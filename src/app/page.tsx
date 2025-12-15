@@ -1,9 +1,9 @@
-import { Trans } from '@lingui/react/macro';
+import { Trans } from '@lingui/react';
 
 export default function Index() {
   return (
     <div>
-      <Trans>Test page.</Trans>
+      <Trans id="Test page." />
     </div>
   );
 }
