@@ -1,6 +1,0 @@
-{
-  "/": "pages/index.js",
-  "/_app": "pages/_app.js",
-  "/_document": "pages/_document.js",
-  "/api/trpc/[trpc]": "pages/api/trpc/[trpc].js"
-}
