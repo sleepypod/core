@@ -27,6 +27,8 @@ jobs:
           node-version: "lts/*"
           cache: yarn         
           registry-url: 'https://npm.pkg.github.com'
+      - name: Enable Corepack
+        run: corepack enable
       - name: Install dependencies
         run: yarn install --frozen-lockfile
       - name: Verify the integrity of provenance attestations and registry signatures for installed dependencies
