@@ -1,19 +1,27 @@
 {
   "name": "@sleepypod/core",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "next build",
     "dev": "next dev",
+    "lang:compile": "lingui compile",
+    "lang:extract": "lingui extract",
     "start": "next start"
   },
   "dependencies": {
+    "@lingui/core": "^5.7.0",
+    "@lingui/loader": "^5.7.0",
+    "@lingui/react": "^5.7.0",
+    "@lingui/swc-plugin": "^5.9.0",
     "@tanstack/react-query": "^5.90.12",
     "@trpc/client": "^11.7.2",
     "@trpc/next": "^11.7.2",
     "@trpc/react-query": "^11.7.2",
     "@trpc/server": "^11.7.2",
-    "next": "^16.0.10",
+    "accept-language": "^3.0.20",
+    "negotiator": "^1.0.0",
+    "next": "^15.5.9",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "superjson": "^2.2.6",
@@ -22,13 +30,17 @@
   "devDependencies": {
     "@lavamoat/allow-scripts": "^3.4.1",
     "@lavamoat/preinstall-always-fail": "^2.1.1",
+    "@lingui/cli": "^5.7.0",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^10.0.1",
     "@tsconfig/next": "^2.0.5",
+    "@types/negotiator": "^0.6.4",
     "@types/node": "^25.0.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "conventional-changelog-conventionalcommits": "^9.1.0",
+    "prettier": "^3.7.4",
+    "prettier-plugin-packagejson": "^2.5.20",
     "semantic-release": "^25.0.2",
     "typescript": "^5.9.3"
   },
@@ -36,7 +48,9 @@
   "lavamoat": {
     "allowScripts": {
       "@lavamoat/preinstall-always-fail": false,
-      "next>sharp": true
+      "next>sharp": true,
+      "@lingui/cli>esbuild": true,
+      "@swc/core": true
     }
   }
 }

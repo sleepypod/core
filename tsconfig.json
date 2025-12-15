@@ -1,3 +1,13 @@
 {
-  "extends": ["@tsconfig/next/tsconfig.json"]
+  "extends": ["@tsconfig/next/tsconfig.json"],
+  "compilerOptions": {
+    "target": "ES2024"
+  },
+  "include": [
+    "node_modules/@tsconfig/next/next-env.d.ts",
+    "node_modules/@tsconfig/next/**/*.ts",
+    "node_modules/@tsconfig/next/**/*.tsx",
+    "node_modules/@tsconfig/next/.next/types/**/*.ts",
+    ".next/types/**/*.ts"
+  ]
 }
