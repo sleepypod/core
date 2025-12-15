@@ -1,8 +1,6 @@
-import { httpBatchLink, httpSubscriptionLink, splitLink } from '@trpc/client';
-import { createTRPCNext } from '@trpc/next';
-import { ssrPrepass } from '@trpc/next/ssrPrepass';
-import type { AppRouter } from '../pages/api/trpc/[trpc]';
-import { transformer } from './transformer';
+import { httpBatchLink } from '@trpc/client';
+import { createTRPCReact } from '@trpc/react-query';
+import type { AppRouter } from '../server/routers/_app';
 
 function getBaseUrl() {
   if (typeof window !== 'undefined') {
@@ -20,26 +18,12 @@ function getBaseUrl() {
   return `http://localhost:${process.env.PORT ?? 3000}`;
 }
 
-export const trpc = createTRPCNext<AppRouter>({
-  config() {
-    const url = getBaseUrl() + '/api/trpc';
-    return {
-      links: [
-        splitLink({
-          condition: (op) => op.type === 'subscription',
-          true: httpSubscriptionLink({
-            url,
-            transformer,
-          }),
-          false: httpBatchLink({
-            url,
-            transformer,
-          }),
-        }),
-      ],
-    };
-  },
-  ssr: true,
-  ssrPrepass,
-  transformer,
-});
+export const trpc = createTRPCReact<AppRouter>();
+
+export const trpcClientOptions = {
+  links: [
+    httpBatchLink({
+      url: getBaseUrl() + '/api/trpc',
+    }),
+  ],
+};
