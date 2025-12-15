@@ -1,7 +1,7 @@
 import { setI18n } from '@lingui/react/server';
 import { ReactNode } from 'react';
 import { getI18nInstance } from '../appRouterI18n';
-import { LocaleClientProvider } from '../components';
+import { LocaleClientProvider, TRPCProvider } from '../components';
 
 type Props = {
   children: ReactNode;
@@ -14,12 +14,14 @@ export default function RootLayout({ children }: Props) {
   return (
     <html lang="en-US">
       <body>
-        <LocaleClientProvider
-          initialLocale="en-US"
-          initialMessages={i18n.messages}
-        >
-          {children}
-        </LocaleClientProvider>
+        <TRPCProvider>
+          <LocaleClientProvider
+            initialLocale="en-US"
+            initialMessages={i18n.messages}
+          >
+            {children}
+          </LocaleClientProvider>
+        </TRPCProvider>
       </body>
     </html>
   );
