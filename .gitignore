@@ -16,3 +16,7 @@ node_modules
 # Testing
 test-results
 coverage
+/generated/prisma
+
+# Prisma
+db/sleepypod.core.dev.db
