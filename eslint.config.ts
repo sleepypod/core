@@ -21,11 +21,12 @@ export default defineConfig(...[
   pluginReact.configs.flat.recommended,
   ...nextVitals,
   globalIgnores([
-    // Default ignores of eslint-config-next:
     '.next/**',
-    'out/**',
     'build/**',
+    'coverage/**',
+    'dist/**',
     'next-env.d.ts',
+    'out/**',
   ]),
   {
     files: ['**/*.jsonc'],
