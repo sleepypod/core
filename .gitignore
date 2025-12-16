@@ -1,5 +1,6 @@
 # Next.js
 .next
+tsconfig.tsbuildinfo
 
 # Node.js
 node_modules
@@ -11,3 +12,7 @@ node_modules
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Testing
+test-results
+coverage

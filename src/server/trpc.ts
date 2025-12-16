@@ -7,16 +7,16 @@
  * @see https://trpc.io/docs/v11/router
  * @see https://trpc.io/docs/v11/procedures
  */
-import { initTRPC } from '@trpc/server';
-import { transformer } from '../utils/transformer';
+import { initTRPC } from '@trpc/server'
+import { transformer } from '../utils/transformer'
 
 const t = initTRPC.create({
   transformer,
-});
+})
 
 /**
  * Unprotected procedure
  **/
-export const publicProcedure = t.procedure;
+export const publicProcedure = t.procedure
 
-export const router = t.router;
+export const router = t.router

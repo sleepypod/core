@@ -1,6 +1,8 @@
-import type { NextConfig } from 'next';
+import { NextConfig } from 'next'
 
-const nextConfig: NextConfig = {
+export default {
+  poweredByHeader: false,
+
   experimental: {
     swcPlugins: [['@lingui/swc-plugin', {}]],
   },
@@ -20,10 +22,8 @@ const nextConfig: NextConfig = {
       use: {
         loader: '@lingui/loader',
       },
-    });
+    })
 
-    return config;
+    return config
   },
-};
-
-export default nextConfig;
+} satisfies NextConfig

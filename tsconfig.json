@@ -1,13 +1,37 @@
 {
-  "extends": ["@tsconfig/next/tsconfig.json"],
+  "$schema": "https://www.schemastore.org/tsconfig",
+  "_version": "2.0.0",
   "compilerOptions": {
-    "target": "ES2024"
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "target": "ES2024",
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
   "include": [
-    "node_modules/@tsconfig/next/next-env.d.ts",
-    "node_modules/@tsconfig/next/**/*.ts",
-    "node_modules/@tsconfig/next/**/*.tsx",
-    "node_modules/@tsconfig/next/.next/types/**/*.ts",
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
     ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
   ]
 }

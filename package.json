@@ -1,13 +1,17 @@
 {
   "name": "@sleepypod/core",
-  "private": true,
   "type": "module",
+  "private": true,
   "scripts": {
     "build": "next build",
     "dev": "next dev",
     "lang:compile": "lingui compile",
     "lang:extract": "lingui extract",
-    "start": "next start"
+    "lint:fix": "eslint . --fix",
+    "lint": "eslint .",
+    "start": "next start",
+    "test": "vitest",
+    "tsc": "tsc --noEmit"
   },
   "dependencies": {
     "@lingui/core": "^5.7.0",
@@ -21,28 +25,46 @@
     "@trpc/server": "^11.7.2",
     "accept-language": "^3.0.20",
     "negotiator": "^1.0.0",
-    "next": "^15.5.9",
+    "next": "^16.0.10",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "superjson": "^2.2.6",
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@eslint/css": "^0.14.1",
+    "@eslint/js": "^9.39.2",
+    "@eslint/json": "^0.14.0",
     "@lavamoat/allow-scripts": "^3.4.1",
     "@lavamoat/preinstall-always-fail": "^2.1.1",
     "@lingui/cli": "^5.7.0",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^10.0.1",
+    "@stylistic/eslint-plugin": "^5.6.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.0",
     "@tsconfig/next": "^2.0.5",
+    "@types/jsdom": "^27",
     "@types/negotiator": "^0.6.4",
     "@types/node": "^25.0.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5.1.2",
+    "@vitest/coverage-v8": "4.0.15",
     "conventional-changelog-conventionalcommits": "^9.1.0",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "^16.0.10",
+    "eslint-plugin-react": "^7.37.5",
+    "globals": "^16.5.0",
+    "jiti": "^2.6.1",
+    "jsdom": "^27.3.0",
     "prettier": "^3.7.4",
     "prettier-plugin-packagejson": "^2.5.20",
     "semantic-release": "^25.0.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.49.0",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^4.0.15"
   },
   "packageManager": "yarn@4.12.0",
   "lavamoat": {
@@ -50,7 +72,9 @@
       "@lavamoat/preinstall-always-fail": false,
       "next>sharp": true,
       "@lingui/cli>esbuild": true,
-      "@swc/core": true
+      "@swc/core": true,
+      "eslint-config-next>eslint-import-resolver-typescript>unrs-resolver": false,
+      "vitest>vite>esbuild": false
     }
   }
 }
