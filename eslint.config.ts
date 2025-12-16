@@ -27,7 +27,7 @@ export default defineConfig(...[
     'dist/**',
     'next-env.d.ts',
     'out/**',
-    "generated/**",
+    'generated/**',
   ]),
   {
     files: ['**/*.jsonc'],
