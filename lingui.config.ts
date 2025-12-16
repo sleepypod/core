@@ -1,4 +1,4 @@
-import { defineConfig } from '@lingui/cli';
+import { defineConfig } from '@lingui/cli'
 
 export default defineConfig({
   sourceLocale: 'en-US',
@@ -10,4 +10,4 @@ export default defineConfig({
       include: ['src'],
     },
   ],
-});
+})
