@@ -1,5 +1,5 @@
-import { NextConfig } from 'next';
+import { NextConfig } from 'next'
 
 export default {
   poweredByHeader: false,
-} satisfies NextConfig;
+} satisfies NextConfig

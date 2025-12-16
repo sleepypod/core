@@ -1,19 +1,19 @@
 /**
  * This is a Next.js page.
  */
-import { trpc } from '../utils/trpc';
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useState } from 'react'
+import { trpc } from '../utils/trpc'
 
 function QueryExample() {
   // 💡 Tip: CMD+Click (or CTRL+Click) on `greeting` to go to the server definition
-  const result = trpc.greeting.useQuery({ name: 'client' });
+  const result = trpc.greeting.useQuery({ name: 'client' })
 
   if (!result.data) {
     return (
       <div>
         <p>Loading...</p>
       </div>
-    );
+    )
   }
 
   return (
@@ -26,11 +26,11 @@ function QueryExample() {
        */}
       <p>{result.data.text}</p>
     </div>
-  );
+  )
 }
 
 function SubscriptionExample() {
-  const subscription = trpc.loopData.useSubscription();
+  const subscription = trpc.loopData.useSubscription()
   return (
     <table>
       <tr>
@@ -53,18 +53,12 @@ function SubscriptionExample() {
         </td>
       </tr>
     </table>
-  );
+  )
 }
 
-let hasEverMounted = false;
-
 function NoSSR(props: { children: ReactNode }) {
-  const [hasMounted, setHasMounted] = useState(hasEverMounted);
-  useEffect(() => {
-    hasEverMounted = true;
-    setHasMounted(true);
-  }, []);
-  return hasMounted ? <>{props.children}</> : null;
+  const [hasMounted] = useState(typeof window !== 'undefined')
+  return hasMounted ? <>{props.children}</> : null
 }
 
 export default function IndexPage() {
@@ -77,5 +71,5 @@ export default function IndexPage() {
         <SubscriptionExample />
       </NoSSR>
     </div>
-  );
+  )
 }
