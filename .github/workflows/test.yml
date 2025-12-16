@@ -1,0 +1,51 @@
+name: Lint, Typecheck & Tests
+
+on:
+  push:
+    branches: [**]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  vitest:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.57.0-noble
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          
+      - name: Enable Corepack
+        run: corepack enable
+        
+      - name: Set up Node.js and Yarn cache
+        uses: actions/setup-node@v5
+        with:
+          node-version: "lts/*"
+          cache: yarn         
+          registry-url: 'https://npm.pkg.github.com'
+          
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+        
+      - name: Cache Vitest
+        uses: actions/cache@v4
+        with:
+          path: .vitest
+          key: vitest-${{ runner.os }}-${{ hashFiles('vitest.config.ts', '**/*.ts', '**/*.tsx') }}
+          restore-keys: |
+            vitest-${{ runner.os }}-
+            
+      - name: Run Vitest with coverage 
+        run: |
+          yarn test run --coverage
