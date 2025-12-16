@@ -7,11 +7,13 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  lint:
+  setup:
+    name: Setup Environment
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
+    
+    outputs:
+      cache-key: ${{ steps.yarn-cache.outputs.cache-key }}
+      
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -27,42 +29,62 @@ jobs:
           node-version: "lts/*"
           cache: yarn         
           registry-url: 'https://npm.pkg.github.com'
+
+      - name: Get Yarn Cache Key
+        id: yarn-cache
+        run: echo "cache-key=${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}" >> $GITHUB_OUTPUT
           
       - name: Install dependencies
         run: yarn install --frozen-lockfile
+
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    needs: [setup]
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
         
+      - name: Restore Node Modules Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .yarn/cache 
+          key: ${{ needs.setup.outputs.cache-key }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
       - name: Run Lint
         run: yarn lint
-
+--
   typecheck:
+    name: Type Check
     runs-on: ubuntu-latest
+    needs: [setup]
     permissions:
       contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          
-      - name: Enable Corepack
-        run: corepack enable
         
-      - name: Set up Node.js and Yarn cache
-        uses: actions/setup-node@v5
+      - name: Restore Node Modules Cache
+        uses: actions/cache/restore@v4
         with:
-          node-version: "lts/*"
-          cache: yarn         
-          registry-url: 'https://npm.pkg.github.com'
-          
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
-        
-      - name: Run type check
+          path: .yarn/cache
+          key: ${{ needs.setup.outputs.cache-key }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Run Type Check (tsc)
         run: yarn tsc
 
   unit-tests:
+    name: Unit Tests
     runs-on: ubuntu-latest
+    needs: [setup]
     permissions:
       contents: read
       packages: write
@@ -72,22 +94,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          
-      - name: Enable Corepack
-        run: corepack enable
         
-      - name: Set up Node.js and Yarn cache
-        uses: actions/setup-node@v5
+      - name: Restore Node Modules Cache
+        uses: actions/cache/restore@v4
         with:
-          node-version: "lts/*"
-          cache: yarn         
-          registry-url: 'https://npm.pkg.github.com'
-          
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
-        
+          path: .yarn/cache
+          key: ${{ needs.setup.outputs.cache-key }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+            
       - name: Cache Vitest
         uses: actions/cache@v4
         with:
