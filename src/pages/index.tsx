@@ -1,6 +1,7 @@
 /**
  * This is a Next.js page.
  */
+import { Trans } from '@lingui/react'
 import { ReactNode, useState } from 'react'
 import { trpc } from '../utils/trpc'
 
@@ -64,9 +65,10 @@ function NoSSR(props: { children: ReactNode }) {
 export default function IndexPage() {
   return (
     <div>
-      <h2>Query</h2>
+      <h1><Trans id="welcome.title" message="Welcome to Sleepypod Core" /></h1>
+      <h2><Trans id="query.title" message="Query" /></h2>
       <QueryExample />
-      <h2>Subscription</h2>
+      <h2><Trans id="subscription.title" message="Subscription" /></h2>
       <NoSSR>
         <SubscriptionExample />
       </NoSSR>
