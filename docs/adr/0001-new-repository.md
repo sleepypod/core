@@ -14,8 +14,7 @@ Our work **shares the same end goals**—stability, reliability, and ease of use
 - Many of these improvements only make sense when applied holistically rather than incrementally
 - Reviewing them piecemeal would be higher risk and higher overhead than reviewing them as a complete, working system
 
-This difference is about **scope and review approach**, not about stability standards. Additionally, we value delegation and 
-believe that open source thrives when more people are empowered to contribute and innovate.
+This difference is about **scope and review approach**, not about stability standards. Additionally, we value delegation and believe that open source thrives when more people are empowered to contribute and innovate.
 
 ### 2. UI and architecture changes require holistic delivery
 While the upstream project is open to UI improvements, the maintainer has clearly stated that:
