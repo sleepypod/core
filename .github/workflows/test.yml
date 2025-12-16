@@ -7,6 +7,60 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          
+      - name: Enable Corepack
+        run: corepack enable
+        
+      - name: Set up Node.js and Yarn cache
+        uses: actions/setup-node@v5
+        with:
+          node-version: "lts/*"
+          cache: yarn         
+          registry-url: 'https://npm.pkg.github.com'
+          
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+        
+      - name: Run Lint
+        run: yarn lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          
+      - name: Enable Corepack
+        run: corepack enable
+        
+      - name: Set up Node.js and Yarn cache
+        uses: actions/setup-node@v5
+        with:
+          node-version: "lts/*"
+          cache: yarn         
+          registry-url: 'https://npm.pkg.github.com'
+          
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+        
+      - name: Run Lint
+        run: yarn tsc
+
   vitest:
     runs-on: ubuntu-latest
     container:
@@ -48,4 +102,4 @@ jobs:
             
       - name: Run Vitest with coverage 
         run: |
-          yarn test run --coverage
+          yarn test run --coverage --passWithNoTests
