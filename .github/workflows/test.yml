@@ -35,7 +35,7 @@ jobs:
         run: echo "cache-key=${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}" >> $GITHUB_OUTPUT
           
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --immutable
 
   lint:
     name: Lint Code
