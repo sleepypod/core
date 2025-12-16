@@ -3,10 +3,6 @@ import { NextConfig } from 'next'
 export default {
   poweredByHeader: false,
 
-  experimental: {
-    swcPlugins: [['@lingui/swc-plugin', {}]],
-  },
-
   turbopack: {
     rules: {
       '*.po': {
