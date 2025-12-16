@@ -61,15 +61,11 @@ jobs:
       - name: Run Lint
         run: yarn tsc
 
-  vitest:
+  unit-tests:
     runs-on: ubuntu-latest
-    container:
-      image: mcr.microsoft.com/playwright:v1.57.0-noble
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: true
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
 
