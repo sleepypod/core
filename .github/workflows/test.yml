@@ -59,6 +59,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-yarn-
 
+      - name: Activate Cached Dependencies
+        run: yarn install --immutable
+
       - name: Run Lint
         run: yarn lint
 
@@ -83,6 +86,9 @@ jobs:
           key: ${{ needs.setup.outputs.cache-key }}
           restore-keys: |
             ${{ runner.os }}-yarn-
+
+      - name: Activate Cached Dependencies
+        run: yarn install --immutable
 
       - name: Run Type Check (tsc)
         run: yarn tsc
@@ -111,6 +117,9 @@ jobs:
           key: ${{ needs.setup.outputs.cache-key }}
           restore-keys: |
             ${{ runner.os }}-yarn-
+
+      - name: Activate Cached Dependencies
+        run: yarn install --immutable
             
       - name: Cache Vitest
         uses: actions/cache@v4
