@@ -1,5 +1,15 @@
-import { NextConfig } from 'next'
+import type { NextConfig } from 'next'
 
-export default {
-  poweredByHeader: false,
-} satisfies NextConfig
+const nextConfig: NextConfig = {
+  turbopack: {
+    rules: {
+      '*.po': {
+        loaders: ['@lingui/loader'],
+        as: '*.js',
+      },
+    },
+  },
+  reactCompiler: false,
+}
+
+export default nextConfig
