@@ -5,6 +5,7 @@
   "scripts": {
     "build": "next build",
     "dev": "prisma generate && next dev",
+    "lingui:extract": "lingui extract --clean",
     "lint:fix": "eslint . --fix",
     "lint": "eslint .",
     "migrate:dev": "prisma migrate dev",
@@ -14,6 +15,10 @@
     "tsc": "tsc --noEmit"
   },
   "dependencies": {
+    "@formatjs/intl-localematcher": "^0.6.2",
+    "@lingui/core": "^5.7.0",
+    "@lingui/macro": "^5.7.0",
+    "@lingui/react": "^5.7.0",
     "@prisma/adapter-better-sqlite3": "^7.1.0",
     "@prisma/client": "^7.1.0",
     "@tanstack/react-query": "^5.90.12",
@@ -22,6 +27,7 @@
     "@trpc/react-query": "^11.7.2",
     "@trpc/server": "^11.7.2",
     "dotenv": "^17.2.3",
+    "negotiator": "^1.0.0",
     "next": "^16.0.10",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
@@ -29,11 +35,16 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@babel/preset-typescript": "^7.28.5",
     "@eslint/css": "^0.14.1",
     "@eslint/js": "^9.39.2",
     "@eslint/json": "^0.14.0",
     "@lavamoat/allow-scripts": "^3.4.1",
     "@lavamoat/preinstall-always-fail": "^2.1.1",
+    "@lingui/babel-plugin-lingui-macro": "^5.7.0",
+    "@lingui/cli": "^5.7.0",
+    "@lingui/loader": "^5.7.0",
+    "@lingui/swc-plugin": "^5.9.0",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^10.0.1",
     "@stylistic/eslint-plugin": "^5.6.1",
@@ -42,6 +53,7 @@
     "@tsconfig/next": "^2.0.5",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jsdom": "^27",
+    "@types/negotiator": "^0.6.4",
     "@types/node": "^25.0.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -73,7 +85,8 @@
       "prisma>@prisma/engines": true,
       "prisma>better-sqlite3": true,
       "tsx>esbuild": true,
-      "$root$": true
+      "$root$": true,
+      "@lingui/cli>esbuild": true
     }
   }
 }
