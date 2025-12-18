@@ -29,11 +29,12 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: "lts/*"
-          cache: yarn         
           registry-url: 'https://npm.pkg.github.com'
+          # Note: No cache needed - we use Yarn offline mirror (.yarn/cache is committed)
       
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --immutable
+        # Uses committed .yarn/cache - no npm registry downloads needed!
       
       - name: Verify the integrity of provenance attestations and registry signatures for installed dependencies
         run: npm audit signatures

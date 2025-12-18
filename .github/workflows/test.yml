@@ -33,11 +33,12 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: "lts/*"
-          cache: 'yarn'
           registry-url: 'https://npm.pkg.github.com'
+          # Note: No cache needed - we use Yarn offline mirror (.yarn/cache is committed)
 
       - name: Install Dependencies
         run: yarn install --immutable
+        # Uses committed .yarn/cache - no npm registry downloads needed!
 
       - name: Cache Prisma Client
         id: prisma-cache
