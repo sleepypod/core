@@ -5,42 +5,43 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  test-suite:
+  ci:
     name: ${{ matrix.task.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         task:
-          - { name: "Lint", command: "yarn lint" }
-          - { name: "Typecheck", command: "yarn tsc" }
-          - { name: "Unit Tests", command: "yarn test run --coverage" }
+          - { name: "Lint", cmd: "yarn lint" }
+          - { name: "Typecheck", cmd: "yarn tsc" }
+          - { name: "Unit Tests", cmd: "yarn test run --coverage --passWithNoTests" }
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
       - name: Enable Corepack
-        run: corepack enable
+        run: corepack enable 
 
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
           node-version: "lts/*"
-          cache: 'yarn'
+          cache: 'yarn' 
+          registry-url: 'https://npm.pkg.github.com'
 
       - name: Install Dependencies
         run: yarn install --immutable
 
       - name: Cache Prisma Client
-        id: cache-prisma
+        id: prisma-cache
         uses: actions/cache@v4
         with:
           path: node_modules/.prisma
-          key: prisma-${{ runner.os }}-${{ hashFiles('prisma/schema.prisma', 'yarn.lock') }}
+          key: prisma-${{ runner.os }}-${{ hashFiles('prisma/schema.prisma') }}
 
       - name: Generate Prisma Client
-        if: steps.cache-prisma.outputs.cache-hit != 'true'
+        if: steps.prisma-cache.outputs.cache-hit != 'true'
         run: yarn prisma generate
 
       - name: Cache Vitest
@@ -51,7 +52,7 @@ jobs:
           key: vitest-${{ runner.os }}-${{ hashFiles('**/*.ts', 'vitest.config.ts') }}
 
       - name: Run Task
-        run: ${{ matrix.task.command }}
+        run: ${{ matrix.task.cmd }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_ENV: test
