@@ -5,11 +5,11 @@
   "scripts": {
     "build": "next build",
     "dev": "prisma generate && next dev",
+    "prisma:generate": "prisma generate",
     "lingui:extract": "lingui extract --clean",
     "lint:fix": "eslint . --fix",
     "lint": "eslint .",
     "migrate:dev": "prisma migrate dev",
-    "postinstall": "prisma generate",
     "start": "next start",
     "test": "vitest",
     "tsc": "tsc --noEmit"
