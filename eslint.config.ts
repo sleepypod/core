@@ -4,8 +4,12 @@ import json from '@eslint/json'
 import stylistic from '@stylistic/eslint-plugin'
 import nextVitals from 'eslint-config-next/core-web-vitals'
 import pluginReact from 'eslint-plugin-react'
+import { includeIgnoreFile } from '@eslint/compat'
 import { defineConfig, globalIgnores } from 'eslint/config'
+import { fileURLToPath } from 'node:url'
 import tseslint from 'typescript-eslint'
+
+const gitignorePath = fileURLToPath(new URL('.gitignore', import.meta.url))
 
 export default defineConfig(...[
   {
@@ -20,10 +24,9 @@ export default defineConfig(...[
   tseslint.configs.strict,
   pluginReact.configs.flat.recommended,
   ...nextVitals,
+  includeIgnoreFile(gitignorePath),
   globalIgnores([
-    '.next/**',
     'build/**',
-    'coverage/**',
     'dist/**',
     'next-env.d.ts',
     'out/**',
