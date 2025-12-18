@@ -1,9 +1,6 @@
 import { TRPCProvider } from '@/src/components/providers/TRPCProvider' // Our client component TRPC wrapper
 import type { Metadata } from 'next'
 
-// Define the available locales for your application
-const locales = ['en', 'ar']
-
 export const metadata: Metadata = {
   title: 'MyApp',
   description: 'Global description',

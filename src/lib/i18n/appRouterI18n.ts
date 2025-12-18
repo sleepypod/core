@@ -40,5 +40,5 @@ export const getI18nInstance = (locale: SupportedLocales): I18n => {
   if (!allI18nInstances[locale]) {
     console.warn(`No i18n instance found for locale "${locale}"`)
   }
-  return allI18nInstances[locale]! || allI18nInstances['en']!
+  return allI18nInstances[locale] || allI18nInstances['en']
 }

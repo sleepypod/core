@@ -12,7 +12,7 @@ export function initLingui(lang: string) {
     i18n.activate(lang)
   }
   catch (err) {
-    // some i18n setups may already be activated; ignore activation errors
+    console.error('Error activating i18n instance:', err)
   }
   setI18n(i18n)
   return i18n

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "automerge": true,
+  "automergeType": "branch",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
+  "commitMessagePrefix": "chore",
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "labels": ["dependencies", "patch"]
+    },
+    {
+      "matchUpdateTypes": ["minor"],
+      "automerge": true,
+      "labels": ["dependencies", "minor"]
+    },
+    {
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false,
+      "labels": ["dependencies", "manual"]
+    },
+    {
+      "matchDepTypes": ["devDependencies"],
+      "matchPackageNames": [
+        "@types/*",
+        "eslint",
+        "typescript"
+      ],
+      "automerge": true,
+      "labels": ["devDependencies", "auto-merge"]
+    },
+    {
+      "matchPackageNames": ["vitest"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "labels": ["dependencies", "vitest"]
+    },
+    {
+      "matchPackageNames": ["next", "react", "react-dom"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["dependencies", "nextjs", "react", "manual"]
+    },
+    {
+      "matchPackagePatterns": ["^@mui/"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["dependencies", "mui", "manual"]
+    },
+    {
+      "matchUpdateTypes": ["major"],
+      "commitMessagePrefix": "feat(deps-major):",
+      "commitMessageAction": "Update {{packageName}}",
+      "labels": ["dependencies", "major"]
+    },
+    {
+      "matchUpdateTypes": ["fix", "patch"],
+      "commitMessagePrefix": "fix(deps-patch):",
+      "commitMessageAction": "Update {{packageName}}",
+      "labels": ["dependencies", "fix-patch"]
+    },
+    {
+      "matchPackagePatterns": [".*"],
+      "commitMessagePrefix": "chore(deps):",
+      "commitMessageAction": "Update {{packageName}}"
+    }
+  ]
+}

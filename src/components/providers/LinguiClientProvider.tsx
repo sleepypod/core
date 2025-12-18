@@ -24,7 +24,7 @@ export const LinguiClientProvider = ({
       inst.activate(initialLocale)
     }
     catch (err) {
-      // ignore if already activated or activation not needed
+      console.error('Error activating i18n instance:', err)
     }
     return inst
   })
