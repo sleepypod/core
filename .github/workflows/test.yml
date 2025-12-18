@@ -24,12 +24,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Enable Corepack
+      - name: Setup Package Manager
         run: |
-          VERSION=$(node -p "require('./package.json').packageManager")
-          echo "Activating $VERSION"
           corepack enable
-          corepack prepare $VERSION --activate
+          corepack prepare $(node -p "require('./package.json').packageManager") --activate
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -48,7 +46,7 @@ jobs:
           path: node_modules/.prisma
           key: prisma-${{ runner.os }}-${{ hashFiles('prisma/schema.prisma') }}
 
-      - name: Generate Prisma Client
+      - name: Generate Prisma
         if: steps.prisma-cache.outputs.cache-hit != 'true'
         run: yarn prisma generate
 
