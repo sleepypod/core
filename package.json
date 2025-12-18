@@ -10,7 +10,6 @@
     "lint:fix": "eslint . --fix",
     "lint": "eslint .",
     "migrate:dev": "prisma migrate dev",
-    
     "start": "next start",
     "test": "vitest",
     "tsc": "tsc --noEmit"

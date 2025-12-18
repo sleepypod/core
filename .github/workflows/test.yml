@@ -5,155 +5,50 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  setup:
-    name: Setup Environment
+  ci:
+    name: ${{ matrix.task.name }}
     runs-on: ubuntu-latest
-    
-    outputs:
-      cache-key: ${{ steps.yarn-cache.outputs.cache-key }}
-      
+    strategy:
+      fail-fast: false
+      matrix:
+        task:
+          - { name: "Lint", command: "yarn lint" }
+          - { name: "Typecheck", command: "yarn tsc" }
+          - { name: "Unit Tests", command: "yarn test run --coverage" }
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          
-      - name: Enable Corepack
-        run: corepack enable
-        
-      - name: Set up Node.js and Yarn cache
+
+      - name: Setup Node
         uses: actions/setup-node@v5
         with:
           node-version: "lts/*"
-          cache: yarn         
-          registry-url: 'https://npm.pkg.github.com'
+          cache: 'yarn'
 
-      - name: Get Yarn Cache Key
-        id: yarn-cache
-        run: echo "cache-key=${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}" >> $GITHUB_OUTPUT
-          
-      - name: Restore Yarn cache
+      - name: Install Dependencies
+        run: yarn install --immutable
+
+      - name: Cache Prisma Client
+        id: cache-prisma
         uses: actions/cache@v4
         with:
-          path: |
-            .yarn/cache
-            .yarn/unplugged
-            .yarn/install-state.gz
-            .yarn/build-state.yml
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
+          path: node_modules/.prisma
+          key: prisma-${{ runner.os }}-${{ hashFiles('prisma/schema.prisma', 'yarn.lock') }}
 
-      - name: Install dependencies
-        run: yarn install --immutable
+      - name: Generate Prisma Client
+        if: steps.cache-prisma.outputs.cache-hit != 'true'
+        run: yarn prisma generate
 
-      - name: Generate Prisma client
-        run: yarn prisma:generate
-
-  lint:
-    name: Lint Code
-    runs-on: ubuntu-latest
-    needs: [setup]
-    permissions:
-      contents: read
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Restore Node Modules Cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .yarn/cache
-            .yarn/unplugged
-            .yarn/install-state.gz
-            .yarn/build-state.yml
-          key: ${{ needs.setup.outputs.cache-key }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Activate Cached Dependencies
-        run: yarn install --immutable
-
-      - name: Run Lint
-        run: yarn lint
-
-  typecheck:
-    name: Type Check
-    runs-on: ubuntu-latest
-    needs: [setup]
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Enable Corepack
-        run: corepack enable
-        
-      - name: Restore Node Modules Cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .yarn/cache
-            .yarn/unplugged
-            .yarn/install-state.gz
-            .yarn/build-state.yml
-          key: ${{ needs.setup.outputs.cache-key }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Activate Cached Dependencies
-        run: yarn install --immutable
-
-      - name: Run Type Check (tsc)
-        run: yarn tsc
-
-  unit-tests:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    needs: [setup]
-    permissions:
-      contents: read
-      packages: write
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Enable Corepack
-        run: corepack enable
-        
-      - name: Restore Node Modules Cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .yarn/cache
-            .yarn/unplugged
-            .yarn/install-state.gz
-            .yarn/build-state.yml
-          key: ${{ needs.setup.outputs.cache-key }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Activate Cached Dependencies
-        run: yarn install --immutable
-            
       - name: Cache Vitest
+        if: matrix.task.name == 'Unit Tests'
         uses: actions/cache@v4
         with:
           path: .vitest
-          key: vitest-${{ runner.os }}-${{ hashFiles('vitest.config.ts', '**/*.ts', '**/*.tsx') }}
-          restore-keys: |
-            vitest-${{ runner.os }}-
-            
-      - name: Run Vitest unit tests with coverage 
-        run: |
-          yarn test run --coverage --passWithNoTests
+          key: vitest-${{ runner.os }}-${{ hashFiles('**/*.ts', 'vitest.config.ts') }}
+
+      - name: Run Task
+        run: ${{ matrix.task.command }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_ENV: test
