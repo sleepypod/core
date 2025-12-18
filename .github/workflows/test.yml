@@ -32,8 +32,23 @@ jobs:
         id: yarn-cache
         run: echo "cache-key=${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}" >> $GITHUB_OUTPUT
           
+      - name: Restore Yarn cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+            .yarn/install-state.gz
+            .yarn/build-state.yml
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
       - name: Install dependencies
         run: yarn install --immutable
+
+      - name: Generate Prisma client
+        run: yarn prisma:generate
 
   lint:
     name: Lint Code
@@ -52,7 +67,11 @@ jobs:
       - name: Restore Node Modules Cache
         uses: actions/cache/restore@v4
         with:
-          path: .yarn/cache 
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+            .yarn/install-state.gz
+            .yarn/build-state.yml
           key: ${{ needs.setup.outputs.cache-key }}
           restore-keys: |
             ${{ runner.os }}-yarn-
@@ -80,7 +99,11 @@ jobs:
       - name: Restore Node Modules Cache
         uses: actions/cache/restore@v4
         with:
-          path: .yarn/cache
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+            .yarn/install-state.gz
+            .yarn/build-state.yml
           key: ${{ needs.setup.outputs.cache-key }}
           restore-keys: |
             ${{ runner.os }}-yarn-
@@ -111,7 +134,11 @@ jobs:
       - name: Restore Node Modules Cache
         uses: actions/cache/restore@v4
         with:
-          path: .yarn/cache
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+            .yarn/install-state.gz
+            .yarn/build-state.yml
           key: ${{ needs.setup.outputs.cache-key }}
           restore-keys: |
             ${{ runner.os }}-yarn-
