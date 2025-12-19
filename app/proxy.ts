@@ -21,7 +21,7 @@ export const proxy = (request: NextRequest) => {
 
   console.log('Current pathname:', pathname)
   const pathnameHasLocale = locales.some(
-    locale => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`,
+    (locale: string) => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`,
   )
 
   console.log('Pathname has locale:', pathnameHasLocale)

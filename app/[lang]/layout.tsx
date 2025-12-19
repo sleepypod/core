@@ -6,7 +6,7 @@ import linguiConfig from 'lingui.config'
 import type { Metadata } from 'next'
 
 export const generateStaticParams = async () => {
-  return linguiConfig.locales.map(lang => ({ lang }))
+  return linguiConfig.locales.map((lang: string) => ({ lang }))
 }
 
 export const generateMetadata = async (
