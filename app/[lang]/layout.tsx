@@ -1,6 +1,7 @@
 import { LinguiClientProvider } from '@/src/components/providers/LinguiClientProvider'
 import { allMessages, getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
-import { initLingui, PageLangParam } from '@/src/lib/i18n/initLingui'
+import type { PageLangParam } from '@/src/lib/i18n/initLingui'
+import { initLingui } from '@/src/lib/i18n/initLingui'
 import { t } from '@lingui/core/macro'
 import linguiConfig from 'lingui.config'
 import type { Metadata } from 'next'
