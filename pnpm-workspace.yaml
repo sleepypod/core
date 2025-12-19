@@ -1,0 +1,8 @@
+onlyBuiltDependencies:
+  - '@lavamoat/preinstall-always-fail'
+  - '@prisma/engines'
+  - better-sqlite3
+  - esbuild
+  - prisma
+  - sharp
+  - unrs-resolver
