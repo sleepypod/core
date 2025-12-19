@@ -3,6 +3,7 @@ onlyBuiltDependencies:
   - '@prisma/engines'
   - better-sqlite3
   - esbuild
+  - msw
   - prisma
   - sharp
   - unrs-resolver
