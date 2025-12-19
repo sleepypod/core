@@ -1,18 +1,24 @@
 import css from '@eslint/css'
 import { default as eslint } from '@eslint/js'
-import json from '@eslint/json'
 import stylistic from '@stylistic/eslint-plugin'
 import nextVitals from 'eslint-config-next/core-web-vitals'
 import pluginReact from 'eslint-plugin-react'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import tseslint from 'typescript-eslint'
 
-export default defineConfig(...[
+export default defineConfig([
+  {
+    files: ['**/*.ts', '**/*.tsx'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        projectService: true,
+      },
+    },
+  },
   {
     settings: {
-      react: {
-        version: 'detect',
-      },
+      react: { version: 'detect' },
     },
   },
   eslint.configs.recommended,
@@ -20,25 +26,46 @@ export default defineConfig(...[
   tseslint.configs.strict,
   pluginReact.configs.flat.recommended,
   ...nextVitals,
+
   globalIgnores([
     '.next/**',
     'build/**',
     'coverage/**',
     'dist/**',
+    'generated/**',
     'next-env.d.ts',
     'out/**',
-    'generated/**',
   ]),
+
+  /** Global JS overrides */
   {
-    files: ['**/*.jsonc'],
-    plugins: { json },
-    language: 'json/jsonc',
-    extends: ['json/recommended'],
+    rules: {
+      '@stylistic/comma-dangle': ['error', 'only-multiline'],
+      '@stylistic/no-multiple-empty-lines': ['error', { max: 1, maxEOF: 1 }],
+    },
   },
+
+  /** Type-aware rules applied ONLY to TypeScript files */
+  {
+    files: ['**/*.ts', '**/*.tsx'],
+    rules: {
+      '@typescript-eslint/consistent-type-definitions': ['error', 'interface'],
+      '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+    }
+  },
+
+  /** File specific overrides */
+  {
+    files: ['src/app/**', 'src/slices/**', '**/**.stories.*'],
+    rules: {
+      'import/no-default-export': 'off',
+    },
+  },
+
   {
     files: ['**/*.css'],
     plugins: { css },
     language: 'css/css',
     extends: ['css/recommended'],
-  },
+  }
 ])
