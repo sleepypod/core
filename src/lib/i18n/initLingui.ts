@@ -1,7 +1,7 @@
 import { setI18n } from '@lingui/react/server'
 import { getI18nInstance } from './appRouterI18n'
 
-export type PageLangParam = {
+export interface PageLangParam {
   params: Promise<{ lang: string }>
 }
 
