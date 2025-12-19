@@ -1,6 +1,6 @@
-import type { LinguiConfig } from '@lingui/conf'
+import { defineConfig } from '@lingui/cli'
 
-const config: LinguiConfig = {
+const config = defineConfig({
   locales: ['en', 'es', 'pseudo'],
   pseudoLocale: 'pseudo',
   sourceLocale: 'en',
@@ -13,6 +13,6 @@ const config: LinguiConfig = {
       include: ['app/'],
     },
   ],
-}
+})
 
 export default config
