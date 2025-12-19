@@ -1,4 +1,4 @@
-name: Lint, Typecheck & Tests
+name: CI
 
 on:
   pull_request:
@@ -16,46 +16,41 @@ jobs:
       fail-fast: false
       matrix:
         task:
-          - { name: "Lint", cmd: "yarn lint" }
-          - { name: "Typecheck", cmd: "yarn tsc" }
-          - { name: "Unit Tests", cmd: "yarn test run --coverage --passWithNoTests" }
+          - { name: "Lint", cmd: "pnpm lint" }
+          - { name: "Typecheck", cmd: "pnpm tsc" }
+          - { name: "Unit Tests", cmd: "pnpm test run --coverage --passWithNoTests" }
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup Package Manager
-        run: |
-          corepack enable
-          corepack prepare $(node -p "require('./package.json').packageManager") --activate
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
 
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
           node-version: "lts/*"
-          cache: 'yarn'
+          cache: 'pnpm'
           registry-url: 'https://npm.pkg.github.com'
 
       - name: Install Dependencies
-        run: yarn install --immutable
+        run: pnpm install --frozen-lockfile
 
-      - name: Cache Prisma Client
-        id: prisma-cache
+      - name: Cache Assets (Prisma & Vitest)
+        id: asset-cache
         uses: actions/cache@v4
         with:
-          path: node_modules/.prisma
-          key: prisma-${{ runner.os }}-${{ hashFiles('prisma/schema.prisma') }}
+          path: |
+            node_modules/.prisma
+            .vitest
+          key: assets-${{ runner.os }}-${{ hashFiles('prisma/schema.prisma', 'vitest.config.ts') }}
 
       - name: Generate Prisma
-        if: steps.prisma-cache.outputs.cache-hit != 'true'
-        run: yarn prisma generate
-
-      - name: Cache Vitest
-        if: matrix.task.name == 'Unit Tests'
-        uses: actions/cache@v4
-        with:
-          path: .vitest
-          key: vitest-${{ runner.os }}-${{ hashFiles('**/*.ts', 'vitest.config.ts') }}
+        if: steps.asset-cache.outputs.cache-hit != 'true'
+        run: pnpm prisma generate
 
       - name: Run Task
         run: ${{ matrix.task.cmd }}
