@@ -1,3 +1,6 @@
+# Ignore files for SleepyPod Core project
+.DS_Store
+
 # Next.js
 .next
 tsconfig.tsbuildinfo
