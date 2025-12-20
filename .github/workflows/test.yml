@@ -41,7 +41,7 @@ jobs:
 
       - name: Cache Assets (Prisma & Vitest)
         id: asset-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             node_modules/.prisma
