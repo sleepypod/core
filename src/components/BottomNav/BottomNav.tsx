@@ -20,7 +20,7 @@ export const BottomNav = () => {
       <div className="mx-auto flex max-w-md justify-between">
         {tabs.map(tab => (
           <button key={tab.id} className="group flex flex-col items-center gap-1">
-            <tab.icon size={20} className="text-zinc-600 group-first:text-white" />
+            <tab.icon size={20} className="text-zinc-600 group-first:text-sky-400" />
             <span className="text-[9px] font-bold text-zinc-600 uppercase group-first:text-white">
               {i18n._(tab.label)}
             </span>

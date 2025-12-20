@@ -1,5 +1,6 @@
 import '@/app/globals.css'
 import { BottomNav } from '@/src/components/BottomNav/BottomNav'
+import { Header } from '@/src/components/Header/Header'
 import { LinguiClientProvider } from '@/src/components/providers/LinguiClientProvider'
 import { TRPCProvider } from '@/src/components/providers/TRPCProvider'
 import { allMessages, getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
@@ -23,8 +24,11 @@ export default async function LangLayout({
         <TRPCProvider>
           <LinguiClientProvider initialLocale={lang} initialMessages={allMessages[lang]}>
             <div className="flex min-h-screen flex-col items-center bg-black pb-24 text-white">
+              <Header />
+
               <div className="w-full max-w-md space-y-6 px-4 pt-4">
                 {children}
+
                 <BottomNav />
               </div>
             </div>

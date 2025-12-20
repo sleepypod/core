@@ -14,10 +14,7 @@ export default async function Page({
 
   return (
     <div>
-      <h1>
-        Current Language:
-        {lang}
-      </h1>
+
     </div>
   )
 }

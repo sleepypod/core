@@ -21,6 +21,10 @@ msgstr "Data"
 msgid "Hello, tRPC test page!"
 msgstr "Hello, tRPC test page!"
 
+#: src/components/WifiSignalStrength/WifiSignalStrength.tsx:44
+msgid "Offline"
+msgstr "Offline"
+
 #: src/components/BottomNav/BottomNav.tsx:6
 msgid "Schedule"
 msgstr "Schedule"
