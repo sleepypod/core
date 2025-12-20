@@ -1,5 +1,5 @@
-import { Power } from "lucide-react"
-import styles from "./PowerButton.module.css"
+import { Power } from 'lucide-react'
+import styles from './PowerButton.module.css'
 
 /**
  *  A circular power button component with a power icon.

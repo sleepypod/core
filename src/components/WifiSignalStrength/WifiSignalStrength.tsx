@@ -30,22 +30,22 @@ export const WifiSignalStrength = ({ signalStrength = 0 }: WifiSignalStrengthPro
     <div className={clsx('flex items-center gap-1.5 text-[#4ecdc4] text-sm font-medium', statusClass)}>
       {signalStrength
         ? (
-          <>
-            <Wifi size={18} className={statusClass} />
-            <span className="text-white">
-              {normalizedStrength}
-              %
-            </span>
-          </>
-        )
+            <>
+              <Wifi size={18} className={statusClass} />
+              <span className="text-white">
+                {normalizedStrength}
+                %
+              </span>
+            </>
+          )
         : (
-          <>
-            <WifiOff size={18} className={statusClass} />
-            <span className={statusClass}>
-              <Trans>Offline</Trans>
-            </span>
-          </>
-        )}
+            <>
+              <WifiOff size={18} className={statusClass} />
+              <span className={statusClass}>
+                <Trans>Offline</Trans>
+              </span>
+            </>
+          )}
     </div>
   )
 }
