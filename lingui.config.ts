@@ -10,7 +10,8 @@ const config = defineConfig({
   catalogs: [
     {
       path: 'src/lib/i18n/locales/{locale}',
-      include: ['app/'],
+      include: ['src', 'app'],
+      exclude: ['**/node_modules/**', '**/dist/**']
     },
   ],
 })
