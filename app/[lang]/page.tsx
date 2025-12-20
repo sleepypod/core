@@ -1,21 +1,20 @@
-// You now have access to the current locale
+import { getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
+import { initLingui } from '@/src/lib/i18n/initLingui'
+import { setI18n } from '@lingui/react/server'
 
-import { Trans } from '@lingui/react/macro'
-
-// e.g. /en-US/products -> `lang` is "en-US"
 export default async function Page({
   params,
 }: {
   params: Promise<{ lang: string }>
 }) {
   const lang = (await params).lang
+  const i18n = getI18nInstance(lang)
+  initLingui(lang)
+  setI18n(i18n)
+
   return (
     <div>
-      <h1>
-        Current Language:
-        {lang}
-      </h1>
-      <Trans>Hello, world!</Trans>
+
     </div>
   )
 }
