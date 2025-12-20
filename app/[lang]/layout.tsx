@@ -1,9 +1,9 @@
 import '@/app/globals.css'
 import { BottomNav } from '@/src/components/BottomNav/BottomNav'
 import { Header } from '@/src/components/Header/Header'
-import { LinguiClientProvider } from '@/src/components/providers/LinguiClientProvider'
-import { TRPCProvider } from '@/src/components/providers/TRPCProvider'
 import { allMessages, getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
+import { LinguiClientProvider } from '@/src/providers/LinguiClientProvider'
+import { TRPCProvider } from '@/src/providers/TRPCProvider'
 import { setI18n } from '@lingui/react/server'
 
 export default async function LangLayout({
