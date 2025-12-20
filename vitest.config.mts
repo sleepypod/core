@@ -1,6 +1,7 @@
-import react from '@vitejs/plugin-react'
-import tsconfigPaths from 'vite-tsconfig-paths'
-import { defineConfig } from 'vitest/config'
+import { lingui } from "@lingui/vite-plugin";
+import react from '@vitejs/plugin-react';
+import tsconfigPaths from 'vite-tsconfig-paths';
+import { defineConfig } from 'vitest/config';
 
 const sharedConfig = {
   globals: true,
@@ -11,7 +12,11 @@ const sharedConfig = {
 }
 
 export default defineConfig({
-  plugins: [tsconfigPaths(), react()],
+  plugins: [tsconfigPaths(), react({
+    babel: {
+      plugins: ["@lingui/babel-plugin-lingui-macro"],
+    },
+  }), lingui()],
   test: {
     reporters: ['junit', 'verbose'],
     outputFile: {
@@ -20,7 +25,6 @@ export default defineConfig({
     projects: [
       // Unit tests
       {
-        plugins: [tsconfigPaths(), react()],
         test: {
           ...sharedConfig,
           environment: 'jsdom',
