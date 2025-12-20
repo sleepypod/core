@@ -1,4 +1,3 @@
-import css from '@eslint/css'
 import { default as eslint } from '@eslint/js'
 import stylistic from '@stylistic/eslint-plugin'
 import nextVitals from 'eslint-config-next/core-web-vitals'
@@ -61,11 +60,4 @@ export default defineConfig([
       'import/no-default-export': 'off',
     },
   },
-
-  {
-    files: ['**/*.css'],
-    plugins: { css },
-    language: 'css/css',
-    extends: ['css/recommended'],
-  }
 ])
