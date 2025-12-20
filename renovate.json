@@ -12,62 +12,123 @@
   "commitMessagePrefix": "chore",
   "packageRules": [
     {
-      "matchUpdateTypes": ["patch"],
+      "matchUpdateTypes": [
+        "patch"
+      ],
       "automerge": true,
-      "labels": ["dependencies", "patch"]
+      "labels": [
+        "dependencies",
+        "patch"
+      ]
     },
     {
-      "matchUpdateTypes": ["minor"],
+      "matchUpdateTypes": [
+        "minor"
+      ],
       "automerge": true,
-      "labels": ["dependencies", "minor"]
+      "labels": [
+        "dependencies",
+        "minor"
+      ]
     },
     {
-      "matchUpdateTypes": ["minor", "major"],
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
       "automerge": false,
-      "labels": ["dependencies", "manual"]
+      "labels": [
+        "dependencies",
+        "manual"
+      ]
     },
     {
-      "matchDepTypes": ["devDependencies"],
+      "matchDepTypes": [
+        "devDependencies"
+      ],
       "matchPackageNames": [
         "@types/*",
         "eslint",
         "typescript"
       ],
       "automerge": true,
-      "labels": ["devDependencies", "auto-merge"]
+      "labels": [
+        "devDependencies",
+        "auto-merge"
+      ]
     },
     {
-      "matchPackageNames": ["vitest"],
-      "matchUpdateTypes": ["patch", "minor"],
+      "matchPackageNames": [
+        "vitest"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
       "automerge": true,
-      "labels": ["dependencies", "vitest"]
+      "labels": [
+        "dependencies",
+        "vitest"
+      ]
     },
     {
-      "matchPackageNames": ["next", "react", "react-dom"],
-      "matchUpdateTypes": ["major"],
+      "matchPackageNames": [
+        "next",
+        "react",
+        "react-dom"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "automerge": false,
-      "labels": ["dependencies", "nextjs", "react", "manual"]
+      "labels": [
+        "dependencies",
+        "nextjs",
+        "react",
+        "manual"
+      ]
     },
     {
-      "matchPackagePatterns": ["^@mui/"],
-      "matchUpdateTypes": ["major"],
+      "matchPackagePatterns": [
+        "^@base-ui/.*"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "automerge": false,
-      "labels": ["dependencies", "mui", "manual"]
+      "labels": [
+        "dependencies",
+        "base-ui",
+        "manual"
+      ]
     },
     {
-      "matchUpdateTypes": ["major"],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "commitMessagePrefix": "feat(deps-major):",
       "commitMessageAction": "Update {{packageName}}",
-      "labels": ["dependencies", "major"]
+      "labels": [
+        "dependencies",
+        "major"
+      ]
     },
     {
-      "matchUpdateTypes": ["fix", "patch"],
+      "matchUpdateTypes": [
+        "fix",
+        "patch"
+      ],
       "commitMessagePrefix": "fix(deps-patch):",
       "commitMessageAction": "Update {{packageName}}",
-      "labels": ["dependencies", "fix-patch"]
+      "labels": [
+        "dependencies",
+        "fix-patch"
+      ]
     },
     {
-      "matchPackagePatterns": [".*"],
+      "matchPackagePatterns": [
+        ".*"
+      ],
       "commitMessagePrefix": "chore(deps):",
       "commitMessageAction": "Update {{packageName}}"
     }
