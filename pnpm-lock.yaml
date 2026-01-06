@@ -13,7 +13,7 @@ importers:
         version: 1.0.0(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@formatjs/intl-localematcher':
         specifier: ^0.7.0
-        version: 0.7.4
+        version: 0.7.5
       '@lingui/core':
         specifier: ^5.7.0
         version: 5.7.0(@lingui/babel-plugin-lingui-macro@5.7.0(typescript@5.9.3))
@@ -877,11 +877,11 @@ packages:
   '@floating-ui/utils@0.2.10':
     resolution: {integrity: sha512-aGTxbpbg8/b5JfU1HXSrbH3wXZuLPJcNEcZQFMxLs3oSzgtVu6nFPkbbGGUvBcUjKV2YyB9Wxxabo+HEH9tcRQ==}
 
-  '@formatjs/fast-memoize@3.0.2':
-    resolution: {integrity: sha512-YFApUDWFmjpPwAE7VcY7PYVjm6JaLZOAo0UfCQj1/OGi/1QtduG9kIBHmVC551M6AI01qvuP5kjbDebrZOT4Vg==}
+  '@formatjs/fast-memoize@3.0.3':
+    resolution: {integrity: sha512-CArYtQKGLAOruCMeq5/RxCg6vUXFx3OuKBdTm30Wn/+gCefehmZ8Y2xSMxMrO2iel7hRyE3HKfV56t3vAU6D4Q==}
 
-  '@formatjs/intl-localematcher@0.7.4':
-    resolution: {integrity: sha512-AWsSZupIBMU/y04Nj24CjohyNVyfItMJPxSzX5OJwedDEIbGLOHkPxCjAeLeiLF2dw4xmQA8psktdi9MaebBQw==}
+  '@formatjs/intl-localematcher@0.7.5':
+    resolution: {integrity: sha512-7/nd90cn5CT7SVF71/ybUKAcnvBlr9nZlJJp8O8xIZHXFgYOC4SXExZlSdgHv2l6utjw1byidL06QzChvQMHwA==}
 
   '@hono/node-server@1.19.6':
     resolution: {integrity: sha512-Shz/KjlIeAhfiuE93NDKVdZ7HdBVLQAfdbaXEaoAVO3ic9ibRSLGIQGkcBbFyuLr+7/1D5ZCINM8B+6IvXeMtw==}
@@ -6388,13 +6388,13 @@ snapshots:
 
   '@floating-ui/utils@0.2.10': {}
 
-  '@formatjs/fast-memoize@3.0.2':
+  '@formatjs/fast-memoize@3.0.3':
     dependencies:
       tslib: 2.8.1
 
-  '@formatjs/intl-localematcher@0.7.4':
+  '@formatjs/intl-localematcher@0.7.5':
     dependencies:
-      '@formatjs/fast-memoize': 3.0.2
+      '@formatjs/fast-memoize': 3.0.3
       tslib: 2.8.1
 
   '@hono/node-server@1.19.6(hono@4.10.6)':
