@@ -1,6 +1,7 @@
 import { z } from 'zod'
+import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { createHardwareClient } from '@/src/hardware'
+import { createHardwareClient } from '@/src/hardware/client'
 import { db } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
@@ -24,24 +25,16 @@ export const deviceRouter = router({
       const status = await client.getDeviceStatus()
 
       // Update database with current state
+      // Note: Using separate updates instead of bulk insert to ensure correct conflict resolution
       await db
         .insert(deviceState)
-        .values([
-          {
-            side: 'left',
-            currentTemperature: status.leftSide.currentTemperature,
-            targetTemperature: status.leftSide.targetTemperature,
-            isPowered: status.leftSide.targetLevel !== 0,
-            lastUpdated: new Date(),
-          },
-          {
-            side: 'right',
-            currentTemperature: status.rightSide.currentTemperature,
-            targetTemperature: status.rightSide.targetTemperature,
-            isPowered: status.rightSide.targetLevel !== 0,
-            lastUpdated: new Date(),
-          },
-        ])
+        .values({
+          side: 'left',
+          currentTemperature: status.leftSide.currentTemperature,
+          targetTemperature: status.leftSide.targetTemperature,
+          isPowered: status.leftSide.targetLevel !== 0,
+          lastUpdated: new Date(),
+        })
         .onConflictDoUpdate({
           target: deviceState.side,
           set: {
@@ -52,7 +45,33 @@ export const deviceRouter = router({
           },
         })
 
+      await db
+        .insert(deviceState)
+        .values({
+          side: 'right',
+          currentTemperature: status.rightSide.currentTemperature,
+          targetTemperature: status.rightSide.targetTemperature,
+          isPowered: status.rightSide.targetLevel !== 0,
+          lastUpdated: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: deviceState.side,
+          set: {
+            currentTemperature: status.rightSide.currentTemperature,
+            targetTemperature: status.rightSide.targetTemperature,
+            isPowered: status.rightSide.targetLevel !== 0,
+            lastUpdated: new Date(),
+          },
+        })
+
       return status
+    }
+    catch (error) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: `Failed to get device status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        cause: error,
+      })
     }
     finally {
       client.disconnect()
@@ -90,6 +109,13 @@ export const deviceRouter = router({
 
         return { success: true }
       }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to set temperature: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
       finally {
         client.disconnect()
       }
@@ -125,6 +151,13 @@ export const deviceRouter = router({
           .where(eq(deviceState.side, input.side))
 
         return { success: true }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to set power: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
       }
       finally {
         client.disconnect()
@@ -166,6 +199,13 @@ export const deviceRouter = router({
 
         return { success: true }
       }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to set alarm: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
       finally {
         client.disconnect()
       }
@@ -199,6 +239,13 @@ export const deviceRouter = router({
 
         return { success: true }
       }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to clear alarm: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
       finally {
         client.disconnect()
       }
@@ -215,6 +262,13 @@ export const deviceRouter = router({
     try {
       await client.startPriming()
       return { success: true }
+    }
+    catch (error) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: `Failed to start priming: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        cause: error,
+      })
     }
     finally {
       client.disconnect()
