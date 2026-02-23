@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3'
 import * as schema from './schema'
 
 // Database file path (configurable via environment)
-const DB_PATH = process.env.DATABASE_URL?.replace('file:', '') || './sleepypod.db'
+const DB_PATH = process.env.DATABASE_URL?.replace('file:', '') || './sleepypod.dev.db'
 
 // Initialize SQLite connection
 export const sqlite = new Database(DB_PATH)

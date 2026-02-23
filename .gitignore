@@ -20,18 +20,15 @@ node_modules
 test-results
 coverage
 
-# SQLite Database
-sleepypod.db
-sleepypod.db-shm
-sleepypod.db-wal
+# SQLite Database (development)
+sleepypod.dev.db
+sleepypod.dev.db-shm
+sleepypod.dev.db-wal
 
-# SQLite test/development databases
-*.test.db
-*.dev.db
-*.local.db
-*.test.db-shm
-*.test.db-wal
-*.dev.db-shm
-*.dev.db-wal
-*.local.db-shm
-*.local.db-wal
+# SQLite test/local databases
+sleepypod.test.db
+sleepypod.local.db
+sleepypod.test.db-shm
+sleepypod.test.db-wal
+sleepypod.local.db-shm
+sleepypod.local.db-wal
