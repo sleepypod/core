@@ -92,7 +92,7 @@ export const temperatureSchedules = sqliteTable('temperature_schedules', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-}, (t) => [
+}, t => [
   index('idx_temp_schedules_side_day_time').on(t.side, t.dayOfWeek, t.time),
 ])
 
@@ -120,7 +120,7 @@ export const powerSchedules = sqliteTable('power_schedules', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-}, (t) => [
+}, t => [
   index('idx_power_schedules_side_day').on(t.side, t.dayOfWeek),
 ])
 
@@ -152,7 +152,7 @@ export const alarmSchedules = sqliteTable('alarm_schedules', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-}, (t) => [
+}, t => [
   index('idx_alarm_schedules_side_day').on(t.side, t.dayOfWeek),
 ])
 
@@ -192,7 +192,7 @@ export const sleepRecords = sqliteTable('sleep_records', {
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-}, (t) => [
+}, t => [
   index('idx_sleep_records_side_entered').on(t.side, t.enteredBedAt),
 ])
 
@@ -203,7 +203,7 @@ export const vitals = sqliteTable('vitals', {
   heartRate: real('heart_rate'), // 30-90 bpm
   hrv: real('hrv'), // 0-200
   breathingRate: real('breathing_rate'), // 5-30 breaths/min
-}, (t) => [
+}, t => [
   index('idx_vitals_side_timestamp').on(t.side, t.timestamp),
 ])
 
@@ -212,7 +212,7 @@ export const movement = sqliteTable('movement', {
   side: text('side', { enum: ['left', 'right'] }).notNull(),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   totalMovement: integer('total_movement').notNull(),
-}, (t) => [
+}, t => [
   index('idx_movement_side_timestamp').on(t.side, t.timestamp),
 ])
 

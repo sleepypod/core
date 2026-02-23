@@ -48,14 +48,25 @@ export const SideSelector = ({ temperatures }: SideSelectorProps) => {
               const scale = mapToEightSleepScale(currentF)
               return (
                 <>
-                  {trend === 'up' ? (
-                    <TrendingUp size={14} className="text-amber-500" />
-                  ) : trend === 'down' ? (
-                    <TrendingDown size={14} className="text-sky-500" />
-                  ) : (
-                    <TrendingUp size={14} className="text-zinc-400" />
-                  )}
-                  <span>{formatTemp(currentF, 'F')} · {scale}/10</span>
+                  {trend === 'up'
+                    ? (
+                        <TrendingUp size={14} className="text-amber-500" />
+                      )
+                    : trend === 'down'
+                      ? (
+                          <TrendingDown size={14} className="text-sky-500" />
+                        )
+                      : (
+                          <TrendingUp size={14} className="text-zinc-400" />
+                        )}
+                  <span>
+                    {formatTemp(currentF, 'F')}
+                    {' '}
+                    ·
+                    {' '}
+                    {scale}
+                    /10
+                  </span>
                 </>
               )
             })()
@@ -82,14 +93,25 @@ export const SideSelector = ({ temperatures }: SideSelectorProps) => {
               const scale = mapToEightSleepScale(currentF)
               return (
                 <>
-                  {trend === 'up' ? (
-                    <TrendingUp size={14} className="text-amber-500" />
-                  ) : trend === 'down' ? (
-                    <TrendingDown size={14} className="text-sky-500" />
-                  ) : (
-                    <TrendingUp size={14} className="text-zinc-400" />
-                  )}
-                  <span>{formatTemp(currentF, 'F')} · {scale}/10</span>
+                  {trend === 'up'
+                    ? (
+                        <TrendingUp size={14} className="text-amber-500" />
+                      )
+                    : trend === 'down'
+                      ? (
+                          <TrendingDown size={14} className="text-sky-500" />
+                        )
+                      : (
+                          <TrendingUp size={14} className="text-zinc-400" />
+                        )}
+                  <span>
+                    {formatTemp(currentF, 'F')}
+                    {' '}
+                    ·
+                    {' '}
+                    {scale}
+                    /10
+                  </span>
                 </>
               )
             })()
