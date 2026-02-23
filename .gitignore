@@ -21,6 +21,17 @@ test-results
 coverage
 
 # SQLite Database
-*.db
-*.db-shm
-*.db-wal
+sleepypod.db
+sleepypod.db-shm
+sleepypod.db-wal
+
+# SQLite test/development databases
+*.test.db
+*.dev.db
+*.local.db
+*.test.db-shm
+*.test.db-wal
+*.dev.db-shm
+*.dev.db-wal
+*.local.db-shm
+*.local.db-wal
