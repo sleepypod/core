@@ -1,4 +1,4 @@
-import { Readable } from 'stream'
+import type { Readable } from 'stream'
 import split from 'binary-split'
 
 /**
@@ -30,7 +30,8 @@ export class MessageStream {
         const resolve = this.pendingRead
         this.pendingRead = null
         resolve(chunk)
-      } else {
+      }
+      else {
         this.messageQueue.push(chunk)
       }
     })
@@ -47,10 +48,9 @@ export class MessageStream {
     splitter.on('error', (error: Error) => {
       this.streamError = error
       if (this.pendingRead) {
-        const reject = this.pendingRead
         this.pendingRead = null
-        throw error
       }
+      throw error
     })
   }
 
@@ -61,7 +61,11 @@ export class MessageStream {
   async readMessage(): Promise<Buffer> {
     // Return buffered message if available
     if (this.messageQueue.length > 0) {
-      return this.messageQueue.shift()!
+      const message = this.messageQueue.shift()
+      if (!message) {
+        throw new Error('Unexpected empty message queue')
+      }
+      return message
     }
 
     // Check for stream errors

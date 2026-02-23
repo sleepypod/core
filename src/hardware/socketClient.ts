@@ -1,10 +1,11 @@
 import { Socket } from 'net'
 import { MessageStream } from './messageStream'
 import { SequentialQueue } from './sequentialQueue'
+import type {
+  HardwareCommand } from './types'
 import {
   CommandExecutionError,
-  ConnectionTimeoutError,
-  HardwareCommand,
+  ConnectionTimeoutError
 } from './types'
 
 /**
@@ -57,7 +58,8 @@ export class SocketClient {
         // Read response
         const responseBuffer = await this.messageStream.readMessage()
         return responseBuffer.toString('utf-8')
-      } catch (error) {
+      }
+      catch (error) {
         throw new CommandExecutionError(
           `Failed to execute command ${command}: ${error}`,
           command
@@ -74,7 +76,8 @@ export class SocketClient {
       this.socket.write(data, (error) => {
         if (error) {
           reject(error)
-        } else {
+        }
+        else {
           resolve()
         }
       })
@@ -85,7 +88,7 @@ export class SocketClient {
    * Utility delay function.
    */
   private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
+    return new Promise(resolve => setTimeout(resolve, ms))
   }
 
   /**

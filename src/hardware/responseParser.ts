@@ -48,7 +48,8 @@ export function parseDeviceStatus(response: string): DeviceStatus {
       sensorLabel: validated.sensorLabel,
       gestures,
     }
-  } catch (error) {
+  }
+  catch (error) {
     throw new ParseError(
       `Failed to parse device status: ${error}`,
       response
@@ -63,7 +64,7 @@ export function parseDeviceStatus(response: string): DeviceStatus {
 function parseKeyValueResponse(response: string): Record<string, string> {
   const result: Record<string, string> = {}
 
-  const lines = response.split('\n').filter((line) => line.trim())
+  const lines = response.split('\n').filter(line => line.trim())
 
   for (const line of lines) {
     const parts = line.split(' = ')
@@ -85,9 +86,11 @@ function extractPodVersion(sensorLabel: string): PodVersion {
 
   if (hwRev >= 'J00') {
     return PodVersion.POD_5
-  } else if (hwRev >= 'I00') {
+  }
+  else if (hwRev >= 'I00') {
     return PodVersion.POD_4
-  } else if (hwRev >= 'H00') {
+  }
+  else if (hwRev >= 'H00') {
     return PodVersion.POD_3
   }
 
@@ -114,7 +117,8 @@ function parseGestures(raw: RawDeviceData): GestureData | undefined {
     }
 
     return Object.keys(gestures).length > 0 ? gestures : undefined
-  } catch (error) {
+  }
+  catch (error) {
     console.warn('Failed to parse gesture data:', error)
     return undefined
   }
@@ -127,7 +131,8 @@ export function decodeSettings(hexString: string): Record<string, unknown> {
   try {
     const buffer = Buffer.from(hexString, 'hex')
     return cborDecode(buffer) as Record<string, unknown>
-  } catch (error) {
+  }
+  catch (error) {
     throw new ParseError(`Failed to decode CBOR settings: ${error}`)
   }
 }
@@ -135,7 +140,7 @@ export function decodeSettings(hexString: string): Record<string, unknown> {
 /**
  * Parse a simple response (e.g., "OK" or error message).
  */
-export function parseSimpleResponse(response: string): { success: boolean; message: string } {
+export function parseSimpleResponse(response: string): { success: boolean, message: string } {
   const trimmed = response.trim()
 
   if (trimmed === 'OK' || trimmed === '') {

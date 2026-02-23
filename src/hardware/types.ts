@@ -59,9 +59,9 @@ export type RawDeviceData = z.infer<typeof rawDeviceDataSchema>
  * Parsed gesture data
  */
 export interface GestureData {
-  doubleTap?: { l: number; r: number }
-  tripleTap?: { l: number; r: number }
-  quadTap?: { l: number; r: number }
+  doubleTap?: { l: number, r: number }
+  tripleTap?: { l: number, r: number }
+  quadTap?: { l: number, r: number }
 }
 
 /**

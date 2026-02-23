@@ -50,7 +50,8 @@ export class HardwareClient {
 
       // Send hello command to verify connection
       await this.client.executeCommand(HardwareCommand.HELLO)
-    } catch (error) {
+    }
+    catch (error) {
       this.client = null
       throw new HardwareError(`Failed to connect to hardware: ${error}`)
     }
@@ -63,12 +64,17 @@ export class HardwareClient {
     if (!this.client || this.client.isClosed()) {
       if (this.config.autoReconnect) {
         await this.connect()
-      } else {
+      }
+      else {
         throw new HardwareError('Not connected to hardware')
       }
     }
 
-    return this.client!
+    if (!this.client) {
+      throw new HardwareError('Client connection failed')
+    }
+
+    return this.client
   }
 
   /**
@@ -102,8 +108,8 @@ export class HardwareClient {
     const level = fahrenheitToLevel(temperature)
 
     // Set temperature level
-    const levelCommand =
-      side === 'left'
+    const levelCommand
+      = side === 'left'
         ? HardwareCommand.TEMP_LEVEL_LEFT
         : HardwareCommand.TEMP_LEVEL_RIGHT
 
@@ -111,8 +117,8 @@ export class HardwareClient {
 
     // Set duration if provided
     if (duration !== undefined) {
-      const durationCommand =
-        side === 'left'
+      const durationCommand
+        = side === 'left'
           ? HardwareCommand.LEFT_TEMP_DURATION
           : HardwareCommand.RIGHT_TEMP_DURATION
 
@@ -184,11 +190,12 @@ export class HardwareClient {
       // Power on by setting temperature
       const temp = temperature ?? 75 // Default to 75°F
       await this.setTemperature(side, temp)
-    } else {
+    }
+    else {
       // Power off by setting level to 0
       const client = await this.ensureConnected()
-      const command =
-        side === 'left' ? HardwareCommand.TEMP_LEVEL_LEFT : HardwareCommand.TEMP_LEVEL_RIGHT
+      const command
+        = side === 'left' ? HardwareCommand.TEMP_LEVEL_LEFT : HardwareCommand.TEMP_LEVEL_RIGHT
       await client.executeCommand(command, '0')
     }
   }
