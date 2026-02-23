@@ -1,18 +1,16 @@
 import { publicProcedure, router } from '@/src/server/trpc'
-import { z } from 'zod'
+import { deviceRouter } from './device'
+import { settingsRouter } from './settings'
+import { schedulesRouter } from './schedules'
+import { biometricsRouter } from './biometrics'
 
 export const appRouter = router({
   healthcheck: publicProcedure.query(() => 'yay!'),
 
-  greeting: publicProcedure
-    .input(
-      z.object({
-        name: z.string(),
-      }),
-    )
-    .query(({ input }) => {
-      return `Hello ${input.name}!`
-    }),
+  device: deviceRouter,
+  settings: settingsRouter,
+  schedules: schedulesRouter,
+  biometrics: biometricsRouter,
 })
 
 export type AppRouter = typeof appRouter

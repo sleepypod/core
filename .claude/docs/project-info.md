@@ -81,6 +81,14 @@ curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install
 
 CLI: `sp-status`, `sp-restart`, `sp-logs`, `sp-update`
 
+## documentation
+
+- `.claude/docs/trpc-api-architecture.md` - Complete tRPC API reference
+- `.claude/docs/documentation-best-practices.md` - Documentation standards
+- `.claude/docs/import-patterns.md` - Import conventions
+- `.claude/docs/pr-review-process.md` - PR workflow
+- `.claude/docs/ci-checks.md` - CI pipeline details
+
 ## related
 
 - ADRs: `docs/adr/`

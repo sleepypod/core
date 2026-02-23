@@ -5,7 +5,6 @@ import { Trans } from '@lingui/react/macro'
 
 export default function Page() {
   const healthcheck = trpc.healthcheck.useQuery()
-  const greeting = trpc.greeting.useQuery({ name: 'tRPC' })
 
   return (
     <div>
@@ -16,11 +15,6 @@ export default function Page() {
           Healthcheck:
           {' '}
           {healthcheck.data ?? 'Loading...'}
-        </p>
-        <p>
-          Greeting:
-          {' '}
-          {greeting.data ?? 'Loading...'}
         </p>
       </div>
     </div>
