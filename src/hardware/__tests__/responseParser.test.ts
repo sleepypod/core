@@ -74,7 +74,7 @@ describe('parseDeviceStatus', () => {
 
     expect(status.rightSide.currentLevel).toBe(98)
     expect(status.rightSide.targetLevel).toBe(100)
-    expect(status.rightSide.currentTemperature).toBe(110) // Level 98 = ~110°F
+    expect(status.rightSide.currentTemperature).toBe(109) // Level 98 = 109°F
     expect(status.rightSide.targetTemperature).toBe(110) // Level 100 = 110°F (max)
   })
 

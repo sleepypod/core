@@ -79,7 +79,7 @@ export const HELLO_RESPONSE = 'READY\n\n'
  * CBOR-encoded settings data (hex string).
  * This represents actual firmware settings format.
  */
-export const CBOR_SETTINGS_HEX = 'a3667465737431016674657374320263746573743303'
+export const CBOR_SETTINGS_HEX = 'b90003657465737431016574657374320265746573743303'
 
 /**
  * Expected parsed structure of CBOR settings above.

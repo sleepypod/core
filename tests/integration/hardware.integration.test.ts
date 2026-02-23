@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import { HardwareCommand } from '../types'
-import { DEVICE_STATUS_POD4, DEVICE_STATUS_POD5, OK_RESPONSE } from './fixtures'
-import { setupMockServer, sleep } from './testUtils'
+import { HardwareCommand } from '../../src/hardware/types'
+import { DEVICE_STATUS_POD4, DEVICE_STATUS_POD5, OK_RESPONSE } from '../../src/hardware/__tests__/fixtures'
+import { setupMockServer, sleep } from '../../src/hardware/__tests__/testUtils'
 
 /**
  * Integration tests for the full hardware stack.

@@ -1,3 +1,4 @@
+import { promises as fs } from 'fs'
 import { Server, Socket, createServer } from 'net'
 import { HardwareCommand } from '../types'
 import {
@@ -188,7 +189,7 @@ export class MockHardwareServer {
 
     // Close server
     if (this.server) {
-      return new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         this.server!.close((error) => {
           if (error) {
             reject(error)
@@ -198,6 +199,14 @@ export class MockHardwareServer {
           }
         })
       })
+
+      // Clean up socket file
+      try {
+        await fs.unlink(this.socketPath)
+      }
+      catch (error) {
+        // Ignore errors - file might not exist
+      }
     }
   }
 
