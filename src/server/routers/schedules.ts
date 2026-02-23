@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import {
@@ -7,16 +8,17 @@ import {
   alarmSchedules,
 } from '@/src/db/schema'
 import { eq, and } from 'drizzle-orm'
-
-const dayOfWeekEnum = z.enum([
-  'sunday',
-  'monday',
-  'tuesday',
-  'wednesday',
-  'thursday',
-  'friday',
-  'saturday',
-])
+import {
+  sideSchema,
+  dayOfWeekSchema,
+  timeStringSchema,
+  temperatureSchema,
+  idSchema,
+  vibrationIntensitySchema,
+  vibrationPatternSchema,
+  alarmDurationSchema,
+  validateTimeRange,
+} from '@/src/server/validation-schemas'
 
 /**
  * Schedules router - manages temperature, power, and alarm schedules
@@ -27,30 +29,42 @@ export const schedulesRouter = router({
    */
   getAll: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-      })
+      z
+        .object({
+          side: sideSchema,
+        })
+        .strict()
     )
     .query(async ({ input }) => {
-      const [tempSchedules, powSchedules, almSchedules] = await Promise.all([
-        db
-          .select()
-          .from(temperatureSchedules)
-          .where(eq(temperatureSchedules.side, input.side)),
-        db
-          .select()
-          .from(powerSchedules)
-          .where(eq(powerSchedules.side, input.side)),
-        db
-          .select()
-          .from(alarmSchedules)
-          .where(eq(alarmSchedules.side, input.side)),
-      ])
+      try {
+        const [temperatureSchedulesList, powerSchedulesList, alarmSchedulesList]
+          = await Promise.all([
+            db
+              .select()
+              .from(temperatureSchedules)
+              .where(eq(temperatureSchedules.side, input.side)),
+            db
+              .select()
+              .from(powerSchedules)
+              .where(eq(powerSchedules.side, input.side)),
+            db
+              .select()
+              .from(alarmSchedules)
+              .where(eq(alarmSchedules.side, input.side)),
+          ])
 
-      return {
-        temperature: tempSchedules,
-        power: powSchedules,
-        alarm: almSchedules,
+        return {
+          temperature: temperatureSchedulesList,
+          power: powerSchedulesList,
+          alarm: alarmSchedulesList,
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch schedules: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
       }
     }),
 
@@ -59,21 +73,41 @@ export const schedulesRouter = router({
    */
   createTemperatureSchedule: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        dayOfWeek: dayOfWeekEnum,
-        time: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
-        temperature: z.number().min(55).max(110),
-        enabled: z.boolean().default(true),
-      })
+      z
+        .object({
+          side: sideSchema,
+          dayOfWeek: dayOfWeekSchema,
+          time: timeStringSchema,
+          temperature: temperatureSchema,
+          enabled: z.boolean().default(true),
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      const [created] = await db
-        .insert(temperatureSchedules)
-        .values(input)
-        .returning()
+      try {
+        const [created] = await db
+          .insert(temperatureSchedules)
+          .values(input)
+          .returning()
 
-      return created
+        if (!created) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Failed to create temperature schedule - no record returned',
+          })
+        }
+
+        return created
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to create temperature schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 
   /**
@@ -81,26 +115,46 @@ export const schedulesRouter = router({
    */
   updateTemperatureSchedule: publicProcedure
     .input(
-      z.object({
-        id: z.number(),
-        time: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
-        temperature: z.number().min(55).max(110).optional(),
-        enabled: z.boolean().optional(),
-      })
+      z
+        .object({
+          id: idSchema,
+          time: timeStringSchema.optional(),
+          temperature: temperatureSchema.optional(),
+          enabled: z.boolean().optional(),
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      const { id, ...updates } = input
+      try {
+        const { id, ...updates } = input
 
-      const [updated] = await db
-        .update(temperatureSchedules)
-        .set({
-          ...updates,
-          updatedAt: new Date(),
+        const [updated] = await db
+          .update(temperatureSchedules)
+          .set({
+            ...updates,
+            updatedAt: new Date(),
+          })
+          .where(eq(temperatureSchedules.id, id))
+          .returning()
+
+        if (!updated) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: `Temperature schedule with ID ${id} not found`,
+          })
+        }
+
+        return updated
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to update temperature schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
         })
-        .where(eq(temperatureSchedules.id, id))
-        .returning()
-
-      return updated
+      }
     }),
 
   /**
@@ -108,16 +162,27 @@ export const schedulesRouter = router({
    */
   deleteTemperatureSchedule: publicProcedure
     .input(
-      z.object({
-        id: z.number(),
-      })
+      z
+        .object({
+          id: idSchema,
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      await db
-        .delete(temperatureSchedules)
-        .where(eq(temperatureSchedules.id, input.id))
+      try {
+        await db
+          .delete(temperatureSchedules)
+          .where(eq(temperatureSchedules.id, input.id))
 
-      return { success: true }
+        return { success: true }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to delete temperature schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 
   /**
@@ -125,19 +190,46 @@ export const schedulesRouter = router({
    */
   createPowerSchedule: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        dayOfWeek: dayOfWeekEnum,
-        onTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
-        offTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
-        onTemperature: z.number().min(55).max(110),
-        enabled: z.boolean().default(true),
-      })
+      z
+        .object({
+          side: sideSchema,
+          dayOfWeek: dayOfWeekSchema,
+          onTime: timeStringSchema,
+          offTime: timeStringSchema,
+          onTemperature: temperatureSchema,
+          enabled: z.boolean().default(true),
+        })
+        .strict()
+        .refine(
+          data => validateTimeRange(data.onTime, data.offTime),
+          {
+            message: 'onTime must be before offTime',
+            path: ['offTime'],
+          }
+        )
     )
     .mutation(async ({ input }) => {
-      const [created] = await db.insert(powerSchedules).values(input).returning()
+      try {
+        const [created] = await db.insert(powerSchedules).values(input).returning()
 
-      return created
+        if (!created) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Failed to create power schedule - no record returned',
+          })
+        }
+
+        return created
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to create power schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 
   /**
@@ -145,27 +237,60 @@ export const schedulesRouter = router({
    */
   updatePowerSchedule: publicProcedure
     .input(
-      z.object({
-        id: z.number(),
-        onTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
-        offTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
-        onTemperature: z.number().min(55).max(110).optional(),
-        enabled: z.boolean().optional(),
-      })
+      z
+        .object({
+          id: idSchema,
+          onTime: timeStringSchema.optional(),
+          offTime: timeStringSchema.optional(),
+          onTemperature: temperatureSchema.optional(),
+          enabled: z.boolean().optional(),
+        })
+        .strict()
+        .refine(
+          (data) => {
+            // If both times are provided, validate the range
+            if (data.onTime && data.offTime) {
+              return validateTimeRange(data.onTime, data.offTime)
+            }
+            return true
+          },
+          {
+            message: 'onTime must be before offTime',
+            path: ['offTime'],
+          }
+        )
     )
     .mutation(async ({ input }) => {
-      const { id, ...updates } = input
+      try {
+        const { id, ...updates } = input
 
-      const [updated] = await db
-        .update(powerSchedules)
-        .set({
-          ...updates,
-          updatedAt: new Date(),
+        const [updated] = await db
+          .update(powerSchedules)
+          .set({
+            ...updates,
+            updatedAt: new Date(),
+          })
+          .where(eq(powerSchedules.id, id))
+          .returning()
+
+        if (!updated) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: `Power schedule with ID ${id} not found`,
+          })
+        }
+
+        return updated
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to update power schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
         })
-        .where(eq(powerSchedules.id, id))
-        .returning()
-
-      return updated
+      }
     }),
 
   /**
@@ -173,14 +298,25 @@ export const schedulesRouter = router({
    */
   deletePowerSchedule: publicProcedure
     .input(
-      z.object({
-        id: z.number(),
-      })
+      z
+        .object({
+          id: idSchema,
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      await db.delete(powerSchedules).where(eq(powerSchedules.id, input.id))
+      try {
+        await db.delete(powerSchedules).where(eq(powerSchedules.id, input.id))
 
-      return { success: true }
+        return { success: true }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to delete power schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 
   /**
@@ -188,21 +324,41 @@ export const schedulesRouter = router({
    */
   createAlarmSchedule: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        dayOfWeek: dayOfWeekEnum,
-        time: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
-        vibrationIntensity: z.number().min(1).max(100),
-        vibrationPattern: z.enum(['double', 'rise']).default('rise'),
-        duration: z.number().min(0).max(180),
-        alarmTemperature: z.number().min(55).max(110),
-        enabled: z.boolean().default(true),
-      })
+      z
+        .object({
+          side: sideSchema,
+          dayOfWeek: dayOfWeekSchema,
+          time: timeStringSchema,
+          vibrationIntensity: vibrationIntensitySchema,
+          vibrationPattern: vibrationPatternSchema.default('rise'),
+          duration: alarmDurationSchema,
+          alarmTemperature: temperatureSchema,
+          enabled: z.boolean().default(true),
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      const [created] = await db.insert(alarmSchedules).values(input).returning()
+      try {
+        const [created] = await db.insert(alarmSchedules).values(input).returning()
 
-      return created
+        if (!created) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Failed to create alarm schedule - no record returned',
+          })
+        }
+
+        return created
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to create alarm schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 
   /**
@@ -210,29 +366,49 @@ export const schedulesRouter = router({
    */
   updateAlarmSchedule: publicProcedure
     .input(
-      z.object({
-        id: z.number(),
-        time: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
-        vibrationIntensity: z.number().min(1).max(100).optional(),
-        vibrationPattern: z.enum(['double', 'rise']).optional(),
-        duration: z.number().min(0).max(180).optional(),
-        alarmTemperature: z.number().min(55).max(110).optional(),
-        enabled: z.boolean().optional(),
-      })
+      z
+        .object({
+          id: idSchema,
+          time: timeStringSchema.optional(),
+          vibrationIntensity: vibrationIntensitySchema.optional(),
+          vibrationPattern: vibrationPatternSchema.optional(),
+          duration: alarmDurationSchema.optional(),
+          alarmTemperature: temperatureSchema.optional(),
+          enabled: z.boolean().optional(),
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      const { id, ...updates } = input
+      try {
+        const { id, ...updates } = input
 
-      const [updated] = await db
-        .update(alarmSchedules)
-        .set({
-          ...updates,
-          updatedAt: new Date(),
+        const [updated] = await db
+          .update(alarmSchedules)
+          .set({
+            ...updates,
+            updatedAt: new Date(),
+          })
+          .where(eq(alarmSchedules.id, id))
+          .returning()
+
+        if (!updated) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: `Alarm schedule with ID ${id} not found`,
+          })
+        }
+
+        return updated
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to update alarm schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
         })
-        .where(eq(alarmSchedules.id, id))
-        .returning()
-
-      return updated
+      }
     }),
 
   /**
@@ -240,14 +416,25 @@ export const schedulesRouter = router({
    */
   deleteAlarmSchedule: publicProcedure
     .input(
-      z.object({
-        id: z.number(),
-      })
+      z
+        .object({
+          id: idSchema,
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      await db.delete(alarmSchedules).where(eq(alarmSchedules.id, input.id))
+      try {
+        await db.delete(alarmSchedules).where(eq(alarmSchedules.id, input.id))
 
-      return { success: true }
+        return { success: true }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to delete alarm schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 
   /**
@@ -255,46 +442,58 @@ export const schedulesRouter = router({
    */
   getByDay: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        dayOfWeek: dayOfWeekEnum,
-      })
+      z
+        .object({
+          side: sideSchema,
+          dayOfWeek: dayOfWeekSchema,
+        })
+        .strict()
     )
     .query(async ({ input }) => {
-      const [tempSchedules, powSchedules, almSchedules] = await Promise.all([
-        db
-          .select()
-          .from(temperatureSchedules)
-          .where(
-            and(
-              eq(temperatureSchedules.side, input.side),
-              eq(temperatureSchedules.dayOfWeek, input.dayOfWeek)
-            )
-          ),
-        db
-          .select()
-          .from(powerSchedules)
-          .where(
-            and(
-              eq(powerSchedules.side, input.side),
-              eq(powerSchedules.dayOfWeek, input.dayOfWeek)
-            )
-          ),
-        db
-          .select()
-          .from(alarmSchedules)
-          .where(
-            and(
-              eq(alarmSchedules.side, input.side),
-              eq(alarmSchedules.dayOfWeek, input.dayOfWeek)
-            )
-          ),
-      ])
+      try {
+        const [temperatureSchedulesList, powerSchedulesList, alarmSchedulesList]
+          = await Promise.all([
+            db
+              .select()
+              .from(temperatureSchedules)
+              .where(
+                and(
+                  eq(temperatureSchedules.side, input.side),
+                  eq(temperatureSchedules.dayOfWeek, input.dayOfWeek)
+                )
+              ),
+            db
+              .select()
+              .from(powerSchedules)
+              .where(
+                and(
+                  eq(powerSchedules.side, input.side),
+                  eq(powerSchedules.dayOfWeek, input.dayOfWeek)
+                )
+              ),
+            db
+              .select()
+              .from(alarmSchedules)
+              .where(
+                and(
+                  eq(alarmSchedules.side, input.side),
+                  eq(alarmSchedules.dayOfWeek, input.dayOfWeek)
+                )
+              ),
+          ])
 
-      return {
-        temperature: tempSchedules,
-        power: powSchedules,
-        alarm: almSchedules,
+        return {
+          temperature: temperatureSchedulesList,
+          power: powerSchedulesList,
+          alarm: alarmSchedulesList,
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch schedules by day: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
       }
     }),
 })
