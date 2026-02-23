@@ -134,15 +134,19 @@ export class MockHardwareServer {
     socket.on('data', (chunk) => {
       buffer += chunk.toString('utf-8')
 
-      // Check for complete command (ends with double newline)
-      if (buffer.includes(PROTOCOL.DELIMITER)) {
-        const messages = buffer.split(PROTOCOL.DELIMITER)
-        buffer = messages.pop() || '' // Keep incomplete message in buffer
+      // Process all complete commands in buffer
+      // Protocol: "{command}\n{argument}\n\n"
+      // For commands without arguments: "{command}\n\n\n" (extra newline for empty arg)
+      while (buffer.includes(PROTOCOL.DELIMITER)) {
+        const delimiterIndex = buffer.indexOf(PROTOCOL.DELIMITER)
+        const message = buffer.substring(0, delimiterIndex)
+        buffer = buffer.substring(delimiterIndex + PROTOCOL.DELIMITER.length)
 
-        for (const message of messages) {
-          if (message) {
-            this.handleCommand(socket, message)
-          }
+        // Skip empty messages and trim any leading/trailing whitespace
+        // This handles cases where the buffer has leftover newlines from previous messages
+        const trimmedMessage = message.trim()
+        if (trimmedMessage) {
+          this.handleCommand(socket, trimmedMessage)
         }
       }
     })
@@ -164,7 +168,7 @@ export class MockHardwareServer {
    */
   private handleCommand(socket: Socket, message: string) {
     const lines = message.split('\n')
-    const command = lines[0]
+    const command = lines[0].trim() // Trim whitespace as defensive measure
     const argument = lines[1] || ''
 
     const response = this.commandResponses.get(command) || ERROR_RESPONSE
