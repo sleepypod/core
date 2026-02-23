@@ -8,23 +8,21 @@ import { determineTrend, ensureF, formatTemp, mapToEightSleepScale } from 'src/l
 type Side = 'left' | 'right'
 
 interface SideTemp {
-  currentTemp: number;
-  targetTemp: number;
+  currentTemp: number
+  targetTemp: number
 }
 
 interface SideSelectorProps {
   temperatures: {
-    leftSide: SideTemp;
-    rightSide: SideTemp;
-  };
+    leftSide: SideTemp
+    rightSide: SideTemp
+  }
 }
 
 export const SideSelector = ({ temperatures }: SideSelectorProps) => {
-  const [temperature, setTemperature] = useState(2)
   const [activeSide, setActiveSide] = useState<Side>('left')
-  const [activeTab, setActiveTab] = useState('temp')
 
-  const { leftSide, rightSide } = temperatures;
+  const { leftSide, rightSide } = temperatures
 
   const handleSideChange = (side: Side) => {
     setActiveSide(side)
@@ -89,7 +87,7 @@ export const SideSelector = ({ temperatures }: SideSelectorProps) => {
                   ) : trend === 'down' ? (
                     <TrendingDown size={14} className="text-sky-500" />
                   ) : (
-                    <TrendingDown size={14} className="text-zinc-400" />
+                    <TrendingUp size={14} className="text-zinc-400" />
                   )}
                   <span>{formatTemp(currentF, 'F')} · {scale}/10</span>
                 </>

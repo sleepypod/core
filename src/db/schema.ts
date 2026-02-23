@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 // ============================================================================
 // Device Settings & Configuration
@@ -29,7 +29,7 @@ export const deviceSettings = sqliteTable('device_settings', {
 
 export const sideSettings = sqliteTable('side_settings', {
   side: text('side', { enum: ['left', 'right'] }).primaryKey(),
-  name: text('name').notNull().default('Left'),
+  name: text('name').notNull(), // Must be provided explicitly during insert
   awayMode: integer('away_mode', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -92,7 +92,9 @@ export const temperatureSchedules = sqliteTable('temperature_schedules', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-})
+}, (t) => [
+  index('idx_temp_schedules_side_day_time').on(t.side, t.dayOfWeek, t.time),
+])
 
 export const powerSchedules = sqliteTable('power_schedules', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -118,7 +120,9 @@ export const powerSchedules = sqliteTable('power_schedules', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-})
+}, (t) => [
+  index('idx_power_schedules_side_day').on(t.side, t.dayOfWeek),
+])
 
 export const alarmSchedules = sqliteTable('alarm_schedules', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -148,7 +152,9 @@ export const alarmSchedules = sqliteTable('alarm_schedules', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-})
+}, (t) => [
+  index('idx_alarm_schedules_side_day').on(t.side, t.dayOfWeek),
+])
 
 // ============================================================================
 // Device State (Runtime)
@@ -186,7 +192,9 @@ export const sleepRecords = sqliteTable('sleep_records', {
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-})
+}, (t) => [
+  index('idx_sleep_records_side_entered').on(t.side, t.enteredBedAt),
+])
 
 export const vitals = sqliteTable('vitals', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -195,14 +203,18 @@ export const vitals = sqliteTable('vitals', {
   heartRate: real('heart_rate'), // 30-90 bpm
   hrv: real('hrv'), // 0-200
   breathingRate: real('breathing_rate'), // 5-30 breaths/min
-})
+}, (t) => [
+  index('idx_vitals_side_timestamp').on(t.side, t.timestamp),
+])
 
 export const movement = sqliteTable('movement', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   totalMovement: integer('total_movement').notNull(),
-})
+}, (t) => [
+  index('idx_movement_side_timestamp').on(t.side, t.timestamp),
+])
 
 // ============================================================================
 // System Health & Services
@@ -222,32 +234,5 @@ export const systemHealth = sqliteTable('system_health', {
     .default(sql`(unixepoch())`),
 })
 
-// ============================================================================
-// Indexes
-// ============================================================================
-
-// Biometrics indexes for efficient time-series queries
-export const vitalsIndexes = {
-  sideTimestamp: sql`CREATE INDEX IF NOT EXISTS idx_vitals_side_timestamp ON vitals(side, timestamp DESC)`,
-}
-
-export const movementIndexes = {
-  sideTimestamp: sql`CREATE INDEX IF NOT EXISTS idx_movement_side_timestamp ON movement(side, timestamp DESC)`,
-}
-
-export const sleepRecordsIndexes = {
-  sideEnteredAt: sql`CREATE INDEX IF NOT EXISTS idx_sleep_records_side_entered ON sleep_records(side, entered_bed_at DESC)`,
-}
-
-// Schedule indexes for efficient lookups
-export const temperatureSchedulesIndexes = {
-  sideDayTime: sql`CREATE INDEX IF NOT EXISTS idx_temp_schedules_side_day_time ON temperature_schedules(side, day_of_week, time)`,
-}
-
-export const powerSchedulesIndexes = {
-  sideDayTime: sql`CREATE INDEX IF NOT EXISTS idx_power_schedules_side_day ON power_schedules(side, day_of_week)`,
-}
-
-export const alarmSchedulesIndexes = {
-  sideDayTime: sql`CREATE INDEX IF NOT EXISTS idx_alarm_schedules_side_day ON alarm_schedules(side, day_of_week)`,
-}
+// Indexes are now defined inline within each table definition above using index()
+// This ensures Drizzle Kit generates them in migrations
