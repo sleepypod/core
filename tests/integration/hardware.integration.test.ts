@@ -1,7 +1,8 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { describe, expect, test } from 'vitest'
 import { HardwareCommand } from '../../src/hardware/types'
 import { DEVICE_STATUS_POD4, DEVICE_STATUS_POD5, OK_RESPONSE } from '../../src/hardware/tests/fixtures'
-import { setupMockServer, sleep } from '../../src/hardware/tests/testUtils'
+import { setupMockServer } from '../../src/hardware/tests/testUtils'
 
 /**
  * Integration tests for the full hardware stack.

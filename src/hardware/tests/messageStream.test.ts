@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, test } from 'vitest'
 import { MessageStream } from '../messageStream'
 import { createMockReadable, sleep } from './testUtils'
@@ -18,7 +19,6 @@ describe('MessageStream', () => {
   })
 
   test('waits for messages when buffer is empty', async () => {
-    const messages: string[] = []
     const stream: any = {
       pipe: (destination: any) => {
         // Send first message immediately

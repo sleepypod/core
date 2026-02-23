@@ -1,5 +1,7 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { promises as fs } from 'fs'
-import { Server, Socket, createServer } from 'net'
+import type { Server, Socket } from 'net'
+import { createServer } from 'net'
 import { HardwareCommand } from '../types'
 import {
   DEVICE_STATUS_POD4,
@@ -169,7 +171,7 @@ export class MockHardwareServer {
   private handleCommand(socket: Socket, message: string) {
     const lines = message.split('\n')
     const command = lines[0].trim() // Trim whitespace as defensive measure
-    const argument = lines[1] || ''
+    // const argument = lines[1] || '' // Not currently used, but protocol includes arguments
 
     const response = this.commandResponses.get(command) || ERROR_RESPONSE
     const delay = this.commandDelays.get(command) || 0
@@ -208,7 +210,7 @@ export class MockHardwareServer {
       try {
         await fs.unlink(this.socketPath)
       }
-      catch (error) {
+      catch {
         // Ignore errors - file might not exist
       }
     }

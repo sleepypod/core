@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach } from 'vitest'
 import { HardwareClient } from '../client'
 import { type SocketClient, connectToSocket } from '../socketClient'
@@ -119,7 +120,6 @@ export function neverResolves<T>(): Promise<T> {
  * Useful for testing MessageStream with controlled data.
  */
 export function createMockReadable(data: string[]): NodeJS.ReadableStream {
-  let index = 0
   const stream: any = {
     pipe: (destination: any) => {
       // Simulate async data emission

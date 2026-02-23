@@ -1,8 +1,9 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { describe, expect, test } from 'vitest'
-import { CommandExecutionError, ConnectionTimeoutError, HardwareCommand } from '../types'
+import { HardwareCommand } from '../types'
 import { connectToSocket } from '../socketClient'
-import { ERROR_RESPONSE, HELLO_RESPONSE, OK_RESPONSE } from './fixtures'
-import { setupMockServer, sleep } from './testUtils'
+import { ERROR_RESPONSE } from './fixtures'
+import { setupMockServer } from './testUtils'
 
 describe('SocketClient', () => {
   const ctx = setupMockServer({ createSocketClient: true })

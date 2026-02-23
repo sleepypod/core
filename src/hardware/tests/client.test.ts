@@ -1,7 +1,8 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { describe, expect, test } from 'vitest'
 import { HardwareClient, createHardwareClient } from '../client'
-import { HardwareError, MAX_TEMP, MIN_TEMP, PodVersion } from '../types'
-import { DEVICE_STATUS_POD3, DEVICE_STATUS_POD4, ERROR_RESPONSE, OK_RESPONSE } from './fixtures'
+import { HardwareCommand, MAX_TEMP, MIN_TEMP, PodVersion } from '../types'
+import { DEVICE_STATUS_POD3, DEVICE_STATUS_POD4, ERROR_RESPONSE } from './fixtures'
 import { setupMockServer } from './testUtils'
 
 describe('HardwareClient', () => {
@@ -68,14 +69,14 @@ describe('HardwareClient', () => {
     })
 
     test('handles different pod versions', async () => {
-      ctx.server.setCommandResponse('14', DEVICE_STATUS_POD3)
+      ctx.server.setCommandResponse(HardwareCommand.DEVICE_STATUS, DEVICE_STATUS_POD3)
 
       const status = await ctx.hardwareClient!.getDeviceStatus()
       expect(status.podVersion).toBe(PodVersion.POD_3)
     })
 
     test('includes gesture data for supported hardware', async () => {
-      ctx.server.setCommandResponse('14', DEVICE_STATUS_POD4)
+      ctx.server.setCommandResponse(HardwareCommand.DEVICE_STATUS, DEVICE_STATUS_POD4)
 
       const status = await ctx.hardwareClient!.getDeviceStatus()
       expect(status.gestures).toBeDefined()
@@ -210,7 +211,7 @@ describe('HardwareClient', () => {
     })
 
     test('throws on hardware error', async () => {
-      ctx.server.setCommandResponse('5', ERROR_RESPONSE)
+      ctx.server.setCommandResponse(HardwareCommand.ALARM_LEFT, ERROR_RESPONSE)
 
       await expect(
         ctx.hardwareClient!.setAlarm('left', {
@@ -246,7 +247,7 @@ describe('HardwareClient', () => {
     })
 
     test('throws on hardware error', async () => {
-      ctx.server.setCommandResponse('13', ERROR_RESPONSE)
+      ctx.server.setCommandResponse(HardwareCommand.PRIME, ERROR_RESPONSE)
 
       await expect(ctx.hardwareClient!.startPriming()).rejects.toThrow('Failed to start priming')
     })
@@ -272,7 +273,7 @@ describe('HardwareClient', () => {
     })
 
     test('throws on hardware error when powering off', async () => {
-      ctx.server.setCommandResponse('11', ERROR_RESPONSE)
+      ctx.server.setCommandResponse(HardwareCommand.TEMP_LEVEL_LEFT, ERROR_RESPONSE)
 
       await expect(ctx.hardwareClient!.setPower('left', false)).rejects.toThrow(
         'Failed to power off'
