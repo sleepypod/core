@@ -41,7 +41,7 @@ export const SideSelector = ({ temperatures }: SideSelectorProps) => {
         </span>
         <div className="flex items-center gap-1.5 text-[13px]">
           {
-            ((): JSX.Element => {
+            (() => {
               const currentF = ensureF(leftSide.currentTemp, 'F')
               const targetF = ensureF(leftSide.targetTemp, 'F')
               const trend = determineTrend(currentF, targetF)
@@ -86,7 +86,7 @@ export const SideSelector = ({ temperatures }: SideSelectorProps) => {
         </span>
         <div className="flex items-center gap-1.5 text-[13px]">
           {
-            ((): JSX.Element => {
+            (() => {
               const currentF = ensureF(rightSide.currentTemp, 'F')
               const targetF = ensureF(rightSide.targetTemp, 'F')
               const trend = determineTrend(currentF, targetF)
