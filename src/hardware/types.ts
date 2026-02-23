@@ -37,12 +37,12 @@ export type Side = 'left' | 'right'
  * Raw device status response from hardware
  */
 export const rawDeviceDataSchema = z.object({
-  tgHeatLevelR: z.string().regex(/-?\d+/),
-  tgHeatLevelL: z.string().regex(/-?\d+/),
-  heatTimeL: z.string().regex(/^\d+/),
-  heatLevelL: z.string().regex(/-?\d+/),
-  heatTimeR: z.string().regex(/^\d+/),
-  heatLevelR: z.string().regex(/-?\d+/),
+  tgHeatLevelR: z.string().regex(/^-?\d+$/),
+  tgHeatLevelL: z.string().regex(/^-?\d+$/),
+  heatTimeL: z.string().regex(/^\d+$/),
+  heatLevelL: z.string().regex(/^-?\d+$/),
+  heatTimeR: z.string().regex(/^\d+$/),
+  heatLevelR: z.string().regex(/^-?\d+$/),
   sensorLabel: z.string(),
   waterLevel: z.enum(['true', 'false']),
   priming: z.enum(['true', 'false']),

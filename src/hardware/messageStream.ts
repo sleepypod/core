@@ -5,10 +5,16 @@ import split from 'binary-split'
  * Message stream parser for Unix socket communication.
  * Splits incoming data by delimiter and provides async message reading.
  */
+interface PendingRead {
+  resolve: (value: Buffer) => void
+  reject: (error: Error) => void
+  timer: NodeJS.Timeout
+}
+
 export class MessageStream {
   private readonly messageQueue: Buffer[] = []
   private readonly delimiter: Buffer
-  private pendingRead: ((value: Buffer) => void) | null = null
+  private pendingRead: PendingRead | null = null
   private streamEnded = false
   private streamError: Error | null = null
 
@@ -27,7 +33,8 @@ export class MessageStream {
 
     splitter.on('data', (chunk: Buffer) => {
       if (this.pendingRead) {
-        const resolve = this.pendingRead
+        const { resolve, timer } = this.pendingRead
+        clearTimeout(timer)
         this.pendingRead = null
         resolve(chunk)
       }
@@ -39,18 +46,21 @@ export class MessageStream {
     splitter.on('end', () => {
       this.streamEnded = true
       if (this.pendingRead) {
-        const error = new Error('Stream ended while waiting for message')
+        const { reject, timer } = this.pendingRead
+        clearTimeout(timer)
         this.pendingRead = null
-        throw error
+        reject(new Error('Stream ended while waiting for message'))
       }
     })
 
     splitter.on('error', (error: Error) => {
       this.streamError = error
       if (this.pendingRead) {
+        const { reject, timer } = this.pendingRead
+        clearTimeout(timer)
         this.pendingRead = null
+        reject(error)
       }
-      throw error
     })
   }
 
@@ -80,15 +90,14 @@ export class MessageStream {
 
     // Wait for next message
     return new Promise<Buffer>((resolve, reject) => {
-      this.pendingRead = resolve
-
-      // Timeout after 30 seconds
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pendingRead) {
           this.pendingRead = null
           reject(new Error('Message read timeout after 30 seconds'))
         }
       }, 30000)
+
+      this.pendingRead = { resolve, reject, timer }
     })
   }
 
@@ -107,11 +116,21 @@ export class MessageStream {
   }
 
   /**
-   * Clean up resources.
+   * Cleans up resources and rejects any pending read promises.
+   *
+   * If a read operation is in progress, it will be rejected with an error
+   * to prevent callers from hanging indefinitely.
    */
   destroy() {
+    // Reject any pending read operation before cleanup
+    if (this.pendingRead) {
+      const { reject, timer } = this.pendingRead
+      clearTimeout(timer)
+      this.pendingRead = null
+      reject(new Error('Stream destroyed'))
+    }
+
     this.stream.unpipe()
     this.messageQueue.length = 0
-    this.pendingRead = null
   }
 }

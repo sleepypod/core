@@ -67,10 +67,12 @@ function parseKeyValueResponse(response: string): Record<string, string> {
   const lines = response.split('\n').filter(line => line.trim())
 
   for (const line of lines) {
-    const parts = line.split(' = ')
-    if (parts.length === 2) {
-      const [key, value] = parts
-      result[key.trim()] = value.trim()
+    // Split only on first ' = ' to handle values containing ' = '
+    const separatorIndex = line.indexOf(' = ')
+    if (separatorIndex !== -1) {
+      const key = line.substring(0, separatorIndex).trim()
+      const value = line.substring(separatorIndex + 3).trim()
+      result[key] = value
     }
   }
 

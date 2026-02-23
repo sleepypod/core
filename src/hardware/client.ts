@@ -7,6 +7,8 @@ import {
   HardwareCommand,
   HardwareError,
   fahrenheitToLevel,
+  MAX_TEMP,
+  MIN_TEMP,
 } from './types'
 
 /**
@@ -177,8 +179,8 @@ export class HardwareClient {
     const client = await this.ensureConnected()
 
     // Validate against hardware's physical limits (heating/cooling capacity)
-    if (temperature < 55 || temperature > 110) {
-      throw new HardwareError(`Temperature must be between 55°F and 110°F`)
+    if (temperature < MIN_TEMP || temperature > MAX_TEMP) {
+      throw new HardwareError(`Temperature must be between ${MIN_TEMP}°F and ${MAX_TEMP}°F`)
     }
 
     // Convert Fahrenheit to hardware's internal level scale (-100 to 100)
@@ -338,7 +340,12 @@ export class HardwareClient {
       const client = await this.ensureConnected()
       const command
         = side === 'left' ? HardwareCommand.TEMP_LEVEL_LEFT : HardwareCommand.TEMP_LEVEL_RIGHT
-      await client.executeCommand(command, '0')
+      const response = await client.executeCommand(command, '0')
+      const parsed = parseSimpleResponse(response)
+
+      if (!parsed.success) {
+        throw new HardwareError(`Failed to power off: ${parsed.message}`)
+      }
     }
   }
 

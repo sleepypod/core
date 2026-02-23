@@ -4,6 +4,7 @@
  */
 export class SequentialQueue {
   private executing: Promise<unknown> = Promise.resolve()
+  private pendingCount = 0
 
   /**
    * Execute a function sequentially, waiting for previous operations to complete.
@@ -13,19 +14,27 @@ export class SequentialQueue {
   }
 
   private execInternal<T>(fn: () => Promise<T>): Promise<T> {
+    this.pendingCount++
     return new Promise<T>((resolve, reject) => {
       this.executing = this.executing
         .then(() => fn())
-        .then(resolve)
-        .catch(reject)
+        .then((result) => {
+          this.pendingCount--
+          resolve(result)
+        })
+        .catch((error) => {
+          this.pendingCount--
+          reject(error)
+        })
     })
   }
 
   /**
-   * Get current queue depth (for monitoring).
-   * Note: This is approximate as promises may resolve between checks.
+   * Checks if any operations are currently pending in the queue.
+   *
+   * @returns true if operations are queued or executing, false if idle
    */
   isPending(): boolean {
-    return this.executing !== Promise.resolve()
+    return this.pendingCount > 0
   }
 }

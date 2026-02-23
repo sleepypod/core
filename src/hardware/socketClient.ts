@@ -5,7 +5,8 @@ import type {
   HardwareCommand } from './types'
 import {
   CommandExecutionError,
-  ConnectionTimeoutError
+  ConnectionTimeoutError,
+  HardwareError,
 } from './types'
 
 /**
@@ -267,7 +268,12 @@ export async function connectToSocket(
 
     socket.on('error', (error) => {
       clearTimeout(timeout)
-      reject(error)
+      // Wrap in HardwareError for consistent error type handling
+      const hwError = new HardwareError(
+        `Socket connection failed: ${error.message}`,
+        'SOCKET_ERROR'
+      )
+      reject(hwError)
     })
   })
 }
