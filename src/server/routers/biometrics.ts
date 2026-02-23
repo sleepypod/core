@@ -21,22 +21,22 @@ export const biometricsRouter = router({
       })
     )
     .query(async ({ input }) => {
-      let query = db
-        .select()
-        .from(sleepRecords)
-        .where(eq(sleepRecords.side, input.side))
-        .orderBy(desc(sleepRecords.enteredBedAt))
-        .limit(input.limit)
+      const conditions = [eq(sleepRecords.side, input.side)]
 
       if (input.startDate) {
-        query = query.where(gte(sleepRecords.enteredBedAt, input.startDate))
+        conditions.push(gte(sleepRecords.enteredBedAt, input.startDate))
       }
 
       if (input.endDate) {
-        query = query.where(lte(sleepRecords.enteredBedAt, input.endDate))
+        conditions.push(lte(sleepRecords.enteredBedAt, input.endDate))
       }
 
-      const records = await query
+      const records = await db
+        .select()
+        .from(sleepRecords)
+        .where(and(...conditions))
+        .orderBy(desc(sleepRecords.enteredBedAt))
+        .limit(input.limit)
 
       return records
     }),
@@ -54,22 +54,22 @@ export const biometricsRouter = router({
       })
     )
     .query(async ({ input }) => {
-      let query = db
-        .select()
-        .from(vitals)
-        .where(eq(vitals.side, input.side))
-        .orderBy(desc(vitals.timestamp))
-        .limit(input.limit)
+      const conditions = [eq(vitals.side, input.side)]
 
       if (input.startDate) {
-        query = query.where(gte(vitals.timestamp, input.startDate))
+        conditions.push(gte(vitals.timestamp, input.startDate))
       }
 
       if (input.endDate) {
-        query = query.where(lte(vitals.timestamp, input.endDate))
+        conditions.push(lte(vitals.timestamp, input.endDate))
       }
 
-      const records = await query
+      const records = await db
+        .select()
+        .from(vitals)
+        .where(and(...conditions))
+        .orderBy(desc(vitals.timestamp))
+        .limit(input.limit)
 
       return records
     }),
@@ -87,22 +87,22 @@ export const biometricsRouter = router({
       })
     )
     .query(async ({ input }) => {
-      let query = db
-        .select()
-        .from(movement)
-        .where(eq(movement.side, input.side))
-        .orderBy(desc(movement.timestamp))
-        .limit(input.limit)
+      const conditions = [eq(movement.side, input.side)]
 
       if (input.startDate) {
-        query = query.where(gte(movement.timestamp, input.startDate))
+        conditions.push(gte(movement.timestamp, input.startDate))
       }
 
       if (input.endDate) {
-        query = query.where(lte(movement.timestamp, input.endDate))
+        conditions.push(lte(movement.timestamp, input.endDate))
       }
 
-      const records = await query
+      const records = await db
+        .select()
+        .from(movement)
+        .where(and(...conditions))
+        .orderBy(desc(movement.timestamp))
+        .limit(input.limit)
 
       return records
     }),
@@ -156,12 +156,14 @@ export const biometricsRouter = router({
 
       // Calculate summary statistics
       const heartRates = records
-        .filter((r) => r.heartRate !== null)
-        .map((r) => r.heartRate!)
-      const hrvValues = records.filter((r) => r.hrv !== null).map((r) => r.hrv!)
+        .map(r => r.heartRate)
+        .filter((hr): hr is number => hr !== null)
+      const hrvValues = records
+        .map(r => r.hrv)
+        .filter((hrv): hrv is number => hrv !== null)
       const breathingRates = records
-        .filter((r) => r.breathingRate !== null)
-        .map((r) => r.breathingRate!)
+        .map(r => r.breathingRate)
+        .filter((br): br is number => br !== null)
 
       return {
         avgHeartRate:

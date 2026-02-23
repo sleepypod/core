@@ -53,7 +53,8 @@ export const deviceRouter = router({
         })
 
       return status
-    } finally {
+    }
+    finally {
       client.disconnect()
     }
   }),
@@ -88,7 +89,8 @@ export const deviceRouter = router({
           .where(eq(deviceState.side, input.side))
 
         return { success: true }
-      } finally {
+      }
+      finally {
         client.disconnect()
       }
     }),
@@ -123,7 +125,8 @@ export const deviceRouter = router({
           .where(eq(deviceState.side, input.side))
 
         return { success: true }
-      } finally {
+      }
+      finally {
         client.disconnect()
       }
     }),
@@ -162,7 +165,8 @@ export const deviceRouter = router({
           .where(eq(deviceState.side, input.side))
 
         return { success: true }
-      } finally {
+      }
+      finally {
         client.disconnect()
       }
     }),
@@ -194,7 +198,8 @@ export const deviceRouter = router({
           .where(eq(deviceState.side, input.side))
 
         return { success: true }
-      } finally {
+      }
+      finally {
         client.disconnect()
       }
     }),
@@ -210,7 +215,8 @@ export const deviceRouter = router({
     try {
       await client.startPriming()
       return { success: true }
-    } finally {
+    }
+    finally {
       client.disconnect()
     }
   }),

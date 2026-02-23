@@ -19,12 +19,12 @@ export const settingsRouter = router({
     return {
       device: device || null,
       sides: {
-        left: sides.find((s) => s.side === 'left') || null,
-        right: sides.find((s) => s.side === 'right') || null,
+        left: sides.find(s => s.side === 'left') || null,
+        right: sides.find(s => s.side === 'right') || null,
       },
       gestures: {
-        left: gestures.filter((g) => g.side === 'left'),
-        right: gestures.filter((g) => g.side === 'right'),
+        left: gestures.filter(g => g.side === 'left'),
+        right: gestures.filter(g => g.side === 'right'),
       },
     }
   }),
@@ -125,7 +125,8 @@ export const settingsRouter = router({
           .returning()
 
         return updated
-      } else {
+      }
+      else {
         // Create new
         const [created] = await db
           .insert(tapGestures)

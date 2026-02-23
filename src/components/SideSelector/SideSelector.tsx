@@ -2,6 +2,7 @@
 
 import clsx from 'clsx'
 import { TrendingDown, TrendingUp } from 'lucide-react'
+import type { JSX } from 'react'
 import { useState } from 'react'
 import { determineTrend, ensureF, formatTemp, mapToEightSleepScale } from 'src/lib/tempUtils'
 
