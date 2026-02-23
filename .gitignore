@@ -20,5 +20,7 @@ node_modules
 test-results
 coverage
 
-# Prisma
-db/sleepypod.core.dev.db
+# SQLite Database
+*.db
+*.db-shm
+*.db-wal
