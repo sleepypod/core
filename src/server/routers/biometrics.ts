@@ -1,8 +1,10 @@
 import { z } from 'zod'
+import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/schema'
-import { eq, and, gte, lte, desc } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, avg, min, max, count } from 'drizzle-orm'
+import { sideSchema, validateDateRange } from '@/src/server/validation-schemas'
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -44,32 +46,56 @@ export const biometricsRouter = router({
    */
   getSleepRecords: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        startDate: z.date().optional(),
-        endDate: z.date().optional(),
-        limit: z.number().min(1).max(100).default(30),
-      })
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          limit: z.number().int().min(1).max(100).default(30),
+        })
+        .strict()
+        .refine(
+          (data) => {
+            // Validate date range if both dates are provided
+            if (data.startDate && data.endDate) {
+              return validateDateRange(data.startDate, data.endDate)
+            }
+            return true
+          },
+          {
+            message: 'startDate must be before or equal to endDate',
+            path: ['endDate'],
+          }
+        )
     )
     .query(async ({ input }) => {
-      const conditions = [eq(sleepRecords.side, input.side)]
+      try {
+        const conditions = [eq(sleepRecords.side, input.side)]
 
-      if (input.startDate) {
-        conditions.push(gte(sleepRecords.enteredBedAt, input.startDate))
+        if (input.startDate) {
+          conditions.push(gte(sleepRecords.enteredBedAt, input.startDate))
+        }
+
+        if (input.endDate) {
+          conditions.push(lte(sleepRecords.enteredBedAt, input.endDate))
+        }
+
+        const records = await db
+          .select()
+          .from(sleepRecords)
+          .where(and(...conditions))
+          .orderBy(desc(sleepRecords.enteredBedAt))
+          .limit(input.limit)
+
+        return records
       }
-
-      if (input.endDate) {
-        conditions.push(lte(sleepRecords.enteredBedAt, input.endDate))
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch sleep records: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
       }
-
-      const records = await db
-        .select()
-        .from(sleepRecords)
-        .where(and(...conditions))
-        .orderBy(desc(sleepRecords.enteredBedAt))
-        .limit(input.limit)
-
-      return records
     }),
 
   /**
@@ -99,32 +125,56 @@ export const biometricsRouter = router({
    */
   getVitals: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        startDate: z.date().optional(),
-        endDate: z.date().optional(),
-        limit: z.number().min(1).max(1000).default(288), // Default: 24 hours of 5-min intervals
-      })
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          limit: z.number().int().min(1).max(1000).default(288), // Default: 24 hours of 5-min intervals
+        })
+        .strict()
+        .refine(
+          (data) => {
+            // Validate date range if both dates are provided
+            if (data.startDate && data.endDate) {
+              return validateDateRange(data.startDate, data.endDate)
+            }
+            return true
+          },
+          {
+            message: 'startDate must be before or equal to endDate',
+            path: ['endDate'],
+          }
+        )
     )
     .query(async ({ input }) => {
-      const conditions = [eq(vitals.side, input.side)]
+      try {
+        const conditions = [eq(vitals.side, input.side)]
 
-      if (input.startDate) {
-        conditions.push(gte(vitals.timestamp, input.startDate))
+        if (input.startDate) {
+          conditions.push(gte(vitals.timestamp, input.startDate))
+        }
+
+        if (input.endDate) {
+          conditions.push(lte(vitals.timestamp, input.endDate))
+        }
+
+        const records = await db
+          .select()
+          .from(vitals)
+          .where(and(...conditions))
+          .orderBy(desc(vitals.timestamp))
+          .limit(input.limit)
+
+        return records
       }
-
-      if (input.endDate) {
-        conditions.push(lte(vitals.timestamp, input.endDate))
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch vitals: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
       }
-
-      const records = await db
-        .select()
-        .from(vitals)
-        .where(and(...conditions))
-        .orderBy(desc(vitals.timestamp))
-        .limit(input.limit)
-
-      return records
     }),
 
   /**
@@ -153,32 +203,56 @@ export const biometricsRouter = router({
    */
   getMovement: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        startDate: z.date().optional(),
-        endDate: z.date().optional(),
-        limit: z.number().min(1).max(1000).default(288),
-      })
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          limit: z.number().int().min(1).max(1000).default(288),
+        })
+        .strict()
+        .refine(
+          (data) => {
+            // Validate date range if both dates are provided
+            if (data.startDate && data.endDate) {
+              return validateDateRange(data.startDate, data.endDate)
+            }
+            return true
+          },
+          {
+            message: 'startDate must be before or equal to endDate',
+            path: ['endDate'],
+          }
+        )
     )
     .query(async ({ input }) => {
-      const conditions = [eq(movement.side, input.side)]
+      try {
+        const conditions = [eq(movement.side, input.side)]
 
-      if (input.startDate) {
-        conditions.push(gte(movement.timestamp, input.startDate))
+        if (input.startDate) {
+          conditions.push(gte(movement.timestamp, input.startDate))
+        }
+
+        if (input.endDate) {
+          conditions.push(lte(movement.timestamp, input.endDate))
+        }
+
+        const records = await db
+          .select()
+          .from(movement)
+          .where(and(...conditions))
+          .orderBy(desc(movement.timestamp))
+          .limit(input.limit)
+
+        return records
       }
-
-      if (input.endDate) {
-        conditions.push(lte(movement.timestamp, input.endDate))
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch movement data: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
       }
-
-      const records = await db
-        .select()
-        .from(movement)
-        .where(and(...conditions))
-        .orderBy(desc(movement.timestamp))
-        .limit(input.limit)
-
-      return records
     }),
 
   /**
@@ -198,33 +272,43 @@ export const biometricsRouter = router({
    */
   getLatestSleep: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-      })
+      z
+        .object({
+          side: sideSchema,
+        })
+        .strict()
     )
     .query(async ({ input }) => {
-      const [record] = await db
-        .select()
-        .from(sleepRecords)
-        .where(eq(sleepRecords.side, input.side))
-        .orderBy(desc(sleepRecords.enteredBedAt))
-        .limit(1)
+      try {
+        const [record] = await db
+          .select()
+          .from(sleepRecords)
+          .where(eq(sleepRecords.side, input.side))
+          .orderBy(desc(sleepRecords.enteredBedAt))
+          .limit(1)
 
-      return record || null
+        return record || null
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch latest sleep record: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 
   /**
    * Get aggregated vitals statistics for a date range.
    *
    * Computation:
-   * - Calculates on-demand from raw vitals records (not pre-aggregated)
-   * - Filters out null values before computing averages
+   * - Uses SQL aggregations (AVG, MIN, MAX, COUNT) computed at the database level
+   * - SQL aggregate functions automatically ignore NULL values
    * - Returns null for metrics if no valid data points exist
    *
    * Performance:
-   * - Can be expensive for large date ranges (scans all matching records)
-   * - Consider adding database indexes on (side, timestamp) if slow
-   * - For frequently accessed summaries, consider caching results
+   * - Efficient for any date range size — only aggregate results are returned
+   * - Uses index on (side, timestamp) for the WHERE clause scan
    *
    * Use Cases:
    * - Weekly/monthly vitals trends
@@ -238,55 +322,60 @@ export const biometricsRouter = router({
    */
   getVitalsSummary: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        startDate: z.date(),
-        endDate: z.date(),
-      })
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date(),
+          endDate: z.date(),
+        })
+        .strict()
+        .refine(
+          data => validateDateRange(data.startDate, data.endDate),
+          {
+            message: 'startDate must be before or equal to endDate',
+            path: ['endDate'],
+          }
+        )
     )
     .query(async ({ input }) => {
-      const records = await db
-        .select()
-        .from(vitals)
-        .where(
-          and(
-            eq(vitals.side, input.side),
-            gte(vitals.timestamp, input.startDate),
-            lte(vitals.timestamp, input.endDate)
+      try {
+        const [summary] = await db
+          .select({
+            avgHeartRate: avg(vitals.heartRate),
+            minHeartRate: min(vitals.heartRate),
+            maxHeartRate: max(vitals.heartRate),
+            avgHRV: avg(vitals.hrv),
+            avgBreathingRate: avg(vitals.breathingRate),
+            recordCount: count(),
+          })
+          .from(vitals)
+          .where(
+            and(
+              eq(vitals.side, input.side),
+              gte(vitals.timestamp, input.startDate),
+              lte(vitals.timestamp, input.endDate)
+            )
           )
-        )
 
-      if (records.length === 0) {
-        return null
+        if (summary.recordCount === 0) {
+          return null
+        }
+
+        return {
+          avgHeartRate: summary.avgHeartRate !== null ? Number(summary.avgHeartRate) : null,
+          minHeartRate: summary.minHeartRate ?? null,
+          maxHeartRate: summary.maxHeartRate ?? null,
+          avgHRV: summary.avgHRV !== null ? Number(summary.avgHRV) : null,
+          avgBreathingRate: summary.avgBreathingRate !== null ? Number(summary.avgBreathingRate) : null,
+          recordCount: summary.recordCount,
+        }
       }
-
-      // Calculate summary statistics
-      const heartRates = records
-        .map(r => r.heartRate)
-        .filter((hr): hr is number => hr !== null)
-      const hrvValues = records
-        .map(r => r.hrv)
-        .filter((hrv): hrv is number => hrv !== null)
-      const breathingRates = records
-        .map(r => r.breathingRate)
-        .filter((br): br is number => br !== null)
-
-      return {
-        avgHeartRate:
-          heartRates.length > 0
-            ? heartRates.reduce((a, b) => a + b, 0) / heartRates.length
-            : null,
-        minHeartRate: heartRates.length > 0 ? Math.min(...heartRates) : null,
-        maxHeartRate: heartRates.length > 0 ? Math.max(...heartRates) : null,
-        avgHRV:
-          hrvValues.length > 0
-            ? hrvValues.reduce((a, b) => a + b, 0) / hrvValues.length
-            : null,
-        avgBreathingRate:
-          breathingRates.length > 0
-            ? breathingRates.reduce((a, b) => a + b, 0) / breathingRates.length
-            : null,
-        recordCount: records.length,
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to calculate vitals summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
       }
     }),
 })

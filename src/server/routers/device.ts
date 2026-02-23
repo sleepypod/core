@@ -1,12 +1,16 @@
 import { z } from 'zod'
-import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { createHardwareClient } from '@/src/hardware/client'
 import { db } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
-
-const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
+import { withHardwareClient } from '@/src/server/helpers'
+import {
+  sideSchema,
+  temperatureSchema,
+  vibrationIntensitySchema,
+  vibrationPatternSchema,
+  alarmDurationSchema,
+} from '@/src/server/validation-schemas'
 
 /**
  * Device control router - direct hardware control for immediate operations.
@@ -41,66 +45,55 @@ export const deviceRouter = router({
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware doesn't respond within timeout
    */
   getStatus: publicProcedure.query(async () => {
-    const client = await createHardwareClient({
-      socketPath: DAC_SOCK_PATH,
-      autoReconnect: true,
-    })
-
-    try {
+    return withHardwareClient(async (client) => {
       const status = await client.getDeviceStatus()
 
-      // Update database with current state
-      // Note: Using separate updates instead of bulk insert to ensure correct conflict resolution
-      await db
-        .insert(deviceState)
-        .values({
-          side: 'left',
-          currentTemperature: status.leftSide.currentTemperature,
-          targetTemperature: status.leftSide.targetTemperature,
-          isPowered: status.leftSide.targetLevel !== 0,
-          lastUpdated: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: deviceState.side,
-          set: {
+      // Best-effort DB sync — next getStatus() call will re-sync if this fails
+      try {
+        await db
+          .insert(deviceState)
+          .values({
+            side: 'left',
             currentTemperature: status.leftSide.currentTemperature,
             targetTemperature: status.leftSide.targetTemperature,
             isPowered: status.leftSide.targetLevel !== 0,
             lastUpdated: new Date(),
-          },
-        })
+          })
+          .onConflictDoUpdate({
+            target: deviceState.side,
+            set: {
+              currentTemperature: status.leftSide.currentTemperature,
+              targetTemperature: status.leftSide.targetTemperature,
+              isPowered: status.leftSide.targetLevel !== 0,
+              lastUpdated: new Date(),
+            },
+          })
 
-      await db
-        .insert(deviceState)
-        .values({
-          side: 'right',
-          currentTemperature: status.rightSide.currentTemperature,
-          targetTemperature: status.rightSide.targetTemperature,
-          isPowered: status.rightSide.targetLevel !== 0,
-          lastUpdated: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: deviceState.side,
-          set: {
+        await db
+          .insert(deviceState)
+          .values({
+            side: 'right',
             currentTemperature: status.rightSide.currentTemperature,
             targetTemperature: status.rightSide.targetTemperature,
             isPowered: status.rightSide.targetLevel !== 0,
             lastUpdated: new Date(),
-          },
-        })
+          })
+          .onConflictDoUpdate({
+            target: deviceState.side,
+            set: {
+              currentTemperature: status.rightSide.currentTemperature,
+              targetTemperature: status.rightSide.targetTemperature,
+              isPowered: status.rightSide.targetLevel !== 0,
+              lastUpdated: new Date(),
+            },
+          })
+      }
+      catch (dbError) {
+        console.error('Failed to sync device status to DB:', dbError)
+      }
 
       return status
-    }
-    catch (error) {
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: `Failed to get device status: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        cause: error,
-      })
-    }
-    finally {
-      client.disconnect()
-    }
+    }, 'Failed to get device status')
   }),
 
   /**
@@ -137,42 +130,35 @@ export const deviceRouter = router({
    */
   setTemperature: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        temperature: z.number().min(55).max(110),
-        duration: z.number().min(0).optional(),
-      })
+      z
+        .object({
+          side: sideSchema,
+          temperature: temperatureSchema,
+          duration: z.number().int().min(0).optional(),
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      const client = await createHardwareClient({
-        socketPath: DAC_SOCK_PATH,
-      })
-
-      try {
+      return withHardwareClient(async (client) => {
         await client.setTemperature(input.side, input.temperature, input.duration)
 
-        // Update database
-        await db
-          .update(deviceState)
-          .set({
-            targetTemperature: input.temperature,
-            isPowered: true,
-            lastUpdated: new Date(),
-          })
-          .where(eq(deviceState.side, input.side))
+        // Best-effort DB sync — next getStatus() call will re-sync if this fails
+        try {
+          await db
+            .update(deviceState)
+            .set({
+              targetTemperature: input.temperature,
+              isPowered: true,
+              lastUpdated: new Date(),
+            })
+            .where(eq(deviceState.side, input.side))
+        }
+        catch (dbError) {
+          console.error('Failed to sync temperature state to DB:', dbError)
+        }
 
         return { success: true }
-      }
-      catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: `Failed to set temperature: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          cause: error,
-        })
-      }
-      finally {
-        client.disconnect()
-      }
+      }, 'Failed to set temperature')
     }),
 
   /**
@@ -200,42 +186,35 @@ export const deviceRouter = router({
    */
   setPower: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        powered: z.boolean(),
-        temperature: z.number().min(55).max(110).optional(),
-      })
+      z
+        .object({
+          side: sideSchema,
+          powered: z.boolean(),
+          temperature: temperatureSchema.optional(),
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      const client = await createHardwareClient({
-        socketPath: DAC_SOCK_PATH,
-      })
-
-      try {
+      return withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 
-        // Update database
-        await db
-          .update(deviceState)
-          .set({
-            isPowered: input.powered,
-            ...(input.temperature && { targetTemperature: input.temperature }),
-            lastUpdated: new Date(),
-          })
-          .where(eq(deviceState.side, input.side))
+        // Best-effort DB sync — next getStatus() call will re-sync if this fails
+        try {
+          await db
+            .update(deviceState)
+            .set({
+              isPowered: input.powered,
+              ...(input.temperature && { targetTemperature: input.temperature }),
+              lastUpdated: new Date(),
+            })
+            .where(eq(deviceState.side, input.side))
+        }
+        catch (dbError) {
+          console.error('Failed to sync power state to DB:', dbError)
+        }
 
         return { success: true }
-      }
-      catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: `Failed to set power: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          cause: error,
-        })
-      }
-      finally {
-        client.disconnect()
-      }
+      }, 'Failed to set power')
     }),
 
   /**
@@ -271,46 +250,39 @@ export const deviceRouter = router({
    */
   setAlarm: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-        vibrationIntensity: z.number().min(1).max(100),
-        vibrationPattern: z.enum(['double', 'rise']),
-        duration: z.number().min(0).max(180),
-      })
+      z
+        .object({
+          side: sideSchema,
+          vibrationIntensity: vibrationIntensitySchema,
+          vibrationPattern: vibrationPatternSchema,
+          duration: alarmDurationSchema,
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      const client = await createHardwareClient({
-        socketPath: DAC_SOCK_PATH,
-      })
-
-      try {
+      return withHardwareClient(async (client) => {
         await client.setAlarm(input.side, {
           vibrationIntensity: input.vibrationIntensity,
           vibrationPattern: input.vibrationPattern,
           duration: input.duration,
         })
 
-        // Update database
-        await db
-          .update(deviceState)
-          .set({
-            isAlarmVibrating: true,
-            lastUpdated: new Date(),
-          })
-          .where(eq(deviceState.side, input.side))
+        // Best-effort DB sync — next getStatus() call will re-sync if this fails
+        try {
+          await db
+            .update(deviceState)
+            .set({
+              isAlarmVibrating: true,
+              lastUpdated: new Date(),
+            })
+            .where(eq(deviceState.side, input.side))
+        }
+        catch (dbError) {
+          console.error('Failed to sync alarm state to DB:', dbError)
+        }
 
         return { success: true }
-      }
-      catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: `Failed to set alarm: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          cause: error,
-        })
-      }
-      finally {
-        client.disconnect()
-      }
+      }, 'Failed to set alarm')
     }),
 
   /**
@@ -326,39 +298,32 @@ export const deviceRouter = router({
    */
   clearAlarm: publicProcedure
     .input(
-      z.object({
-        side: z.enum(['left', 'right']),
-      })
+      z
+        .object({
+          side: sideSchema,
+        })
+        .strict()
     )
     .mutation(async ({ input }) => {
-      const client = await createHardwareClient({
-        socketPath: DAC_SOCK_PATH,
-      })
-
-      try {
+      return withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
 
-        // Update database
-        await db
-          .update(deviceState)
-          .set({
-            isAlarmVibrating: false,
-            lastUpdated: new Date(),
-          })
-          .where(eq(deviceState.side, input.side))
+        // Best-effort DB sync — next getStatus() call will re-sync if this fails
+        try {
+          await db
+            .update(deviceState)
+            .set({
+              isAlarmVibrating: false,
+              lastUpdated: new Date(),
+            })
+            .where(eq(deviceState.side, input.side))
+        }
+        catch (dbError) {
+          console.error('Failed to sync alarm clear state to DB:', dbError)
+        }
 
         return { success: true }
-      }
-      catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: `Failed to clear alarm: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          cause: error,
-        })
-      }
-      finally {
-        client.disconnect()
-      }
+      }, 'Failed to clear alarm')
     }),
 
   /**
@@ -394,23 +359,9 @@ export const deviceRouter = router({
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware connection fails
    */
   startPriming: publicProcedure.mutation(async () => {
-    const client = await createHardwareClient({
-      socketPath: DAC_SOCK_PATH,
-    })
-
-    try {
+    return withHardwareClient(async (client) => {
       await client.startPriming()
       return { success: true }
-    }
-    catch (error) {
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: `Failed to start priming: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        cause: error,
-      })
-    }
-    finally {
-      client.disconnect()
-    }
+    }, 'Failed to start priming')
   }),
 })
