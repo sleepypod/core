@@ -5,7 +5,7 @@ Comprehensive test infrastructure for the Eight Sleep Pod hardware abstraction l
 ## Structure
 
 ```
-__tests__/
+tests/
 ├── README.md              # This file
 ├── fixtures.ts            # Test data (device responses, constants)
 ├── mockServer.ts          # Mock hardware daemon (Unix socket server)
@@ -60,17 +60,17 @@ test('my test', async () => {
 
 Run all hardware tests:
 ```bash
-pnpm test run src/hardware/__tests__/
+pnpm test run src/hardware/tests/
 ```
 
 Run specific test file:
 ```bash
-pnpm test run src/hardware/__tests__/client.test.ts
+pnpm test run src/hardware/tests/client.test.ts
 ```
 
 Run with coverage:
 ```bash
-pnpm test run --coverage src/hardware/__tests__/
+pnpm test run --coverage src/hardware/tests/
 ```
 
 ## Test Organization

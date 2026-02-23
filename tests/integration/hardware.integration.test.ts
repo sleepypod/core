@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { HardwareCommand } from '../../src/hardware/types'
-import { DEVICE_STATUS_POD4, DEVICE_STATUS_POD5, OK_RESPONSE } from '../../src/hardware/__tests__/fixtures'
-import { setupMockServer, sleep } from '../../src/hardware/__tests__/testUtils'
+import { DEVICE_STATUS_POD4, DEVICE_STATUS_POD5, OK_RESPONSE } from '../../src/hardware/tests/fixtures'
+import { setupMockServer, sleep } from '../../src/hardware/tests/testUtils'
 
 /**
  * Integration tests for the full hardware stack.
@@ -136,7 +136,7 @@ describe('Hardware Integration', () => {
   })
 
   test('connection resilience with autoReconnect', async () => {
-    const client = await import('../client').then(m =>
+    const client = await import('../../src/hardware/client').then(m =>
       m.createHardwareClient({
         socketPath: ctx.socketPath,
         connectionTimeout: 1000,
@@ -188,7 +188,7 @@ describe('Hardware Integration', () => {
   })
 
   test('temperature conversion round-trip', async () => {
-    const { fahrenheitToLevel, levelToFahrenheit } = await import('../types')
+    const { fahrenheitToLevel, levelToFahrenheit } = await import('../../src/hardware/types')
 
     // Test various temperatures
     const temps = [55, 65, 75, 82, 90, 100, 110]

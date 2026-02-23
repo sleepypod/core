@@ -21,7 +21,7 @@ Tests the complete hardware stack end-to-end:
 - Concurrent and sequential operations
 - Pod version compatibility
 
-These tests use the mock hardware server from `src/hardware/__tests__/mockServer.ts`.
+These tests use the mock hardware server from `src/hardware/tests/mockServer.ts`.
 
 ## Running Tests
 
