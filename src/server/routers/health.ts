@@ -10,15 +10,24 @@ import {
 } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
 import { HardwareClient } from '@/src/hardware/client'
+import { getDacMonitor } from '@/src/hardware/dacMonitor.instance'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
 
 /**
- * Health router - monitors system health including scheduler
+ * Health router — exposes system observability endpoints.
+ *
+ * Procedures:
+ * - `scheduler` — job counts and next invocations
+ * - `system`    — DB connectivity, scheduler drift detection, overall status
+ * - `dacMonitor` — hardware polling loop status and gesture support flag
+ * - `hardware`  — raw socket connectivity check with latency
  */
 export const healthRouter = router({
   /**
-   * Get scheduler health status
+   * Returns job counts, upcoming invocations, and a `healthy` flag.
+   * `healthy` is false only when the scheduler is enabled but has zero jobs
+   * (indicates the scheduler failed to load schedules from the DB).
    */
   scheduler: publicProcedure.query(async () => {
     try {
@@ -189,6 +198,28 @@ export const healthRouter = router({
         jobCount: schedulerJobCount,
         ...(drift && { drift }),
       },
+    }
+  }),
+
+  /**
+   * DacMonitor status - polling loop health and gesture support
+   */
+  dacMonitor: publicProcedure.query(async () => {
+    try {
+      const monitor = await getDacMonitor()
+      const lastStatus = monitor.getLastStatus()
+      return {
+        status: monitor.getStatus(),
+        podVersion: lastStatus?.podVersion ?? null,
+        gesturesSupported: !!lastStatus?.gestures,
+      }
+    }
+    catch (error) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: `Failed to get DacMonitor status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        cause: error,
+      })
     }
   }),
 

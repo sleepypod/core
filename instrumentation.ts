@@ -1,21 +1,24 @@
 /**
- * Scheduler initialization and process lifecycle management
+ * Server startup and process lifecycle management.
  *
  * Handles:
- * - Job scheduler initialization with retry logic
- * - Centralized signal handling (SIGTERM/SIGINT)
+ * - Job scheduler initialization with exponential-backoff retry
+ * - DAC hardware monitor initialization (non-blocking)
+ * - Hardware daemon pre-flight validation
+ * - Centralized SIGTERM/SIGINT signal handling
  * - Global unhandled rejection/exception handlers
- * - Hardware pre-flight validation
- * - Graceful shutdown sequencing
+ * - Graceful shutdown sequencing with 10 s force-exit watchdog
  *
- * USAGE:
- * - If your Next.js version supports instrumentation hooks, this will be called automatically
- * - Otherwise, call `initializeScheduler()` from your app startup (e.g., in a layout or API route)
+ * Entry points:
+ * - `register()` — Next.js instrumentation hook, called automatically on server start.
+ *    Runs only in the Node.js runtime; skipped on the Edge runtime.
+ * - `initializeScheduler()` — idempotent, safe to call from app code as a fallback.
  */
 
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
 import { closeDatabase } from '@/src/db'
 import { createHardwareClient } from '@/src/hardware/client'
+import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
 
@@ -48,7 +51,15 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down scheduler:', error)
   }
 
-  // Step 2: Close database connection
+  // Step 2: Shutdown DAC monitor
+  try {
+    await shutdownDacMonitor()
+  }
+  catch (error) {
+    console.error('Error shutting down DacMonitor:', error)
+  }
+
+  // Step 3: Close database connection
   try {
     closeDatabase()
   }
@@ -141,6 +152,22 @@ async function validateHardware(): Promise<void> {
 }
 
 /**
+ * Initialize the DAC hardware monitor.
+ * Non-blocking — logs a warning on failure but does not crash.
+ */
+const initializeDacMonitor = async (): Promise<void> => {
+  try {
+    await getDacMonitor()
+  }
+  catch (error) {
+    console.warn(
+      'WARNING: DacMonitor failed to start:',
+      error instanceof Error ? error.message : error
+    )
+  }
+}
+
+/**
  * Initialize the job scheduler
  * Safe to call multiple times - will only initialize once
  */
@@ -186,6 +213,9 @@ export async function initializeScheduler(): Promise<void> {
 
     // Validate hardware connectivity (non-blocking, runs after scheduler is ready)
     validateHardware()
+
+    // Start DAC monitor (non-blocking, logs warning on failure)
+    initializeDacMonitor()
   }
   catch (error) {
     console.error('Failed to initialize job scheduler:', error)
