@@ -63,17 +63,22 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
   return monitorInitPromise
 }
 
+/** Non-creating accessor — returns the running instance or null without triggering lazy init. */
+export const getDacMonitorIfRunning = (): DacMonitor | null => monitorInstance
+
 /**
  * Shutdown the global DacMonitor instance.
  * Cancels pending snooze timers, removes listeners, and stops polling.
  */
-/** Non-creating accessor — returns the running instance or null without triggering lazy init. */
-export const getDacMonitorIfRunning = (): DacMonitor | null => monitorInstance
-
 export const shutdownDacMonitor = async (): Promise<void> => {
   // If initialization is in-flight, wait for it so we can shut it down cleanly
   if (monitorInitPromise) {
-    try { await monitorInitPromise } catch { /* start failure is fine */ }
+    try {
+      await monitorInitPromise
+    }
+    catch {
+      // start() failure is fine — instance was already cleared in the catch block above
+    }
   }
 
   const monitor = monitorInstance

@@ -132,8 +132,10 @@ export class DacMonitor extends EventEmitter {
     try {
       const status = await client.getDeviceStatus()
 
-      // Discard results if stop() ran while we were awaiting
-      if (this.monitorStatus === 'stopped' || this.client !== client) return
+      // Discard results if stop() ran while we were awaiting.
+      // Cast needed: TS narrows monitorStatus to non-stopped after the guard above,
+      // but an async tick may have changed it.
+      if ((this.monitorStatus as DacMonitorStatus) === 'stopped' || this.client !== client) return
 
       if (this.monitorStatus === 'degraded') {
         this.monitorStatus = 'running'
@@ -142,7 +144,6 @@ export class DacMonitor extends EventEmitter {
 
       this.lastStatus = status
       this.emit('status:updated', status)
-
 
       if (status.gestures) {
         if (this.isFirstPoll) {
