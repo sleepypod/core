@@ -103,10 +103,11 @@ export const schedulesRouter = router({
             })
           }
 
-          // Reload scheduler inside transaction for atomicity
-          await reloadScheduler()
           return result
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return created
       }
@@ -152,9 +153,11 @@ export const schedulesRouter = router({
             })
           }
 
-          await reloadScheduler()
           return result
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return updated
       }
@@ -193,9 +196,10 @@ export const schedulesRouter = router({
               message: `Temperature schedule with ID ${input.id} not found`,
             })
           }
-
-          await reloadScheduler()
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return { success: true }
       }
@@ -244,9 +248,11 @@ export const schedulesRouter = router({
             })
           }
 
-          await reloadScheduler()
           return result
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return created
       }
@@ -332,9 +338,11 @@ export const schedulesRouter = router({
             })
           }
 
-          await reloadScheduler()
           return result
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return updated
       }
@@ -373,9 +381,10 @@ export const schedulesRouter = router({
               message: `Power schedule with ID ${input.id} not found`,
             })
           }
-
-          await reloadScheduler()
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return { success: true }
       }
@@ -419,9 +428,11 @@ export const schedulesRouter = router({
             })
           }
 
-          await reloadScheduler()
           return result
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return created
       }
@@ -470,9 +481,11 @@ export const schedulesRouter = router({
             })
           }
 
-          await reloadScheduler()
           return result
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return updated
       }
@@ -511,9 +524,10 @@ export const schedulesRouter = router({
               message: `Alarm schedule with ID ${input.id} not found`,
             })
           }
-
-          await reloadScheduler()
         })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return { success: true }
       }

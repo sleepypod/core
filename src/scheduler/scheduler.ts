@@ -169,10 +169,14 @@ export class Scheduler extends EventEmitter {
    * Update scheduler configuration
    */
   updateConfig(config: Partial<SchedulerConfig>): void {
+    // Store old timezone before updating config
+    const oldTimezone = this.config.timezone
+
+    // Update config
     this.config = { ...this.config, ...config }
 
     // Reschedule all jobs with new config if timezone changed
-    if (config.timezone && config.timezone !== this.config.timezone) {
+    if (config.timezone != null && config.timezone !== oldTimezone) {
       this.rescheduleAllJobs()
     }
   }
@@ -207,7 +211,7 @@ export class Scheduler extends EventEmitter {
     console.log('Shutting down scheduler...')
     await this.waitForInFlightJobs(5000)
     this.cancelAllJobs()
-    schedule.gracefulShutdown()
+    await schedule.gracefulShutdown()
     console.log('Scheduler shut down successfully')
   }
 }

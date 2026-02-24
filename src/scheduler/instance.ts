@@ -12,6 +12,7 @@ import { deviceSettings } from '@/src/db/schema'
 const DEFAULT_TIMEZONE = 'America/Los_Angeles'
 
 let jobManagerInstance: JobManager | null = null
+let jobManagerInitPromise: Promise<JobManager> | null = null
 
 /**
  * Load timezone from database with fallback to safe default.
@@ -32,18 +33,39 @@ async function loadTimezone(): Promise<string> {
 
 /**
  * Get or create the global JobManager instance
+ * Uses single-flight pattern to prevent race conditions
  */
 export async function getJobManager(): Promise<JobManager> {
-  if (!jobManagerInstance) {
-    const timezone = await loadTimezone()
-
-    jobManagerInstance = new JobManager(timezone)
-    await jobManagerInstance.loadSchedules()
-
-    console.log('JobManager initialized with timezone:', timezone)
+  // If already initialized, return immediately
+  if (jobManagerInstance) {
+    return jobManagerInstance
   }
 
-  return jobManagerInstance
+  // If initialization is in progress, await it
+  if (jobManagerInitPromise) {
+    return jobManagerInitPromise
+  }
+
+  // Start initialization
+  jobManagerInitPromise = (async () => {
+    try {
+      const timezone = await loadTimezone()
+
+      const manager = new JobManager(timezone)
+      await manager.loadSchedules()
+
+      jobManagerInstance = manager
+      console.log('JobManager initialized with timezone:', timezone)
+
+      return manager
+    }
+    finally {
+      // Clear the promise to allow subsequent calls to check jobManagerInstance or retry on failure
+      jobManagerInitPromise = null
+    }
+  })()
+
+  return jobManagerInitPromise
 }
 
 /**
@@ -53,6 +75,7 @@ export async function shutdownJobManager(): Promise<void> {
   if (jobManagerInstance) {
     await jobManagerInstance.shutdown()
     jobManagerInstance = null
+    jobManagerInitPromise = null
     console.log('JobManager shut down')
   }
 }

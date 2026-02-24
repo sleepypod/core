@@ -27,6 +27,17 @@ export class JobManager {
     this.setupEventListeners()
   }
 
+  /**
+   * Parse time string into hour and minute, with validation
+   */
+  private parseTime(time: string): [number, number] {
+    const [hour, minute] = time.split(':').map(Number)
+    if (Number.isNaN(hour) || Number.isNaN(minute)) {
+      throw new Error(`Invalid time format: "${time}"`)
+    }
+    return [hour, minute]
+  }
+
   private onJobScheduled = (job: { id: string, type: string }) => {
     console.log(`Job scheduled: ${job.id} [${job.type}]`)
   }
@@ -116,7 +127,7 @@ export class JobManager {
   private scheduleTemperature(
     sched: typeof temperatureSchedules.$inferSelect
   ): void {
-    const [hour, minute] = sched.time.split(':').map(Number)
+    const [hour, minute] = this.parseTime(sched.time)
     const cron = this.buildWeeklyCron(sched.dayOfWeek, hour, minute)
 
     this.scheduler.scheduleJob(
@@ -140,7 +151,7 @@ export class JobManager {
    * Schedule power on
    */
   private schedulePowerOn(sched: typeof powerSchedules.$inferSelect): void {
-    const [hour, minute] = sched.onTime.split(':').map(Number)
+    const [hour, minute] = this.parseTime(sched.onTime)
     const cron = this.buildWeeklyCron(sched.dayOfWeek, hour, minute)
 
     this.scheduler.scheduleJob(
@@ -164,7 +175,7 @@ export class JobManager {
    * Schedule power off
    */
   private schedulePowerOff(sched: typeof powerSchedules.$inferSelect): void {
-    const [hour, minute] = sched.offTime.split(':').map(Number)
+    const [hour, minute] = this.parseTime(sched.offTime)
     const cron = this.buildWeeklyCron(sched.dayOfWeek, hour, minute)
 
     this.scheduler.scheduleJob(
@@ -188,7 +199,7 @@ export class JobManager {
    * Schedule an alarm
    */
   private scheduleAlarm(sched: typeof alarmSchedules.$inferSelect): void {
-    const [hour, minute] = sched.time.split(':').map(Number)
+    const [hour, minute] = this.parseTime(sched.time)
     const cron = this.buildWeeklyCron(sched.dayOfWeek, hour, minute)
 
     this.scheduler.scheduleJob(
@@ -220,7 +231,7 @@ export class JobManager {
    * Schedule daily priming
    */
   private scheduleDailyPriming(time: string): void {
-    const [hour, minute] = time.split(':').map(Number)
+    const [hour, minute] = this.parseTime(time)
     const cron = `${minute} ${hour} * * *` // Every day at specified time
 
     this.scheduler.scheduleJob('daily-prime', JobType.PRIME, cron, async () => {
@@ -238,7 +249,7 @@ export class JobManager {
    * Schedule daily reboot
    */
   private scheduleDailyReboot(time: string): void {
-    const [hour, minute] = time.split(':').map(Number)
+    const [hour, minute] = this.parseTime(time)
     const cron = `${minute} ${hour} * * *` // Every day at specified time
 
     this.scheduler.scheduleJob('daily-reboot', JobType.REBOOT, cron, async () => {

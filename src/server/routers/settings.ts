@@ -134,9 +134,11 @@ export const settingsRouter = router({
             })
           }
 
-          await reloadSchedulerIfNeeded(input)
           return result
         })
+
+        // Reload scheduler AFTER transaction commits so it reads committed data
+        await reloadSchedulerIfNeeded(input)
 
         return updated
       }
