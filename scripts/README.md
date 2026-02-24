@@ -132,7 +132,7 @@ Common issues:
 
 1. Check service is running: `sp-status`
 2. Check firewall isn't blocking port 3000
-3. Verify pod IP: `ip addr show wlan0`
+3. Verify pod IP: `ip -4 addr show "$(ip route | awk '/default/ {print $5; exit}')"`
 
 ### Database errors
 
@@ -154,10 +154,12 @@ sp-update
 Or manually:
 ```bash
 cd /home/dac/sleepypod-core
+systemctl stop sleepypod.service
 git pull
-pnpm install
+pnpm install --frozen-lockfile --ignore-scripts
+cd node_modules/better-sqlite3 && npm run build-release && cd ../..
 pnpm db:generate
 pnpm db:migrate
 pnpm build
-sp-restart
+systemctl start sleepypod.service
 ```

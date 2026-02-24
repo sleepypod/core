@@ -55,8 +55,8 @@ case "$COMMAND" in
     echo "Local subnet: $LOCAL_SUBNET"
     echo ""
 
-    # Install iptables if not present
-    if ! command -v iptables &>/dev/null; then
+    # Install iptables and iptables-persistent if not present
+    if ! command -v iptables &>/dev/null || ! dpkg -l | grep -q iptables-persistent; then
       echo "Installing iptables..."
       apt-get update
       apt-get install -y iptables iptables-persistent
@@ -107,7 +107,9 @@ case "$COMMAND" in
     echo ""
     echo "✓ Internet access blocked!"
     echo "  Local network ($LOCAL_SUBNET) is still accessible"
-    echo "  IPv6 is also blocked"
+    if command -v ip6tables &>/dev/null; then
+      echo "  IPv6 is also blocked"
+    fi
     echo ""
     echo "To restore: sudo $(basename "$0") unblock"
     echo ""
