@@ -47,7 +47,7 @@ graph TD
     RAW -->|tails CBOR| SD
     PP -->|writes rows| DB2
     SD -->|writes rows| DB2
-    DAC -.->|status:updated| SYNC
+    DAC -.->|status updated| SYNC
 ```
 
 ### Biometrics data flow
@@ -57,7 +57,7 @@ The Pod hardware daemon continuously writes raw sensor data to `/persistent/*.RA
 ```mermaid
 sequenceDiagram
     participant HW as Pod Hardware
-    participant RAW as /persistent/*.RAW
+    participant RAW as RAW Files
     participant PP as piezo-processor
     participant SD as sleep-detector
     participant BDB as biometrics.db
@@ -66,12 +66,12 @@ sequenceDiagram
     HW->>RAW: writes CBOR records (500Hz piezo, capSense)
     loop every ~60s
         PP->>RAW: tail + decode piezo-dual records
-        PP->>PP: bandpass filter → HR, HRV, breathing rate
+        PP->>PP: bandpass filter, HR/HRV/breathing rate
         PP->>BDB: INSERT vitals row
     end
     loop continuously
         SD->>RAW: tail + decode capSense records
-        SD->>SD: capacitance threshold → presence / absence
+        SD->>SD: capacitance threshold, presence/absence
         SD->>BDB: INSERT sleep_record on session end
     end
     UI->>BDB: tRPC getVitals / getSleepRecords
@@ -84,9 +84,9 @@ The core app also creates stub sleep records from device power transitions — i
 ```mermaid
 stateDiagram-v2
     [*] --> Off
-    Off --> On: setPower true - stamp poweredOnAt
-    On --> Off: setPower false - write stub sleep record
-    On --> On: status:updated - upsert device_state
+    Off --> On: setPower true, stamp poweredOnAt
+    On --> Off: setPower false, write stub sleep record
+    On --> On: status updated, upsert device_state
 ```
 
 ### Scheduler startup
@@ -181,11 +181,11 @@ graph LR
         S[biometrics-schema.ts]
     end
     subgraph Bundled
-        PP[piezo-processor\nPython]
-        SD[sleep-detector\nPython]
+        PP["piezo-processor (Python)"]
+        SD["sleep-detector (Python)"]
     end
     subgraph Future
-        CM[community-module\nRust / Go / anything]
+        CM["community-module (any language)"]
     end
     PP -->|writes to| S
     SD -->|writes to| S
