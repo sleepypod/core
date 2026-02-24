@@ -45,7 +45,7 @@ case "$COMMAND" in
       exit 1
     fi
 
-    LOCAL_SUBNET=$(ip -4 addr show "$INTERFACE" | grep -o 'inet [0-9.]*\/[0-9]*' | awk '{print $2}')
+    LOCAL_SUBNET=$(ip -4 addr show "$INTERFACE" | awk '/inet / {print $2; exit}')
     if [ -z "$LOCAL_SUBNET" ]; then
       echo "Error: Could not detect local subnet" >&2
       exit 1
@@ -99,7 +99,9 @@ case "$COMMAND" in
       ip6tables -A SLEEPYPOD-BLOCK -d fe80::/10 -j ACCEPT
       ip6tables -A SLEEPYPOD-BLOCK -j DROP
 
-      ip6tables-save > /etc/iptables/rules.v6
+      if command -v ip6tables-save &>/dev/null; then
+        ip6tables-save > /etc/iptables/rules.v6
+      fi
     fi
 
     echo ""
@@ -140,7 +142,7 @@ case "$COMMAND" in
       ip6tables -X SLEEPYPOD-BLOCK
       ip6tables -P OUTPUT ACCEPT
 
-      if [ -f /etc/iptables/rules.v6 ]; then
+      if command -v ip6tables-save &>/dev/null; then
         ip6tables-save > /etc/iptables/rules.v6
       fi
     fi

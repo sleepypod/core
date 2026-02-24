@@ -91,14 +91,17 @@ echo "Creating data directory at $DATA_DIR..."
 mkdir -p "$DATA_DIR"
 chmod 755 "$DATA_DIR"
 
-# Install Node.js if not present
-if ! command -v node &>/dev/null; then
+# Install or upgrade Node.js to version 20
+NODE_VERSION=$(node --version 2>/dev/null | grep -oP '(?<=v)\d+' || echo "0")
+if ! command -v node &>/dev/null || [ "$NODE_VERSION" -lt 20 ]; then
   echo "Installing Node.js 20..."
-  SETUP_SCRIPT=$(mktemp)
-  trap 'rm -f "$SETUP_SCRIPT"' EXIT
-  curl -fsSL https://deb.nodesource.com/setup_20.x -o "$SETUP_SCRIPT"
-  bash "$SETUP_SCRIPT"
-  rm -f "$SETUP_SCRIPT"
+  apt-get install -y ca-certificates curl gnupg
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    | tee /etc/apt/sources.list.d/nodesource.list
+  apt-get update
   apt-get install -y nodejs
 fi
 
@@ -191,7 +194,7 @@ WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
-ExecStart=/usr/bin/pnpm start
+ExecStart=/usr/bin/env pnpm start
 Restart=always
 RestartSec=10
 
@@ -347,8 +350,23 @@ if [[ "$SETUP_SSH" =~ ^[Yy]$ ]]; then
     fi
   fi
 
-  systemctl restart sshd
-  echo "✓ SSH configured on port 8822 (keys only)"
+  # Validate SSH config before restarting
+  if ! sshd -t; then
+    echo "Error: sshd_config validation failed. Restoring backup..." >&2
+    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    exit 1
+  fi
+
+  # Restart SSH (try both service names for compatibility)
+  if systemctl restart sshd 2>/dev/null; then
+    echo "✓ SSH configured on port 8822 (keys only)"
+  elif systemctl restart ssh 2>/dev/null; then
+    echo "✓ SSH configured on port 8822 (keys only)"
+  else
+    echo "Error: Failed to restart SSH service" >&2
+    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    exit 1
+  fi
 fi
 
 # Auto-detect network interface and get IP

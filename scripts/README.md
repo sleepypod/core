@@ -157,6 +157,7 @@ cd /home/dac/sleepypod-core
 git pull
 pnpm install
 pnpm db:generate
+pnpm db:migrate
 pnpm build
 sp-restart
 ```
