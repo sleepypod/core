@@ -1,0 +1,33 @@
+[Unit]
+Description=SleepyPod Sleep Detector (Session Boundaries and Movement)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/sleep-detector
+After=network.target sleepypod.service
+Wants=sleepypod.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/sleepypod/modules/sleep-detector
+ExecStart=/opt/sleepypod/modules/sleep-detector/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+# Environment — override via /etc/sleepypod/modules/sleep-detector.env
+EnvironmentFile=-/etc/sleepypod/modules/sleep-detector.env
+Environment="RAW_DATA_DIR=/persistent"
+Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
+Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
+
+# Resource limits
+MemoryMax=64M
+CPUQuota=20%
+
+# Sandboxing
+NoNewPrivileges=true
+ReadOnlyPaths=/persistent
+ReadWritePaths=/persistent/sleepypod-data
+ProtectSystem=strict
+ProtectKernelTunables=true
+
+[Install]
+WantedBy=multi-user.target

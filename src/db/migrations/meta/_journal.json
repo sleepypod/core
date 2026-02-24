@@ -15,6 +15,20 @@
       "when": 1771834604093,
       "tag": "0001_little_the_twelve",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1771913132044,
+      "tag": "0002_flaky_doctor_strange",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1771914402335,
+      "tag": "0003_odd_gargoyle",
+      "breakpoints": true
     }
   ]
 }

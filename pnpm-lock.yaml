@@ -1016,12 +1016,6 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@eslint-community/eslint-utils@4.9.0':
-    resolution: {integrity: sha512-ayVFHdtZ+hsq1t2Dy24wCmGXGe4q9Gu3smhLYALJrr473ZH27MsnSL+LKUlimp4BWJqMDMLmPpx/Q9R3OAlL4g==}
-    engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
-    peerDependencies:
-      eslint: ^6.0.0 || ^7.0.0 || >=8.0.0
-
   '@eslint-community/eslint-utils@4.9.1':
     resolution: {integrity: sha512-phrYmNiYppR7znFEdqgfWHXR6NCkZEK7hwWDHZUjit/2/U0r6XvkDl0SYnoM51Hq7FhCGdLDT6zxCCOY1hexsQ==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
@@ -1052,8 +1046,8 @@ packages:
     resolution: {integrity: sha512-NXiteSacmpaXqgyIW3+GcNzexXyfC0kd+gig6WTjD4A74kBGJeNx1tV0Hxa0v7x0+mnIyKfGPhGNs1uhRFdh+w==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@eslint/eslintrc@3.3.3':
-    resolution: {integrity: sha512-Kr+LPIUVKz2qkx1HAMH8q1q6azbqBAsXJUxBl/ODDuVPX45Z9DfwB8tPjTi6nNZ8BuM3nbJxC5zCAg5elnBUTQ==}
+  '@eslint/eslintrc@3.3.4':
+    resolution: {integrity: sha512-4h4MVF8pmBsncB60r0wSJiIeUKTSD4m7FmTFThG8RHlsg9ajqckLm9OraguFGZE4vVdpiI1Q4+hFnisopmG6gQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
   '@eslint/js@9.39.3':
@@ -2304,6 +2298,11 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
+  acorn@8.16.0:
+    resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
+
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
@@ -2337,8 +2336,8 @@ packages:
     peerDependencies:
       ajv: ^8.8.2
 
-  ajv@6.12.6:
-    resolution: {integrity: sha512-j3fVLgvTo527anyYyJOGTYJbG+vnnQYvE0m5mmkc1TK+nxAppkCLMIL0aZ4dblVCNoGShhm+kzE4ZUykBoMg4g==}
+  ajv@6.14.0:
+    resolution: {integrity: sha512-IWrosm/yrn43eiKqkfkHis7QioDleaXQHdDVPKg0FSwwd/DuvyX79TZnFOnYpB7dcsFAMmtFztZuXPDvSePkFw==}
 
   ajv@8.17.1:
     resolution: {integrity: sha512-B/gBuNg5SiMTrPkC+A2+cW0RszwxYmn6VYxB/inlBStS5nx6xHIt/ehKRhIMhqusl7a8LjQoZnjCs5vhwxOQ1g==}
@@ -3069,10 +3068,6 @@ packages:
   end-of-stream@1.4.5:
     resolution: {integrity: sha512-ooEGc6HP26xXq/N+GCGOT0JKCLDGrq2bQUZrQ7gyrJiZANJ/8YDTxTpQBXGMn+WbIQXNVpyWymm7KYVICQnyOg==}
 
-  enhanced-resolve@5.18.4:
-    resolution: {integrity: sha512-LgQMM4WXU3QI+SYgEc2liRgznaD5ojbmY3sb8LxyguVkIg5FxdpTkvk72te2R38/TGKxH634oLxXRGY6d7AP+Q==}
-    engines: {node: '>=10.13.0'}
-
   enhanced-resolve@5.19.0:
     resolution: {integrity: sha512-phv3E1Xl4tQOShqSte26C7Fl84EwUdZsyOuSSk9qtAGyyQs2s3jJzComh+Abf4g187lUUAvH+H26omrqia2aGg==}
     engines: {node: '>=10.13.0'}
@@ -3290,8 +3285,8 @@ packages:
     engines: {node: '>=4'}
     hasBin: true
 
-  esquery@1.6.0:
-    resolution: {integrity: sha512-ca9pw9fomFcKPvFLXhBKUK90ZvGibiGOvRJNbjljY7s7uq/5YO4BOzcYtJqExdx99rF6aAcnRxHmcUHcz6sQsg==}
+  esquery@1.7.0:
+    resolution: {integrity: sha512-Ap6G0WQwcU/LHsvLwON1fAQX9Zp0A2Y6Y/cJBl9r/JbW90Zyg4/zbG6zzKa2OTALELarYHmKu0GhpM5EO+7T0g==}
     engines: {node: '>=0.10'}
 
   esrecurse@4.3.0:
@@ -4368,6 +4363,9 @@ packages:
 
   minimatch@3.1.2:
     resolution: {integrity: sha512-J7p63hRiAjw1NDEww1W7i37+ByIrOWO5XQQAzZ3VOcL0PNybwpfmV/N05zFAzwQ9USyEcX6t3UO+K5aqBQOIHw==}
+
+  minimatch@3.1.3:
+    resolution: {integrity: sha512-M2GCs7Vk83NxkUyQV1bkABc4yxgz9kILhHImZiBPAZ9ybuvCb0/H7lEl5XvIg3g+9d4eNotkZA5IWwYl0tibaA==}
 
   minimist@1.2.8:
     resolution: {integrity: sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==}
@@ -6681,11 +6679,6 @@ snapshots:
   '@esbuild/win32-x64@0.27.2':
     optional: true
 
-  '@eslint-community/eslint-utils@4.9.0(eslint@9.39.3(jiti@2.6.1))':
-    dependencies:
-      eslint: 9.39.3(jiti@2.6.1)
-      eslint-visitor-keys: 3.4.3
-
   '@eslint-community/eslint-utils@4.9.1(eslint@9.39.3(jiti@2.6.1))':
     dependencies:
       eslint: 9.39.3(jiti@2.6.1)
@@ -6720,16 +6713,16 @@ snapshots:
       '@eslint/css-tree': 3.6.8
       '@eslint/plugin-kit': 0.4.1
 
-  '@eslint/eslintrc@3.3.3':
+  '@eslint/eslintrc@3.3.4':
     dependencies:
-      ajv: 6.12.6
+      ajv: 6.14.0
       debug: 4.4.3
       espree: 10.4.0
       globals: 14.0.0
       ignore: 5.3.2
       import-fresh: 3.3.1
       js-yaml: 4.1.1
-      minimatch: 3.1.2
+      minimatch: 3.1.3
       strip-json-comments: 3.1.1
     transitivePeerDependencies:
       - supports-color
@@ -7586,7 +7579,7 @@ snapshots:
   '@ts-morph/common@0.27.0':
     dependencies:
       fast-glob: 3.3.3
-      minimatch: 10.1.1
+      minimatch: 10.2.2
       path-browserify: 1.0.1
 
   '@tsconfig/next@2.0.5': {}
@@ -7999,15 +7992,17 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.0.0
 
-  acorn-import-phases@1.0.4(acorn@8.15.0):
+  acorn-import-phases@1.0.4(acorn@8.16.0):
     dependencies:
-      acorn: 8.15.0
+      acorn: 8.16.0
 
   acorn-jsx@5.3.2(acorn@8.15.0):
     dependencies:
       acorn: 8.15.0
 
   acorn@8.15.0: {}
+
+  acorn@8.16.0: {}
 
   agent-base@7.1.4: {}
 
@@ -8034,7 +8029,7 @@ snapshots:
       ajv: 8.17.1
       fast-deep-equal: 3.1.3
 
-  ajv@6.12.6:
+  ajv@6.14.0:
     dependencies:
       fast-deep-equal: 3.1.3
       fast-json-stable-stringify: 2.1.0
@@ -8682,11 +8677,6 @@ snapshots:
     dependencies:
       once: 1.4.0
 
-  enhanced-resolve@5.18.4:
-    dependencies:
-      graceful-fs: 4.2.11
-      tapable: 2.3.0
-
   enhanced-resolve@5.19.0:
     dependencies:
       graceful-fs: 4.2.11
@@ -9065,19 +9055,19 @@ snapshots:
 
   eslint@9.39.3(jiti@2.6.1):
     dependencies:
-      '@eslint-community/eslint-utils': 4.9.0(eslint@9.39.3(jiti@2.6.1))
+      '@eslint-community/eslint-utils': 4.9.1(eslint@9.39.3(jiti@2.6.1))
       '@eslint-community/regexpp': 4.12.2
       '@eslint/config-array': 0.21.1
       '@eslint/config-helpers': 0.4.2
       '@eslint/core': 0.17.0
-      '@eslint/eslintrc': 3.3.3
+      '@eslint/eslintrc': 3.3.4
       '@eslint/js': 9.39.3
       '@eslint/plugin-kit': 0.4.1
       '@humanfs/node': 0.16.7
       '@humanwhocodes/module-importer': 1.0.1
       '@humanwhocodes/retry': 0.4.3
       '@types/estree': 1.0.8
-      ajv: 6.12.6
+      ajv: 6.14.0
       chalk: 4.1.2
       cross-spawn: 7.0.6
       debug: 4.4.3
@@ -9085,7 +9075,7 @@ snapshots:
       eslint-scope: 8.4.0
       eslint-visitor-keys: 4.2.1
       espree: 10.4.0
-      esquery: 1.6.0
+      esquery: 1.7.0
       esutils: 2.0.3
       fast-deep-equal: 3.1.3
       file-entry-cache: 8.0.0
@@ -9115,7 +9105,7 @@ snapshots:
 
   esprima@4.0.1: {}
 
-  esquery@1.6.0:
+  esquery@1.7.0:
     dependencies:
       estraverse: 5.3.0
 
@@ -10136,6 +10126,10 @@ snapshots:
       brace-expansion: 5.0.3
 
   minimatch@3.1.2:
+    dependencies:
+      brace-expansion: 1.1.12
+
+  minimatch@3.1.3:
     dependencies:
       brace-expansion: 1.1.12
 
@@ -11327,7 +11321,7 @@ snapshots:
   terser@5.44.1:
     dependencies:
       '@jridgewell/source-map': 0.3.11
-      acorn: 8.15.0
+      acorn: 8.16.0
       commander: 2.20.3
       source-map-support: 0.5.21
 
@@ -11688,11 +11682,11 @@ snapshots:
       '@webassemblyjs/ast': 1.14.1
       '@webassemblyjs/wasm-edit': 1.14.1
       '@webassemblyjs/wasm-parser': 1.14.1
-      acorn: 8.15.0
-      acorn-import-phases: 1.0.4(acorn@8.15.0)
+      acorn: 8.16.0
+      acorn-import-phases: 1.0.4(acorn@8.16.0)
       browserslist: 4.28.1
       chrome-trace-event: 1.0.4
-      enhanced-resolve: 5.18.4
+      enhanced-resolve: 5.19.0
       es-module-lexer: 2.0.0
       eslint-scope: 5.1.1
       events: 3.3.0
