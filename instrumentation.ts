@@ -16,7 +16,7 @@
  */
 
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
-import { closeDatabase } from '@/src/db'
+import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
 import { createHardwareClient } from '@/src/hardware/client'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
 
@@ -59,9 +59,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down DacMonitor:', error)
   }
 
-  // Step 3: Close database connection
+  // Step 3: Close database connections
   try {
     closeDatabase()
+    closeBiometricsDatabase()
   }
   catch (error) {
     console.error('Error closing database:', error)
@@ -168,6 +169,30 @@ const initializeDacMonitor = async (): Promise<void> => {
 }
 
 /**
+ * Wait until the system clock is plausible (year >= 2024).
+ * The Pod can boot with its clock reset to ~2010 before NTP syncs.
+ * Schedulers must not start until the date is valid or cron jobs fire at wrong times.
+ */
+async function waitForValidSystemDate(
+  maxAttempts: number = 24,
+  intervalMs: number = 5_000
+): Promise<void> {
+  const MIN_VALID_YEAR = 2024
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (new Date().getFullYear() >= MIN_VALID_YEAR) return
+    console.warn(
+      `System clock is invalid (${new Date().toISOString()}), waiting for NTP sync...`,
+      `(${attempt + 1}/${maxAttempts})`
+    )
+    await new Promise(resolve => setTimeout(resolve, intervalMs))
+  }
+  console.error(
+    'System clock never synced after waiting — proceeding anyway.',
+    'Scheduled jobs may fire at incorrect times.'
+  )
+}
+
+/**
  * Initialize the job scheduler
  * Safe to call multiple times - will only initialize once
  */
@@ -175,6 +200,7 @@ export async function initializeScheduler(): Promise<void> {
   if (isInitialized) return
 
   try {
+    await waitForValidSystemDate()
     console.log('Initializing job scheduler...')
     const jobManager = await withRetry(
       () => getJobManager(),

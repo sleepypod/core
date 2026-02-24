@@ -111,6 +111,8 @@ export class JobManager {
     if (settings) {
       if (settings.primePodDaily && settings.primePodTime) {
         this.scheduleDailyPriming(settings.primePodTime)
+        // Always reboot 1hr before priming to ensure clean device state
+        this.schedulePrimePreReboot(settings.primePodTime)
       }
 
       if (settings.rebootDaily && settings.rebootTime) {
@@ -250,12 +252,48 @@ export class JobManager {
    */
   private scheduleDailyReboot(time: string): void {
     const [hour, minute] = this.parseTime(time)
-    const cron = `${minute} ${hour} * * *` // Every day at specified time
+    const cron = `${minute} ${hour} * * *`
 
     this.scheduler.scheduleJob('daily-reboot', JobType.REBOOT, cron, async () => {
       console.log('Executing daily system reboot...')
-      // On actual pod, this would execute: exec('reboot')
-      // For safety, we just log it here
+      await this.executeReboot()
+    })
+  }
+
+  /**
+   * Schedule a reboot 1 hour before daily priming.
+   * Ensures the device is in a clean state before the prime cycle runs.
+   */
+  private schedulePrimePreReboot(primeTime: string): void {
+    const [hour, minute] = this.parseTime(primeTime)
+    // Subtract 60 minutes, wrapping around midnight
+    const totalMinutes = ((hour * 60 + minute - 60) % 1440 + 1440) % 1440
+    const rebootHour = Math.floor(totalMinutes / 60)
+    const rebootMinute = totalMinutes % 60
+    const cron = `${rebootMinute} ${rebootHour} * * *`
+
+    this.scheduler.scheduleJob('prime-prereboot', JobType.REBOOT, cron, async () => {
+      console.log('Executing pre-prime system reboot...')
+      await this.executeReboot()
+    })
+  }
+
+  /**
+   * Execute a system reboot via systemctl.
+   * Returns a Promise so callers can await and the scheduler can surface failures.
+   */
+  private async executeReboot(): Promise<void> {
+    const { exec } = await import('child_process')
+    return new Promise((resolve, reject) => {
+      exec('systemctl reboot', (error) => {
+        if (error) {
+          console.error('Reboot command failed:', error.message)
+          reject(error)
+        }
+        else {
+          resolve()
+        }
+      })
     })
   }
 
