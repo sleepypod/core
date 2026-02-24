@@ -183,7 +183,7 @@ export const deviceState = sqliteTable('device_state', {
 
 export const systemHealth = sqliteTable('system_health', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  component: text('component').notNull(), // e.g., 'express', 'database', 'franken'
+  component: text('component').notNull().unique(), // e.g., 'express', 'database', 'franken'
   status: text('status', {
     enum: ['healthy', 'degraded', 'down', 'unknown'],
   })

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "296fcd40-205a-491a-a65b-8f9a9d455354",
+  "id": "73fe797c-877d-4d5d-9943-b35265f83b7f",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "alarm_schedules": {
@@ -429,7 +429,15 @@
           "default": "(unixepoch())"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "system_health_component_unique": {
+          "name": "system_health_component_unique",
+          "columns": [
+            "component"
+          ],
+          "isUnique": true
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

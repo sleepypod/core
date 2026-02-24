@@ -65,6 +65,7 @@ CREATE TABLE `system_health` (
 	`last_checked` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
+CREATE UNIQUE INDEX `system_health_component_unique` ON `system_health` (`component`);--> statement-breakpoint
 CREATE TABLE `tap_gestures` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`side` text NOT NULL,
