@@ -19,23 +19,23 @@ A self-hosted control system for [Eight Sleep](https://www.eightsleep.com/) Pod 
 
 ```mermaid
 graph TD
-    subgraph Pod Hardware
-        DAC[dac.sock\nDevice Control]
-        RAW[/persistent/*.RAW\nCBOR Sensor Data]
+    subgraph hw [Pod Hardware]
+        DAC["dac.sock<br/>Device Control"]
+        RAW["RAW Files<br/>/persistent/*.RAW"]
     end
 
-    subgraph sleepypod-core [SleepyPod Core · Next.js]
+    subgraph core [SleepyPod Core - Next.js]
         UI[React UI]
         API[tRPC API]
-        SCHED[Scheduler\nnode-schedule]
+        SCHED["Scheduler<br/>node-schedule"]
         SYNC[DeviceStateSync]
-        DB1[(sleepypod.db\nConfig & State)]
+        DB1[("sleepypod.db<br/>Config & State")]
     end
 
-    subgraph Biometrics Modules
-        PP[piezo-processor\nPython sidecar]
-        SD[sleep-detector\nPython sidecar]
-        DB2[(biometrics.db\nVitals & Sleep)]
+    subgraph mods [Biometrics Modules]
+        PP["piezo-processor<br/>Python sidecar"]
+        SD["sleep-detector<br/>Python sidecar"]
+        DB2[("biometrics.db<br/>Vitals & Sleep")]
     end
 
     UI -->|queries| API
@@ -84,9 +84,9 @@ The core app also creates stub sleep records from device power transitions — i
 ```mermaid
 stateDiagram-v2
     [*] --> Off
-    Off --> On: setPower(true)\nstamp poweredOnAt
-    On --> Off: setPower(false)\ncreate stub sleep record\nclear poweredOnAt
-    On --> On: status:updated\nupsert device_state
+    Off --> On: setPower true - stamp poweredOnAt
+    On --> Off: setPower false - write stub sleep record
+    On --> On: status:updated - upsert device_state
 ```
 
 ### Scheduler startup
@@ -95,11 +95,11 @@ The Pod's RTC can reset to ~2010 after a power cycle. The scheduler waits for a 
 
 ```mermaid
 flowchart LR
-    A[instrumentation.ts\nregister] --> B{year ≥ 2024?}
-    B -- no --> C[wait 5s\npoll again]
+    A["instrumentation.ts<br/>register"] --> B{year >= 2024?}
+    B -- no --> C["wait 5s<br/>poll again"]
     C --> B
     B -- yes --> D[JobManager.loadSchedules]
-    D --> E[temperature jobs\npower jobs\nalarm jobs\nprime + reboot jobs]
+    D --> E["temperature jobs<br/>power jobs<br/>alarm jobs<br/>prime + reboot jobs"]
 ```
 
 ---
@@ -127,23 +127,23 @@ flowchart LR
 Two SQLite files with separate Drizzle connections and independent migration sets.
 
 ```mermaid
-erDiagram
-    sleepypod_db {
-        table device_state
-        table device_settings
-        table side_settings
-        table temperature_schedules
-        table power_schedules
-        table alarm_schedules
-        table tap_gestures
-        table system_health
-    }
+graph LR
+    subgraph sdb ["sleepypod.db — config & state"]
+        T1[device_state]
+        T2[device_settings]
+        T3[side_settings]
+        T4[temperature_schedules]
+        T5[power_schedules]
+        T6[alarm_schedules]
+        T7[tap_gestures]
+        T8[system_health]
+    end
 
-    biometrics_db {
-        table vitals
-        table sleep_records
-        table movement
-    }
+    subgraph bdb ["biometrics.db — time-series"]
+        B1[vitals]
+        B2[sleep_records]
+        B3[movement]
+    end
 ```
 
 ### `sleepypod.db` — config and runtime state
@@ -360,4 +360,4 @@ Modules run on the same device and read `/persistent/*.RAW` directly — no prox
 
 ## License
 
-MIT
+[AGPL-3.0](LICENSE)
