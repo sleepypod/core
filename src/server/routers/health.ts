@@ -71,7 +71,7 @@ export const healthRouter = router({
             nextRun: nextInvocation?.toISOString() || null,
           }
         })
-        .filter((job) => job.nextRun !== null)
+        .filter(job => job.nextRun !== null)
         .sort((a, b) => {
           if (!a.nextRun || !b.nextRun) return 0
           return new Date(a.nextRun).getTime() - new Date(b.nextRun).getTime()
@@ -84,7 +84,8 @@ export const healthRouter = router({
         upcomingJobs,
         healthy: jobs.length > 0 || jobCounts.total === 0, // Healthy if has jobs or expected to have none
       }
-    } catch (error) {
+    }
+    catch (error) {
       throw new TRPCError({
         code: 'INTERNAL_SERVER_ERROR',
         message: `Failed to get scheduler health: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -107,7 +108,8 @@ export const healthRouter = router({
       const dbStart = performance.now()
       sqlite.pragma('quick_check(1)')
       dbLatencyMs = Math.round((performance.now() - dbStart) * 100) / 100
-    } catch (error) {
+    }
+    catch (error) {
       dbStatus = 'degraded'
       overallStatus = 'degraded'
       dbError = error instanceof Error ? error.message : 'Unknown error'
@@ -121,12 +123,13 @@ export const healthRouter = router({
       const scheduler = jobManager.getScheduler()
       schedulerEnabled = scheduler.isEnabled()
       schedulerJobCount = scheduler.getJobs().length
-    } catch {
+    }
+    catch {
       overallStatus = 'degraded'
     }
 
     // Scheduler drift detection: compare DB enabled schedule count vs scheduler job count
-    let drift: { dbScheduleCount: number; schedulerJobCount: number; drifted: boolean } | undefined
+    let drift: { dbScheduleCount: number, schedulerJobCount: number, drifted: boolean } | undefined
     try {
       const [tempSchedules, powSchedules, almSchedules] = await Promise.all([
         db.select({ id: temperatureSchedules.id })
@@ -153,7 +156,8 @@ export const healthRouter = router({
             systemJobCount++
           }
         }
-      } catch {
+      }
+      catch {
         // Already handled above
       }
 
@@ -167,7 +171,8 @@ export const healthRouter = router({
       if (drifted) {
         overallStatus = 'degraded'
       }
-    } catch {
+    }
+    catch {
       // If drift detection fails, don't block the health check
     }
 
@@ -205,10 +210,12 @@ export const healthRouter = router({
       const start = performance.now()
       await client.connect()
       latencyMs = Math.round((performance.now() - start) * 100) / 100
-    } catch (err) {
+    }
+    catch (err) {
       status = 'degraded'
       error = err instanceof Error ? err.message : 'Unknown error'
-    } finally {
+    }
+    finally {
       client.disconnect()
     }
 

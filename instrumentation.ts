@@ -43,14 +43,16 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Step 1: Shutdown scheduler (waits for in-flight jobs internally)
   try {
     await shutdownJobManager()
-  } catch (error) {
+  }
+  catch (error) {
     console.error('Error shutting down scheduler:', error)
   }
 
   // Step 2: Close database connection
   try {
     closeDatabase()
-  } catch (error) {
+  }
+  catch (error) {
     console.error('Error closing database:', error)
   }
 
@@ -96,7 +98,8 @@ async function withRetry<T>(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await fn()
-    } catch (error) {
+    }
+    catch (error) {
       lastError = error
       if (attempt < maxAttempts) {
         const delay = baseDelayMs * Math.pow(2, attempt - 1)
@@ -104,7 +107,7 @@ async function withRetry<T>(
           `${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms:`,
           error instanceof Error ? error.message : error
         )
-        await new Promise((resolve) => setTimeout(resolve, delay))
+        await new Promise(resolve => setTimeout(resolve, delay))
       }
     }
   }
@@ -125,7 +128,8 @@ async function validateHardware(): Promise<void> {
     )
     client.disconnect()
     console.log('Hardware daemon connectivity verified')
-  } catch (error) {
+  }
+  catch (error) {
     console.warn(
       'WARNING: Hardware daemon is not available at',
       DAC_SOCK_PATH,
@@ -164,7 +168,7 @@ export async function initializeScheduler(): Promise<void> {
           nextRun: nextRun ? nextRun.toISOString() : 'N/A',
         }
       })
-      .filter((job) => job.nextRun !== 'N/A')
+      .filter(job => job.nextRun !== 'N/A')
       .sort((a, b) => {
         if (a.nextRun === 'N/A' || b.nextRun === 'N/A') return 0
         return new Date(a.nextRun).getTime() - new Date(b.nextRun).getTime()
@@ -182,7 +186,8 @@ export async function initializeScheduler(): Promise<void> {
 
     // Validate hardware connectivity (non-blocking, runs after scheduler is ready)
     validateHardware()
-  } catch (error) {
+  }
+  catch (error) {
     console.error('Failed to initialize job scheduler:', error)
     // Don't crash the app if scheduler fails to initialize
   }

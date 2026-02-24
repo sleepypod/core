@@ -26,7 +26,8 @@ async function reloadSchedulerIfNeeded(input: Record<string, unknown>): Promise<
     // If timezone changed, use updateTimezone which reloads automatically
     if ('timezone' in input && typeof input.timezone === 'string') {
       await jobManager.updateTimezone(input.timezone)
-    } else {
+    }
+    else {
       await jobManager.reloadSchedules()
     }
   }

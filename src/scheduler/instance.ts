@@ -20,7 +20,8 @@ async function loadTimezone(): Promise<string> {
   try {
     const [settings] = await db.select().from(deviceSettings).limit(1)
     return settings?.timezone || DEFAULT_TIMEZONE
-  } catch (error) {
+  }
+  catch (error) {
     console.warn(
       'Failed to load timezone from database, using default:',
       error instanceof Error ? error.message : error

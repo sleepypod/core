@@ -11,6 +11,7 @@ import type {
 /**
  * Job scheduler service for automated pod control
  */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class Scheduler extends EventEmitter {
   private jobs: Map<string, ScheduledJob> = new Map()
   private config: SchedulerConfig
@@ -77,11 +78,13 @@ export class Scheduler extends EventEmitter {
     try {
       await handler()
       return { success: true, timestamp }
-    } catch (error) {
+    }
+    catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       this.emit('jobError', id, error as Error)
       return { success: false, error: errorMessage, timestamp }
-    } finally {
+    }
+    finally {
       this.inFlightJobs.delete(id)
     }
   }
@@ -96,7 +99,7 @@ export class Scheduler extends EventEmitter {
 
     const start = Date.now()
     while (this.inFlightJobs.size > 0 && Date.now() - start < timeoutMs) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      await new Promise(resolve => setTimeout(resolve, 100))
     }
 
     if (this.inFlightJobs.size > 0) {
@@ -152,7 +155,7 @@ export class Scheduler extends EventEmitter {
    * Get jobs by type
    */
   getJobsByType(type: JobType): ScheduledJob[] {
-    return Array.from(this.jobs.values()).filter((job) => job.type === type)
+    return Array.from(this.jobs.values()).filter(job => job.type === type)
   }
 
   /**
@@ -210,6 +213,7 @@ export class Scheduler extends EventEmitter {
 }
 
 // Type-safe event emitter
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export interface Scheduler {
   on<K extends keyof SchedulerEvents>(
     event: K,

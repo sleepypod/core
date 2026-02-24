@@ -7,7 +7,6 @@ import {
   alarmSchedules,
   deviceSettings,
 } from '@/src/db/schema'
-import { eq } from 'drizzle-orm'
 import { createHardwareClient } from '@/src/hardware/client'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
@@ -28,14 +27,15 @@ export class JobManager {
     this.setupEventListeners()
   }
 
-  private onJobScheduled = (job: { id: string; type: string }) => {
+  private onJobScheduled = (job: { id: string, type: string }) => {
     console.log(`Job scheduled: ${job.id} [${job.type}]`)
   }
 
-  private onJobExecuted = (jobId: string, result: { success: boolean; error?: string }) => {
+  private onJobExecuted = (jobId: string, result: { success: boolean, error?: string }) => {
     if (result.success) {
       console.log(`Job executed successfully: ${jobId}`)
-    } else {
+    }
+    else {
       console.error(`Job execution failed: ${jobId}`, result.error)
     }
   }
@@ -127,7 +127,8 @@ export class JobManager {
         const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
         try {
           await client.setTemperature(sched.side, sched.temperature)
-        } finally {
+        }
+        finally {
           client.disconnect()
         }
       },
@@ -150,7 +151,8 @@ export class JobManager {
         const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
         try {
           await client.setPower(sched.side, true, sched.onTemperature)
-        } finally {
+        }
+        finally {
           client.disconnect()
         }
       },
@@ -173,7 +175,8 @@ export class JobManager {
         const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
         try {
           await client.setPower(sched.side, false)
-        } finally {
+        }
+        finally {
           client.disconnect()
         }
       },
@@ -204,7 +207,8 @@ export class JobManager {
             vibrationPattern: sched.vibrationPattern,
             duration: sched.duration,
           })
-        } finally {
+        }
+        finally {
           client.disconnect()
         }
       },
@@ -223,7 +227,8 @@ export class JobManager {
       const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
       try {
         await client.startPriming()
-      } finally {
+      }
+      finally {
         client.disconnect()
       }
     })
@@ -288,7 +293,8 @@ export class JobManager {
       try {
         this.scheduler.cancelAllJobs()
         await this.loadSchedules()
-      } finally {
+      }
+      finally {
         this.reloadInProgress = null
       }
     })()
