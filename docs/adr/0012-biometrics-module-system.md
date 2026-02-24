@@ -175,9 +175,9 @@ Community modules can be installed the same way by dropping a directory into `/o
 
 ### WebSocket proxy (core app re-streams raw data)
 
-**Pros**: Modules don't need filesystem access to `/persistent`
-**Cons**: Unnecessary complexity — modules run on the same device and can read the files directly; adds latency and a failure point
-**Verdict**: Rejected (file access is simpler)
+**Pros**: Modules don't need filesystem access to `/persistent`; enables modules running on separate hardware
+**Cons**: Unnecessary complexity for the current single-device setup — modules run on the same device and can read the files directly; adds latency and a failure point
+**Verdict**: Not adopted for now (file access is simpler on a single device). **Not ruled out** — if modules need to run on a separate host, or if the core app wants to push real-time sensor data to the UI, a WebSocket transport is a natural fit for that phase.
 
 ### InfluxDB or other time-series DB
 
