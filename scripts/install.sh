@@ -74,8 +74,11 @@ DAC_SOCK_PATH=$DAC_SOCK_PATH
 NODE_ENV=production
 EOF
 
-# Run database migrations
-echo "Running database migrations..."
+# Initialize database
+echo "Generating database schema..."
+pnpm db:generate
+
+echo "Creating database and tables..."
 pnpm db:push
 
 # Create systemd service
@@ -125,12 +128,15 @@ EOF
 
 cat > /usr/local/bin/sp-update << 'EOF'
 #!/bin/bash
+set -e
+echo "Updating SleepyPod..."
 cd /home/dac/sleepypod-core
 git pull
 pnpm install
+pnpm db:generate
 pnpm build
 systemctl restart sleepypod.service
-echo "Update complete!"
+echo "✓ Update complete!"
 EOF
 
 chmod +x /usr/local/bin/sp-*
@@ -138,15 +144,30 @@ chmod +x /usr/local/bin/sp-*
 # Get pod IP address
 POD_IP=$(ip -4 addr show wlan0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
 
+# Wait for service to start and check health
+echo "Waiting for service to start..."
+sleep 5
+
+if systemctl is-active --quiet sleepypod.service; then
+  SERVICE_STATUS="✓ Running"
+else
+  SERVICE_STATUS="✗ Failed (check logs with: sp-logs)"
+fi
+
 echo ""
 echo "========================================"
 echo "  Installation Complete!"
 echo "========================================"
 echo ""
-echo "Service: sleepypod"
-echo "Status: $(systemctl is-active sleepypod.service)"
+echo "Service Status: $SERVICE_STATUS"
 echo ""
 echo "Web Interface: http://$POD_IP:3000/"
+echo ""
+echo "Features:"
+echo "  • Temperature & Power Scheduling"
+echo "  • Alarm Management"
+echo "  • Hardware Control via DAC socket"
+echo "  • Automated job scheduler with timezone support"
 echo ""
 echo "CLI Commands:"
 echo "  sp-status   - View service status"
@@ -154,6 +175,8 @@ echo "  sp-restart  - Restart service"
 echo "  sp-logs     - View live logs"
 echo "  sp-update   - Update to latest version"
 echo ""
-echo "Database: $DATA_DIR/sleepypod.db"
-echo "Logs: journalctl -u sleepypod.service"
+echo "Files:"
+echo "  Database: $DATA_DIR/sleepypod.db"
+echo "  Config:   $INSTALL_DIR/.env"
+echo "  Logs:     journalctl -u sleepypod.service"
 echo ""
