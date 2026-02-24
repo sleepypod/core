@@ -1,8 +1,8 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { db } from '@/src/db'
-import { sleepRecords, vitals, movement } from '@/src/db/schema'
+import { biometricsDb } from '@/src/db'
+import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { eq, and, gte, lte, desc, avg, min, max, count } from 'drizzle-orm'
 import { sideSchema, validateDateRange } from '@/src/server/validation-schemas'
 
@@ -80,7 +80,7 @@ export const biometricsRouter = router({
           conditions.push(lte(sleepRecords.enteredBedAt, input.endDate))
         }
 
-        const records = await db
+        const records = await biometricsDb
           .select()
           .from(sleepRecords)
           .where(and(...conditions))
@@ -159,7 +159,7 @@ export const biometricsRouter = router({
           conditions.push(lte(vitals.timestamp, input.endDate))
         }
 
-        const records = await db
+        const records = await biometricsDb
           .select()
           .from(vitals)
           .where(and(...conditions))
@@ -237,7 +237,7 @@ export const biometricsRouter = router({
           conditions.push(lte(movement.timestamp, input.endDate))
         }
 
-        const records = await db
+        const records = await biometricsDb
           .select()
           .from(movement)
           .where(and(...conditions))
@@ -280,7 +280,7 @@ export const biometricsRouter = router({
     )
     .query(async ({ input }) => {
       try {
-        const [record] = await db
+        const [record] = await biometricsDb
           .select()
           .from(sleepRecords)
           .where(eq(sleepRecords.side, input.side))
@@ -339,7 +339,7 @@ export const biometricsRouter = router({
     )
     .query(async ({ input }) => {
       try {
-        const [summary] = await db
+        const [summary] = await biometricsDb
           .select({
             avgHeartRate: avg(vitals.heartRate),
             minHeartRate: min(vitals.heartRate),

@@ -171,50 +171,11 @@ export const deviceState = sqliteTable('device_state', {
   waterLevel: text('water_level', { enum: ['low', 'ok', 'unknown'] }).default(
     'unknown'
   ),
+  poweredOnAt: integer('powered_on_at', { mode: 'timestamp' }), // Set when power transitions OFF→ON, cleared ON→OFF
   lastUpdated: integer('last_updated', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
 })
-
-// ============================================================================
-// Biometrics (Time-Series Data)
-// ============================================================================
-
-export const sleepRecords = sqliteTable('sleep_records', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  side: text('side', { enum: ['left', 'right'] }).notNull(),
-  enteredBedAt: integer('entered_bed_at', { mode: 'timestamp' }).notNull(),
-  leftBedAt: integer('left_bed_at', { mode: 'timestamp' }).notNull(),
-  sleepDurationSeconds: integer('sleep_duration_seconds').notNull(),
-  timesExitedBed: integer('times_exited_bed').notNull().default(0),
-  presentIntervals: text('present_intervals', { mode: 'json' }), // Array of [start, end] timestamps
-  notPresentIntervals: text('not_present_intervals', { mode: 'json' }), // Array of [start, end] timestamps
-  createdAt: integer('created_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-}, t => [
-  index('idx_sleep_records_side_entered').on(t.side, t.enteredBedAt),
-])
-
-export const vitals = sqliteTable('vitals', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  side: text('side', { enum: ['left', 'right'] }).notNull(),
-  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
-  heartRate: real('heart_rate'), // 30-90 bpm
-  hrv: real('hrv'), // 0-200
-  breathingRate: real('breathing_rate'), // 5-30 breaths/min
-}, t => [
-  index('idx_vitals_side_timestamp').on(t.side, t.timestamp),
-])
-
-export const movement = sqliteTable('movement', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  side: text('side', { enum: ['left', 'right'] }).notNull(),
-  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
-  totalMovement: integer('total_movement').notNull(),
-}, t => [
-  index('idx_movement_side_timestamp').on(t.side, t.timestamp),
-])
 
 // ============================================================================
 // System Health & Services
@@ -222,7 +183,7 @@ export const movement = sqliteTable('movement', {
 
 export const systemHealth = sqliteTable('system_health', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  component: text('component').notNull(), // e.g., 'express', 'database', 'franken'
+  component: text('component').notNull().unique(), // e.g., 'express', 'database', 'franken'
   status: text('status', {
     enum: ['healthy', 'degraded', 'down', 'unknown'],
   })

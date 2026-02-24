@@ -12,6 +12,7 @@ CREATE TABLE `alarm_schedules` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
+CREATE INDEX `idx_alarm_schedules_side_day` ON `alarm_schedules` (`side`,`day_of_week`);--> statement-breakpoint
 CREATE TABLE `device_settings` (
 	`id` integer PRIMARY KEY NOT NULL,
 	`timezone` text DEFAULT 'America/Los_Angeles' NOT NULL,
@@ -31,14 +32,8 @@ CREATE TABLE `device_state` (
 	`is_powered` integer DEFAULT false NOT NULL,
 	`is_alarm_vibrating` integer DEFAULT false NOT NULL,
 	`water_level` text DEFAULT 'unknown',
+	`powered_on_at` integer,
 	`last_updated` integer DEFAULT (unixepoch()) NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE `movement` (
-	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`side` text NOT NULL,
-	`timestamp` integer NOT NULL,
-	`total_movement` integer NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE `power_schedules` (
@@ -53,24 +48,13 @@ CREATE TABLE `power_schedules` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
+CREATE INDEX `idx_power_schedules_side_day` ON `power_schedules` (`side`,`day_of_week`);--> statement-breakpoint
 CREATE TABLE `side_settings` (
 	`side` text PRIMARY KEY NOT NULL,
-	`name` text DEFAULT 'Left' NOT NULL,
+	`name` text NOT NULL,
 	`away_mode` integer DEFAULT false NOT NULL,
 	`created_at` integer DEFAULT (unixepoch()) NOT NULL,
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE `sleep_records` (
-	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`side` text NOT NULL,
-	`entered_bed_at` integer NOT NULL,
-	`left_bed_at` integer NOT NULL,
-	`sleep_duration_seconds` integer NOT NULL,
-	`times_exited_bed` integer DEFAULT 0 NOT NULL,
-	`present_intervals` text,
-	`not_present_intervals` text,
-	`created_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE `system_health` (
@@ -81,6 +65,7 @@ CREATE TABLE `system_health` (
 	`last_checked` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
+CREATE UNIQUE INDEX `system_health_component_unique` ON `system_health` (`component`);--> statement-breakpoint
 CREATE TABLE `tap_gestures` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`side` text NOT NULL,
@@ -106,11 +91,4 @@ CREATE TABLE `temperature_schedules` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `vitals` (
-	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`side` text NOT NULL,
-	`timestamp` integer NOT NULL,
-	`heart_rate` real,
-	`hrv` real,
-	`breathing_rate` real
-);
+CREATE INDEX `idx_temp_schedules_side_day_time` ON `temperature_schedules` (`side`,`day_of_week`,`time`);

@@ -20,10 +20,14 @@ sqlite.pragma('foreign_keys = ON') // Enable foreign key constraints
 export const db = drizzle(sqlite, { schema })
 
 /**
- * Close the database connection.
+ * Close the main database connection.
  * Called by the centralized shutdown coordinator in instrumentation.ts.
+ * Note: call closeBiometricsDatabase() separately to close the biometrics DB.
  */
 export function closeDatabase(): void {
-  console.log('Closing database connection...')
+  console.log('Closing main database connection...')
   sqlite.close()
 }
+
+// Re-export biometrics DB for convenience
+export { biometricsDb, closeBiometricsDatabase } from './biometrics'
