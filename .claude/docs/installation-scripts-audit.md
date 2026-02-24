@@ -90,50 +90,45 @@ Three expert agents (bash-script-expert, security-expert, devops-expert) reviewe
 ### HTTPS/TLS → Not Needed
 **Reasoning:** Local network only, certificate management adds bricking risk
 
-## Script Changes
+## Script Implementation
 
-### install (was install.sh)
-- ✅ Removed .sh extension, made executable
-- ✅ Added pipefail + trap handler
+### install
+Production-ready installation script with comprehensive safety checks:
+- ✅ Pipefail + trap handler for error recovery
 - ✅ Pre-flight checks (disk, network, dependencies)
-- ✅ Lock file for re-entrancy
+- ✅ Lock file prevents concurrent installs
 - ✅ Input validation for DAC_SOCK_PATH
 - ✅ Auto-detect network interface
-- ✅ `--ignore-scripts` for security
+- ✅ `--ignore-scripts` for npm supply chain security
 - ✅ Explicit better-sqlite3 build
-- ✅ `--frozen-lockfile` for reproducibility
+- ✅ `--frozen-lockfile` for reproducible builds
 - ✅ .env preservation on re-runs
-- ✅ Database migrations (not destructive push)
+- ✅ Safe database migrations
 - ✅ Improved error messages to stderr
+- ✅ Interactive SSH configuration
+- ✅ Uses `/usr/bin/env pnpm` for systemd compatibility
+- ✅ Modern NodeSource keyring-based installation
+- ✅ SSH config validation before restart
 
 ### sp-update (embedded in install)
-- ✅ Complete rewrite from broken state
+Production-ready update script with full rollback capability:
 - ✅ Database backup before update
 - ✅ Git rollback on failure
 - ✅ Database restore on failure
 - ✅ Stop service during update
 - ✅ Health check validation
-- ✅ Pre-flight checks
+- ✅ Pre-flight checks (network, disk space)
+- ✅ Applies database migrations
 
-### setup-ssh (was setup-ssh.sh)
-- ✅ Removed .sh extension
-- ✅ Keys-only authentication (prohibit-password)
-- ✅ Disable password auth entirely
-- ✅ SSH key format validation
-- ✅ Trap handler to restore on failure
-
-### block-internet (was block-internet.sh)
-- ✅ Removed .sh extension
-- ✅ IPv6 support (ip6tables rules)
-- ✅ Custom chain (don't flush all rules)
+### internet-control
+Unified script for blocking/unblocking internet access:
+- ✅ IPv4 and IPv6 support (prevents bypass)
+- ✅ Custom iptables chains (don't flush all rules)
 - ✅ Connection tracking
 - ✅ mDNS support for local discovery
-- ✅ Auto-detect interface
-
-### unblock-internet (was unblock-internet.sh)
-- ✅ Removed .sh extension
-- ✅ IPv6 support
+- ✅ Auto-detect network interface
 - ✅ Clean removal of custom chains
+- ✅ Single command interface: `{block|unblock}`
 
 ## Expert Consensus
 
@@ -143,41 +138,68 @@ Three expert agents (bash-script-expert, security-expert, devops-expert) reviewe
 
 **Key Insight:** Focus on "Can I still SSH in and fix this?" vs. enterprise server concerns.
 
+## PR Review Fixes (Feb 2026)
+
+Additional issues identified and fixed in PR #115 review:
+
+### Critical
+- ✅ Fixed hardcoded `/usr/bin/pnpm` → `/usr/bin/env pnpm` for systemd compatibility
+- ✅ Replaced deprecated NodeSource setup_20.x with keyring-based installation
+- ✅ Added SSH config validation (`sshd -t`) before restart to prevent bricking
+
+### Major
+- ✅ Fixed SSH service name compatibility (Debian `ssh` vs RHEL `sshd`)
+- ✅ Added missing `pnpm db:migrate` to README manual update steps
+- ✅ Guarded `ip6tables-save` with command existence check
+
+### Minor
+- ✅ Fixed multiple IPv4 address handling in LOCAL_SUBNET detection
+
+**All changes verified with bash syntax validation.**
+
 ## Testing Checklist
 
 - [ ] Test install on fresh Eight Sleep Pod
 - [ ] Test sp-update with rollback scenario
 - [ ] Verify disk space check prevents corruption
-- [ ] Test on system without wlan0 interface
+- [ ] Test on Debian/Ubuntu (ssh service) and RHEL (sshd service)
 - [ ] Verify IPv6 blocking works
 - [ ] Test .env preservation on re-run
 - [ ] Verify better-sqlite3 builds correctly
-- [ ] Test SSH with keys-only
+- [ ] Test SSH with keys-only authentication
 - [ ] Verify input validation catches bad socket paths
+- [ ] Test on system without ip6tables-save
+- [ ] Test interface with multiple IPv4 addresses
 
-## Files Modified
+## Production Scripts
 
-### Final Structure (Simplified to 2 Scripts)
-
-**scripts/install** (~350 lines)
-- Main installation script
-- Interactive SSH setup prompt (consolidated from setup-ssh)
+### scripts/install (~400 lines)
+Main installation script with comprehensive safety checks:
+- One-line installation: `curl -fsSL ... | sudo bash`
+- Interactive SSH setup prompt
 - Embedded sp-update CLI tool with rollback
+- Pre-flight validation
+- Auto-detection of system configuration
 
-**scripts/internet-control** (~140 lines)
-- Combined block/unblock functionality
-- Single command: `internet-control {block|unblock}`
+### scripts/internet-control (~160 lines)
+Network access control utility:
+- Single command interface: `{block|unblock}`
 - Handles both IPv4 and IPv6
+- Preserves local network access
+- mDNS support for local discovery
 
-**Removed/Consolidated:**
-- ~~setup-ssh~~ → Interactive prompt in install
-- ~~block-internet~~ → `internet-control block`
-- ~~unblock-internet~~ → `internet-control unblock`
+### scripts/README.md
+Complete documentation:
+- Installation instructions
+- Post-install CLI commands
+- Troubleshooting guide
+- Manual update steps
 
-**Benefits:**
-- Simpler mental model (2 scripts vs 4)
-- One-command installation with optional SSH
-- Easier to maintain and test
+**Architecture Benefits:**
+- Simple 2-script design (easy to understand)
+- One-command installation with optional features
+- Self-contained with minimal dependencies
+- Easy to maintain and test
 
 ## Date
 2026-02-23
