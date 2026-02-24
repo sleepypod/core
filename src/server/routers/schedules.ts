@@ -19,6 +19,15 @@ import {
   alarmDurationSchema,
   validateTimeRange,
 } from '@/src/server/validation-schemas'
+import { getJobManager } from '@/src/scheduler'
+
+/**
+ * Reload schedules in the job manager after database changes
+ */
+async function reloadScheduler(): Promise<void> {
+  const jobManager = await getJobManager()
+  await jobManager.reloadSchedules()
+}
 
 /**
  * Schedules router - manages temperature, power, and alarm schedules
@@ -85,17 +94,20 @@ export const schedulesRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        const [created] = await db
-          .insert(temperatureSchedules)
-          .values(input)
-          .returning()
+        const created = await db.transaction(async (tx) => {
+          const [result] = await tx.insert(temperatureSchedules).values(input).returning()
+          if (!result) {
+            throw new TRPCError({
+              code: 'INTERNAL_SERVER_ERROR',
+              message: 'Failed to create temperature schedule - no record returned',
+            })
+          }
 
-        if (!created) {
-          throw new TRPCError({
-            code: 'INTERNAL_SERVER_ERROR',
-            message: 'Failed to create temperature schedule - no record returned',
-          })
-        }
+          return result
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return created
       }
@@ -128,21 +140,24 @@ export const schedulesRouter = router({
       try {
         const { id, ...updates } = input
 
-        const [updated] = await db
-          .update(temperatureSchedules)
-          .set({
-            ...updates,
-            updatedAt: new Date(),
-          })
-          .where(eq(temperatureSchedules.id, id))
-          .returning()
+        const updated = await db.transaction(async (tx) => {
+          const [result] = await tx
+            .update(temperatureSchedules)
+            .set({ ...updates, updatedAt: new Date() })
+            .where(eq(temperatureSchedules.id, id))
+            .returning()
+          if (!result) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Temperature schedule with ID ${id} not found`,
+            })
+          }
 
-        if (!updated) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Temperature schedule with ID ${id} not found`,
-          })
-        }
+          return result
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return updated
       }
@@ -170,13 +185,27 @@ export const schedulesRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        await db
-          .delete(temperatureSchedules)
-          .where(eq(temperatureSchedules.id, input.id))
+        await db.transaction(async (tx) => {
+          const [deleted] = await tx
+            .delete(temperatureSchedules)
+            .where(eq(temperatureSchedules.id, input.id))
+            .returning()
+          if (!deleted) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Temperature schedule with ID ${input.id} not found`,
+            })
+          }
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return { success: true }
       }
       catch (error) {
+        if (error instanceof TRPCError) throw error
+
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to delete temperature schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -210,14 +239,20 @@ export const schedulesRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        const [created] = await db.insert(powerSchedules).values(input).returning()
+        const created = await db.transaction(async (tx) => {
+          const [result] = await tx.insert(powerSchedules).values(input).returning()
+          if (!result) {
+            throw new TRPCError({
+              code: 'INTERNAL_SERVER_ERROR',
+              message: 'Failed to create power schedule - no record returned',
+            })
+          }
 
-        if (!created) {
-          throw new TRPCError({
-            code: 'INTERNAL_SERVER_ERROR',
-            message: 'Failed to create power schedule - no record returned',
-          })
-        }
+          return result
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return created
       }
@@ -264,21 +299,50 @@ export const schedulesRouter = router({
       try {
         const { id, ...updates } = input
 
-        const [updated] = await db
-          .update(powerSchedules)
-          .set({
-            ...updates,
-            updatedAt: new Date(),
-          })
-          .where(eq(powerSchedules.id, id))
-          .returning()
+        const updated = await db.transaction(async (tx) => {
+          // If partial time update, validate final computed state
+          if ((input.onTime || input.offTime) && !(input.onTime && input.offTime)) {
+            const [existing] = await tx
+              .select({ onTime: powerSchedules.onTime, offTime: powerSchedules.offTime })
+              .from(powerSchedules)
+              .where(eq(powerSchedules.id, id))
+              .limit(1)
 
-        if (!updated) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Power schedule with ID ${id} not found`,
-          })
-        }
+            if (!existing) {
+              throw new TRPCError({
+                code: 'NOT_FOUND',
+                message: `Power schedule with ID ${id} not found`,
+              })
+            }
+
+            const finalOnTime = input.onTime ?? existing.onTime
+            const finalOffTime = input.offTime ?? existing.offTime
+
+            if (!validateTimeRange(finalOnTime, finalOffTime)) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'onTime must be before offTime',
+              })
+            }
+          }
+
+          const [result] = await tx
+            .update(powerSchedules)
+            .set({ ...updates, updatedAt: new Date() })
+            .where(eq(powerSchedules.id, id))
+            .returning()
+          if (!result) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Power schedule with ID ${id} not found`,
+            })
+          }
+
+          return result
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return updated
       }
@@ -306,11 +370,27 @@ export const schedulesRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        await db.delete(powerSchedules).where(eq(powerSchedules.id, input.id))
+        await db.transaction(async (tx) => {
+          const [deleted] = await tx
+            .delete(powerSchedules)
+            .where(eq(powerSchedules.id, input.id))
+            .returning()
+          if (!deleted) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Power schedule with ID ${input.id} not found`,
+            })
+          }
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return { success: true }
       }
       catch (error) {
+        if (error instanceof TRPCError) throw error
+
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to delete power schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -339,14 +419,20 @@ export const schedulesRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        const [created] = await db.insert(alarmSchedules).values(input).returning()
+        const created = await db.transaction(async (tx) => {
+          const [result] = await tx.insert(alarmSchedules).values(input).returning()
+          if (!result) {
+            throw new TRPCError({
+              code: 'INTERNAL_SERVER_ERROR',
+              message: 'Failed to create alarm schedule - no record returned',
+            })
+          }
 
-        if (!created) {
-          throw new TRPCError({
-            code: 'INTERNAL_SERVER_ERROR',
-            message: 'Failed to create alarm schedule - no record returned',
-          })
-        }
+          return result
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return created
       }
@@ -382,21 +468,24 @@ export const schedulesRouter = router({
       try {
         const { id, ...updates } = input
 
-        const [updated] = await db
-          .update(alarmSchedules)
-          .set({
-            ...updates,
-            updatedAt: new Date(),
-          })
-          .where(eq(alarmSchedules.id, id))
-          .returning()
+        const updated = await db.transaction(async (tx) => {
+          const [result] = await tx
+            .update(alarmSchedules)
+            .set({ ...updates, updatedAt: new Date() })
+            .where(eq(alarmSchedules.id, id))
+            .returning()
+          if (!result) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Alarm schedule with ID ${id} not found`,
+            })
+          }
 
-        if (!updated) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Alarm schedule with ID ${id} not found`,
-          })
-        }
+          return result
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return updated
       }
@@ -424,11 +513,27 @@ export const schedulesRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        await db.delete(alarmSchedules).where(eq(alarmSchedules.id, input.id))
+        await db.transaction(async (tx) => {
+          const [deleted] = await tx
+            .delete(alarmSchedules)
+            .where(eq(alarmSchedules.id, input.id))
+            .returning()
+          if (!deleted) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Alarm schedule with ID ${input.id} not found`,
+            })
+          }
+        })
+
+        // Reload scheduler AFTER transaction commits
+        await reloadScheduler()
 
         return { success: true }
       }
       catch (error) {
+        if (error instanceof TRPCError) throw error
+
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to delete alarm schedule: ${error instanceof Error ? error.message : 'Unknown error'}`,
