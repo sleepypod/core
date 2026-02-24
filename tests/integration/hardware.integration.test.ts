@@ -227,7 +227,8 @@ describe('Hardware Integration', () => {
     const elapsed = Date.now() - startTime
 
     expect(status).toBeDefined()
-    expect(elapsed).toBeGreaterThanOrEqual(100)
+    // Allow 5ms tolerance for timer precision and scheduling
+    expect(elapsed).toBeGreaterThanOrEqual(95)
 
     // Reset delay
     ctx.server.setCommandDelay(HardwareCommand.DEVICE_STATUS, 0)
