@@ -21,7 +21,7 @@ We will use a **plugin/sidecar module system** with a **separate `biometrics.db`
 
 The architecture:
 
-```
+```text
 /persistent/*.RAW   ←  hardware daemon writes CBOR sensor data continuously
        ↓
 [module process]    reads + tails RAW files, processes signals (any language)
@@ -136,7 +136,7 @@ export interface ModuleManifest {
 
 ### Bundled modules (`modules/`)
 
-```
+```text
 modules/
 ├── piezo-processor/       # HR, HRV, breathing rate from 500Hz piezo data
 │   ├── manifest.json

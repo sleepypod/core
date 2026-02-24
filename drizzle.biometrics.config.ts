@@ -5,6 +5,6 @@ export default defineConfig({
   out: './src/db/biometrics-migrations',
   dialect: 'sqlite',
   dbCredentials: {
-    url: process.env.BIOMETRICS_DATABASE_URL || 'file:./biometrics.db',
+    url: process.env.BIOMETRICS_DATABASE_URL || 'file:./biometrics.dev.db',
   },
 })
