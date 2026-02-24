@@ -153,13 +153,12 @@ describe('DacMonitor', () => {
     monitor.stop()
     expect(monitor.getStatus()).toBe('stopped')
 
-    const updatesBefore = 0
     const updates: unknown[] = []
     monitor.on('status:updated', s => updates.push(s))
     await sleep(POLL_MS * 3)
 
     // No more polls after stop
-    expect(updates.length).toBe(updatesBefore)
+    expect(updates).toHaveLength(0)
   })
 
   test('start is idempotent when already running', async () => {

@@ -29,6 +29,7 @@ export class DeviceStateSync {
    */
   private upsertSide = async (side: 'left' | 'right', status: DeviceStatus): Promise<void> => {
     const sideStatus = side === 'left' ? status.leftSide : status.rightSide
+    const now = new Date()
 
     await db
       .insert(deviceState)
@@ -38,7 +39,7 @@ export class DeviceStateSync {
         targetTemperature: sideStatus.targetTemperature,
         isPowered: sideStatus.currentLevel !== 0,
         waterLevel: status.waterLevel,
-        lastUpdated: new Date(),
+        lastUpdated: now,
       })
       .onConflictDoUpdate({
         target: deviceState.side,
@@ -47,7 +48,7 @@ export class DeviceStateSync {
           targetTemperature: sideStatus.targetTemperature,
           isPowered: sideStatus.currentLevel !== 0,
           waterLevel: status.waterLevel,
-          lastUpdated: new Date(),
+          lastUpdated: now,
         },
       })
   }

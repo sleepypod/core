@@ -109,6 +109,9 @@ export class DacMonitor extends EventEmitter {
   }
 
   stop = (): void => {
+    // Set stopped first so any in-flight poll sees the flag before we null the client
+    this.monitorStatus = 'stopped'
+
     if (this.intervalHandle !== null) {
       clearInterval(this.intervalHandle)
       this.intervalHandle = null
@@ -119,15 +122,18 @@ export class DacMonitor extends EventEmitter {
       this.client = null
     }
 
-    this.monitorStatus = 'stopped'
     this.isPollInFlight = false
   }
 
   private poll = async (): Promise<void> => {
-    if (!this.client) return
+    const client = this.client
+    if (!client || this.monitorStatus === 'stopped') return
 
     try {
-      const status = await this.client.getDeviceStatus()
+      const status = await client.getDeviceStatus()
+
+      // Discard results if stop() ran while we were awaiting
+      if (this.monitorStatus === 'stopped' || this.client !== client) return
 
       if (this.monitorStatus === 'degraded') {
         this.monitorStatus = 'running'
@@ -136,6 +142,7 @@ export class DacMonitor extends EventEmitter {
 
       this.lastStatus = status
       this.emit('status:updated', status)
+
 
       if (status.gestures) {
         if (this.isFirstPoll) {
@@ -186,11 +193,13 @@ export class DacMonitor extends EventEmitter {
         return
       }
 
-      if (currentCounts.l > lastCounts.l) {
+      const deltaL = currentCounts.l - lastCounts.l
+      for (let i = 0; i < deltaL; i += 1) {
         this.emit('gesture:detected', { side: 'left', tapType, timestamp: new Date() })
       }
 
-      if (currentCounts.r > lastCounts.r) {
+      const deltaR = currentCounts.r - lastCounts.r
+      for (let i = 0; i < deltaR; i += 1) {
         this.emit('gesture:detected', { side: 'right', tapType, timestamp: new Date() })
       }
     }

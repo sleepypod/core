@@ -10,7 +10,7 @@ import {
 } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
 import { HardwareClient } from '@/src/hardware/client'
-import { getDacMonitor } from '@/src/hardware/dacMonitor.instance'
+import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
 
@@ -204,22 +204,16 @@ export const healthRouter = router({
   /**
    * DacMonitor status - polling loop health and gesture support
    */
-  dacMonitor: publicProcedure.query(async () => {
-    try {
-      const monitor = await getDacMonitor()
-      const lastStatus = monitor.getLastStatus()
-      return {
-        status: monitor.getStatus(),
-        podVersion: lastStatus?.podVersion ?? null,
-        gesturesSupported: !!lastStatus?.gestures,
-      }
+  dacMonitor: publicProcedure.query(() => {
+    const monitor = getDacMonitorIfRunning()
+    if (!monitor) {
+      return { status: 'not_initialized' as const, podVersion: null, gesturesSupported: false }
     }
-    catch (error) {
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: `Failed to get DacMonitor status: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        cause: error,
-      })
+    const lastStatus = monitor.getLastStatus()
+    return {
+      status: monitor.getStatus(),
+      podVersion: lastStatus?.podVersion ?? null,
+      gesturesSupported: !!lastStatus?.gestures,
     }
   }),
 

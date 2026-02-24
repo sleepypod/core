@@ -95,6 +95,7 @@ export class GestureActionHandler {
     const state = await this.deps.findDeviceState(event.side)
     const currentTemp = state?.targetTemperature ?? 75
     const amount = gesture.temperatureAmount ?? 0
+    if (!gesture.temperatureChange) return  // misconfigured row — skip
     const delta = gesture.temperatureChange === 'increment' ? amount : -amount
     const newTemp = Math.min(MAX_TEMP, Math.max(MIN_TEMP, currentTemp + delta))
 
