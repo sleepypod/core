@@ -1,0 +1,48 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "========================================"
+echo "  Restore WAN Internet Access"
+echo "========================================"
+echo ""
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: This script must be run as root" >&2
+  exit 1
+fi
+
+# Remove custom chains
+if iptables -L SLEEPYPOD-BLOCK &>/dev/null; then
+  echo "Removing IPv4 firewall rules..."
+  iptables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+  iptables -F SLEEPYPOD-BLOCK
+  iptables -X SLEEPYPOD-BLOCK
+fi
+
+# Set default policy to ACCEPT
+iptables -P OUTPUT ACCEPT
+
+# Save rules
+if command -v iptables-save &>/dev/null; then
+  mkdir -p /etc/iptables
+  iptables-save > /etc/iptables/rules.v4
+fi
+
+# Remove IPv6 rules
+if command -v ip6tables &>/dev/null && ip6tables -L SLEEPYPOD-BLOCK &>/dev/null; then
+  echo "Removing IPv6 firewall rules..."
+  ip6tables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+  ip6tables -F SLEEPYPOD-BLOCK
+  ip6tables -X SLEEPYPOD-BLOCK
+  ip6tables -P OUTPUT ACCEPT
+
+  if [ -f /etc/iptables/rules.v6 ]; then
+    ip6tables-save > /etc/iptables/rules.v6
+  fi
+fi
+
+echo ""
+echo "Internet access restored!"
+echo "Both IPv4 and IPv6 are now unblocked."
+echo ""

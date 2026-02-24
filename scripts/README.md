@@ -16,19 +16,20 @@ See main [installation guide](../docs/INSTALLATION.md) for hardware setup.
 Run on the pod:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install | sudo bash
 ```
 
 This will:
-1. Detect dac.sock location
-2. Install Node.js 20 and pnpm
-3. Clone the repository
-4. Install dependencies
-5. Build the application
-6. Generate and initialize database (Drizzle ORM + better-sqlite3)
-7. Create systemd service with auto-restart
-8. Create CLI shortcuts
-9. Start the scheduler for automated jobs
+1. **Pre-flight checks** - Verify disk space, network, dependencies
+2. **Detect dac.sock** - Auto-detect hardware socket location
+3. **Install Node.js 20** - Via nodesource repository
+4. **Clone repository** - From GitHub main branch
+5. **Install dependencies** - With `--frozen-lockfile` and `--ignore-scripts` for security
+6. **Build application** - Next.js production build
+7. **Database migrations** - Safe schema updates (not destructive push)
+8. **Create systemd service** - With auto-restart and hardening
+9. **CLI shortcuts** - sp-status, sp-restart, sp-logs, sp-update
+10. **Start scheduler** - Automated temperature/power/alarm jobs
 
 ## CLI Commands
 
@@ -44,7 +45,7 @@ After installation:
 ### SSH Access (Port 8822)
 
 ```bash
-sudo bash scripts/setup-ssh.sh
+sudo bash scripts/setup-ssh
 ```
 
 Then connect:
@@ -57,12 +58,12 @@ ssh root@<POD_IP> -p 8822
 Block all internet except local network:
 
 ```bash
-sudo bash scripts/block-internet.sh
+sudo bash scripts/block-internet
 ```
 
 To restore internet:
 ```bash
-sudo bash scripts/unblock-internet.sh
+sudo bash scripts/unblock-internet
 ```
 
 ## Service Management

@@ -1,0 +1,83 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "========================================"
+echo "  SleepyPod SSH Configuration"
+echo "========================================"
+echo ""
+
+# Cleanup handler
+cleanup() {
+  local exit_code=$?
+  if [ $exit_code -ne 0 ]; then
+    if [ -f /etc/ssh/sshd_config.backup ]; then
+      echo "ERROR: SSH configuration failed. Restoring backup..." >&2
+      cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+      systemctl restart sshd
+      echo "Backup restored." >&2
+    fi
+  fi
+}
+trap 'cleanup' EXIT
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: This script must be run as root" >&2
+  exit 1
+fi
+
+# Configure SSH on alternate port
+SSH_PORT=8822
+
+echo "Configuring SSH on port $SSH_PORT..."
+
+# Backup original sshd_config
+if [ ! -f /etc/ssh/sshd_config.backup ]; then
+  cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+  echo "Backed up original sshd_config"
+fi
+
+# Update SSH configuration
+sed -i "s/#\?Port .*/Port $SSH_PORT/" /etc/ssh/sshd_config
+
+# Enable root login with keys only (not passwords)
+sed -i "s/#\?PermitRootLogin .*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
+
+# Disable password authentication for security
+sed -i "s/#\?PasswordAuthentication .*/PasswordAuthentication no/" /etc/ssh/sshd_config
+
+# Disable empty passwords
+sed -i "s/#\?PermitEmptyPasswords .*/PermitEmptyPasswords no/" /etc/ssh/sshd_config
+
+# Add public key
+echo ""
+echo "Enter your SSH public key (or press Enter to skip):"
+read -r SSH_KEY
+
+if [ -n "$SSH_KEY" ]; then
+  # Basic format validation
+  if ! echo "$SSH_KEY" | grep -qE '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp[0-9]+) [A-Za-z0-9+/=]+'; then
+    echo "Error: Invalid SSH public key format" >&2
+    exit 1
+  fi
+
+  mkdir -p /root/.ssh
+  echo "$SSH_KEY" >> /root/.ssh/authorized_keys
+  chmod 700 /root/.ssh
+  chmod 600 /root/.ssh/authorized_keys
+  echo "SSH key added successfully!"
+else
+  echo "Warning: No SSH key provided. You'll need to add one manually to /root/.ssh/authorized_keys"
+fi
+
+# Restart SSH service
+echo "Restarting SSH service..."
+systemctl restart sshd
+
+echo ""
+echo "SSH configured successfully!"
+echo "Port: $SSH_PORT"
+echo "Auth: Keys only (passwords disabled)"
+echo ""
+echo "Connect with: ssh root@<POD_IP> -p $SSH_PORT"
+echo ""
