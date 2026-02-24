@@ -245,7 +245,8 @@ class SideProcessor:
         if not is_present(hr_arr):
             return  # No user detected — skip
 
-        hr, hrv = compute_heart_rate_hrv(hr_arr)
+        hr, _ = compute_heart_rate_hrv(hr_arr)
+        _, hrv = compute_heart_rate_hrv(np.array(self._hrv_buf))
         br = compute_breathing_rate(np.array(self._br_buf))
 
         if hr is not None or hrv is not None or br is not None:

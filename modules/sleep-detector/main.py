@@ -204,7 +204,10 @@ class SessionTracker:
             if (self._session_start is not None
                     and self._last_present_ts is not None
                     and ts - self._last_present_ts >= ABSENCE_TIMEOUT_S):
-                self._close_session(self._last_present_ts)
+                # Close at interval_start (first absent sample) when available to
+                # avoid emitting absent intervals with end < start
+                close_ts = self._interval_start if self._interval_start is not None else self._last_present_ts
+                self._close_session(close_ts)
 
     def _close_session(self, left_ts: float) -> None:
         if self._session_start is None:
@@ -220,7 +223,7 @@ class SessionTracker:
             if self._interval_start is not None:
                 if self._was_present:
                     self._present_intervals.append([self._interval_start, left_ts])
-                else:
+                elif left_ts > self._interval_start:
                     self._absent_intervals.append([self._interval_start, left_ts])
 
             write_sleep_record(
