@@ -1,1 +1,0 @@
-ALTER TABLE `device_state` ADD `powered_on_at` integer;

@@ -5,29 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1771827749329,
-      "tag": "0000_plain_silverclaw",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1771834604093,
-      "tag": "0001_little_the_twelve",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1771913132044,
-      "tag": "0002_flaky_doctor_strange",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1771914402335,
-      "tag": "0003_odd_gargoyle",
+      "when": 1771917379431,
+      "tag": "0000_fine_frightful_four",
       "breakpoints": true
     }
   ]
