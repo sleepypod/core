@@ -308,6 +308,49 @@ chmod +x /usr/local/bin/sp-restart
 chmod +x /usr/local/bin/sp-logs
 chmod +x /usr/local/bin/sp-update
 
+# Optional SSH configuration
+echo ""
+echo "========================================"
+echo "  Optional SSH Configuration"
+echo "========================================"
+echo ""
+read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH
+
+if [[ "$SETUP_SSH" =~ ^[Yy]$ ]]; then
+  echo "Configuring SSH..."
+
+  # Backup sshd_config
+  if [ ! -f /etc/ssh/sshd_config.backup ]; then
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+  fi
+
+  # Update SSH configuration
+  sed -i "s/#\?Port .*/Port 8822/" /etc/ssh/sshd_config
+  sed -i "s/#\?PermitRootLogin .*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
+  sed -i "s/#\?PasswordAuthentication .*/PasswordAuthentication no/" /etc/ssh/sshd_config
+  sed -i "s/#\?PermitEmptyPasswords .*/PermitEmptyPasswords no/" /etc/ssh/sshd_config
+
+  echo ""
+  echo "Enter your SSH public key:"
+  read -r SSH_KEY
+
+  if [ -n "$SSH_KEY" ]; then
+    # Validate key format
+    if echo "$SSH_KEY" | grep -qE '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp[0-9]+) [A-Za-z0-9+/=]+'; then
+      mkdir -p /root/.ssh
+      echo "$SSH_KEY" >> /root/.ssh/authorized_keys
+      chmod 700 /root/.ssh
+      chmod 600 /root/.ssh/authorized_keys
+      echo "✓ SSH key added"
+    else
+      echo "Warning: Invalid SSH key format, skipping"
+    fi
+  fi
+
+  systemctl restart sshd
+  echo "✓ SSH configured on port 8822 (keys only)"
+fi
+
 # Auto-detect network interface and get IP
 DEFAULT_IFACE=$(ip route | awk '/default/ {print $5; exit}')
 POD_IP=$(ip -4 addr show "$DEFAULT_IFACE" 2>/dev/null | grep -o 'inet [0-9.]*' | awk '{print $2}') || POD_IP="<unknown>"

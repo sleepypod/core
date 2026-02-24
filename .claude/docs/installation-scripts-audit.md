@@ -157,12 +157,27 @@ Three expert agents (bash-script-expert, security-expert, devops-expert) reviewe
 
 ## Files Modified
 
-- `scripts/install` (was install.sh) - 350 lines, comprehensive rewrite
-- `scripts/sp-update` - 50 lines, embedded in install
-- `scripts/setup-ssh` (was setup-ssh.sh) - 70 lines
-- `scripts/block-internet` (was block-internet.sh) - 90 lines
-- `scripts/unblock-internet` (was unblock-internet.sh) - 40 lines
-- `scripts/README.md` - Updated for new filenames and features
+### Final Structure (Simplified to 2 Scripts)
+
+**scripts/install** (~350 lines)
+- Main installation script
+- Interactive SSH setup prompt (consolidated from setup-ssh)
+- Embedded sp-update CLI tool with rollback
+
+**scripts/internet-control** (~140 lines)
+- Combined block/unblock functionality
+- Single command: `internet-control {block|unblock}`
+- Handles both IPv4 and IPv6
+
+**Removed/Consolidated:**
+- ~~setup-ssh~~ → Interactive prompt in install
+- ~~block-internet~~ → `internet-control block`
+- ~~unblock-internet~~ → `internet-control unblock`
+
+**Benefits:**
+- Simpler mental model (2 scripts vs 4)
+- One-command installation with optional SSH
+- Easier to maintain and test
 
 ## Date
 2026-02-23

@@ -1,6 +1,6 @@
 # SleepyPod Installation Scripts
 
-Scripts for deploying SleepyPod to Eight Sleep Pod hardware.
+**Two simple scripts** for deploying SleepyPod to Eight Sleep Pod hardware.
 
 ## Prerequisites
 
@@ -30,6 +30,7 @@ This will:
 8. **Create systemd service** - With auto-restart and hardening
 9. **CLI shortcuts** - sp-status, sp-restart, sp-logs, sp-update
 10. **Start scheduler** - Automated temperature/power/alarm jobs
+11. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
 
 ## CLI Commands
 
@@ -40,31 +41,24 @@ After installation:
 - `sp-logs` - View live logs
 - `sp-update` - Update to latest version
 
-## Optional Configuration
+## Internet Control
 
-### SSH Access (Port 8822)
-
-```bash
-sudo bash scripts/setup-ssh
-```
-
-Then connect:
-```bash
-ssh root@<POD_IP> -p 8822
-```
-
-### Block WAN Internet
-
-Block all internet except local network:
+Block all WAN internet (keep local network only):
 
 ```bash
-sudo bash scripts/block-internet
+sudo scripts/internet-control block
 ```
 
-To restore internet:
+Restore full internet access:
 ```bash
-sudo bash scripts/unblock-internet
+sudo scripts/internet-control unblock
 ```
+
+**Features:**
+- Blocks both IPv4 and IPv6 (prevents bypass)
+- Preserves local network access
+- Keeps mDNS for local discovery
+- Connection tracking for established connections
 
 ## Service Management
 
@@ -83,6 +77,21 @@ journalctl -u sleepypod -f
 # Enable/disable auto-start
 systemctl enable sleepypod
 systemctl disable sleepypod
+```
+
+## SSH Access
+
+During installation, you'll be prompted to configure SSH on port 8822 with keys-only authentication.
+
+If you need to configure SSH later:
+1. Edit `/etc/ssh/sshd_config`
+2. Set `Port 8822` and `PermitRootLogin prohibit-password`
+3. Add your public key to `/root/.ssh/authorized_keys`
+4. Restart: `systemctl restart sshd`
+
+Connect with:
+```bash
+ssh root@<POD_IP> -p 8822
 ```
 
 ## Features
