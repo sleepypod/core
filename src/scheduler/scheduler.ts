@@ -14,6 +14,7 @@ import type {
 export class Scheduler extends EventEmitter {
   private jobs: Map<string, ScheduledJob> = new Map()
   private config: SchedulerConfig
+  private inFlightJobs: Set<string> = new Set()
 
   constructor(config: SchedulerConfig) {
     super()
@@ -71,6 +72,7 @@ export class Scheduler extends EventEmitter {
     handler: () => Promise<void>
   ): Promise<JobExecutionResult> {
     const timestamp = new Date()
+    this.inFlightJobs.add(id)
 
     try {
       await handler()
@@ -79,6 +81,28 @@ export class Scheduler extends EventEmitter {
       const errorMessage = error instanceof Error ? error.message : String(error)
       this.emit('jobError', id, error as Error)
       return { success: false, error: errorMessage, timestamp }
+    } finally {
+      this.inFlightJobs.delete(id)
+    }
+  }
+
+  /**
+   * Wait for in-flight jobs to complete with a timeout
+   */
+  async waitForInFlightJobs(timeoutMs: number = 5000): Promise<void> {
+    if (this.inFlightJobs.size === 0) return
+
+    console.log(`Waiting for ${this.inFlightJobs.size} in-flight job(s) to complete...`)
+
+    const start = Date.now()
+    while (this.inFlightJobs.size > 0 && Date.now() - start < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
+    if (this.inFlightJobs.size > 0) {
+      console.warn(
+        `Force shutdown with ${this.inFlightJobs.size} in-flight job(s) still running: ${[...this.inFlightJobs].join(', ')}`
+      )
     }
   }
 
@@ -178,6 +202,7 @@ export class Scheduler extends EventEmitter {
    */
   async shutdown(): Promise<void> {
     console.log('Shutting down scheduler...')
+    await this.waitForInFlightJobs(5000)
     this.cancelAllJobs()
     schedule.gracefulShutdown()
     console.log('Scheduler shut down successfully')

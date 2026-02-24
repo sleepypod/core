@@ -32,3 +32,4 @@
 export { Scheduler } from './scheduler'
 export { JobManager } from './jobManager'
 export { JobType, type ScheduledJob, type SchedulerConfig, type JobExecutionResult, type SchedulerEvents } from './types'
+export { getJobManager, shutdownJobManager } from './instance'

@@ -8,7 +8,7 @@ import {
   deviceSettings,
 } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
-import { createHardwareClient } from '@/src/hardware'
+import { createHardwareClient } from '@/src/hardware/client'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
 
@@ -17,6 +17,7 @@ const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
  */
 export class JobManager {
   private scheduler: Scheduler
+  private reloadInProgress: Promise<void> | null = null
 
   constructor(timezone: string) {
     this.scheduler = new Scheduler({
@@ -27,25 +28,40 @@ export class JobManager {
     this.setupEventListeners()
   }
 
+  private onJobScheduled = (job: { id: string; type: string }) => {
+    console.log(`Job scheduled: ${job.id} [${job.type}]`)
+  }
+
+  private onJobExecuted = (jobId: string, result: { success: boolean; error?: string }) => {
+    if (result.success) {
+      console.log(`Job executed successfully: ${jobId}`)
+    } else {
+      console.error(`Job execution failed: ${jobId}`, result.error)
+    }
+  }
+
+  private onJobError = (jobId: string, error: Error) => {
+    console.error(`Job error: ${jobId}`, error)
+  }
+
   /**
-   * Setup event listeners for job lifecycle
+   * Setup event listeners for job lifecycle.
+   * Removes any existing listeners first to prevent duplicates on reload.
    */
   private setupEventListeners(): void {
-    this.scheduler.on('jobScheduled', (job) => {
-      console.log(`Job scheduled: ${job.id} [${job.type}]`)
-    })
+    this.removeEventListeners()
+    this.scheduler.on('jobScheduled', this.onJobScheduled)
+    this.scheduler.on('jobExecuted', this.onJobExecuted)
+    this.scheduler.on('jobError', this.onJobError)
+  }
 
-    this.scheduler.on('jobExecuted', (jobId, result) => {
-      if (result.success) {
-        console.log(`Job executed successfully: ${jobId}`)
-      } else {
-        console.error(`Job execution failed: ${jobId}`, result.error)
-      }
-    })
-
-    this.scheduler.on('jobError', (jobId, error) => {
-      console.error(`Job error: ${jobId}`, error)
-    })
+  /**
+   * Remove event listeners to prevent memory leaks.
+   */
+  private removeEventListeners(): void {
+    this.scheduler.off('jobScheduled', this.onJobScheduled)
+    this.scheduler.off('jobExecuted', this.onJobExecuted)
+    this.scheduler.off('jobError', this.onJobError)
   }
 
   /**
@@ -257,11 +273,27 @@ export class JobManager {
   }
 
   /**
-   * Reload all schedules (useful after database changes)
+   * Reload all schedules (useful after database changes).
+   * Uses a mutex to prevent concurrent reloads which could cause race conditions.
    */
   async reloadSchedules(): Promise<void> {
-    this.scheduler.cancelAllJobs()
-    await this.loadSchedules()
+    // If a reload is already in progress, wait for it to complete
+    if (this.reloadInProgress) {
+      await this.reloadInProgress
+      return
+    }
+
+    // Set the mutex and perform the reload
+    this.reloadInProgress = (async () => {
+      try {
+        this.scheduler.cancelAllJobs()
+        await this.loadSchedules()
+      } finally {
+        this.reloadInProgress = null
+      }
+    })()
+
+    await this.reloadInProgress
   }
 
   /**
@@ -283,6 +315,7 @@ export class JobManager {
    * Gracefully shutdown
    */
   async shutdown(): Promise<void> {
+    this.removeEventListeners()
     await this.scheduler.shutdown()
   }
 }

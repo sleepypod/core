@@ -19,30 +19,11 @@ sqlite.pragma('foreign_keys = ON') // Enable foreign key constraints
 // Initialize Drizzle ORM
 export const db = drizzle(sqlite, { schema })
 
-// Graceful shutdown - register once
-let handlersRegistered = false
-
-export function registerShutdownHandlers() {
-  if (handlersRegistered) return
-  handlersRegistered = true
-
-  const closeDb = () => {
-    console.log('Closing database connection...')
-    sqlite.close()
-  }
-
-  process.on('SIGINT', () => {
-    closeDb()
-    process.exit(0)
-  })
-
-  process.on('SIGTERM', () => {
-    closeDb()
-    process.exit(0)
-  })
-}
-
-// Auto-register in production or when directly imported
-if (process.env.NODE_ENV === 'production' || !process.env.VITEST) {
-  registerShutdownHandlers()
+/**
+ * Close the database connection.
+ * Called by the centralized shutdown coordinator in instrumentation.ts.
+ */
+export function closeDatabase(): void {
+  console.log('Closing database connection...')
+  sqlite.close()
 }

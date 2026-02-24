@@ -10,6 +10,27 @@ import {
   temperatureUnitSchema,
   timeStringSchema,
 } from '@/src/server/validation-schemas'
+import { getJobManager } from '@/src/scheduler'
+
+/**
+ * Reload schedules in the job manager after settings changes
+ * that affect scheduling (timezone, priming, reboot)
+ */
+async function reloadSchedulerIfNeeded(input: Record<string, unknown>): Promise<void> {
+  const schedulingKeys = ['timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime']
+  const hasSchedulingChanges = schedulingKeys.some(key => key in input)
+
+  if (hasSchedulingChanges) {
+    const jobManager = await getJobManager()
+
+    // If timezone changed, use updateTimezone which reloads automatically
+    if ('timezone' in input && typeof input.timezone === 'string') {
+      await jobManager.updateTimezone(input.timezone)
+    } else {
+      await jobManager.reloadSchedules()
+    }
+  }
+}
 
 /**
  * Settings router - manages device configuration
@@ -60,50 +81,61 @@ export const settingsRouter = router({
           primePodTime: timeStringSchema.optional(),
         })
         .strict()
-        .refine(
-          (data) => {
-            // If rebootDaily is true, rebootTime should be provided
-            if (data.rebootDaily === true && !data.rebootTime) {
-              return false
-            }
-            return true
-          },
-          {
-            message: 'rebootTime is required when rebootDaily is true',
-            path: ['rebootTime'],
-          }
-        )
-        .refine(
-          (data) => {
-            // If primePodDaily is true, primePodTime should be provided
-            if (data.primePodDaily === true && !data.primePodTime) {
-              return false
-            }
-            return true
-          },
-          {
-            message: 'primePodTime is required when primePodDaily is true',
-            path: ['primePodTime'],
-          }
-        )
     )
     .mutation(async ({ input }) => {
       try {
-        const [updated] = await db
-          .update(deviceSettings)
-          .set({
-            ...input,
-            updatedAt: new Date(),
-          })
-          .where(eq(deviceSettings.id, 1))
-          .returning()
+        const updated = await db.transaction(async (tx) => {
+          // Fetch current settings to validate final computed state
+          const [current] = await tx
+            .select()
+            .from(deviceSettings)
+            .where(eq(deviceSettings.id, 1))
+            .limit(1)
 
-        if (!updated) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: 'Device settings not found',
-          })
-        }
+          if (!current) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Device settings not found',
+            })
+          }
+
+          // Compute final state after update
+          const finalRebootDaily = input.rebootDaily ?? current.rebootDaily
+          const finalRebootTime = input.rebootTime ?? current.rebootTime
+          const finalPrimeDaily = input.primePodDaily ?? current.primePodDaily
+          const finalPrimeTime = input.primePodTime ?? current.primePodTime
+
+          // Validate final state
+          if (finalRebootDaily && !finalRebootTime) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'rebootTime is required when rebootDaily is enabled',
+            })
+          }
+
+          if (finalPrimeDaily && !finalPrimeTime) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'primePodTime is required when primePodDaily is enabled',
+            })
+          }
+
+          const [result] = await tx
+            .update(deviceSettings)
+            .set({ ...input, updatedAt: new Date() })
+            .where(eq(deviceSettings.id, 1))
+            .returning()
+
+          if (!result) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Device settings not found',
+            })
+          }
+
+          await reloadSchedulerIfNeeded(input)
+          return result
+        })
 
         return updated
       }
@@ -273,7 +305,7 @@ export const settingsRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        await db
+        const [deleted] = await db
           .delete(tapGestures)
           .where(
             and(
@@ -281,10 +313,20 @@ export const settingsRouter = router({
               eq(tapGestures.tapType, input.tapType)
             )
           )
+          .returning()
+
+        if (!deleted) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: `Gesture for ${input.side} ${input.tapType} not found`,
+          })
+        }
 
         return { success: true }
       }
       catch (error) {
+        if (error instanceof TRPCError) throw error
+
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to delete gesture: ${error instanceof Error ? error.message : 'Unknown error'}`,
