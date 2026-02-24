@@ -159,17 +159,47 @@ Additional issues identified and fixed in PR #115 review:
 
 ## Testing Checklist
 
+### Installation Tests
+- [ ] Test one-line curl install: `curl -fsSL ... | sudo bash`
 - [ ] Test install on fresh Eight Sleep Pod
-- [ ] Test sp-update with rollback scenario
-- [ ] Verify disk space check prevents corruption
-- [ ] Test on Debian/Ubuntu (ssh service) and RHEL (sshd service)
-- [ ] Verify IPv6 blocking works
+- [ ] Test install on system without wlan0 interface
 - [ ] Test .env preservation on re-run
 - [ ] Verify better-sqlite3 builds correctly
+- [ ] Verify disk space check prevents install (< 500MB)
+
+### Input Validation Tests
+- [ ] DAC_SOCK_PATH validation rejects empty input
+- [ ] DAC_SOCK_PATH validation rejects non-existent path
+- [ ] DAC_SOCK_PATH validation rejects regular file (not socket)
+- [ ] SSH key validation rejects malformed keys
+
+### Update & Rollback Tests
+- [ ] Test sp-update success path
+- [ ] Test sp-update rollback on build failure
+- [ ] Test sp-update rollback on health check failure
+- [ ] Verify database backup/restore on failed update
+- [ ] Verify disk space check prevents update (< 300MB)
+
+### Network & Firewall Tests
+- [ ] Test internet-control block end-to-end
+- [ ] Test internet-control unblock end-to-end
+- [ ] Verify local network still accessible when blocked
+- [ ] Verify IPv6 blocking works (when ip6tables available)
+- [ ] Test on system without ip6tables/ip6tables-save
+- [ ] Verify iptables-persistent installation and rule persistence
+
+### SSH Configuration Tests
+- [ ] Test SSH on Debian/Ubuntu (ssh.service)
+- [ ] Test SSH on RHEL (sshd.service)
 - [ ] Test SSH with keys-only authentication
-- [ ] Verify input validation catches bad socket paths
-- [ ] Test on system without ip6tables-save
+- [ ] Test SSH config validation (sshd -t) catches errors
+- [ ] Verify SSH config restored on validation failure
+
+### Edge Cases
 - [ ] Test interface with multiple IPv4 addresses
+- [ ] Test Node.js upgrade from v16/v18 to v20
+- [ ] Test pnpm installation to /usr/local/bin
+- [ ] Test systemd service with /usr/bin/env pnpm
 
 ## Production Scripts
 
