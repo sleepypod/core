@@ -162,7 +162,7 @@ def compute_breathing_rate(samples: np.ndarray, fs: float = SAMPLE_RATE) -> Opti
     """Breathing rate via FFT of the 0.15–0.5 Hz band."""
     try:
         cleaned = _bandpass(samples, 0.15, 0.5, fs)
-        freqs, psd = welch(cleaned, fs=fs, nperseg=min(len(cleaned), fs * 10))
+        freqs, psd = welch(cleaned, fs=fs, nperseg=int(min(len(cleaned), fs * 10)))
         mask = (freqs >= 0.15) & (freqs <= 0.5)
         if not np.any(mask):
             return None
@@ -296,8 +296,10 @@ def main() -> None:
         sys.exit(1)
     finally:
         db_conn.close()
-        report_health("down", "piezo-processor stopped")
         log.info("Shutdown complete")
+
+    # Only reached on clean shutdown (not via sys.exit)
+    report_health("down", "piezo-processor stopped")
 
 
 if __name__ == "__main__":

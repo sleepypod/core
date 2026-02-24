@@ -181,9 +181,10 @@ class SessionTracker:
                 # New session starts
                 self._session_start = datetime.fromtimestamp(ts, tz=timezone.utc)
                 self._interval_start = ts
+                self._was_present = True
                 log.info("%s: session started at %s", self.side, self._session_start.isoformat())
 
-            if not self._was_present and self._interval_start is not None:
+            elif not self._was_present and self._interval_start is not None:
                 # Returning from absence — close absent interval, open present interval
                 self._absent_intervals.append([self._interval_start, ts])
                 self._interval_start = ts
@@ -292,6 +293,11 @@ class RawFileFollower:
                 log.warning("Error reading RAW record: %s", e)
                 time.sleep(1)
 
+        # Clean up file handle on shutdown
+        if self._file:
+            self._file.close()
+            self._file = None
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -325,8 +331,10 @@ def main() -> None:
         sys.exit(1)
     finally:
         db_conn.close()
-        report_health("down", "sleep-detector stopped")
         log.info("Shutdown complete")
+
+    # Only reached on clean shutdown (not via sys.exit)
+    report_health("down", "sleep-detector stopped")
 
 
 if __name__ == "__main__":
