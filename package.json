@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.2.0",
-    "@formatjs/intl-localematcher": "^0.7.5",
+    "@formatjs/intl-localematcher": "^0.8.0",
     "@lingui/core": "^5.9.2",
     "@lingui/macro": "^5.9.2",
     "@lingui/react": "^5.9.2",
