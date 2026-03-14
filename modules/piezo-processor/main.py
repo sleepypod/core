@@ -30,7 +30,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
-from common.cbor_raw import read_raw_record
+from common.raw_follower import RawFileFollower
 import numpy as np
 from scipy.signal import butter, filtfilt, welch
 import heartpy as hp
@@ -101,17 +101,19 @@ def report_health(status: str, message: str) -> None:
     """Write module health to sleepypod.db system_health table."""
     try:
         conn = sqlite3.connect(str(SLEEPYPOD_DB), timeout=2.0)
-        with conn:
-            conn.execute(
-                """INSERT INTO system_health (component, status, message, last_checked)
-                   VALUES ('piezo-processor', ?, ?, ?)
-                   ON CONFLICT(component) DO UPDATE SET
-                     status=excluded.status,
-                     message=excluded.message,
-                     last_checked=excluded.last_checked""",
-                (status, message, int(time.time())),
-            )
-        conn.close()
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO system_health (component, status, message, last_checked)
+                       VALUES ('piezo-processor', ?, ?, ?)
+                       ON CONFLICT(component) DO UPDATE SET
+                         status=excluded.status,
+                         message=excluded.message,
+                         last_checked=excluded.last_checked""",
+                    (status, message, int(time.time())),
+                )
+        finally:
+            conn.close()
     except Exception as e:
         log.warning("Could not write health status: %s", e)
 
@@ -175,76 +177,6 @@ def compute_breathing_rate(samples: np.ndarray, fs: float = SAMPLE_RATE) -> Opti
         log.debug("Breathing rate computation failed: %s", e)
         return None
 
-# ---------------------------------------------------------------------------
-# RAW file follower
-# ---------------------------------------------------------------------------
-
-MAX_CONSECUTIVE_FAILURES = 5
-
-class RawFileFollower:
-    """
-    Follows the newest .RAW file in RAW_DATA_DIR, tailing it as new CBOR
-    records are appended by the hardware daemon.
-    """
-
-    def __init__(self, data_dir: Path):
-        self.data_dir = data_dir
-        self._file = None
-        self._path = None
-        self._last_pos = 0
-        self._consecutive_failures = 0
-
-    def _find_latest(self) -> Optional[Path]:
-        candidates = sorted(self.data_dir.glob("*.RAW"), key=lambda p: p.stat().st_mtime, reverse=True)
-        return candidates[0] if candidates else None
-
-    def read_records(self):
-        """Yield decoded CBOR records as they arrive. Blocks between records."""
-        while not _shutdown.is_set():
-            latest = self._find_latest()
-            if latest is None:
-                time.sleep(1)
-                continue
-
-            if latest != self._path:
-                log.info("Switched to RAW file: %s", latest.name)
-                if self._file:
-                    self._file.close()
-                self._file = open(latest, "rb")
-                self._path = latest
-                self._last_pos = 0
-                self._consecutive_failures = 0
-
-            try:
-                data_bytes = read_raw_record(self._file)
-                if data_bytes is None:
-                    self._last_pos = self._file.tell()
-                    self._consecutive_failures = 0
-                    continue  # empty placeholder record
-                inner = cbor2.loads(data_bytes)
-                self._last_pos = self._file.tell()
-                self._consecutive_failures = 0
-                yield inner
-            except EOFError:
-                # No new data yet — poll
-                time.sleep(0.01)
-            except (ValueError, cbor2.CBORDecodeError, OSError) as e:
-                self._consecutive_failures += 1
-                if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    log.warning("Skipping past corrupt data at offset %d after %d failures: %s",
-                                self._last_pos, self._consecutive_failures, e)
-                    self._last_pos += 1
-                    self._consecutive_failures = 0
-                else:
-                    log.debug("Error reading RAW record (attempt %d): %s",
-                              self._consecutive_failures, e)
-                self._file.seek(self._last_pos)
-                time.sleep(0.1)
-
-        # Clean up file handle on shutdown
-        if self._file:
-            self._file.close()
-            self._file = None
 
 # ---------------------------------------------------------------------------
 # Per-side processor
@@ -300,7 +232,7 @@ def main() -> None:
     db_conn = open_biometrics_db()
     left = SideProcessor("left", db_conn)
     right = SideProcessor("right", db_conn)
-    follower = RawFileFollower(RAW_DATA_DIR)
+    follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
 
     report_health("healthy", "piezo-processor started")
 
