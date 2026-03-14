@@ -29,9 +29,10 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional
 
-import struct
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
+from common.cbor_raw import read_raw_record
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -258,80 +259,10 @@ class SessionTracker:
         self._last_movement_write = ts
 
 # ---------------------------------------------------------------------------
-# CBOR record reader
-# ---------------------------------------------------------------------------
-
-def _read_raw_record(f):
-    """
-    Manually parse one outer {seq, data} CBOR record using f.read().
-
-    The cbor2 C extension (_cbor2) reads files in internal 4096-byte chunks,
-    so cbor2.load(f) advances f.tell() by 4096 bytes regardless of the actual
-    record size. Since RAW file records are typically 17-5000 bytes, this causes
-    nearly every record to be skipped silently.
-
-    This function parses the outer {seq: uint, data: bytes} wrapper byte-by-byte
-    using f.read(), keeping f.tell() accurate after each record.
-
-    Returns the raw inner data bytes, or None for empty placeholder records
-    (which the Pod firmware writes as sequence number markers with data=b'').
-    Raises EOFError at end of file, ValueError on malformed data.
-    """
-    b = f.read(1)
-    if not b:
-        raise EOFError
-    if b[0] != 0xa2:
-        raise ValueError('Expected outer map 0xa2, got 0x%02x' % b[0])
-    if f.read(4) != b'\x63\x73\x65\x71':
-        raise ValueError('Expected seq key')
-    hdr = f.read(1)
-    if not hdr:
-        raise EOFError
-    if hdr[0] == 0x1a:
-        seq_bytes = f.read(4)
-        if len(seq_bytes) < 4:
-            raise EOFError
-    elif hdr[0] == 0x1b:
-        seq_bytes = f.read(8)
-        if len(seq_bytes) < 8:
-            raise EOFError
-    else:
-        raise ValueError('Unexpected seq encoding: 0x%02x' % hdr[0])
-    if f.read(5) != b'\x64\x64\x61\x74\x61':
-        raise ValueError('Expected data key')
-    bs = f.read(1)
-    if not bs:
-        raise EOFError
-    ai = bs[0] & 0x1f
-    if ai <= 23:
-        length = ai
-    elif ai == 24:
-        lb = f.read(1)
-        if not lb:
-            raise EOFError
-        length = lb[0]
-    elif ai == 25:
-        lb = f.read(2)
-        if len(lb) < 2:
-            raise EOFError
-        length = struct.unpack('>H', lb)[0]
-    elif ai == 26:
-        lb = f.read(4)
-        if len(lb) < 4:
-            raise EOFError
-        length = struct.unpack('>I', lb)[0]
-    else:
-        raise ValueError('Unsupported length encoding: %d' % ai)
-    data = f.read(length)
-    if len(data) < length:
-        raise EOFError
-    if not data:
-        return None  # empty placeholder record, caller should skip
-    return data
-
-# ---------------------------------------------------------------------------
 # RAW file follower (same pattern as piezo-processor)
 # ---------------------------------------------------------------------------
+
+MAX_CONSECUTIVE_FAILURES = 5
 
 class RawFileFollower:
     def __init__(self, data_dir: Path):
@@ -339,6 +270,7 @@ class RawFileFollower:
         self._file = None
         self._path = None
         self._last_pos = 0
+        self._consecutive_failures = 0
 
     def _find_latest(self):
         candidates = sorted(self.data_dir.glob("*.RAW"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -358,21 +290,32 @@ class RawFileFollower:
                 self._file = open(latest, "rb")
                 self._path = latest
                 self._last_pos = 0
+                self._consecutive_failures = 0
 
             try:
-                data_bytes = _read_raw_record(self._file)
+                data_bytes = read_raw_record(self._file)
                 if data_bytes is None:
                     self._last_pos = self._file.tell()
+                    self._consecutive_failures = 0
                     continue  # empty placeholder record
                 inner = cbor2.loads(data_bytes)
                 self._last_pos = self._file.tell()
+                self._consecutive_failures = 0
                 yield inner
             except EOFError:
                 time.sleep(0.5)
-            except Exception as e:
-                log.warning("Error reading RAW record: %s", e)
+            except (ValueError, cbor2.CBORDecodeError, OSError) as e:
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    log.warning("Skipping past corrupt data at offset %d after %d failures: %s",
+                                self._last_pos, self._consecutive_failures, e)
+                    self._last_pos += 1
+                    self._consecutive_failures = 0
+                else:
+                    log.debug("Error reading RAW record (attempt %d): %s",
+                              self._consecutive_failures, e)
                 self._file.seek(self._last_pos)
-                time.sleep(1)
+                time.sleep(0.1)
 
         # Clean up file handle on shutdown
         if self._file:
