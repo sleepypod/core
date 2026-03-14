@@ -15,7 +15,7 @@ const IPTABLES_SAVE = '/usr/sbin/iptables-save'
 async function isWanBlocked(): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync(IPTABLES, ['-L', 'OUTPUT', '-n'])
-    return stdout.includes('DROP')
+    return /\bDROP\s*$/.test(stdout)
   }
   catch {
     return false
@@ -133,7 +133,11 @@ export const systemRouter = router({
    * Optional `branch` param for testing feature branches.
    */
   triggerUpdate: publicProcedure
-    .input(z.object({ branch: z.string().optional() }).optional())
+    .input(z.object({
+      branch: z.string()
+        .regex(/^[a-zA-Z0-9._\-/]+$/, 'Invalid branch name')
+        .optional(),
+    }).optional())
     .mutation(async ({ input }) => {
       const branch = input?.branch
 
@@ -145,7 +149,7 @@ export const systemRouter = router({
       const args = branch
         ? [
           '-c',
-          `cd /home/dac/sleepypod-core && git fetch origin && git checkout ${branch} && git reset --hard origin/${branch} && bash scripts/install --local --no-ssh`,
+          `cd /home/dac/sleepypod-core && git fetch origin && git checkout "${branch}" && git reset --hard "origin/${branch}" && bash scripts/install --local --no-ssh`,
         ]
         : []
 
