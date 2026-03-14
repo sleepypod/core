@@ -6,9 +6,31 @@ echo "  SleepyPod Core Installation Script"
 echo "========================================"
 echo ""
 
-# Cleanup handler
+# --------------------------------------------------------------------------------
+# Mode flags
+#   --local    Skip git clone/pull (code already on disk, e.g. via scp/deploy)
+#   --no-ssh   Skip interactive SSH setup prompt
+INSTALL_LOCAL=false
+SKIP_SSH=false
+for arg in "$@"; do
+  case "$arg" in
+    --local)  INSTALL_LOCAL=true ;;
+    --no-ssh) SKIP_SSH=true ;;
+  esac
+done
+
+# Cleanup handler — re-blocks WAN if we unblocked it
+WAN_WAS_BLOCKED=false
+
 cleanup() {
   local exit_code=$?
+
+  # Restore iptables if we temporarily unblocked
+  if [ "$WAN_WAS_BLOCKED" = true ]; then
+    echo "Restoring iptables WAN block..."
+    block_wan
+  fi
+
   if [ $exit_code -ne 0 ]; then
     echo "ERROR: Installation failed at line $1 (exit code: $exit_code)" >&2
     echo "The system may be in a partially installed state." >&2
@@ -16,6 +38,57 @@ cleanup() {
   fi
 }
 trap 'cleanup $LINENO' EXIT
+
+# --------------------------------------------------------------------------------
+# iptables helpers
+
+wan_is_blocked() {
+  # Check if the OUTPUT chain has a DROP rule (WAN is blocked)
+  iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
+}
+
+unblock_wan() {
+  echo "Temporarily unblocking WAN access..."
+  iptables -F
+  iptables -X
+  iptables -t nat -F
+  iptables -t nat -X
+  echo "WAN unblocked."
+}
+
+block_wan() {
+  echo "Re-blocking WAN access..."
+
+  # Allow established connections
+  iptables -I INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+  # Allow LAN traffic (RFC 1918)
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+    iptables -A INPUT  -s "$cidr" -j ACCEPT
+    iptables -A OUTPUT -d "$cidr" -j ACCEPT
+  done
+
+  # Allow NTP
+  iptables -I OUTPUT -p udp --dport 123 -j ACCEPT
+  iptables -I INPUT  -p udp --sport 123 -j ACCEPT
+
+  # Allow loopback
+  iptables -A INPUT  -i lo -j ACCEPT
+  iptables -A OUTPUT -o lo -j ACCEPT
+
+  # Block everything else
+  iptables -A INPUT  -j DROP
+  iptables -A OUTPUT -j DROP
+
+  # Persist
+  if command -v iptables-save &>/dev/null; then
+    mkdir -p /etc/iptables
+    iptables-save > /etc/iptables/iptables.rules
+  fi
+
+  echo "WAN blocked."
+}
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
@@ -31,8 +104,12 @@ if ! flock -n 200; then
   exit 1
 fi
 
-# Check for required commands
-for cmd in git curl systemctl ip; do
+# Check for required commands (git only needed for non-local installs)
+REQUIRED_CMDS=(curl systemctl ip)
+if [ "$INSTALL_LOCAL" = false ]; then
+  REQUIRED_CMDS+=(git)
+fi
+for cmd in "${REQUIRED_CMDS[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Error: Required command '$cmd' not found." >&2
     exit 1
@@ -45,11 +122,32 @@ if ! command -v apt-get &>/dev/null; then
   exit 1
 fi
 
-# Check network connectivity
-echo "Checking network connectivity..."
-if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
-  echo "Error: Cannot reach GitHub. Check network and try again." >&2
-  exit 1
+# Handle WAN connectivity — unblock if needed for package installs
+NEEDS_WAN=false
+if ! command -v node &>/dev/null || ! command -v pnpm &>/dev/null; then
+  NEEDS_WAN=true
+fi
+if [ "$INSTALL_LOCAL" = false ]; then
+  NEEDS_WAN=true
+fi
+
+if [ "$NEEDS_WAN" = true ]; then
+  echo "Checking network connectivity..."
+  if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
+    if wan_is_blocked; then
+      echo "WAN is blocked by iptables. Temporarily unblocking for install..."
+      WAN_WAS_BLOCKED=true
+      unblock_wan
+      # Re-check after unblock
+      if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
+        echo "Error: Still cannot reach GitHub after unblocking. Check Wi-Fi." >&2
+        exit 1
+      fi
+    else
+      echo "Error: Cannot reach GitHub. Check network and try again." >&2
+      exit 1
+    fi
+  fi
 fi
 
 # Check disk space (need 500MB for build)
@@ -118,17 +216,26 @@ if ! command -v pnpm &>/dev/null; then
   npm install -g pnpm
 fi
 
-# Clone or update repository
+# Get the code in place
 INSTALL_DIR="/home/dac/sleepypod-core"
-if [ -d "$INSTALL_DIR" ]; then
-  echo "Updating existing installation..."
+if [ "$INSTALL_LOCAL" = true ]; then
+  echo "Local install mode — using code already at $INSTALL_DIR"
+  if [ ! -d "$INSTALL_DIR" ]; then
+    echo "Error: $INSTALL_DIR does not exist. SCP the code first or run without --local." >&2
+    exit 1
+  fi
   cd "$INSTALL_DIR"
-  git fetch origin
-  git reset --hard origin/main
 else
-  echo "Cloning repository..."
-  git clone https://github.com/sleepypod/core.git "$INSTALL_DIR"
-  cd "$INSTALL_DIR"
+  if [ -d "$INSTALL_DIR" ]; then
+    echo "Updating existing installation..."
+    cd "$INSTALL_DIR"
+    git fetch origin
+    git reset --hard origin/main
+  else
+    echo "Cloning repository..."
+    git clone https://github.com/sleepypod/core.git "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+  fi
 fi
 
 # Install dependencies (ignore scripts for security)
@@ -384,14 +491,20 @@ chmod +x /usr/local/bin/sp-logs
 chmod +x /usr/local/bin/sp-update
 
 # Optional SSH configuration
+if [ "$SKIP_SSH" = true ]; then
+  echo "Skipping SSH setup (--no-ssh)"
+elif [ ! -t 0 ]; then
+  echo "Skipping SSH setup (non-interactive)"
+else
 echo ""
 echo "========================================"
 echo "  Optional SSH Configuration"
 echo "========================================"
 echo ""
 read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH
+fi
 
-if [[ "$SETUP_SSH" =~ ^[Yy]$ ]]; then
+if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; then
   echo "Configuring SSH..."
 
   # Backup sshd_config

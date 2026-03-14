@@ -1,0 +1,83 @@
+#!/bin/bash
+set -euo pipefail
+
+# deploy — push sleepypod-core to a Pod from your local machine
+#
+# Usage:
+#   ./scripts/deploy [POD_IP] [branch]
+#
+# Examples:
+#   ./scripts/deploy                           # deploy current branch to 192.168.1.88
+#   ./scripts/deploy 192.168.1.50              # deploy current branch to a different pod
+#   ./scripts/deploy 192.168.1.88 main         # pull and deploy main
+#   ./scripts/deploy 192.168.1.88 feat/alarms  # pull and deploy a feature branch
+#
+# What it does:
+#   1. Optionally checks out and pulls the specified branch
+#   2. SCPs the project to the pod (excluding node_modules, .next, etc.)
+#   3. Runs the install script on the pod via SSH
+#
+# Requirements:
+#   - SSH access to the pod on port 8822 with key auth
+#   - The pod must be on your local network
+
+SSH_PORT=8822
+SSH_USER=root
+REMOTE_DIR="/home/dac/sleepypod-core"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+DEFAULT_POD_IP="192.168.1.88"
+
+POD_IP="${1:-$DEFAULT_POD_IP}"
+BRANCH="${2:-}"
+
+echo "=== SleepyPod Deploy ==="
+echo "Target: ${SSH_USER}@${POD_IP}:${SSH_PORT}"
+echo "Source: $PROJECT_DIR"
+echo ""
+
+# Check SSH connectivity
+echo "Checking SSH connectivity..."
+if ! ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o BatchMode=yes "$SSH_USER@$POD_IP" "echo ok" >/dev/null 2>&1; then
+  echo "Error: Cannot SSH to $SSH_USER@$POD_IP:$SSH_PORT" >&2
+  echo "Ensure SSH is configured (setup_ssh.sh) and your key is authorized." >&2
+  exit 1
+fi
+
+# Optionally switch branch and pull
+if [ -n "$BRANCH" ]; then
+  echo "Checking out branch: $BRANCH"
+  cd "$PROJECT_DIR"
+  git fetch origin
+  git checkout "$BRANCH"
+  git pull origin "$BRANCH"
+  echo ""
+fi
+
+# Sync project to pod (rsync over SSH, excluding build artifacts)
+echo "Syncing project to pod..."
+rsync -az --delete \
+  --exclude='node_modules' \
+  --exclude='.next' \
+  --exclude='.git' \
+  --exclude='*.db' \
+  --exclude='*.db-shm' \
+  --exclude='*.db-wal' \
+  --exclude='*.db-journal' \
+  --exclude='.DS_Store' \
+  --exclude='test-results' \
+  --exclude='.serena' \
+  --exclude='.claude' \
+  -e "ssh -p $SSH_PORT" \
+  "$PROJECT_DIR/" "$SSH_USER@$POD_IP:$REMOTE_DIR/"
+
+echo "Files synced."
+echo ""
+
+# Run the install script on the pod (local mode — code already synced, skip SSH prompt)
+echo "Running install on pod..."
+ssh -p "$SSH_PORT" "$SSH_USER@$POD_IP" "bash $REMOTE_DIR/scripts/install --local --no-ssh"
+
+echo ""
+echo "=== Deploy complete ==="
+echo "Web UI: http://$POD_IP:3000/"
