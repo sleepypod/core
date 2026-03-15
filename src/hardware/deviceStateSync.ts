@@ -40,28 +40,28 @@ export class DeviceStateSync {
     const now = new Date()
     const isNowPowered = sideStatus.currentLevel !== 0
 
-    const sleepInfo = await db.transaction(async (tx) => {
-      const [prev] = await tx
+    // Note: better-sqlite3 transactions are synchronous — cannot use async/await
+    const sleepInfo = db.transaction((tx) => {
+      const [prev] = tx
         .select({ isPowered: deviceState.isPowered, poweredOnAt: deviceState.poweredOnAt })
         .from(deviceState)
         .where(eq(deviceState.side, side))
         .limit(1)
+        .all()
 
       const wasPowered = prev?.isPowered ?? false
       let poweredOnAt = prev?.poweredOnAt ?? null
       let sessionToRecord: { enteredBedAt: Date, leftBedAt: Date } | null = null
 
       if (!wasPowered && isNowPowered) {
-        // OFF → ON: record when the session started
         poweredOnAt = now
       }
       else if (wasPowered && !isNowPowered && poweredOnAt) {
-        // ON → OFF: capture timestamps; write to biometricsDb after commit
         sessionToRecord = { enteredBedAt: poweredOnAt, leftBedAt: now }
         poweredOnAt = null
       }
 
-      await tx
+      tx
         .insert(deviceState)
         .values({
           side,
@@ -83,6 +83,7 @@ export class DeviceStateSync {
             lastUpdated: now,
           },
         })
+        .run()
 
       return sessionToRecord
     })

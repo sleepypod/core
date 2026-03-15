@@ -5,6 +5,7 @@ import { biometricsDb } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { eq, and, gte, lte, desc, avg, min, max, count } from 'drizzle-orm'
 import { sideSchema, validateDateRange } from '@/src/server/validation-schemas'
+import { isIosProcessing, getConnectedSince } from '@/src/streaming/processingState'
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -376,6 +377,97 @@ export const biometricsRouter = router({
           message: `Failed to calculate vitals summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
+      }
+    }),
+
+  /**
+   * Report a single vitals measurement from the iOS app.
+   * Uses ON CONFLICT to avoid duplicates when pod and iOS both write.
+   */
+  reportVitals: publicProcedure
+    .input(
+      z.object({
+        side: sideSchema,
+        timestamp: z.number().int(),
+        heartRate: z.number().nullable(),
+        hrv: z.number().nullable(),
+        breathingRate: z.number().nullable(),
+      }).strict()
+    )
+    .mutation(async ({ input }) => {
+      try {
+        await biometricsDb
+          .insert(vitals)
+          .values({
+            side: input.side,
+            timestamp: new Date(input.timestamp * 1000),
+            heartRate: input.heartRate,
+            hrv: input.hrv,
+            breathingRate: input.breathingRate,
+          })
+          .onConflictDoNothing()
+
+        return { written: 1 }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to report vitals: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Report a batch of vitals measurements from the iOS app.
+   * Efficient bulk insert with ON CONFLICT to avoid duplicates.
+   */
+  reportVitalsBatch: publicProcedure
+    .input(
+      z.object({
+        vitals: z.array(z.object({
+          side: sideSchema,
+          timestamp: z.number().int(),
+          heartRate: z.number().nullable(),
+          hrv: z.number().nullable(),
+          breathingRate: z.number().nullable(),
+        })).min(1).max(100),
+      }).strict()
+    )
+    .mutation(async ({ input }) => {
+      try {
+        const rows = input.vitals.map(v => ({
+          side: v.side as 'left' | 'right',
+          timestamp: new Date(v.timestamp * 1000),
+          heartRate: v.heartRate,
+          hrv: v.hrv,
+          breathingRate: v.breathingRate,
+        }))
+
+        await biometricsDb
+          .insert(vitals)
+          .values(rows)
+          .onConflictDoNothing()
+
+        return { written: rows.length }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to report vitals batch: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Check whether an iOS client is actively processing piezo data.
+   */
+  getProcessingStatus: publicProcedure
+    .query(() => {
+      return {
+        iosProcessingActive: isIosProcessing(),
+        connectedSince: getConnectedSince(),
       }
     }),
 })

@@ -1,52 +1,72 @@
 /**
- * Global DacMonitor singleton.
- * Uses single-flight pattern identical to src/scheduler/instance.ts.
+ * Global hardware singleton — ONE socket server, ONE client, ONE monitor.
+ *
+ * Lifecycle (managed by instrumentation.ts):
+ *   1. startDacServer()     — listen on dac.sock, accept frankenfirmware connections
+ *   2. getDacMonitor()      — create monitor + client, start polling when connected
+ *   3. shutdownDacMonitor() — stop everything
+ *
+ * All consumers (DacMonitor, device router, health router) share the same
+ * DacSocketServer and HardwareClient. No competing listeners.
  */
 
+import { DacSocketServer } from './socketServer'
 import { DacMonitor } from './dacMonitor'
 import { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
 import { DeviceStateSync } from './deviceStateSync'
 
-const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
+const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
 
-/**
- * Shared hardware client — one socket server for the entire app.
- * Both DacMonitor (polling) and device router (ad-hoc commands) use this.
- *
- * Uses globalThis to survive Next.js module re-instantiation across
- * Turbopack build contexts. Without this, multiple socket servers
- * would be created on the same path.
- */
-const GLOBAL_KEY = '__sleepypod_hw_client__' as const
+// ── Singleton storage on globalThis (survives Turbopack module duplication) ──
 
-export function getSharedHardwareClient(): HardwareClient {
-  const g = globalThis as Record<string, unknown>
-  if (!g[GLOBAL_KEY]) {
-    g[GLOBAL_KEY] = new HardwareClient({
-      socketPath: DAC_SOCK_PATH,
-      autoReconnect: true,
-      mode: 'server',
-    })
-  }
-  return g[GLOBAL_KEY] as HardwareClient
+const KEYS = {
+  server: '__sp_dac_server__',
+  client: '__sp_hw_client__',
+  monitor: '__sp_dac_monitor__',
+  gesture: '__sp_gesture_handler__',
+} as const
+
+const g = globalThis as Record<string, unknown>
+
+// ── DacSocketServer (started once, before anything else) ──
+
+export async function startDacServer(): Promise<DacSocketServer> {
+  if (g[KEYS.server]) return g[KEYS.server] as DacSocketServer
+
+  const server = new DacSocketServer()
+  await server.listen(DAC_SOCK_PATH)
+  g[KEYS.server] = server
+  return server
 }
 
-let monitorInstance: DacMonitor | null = null
-let gestureHandlerInstance: GestureActionHandler | null = null
+export function getDacServer(): DacSocketServer | null {
+  return (g[KEYS.server] as DacSocketServer) ?? null
+}
+
+// ── Shared HardwareClient ──
+
+export function getSharedHardwareClient(): HardwareClient {
+  if (g[KEYS.client]) return g[KEYS.client] as HardwareClient
+
+  const server = getDacServer()
+  const client = new HardwareClient({
+    socketPath: DAC_SOCK_PATH,
+    autoReconnect: true,
+    dacServer: server ?? undefined,
+  })
+
+  g[KEYS.client] = client
+  return client
+}
+
+// ── DacMonitor ──
+
 let monitorInitPromise: Promise<DacMonitor> | null = null
 
-/**
- * Get or create the global DacMonitor instance.
- * Wires GestureActionHandler and DeviceStateSync on first call.
- *
- * The instance is registered before `start()` is awaited so that concurrent
- * callers that arrive while startup is in-flight (or after a failed start)
- * all receive the same instance rather than creating duplicates.
- */
 export const getDacMonitor = async (): Promise<DacMonitor> => {
-  if (monitorInstance) return monitorInstance
+  if (g[KEYS.monitor]) return g[KEYS.monitor] as DacMonitor
   if (monitorInitPromise) return monitorInitPromise
 
   monitorInitPromise = (async () => {
@@ -63,20 +83,17 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
         )
       })
 
-      // Register as singleton BEFORE start() so concurrent callers that race
-      // during initialization share the same instance.
-      monitorInstance = monitor
-      gestureHandlerInstance = gestureHandler
+      g[KEYS.monitor] = monitor
+      g[KEYS.gesture] = gestureHandler
 
       await monitor.start()
-      console.log('DacMonitor initialized')
+      console.log('[DAC] monitor started')
 
       return monitor
     }
     catch (error) {
-      // start() failed — clear the poisoned singleton so future callers can retry
-      monitorInstance = null
-      gestureHandlerInstance = null
+      g[KEYS.monitor] = null
+      g[KEYS.gesture] = null
       throw error
     }
     finally {
@@ -87,41 +104,33 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
   return monitorInitPromise
 }
 
-/** Non-creating accessor — returns the running instance or null without triggering lazy init. */
-export const getDacMonitorIfRunning = (): DacMonitor | null => monitorInstance
+export const getDacMonitorIfRunning = (): DacMonitor | null =>
+  (g[KEYS.monitor] as DacMonitor) ?? null
 
-/**
- * Shutdown the global DacMonitor instance.
- * Cancels pending snooze timers, removes listeners, and stops polling.
- */
 export const shutdownDacMonitor = async (): Promise<void> => {
-  // If initialization is in-flight, wait for it so we can shut it down cleanly
   if (monitorInitPromise) {
-    try {
-      await monitorInitPromise
-    }
-    catch {
-      // start() failure is fine — instance was already cleared in the catch block above
-    }
+    try { await monitorInitPromise } catch { /* ok */ }
   }
 
-  const monitor = monitorInstance
-  const gestureHandler = gestureHandlerInstance
+  const monitor = g[KEYS.monitor] as DacMonitor | undefined
+  const gestureHandler = g[KEYS.gesture] as GestureActionHandler | undefined
+  const server = g[KEYS.server] as DacSocketServer | undefined
 
-  // Clear instance references first so no new callers can get stale instances
-  monitorInstance = null
-  gestureHandlerInstance = null
+  g[KEYS.monitor] = null
+  g[KEYS.gesture] = null
+  g[KEYS.client] = null
+  g[KEYS.server] = null
   monitorInitPromise = null
 
-  if (!monitor) return
-
-  // Cancel any pending snooze restart timers so the process can exit cleanly
   gestureHandler?.cleanup()
 
-  // Remove all wired event listeners before stopping
-  monitor.removeAllListeners('gesture:detected')
-  monitor.removeAllListeners('status:updated')
+  if (monitor) {
+    monitor.removeAllListeners('gesture:detected')
+    monitor.removeAllListeners('status:updated')
+    monitor.stop()
+  }
 
-  monitor.stop()
-  console.log('DacMonitor shut down')
+  server?.stop()
+
+  console.log('[DAC] shutdown complete')
 }

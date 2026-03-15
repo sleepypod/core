@@ -147,30 +147,8 @@ async function withRetry<T>(
  * Validate hardware daemon connectivity on startup.
  * Logs a warning if unavailable but does not crash.
  */
-async function validateHardware(): Promise<void> {
-  try {
-    // Use the shared hardware client — don't create a separate one.
-    // Creating a second DacSocketServer on the same path conflicts.
-    const { getSharedHardwareClient } = await import('@/src/hardware/dacMonitor.instance')
-    const client = getSharedHardwareClient()
-    await withRetry(
-      () => client.connect(),
-      'Hardware validation',
-      3,
-      1000
-    )
-    console.log('Hardware daemon connectivity verified')
-  }
-  catch (error) {
-    console.warn(
-      'WARNING: Hardware daemon is not available at',
-      DAC_SOCK_PATH,
-      '-',
-      error instanceof Error ? error.message : error
-    )
-    console.warn('Scheduled jobs that require hardware will fail until the daemon is running')
-  }
-}
+// Hardware validation removed — the DacMonitor handles connection lifecycle.
+// The DAC socket server starts first, then the monitor waits for frankenfirmware.
 
 /**
  * Initialize the DAC hardware monitor.
@@ -257,8 +235,18 @@ export async function initializeScheduler(): Promise<void> {
 
     isInitialized = true
 
-    // Start DAC monitor (non-blocking, logs warning on failure)
-    // This also validates hardware connectivity via the shared HardwareClient
+    // Start DAC socket server FIRST — this is the single listener on dac.sock.
+    // frankenfirmware will connect to it. Everything else (DacMonitor, device
+    // router, health checks) uses this server's connection.
+    try {
+      const { startDacServer } = await import('@/src/hardware/dacMonitor.instance')
+      await startDacServer()
+    }
+    catch (error) {
+      console.warn('[DAC] Socket server failed to start:', error instanceof Error ? error.message : error)
+    }
+
+    // Start DAC monitor (non-blocking — waits for frankenfirmware to connect)
     initializeDacMonitor()
 
     // Start piezo WebSocket stream server (non-blocking)

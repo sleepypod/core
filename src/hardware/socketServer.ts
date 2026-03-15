@@ -4,190 +4,123 @@ import { existsSync, unlinkSync } from 'fs'
 /**
  * Unix socket server for DAC hardware connections.
  *
- * Eight.Capybara's frankenfirmware connects TO this server.
- * This follows the same pattern as free-sleep's FrankenServer:
+ * frankenfirmware connects TO this server at dac.sock.
+ * Follows ninesleep's pattern: no handshake, no verification.
+ * Each new connection replaces the previous one.
  *
- * 1. Create server, listen on dac.sock
- * 2. Wait for frankenfirmware to connect
- * 3. If connection drops or times out, destroy server, recreate, wait again
- * 4. Once a stable connection is established, use it for commands
- *
- * frankenfirmware may connect/disconnect rapidly several times before
- * establishing a stable connection — this is normal behavior.
+ * Usage:
+ *   const server = new DacSocketServer()
+ *   await server.listen('/persistent/deviceinfo/dac.sock')
+ *   const socket = await server.getConnection()  // blocks until connected
  */
 export class DacSocketServer {
   private server: Server | null = null
-  private activeSocket: Socket | null = null
+  private socket: Socket | null = null
   private socketPath: string | null = null
+  private waiters: Array<(socket: Socket) => void> = []
 
   /**
-   * Wait for a stable hardware connection with retry loop.
-   *
-   * Creates a socket server, waits for frankenfirmware to connect.
-   * If the connection drops or times out, destroys the server and tries again.
-   * This matches free-sleep's connectFranken() pattern.
-   *
-   * @param path - Unix socket path to listen on
-   * @param timeoutMs - Timeout per attempt (default: 25s)
-   * @param maxRetries - Max retry attempts (default: unlimited via -1)
-   * @returns Connected socket ready for command execution
+   * Start listening on a Unix socket path.
+   * Cleans up stale socket files from previous runs.
    */
-  async waitForStableConnection(
-    path: string,
-    timeoutMs = 25000,
-    maxRetries = -1
-  ): Promise<Socket> {
+  async listen(path: string): Promise<void> {
     this.socketPath = path
-    let attempts = 0
 
-    while (maxRetries === -1 || attempts < maxRetries) {
-      attempts++
-
-      try {
-        // Clean up any existing server
-        this.destroyServer()
-
-        // Remove stale socket file
-        this.cleanSocketFile(path)
-
-        // Create fresh server
-        await this.startServer(path)
-
-        // Wait for connection
-        const socket = await this.waitForConnection(timeoutMs)
-
-        // Verify the connection is stable (wait a moment)
-        const isStable = await this.verifyStable(socket, 500)
-        if (!isStable) {
-          console.log('[DacSocketServer] Connection dropped immediately, retrying...')
-          continue
-        }
-
-        this.activeSocket = socket
-        return socket
-      }
-      catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
-        console.log(`[DacSocketServer] Attempt ${attempts} failed: ${msg}`)
-
-        if (maxRetries !== -1 && attempts >= maxRetries) {
-          throw error
-        }
-
-        // Brief pause before retry
-        await new Promise(r => setTimeout(r, 1000))
-      }
+    // Clean stale socket file
+    if (existsSync(path)) {
+      try { unlinkSync(path) } catch { /* ignore */ }
     }
 
-    throw new Error('Max retries exceeded waiting for hardware connection')
-  }
-
-  private startServer(path: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.server = createServer()
+      this.server = createServer((incoming: Socket) => {
+        // ninesleep pattern: each new connection replaces the previous one
+        if (this.socket && !this.socket.destroyed) {
+          this.socket.destroy()
+        }
 
-      this.server.on('error', (error) => {
-        console.error('[DacSocketServer] Server error:', error.message)
-        reject(error)
+        this.socket = incoming
+        console.log('[DAC] frankenfirmware connected')
+
+        incoming.on('error', (err) => {
+          console.error('[DAC] socket error:', err.message)
+        })
+
+        incoming.on('close', () => {
+          console.log('[DAC] frankenfirmware disconnected')
+          if (this.socket === incoming) {
+            this.socket = null
+          }
+        })
+
+        // Wake up anyone waiting for a connection
+        const waiter = this.waiters.shift()
+        if (waiter) waiter(incoming)
       })
 
+      this.server.on('error', (err) => reject(err))
       this.server.listen(path, () => {
-        console.log(`[DacSocketServer] Listening on ${path}`)
+        console.log(`[DAC] listening on ${path}`)
         resolve()
       })
     })
   }
 
-  private waitForConnection(timeoutMs: number): Promise<Socket> {
+  /**
+   * Get the current connection, or wait for one.
+   * Returns immediately if frankenfirmware is already connected.
+   */
+  getConnection(timeoutMs = 30000): Promise<Socket> {
+    if (this.socket && !this.socket.destroyed) {
+      return Promise.resolve(this.socket)
+    }
+
     return new Promise((resolve, reject) => {
-      if (!this.server) {
-        reject(new Error('Server not started'))
-        return
+      let settled = false
+
+      const waiter = (socket: Socket) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(socket)
       }
 
       const timer = setTimeout(() => {
-        reject(new Error(`No hardware connection within ${timeoutMs}ms`))
+        if (settled) return
+        settled = true
+        const idx = this.waiters.indexOf(waiter)
+        if (idx >= 0) this.waiters.splice(idx, 1)
+        reject(new Error('Waiting for frankenfirmware connection timed out'))
       }, timeoutMs)
 
-      this.server.once('connection', (socket: Socket) => {
-        clearTimeout(timer)
-        console.log('[DacSocketServer] Hardware connected')
-
-        socket.on('error', (error) => {
-          console.error('[DacSocketServer] Connection error:', error.message)
-        })
-
-        socket.on('close', () => {
-          console.log('[DacSocketServer] Hardware disconnected')
-          if (this.activeSocket === socket) {
-            this.activeSocket = null
-          }
-        })
-
-        resolve(socket)
-      })
+      this.waiters.push(waiter)
     })
   }
 
-  /**
-   * Verify the connection stays alive for a brief period.
-   * frankenfirmware sometimes connects and immediately disconnects.
-   */
-  private verifyStable(socket: Socket, waitMs: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      if (socket.destroyed) {
-        resolve(false)
-        return
-      }
-
-      const onClose = () => resolve(false)
-      socket.once('close', onClose)
-
-      setTimeout(() => {
-        socket.removeListener('close', onClose)
-        resolve(!socket.destroyed)
-      }, waitMs)
-    })
+  /** Check if frankenfirmware is currently connected. */
+  isConnected(): boolean {
+    return this.socket !== null && !this.socket.destroyed
   }
 
-  private destroyServer(): void {
-    if (this.activeSocket) {
-      this.activeSocket.destroy()
-      this.activeSocket = null
+  /** Get the raw socket if connected, null otherwise. */
+  getSocketIfConnected(): Socket | null {
+    return this.socket && !this.socket.destroyed ? this.socket : null
+  }
+
+  /** Stop the server and clean up. */
+  stop(): void {
+    if (this.socket) {
+      this.socket.destroy()
+      this.socket = null
     }
-
     if (this.server) {
       this.server.close()
       this.server = null
     }
-  }
-
-  private cleanSocketFile(path: string): void {
-    if (existsSync(path)) {
-      try {
-        unlinkSync(path)
-      }
-      catch {
-        // Ignore
-      }
-    }
-  }
-
-  /**
-   * Check if a hardware client is currently connected.
-   */
-  isConnected(): boolean {
-    return this.activeSocket !== null && !this.activeSocket.destroyed
-  }
-
-  /**
-   * Stop the server and clean up everything.
-   */
-  stop(): void {
-    this.destroyServer()
-
-    if (this.socketPath) {
-      this.cleanSocketFile(this.socketPath)
+    // Reject all waiters
+    this.waiters.forEach(() => { /* they'll timeout */ })
+    this.waiters.length = 0
+    if (this.socketPath && existsSync(this.socketPath)) {
+      try { unlinkSync(this.socketPath) } catch { /* ignore */ }
     }
   }
 }

@@ -1,5 +1,5 @@
 import { connectToSocket, wrapSocket, type SocketClient } from './socketClient'
-import { DacSocketServer } from './socketServer'
+import type { DacSocketServer } from './socketServer'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import {
   type AlarmConfig,
@@ -15,18 +15,16 @@ import {
 /**
  * Configuration for the hardware client connection.
  *
- * @property socketPath - Path to Unix socket
- * @property connectionTimeout - Max milliseconds to wait for connection (default: 25s)
+ * @property socketPath - Path to Unix socket (used in client mode)
+ * @property connectionTimeout - Max milliseconds to wait for connection (default: 30s)
  * @property autoReconnect - Whether to automatically reconnect on connection loss (default: true)
- * @property mode - Connection mode:
- *   - 'server': Listen on socketPath, wait for hardware to connect (production — Eight.Capybara connects to us)
- *   - 'client': Connect TO socketPath as a client (development/testing)
+ * @property dacServer - Shared DacSocketServer instance (server mode — production)
  */
 export interface HardwareClientConfig {
   socketPath: string
   connectionTimeout?: number
   autoReconnect?: boolean
-  mode?: 'server' | 'client'
+  dacServer?: DacSocketServer
 }
 
 /**
@@ -62,14 +60,12 @@ export interface HardwareClientConfig {
  */
 export class HardwareClient {
   private client: SocketClient | null = null
-  private socketServer: DacSocketServer | null = null
-  private readonly config: Required<HardwareClientConfig>
+  private readonly config: Required<Omit<HardwareClientConfig, 'dacServer'>> & Pick<HardwareClientConfig, 'dacServer'>
 
   constructor(config: HardwareClientConfig) {
     this.config = {
-      connectionTimeout: 25000,
+      connectionTimeout: 30000,
       autoReconnect: true,
-      mode: 'server',
       ...config,
     }
   }
@@ -77,12 +73,10 @@ export class HardwareClient {
   /**
    * Establishes connection to the Pod hardware controller.
    *
-   * In server mode (production): Creates a Unix socket server and waits for
-   * Eight.Capybara to connect to us.
+   * If a DacSocketServer is provided (production): waits for frankenfirmware
+   * to connect to the shared server. No handshake, no verification.
    *
-   * In client mode (dev/test): Connects to an existing Unix socket as a client.
-   *
-   * @throws {HardwareError} If connection fails or HELLO command times out
+   * If no server (dev/test): connects TO an existing socket as a client.
    */
   async connect(): Promise<void> {
     if (this.client && !this.client.isClosed()) {
@@ -90,21 +84,12 @@ export class HardwareClient {
     }
 
     try {
-      if (this.config.mode === 'server') {
-        // Server mode: listen for hardware connections with retry loop.
-        // frankenfirmware may connect/disconnect rapidly before establishing
-        // a stable connection — this is normal behavior.
-        if (!this.socketServer) {
-          this.socketServer = new DacSocketServer()
-        }
-
-        console.log('[HardwareClient] Waiting for hardware connection...')
-        const socket = await this.socketServer.waitForStableConnection(
-          this.config.socketPath,
-          this.config.connectionTimeout,
+      if (this.config.dacServer) {
+        // Server mode: get connection from the shared DacSocketServer
+        const socket = await this.config.dacServer.getConnection(
+          this.config.connectionTimeout
         )
         this.client = wrapSocket(socket)
-        console.log('[HardwareClient] Hardware connection established')
       }
       else {
         // Client mode: connect TO existing socket
@@ -112,9 +97,6 @@ export class HardwareClient {
           this.config.socketPath,
           this.config.connectionTimeout
         )
-        // In client mode, verify the daemon is responsive
-        await this.client.executeCommand(HardwareCommand.HELLO)
-        console.log('[HardwareClient] Hardware connection established')
       }
     }
     catch (error) {
@@ -408,10 +390,6 @@ export class HardwareClient {
     if (this.client) {
       this.client.close()
       this.client = null
-    }
-    if (this.socketServer) {
-      this.socketServer.stop()
-      this.socketServer = null
     }
   }
 

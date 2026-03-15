@@ -85,7 +85,6 @@ export class DacMonitor extends EventEmitter {
     this.client = this.config.hardwareClient ?? new HardwareClient({
       socketPath: this.config.socketPath,
       autoReconnect: true,
-      mode: 'server',
     })
 
     try {
