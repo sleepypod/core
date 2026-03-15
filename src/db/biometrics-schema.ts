@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 /**
  * Biometrics database schema — lives in biometrics.db, separate from the
@@ -22,6 +22,7 @@ export const vitals = sqliteTable('vitals', {
   breathingRate: real('breathing_rate'), // breaths/min
 }, t => [
   index('idx_vitals_side_timestamp').on(t.side, t.timestamp),
+  uniqueIndex('uq_vitals_side_timestamp').on(t.side, t.timestamp),
 ])
 
 export const sleepRecords = sqliteTable('sleep_records', {

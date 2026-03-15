@@ -221,33 +221,15 @@ export class SocketClient {
 /**
  * Establishes a Unix socket connection to the Pod hardware daemon.
  *
- * Connection Process:
- * 1. Creates a new Node.js Socket
- * 2. Attempts to connect to the Unix socket path
- * 3. Waits for 'connect' event (or timeout)
- * 4. Wraps connected socket in SocketClient
- *
- * Timeout Behavior:
- * - If connection takes longer than timeoutMs, destroys socket and rejects
- * - Default 25 seconds accommodates slow hardware daemon startup
- * - On timeout, socket is destroyed to prevent resource leaks
- *
- * Common Failure Modes:
- * - ENOENT: Socket file doesn't exist (daemon not running)
- * - ECONNREFUSED: Daemon not listening on socket
- * - EACCES: Permission denied (check socket permissions)
- * - Timeout: Daemon hung or slow to respond
+ * This is CLIENT mode — used for development/testing when connecting
+ * TO an existing socket. In production, use FrankenServer from
+ * frankenServer.ts instead (frankenfirmware connects to US).
  *
  * @param socketPath - Path to Unix socket (e.g., /run/dac.sock)
  * @param timeoutMs - Connection timeout in milliseconds (default: 25000)
  * @returns Connected SocketClient ready for command execution
  * @throws {ConnectionTimeoutError} If connection times out
- * @throws {Error} For other connection failures (ENOENT, ECONNREFUSED, etc.)
- *
- * @example
- * ```typescript
- * const client = await connectToSocket('/run/dac.sock', 10000)
- * ```
+ * @throws {HardwareError} For other connection failures
  */
 export async function connectToSocket(
   socketPath: string,
@@ -268,7 +250,6 @@ export async function connectToSocket(
 
     socket.on('error', (error) => {
       clearTimeout(timeout)
-      // Wrap in HardwareError for consistent error type handling
       const hwError = new HardwareError(
         `Socket connection failed: ${error.message}`,
         'SOCKET_ERROR'

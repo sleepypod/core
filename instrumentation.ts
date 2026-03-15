@@ -17,10 +17,9 @@
 
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
-import { createHardwareClient } from '@/src/hardware/client'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
-
-const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
+import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
+import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
 
 let isInitialized = false
 let isShuttingDown = false
@@ -51,7 +50,23 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down scheduler:', error)
   }
 
-  // Step 2: Shutdown DAC monitor
+  // Step 2: Shutdown piezo stream server
+  try {
+    await shutdownPiezoStreamServer()
+  }
+  catch (error) {
+    console.error('Error shutting down piezo stream server:', error)
+  }
+
+  // Step 3: Stop Bonjour announcement
+  try {
+    stopBonjourAnnouncement()
+  }
+  catch (error) {
+    console.error('Error stopping Bonjour:', error)
+  }
+
+  // Step 4: Shutdown DAC monitor
   try {
     await shutdownDacMonitor()
   }
@@ -59,7 +74,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down DacMonitor:', error)
   }
 
-  // Step 3: Close database connections
+  // Step 5: Close database connections
   try {
     closeDatabase()
     closeBiometricsDatabase()
@@ -130,27 +145,8 @@ async function withRetry<T>(
  * Validate hardware daemon connectivity on startup.
  * Logs a warning if unavailable but does not crash.
  */
-async function validateHardware(): Promise<void> {
-  try {
-    const client = await withRetry(
-      () => createHardwareClient({ socketPath: DAC_SOCK_PATH, connectionTimeout: 5000 }),
-      'Hardware validation',
-      3,
-      1000
-    )
-    client.disconnect()
-    console.log('Hardware daemon connectivity verified')
-  }
-  catch (error) {
-    console.warn(
-      'WARNING: Hardware daemon is not available at',
-      DAC_SOCK_PATH,
-      '-',
-      error instanceof Error ? error.message : error
-    )
-    console.warn('Scheduled jobs that require hardware will fail until the daemon is running')
-  }
-}
+// Hardware validation removed — the DacMonitor handles connection lifecycle.
+// The DAC socket server starts first, then the monitor waits for frankenfirmware.
 
 /**
  * Initialize the DAC hardware monitor.
@@ -237,11 +233,33 @@ export async function initializeScheduler(): Promise<void> {
 
     isInitialized = true
 
-    // Validate hardware connectivity (non-blocking, runs after scheduler is ready)
-    validateHardware()
+    // Start DAC socket server FIRST — this is the single listener on dac.sock.
+    // frankenfirmware will connect to it. Everything else (DacMonitor, device
+    // router, health checks) uses this server's connection.
+    try {
+      const { startDacServer } = await import('@/src/hardware/dacMonitor.instance')
+      await startDacServer()
+    }
+    catch (error) {
+      console.warn('[DAC] Socket server failed to start:', error instanceof Error ? error.message : error)
+    }
 
-    // Start DAC monitor (non-blocking, logs warning on failure)
+    // Start DAC monitor (non-blocking — waits for frankenfirmware to connect)
     initializeDacMonitor()
+
+    // Start piezo WebSocket stream server (non-blocking)
+    try {
+      startPiezoStreamServer()
+    }
+    catch (error) {
+      console.warn(
+        'WARNING: Piezo stream server failed to start:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
+    // Start Bonjour/mDNS announcement (non-blocking)
+    startBonjourAnnouncement()
   }
   catch (error) {
     console.error('Failed to initialize job scheduler:', error)

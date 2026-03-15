@@ -14,8 +14,12 @@ import {
 /**
  * Configuration for the hardware client connection.
  *
- * @property socketPath - Path to Unix socket (typically /run/dac.sock on Pod hardware)
- * @property connectionTimeout - Max milliseconds to wait for initial connection (default: 25s)
+ * This is the CLIENT-mode connection (for dev/testing only).
+ * In production, use FrankenHardwareClient from dacMonitor.instance.ts instead,
+ * which uses the FrankenServer pattern (socket server that frankenfirmware connects to).
+ *
+ * @property socketPath - Path to Unix socket to connect to
+ * @property connectionTimeout - Max milliseconds to wait for connection (default: 30s)
  * @property autoReconnect - Whether to automatically reconnect on connection loss (default: true)
  */
 export interface HardwareClientConfig {
@@ -61,25 +65,17 @@ export class HardwareClient {
 
   constructor(config: HardwareClientConfig) {
     this.config = {
-      connectionTimeout: 25000,
+      connectionTimeout: 30000,
       autoReconnect: true,
       ...config,
     }
   }
 
   /**
-   * Establishes connection to the Pod hardware controller.
+   * Connects TO an existing Unix socket as a client.
    *
-   * Idempotent - safe to call multiple times. If already connected, returns
-   * immediately without creating a new connection.
-   *
-   * Connection Flow:
-   * 1. Opens Unix socket to hardware daemon
-   * 2. Sends HELLO command to verify daemon is responsive
-   * 3. Stores connection for subsequent commands
-   *
-   * @throws {HardwareError} If connection fails or HELLO command times out
-   * @throws {ConnectionTimeoutError} If connection takes longer than configured timeout
+   * This is for dev/testing only. In production, use FrankenHardwareClient
+   * from dacMonitor.instance.ts which uses the FrankenServer pattern.
    */
   async connect(): Promise<void> {
     if (this.client && !this.client.isClosed()) {
@@ -91,10 +87,6 @@ export class HardwareClient {
         this.config.socketPath,
         this.config.connectionTimeout
       )
-
-      // Verify hardware daemon is responsive by sending HELLO command.
-      // This catches cases where socket connects but daemon is unresponsive.
-      await this.client.executeCommand(HardwareCommand.HELLO)
     }
     catch (error) {
       this.client = null

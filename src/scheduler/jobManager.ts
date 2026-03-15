@@ -7,9 +7,7 @@ import {
   alarmSchedules,
   deviceSettings,
 } from '@/src/db/schema'
-import { createHardwareClient } from '@/src/hardware/client'
-
-const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
+import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 
 /**
  * Job manager - orchestrates all scheduled tasks
@@ -137,12 +135,13 @@ export class JobManager {
       JobType.TEMPERATURE,
       cron,
       async () => {
-        const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
+        const client = getSharedHardwareClient()
+        await client.connect()
         try {
           await client.setTemperature(sched.side, sched.temperature)
         }
         finally {
-          client.disconnect()
+          // shared client — don't disconnect
         }
       },
       { scheduleId: sched.id, side: sched.side }
@@ -161,12 +160,13 @@ export class JobManager {
       JobType.POWER_ON,
       cron,
       async () => {
-        const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
+        const client = getSharedHardwareClient()
+        await client.connect()
         try {
           await client.setPower(sched.side, true, sched.onTemperature)
         }
         finally {
-          client.disconnect()
+          // shared client — don't disconnect
         }
       },
       { scheduleId: sched.id, side: sched.side }
@@ -185,12 +185,13 @@ export class JobManager {
       JobType.POWER_OFF,
       cron,
       async () => {
-        const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
+        const client = getSharedHardwareClient()
+        await client.connect()
         try {
           await client.setPower(sched.side, false)
         }
         finally {
-          client.disconnect()
+          // shared client — don't disconnect
         }
       },
       { scheduleId: sched.id, side: sched.side }
@@ -209,7 +210,8 @@ export class JobManager {
       JobType.ALARM,
       cron,
       async () => {
-        const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
+        const client = getSharedHardwareClient()
+        await client.connect()
         try {
           // Set alarm temperature first
           await client.setTemperature(sched.side, sched.alarmTemperature)
@@ -222,7 +224,7 @@ export class JobManager {
           })
         }
         finally {
-          client.disconnect()
+          // shared client — don't disconnect
         }
       },
       { scheduleId: sched.id, side: sched.side }
@@ -237,12 +239,13 @@ export class JobManager {
     const cron = `${minute} ${hour} * * *` // Every day at specified time
 
     this.scheduler.scheduleJob('daily-prime', JobType.PRIME, cron, async () => {
-      const client = await createHardwareClient({ socketPath: DAC_SOCK_PATH })
+      const client = getSharedHardwareClient()
+      await client.connect()
       try {
         await client.startPriming()
       }
       finally {
-        client.disconnect()
+        // shared client — don't disconnect
       }
     })
   }

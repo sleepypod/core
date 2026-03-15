@@ -8,6 +8,8 @@ export interface DacMonitorConfig {
   socketPath: string
   /** Poll interval in milliseconds. Defaults to 2000. */
   pollIntervalMs?: number
+  /** External hardware client to use instead of creating a new one. */
+  hardwareClient?: HardwareClient
 }
 
 export interface GestureEvent {
@@ -50,7 +52,7 @@ const TAP_TYPES = ['doubleTap', 'tripleTap', 'quadTap'] as const
  */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class DacMonitor extends EventEmitter {
-  private readonly config: Required<DacMonitorConfig>
+  private readonly config: Required<Pick<DacMonitorConfig, 'socketPath' | 'pollIntervalMs'>> & Pick<DacMonitorConfig, 'hardwareClient'>
   private client: HardwareClient | null = null
   private intervalHandle: ReturnType<typeof setInterval> | null = null
   private monitorStatus: DacMonitorStatus = 'stopped'
@@ -79,7 +81,8 @@ export class DacMonitor extends EventEmitter {
     this.lastGestures = null
     this.isPollInFlight = false
 
-    this.client = new HardwareClient({
+    // Use external client if provided (shared singleton), otherwise create our own
+    this.client = this.config.hardwareClient ?? new HardwareClient({
       socketPath: this.config.socketPath,
       autoReconnect: true,
     })

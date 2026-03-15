@@ -1,10 +1,10 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '@/src/db'
 import { deviceState, tapGestures } from '@/src/db/schema'
-import { HardwareClient } from './client'
 import type { Side } from './types'
 import type { GestureActionDeps } from './gestureActionHandler'
 import type { GestureEvent } from './dacMonitor'
+import { getSharedHardwareClient } from './dacMonitor.instance'
 
 /**
  * Production dependency implementations for GestureActionHandler.
@@ -30,6 +30,7 @@ export const defaultGestureActionDeps: GestureActionDeps = {
     return row ?? null
   },
 
-  newHardwareClient: (socketPath: string) =>
-    new HardwareClient({ socketPath, autoReconnect: false }),
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  newHardwareClient: (_socketPath: string) =>
+    getSharedHardwareClient(),
 }
