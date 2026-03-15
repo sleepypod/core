@@ -20,7 +20,7 @@ Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.
 Environment="CALIBRATION_HOUR=6"
 
 # Resource limits (calibration is bursty but short-lived)
-MemoryMax=64M
+MemoryMax=256M
 CPUQuota=25%
 
 # Sandboxing
