@@ -9,7 +9,7 @@ import {
   alarmSchedules,
 } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
-import { HardwareClient } from '@/src/hardware/client'
+import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
@@ -225,11 +225,7 @@ export const healthRouter = router({
     let latencyMs = 0
     let error: string | undefined
 
-    const client = new HardwareClient({
-      socketPath: DAC_SOCK_PATH,
-      connectionTimeout: 5000,
-      autoReconnect: false,
-    })
+    const client = getSharedHardwareClient()
 
     try {
       const start = performance.now()
@@ -239,9 +235,6 @@ export const healthRouter = router({
     catch (err) {
       status = 'degraded'
       error = err instanceof Error ? err.message : 'Unknown error'
-    }
-    finally {
-      client.disconnect()
     }
 
     return {

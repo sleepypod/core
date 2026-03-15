@@ -60,6 +60,14 @@ export class DacSocketServer {
       this.server.on('error', (err) => reject(err))
       this.server.listen(path, () => {
         console.log(`[DAC] listening on ${path}`)
+        // Match free-sleep's socket ownership (runs as dac user)
+        // frankenfirmware may check socket owner
+        try {
+          const { chownSync, chmodSync } = require('fs')
+          chownSync(path, 1000, 1000) // dac:dac (uid/gid 1000)
+          chmodSync(path, 0o777)
+        }
+        catch { /* best effort */ }
         resolve()
       })
     })
