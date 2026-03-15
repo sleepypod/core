@@ -34,7 +34,7 @@ import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -157,19 +157,32 @@ CHANNELS = ("out", "cen", "in")
 
 
 def movement_score_calibrated(record: dict, side: str, baselines: Optional[dict]) -> int:
-    """Compute movement as sum of per-channel deviations from baseline.
+    """Compute movement as sum of per-channel z-score deviations from baseline.
+
+    Returns a value in "centi-sigma" units (z-score * 100) regardless of
+    calibration state, so that the movement column has a consistent scale.
 
     With calibration: each channel's deviation is measured in standard deviations
-    from the empty-bed mean, then summed. This normalizes across pods.
+    from the empty-bed mean, then summed and scaled by 100.
 
-    Without calibration: falls back to sum of absolute raw channel values.
+    Without calibration: uses a default std of 500 per channel (empirical
+    estimate for uncalibrated capacitance sensors) to produce scores in the
+    same unit space. These will be less accurate but comparable in magnitude.
     """
     data = record.get(side, {})
     if not data:
         return 0
 
+    # Default baseline: mean=0, std=500 per channel — empirical estimate
+    # for uncalibrated capacitance sensors. Keeps output in the same
+    # centi-sigma unit space as calibrated scores.
+    DEFAULT_STD = 500
+
     if baselines is None:
-        return abs(int(data.get("out", 0))) + abs(int(data.get("cen", 0))) + abs(int(data.get("in", 0)))
+        raw_sum = 0.0
+        for ch in CHANNELS:
+            raw_sum += abs(int(data.get(ch, 0))) / DEFAULT_STD
+        return int(round(raw_sum * 100))
 
     channels = baselines.get("channels", {})
     score = 0.0
@@ -180,8 +193,6 @@ def movement_score_calibrated(record: dict, side: str, baselines: Optional[dict]
         std = ch_cal.get("std", 1)
         if std > 0:
             score += abs((val - mean) / std)
-    # Scale to integer — multiply by 100 to preserve two decimal places of
-    # z-score precision in the integer column
     return int(round(score * 100))
 
 
@@ -190,7 +201,7 @@ class CalibrationCache:
 
     def __init__(self, store: CalibrationStore):
         self._store = store
-        self._profiles: dict[str, Optional[dict]] = {"left": None, "right": None}
+        self._profiles: Dict[str, Optional[dict]] = {"left": None, "right": None}
         self._last_reload = 0.0
 
     def get_baselines(self, side: str) -> Optional[dict]:
