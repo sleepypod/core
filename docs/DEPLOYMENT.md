@@ -44,7 +44,7 @@ flowchart TB
     spupdate -->|"close"| iptables
     spupdate --> install
 
-    install -->|"pnpm install --prod<br/>migrate DB"| service
+    install -->|"pnpm install --prod<br/>start service"| service
 ```
 
 ## Three Deployment Paths
@@ -65,7 +65,7 @@ Builds locally (fast, full RAM), pushes built artifacts to the pod. No WAN neede
 3. Cleans stale files on the pod (preserves `node_modules`, `.env`)
 4. Tars source + `.next` build, pipes over SSH
 5. Runs `scripts/install --local --no-ssh` on the pod
-6. Install script: installs prod deps (with prebuilt native modules), runs DB migrations, restarts service
+6. Install script: installs prod deps (with prebuilt native modules), restarts service (DB migrations run automatically on startup via `instrumentation.ts`)
 
 **Requirements:** SSH access to pod on port 8822 with key auth.
 
@@ -100,9 +100,8 @@ sp-update feat/alarms  # specific branch (source only, needs build)
 2. Tries to download latest CI release tarball (includes `.next` — no build needed)
 3. Falls back to GitHub source tarball if no release or if requesting a non-main branch
 4. Installs prod dependencies (prebuild-install fetches linux-arm64 native modules)
-5. Runs DB migrations
-6. Closes iptables (re-blocks WAN)
-7. Restarts service
+5. Closes iptables (re-blocks WAN)
+6. Restarts service (DB migrations run automatically on startup via `instrumentation.ts`)
 
 **If the update fails:** iptables are restored and the service restarts with existing code. Database is restored from backup.
 

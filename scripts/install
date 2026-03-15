@@ -411,11 +411,13 @@ if systemctl is-active --quiet free-sleep.service 2>/dev/null; then
 fi
 
 # Kill anything else holding port 3000
-PORT_PID=$(fuser 3000/tcp 2>/dev/null | tr -d ' ' || true)
-if [ -n "$PORT_PID" ]; then
-  echo "Killing process $PORT_PID on port 3000..."
-  kill "$PORT_PID" 2>/dev/null || true
-  sleep 1
+if command -v fuser &>/dev/null; then
+  PORT_PID=$(fuser 3000/tcp 2>/dev/null | tr -d ' ' || true)
+  if [ -n "$PORT_PID" ]; then
+    echo "Killing process $PORT_PID on port 3000..."
+    kill "$PORT_PID" 2>/dev/null || true
+    sleep 1
+  fi
 fi
 
 systemctl restart sleepypod.service
@@ -546,7 +548,7 @@ WAN_WAS_BLOCKED=false
 
 unblock_wan() {
   echo "Opening WAN access..."
-  SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+  SAVED_IPTABLES="$(/usr/sbin/iptables-save 2>/dev/null || true)"
   $IPTABLES -F && $IPTABLES -X && $IPTABLES -t nat -F && $IPTABLES -t nat -X
   echo "WAN open."
 }
@@ -554,7 +556,7 @@ unblock_wan() {
 restore_wan() {
   if [ -n "$SAVED_IPTABLES" ]; then
     echo "Restoring iptables rules..."
-    echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || true
+    echo "$SAVED_IPTABLES" | /usr/sbin/iptables-restore 2>/dev/null || true
   fi
   echo "WAN blocked."
 }
@@ -597,11 +599,11 @@ if [ -f "$DATA_DIR/sleepypod.db" ]; then
   echo "Database backed up."
 fi
 
-# Backup current code for rollback
+# Backup current code for rollback (everything except node_modules)
 BACKUP_DIR="/tmp/sleepypod-rollback"
 rm -rf "$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
-cp -r "$INSTALL_DIR/package.json" "$INSTALL_DIR/pnpm-lock.yaml" "$BACKUP_DIR/" 2>/dev/null || true
+tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C "$BACKUP_DIR" || true
 
 # Stop service
 systemctl stop sleepypod.service
@@ -635,14 +637,15 @@ if [ "$HAS_BUILD" = false ]; then
     exit 1
   fi
   # Source tarball extracts to a subdirectory (e.g., core-main/)
-  SUBDIR=$(ls "$TMPDIR")
+  SUBDIR=$(ls "$TMPDIR" | head -1)
+  if [ -z "$SUBDIR" ] || [ ! -d "$TMPDIR/$SUBDIR" ]; then
+    echo "Error: Unexpected tarball structure in $TMPDIR" >&2
+    exit 1
+  fi
   # Move contents up so TMPDIR is the root
   mv "$TMPDIR/$SUBDIR"/* "$TMPDIR/$SUBDIR"/.[!.]* "$TMPDIR/" 2>/dev/null || true
   rmdir "$TMPDIR/$SUBDIR" 2>/dev/null || true
 fi
-
-# Stop service
-systemctl stop sleepypod.service
 
 # Clean old files (preserve node_modules, .env)
 find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
@@ -657,12 +660,8 @@ echo "Source updated."
 
 cd "$INSTALL_DIR"
 
-# Install prod deps + run migrations
-if pnpm install --frozen-lockfile --prod && \
-   pnpm db:generate && \
-   pnpm db:biometrics:generate && \
-   pnpm db:migrate && \
-   pnpm db:biometrics:migrate; then
+# Install prod deps (migrations run automatically on app startup via instrumentation.ts)
+if pnpm install --frozen-lockfile --prod; then
 
   # Build only if no pre-built .next exists
   if [ ! -d "$INSTALL_DIR/.next" ]; then
@@ -687,12 +686,21 @@ if pnpm install --frozen-lockfile --prod && \
   fi
 fi
 
-# Rollback on failure
+# Rollback on failure — restore full previous code and database
 echo "Update failed, restoring previous code..." >&2
+if [ -d "$BACKUP_DIR" ]; then
+  find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+    ! -name 'node_modules' \
+    ! -name '.env' \
+    -exec rm -rf {} +
+  cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
+  echo "Previous code restored."
+fi
 if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
   cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
   echo "Database restored."
 fi
+systemctl start sleepypod.service 2>/dev/null || true
 
 exit 1
 UPDATEEOF

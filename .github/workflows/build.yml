@@ -37,6 +37,7 @@ jobs:
           # Package source + .next build (no node_modules — installed on target)
           tar czf sleepypod-core.tar.gz \
             --exclude='node_modules' \
+            --exclude='.git' \
             --exclude='*.db' \
             --exclude='*.db-*' \
             --exclude='test-results' \
