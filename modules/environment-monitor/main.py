@@ -88,7 +88,7 @@ def open_biometrics_db() -> sqlite3.Connection:
 def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
     with conn:
         conn.execute(
-            """INSERT INTO bed_temp
+            """INSERT OR IGNORE INTO bed_temp
                (timestamp, ambient_temp, mcu_temp, humidity,
                 left_outer_temp, left_center_temp, left_inner_temp,
                 right_outer_temp, right_center_temp, right_inner_temp)
@@ -111,7 +111,7 @@ def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
 def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
     with conn:
         conn.execute(
-            """INSERT INTO freezer_temp
+            """INSERT OR IGNORE INTO freezer_temp
                (timestamp, ambient_temp, heatsink_temp,
                 left_water_temp, right_water_temp)
                VALUES (?, ?, ?, ?, ?)""",
@@ -160,8 +160,13 @@ def main() -> None:
     db_conn = open_biometrics_db()
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
-    last_bed_write = 0.0
-    last_frz_write = 0.0
+    # Seed cursors from DB so restarts don't replay already-ingested samples
+    last_bed_write = float(
+        db_conn.execute("SELECT COALESCE(MAX(timestamp), 0) FROM bed_temp").fetchone()[0] or 0
+    )
+    last_frz_write = float(
+        db_conn.execute("SELECT COALESCE(MAX(timestamp), 0) FROM freezer_temp").fetchone()[0] or 0
+    )
 
     report_health("healthy", "environment-monitor started")
 

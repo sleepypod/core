@@ -56,7 +56,7 @@ export const rawRouter = router({
     }),
 
   deleteFile: publicProcedure
-    .meta({ openapi: { method: 'POST', path: '/raw/files/delete', protect: false, tags: ['Raw'] } })
+    .meta({ openapi: { method: 'POST', path: '/raw/files/delete', protect: true, tags: ['Raw'] } })
     .input(z.object({ filename: z.string() }).strict())
     .output(z.object({ deleted: z.boolean(), message: z.string() }))
     .mutation(async ({ input }) => {

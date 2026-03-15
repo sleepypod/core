@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createReadStream, statSync } from 'node:fs'
+import { createReadStream } from 'node:fs'
+import { lstat, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 
@@ -24,7 +25,20 @@ export async function GET(
   }
 
   try {
-    const s = statSync(resolved)
+    // Reject symlinks to prevent escaping RAW_DIR
+    const lstats = await lstat(resolved)
+    if (lstats.isSymbolicLink()) {
+      return NextResponse.json({ error: 'Path traversal detected' }, { status: 400 })
+    }
+
+    // Verify canonical path is still inside RAW_DIR
+    const canonicalFile = await realpath(resolved)
+    const canonicalDir = await realpath(RAW_DIR)
+    if (!canonicalFile.startsWith(canonicalDir)) {
+      return NextResponse.json({ error: 'Path traversal detected' }, { status: 400 })
+    }
+
+    const s = await stat(resolved)
     const stream = createReadStream(resolved)
     const webStream = Readable.toWeb(stream) as ReadableStream
 
@@ -36,7 +50,10 @@ export async function GET(
       },
     })
   }
-  catch {
-    return NextResponse.json({ error: 'File not found' }, { status: 404 })
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 })
+    }
+    return NextResponse.json({ error: 'Failed to read file' }, { status: 500 })
   }
 }

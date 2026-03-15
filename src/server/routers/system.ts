@@ -167,11 +167,27 @@ export const systemRouter = router({
         const active = stdout.trim().split('\n').find(l => l.startsWith('yes:'))
         if (!active) return { connected: false, ssid: null, signal: null }
 
-        const parts = active.split(':')
+        // nmcli -t escapes colons as \: and backslashes as \\
+        const fields: string[] = []
+        let current = ''
+        for (let i = 0; i < active.length; i++) {
+          if (active[i] === '\\' && i + 1 < active.length) {
+            current += active[++i]
+          }
+          else if (active[i] === ':') {
+            fields.push(current)
+            current = ''
+          }
+          else {
+            current += active[i]
+          }
+        }
+        fields.push(current)
+
         return {
           connected: true,
-          ssid: parts[1] || null,
-          signal: parts[2] ? Number(parts[2]) : null,
+          ssid: fields[1] || null,
+          signal: fields[2] ? Number(fields[2]) : null,
         }
       }
       catch {

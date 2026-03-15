@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "ae77a2a8-323a-4170-a2e3-8c94071b2bb3",
+  "id": "209aa56c-c286-49a6-951e-60e9bdb9f8bb",
   "prevId": "ad058c4a-529c-4d09-950c-2c751cc9acd5",
   "tables": {
     "bed_temp": {
@@ -91,7 +91,7 @@
           "columns": [
             "timestamp"
           ],
-          "isUnique": false
+          "isUnique": true
         }
       },
       "foreignKeys": {},
@@ -151,7 +151,7 @@
           "columns": [
             "timestamp"
           ],
-          "isUnique": false
+          "isUnique": true
         }
       },
       "foreignKeys": {},

@@ -63,7 +63,7 @@ export const bedTemp = sqliteTable('bed_temp', {
   rightCenterTemp: integer('right_center_temp'),
   rightInnerTemp: integer('right_inner_temp'),
 }, t => [
-  index('idx_bed_temp_timestamp').on(t.timestamp),
+  uniqueIndex('idx_bed_temp_timestamp').on(t.timestamp),
 ])
 
 export const freezerTemp = sqliteTable('freezer_temp', {
@@ -74,5 +74,5 @@ export const freezerTemp = sqliteTable('freezer_temp', {
   leftWaterTemp: integer('left_water_temp'), // centidegrees C (u16)
   rightWaterTemp: integer('right_water_temp'), // centidegrees C (u16)
 }, t => [
-  index('idx_freezer_temp_timestamp').on(t.timestamp),
+  uniqueIndex('idx_freezer_temp_timestamp').on(t.timestamp),
 ])

@@ -6,7 +6,7 @@ Wants=sleepypod.service
 
 [Service]
 Type=simple
-User=root
+User=dac
 WorkingDirectory=/opt/sleepypod/modules/environment-monitor
 ExecStart=/opt/sleepypod/modules/environment-monitor/venv/bin/python main.py
 Restart=always
