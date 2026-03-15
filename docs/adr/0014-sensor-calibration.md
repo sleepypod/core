@@ -26,9 +26,10 @@ The design has four components:
 
 1. **CalibrationStore** (`modules/common/calibration.py`): A Python class that reads and writes calibration profiles to `biometrics.db`. Replaces free-sleep's per-module JSON files with a single DB-backed source of truth. All modules import this library.
 
-2. **Calibrator module** (`modules/calibrator/`): A standalone systemd service that owns all calibration writes. It runs on two triggers:
-   - **Daily timer** (03:00 local): Scans recent RAW data to compute fresh noise floors and baselines for all sensors on both sides.
-   - **On-demand trigger file**: The iOS app (via tRPC) writes a sentinel file to `/tmp/sleepypod-calibrate`; the calibrator picks it up within 10 seconds, runs a full calibration pass, and deletes the trigger.
+2. **Calibrator module** (`modules/calibrator/`): A standalone systemd service that owns all calibration writes. It runs on three triggers:
+   - **Pre-prime schedule**: The jobManager triggers calibration 30 minutes before the configured pod prime time (e.g., prime at 14:00 → calibration at 13:30). The bed should be empty after the pre-prime reboot (1h before prime). This is the primary calibration path.
+   - **Fallback daily timer** (25h interval): If priming is disabled, the calibrator's internal timer fires as a fallback.
+   - **On-demand trigger file**: The iOS app (via tRPC) writes an atomic trigger file to `/persistent/sleepypod-data/.calibrate-trigger.{ts}`; the calibrator picks it up within 10 seconds, runs calibration, and deletes the trigger. Multiple concurrent triggers are queued as separate files.
 
 3. **Read-only consumers**: Processing modules (piezo-processor, sleep-detector) only read calibration profiles from the store. They never write. This enforces a single-writer/multiple-reader pattern.
 
@@ -54,7 +55,7 @@ Expose a lightweight HTTP server in each Python module so the core Node.js app (
 - Adds port allocation complexity on the Pod (already using 3000 for tRPC, 3001 for piezo WebSocket).
 - Requires health checks and restart logic for each HTTP server.
 - Another failure mode: if the HTTP server hangs, calibration cannot be triggered.
-- The trigger file pattern is simpler and works within systemd sandboxing (no network permission needed for the calibrator).
+- The trigger file pattern is simpler and works within systemd sandboxing (`ReadWritePaths=/persistent/sleepypod-data`).
 
 ### 3. Shared SQLite table without a library
 
@@ -88,12 +89,14 @@ Use gRPC for structured communication between the Node.js core app and Python mo
 ### Negative
 
 - All modules depend on `common/calibration.py` -- a breaking change to CalibrationStore requires updating all modules simultaneously.
-- Trigger file IPC has ~10-second latency (the calibrator checks every 10 seconds). This is acceptable for calibration, which is not time-critical.
+- Trigger file IPC has ~10-second latency (the calibrator polls every 10 seconds). This is acceptable for calibration, which is not time-critical.
+- Trigger files use atomic writes (write `.tmp` then `rename`) to prevent partial reads. Each trigger gets a unique filename (`.calibrate-trigger.{ts}`) to support queuing concurrent requests.
 - `vitals_quality` is a companion table (not additional columns on `vitals`) to avoid running ALTER TABLE migrations on a heavily-written, indexed table. This means quality data requires a JOIN to correlate with vitals.
+- `CalibrationStore` is NOT thread-safe — each module should create its own instance or use from a single thread.
 
 ### Neutral
 
-- The calibration daily timer at 03:00 assumes a "typical" sleep schedule. Users who sleep 03:00-11:00 may have calibration run during sleep. The calibrator is read-only on RAW data and write-only on its own tables, so this does not affect ongoing processing -- it just means the baseline may include some sleep signal. The algorithm accounts for this by using percentile-based noise floors rather than simple min/max.
+- Calibration is primarily scheduled 30 minutes before the pod's configured prime time. The bed should be empty after the pre-prime reboot (1h before). Users who disable priming fall back to the calibrator's internal 25-hour timer. The calibrator reads RAW data read-only, so running during sleep does not affect processing — the algorithm selects the quietest 5-minute window from the available data.
 
 ## Medical Threshold Rationale
 
