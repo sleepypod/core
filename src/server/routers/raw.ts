@@ -16,7 +16,7 @@ const SAFE_FILENAME = /^[\w.-]+\.RAW$/i
 async function listRawFiles() {
   try {
     const entries = await readdir(RAW_DIR)
-    const rawFiles = entries.filter(f => f.toUpperCase().endsWith('.RAW'))
+    const rawFiles = entries.filter(f => SAFE_FILENAME.test(f))
 
     const results = await Promise.all(rawFiles.map(async (name) => {
       const s = await stat(path.join(RAW_DIR, name))
@@ -88,6 +88,7 @@ export const rawRouter = router({
         return { deleted: true, message: `Deleted ${input.filename}` }
       }
       catch (error) {
+        if (error instanceof TRPCError) throw error
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           return { deleted: false, message: 'File not found' }
         }
@@ -105,18 +106,24 @@ export const rawRouter = router({
     .output(z.any())
     .query(async () => {
       try {
-        // Get partition disk usage
-        const { stdout: dfOut } = await execFileAsync('df', ['-B1', RAW_DIR], { timeout: 5000 })
-        const dfLine = dfOut.trim().split('\n')[1]
-        const dfParts = dfLine?.split(/\s+/) ?? []
-
-        const totalBytes = Number(dfParts[1]) || 0
-        const usedBytes = Number(dfParts[2]) || 0
-        const availableBytes = Number(dfParts[3]) || 0
-
-        // Get RAW-specific usage
         const files = await listRawFiles()
         const rawBytes = files.reduce((sum, f) => sum + f.sizeBytes, 0)
+
+        // df -B1 is GNU coreutils (Linux only); fall back gracefully on macOS/dev
+        let totalBytes = 0
+        let usedBytes = 0
+        let availableBytes = 0
+        try {
+          const { stdout: dfOut } = await execFileAsync('df', ['-B1', RAW_DIR], { timeout: 5000 })
+          const dfLine = dfOut.trim().split('\n')[1]
+          const dfParts = dfLine?.split(/\s+/) ?? []
+          totalBytes = Number(dfParts[1]) || 0
+          usedBytes = Number(dfParts[2]) || 0
+          availableBytes = Number(dfParts[3]) || 0
+        }
+        catch {
+          // df unavailable (macOS dev environment) — return file stats only
+        }
 
         return {
           totalBytes,

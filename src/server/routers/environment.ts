@@ -20,7 +20,7 @@ function convertHumidity(centipercent: number | null): number | null {
 const dateRangeInput = z.object({
   startDate: z.date().optional(),
   endDate: z.date().optional(),
-  limit: z.number().int().min(1).max(1000).default(1440), // 24hr at 60s intervals
+  limit: z.number().int().min(1).max(1440).default(1440), // 24hr at 60s intervals
   unit: z.enum(['F', 'C']).default('F'),
 }).strict().refine(
   data => !(data.startDate && data.endDate) || validateDateRange(data.startDate, data.endDate),
@@ -187,35 +187,36 @@ export const environmentRouter = router({
     )
     .query(async ({ input }) => {
       try {
-        const [bed] = await biometricsDb
-          .select({
-            avgAmbient: avg(bedTemp.ambientTemp),
-            minAmbient: min(bedTemp.ambientTemp),
-            maxAmbient: max(bedTemp.ambientTemp),
-            avgHumidity: avg(bedTemp.humidity),
-            avgLeftCenter: avg(bedTemp.leftCenterTemp),
-            avgRightCenter: avg(bedTemp.rightCenterTemp),
-            recordCount: count(),
-          })
-          .from(bedTemp)
-          .where(and(
-            gte(bedTemp.timestamp, input.startDate),
-            lte(bedTemp.timestamp, input.endDate),
-          ))
-
-        const [frz] = await biometricsDb
-          .select({
-            avgAmbient: avg(freezerTemp.ambientTemp),
-            avgHeatsink: avg(freezerTemp.heatsinkTemp),
-            avgLeftWater: avg(freezerTemp.leftWaterTemp),
-            avgRightWater: avg(freezerTemp.rightWaterTemp),
-            recordCount: count(),
-          })
-          .from(freezerTemp)
-          .where(and(
-            gte(freezerTemp.timestamp, input.startDate),
-            lte(freezerTemp.timestamp, input.endDate),
-          ))
+        const [[bed], [frz]] = await Promise.all([
+          biometricsDb
+            .select({
+              avgAmbient: avg(bedTemp.ambientTemp),
+              minAmbient: min(bedTemp.ambientTemp),
+              maxAmbient: max(bedTemp.ambientTemp),
+              avgHumidity: avg(bedTemp.humidity),
+              avgLeftCenter: avg(bedTemp.leftCenterTemp),
+              avgRightCenter: avg(bedTemp.rightCenterTemp),
+              recordCount: count(),
+            })
+            .from(bedTemp)
+            .where(and(
+              gte(bedTemp.timestamp, input.startDate),
+              lte(bedTemp.timestamp, input.endDate),
+            )),
+          biometricsDb
+            .select({
+              avgAmbient: avg(freezerTemp.ambientTemp),
+              avgHeatsink: avg(freezerTemp.heatsinkTemp),
+              avgLeftWater: avg(freezerTemp.leftWaterTemp),
+              avgRightWater: avg(freezerTemp.rightWaterTemp),
+              recordCount: count(),
+            })
+            .from(freezerTemp)
+            .where(and(
+              gte(freezerTemp.timestamp, input.startDate),
+              lte(freezerTemp.timestamp, input.endDate),
+            )),
+        ])
 
         const cv = (v: string | null) =>
           v !== null
