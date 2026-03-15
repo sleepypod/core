@@ -111,6 +111,8 @@ export class JobManager {
         this.scheduleDailyPriming(settings.primePodTime)
         // Always reboot 1hr before priming to ensure clean device state
         this.schedulePrimePreReboot(settings.primePodTime)
+        // Calibrate sensors 30min before priming (bed should be empty)
+        this.schedulePrePrimeCalibration(settings.primePodTime)
       }
 
       if (settings.rebootDaily && settings.rebootTime) {
@@ -278,6 +280,35 @@ export class JobManager {
     this.scheduler.scheduleJob('prime-prereboot', JobType.REBOOT, cron, async () => {
       console.log('Executing pre-prime system reboot...')
       await this.executeReboot()
+    })
+  }
+
+  /**
+   * Schedule sensor calibration 30 minutes before daily priming.
+   * After the pre-prime reboot (1hr before) the pod is up with a clean state,
+   * and the bed should be empty — ideal conditions for baseline capture.
+   * Writes a trigger file that the calibrator Python module picks up.
+   */
+  private schedulePrePrimeCalibration(primeTime: string): void {
+    const [hour, minute] = this.parseTime(primeTime)
+    // Subtract 30 minutes, wrapping around midnight
+    const totalMinutes = ((hour * 60 + minute - 30) % 1440 + 1440) % 1440
+    const calHour = Math.floor(totalMinutes / 60)
+    const calMinute = totalMinutes % 60
+    const cron = `${calMinute} ${calHour} * * *`
+
+    this.scheduler.scheduleJob('pre-prime-calibration', JobType.CALIBRATION, cron, async () => {
+      console.log('Triggering pre-prime sensor calibration...')
+      const { writeFile } = await import('node:fs/promises')
+      const triggerPath = process.env.CALIBRATION_TRIGGER_PATH
+        ?? '/persistent/sleepypod-data/.calibrate-trigger'
+      const payload = JSON.stringify({
+        side: 'all',
+        sensor_type: 'all',
+        ts: Math.floor(Date.now() / 1000),
+      })
+      await writeFile(triggerPath, payload)
+      console.log('Calibration trigger written — calibrator module will process within 10s')
     })
   }
 

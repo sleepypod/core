@@ -164,12 +164,16 @@ def run_calibration(store: CalibrationStore, side: str, sensor_type: str,
 
 
 def should_run_daily(now: float, last_run: float) -> bool:
-    """Check if daily calibration should run (once per day at DAILY_HOUR UTC)."""
-    if now - last_run < 3600:  # at most once per hour
+    """Fallback daily calibration if scheduler trigger didn't fire.
+
+    The primary trigger is the jobManager's pre-prime-calibration job
+    (30min before pod priming). This fallback only fires if no calibration
+    has run in the last 25 hours — covers the case where priming is disabled.
+    """
+    if now - last_run < 25 * 3600:
         return False
-    import datetime
-    hour = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc).hour
-    return hour == DAILY_HOUR
+    # Check if any profile is older than 25h
+    return True
 
 
 # ---------------------------------------------------------------------------
