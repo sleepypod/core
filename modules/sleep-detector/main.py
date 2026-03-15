@@ -11,9 +11,16 @@ Writes to two tables:
 
 Detection logic:
   Each capacitance record contains three channels per side (out, cen, in).
-  Presence is determined by whether any channel exceeds its calibrated threshold.
+  Presence is determined via calibrated z-score thresholds when a calibration
+  profile is available, falling back to a fixed sum threshold otherwise.
   A session starts on the first present sample and ends after ABSENCE_TIMEOUT_S
   consecutive absent samples.
+
+Movement scoring:
+  When calibrated, movement is measured as the sum of per-channel deviations
+  from the empty-bed baseline (in units of standard deviations). This makes
+  scores comparable across pods with different sensor characteristics.
+  Without calibration, raw channel magnitude is used as a fallback.
 """
 
 import os
@@ -27,12 +34,13 @@ import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
 from common.raw_follower import RawFileFollower
+from common.calibration import CalibrationStore, is_present_capsense_calibrated
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -49,8 +57,10 @@ ABSENCE_TIMEOUT_S = 120
 MIN_SESSION_S = 300
 # How often to write a movement row (seconds)
 MOVEMENT_INTERVAL_S = 60
-# Presence threshold: sum of all three capacitance channels must exceed this
+# Fallback presence threshold when uncalibrated
 PRESENCE_THRESHOLD = 1500
+# How often to reload calibration profiles (seconds)
+CALIBRATION_RELOAD_S = 60
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -140,24 +150,79 @@ def report_health(status: str, message: str) -> None:
         log.warning("Could not write health status: %s", e)
 
 # ---------------------------------------------------------------------------
-# Presence detection
+# Calibration-aware presence and movement
 # ---------------------------------------------------------------------------
 
-def is_present_capsense(record: dict, side: str) -> bool:
-    """Determine presence from capacitance channels for a given side."""
-    data = record.get(side, {})
-    total = (
-        int(data.get("out", 0))
-        + int(data.get("cen", 0))
-        + int(data.get("in", 0))
-    )
-    return total > PRESENCE_THRESHOLD
+CHANNELS = ("out", "cen", "in")
 
 
-def movement_score(record: dict, side: str) -> int:
-    """Aggregate movement proxy: sum of absolute channel values."""
+def movement_score_calibrated(record: dict, side: str, baselines: Optional[dict]) -> int:
+    """Compute movement as sum of per-channel z-score deviations from baseline.
+
+    Returns a value in "centi-sigma" units (z-score * 100) regardless of
+    calibration state, so that the movement column has a consistent scale.
+
+    With calibration: each channel's deviation is measured in standard deviations
+    from the empty-bed mean, then summed and scaled by 100.
+
+    Without calibration: uses a default std of 500 per channel (empirical
+    estimate for uncalibrated capacitance sensors) to produce scores in the
+    same unit space. These will be less accurate but comparable in magnitude.
+    """
     data = record.get(side, {})
-    return abs(int(data.get("out", 0))) + abs(int(data.get("cen", 0))) + abs(int(data.get("in", 0)))
+    if not data:
+        return 0
+
+    # Default baseline: mean=0, std=500 per channel — empirical estimate
+    # for uncalibrated capacitance sensors. Keeps output in the same
+    # centi-sigma unit space as calibrated scores.
+    DEFAULT_STD = 500
+
+    if baselines is None:
+        raw_sum = 0.0
+        for ch in CHANNELS:
+            raw_sum += abs(int(data.get(ch, 0))) / DEFAULT_STD
+        return int(round(raw_sum * 100))
+
+    channels = baselines.get("channels", {})
+    score = 0.0
+    for ch in CHANNELS:
+        val = int(data.get(ch, 0))
+        ch_cal = channels.get(ch, {})
+        mean = ch_cal.get("mean", 0)
+        std = ch_cal.get("std", 1)
+        if std > 0:
+            score += abs((val - mean) / std)
+    return int(round(score * 100))
+
+
+class CalibrationCache:
+    """Periodically reloads capacitance calibration profiles for both sides."""
+
+    def __init__(self, store: CalibrationStore):
+        self._store = store
+        self._profiles: Dict[str, Optional[dict]] = {"left": None, "right": None}
+        self._last_reload = 0.0
+
+    def get_baselines(self, side: str) -> Optional[dict]:
+        self._maybe_reload()
+        return self._profiles.get(side)
+
+    def _maybe_reload(self) -> None:
+        now = time.time()
+        if now - self._last_reload < CALIBRATION_RELOAD_S:
+            return
+        self._last_reload = now
+        for side in ("left", "right"):
+            try:
+                profile = self._store.get_active(side, "capacitance")
+                if profile:
+                    params = profile["parameters"]
+                    self._profiles[side] = json.loads(params) if isinstance(params, str) else params
+                else:
+                    self._profiles[side] = None
+            except Exception as e:
+                log.warning("Failed to load calibration for %s: %s", side, e)
 
 # ---------------------------------------------------------------------------
 # Per-side session tracker
@@ -167,6 +232,7 @@ def movement_score(record: dict, side: str) -> int:
 class SessionTracker:
     side: str
     db: sqlite3.Connection
+    calibration: CalibrationCache
     _session_start: Optional[datetime] = None
     _last_present_ts: Optional[float] = None
     _present_intervals: list = field(default_factory=list)
@@ -177,7 +243,15 @@ class SessionTracker:
     _movement_buf: list = field(default_factory=list)
     _last_movement_write: float = field(default_factory=time.time)
 
-    def update(self, ts: float, present: bool, movement: int) -> None:
+    def process(self, ts: float, record: dict) -> None:
+        baselines = self.calibration.get_baselines(self.side)
+        present = is_present_capsense_calibrated(
+            record, self.side, baselines, fallback_threshold=PRESENCE_THRESHOLD
+        )
+        movement = movement_score_calibrated(record, self.side, baselines)
+        self._update(ts, present, movement)
+
+    def _update(self, ts: float, present: bool, movement: int) -> None:
         self._movement_buf.append(movement)
         self._flush_movement(ts)
 
@@ -273,11 +347,15 @@ def main() -> None:
         sys.exit(1)
 
     db_conn = open_biometrics_db()
-    left = SessionTracker(side="left", db=db_conn)
-    right = SessionTracker(side="right", db=db_conn)
+    cal_store = CalibrationStore(BIOMETRICS_DB)
+    cal_cache = CalibrationCache(cal_store)
+
+    left = SessionTracker(side="left", db=db_conn, calibration=cal_cache)
+    right = SessionTracker(side="right", db=db_conn, calibration=cal_cache)
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
     report_health("healthy", "sleep-detector started")
+    log.info("Calibration profiles will be loaded from biometrics.db (reload every %ds)", CALIBRATION_RELOAD_S)
 
     try:
         for record in follower.read_records():
@@ -285,14 +363,15 @@ def main() -> None:
                 continue
 
             ts = float(record.get("ts", time.time()))
-            left.update(ts, is_present_capsense(record, "left"), movement_score(record, "left"))
-            right.update(ts, is_present_capsense(record, "right"), movement_score(record, "right"))
+            left.process(ts, record)
+            right.process(ts, record)
 
     except Exception as e:
         log.exception("Fatal error in main loop: %s", e)
         report_health("down", str(e))
         sys.exit(1)
     finally:
+        cal_store.close()
         db_conn.close()
         log.info("Shutdown complete")
 
