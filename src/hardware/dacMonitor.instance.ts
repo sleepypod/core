@@ -2,19 +2,19 @@
  * Global hardware singleton — ONE franken connection, ONE client, ONE monitor.
  *
  * Lifecycle (managed by instrumentation.ts):
- *   1. startDacServer()     — connectFranken() on dac.sock
+ *   1. startDacServer()     — connectDac() on dac.sock
  *   2. getDacMonitor()      — create monitor + client, start polling when connected
- *   3. shutdownDacMonitor() — disconnectFranken() + stop everything
+ *   3. shutdownDacMonitor() — disconnectDac() + stop everything
  *
  * All consumers (DacMonitor, device router, health router) share the same
- * FrankenServer connection and HardwareClient. No competing listeners.
+ * DacTransport connection and HardwareClient. No competing listeners.
  *
  * The HardwareClient returned by getSharedHardwareClient() is a thin wrapper
  * around sendCommand() from ./frankenServer — it implements the same interface
  * as the old SocketClient-based HardwareClient.
  */
 
-import { connectFranken, disconnectFranken, sendCommand, isFrankenConnected } from './frankenServer'
+import { connectDac, disconnectDac, sendCommand, isDacConnected } from './dacTransport'
 import { DacMonitor } from './dacMonitor'
 import { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
@@ -45,12 +45,12 @@ const KEYS = {
 
 const g = globalThis as Record<string, unknown>
 
-// ── FrankenServer connection (replaces DacSocketServer) ──
+// ── DacTransport connection (replaces DacSocketServer) ──
 
 export async function startDacServer(): Promise<void> {
   if (g[KEYS.server]) return
 
-  await connectFranken(DAC_SOCK_PATH)
+  await connectDac(DAC_SOCK_PATH)
   g[KEYS.server] = true // sentinel — frankenServer manages its own state
 }
 
@@ -58,19 +58,19 @@ export function getDacServer(): unknown {
   return g[KEYS.server] ?? null
 }
 
-// ── FrankenHardwareClient — same interface as HardwareClient, backed by sendCommand() ──
+// ── DacHardwareClient — same interface as HardwareClient, backed by sendCommand() ──
 
 /**
  * Thin wrapper around sendCommand() that presents the same interface as
  * the original HardwareClient. All consumers (DacMonitor, tRPC routers,
  * gesture handler, job manager) use this without knowing the backend changed.
  */
-class FrankenHardwareClient {
+class DacHardwareClient {
   async connect(): Promise<void> {
-    // connectFranken is called in startDacServer().
+    // connectDac is called in startDacServer().
     // If not yet connected, connect now.
-    if (!isFrankenConnected()) {
-      await connectFranken(DAC_SOCK_PATH)
+    if (!isDacConnected()) {
+      await connectDac(DAC_SOCK_PATH)
     }
   }
 
@@ -153,11 +153,11 @@ class FrankenHardwareClient {
   }
 
   isConnected(): boolean {
-    return isFrankenConnected()
+    return isDacConnected()
   }
 
   disconnect(): void {
-    // No-op for shared client — disconnectFranken() is called at shutdown.
+    // No-op for shared client — disconnectDac() is called at shutdown.
     // Individual consumers should not tear down the shared connection.
   }
 
@@ -171,9 +171,9 @@ class FrankenHardwareClient {
 export function getSharedHardwareClient(): HardwareClient {
   if (g[KEYS.client]) return g[KEYS.client] as HardwareClient
 
-  // Return a FrankenHardwareClient cast as HardwareClient.
+  // Return a DacHardwareClient cast as HardwareClient.
   // It implements the same interface (duck typing).
-  const client = new FrankenHardwareClient() as unknown as HardwareClient
+  const client = new DacHardwareClient() as unknown as HardwareClient
   g[KEYS.client] = client
   return client
 }
@@ -246,7 +246,7 @@ export const shutdownDacMonitor = async (): Promise<void> => {
     monitor.stop()
   }
 
-  await disconnectFranken()
+  await disconnectDac()
 
   console.log('[DAC] shutdown complete')
 }
