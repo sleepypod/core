@@ -1,0 +1,24 @@
+{
+  "name": "environment-monitor",
+  "version": "1.0.0",
+  "description": "Ambient, bed zone, and freezer temperature monitoring from RAW sensor files",
+  "provides": [
+    "bed_temp.ambientTemp",
+    "bed_temp.mcuTemp",
+    "bed_temp.humidity",
+    "bed_temp.leftOuterTemp",
+    "bed_temp.leftCenterTemp",
+    "bed_temp.leftInnerTemp",
+    "bed_temp.rightOuterTemp",
+    "bed_temp.rightCenterTemp",
+    "bed_temp.rightInnerTemp",
+    "freezer_temp.ambientTemp",
+    "freezer_temp.heatsinkTemp",
+    "freezer_temp.leftWaterTemp",
+    "freezer_temp.rightWaterTemp"
+  ],
+  "writes": ["bed_temp", "freezer_temp"],
+  "service": "sleepypod-environment-monitor.service",
+  "language": "python",
+  "minVersion": "1.0.0"
+}

@@ -31,3 +31,12 @@ export const mapToEightSleepScale = (tempF: number) => {
 
 export const ensureF = (temp: number, unit: TempUnit = 'F') =>
   unit === 'C' ? toF(temp) : temp
+
+/** Convert raw centidegrees (u16 from hardware) to degrees Celsius. */
+export const centiDegreesToC = (cd: number) => cd / 100
+
+/** Convert raw centidegrees (u16 from hardware) to degrees Fahrenheit. */
+export const centiDegreesToF = (cd: number) => toF(cd / 100)
+
+/** Convert raw centipercent (u16 from hardware) to percent. */
+export const centiPercentToPercent = (cp: number) => cp / 100

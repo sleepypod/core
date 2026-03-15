@@ -150,6 +150,37 @@ export const systemRouter = router({
     }),
 
   /**
+   * Returns WiFi connection status and signal strength.
+   * Uses nmcli on Linux; returns a graceful fallback in dev environments.
+   */
+  wifiStatus: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/wifi-status', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      connected: z.boolean(),
+      ssid: z.string().nullable(),
+      signal: z.number().nullable(),
+    }))
+    .query(async () => {
+      try {
+        const { stdout } = await execFileAsync('nmcli', ['-t', '-f', 'ACTIVE,SSID,SIGNAL', 'dev', 'wifi'])
+        const active = stdout.trim().split('\n').find(l => l.startsWith('yes:'))
+        if (!active) return { connected: false, ssid: null, signal: null }
+
+        const parts = active.split(':')
+        return {
+          connected: true,
+          ssid: parts[1] || null,
+          signal: parts[2] ? Number(parts[2]) : null,
+        }
+      }
+      catch {
+        // nmcli unavailable (dev environment, macOS, etc.)
+        return { connected: false, ssid: null, signal: null }
+      }
+    }),
+
+  /**
    * Trigger a self-update via curl+tarball from GitHub.
    *
    * sp-update handles the full flow: iptables toggle, tarball download,

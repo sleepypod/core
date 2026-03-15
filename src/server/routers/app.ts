@@ -6,6 +6,8 @@ import { schedulesRouter } from './schedules'
 import { biometricsRouter } from './biometrics'
 import { healthRouter } from './health'
 import { systemRouter } from './system'
+import { environmentRouter } from './environment'
+import { rawRouter } from './raw'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -23,6 +25,8 @@ export const appRouter = router({
   // isolated LAN with WAN blocked by iptables. If internet access is ever opened,
   // add auth middleware before exposing these endpoints. See GitHub issue.
   system: systemRouter,
+  environment: environmentRouter,
+  raw: rawRouter,
 })
 
 export type AppRouter = typeof appRouter

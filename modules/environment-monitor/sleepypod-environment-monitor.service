@@ -1,0 +1,33 @@
+[Unit]
+Description=SleepyPod Environment Monitor (Bed and Freezer Temperatures)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/environment-monitor
+After=network.target sleepypod.service
+Wants=sleepypod.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/sleepypod/modules/environment-monitor
+ExecStart=/opt/sleepypod/modules/environment-monitor/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+# Environment — override via /etc/sleepypod/modules/environment-monitor.env
+EnvironmentFile=-/etc/sleepypod/modules/environment-monitor.env
+Environment="RAW_DATA_DIR=/persistent"
+Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
+Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
+
+# Resource limits
+MemoryMax=32M
+CPUQuota=10%
+
+# Sandboxing
+NoNewPrivileges=true
+ReadOnlyPaths=/persistent
+ReadWritePaths=/persistent/sleepypod-data
+ProtectSystem=strict
+ProtectKernelTunables=true
+
+[Install]
+WantedBy=multi-user.target

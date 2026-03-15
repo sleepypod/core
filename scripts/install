@@ -501,6 +501,7 @@ else
 
   install_module "piezo-processor"
   install_module "sleep-detector"
+  install_module "environment-monitor"
 fi
 
 # Create CLI shortcuts
@@ -813,6 +814,7 @@ echo "  - Hardware Control via DAC socket"
 echo "  - Automated job scheduler with timezone support"
 echo "  - Heart rate, HRV, and breathing rate (piezo-processor)"
 echo "  - Sleep session detection and movement tracking (sleep-detector)"
+echo "  - Ambient, bed zone, and freezer temperature monitoring (environment-monitor)"
 echo ""
 echo "CLI Commands:"
 echo "  sp-status   - View service status"
@@ -826,5 +828,6 @@ echo "  Biometrics DB:  $DATA_DIR/biometrics.db"
 echo "  Config:         $INSTALL_DIR/.env"
 echo "  Module logs:    journalctl -u sleepypod-piezo-processor.service"
 echo "                  journalctl -u sleepypod-sleep-detector.service"
+echo "                  journalctl -u sleepypod-environment-monitor.service"
 echo "  App logs:       journalctl -u sleepypod.service"
 echo ""
