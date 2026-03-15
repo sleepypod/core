@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { readdir, stat, unlink } from 'node:fs/promises'
+import { lstat, readdir, realpath, stat, unlink } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import path from 'node:path'
@@ -65,11 +65,19 @@ export const rawRouter = router({
       }
 
       const resolved = path.resolve(RAW_DIR, input.filename)
-      if (!resolved.startsWith(path.resolve(RAW_DIR))) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Path traversal detected' })
-      }
 
       try {
+        // Reject symlinks and verify canonical path (matches download route)
+        const lstats = await lstat(resolved)
+        if (lstats.isSymbolicLink()) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Path traversal detected' })
+        }
+        const canonicalFile = await realpath(resolved)
+        const canonicalDir = await realpath(RAW_DIR)
+        if (!canonicalFile.startsWith(canonicalDir)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Path traversal detected' })
+        }
+
         // Prevent deleting the actively-written (newest) file
         const files = await listRawFiles()
         if (files.length > 0 && files[0].name === input.filename) {
@@ -98,7 +106,7 @@ export const rawRouter = router({
     .query(async () => {
       try {
         // Get partition disk usage
-        const { stdout: dfOut } = await execFileAsync('df', ['-B1', RAW_DIR])
+        const { stdout: dfOut } = await execFileAsync('df', ['-B1', RAW_DIR], { timeout: 5000 })
         const dfLine = dfOut.trim().split('\n')[1]
         const dfParts = dfLine?.split(/\s+/) ?? []
 

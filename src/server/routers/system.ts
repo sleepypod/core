@@ -187,7 +187,7 @@ export const systemRouter = router({
         return {
           connected: true,
           ssid: fields[1] || null,
-          signal: fields[2] ? Number(fields[2]) : null,
+          signal: fields[2] && Number.isFinite(Number(fields[2])) ? Number(fields[2]) : null,
         }
       }
       catch {

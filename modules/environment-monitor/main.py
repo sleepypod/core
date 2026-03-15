@@ -141,7 +141,7 @@ def report_health(status: str, message: str) -> None:
                 )
         finally:
             conn.close()
-    except Exception as e:
+    except sqlite3.Error as e:
         log.warning("Could not write health status: %s", e)
 
 
@@ -172,8 +172,16 @@ def main() -> None:
 
     try:
         for record in follower.read_records():
+            if not isinstance(record, dict):
+                continue
             rtype = record.get("type")
-            ts = float(record.get("ts", time.time()))
+            if rtype not in ("bedTemp", "frzTemp"):
+                continue
+            try:
+                ts = float(record.get("ts", time.time()))
+            except (TypeError, ValueError):
+                log.warning("Skipping record with invalid ts: %r", record.get("ts"))
+                continue
 
             if rtype == "bedTemp":
                 if ts - last_bed_write >= DOWNSAMPLE_INTERVAL_S:
