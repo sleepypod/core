@@ -373,4 +373,34 @@ export const systemRouter = router({
         })
       }
     }),
+
+  /**
+   * Returns root filesystem disk usage.
+   * Uses `df -B1 /` on Linux; returns zeros on macOS/dev.
+   */
+  getDiskUsage: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/disk-usage', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      totalBytes: z.number(),
+      usedBytes: z.number(),
+      availableBytes: z.number(),
+      usedPercent: z.number(),
+    }))
+    .query(async () => {
+      try {
+        const { stdout } = await execFileAsync('df', ['-B1', '/'], { timeout: 5000 })
+        const line = stdout.trim().split('\n')[1]
+        const parts = line?.split(/\s+/) ?? []
+        const totalBytes = Number(parts[1]) || 0
+        const usedBytes = Number(parts[2]) || 0
+        const availableBytes = Number(parts[3]) || 0
+        const usedPercent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 10000) / 100 : 0
+        return { totalBytes, usedBytes, availableBytes, usedPercent }
+      }
+      catch {
+        // df unavailable (macOS dev environment)
+        return { totalBytes: 0, usedBytes: 0, availableBytes: 0, usedPercent: 0 }
+      }
+    }),
 })

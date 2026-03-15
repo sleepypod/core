@@ -13,7 +13,7 @@ const RAW_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
 /** Only allow alphanumeric, dash, underscore, dot — no path separators. */
 const SAFE_FILENAME = /^[\w.-]+\.RAW$/i
 
-async function listRawFiles() {
+export async function listRawFiles() {
   try {
     const entries = await readdir(RAW_DIR)
     const rawFiles = entries.filter(f => SAFE_FILENAME.test(f))
