@@ -183,10 +183,15 @@ def main() -> None:
     store = CalibrationStore(BIOMETRICS_DB)
     watcher = CalibrationWatcher()
 
-    # Run startup calibration for any sensor type that has no active profile
+    # Run startup calibration if profiles are missing or expired (>48h old)
+    now = time.time()
     for side in ("left", "right"):
         for sensor_type in ("capacitance", "piezo", "temperature"):
-            if store.get_active(side, sensor_type) is None:
+            profile = store.get_active(side, sensor_type)
+            needs_cal = profile is None
+            if profile and profile.get("expires_at"):
+                needs_cal = profile["expires_at"] < now
+            if needs_cal:
                 run_calibration(store, side, sensor_type, triggered_by="startup")
 
     daily_last_run = 0.0
