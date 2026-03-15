@@ -8,9 +8,10 @@
  * @see https://trpc.io/docs/v11/procedures
  */
 import { initTRPC } from '@trpc/server'
+import type { OpenApiMeta } from 'trpc-to-openapi'
 import { transformer } from '../utils/transformer'
 
-const t = initTRPC.create({
+const t = initTRPC.meta<OpenApiMeta>().create({
   transformer,
 })
 

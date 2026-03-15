@@ -46,6 +46,8 @@ export const biometricsRouter = router({
    * @returns Array of sleep records, most recent first
    */
   getSleepRecords: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/sleep-records', protect: false, tags: ['Biometrics'] } })
+    .output(z.any())
     .input(
       z
         .object({
@@ -125,6 +127,8 @@ export const biometricsRouter = router({
    * @returns Array of vitals measurements, most recent first
    */
   getVitals: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/vitals', protect: false, tags: ['Biometrics'] } })
+    .output(z.any())
     .input(
       z
         .object({
@@ -203,6 +207,8 @@ export const biometricsRouter = router({
    * @returns Array of movement measurements, most recent first
    */
   getMovement: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/movement', protect: false, tags: ['Biometrics'] } })
+    .output(z.any())
     .input(
       z
         .object({
@@ -272,6 +278,7 @@ export const biometricsRouter = router({
    * @returns Latest sleep record or null if no records found
    */
   getLatestSleep: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/sleep-records/latest', protect: false, tags: ['Biometrics'] } })
     .input(
       z
         .object({
@@ -279,6 +286,7 @@ export const biometricsRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .query(async ({ input }) => {
       try {
         const [record] = await biometricsDb
@@ -322,6 +330,8 @@ export const biometricsRouter = router({
    * @returns Summary statistics or null if no vitals data in range
    */
   getVitalsSummary: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/vitals/summary', protect: false, tags: ['Biometrics'] } })
+    .output(z.any())
     .input(
       z
         .object({
@@ -385,6 +395,7 @@ export const biometricsRouter = router({
    * Uses ON CONFLICT to avoid duplicates when pod and iOS both write.
    */
   reportVitals: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometrics/vitals', protect: false, tags: ['Biometrics'] } })
     .input(
       z.object({
         side: sideSchema,
@@ -394,6 +405,7 @@ export const biometricsRouter = router({
         breathingRate: z.number().nullable(),
       }).strict()
     )
+    .output(z.object({ written: z.number() }))
     .mutation(async ({ input }) => {
       try {
         await biometricsDb
@@ -423,6 +435,7 @@ export const biometricsRouter = router({
    * Efficient bulk insert with ON CONFLICT to avoid duplicates.
    */
   reportVitalsBatch: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometrics/vitals/batch', protect: false, tags: ['Biometrics'] } })
     .input(
       z.object({
         vitals: z.array(z.object({
@@ -434,6 +447,7 @@ export const biometricsRouter = router({
         })).min(1).max(100),
       }).strict()
     )
+    .output(z.object({ written: z.number() }))
     .mutation(async ({ input }) => {
       try {
         const rows = input.vitals.map(v => ({
@@ -464,6 +478,12 @@ export const biometricsRouter = router({
    * Check whether an iOS client is actively processing piezo data.
    */
   getProcessingStatus: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/processing-status', protect: false, tags: ['Biometrics'] } })
+    .input(z.object({}))
+    .output(z.object({
+      iosProcessingActive: z.boolean(),
+      connectedSince: z.number().nullable(),
+    }))
     .query(() => {
       return {
         iosProcessingActive: isIosProcessing(),

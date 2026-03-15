@@ -109,10 +109,14 @@ export const systemRouter = router({
   /**
    * Returns whether WAN access is currently blocked by iptables.
    */
-  internetStatus: publicProcedure.query(async () => {
-    const blocked = await isWanBlocked()
-    return { blocked }
-  }),
+  internetStatus: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/internet-status', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({ blocked: z.boolean() }))
+    .query(async () => {
+      const blocked = await isWanBlocked()
+      return { blocked }
+    }),
 
   /**
    * Toggle WAN internet access.
@@ -120,7 +124,9 @@ export const systemRouter = router({
    * `blocked: false` → flush all iptables rules (allow everything)
    */
   setInternetAccess: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/system/internet-access', protect: false, tags: ['System'] } })
     .input(z.object({ blocked: z.boolean() }))
+    .output(z.object({ blocked: z.boolean() }))
     .mutation(async ({ input }) => {
       return withIptablesLock(async () => {
         try {
@@ -153,11 +159,17 @@ export const systemRouter = router({
    * Optional `branch` param for deploying feature branches.
    */
   triggerUpdate: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/system/update', protect: false, tags: ['System'] } })
     .input(z.object({
       branch: z.string()
         .regex(/^[a-zA-Z0-9._\-/]+$/, 'Invalid branch name')
         .optional(),
-    }).optional())
+    }))
+    .output(z.object({
+      triggered: z.boolean(),
+      branch: z.string(),
+      message: z.string(),
+    }))
     .mutation(async ({ input }) => {
       const branch = input?.branch ?? 'main'
 

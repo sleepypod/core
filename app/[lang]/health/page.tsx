@@ -4,7 +4,7 @@ import { trpc } from '@/src/utils/trpc'
 import { Trans } from '@lingui/react/macro'
 
 export default function Page() {
-  const healthcheck = trpc.healthcheck.useQuery()
+  const healthcheck = trpc.healthcheck.useQuery({})
 
   return (
     <div>

@@ -37,6 +37,7 @@ export const schedulesRouter = router({
    * Get all schedules for a side
    */
   getAll: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/schedules', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -44,6 +45,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .query(async ({ input }) => {
       try {
         const [temperatureSchedulesList, powerSchedulesList, alarmSchedulesList]
@@ -81,6 +83,7 @@ export const schedulesRouter = router({
    * Create temperature schedule
    */
   createTemperatureSchedule: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/schedules/temperature', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -92,6 +95,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .mutation(async ({ input }) => {
       try {
         const created = await db.transaction(async (tx) => {
@@ -126,6 +130,7 @@ export const schedulesRouter = router({
    * Update temperature schedule
    */
   updateTemperatureSchedule: publicProcedure
+    .meta({ openapi: { method: 'PATCH', path: '/schedules/temperature', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -136,6 +141,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .mutation(async ({ input }) => {
       try {
         const { id, ...updates } = input
@@ -176,6 +182,7 @@ export const schedulesRouter = router({
    * Delete temperature schedule
    */
   deleteTemperatureSchedule: publicProcedure
+    .meta({ openapi: { method: 'DELETE', path: '/schedules/temperature', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -183,6 +190,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
         await db.transaction(async (tx) => {
@@ -361,6 +369,7 @@ export const schedulesRouter = router({
    * Delete power schedule
    */
   deletePowerSchedule: publicProcedure
+    .meta({ openapi: { method: 'DELETE', path: '/schedules/power', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -368,6 +377,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
         await db.transaction(async (tx) => {
@@ -403,6 +413,7 @@ export const schedulesRouter = router({
    * Create alarm schedule
    */
   createAlarmSchedule: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/schedules/alarm', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -417,6 +428,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .mutation(async ({ input }) => {
       try {
         const created = await db.transaction(async (tx) => {
@@ -451,6 +463,7 @@ export const schedulesRouter = router({
    * Update alarm schedule
    */
   updateAlarmSchedule: publicProcedure
+    .meta({ openapi: { method: 'PATCH', path: '/schedules/alarm', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -464,6 +477,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .mutation(async ({ input }) => {
       try {
         const { id, ...updates } = input
@@ -504,6 +518,7 @@ export const schedulesRouter = router({
    * Delete alarm schedule
    */
   deleteAlarmSchedule: publicProcedure
+    .meta({ openapi: { method: 'DELETE', path: '/schedules/alarm', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -511,6 +526,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
         await db.transaction(async (tx) => {
@@ -546,6 +562,7 @@ export const schedulesRouter = router({
    * Get schedules for a specific day
    */
   getByDay: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/schedules/by-day', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -554,6 +571,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .query(async ({ input }) => {
       try {
         const [temperatureSchedulesList, powerSchedulesList, alarmSchedulesList]
