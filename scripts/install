@@ -493,6 +493,12 @@ else
     fi
   }
 
+  # Copy shared common package (used by all modules via sys.path)
+  if [ -d "$MODULES_SRC/common" ]; then
+    mkdir -p "$MODULES_DEST/common"
+    cp -r "$MODULES_SRC/common/." "$MODULES_DEST/common/"
+  fi
+
   install_module "piezo-processor"
   install_module "sleep-detector"
 fi

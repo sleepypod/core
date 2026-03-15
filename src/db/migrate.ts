@@ -2,11 +2,12 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { db, sqlite } from './index'
+import { biometricsDb, closeBiometricsDatabase } from './biometrics'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /**
- * Run pending database migrations.
+ * Run pending database migrations for all databases.
  * This should be called on server startup.
  */
 export async function runMigrations() {
@@ -15,6 +16,10 @@ export async function runMigrations() {
 
     migrate(db, {
       migrationsFolder: path.resolve(__dirname, 'migrations'),
+    })
+
+    migrate(biometricsDb, {
+      migrationsFolder: path.resolve(__dirname, 'biometrics-migrations'),
     })
 
     console.log('✓ Database migrations completed successfully')
@@ -86,11 +91,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     .then(() => seedDefaultData())
     .then(() => {
       console.log('✓ Database setup complete')
+      closeBiometricsDatabase()
       sqlite.close()
       process.exit(0)
     })
     .catch((error) => {
       console.error('✗ Database setup failed:', error)
+      closeBiometricsDatabase()
       sqlite.close()
       process.exit(1)
     })
