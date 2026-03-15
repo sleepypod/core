@@ -15,6 +15,13 @@
       "when": 1773544706854,
       "tag": "0001_flawless_karma",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1773601262444,
+      "tag": "0002_fuzzy_strong_guy",
+      "breakpoints": true
     }
   ]
 }

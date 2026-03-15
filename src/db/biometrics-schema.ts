@@ -49,3 +49,30 @@ export const movement = sqliteTable('movement', {
 }, t => [
   index('idx_movement_side_timestamp').on(t.side, t.timestamp),
 ])
+
+export const bedTemp = sqliteTable('bed_temp', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  ambientTemp: integer('ambient_temp'), // centidegrees C (u16)
+  mcuTemp: integer('mcu_temp'), // centidegrees C (u16)
+  humidity: integer('humidity'), // centipercent (u16)
+  leftOuterTemp: integer('left_outer_temp'), // centidegrees C (u16)
+  leftCenterTemp: integer('left_center_temp'),
+  leftInnerTemp: integer('left_inner_temp'),
+  rightOuterTemp: integer('right_outer_temp'),
+  rightCenterTemp: integer('right_center_temp'),
+  rightInnerTemp: integer('right_inner_temp'),
+}, t => [
+  uniqueIndex('idx_bed_temp_timestamp').on(t.timestamp),
+])
+
+export const freezerTemp = sqliteTable('freezer_temp', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  ambientTemp: integer('ambient_temp'), // centidegrees C (u16)
+  heatsinkTemp: integer('heatsink_temp'), // centidegrees C (u16)
+  leftWaterTemp: integer('left_water_temp'), // centidegrees C (u16)
+  rightWaterTemp: integer('right_water_temp'), // centidegrees C (u16)
+}, t => [
+  uniqueIndex('idx_freezer_temp_timestamp').on(t.timestamp),
+])

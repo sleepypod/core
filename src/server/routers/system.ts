@@ -150,6 +150,53 @@ export const systemRouter = router({
     }),
 
   /**
+   * Returns WiFi connection status and signal strength.
+   * Uses nmcli on Linux; returns a graceful fallback in dev environments.
+   */
+  wifiStatus: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/wifi-status', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      connected: z.boolean(),
+      ssid: z.string().nullable(),
+      signal: z.number().nullable(),
+    }))
+    .query(async () => {
+      try {
+        const { stdout } = await execFileAsync('nmcli', ['-t', '-f', 'ACTIVE,SSID,SIGNAL', 'dev', 'wifi'])
+        const active = stdout.trim().split('\n').find(l => l.startsWith('yes:'))
+        if (!active) return { connected: false, ssid: null, signal: null }
+
+        // nmcli -t escapes colons as \: and backslashes as \\
+        const fields: string[] = []
+        let current = ''
+        for (let i = 0; i < active.length; i++) {
+          if (active[i] === '\\' && i + 1 < active.length) {
+            current += active[++i]
+          }
+          else if (active[i] === ':') {
+            fields.push(current)
+            current = ''
+          }
+          else {
+            current += active[i]
+          }
+        }
+        fields.push(current)
+
+        return {
+          connected: true,
+          ssid: fields[1] || null,
+          signal: fields[2] && Number.isFinite(Number(fields[2])) ? Number(fields[2]) : null,
+        }
+      }
+      catch {
+        // nmcli unavailable (dev environment, macOS, etc.)
+        return { connected: false, ssid: null, signal: null }
+      }
+    }),
+
+  /**
    * Trigger a self-update via curl+tarball from GitHub.
    *
    * sp-update handles the full flow: iptables toggle, tarball download,
