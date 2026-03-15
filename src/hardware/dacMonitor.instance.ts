@@ -4,11 +4,34 @@
  */
 
 import { DacMonitor } from './dacMonitor'
+import { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
 import { DeviceStateSync } from './deviceStateSync'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
+
+/**
+ * Shared hardware client — one socket server for the entire app.
+ * Both DacMonitor (polling) and device router (ad-hoc commands) use this.
+ *
+ * Uses globalThis to survive Next.js module re-instantiation across
+ * Turbopack build contexts. Without this, multiple socket servers
+ * would be created on the same path.
+ */
+const GLOBAL_KEY = '__sleepypod_hw_client__' as const
+
+export function getSharedHardwareClient(): HardwareClient {
+  const g = globalThis as Record<string, unknown>
+  if (!g[GLOBAL_KEY]) {
+    g[GLOBAL_KEY] = new HardwareClient({
+      socketPath: DAC_SOCK_PATH,
+      autoReconnect: true,
+      mode: 'server',
+    })
+  }
+  return g[GLOBAL_KEY] as HardwareClient
+}
 
 let monitorInstance: DacMonitor | null = null
 let gestureHandlerInstance: GestureActionHandler | null = null
@@ -28,7 +51,8 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
 
   monitorInitPromise = (async () => {
     try {
-      const monitor = new DacMonitor({ socketPath: DAC_SOCK_PATH })
+      const hwClient = getSharedHardwareClient()
+      const monitor = new DacMonitor({ socketPath: DAC_SOCK_PATH, hardwareClient: hwClient })
       const gestureHandler = new GestureActionHandler(DAC_SOCK_PATH, defaultGestureActionDeps)
       const stateSync = new DeviceStateSync()
 

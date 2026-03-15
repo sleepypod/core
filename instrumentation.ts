@@ -17,8 +17,9 @@
 
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
-import { createHardwareClient } from '@/src/hardware/client'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
+import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
+import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
 
@@ -51,7 +52,23 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down scheduler:', error)
   }
 
-  // Step 2: Shutdown DAC monitor
+  // Step 2: Shutdown piezo stream server
+  try {
+    await shutdownPiezoStreamServer()
+  }
+  catch (error) {
+    console.error('Error shutting down piezo stream server:', error)
+  }
+
+  // Step 3: Stop Bonjour announcement
+  try {
+    stopBonjourAnnouncement()
+  }
+  catch (error) {
+    console.error('Error stopping Bonjour:', error)
+  }
+
+  // Step 4: Shutdown DAC monitor
   try {
     await shutdownDacMonitor()
   }
@@ -59,7 +76,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down DacMonitor:', error)
   }
 
-  // Step 3: Close database connections
+  // Step 5: Close database connections
   try {
     closeDatabase()
     closeBiometricsDatabase()
@@ -132,13 +149,16 @@ async function withRetry<T>(
  */
 async function validateHardware(): Promise<void> {
   try {
-    const client = await withRetry(
-      () => createHardwareClient({ socketPath: DAC_SOCK_PATH, connectionTimeout: 5000 }),
+    // Use the shared hardware client — don't create a separate one.
+    // Creating a second DacSocketServer on the same path conflicts.
+    const { getSharedHardwareClient } = await import('@/src/hardware/dacMonitor.instance')
+    const client = getSharedHardwareClient()
+    await withRetry(
+      () => client.connect(),
       'Hardware validation',
       3,
       1000
     )
-    client.disconnect()
     console.log('Hardware daemon connectivity verified')
   }
   catch (error) {
@@ -237,11 +257,23 @@ export async function initializeScheduler(): Promise<void> {
 
     isInitialized = true
 
-    // Validate hardware connectivity (non-blocking, runs after scheduler is ready)
-    validateHardware()
-
     // Start DAC monitor (non-blocking, logs warning on failure)
+    // This also validates hardware connectivity via the shared HardwareClient
     initializeDacMonitor()
+
+    // Start piezo WebSocket stream server (non-blocking)
+    try {
+      startPiezoStreamServer()
+    }
+    catch (error) {
+      console.warn(
+        'WARNING: Piezo stream server failed to start:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
+    // Start Bonjour/mDNS announcement (non-blocking)
+    startBonjourAnnouncement()
   }
   catch (error) {
     console.error('Failed to initialize job scheduler:', error)

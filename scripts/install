@@ -390,7 +390,7 @@ RestartSec=10
 
 # Hardening (optional, doesn't interfere with dac.sock)
 NoNewPrivileges=true
-ReadWritePaths=$DATA_DIR
+ReadWritePaths=$DATA_DIR /persistent/deviceinfo /run/dac
 ProtectSystem=strict
 ProtectKernelTunables=true
 ProtectKernelModules=true
@@ -419,6 +419,15 @@ if [ -n "$PORT_PID" ]; then
 fi
 
 systemctl restart sleepypod.service
+
+# Restart frankenfirmware so it discovers our dac.sock server.
+# frankenfirmware connects to dac.sock on startup — it won't retry if the
+# socket didn't exist when it started.
+FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
+if [ -n "$FRANKEN_PID" ]; then
+  echo "Restarting frankenfirmware (PID $FRANKEN_PID) to discover dac.sock..."
+  kill "$FRANKEN_PID" 2>/dev/null || true
+fi
 
 # ============================================================================
 # Install bundled biometrics modules

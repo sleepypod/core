@@ -1,60 +1,38 @@
 /**
  * Shared helper functions for tRPC routers
- * Extracting common patterns to reduce code duplication
  */
 import { TRPCError } from '@trpc/server'
-import { createHardwareClient, type HardwareClient } from '@/src/hardware/client'
-
-const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
+import type { HardwareClient } from '@/src/hardware/client'
+import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 
 /**
- * Execute a callback with a hardware client connection.
- * Automatically handles connection setup, error wrapping, and cleanup.
+ * Execute a callback with the shared hardware client.
  *
- * Pattern extracted from device router to eliminate repeated try-catch-finally blocks.
- * Each operation creates a new connection for hardware isolation and simplicity.
- *
- * @param callback - Async function that receives the hardware client
- * @param errorMessage - Custom error message prefix for TRPCError
- * @returns Result from the callback
- * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware operations fail
- *
- * @example
- * ```typescript
- * return withHardwareClient(
- *   async (client) => {
- *     return await client.getDeviceStatus()
- *   },
- *   'Failed to get device status'
- * )
- * ```
+ * Uses the app-wide singleton HardwareClient (server mode) that listens
+ * for frankenfirmware connections. The client persists across requests —
+ * it is NOT disconnected after each call.
  */
 export async function withHardwareClient<T>(
   callback: (client: HardwareClient) => Promise<T>,
   errorMessage: string
 ): Promise<T> {
-  const client = await createHardwareClient({
-    socketPath: DAC_SOCK_PATH,
-    autoReconnect: true,
-  })
+  const client = getSharedHardwareClient()
+
+  // Ensure connected (will wait for frankenfirmware if not yet connected)
+  await client.connect()
 
   try {
     return await callback(client)
   }
   catch (error) {
-    // If error is already a TRPCError, preserve it
     if (error instanceof TRPCError) {
       throw error
     }
 
-    // Otherwise wrap in TRPCError with context
     throw new TRPCError({
       code: 'INTERNAL_SERVER_ERROR',
       message: `${errorMessage}: ${error instanceof Error ? error.message : 'Unknown error'}`,
       cause: error,
     })
-  }
-  finally {
-    client.disconnect()
   }
 }
