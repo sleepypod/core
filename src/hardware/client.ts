@@ -147,7 +147,7 @@ export class HardwareClient {
    * - Temperature is converted to a level (-100 to 100) before sending
    * - Level 0 = 82.5°F (neutral), -100 = 55°F (cool), +100 = 110°F (warm)
    * - If duration is set, pod automatically returns to neutral after timeout
-   * - If duration is omitted, temperature persists indefinitely (or until changed)
+   * - If duration is omitted, defaults to 28800 seconds (8 hours)
    *
    * @param side - Which side of the pod ('left' or 'right')
    * @param temperature - Target temperature in Fahrenheit (55-110°F range)
@@ -157,7 +157,7 @@ export class HardwareClient {
    *
    * @example
    * ```typescript
-   * // Set left side to 72°F indefinitely
+   * // Set left side to 72°F for the default 8-hour duration
    * await client.setTemperature('left', 72)
    *
    * // Set right side to 65°F for 30 minutes (1800 seconds)
