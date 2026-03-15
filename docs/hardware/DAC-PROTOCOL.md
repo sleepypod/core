@@ -68,99 +68,46 @@ sequenceDiagram
     D-->>API: result
 ```
 
-## Critical: Why the Connection Pattern Matters
+## Connection Architecture
 
-If you're building software that communicates with the Eight Sleep Pod hardware, **you must follow this pattern exactly**. This section documents what we learned through extensive debugging.
+### One server, one transport, one queue
 
-### The Problem
-
-Our initial implementation used a custom socket server that:
-1. Created a Unix socket server with `createServer(callback)`
-2. Replaced the previous connection when a new one arrived
-3. Eagerly wrapped sockets in a message stream pipe
-4. Let multiple consumers create independent hardware client instances
-
-**Result**: frankenfirmware connected, stayed for 1-2 seconds, then disconnected. Every time.
-
-### What We Tried (and Failed)
-
-| Attempt | Result |
-|---------|--------|
-| No handshake/HELLO on connect | Still disconnects after 1s |
-| Stability check (wait 500ms before using) | Passes check, then drops |
-| Retry loop with server recreation | Connects on retry, still drops |
-| `globalThis` singleton to prevent duplicate servers | Same behavior |
-| Socket chown to `dac:dac` | Slightly longer (5s), still drops |
-| Run service as `dac` user | Service startup issues |
-| Remove all data listeners | Same 1s disconnect |
-
-### What Actually Worked
-
-A queue-and-wait socket server with a single shared transport. Connection is stable, polls every 2 seconds indefinitely.
-
-### The Key Differences
-
-```mermaid
-flowchart TD
-    subgraph broken["Custom Socket Server (BROKEN)"]
-        b1["createServer(callback)"]
-        b2["Replace old socket on new connection"]
-        b3["Eager pipe through binary-split"]
-        b4["Multiple HardwareClient instances"]
-        b5["Consumers connect as clients to dac.sock"]
-        b1 --> b2 --> b3 --> b4 --> b5
-    end
-
-    subgraph working["DacTransport (WORKING)"]
-        w1["createServer() + server.on('connection')"]
-        w2["Queue connections, let consumer pull"]
-        w3["Pipe only when transport wraps socket"]
-        w4["ONE transport instance via sendCommand()"]
-        w5["All commands go through single queue"]
-        w1 --> w2 --> w3 --> w4 --> w5
-    end
+```
+SocketListener (listens on dac.sock)
+  └── DacTransport (wraps connected socket)
+       └── SequentialQueue (one command at a time)
+            └── MessageStream (binary-split on double-newline)
 ```
 
-#### 1. Connection handling: queue vs replace
+All consumers share a single `DacTransport` instance via `getSharedHardwareClient()`:
 
-**Broken**: New connections destroy the previous socket. If anything (health check, scheduled job, gesture handler) connected as a client to `dac.sock`, it killed frankenfirmware's real connection.
-
-**Working**: Connections are queued. The consumer explicitly calls `waitForConnection()` to pull the next one. Stale queued connections are cleaned up, but the active connection is never touched.
-
-#### 2. Consumer model: many clients vs one channel
-
-**Broken**: 7+ call sites created independent hardware client instances with `new HardwareClient({ socketPath })`. Without a shared transport reference, these connected as **outbound clients** to `dac.sock`. The server saw each as a new incoming connection and destroyed frankenfirmware's socket.
-
-**Working**: ONE `DacTransport` instance wraps the socket. ALL commands go through `sendCommand()` which uses a `SequentialQueue`. No consumer ever touches the socket directly.
-
-#### 3. Socket wrapping timing
-
-**Broken**: Socket was immediately piped through `binary-split` on accept. This set up Node.js flow control (backpressure) on the socket before any consumer was ready to read.
-
-**Working**: Socket is wrapped in `DacTransport.fromSocket()` which sets up the message stream, but only AFTER the connection is pulled by `waitForConnection()`. The consumer is ready to read when the pipe is created.
-
-#### 4. Sequential command execution
-
-Both implementations use a sequential queue, but the working version ensures **exactly one in-flight command** with a 10ms delay between write and read:
-
-```typescript
-async sendMessage(message: string) {
-  return this.queue.exec(async () => {
-    await this.write(Buffer.concat([Buffer.from(message), SEPARATOR]))
-    await wait(10)  // hardware processing delay
-    return (await this.messageStream.readMessage()).toString()
-  })
-}
+```
+getSharedHardwareClient()  ← singleton
+  └── DacHardwareClient    ← typed interface (setTemperature, getDeviceStatus, etc.)
+       └── sendCommand()   ← raw protocol
+            ├── DacMonitor (polling every 2s)
+            ├── Device Router (ad-hoc API calls)
+            ├── Job Manager (scheduled operations)
+            ├── Health Router (connectivity checks)
+            └── Gesture Handler (tap actions)
 ```
 
-### Rules for Pod Hardware Communication
+### How it works
 
-1. **ONE socket server, ONE consumer.** Never create multiple hardware client instances. Use a shared singleton.
-2. **Queue connections, don't replace.** Let the consumer pull connections when ready.
-3. **Don't eagerly pipe.** Only set up the message stream when you're ready to send commands.
-4. **Never connect as a client to your own socket.** Any outbound `socket.connect(dacSockPath)` will be seen as a new frankenfirmware connection and kill the real one.
-5. **Sequential commands only.** One command, one response. Wait 10ms between write and read.
-6. **Restart frankenfirmware after creating dac.sock.** It only connects on startup.
+1. **`SocketListener`** creates a Unix socket server at `dac.sock` and queues incoming connections
+2. **`connectDac()`** pulls a connection from the queue (blocks if none available)
+3. **`DacTransport.fromSocket()`** wraps the socket with a `MessageStream` and `SequentialQueue`
+4. **`sendCommand()`** writes a command, waits 10ms, reads the response — all serialized through the queue
+5. If the connection times out (25s), the server is destroyed and recreated
+6. If frankenfirmware disconnects, a new connection is accepted on the next call
+
+### Why this design
+
+- **Queue, don't replace.** Incoming connections are queued. The consumer pulls when ready. Replacing on connect kills the active connection.
+- **One transport for all consumers.** Multiple independent connections to `dac.sock` cause each to be treated as a new frankenfirmware, destroying the real one.
+- **Pipe only when ready.** The message stream is set up after the consumer takes the connection, not eagerly on accept.
+- **Sequential commands.** One command, one response. The 10ms delay between write and read lets the hardware buffer its response.
+- **Restart frankenfirmware after deploy.** It only discovers `dac.sock` on startup. The install script kills it so it respawns and connects.
 
 ## Wire Protocol
 
