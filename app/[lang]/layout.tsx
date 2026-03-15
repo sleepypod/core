@@ -5,6 +5,13 @@ import { allMessages, getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { LinguiClientProvider } from '@/src/providers/LinguiClientProvider'
 import { TRPCProvider } from '@/src/providers/TRPCProvider'
 import { setI18n } from '@lingui/react/server'
+import linguiConfig from 'lingui.config'
+
+export const dynamicParams = false
+
+export function generateStaticParams() {
+  return linguiConfig.locales.map((lang: string) => ({ lang }))
+}
 
 export default async function LangLayout({
   children,
