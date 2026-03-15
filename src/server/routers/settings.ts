@@ -40,7 +40,11 @@ export const settingsRouter = router({
   /**
    * Get all settings
    */
-  getAll: publicProcedure.query(async () => {
+  getAll: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/settings', protect: false, tags: ['Settings'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
     try {
       const [device] = await db.select().from(deviceSettings).limit(1)
       const sides = await db.select().from(sideSettings)
@@ -71,6 +75,7 @@ export const settingsRouter = router({
    * Update device settings
    */
   updateDevice: publicProcedure
+    .meta({ openapi: { method: 'PATCH', path: '/settings/device', protect: false, tags: ['Settings'] } })
     .input(
       z
         .object({
@@ -83,6 +88,7 @@ export const settingsRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .mutation(async ({ input }) => {
       try {
         const updated = await db.transaction(async (tx) => {
@@ -157,6 +163,7 @@ export const settingsRouter = router({
    * Update side settings
    */
   updateSide: publicProcedure
+    .meta({ openapi: { method: 'PATCH', path: '/settings/side', protect: false, tags: ['Settings'] } })
     .input(
       z
         .object({
@@ -166,6 +173,7 @@ export const settingsRouter = router({
         })
         .strict()
     )
+    .output(z.any())
     .mutation(async ({ input }) => {
       try {
         const { side, ...updates } = input
@@ -298,6 +306,7 @@ export const settingsRouter = router({
    * Delete tap gesture
    */
   deleteGesture: publicProcedure
+    .meta({ openapi: { method: 'DELETE', path: '/settings/gesture', protect: false, tags: ['Settings'] } })
     .input(
       z
         .object({
@@ -306,6 +315,7 @@ export const settingsRouter = router({
         })
         .strict()
     )
+    .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
         const [deleted] = await db

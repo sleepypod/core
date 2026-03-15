@@ -44,7 +44,11 @@ export const deviceRouter = router({
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware connection fails
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware doesn't respond within timeout
    */
-  getStatus: publicProcedure.query(async () => {
+  getStatus: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/device/status', protect: false, tags: ['Device'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
     return withHardwareClient(async (client) => {
       const status = await client.getDeviceStatus()
 
@@ -129,6 +133,7 @@ export const deviceRouter = router({
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware connection fails or rejects command
    */
   setTemperature: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/temperature', protect: false, tags: ['Device'] } })
     .input(
       z
         .object({
@@ -138,6 +143,7 @@ export const deviceRouter = router({
         })
         .strict()
     )
+    .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       return withHardwareClient(async (client) => {
         await client.setTemperature(input.side, input.temperature, input.duration)
@@ -185,6 +191,7 @@ export const deviceRouter = router({
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware connection fails
    */
   setPower: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/power', protect: false, tags: ['Device'] } })
     .input(
       z
         .object({
@@ -194,6 +201,7 @@ export const deviceRouter = router({
         })
         .strict()
     )
+    .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       return withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
@@ -249,6 +257,7 @@ export const deviceRouter = router({
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware rejects config or connection fails
    */
   setAlarm: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/alarm', protect: false, tags: ['Device'] } })
     .input(
       z
         .object({
@@ -259,6 +268,7 @@ export const deviceRouter = router({
         })
         .strict()
     )
+    .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       return withHardwareClient(async (client) => {
         await client.setAlarm(input.side, {
@@ -297,6 +307,7 @@ export const deviceRouter = router({
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware connection fails
    */
   clearAlarm: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/alarm/clear', protect: false, tags: ['Device'] } })
     .input(
       z
         .object({
@@ -304,6 +315,7 @@ export const deviceRouter = router({
         })
         .strict()
     )
+    .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       return withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
@@ -358,7 +370,11 @@ export const deviceRouter = router({
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware rejects command (e.g., already priming)
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware connection fails
    */
-  startPriming: publicProcedure.mutation(async () => {
+  startPriming: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/prime', protect: false, tags: ['Device'] } })
+    .input(z.object({}))
+    .output(z.object({ success: z.boolean() }))
+    .mutation(async () => {
     return withHardwareClient(async (client) => {
       await client.startPriming()
       return { success: true }

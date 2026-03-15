@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { getJobManager } from '@/src/scheduler'
@@ -29,7 +30,11 @@ export const healthRouter = router({
    * `healthy` is false only when the scheduler is enabled but has zero jobs
    * (indicates the scheduler failed to load schedules from the DB).
    */
-  scheduler: publicProcedure.query(async () => {
+  scheduler: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/scheduler', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
     try {
       const jobManager = await getJobManager()
       const scheduler = jobManager.getScheduler()
@@ -106,7 +111,11 @@ export const healthRouter = router({
   /**
    * Overall system health check with database connectivity and scheduler drift detection
    */
-  system: publicProcedure.query(async () => {
+  system: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/system', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
     let overallStatus: 'ok' | 'degraded' = 'ok'
 
     // Database connectivity check with latency measurement
@@ -204,7 +213,11 @@ export const healthRouter = router({
   /**
    * DacMonitor status - polling loop health and gesture support
    */
-  dacMonitor: publicProcedure.query(() => {
+  dacMonitor: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/dac-monitor', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(() => {
     const monitor = getDacMonitorIfRunning()
     if (!monitor) {
       return { status: 'not_initialized' as const, podVersion: null, gesturesSupported: false }
@@ -220,7 +233,11 @@ export const healthRouter = router({
   /**
    * Hardware health check - pings dac.sock to verify hardware daemon connectivity
    */
-  hardware: publicProcedure.query(async () => {
+  hardware: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/hardware', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
     let status: 'ok' | 'degraded' = 'ok'
     let latencyMs = 0
     let error: string | undefined

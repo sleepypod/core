@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { deviceRouter } from './device'
 import { settingsRouter } from './settings'
@@ -7,7 +8,11 @@ import { healthRouter } from './health'
 import { systemRouter } from './system'
 
 export const appRouter = router({
-  healthcheck: publicProcedure.query(() => 'yay!'),
+  healthcheck: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/healthcheck', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.string())
+    .query(() => 'yay!'),
 
   device: deviceRouter,
   settings: settingsRouter,
