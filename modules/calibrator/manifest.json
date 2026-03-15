@@ -1,0 +1,14 @@
+{
+  "name": "calibrator",
+  "version": "1.0.0",
+  "description": "Sensor calibration: baselines, noise floors, and temp offsets",
+  "provides": [
+    "calibration_profiles.parameters",
+    "calibration_runs.*",
+    "vitals_quality.*"
+  ],
+  "writes": ["calibration_profiles", "calibration_runs"],
+  "service": "sleepypod-calibrator.service",
+  "language": "python",
+  "minVersion": "1.0.0"
+}

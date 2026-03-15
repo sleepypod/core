@@ -76,3 +76,55 @@ export const freezerTemp = sqliteTable('freezer_temp', {
 }, t => [
   uniqueIndex('idx_freezer_temp_timestamp').on(t.timestamp),
 ])
+
+// ── Calibration tables ──
+
+export const calibrationProfiles = sqliteTable('calibration_profiles', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  sensorType: text('sensor_type', { enum: ['piezo', 'capacitance', 'temperature'] }).notNull(),
+  status: text('status', { enum: ['pending', 'running', 'completed', 'failed'] }).notNull().default('pending'),
+  parameters: text('parameters', { mode: 'json' }).notNull(), // sensor-specific JSON
+  qualityScore: real('quality_score'), // 0.0–1.0
+  sourceWindowStart: integer('source_window_start'), // unix ts
+  sourceWindowEnd: integer('source_window_end'), // unix ts
+  samplesUsed: integer('samples_used'),
+  errorMessage: text('error_message'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }),
+}, t => [
+  index('idx_cal_type_status').on(t.sensorType, t.status),
+  uniqueIndex('uq_cal_side_type_active').on(t.side, t.sensorType),
+])
+
+export const calibrationRuns = sqliteTable('calibration_runs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  sensorType: text('sensor_type', { enum: ['piezo', 'capacitance', 'temperature'] }).notNull(),
+  status: text('status', { enum: ['completed', 'failed'] }).notNull(),
+  parameters: text('parameters', { mode: 'json' }),
+  qualityScore: real('quality_score'),
+  sourceWindowStart: integer('source_window_start'),
+  sourceWindowEnd: integer('source_window_end'),
+  samplesUsed: integer('samples_used'),
+  errorMessage: text('error_message'),
+  durationMs: integer('duration_ms'),
+  triggeredBy: text('triggered_by', { enum: ['daily', 'manual', 'startup'] }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+}, t => [
+  index('idx_cal_runs_side_type').on(t.side, t.sensorType, t.createdAt),
+])
+
+export const vitalsQuality = sqliteTable('vitals_quality', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  vitalsId: integer('vitals_id').notNull(), // FK to vitals.id
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  qualityScore: real('quality_score').notNull(), // 0.0–1.0
+  flags: text('flags', { mode: 'json' }), // ['low_signal', 'hr_out_of_bounds', ...]
+  hrRaw: real('hr_raw'), // pre-validation HR
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+}, t => [
+  index('idx_vq_vitals_id').on(t.vitalsId),
+  index('idx_vq_side_ts').on(t.side, t.timestamp),
+])

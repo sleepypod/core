@@ -18,7 +18,7 @@ export function getOpenApiDocument(baseUrl: string) {
     description:
       'REST-style API for the Sleepypod Pod controller. '
       + 'All endpoints are also available via tRPC at /api/trpc.',
-    tags: ['Health', 'Device', 'Settings', 'Schedules', 'Biometrics', 'System', 'Environment', 'Raw'],
+    tags: ['Health', 'Device', 'Settings', 'Schedules', 'Biometrics', 'System', 'Environment', 'Raw', 'Calibration'],
     securitySchemes: {},
   })
 }

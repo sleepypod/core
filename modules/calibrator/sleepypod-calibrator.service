@@ -1,0 +1,35 @@
+[Unit]
+Description=SleepyPod Calibrator (Sensor Baselines and Thresholds)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/calibrator
+After=network.target sleepypod.service
+Wants=sleepypod.service
+
+[Service]
+Type=simple
+User=dac
+WorkingDirectory=/opt/sleepypod/modules/calibrator
+ExecStart=/opt/sleepypod/modules/calibrator/venv/bin/python main.py
+Restart=always
+RestartSec=30
+
+# Environment — override via /etc/sleepypod/modules/calibrator.env
+EnvironmentFile=-/etc/sleepypod/modules/calibrator.env
+Environment="RAW_DATA_DIR=/persistent"
+Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
+Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
+Environment="CALIBRATION_HOUR=6"
+
+# Resource limits (calibration is bursty but short-lived)
+MemoryMax=64M
+CPUQuota=25%
+
+# Sandboxing
+NoNewPrivileges=true
+# ReadWritePaths overrides ReadOnlyPaths for the sub-path (systemd precedence rules)
+ReadOnlyPaths=/persistent
+ReadWritePaths=/persistent/sleepypod-data
+ProtectSystem=strict
+ProtectKernelTunables=true
+
+[Install]
+WantedBy=multi-user.target
