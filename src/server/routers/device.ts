@@ -111,7 +111,7 @@ export const deviceRouter = router({
    *
    * Duration Parameter:
    * - If provided: Hardware maintains temperature for N seconds, then returns to neutral (82.5°F)
-   * - If omitted: Temperature persists indefinitely until changed or powered off
+   * - If omitted: Defaults to 28800 seconds (8 hours)
    * - Hardware handles timing automatically (no background jobs needed)
    *
    * Database State:

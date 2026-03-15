@@ -97,6 +97,7 @@ export const MIN_TEMP = 55 // °F
 export const MAX_TEMP = 110 // °F
 export const MIN_LEVEL = -100
 export const MAX_LEVEL = 100
+export const DEFAULT_HEATING_DURATION = 28800 // 8 hours in seconds
 
 /**
  * Convert temperature level (-100 to 100) to Fahrenheit

@@ -20,8 +20,11 @@ export function parseDeviceStatus(response: string): DeviceStatus {
     // Validate schema
     const validated = rawDeviceDataSchema.parse(raw)
 
+    // Strip surrounding quotes from hardware value (e.g. "\"ABC\"" → "ABC")
+    const sensorLabel = validated.sensorLabel.replace(/^"|"$/g, '')
+
     // Extract pod version from sensor label
-    const podVersion = extractPodVersion(validated.sensorLabel)
+    const podVersion = extractPodVersion(sensorLabel)
 
     // Parse gesture data if available
     const gestures = parseGestures(validated)
@@ -45,7 +48,7 @@ export function parseDeviceStatus(response: string): DeviceStatus {
       waterLevel: validated.waterLevel === 'true' ? 'ok' : 'low',
       isPriming: validated.priming === 'true',
       podVersion,
-      sensorLabel: validated.sensorLabel,
+      sensorLabel,
       gestures,
     }
   }

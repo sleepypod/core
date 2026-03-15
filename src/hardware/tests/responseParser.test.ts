@@ -110,6 +110,24 @@ priming = false
     expect(status.sensorLabel).toBe('FOO=BAR=BAZ')
   })
 
+  test('strips surrounding quotes from sensorLabel', () => {
+    const withQuotes = `tgHeatLevelR = 0
+tgHeatLevelL = 0
+heatTimeL = 0
+heatLevelL = 0
+heatTimeR = 0
+heatLevelR = 0
+sensorLabel = "20600-0003-J55-B0708DE3"
+waterLevel = true
+priming = false
+
+`
+
+    const status = parseDeviceStatus(withQuotes)
+    expect(status.sensorLabel).toBe('20600-0003-J55-B0708DE3')
+    expect(status.podVersion).toBe(PodVersion.POD_3)
+  })
+
   test('handles invalid gesture JSON', () => {
     const invalidGesture = `tgHeatLevelR = 0
 tgHeatLevelL = 0
