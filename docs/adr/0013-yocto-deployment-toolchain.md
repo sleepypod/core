@@ -25,7 +25,9 @@ The deploy script creates a tar archive locally (excluding `node_modules`, `.nex
 ### 4. git is optional in local deploy mode
 When deploying via the `deploy` script (which syncs code from a Mac), git is not required on the Pod. The `--local` flag to the install script skips all git operations. Git is only required for `sp-update` (pull-from-GitHub updates), which may not be the primary update path.
 
-**Why:** Git is not installed on the Pod's Yocto image. The primary deployment flow is Mac -> Pod via LAN (deploy script), not Pod -> GitHub (git pull). We may later support updates via the iOS app proxying through the deploy script.
+**Why:** Git is not installed on the Pod's Yocto image. The primary deployment flow is Mac -> Pod via LAN (deploy script), not Pod -> GitHub (git pull).
+
+**Future consideration:** We may later support updates via the iOS app proxying through the deploy script.
 
 ### 5. pnpm via npm global install
 After Node is installed, `pnpm` is installed via `npm install -g pnpm`. This is a single command and works on any platform with npm.
@@ -35,4 +37,4 @@ After Node is installed, `pnpm` is installed via `npm install -g pnpm`. This is 
 - No package manager (apt, opkg, etc.) is required
 - No C/C++ compiler is required on the Pod
 - WAN access is still needed during install for downloading Node binary, npm packages, and prebuilt native modules — the existing iptables unblock/reblock mechanism handles this
-- `sp-update` (git-based self-update on the Pod) requires git, which is not available — updates should go through the deploy script from a Mac or the iOS app's remote management API
+- `sp-update` (curl+tarball self-update on the Pod) does not require git — it downloads from GitHub's tarball API or CI release assets. Updates can also go through the deploy script from a Mac or the iOS app's remote management API
