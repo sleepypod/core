@@ -38,8 +38,11 @@ export const proxy = (request: NextRequest) => {
   return NextResponse.redirect(request.nextUrl)
 }
 
+// Routes excluded from locale redirect:
+//   api    — tRPC + REST endpoints, no locale needed
+//   panel  — tRPC panel dev tool, served as a plain route handler
 export const config = {
   matcher: [
-    '/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!api|panel(?:/|$)|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
