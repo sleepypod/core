@@ -31,79 +31,138 @@ flowchart LR
 
 ## Connection Lifecycle
 
-This is the critical initialization sequence. Getting this wrong causes the connection to fail or compete.
-
 ```mermaid
 sequenceDiagram
     participant I as instrumentation.ts
-    participant S as DacSocketServer
+    participant FS as FrankenServer
     participant F as frankenfirmware
     participant M as DacMonitor
     participant API as Device Router
 
     Note over I: App starts (next start)
 
-    I->>S: startDacServer()
-    S->>S: listen('/persistent/deviceinfo/dac.sock')
-    Note over S: ONE server, ONE listener<br/>stored in globalThis
+    I->>FS: connectFranken(path)
+    FS->>FS: UnixSocketServer.start(path)<br/>createServer() + listen()
+    FS->>FS: waitForFranken()<br/>blocks until connection
 
-    I->>M: initializeDacMonitor()
-    M->>M: getSharedHardwareClient()
-    Note over M: Client wired to the<br/>shared DacSocketServer
+    Note over F: frankenfirmware starts<br/>(or is restarted by install script)
+    F->>FS: connect()
+    FS-->>FS: Franken.fromSocket(socket)<br/>wraps in MessageStream
 
-    M->>S: getConnection()
-    Note over M: Blocks, waiting for<br/>frankenfirmware...
+    Note over FS: Connection established.<br/>Ready for commands.
 
-    Note over F: frankenfirmware starts<br/>(or is restarted)
-    F->>S: connect()
-    S-->>M: socket
-    Note over M: Connection established!<br/>Start polling loop
+    I->>M: getDacMonitor()
+    M->>M: getSharedHardwareClient()<br/>→ FrankenHardwareClient
 
     loop Every 2 seconds
-        M->>F: DEVICE_STATUS (14)
-        F-->>M: key=value response
+        M->>FS: sendCommand('14', 'empty')
+        FS->>F: "14\nempty\n\n"
+        F-->>FS: "tgHeatLevelR=...\n..."
+        FS-->>M: parsed response
         M->>M: emit 'status:updated'
     end
 
-    Note over API: User requests device status
-    API->>M: getSharedHardwareClient()
-    API->>F: command
-    F-->>API: response
-
-    Note over F: frankenfirmware disconnects
-    F->>S: close
-    Note over S: socket = null
-
-    Note over F: frankenfirmware reconnects
-    F->>S: connect()
-    Note over S: New connection replaces old<br/>(ninesleep pattern)
+    API->>FS: sendCommand('11', '-24')
+    FS->>F: "11\n-24\n\n"
+    F-->>FS: response
+    FS-->>API: result
 ```
 
-## Key Design Decisions
+## Critical: Why the FrankenServer Pattern Matters
 
-### ONE socket server, shared by all consumers
+If you're building software that communicates with the Eight Sleep Pod hardware, **you must follow the FrankenServer pattern exactly**. This section documents what we learned through extensive debugging.
 
+### The Problem
+
+Our initial implementation used a custom `DacSocketServer` that:
+1. Created a Unix socket server with `createServer(callback)`
+2. Replaced the previous connection when a new one arrived
+3. Eagerly wrapped sockets in `SocketClient` → `MessageStream` → `binary-split` pipe
+4. Let multiple consumers create independent `HardwareClient` instances
+
+**Result**: frankenfirmware connected, stayed for 1-2 seconds, then disconnected. Every time.
+
+### What We Tried (and Failed)
+
+| Attempt | Result |
+|---------|--------|
+| No handshake/HELLO on connect | Still disconnects after 1s |
+| Stability check (wait 500ms before using) | Passes check, then drops |
+| Retry loop with server recreation | Connects on retry, still drops |
+| `globalThis` singleton to prevent duplicate servers | Same behavior |
+| Socket chown to `dac:dac` | Slightly longer (5s), still drops |
+| Run service as `dac` user | Service startup issues |
+| Remove all data listeners | Same 1s disconnect |
+| Disable Turbopack | Build issues, not the cause |
+
+### What Actually Worked
+
+Literally porting free-sleep's `FrankenServer` code — the exact same `UnixSocketServer`, `MessageStream`, `Franken`, and `SequentialQueue` classes. Connection is stable, polls every 2 seconds indefinitely.
+
+### The Key Differences
+
+```mermaid
+flowchart TD
+    subgraph broken["Our Custom DacSocketServer (BROKEN)"]
+        b1["createServer(callback)"]
+        b2["Replace old socket on new connection"]
+        b3["Eager pipe through binary-split"]
+        b4["Multiple HardwareClient instances"]
+        b5["Consumers connect as clients to dac.sock"]
+        b1 --> b2 --> b3 --> b4 --> b5
+    end
+
+    subgraph working["Free-sleep FrankenServer (WORKING)"]
+        w1["createServer() + server.on('connection')"]
+        w2["Queue connections, let consumer pull"]
+        w3["Pipe only when Franken wraps socket"]
+        w4["ONE Franken instance via sendCommand()"]
+        w5["All commands go through single queue"]
+        w1 --> w2 --> w3 --> w4 --> w5
+    end
 ```
-DacSocketServer (globalThis singleton)
-    └── HardwareClient (shared)
-        ├── DacMonitor (polling every 2s)
-        ├── Device Router (ad-hoc API calls)
-        └── Health Router (connectivity checks)
+
+#### 1. Connection handling: queue vs replace
+
+**Broken**: New connections destroy the previous socket. If anything (health check, scheduled job, gesture handler) connected as a client to `dac.sock`, it killed frankenfirmware's real connection.
+
+**Working**: Connections are queued. The consumer explicitly calls `waitForConnection()` to pull the next one. Stale queued connections are cleaned up, but the active connection is never touched.
+
+#### 2. Consumer model: many clients vs one channel
+
+**Broken**: 7+ call sites created independent `HardwareClient` instances with `new HardwareClient({ socketPath })`. Without a `dacServer` reference, these connected as **outbound clients** to `dac.sock`. The server saw each as a new incoming connection and destroyed frankenfirmware's socket.
+
+**Working**: ONE `Franken` instance wraps the socket. ALL commands go through `sendCommand()` → `Franken.callFunction()` → `SequentialQueue`. No consumer ever touches the socket directly.
+
+#### 3. Socket wrapping timing
+
+**Broken**: Socket was immediately piped through `binary-split` on accept. This set up Node.js flow control (backpressure) on the socket before any consumer was ready to read.
+
+**Working**: Socket is wrapped in `Franken.fromSocket()` which sets up `MessageStream` (with `binary-split`), but only AFTER the connection is pulled by `waitForFranken()`. The consumer is ready to read when the pipe is created.
+
+#### 4. Sequential command execution
+
+Both implementations use a sequential queue, but the working version ensures **exactly one in-flight command** with a 10ms delay between write and read:
+
+```typescript
+// The critical pattern from free-sleep
+async sendMessage(message: string): Promise<string> {
+  return this.queue.add(async () => {
+    await this.write(Buffer.concat([Buffer.from(message), SEPARATOR]))
+    await wait(10)  // hardware processing delay
+    return (await this.messages.read()).toString('utf-8')
+  })
+}
 ```
 
-All consumers share ONE `DacSocketServer` listening on `dac.sock`. There must never be multiple servers — frankenfirmware connects to whoever is listening, and competing listeners cause connection drops.
+### Rules for Pod Hardware Communication
 
-### No handshake, no verification
-
-Based on ninesleep's implementation: frankenfirmware connects and the socket is immediately ready for commands. No HELLO, no verification step. Just accept the connection and start sending commands when needed.
-
-### Replace-on-reconnect
-
-When frankenfirmware reconnects (after a restart or transient disconnect), the new connection replaces the old one. This is not an error — it's normal operation. The DacSocketServer handles this automatically.
-
-### frankenfirmware must be restarted after deploy
-
-frankenfirmware connects to `dac.sock` on startup. If sleepypod-core creates `dac.sock` after frankenfirmware has already started, frankenfirmware won't discover it. The install script kills frankenfirmware so it respawns and finds our socket.
+1. **ONE socket server, ONE consumer.** Never create multiple `HardwareClient` instances. Use a shared singleton.
+2. **Queue connections, don't replace.** Let the consumer pull connections when ready.
+3. **Don't eagerly pipe.** Only set up `MessageStream` when you're ready to send commands.
+4. **Never connect as a client to your own socket.** Any outbound `socket.connect(dacSockPath)` will be seen as a new frankenfirmware connection and kill the real one.
+5. **Sequential commands only.** One command → one response. Wait 10ms between write and read.
+6. **Restart frankenfirmware after creating dac.sock.** It only connects on startup.
 
 ## Wire Protocol
 
@@ -114,13 +173,16 @@ Request:  {command_number}\n{argument}\n\n
 Response: {data}\n\n
 ```
 
-The double newline (`\n\n`) terminates each message.
+The double newline (`\n\n`) terminates each message. When no argument is needed, send `empty`:
+```
+14\nempty\n\n    (DEVICE_STATUS query)
+```
 
 ### Commands
 
 | Code | Command | Argument | Description |
 |------|---------|----------|-------------|
-| `0` | HELLO | — | Ping/connectivity check |
+| `0` | HELLO | empty | Ping/connectivity check |
 | `1` | SET_TEMP | temp value | Set temperature (legacy) |
 | `5` | ALARM_LEFT | hex CBOR | Configure left alarm |
 | `6` | ALARM_RIGHT | hex CBOR | Configure right alarm |
@@ -129,8 +191,8 @@ The double newline (`\n\n`) terminates each message.
 | `10` | RIGHT_TEMP_DURATION | seconds | Auto-off duration (right) |
 | `11` | TEMP_LEVEL_LEFT | -100 to 100 | Set left temperature level |
 | `12` | TEMP_LEVEL_RIGHT | -100 to 100 | Set right temperature level |
-| `13` | PRIME | — | Start water priming |
-| `14` | DEVICE_STATUS | — | Get all device status |
+| `13` | PRIME | empty | Start water priming |
+| `14` | DEVICE_STATUS | empty | Get all device status |
 | `16` | ALARM_CLEAR | 0 or 1 | Clear alarm (0=left, 1=right) |
 
 ### Temperature Scale
@@ -163,12 +225,12 @@ quadTap={"l":0,"r":0}
 
 ### Timing
 
-- **50ms** read timeout after writing a command (per ninesleep)
-- **10ms** hardware processing delay (per free-sleep)
+- **10ms** delay between writing command and reading response
 - **2000ms** polling interval for DacMonitor
+- **25s** timeout waiting for frankenfirmware to connect (then retry)
 
 ## References
 
+- **free-sleep** — Node.js DAC replacement, FrankenServer pattern (the reference implementation)
 - **ninesleep** (bobobo1618/ninesleep) — Rust DAC replacement, same Unix socket server pattern
 - **opensleep** (liamsnow/opensleep) — Full firmware replacement, raw UART/STM32 protocol
-- **free-sleep** (free-sleep) — Node.js DAC replacement, FrankenServer pattern

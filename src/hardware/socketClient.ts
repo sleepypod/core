@@ -219,24 +219,11 @@ export class SocketClient {
 }
 
 /**
- * Wraps an already-connected socket in a SocketClient.
- *
- * Used when the socket comes from a DacSocketServer (server mode) rather
- * than from a client connection. The socket must already be connected.
- *
- * @param socket - A connected Node.js Socket (e.g., from DacSocketServer.waitForConnection())
- * @returns SocketClient ready for command execution
- */
-export function wrapSocket(socket: Socket): SocketClient {
-  return new SocketClient(socket)
-}
-
-/**
  * Establishes a Unix socket connection to the Pod hardware daemon.
  *
- * This is the CLIENT mode — used for development/testing when connecting
- * TO an existing socket. In production, use DacSocketServer + wrapSocket()
- * instead (the hardware connects to US).
+ * This is CLIENT mode — used for development/testing when connecting
+ * TO an existing socket. In production, use FrankenServer from
+ * frankenServer.ts instead (frankenfirmware connects to US).
  *
  * @param socketPath - Path to Unix socket (e.g., /run/dac.sock)
  * @param timeoutMs - Connection timeout in milliseconds (default: 25000)

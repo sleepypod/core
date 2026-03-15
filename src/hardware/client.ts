@@ -1,5 +1,4 @@
-import { connectToSocket, wrapSocket, type SocketClient } from './socketClient'
-import type { DacSocketServer } from './socketServer'
+import { connectToSocket, type SocketClient } from './socketClient'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import {
   type AlarmConfig,
@@ -15,16 +14,18 @@ import {
 /**
  * Configuration for the hardware client connection.
  *
- * @property socketPath - Path to Unix socket (used in client mode)
+ * This is the CLIENT-mode connection (for dev/testing only).
+ * In production, use FrankenHardwareClient from dacMonitor.instance.ts instead,
+ * which uses the FrankenServer pattern (socket server that frankenfirmware connects to).
+ *
+ * @property socketPath - Path to Unix socket to connect to
  * @property connectionTimeout - Max milliseconds to wait for connection (default: 30s)
  * @property autoReconnect - Whether to automatically reconnect on connection loss (default: true)
- * @property dacServer - Shared DacSocketServer instance (server mode — production)
  */
 export interface HardwareClientConfig {
   socketPath: string
   connectionTimeout?: number
   autoReconnect?: boolean
-  dacServer?: DacSocketServer
 }
 
 /**
@@ -60,7 +61,7 @@ export interface HardwareClientConfig {
  */
 export class HardwareClient {
   private client: SocketClient | null = null
-  private readonly config: Required<Omit<HardwareClientConfig, 'dacServer'>> & Pick<HardwareClientConfig, 'dacServer'>
+  private readonly config: Required<HardwareClientConfig>
 
   constructor(config: HardwareClientConfig) {
     this.config = {
@@ -71,12 +72,10 @@ export class HardwareClient {
   }
 
   /**
-   * Establishes connection to the Pod hardware controller.
+   * Connects TO an existing Unix socket as a client.
    *
-   * If a DacSocketServer is provided (production): waits for frankenfirmware
-   * to connect to the shared server. No handshake, no verification.
-   *
-   * If no server (dev/test): connects TO an existing socket as a client.
+   * This is for dev/testing only. In production, use FrankenHardwareClient
+   * from dacMonitor.instance.ts which uses the FrankenServer pattern.
    */
   async connect(): Promise<void> {
     if (this.client && !this.client.isClosed()) {
@@ -84,20 +83,10 @@ export class HardwareClient {
     }
 
     try {
-      if (this.config.dacServer) {
-        // Server mode: get connection from the shared DacSocketServer
-        const socket = await this.config.dacServer.getConnection(
-          this.config.connectionTimeout
-        )
-        this.client = wrapSocket(socket)
-      }
-      else {
-        // Client mode: connect TO existing socket
-        this.client = await connectToSocket(
-          this.config.socketPath,
-          this.config.connectionTimeout
-        )
-      }
+      this.client = await connectToSocket(
+        this.config.socketPath,
+        this.config.connectionTimeout
+      )
     }
     catch (error) {
       this.client = null
