@@ -10,7 +10,7 @@
  * 3. Single command channel: sequential execution, no interleaving
  * 4. Reconnection: server recreates on timeout, accepts new connections
  */
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Socket } from 'net'
 import { promises as fs } from 'fs'
 import { connectDac, sendCommand, disconnectDac, isDacConnected } from '../dacTransport'

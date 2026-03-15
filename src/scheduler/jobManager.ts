@@ -240,12 +240,12 @@ export class JobManager {
 
     this.scheduler.scheduleJob('daily-prime', JobType.PRIME, cron, async () => {
       const client = getSharedHardwareClient()
-        await client.connect()
+      await client.connect()
       try {
         await client.startPriming()
       }
       finally {
-        client.disconnect()
+        // shared client — don't disconnect
       }
     })
   }

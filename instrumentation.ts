@@ -21,8 +21,6 @@ import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.ins
 import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
 import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
 
-const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/run/dac.sock'
-
 let isInitialized = false
 let isShuttingDown = false
 let handlersRegistered = false

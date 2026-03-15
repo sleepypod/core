@@ -30,6 +30,7 @@ export const defaultGestureActionDeps: GestureActionDeps = {
     return row ?? null
   },
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   newHardwareClient: (_socketPath: string) =>
     getSharedHardwareClient(),
 }
