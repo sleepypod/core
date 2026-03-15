@@ -30,7 +30,7 @@ from common.calibration import (
     CalibrationStore, CalibrationWatcher,
     CapCalibrator, PiezoCalibrator, TempCalibrator,
 )
-from common.raw_follower import RawFileFollower
+from common.cbor_raw import read_raw_record
 import cbor2
 
 # ---------------------------------------------------------------------------
@@ -76,26 +76,48 @@ signal.signal(signal.SIGINT, _on_signal)
 
 
 def load_recent_records(hours: int = 6) -> dict:
-    """Load recent CBOR records from RAW files, grouped by type."""
+    """Load recent CBOR records from RAW files via bounded scan (not tailing).
+
+    Reads ALL .RAW files (sorted newest first), stopping when records are
+    older than the cutoff. Does NOT use RawFileFollower (which tails live
+    data and would hang/spin on stale files).
+    """
     cutoff = time.time() - hours * 3600
-    records = {"capSense": [], "piezo-dual": [], "bedTemp": []}
+    records: dict = {"capSense": [], "piezo-dual": [], "bedTemp": []}
 
-    follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0)
+    # Find all RAW files, newest first
+    raw_files = sorted(RAW_DATA_DIR.glob("*.RAW"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not raw_files:
+        return records
 
-    for record in follower.read_records():
+    for raw_path in raw_files:
         if _shutdown.is_set():
             break
-        ts = float(record.get("ts", 0))
-        if ts < cutoff:
-            continue
-        rtype = record.get("type", "")
-        if rtype in records:
-            records[rtype].append(record)
-
-        # Stop after processing all available data (follower would block waiting for new)
-        # We only want historical data, not to tail the file
-        if ts > time.time() - 5:
+        # Skip files older than our window (mtime is a rough filter)
+        if raw_path.stat().st_mtime < cutoff - 3600:
             break
+
+        try:
+            with open(raw_path, "rb") as f:
+                while not _shutdown.is_set():
+                    try:
+                        data_bytes = read_raw_record(f)
+                        if data_bytes is None:
+                            continue
+                        inner = cbor2.loads(data_bytes)
+                        ts = float(inner.get("ts", 0))
+                        if ts < cutoff:
+                            continue
+                        rtype = inner.get("type", "")
+                        if rtype in records:
+                            records[rtype].append(inner)
+                    except EOFError:
+                        break
+                    except (ValueError, cbor2.CBORDecodeError) as e:
+                        log.debug("Skipping corrupt record in %s: %s", raw_path.name, e)
+                        continue
+        except OSError as e:
+            log.warning("Failed to read %s: %s", raw_path.name, e)
 
     return records
 

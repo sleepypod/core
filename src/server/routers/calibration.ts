@@ -9,7 +9,8 @@ import {
 } from '@/src/db/biometrics-schema'
 import { and, eq, desc, gte, lte } from 'drizzle-orm'
 import { sideSchema } from '@/src/server/validation-schemas'
-import { writeFile } from 'node:fs/promises'
+import { rename, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 
 const TRIGGER_PATH = process.env.CALIBRATION_TRIGGER_PATH
   ?? '/persistent/sleepypod-data/.calibrate-trigger'
@@ -107,12 +108,18 @@ export const calibrationRouter = router({
     .output(z.object({ triggered: z.boolean(), message: z.string() }))
     .mutation(async ({ input }) => {
       try {
+        const ts = Date.now()
         const payload = JSON.stringify({
           side: input.side,
           sensor_type: input.sensorType,
-          ts: Math.floor(Date.now() / 1000),
+          ts: Math.floor(ts / 1000),
         })
-        await writeFile(TRIGGER_PATH, payload)
+        // Atomic write: tmp file then rename (prevents partial reads)
+        // Unique filename per trigger supports queuing
+        const target = path.join(path.dirname(TRIGGER_PATH), `.calibrate-trigger.${ts}`)
+        const tmp = `${target}.tmp`
+        await writeFile(tmp, payload)
+        await rename(tmp, target)
 
         // Mark as pending in DB for immediate status feedback
         await biometricsDb
@@ -152,12 +159,16 @@ export const calibrationRouter = router({
     .output(z.object({ triggered: z.boolean(), message: z.string() }))
     .mutation(async () => {
       try {
+        const ts = Date.now()
         const payload = JSON.stringify({
           side: 'all',
           sensor_type: 'all',
-          ts: Math.floor(Date.now() / 1000),
+          ts: Math.floor(ts / 1000),
         })
-        await writeFile(TRIGGER_PATH, payload)
+        const target = path.join(path.dirname(TRIGGER_PATH), `.calibrate-trigger.${ts}`)
+        const tmp = `${target}.tmp`
+        await writeFile(tmp, payload)
+        await rename(tmp, target)
         return {
           triggered: true,
           message: 'Full calibration queued for all sensors on both sides.',

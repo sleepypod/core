@@ -299,15 +299,22 @@ export class JobManager {
 
     this.scheduler.scheduleJob('pre-prime-calibration', JobType.CALIBRATION, cron, async () => {
       console.log('Triggering pre-prime sensor calibration...')
-      const { writeFile } = await import('node:fs/promises')
-      const triggerPath = process.env.CALIBRATION_TRIGGER_PATH
-        ?? '/persistent/sleepypod-data/.calibrate-trigger'
+      const { writeFile, rename } = await import('node:fs/promises')
+      const { dirname, join } = await import('node:path')
+      const triggerDir = dirname(
+        process.env.CALIBRATION_TRIGGER_PATH
+          ?? '/persistent/sleepypod-data/.calibrate-trigger'
+      )
+      const ts = Date.now()
+      const target = join(triggerDir, `.calibrate-trigger.${ts}`)
+      const tmp = `${target}.tmp`
       const payload = JSON.stringify({
         side: 'all',
         sensor_type: 'all',
-        ts: Math.floor(Date.now() / 1000),
+        ts: Math.floor(ts / 1000),
       })
-      await writeFile(triggerPath, payload)
+      await writeFile(tmp, payload)
+      await rename(tmp, target)
       console.log('Calibration trigger written — calibrator module will process within 10s')
     })
   }

@@ -67,7 +67,12 @@ class HRValidationResult:
 # ── CalibrationStore ──
 
 class CalibrationStore:
-    """Thread-safe read/write interface to calibration tables in biometrics.db."""
+    """Read/write interface to calibration tables in biometrics.db.
+
+    NOT thread-safe — uses a single cached SQLite connection without locking.
+    Each module should create its own CalibrationStore instance, or use from
+    a single thread only.
+    """
 
     def __init__(self, db_path: Path):
         self._db_path = db_path
@@ -292,23 +297,36 @@ class PiezoCalibrator:
 
         key = f"{side}1"  # primary piezo channel
         for rec in records:
-            samples = rec.get(key, [])
-            if not samples or not isinstance(samples, list):
+            raw = rec.get(key)
+            if raw is None:
+                continue
+            # Handle both bytes buffers (production) and lists (tests)
+            if isinstance(raw, (bytes, bytearray)):
+                import struct as _struct
+                count = len(raw) // 4
+                if count == 0:
+                    continue
+                samples = list(_struct.unpack(f'<{count}i', raw[:count * 4]))
+            elif isinstance(raw, list):
+                samples = raw
+            else:
+                continue
+            if not samples:
                 continue
             ts = float(rec.get("ts", 0))
             timestamps.append(ts)
-            p2p = max(samples) - min(samples) if samples else 0
+            p2p = max(samples) - min(samples)
             ranges.append(p2p)
 
         if len(ranges) < 60:
             raise ValueError(f"Insufficient piezo data: {len(ranges)} records (need ≥60)")
 
-        # Find quietest 5-minute window (lowest mean range)
-        window = self.MIN_WINDOW_S
+        # Find quietest window (use available data if < MIN_WINDOW_S records)
+        window = min(self.MIN_WINDOW_S, len(ranges))
         best_start = 0
         best_mean_range = float("inf")
 
-        for i in range(len(ranges) - window):
+        for i in range(len(ranges) - window + 1):
             segment = ranges[i:i + window]
             mean_range = sum(segment) / len(segment)
             if mean_range < best_mean_range:
@@ -612,26 +630,52 @@ def is_present_piezo_calibrated(
 # ── CalibrationWatcher ──
 
 class CalibrationWatcher:
-    """Watch for calibration trigger file written by tRPC.
+    """Watch for calibration trigger files written by tRPC.
 
-    The tRPC layer writes TRIGGER_PATH containing JSON:
-      {"side": "left", "sensor_type": "capacitance", "ts": 1234567890}
-    or {"side": "all", "sensor_type": "all"} for full calibration.
+    Trigger files are written atomically (write to .tmp then rename) to
+    prevent partial reads. Multiple concurrent triggers are queued as
+    separate files (TRIGGER_PATH.{ts}) and processed in order.
     """
 
     def check_trigger(self) -> Optional[dict]:
-        """Return trigger payload if file exists and is valid, else None."""
+        """Return the oldest pending trigger payload, or None."""
         try:
-            if TRIGGER_PATH.exists():
-                data = json.loads(TRIGGER_PATH.read_text())
-                return data
+            # Check for queued triggers (*.trigger files)
+            trigger_dir = TRIGGER_PATH.parent
+            triggers = sorted(trigger_dir.glob(".calibrate-trigger*"))
+            triggers = [t for t in triggers if not t.suffix == ".tmp"]
+            if not triggers:
+                return None
+            data = json.loads(triggers[0].read_text())
+            return data
         except (json.JSONDecodeError, OSError):
-            pass
-        return None
+            # Corrupt trigger file — remove it
+            try:
+                triggers[0].unlink(missing_ok=True)
+            except (OSError, UnboundLocalError):
+                pass
+            return None
 
     def clear_trigger(self) -> None:
-        """Delete the trigger file after calibration completes."""
+        """Delete the oldest trigger file after calibration completes."""
         try:
-            TRIGGER_PATH.unlink(missing_ok=True)
+            trigger_dir = TRIGGER_PATH.parent
+            triggers = sorted(trigger_dir.glob(".calibrate-trigger*"))
+            triggers = [t for t in triggers if not t.suffix == ".tmp"]
+            if triggers:
+                triggers[0].unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def write_trigger_atomic(payload: dict) -> None:
+    """Write a calibration trigger file atomically.
+
+    Uses write-to-tmp-then-rename to prevent partial reads.
+    Each trigger gets a unique filename to support queuing.
+    """
+    ts = int(time.time() * 1000)
+    target = TRIGGER_PATH.parent / f".calibrate-trigger.{ts}"
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload))
+    tmp.rename(target)
