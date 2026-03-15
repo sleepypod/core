@@ -14,6 +14,9 @@ export const appRouter = router({
   schedules: schedulesRouter,
   biometrics: biometricsRouter,
   health: healthRouter,
+  // NOTE: systemRouter uses publicProcedure — acceptable because the pod runs on an
+  // isolated LAN with WAN blocked by iptables. If internet access is ever opened,
+  // add auth middleware before exposing these endpoints. See GitHub issue.
   system: systemRouter,
 })
 

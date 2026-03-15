@@ -519,12 +519,12 @@ if [ "$SKIP_SSH" = true ]; then
 elif [ ! -t 0 ]; then
   echo "Skipping SSH setup (non-interactive)"
 else
-echo ""
-echo "========================================"
-echo "  Optional SSH Configuration"
-echo "========================================"
-echo ""
-read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH
+  echo ""
+  echo "========================================"
+  echo "  Optional SSH Configuration"
+  echo "========================================"
+  echo ""
+  read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH
 fi
 
 if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; then
