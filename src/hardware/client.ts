@@ -186,15 +186,13 @@ export class HardwareClient {
 
     await client.executeCommand(levelCommand, level.toString())
 
-    // Set duration if provided (hardware auto-returns to neutral after timeout)
-    if (duration !== undefined) {
-      const durationCommand
-        = side === 'left'
-          ? HardwareCommand.LEFT_TEMP_DURATION
-          : HardwareCommand.RIGHT_TEMP_DURATION
+    // Set duration — default to 8 hours if not specified so the pod actually heats
+    const durationCommand
+      = side === 'left'
+        ? HardwareCommand.LEFT_TEMP_DURATION
+        : HardwareCommand.RIGHT_TEMP_DURATION
 
-      await client.executeCommand(durationCommand, duration.toString())
-    }
+    await client.executeCommand(durationCommand, (duration ?? 28800).toString())
   }
 
   /**

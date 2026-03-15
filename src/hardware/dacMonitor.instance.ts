@@ -96,13 +96,12 @@ class DacHardwareClient {
 
     await sendCommand(levelCommand, level.toString())
 
-    if (duration !== undefined) {
-      const durationCommand = side === 'left'
-        ? HardwareCommand.LEFT_TEMP_DURATION
-        : HardwareCommand.RIGHT_TEMP_DURATION
+    // Always send duration — default to 8 hours if not specified so the pod actually heats
+    const durationCommand = side === 'left'
+      ? HardwareCommand.LEFT_TEMP_DURATION
+      : HardwareCommand.RIGHT_TEMP_DURATION
 
-      await sendCommand(durationCommand, duration.toString())
-    }
+    await sendCommand(durationCommand, (duration ?? 28800).toString())
   }
 
   async setAlarm(side: Side, config: AlarmConfig): Promise<void> {
