@@ -12,7 +12,7 @@ CREATE TABLE `bed_temp` (
 	`right_inner_temp` integer
 );
 --> statement-breakpoint
-CREATE INDEX `idx_bed_temp_timestamp` ON `bed_temp` (`timestamp`);--> statement-breakpoint
+CREATE UNIQUE INDEX `idx_bed_temp_timestamp` ON `bed_temp` (`timestamp`);--> statement-breakpoint
 CREATE TABLE `freezer_temp` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`timestamp` integer NOT NULL,
@@ -22,4 +22,4 @@ CREATE TABLE `freezer_temp` (
 	`right_water_temp` integer
 );
 --> statement-breakpoint
-CREATE INDEX `idx_freezer_temp_timestamp` ON `freezer_temp` (`timestamp`);
+CREATE UNIQUE INDEX `idx_freezer_temp_timestamp` ON `freezer_temp` (`timestamp`);
