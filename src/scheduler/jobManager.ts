@@ -303,7 +303,7 @@ export class JobManager {
       const { dirname, join } = await import('node:path')
       const triggerDir = dirname(
         process.env.CALIBRATION_TRIGGER_PATH
-          ?? '/persistent/sleepypod-data/.calibrate-trigger'
+        ?? '/persistent/sleepypod-data/.calibrate-trigger'
       )
       const ts = Date.now()
       const target = join(triggerDir, `.calibrate-trigger.${ts}`)
