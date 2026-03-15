@@ -26,7 +26,7 @@ function withIptablesLock<T>(fn: () => Promise<T>): Promise<T> {
 async function isWanBlocked(): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync(IPTABLES, ['-L', 'OUTPUT', '-n'])
-    return /\bDROP\s*$/m.test(stdout)
+    return /^DROP\b/m.test(stdout)
   }
   catch {
     return false
