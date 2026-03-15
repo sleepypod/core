@@ -6,6 +6,7 @@ import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { eq, and, gte, lte, desc, avg, min, max, count } from 'drizzle-orm'
 import { sideSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { isIosProcessing, getConnectedSince } from '@/src/streaming/processingState'
+import { listRawFiles } from './raw'
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -488,6 +489,36 @@ export const biometricsRouter = router({
       return {
         iosProcessingActive: isIosProcessing(),
         connectedSince: getConnectedSince(),
+      }
+    }),
+
+  /**
+   * Returns the count of RAW biometrics files and total size.
+   * RAW files are dual-channel (left + right interleaved), so left = right = total count.
+   * Designed for the iOS Status screen.
+   */
+  getFileCount: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/file-count', protect: false, tags: ['Biometrics'] } })
+    .input(z.object({}))
+    .output(z.object({
+      rawFiles: z.object({
+        left: z.number(),
+        right: z.number(),
+      }),
+      totalSizeMB: z.number(),
+    }))
+    .query(async () => {
+      try {
+        const files = await listRawFiles()
+        const totalBytes = files.reduce((sum, f) => sum + f.sizeBytes, 0)
+        const totalSizeMB = Math.round((totalBytes / (1024 * 1024)) * 100) / 100
+        return {
+          rawFiles: { left: files.length, right: files.length },
+          totalSizeMB,
+        }
+      }
+      catch {
+        return { rawFiles: { left: 0, right: 0 }, totalSizeMB: 0 }
       }
     }),
 })
