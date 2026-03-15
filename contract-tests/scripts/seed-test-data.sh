@@ -3,7 +3,8 @@
 # Timestamps are unix epoch (seconds) — matching the integer column mode in the schema.
 set -euo pipefail
 
-DB_PATH="${BIOMETRICS_DB_PATH:-biometrics.dev.db}"
+DB_PATH="${BIOMETRICS_DATABASE_URL:-${BIOMETRICS_DB_PATH:-biometrics.dev.db}}"
+DB_PATH="${DB_PATH#file:}"
 
 echo "Seeding test data into $DB_PATH ..."
 

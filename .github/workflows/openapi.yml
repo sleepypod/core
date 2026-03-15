@@ -30,7 +30,9 @@ jobs:
         run: pnpm build
 
       - name: Start server
-        run: pnpm start &
+        run: |
+          pnpm start &
+          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
 
       - name: Wait for server
         run: |
@@ -48,7 +50,8 @@ jobs:
         run: curl -sf http://localhost:3000/api/openapi.json | jq . > openapi.json
 
       - name: Stop server
-        run: kill %1 2>/dev/null || true
+        if: always()
+        run: kill "$SERVER_PID" 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

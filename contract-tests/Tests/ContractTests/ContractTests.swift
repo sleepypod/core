@@ -4,7 +4,13 @@ import Testing
 
 /// Loads a JSON fixture file from the Fixtures/ resource bundle.
 private func loadFixture(_ name: String) throws -> Data {
-    let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!
+    guard let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures") else {
+        throw NSError(
+            domain: "ContractTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Missing fixture: \(name).json in Fixtures/"]
+        )
+    }
     return try Data(contentsOf: url)
 }
 
@@ -28,6 +34,7 @@ private func loadFixture(_ name: String) throws -> Data {
     let data = try loadFixture("disk-usage")
     let result = try JSONDecoder().decode(DiskUsage.self, from: data)
     #expect(result.usedPercent >= 0)
+    #expect(result.usedPercent <= 100)
 }
 
 @Test func internetStatusDecodes() throws {
