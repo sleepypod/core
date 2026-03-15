@@ -10,11 +10,10 @@
  * 3. Single command channel: sequential execution, no interleaving
  * 4. Reconnection: server recreates on timeout, accepts new connections
  */
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { createServer, type Server, type Socket } from 'net'
+import { afterEach, describe, expect, test } from 'vitest'
+import { Socket } from 'net'
 import { promises as fs } from 'fs'
 import { connectDac, sendCommand, disconnectDac, isDacConnected } from '../dacTransport'
-import { PROTOCOL } from './fixtures'
 
 function createTestSocketPath(): string {
   return `/tmp/test-dac-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`
@@ -27,8 +26,7 @@ function createTestSocketPath(): string {
  */
 function connectAsFrankenfirmware(socketPath: string): Promise<Socket> {
   return new Promise((resolve, reject) => {
-    const { Socket: NetSocket } = require('net')
-    const socket = new NetSocket()
+    const socket = new Socket()
     const timeout = setTimeout(() => {
       socket.destroy()
       reject(new Error('Mock frankenfirmware connection timeout'))
@@ -51,10 +49,10 @@ function connectAsFrankenfirmware(socketPath: string): Promise<Socket> {
  */
 function handleCommands(socket: Socket, responses: Record<string, string> = {}) {
   const defaultResponses: Record<string, string> = {
-    '14': 'tgHeatLevelR=10\ntgHeatLevelL=20\nheatTimeL=0\nheatLevelL=18\nheatTimeR=0\nheatLevelR=8\nsensorLabel=H00-test\nwaterLevel=true\npriming=false',
-    '0': 'READY',
-    '11': 'SET: ok',
-    '12': 'SET: ok',
+    14: 'tgHeatLevelR=10\ntgHeatLevelL=20\nheatTimeL=0\nheatLevelL=18\nheatTimeR=0\nheatLevelR=8\nsensorLabel=H00-test\nwaterLevel=true\npriming=false',
+    0: 'READY',
+    11: 'SET: ok',
+    12: 'SET: ok',
   }
 
   const allResponses = { ...defaultResponses, ...responses }
@@ -87,7 +85,10 @@ describe('dacTransport', () => {
     mockFranken?.destroy()
     mockFranken = undefined
     await disconnectDac()
-    try { await fs.unlink(socketPath) } catch { /* ignore */ }
+    try {
+      await fs.unlink(socketPath)
+    }
+    catch { /* ignore */ }
   })
 
   test('creates socket server and accepts frankenfirmware connection', async () => {
@@ -147,7 +148,7 @@ describe('dacTransport', () => {
         buffer = buffer.substring(idx + 2)
         const command = message.split('\n')[0].trim()
         commandOrder.push(command)
-        mockFranken!.write(`OK-${command}\n\n`)
+        mockFranken?.write(`OK-${command}\n\n`)
       }
     })
 

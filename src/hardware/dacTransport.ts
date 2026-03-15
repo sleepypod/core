@@ -12,6 +12,7 @@
  */
 
 import { once } from 'events'
+import { chownSync, chmodSync } from 'fs'
 import { unlink } from 'fs/promises'
 import { createServer, type Server, type Socket } from 'net'
 import split from 'binary-split'
@@ -29,7 +30,7 @@ function toPromise(func: (cb: (err: unknown, result?: unknown) => void) => void)
 }
 
 function wait(milliseconds: number): Promise<void> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     setTimeout(resolve, milliseconds)
   })
 }
@@ -43,7 +44,10 @@ class SequentialQueue {
     const current = this.executing
     // eslint-disable-next-line no-async-promise-executor
     const newPromise = new Promise<void>(async (resolve) => {
-      await current
+      try {
+        await current
+      }
+      catch { /* prevent poisoning */ }
       await f()
       resolve()
     })
@@ -57,7 +61,8 @@ class SequentialQueue {
       this.execInternal(async () => {
         try {
           resolve(await f())
-        } catch (err) {
+        }
+        catch (err) {
           reject(err)
         }
       })
@@ -89,11 +94,10 @@ class MessageStream {
     })
 
     readable.pipe(this.splitter)
-    readable.on('error', (error) => this.splitter.destroy(error as Error))
+    readable.on('error', error => this.splitter.destroy(error as Error))
   }
 
   public async readMessage(): Promise<Buffer> {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (this.queue.length > 0) {
         return this.queue.shift() as Buffer
@@ -121,11 +125,11 @@ class SocketListener {
   private waiting: ((socket: Socket) => void) | undefined
 
   public constructor(private readonly server: Server) {
-    this.server.on('connection', (socket) => this.handleConnection(socket))
+    this.server.on('connection', socket => this.handleConnection(socket))
   }
 
   private handleConnection(socket: Socket) {
-    socket.on('error', (error) => console.error('[DAC] socket connection error:', error))
+    socket.on('error', error => console.error('[DAC] socket connection error:', error))
 
     if (this.waiting) {
       const resolve = this.waiting
@@ -155,21 +159,28 @@ class SocketListener {
     }
 
     console.log('[DAC] waiting for frankenfirmware...')
-    return new Promise<Socket>((resolve) => this.waiting = resolve)
+    return new Promise<Socket>(resolve => this.waiting = resolve)
   }
 
   public static async start(path: string) {
     await SocketListener.tryCleanup(path)
     const server = createServer()
-    server.on('error', (error) => console.error('[DAC] server error:', error))
 
-    await new Promise<void>((resolve) => server.listen(path, resolve))
+    await new Promise<void>((resolve, reject) => {
+      server.on('error', error => reject(error))
+      server.listen(path, () => {
+        // Replace the startup error handler with a runtime one
+        server.removeAllListeners('error')
+        server.on('error', error => console.error('[DAC] server error:', error))
+        resolve()
+      })
+    })
 
     try {
-      const { chownSync, chmodSync } = require('fs')
       chownSync(path, 1000, 1000) // dac:dac
-      chmodSync(path, 0o777)
-    } catch { /* best effort */ }
+      chmodSync(path, 0o770)
+    }
+    catch { /* best effort */ }
 
     console.log(`[DAC] listening on ${path}`)
     return new SocketListener(server)
@@ -178,8 +189,9 @@ class SocketListener {
   private static async tryCleanup(path: string) {
     try {
       await unlink(path)
-    } catch (err) {
-      if ((err as any)?.code === 'ENOENT') return
+    }
+    catch (err) {
+      if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return
       throw err
     }
   }
@@ -269,11 +281,11 @@ function withTimeout<T>(promise: Promise<T>, onTimeout: () => Error): Promise<T>
     }, CONNECTION_TIMEOUT_MS)
 
     promise
-      .then(value => {
+      .then((value) => {
         if (timeout) clearTimeout(timeout)
         resolve(value)
       })
-      .catch(error => {
+      .catch((error) => {
         if (timeout) clearTimeout(timeout)
         reject(error)
       })
@@ -316,7 +328,6 @@ export async function connectDac(socketPath: string): Promise<void> {
   }
 
   connectPromise = (async () => {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (!dacServer) {
         dacServer = await DacServer.start(socketPath)
@@ -326,7 +337,8 @@ export async function connectDac(socketPath: string): Promise<void> {
         transport = await waitWithTimeout(dacServer)
         console.log('[DAC] connected')
         return transport
-      } catch (error) {
+      }
+      catch (error) {
         if (error instanceof ConnectionTimeoutError) {
           await shutdown()
           continue
@@ -339,7 +351,8 @@ export async function connectDac(socketPath: string): Promise<void> {
 
   try {
     await connectPromise
-  } finally {
+  }
+  finally {
     connectPromise = undefined
   }
 }

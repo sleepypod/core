@@ -10,13 +10,13 @@
  * DacTransport connection and HardwareClient. No competing listeners.
  *
  * The HardwareClient returned by getSharedHardwareClient() is a thin wrapper
- * around sendCommand() from ./frankenServer — it implements the same interface
+ * around sendCommand() from ./dacTransport — it implements the same interface
  * as the old SocketClient-based HardwareClient.
  */
 
 import { connectDac, disconnectDac, sendCommand, isDacConnected } from './dacTransport'
 import { DacMonitor } from './dacMonitor'
-import { HardwareClient } from './client'
+import type { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
 import { DeviceStateSync } from './deviceStateSync'
@@ -50,8 +50,12 @@ const g = globalThis as Record<string, unknown>
 export async function startDacServer(): Promise<void> {
   if (g[KEYS.server]) return
 
-  await connectDac(DAC_SOCK_PATH)
-  g[KEYS.server] = true // sentinel — frankenServer manages its own state
+  // connectDac blocks until frankenfirmware connects. Run it non-blocking
+  // so the app can start in degraded mode if hardware isn't available yet.
+  connectDac(DAC_SOCK_PATH).catch((error) => {
+    console.warn('[DAC] connection failed (will retry on next command):', error instanceof Error ? error.message : error)
+  })
+  g[KEYS.server] = true
 }
 
 export function getDacServer(): unknown {
@@ -138,7 +142,8 @@ class DacHardwareClient {
     if (powered) {
       const temp = temperature ?? 75
       await this.setTemperature(side, temp)
-    } else {
+    }
+    else {
       const command = side === 'left'
         ? HardwareCommand.TEMP_LEVEL_LEFT
         : HardwareCommand.TEMP_LEVEL_RIGHT
@@ -226,7 +231,10 @@ export const getDacMonitorIfRunning = (): DacMonitor | null =>
 
 export const shutdownDacMonitor = async (): Promise<void> => {
   if (monitorInitPromise) {
-    try { await monitorInitPromise } catch { /* ok */ }
+    try {
+      await monitorInitPromise
+    }
+    catch { /* ok */ }
   }
 
   const monitor = g[KEYS.monitor] as DacMonitor | undefined
