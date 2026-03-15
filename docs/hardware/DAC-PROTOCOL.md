@@ -7,7 +7,7 @@ How sleepypod-core communicates with the Eight Sleep Pod hardware.
 The Pod runs three stock Eight Sleep processes:
 - **frankenfirmware** — controls the hardware (temperature, pumps, sensors, alarms)
 - **Eight.Capybara** — cloud connectivity (hub connection, OTA updates)
-- **DAC** (replaced by sleepypod-core or free-sleep) — user-facing API and control
+- **DAC** (replaced by sleepypod-core) — user-facing API and control
 
 sleepypod-core **replaces the DAC** process. frankenfirmware connects TO us.
 
