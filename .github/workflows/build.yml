@@ -43,6 +43,7 @@ jobs:
             --exclude='test-results' \
             --exclude='.serena' \
             --exclude='.claude' \
+            --exclude='sleepypod-core.tar.gz' \
             .
 
       - name: Upload artifact
