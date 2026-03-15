@@ -1,21 +1,36 @@
 /**
- * Global hardware singleton — ONE socket server, ONE client, ONE monitor.
+ * Global hardware singleton — ONE franken connection, ONE client, ONE monitor.
  *
  * Lifecycle (managed by instrumentation.ts):
- *   1. startDacServer()     — listen on dac.sock, accept frankenfirmware connections
+ *   1. startDacServer()     — connectFranken() on dac.sock
  *   2. getDacMonitor()      — create monitor + client, start polling when connected
- *   3. shutdownDacMonitor() — stop everything
+ *   3. shutdownDacMonitor() — disconnectFranken() + stop everything
  *
  * All consumers (DacMonitor, device router, health router) share the same
- * DacSocketServer and HardwareClient. No competing listeners.
+ * FrankenServer connection and HardwareClient. No competing listeners.
+ *
+ * The HardwareClient returned by getSharedHardwareClient() is a thin wrapper
+ * around sendCommand() from ./frankenServer — it implements the same interface
+ * as the old SocketClient-based HardwareClient.
  */
 
-import { DacSocketServer } from './socketServer'
+import { connectFranken, disconnectFranken, sendCommand, isFrankenConnected } from './frankenServer'
 import { DacMonitor } from './dacMonitor'
 import { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
 import { DeviceStateSync } from './deviceStateSync'
+import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
+import {
+  type AlarmConfig,
+  type DeviceStatus,
+  type Side,
+  HardwareCommand,
+  HardwareError,
+  fahrenheitToLevel,
+  MAX_TEMP,
+  MIN_TEMP,
+} from './types'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
 
@@ -30,19 +45,125 @@ const KEYS = {
 
 const g = globalThis as Record<string, unknown>
 
-// ── DacSocketServer (started once, before anything else) ──
+// ── FrankenServer connection (replaces DacSocketServer) ──
 
-export async function startDacServer(): Promise<DacSocketServer> {
-  if (g[KEYS.server]) return g[KEYS.server] as DacSocketServer
+export async function startDacServer(): Promise<void> {
+  if (g[KEYS.server]) return
 
-  const server = new DacSocketServer()
-  await server.listen(DAC_SOCK_PATH)
-  g[KEYS.server] = server
-  return server
+  await connectFranken(DAC_SOCK_PATH)
+  g[KEYS.server] = true // sentinel — frankenServer manages its own state
 }
 
-export function getDacServer(): DacSocketServer | null {
-  return (g[KEYS.server] as DacSocketServer) ?? null
+export function getDacServer(): unknown {
+  return g[KEYS.server] ?? null
+}
+
+// ── FrankenHardwareClient — same interface as HardwareClient, backed by sendCommand() ──
+
+/**
+ * Thin wrapper around sendCommand() that presents the same interface as
+ * the original HardwareClient. All consumers (DacMonitor, tRPC routers,
+ * gesture handler, job manager) use this without knowing the backend changed.
+ */
+class FrankenHardwareClient {
+  async connect(): Promise<void> {
+    // connectFranken is called in startDacServer().
+    // If not yet connected, connect now.
+    if (!isFrankenConnected()) {
+      await connectFranken(DAC_SOCK_PATH)
+    }
+  }
+
+  async getDeviceStatus(): Promise<DeviceStatus> {
+    const response = await sendCommand(HardwareCommand.DEVICE_STATUS)
+    return parseDeviceStatus(response)
+  }
+
+  async setTemperature(side: Side, temperature: number, duration?: number): Promise<void> {
+    if (temperature < MIN_TEMP || temperature > MAX_TEMP) {
+      throw new HardwareError(`Temperature must be between ${MIN_TEMP}°F and ${MAX_TEMP}°F`)
+    }
+
+    const level = fahrenheitToLevel(temperature)
+
+    const levelCommand = side === 'left'
+      ? HardwareCommand.TEMP_LEVEL_LEFT
+      : HardwareCommand.TEMP_LEVEL_RIGHT
+
+    await sendCommand(levelCommand, level.toString())
+
+    if (duration !== undefined) {
+      const durationCommand = side === 'left'
+        ? HardwareCommand.LEFT_TEMP_DURATION
+        : HardwareCommand.RIGHT_TEMP_DURATION
+
+      await sendCommand(durationCommand, duration.toString())
+    }
+  }
+
+  async setAlarm(side: Side, config: AlarmConfig): Promise<void> {
+    if (config.vibrationIntensity < 1 || config.vibrationIntensity > 100) {
+      throw new HardwareError('Vibration intensity must be between 1 and 100')
+    }
+    if (config.duration < 0 || config.duration > 180) {
+      throw new HardwareError('Alarm duration must be between 0 and 180 seconds')
+    }
+
+    const command = side === 'left' ? HardwareCommand.ALARM_LEFT : HardwareCommand.ALARM_RIGHT
+    const patternCode = config.vibrationPattern === 'double' ? '0' : '1'
+    const argument = `${config.vibrationIntensity},${patternCode},${config.duration}`
+
+    const response = await sendCommand(command, argument)
+    const parsed = parseSimpleResponse(response)
+
+    if (!parsed.success) {
+      throw new HardwareError(`Failed to set alarm: ${parsed.message}`)
+    }
+  }
+
+  async clearAlarm(side: Side): Promise<void> {
+    await sendCommand(HardwareCommand.ALARM_CLEAR, side === 'left' ? '0' : '1')
+  }
+
+  async startPriming(): Promise<void> {
+    const response = await sendCommand(HardwareCommand.PRIME)
+    const parsed = parseSimpleResponse(response)
+
+    if (!parsed.success) {
+      throw new HardwareError(`Failed to start priming: ${parsed.message}`)
+    }
+  }
+
+  async setPower(side: Side, powered: boolean, temperature?: number): Promise<void> {
+    if (powered) {
+      const temp = temperature ?? 75
+      await this.setTemperature(side, temp)
+    } else {
+      const command = side === 'left'
+        ? HardwareCommand.TEMP_LEVEL_LEFT
+        : HardwareCommand.TEMP_LEVEL_RIGHT
+
+      const response = await sendCommand(command, '0')
+      const parsed = parseSimpleResponse(response)
+
+      if (!parsed.success) {
+        throw new HardwareError(`Failed to power off: ${parsed.message}`)
+      }
+    }
+  }
+
+  isConnected(): boolean {
+    return isFrankenConnected()
+  }
+
+  disconnect(): void {
+    // No-op for shared client — disconnectFranken() is called at shutdown.
+    // Individual consumers should not tear down the shared connection.
+  }
+
+  getRawClient(): null {
+    return null
+  }
 }
 
 // ── Shared HardwareClient ──
@@ -50,13 +171,9 @@ export function getDacServer(): DacSocketServer | null {
 export function getSharedHardwareClient(): HardwareClient {
   if (g[KEYS.client]) return g[KEYS.client] as HardwareClient
 
-  const server = getDacServer()
-  const client = new HardwareClient({
-    socketPath: DAC_SOCK_PATH,
-    autoReconnect: true,
-    dacServer: server ?? undefined,
-  })
-
+  // Return a FrankenHardwareClient cast as HardwareClient.
+  // It implements the same interface (duck typing).
+  const client = new FrankenHardwareClient() as unknown as HardwareClient
   g[KEYS.client] = client
   return client
 }
@@ -114,7 +231,6 @@ export const shutdownDacMonitor = async (): Promise<void> => {
 
   const monitor = g[KEYS.monitor] as DacMonitor | undefined
   const gestureHandler = g[KEYS.gesture] as GestureActionHandler | undefined
-  const server = g[KEYS.server] as DacSocketServer | undefined
 
   g[KEYS.monitor] = null
   g[KEYS.gesture] = null
@@ -130,7 +246,7 @@ export const shutdownDacMonitor = async (): Promise<void> => {
     monitor.stop()
   }
 
-  server?.stop()
+  await disconnectFranken()
 
   console.log('[DAC] shutdown complete')
 }
