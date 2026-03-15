@@ -8,6 +8,18 @@ const execFileAsync = promisify(execFile)
 
 const IPTABLES = '/usr/sbin/iptables'
 const IPTABLES_SAVE = '/usr/sbin/iptables-save'
+const CORE_DIR = '/home/dac/sleepypod-core'
+
+/**
+ * Simple async mutex to serialize iptables mutations.
+ */
+let iptablesLock: Promise<void> = Promise.resolve()
+function withIptablesLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = iptablesLock
+  let release: (() => void) | undefined
+  iptablesLock = new Promise<void>(r => release = r)
+  return prev.then(fn).finally(() => release?.())
+}
 
 /**
  * Check if WAN is currently blocked by looking for a DROP rule in the OUTPUT chain.
@@ -15,7 +27,7 @@ const IPTABLES_SAVE = '/usr/sbin/iptables-save'
 async function isWanBlocked(): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync(IPTABLES, ['-L', 'OUTPUT', '-n'])
-    return /\bDROP\s*$/.test(stdout)
+    return /\bDROP\s*$/m.test(stdout)
   }
   catch {
     return false
@@ -23,13 +35,15 @@ async function isWanBlocked(): Promise<boolean> {
 }
 
 /**
- * Flush all iptables rules (unblock WAN).
+ * Save current iptables rules, flush to unblock WAN, return saved rules for restore.
  */
-async function unblockWan(): Promise<void> {
+async function unblockWan(): Promise<string> {
+  const { stdout: saved } = await execFileAsync(IPTABLES_SAVE)
   await execFileAsync(IPTABLES, ['-F'])
   await execFileAsync(IPTABLES, ['-X'])
   await execFileAsync(IPTABLES, ['-t', 'nat', '-F'])
   await execFileAsync(IPTABLES, ['-t', 'nat', '-X'])
+  return saved
 }
 
 /**
@@ -43,7 +57,10 @@ async function unblockWan(): Promise<void> {
  */
 async function blockWan(): Promise<void> {
   // Flush first to avoid duplicate rules
-  await unblockWan()
+  await execFileAsync(IPTABLES, ['-F'])
+  await execFileAsync(IPTABLES, ['-X'])
+  await execFileAsync(IPTABLES, ['-t', 'nat', '-F'])
+  await execFileAsync(IPTABLES, ['-t', 'nat', '-X'])
 
   const run = (args: string[]) => execFileAsync(IPTABLES, args)
 
@@ -106,23 +123,25 @@ export const systemRouter = router({
   setInternetAccess: publicProcedure
     .input(z.object({ blocked: z.boolean() }))
     .mutation(async ({ input }) => {
-      try {
-        if (input.blocked) {
-          await blockWan()
+      return withIptablesLock(async () => {
+        try {
+          if (input.blocked) {
+            await blockWan()
+          }
+          else {
+            await unblockWan()
+          }
+          const currentState = await isWanBlocked()
+          return { blocked: currentState }
         }
-        else {
-          await unblockWan()
+        catch (error) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: `Failed to update iptables: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            cause: error,
+          })
         }
-        const currentState = await isWanBlocked()
-        return { blocked: currentState }
-      }
-      catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: `Failed to update iptables: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          cause: error,
-        })
-      }
+      })
     }),
 
   /**
@@ -141,26 +160,31 @@ export const systemRouter = router({
     .mutation(async ({ input }) => {
       const branch = input?.branch
 
-      // Use sp-update for main branch (handles rollback), otherwise run install --local
-      const command = branch
-        ? '/bin/bash'
-        : '/usr/local/bin/sp-update'
-
-      const args = branch
-        ? [
-          '-c',
-          `cd /home/dac/sleepypod-core && git fetch origin && git checkout "${branch}" && git reset --hard "origin/${branch}" && bash scripts/install --local --no-ssh`,
-        ]
-        : []
-
       try {
-        // Fire-and-forget — the service will restart mid-update
         const { spawn } = await import('node:child_process')
-        const child = spawn(command, args, {
-          detached: true,
-          stdio: 'ignore',
-        })
-        child.unref()
+
+        if (branch) {
+          // Deploy a specific branch via a script that takes branch as an argument
+          const child = spawn(
+            '/bin/bash',
+            [`${CORE_DIR}/scripts/install`, '--local', '--no-ssh', '--branch', branch],
+            {
+              cwd: CORE_DIR,
+              detached: true,
+              stdio: 'ignore',
+              env: { ...process.env, INSTALL_BRANCH: branch },
+            },
+          )
+          child.unref()
+        }
+        else {
+          // Default: reset to origin/main via sp-update
+          const child = spawn('/usr/local/bin/sp-update', [], {
+            detached: true,
+            stdio: 'ignore',
+          })
+          child.unref()
+        }
 
         return {
           triggered: true,

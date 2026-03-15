@@ -59,7 +59,6 @@ echo "Syncing project to pod..."
 rsync -az --delete \
   --exclude='node_modules' \
   --exclude='.next' \
-  --exclude='.git' \
   --exclude='*.db' \
   --exclude='*.db-shm' \
   --exclude='*.db-wal' \

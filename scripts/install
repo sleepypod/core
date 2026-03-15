@@ -10,13 +10,17 @@ echo ""
 # Mode flags
 #   --local    Skip git clone/pull (code already on disk, e.g. via scp/deploy)
 #   --no-ssh   Skip interactive SSH setup prompt
+#   --branch X Checkout a specific branch before installing
 INSTALL_LOCAL=false
 SKIP_SSH=false
-for arg in "$@"; do
-  case "$arg" in
+INSTALL_BRANCH=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --local)  INSTALL_LOCAL=true ;;
     --no-ssh) SKIP_SSH=true ;;
+    --branch) shift; INSTALL_BRANCH="${1:-}" ;;
   esac
+  shift
 done
 
 # Cleanup handler — re-blocks WAN if we unblocked it
@@ -27,8 +31,8 @@ cleanup() {
 
   # Restore iptables if we temporarily unblocked
   if [ "$WAN_WAS_BLOCKED" = true ]; then
-    echo "Restoring iptables WAN block..."
-    block_wan
+    echo "Restoring iptables rules..."
+    restore_wan
   fi
 
   if [ $exit_code -ne 0 ]; then
@@ -47,13 +51,25 @@ wan_is_blocked() {
   iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
 }
 
+SAVED_IPTABLES=""
+
 unblock_wan() {
   echo "Temporarily unblocking WAN access..."
+  SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
   iptables -F
   iptables -X
   iptables -t nat -F
   iptables -t nat -X
   echo "WAN unblocked."
+}
+
+restore_wan() {
+  if [ -n "$SAVED_IPTABLES" ]; then
+    echo "Restoring saved iptables rules..."
+    echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || block_wan
+  else
+    block_wan
+  fi
 }
 
 block_wan() {
@@ -110,11 +126,8 @@ if ! flock -n 200; then
   exit 1
 fi
 
-# Check for required commands (git only needed for non-local installs)
-REQUIRED_CMDS=(curl systemctl ip)
-if [ "$INSTALL_LOCAL" = false ]; then
-  REQUIRED_CMDS+=(git)
-fi
+# Check for required commands (git always required — sp-update and system router depend on it)
+REQUIRED_CMDS=(curl systemctl ip git)
 for cmd in "${REQUIRED_CMDS[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Error: Required command '$cmd' not found." >&2
@@ -128,14 +141,8 @@ if ! command -v apt-get &>/dev/null; then
   exit 1
 fi
 
-# Handle WAN connectivity — unblock if needed for package installs
-NEEDS_WAN=false
-if ! command -v node &>/dev/null || ! command -v pnpm &>/dev/null; then
-  NEEDS_WAN=true
-fi
-if [ "$INSTALL_LOCAL" = false ]; then
-  NEEDS_WAN=true
-fi
+# Handle WAN connectivity — always needed (pnpm install, pip install, node/pnpm setup)
+NEEDS_WAN=true
 
 if [ "$NEEDS_WAN" = true ]; then
   echo "Checking network connectivity..."
@@ -231,6 +238,14 @@ if [ "$INSTALL_LOCAL" = true ]; then
     exit 1
   fi
   cd "$INSTALL_DIR"
+
+  # Checkout a specific branch if requested
+  if [ -n "$INSTALL_BRANCH" ]; then
+    echo "Checking out branch: $INSTALL_BRANCH"
+    git fetch origin
+    git checkout "$INSTALL_BRANCH"
+    git reset --hard "origin/$INSTALL_BRANCH"
+  fi
 else
   if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
@@ -453,9 +468,11 @@ fi
 # Stop service during update
 systemctl stop sleepypod.service
 
-# Try update
+# Try update — always reset to origin/main to avoid staying on a feature branch
 echo "Pulling latest changes..."
-if git pull && \
+if git fetch origin && \
+   git checkout main && \
+   git reset --hard origin/main && \
    pnpm install --frozen-lockfile --ignore-scripts && \
    (cd node_modules/better-sqlite3 && npm run build-release) && \
    pnpm db:generate && \
