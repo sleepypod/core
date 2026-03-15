@@ -6,6 +6,7 @@ import {
   type Side,
   HardwareCommand,
   HardwareError,
+  DEFAULT_HEATING_DURATION,
   fahrenheitToLevel,
   MAX_TEMP,
   MIN_TEMP,
@@ -192,7 +193,7 @@ export class HardwareClient {
         ? HardwareCommand.LEFT_TEMP_DURATION
         : HardwareCommand.RIGHT_TEMP_DURATION
 
-    await client.executeCommand(durationCommand, (duration ?? 28800).toString())
+    await client.executeCommand(durationCommand, (duration ?? DEFAULT_HEATING_DURATION).toString())
   }
 
   /**

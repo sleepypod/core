@@ -25,6 +25,7 @@ import {
   type AlarmConfig,
   type DeviceStatus,
   type Side,
+  DEFAULT_HEATING_DURATION,
   HardwareCommand,
   HardwareError,
   fahrenheitToLevel,
@@ -101,7 +102,7 @@ class DacHardwareClient {
       ? HardwareCommand.LEFT_TEMP_DURATION
       : HardwareCommand.RIGHT_TEMP_DURATION
 
-    await sendCommand(durationCommand, (duration ?? 28800).toString())
+    await sendCommand(durationCommand, (duration ?? DEFAULT_HEATING_DURATION).toString())
   }
 
   async setAlarm(side: Side, config: AlarmConfig): Promise<void> {
