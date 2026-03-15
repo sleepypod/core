@@ -243,4 +243,118 @@ export const systemRouter = router({
         })
       }
     }),
+
+  /**
+   * List available log sources (systemd service units).
+   */
+  getLogSources: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/log-sources', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      sources: z.array(z.object({
+        unit: z.string(),
+        name: z.string(),
+        active: z.boolean(),
+      })),
+    }))
+    .query(async () => {
+      const units = [
+        { unit: 'sleepypod.service', name: 'Core' },
+        { unit: 'sleepypod-piezo-processor.service', name: 'Piezo Processor' },
+        { unit: 'sleepypod-sleep-detector.service', name: 'Sleep Detector' },
+        { unit: 'sleepypod-environment-monitor.service', name: 'Environment Monitor' },
+      ]
+
+      const sources = await Promise.all(units.map(async ({ unit, name }) => {
+        try {
+          await execFileAsync('systemctl', ['is-active', '--quiet', unit])
+          return { unit, name, active: true }
+        }
+        catch {
+          return { unit, name, active: false }
+        }
+      }))
+
+      return { sources }
+    }),
+
+  /**
+   * Read log lines from a systemd service unit via journalctl.
+   *
+   * Returns newest lines first (reverse chronological).
+   * Use `cursor` for pagination — pass the returned `nextCursor`
+   * to get older entries.
+   */
+  getLogs: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/logs', protect: false, tags: ['System'] } })
+    .input(z.object({
+      unit: z.string().regex(/^sleepypod[\w.-]*\.service$/, 'Invalid unit name'),
+      lines: z.number().int().min(1).max(500).default(100),
+      cursor: z.string().optional(),
+      since: z.string().optional(), // journalctl --since format, e.g. "1 hour ago"
+      priority: z.enum(['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug']).optional(),
+    }).strict())
+    .output(z.object({
+      lines: z.array(z.string()),
+      nextCursor: z.string().nullable(),
+    }))
+    .query(async ({ input }) => {
+      try {
+        const args = [
+          '-u', input.unit,
+          '-n', String(input.lines + 1), // fetch one extra to detect if more exist
+          '--no-pager',
+          '-r', // reverse (newest first)
+          '--output', 'short-iso',
+        ]
+
+        if (input.cursor) {
+          args.push('--after-cursor', input.cursor)
+        }
+        if (input.since) {
+          args.push('--since', input.since)
+        }
+        if (input.priority) {
+          args.push('-p', input.priority)
+        }
+
+        // Show cursor for pagination
+        args.push('--show-cursor')
+
+        const { stdout } = await execFileAsync('journalctl', args, { timeout: 10000 })
+
+        const rawLines = stdout.split('\n')
+
+        // journalctl --show-cursor appends "-- cursor: s=..." as last non-empty line
+        let nextCursor: string | null = null
+        const cursorIdx = rawLines.findLastIndex(l => l.startsWith('-- cursor: '))
+        if (cursorIdx !== -1) {
+          nextCursor = rawLines[cursorIdx].replace('-- cursor: ', '').trim()
+          rawLines.splice(cursorIdx, 1)
+        }
+
+        // Filter empty lines
+        const logLines = rawLines.filter(l => l.trim())
+
+        // If we got more than requested, there are more entries
+        const hasMore = logLines.length > input.lines
+        const trimmed = hasMore ? logLines.slice(0, input.lines) : logLines
+
+        return {
+          lines: trimmed,
+          nextCursor: hasMore ? nextCursor : null,
+        }
+      }
+      catch (error) {
+        // journalctl unavailable (dev environment)
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return { lines: ['journalctl not available (dev environment)'], nextCursor: null }
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to read logs: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
 })
