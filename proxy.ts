@@ -43,6 +43,6 @@ export const proxy = (request: NextRequest) => {
 //   panel  — tRPC panel dev tool, served as a plain route handler
 export const config = {
   matcher: [
-    '/((?!api|panel|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!api|panel(?:/|$)|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
