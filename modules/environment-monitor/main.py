@@ -46,6 +46,9 @@ SLEEPYPOD_DB = Path(os.environ.get(
 # Write at most once per 60s per record type
 DOWNSAMPLE_INTERVAL_S = 60
 
+# Hardware sentinel for "no sensor connected"
+NO_SENSOR = -327.68
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -85,7 +88,51 @@ def open_biometrics_db() -> sqlite3.Connection:
     return conn
 
 
+def _to_centidegrees(val) -> int | None:
+    """Convert a degrees-C float to centidegrees integer, or None if sentinel."""
+    if val is None or val == NO_SENSOR or abs(val - NO_SENSOR) < 0.01:
+        return None
+    return round(val * 100)
+
+
+def _to_centipercent(val) -> int | None:
+    """Convert a percent float to centipercent integer, or None if sentinel."""
+    if val is None or val == NO_SENSOR or abs(val - NO_SENSOR) < 0.01:
+        return None
+    return round(val * 100)
+
+
+def _safe_temp(temps: list, idx: int) -> int | None:
+    """Extract a thermistor value from a temps array by index."""
+    if not isinstance(temps, list) or idx >= len(temps):
+        return None
+    return _to_centidegrees(temps[idx])
+
+
 def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
+    """Parse bedTemp2 record and write to bed_temp table.
+
+    bedTemp2 format:
+      mcu: float (MCU temp °C)
+      left:  {amb, hu, board, temps: [outer, center, inner, ?]}
+      right: {amb, hu, board, temps: [outer, center, inner, ?]}
+    """
+    left = record.get("left", {})
+    right = record.get("right", {})
+    left_temps = left.get("temps", [])
+    right_temps = right.get("temps", [])
+
+    # Use left ambient as the primary ambient reading (both sides share the room)
+    ambient = left.get("amb") if left.get("amb") != NO_SENSOR else right.get("amb")
+    # Average humidity from both sides (if available)
+    lhu = left.get("hu")
+    rhu = right.get("hu")
+    humidity = None
+    if lhu is not None and lhu != NO_SENSOR:
+        humidity = lhu
+    elif rhu is not None and rhu != NO_SENSOR:
+        humidity = rhu
+
     with conn:
         conn.execute(
             """INSERT OR IGNORE INTO bed_temp
@@ -95,20 +142,24 @@ def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 int(ts),
-                record.get("ambientTemp"),
-                record.get("mcuTemp"),
-                record.get("humidity"),
-                record.get("leftOuterTemp"),
-                record.get("leftCenterTemp"),
-                record.get("leftInnerTemp"),
-                record.get("rightOuterTemp"),
-                record.get("rightCenterTemp"),
-                record.get("rightInnerTemp"),
+                _to_centidegrees(ambient),
+                _to_centidegrees(record.get("mcu")),
+                _to_centipercent(humidity),
+                _safe_temp(left_temps, 0),
+                _safe_temp(left_temps, 1),
+                _safe_temp(left_temps, 2),
+                _safe_temp(right_temps, 0),
+                _safe_temp(right_temps, 1),
+                _safe_temp(right_temps, 2),
             ),
         )
 
 
 def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
+    """Parse frzTemp record and write to freezer_temp table.
+
+    frzTemp format: {left, right, amb, hs} — all raw centidegrees (u16).
+    """
     with conn:
         conn.execute(
             """INSERT OR IGNORE INTO freezer_temp
@@ -117,10 +168,10 @@ def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> Non
                VALUES (?, ?, ?, ?, ?)""",
             (
                 int(ts),
-                record.get("ambientTemp"),
-                record.get("heatsinkTemp"),
-                record.get("leftWaterTemp"),
-                record.get("rightWaterTemp"),
+                record.get("amb"),
+                record.get("hs"),
+                record.get("left"),
+                record.get("right"),
             ),
         )
 
@@ -175,7 +226,7 @@ def main() -> None:
             if not isinstance(record, dict):
                 continue
             rtype = record.get("type")
-            if rtype not in ("bedTemp", "frzTemp"):
+            if rtype not in ("bedTemp", "bedTemp2", "frzTemp"):
                 continue
             try:
                 ts = float(record.get("ts", time.time()))
@@ -183,7 +234,7 @@ def main() -> None:
                 log.warning("Skipping record with invalid ts: %r", record.get("ts"))
                 continue
 
-            if rtype == "bedTemp":
+            if rtype in ("bedTemp", "bedTemp2"):
                 if ts - last_bed_write >= DOWNSAMPLE_INTERVAL_S:
                     write_bed_temp(db_conn, ts, record)
                     last_bed_write = ts
