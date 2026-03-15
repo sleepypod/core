@@ -9,6 +9,7 @@ export enum JobType {
   POWER_OFF = 'power_off',
   ALARM = 'alarm',
   PRIME = 'prime',
+  CALIBRATION = 'calibration',
   REBOOT = 'reboot',
 }
 

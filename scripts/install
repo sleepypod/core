@@ -502,6 +502,7 @@ else
   install_module "piezo-processor"
   install_module "sleep-detector"
   install_module "environment-monitor"
+  install_module "calibrator"
 fi
 
 # Create CLI shortcuts

@@ -8,6 +8,7 @@ import { healthRouter } from './health'
 import { systemRouter } from './system'
 import { environmentRouter } from './environment'
 import { rawRouter } from './raw'
+import { calibrationRouter } from './calibration'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -27,6 +28,7 @@ export const appRouter = router({
   system: systemRouter,
   environment: environmentRouter,
   raw: rawRouter,
+  calibration: calibrationRouter,
 })
 
 export type AppRouter = typeof appRouter
