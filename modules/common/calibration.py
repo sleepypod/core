@@ -3,7 +3,7 @@ Shared calibration library for SleepyPod biometrics modules.
 
 Architecture: this library is the single source of truth for all calibration
 logic. The calibrator module writes profiles; processing modules read them.
-See .claude/docs/adr-calibration.md for rationale.
+See docs/adr/0014-sensor-calibration.md for rationale.
 
 Provides:
   - CalibrationStore:    read/write calibration profiles from biometrics.db

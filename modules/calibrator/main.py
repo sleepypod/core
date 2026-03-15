@@ -12,7 +12,7 @@ Writes results to calibration_profiles and calibration_runs tables in
 biometrics.db. Processing modules (piezo-processor, sleep-detector,
 environment-monitor) read these profiles to apply calibrated thresholds.
 
-See .claude/docs/adr-calibration.md for architecture rationale.
+See docs/adr/0014-sensor-calibration.md for architecture rationale.
 """
 
 import os
