@@ -8,7 +8,6 @@ const execFileAsync = promisify(execFile)
 
 const IPTABLES = '/usr/sbin/iptables'
 const IPTABLES_SAVE = '/usr/sbin/iptables-save'
-const CORE_DIR = '/home/dac/sleepypod-core'
 
 /**
  * Simple async mutex to serialize iptables mutations.
