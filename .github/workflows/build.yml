@@ -35,7 +35,7 @@ jobs:
       - name: Create deploy tarball
         run: |
           # Package source + .next build (no node_modules — installed on target)
-          tar czf sleepypod-core.tar.gz \
+          tar czf /tmp/sleepypod-core.tar.gz \
             --exclude='node_modules' \
             --exclude='.git' \
             --exclude='*.db' \
@@ -43,8 +43,8 @@ jobs:
             --exclude='test-results' \
             --exclude='.serena' \
             --exclude='.claude' \
-            --exclude='sleepypod-core.tar.gz' \
             .
+          mv /tmp/sleepypod-core.tar.gz .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
