@@ -39,24 +39,25 @@ export async function seedDefaultData() {
       console.log('Seeding default device settings...')
 
       // Wrap all inserts in a transaction for atomicity
-      await db.transaction(async (tx) => {
+      // Note: better-sqlite3 transactions are synchronous — cannot use async/await
+      db.transaction((tx) => {
         // Insert default device settings
-        await tx.insert(deviceSettings).values({
+        tx.insert(deviceSettings).values({
           id: 1,
           timezone: 'America/Los_Angeles',
           temperatureUnit: 'F',
           rebootDaily: false,
           primePodDaily: false,
-        })
+        }).run()
 
         // Insert default side settings
-        await tx.insert(sideSettings).values([
+        tx.insert(sideSettings).values([
           { side: 'left', name: 'Left', awayMode: false },
           { side: 'right', name: 'Right', awayMode: false },
-        ])
+        ]).run()
 
         // Insert default device state
-        await tx.insert(deviceState).values([
+        tx.insert(deviceState).values([
           {
             side: 'left',
             isPowered: false,
@@ -67,7 +68,7 @@ export async function seedDefaultData() {
             isPowered: false,
             isAlarmVibrating: false,
           },
-        ])
+        ]).run()
       })
 
       console.log('✓ Default data seeded successfully')

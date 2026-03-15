@@ -258,6 +258,12 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === 'nodejs' || typeof window === 'undefined') {
     // Register global handlers first (before any initialization that could fail)
     registerGlobalHandlers()
+
+    // Run pending database migrations before starting the app
+    const { runMigrations, seedDefaultData } = await import('@/src/db/migrate')
+    await runMigrations()
+    await seedDefaultData()
+
     await initializeScheduler()
   }
 }

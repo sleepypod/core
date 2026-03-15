@@ -118,6 +118,14 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Ensure /usr/local/bin is in PATH (Yocto's root PATH is minimal)
+case ":$PATH:" in
+  *:/usr/local/bin:*) ;;
+  *) export PATH="/usr/local/bin:$PATH" ;;
+esac
+
+INSTALL_DIR="/home/dac/sleepypod-core"
+
 # Lock file to prevent concurrent installs
 LOCKFILE="/var/run/sleepypod-install.lock"
 exec 200>"$LOCKFILE"
@@ -126,8 +134,11 @@ if ! flock -n 200; then
   exit 1
 fi
 
-# Check for required commands (git always required — sp-update and system router depend on it)
-REQUIRED_CMDS=(curl systemctl ip git)
+# Check for required commands
+REQUIRED_CMDS=(curl systemctl ip)
+if [ "$INSTALL_LOCAL" = false ]; then
+  REQUIRED_CMDS+=(git)
+fi
 for cmd in "${REQUIRED_CMDS[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Error: Required command '$cmd' not found." >&2
@@ -135,31 +146,21 @@ for cmd in "${REQUIRED_CMDS[@]}"; do
   fi
 done
 
-# Check OS (require Debian/Ubuntu)
-if ! command -v apt-get &>/dev/null; then
-  echo "Error: This script requires apt-get (Debian/Ubuntu)." >&2
-  exit 1
-fi
-
-# Handle WAN connectivity — always needed (pnpm install, pip install, node/pnpm setup)
-NEEDS_WAN=true
-
-if [ "$NEEDS_WAN" = true ]; then
-  echo "Checking network connectivity..."
-  if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
-    if wan_is_blocked; then
-      echo "WAN is blocked by iptables. Temporarily unblocking for install..."
-      WAN_WAS_BLOCKED=true
-      unblock_wan
-      # Re-check after unblock
-      if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
-        echo "Error: Still cannot reach GitHub after unblocking. Check Wi-Fi." >&2
-        exit 1
-      fi
-    else
-      echo "Error: Cannot reach GitHub. Check network and try again." >&2
+# Handle WAN connectivity — always needed (npm packages, node binary download)
+echo "Checking network connectivity..."
+if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
+  if wan_is_blocked; then
+    echo "WAN is blocked by iptables. Temporarily unblocking for install..."
+    WAN_WAS_BLOCKED=true
+    unblock_wan
+    # Re-check after unblock
+    if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
+      echo "Error: Still cannot reach GitHub after unblocking. Check Wi-Fi." >&2
       exit 1
     fi
+  else
+    echo "Error: Cannot reach GitHub. Check network and try again." >&2
+    exit 1
   fi
 fi
 
@@ -171,30 +172,38 @@ if [ "$DISK_AVAIL" -lt 500 ]; then
   exit 1
 fi
 
-# Detect dac.sock path
-echo "Detecting dac.sock path..."
+# Detect dac.sock path (skip if .env already has it)
 DAC_SOCK_PATH=""
 
-if [ -S "/run/dac.sock" ]; then
-  DAC_SOCK_PATH="/run/dac.sock"
-elif [ -S "/var/run/dac.sock" ]; then
-  DAC_SOCK_PATH="/var/run/dac.sock"
-else
-  echo "Warning: dac.sock not found. Please specify manually."
-  read -rp "Enter dac.sock path: " DAC_SOCK_PATH
-
-  # Validate user input
-  if [ -z "$DAC_SOCK_PATH" ]; then
-    echo "Error: No path provided." >&2
-    exit 1
-  fi
-  if [ ! -S "$DAC_SOCK_PATH" ]; then
-    echo "Error: '$DAC_SOCK_PATH' is not a valid socket." >&2
-    exit 1
-  fi
+if [ -f "$INSTALL_DIR/.env" ]; then
+  DAC_SOCK_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
 fi
 
-echo "Using dac.sock at: $DAC_SOCK_PATH"
+if [ -z "$DAC_SOCK_PATH" ]; then
+  echo "Detecting dac.sock path..."
+  for sock_path in \
+    /run/dac.sock \
+    /var/run/dac.sock \
+    /persistent/deviceinfo/dac.sock \
+  ; do
+    if [ -S "$sock_path" ]; then
+      DAC_SOCK_PATH="$sock_path"
+      break
+    fi
+  done
+fi
+
+if [ -z "$DAC_SOCK_PATH" ]; then
+  DAC_SOCK_PATH=$(find / -name 'dac.sock' -type s 2>/dev/null | head -1)
+fi
+
+if [ -z "$DAC_SOCK_PATH" ]; then
+  # Default to known path even if socket isn't present yet (daemon may not be running)
+  DAC_SOCK_PATH="/persistent/deviceinfo/dac.sock"
+  echo "Warning: dac.sock not found as active socket, using default: $DAC_SOCK_PATH"
+else
+  echo "Using dac.sock at: $DAC_SOCK_PATH"
+fi
 
 # Create data directory
 DATA_DIR="/persistent/sleepypod-data"
@@ -202,24 +211,47 @@ echo "Creating data directory at $DATA_DIR..."
 mkdir -p "$DATA_DIR"
 chmod 755 "$DATA_DIR"
 
-# Install or upgrade Node.js to version 20
-NODE_VERSION=$(node --version 2>/dev/null | grep -oP '(?<=v)\d+' || echo "0")
-if ! command -v node &>/dev/null || [ "$NODE_VERSION" -lt 20 ]; then
-  echo "Installing Node.js 20..."
-  apt-get install -y ca-certificates curl gnupg
-  mkdir -p /etc/apt/keyrings
-  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
-    | tee /etc/apt/sources.list.d/nodesource.list
-  apt-get update
-  apt-get install -y nodejs
+# ============================================================================
+# Install Node.js via binary download (works on any Linux, no apt required)
+# ============================================================================
+NODE_WANTED=22
+NODE_FULL="22.17.0"
+NODE_DIR="/usr/local/lib/nodejs"
+
+# Detect architecture
+ARCH=$(uname -m)
+case "$ARCH" in
+  aarch64|arm64) NODE_ARCH="arm64" ;;
+  x86_64)        NODE_ARCH="x64" ;;
+  armv7l)        NODE_ARCH="armv7l" ;;
+  *)             echo "Error: Unsupported architecture: $ARCH" >&2; exit 1 ;;
+esac
+
+# Check if adequate Node is already installed
+CURRENT_NODE_MAJOR=$(node -v 2>/dev/null | cut -d. -f1 | tr -d v || echo "0")
+if [ "$CURRENT_NODE_MAJOR" -lt "$NODE_WANTED" ]; then
+  echo "Installing Node.js $NODE_FULL ($NODE_ARCH)..."
+  NODE_TARBALL="node-v${NODE_FULL}-linux-${NODE_ARCH}.tar.gz"
+  NODE_URL="https://nodejs.org/dist/v${NODE_FULL}/${NODE_TARBALL}"
+
+  mkdir -p "$NODE_DIR"
+  curl -fSL "$NODE_URL" | tar -xz -C "$NODE_DIR"
+
+  # Symlink binaries into /usr/local/bin
+  NODE_BIN="$NODE_DIR/node-v${NODE_FULL}-linux-${NODE_ARCH}/bin"
+  for bin in node npm npx; do
+    ln -sf "$NODE_BIN/$bin" "/usr/local/bin/$bin"
+  done
+
+  echo "Node.js $(node -v) installed."
+else
+  echo "Node.js $(node -v) already installed (>= $NODE_WANTED)."
 fi
 
 # Verify Node.js version
 NODE_MAJOR=$(node -v | cut -d. -f1 | tr -d v)
-if [ "$NODE_MAJOR" -ne 20 ]; then
-  echo "Error: Node.js 20 required, found $(node -v)" >&2
+if [ "$NODE_MAJOR" -lt "$NODE_WANTED" ]; then
+  echo "Error: Node.js >= $NODE_WANTED required, found $(node -v)" >&2
   exit 1
 fi
 
@@ -227,10 +259,14 @@ fi
 if ! command -v pnpm &>/dev/null; then
   echo "Installing pnpm..."
   npm install -g pnpm
+  # Ensure pnpm is in PATH (npm global bin may differ from /usr/local/bin)
+  NPM_BIN="$(npm config get prefix)/bin"
+  if [ ! -f "/usr/local/bin/pnpm" ] && [ -f "$NPM_BIN/pnpm" ]; then
+    ln -sf "$NPM_BIN/pnpm" /usr/local/bin/pnpm
+  fi
 fi
 
 # Get the code in place
-INSTALL_DIR="/home/dac/sleepypod-core"
 if [ "$INSTALL_LOCAL" = true ]; then
   echo "Local install mode — using code already at $INSTALL_DIR"
   if [ ! -d "$INSTALL_DIR" ]; then
@@ -239,8 +275,12 @@ if [ "$INSTALL_LOCAL" = true ]; then
   fi
   cd "$INSTALL_DIR"
 
-  # Checkout a specific branch if requested
+  # Checkout a specific branch if requested (requires git)
   if [ -n "$INSTALL_BRANCH" ]; then
+    if ! command -v git &>/dev/null; then
+      echo "Error: git required for --branch but not found." >&2
+      exit 1
+    fi
     echo "Checking out branch: $INSTALL_BRANCH"
     git fetch origin
     git checkout "$INSTALL_BRANCH"
@@ -259,18 +299,38 @@ else
   fi
 fi
 
-# Install dependencies (ignore scripts for security)
+# Install production dependencies (prebuild-install downloads prebuilt better-sqlite3)
 echo "Installing dependencies..."
-pnpm install --frozen-lockfile --ignore-scripts
+pnpm install --frozen-lockfile --prod
 
-# Build native modules explicitly (better-sqlite3 needs this)
-echo "Building native modules..."
-cd node_modules/better-sqlite3 && npm run build-release && cd ../..
+# Verify better-sqlite3 native module is ready
+if [ ! -f "$INSTALL_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" ] && \
+   [ ! -f "$INSTALL_DIR/node_modules/better-sqlite3/prebuilds/linux-${NODE_ARCH}/node.napi.node" ]; then
+  echo "Warning: better-sqlite3 native module not found, attempting manual prebuild..."
+  cd "$INSTALL_DIR/node_modules/better-sqlite3"
+  npx prebuild-install || {
+    echo "Error: Failed to install better-sqlite3 prebuilt binary." >&2
+    echo "This platform may need gcc/g++ for native compilation." >&2
+    exit 1
+  }
+  cd "$INSTALL_DIR"
+fi
 
-# Build application
-echo "Building application..."
-rm -rf "$INSTALL_DIR/.next"
-pnpm build
+# Build application (skip if .next already exists — pre-built by deploy script or CI)
+if [ -d "$INSTALL_DIR/.next" ]; then
+  echo "Pre-built .next found, skipping build."
+else
+  echo "Building application (this may take a while on low-memory devices)..."
+  pnpm build
+fi
+
+# Turbopack hashes the better-sqlite3 module name — create a symlink so the
+# hashed reference resolves to the real module with the correct native binary
+HASHED_NAME=$(grep -roh 'better-sqlite3-[a-f0-9]\{16\}' "$INSTALL_DIR/.next/server/" 2>/dev/null | head -1)
+if [ -n "$HASHED_NAME" ] && [ ! -e "$INSTALL_DIR/node_modules/$HASHED_NAME" ]; then
+  echo "Creating symlink for Turbopack module: $HASHED_NAME -> better-sqlite3"
+  ln -sf better-sqlite3 "$INSTALL_DIR/node_modules/$HASHED_NAME"
+fi
 
 # Create or preserve environment file
 if [ -f "$INSTALL_DIR/.env" ]; then
@@ -307,13 +367,8 @@ if [ -f "$DATA_DIR/sleepypod.db" ]; then
   cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak.$(date +%s)"
 fi
 
-echo "Generating database schema..."
-pnpm db:generate
-pnpm db:biometrics:generate
-
-echo "Running database migrations..."
-pnpm db:migrate
-pnpm db:biometrics:migrate
+# Database migrations run automatically on app startup (instrumentation.ts)
+echo "Database migrations will run on first startup."
 
 # Create systemd service
 echo "Creating systemd service..."
@@ -329,7 +384,7 @@ WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
-ExecStart=/usr/bin/env pnpm start
+ExecStart=/usr/local/bin/pnpm start
 Restart=always
 RestartSec=10
 
@@ -348,6 +403,21 @@ EOF
 echo "Enabling service..."
 systemctl daemon-reload
 systemctl enable sleepypod.service
+
+# Stop free-sleep if running (both services use port 3000)
+if systemctl is-active --quiet free-sleep.service 2>/dev/null; then
+  echo "Stopping free-sleep.service (port 3000 conflict)..."
+  systemctl stop free-sleep.service
+fi
+
+# Kill anything else holding port 3000
+PORT_PID=$(fuser 3000/tcp 2>/dev/null | tr -d ' ' || true)
+if [ -n "$PORT_PID" ]; then
+  echo "Killing process $PORT_PID on port 3000..."
+  kill "$PORT_PID" 2>/dev/null || true
+  sleep 1
+fi
+
 systemctl restart sleepypod.service
 
 # ============================================================================
@@ -386,10 +456,11 @@ else
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
 
-    # Ensure python3-venv is available (may be absent on Debian/Ubuntu minimal images)
+    # Check if python3 venv is available (built-in on most distros, separate package on Debian)
     if ! python3 -m venv --help >/dev/null 2>&1; then
-      echo "python3-venv not found; installing..."
-      apt-get install -y python3-venv
+      echo "Warning: python3-venv not available, skipping module $name"
+      echo "On Debian/Ubuntu: apt-get install -y python3-venv"
+      return
     fi
 
     # Create Python virtualenv and install deps
@@ -405,7 +476,7 @@ else
       systemctl daemon-reload
       systemctl enable "$service"
       systemctl restart "$service"
-      echo "✓ $name installed and started"
+      echo "Module $name installed and started"
     else
       echo "Warning: no service file found for $name"
     fi
@@ -432,81 +503,190 @@ cat > /usr/local/bin/sp-logs << 'EOF'
 journalctl -u sleepypod.service -f
 EOF
 
-cat > /usr/local/bin/sp-update << 'EOF'
+cat > /usr/local/bin/sp-update << 'UPDATEEOF'
 #!/bin/bash
 set -euo pipefail
 
+# sp-update — self-update sleepypod-core from GitHub via curl+tarball
+#
+# Usage:
+#   sp-update              # update to latest main
+#   sp-update feat/alarms  # update to a specific branch
+#
+# Handles iptables toggle automatically (opens WAN, downloads, closes WAN).
+# No git required — uses GitHub's tarball API.
+
 INSTALL_DIR="/home/dac/sleepypod-core"
 DATA_DIR="/persistent/sleepypod-data"
+GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+BRANCH="${1:-main}"
+IPTABLES="/usr/sbin/iptables"
 
 echo "=== SleepyPod Update ==="
+echo "Branch: $BRANCH"
+echo "Repo:   $GITHUB_REPO"
+echo ""
 
-# Pre-flight checks
-if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
-  echo "Error: No network connectivity to GitHub" >&2
-  exit 1
-fi
+# iptables helpers
+wan_is_blocked() {
+  $IPTABLES -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
+}
 
+SAVED_IPTABLES=""
+WAN_WAS_BLOCKED=false
+
+unblock_wan() {
+  echo "Opening WAN access..."
+  SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+  $IPTABLES -F && $IPTABLES -X && $IPTABLES -t nat -F && $IPTABLES -t nat -X
+  echo "WAN open."
+}
+
+restore_wan() {
+  if [ -n "$SAVED_IPTABLES" ]; then
+    echo "Restoring iptables rules..."
+    echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || true
+  fi
+  echo "WAN blocked."
+}
+
+# Cleanup — always re-block WAN and restart service on failure
+cleanup() {
+  local exit_code=$?
+  if [ "$WAN_WAS_BLOCKED" = true ]; then
+    restore_wan
+  fi
+  if [ $exit_code -ne 0 ]; then
+    echo "Update failed, starting service with existing code..." >&2
+    systemctl start sleepypod.service 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+# Pre-flight: disk space
 DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
 if [ "$DISK_AVAIL" -lt 300 ]; then
   echo "Error: Need 300MB free, only ${DISK_AVAIL}MB available" >&2
   exit 1
 fi
 
-cd "$INSTALL_DIR"
-
-# Save rollback point
-PREV_COMMIT=$(git rev-parse HEAD)
-echo "Current version: $PREV_COMMIT"
-
-# Backup database (single backup, overwrite previous)
-if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
-  echo "Database backed up"
+# Open WAN if blocked
+if wan_is_blocked; then
+  WAN_WAS_BLOCKED=true
+  unblock_wan
 fi
 
-# Stop service during update
+# Check connectivity
+if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
+  echo "Error: Cannot reach GitHub. Check network." >&2
+  exit 1
+fi
+
+# Backup database
+if [ -f "$DATA_DIR/sleepypod.db" ]; then
+  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
+  echo "Database backed up."
+fi
+
+# Backup current code for rollback
+BACKUP_DIR="/tmp/sleepypod-rollback"
+rm -rf "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR"
+cp -r "$INSTALL_DIR/package.json" "$INSTALL_DIR/pnpm-lock.yaml" "$BACKUP_DIR/" 2>/dev/null || true
+
+# Stop service
 systemctl stop sleepypod.service
 
-# Try update — always reset to origin/main to avoid staying on a feature branch
-echo "Pulling latest changes..."
-if git fetch origin && \
-   git checkout main && \
-   git reset --hard origin/main && \
-   pnpm install --frozen-lockfile --ignore-scripts && \
-   (cd node_modules/better-sqlite3 && npm run build-release) && \
+# Download code — try CI release first (includes pre-built .next), fall back to source tarball
+TMPDIR=$(mktemp -d)
+HAS_BUILD=false
+
+if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "latest" ]; then
+  # Try latest GitHub Release (CI-built, includes .next)
+  echo "Checking for CI release..."
+  RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+    | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
+    | grep -o 'https://[^"]*' || true)
+
+  if [ -n "$RELEASE_URL" ]; then
+    echo "Downloading CI release..."
+    if curl -fSL "$RELEASE_URL" | tar xz -C "$TMPDIR"; then
+      HAS_BUILD=true
+      echo "CI release downloaded (pre-built)."
+    fi
+  fi
+fi
+
+if [ "$HAS_BUILD" = false ]; then
+  # Fall back to source tarball (no .next — would need build on pod)
+  echo "Downloading $BRANCH from GitHub..."
+  TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${BRANCH}.tar.gz"
+  if ! curl -fSL "$TARBALL_URL" | tar xz -C "$TMPDIR"; then
+    echo "Error: Failed to download branch '$BRANCH'" >&2
+    exit 1
+  fi
+  # Source tarball extracts to a subdirectory (e.g., core-main/)
+  SUBDIR=$(ls "$TMPDIR")
+  # Move contents up so TMPDIR is the root
+  mv "$TMPDIR/$SUBDIR"/* "$TMPDIR/$SUBDIR"/.[!.]* "$TMPDIR/" 2>/dev/null || true
+  rmdir "$TMPDIR/$SUBDIR" 2>/dev/null || true
+fi
+
+# Stop service
+systemctl stop sleepypod.service
+
+# Clean old files (preserve node_modules, .env)
+find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+  ! -name 'node_modules' \
+  ! -name '.env' \
+  -exec rm -rf {} +
+
+# Move new code into place
+cp -r "$TMPDIR/." "$INSTALL_DIR/"
+rm -rf "$TMPDIR"
+echo "Source updated."
+
+cd "$INSTALL_DIR"
+
+# Install prod deps + run migrations
+if pnpm install --frozen-lockfile --prod && \
    pnpm db:generate && \
+   pnpm db:biometrics:generate && \
    pnpm db:migrate && \
-   rm -rf .next && \
-   pnpm build; then
+   pnpm db:biometrics:migrate; then
+
+  # Build only if no pre-built .next exists
+  if [ ! -d "$INSTALL_DIR/.next" ]; then
+    echo "No pre-built .next found, building..."
+    pnpm install --frozen-lockfile
+    pnpm build
+  fi
+
+  # Re-block WAN before starting service
+  if [ "$WAN_WAS_BLOCKED" = true ]; then
+    restore_wan
+    WAN_WAS_BLOCKED=false
+  fi
 
   echo "Starting service..."
   systemctl start sleepypod.service
 
-  # Wait and health check
   sleep 5
   if systemctl is-active --quiet sleepypod.service; then
-    echo "✓ Update complete! Service is running."
+    echo "Update complete! Service is running."
     exit 0
   fi
 fi
 
-# If we get here, something failed — rollback
-echo "Update failed, rolling back to $PREV_COMMIT..." >&2
-git checkout "$PREV_COMMIT"
-pnpm install --frozen-lockfile --ignore-scripts
-(cd node_modules/better-sqlite3 && npm run build-release)
-pnpm build
-
+# Rollback on failure
+echo "Update failed, restoring previous code..." >&2
 if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
   cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
-  echo "Database restored"
+  echo "Database restored."
 fi
 
-systemctl start sleepypod.service
-echo "✗ Rolled back to previous version." >&2
 exit 1
-EOF
+UPDATEEOF
 
 chmod +x /usr/local/bin/sp-status
 chmod +x /usr/local/bin/sp-restart
@@ -552,7 +732,7 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
       echo "$SSH_KEY" >> /root/.ssh/authorized_keys
       chmod 700 /root/.ssh
       chmod 600 /root/.ssh/authorized_keys
-      echo "✓ SSH key added"
+      echo "SSH key added"
     else
       echo "Warning: Invalid SSH key format, skipping"
     fi
@@ -567,9 +747,9 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
 
   # Restart SSH (try both service names for compatibility)
   if systemctl restart sshd 2>/dev/null; then
-    echo "✓ SSH configured on port 8822 (keys only)"
+    echo "SSH configured on port 8822 (keys only)"
   elif systemctl restart ssh 2>/dev/null; then
-    echo "✓ SSH configured on port 8822 (keys only)"
+    echo "SSH configured on port 8822 (keys only)"
   else
     echo "Error: Failed to restart SSH service" >&2
     cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
@@ -585,12 +765,12 @@ POD_IP=$(ip -4 addr show "$DEFAULT_IFACE" 2>/dev/null | grep -o 'inet [0-9.]*' |
 echo "Waiting for service to start..."
 for i in $(seq 1 30); do
   if systemctl is-active --quiet sleepypod.service; then
-    SERVICE_STATUS="✓ Running"
+    SERVICE_STATUS="Running"
     break
   fi
   sleep 1
   if [ $i -eq 30 ]; then
-    SERVICE_STATUS="✗ Failed (check logs with: sp-logs)"
+    SERVICE_STATUS="Failed (check logs with: sp-logs)"
   fi
 done
 
@@ -604,12 +784,12 @@ echo ""
 echo "Web Interface: http://$POD_IP:3000/"
 echo ""
 echo "Features:"
-echo "  • Temperature & Power Scheduling"
-echo "  • Alarm Management"
-echo "  • Hardware Control via DAC socket"
-echo "  • Automated job scheduler with timezone support"
-echo "  • Heart rate, HRV, and breathing rate (piezo-processor)"
-echo "  • Sleep session detection and movement tracking (sleep-detector)"
+echo "  - Temperature & Power Scheduling"
+echo "  - Alarm Management"
+echo "  - Hardware Control via DAC socket"
+echo "  - Automated job scheduler with timezone support"
+echo "  - Heart rate, HRV, and breathing rate (piezo-processor)"
+echo "  - Sleep session detection and movement tracking (sleep-detector)"
 echo ""
 echo "CLI Commands:"
 echo "  sp-status   - View service status"

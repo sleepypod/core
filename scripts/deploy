@@ -1,25 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 
-# deploy — push sleepypod-core to a Pod from your local machine
+# deploy — build locally, push built artifacts to a Pod
 #
 # Usage:
 #   ./scripts/deploy [POD_IP] [branch]
 #
 # Examples:
 #   ./scripts/deploy                           # deploy current branch to 192.168.1.88
-#   ./scripts/deploy 192.168.1.50              # deploy current branch to a different pod
+#   ./scripts/deploy 192.168.1.50              # current branch -> different pod
 #   ./scripts/deploy 192.168.1.88 main         # pull and deploy main
 #   ./scripts/deploy 192.168.1.88 feat/alarms  # pull and deploy a feature branch
 #
 # What it does:
 #   1. Optionally checks out and pulls the specified branch
-#   2. SCPs the project to the pod (excluding node_modules, .next, etc.)
-#   3. Runs the install script on the pod via SSH
+#   2. Builds the Next.js app locally (fast, full RAM)
+#   3. Syncs source + .next build to the pod via tar+ssh
+#   4. Runs the install script on the pod (prod deps only, no build)
 #
 # Requirements:
 #   - SSH access to the pod on port 8822 with key auth
 #   - The pod must be on your local network
+#   - Node.js and pnpm installed locally
 
 SSH_PORT=8822
 SSH_USER=root
@@ -40,7 +42,7 @@ echo ""
 echo "Checking SSH connectivity..."
 if ! ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o BatchMode=yes "$SSH_USER@$POD_IP" "echo ok" >/dev/null 2>&1; then
   echo "Error: Cannot SSH to $SSH_USER@$POD_IP:$SSH_PORT" >&2
-  echo "Ensure SSH is configured (setup_ssh.sh) and your key is authorized." >&2
+  echo "Ensure SSH is configured and your key is authorized." >&2
   exit 1
 fi
 
@@ -54,11 +56,30 @@ if [ -n "$BRANCH" ]; then
   echo ""
 fi
 
-# Sync project to pod (rsync over SSH, excluding build artifacts)
-echo "Syncing project to pod..."
-rsync -az --delete \
+# Build locally and generate migrations
+echo "Building locally..."
+cd "$PROJECT_DIR"
+pnpm db:generate
+pnpm db:biometrics:generate
+pnpm build
+echo "Build complete."
+echo ""
+
+# Sync to pod via tar+ssh
+echo "Syncing to pod..."
+SSH_CMD="ssh -p $SSH_PORT -o ServerAliveInterval=30 $SSH_USER@$POD_IP"
+
+# Clean old files on pod (preserve node_modules, .env)
+$SSH_CMD "mkdir -p '$REMOTE_DIR' && \
+  find '$REMOTE_DIR' -mindepth 1 -maxdepth 1 \
+    ! -name 'node_modules' \
+    ! -name '.env' \
+    -exec rm -rf {} +"
+
+# Tar source + build, pipe over SSH, extract on pod
+# Includes .next (pre-built) but excludes node_modules (installed on pod for native modules)
+COPYFILE_DISABLE=1 tar cf - --no-mac-metadata \
   --exclude='node_modules' \
-  --exclude='.next' \
   --exclude='*.db' \
   --exclude='*.db-shm' \
   --exclude='*.db-wal' \
@@ -67,15 +88,16 @@ rsync -az --delete \
   --exclude='test-results' \
   --exclude='.serena' \
   --exclude='.claude' \
-  -e "ssh -p $SSH_PORT" \
-  "$PROJECT_DIR/" "$SSH_USER@$POD_IP:$REMOTE_DIR/"
+  -C "$PROJECT_DIR" . \
+  | $SSH_CMD "tar xf - -C '$REMOTE_DIR' 2>/dev/null"
 
 echo "Files synced."
 echo ""
 
-# Run the install script on the pod (local mode — code already synced, skip SSH prompt)
+# Run install on pod (local mode, pre-built — no build step needed)
 echo "Running install on pod..."
-ssh -p "$SSH_PORT" "$SSH_USER@$POD_IP" "bash $REMOTE_DIR/scripts/install --local --no-ssh"
+ssh -p "$SSH_PORT" -o ServerAliveInterval=30 "$SSH_USER@$POD_IP" \
+  "bash $REMOTE_DIR/scripts/install --local --no-ssh"
 
 echo ""
 echo "=== Deploy complete ==="
