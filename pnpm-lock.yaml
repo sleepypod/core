@@ -137,7 +137,7 @@ importers:
         version: 10.0.1(semantic-release@25.0.3(typescript@5.9.3))
       '@stylistic/eslint-plugin':
         specifier: ^5.9.0
-        version: 5.9.0(eslint@9.39.4(jiti@2.6.1))
+        version: 5.10.0(eslint@9.39.4(jiti@2.6.1))
       '@tailwindcss/postcss':
         specifier: ^4.2.1
         version: 4.2.1
@@ -1976,8 +1976,8 @@ packages:
   '@stoplight/json-schema-sampler@0.3.0':
     resolution: {integrity: sha512-G7QImi2xr9+8iPEg0D9YUi1BWhIiiEm19aMb91oWBSdxuhezOAqqRP3XNY6wczHV9jLWW18f+KkghTy9AG0BQA==}
 
-  '@stylistic/eslint-plugin@5.9.0':
-    resolution: {integrity: sha512-FqqSkvDMYJReydrMhlugc71M76yLLQWNfmGq+SIlLa7N3kHp8Qq8i2PyWrVNAfjOyOIY+xv9XaaYwvVW7vroMA==}
+  '@stylistic/eslint-plugin@5.10.0':
+    resolution: {integrity: sha512-nPK52ZHvot8Ju/0A4ucSX1dcPV2/1clx0kLcH5wDmrE4naKso7TUC/voUyU1O9OTKTrR6MYip6LP0ogEMQ9jPQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^9.0.0 || ^10.0.0
@@ -2240,6 +2240,9 @@ packages:
   '@types/node@25.4.0':
     resolution: {integrity: sha512-9wLpoeWuBlcbBpOY3XmzSTG3oscB6xjBEEtn+pYXTfhyXhIxC5FsBer2KTopBlvKEiW9l13po9fq+SJY/5lkhw==}
 
+  '@types/node@25.5.0':
+    resolution: {integrity: sha512-jp2P3tQMSxWugkCUKLRPVUpGaL5MVFwF8RDuSRztfwgN1wmqJeMSbKlnEtQqU8UrhTmzEmZdu2I6v2dpp7XIxw==}
+
   '@types/normalize-package-data@2.4.4':
     resolution: {integrity: sha512-37i+OaWTh9qeK4LSHPsyRC7NahnGotNuZvjLSgcPzblpHB3rrCJxAOgI5gCdKm7coonsaX1Of0ILiTcnZjbfxA==}
 
@@ -2329,6 +2332,10 @@ packages:
 
   '@typescript-eslint/types@8.56.1':
     resolution: {integrity: sha512-dbMkdIUkIkchgGDIv7KLUpa0Mda4IYjo4IAMJUZ+3xNoUXxMsk9YtKpTHSChRS85o+H9ftm51gsK1dZReY9CVw==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/types@8.57.0':
+    resolution: {integrity: sha512-dTLI8PEXhjUC7B9Kre+u0XznO696BhXcTlOn0/6kf1fHaQW8+VjJAVHJ3eTI14ZapTxdkOmc80HblPQLaEeJdg==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
   '@typescript-eslint/typescript-estree@8.56.1':
@@ -8306,10 +8313,10 @@ snapshots:
       '@types/json-schema': 7.0.15
       json-pointer: 0.6.2
 
-  '@stylistic/eslint-plugin@5.9.0(eslint@9.39.4(jiti@2.6.1))':
+  '@stylistic/eslint-plugin@5.10.0(eslint@9.39.4(jiti@2.6.1))':
     dependencies:
       '@eslint-community/eslint-utils': 4.9.1(eslint@9.39.4(jiti@2.6.1))
-      '@typescript-eslint/types': 8.56.1
+      '@typescript-eslint/types': 8.57.0
       eslint: 9.39.4(jiti@2.6.1)
       eslint-visitor-keys: 4.2.1
       espree: 10.4.0
@@ -8576,6 +8583,10 @@ snapshots:
     dependencies:
       undici-types: 7.18.2
 
+  '@types/node@25.5.0':
+    dependencies:
+      undici-types: 7.18.2
+
   '@types/normalize-package-data@2.4.4': {}
 
   '@types/parse-json@4.0.2': {}
@@ -8676,6 +8687,8 @@ snapshots:
       - supports-color
 
   '@typescript-eslint/types@8.56.1': {}
+
+  '@typescript-eslint/types@8.57.0': {}
 
   '@typescript-eslint/typescript-estree@8.56.1(typescript@5.9.3)':
     dependencies:
@@ -10873,7 +10886,7 @@ snapshots:
 
   jest-worker@27.5.1:
     dependencies:
-      '@types/node': 25.4.0
+      '@types/node': 25.5.0
       merge-stream: 2.0.0
       supports-color: 8.1.1
 
