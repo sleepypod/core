@@ -1,0 +1,60 @@
+name: Build & Package
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Create deploy tarball
+        run: |
+          # Package source + .next build (no node_modules — installed on target)
+          tar czf sleepypod-core.tar.gz \
+            --exclude='node_modules' \
+            --exclude='*.db' \
+            --exclude='*.db-*' \
+            --exclude='test-results' \
+            --exclude='.serena' \
+            --exclude='.claude' \
+            .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleepypod-core
+          path: sleepypod-core.tar.gz
+          retention-days: 30
+
+      # Create GitHub Release with deploy tarball on tags
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sleepypod-core.tar.gz
+          generate_release_notes: true

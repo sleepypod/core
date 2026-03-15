@@ -145,11 +145,13 @@ export const systemRouter = router({
     }),
 
   /**
-   * Trigger a self-update. Runs the install script in the background.
-   * The service will restart as part of the install, so the response
-   * may not arrive — the client should poll for reconnection.
+   * Trigger a self-update via curl+tarball from GitHub.
    *
-   * Optional `branch` param for testing feature branches.
+   * sp-update handles the full flow: iptables toggle, tarball download,
+   * dependency install, build, and service restart. The response may not
+   * arrive since the service restarts — client should poll for reconnection.
+   *
+   * Optional `branch` param for deploying feature branches.
    */
   triggerUpdate: publicProcedure
     .input(z.object({
@@ -158,37 +160,20 @@ export const systemRouter = router({
         .optional(),
     }).optional())
     .mutation(async ({ input }) => {
-      const branch = input?.branch
+      const branch = input?.branch ?? 'main'
 
       try {
         const { spawn } = await import('node:child_process')
 
-        if (branch) {
-          // Deploy a specific branch via a script that takes branch as an argument
-          const child = spawn(
-            '/bin/bash',
-            [`${CORE_DIR}/scripts/install`, '--local', '--no-ssh', '--branch', branch],
-            {
-              cwd: CORE_DIR,
-              detached: true,
-              stdio: 'ignore',
-              env: { ...process.env, INSTALL_BRANCH: branch },
-            },
-          )
-          child.unref()
-        }
-        else {
-          // Default: reset to origin/main via sp-update
-          const child = spawn('/usr/local/bin/sp-update', [], {
-            detached: true,
-            stdio: 'ignore',
-          })
-          child.unref()
-        }
+        const child = spawn('/usr/local/bin/sp-update', [branch], {
+          detached: true,
+          stdio: 'ignore',
+        })
+        child.unref()
 
         return {
           triggered: true,
-          branch: branch ?? 'main',
+          branch,
           message: 'Update started. Service will restart — poll for reconnection.',
         }
       }
