@@ -49,56 +49,56 @@ export const deviceRouter = router({
     .input(z.object({}))
     .output(z.any())
     .query(async () => {
-    return withHardwareClient(async (client) => {
-      const status = await client.getDeviceStatus()
+      return withHardwareClient(async (client) => {
+        const status = await client.getDeviceStatus()
 
-      // Best-effort DB sync — next getStatus() call will re-sync if this fails
-      try {
-        await db
-          .insert(deviceState)
-          .values({
-            side: 'left',
-            currentTemperature: status.leftSide.currentTemperature,
-            targetTemperature: status.leftSide.targetTemperature,
-            isPowered: status.leftSide.targetLevel !== 0,
-            lastUpdated: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: deviceState.side,
-            set: {
+        // Best-effort DB sync — next getStatus() call will re-sync if this fails
+        try {
+          await db
+            .insert(deviceState)
+            .values({
+              side: 'left',
               currentTemperature: status.leftSide.currentTemperature,
               targetTemperature: status.leftSide.targetTemperature,
               isPowered: status.leftSide.targetLevel !== 0,
               lastUpdated: new Date(),
-            },
-          })
+            })
+            .onConflictDoUpdate({
+              target: deviceState.side,
+              set: {
+                currentTemperature: status.leftSide.currentTemperature,
+                targetTemperature: status.leftSide.targetTemperature,
+                isPowered: status.leftSide.targetLevel !== 0,
+                lastUpdated: new Date(),
+              },
+            })
 
-        await db
-          .insert(deviceState)
-          .values({
-            side: 'right',
-            currentTemperature: status.rightSide.currentTemperature,
-            targetTemperature: status.rightSide.targetTemperature,
-            isPowered: status.rightSide.targetLevel !== 0,
-            lastUpdated: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: deviceState.side,
-            set: {
+          await db
+            .insert(deviceState)
+            .values({
+              side: 'right',
               currentTemperature: status.rightSide.currentTemperature,
               targetTemperature: status.rightSide.targetTemperature,
               isPowered: status.rightSide.targetLevel !== 0,
               lastUpdated: new Date(),
-            },
-          })
-      }
-      catch (dbError) {
-        console.error('Failed to sync device status to DB:', dbError)
-      }
+            })
+            .onConflictDoUpdate({
+              target: deviceState.side,
+              set: {
+                currentTemperature: status.rightSide.currentTemperature,
+                targetTemperature: status.rightSide.targetTemperature,
+                isPowered: status.rightSide.targetLevel !== 0,
+                lastUpdated: new Date(),
+              },
+            })
+        }
+        catch (dbError) {
+          console.error('Failed to sync device status to DB:', dbError)
+        }
 
-      return status
-    }, 'Failed to get device status')
-  }),
+        return status
+      }, 'Failed to get device status')
+    }),
 
   /**
    * Set target temperature for a pod side.
@@ -375,9 +375,9 @@ export const deviceRouter = router({
     .input(z.object({}))
     .output(z.object({ success: z.boolean() }))
     .mutation(async () => {
-    return withHardwareClient(async (client) => {
-      await client.startPriming()
-      return { success: true }
-    }, 'Failed to start priming')
-  }),
+      return withHardwareClient(async (client) => {
+        await client.startPriming()
+        return { success: true }
+      }, 'Failed to start priming')
+    }),
 })

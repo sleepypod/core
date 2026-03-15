@@ -114,9 +114,9 @@ export const systemRouter = router({
     .input(z.object({}))
     .output(z.object({ blocked: z.boolean() }))
     .query(async () => {
-    const blocked = await isWanBlocked()
-    return { blocked }
-  }),
+      const blocked = await isWanBlocked()
+      return { blocked }
+    }),
 
   /**
    * Toggle WAN internet access.

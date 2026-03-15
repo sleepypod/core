@@ -45,31 +45,31 @@ export const settingsRouter = router({
     .input(z.object({}))
     .output(z.any())
     .query(async () => {
-    try {
-      const [device] = await db.select().from(deviceSettings).limit(1)
-      const sides = await db.select().from(sideSettings)
-      const gestures = await db.select().from(tapGestures)
+      try {
+        const [device] = await db.select().from(deviceSettings).limit(1)
+        const sides = await db.select().from(sideSettings)
+        const gestures = await db.select().from(tapGestures)
 
-      return {
-        device: device || null,
-        sides: {
-          left: sides.find(s => s.side === 'left') || null,
-          right: sides.find(s => s.side === 'right') || null,
-        },
-        gestures: {
-          left: gestures.filter(g => g.side === 'left'),
-          right: gestures.filter(g => g.side === 'right'),
-        },
+        return {
+          device: device || null,
+          sides: {
+            left: sides.find(s => s.side === 'left') || null,
+            right: sides.find(s => s.side === 'right') || null,
+          },
+          gestures: {
+            left: gestures.filter(g => g.side === 'left'),
+            right: gestures.filter(g => g.side === 'right'),
+          },
+        }
       }
-    }
-    catch (error) {
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: `Failed to fetch settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        cause: error,
-      })
-    }
-  }),
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
 
   /**
    * Update device settings
