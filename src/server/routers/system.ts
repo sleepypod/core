@@ -300,16 +300,20 @@ export const systemRouter = router({
     }))
     .query(async ({ input }) => {
       try {
+        // Without -r: journalctl outputs oldest→newest, --cursor moves forward.
+        // We fetch oldest→newest then reverse in JS so pagination cursors
+        // move backward through time correctly.
         const args = [
           '-u', input.unit,
           '-n', String(input.lines + 1), // fetch one extra to detect if more exist
           '--no-pager',
-          '-r', // reverse (newest first)
           '--output', 'short-iso',
         ]
 
         if (input.cursor) {
-          args.push('--after-cursor', input.cursor)
+          // --until-cursor fetches entries up to (but not including) the cursor,
+          // giving us older entries for backward pagination
+          args.push('--until-cursor', input.cursor)
         }
         if (input.since) {
           args.push('--since', input.since)
@@ -318,14 +322,16 @@ export const systemRouter = router({
           args.push('-p', input.priority)
         }
 
-        // Show cursor for pagination
         args.push('--show-cursor')
 
-        const { stdout } = await execFileAsync('journalctl', args, { timeout: 10000 })
+        const { stdout } = await execFileAsync('journalctl', args, {
+          timeout: 10000,
+          maxBuffer: 5 * 1024 * 1024, // 5MB for large stack traces / JSON logs
+        })
 
         const rawLines = stdout.split('\n')
 
-        // journalctl --show-cursor appends "-- cursor: s=..." as last non-empty line
+        // Extract cursor from "-- cursor: s=..." line
         let nextCursor: string | null = null
         const cursorIdx = rawLines.findLastIndex(l => l.startsWith('-- cursor: '))
         if (cursorIdx !== -1) {
@@ -333,15 +339,21 @@ export const systemRouter = router({
           rawLines.splice(cursorIdx, 1)
         }
 
-        // Filter empty lines
         const logLines = rawLines.filter(l => l.trim())
 
-        // If we got more than requested, there are more entries
         const hasMore = logLines.length > input.lines
-        const trimmed = hasMore ? logLines.slice(0, input.lines) : logLines
+        // Take the last N lines (newest) since journalctl outputs oldest first
+        const page = hasMore ? logLines.slice(-input.lines) : logLines
+        // Reverse to newest-first for the client
+        page.reverse()
+
+        // If there are more entries but cursor wasn't parsed, pagination is broken
+        if (hasMore && !nextCursor) {
+          nextCursor = null // client will know there were more but can't paginate
+        }
 
         return {
-          lines: trimmed,
+          lines: page,
           nextCursor: hasMore ? nextCursor : null,
         }
       }
@@ -349,6 +361,10 @@ export const systemRouter = router({
         // journalctl unavailable (dev environment)
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           return { lines: ['journalctl not available (dev environment)'], nextCursor: null }
+        }
+        // maxBuffer exceeded — truncate gracefully
+        if ((error as NodeJS.ErrnoException).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+          return { lines: ['Log output too large — try reducing line count or adding a priority filter'], nextCursor: null }
         }
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
