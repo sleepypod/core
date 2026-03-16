@@ -1,24 +1,39 @@
 /**
- * WebSocket server for streaming raw piezo sensor data to an iOS client.
+ * WebSocket server for streaming raw sensor data to iOS clients.
  *
  * Runs on port 3001 (separate from the Next.js tRPC server on 3000).
  * Reads the newest `.RAW` file from the configured data directory using
  * manual CBOR byte parsing (the same `_read_raw_record` strategy used by
  * the Python piezo-processor sidecar — see modules/piezo-processor/main.py).
  *
- * Only one iOS client may be connected and processing at a time.
+ * Streams all sensor types: piezo, capacitance, bed temperature, freezer
+ * temperature, freezer health, and firmware logs. Clients can subscribe to
+ * specific types to avoid receiving unwanted high-frequency data.
+ *
+ * Only one iOS client may claim processing ownership at a time.
  *
  * Protocol:
  *   Client → Server:
- *     { type: "claim_processing" }   — claim processing ownership
- *     { type: "heartbeat" }          — keep-alive (must arrive within 30 s)
- *     { type: "release_processing" } — voluntarily release ownership
+ *     { type: "claim_processing" }           — claim processing ownership
+ *     { type: "heartbeat" }                  — keep-alive (must arrive within 30 s)
+ *     { type: "release_processing" }         — voluntarily release ownership
+ *     { type: "subscribe", sensors: [...] }  — subscribe to sensor types
+ *                                              (default: all types)
  *
- *   Server → Client:
- *     { type: "piezo-dual", ts, left1, right1, left2?, right2? }  — sensor frame
+ *   Server → Client (sensor frames, filtered by subscription):
+ *     { type: "piezo-dual", ts, left1, right1, ... }   — piezo BCG (~1 Hz)
+ *     { type: "capSense"|"capSense2", ts, left, right } — presence (~2 Hz)
+ *     { type: "bedTemp"|"bedTemp2", ts, ... }           — bed temperature (~0.06 Hz)
+ *     { type: "frzTemp", ts, left, right, amb, hs }     — freezer temp (~0.06 Hz)
+ *     { type: "frzTherm", ts, left, right }             — thermal control status
+ *     { type: "frzHealth", ts, left, right, fan }       — hardware health
+ *     { type: "log", ts, level, msg }                   — firmware debug log
+ *
+ *   Server → Client (control):
  *     { type: "error", message }     — error notification
  *     { type: "claimed", since }     — ack for claim_processing
  *     { type: "released" }           — ack for release / heartbeat timeout
+ *     { type: "subscribed", sensors } — ack for subscribe
  */
 
 import { WebSocketServer, WebSocket } from 'ws'
@@ -78,15 +93,31 @@ function readRawRecord(
   }
   pos += 4
 
-  // seq value — uint32 (0x1a) or uint64 (0x1b)
+  // seq value — CBOR unsigned integer (any valid encoding)
   need(1)
   const seqHdr = buf[pos]
   pos += 1
-  if (seqHdr === 0x1a) {
+  const seqAi = seqHdr & 0x1f
+  const seqMt = seqHdr >> 5
+  if (seqMt !== 0) {
+    throw new Error(`seq must be unsigned int, got major type ${seqMt}`)
+  }
+  if (seqAi <= 23) {
+    // inline value — no additional bytes
+  }
+  else if (seqAi === 24) {
+    need(1)
+    pos += 1
+  }
+  else if (seqAi === 25) {
+    need(2)
+    pos += 2
+  }
+  else if (seqAi === 26) {
     need(4)
     pos += 4
   }
-  else if (seqHdr === 0x1b) {
+  else if (seqAi === 27) {
     need(8)
     pos += 8
   }
@@ -164,52 +195,80 @@ function findLatestRaw(dir: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Piezo frame decoder
+// Sensor types
 // ---------------------------------------------------------------------------
 
-const cborDecoder = new Decoder()
+/** All sensor record types the firmware emits. */
+const ALL_SENSOR_TYPES = [
+  'piezo-dual', 'capSense', 'capSense2',
+  'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
+] as const
 
-interface PiezoFrame {
-  type: 'piezo-dual'
-  ts: number
-  left1: number[]
-  right1: number[]
-  left2?: number[]
-  right2?: number[]
+/** Valid sensor type string. Used for subscription filtering. */
+type SensorType = typeof ALL_SENSOR_TYPES[number]
+
+// ---------------------------------------------------------------------------
+// Sensor frame decoder
+// ---------------------------------------------------------------------------
+
+const cborDecoder = new Decoder({ mapsAsObjects: true, useRecords: false })
+
+/** Convert raw byte buffer of little-endian int32s to a JS number array. */
+function int32BufferToArray(raw: Buffer | Uint8Array | undefined): number[] {
+  if (!raw || raw.length === 0) return []
+  // Guard against partial buffers (byteLength not multiple of 4)
+  const usableBytes = raw.byteLength - (raw.byteLength % 4)
+  if (usableBytes === 0) return []
+  const view = new DataView(raw.buffer, raw.byteOffset, usableBytes)
+  const nums: number[] = []
+  for (let i = 0; i < usableBytes; i += 4) {
+    nums.push(view.getInt32(i, true))
+  }
+  return nums
 }
 
-function decodePiezoFrame(innerBytes: Buffer): PiezoFrame | null {
+/**
+ * Decode CBOR inner data into JSON-serializable sensor frames.
+ *
+ * The inner data blob from a RAW record can contain multiple concatenated
+ * CBOR values (the firmware packs several sensor readings per outer record).
+ *
+ * For piezo-dual: converts raw byte buffers (int32 arrays) to number arrays.
+ * For all other types: passes the decoded CBOR object through as-is.
+ *
+ * Returns an array of decoded frames (may be empty on failure).
+ */
+function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
+  const frames: Record<string, unknown>[] = []
   try {
-    const inner = cborDecoder.decode(innerBytes)
-    if (inner?.type !== 'piezo-dual') return null
+    // decodeMultiple handles concatenated CBOR values in a single buffer
+    cborDecoder.decodeMultiple(innerBytes, (inner: unknown) => {
+      if (!inner || typeof inner !== 'object' || !('type' in (inner as Record<string, unknown>))) return
+      const rec = inner as Record<string, unknown>
+      const recordType = rec.type as string
 
-    // Convert raw byte buffers (int32 arrays) to JS number arrays
-    const toNumbers = (raw: Buffer | Uint8Array | undefined): number[] => {
-      if (!raw || raw.length === 0) return []
-      const view = new DataView(
-        raw.buffer,
-        raw.byteOffset,
-        raw.byteLength
-      )
-      const nums: number[] = []
-      for (let i = 0; i < raw.byteLength; i += 4) {
-        nums.push(view.getInt32(i, true)) // little-endian int32
+      if (recordType === 'piezo-dual') {
+        frames.push({
+          type: 'piezo-dual',
+          ts: rec.ts ?? Math.floor(Date.now() / 1000),  // epoch seconds (consistent with firmware)
+          freq: rec.freq,
+          left1: int32BufferToArray(rec.left1 as Buffer | Uint8Array | undefined),
+          right1: int32BufferToArray(rec.right1 as Buffer | Uint8Array | undefined),
+          left2: rec.left2 ? int32BufferToArray(rec.left2 as Buffer | Uint8Array) : undefined,
+          right2: rec.right2 ? int32BufferToArray(rec.right2 as Buffer | Uint8Array) : undefined,
+        })
       }
-      return nums
-    }
-
-    return {
-      type: 'piezo-dual',
-      ts: Date.now(),
-      left1: toNumbers(inner.left1),
-      right1: toNumbers(inner.right1),
-      left2: inner.left2 ? toNumbers(inner.left2) : undefined,
-      right2: inner.right2 ? toNumbers(inner.right2) : undefined,
-    }
+      else {
+        // capSense, capSense2, bedTemp, bedTemp2, frzTemp, frzTherm,
+        // frzHealth, log — all JSON-compatible after CBOR decode
+        frames.push(rec)
+      }
+    })
   }
   catch {
-    return null
+    // Partial decode — return whatever we got
   }
+  return frames
 }
 
 // ---------------------------------------------------------------------------
@@ -223,10 +282,13 @@ let streamingInterval: ReturnType<typeof setInterval> | null = null
 let activeClient: WebSocket | null = null
 let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
 
+/** Per-client sensor subscriptions. undefined = all types (default). */
+const clientSubscriptions = new WeakMap<WebSocket, Set<SensorType> | undefined>()
+
 function resetHeartbeatTimer(): void {
   if (heartbeatTimer) clearTimeout(heartbeatTimer)
   heartbeatTimer = setTimeout(() => {
-    console.warn('[piezoStream] iOS heartbeat timeout — releasing processing ownership')
+    console.warn('[sensorStream] iOS heartbeat timeout — releasing processing ownership')
     releaseClient()
   }, HEARTBEAT_TIMEOUT_MS)
 }
@@ -259,7 +321,7 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
       setIosProcessing(true)
       resetHeartbeatTimer()
       ws.send(JSON.stringify({ type: 'claimed', since: Date.now() }))
-      console.log('[piezoStream] iOS client claimed processing ownership')
+      console.log('[sensorStream] iOS client claimed processing ownership')
     }
     else if (msg.type === 'heartbeat') {
       if (activeClient === ws) {
@@ -269,8 +331,36 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
     else if (msg.type === 'release_processing') {
       if (activeClient === ws) {
         releaseClient()
-        console.log('[piezoStream] iOS client voluntarily released processing')
+        console.log('[sensorStream] iOS client voluntarily released processing')
       }
+    }
+    else if (msg.type === 'subscribe') {
+      // Client specifies which sensor types it wants
+      const requested = msg.sensors as string[] | undefined
+      if (!Array.isArray(requested) || requested.length === 0) {
+        // Empty or missing → subscribe to all (undefined = no filter)
+        clientSubscriptions.set(ws, undefined)
+        ws.send(JSON.stringify({ type: 'subscribed', sensors: [...ALL_SENSOR_TYPES] }))
+        console.log('[sensorStream] Client subscribed to: all')
+      }
+      else {
+        const valid = requested.filter(
+          (s): s is SensorType => (ALL_SENSOR_TYPES as readonly string[]).includes(s))
+        if (valid.length === 0) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: `No valid sensor types in request. Valid types: ${ALL_SENSOR_TYPES.join(', ')}`,
+          }))
+        }
+        else {
+          clientSubscriptions.set(ws, new Set(valid))
+          ws.send(JSON.stringify({ type: 'subscribed', sensors: valid }))
+          console.log('[sensorStream] Client subscribed to: %s', valid.join(', '))
+        }
+      }
+    }
+    else {
+      ws.send(JSON.stringify({ type: 'error', message: `Unknown message type: ${msg.type}` }))
     }
   }
   catch {
@@ -286,7 +376,7 @@ export function startPiezoStreamServer(): WebSocketServer {
   if (wss) return wss
 
   wss = new WebSocketServer({ port: WS_PORT })
-  console.log(`[piezoStream] WebSocket server listening on port ${WS_PORT}`)
+  console.log(`[sensorStream] WebSocket server listening on port ${WS_PORT}`)
 
   // State for file tailing
   let currentPath: string | null = null
@@ -294,19 +384,19 @@ export function startPiezoStreamServer(): WebSocketServer {
   let readOffset = 0 // offset into the actual file (not the buffer)
 
   wss.on('connection', (ws) => {
-    console.log('[piezoStream] Client connected')
+    console.log('[sensorStream] Client connected')
 
     ws.on('message', data => handleClientMessage(ws, data as Buffer | string))
 
     ws.on('close', () => {
-      console.log('[piezoStream] Client disconnected')
+      console.log('[sensorStream] Client disconnected')
       if (activeClient === ws) {
         releaseClient()
       }
     })
 
     ws.on('error', (err) => {
-      console.error('[piezoStream] WebSocket error:', err.message)
+      console.error('[sensorStream] WebSocket error:', err.message)
       if (activeClient === ws) {
         releaseClient()
       }
@@ -323,7 +413,7 @@ export function startPiezoStreamServer(): WebSocketServer {
 
     // Switch files if a newer one appeared
     if (latest !== currentPath) {
-      console.log(`[piezoStream] Switched to RAW file: ${path.basename(latest)}`)
+      console.log(`[sensorStream] Switched to RAW file: ${path.basename(latest)}`)
       currentPath = latest
       fileBuffer = Buffer.alloc(0)
       readOffset = 0
@@ -358,15 +448,26 @@ export function startPiezoStreamServer(): WebSocketServer {
 
           if (data === null) continue // empty placeholder
 
-          const frame = decodePiezoFrame(data)
-          if (!frame) continue
+          const frames = decodeSensorFrames(data)
 
-          const payload = JSON.stringify(frame)
+          for (const frame of frames) {
+            const frameType = frame.type as string
 
-          const server = wss
-          if (server) {
-            for (const client of server.clients) {
-              if (client.readyState === WebSocket.OPEN) {
+            // Broadcast to subscribed clients only
+            const server = wss
+            if (server) {
+              // Pre-serialize once (avoid per-client JSON.stringify)
+              let payload: string | null = null
+
+              for (const client of server.clients) {
+                if (client.readyState !== WebSocket.OPEN) continue
+
+                // Check subscription filter (default: all types)
+                const subs = clientSubscriptions.get(client)
+                if (subs && !subs.has(frameType as SensorType)) continue
+
+                // Lazy serialize — only if at least one client needs it
+                if (payload === null) payload = JSON.stringify(frame)
                 client.send(payload)
               }
             }
@@ -377,7 +478,7 @@ export function startPiezoStreamServer(): WebSocketServer {
             break // incomplete record — wait for more data
           }
           // Malformed record — skip forward one byte and try to resync
-          console.warn('[piezoStream] Skipping malformed record:', (e as Error).message)
+          console.warn('[sensorStream] Skipping malformed record:', (e as Error).message)
           bufferPos += 1
         }
       }
@@ -418,7 +519,7 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
     wss = null
     return new Promise<void>((resolve) => {
       server.close(() => {
-        console.log('[piezoStream] WebSocket server closed')
+        console.log('[sensorStream] WebSocket server closed')
         resolve()
       })
     })
