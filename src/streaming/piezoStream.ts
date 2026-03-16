@@ -93,15 +93,31 @@ function readRawRecord(
   }
   pos += 4
 
-  // seq value — uint32 (0x1a) or uint64 (0x1b)
+  // seq value — CBOR unsigned integer (any valid encoding)
   need(1)
   const seqHdr = buf[pos]
   pos += 1
-  if (seqHdr === 0x1a) {
+  const seqAi = seqHdr & 0x1f
+  const seqMt = seqHdr >> 5
+  if (seqMt !== 0) {
+    throw new Error(`seq must be unsigned int, got major type ${seqMt}`)
+  }
+  if (seqAi <= 23) {
+    // inline value — no additional bytes
+  }
+  else if (seqAi === 24) {
+    need(1)
+    pos += 1
+  }
+  else if (seqAi === 25) {
+    need(2)
+    pos += 2
+  }
+  else if (seqAi === 26) {
     need(4)
     pos += 4
   }
-  else if (seqHdr === 0x1b) {
+  else if (seqAi === 27) {
     need(8)
     pos += 8
   }
