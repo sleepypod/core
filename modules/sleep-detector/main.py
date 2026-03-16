@@ -16,11 +16,20 @@ Detection logic:
   A session starts on the first present sample and ends after ABSENCE_TIMEOUT_S
   consecutive absent samples.
 
-Movement scoring:
-  When calibrated, movement is measured as the sum of per-channel deviations
-  from the empty-bed baseline (in units of standard deviations). This makes
-  scores comparable across pods with different sensor characteristics.
-  Without calibration, raw channel magnitude is used as a fallback.
+Movement scoring (Proportional Integration Mode):
+  Movement is computed as the sum of absolute sample-to-sample deltas across
+  the 3 sensing channel pairs per epoch (Kortelainen et al. 2010; Cole-Kripke
+  1992). This measures actual body displacement over time rather than static
+  deviation from an empty-bed baseline.
+
+  Sentinel values (-1.0 from firmware) are filtered via zero-order hold.
+  Reference channel pair is used for common-mode rejection.
+
+  Expected score ranges (per 60s epoch, stored as integer 0-1000):
+    0-50:    still (deep sleep, stable N2)
+    50-200:  minor fidgeting/twitches
+    200-500: limb repositioning, partial turns
+    500+:    major position change, getting up
 """
 
 import os
@@ -45,7 +54,6 @@ from common.calibration import (
     is_present_capsense_calibrated,
     is_present_capsense2_calibrated,
 )
-import numpy as np
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -157,66 +165,71 @@ def report_health(status: str, message: str) -> None:
 # Calibration-aware presence and movement
 # ---------------------------------------------------------------------------
 
-CHANNELS = ("out", "cen", "in")
+# Sentinel value emitted by capSense2 firmware on read errors
+CAPSENSE2_SENTINEL = -1.0
 
 
-def movement_score_calibrated(record: dict, side: str, baselines: Optional[dict]) -> int:
-    """Compute movement as sum of per-channel z-score deviations from baseline.
+def _extract_channel_values(record: dict, side: str,
+                            baselines: Optional[dict] = None):
+    """Extract averaged sensing channel values from a capSense/capSense2 record.
 
-    Returns a value in "centi-sigma" units (z-score * 100) regardless of
-    calibration state, so that the movement column has a consistent scale.
+    Returns (values_list, rtype) where values_list is [A, B, C] averages
+    (floats for capSense2, ints for capSense) and rtype is the record type.
+    Returns (None, rtype) if the record is invalid or contains sentinels.
 
-    Handles both capSense (Pod 3: out/cen/in) and capSense2 (Pod 5: values array).
+    If baselines are provided and include a ref mean, uses the calibrated
+    reference instead of the hardcoded nominal 1.16.
     """
     data = record.get(side, {})
     if not data:
-        return 0
+        return None, record.get("type", "")
 
     rtype = record.get("type", "")
 
     if rtype == "capSense2":
         vals = data.get("values")
         if not vals or len(vals) < 6:
-            return 0
+            return None, rtype
+        # Check for sentinel values (-1.0)
+        for i in range(6):
+            if vals[i] == CAPSENSE2_SENTINEL:
+                return None, rtype
         # Average redundant pairs: A=[0:2], B=[2:4], C=[4:6]
-        sense_pairs = (("A", 0, 1), ("B", 2, 3), ("C", 4, 5))
-        if baselines is None or baselines.get("format") != "capSense2":
-            # Uncalibrated: default std=5.0 for float-range capSense2 values
-            score = 0.0
-            for _, ia, ib in sense_pairs:
-                score += abs((vals[ia] + vals[ib]) / 2.0) / 5.0
-            return int(round(score * 100))
-        channels = baselines.get("channels", {})
-        score = 0.0
-        for name, ia, ib in sense_pairs:
-            val = (vals[ia] + vals[ib]) / 2.0
-            ch_cal = channels.get(name, {})
-            mean = ch_cal.get("mean", 0)
-            std = ch_cal.get("std", 0.05)
-            if std > 0:
-                score += abs((val - mean) / std)
-        return int(round(score * 100))
+        a = (vals[0] + vals[1]) / 2.0
+        b = (vals[2] + vals[3]) / 2.0
+        c = (vals[4] + vals[5]) / 2.0
+        # Common-mode rejection using reference channel pair (indices 6,7)
+        if len(vals) >= 8 and vals[6] != CAPSENSE2_SENTINEL and vals[7] != CAPSENSE2_SENTINEL:
+            # Use calibrated ref mean if available, else hardcoded nominal
+            ref_nominal = 1.16
+            if baselines and baselines.get("ref"):
+                ref_nominal = baselines["ref"].get("mean", 1.16)
+            ref_delta = ((vals[6] + vals[7]) / 2.0) - ref_nominal
+            a -= ref_delta
+            b -= ref_delta
+            c -= ref_delta
+        return [a, b, c], rtype
 
-    # capSense (Pod 3): named int channels
-    DEFAULT_STD = 500
+    # capSense (Pod 3): named int channels — baselines param unused
+    # (Pod 3 has no reference channel for common-mode rejection)
+    a = int(data.get("out", 0))
+    b = int(data.get("cen", 0))
+    c = int(data.get("in", 0))
+    return [a, b, c], rtype
 
-    if baselines is None or baselines.get("format") == "capSense2":
-        # No baseline or mismatched format — use uncalibrated defaults
-        raw_sum = 0.0
-        for ch in CHANNELS:
-            raw_sum += abs(int(data.get(ch, 0))) / DEFAULT_STD
-        return int(round(raw_sum * 100))
 
-    channels = baselines.get("channels", {})
-    score = 0.0
-    for ch in CHANNELS:
-        val = int(data.get(ch, 0))
-        ch_cal = channels.get(ch, {})
-        mean = ch_cal.get("mean", 0)
-        std = ch_cal.get("std", 1)
-        if std > 0:
-            score += abs((val - mean) / std)
-    return int(round(score * 100))
+def compute_movement_delta(current: list, previous: list) -> float:
+    """Compute instantaneous movement from sample-to-sample delta.
+
+    Sum of absolute deltas across all sensing channels.
+    This is the Proportional Integration Mode (PIM) analog for bed sensors
+    (Kortelainen et al. 2010; Cole-Kripke 1992).
+
+    Returns a non-negative float. Accumulate over an epoch for scoring.
+    """
+    if not current or not previous or len(current) != len(previous):
+        return 0.0
+    return sum(abs(c - p) for c, p in zip(current, previous))
 
 
 class CalibrationCache:
@@ -265,6 +278,8 @@ class SessionTracker:
     _exit_count: int = 0
     _movement_buf: list = field(default_factory=list)
     _last_movement_write: float = field(default_factory=time.time)
+    _prev_values: Optional[list] = None  # previous sample's channel values
+    _scale_factor: float = 10.0  # default for capSense2; updated on first record
 
     def process(self, ts: float, record: dict) -> None:
         baselines = self.calibration.get_baselines(self.side)
@@ -281,10 +296,25 @@ class SessionTracker:
             present = is_present_capsense_calibrated(
                 record, self.side, cal, fallback_threshold=PRESENCE_THRESHOLD,
             )
-        movement = movement_score_calibrated(record, self.side, baselines)
-        self._update(ts, present, movement)
 
-    def _update(self, ts: float, present: bool, movement: int) -> None:
+        # Set scale factor based on sensor type (Pod 3 int vs Pod 5 float)
+        if rtype == "capSense" and self._scale_factor != 0.5:
+            self._scale_factor = 0.5
+        elif rtype == "capSense2" and self._scale_factor != 10.0:
+            self._scale_factor = 10.0
+
+        # Movement: sample-to-sample delta (PIM)
+        current_values, _ = _extract_channel_values(record, self.side, baselines)
+        if current_values is not None:
+            delta = compute_movement_delta(current_values, self._prev_values)
+            self._prev_values = current_values
+        else:
+            # Sentinel or invalid — skip delta, keep previous (zero-order hold)
+            delta = 0.0
+
+        self._update(ts, present, delta)
+
+    def _update(self, ts: float, present: bool, movement: float) -> None:
         self._movement_buf.append(movement)
         self._flush_movement(ts)
 
@@ -356,15 +386,26 @@ class SessionTracker:
         self._interval_start = None
         self._was_present = False
         self._exit_count = 0
+        self._prev_values = None  # avoid stale delta on next session start
+        self._movement_buf = []   # discard leftover deltas from session end
 
     def _flush_movement(self, ts: float) -> None:
         if ts - self._last_movement_write < MOVEMENT_INTERVAL_S:
             return
-        if self._movement_buf:
-            total = int(np.mean(self._movement_buf))
-            write_movement(self.db, self.side,
-                           datetime.fromtimestamp(ts, tz=timezone.utc), total)
+        if not self._movement_buf or self._session_start is None:
+            # Only write movement during active sessions (O-2 fix)
             self._movement_buf = []
+            self._last_movement_write = ts
+            return
+        # Sum of absolute deltas over the epoch (PIM analog)
+        # Scale factor depends on sensor type:
+        #   capSense2 (Pod 5): float channels, deltas ~0.05-5.0 → ×10
+        #   capSense  (Pod 3): int ADC channels, deltas ~1-50 → ×0.5
+        raw_sum = sum(self._movement_buf)
+        total = min(1000, int(raw_sum * self._scale_factor))
+        write_movement(self.db, self.side,
+                       datetime.fromtimestamp(ts, tz=timezone.utc), total)
+        self._movement_buf = []
         self._last_movement_write = ts
 
 
