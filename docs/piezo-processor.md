@@ -74,12 +74,12 @@ stateDiagram-v2
 
     ABSENT --> PRESENT : med_std > 400k OR acr_qual > 0.45
     PRESENT --> PRESENT : med_std >= 150k OR acr_qual >= 0.225
-    PRESENT --> PRESENT : consecutive_low < 3\n(hysteresis hold)
-    PRESENT --> ABSENT : consecutive_low >= 3\n(3 consecutive low windows)
+    PRESENT --> PRESENT : consecutive_low < 3 (hysteresis hold)
+    PRESENT --> ABSENT : consecutive_low >= 3 (3 consecutive low windows)
 
-    note right of ABSENT : No vitals computed.\nBuffers still accumulate.
+    note right of ABSENT : No vitals computed. Buffers still accumulate.
 
-    note right of PRESENT : Vitals written every 60s.\nconsecutive_low resets on any good window.
+    note right of PRESENT : Vitals written every 60s. consecutive_low resets on any good window.
 ```
 
 ## 3. Signal Processing Pipeline
@@ -208,7 +208,7 @@ The upper cutoff of 8.5 Hz captures up to the 5th harmonic of a 100 BPM heart ra
 2. Find peaks in the cardiac lag range (45-120 BPM, i.e., lags 250-667 at 500 Hz). Only peaks with height > 0.02 and minimum distance 75 samples (0.15 s) are considered.
 3. For each candidate peak at lag `L`, compute the SHS score:
 
-```
+```text
 score(L) = 1.0 * ACR(L) + 0.8 * ACR(L/2) + 0.6 * ACR(L/3)
 ```
 
@@ -362,7 +362,7 @@ Live pod data, Pod 5, 2026-03-16. Left side empty, right side occupied (person a
 | HRV sub-window | 30 s with 50% overlap | Balances IBI resolution vs. number of estimates |
 | HRV IBI validity | [400, 1500] ms | Corresponds to 40-150 BPM |
 | Hampel `k` | 3 (window radius) | 7-element window; standard for short time series |
-| Hampel `threshold` | 3.0 * 1.4826 * MAD | ~3 sigma equivalent for Gaussian; rejects gross outliers |
+| Hampel `threshold` | `3.0 * 1.4826 * MAD` | ~3 sigma equivalent for Gaussian; rejects gross outliers |
 | RMSSD validity | [5, 200] ms | BCG-derived RMSSD >200 ms is artifact (Shaffer & Ginsberg 2017) |
 
 ## 11. Literature References
@@ -401,4 +401,4 @@ Live pod data, Pod 5, 2026-03-16. Left side empty, right side occupied (person a
 
 6. **Fixed filter parameters.** All bandpass cutoffs are hardcoded. Individual variation in heart rate range (e.g., athletes with resting HR < 48 BPM) or breathing patterns could fall outside the fixed bands. The `bpm_range=(45, 120)` in SHS and the BR validity gate `[6, 30]` BPM cover the vast majority of sleeping adults but are not adaptive.
 
-7. **SHS scoring resolution.** The SHS algorithm uses linear interpolation between integer lags for sub-harmonic lookup. At 500 Hz, adjacent lags differ by 0.12 s, corresponding to ~0.3 BPM resolution at 80 BPM. This is adequate for clinical purposes but means the algorithm cannot resolve sub-BPM differences.
+7. **SHS scoring resolution.** The SHS algorithm uses linear interpolation between integer lags for sub-harmonic lookup. At 500 Hz, adjacent lags differ by 0.002 s (2 ms), corresponding to ~0.3 BPM resolution at 80 BPM. This is adequate for clinical purposes but means the algorithm cannot resolve sub-BPM differences.

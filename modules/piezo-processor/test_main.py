@@ -212,7 +212,7 @@ class TestPumpGate:
         gate.check(left_spike, right_spike)
 
         # Simulate time passing beyond guard period
-        gate._pump_until = time.time() - 1.0
+        gate._pump_until = time.monotonic() - 1.0
 
         left_normal = (np.random.randn(500) * 1000).astype(np.float64)
         right_normal = (np.random.randn(500) * 1000).astype(np.float64)

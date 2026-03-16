@@ -158,10 +158,10 @@ class PumpGate:
     def __init__(self, fs: float = SAMPLE_RATE):
         self._fs = fs
         self._baseline: Optional[float] = None
-        self._pump_until: float = 0.0  # time.time() when guard expires
+        self._pump_until: float = 0.0  # monotonic seconds when guard expires
 
     def is_pump_active(self) -> bool:
-        return time.time() < self._pump_until
+        return time.monotonic() < self._pump_until
 
     def check(self, left_chunk: np.ndarray, right_chunk: np.ndarray) -> bool:
         """Check a single record's L+R chunks for pump activity.
@@ -186,17 +186,24 @@ class PumpGate:
             spike = max(le, re) / self._baseline
             if ratio > PUMP_CORRELATION_MIN and spike > PUMP_ENERGY_MULTIPLIER:
                 # Pump detected — set guard period
-                self._pump_until = time.time() + PUMP_GUARD_S
+                self._pump_until = time.monotonic() + PUMP_GUARD_S
                 log.debug("Pump detected (spike=%.1f, ratio=%.2f), "
                           "guard until +%.0fs", spike, ratio, PUMP_GUARD_S)
                 return True
 
-        # Update baseline with exponential moving average (only on clean data)
+        # Update baseline with exponential moving average (only on clean data).
+        # Guard: if first record has unusually high energy (module started during
+        # pump), don't initialize baseline from it — wait for a quieter sample.
         avg = (le + re) / 2
         if self._baseline is None:
             self._baseline = avg
+            self._baseline_samples = 1
         elif avg < self._baseline * 3:
             self._baseline = 0.95 * self._baseline + 0.05 * avg
+            self._baseline_samples = getattr(self, '_baseline_samples', 0) + 1
+            # If early samples are settling, allow baseline to drop faster
+            if self._baseline_samples < 10:
+                self._baseline = min(self._baseline, avg)
 
         return False
 
@@ -453,12 +460,12 @@ def compute_hrv(samples: np.ndarray,
         min_lag = int(fs * 60 / 150)
         max_lag = int(fs * 60 / 40)
 
-        for start in range(0, len(filtered) - sub_window, sub_window // 2):
+        for start in range(0, len(filtered) - sub_window + 1, sub_window // 2):
             chunk = filtered[start:start + sub_window]
             acr = _compute_autocorr(chunk, fs)
             if acr is None:
                 continue
-            search = acr[min_lag:min(max_lag, len(acr))]
+            search = acr[min_lag:min(max_lag + 1, len(acr))]
             if len(search) == 0:
                 continue
 
@@ -549,7 +556,7 @@ class SideProcessor:
         filt = _bandpass(hr_arr, 1.0, 10.0, SAMPLE_RATE)
         w = int(5 * SAMPLE_RATE)
         stds = [np.std(filt[j:j + w])
-                for j in range(0, len(filt) - w, w)]
+                for j in range(0, len(filt) - w + 1, w)]
         med_std = float(np.median(stds)) if stds else 0.0
         acr_qual = _autocorr_quality(hr_arr)
         present = self._presence.update(med_std, acr_qual)
@@ -567,7 +574,7 @@ class SideProcessor:
         # --- HRV (sub-window autocorrelation IBI) ---
         hrv_arr = np.array(self._hrv_buf)
         hrv = compute_hrv(hrv_arr) if len(hrv_arr) >= int(
-            60 * SAMPLE_RATE) else None
+            HRV_WINDOW_S * SAMPLE_RATE) else None
 
         if hr is not None or hrv is not None or br is not None:
             ts = datetime.now(timezone.utc)
