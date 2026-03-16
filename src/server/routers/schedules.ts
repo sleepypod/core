@@ -98,8 +98,8 @@ export const schedulesRouter = router({
     .output(z.any())
     .mutation(async ({ input }) => {
       try {
-        const created = await db.transaction(async (tx) => {
-          const [result] = await tx.insert(temperatureSchedules).values(input).returning()
+        const created = db.transaction((tx) => {
+          const [result] = tx.insert(temperatureSchedules).values(input).returning().all()
           if (!result) {
             throw new TRPCError({
               code: 'INTERNAL_SERVER_ERROR',
@@ -146,12 +146,13 @@ export const schedulesRouter = router({
       try {
         const { id, ...updates } = input
 
-        const updated = await db.transaction(async (tx) => {
-          const [result] = await tx
+        const updated = db.transaction((tx) => {
+          const [result] = tx
             .update(temperatureSchedules)
             .set({ ...updates, updatedAt: new Date() })
             .where(eq(temperatureSchedules.id, id))
             .returning()
+            .all()
           if (!result) {
             throw new TRPCError({
               code: 'NOT_FOUND',
@@ -193,11 +194,12 @@ export const schedulesRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        await db.transaction(async (tx) => {
-          const [deleted] = await tx
+        db.transaction((tx) => {
+          const [deleted] = tx
             .delete(temperatureSchedules)
             .where(eq(temperatureSchedules.id, input.id))
             .returning()
+            .all()
           if (!deleted) {
             throw new TRPCError({
               code: 'NOT_FOUND',
@@ -247,8 +249,8 @@ export const schedulesRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        const created = await db.transaction(async (tx) => {
-          const [result] = await tx.insert(powerSchedules).values(input).returning()
+        const created = db.transaction((tx) => {
+          const [result] = tx.insert(powerSchedules).values(input).returning().all()
           if (!result) {
             throw new TRPCError({
               code: 'INTERNAL_SERVER_ERROR',
@@ -307,14 +309,15 @@ export const schedulesRouter = router({
       try {
         const { id, ...updates } = input
 
-        const updated = await db.transaction(async (tx) => {
+        const updated = db.transaction((tx) => {
           // If partial time update, validate final computed state
           if ((input.onTime || input.offTime) && !(input.onTime && input.offTime)) {
-            const [existing] = await tx
+            const [existing] = tx
               .select({ onTime: powerSchedules.onTime, offTime: powerSchedules.offTime })
               .from(powerSchedules)
               .where(eq(powerSchedules.id, id))
               .limit(1)
+              .all()
 
             if (!existing) {
               throw new TRPCError({
@@ -334,11 +337,12 @@ export const schedulesRouter = router({
             }
           }
 
-          const [result] = await tx
+          const [result] = tx
             .update(powerSchedules)
             .set({ ...updates, updatedAt: new Date() })
             .where(eq(powerSchedules.id, id))
             .returning()
+            .all()
           if (!result) {
             throw new TRPCError({
               code: 'NOT_FOUND',
@@ -380,11 +384,12 @@ export const schedulesRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        await db.transaction(async (tx) => {
-          const [deleted] = await tx
+        db.transaction((tx) => {
+          const [deleted] = tx
             .delete(powerSchedules)
             .where(eq(powerSchedules.id, input.id))
             .returning()
+            .all()
           if (!deleted) {
             throw new TRPCError({
               code: 'NOT_FOUND',
@@ -431,8 +436,8 @@ export const schedulesRouter = router({
     .output(z.any())
     .mutation(async ({ input }) => {
       try {
-        const created = await db.transaction(async (tx) => {
-          const [result] = await tx.insert(alarmSchedules).values(input).returning()
+        const created = db.transaction((tx) => {
+          const [result] = tx.insert(alarmSchedules).values(input).returning().all()
           if (!result) {
             throw new TRPCError({
               code: 'INTERNAL_SERVER_ERROR',
@@ -482,12 +487,13 @@ export const schedulesRouter = router({
       try {
         const { id, ...updates } = input
 
-        const updated = await db.transaction(async (tx) => {
-          const [result] = await tx
+        const updated = db.transaction((tx) => {
+          const [result] = tx
             .update(alarmSchedules)
             .set({ ...updates, updatedAt: new Date() })
             .where(eq(alarmSchedules.id, id))
             .returning()
+            .all()
           if (!result) {
             throw new TRPCError({
               code: 'NOT_FOUND',
@@ -529,11 +535,12 @@ export const schedulesRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        await db.transaction(async (tx) => {
-          const [deleted] = await tx
+        db.transaction((tx) => {
+          const [deleted] = tx
             .delete(alarmSchedules)
             .where(eq(alarmSchedules.id, input.id))
             .returning()
+            .all()
           if (!deleted) {
             throw new TRPCError({
               code: 'NOT_FOUND',
