@@ -131,6 +131,20 @@
       ],
       "commitMessagePrefix": "chore(deps):",
       "commitMessageAction": "Update {{packageName}}"
+    },
+    {
+      "description": "Pin scipy <1.16 — pod runs Python 3.10, scipy 1.16+ requires 3.11",
+      "matchPackageNames": [
+        "scipy"
+      ],
+      "allowedVersions": "<1.16"
+    },
+    {
+      "description": "Pin numpy <2.3 — keep compatible with scipy 1.15.x on Python 3.10",
+      "matchPackageNames": [
+        "numpy"
+      ],
+      "allowedVersions": "<2.3"
     }
   ]
 }
