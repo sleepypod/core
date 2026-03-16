@@ -1,6 +1,7 @@
 import type { HardwareClient } from './client'
 import { MAX_TEMP, MIN_TEMP, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
+import { cancelSnooze } from './snoozeManager'
 
 // Re-export for callers that need to build deps
 export type { GestureActionDeps }
@@ -123,6 +124,7 @@ export class GestureActionHandler {
 
         if (gesture.alarmBehavior === 'dismiss') {
           await client.clearAlarm(event.side)
+          cancelSnooze(event.side)
         }
         else if (gesture.alarmBehavior === 'snooze') {
           await client.clearAlarm(event.side)

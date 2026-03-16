@@ -3,7 +3,7 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
 import { waterLevelReadings, waterLevelAlerts } from '@/src/db/biometrics-schema'
-import { eq, and, gte, lte, desc, isNull, count, sql } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, isNull, count } from 'drizzle-orm'
 import { idSchema, validateDateRange } from '@/src/server/validation-schemas'
 
 export const waterLevelRouter = router({
@@ -113,7 +113,7 @@ export const waterLevelRouter = router({
           .from(waterLevelReadings)
           .where(and(
             gte(waterLevelReadings.timestamp, midpoint),
-            sql`${waterLevelReadings.level} = 'low'`,
+            eq(waterLevelReadings.level, 'low'),
           ))
         const [olderLow] = await biometricsDb
           .select({ cnt: count() })
@@ -121,7 +121,7 @@ export const waterLevelRouter = router({
           .where(and(
             gte(waterLevelReadings.timestamp, since),
             lte(waterLevelReadings.timestamp, midpoint),
-            sql`${waterLevelReadings.level} = 'low'`,
+            eq(waterLevelReadings.level, 'low'),
           ))
         const [recentTotal] = await biometricsDb
           .select({ cnt: count() })
