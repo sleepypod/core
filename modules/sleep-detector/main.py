@@ -40,7 +40,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
 from common.raw_follower import RawFileFollower
-from common.calibration import CalibrationStore, is_present_capsense_calibrated
+from common.calibration import (
+    CalibrationStore,
+    is_present_capsense_calibrated,
+    is_present_capsense2_calibrated,
+)
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -245,9 +249,15 @@ class SessionTracker:
 
     def process(self, ts: float, record: dict) -> None:
         baselines = self.calibration.get_baselines(self.side)
-        present = is_present_capsense_calibrated(
-            record, self.side, baselines, fallback_threshold=PRESENCE_THRESHOLD
-        )
+        rtype = record.get("type", "")
+        if rtype == "capSense2":
+            present = is_present_capsense2_calibrated(
+                record, self.side, baselines, fallback_threshold=60.0,
+            )
+        else:
+            present = is_present_capsense_calibrated(
+                record, self.side, baselines, fallback_threshold=PRESENCE_THRESHOLD,
+            )
         movement = movement_score_calibrated(record, self.side, baselines)
         self._update(ts, present, movement)
 
@@ -359,7 +369,7 @@ def main() -> None:
 
     try:
         for record in follower.read_records():
-            if record.get("type") != "capSense":
+            if record.get("type") not in ("capSense", "capSense2"):
                 continue
 
             ts = float(record.get("ts", time.time()))
