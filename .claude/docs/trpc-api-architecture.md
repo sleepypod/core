@@ -176,19 +176,20 @@ Query sleep and health data from Pod sensors.
 **Procedures:**
 - `getSleepRecords(side, dateRange?, limit)` - Sleep session history
 - `getVitals(side, dateRange?, limit)` - Heart rate, HRV, breathing rate
-- `getMovement(side, dateRange?, limit)` - Activity/restlessness data
+- `getMovement(side, dateRange?, limit)` - Movement score per 60s epoch (0-1000, PIM delta-based)
 - `getLatestSleep(side)` - Most recent sleep session
 - `getVitalsSummary(side, startDate, endDate)` - Aggregated vitals statistics
 
 **Data Collection:**
-- Vitals: Sampled every ~5 minutes during sleep (ballistocardiography)
-- Movement: Continuous tracking via pressure sensors
+- Vitals: Sampled every ~60 seconds during sleep (ballistocardiography)
+- Movement: Every 60s via capacitance sensor deltas (sum of absolute sample-to-sample changes)
 - Sleep records: Created on bed entry/exit detection
 
 **Data Fields:**
-- Heart rate: Beats per minute
-- HRV: Heart rate variability in ms (higher = better recovery)
-- Breathing rate: Breaths per minute
+- Heart rate: Beats per minute (SHS autocorrelation, 0.8-8.5 Hz band)
+- HRV: RMSSD in ms (sub-window autocorrelation IBI, 5-200 ms range)
+- Breathing rate: Breaths per minute (Hilbert envelope of cardiac band)
+- Movement: Integer 0-1000 (0=still, 50-200=restless, 200+=major movement)
 - Fields may be null if sensor couldn't get reliable reading
 
 **Performance:**
