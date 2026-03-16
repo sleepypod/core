@@ -25,11 +25,11 @@ Movement scoring (Proportional Integration Mode):
   Sentinel values (-1.0 from firmware) are filtered via zero-order hold.
   Reference channel pair is used for common-mode rejection.
 
-  Expected score ranges (per 60s epoch):
-    0-5:    still (deep sleep, stable N2)
-    5-50:   minor fidgeting/twitches
-    50-200: limb repositioning, partial turns
-    200+:   major position change, getting up
+  Expected score ranges (per 60s epoch, stored as integer 0-1000):
+    0-50:    still (deep sleep, stable N2)
+    50-200:  minor fidgeting/twitches
+    200-500: limb repositioning, partial turns
+    500+:    major position change, getting up
 """
 
 import os
@@ -172,12 +172,16 @@ CHANNELS = ("out", "cen", "in")
 CAPSENSE2_SENTINEL = -1.0
 
 
-def _extract_channel_values(record: dict, side: str):
+def _extract_channel_values(record: dict, side: str,
+                            baselines: Optional[dict] = None):
     """Extract averaged sensing channel values from a capSense/capSense2 record.
 
     Returns (values_list, rtype) where values_list is [A, B, C] averages
     (floats for capSense2, ints for capSense) and rtype is the record type.
     Returns (None, rtype) if the record is invalid or contains sentinels.
+
+    If baselines are provided and include a ref mean, uses the calibrated
+    reference instead of the hardcoded nominal 1.16.
     """
     data = record.get(side, {})
     if not data:
@@ -199,7 +203,11 @@ def _extract_channel_values(record: dict, side: str):
         c = (vals[4] + vals[5]) / 2.0
         # Common-mode rejection using reference channel pair (indices 6,7)
         if len(vals) >= 8 and vals[6] != CAPSENSE2_SENTINEL and vals[7] != CAPSENSE2_SENTINEL:
-            ref_delta = ((vals[6] + vals[7]) / 2.0) - 1.16  # nominal ref ~1.16
+            # Use calibrated ref mean if available, else hardcoded nominal
+            ref_nominal = 1.16
+            if baselines and baselines.get("ref"):
+                ref_nominal = baselines["ref"].get("mean", 1.16)
+            ref_delta = ((vals[6] + vals[7]) / 2.0) - ref_nominal
             a -= ref_delta
             b -= ref_delta
             c -= ref_delta
@@ -291,7 +299,7 @@ class SessionTracker:
             )
 
         # Movement: sample-to-sample delta (PIM)
-        current_values, _ = _extract_channel_values(record, self.side)
+        current_values, _ = _extract_channel_values(record, self.side, baselines)
         if current_values is not None:
             delta = compute_movement_delta(current_values, self._prev_values)
             self._prev_values = current_values
@@ -301,7 +309,7 @@ class SessionTracker:
 
         self._update(ts, present, delta)
 
-    def _update(self, ts: float, present: bool, movement: int) -> None:
+    def _update(self, ts: float, present: bool, movement: float) -> None:
         self._movement_buf.append(movement)
         self._flush_movement(ts)
 

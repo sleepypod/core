@@ -28,8 +28,8 @@ Movement is measured as the sum of absolute sample-to-sample deltas across the 3
 
 ```mermaid
 flowchart LR
-    Raw["capSense2 record\n[A1,A2,B1,B2,C1,C2,ref1,ref2]"] --> Sentinel{"Any value == -1.0?"}
-    Sentinel -->|Yes| Hold["Zero-order hold\n(keep previous)"]
+    Raw["capSense2 record\n[A1,A2,B1,B2,C1,C2,ref1,ref2]"] --> Sentinel{"Any sensing value\n(indices 0-5) == -1.0?"}
+    Sentinel -->|Yes| Hold["Zero-order hold\n(keep previous, delta=0)"]
     Sentinel -->|No| Avg["Average pairs\nA=(A1+A2)/2\nB=(B1+B2)/2\nC=(C1+C2)/2"]
     Avg --> Ref["Reference compensation\nsubtract ref drift from nominal 1.16"]
     Ref --> Delta["|A_curr - A_prev| +\n|B_curr - B_prev| +\n|C_curr - C_prev|"]
@@ -56,13 +56,15 @@ The delta approach removes the DC presence offset entirely. A person's body shif
 | 0-50 | Still (deep sleep, stable N2) | 70-80% of epochs |
 | 50-200 | Minor fidgeting, twitches | 10-15% |
 | 200-500 | Limb repositioning, partial turn | 5-10% |
-| 500-1000 | Major position change, rolling over | 1-3% (~1-2/hour) |
+| 500+ | Major position change, rolling over | 1-3% (~1-2/hour) |
+
+Score is capped at 1000 to prevent outliers from sensor glitches.
 
 Normal healthy sleep averages ~10 major position changes per night (De Koninck et al. 1992).
 
 ### Sentinel filtering
 
-capSense2 firmware occasionally emits `-1.0` as a sentinel value on read errors. These are filtered via zero-order hold (carry forward the last valid reading). Deltas are not computed across sentinel boundaries to avoid false movement spikes.
+capSense2 firmware occasionally emits `-1.0` as a sentinel value on read errors in the sensing channels (indices 0-5). These are filtered via zero-order hold (carry forward the last valid reading, emit delta=0 for that sample). The next valid sample computes its delta against the last valid reading, which may span the sentinel gap — this produces a slightly larger delta but avoids the massive spike that a raw sentinel-to-valid transition would cause. Reference channel sentinels (indices 6-7) disable reference compensation for that sample but do not affect the sensing channels.
 
 ### Reference channel compensation
 
