@@ -98,8 +98,13 @@ export const waterLevelRouter = router({
         const lowCount = totals.find(r => r.level === 'low')?.cnt ?? 0
         const total = okCount + lowCount
 
-        if (total === 0) {
-          return { totalReadings: 0, okPercent: 0, lowPercent: 0, trend: 'unknown' as const }
+        if (total < 2) {
+          return {
+            totalReadings: total,
+            okPercent: total > 0 ? Math.round((okCount / total) * 100) : 0,
+            lowPercent: total > 0 ? Math.round((lowCount / total) * 100) : 0,
+            trend: 'unknown' as const,
+          }
         }
 
         // Trend: compare recent half vs older half low-count rates

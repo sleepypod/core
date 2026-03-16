@@ -270,6 +270,104 @@ class CapCalibrator:
         )
 
 
+# ── CapSense2Calibrator ──
+
+class CapSense2Calibrator:
+    """Compute per-channel mean+std from empty-bed capacitance data (Pod 5 capSense2).
+
+    capSense2 has 4 paired float channels per side (8 values total):
+      - A pair (values[0:2]): highest presence sensitivity
+      - B pair (values[2:4]): medium sensitivity
+      - C pair (values[4:6]): lowest sensitivity
+      - REF pair (values[6:8]): reference/ground, no presence response
+
+    Each pair is redundant (r>0.99), so we average them for noise reduction.
+    The REF pair is stored for drift compensation but excluded from
+    presence detection.
+
+    See docs/hardware/sensor-profiles.md for channel map and validation data.
+    """
+
+    LOOKBACK_HOURS = 6
+    MIN_WINDOW_S = 300   # 5 minutes at ~2 Hz = ~600 samples
+    MIN_STD = 0.05       # floats in the tens, not ints in the hundreds
+    # Sensing channel pairs: (name, index_a, index_b)
+    SENSE_PAIRS = (("A", 0, 1), ("B", 2, 3), ("C", 4, 5))
+    REF_PAIR = ("REF", 6, 7)
+
+    def calibrate(self, records: list, side: str) -> CalibrationResult:
+        """Find the quietest 5-min window and compute per-channel baselines."""
+        if not records:
+            raise ValueError("No capSense2 records available for calibration")
+
+        timestamps = []
+        channels = {name: [] for name, _, _ in self.SENSE_PAIRS}
+        channels["REF"] = []
+
+        for rec in records:
+            data = rec.get(side, {})
+            vals = data.get("values") if data else None
+            if not vals or len(vals) < 8:
+                continue
+            ts = float(rec.get("ts", 0))
+            timestamps.append(ts)
+            for name, ia, ib in self.SENSE_PAIRS:
+                channels[name].append((vals[ia] + vals[ib]) / 2.0)
+            rn, ria, rib = self.REF_PAIR
+            channels["REF"].append((vals[ria] + vals[rib]) / 2.0)
+
+        if len(timestamps) < 60:
+            raise ValueError(
+                f"Insufficient capSense2 data: {len(timestamps)} samples (need >= 60)"
+            )
+
+        # Find quietest 5-min window across sensing channels only
+        window = min(self.MIN_WINDOW_S, len(timestamps))
+        best_start = 0
+        best_variance = float("inf")
+        sense_names = [name for name, _, _ in self.SENSE_PAIRS]
+
+        for i in range(len(timestamps) - window + 1):
+            total_var = 0.0
+            for name in sense_names:
+                seg = channels[name][i:i + window]
+                m = sum(seg) / len(seg)
+                total_var += sum((x - m) ** 2 for x in seg) / len(seg)
+            if total_var < best_variance:
+                best_variance = total_var
+                best_start = i
+
+        window_end = min(best_start + window, len(timestamps))
+
+        # Compute baselines from best window
+        baseline = {"channels": {}, "threshold": 6.0, "format": "capSense2"}
+
+        for name in sense_names:
+            seg = channels[name][best_start:window_end]
+            m = sum(seg) / len(seg)
+            std = math.sqrt(sum((x - m) ** 2 for x in seg) / len(seg))
+            std = max(std, self.MIN_STD)
+            baseline["channels"][name] = {"mean": round(m, 4), "std": round(std, 4)}
+
+        # Store REF baseline for drift compensation
+        ref_seg = channels["REF"][best_start:window_end]
+        ref_mean = sum(ref_seg) / len(ref_seg)
+        ref_std = math.sqrt(sum((x - ref_mean) ** 2 for x in ref_seg) / len(ref_seg))
+        baseline["ref"] = {"mean": round(ref_mean, 4), "std": round(max(ref_std, 0.001), 4)}
+
+        # Quality: lower variance = better baseline
+        # capSense2 floats are ~10-30 range, so normalize differently than capSense ints
+        quality = max(0.0, min(1.0, 1.0 - (best_variance / 10.0)))
+
+        return CalibrationResult(
+            params=baseline,
+            quality_score=round(quality, 3),
+            window_start=int(timestamps[best_start]),
+            window_end=int(timestamps[window_end - 1]),
+            samples_used=window_end - best_start,
+        )
+
+
 # ── PiezoCalibrator ──
 
 class PiezoCalibrator:
@@ -609,6 +707,40 @@ def is_present_capsense_calibrated(
         val = int(data.get(ch, 0))
         ch_cal = channels.get(ch, {})
         std = ch_cal.get("std", 1)
+        mean = ch_cal.get("mean", 0)
+        if std > 0:
+            z_sum += abs((val - mean) / std)
+
+    threshold = baselines.get("threshold", 6.0)
+    return z_sum > threshold
+
+
+def is_present_capsense2_calibrated(
+    record: dict, side: str, baselines: Optional[dict],
+    fallback_threshold: float = 60.0,
+) -> bool:
+    """Z-score based presence detection for capSense2 (Pod 5).
+
+    Uses the averaged A/B/C channel pairs against calibrated baselines.
+    Falls back to raw sum threshold if no calibration available.
+    """
+    data = record.get(side, {})
+    vals = data.get("values") if data else None
+    if not vals or len(vals) < 8:
+        return False
+
+    if baselines is None:
+        # Uncalibrated fallback: sum of sensing channels
+        total = sum((vals[i] + vals[i + 1]) / 2.0 for i in (0, 2, 4))
+        return total > fallback_threshold
+
+    z_sum = 0.0
+    channels = baselines.get("channels", {})
+    sense_pairs = (("A", 0, 1), ("B", 2, 3), ("C", 4, 5))
+    for name, ia, ib in sense_pairs:
+        val = (vals[ia] + vals[ib]) / 2.0
+        ch_cal = channels.get(name, {})
+        std = ch_cal.get("std", 0.05)
         mean = ch_cal.get("mean", 0)
         if std > 0:
             z_sum += abs((val - mean) / std)

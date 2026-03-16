@@ -3,8 +3,12 @@ import { execSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 
 const run = (cmd) => {
-  try { return execSync(cmd, { encoding: 'utf-8' }).trim() }
-  catch { return 'unknown' }
+  try {
+    return execSync(cmd, { encoding: 'utf-8' }).trim()
+  }
+  catch {
+    return 'unknown'
+  }
 }
 
 try {
