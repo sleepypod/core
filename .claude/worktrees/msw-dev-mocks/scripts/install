@@ -1,0 +1,491 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "========================================"
+echo "  SleepyPod Core Installation Script"
+echo "========================================"
+echo ""
+
+# Cleanup handler
+cleanup() {
+  local exit_code=$?
+  if [ $exit_code -ne 0 ]; then
+    echo "ERROR: Installation failed at line $1 (exit code: $exit_code)" >&2
+    echo "The system may be in a partially installed state." >&2
+    echo "Check logs and try running the script again." >&2
+  fi
+}
+trap 'cleanup $LINENO' EXIT
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: This script must be run as root (use sudo)" >&2
+  exit 1
+fi
+
+# Lock file to prevent concurrent installs
+LOCKFILE="/var/run/sleepypod-install.lock"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+  echo "Error: Another installation is already running" >&2
+  exit 1
+fi
+
+# Check for required commands
+for cmd in git curl systemctl ip; do
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "Error: Required command '$cmd' not found." >&2
+    exit 1
+  fi
+done
+
+# Check OS (require Debian/Ubuntu)
+if ! command -v apt-get &>/dev/null; then
+  echo "Error: This script requires apt-get (Debian/Ubuntu)." >&2
+  exit 1
+fi
+
+# Check network connectivity
+echo "Checking network connectivity..."
+if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
+  echo "Error: Cannot reach GitHub. Check network and try again." >&2
+  exit 1
+fi
+
+# Check disk space (need 500MB for build)
+DISK_AVAIL=$(df -m /home | awk 'NR==2{print $4}')
+if [ "$DISK_AVAIL" -lt 500 ]; then
+  echo "Error: Need at least 500MB free. Only ${DISK_AVAIL}MB available." >&2
+  echo "Clean up with: rm -rf /home/dac/sleepypod-core/node_modules/.cache" >&2
+  exit 1
+fi
+
+# Detect dac.sock path
+echo "Detecting dac.sock path..."
+DAC_SOCK_PATH=""
+
+if [ -S "/run/dac.sock" ]; then
+  DAC_SOCK_PATH="/run/dac.sock"
+elif [ -S "/var/run/dac.sock" ]; then
+  DAC_SOCK_PATH="/var/run/dac.sock"
+else
+  echo "Warning: dac.sock not found. Please specify manually."
+  read -rp "Enter dac.sock path: " DAC_SOCK_PATH
+
+  # Validate user input
+  if [ -z "$DAC_SOCK_PATH" ]; then
+    echo "Error: No path provided." >&2
+    exit 1
+  fi
+  if [ ! -S "$DAC_SOCK_PATH" ]; then
+    echo "Error: '$DAC_SOCK_PATH' is not a valid socket." >&2
+    exit 1
+  fi
+fi
+
+echo "Using dac.sock at: $DAC_SOCK_PATH"
+
+# Create data directory
+DATA_DIR="/persistent/sleepypod-data"
+echo "Creating data directory at $DATA_DIR..."
+mkdir -p "$DATA_DIR"
+chmod 755 "$DATA_DIR"
+
+# Install or upgrade Node.js to version 20
+NODE_VERSION=$(node --version 2>/dev/null | grep -oP '(?<=v)\d+' || echo "0")
+if ! command -v node &>/dev/null || [ "$NODE_VERSION" -lt 20 ]; then
+  echo "Installing Node.js 20..."
+  apt-get install -y ca-certificates curl gnupg
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    | tee /etc/apt/sources.list.d/nodesource.list
+  apt-get update
+  apt-get install -y nodejs
+fi
+
+# Verify Node.js version
+NODE_MAJOR=$(node -v | cut -d. -f1 | tr -d v)
+if [ "$NODE_MAJOR" -ne 20 ]; then
+  echo "Error: Node.js 20 required, found $(node -v)" >&2
+  exit 1
+fi
+
+# Install pnpm if not present
+if ! command -v pnpm &>/dev/null; then
+  echo "Installing pnpm..."
+  npm install -g pnpm
+fi
+
+# Clone or update repository
+INSTALL_DIR="/home/dac/sleepypod-core"
+if [ -d "$INSTALL_DIR" ]; then
+  echo "Updating existing installation..."
+  cd "$INSTALL_DIR"
+  git fetch origin
+  git reset --hard origin/main
+else
+  echo "Cloning repository..."
+  git clone https://github.com/sleepypod/core.git "$INSTALL_DIR"
+  cd "$INSTALL_DIR"
+fi
+
+# Install dependencies (ignore scripts for security)
+echo "Installing dependencies..."
+pnpm install --frozen-lockfile --ignore-scripts
+
+# Build native modules explicitly (better-sqlite3 needs this)
+echo "Building native modules..."
+cd node_modules/better-sqlite3 && npm run build-release && cd ../..
+
+# Build application
+echo "Building application..."
+rm -rf "$INSTALL_DIR/.next"
+pnpm build
+
+# Create or preserve environment file
+if [ -f "$INSTALL_DIR/.env" ]; then
+  echo "Existing .env found, backing up..."
+  cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.bak.$(date +%s)"
+
+  # Update managed keys
+  grep -q "^DAC_SOCK_PATH=" "$INSTALL_DIR/.env" && \
+    sed -i "s|^DAC_SOCK_PATH=.*|DAC_SOCK_PATH=$DAC_SOCK_PATH|" "$INSTALL_DIR/.env" || \
+    echo "DAC_SOCK_PATH=$DAC_SOCK_PATH" >> "$INSTALL_DIR/.env"
+
+  grep -q "^DATABASE_URL=" "$INSTALL_DIR/.env" && \
+    sed -i "s|^DATABASE_URL=.*|DATABASE_URL=file:$DATA_DIR/sleepypod.db|" "$INSTALL_DIR/.env" || \
+    echo "DATABASE_URL=file:$DATA_DIR/sleepypod.db" >> "$INSTALL_DIR/.env"
+
+  grep -q "^BIOMETRICS_DATABASE_URL=" "$INSTALL_DIR/.env" && \
+    sed -i "s|^BIOMETRICS_DATABASE_URL=.*|BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db|" "$INSTALL_DIR/.env" || \
+    echo "BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db" >> "$INSTALL_DIR/.env"
+else
+  echo "Creating environment file..."
+  touch "$INSTALL_DIR/.env"
+  chmod 600 "$INSTALL_DIR/.env"
+  cat > "$INSTALL_DIR/.env" << EOF
+DATABASE_URL=file:$DATA_DIR/sleepypod.db
+BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db
+DAC_SOCK_PATH=$DAC_SOCK_PATH
+NODE_ENV=production
+EOF
+fi
+
+# Initialize database with migrations (not destructive push)
+if [ -f "$DATA_DIR/sleepypod.db" ]; then
+  echo "Existing database found, backing up..."
+  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak.$(date +%s)"
+fi
+
+echo "Generating database schema..."
+pnpm db:generate
+pnpm db:biometrics:generate
+
+echo "Running database migrations..."
+pnpm db:migrate
+pnpm db:biometrics:migrate
+
+# Create systemd service
+echo "Creating systemd service..."
+cat > /etc/systemd/system/sleepypod.service << EOF
+[Unit]
+Description=SleepyPod Core Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR
+Environment="NODE_ENV=production"
+Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
+Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
+ExecStart=/usr/bin/env pnpm start
+Restart=always
+RestartSec=10
+
+# Hardening (optional, doesn't interfere with dac.sock)
+NoNewPrivileges=true
+ReadWritePaths=$DATA_DIR
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload systemd and enable service
+echo "Enabling service..."
+systemctl daemon-reload
+systemctl enable sleepypod.service
+systemctl restart sleepypod.service
+
+# ============================================================================
+# Install bundled biometrics modules
+# ============================================================================
+echo ""
+echo "========================================"
+echo "  Installing Biometrics Modules"
+echo "========================================"
+echo ""
+
+MODULES_SRC="$INSTALL_DIR/modules"
+MODULES_DEST="/opt/sleepypod/modules"
+mkdir -p "$MODULES_DEST"
+mkdir -p /etc/sleepypod/modules
+
+# Check Python 3 is available
+if ! command -v python3 &>/dev/null; then
+  echo "Warning: python3 not found — skipping biometrics module installation"
+  echo "Install Python 3 and re-run the installer to enable health monitoring"
+else
+  install_module() {
+    local name="$1"
+    local src="$MODULES_SRC/$name"
+    local dest="$MODULES_DEST/$name"
+    local service="sleepypod-$name.service"
+
+    if [ ! -d "$src" ]; then
+      echo "Warning: module source not found at $src, skipping"
+      return
+    fi
+
+    echo "Installing module: $name..."
+
+    # Copy module files
+    mkdir -p "$dest"
+    cp -r "$src/." "$dest/"
+
+    # Ensure python3-venv is available (may be absent on Debian/Ubuntu minimal images)
+    if ! python3 -m venv --help >/dev/null 2>&1; then
+      echo "python3-venv not found; installing..."
+      apt-get install -y python3-venv
+    fi
+
+    # Create Python virtualenv and install deps
+    if [ ! -d "$dest/venv" ]; then
+      python3 -m venv "$dest/venv"
+    fi
+    "$dest/venv/bin/pip" install --quiet --upgrade pip
+    "$dest/venv/bin/pip" install --quiet -r "$dest/requirements.txt"
+
+    # Install systemd service
+    if [ -f "$dest/$service" ]; then
+      cp "$dest/$service" "/etc/systemd/system/$service"
+      systemctl daemon-reload
+      systemctl enable "$service"
+      systemctl restart "$service"
+      echo "✓ $name installed and started"
+    else
+      echo "Warning: no service file found for $name"
+    fi
+  }
+
+  install_module "piezo-processor"
+  install_module "sleep-detector"
+fi
+
+# Create CLI shortcuts
+echo "Creating CLI shortcuts..."
+cat > /usr/local/bin/sp-status << 'EOF'
+#!/bin/bash
+systemctl status sleepypod.service
+EOF
+
+cat > /usr/local/bin/sp-restart << 'EOF'
+#!/bin/bash
+systemctl restart sleepypod.service
+EOF
+
+cat > /usr/local/bin/sp-logs << 'EOF'
+#!/bin/bash
+journalctl -u sleepypod.service -f
+EOF
+
+cat > /usr/local/bin/sp-update << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+INSTALL_DIR="/home/dac/sleepypod-core"
+DATA_DIR="/persistent/sleepypod-data"
+
+echo "=== SleepyPod Update ==="
+
+# Pre-flight checks
+if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
+  echo "Error: No network connectivity to GitHub" >&2
+  exit 1
+fi
+
+DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
+if [ "$DISK_AVAIL" -lt 300 ]; then
+  echo "Error: Need 300MB free, only ${DISK_AVAIL}MB available" >&2
+  exit 1
+fi
+
+cd "$INSTALL_DIR"
+
+# Save rollback point
+PREV_COMMIT=$(git rev-parse HEAD)
+echo "Current version: $PREV_COMMIT"
+
+# Backup database (single backup, overwrite previous)
+if [ -f "$DATA_DIR/sleepypod.db" ]; then
+  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
+  echo "Database backed up"
+fi
+
+# Stop service during update
+systemctl stop sleepypod.service
+
+# Try update
+echo "Pulling latest changes..."
+if git pull && \
+   pnpm install --frozen-lockfile --ignore-scripts && \
+   (cd node_modules/better-sqlite3 && npm run build-release) && \
+   pnpm db:generate && \
+   pnpm db:migrate && \
+   rm -rf .next && \
+   pnpm build; then
+
+  echo "Starting service..."
+  systemctl start sleepypod.service
+
+  # Wait and health check
+  sleep 5
+  if systemctl is-active --quiet sleepypod.service; then
+    echo "✓ Update complete! Service is running."
+    exit 0
+  fi
+fi
+
+# If we get here, something failed — rollback
+echo "Update failed, rolling back to $PREV_COMMIT..." >&2
+git checkout "$PREV_COMMIT"
+pnpm install --frozen-lockfile --ignore-scripts
+(cd node_modules/better-sqlite3 && npm run build-release)
+pnpm build
+
+if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
+  cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
+  echo "Database restored"
+fi
+
+systemctl start sleepypod.service
+echo "✗ Rolled back to previous version." >&2
+exit 1
+EOF
+
+chmod +x /usr/local/bin/sp-status
+chmod +x /usr/local/bin/sp-restart
+chmod +x /usr/local/bin/sp-logs
+chmod +x /usr/local/bin/sp-update
+
+# Optional SSH configuration
+echo ""
+echo "========================================"
+echo "  Optional SSH Configuration"
+echo "========================================"
+echo ""
+read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH
+
+if [[ "$SETUP_SSH" =~ ^[Yy]$ ]]; then
+  echo "Configuring SSH..."
+
+  # Backup sshd_config
+  if [ ! -f /etc/ssh/sshd_config.backup ]; then
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+  fi
+
+  # Update SSH configuration
+  sed -i "s/#\?Port .*/Port 8822/" /etc/ssh/sshd_config
+  sed -i "s/#\?PermitRootLogin .*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
+  sed -i "s/#\?PasswordAuthentication .*/PasswordAuthentication no/" /etc/ssh/sshd_config
+  sed -i "s/#\?PermitEmptyPasswords .*/PermitEmptyPasswords no/" /etc/ssh/sshd_config
+
+  echo ""
+  echo "Enter your SSH public key:"
+  read -r SSH_KEY
+
+  if [ -n "$SSH_KEY" ]; then
+    # Validate key format
+    if echo "$SSH_KEY" | grep -qE '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp[0-9]+) [A-Za-z0-9+/=]+'; then
+      mkdir -p /root/.ssh
+      echo "$SSH_KEY" >> /root/.ssh/authorized_keys
+      chmod 700 /root/.ssh
+      chmod 600 /root/.ssh/authorized_keys
+      echo "✓ SSH key added"
+    else
+      echo "Warning: Invalid SSH key format, skipping"
+    fi
+  fi
+
+  # Validate SSH config before restarting
+  if ! sshd -t; then
+    echo "Error: sshd_config validation failed. Restoring backup..." >&2
+    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    exit 1
+  fi
+
+  # Restart SSH (try both service names for compatibility)
+  if systemctl restart sshd 2>/dev/null; then
+    echo "✓ SSH configured on port 8822 (keys only)"
+  elif systemctl restart ssh 2>/dev/null; then
+    echo "✓ SSH configured on port 8822 (keys only)"
+  else
+    echo "Error: Failed to restart SSH service" >&2
+    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    exit 1
+  fi
+fi
+
+# Auto-detect network interface and get IP
+DEFAULT_IFACE=$(ip route | awk '/default/ {print $5; exit}')
+POD_IP=$(ip -4 addr show "$DEFAULT_IFACE" 2>/dev/null | grep -o 'inet [0-9.]*' | awk '{print $2}') || POD_IP="<unknown>"
+
+# Wait for service to start with polling
+echo "Waiting for service to start..."
+for i in $(seq 1 30); do
+  if systemctl is-active --quiet sleepypod.service; then
+    SERVICE_STATUS="✓ Running"
+    break
+  fi
+  sleep 1
+  if [ $i -eq 30 ]; then
+    SERVICE_STATUS="✗ Failed (check logs with: sp-logs)"
+  fi
+done
+
+echo ""
+echo "========================================"
+echo "  Installation Complete!"
+echo "========================================"
+echo ""
+echo "Service Status: $SERVICE_STATUS"
+echo ""
+echo "Web Interface: http://$POD_IP:3000/"
+echo ""
+echo "Features:"
+echo "  • Temperature & Power Scheduling"
+echo "  • Alarm Management"
+echo "  • Hardware Control via DAC socket"
+echo "  • Automated job scheduler with timezone support"
+echo "  • Heart rate, HRV, and breathing rate (piezo-processor)"
+echo "  • Sleep session detection and movement tracking (sleep-detector)"
+echo ""
+echo "CLI Commands:"
+echo "  sp-status   - View service status"
+echo "  sp-restart  - Restart service"
+echo "  sp-logs     - View live logs"
+echo "  sp-update   - Update to latest version"
+echo ""
+echo "Files:"
+echo "  Config DB:      $DATA_DIR/sleepypod.db"
+echo "  Biometrics DB:  $DATA_DIR/biometrics.db"
+echo "  Config:         $INSTALL_DIR/.env"
+echo "  Module logs:    journalctl -u sleepypod-piezo-processor.service"
+echo "                  journalctl -u sleepypod-sleep-detector.service"
+echo "  App logs:       journalctl -u sleepypod.service"
+echo ""

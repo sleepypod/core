@@ -1,0 +1,10 @@
+{
+  "name": "piezo-processor",
+  "version": "1.0.0",
+  "description": "Heart rate, HRV, and breathing rate from piezoelectric sensors",
+  "provides": ["vitals.heartRate", "vitals.hrv", "vitals.breathingRate"],
+  "writes": ["vitals"],
+  "service": "sleepypod-piezo-processor.service",
+  "language": "python",
+  "minVersion": "1.0.0"
+}

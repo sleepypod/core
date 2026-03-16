@@ -1,0 +1,163 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+  cat << EOF
+Usage: $(basename "$0") {block|unblock}
+
+Control internet access for SleepyPod device.
+
+Commands:
+  block    - Block all internet access (keep local network only)
+  unblock  - Restore full internet access
+
+Examples:
+  sudo $(basename "$0") block
+  sudo $(basename "$0") unblock
+EOF
+  exit 1
+}
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: This script must be run as root" >&2
+  exit 1
+fi
+
+# Check for command
+if [ $# -ne 1 ]; then
+  usage
+fi
+
+COMMAND="$1"
+
+case "$COMMAND" in
+  block)
+    echo "========================================"
+    echo "  Block WAN Internet Access"
+    echo "========================================"
+    echo ""
+
+    # Get local network interface and subnet
+    INTERFACE=$(ip route | awk '/default/ {print $5; exit}')
+    if [ -z "$INTERFACE" ]; then
+      echo "Error: Could not detect default network interface" >&2
+      exit 1
+    fi
+
+    LOCAL_SUBNET=$(ip -4 addr show "$INTERFACE" | awk '/inet / {print $2; exit}')
+    if [ -z "$LOCAL_SUBNET" ]; then
+      echo "Error: Could not detect local subnet" >&2
+      exit 1
+    fi
+
+    echo "Interface: $INTERFACE"
+    echo "Local subnet: $LOCAL_SUBNET"
+    echo ""
+
+    # Install iptables and iptables-persistent if not present
+    if ! command -v iptables &>/dev/null || ! dpkg -l | grep -q iptables-persistent; then
+      echo "Installing iptables..."
+      apt-get update
+      apt-get install -y iptables iptables-persistent
+    fi
+
+    # Create custom chain for SleepyPod rules (IPv4)
+    iptables -N SLEEPYPOD-BLOCK 2>/dev/null || iptables -F SLEEPYPOD-BLOCK
+    iptables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+    iptables -I OUTPUT -j SLEEPYPOD-BLOCK
+
+    # Allow loopback
+    iptables -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
+
+    # Allow established/related connections
+    iptables -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+    # Allow local network
+    iptables -A SLEEPYPOD-BLOCK -d "$LOCAL_SUBNET" -j ACCEPT
+
+    # Allow mDNS for local discovery
+    iptables -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --dport 5353 -j ACCEPT
+
+    # Block all other outbound traffic
+    iptables -A SLEEPYPOD-BLOCK -j DROP
+
+    # Save IPv4 rules
+    mkdir -p /etc/iptables
+    iptables-save > /etc/iptables/rules.v4
+
+    # Block IPv6 as well (prevents bypass)
+    if command -v ip6tables &>/dev/null; then
+      echo "Configuring IPv6 rules..."
+
+      ip6tables -N SLEEPYPOD-BLOCK 2>/dev/null || ip6tables -F SLEEPYPOD-BLOCK
+      ip6tables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+      ip6tables -I OUTPUT -j SLEEPYPOD-BLOCK
+
+      ip6tables -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
+      ip6tables -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
+      ip6tables -A SLEEPYPOD-BLOCK -d fe80::/10 -j ACCEPT
+      ip6tables -A SLEEPYPOD-BLOCK -j DROP
+
+      if command -v ip6tables-save &>/dev/null; then
+        ip6tables-save > /etc/iptables/rules.v6
+      fi
+    fi
+
+    echo ""
+    echo "✓ Internet access blocked!"
+    echo "  Local network ($LOCAL_SUBNET) is still accessible"
+    if command -v ip6tables &>/dev/null; then
+      echo "  IPv6 is also blocked"
+    fi
+    echo ""
+    echo "To restore: sudo $(basename "$0") unblock"
+    echo ""
+    ;;
+
+  unblock)
+    echo "========================================"
+    echo "  Restore WAN Internet Access"
+    echo "========================================"
+    echo ""
+
+    # Remove custom chains (IPv4)
+    if iptables -L SLEEPYPOD-BLOCK &>/dev/null; then
+      echo "Removing IPv4 firewall rules..."
+      iptables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+      iptables -F SLEEPYPOD-BLOCK
+      iptables -X SLEEPYPOD-BLOCK
+    fi
+
+    iptables -P OUTPUT ACCEPT
+
+    if command -v iptables-save &>/dev/null; then
+      mkdir -p /etc/iptables
+      iptables-save > /etc/iptables/rules.v4
+    fi
+
+    # Remove IPv6 rules
+    if command -v ip6tables &>/dev/null && ip6tables -L SLEEPYPOD-BLOCK &>/dev/null; then
+      echo "Removing IPv6 firewall rules..."
+      ip6tables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+      ip6tables -F SLEEPYPOD-BLOCK
+      ip6tables -X SLEEPYPOD-BLOCK
+      ip6tables -P OUTPUT ACCEPT
+
+      if command -v ip6tables-save &>/dev/null; then
+        ip6tables-save > /etc/iptables/rules.v6
+      fi
+    fi
+
+    echo ""
+    echo "✓ Internet access restored!"
+    echo "  Both IPv4 and IPv6 are now unblocked"
+    echo ""
+    ;;
+
+  *)
+    echo "Error: Unknown command '$COMMAND'" >&2
+    echo ""
+    usage
+    ;;
+esac

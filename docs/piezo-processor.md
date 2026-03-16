@@ -1,4 +1,4 @@
-# Piezo Processor v2
+# Piezo Processor
 
 ## 1. Overview
 
