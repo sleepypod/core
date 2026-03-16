@@ -90,7 +90,7 @@ export const biometricsRouter = router({
         const records = await biometricsDb
           .select()
           .from(sleepRecords)
-          .where(and(...conditions))
+          .where(conditions.length > 0 ? and(...conditions) : undefined)
           .orderBy(desc(sleepRecords.enteredBedAt))
           .limit(input.limit)
 
@@ -174,7 +174,7 @@ export const biometricsRouter = router({
         const records = await biometricsDb
           .select()
           .from(vitals)
-          .where(and(...conditions))
+          .where(conditions.length > 0 ? and(...conditions) : undefined)
           .orderBy(desc(vitals.timestamp))
           .limit(input.limit)
 
@@ -257,7 +257,7 @@ export const biometricsRouter = router({
         const records = await biometricsDb
           .select()
           .from(movement)
-          .where(and(...conditions))
+          .where(conditions.length > 0 ? and(...conditions) : undefined)
           .orderBy(desc(movement.timestamp))
           .limit(input.limit)
 
@@ -368,6 +368,14 @@ export const biometricsRouter = router({
         const now = new Date()
         const effectiveStart = input.startDate ?? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
         const effectiveEnd = input.endDate ?? now
+
+        // Guard against inverted range (e.g., endDate older than default startDate)
+        if (effectiveStart > effectiveEnd) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Computed date range is inverted — startDate is after endDate',
+          })
+        }
 
         const [summary] = await biometricsDb
           .select({

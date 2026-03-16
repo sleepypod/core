@@ -53,12 +53,12 @@ export const settingsRouter = router({
         return {
           device: device ?? {
             id: 1,
-            timezone: 'America/New_York',
-            temperatureUnit: 'f',
+            timezone: 'America/Los_Angeles',
+            temperatureUnit: 'F',
             rebootDaily: false,
-            rebootTime: null,
+            rebootTime: '03:00',
             primePodDaily: false,
-            primePodTime: null,
+            primePodTime: '14:00',
             createdAt: new Date(),
             updatedAt: new Date(),
           },
