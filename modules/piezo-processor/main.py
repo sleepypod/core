@@ -21,8 +21,9 @@ Signal processing pipeline (per side):
      Gaussian consistency tracking (max 15 BPM delta)
   5. Breathing rate: Hilbert envelope of 0.8-10 Hz cardiac band →
      0.1-0.7 Hz respiratory extraction → peak counting (PMC9354426)
-  6. HRV: 30s sub-window autocorrelation IBI with 50% overlap →
-     Hampel filter → RMSSD (PMC9305910)
+  6. HR variability index: 10s sub-window autocorrelation IBI with 50%
+     overlap → harmonic gate → Hampel filter → gap-aware successive
+     differences (NOT clinical RMSSD — see #221)
 """
 
 import os
@@ -442,25 +443,69 @@ def compute_breathing_rate(samples: np.ndarray,
         return None
 
 # ---------------------------------------------------------------------------
-# HRV — sub-window autocorrelation IBI + Hampel filter (PMC9305910)
+# HR variability index — window-level IBI with harmonic gate
+#
+# NOTE: This is NOT clinical RMSSD. It computes successive differences of
+# window-level IBI estimates (~59 per 5 min with 10s windows), not beat-to-beat
+# intervals (~300+ per 5 min). The output measures HR stability across windows,
+# not vagal beat-to-beat modulation. See #221 for the beat-level upgrade path.
 # ---------------------------------------------------------------------------
+
+# Harmonic tolerance for IBI gating (18% per DSP expert recommendation)
+_HRV_HARMONIC_TOL = 0.18
+# Sub-window length for IBI estimation (10s per DSP expert recommendation —
+# gives ~59 windows per 5 min vs ~19 with 30s windows)
+_HRV_WINDOW_S = 10
+# Minimum accepted IBI estimates after filtering
+_HRV_MIN_IBIS = 10
+# Maximum gap between consecutive accepted windows before skipping the diff
+_HRV_MAX_GAP_WINDOWS = 3
+
+
+def _harmonic_gate(ibi_ms: float, tracker_ibi_ms: float) -> Optional[float]:
+    """Reject or correct IBIs that are harmonic multiples of the expected value.
+
+    Returns the accepted/corrected IBI in ms, or None to discard.
+    """
+    if tracker_ibi_ms <= 0:
+        return ibi_ms  # no prior yet — accept as-is
+
+    for multiplier in [1.0, 2.0, 0.5, 3.0, 1.0 / 3.0]:
+        candidate = tracker_ibi_ms * multiplier
+        if candidate > 0 and abs(ibi_ms - candidate) / candidate < _HRV_HARMONIC_TOL:
+            if multiplier == 1.0:
+                return ibi_ms       # fundamental — accept
+            else:
+                return tracker_ibi_ms  # harmonic — substitute tracker value
+    return None  # outside all harmonic relationships — discard
+
 
 def compute_hrv(samples: np.ndarray,
                 fs: float = SAMPLE_RATE) -> Optional[float]:
-    """HRV (RMSSD in ms) via sub-window autocorrelation IBI series.
+    """HR variability index via window-level IBI with harmonic gate.
 
-    Splits the buffer into 30s sub-windows with 50% overlap, computes
-    SHS autocorrelation per sub-window for IBI estimation, applies
-    Hampel filter on the IBI series, and returns RMSSD.
+    Pipeline:
+      1. Bandpass 0.8-8.5 Hz
+      2. 10s sub-windows with 50% overlap (~59 windows per 5 min)
+      3. SHS autocorrelation per window → raw IBI
+      4. Harmonic gate: reject/correct IBIs using trimmed-mean tracker
+      5. Hampel filter on accepted IBI series
+      6. Gap-aware RMSSD (skip diffs across rejected-window gaps)
+      7. Range gate: 5-100 ms
+
+    NOT clinical RMSSD — see module docstring and #221.
     """
     try:
         filtered = _bandpass(samples, HR_BAND[0], HR_BAND[1], fs)
-        sub_window = int(30 * fs)
-        ibis: list = []
+        sub_window = int(_HRV_WINDOW_S * fs)
+        step = sub_window // 2
         min_lag = int(fs * 60 / 150)
         max_lag = int(fs * 60 / 40)
 
-        for start in range(0, len(filtered) - sub_window + 1, sub_window // 2):
+        # --- Pass 1: SHS autocorrelation per window → raw IBIs ---
+        raw_ibis: list = []  # (window_index, ibi_ms)
+        for idx, start in enumerate(
+                range(0, len(filtered) - sub_window + 1, step)):
             chunk = filtered[start:start + sub_window]
             acr = _compute_autocorr(chunk, fs)
             if acr is None:
@@ -469,12 +514,17 @@ def compute_hrv(samples: np.ndarray,
             if len(search) == 0:
                 continue
 
-            # SHS scoring for IBI
+            # SHS scoring — find peaks first, then score
+            peaks, _props = find_peaks(search, height=0.02,
+                                       distance=int(fs * 0.15))
+            if len(peaks) == 0:
+                continue
+
+            candidate_lags = peaks + min_lag
             weights = [1.0, 0.8, 0.6]
-            scores = np.zeros(len(search))
-            for j in range(len(search)):
-                lag = j + min_lag
-                s = 0.0
+            best_lag, best_score = None, 0.0
+            for lag in candidate_lags:
+                score = 0.0
                 for k in range(3):
                     exact = lag / (k + 1)
                     lo_i = int(exact)
@@ -483,41 +533,84 @@ def compute_hrv(samples: np.ndarray,
                         continue
                     frac = exact - lo_i
                     val = acr[lo_i] * (1 - frac) + acr[hi_i] * frac
-                    s += weights[k] * max(val, 0)
-                scores[j] = s
+                    score += weights[k] * max(val, 0)
+                if score > best_score:
+                    best_score = score
+                    best_lag = lag
 
-            best_j = int(np.argmax(scores))
-            if scores[best_j] < 0.1:
+            if best_lag is None or best_score < 0.1:
                 continue
-            peak_lag = best_j + min_lag
-            ibi_ms = peak_lag / fs * 1000
+            ibi_ms = best_lag / fs * 1000
             if 400 <= ibi_ms <= 1500:
-                ibis.append(ibi_ms)
+                raw_ibis.append((idx, ibi_ms))
 
-        if len(ibis) < 4:
+        if len(raw_ibis) < _HRV_MIN_IBIS:
             return None
 
-        ibis_arr = np.array(ibis)
+        # --- Pass 2: Harmonic gate with trimmed-mean tracker ---
+        tracker_history: list = []
+        gated: list = []  # (window_index, ibi_ms)
 
-        # Hampel filter — remove outliers from IBI series
-        clean: list = []
-        for i in range(len(ibis_arr)):
+        for win_idx, ibi_ms in raw_ibis:
+            # Compute tracker IBI as trimmed mean of last 5 accepted
+            if len(tracker_history) >= 3:
+                sorted_h = sorted(tracker_history[-5:])
+                # Drop min+max if we have enough
+                if len(sorted_h) >= 4:
+                    trimmed = sorted_h[1:-1]
+                else:
+                    trimmed = sorted_h
+                tracker_ibi = sum(trimmed) / len(trimmed)
+            elif tracker_history:
+                tracker_ibi = sum(tracker_history) / len(tracker_history)
+            else:
+                tracker_ibi = 0  # no prior — accept first value
+
+            accepted = _harmonic_gate(ibi_ms, tracker_ibi)
+            if accepted is not None:
+                gated.append((win_idx, accepted))
+                tracker_history.append(accepted)
+
+        if len(gated) < _HRV_MIN_IBIS:
+            return None
+
+        # --- Pass 3: Hampel filter on gated IBI series ---
+        ibi_values = np.array([ibi for _, ibi in gated])
+        win_indices = [idx for idx, _ in gated]
+        clean_mask = np.ones(len(ibi_values), dtype=bool)
+
+        for i in range(len(ibi_values)):
             lo_i = max(0, i - 3)
-            hi_i = min(len(ibis_arr), i + 4)
-            local = ibis_arr[lo_i:hi_i]
+            hi_i = min(len(ibi_values), i + 4)
+            local = ibi_values[lo_i:hi_i]
             med = np.median(local)
             mad = max(np.median(np.abs(local - med)), 1e-6)
-            if abs(ibis_arr[i] - med) <= 3.0 * 1.4826 * mad:
-                clean.append(ibis_arr[i])
-        clean_arr = np.array(clean)
+            if abs(ibi_values[i] - med) > 3.0 * 1.4826 * mad:
+                clean_mask[i] = False
 
-        if len(clean_arr) < 3:
+        clean_ibis = ibi_values[clean_mask]
+        clean_indices = [win_indices[i] for i in range(len(win_indices))
+                         if clean_mask[i]]
+
+        if len(clean_ibis) < _HRV_MIN_IBIS:
             return None
-        diffs = np.diff(clean_arr)
-        rmssd = float(np.sqrt(np.mean(diffs ** 2)))
-        # RMSSD range: 5-200 ms. Values >200 ms from BCG are artifacts
-        # (Shaffer & Ginsberg 2017; even elite athletes rarely exceed 200 ms)
-        return rmssd if 5 <= rmssd <= 200 else None
+
+        # --- Pass 4: Gap-aware RMSSD ---
+        sq_diffs: list = []
+        for i in range(1, len(clean_ibis)):
+            gap = clean_indices[i] - clean_indices[i - 1]
+            if gap >= _HRV_MAX_GAP_WINDOWS:
+                continue  # skip diff across rejected-window gap
+            diff = clean_ibis[i] - clean_ibis[i - 1]
+            sq_diffs.append(diff ** 2)
+
+        if len(sq_diffs) < 5:
+            return None
+
+        hrv_index = float(np.sqrt(np.mean(sq_diffs)))
+        # Range gate: 5-100 ms. Window-level HRV above 100 ms is artifact
+        # even after harmonic correction (cardiologist recommendation).
+        return hrv_index if 5 <= hrv_index <= 100 else None
     except Exception as e:
         log.debug("HRV computation failed: %s", e)
         return None

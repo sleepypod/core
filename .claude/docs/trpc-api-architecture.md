@@ -187,7 +187,7 @@ Query sleep and health data from Pod sensors.
 
 **Data Fields:**
 - Heart rate: Beats per minute (SHS autocorrelation, 0.8-8.5 Hz band)
-- HRV: RMSSD in ms (sub-window autocorrelation IBI, 5-200 ms range)
+- HRV: HR variability index in ms (window-level IBI, 5-100 ms range, NOT clinical RMSSD)
 - Breathing rate: Breaths per minute (Hilbert envelope of cardiac band)
 - Movement: Integer 0-1000 (0-50=still, 50-200=fidgeting, 200-500=repositioning, 500+=major)
 - Fields may be null if sensor couldn't get reliable reading

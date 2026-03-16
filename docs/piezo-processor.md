@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The piezo-processor module extracts heart rate (HR), heart rate variability (HRV/RMSSD), and breathing rate (BR) from raw piezoelectric ballistocardiogram (BCG) sensor data on the SleepyPod. It tails CBOR-encoded `.RAW` files written by the pod firmware, processes dual-channel (left/right) signals at 500 Hz, and writes vitals rows to `biometrics.db` every 60 seconds per occupied side.
+The piezo-processor module extracts heart rate (HR), HR variability index, and breathing rate (BR) from raw piezoelectric ballistocardiogram (BCG) sensor data on the SleepyPod. It tails CBOR-encoded `.RAW` files written by the pod firmware, processes dual-channel (left/right) signals at 500 Hz, and writes vitals rows to `biometrics.db` every 60 seconds per occupied side.
 
 **Why v2 was needed.** The v1 processor produced garbage readings under real pod conditions:
 
@@ -29,7 +29,7 @@ flowchart TD
 
     HR["HR Pipeline<br/>bandpass → autocorr → SHS → tracking"]
     BR["BR Pipeline<br/>bandpass → Hilbert → envelope → peaks"]
-    HRV["HRV Pipeline<br/>sub-window autocorr IBI → Hampel → RMSSD"]
+    HRV["HRV Index<br/>10s autocorr IBI → harmonic gate → Hampel → gap-aware RMSSD"]
 
     DB[("biometrics.db<br/>vitals table")]
     HEALTH[("sleepypod.db<br/>system_health table")]
@@ -100,7 +100,7 @@ Clean (non-pump) samples are ingested into three rolling buffers per side:
 |--------|--------|-------------|---------|
 | `_hr_buf` | 30 s | 15,000 | Heart rate extraction |
 | `_br_buf` | 60 s | 30,000 | Breathing rate extraction |
-| `_hrv_buf` | 300 s | 150,000 | HRV (RMSSD) computation |
+| `_hrv_buf` | 300 s | 150,000 | HR variability index computation |
 
 All buffers are `collections.deque` with `maxlen` — oldest samples are automatically evicted when the buffer is full.
 
@@ -287,38 +287,40 @@ This works because the Hilbert envelope tracks amplitude modulation regardless o
 | Method | Direct bandpass + Welch | Hilbert envelope + peak counting |
 | Physiological plausibility | No (locked) | Yes (varies with breathing) |
 
-## 8. HRV (RMSSD)
+## 8. HR Variability Index
 
-### Approach: Sub-Window Autocorrelation IBI
+> **Important:** This metric is NOT clinical RMSSD. It computes successive differences
+> of window-level IBI estimates, not beat-to-beat intervals. It measures HR stability
+> across 10-second windows, not vagal beat-to-beat modulation. See issue #221 for the
+> beat-level J-peak upgrade path. Do not present this to users as "RMSSD" or "HRV" in
+> a clinical context.
 
-RMSSD (root mean square of successive differences) requires a series of inter-beat intervals (IBIs). In clinical settings, IBIs come from ECG R-peak detection. BCG signals lack the sharp R-peak morphology, making direct peak detection unreliable on noisy bed sensor data.
+### Approach: Window-Level IBI with Harmonic Gate
 
-Instead, v2 estimates IBIs from autocorrelation of short sub-windows:
+1. **Bandpass** the 300-second buffer at 0.8-8.5 Hz.
+2. **Split** into 10-second sub-windows with 50% overlap (~59 windows per 5 min). Shorter windows give 3x more IBI samples while still containing ~12 beat cycles for stable autocorrelation.
+3. **Per sub-window**: SHS-scored autocorrelation (peak-only, same as HR extraction). The winning lag gives the dominant IBI for that 10-second segment.
+4. **IBI validity gate**: Only accept IBIs in [400, 1500] ms (40-150 BPM).
+5. **Harmonic gate**: Each IBI is checked against a trimmed-mean tracker of the last 5 accepted IBIs. If the IBI matches a harmonic (2x, 0.5x, 3x, 1/3x within 18% tolerance), it is corrected to the tracker's expected value. If it matches no harmonic relationship, it is discarded as artifact.
+6. **Hampel filter**: Sliding window of 7 elements. Reject if `|IBI - median| > 3 * 1.4826 * MAD`.
+7. **Gap-aware successive differences**: Only compute diffs between consecutive accepted windows (skip across gaps of >3 rejected windows).
+8. **Validity gate**: 5-100 ms. Window-level HRV above 100 ms is artifact even after harmonic correction.
 
-1. **Bandpass** the 300-second HRV buffer at 0.8-8.5 Hz.
-2. **Split** into 30-second sub-windows with 50% overlap (producing ~19 windows from 300 seconds).
-3. **Per sub-window**: Compute SHS-scored autocorrelation (same algorithm as HR extraction). The winning lag gives the dominant IBI for that 30-second segment.
-4. **IBI validity gate**: Only accept IBIs in [400, 1500] ms (corresponding to 40-150 BPM).
-5. **Hampel filter**: Sliding window of 7 elements (i-3 to i+3). For each IBI, compute the local median and MAD (median absolute deviation). Reject if `|IBI - median| > 3 * 1.4826 * MAD`. The constant 1.4826 normalizes MAD to be consistent with standard deviation for Gaussian distributions.
-6. **RMSSD**: Compute successive differences of clean IBIs, then `sqrt(mean(diffs^2))`.
-7. **Validity gate**: Only return if 5 <= RMSSD <= 200 ms (Shaffer & Ginsberg 2017; BCG-derived values >200 ms are artifacts).
+### Why Harmonic Gate Is Necessary
 
-### Why Not HeartPy
+Without the gate, ~20% of windows lock to the 2nd harmonic (IBI ~474ms at 75 BPM true HR) or sub-harmonic (IBI ~1458ms). These appear in clusters that defeat the Hampel filter (which uses a local median that shifts toward the cluster). The harmonic gate uses a physiological prior (HR doesn't change >15 BPM in 10 seconds during sleep) to reject these before statistical filtering.
 
-HeartPy was evaluated during v2 development. It is designed for clean PPG/ECG signals and struggled on BCG data:
+### Why Not Beat-Level IBI
 
-- Peak detection assumes a clear, repeating waveform morphology that BCG lacks
-- The adaptive threshold algorithm frequently over- or under-segments on noisy BCG
-- On 5-minute windows with pump artifacts, HeartPy often returned NaN or physiologically implausible values
-
-The sub-window autocorrelation approach is more robust because it estimates the dominant periodicity statistically rather than trying to identify individual beats.
+Beat-level J-peak detection (the clinical approach) was evaluated and is the long-term goal. However, BCG J-peak morphology varies significantly with sleep posture and mattress coupling, making template-based peak detection unreliable without per-user adaptation. The window-level autocorrelation approach is more robust as an initial implementation. See #221 for the upgrade path (Bruser et al. 2013 template matching).
 
 ### Quality Requirements
 
-- Minimum 4 valid IBIs required (otherwise returns None)
-- Minimum 3 clean IBIs after Hampel filtering
-- The 300-second buffer must contain at least 60 seconds of data before HRV is attempted
-- First 5 minutes after presence detection have no HRV output (buffer still filling)
+- Minimum 10 valid IBIs after harmonic gate (otherwise returns None)
+- Minimum 10 clean IBIs after Hampel filtering
+- Minimum 5 valid successive differences after gap handling
+- The 300-second buffer must be full before HRV is attempted
+- First 5 minutes after presence detection have no HRV output (buffer filling)
 
 ## 9. Validation Results
 
@@ -359,11 +361,13 @@ Live pod data, Pod 5, 2026-03-16. Left side empty, right side occupied (person a
 | HRTracker consistency threshold | 0.3 | Gaussian weight cutoff (~20 BPM delta passes) |
 | BR peak `distance` | 2.0 s (1000 samples) | Minimum inter-breath interval; enforces max 30 BPM |
 | BR validity | [6, 30] BPM | Physiological range for adult breathing at rest |
-| HRV sub-window | 30 s with 50% overlap | Balances IBI resolution vs. number of estimates |
+| HRV sub-window | 10 s with 50% overlap | ~59 windows per 5 min; 3x more samples than 30s |
 | HRV IBI validity | [400, 1500] ms | Corresponds to 40-150 BPM |
+| Harmonic tolerance | 18% | Gate rejects IBIs that are 2x/0.5x/3x of tracker (DSP expert) |
 | Hampel `k` | 3 (window radius) | 7-element window; standard for short time series |
 | Hampel `threshold` | `3.0 * 1.4826 * MAD` | ~3 sigma equivalent for Gaussian; rejects gross outliers |
-| RMSSD validity | [5, 200] ms | BCG-derived RMSSD >200 ms is artifact (Shaffer & Ginsberg 2017) |
+| Max gap (windows) | 3 | Skip successive diff across gaps of >3 rejected windows |
+| HRV index validity | [5, 100] ms | Window-level HRV >100 ms is artifact (cardiologist recommendation) |
 
 ## 11. Literature References
 
