@@ -202,8 +202,12 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
 
       monitor.on('gesture:detected', event => gestureHandler.handle(event))
       monitor.on('status:updated', (status) => {
-        try { trackPrimingState(status.isPriming) }
-        catch (err) { console.error('[DacMonitor] primeNotification error:', err) }
+        try {
+          trackPrimingState(status.isPriming)
+        }
+        catch (err) {
+          console.error('[DacMonitor] primeNotification error:', err)
+        }
         stateSync.sync(status).catch(err =>
           console.error('[DacMonitor] DeviceStateSync error:', err)
         )

@@ -8,7 +8,7 @@ import type { Side } from './types'
 interface SnoozeState {
   timeoutId: ReturnType<typeof setTimeout>
   snoozeUntil: Date
-  config: { vibrationIntensity: number; vibrationPattern: 'double' | 'rise'; duration: number }
+  config: { vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number }
 }
 
 const activeSnoozes = new Map<Side, SnoozeState>()
@@ -46,7 +46,7 @@ export function cancelSnooze(side: Side): void {
   }
 }
 
-export function getSnoozeStatus(side: Side): { active: boolean; snoozeUntil: number | null } {
+export function getSnoozeStatus(side: Side): { active: boolean, snoozeUntil: number | null } {
   const state = activeSnoozes.get(side)
   return {
     active: !!state,
