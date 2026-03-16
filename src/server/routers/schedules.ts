@@ -110,8 +110,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return created
       }
@@ -163,8 +162,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return updated
       }
@@ -194,7 +192,7 @@ export const schedulesRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        db.transaction((tx) => {
+        void db.transaction((tx) => {
           const [deleted] = tx
             .delete(temperatureSchedules)
             .where(eq(temperatureSchedules.id, input.id))
@@ -208,8 +206,7 @@ export const schedulesRouter = router({
           }
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return { success: true }
       }
@@ -228,6 +225,7 @@ export const schedulesRouter = router({
    * Create power schedule
    */
   createPowerSchedule: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/schedules/power', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -247,6 +245,7 @@ export const schedulesRouter = router({
           }
         )
     )
+    .output(z.any())
     .mutation(async ({ input }) => {
       try {
         const created = db.transaction((tx) => {
@@ -261,8 +260,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return created
       }
@@ -281,6 +279,7 @@ export const schedulesRouter = router({
    * Update power schedule
    */
   updatePowerSchedule: publicProcedure
+    .meta({ openapi: { method: 'PATCH', path: '/schedules/power', protect: false, tags: ['Schedules'] } })
     .input(
       z
         .object({
@@ -305,6 +304,7 @@ export const schedulesRouter = router({
           }
         )
     )
+    .output(z.any())
     .mutation(async ({ input }) => {
       try {
         const { id, ...updates } = input
@@ -353,8 +353,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return updated
       }
@@ -384,7 +383,7 @@ export const schedulesRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        db.transaction((tx) => {
+        void db.transaction((tx) => {
           const [deleted] = tx
             .delete(powerSchedules)
             .where(eq(powerSchedules.id, input.id))
@@ -398,8 +397,7 @@ export const schedulesRouter = router({
           }
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return { success: true }
       }
@@ -448,8 +446,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return created
       }
@@ -504,8 +501,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return updated
       }
@@ -535,7 +531,7 @@ export const schedulesRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        db.transaction((tx) => {
+        void db.transaction((tx) => {
           const [deleted] = tx
             .delete(alarmSchedules)
             .where(eq(alarmSchedules.id, input.id))
@@ -549,8 +545,7 @@ export const schedulesRouter = router({
           }
         })
 
-        // Reload scheduler AFTER transaction commits
-        await reloadScheduler()
+        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return { success: true }
       }

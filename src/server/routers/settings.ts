@@ -145,8 +145,7 @@ export const settingsRouter = router({
           return result
         })
 
-        // Reload scheduler AFTER transaction commits so it reads committed data
-        await reloadSchedulerIfNeeded(input)
+        try { await reloadSchedulerIfNeeded(input) } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return updated
       }
