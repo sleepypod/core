@@ -5,7 +5,7 @@ import { deviceState } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
-import { snoozeAlarm, cancelSnooze } from '@/src/hardware/snoozeManager'
+import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import {
   sideSchema,
   temperatureSchema,
@@ -99,9 +99,12 @@ export const deviceRouter = router({
         }
 
         const primeCompletedAt = getPrimeCompletedAt()
+        const leftSnooze = getSnoozeStatus('left')
+        const rightSnooze = getSnoozeStatus('right')
         return {
           ...status,
           ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+          snooze: { left: leftSnooze, right: rightSnooze },
         }
       }, 'Failed to get device status')
     }),

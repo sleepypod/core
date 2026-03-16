@@ -459,12 +459,13 @@ export const biometricsRouter = router({
           breathingRate: v.breathingRate,
         }))
 
-        await biometricsDb
+        const inserted = await biometricsDb
           .insert(vitals)
           .values(rows)
           .onConflictDoNothing()
+          .returning()
 
-        return { written: rows.length }
+        return { written: inserted.length }
       }
       catch (error) {
         throw new TRPCError({
