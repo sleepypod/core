@@ -599,7 +599,7 @@ def compute_hrv(samples: np.ndarray,
         sq_diffs: list = []
         for i in range(1, len(clean_ibis)):
             gap = clean_indices[i] - clean_indices[i - 1]
-            if gap > _HRV_MAX_GAP_WINDOWS:
+            if gap >= _HRV_MAX_GAP_WINDOWS:
                 continue  # skip diff across rejected-window gap
             diff = clean_ibis[i] - clean_ibis[i - 1]
             sq_diffs.append(diff ** 2)
@@ -607,10 +607,10 @@ def compute_hrv(samples: np.ndarray,
         if len(sq_diffs) < 5:
             return None
 
-        rmssd = float(np.sqrt(np.mean(sq_diffs)))
+        hrv_index = float(np.sqrt(np.mean(sq_diffs)))
         # Range gate: 5-100 ms. Window-level HRV above 100 ms is artifact
         # even after harmonic correction (cardiologist recommendation).
-        return rmssd if 5 <= rmssd <= 100 else None
+        return hrv_index if 5 <= hrv_index <= 100 else None
     except Exception as e:
         log.debug("HRV computation failed: %s", e)
         return None

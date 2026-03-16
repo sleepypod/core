@@ -525,7 +525,7 @@ class HRValidator:
 
     Thresholds are based on clinical literature:
     - HR 30-100 bpm: AHA resting HR; Circulation (athlete bradycardia, REM tachycardia)
-    - HRV 8-300ms: PMC5624990 (Umetani 1998 short-term SDNN in young adults)
+    - HRV 8-100ms: window-level BCG HRV >100 is artifact (see #221)
     - BR 6-22: PMC5027356 (respiratory rate variability in sleeping adults)
     - Dynamic bounds: P10-P90 over 300 samples per PMC6522616 (BCG adaptive thresholds)
     """

@@ -704,7 +704,7 @@ class TestComputeBreathingRate:
 
 
 class TestComputeHRV:
-    """HRV (RMSSD) via sub-window autocorrelation IBI + Hampel filter."""
+    """HR variability index via window-level autocorrelation IBI + harmonic gate."""
 
     def _make_varying_ibi_signal(self, mean_hr=70, ibi_std_ms=30,
                                   duration_s=300, fs=FS):
@@ -739,11 +739,11 @@ class TestComputeHRV:
         return signal
 
     def test_computes_rmssd_for_varying_ibi(self):
-        """RMSSD should be a positive finite number for a realistic signal."""
+        """HRV index should be a positive finite number for a realistic signal."""
         sig = self._make_varying_ibi_signal(mean_hr=70, ibi_std_ms=30,
                                              duration_s=300)
         hrv = compute_hrv(sig, FS)
-        # We expect an RMSSD; it may or may not match the exact input std
+        # We expect an HRV index; it may or may not match the exact input std
         # but should be a plausible number
         if hrv is not None:
             assert 5 <= hrv <= 100
@@ -770,7 +770,7 @@ class TestComputeHRV:
             assert 5 <= hrv <= 100
 
     def test_range_gate(self):
-        """RMSSD should be None or within 5-100 ms."""
+        """HRV index should be None or within 5-100 ms."""
         np.random.seed(42)
         sig = self._make_varying_ibi_signal(mean_hr=70, ibi_std_ms=50,
                                              duration_s=300)
@@ -796,13 +796,13 @@ class TestComputeHRV:
             assert 5 <= hrv <= 100
 
     def test_long_clean_signal_produces_result(self):
-        """A 5-minute clean BCG signal should produce a valid RMSSD."""
+        """A 5-minute clean BCG signal should produce a valid HRV index."""
         np.random.seed(42)
         sig = make_bcg_signal(hr_bpm=65, duration_s=300, noise_level=0.05)
         hrv = compute_hrv(sig, FS)
         # May or may not produce a result depending on SHS scoring;
         # a clean sinusoidal BCG should have very consistent IBI
-        # so RMSSD should be small if detected
+        # so HRV index should be small if detected
         if hrv is not None:
             assert 5 <= hrv <= 100
 
