@@ -1,7 +1,0 @@
-onlyBuiltDependencies:
-  - '@lavamoat/preinstall-always-fail'
-  - better-sqlite3
-  - esbuild
-  - msw
-  - sharp
-  - unrs-resolver
