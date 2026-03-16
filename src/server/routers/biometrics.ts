@@ -52,7 +52,7 @@ export const biometricsRouter = router({
     .input(
       z
         .object({
-          side: sideSchema,
+          side: sideSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
           limit: z.number().int().min(1).max(100).default(30),
@@ -74,7 +74,10 @@ export const biometricsRouter = router({
     )
     .query(async ({ input }) => {
       try {
-        const conditions = [eq(sleepRecords.side, input.side)]
+        const conditions = []
+        if (input.side) {
+          conditions.push(eq(sleepRecords.side, input.side))
+        }
 
         if (input.startDate) {
           conditions.push(gte(sleepRecords.enteredBedAt, input.startDate))
@@ -133,7 +136,7 @@ export const biometricsRouter = router({
     .input(
       z
         .object({
-          side: sideSchema,
+          side: sideSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
           limit: z.number().int().min(1).max(1000).default(288), // Default: 24 hours of 5-min intervals
@@ -155,7 +158,10 @@ export const biometricsRouter = router({
     )
     .query(async ({ input }) => {
       try {
-        const conditions = [eq(vitals.side, input.side)]
+        const conditions = []
+        if (input.side) {
+          conditions.push(eq(vitals.side, input.side))
+        }
 
         if (input.startDate) {
           conditions.push(gte(vitals.timestamp, input.startDate))
@@ -213,7 +219,7 @@ export const biometricsRouter = router({
     .input(
       z
         .object({
-          side: sideSchema,
+          side: sideSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
           limit: z.number().int().min(1).max(1000).default(288),
@@ -235,7 +241,10 @@ export const biometricsRouter = router({
     )
     .query(async ({ input }) => {
       try {
-        const conditions = [eq(movement.side, input.side)]
+        const conditions = []
+        if (input.side) {
+          conditions.push(eq(movement.side, input.side))
+        }
 
         if (input.startDate) {
           conditions.push(gte(movement.timestamp, input.startDate))
@@ -337,12 +346,17 @@ export const biometricsRouter = router({
       z
         .object({
           side: sideSchema,
-          startDate: z.date(),
-          endDate: z.date(),
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
         })
         .strict()
         .refine(
-          data => validateDateRange(data.startDate, data.endDate),
+          (data) => {
+            if (data.startDate && data.endDate) {
+              return validateDateRange(data.startDate, data.endDate)
+            }
+            return true
+          },
           {
             message: 'startDate must be before or equal to endDate',
             path: ['endDate'],
@@ -351,6 +365,10 @@ export const biometricsRouter = router({
     )
     .query(async ({ input }) => {
       try {
+        const now = new Date()
+        const effectiveStart = input.startDate ?? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+        const effectiveEnd = input.endDate ?? now
+
         const [summary] = await biometricsDb
           .select({
             avgHeartRate: avg(vitals.heartRate),
@@ -364,8 +382,8 @@ export const biometricsRouter = router({
           .where(
             and(
               eq(vitals.side, input.side),
-              gte(vitals.timestamp, input.startDate),
-              lte(vitals.timestamp, input.endDate)
+              gte(vitals.timestamp, effectiveStart),
+              lte(vitals.timestamp, effectiveEnd)
             )
           )
 

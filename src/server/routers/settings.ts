@@ -51,10 +51,20 @@ export const settingsRouter = router({
         const gestures = await db.select().from(tapGestures)
 
         return {
-          device: device || null,
+          device: device ?? {
+            id: 1,
+            timezone: 'America/New_York',
+            temperatureUnit: 'f',
+            rebootDaily: false,
+            rebootTime: null,
+            primePodDaily: false,
+            primePodTime: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
           sides: {
-            left: sides.find(s => s.side === 'left') || null,
-            right: sides.find(s => s.side === 'right') || null,
+            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', awayMode: false, createdAt: new Date(), updatedAt: new Date() },
+            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', awayMode: false, createdAt: new Date(), updatedAt: new Date() },
           },
           gestures: {
             left: gestures.filter(g => g.side === 'left'),
@@ -187,6 +197,7 @@ export const settingsRouter = router({
           })
           .where(eq(sideSettings.side, side))
           .returning()
+          .all()
 
         if (!updated) {
           throw new TRPCError({
@@ -252,6 +263,7 @@ export const settingsRouter = router({
             )
           )
           .limit(1)
+          .all()
 
         if (existing.length > 0) {
           // Update existing
@@ -263,6 +275,7 @@ export const settingsRouter = router({
             })
             .where(eq(tapGestures.id, existing[0].id))
             .returning()
+            .all()
 
           if (!updated) {
             throw new TRPCError({
@@ -281,6 +294,7 @@ export const settingsRouter = router({
               ...input,
             })
             .returning()
+            .all()
 
           if (!created) {
             throw new TRPCError({
@@ -328,6 +342,7 @@ export const settingsRouter = router({
             )
           )
           .returning()
+          .all()
 
         if (!deleted) {
           throw new TRPCError({
