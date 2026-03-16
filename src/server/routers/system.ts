@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { execFile } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -401,6 +402,28 @@ export const systemRouter = router({
       catch {
         // df unavailable (macOS dev environment)
         return { totalBytes: 0, usedBytes: 0, availableBytes: 0, usedPercent: 0 }
+      }
+    }),
+
+  /**
+   * Returns build/version info from .git-info (generated at build time).
+   */
+  getVersion: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/version', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      branch: z.string(),
+      commitHash: z.string(),
+      commitTitle: z.string(),
+      buildDate: z.string(),
+    }))
+    .query(async () => {
+      try {
+        const raw = await readFile('.git-info', 'utf-8')
+        return JSON.parse(raw)
+      }
+      catch {
+        return { branch: 'unknown', commitHash: 'unknown', commitTitle: 'unknown', buildDate: 'unknown' }
       }
     }),
 })

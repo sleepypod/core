@@ -77,6 +77,31 @@ export const freezerTemp = sqliteTable('freezer_temp', {
   uniqueIndex('idx_freezer_temp_timestamp').on(t.timestamp),
 ])
 
+export const waterLevelReadings = sqliteTable('water_level_readings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  level: text('level', { enum: ['low', 'ok'] }).notNull(),
+}, t => [
+  index('idx_water_level_timestamp').on(t.timestamp),
+])
+
+export const waterLevelAlerts = sqliteTable('water_level_alerts', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  type: text('type', { enum: ['low_sustained', 'rapid_change', 'leak_suspected'] }).notNull(),
+  startedAt: integer('started_at', { mode: 'timestamp' }).notNull(),
+  dismissedAt: integer('dismissed_at', { mode: 'timestamp' }),
+  message: text('message'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+})
+
+export const ambientLight = sqliteTable('ambient_light', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  lux: real('lux'),
+}, t => [
+  uniqueIndex('idx_ambient_light_timestamp').on(t.timestamp),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {

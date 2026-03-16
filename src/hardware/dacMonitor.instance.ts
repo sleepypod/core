@@ -20,6 +20,7 @@ import type { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
 import { DeviceStateSync } from './deviceStateSync'
+import { trackPrimingState } from './primeNotification'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import {
   type AlarmConfig,
@@ -200,6 +201,7 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
 
       monitor.on('gesture:detected', event => gestureHandler.handle(event))
       monitor.on('status:updated', (status) => {
+        trackPrimingState(status.isPriming)
         stateSync.sync(status).catch(err =>
           console.error('[DacMonitor] DeviceStateSync error:', err)
         )

@@ -4,6 +4,8 @@ import { db } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
+import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
+import { snoozeAlarm, cancelSnooze } from '@/src/hardware/snoozeManager'
 import {
   sideSchema,
   temperatureSchema,
@@ -96,7 +98,11 @@ export const deviceRouter = router({
           console.error('Failed to sync device status to DB:', dbError)
         }
 
-        return status
+        const primeCompletedAt = getPrimeCompletedAt()
+        return {
+          ...status,
+          ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+        }
       }, 'Failed to get device status')
     }),
 
@@ -319,6 +325,7 @@ export const deviceRouter = router({
     .mutation(async ({ input }) => {
       return withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
+        cancelSnooze(input.side)
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
         try {
@@ -336,6 +343,45 @@ export const deviceRouter = router({
 
         return { success: true }
       }, 'Failed to clear alarm')
+    }),
+
+  /**
+   * Snooze an active alarm. Stops vibration immediately, restarts after duration.
+   */
+  snoozeAlarm: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/alarm/snooze', protect: false, tags: ['Device'] } })
+    .input(
+      z.object({
+        side: sideSchema,
+        duration: z.number().int().min(60).max(1800).default(300),
+        vibrationIntensity: vibrationIntensitySchema.default(50),
+        vibrationPattern: vibrationPatternSchema.default('rise'),
+        alarmDuration: alarmDurationSchema.default(120),
+      }).strict()
+    )
+    .output(z.object({ success: z.boolean(), snoozeUntil: z.number() }))
+    .mutation(async ({ input }) => {
+      return withHardwareClient(async (client) => {
+        await client.clearAlarm(input.side)
+
+        const snoozeUntil = snoozeAlarm(input.side, input.duration, {
+          vibrationIntensity: input.vibrationIntensity,
+          vibrationPattern: input.vibrationPattern,
+          duration: input.alarmDuration,
+        })
+
+        try {
+          await db
+            .update(deviceState)
+            .set({ isAlarmVibrating: false, lastUpdated: new Date() })
+            .where(eq(deviceState.side, input.side))
+        }
+        catch (dbError) {
+          console.error('Failed to sync snooze state to DB:', dbError)
+        }
+
+        return { success: true, snoozeUntil: Math.floor(snoozeUntil.getTime() / 1000) }
+      }, 'Failed to snooze alarm')
     }),
 
   /**
@@ -379,5 +425,18 @@ export const deviceRouter = router({
         await client.startPriming()
         return { success: true }
       }, 'Failed to start priming')
+    }),
+
+  /**
+   * Dismiss the prime completion notification.
+   * No-op if no notification is active.
+   */
+  dismissPrimeNotification: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/prime/dismiss', protect: false, tags: ['Device'] } })
+    .input(z.object({}))
+    .output(z.object({ success: z.boolean() }))
+    .mutation(() => {
+      dismissPrimeNotification()
+      return { success: true }
     }),
 })

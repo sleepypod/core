@@ -1,0 +1,175 @@
+import { z } from 'zod'
+import { TRPCError } from '@trpc/server'
+import { publicProcedure, router } from '@/src/server/trpc'
+import { biometricsDb } from '@/src/db'
+import { waterLevelReadings, waterLevelAlerts } from '@/src/db/biometrics-schema'
+import { eq, and, gte, lte, desc, isNull, count, sql } from 'drizzle-orm'
+import { idSchema, validateDateRange } from '@/src/server/validation-schemas'
+
+export const waterLevelRouter = router({
+  /**
+   * Get historical water level readings with optional date range.
+   */
+  getHistory: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/water-level/history', protect: false, tags: ['Water Level'] } })
+    .input(z.object({
+      startDate: z.date().optional(),
+      endDate: z.date().optional(),
+      limit: z.number().int().min(1).max(10000).default(1440),
+    }).strict().refine(
+      data => !(data.startDate && data.endDate) || validateDateRange(data.startDate, data.endDate),
+      { message: 'startDate must be before or equal to endDate', path: ['endDate'] },
+    ))
+    .output(z.any())
+    .query(async ({ input }) => {
+      try {
+        const conditions = []
+        if (input.startDate) conditions.push(gte(waterLevelReadings.timestamp, input.startDate))
+        if (input.endDate) conditions.push(lte(waterLevelReadings.timestamp, input.endDate))
+
+        return await biometricsDb
+          .select()
+          .from(waterLevelReadings)
+          .where(conditions.length ? and(...conditions) : undefined)
+          .orderBy(desc(waterLevelReadings.timestamp))
+          .limit(input.limit)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch water level history: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Get latest water level reading.
+   */
+  getLatest: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/water-level/latest', protect: false, tags: ['Water Level'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
+      try {
+        const [row] = await biometricsDb
+          .select()
+          .from(waterLevelReadings)
+          .orderBy(desc(waterLevelReadings.timestamp))
+          .limit(1)
+        return row || null
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch latest water level: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Get water level trend summary for the last N hours.
+   * Returns percentage of time at each level and overall trend direction.
+   */
+  getTrend: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/water-level/trend', protect: false, tags: ['Water Level'] } })
+    .input(z.object({
+      hours: z.number().int().min(1).max(168).default(24),
+    }).strict())
+    .output(z.any())
+    .query(async ({ input }) => {
+      try {
+        const since = new Date(Date.now() - input.hours * 60 * 60 * 1000)
+
+        const rows = await biometricsDb
+          .select()
+          .from(waterLevelReadings)
+          .where(gte(waterLevelReadings.timestamp, since))
+          .orderBy(desc(waterLevelReadings.timestamp))
+
+        if (rows.length === 0) {
+          return { totalReadings: 0, okPercent: 0, lowPercent: 0, trend: 'unknown' as const }
+        }
+
+        const okCount = rows.filter(r => r.level === 'ok').length
+        const lowCount = rows.filter(r => r.level === 'low').length
+        const total = rows.length
+
+        // Trend: compare first half vs second half of readings
+        const mid = Math.floor(total / 2)
+        const recentLow = rows.slice(0, mid).filter(r => r.level === 'low').length
+        const olderLow = rows.slice(mid).filter(r => r.level === 'low').length
+
+        let trend: 'stable' | 'declining' | 'rising' | 'unknown' = 'stable'
+        if (mid > 0) {
+          const recentRate = recentLow / mid
+          const olderRate = olderLow / (total - mid)
+          if (recentRate > olderRate + 0.2) trend = 'declining'
+          else if (recentRate < olderRate - 0.2) trend = 'rising'
+        }
+
+        return {
+          totalReadings: total,
+          okPercent: Math.round((okCount / total) * 100),
+          lowPercent: Math.round((lowCount / total) * 100),
+          trend,
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to calculate water level trend: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Get active (undismissed) water level alerts.
+   */
+  getAlerts: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/water-level/alerts', protect: false, tags: ['Water Level'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
+      try {
+        return await biometricsDb
+          .select()
+          .from(waterLevelAlerts)
+          .where(isNull(waterLevelAlerts.dismissedAt))
+          .orderBy(desc(waterLevelAlerts.createdAt))
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch water level alerts: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Dismiss a water level alert.
+   */
+  dismissAlert: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/water-level/alerts/dismiss', protect: false, tags: ['Water Level'] } })
+    .input(z.object({ id: idSchema }).strict())
+    .output(z.object({ success: z.boolean() }))
+    .mutation(async ({ input }) => {
+      const [updated] = await biometricsDb
+        .update(waterLevelAlerts)
+        .set({ dismissedAt: new Date() })
+        .where(and(
+          eq(waterLevelAlerts.id, input.id),
+          isNull(waterLevelAlerts.dismissedAt),
+        ))
+        .returning()
+
+      if (!updated) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Alert ${input.id} not found or already dismissed` })
+      }
+
+      return { success: true }
+    }),
+})
