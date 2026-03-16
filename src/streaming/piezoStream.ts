@@ -224,42 +224,47 @@ function int32BufferToArray(raw: Buffer | Uint8Array | undefined): number[] {
 }
 
 /**
- * Decode a CBOR inner record into a JSON-serializable sensor frame.
+ * Decode CBOR inner data into JSON-serializable sensor frames.
+ *
+ * The inner data blob from a RAW record can contain multiple concatenated
+ * CBOR values (the firmware packs several sensor readings per outer record).
  *
  * For piezo-dual: converts raw byte buffers (int32 arrays) to number arrays.
- * For all other types: passes the decoded CBOR object through as-is (all
- * fields are already JSON-compatible — floats, ints, strings, nested objects).
+ * For all other types: passes the decoded CBOR object through as-is.
  *
- * Returns null if decoding fails.
+ * Returns an array of decoded frames (may be empty on failure).
  */
-function decodeSensorFrame(innerBytes: Buffer): Record<string, unknown> | null {
+function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
+  const frames: Record<string, unknown>[] = []
   try {
-    const inner = cborDecoder.decode(innerBytes)
-    if (!inner?.type) return null
+    // decodeMultiple handles concatenated CBOR values in a single buffer
+    cborDecoder.decodeMultiple(innerBytes, (inner: unknown) => {
+      if (!inner || typeof inner !== 'object' || !('type' in (inner as Record<string, unknown>))) return
+      const rec = inner as Record<string, unknown>
+      const recordType = rec.type as string
 
-    const recordType = inner.type as string
-
-    if (recordType === 'piezo-dual') {
-      // Piezo records have binary int32 buffers that need conversion
-      return {
-        type: 'piezo-dual',
-        ts: inner.ts ?? Date.now(),
-        freq: inner.freq,
-        left1: int32BufferToArray(inner.left1),
-        right1: int32BufferToArray(inner.right1),
-        left2: inner.left2 ? int32BufferToArray(inner.left2) : undefined,
-        right2: inner.right2 ? int32BufferToArray(inner.right2) : undefined,
+      if (recordType === 'piezo-dual') {
+        frames.push({
+          type: 'piezo-dual',
+          ts: rec.ts ?? Date.now(),
+          freq: rec.freq,
+          left1: int32BufferToArray(rec.left1 as Buffer | Uint8Array | undefined),
+          right1: int32BufferToArray(rec.right1 as Buffer | Uint8Array | undefined),
+          left2: rec.left2 ? int32BufferToArray(rec.left2 as Buffer | Uint8Array) : undefined,
+          right2: rec.right2 ? int32BufferToArray(rec.right2 as Buffer | Uint8Array) : undefined,
+        })
       }
-    }
-
-    // All other record types (capSense, capSense2, bedTemp, bedTemp2,
-    // frzTemp, frzTherm, frzHealth, log) are already JSON-compatible
-    // after CBOR decoding — pass through as-is.
-    return inner as Record<string, unknown>
+      else {
+        // capSense, capSense2, bedTemp, bedTemp2, frzTemp, frzTherm,
+        // frzHealth, log — all JSON-compatible after CBOR decode
+        frames.push(rec)
+      }
+    })
   }
   catch {
-    return null
+    // Partial decode — return whatever we got
   }
+  return frames
 }
 
 // ---------------------------------------------------------------------------
@@ -431,27 +436,28 @@ export function startPiezoStreamServer(): WebSocketServer {
 
           if (data === null) continue // empty placeholder
 
-          const frame = decodeSensorFrame(data)
-          if (!frame) continue
+          const frames = decodeSensorFrames(data)
 
-          const frameType = frame.type as string
+          for (const frame of frames) {
+            const frameType = frame.type as string
 
-          // Broadcast to subscribed clients only
-          const server = wss
-          if (server) {
-            // Pre-serialize once (avoid per-client JSON.stringify)
-            let payload: string | null = null
+            // Broadcast to subscribed clients only
+            const server = wss
+            if (server) {
+              // Pre-serialize once (avoid per-client JSON.stringify)
+              let payload: string | null = null
 
-            for (const client of server.clients) {
-              if (client.readyState !== WebSocket.OPEN) continue
+              for (const client of server.clients) {
+                if (client.readyState !== WebSocket.OPEN) continue
 
-              // Check subscription filter (default: all types)
-              const subs = clientSubscriptions.get(client)
-              if (subs && !subs.has(frameType)) continue
+                // Check subscription filter (default: all types)
+                const subs = clientSubscriptions.get(client)
+                if (subs && !subs.has(frameType)) continue
 
-              // Lazy serialize — only if at least one client needs it
-              if (payload === null) payload = JSON.stringify(frame)
-              client.send(payload)
+                // Lazy serialize — only if at least one client needs it
+                if (payload === null) payload = JSON.stringify(frame)
+                client.send(payload)
+              }
             }
           }
         }
