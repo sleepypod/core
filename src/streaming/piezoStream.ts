@@ -210,7 +210,7 @@ type SensorType = typeof ALL_SENSOR_TYPES[number]
 // Sensor frame decoder
 // ---------------------------------------------------------------------------
 
-const cborDecoder = new Decoder()
+const cborDecoder = new Decoder({ mapsAsObjects: true, useRecords: false })
 
 /** Convert raw byte buffer of little-endian int32s to a JS number array. */
 function int32BufferToArray(raw: Buffer | Uint8Array | undefined): number[] {
