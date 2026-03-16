@@ -296,7 +296,7 @@ class CapSense2Calibrator:
     REF_PAIR = ("REF", 6, 7)
 
     def calibrate(self, records: list, side: str) -> CalibrationResult:
-        """Find the quietest 5-min window and compute per-channel baselines."""
+        """Find the quietest ~2.5-min window and compute per-channel baselines."""
         if not records:
             raise ValueError("No capSense2 records available for calibration")
 
