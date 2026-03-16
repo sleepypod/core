@@ -91,13 +91,14 @@ export const settingsRouter = router({
     .output(z.any())
     .mutation(async ({ input }) => {
       try {
-        const updated = await db.transaction(async (tx) => {
+        const updated = db.transaction((tx) => {
           // Fetch current settings to validate final computed state
-          const [current] = await tx
+          const [current] = tx
             .select()
             .from(deviceSettings)
             .where(eq(deviceSettings.id, 1))
             .limit(1)
+            .all()
 
           if (!current) {
             throw new TRPCError({
@@ -127,11 +128,12 @@ export const settingsRouter = router({
             })
           }
 
-          const [result] = await tx
+          const [result] = tx
             .update(deviceSettings)
             .set({ ...input, updatedAt: new Date() })
             .where(eq(deviceSettings.id, 1))
             .returning()
+            .all()
 
           if (!result) {
             throw new TRPCError({
@@ -143,8 +145,7 @@ export const settingsRouter = router({
           return result
         })
 
-        // Reload scheduler AFTER transaction commits so it reads committed data
-        await reloadSchedulerIfNeeded(input)
+        try { await reloadSchedulerIfNeeded(input) } catch (e) { console.error('Scheduler reload failed:', e) }
 
         return updated
       }
