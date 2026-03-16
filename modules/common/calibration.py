@@ -534,7 +534,7 @@ class HRValidator:
     HR_HARD_MIN = 30.0    # bpm — athletes can drop this low (Circulation, AHA)
     HR_HARD_MAX = 100.0   # bpm — above = tachycardia per AHA definition
     HRV_HARD_MIN = 8.0    # ms — below = likely artifact
-    HRV_HARD_MAX = 300.0  # ms — young fit adults during deep NREM (PMC5624990)
+    HRV_HARD_MAX = 200.0  # ms — BCG-derived >200 is artifact (Shaffer & Ginsberg 2017)
     BR_HARD_MIN = 6.0     # breaths/min — below = bradypnea (PMC5027356)
     BR_HARD_MAX = 22.0    # breaths/min — above during sleep = likely artifact
 
