@@ -301,7 +301,7 @@ Instead, v2 estimates IBIs from autocorrelation of short sub-windows:
 4. **IBI validity gate**: Only accept IBIs in [400, 1500] ms (corresponding to 40-150 BPM).
 5. **Hampel filter**: Sliding window of 7 elements (i-3 to i+3). For each IBI, compute the local median and MAD (median absolute deviation). Reject if `|IBI - median| > 3 * 1.4826 * MAD`. The constant 1.4826 normalizes MAD to be consistent with standard deviation for Gaussian distributions.
 6. **RMSSD**: Compute successive differences of clean IBIs, then `sqrt(mean(diffs^2))`.
-7. **Validity gate**: Only return if 5 <= RMSSD <= 400 ms.
+7. **Validity gate**: Only return if 5 <= RMSSD <= 200 ms (Shaffer & Ginsberg 2017; BCG-derived values >200 ms are artifacts).
 
 ### Why Not HeartPy
 
@@ -363,7 +363,7 @@ Live pod data, Pod 5, 2026-03-16. Left side empty, right side occupied (person a
 | HRV IBI validity | [400, 1500] ms | Corresponds to 40-150 BPM |
 | Hampel `k` | 3 (window radius) | 7-element window; standard for short time series |
 | Hampel `threshold` | 3.0 * 1.4826 * MAD | ~3 sigma equivalent for Gaussian; rejects gross outliers |
-| RMSSD validity | [5, 400] ms | Physiological RMSSD range for healthy adults |
+| RMSSD validity | [5, 200] ms | BCG-derived RMSSD >200 ms is artifact (Shaffer & Ginsberg 2017) |
 
 ## 11. Literature References
 

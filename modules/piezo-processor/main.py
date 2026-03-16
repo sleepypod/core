@@ -508,7 +508,9 @@ def compute_hrv(samples: np.ndarray,
             return None
         diffs = np.diff(clean_arr)
         rmssd = float(np.sqrt(np.mean(diffs ** 2)))
-        return rmssd if 5 <= rmssd <= 400 else None
+        # RMSSD range: 5-200 ms. Values >200 ms from BCG are artifacts
+        # (Shaffer & Ginsberg 2017; even elite athletes rarely exceed 200 ms)
+        return rmssd if 5 <= rmssd <= 200 else None
     except Exception as e:
         log.debug("HRV computation failed: %s", e)
         return None

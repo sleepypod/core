@@ -746,7 +746,7 @@ class TestComputeHRV:
         # We expect an RMSSD; it may or may not match the exact input std
         # but should be a plausible number
         if hrv is not None:
-            assert 5 <= hrv <= 400
+            assert 5 <= hrv <= 200
             assert np.isfinite(hrv)
 
     def test_returns_none_for_insufficient_data(self):
@@ -761,22 +761,22 @@ class TestComputeHRV:
 
         Broadband noise after bandpass filtering can produce autocorrelation
         peaks in the cardiac lag range, yielding spurious IBI estimates.
-        The Hampel filter and range gate (5-400 ms) provide the safety net.
+        The Hampel filter and range gate (5-200 ms) provide the safety net.
         """
         np.random.seed(42)
         sig = make_noise(duration_s=300, amplitude=100)
         hrv = compute_hrv(sig, FS)
         if hrv is not None:
-            assert 5 <= hrv <= 400
+            assert 5 <= hrv <= 200
 
     def test_range_gate(self):
-        """RMSSD should be None or within 5-400 ms."""
+        """RMSSD should be None or within 5-200 ms."""
         np.random.seed(42)
         sig = self._make_varying_ibi_signal(mean_hr=70, ibi_std_ms=50,
                                              duration_s=300)
         hrv = compute_hrv(sig, FS)
         if hrv is not None:
-            assert 5 <= hrv <= 400
+            assert 5 <= hrv <= 200
 
     def test_hampel_filter_removes_outliers(self):
         """Verify that compute_hrv can handle signals that would produce
@@ -793,7 +793,7 @@ class TestComputeHRV:
         # Should still produce a result (Hampel filter cleans outliers)
         # or return None gracefully — either way, no crash
         if hrv is not None:
-            assert 5 <= hrv <= 400
+            assert 5 <= hrv <= 200
 
     def test_long_clean_signal_produces_result(self):
         """A 5-minute clean BCG signal should produce a valid RMSSD."""
@@ -804,7 +804,7 @@ class TestComputeHRV:
         # a clean sinusoidal BCG should have very consistent IBI
         # so RMSSD should be small if detected
         if hrv is not None:
-            assert 5 <= hrv <= 400
+            assert 5 <= hrv <= 200
 
 
 # ===================================================================
