@@ -550,37 +550,42 @@ export const biometricsRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'No fields to update' })
       }
 
-      // If either timestamp changed, recalculate duration from current + new values
-      if (updates.enteredBedAt || updates.leftBedAt) {
-        const [existing] = await biometricsDb
-          .select()
-          .from(sleepRecords)
-          .where(eq(sleepRecords.id, id))
-          .limit(1)
+      // Wrap in transaction to avoid TOCTOU race on select+update
+      return biometricsDb.transaction((tx) => {
+        // If either timestamp changed, recalculate duration from current + new values
+        if (updates.enteredBedAt || updates.leftBedAt) {
+          const [existing] = tx
+            .select()
+            .from(sleepRecords)
+            .where(eq(sleepRecords.id, id))
+            .limit(1)
+            .all()
 
-        if (!existing) {
+          if (!existing) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: `Sleep record ${id} not found` })
+          }
+
+          const entered = updates.enteredBedAt ?? existing.enteredBedAt
+          const left = updates.leftBedAt ?? existing.leftBedAt
+          if (left <= entered) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'leftBedAt must be after enteredBedAt' })
+          }
+          setValues.sleepDurationSeconds = Math.round((left.getTime() - entered.getTime()) / 1000)
+        }
+
+        const [updated] = tx
+          .update(sleepRecords)
+          .set(setValues)
+          .where(eq(sleepRecords.id, id))
+          .returning()
+          .all()
+
+        if (!updated) {
           throw new TRPCError({ code: 'NOT_FOUND', message: `Sleep record ${id} not found` })
         }
 
-        const entered = updates.enteredBedAt ?? existing.enteredBedAt
-        const left = updates.leftBedAt ?? existing.leftBedAt
-        if (left <= entered) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'leftBedAt must be after enteredBedAt' })
-        }
-        setValues.sleepDurationSeconds = Math.round((left.getTime() - entered.getTime()) / 1000)
-      }
-
-      const [updated] = await biometricsDb
-        .update(sleepRecords)
-        .set(setValues)
-        .where(eq(sleepRecords.id, id))
-        .returning()
-
-      if (!updated) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: `Sleep record ${id} not found` })
-      }
-
-      return updated
+        return updated
+      })
     }),
 
   /**

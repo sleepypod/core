@@ -3,7 +3,7 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
 import { waterLevelReadings, waterLevelAlerts } from '@/src/db/biometrics-schema'
-import { eq, and, gte, lte, desc, isNull } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, isNull, count, sql } from 'drizzle-orm'
 import { idSchema, validateDateRange } from '@/src/server/validation-schemas'
 
 export const waterLevelRouter = router({
@@ -80,31 +80,60 @@ export const waterLevelRouter = router({
     .output(z.any())
     .query(async ({ input }) => {
       try {
-        const since = new Date(Date.now() - input.hours * 60 * 60 * 1000)
+        const now = Date.now()
+        const since = new Date(now - input.hours * 60 * 60 * 1000)
+        const midpoint = new Date(now - (input.hours * 60 * 60 * 1000) / 2)
 
-        const rows = await biometricsDb
-          .select()
+        // Aggregate counts in SQL instead of loading all rows
+        const totals = await biometricsDb
+          .select({
+            level: waterLevelReadings.level,
+            cnt: count(),
+          })
           .from(waterLevelReadings)
           .where(gte(waterLevelReadings.timestamp, since))
-          .orderBy(desc(waterLevelReadings.timestamp))
+          .groupBy(waterLevelReadings.level)
 
-        if (rows.length === 0) {
+        const okCount = totals.find(r => r.level === 'ok')?.cnt ?? 0
+        const lowCount = totals.find(r => r.level === 'low')?.cnt ?? 0
+        const total = okCount + lowCount
+
+        if (total === 0) {
           return { totalReadings: 0, okPercent: 0, lowPercent: 0, trend: 'unknown' as const }
         }
 
-        const okCount = rows.filter(r => r.level === 'ok').length
-        const lowCount = rows.filter(r => r.level === 'low').length
-        const total = rows.length
-
-        // Trend: compare first half vs second half of readings
-        const mid = Math.floor(total / 2)
-        const recentLow = rows.slice(0, mid).filter(r => r.level === 'low').length
-        const olderLow = rows.slice(mid).filter(r => r.level === 'low').length
+        // Trend: compare recent half vs older half low-count rates
+        const [recentLow] = await biometricsDb
+          .select({ cnt: count() })
+          .from(waterLevelReadings)
+          .where(and(
+            gte(waterLevelReadings.timestamp, midpoint),
+            sql`${waterLevelReadings.level} = 'low'`,
+          ))
+        const [olderLow] = await biometricsDb
+          .select({ cnt: count() })
+          .from(waterLevelReadings)
+          .where(and(
+            gte(waterLevelReadings.timestamp, since),
+            lte(waterLevelReadings.timestamp, midpoint),
+            sql`${waterLevelReadings.level} = 'low'`,
+          ))
+        const [recentTotal] = await biometricsDb
+          .select({ cnt: count() })
+          .from(waterLevelReadings)
+          .where(gte(waterLevelReadings.timestamp, midpoint))
+        const [olderTotal] = await biometricsDb
+          .select({ cnt: count() })
+          .from(waterLevelReadings)
+          .where(and(
+            gte(waterLevelReadings.timestamp, since),
+            lte(waterLevelReadings.timestamp, midpoint),
+          ))
 
         let trend: 'stable' | 'declining' | 'rising' | 'unknown' = 'stable'
-        if (mid > 0) {
-          const recentRate = recentLow / mid
-          const olderRate = olderLow / (total - mid)
+        if (recentTotal.cnt > 0 && olderTotal.cnt > 0) {
+          const recentRate = recentLow.cnt / recentTotal.cnt
+          const olderRate = olderLow.cnt / olderTotal.cnt
           if (recentRate > olderRate + 0.2) trend = 'declining'
           else if (recentRate < olderRate - 0.2) trend = 'rising'
         }
@@ -157,19 +186,29 @@ export const waterLevelRouter = router({
     .input(z.object({ id: idSchema }).strict())
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
-      const [updated] = await biometricsDb
-        .update(waterLevelAlerts)
-        .set({ dismissedAt: new Date() })
-        .where(and(
-          eq(waterLevelAlerts.id, input.id),
-          isNull(waterLevelAlerts.dismissedAt),
-        ))
-        .returning()
+      try {
+        const [updated] = await biometricsDb
+          .update(waterLevelAlerts)
+          .set({ dismissedAt: new Date() })
+          .where(and(
+            eq(waterLevelAlerts.id, input.id),
+            isNull(waterLevelAlerts.dismissedAt),
+          ))
+          .returning()
 
-      if (!updated) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: `Alert ${input.id} not found or already dismissed` })
+        if (!updated) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: `Alert ${input.id} not found or already dismissed` })
+        }
+
+        return { success: true }
       }
-
-      return { success: true }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to dismiss alert: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 })

@@ -14,10 +14,11 @@ CREATE TABLE `water_level_alerts` (
 	`created_at` integer NOT NULL
 );
 --> statement-breakpoint
+CREATE INDEX `idx_water_level_alerts_dismissed` ON `water_level_alerts` (`dismissed_at`);--> statement-breakpoint
 CREATE TABLE `water_level_readings` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`timestamp` integer NOT NULL,
 	`level` text NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_water_level_timestamp` ON `water_level_readings` (`timestamp`);
+CREATE UNIQUE INDEX `idx_water_level_timestamp` ON `water_level_readings` (`timestamp`);

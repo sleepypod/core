@@ -82,7 +82,7 @@ export const waterLevelReadings = sqliteTable('water_level_readings', {
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   level: text('level', { enum: ['low', 'ok'] }).notNull(),
 }, t => [
-  index('idx_water_level_timestamp').on(t.timestamp),
+  uniqueIndex('idx_water_level_timestamp').on(t.timestamp),
 ])
 
 export const waterLevelAlerts = sqliteTable('water_level_alerts', {
@@ -92,7 +92,9 @@ export const waterLevelAlerts = sqliteTable('water_level_alerts', {
   dismissedAt: integer('dismissed_at', { mode: 'timestamp' }),
   message: text('message'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-})
+}, t => [
+  index('idx_water_level_alerts_dismissed').on(t.dismissedAt),
+])
 
 export const ambientLight = sqliteTable('ambient_light', {
   id: integer('id').primaryKey({ autoIncrement: true }),

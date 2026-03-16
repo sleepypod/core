@@ -20,7 +20,8 @@ import type { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
 import { DeviceStateSync } from './deviceStateSync'
-import { trackPrimingState } from './primeNotification'
+import { trackPrimingState, resetPrimingState } from './primeNotification'
+import { cancelSnooze } from './snoozeManager'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import {
   type AlarmConfig,
@@ -201,7 +202,8 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
 
       monitor.on('gesture:detected', event => gestureHandler.handle(event))
       monitor.on('status:updated', (status) => {
-        trackPrimingState(status.isPriming)
+        try { trackPrimingState(status.isPriming) }
+        catch (err) { console.error('[DacMonitor] primeNotification error:', err) }
         stateSync.sync(status).catch(err =>
           console.error('[DacMonitor] DeviceStateSync error:', err)
         )
@@ -241,6 +243,10 @@ export const shutdownDacMonitor = async (): Promise<void> => {
 
   const monitor = g[KEYS.monitor] as DacMonitor | undefined
   const gestureHandler = g[KEYS.gesture] as GestureActionHandler | undefined
+
+  cancelSnooze('left')
+  cancelSnooze('right')
+  resetPrimingState()
 
   g[KEYS.monitor] = null
   g[KEYS.gesture] = null

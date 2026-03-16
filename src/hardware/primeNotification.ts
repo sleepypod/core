@@ -25,3 +25,8 @@ export function getPrimeCompletedAt(): number | null {
 export function dismissPrimeNotification(): void {
   primeCompletedAt = null
 }
+
+export function resetPrimingState(): void {
+  primeCompletedAt = null
+  wasPriming = false
+}
