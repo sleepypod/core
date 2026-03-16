@@ -40,7 +40,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
 from common.raw_follower import RawFileFollower
-from common.calibration import CalibrationStore, is_present_capsense_calibrated
+from common.calibration import (
+    CalibrationStore,
+    is_present_capsense_calibrated,
+    is_present_capsense2_calibrated,
+)
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -162,23 +166,42 @@ def movement_score_calibrated(record: dict, side: str, baselines: Optional[dict]
     Returns a value in "centi-sigma" units (z-score * 100) regardless of
     calibration state, so that the movement column has a consistent scale.
 
-    With calibration: each channel's deviation is measured in standard deviations
-    from the empty-bed mean, then summed and scaled by 100.
-
-    Without calibration: uses a default std of 500 per channel (empirical
-    estimate for uncalibrated capacitance sensors) to produce scores in the
-    same unit space. These will be less accurate but comparable in magnitude.
+    Handles both capSense (Pod 3: out/cen/in) and capSense2 (Pod 5: values array).
     """
     data = record.get(side, {})
     if not data:
         return 0
 
-    # Default baseline: mean=0, std=500 per channel — empirical estimate
-    # for uncalibrated capacitance sensors. Keeps output in the same
-    # centi-sigma unit space as calibrated scores.
+    rtype = record.get("type", "")
+
+    if rtype == "capSense2":
+        vals = data.get("values")
+        if not vals or len(vals) < 6:
+            return 0
+        # Average redundant pairs: A=[0:2], B=[2:4], C=[4:6]
+        sense_pairs = (("A", 0, 1), ("B", 2, 3), ("C", 4, 5))
+        if baselines is None or baselines.get("format") != "capSense2":
+            # Uncalibrated: default std=5.0 for float-range capSense2 values
+            score = 0.0
+            for _, ia, ib in sense_pairs:
+                score += abs((vals[ia] + vals[ib]) / 2.0) / 5.0
+            return int(round(score * 100))
+        channels = baselines.get("channels", {})
+        score = 0.0
+        for name, ia, ib in sense_pairs:
+            val = (vals[ia] + vals[ib]) / 2.0
+            ch_cal = channels.get(name, {})
+            mean = ch_cal.get("mean", 0)
+            std = ch_cal.get("std", 0.05)
+            if std > 0:
+                score += abs((val - mean) / std)
+        return int(round(score * 100))
+
+    # capSense (Pod 3): named int channels
     DEFAULT_STD = 500
 
-    if baselines is None:
+    if baselines is None or baselines.get("format") == "capSense2":
+        # No baseline or mismatched format — use uncalibrated defaults
         raw_sum = 0.0
         for ch in CHANNELS:
             raw_sum += abs(int(data.get(ch, 0))) / DEFAULT_STD
@@ -245,9 +268,19 @@ class SessionTracker:
 
     def process(self, ts: float, record: dict) -> None:
         baselines = self.calibration.get_baselines(self.side)
-        present = is_present_capsense_calibrated(
-            record, self.side, baselines, fallback_threshold=PRESENCE_THRESHOLD
-        )
+        rtype = record.get("type", "")
+        # Only use baselines if they match the record format
+        fmt = baselines.get("format") if baselines else None
+        if rtype == "capSense2":
+            cal = baselines if fmt == "capSense2" else None
+            present = is_present_capsense2_calibrated(
+                record, self.side, cal, fallback_threshold=60.0,
+            )
+        else:
+            cal = baselines if fmt != "capSense2" else None
+            present = is_present_capsense_calibrated(
+                record, self.side, cal, fallback_threshold=PRESENCE_THRESHOLD,
+            )
         movement = movement_score_calibrated(record, self.side, baselines)
         self._update(ts, present, movement)
 
@@ -359,7 +392,7 @@ def main() -> None:
 
     try:
         for record in follower.read_records():
-            if record.get("type") != "capSense":
+            if record.get("type") not in ("capSense", "capSense2"):
                 continue
 
             ts = float(record.get("ts", time.time()))

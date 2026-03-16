@@ -289,7 +289,7 @@ class CapSense2Calibrator:
     """
 
     LOOKBACK_HOURS = 6
-    MIN_WINDOW_S = 300   # 5 minutes at ~2 Hz = ~600 samples
+    MIN_WINDOW_SAMPLES = 300  # ~2.5 min at ~2 Hz sampling rate
     MIN_STD = 0.05       # floats in the tens, not ints in the hundreds
     # Sensing channel pairs: (name, index_a, index_b)
     SENSE_PAIRS = (("A", 0, 1), ("B", 2, 3), ("C", 4, 5))
@@ -322,7 +322,7 @@ class CapSense2Calibrator:
             )
 
         # Find quietest 5-min window across sensing channels only
-        window = min(self.MIN_WINDOW_S, len(timestamps))
+        window = min(self.MIN_WINDOW_SAMPLES, len(timestamps))
         best_start = 0
         best_variance = float("inf")
         sense_names = [name for name, _, _ in self.SENSE_PAIRS]
@@ -729,8 +729,8 @@ def is_present_capsense2_calibrated(
     if not vals or len(vals) < 8:
         return False
 
-    if baselines is None:
-        # Uncalibrated fallback: sum of sensing channels
+    if baselines is None or baselines.get("format") != "capSense2":
+        # Uncalibrated or mismatched profile — fall back to raw sum threshold
         total = sum((vals[i] + vals[i + 1]) / 2.0 for i in (0, 2, 4))
         return total > fallback_threshold
 
