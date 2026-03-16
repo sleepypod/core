@@ -7,11 +7,15 @@ const run = (cmd) => {
   catch { return 'unknown' }
 }
 
-writeFileSync('.git-info', JSON.stringify({
-  branch: run('git rev-parse --abbrev-ref HEAD'),
-  commitHash: run('git rev-parse --short HEAD'),
-  commitTitle: run('git log -1 --format=%s'),
-  buildDate: new Date().toISOString(),
-}))
-
-console.log('Generated .git-info')
+try {
+  writeFileSync('.git-info', JSON.stringify({
+    branch: run('git rev-parse --abbrev-ref HEAD'),
+    commitHash: run('git rev-parse --short HEAD'),
+    commitTitle: run('git log -1 --format=%s'),
+    buildDate: new Date().toISOString(),
+  }))
+  console.log('Generated .git-info')
+}
+catch (err) {
+  console.warn('Could not write .git-info (non-fatal):', err.message)
+}

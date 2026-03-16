@@ -564,6 +564,9 @@ export const biometricsRouter = router({
 
         const entered = updates.enteredBedAt ?? existing.enteredBedAt
         const left = updates.leftBedAt ?? existing.leftBedAt
+        if (left <= entered) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'leftBedAt must be after enteredBedAt' })
+        }
         setValues.sleepDurationSeconds = Math.round((left.getTime() - entered.getTime()) / 1000)
       }
 

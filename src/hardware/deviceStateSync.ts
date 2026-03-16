@@ -90,7 +90,6 @@ export class DeviceStateSync {
   private recordWaterLevel(status: DeviceStatus): void {
     const now = Date.now()
     if (now - this.lastWaterLevelWrite < 60_000) return
-    this.lastWaterLevelWrite = now
 
     const level = status.waterLevel === 'low' ? 'low' as const : 'ok' as const
     try {
@@ -98,6 +97,7 @@ export class DeviceStateSync {
         .insert(waterLevelReadings)
         .values({ timestamp: new Date(now), level })
         .run()
+      this.lastWaterLevelWrite = now
     }
     catch (error) {
       console.error('DeviceStateSync: failed to write water level:', error instanceof Error ? error.message : error)

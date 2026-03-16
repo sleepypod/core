@@ -277,6 +277,7 @@ export const deviceRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       return withHardwareClient(async (client) => {
+        cancelSnooze(input.side)
         await client.setAlarm(input.side, {
           vibrationIntensity: input.vibrationIntensity,
           vibrationPattern: input.vibrationPattern,

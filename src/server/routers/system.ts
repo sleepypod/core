@@ -418,12 +418,19 @@ export const systemRouter = router({
       buildDate: z.string(),
     }))
     .query(async () => {
+      const fallback = { branch: 'unknown', commitHash: 'unknown', commitTitle: 'unknown', buildDate: 'unknown' }
       try {
         const raw = await readFile('.git-info', 'utf-8')
-        return JSON.parse(raw)
+        const parsed = JSON.parse(raw)
+        return {
+          branch: typeof parsed.branch === 'string' ? parsed.branch : 'unknown',
+          commitHash: typeof parsed.commitHash === 'string' ? parsed.commitHash : 'unknown',
+          commitTitle: typeof parsed.commitTitle === 'string' ? parsed.commitTitle : 'unknown',
+          buildDate: typeof parsed.buildDate === 'string' ? parsed.buildDate : 'unknown',
+        }
       }
       catch {
-        return { branch: 'unknown', commitHash: 'unknown', commitTitle: 'unknown', buildDate: 'unknown' }
+        return fallback
       }
     }),
 })

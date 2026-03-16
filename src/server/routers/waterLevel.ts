@@ -3,7 +3,7 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
 import { waterLevelReadings, waterLevelAlerts } from '@/src/db/biometrics-schema'
-import { eq, and, gte, lte, desc, isNull, count, sql } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, isNull } from 'drizzle-orm'
 import { idSchema, validateDateRange } from '@/src/server/validation-schemas'
 
 export const waterLevelRouter = router({

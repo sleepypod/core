@@ -8,7 +8,11 @@ let primeCompletedAt: Date | null = null
 let wasPriming = false
 
 export function trackPrimingState(isPriming: boolean): void {
-  if (wasPriming && !isPriming) {
+  if (!wasPriming && isPriming) {
+    // New priming cycle — clear stale notification
+    primeCompletedAt = null
+  }
+  else if (wasPriming && !isPriming) {
     primeCompletedAt = new Date()
   }
   wasPriming = isPriming
