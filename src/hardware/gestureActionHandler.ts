@@ -123,6 +123,9 @@ export class GestureActionHandler {
 
         if (gesture.alarmBehavior === 'dismiss') {
           await client.clearAlarm(event.side)
+          // Lazy import to avoid circular dep chain (snoozeManager → dacMonitor.instance → db)
+          const { cancelSnooze } = await import('./snoozeManager')
+          cancelSnooze(event.side)
         }
         else if (gesture.alarmBehavior === 'snooze') {
           await client.clearAlarm(event.side)

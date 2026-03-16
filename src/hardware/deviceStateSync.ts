@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
-import { db } from '@/src/db'
+import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
+import { waterLevelReadings } from '@/src/db/biometrics-schema'
 import type { DeviceStatus } from './types'
 
 /**
@@ -12,7 +13,10 @@ import type { DeviceStatus } from './types'
  * power-cycle heuristics.
  */
 export class DeviceStateSync {
+  private lastWaterLevelWrite = 0
+
   sync = async (status: DeviceStatus): Promise<void> => {
+    this.recordWaterLevel(status)
     try {
       await Promise.all([
         this.upsertSide('left', status),
@@ -80,5 +84,23 @@ export class DeviceStateSync {
         })
         .run()
     })
+  }
+
+  /** Write water level to biometrics DB, rate-limited to once per 60s. */
+  private recordWaterLevel(status: DeviceStatus): void {
+    const now = Date.now()
+    if (now - this.lastWaterLevelWrite < 60_000) return
+
+    const level = status.waterLevel === 'low' ? 'low' as const : 'ok' as const
+    try {
+      biometricsDb
+        .insert(waterLevelReadings)
+        .values({ timestamp: new Date(now), level })
+        .run()
+      this.lastWaterLevelWrite = now
+    }
+    catch (error) {
+      console.error('DeviceStateSync: failed to write water level:', error instanceof Error ? error.message : error)
+    }
   }
 }

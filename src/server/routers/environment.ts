@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
-import { bedTemp, freezerTemp } from '@/src/db/biometrics-schema'
+import { ambientLight, bedTemp, freezerTemp } from '@/src/db/biometrics-schema'
 import { and, gte, lte, desc, avg, min, max, count } from 'drizzle-orm'
 import { validateDateRange } from '@/src/server/validation-schemas'
 import { centiDegreesToC, centiDegreesToF, centiPercentToPercent, type TempUnit } from '@/src/lib/tempUtils'
@@ -254,6 +254,104 @@ export const environmentRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to calculate environment summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  getAmbientLight: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/environment/ambient-light', protect: false, tags: ['Environment'] } })
+    .input(z.object({
+      startDate: z.date().optional(),
+      endDate: z.date().optional(),
+      limit: z.number().int().min(1).max(1440).default(1440),
+    }).strict().refine(
+      data => !(data.startDate && data.endDate) || validateDateRange(data.startDate, data.endDate),
+      { message: 'startDate must be before or equal to endDate', path: ['endDate'] },
+    ))
+    .output(z.any())
+    .query(async ({ input }) => {
+      try {
+        const conditions = []
+        if (input.startDate) conditions.push(gte(ambientLight.timestamp, input.startDate))
+        if (input.endDate) conditions.push(lte(ambientLight.timestamp, input.endDate))
+
+        return await biometricsDb
+          .select()
+          .from(ambientLight)
+          .where(conditions.length ? and(...conditions) : undefined)
+          .orderBy(desc(ambientLight.timestamp))
+          .limit(input.limit)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch ambient light: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  getLatestAmbientLight: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/environment/ambient-light/latest', protect: false, tags: ['Environment'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
+      try {
+        const [row] = await biometricsDb
+          .select()
+          .from(ambientLight)
+          .orderBy(desc(ambientLight.timestamp))
+          .limit(1)
+        return row || null
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch latest ambient light: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  getAmbientLightSummary: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/environment/ambient-light/summary', protect: false, tags: ['Environment'] } })
+    .input(z.object({
+      startDate: z.date(),
+      endDate: z.date(),
+    }).strict().refine(
+      data => validateDateRange(data.startDate, data.endDate),
+      { message: 'startDate must be before or equal to endDate', path: ['endDate'] },
+    ))
+    .output(z.any())
+    .query(async ({ input }) => {
+      try {
+        const [summary] = await biometricsDb
+          .select({
+            avgLux: avg(ambientLight.lux),
+            minLux: min(ambientLight.lux),
+            maxLux: max(ambientLight.lux),
+            recordCount: count(),
+          })
+          .from(ambientLight)
+          .where(and(
+            gte(ambientLight.timestamp, input.startDate),
+            lte(ambientLight.timestamp, input.endDate),
+          ))
+
+        if (summary.recordCount === 0) return null
+
+        return {
+          avgLux: summary.avgLux !== null ? Number(summary.avgLux) : null,
+          minLux: summary.minLux,
+          maxLux: summary.maxLux,
+          recordCount: summary.recordCount,
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to calculate ambient light summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

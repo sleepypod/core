@@ -16,6 +16,9 @@ node_modules
 !.yarn/sdks
 !.yarn/versions
 
+# Build artifacts
+.git-info
+
 # Testing
 test-results
 coverage

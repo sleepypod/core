@@ -4,7 +4,7 @@ import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { eq, and, gte, lte, desc, avg, min, max, count } from 'drizzle-orm'
-import { sideSchema, validateDateRange } from '@/src/server/validation-schemas'
+import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { isIosProcessing, getConnectedSince } from '@/src/streaming/processingState'
 import { listRawFiles } from './raw'
 
@@ -459,12 +459,13 @@ export const biometricsRouter = router({
           breathingRate: v.breathingRate,
         }))
 
-        await biometricsDb
+        const inserted = await biometricsDb
           .insert(vitals)
           .values(rows)
           .onConflictDoNothing()
+          .returning()
 
-        return { written: rows.length }
+        return { written: inserted.length }
       }
       catch (error) {
         throw new TRPCError({
@@ -520,5 +521,91 @@ export const biometricsRouter = router({
       catch {
         return { rawFiles: { left: 0, right: 0 }, totalSizeMB: 0 }
       }
+    }),
+
+  /**
+   * Update a sleep record (e.g., correct erroneous bed times).
+   * Recalculates sleepDurationSeconds from the updated timestamps.
+   */
+  updateSleepRecord: publicProcedure
+    .meta({ openapi: { method: 'PUT', path: '/biometrics/sleep-records', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z.object({
+        id: idSchema,
+        enteredBedAt: z.date().optional(),
+        leftBedAt: z.date().optional(),
+        timesExitedBed: z.number().int().min(0).optional(),
+      }).strict()
+    )
+    .output(z.any())
+    .mutation(async ({ input }) => {
+      const { id, ...updates } = input
+
+      // If both timestamps provided, recalculate duration
+      const setValues: Record<string, unknown> = {}
+      if (updates.enteredBedAt) setValues.enteredBedAt = updates.enteredBedAt
+      if (updates.leftBedAt) setValues.leftBedAt = updates.leftBedAt
+      if (updates.timesExitedBed !== undefined) setValues.timesExitedBed = updates.timesExitedBed
+
+      if (Object.keys(setValues).length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'No fields to update' })
+      }
+
+      // Wrap in transaction to avoid TOCTOU race on select+update
+      return biometricsDb.transaction((tx) => {
+        // If either timestamp changed, recalculate duration from current + new values
+        if (updates.enteredBedAt || updates.leftBedAt) {
+          const [existing] = tx
+            .select()
+            .from(sleepRecords)
+            .where(eq(sleepRecords.id, id))
+            .limit(1)
+            .all()
+
+          if (!existing) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: `Sleep record ${id} not found` })
+          }
+
+          const entered = updates.enteredBedAt ?? existing.enteredBedAt
+          const left = updates.leftBedAt ?? existing.leftBedAt
+          if (left <= entered) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'leftBedAt must be after enteredBedAt' })
+          }
+          setValues.sleepDurationSeconds = Math.round((left.getTime() - entered.getTime()) / 1000)
+        }
+
+        const [updated] = tx
+          .update(sleepRecords)
+          .set(setValues)
+          .where(eq(sleepRecords.id, id))
+          .returning()
+          .all()
+
+        if (!updated) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: `Sleep record ${id} not found` })
+        }
+
+        return updated
+      })
+    }),
+
+  /**
+   * Delete a sleep record.
+   */
+  deleteSleepRecord: publicProcedure
+    .meta({ openapi: { method: 'DELETE', path: '/biometrics/sleep-records', protect: false, tags: ['Biometrics'] } })
+    .input(z.object({ id: idSchema }).strict())
+    .output(z.object({ success: z.boolean() }))
+    .mutation(async ({ input }) => {
+      const [deleted] = await biometricsDb
+        .delete(sleepRecords)
+        .where(eq(sleepRecords.id, input.id))
+        .returning()
+
+      if (!deleted) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Sleep record ${input.id} not found` })
+      }
+
+      return { success: true }
     }),
 })

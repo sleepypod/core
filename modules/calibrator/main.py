@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from common.calibration import (
     CalibrationStore, CalibrationWatcher,
-    CapCalibrator, PiezoCalibrator, TempCalibrator,
+    CapCalibrator, CapSense2Calibrator, PiezoCalibrator, TempCalibrator,
 )
 from common.cbor_raw import read_raw_record
 import cbor2
@@ -83,7 +83,7 @@ def load_recent_records(hours: int = 6) -> dict:
     data and would hang/spin on stale files).
     """
     cutoff = time.time() - hours * 3600
-    records: dict = {"capSense": [], "piezo-dual": [], "bedTemp": []}
+    records: dict = {"capSense": [], "capSense2": [], "piezo-dual": [], "bedTemp": [], "bedTemp2": []}
 
     # Find all RAW files, newest first
     raw_files = sorted(RAW_DATA_DIR.glob("*.RAW"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -139,8 +139,13 @@ def run_calibration(store: CalibrationStore, side: str, sensor_type: str,
     try:
         if sensor_type == "capacitance":
             records = load_recent_records(hours=6)
-            calibrator = CapCalibrator()
-            result = calibrator.calibrate(records["capSense"], side)
+            # Auto-detect hardware: prefer capSense2 (Pod 5) over capSense (Pod 3)
+            if records["capSense2"]:
+                calibrator = CapSense2Calibrator()
+                result = calibrator.calibrate(records["capSense2"], side)
+            else:
+                calibrator = CapCalibrator()
+                result = calibrator.calibrate(records["capSense"], side)
 
         elif sensor_type == "piezo":
             records = load_recent_records(hours=6)
