@@ -53,12 +53,12 @@ The delta approach removes the DC presence offset entirely. A person's body shif
 
 | Score | State | Expected frequency during sleep |
 |-------|-------|---------------------------------|
-| 0-50 | Still (deep sleep, stable N2) | 70-80% of epochs |
+| 0-50 | Still (deep sleep, stable N2) — capSense2 | 70-80% of epochs |
 | 50-200 | Minor fidgeting, twitches | 10-15% |
 | 200-500 | Limb repositioning, partial turn | 5-10% |
 | 500+ | Major position change, rolling over | 1-3% (~1-2/hour) |
 
-Score is capped at 1000 to prevent outliers from sensor glitches.
+Score is capped at 1000. The scale factor is sensor-type-dependent: capSense2 (Pod 5) uses `×10`, capSense (Pod 3) uses `×0.5` to normalize the different ADC ranges to the same 0-1000 scale. Boundaries are empirical and may need per-pod tuning.
 
 Normal healthy sleep averages ~10 major position changes per night (De Koninck et al. 1992).
 
@@ -93,7 +93,8 @@ Session records include:
 | `MOVEMENT_INTERVAL_S` | 60 s | One movement score per minute; matches AASM epoch length |
 | `PRESENCE_THRESHOLD` | 1500 | Fallback for uncalibrated capSense (Pod 3) |
 | `CALIBRATION_RELOAD_S` | 60 s | Poll calibration_profiles for updates |
-| Movement scale factor | 10x | `score = min(1000, sum(deltas) * 10)` |
+| Movement scale (capSense2) | 10x | Pod 5 float channels, deltas ~0.05-5.0 |
+| Movement scale (capSense) | 0.5x | Pod 3 int ADC channels, deltas ~1-50 |
 | Movement cap | 1000 | Prevents outlier scores from sensor glitches |
 | Sentinel value | -1.0 | capSense2 firmware error indicator |
 | Reference nominal | 1.16 | Expected reference channel value |

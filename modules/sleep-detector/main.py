@@ -54,7 +54,6 @@ from common.calibration import (
     is_present_capsense_calibrated,
     is_present_capsense2_calibrated,
 )
-import numpy as np
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -166,8 +165,6 @@ def report_health(status: str, message: str) -> None:
 # Calibration-aware presence and movement
 # ---------------------------------------------------------------------------
 
-CHANNELS = ("out", "cen", "in")
-
 # Sentinel value emitted by capSense2 firmware on read errors
 CAPSENSE2_SENTINEL = -1.0
 
@@ -213,7 +210,8 @@ def _extract_channel_values(record: dict, side: str,
             c -= ref_delta
         return [a, b, c], rtype
 
-    # capSense (Pod 3): named int channels
+    # capSense (Pod 3): named int channels — baselines param unused
+    # (Pod 3 has no reference channel for common-mode rejection)
     a = int(data.get("out", 0))
     b = int(data.get("cen", 0))
     c = int(data.get("in", 0))
@@ -281,6 +279,7 @@ class SessionTracker:
     _movement_buf: list = field(default_factory=list)
     _last_movement_write: float = field(default_factory=time.time)
     _prev_values: Optional[list] = None  # previous sample's channel values
+    _scale_factor: float = 10.0  # default for capSense2; updated on first record
 
     def process(self, ts: float, record: dict) -> None:
         baselines = self.calibration.get_baselines(self.side)
@@ -297,6 +296,12 @@ class SessionTracker:
             present = is_present_capsense_calibrated(
                 record, self.side, cal, fallback_threshold=PRESENCE_THRESHOLD,
             )
+
+        # Set scale factor based on sensor type (Pod 3 int vs Pod 5 float)
+        if rtype == "capSense" and self._scale_factor != 0.5:
+            self._scale_factor = 0.5
+        elif rtype == "capSense2" and self._scale_factor != 10.0:
+            self._scale_factor = 10.0
 
         # Movement: sample-to-sample delta (PIM)
         current_values, _ = _extract_channel_values(record, self.side, baselines)
@@ -381,18 +386,26 @@ class SessionTracker:
         self._interval_start = None
         self._was_present = False
         self._exit_count = 0
+        self._prev_values = None  # avoid stale delta on next session start
+        self._movement_buf = []   # discard leftover deltas from session end
 
     def _flush_movement(self, ts: float) -> None:
         if ts - self._last_movement_write < MOVEMENT_INTERVAL_S:
             return
-        if self._movement_buf:
-            # Sum of absolute deltas over the epoch (PIM analog)
-            # Scale: multiply by 10 and cap at 1000 for integer storage
-            raw_sum = sum(self._movement_buf)
-            total = min(1000, int(raw_sum * 10))
-            write_movement(self.db, self.side,
-                           datetime.fromtimestamp(ts, tz=timezone.utc), total)
+        if not self._movement_buf or self._session_start is None:
+            # Only write movement during active sessions (O-2 fix)
             self._movement_buf = []
+            self._last_movement_write = ts
+            return
+        # Sum of absolute deltas over the epoch (PIM analog)
+        # Scale factor depends on sensor type:
+        #   capSense2 (Pod 5): float channels, deltas ~0.05-5.0 → ×10
+        #   capSense  (Pod 3): int ADC channels, deltas ~1-50 → ×0.5
+        raw_sum = sum(self._movement_buf)
+        total = min(1000, int(raw_sum * self._scale_factor))
+        write_movement(self.db, self.side,
+                       datetime.fromtimestamp(ts, tz=timezone.utc), total)
+        self._movement_buf = []
         self._last_movement_write = ts
 
 

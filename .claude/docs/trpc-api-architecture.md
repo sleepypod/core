@@ -189,11 +189,11 @@ Query sleep and health data from Pod sensors.
 - Heart rate: Beats per minute (SHS autocorrelation, 0.8-8.5 Hz band)
 - HRV: RMSSD in ms (sub-window autocorrelation IBI, 5-200 ms range)
 - Breathing rate: Breaths per minute (Hilbert envelope of cardiac band)
-- Movement: Integer 0-1000 (0=still, 50-200=restless, 200+=major movement)
+- Movement: Integer 0-1000 (0-50=still, 50-200=fidgeting, 200-500=repositioning, 500+=major)
 - Fields may be null if sensor couldn't get reliable reading
 
 **Performance:**
-- Historical data only (5-minute lag)
+- Historical data only (60-second lag for vitals and movement)
 - Large date ranges can be slow (consider caching)
 - Default limits sized for typical use cases (30 sleep records = ~1 month, 288 vitals = 24 hours)
 
