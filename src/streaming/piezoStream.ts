@@ -204,6 +204,7 @@ const ALL_SENSOR_TYPES = [
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
 ] as const
 
+/** Valid sensor type string. Used for subscription filtering. */
 type SensorType = typeof ALL_SENSOR_TYPES[number]
 
 // ---------------------------------------------------------------------------
@@ -215,9 +216,12 @@ const cborDecoder = new Decoder({ mapsAsObjects: true, useRecords: false })
 /** Convert raw byte buffer of little-endian int32s to a JS number array. */
 function int32BufferToArray(raw: Buffer | Uint8Array | undefined): number[] {
   if (!raw || raw.length === 0) return []
-  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength)
+  // Guard against partial buffers (byteLength not multiple of 4)
+  const usableBytes = raw.byteLength - (raw.byteLength % 4)
+  if (usableBytes === 0) return []
+  const view = new DataView(raw.buffer, raw.byteOffset, usableBytes)
   const nums: number[] = []
-  for (let i = 0; i < raw.byteLength; i += 4) {
+  for (let i = 0; i < usableBytes; i += 4) {
     nums.push(view.getInt32(i, true))
   }
   return nums
@@ -246,7 +250,7 @@ function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
       if (recordType === 'piezo-dual') {
         frames.push({
           type: 'piezo-dual',
-          ts: rec.ts ?? Date.now(),
+          ts: rec.ts ?? Math.floor(Date.now() / 1000),  // epoch seconds (consistent with firmware)
           freq: rec.freq,
           left1: int32BufferToArray(rec.left1 as Buffer | Uint8Array | undefined),
           right1: int32BufferToArray(rec.right1 as Buffer | Uint8Array | undefined),
@@ -278,8 +282,8 @@ let streamingInterval: ReturnType<typeof setInterval> | null = null
 let activeClient: WebSocket | null = null
 let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
 
-/** Per-client sensor subscriptions. Default: all types. */
-const clientSubscriptions = new WeakMap<WebSocket, Set<string>>()
+/** Per-client sensor subscriptions. undefined = all types (default). */
+const clientSubscriptions = new WeakMap<WebSocket, Set<SensorType> | undefined>()
 
 function resetHeartbeatTimer(): void {
   if (heartbeatTimer) clearTimeout(heartbeatTimer)
@@ -334,21 +338,29 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
       // Client specifies which sensor types it wants
       const requested = msg.sensors as string[] | undefined
       if (!Array.isArray(requested) || requested.length === 0) {
-        // Empty or missing → subscribe to all
-        clientSubscriptions.set(ws, new Set(ALL_SENSOR_TYPES))
+        // Empty or missing → subscribe to all (undefined = no filter)
+        clientSubscriptions.set(ws, undefined)
+        ws.send(JSON.stringify({ type: 'subscribed', sensors: [...ALL_SENSOR_TYPES] }))
+        console.log('[sensorStream] Client subscribed to: all')
       }
       else {
-        const valid = requested.filter(s =>
-          (ALL_SENSOR_TYPES as readonly string[]).includes(s))
-        clientSubscriptions.set(ws, new Set(valid))
+        const valid = requested.filter(
+          (s): s is SensorType => (ALL_SENSOR_TYPES as readonly string[]).includes(s))
+        if (valid.length === 0) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: `No valid sensor types in request. Valid types: ${ALL_SENSOR_TYPES.join(', ')}`,
+          }))
+        }
+        else {
+          clientSubscriptions.set(ws, new Set(valid))
+          ws.send(JSON.stringify({ type: 'subscribed', sensors: valid }))
+          console.log('[sensorStream] Client subscribed to: %s', valid.join(', '))
+        }
       }
-      const subs = clientSubscriptions.get(ws)
-      ws.send(JSON.stringify({
-        type: 'subscribed',
-        sensors: subs ? [...subs] : [...ALL_SENSOR_TYPES],
-      }))
-      console.log('[sensorStream] Client subscribed to: %s',
-        subs ? [...subs].join(', ') : 'all')
+    }
+    else {
+      ws.send(JSON.stringify({ type: 'error', message: `Unknown message type: ${msg.type}` }))
     }
   }
   catch {
@@ -452,7 +464,7 @@ export function startPiezoStreamServer(): WebSocketServer {
 
                 // Check subscription filter (default: all types)
                 const subs = clientSubscriptions.get(client)
-                if (subs && !subs.has(frameType)) continue
+                if (subs && !subs.has(frameType as SensorType)) continue
 
                 // Lazy serialize — only if at least one client needs it
                 if (payload === null) payload = JSON.stringify(frame)
