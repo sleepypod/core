@@ -661,17 +661,22 @@ class SideProcessor:
         self._last_acr_qual = acr_qual
 
         # Cross-channel rejection: if the other side has stronger or similar
-        # signal, this side's signal is likely vibration coupling, not a person.
+        # signal AND strong autocorrelation (someone is actually there), this
+        # side's signal is likely vibration coupling, not a person.
         # A real person produces ~3-5x stronger signal on their side.
+        #
+        # Note: due to sequential processing in main() (left before right),
+        # left sees right's values from the previous cycle (~60s stale).
+        # This is acceptable — coupling produces similar energy regardless
+        # of which side checks first.
         if self._other is not None and self._other._last_med_std > 0:
             other_std = self._other._last_med_std
             other_acr = self._other._last_acr_qual
-            # If other side is stronger AND our signal is in the coupling range
-            # (not clearly dominant), suppress autocorr quality to prevent
-            # false presence from coupling
-            if other_std > med_std * 0.7 and med_std < self._presence.enter_threshold:
-                # Our signal is weaker or similar to the other side and below
-                # the energy threshold — likely coupling, not a person
+            # Only suppress if: other side has real periodicity (someone there),
+            # other side's energy is >= ours, and our energy is below threshold
+            if (other_acr > 0.3
+                    and other_std > med_std * 0.7
+                    and med_std < self._presence.enter_threshold):
                 acr_qual = 0.0
 
         present = self._presence.update(med_std, acr_qual)
