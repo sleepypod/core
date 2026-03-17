@@ -58,22 +58,16 @@ export const biometricsRouter = router({
           limit: z.number().int().min(1).max(100).default(30),
         })
         .strict()
-        .refine(
-          (data) => {
-            // Validate date range if both dates are provided
-            if (data.startDate && data.endDate) {
-              return validateDateRange(data.startDate, data.endDate)
-            }
-            return true
-          },
-          {
-            message: 'startDate must be before or equal to endDate',
-            path: ['endDate'],
-          }
-        )
     )
     .query(async ({ input }) => {
       try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
         const conditions = []
         if (input.side) {
           conditions.push(eq(sleepRecords.side, input.side))
@@ -142,22 +136,16 @@ export const biometricsRouter = router({
           limit: z.number().int().min(1).max(1000).default(288), // Default: 24 hours of 5-min intervals
         })
         .strict()
-        .refine(
-          (data) => {
-            // Validate date range if both dates are provided
-            if (data.startDate && data.endDate) {
-              return validateDateRange(data.startDate, data.endDate)
-            }
-            return true
-          },
-          {
-            message: 'startDate must be before or equal to endDate',
-            path: ['endDate'],
-          }
-        )
     )
     .query(async ({ input }) => {
       try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
         const conditions = []
         if (input.side) {
           conditions.push(eq(vitals.side, input.side))
@@ -225,22 +213,16 @@ export const biometricsRouter = router({
           limit: z.number().int().min(1).max(1000).default(288),
         })
         .strict()
-        .refine(
-          (data) => {
-            // Validate date range if both dates are provided
-            if (data.startDate && data.endDate) {
-              return validateDateRange(data.startDate, data.endDate)
-            }
-            return true
-          },
-          {
-            message: 'startDate must be before or equal to endDate',
-            path: ['endDate'],
-          }
-        )
     )
     .query(async ({ input }) => {
       try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
         const conditions = []
         if (input.side) {
           conditions.push(eq(movement.side, input.side))
@@ -350,21 +332,16 @@ export const biometricsRouter = router({
           endDate: z.date().optional(),
         })
         .strict()
-        .refine(
-          (data) => {
-            if (data.startDate && data.endDate) {
-              return validateDateRange(data.startDate, data.endDate)
-            }
-            return true
-          },
-          {
-            message: 'startDate must be before or equal to endDate',
-            path: ['endDate'],
-          }
-        )
     )
     .query(async ({ input }) => {
       try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
         const now = new Date()
         const effectiveStart = input.startDate ?? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
         const effectiveEnd = input.endDate ?? now
