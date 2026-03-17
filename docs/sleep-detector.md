@@ -9,14 +9,22 @@ The sleep-detector module tracks bed occupancy, sleep session boundaries, and bo
 ```mermaid
 flowchart TD
     RAW[".RAW files (CBOR)"] --> Follow["RawFileFollower (0.5s poll)"]
-    Follow --> Filter{"capSense or capSense2?"}
-    Filter -->|No| Skip[Skip]
-    Filter -->|Yes| Extract["Extract channel values\n(sentinel filter, ref compensation)"]
+    Follow --> TypeFilter{"Record type?"}
+    TypeFilter -->|"frzHealth/frzTherm"| PumpState["Update PumpGateCapSense\n(track pump RPM per side)"]
+    TypeFilter -->|"capSense/capSense2"| Extract["Extract channel values\n(sentinel filter, ref compensation)"]
+    TypeFilter -->|Other| Skip[Skip]
     Extract --> Presence["Presence detection\n(calibrated z-score or fallback)"]
-    Extract --> Delta["Movement delta\n(|current - previous| per channel)"]
-    Presence --> Session["SessionTracker\n(per side)"]
+    Extract --> PumpGate{"Pump gate active?\n(RPM > 0 OR guard OR ref anomaly)"}
+    PumpGate -->|Yes| ZeroDelta["delta = 0\n(suppress artifact)"]
+    PumpGate -->|No| Delta["Movement delta\n(|current - previous| per channel)"]
+    ZeroDelta --> Session["SessionTracker\n(per side)"]
     Delta --> Session
-    Session -->|"60s epoch"| MovDB[("movement table\n(total_movement 0-1000)")]
+    Presence --> Session
+    Session -->|"60s epoch"| RawScore["Raw score = min(1000, sum * scale)"]
+    RawScore --> Baseline["Baseline subtraction\n(score - P5 of trailing 30 epochs)"]
+    Baseline --> MedianFilt["3-epoch median filter"]
+    MedianFilt --> Clamp["Clamp to 0-1000"]
+    Clamp --> MovDB[("movement table\n(total_movement 0-1000)")]
     Session -->|"absence > 120s"| SleepDB[("sleep_records table")]
 ```
 
@@ -32,10 +40,16 @@ flowchart LR
     Sentinel -->|Yes| Hold["Zero-order hold\n(keep previous, delta=0)"]
     Sentinel -->|No| Avg["Average pairs\nA=(A1+A2)/2\nB=(B1+B2)/2\nC=(C1+C2)/2"]
     Avg --> Ref["Reference compensation\nsubtract ref drift from nominal 1.16"]
-    Ref --> Delta["|A_curr - A_prev| +\n|B_curr - B_prev| +\n|C_curr - C_prev|"]
-    Delta --> Buf["Accumulate in epoch buffer"]
-    Buf -->|"Every 60s"| Score["score = min(1000, sum * 10)"]
-    Score --> DB[("movement table")]
+    Ref --> PumpCheck{"Pump gate active?"}
+    PumpCheck -->|Yes| ZeroDelta["delta = 0"]
+    PumpCheck -->|No| Delta["|A_curr - A_prev| +\n|B_curr - B_prev| +\n|C_curr - C_prev|"]
+    ZeroDelta --> Buf["Accumulate in epoch buffer"]
+    Delta --> Buf
+    Buf -->|"Every 60s"| Score["raw_score = min(1000, sum * 10)"]
+    Score --> Baseline["score -= P5(trailing 30 epochs)\n(skip during 10-min cold start)"]
+    Baseline --> Median["3-epoch median filter"]
+    Median --> Clamp["clamp(0, 1000)"]
+    Clamp --> DB[("movement table")]
 ```
 
 ### Why sample-to-sample deltas (not z-scores from baseline)
@@ -70,6 +84,47 @@ capSense2 firmware occasionally emits `-1.0` as a sentinel value on read errors 
 
 The capSense2 record includes a reference channel pair (indices 6,7) that reads ~1.16 and barely responds to body presence. Any deviation from nominal is subtracted from the sensing channels as common-mode rejection, guarding against electromagnetic interference or firmware glitches.
 
+### Pump artifact gating (#230)
+
+**Problem.** The pod's air pump runs periodically to maintain mattress pressure. Pump vibrations couple mechanically through the mattress into the capacitive sensor electrodes, producing small but consistent delta spikes (~0.05-0.2 per channel per sample). Over a 60-second epoch with ~120 samples, these accumulate to raw scores of 60-200 per pump-active epoch. Over a full night with frequent pump cycles, movement scores escalate from a true ~50 to 960-990 by the early morning hours.
+
+**Three-signal detection.** The `PumpGateCapSense` class uses three independent signals:
+
+1. **Primary: frzHealth pump RPM.** The `frzHealth` record (Pod 5 only, ~0.06 Hz) reports pump RPM per side. Any RPM > 0 means the pump is running. This is the most reliable signal but has low temporal resolution (~16s between updates).
+
+2. **Secondary: Reference channel anomaly.** The capSense2 reference channel pair (indices 6,7) is mechanically coupled to the sensor PCB but does not respond to body presence. When `|ref_delta| > 0.02` AND at least 2 of 3 active channel deltas correlate (both spike together with magnitude > 0.5x the ref delta), the sample is flagged as mechanical coupling rather than body movement.
+
+3. **Guard period: 3 seconds.** After pump-off is detected (RPM transitions from >0 to 0), a 3-second guard period (~6 samples at ~2 Hz) suppresses deltas while residual vibrations decay. This is shorter than the piezo processor's 5-second guard because capacitive sensors have lower sensitivity to mechanical vibration than piezoelectric sensors.
+
+When any signal is active, the movement delta for that sample is forced to 0.
+
+**Pipeline position.** Pump gating is applied after reference compensation and before delta computation:
+
+```
+1. Sentinel filter (-1.0 values)
+2. Pair averaging
+3. Reference compensation
+4. PUMP GATE — if pumpActive OR inGuardPeriod OR refAnomaly: delta = 0
+5. Per-channel delta
+6. 60s epoch accumulation
+```
+
+### Baseline subtraction
+
+After computing the raw epoch score (`min(1000, sum * scale)`), the 5th percentile of the trailing 30 epochs is subtracted. This removes slow-building noise floors (residual pump artifacts that leak through the gate, thermal drift in the capacitive sensor).
+
+- **Trailing window:** 30 epochs (30 minutes at 60s epochs)
+- **Percentile:** 5th (robust to outliers; represents the quietest ~1.5 epochs in the window)
+- **Cold start:** Baseline subtraction is disabled for the first 10 epochs (~10 minutes) after session start, since there is insufficient history to compute a meaningful baseline.
+
+The subtracted score is clamped to a minimum of 0.
+
+### 3-epoch median filter
+
+A 3-epoch running median is applied as the final smoothing step after baseline subtraction. This suppresses isolated spike artifacts (single-epoch transients from sensor glitches, brief vibration events) without attenuating sustained movement events.
+
+The median filter output is clamped to [0, 1000] before writing to the database.
+
 ## Presence Detection
 
 Presence uses calibrated z-score thresholds from `calibration_profiles` when available, falling back to a fixed sum threshold (`PRESENCE_THRESHOLD = 1500` for capSense, `60.0` for capSense2). Calibration profiles are reloaded every 60 seconds.
@@ -98,6 +153,12 @@ Session records include:
 | Movement cap | 1000 | Prevents outlier scores from sensor glitches |
 | Sentinel value | -1.0 | capSense2 firmware error indicator |
 | Reference nominal | 1.16 | Expected reference channel value |
+| `PUMP_GUARD_S` | 3.0 s | Guard period after pump-off; 6 samples at ~2 Hz (#230) |
+| `REF_ANOMALY_THRESHOLD` | 0.02 | Reference channel deviation for secondary pump detection |
+| `BASELINE_TRAILING_EPOCHS` | 30 | 30-minute trailing window for baseline subtraction |
+| `BASELINE_COLD_START_EPOCHS` | 10 | 10-minute minimum before baseline subtraction activates |
+| `BASELINE_PERCENTILE` | 5 | 5th percentile; represents quietest epoch in trailing window |
+| `MEDIAN_FILTER_WINDOW` | 3 | 3-epoch median filter; suppresses isolated spikes |
 
 ## Literature References
 
@@ -117,3 +178,11 @@ Session records include:
 3. **No sleep stage classification.** The module detects presence and movement but does not classify sleep stages (W/N1/N2/N3/REM). Movement density alone can distinguish wake vs sleep but cannot reliably separate NREM stages or detect REM.
 
 4. **Scale calibration.** The `* 10` scale factor and 1000 cap were empirically tuned on one Pod 5. Different pod generations or mattress configurations may need adjustment.
+
+5. **Pump gate frzHealth dependency.** The primary pump signal comes from `frzHealth` records which are Pod 5 only and arrive at ~0.06 Hz (~16s between updates). There is a detection latency window where pump vibrations may leak through before the first frzHealth record confirms pump-on. The reference channel anomaly detector (signal 2) partially covers this gap but is less reliable than direct RPM monitoring.
+
+6. **Pump gate field name uncertainty.** The exact field names in frzHealth records for pump RPM (`pumpRpm`, `pump_rpm`, etc.) have not been confirmed on live hardware. The implementation checks multiple candidate names for robustness, but if the firmware uses an unexpected name, the primary signal will be inactive and only the reference anomaly detector will provide gating.
+
+7. **Baseline subtraction cold start.** Movement scores during the first 10 minutes of a session are not baseline-subtracted, which may produce slightly elevated readings compared to later in the night. This is acceptable because the baseline requires sufficient history to be meaningful.
+
+8. **Median filter latency.** The 3-epoch median filter introduces a 1-epoch delay in movement score reporting (the current epoch's score is influenced by the next epoch). In practice this is acceptable since movement data is not used for real-time alerting.

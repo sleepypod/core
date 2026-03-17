@@ -22,6 +22,21 @@ Movement scoring (Proportional Integration Mode):
   1992). This measures actual body displacement over time rather than static
   deviation from an empty-bed baseline.
 
+  Pump artifact gating (#230):
+    Pump vibrations contaminate capSense2 deltas, inflating movement scores
+    from ~50 to 960-990 overnight. Three-signal pump detection gates the
+    movement delta computation:
+      1. Primary: frzHealth pump RPM > 0 → pump running
+      2. Secondary: reference channel anomaly (|ref_delta| > 0.02 with
+         correlated active channel spikes = mechanical coupling)
+      3. Guard period: 3 seconds trailing after pump-off (6 samples at ~2 Hz)
+    When any gate is active, delta is forced to 0.
+
+  Post-epoch processing:
+    - Baseline subtraction: 5th percentile of trailing 30 epochs (10-min cold start)
+    - 3-epoch median filter for smoothing
+    - Clamp to [0, 1000]
+
   Sentinel values (-1.0 from firmware) are filtered via zero-order hold.
   Reference channel pair is used for common-mode rejection.
 
@@ -40,10 +55,11 @@ import signal
 import logging
 import sqlite3
 import threading
+from collections import deque
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -73,6 +89,19 @@ MOVEMENT_INTERVAL_S = 60
 PRESENCE_THRESHOLD = 1500
 # How often to reload calibration profiles (seconds)
 CALIBRATION_RELOAD_S = 60
+
+# Pump gating for movement scoring (#230)
+# Guard period after pump-off: 3 seconds = ~6 samples at 2 Hz capSense rate
+PUMP_GUARD_S = 3.0
+# Reference channel anomaly threshold (capSense2 units)
+REF_ANOMALY_THRESHOLD = 0.02
+# Baseline subtraction: trailing epoch window and cold start
+BASELINE_TRAILING_EPOCHS = 30
+BASELINE_COLD_START_EPOCHS = 10  # ~10 minutes at 60s epochs
+# Percentile for baseline (5th percentile)
+BASELINE_PERCENTILE = 5
+# Median filter window (epochs)
+MEDIAN_FILTER_WINDOW = 3
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -261,6 +290,175 @@ class CalibrationCache:
                 log.warning("Failed to load calibration for %s: %s", side, e)
 
 # ---------------------------------------------------------------------------
+# Numeric helpers (no numpy dependency)
+# ---------------------------------------------------------------------------
+
+def _percentile(values: List[int], pct: int) -> int:
+    """Compute the pct-th percentile of a list of integers (nearest rank)."""
+    if not values:
+        return 0
+    s = sorted(values)
+    # Nearest-rank method: ceil(pct/100 * N) - 1, clamped to [0, N-1]
+    idx = max(0, min(len(s) - 1, int((pct / 100.0) * len(s) + 0.5) - 1))
+    return s[idx]
+
+
+def _median(values: List[int]) -> int:
+    """Compute the median of a list of integers."""
+    if not values:
+        return 0
+    s = sorted(values)
+    n = len(s)
+    if n % 2 == 1:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) // 2
+
+
+# ---------------------------------------------------------------------------
+# Pump artifact gating for capSense2 movement scoring (#230)
+# ---------------------------------------------------------------------------
+
+def _extract_ref_delta(record: dict, side: str) -> Optional[float]:
+    """Extract reference channel delta from nominal for a capSense2 record.
+
+    Returns the deviation of the averaged reference pair from 1.16, or None
+    if the record is not capSense2 or reference channels are unavailable.
+    """
+    if record.get("type") != "capSense2":
+        return None
+    data = record.get(side, {})
+    if not data:
+        return None
+    vals = data.get("values")
+    if not vals or len(vals) < 8:
+        return None
+    if vals[6] == CAPSENSE2_SENTINEL or vals[7] == CAPSENSE2_SENTINEL:
+        return None
+    ref_avg = (vals[6] + vals[7]) / 2.0
+    return ref_avg - 1.16
+
+
+class PumpGateCapSense:
+    """Three-signal pump artifact gate for capSense2 movement scoring.
+
+    Detects pump activity via:
+      1. Primary: frzHealth pump RPM > 0 on either side
+      2. Secondary: reference channel anomaly with correlated active channels
+      3. Guard period: 3 seconds trailing after pump-off
+
+    When gate is active, movement delta should be forced to 0.
+
+    The sleep-detector main loop feeds frzHealth/frzTherm records into
+    update_pump_state(), and capSense2 records are checked via is_gated().
+    """
+
+    def __init__(self):
+        # Per-side pump RPM state from frzHealth records
+        self._pump_rpm: Dict[str, float] = {"left": 0.0, "right": 0.0}
+        # Timestamp (monotonic) when pump last turned off — for guard period
+        self._pump_off_at: float = 0.0
+        # Whether pump was active on previous check (for detecting pump-off transition)
+        self._was_pump_active: bool = False
+        # Reference channel anomaly state
+        self._ref_anomaly_active: bool = False
+
+    def update_pump_state(self, record: dict) -> None:
+        """Update pump RPM state from a frzHealth or frzTherm record.
+
+        frzHealth format: { type: "frzHealth", ts, left: {..., pumpRpm: N}, right: {..., pumpRpm: N}, fan: {...} }
+        frzTherm format:  { type: "frzTherm", ts, left: {..., pumpDuty: N}, right: {..., pumpDuty: N} }
+
+        The exact field names depend on firmware version. We check multiple
+        possible field names for robustness.
+        """
+        rtype = record.get("type", "")
+
+        for side in ("left", "right"):
+            side_data = record.get(side)
+            if not isinstance(side_data, dict):
+                continue
+
+            rpm = 0.0
+            if rtype == "frzHealth":
+                # Try known field names for pump RPM
+                for key in ("pumpRpm", "pump_rpm", "pumpRPM", "rpm"):
+                    val = side_data.get(key)
+                    if val is not None:
+                        try:
+                            rpm = float(val)
+                        except (TypeError, ValueError):
+                            pass
+                        break
+                # Also check pumpDuty as fallback — any duty > 0 means pump is running
+                if rpm == 0:
+                    for key in ("pumpDuty", "pump_duty", "duty"):
+                        val = side_data.get(key)
+                        if val is not None:
+                            try:
+                                rpm = 1.0 if float(val) > 0 else 0.0
+                            except (TypeError, ValueError):
+                                pass
+                            break
+
+            elif rtype == "frzTherm":
+                # frzTherm may carry pump duty cycle
+                for key in ("pumpDuty", "pump_duty", "duty", "pumpRpm", "pump_rpm"):
+                    val = side_data.get(key)
+                    if val is not None:
+                        try:
+                            rpm = 1.0 if float(val) > 0 else 0.0
+                        except (TypeError, ValueError):
+                            pass
+                        break
+
+            self._pump_rpm[side] = rpm
+
+        # Track pump-off transitions for guard period
+        pump_active = self._pump_rpm["left"] > 0 or self._pump_rpm["right"] > 0
+        if self._was_pump_active and not pump_active:
+            # Pump just turned off — start guard period
+            self._pump_off_at = time.monotonic()
+        self._was_pump_active = pump_active
+
+    def is_gated(self, record: dict, side: str,
+                 channel_deltas: Optional[List[float]] = None) -> bool:
+        """Check if movement delta should be gated (forced to 0).
+
+        Args:
+            record: The capSense2/capSense record being processed.
+            side: "left" or "right".
+            channel_deltas: Per-channel absolute deltas [|dA|, |dB|, |dC|],
+                if available. Used for reference channel anomaly correlation.
+
+        Returns True if the delta should be suppressed.
+        """
+        # Signal 1: frzHealth pump RPM
+        if self._pump_rpm["left"] > 0 or self._pump_rpm["right"] > 0:
+            return True
+
+        # Signal 3: Guard period (checked before ref anomaly since it's cheap)
+        if time.monotonic() - self._pump_off_at < PUMP_GUARD_S:
+            return True
+
+        # Signal 2: Reference channel anomaly (capSense2 only)
+        ref_delta = _extract_ref_delta(record, side)
+        if ref_delta is not None and abs(ref_delta) > REF_ANOMALY_THRESHOLD:
+            # Reference channel shifted — check if active channels correlate
+            # (both spiking together = mechanical coupling from pump, not body movement)
+            if channel_deltas is not None and len(channel_deltas) >= 3:
+                # If all active channel deltas are elevated (> 2x the ref anomaly),
+                # it's likely mechanical coupling
+                ref_mag = abs(ref_delta)
+                correlated = sum(1 for d in channel_deltas if d > ref_mag * 0.5)
+                if correlated >= 2:
+                    log.debug("Ref anomaly gate: ref_delta=%.4f, correlated=%d/3",
+                              ref_delta, correlated)
+                    return True
+
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Per-side session tracker
 # ---------------------------------------------------------------------------
 
@@ -269,6 +467,7 @@ class SessionTracker:
     side: str
     db: sqlite3.Connection
     calibration: CalibrationCache
+    pump_gate: PumpGateCapSense
     _session_start: Optional[datetime] = None
     _last_present_ts: Optional[float] = None
     _present_intervals: list = field(default_factory=list)
@@ -280,6 +479,10 @@ class SessionTracker:
     _last_movement_write: float = field(default_factory=time.time)
     _prev_values: Optional[list] = None  # previous sample's channel values
     _scale_factor: float = 10.0  # default for capSense2; updated on first record
+    # Epoch score history for baseline subtraction and median filter
+    _epoch_scores: deque = field(default_factory=lambda: deque(maxlen=BASELINE_TRAILING_EPOCHS))
+    _median_buf: deque = field(default_factory=lambda: deque(maxlen=MEDIAN_FILTER_WINDOW))
+    _pump_gated_samples: int = 0  # counter for logging
 
     def process(self, ts: float, record: dict) -> None:
         baselines = self.calibration.get_baselines(self.side)
@@ -307,7 +510,17 @@ class SessionTracker:
         current_values, _ = _extract_channel_values(record, self.side, baselines)
         if current_values is not None:
             delta = compute_movement_delta(current_values, self._prev_values)
+            # Compute per-channel deltas for pump gate ref anomaly correlation
+            if self._prev_values is not None:
+                channel_deltas = [abs(c - p) for c, p in zip(current_values, self._prev_values)]
+            else:
+                channel_deltas = None
             self._prev_values = current_values
+
+            # Pump gate: suppress delta if pump is active or in guard period (#230)
+            if self.pump_gate.is_gated(record, self.side, channel_deltas):
+                delta = 0.0
+                self._pump_gated_samples += 1
         else:
             # Sentinel or invalid — skip delta, keep previous (zero-order hold)
             delta = 0.0
@@ -388,6 +601,9 @@ class SessionTracker:
         self._exit_count = 0
         self._prev_values = None  # avoid stale delta on next session start
         self._movement_buf = []   # discard leftover deltas from session end
+        self._epoch_scores.clear()
+        self._median_buf.clear()
+        self._pump_gated_samples = 0
 
     def _flush_movement(self, ts: float) -> None:
         if ts - self._last_movement_write < MOVEMENT_INTERVAL_S:
@@ -397,12 +613,41 @@ class SessionTracker:
             self._movement_buf = []
             self._last_movement_write = ts
             return
-        # Sum of absolute deltas over the epoch (PIM analog)
+
+        # Log pump gating stats periodically
+        if self._pump_gated_samples > 0:
+            log.debug("%s: pump-gated %d samples this epoch",
+                      self.side, self._pump_gated_samples)
+            self._pump_gated_samples = 0
+
+        # Step 1: Sum of absolute deltas over the epoch (PIM analog)
         # Scale factor depends on sensor type:
         #   capSense2 (Pod 5): float channels, deltas ~0.05-5.0 → ×10
         #   capSense  (Pod 3): int ADC channels, deltas ~1-50 → ×0.5
         raw_sum = sum(self._movement_buf)
-        total = min(1000, int(raw_sum * self._scale_factor))
+        raw_score = min(1000, int(raw_sum * self._scale_factor))
+
+        # Step 2: Baseline subtraction — remove 5th percentile of trailing epochs
+        # This eliminates slow-building artifacts (pump vibration residual, thermal drift)
+        self._epoch_scores.append(raw_score)
+        if len(self._epoch_scores) >= BASELINE_COLD_START_EPOCHS:
+            baseline = _percentile(list(self._epoch_scores), BASELINE_PERCENTILE)
+            score_after_baseline = max(0, raw_score - baseline)
+        else:
+            # Cold start: not enough history yet, skip baseline subtraction
+            score_after_baseline = raw_score
+
+        # Step 3: 3-epoch median filter for smoothing
+        self._median_buf.append(score_after_baseline)
+        if len(self._median_buf) >= MEDIAN_FILTER_WINDOW:
+            filtered_score = _median(list(self._median_buf))
+        else:
+            # Not enough epochs yet for median filter, pass through
+            filtered_score = score_after_baseline
+
+        # Step 4: Final clamp to [0, 1000]
+        total = max(0, min(1000, filtered_score))
+
         write_movement(self.db, self.side,
                        datetime.fromtimestamp(ts, tz=timezone.utc), total)
         self._movement_buf = []
@@ -423,17 +668,31 @@ def main() -> None:
     db_conn = open_biometrics_db()
     cal_store = CalibrationStore(BIOMETRICS_DB)
     cal_cache = CalibrationCache(cal_store)
+    pump_gate = PumpGateCapSense()
 
-    left = SessionTracker(side="left", db=db_conn, calibration=cal_cache)
-    right = SessionTracker(side="right", db=db_conn, calibration=cal_cache)
+    left = SessionTracker(side="left", db=db_conn, calibration=cal_cache, pump_gate=pump_gate)
+    right = SessionTracker(side="right", db=db_conn, calibration=cal_cache, pump_gate=pump_gate)
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
     report_health("healthy", "sleep-detector started")
     log.info("Calibration profiles will be loaded from biometrics.db (reload every %ds)", CALIBRATION_RELOAD_S)
+    log.info("Pump artifact gating enabled (guard=%.0fs, ref_threshold=%.3f)",
+             PUMP_GUARD_S, REF_ANOMALY_THRESHOLD)
+
+    # Record types we process: capSense for presence/movement, frzHealth/frzTherm for pump state
+    CAPSENSE_TYPES = ("capSense", "capSense2")
+    PUMP_STATE_TYPES = ("frzHealth", "frzTherm")
 
     try:
         for record in follower.read_records():
-            if record.get("type") not in ("capSense", "capSense2"):
+            rtype = record.get("type")
+
+            # Update pump state from freezer health/thermal records
+            if rtype in PUMP_STATE_TYPES:
+                pump_gate.update_pump_state(record)
+                continue
+
+            if rtype not in CAPSENSE_TYPES:
                 continue
 
             ts = float(record.get("ts", time.time()))
