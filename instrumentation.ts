@@ -282,6 +282,13 @@ export async function register(): Promise<void> {
     await runMigrations()
     await seedDefaultData()
 
+    // Skip hardware initialization in CI — no dac.sock, no sensors, no scheduler needed.
+    // The server still starts and serves API routes (including /api/openapi.json).
+    if (process.env.CI) {
+      console.log('CI environment detected — skipping hardware initialization')
+      return
+    }
+
     await initializeScheduler()
   }
 }
