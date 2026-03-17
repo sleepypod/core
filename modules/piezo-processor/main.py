@@ -656,10 +656,6 @@ class SideProcessor:
         med_std = float(np.median(stds)) if stds else 0.0
         acr_qual = _autocorr_quality(hr_arr)
 
-        # Cache for cross-channel comparison
-        self._last_med_std = med_std
-        self._last_acr_qual = acr_qual
-
         # Cross-channel rejection: if the other side has stronger or similar
         # signal AND strong autocorrelation (someone is actually there), this
         # side's signal is likely vibration coupling, not a person.
@@ -678,6 +674,10 @@ class SideProcessor:
                     and other_std > med_std * 0.7
                     and med_std < self._presence.enter_threshold):
                 acr_qual = 0.0
+
+        # Cache AFTER suppression so the other side sees post-suppression values
+        self._last_med_std = med_std
+        self._last_acr_qual = acr_qual
 
         present = self._presence.update(med_std, acr_qual)
 
