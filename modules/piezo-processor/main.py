@@ -629,6 +629,9 @@ class SideProcessor:
         self._last_write = 0.0
         self._presence = PresenceDetector()
         self._hr_tracker = HRTracker()
+        self._other: Optional['SideProcessor'] = None  # set after both sides created
+        self._last_med_std: float = 0.0  # cached for cross-channel comparison
+        self._last_acr_qual: float = 0.0
 
     def ingest(self, samples: np.ndarray) -> None:
         self._hr_buf.extend(samples)
@@ -652,6 +655,30 @@ class SideProcessor:
                 for j in range(0, len(filt) - w + 1, w)]
         med_std = float(np.median(stds)) if stds else 0.0
         acr_qual = _autocorr_quality(hr_arr)
+
+        # Cross-channel rejection: if the other side has stronger or similar
+        # signal AND strong autocorrelation (someone is actually there), this
+        # side's signal is likely vibration coupling, not a person.
+        # A real person produces ~3-5x stronger signal on their side.
+        #
+        # Note: due to sequential processing in main() (left before right),
+        # left sees right's values from the previous cycle (~60s stale).
+        # This is acceptable — coupling produces similar energy regardless
+        # of which side checks first.
+        if self._other is not None and self._other._last_med_std > 0:
+            other_std = self._other._last_med_std
+            other_acr = self._other._last_acr_qual
+            # Only suppress if: other side has real periodicity (someone there),
+            # other side's energy is >= ours, and our energy is below threshold
+            if (other_acr > 0.3
+                    and other_std > med_std * 0.7
+                    and med_std < self._presence.enter_threshold):
+                acr_qual = 0.0
+
+        # Cache AFTER suppression so the other side sees post-suppression values
+        self._last_med_std = med_std
+        self._last_acr_qual = acr_qual
+
         present = self._presence.update(med_std, acr_qual)
 
         if not present:
@@ -692,6 +719,8 @@ def main() -> None:
     pump_gate = PumpGate()
     left = SideProcessor("left", db_conn)
     right = SideProcessor("right", db_conn)
+    left._other = right
+    right._other = left
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
 
     report_health("healthy", "piezo-processor v2 started")
