@@ -31,7 +31,8 @@ jobs:
 
       - name: Start server
         run: |
-          pnpm start &
+          mkdir -p /tmp/sleepypod-raw
+          pnpm start > /tmp/server.log 2>&1 &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
         env:
           DATABASE_URL: file:./ci-sleepypod.db
@@ -41,14 +42,16 @@ jobs:
 
       - name: Wait for server
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             if curl -sf http://localhost:3000/api/openapi.json > /dev/null 2>&1; then
               echo "Server ready after ${i}s"
               exit 0
             fi
             sleep 1
           done
-          echo "Server failed to start within 60s"
+          echo "Server failed to start within 90s"
+          echo "--- Server log ---"
+          cat /tmp/server.log
           exit 1
 
       - name: Download OpenAPI spec
