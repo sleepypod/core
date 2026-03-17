@@ -629,6 +629,9 @@ class SideProcessor:
         self._last_write = 0.0
         self._presence = PresenceDetector()
         self._hr_tracker = HRTracker()
+        self._other: Optional['SideProcessor'] = None  # set after both sides created
+        self._last_med_std: float = 0.0  # cached for cross-channel comparison
+        self._last_acr_qual: float = 0.0
 
     def ingest(self, samples: np.ndarray) -> None:
         self._hr_buf.extend(samples)
@@ -652,6 +655,25 @@ class SideProcessor:
                 for j in range(0, len(filt) - w + 1, w)]
         med_std = float(np.median(stds)) if stds else 0.0
         acr_qual = _autocorr_quality(hr_arr)
+
+        # Cache for cross-channel comparison
+        self._last_med_std = med_std
+        self._last_acr_qual = acr_qual
+
+        # Cross-channel rejection: if the other side has stronger or similar
+        # signal, this side's signal is likely vibration coupling, not a person.
+        # A real person produces ~3-5x stronger signal on their side.
+        if self._other is not None and self._other._last_med_std > 0:
+            other_std = self._other._last_med_std
+            other_acr = self._other._last_acr_qual
+            # If other side is stronger AND our signal is in the coupling range
+            # (not clearly dominant), suppress autocorr quality to prevent
+            # false presence from coupling
+            if other_std > med_std * 0.7 and med_std < self._presence.enter_threshold:
+                # Our signal is weaker or similar to the other side and below
+                # the energy threshold — likely coupling, not a person
+                acr_qual = 0.0
+
         present = self._presence.update(med_std, acr_qual)
 
         if not present:
@@ -692,6 +714,8 @@ def main() -> None:
     pump_gate = PumpGate()
     left = SideProcessor("left", db_conn)
     right = SideProcessor("right", db_conn)
+    left._other = right
+    right._other = left
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
 
     report_health("healthy", "piezo-processor v2 started")
