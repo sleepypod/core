@@ -22,10 +22,7 @@ const dateRangeInput = z.object({
   endDate: z.date().optional(),
   limit: z.number().int().min(1).max(1440).default(1440), // 24hr at 60s intervals
   unit: z.enum(['F', 'C']).default('F'),
-}).strict().refine(
-  data => !(data.startDate && data.endDate) || validateDateRange(data.startDate, data.endDate),
-  { message: 'startDate must be before or equal to endDate', path: ['endDate'] },
-)
+}).strict()
 
 export const environmentRouter = router({
   getBedTemp: publicProcedure
@@ -34,6 +31,10 @@ export const environmentRouter = router({
     .output(z.any())
     .query(async ({ input }) => {
       try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+        }
+
         const conditions = []
         if (input.startDate) conditions.push(gte(bedTemp.timestamp, input.startDate))
         if (input.endDate) conditions.push(lte(bedTemp.timestamp, input.endDate))
@@ -74,6 +75,10 @@ export const environmentRouter = router({
     .output(z.any())
     .query(async ({ input }) => {
       try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+        }
+
         const conditions = []
         if (input.startDate) conditions.push(gte(freezerTemp.timestamp, input.startDate))
         if (input.endDate) conditions.push(lte(freezerTemp.timestamp, input.endDate))
@@ -180,13 +185,14 @@ export const environmentRouter = router({
         startDate: z.date(),
         endDate: z.date(),
         unit: z.enum(['F', 'C']).default('F'),
-      }).strict().refine(
-        data => validateDateRange(data.startDate, data.endDate),
-        { message: 'startDate must be before or equal to endDate', path: ['endDate'] },
-      ),
+      }).strict(),
     )
     .query(async ({ input }) => {
       try {
+        if (!validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+        }
+
         const [[bed], [frz]] = await Promise.all([
           biometricsDb
             .select({
@@ -265,13 +271,14 @@ export const environmentRouter = router({
       startDate: z.date().optional(),
       endDate: z.date().optional(),
       limit: z.number().int().min(1).max(1440).default(1440),
-    }).strict().refine(
-      data => !(data.startDate && data.endDate) || validateDateRange(data.startDate, data.endDate),
-      { message: 'startDate must be before or equal to endDate', path: ['endDate'] },
-    ))
+    }).strict())
     .output(z.any())
     .query(async ({ input }) => {
       try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+        }
+
         const conditions = []
         if (input.startDate) conditions.push(gte(ambientLight.timestamp, input.startDate))
         if (input.endDate) conditions.push(lte(ambientLight.timestamp, input.endDate))
@@ -319,13 +326,14 @@ export const environmentRouter = router({
     .input(z.object({
       startDate: z.date(),
       endDate: z.date(),
-    }).strict().refine(
-      data => validateDateRange(data.startDate, data.endDate),
-      { message: 'startDate must be before or equal to endDate', path: ['endDate'] },
-    ))
+    }).strict())
     .output(z.any())
     .query(async ({ input }) => {
       try {
+        if (!validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+        }
+
         const [summary] = await biometricsDb
           .select({
             avgLux: avg(ambientLight.lux),

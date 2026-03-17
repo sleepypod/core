@@ -237,17 +237,14 @@ export const schedulesRouter = router({
           enabled: z.boolean().default(true),
         })
         .strict()
-        .refine(
-          data => validateTimeRange(data.onTime, data.offTime),
-          {
-            message: 'onTime must be before offTime',
-            path: ['offTime'],
-          }
-        )
     )
     .output(z.any())
     .mutation(async ({ input }) => {
       try {
+        if (!validateTimeRange(input.onTime, input.offTime)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'onTime must be before offTime' })
+        }
+
         const created = db.transaction((tx) => {
           const [result] = tx.insert(powerSchedules).values(input).returning().all()
           if (!result) {
@@ -290,23 +287,14 @@ export const schedulesRouter = router({
           enabled: z.boolean().optional(),
         })
         .strict()
-        .refine(
-          (data) => {
-            // If both times are provided, validate the range
-            if (data.onTime && data.offTime) {
-              return validateTimeRange(data.onTime, data.offTime)
-            }
-            return true
-          },
-          {
-            message: 'onTime must be before offTime',
-            path: ['offTime'],
-          }
-        )
     )
     .output(z.any())
     .mutation(async ({ input }) => {
       try {
+        if (input.onTime && input.offTime && !validateTimeRange(input.onTime, input.offTime)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'onTime must be before offTime' })
+        }
+
         const { id, ...updates } = input
 
         const updated = db.transaction((tx) => {

@@ -16,13 +16,14 @@ export const waterLevelRouter = router({
       startDate: z.date().optional(),
       endDate: z.date().optional(),
       limit: z.number().int().min(1).max(10000).default(1440),
-    }).strict().refine(
-      data => !(data.startDate && data.endDate) || validateDateRange(data.startDate, data.endDate),
-      { message: 'startDate must be before or equal to endDate', path: ['endDate'] },
-    ))
+    }).strict())
     .output(z.any())
     .query(async ({ input }) => {
       try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+        }
+
         const conditions = []
         if (input.startDate) conditions.push(gte(waterLevelReadings.timestamp, input.startDate))
         if (input.endDate) conditions.push(lte(waterLevelReadings.timestamp, input.endDate))
