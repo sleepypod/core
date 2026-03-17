@@ -33,6 +33,11 @@ jobs:
         run: |
           pnpm start &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
+        env:
+          DATABASE_URL: file:./ci-sleepypod.db
+          BIOMETRICS_DATABASE_URL: file:./ci-biometrics.db
+          RAW_DATA_DIR: /tmp/sleepypod-raw
+          DAC_SOCK_PATH: /tmp/nonexistent-dac.sock
 
       - name: Wait for server
         run: |
