@@ -1,1 +1,1 @@
-CREATE UNIQUE INDEX `uq_vitals_side_timestamp` ON `vitals` (`side`,`timestamp`);
+CREATE UNIQUE INDEX IF NOT EXISTS `uq_vitals_side_timestamp` ON `vitals` (`side`,`timestamp`);

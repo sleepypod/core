@@ -1,4 +1,4 @@
-CREATE TABLE `calibration_profiles` (
+CREATE TABLE IF NOT EXISTS `calibration_profiles` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`side` text NOT NULL,
 	`sensor_type` text NOT NULL,
@@ -13,9 +13,9 @@ CREATE TABLE `calibration_profiles` (
 	`expires_at` integer
 );
 --> statement-breakpoint
-CREATE INDEX `idx_cal_type_status` ON `calibration_profiles` (`sensor_type`,`status`);--> statement-breakpoint
-CREATE UNIQUE INDEX `uq_cal_side_type_active` ON `calibration_profiles` (`side`,`sensor_type`);--> statement-breakpoint
-CREATE TABLE `calibration_runs` (
+CREATE INDEX IF NOT EXISTS `idx_cal_type_status` ON `calibration_profiles` (`sensor_type`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS `uq_cal_side_type_active` ON `calibration_profiles` (`side`,`sensor_type`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `calibration_runs` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`side` text NOT NULL,
 	`sensor_type` text NOT NULL,
@@ -31,8 +31,8 @@ CREATE TABLE `calibration_runs` (
 	`created_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_cal_runs_side_type` ON `calibration_runs` (`side`,`sensor_type`,`created_at`);--> statement-breakpoint
-CREATE TABLE `vitals_quality` (
+CREATE INDEX IF NOT EXISTS `idx_cal_runs_side_type` ON `calibration_runs` (`side`,`sensor_type`,`created_at`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `vitals_quality` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`vitals_id` integer NOT NULL,
 	`side` text NOT NULL,
@@ -43,5 +43,5 @@ CREATE TABLE `vitals_quality` (
 	`created_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_vq_vitals_id` ON `vitals_quality` (`vitals_id`);--> statement-breakpoint
-CREATE INDEX `idx_vq_side_ts` ON `vitals_quality` (`side`,`timestamp`);
+CREATE INDEX IF NOT EXISTS `idx_vq_vitals_id` ON `vitals_quality` (`vitals_id`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `idx_vq_side_ts` ON `vitals_quality` (`side`,`timestamp`);

@@ -1,4 +1,4 @@
-CREATE TABLE `alarm_schedules` (
+CREATE TABLE IF NOT EXISTS `alarm_schedules` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`side` text NOT NULL,
 	`day_of_week` text NOT NULL,
@@ -12,8 +12,8 @@ CREATE TABLE `alarm_schedules` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_alarm_schedules_side_day` ON `alarm_schedules` (`side`,`day_of_week`);--> statement-breakpoint
-CREATE TABLE `device_settings` (
+CREATE INDEX IF NOT EXISTS `idx_alarm_schedules_side_day` ON `alarm_schedules` (`side`,`day_of_week`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `device_settings` (
 	`id` integer PRIMARY KEY NOT NULL,
 	`timezone` text DEFAULT 'America/Los_Angeles' NOT NULL,
 	`temperature_unit` text DEFAULT 'F' NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE `device_settings` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `device_state` (
+CREATE TABLE IF NOT EXISTS `device_state` (
 	`side` text PRIMARY KEY NOT NULL,
 	`current_temperature` real,
 	`target_temperature` real,
@@ -36,7 +36,7 @@ CREATE TABLE `device_state` (
 	`last_updated` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `power_schedules` (
+CREATE TABLE IF NOT EXISTS `power_schedules` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`side` text NOT NULL,
 	`day_of_week` text NOT NULL,
@@ -48,8 +48,8 @@ CREATE TABLE `power_schedules` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_power_schedules_side_day` ON `power_schedules` (`side`,`day_of_week`);--> statement-breakpoint
-CREATE TABLE `side_settings` (
+CREATE INDEX IF NOT EXISTS `idx_power_schedules_side_day` ON `power_schedules` (`side`,`day_of_week`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `side_settings` (
 	`side` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
 	`away_mode` integer DEFAULT false NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE `side_settings` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `system_health` (
+CREATE TABLE IF NOT EXISTS `system_health` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`component` text NOT NULL,
 	`status` text DEFAULT 'unknown' NOT NULL,
@@ -65,8 +65,8 @@ CREATE TABLE `system_health` (
 	`last_checked` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `system_health_component_unique` ON `system_health` (`component`);--> statement-breakpoint
-CREATE TABLE `tap_gestures` (
+CREATE UNIQUE INDEX IF NOT EXISTS `system_health_component_unique` ON `system_health` (`component`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `tap_gestures` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`side` text NOT NULL,
 	`tap_type` text NOT NULL,
@@ -80,7 +80,7 @@ CREATE TABLE `tap_gestures` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `temperature_schedules` (
+CREATE TABLE IF NOT EXISTS `temperature_schedules` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`side` text NOT NULL,
 	`day_of_week` text NOT NULL,
@@ -91,4 +91,4 @@ CREATE TABLE `temperature_schedules` (
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_temp_schedules_side_day_time` ON `temperature_schedules` (`side`,`day_of_week`,`time`);
+CREATE INDEX IF NOT EXISTS `idx_temp_schedules_side_day_time` ON `temperature_schedules` (`side`,`day_of_week`,`time`);

@@ -1,4 +1,4 @@
-CREATE TABLE `bed_temp` (
+CREATE TABLE IF NOT EXISTS `bed_temp` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`timestamp` integer NOT NULL,
 	`ambient_temp` integer,
@@ -12,8 +12,8 @@ CREATE TABLE `bed_temp` (
 	`right_inner_temp` integer
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `idx_bed_temp_timestamp` ON `bed_temp` (`timestamp`);--> statement-breakpoint
-CREATE TABLE `freezer_temp` (
+CREATE UNIQUE INDEX IF NOT EXISTS `idx_bed_temp_timestamp` ON `bed_temp` (`timestamp`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `freezer_temp` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`timestamp` integer NOT NULL,
 	`ambient_temp` integer,
@@ -22,4 +22,4 @@ CREATE TABLE `freezer_temp` (
 	`right_water_temp` integer
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `idx_freezer_temp_timestamp` ON `freezer_temp` (`timestamp`);
+CREATE UNIQUE INDEX IF NOT EXISTS `idx_freezer_temp_timestamp` ON `freezer_temp` (`timestamp`);
