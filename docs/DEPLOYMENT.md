@@ -163,6 +163,49 @@ sp-logs                # tail service logs (journalctl -f)
 sp-update [branch]     # self-update from GitHub (handles iptables)
 ```
 
+## Network Security (Telemetry Blocking)
+
+The pod runs two Eight Sleep stock processes that continuously attempt to phone home:
+
+| Process | Service | Target | Purpose |
+|---|---|---|---|
+| `frankenfirmware` | `frank.service` | `raw-api-upload.8slp.net:443` | Upload raw sensor data |
+| `Eight.Capybara` | `capybara.service` | `wss://device-api-ws.8slp.net` | WebSocket device API hub |
+
+We block these with **two independent layers**:
+
+### Layer 1: iptables (primary)
+
+The OUTPUT chain DROPs all non-LAN, non-NTP traffic. This is the same firewall that was on the pod before sleepypod — we preserve it.
+
+### Layer 2: /etc/hosts null routes (defense-in-depth)
+
+Eight Sleep domains are null-routed to `0.0.0.0` in `/etc/hosts`. This prevents data exfiltration even when iptables are **temporarily opened** for `sp-update` or other maintenance. DNS resolves to `0.0.0.0` so frank/Capybara can't connect regardless of firewall state.
+
+### Management
+
+```bash
+# Install both layers
+sudo scripts/internet-control block
+
+# Manage hosts layer independently
+sudo scripts/internet-control hosts-block    # add null routes
+sudo scripts/internet-control hosts-unblock  # remove null routes
+
+# Check status of both layers
+sudo scripts/internet-control status
+```
+
+### Domains blocked
+
+- `raw-api-upload.8slp.net` — frank raw sensor data upload
+- `device-api-ws.8slp.net` — Capybara WebSocket hub (configured in `/opt/eight/config/default.json`)
+- `api.8slp.net`, `app-api.8slp.net`, `client-api.8slp.net` — preemptive
+
+### Why not just stop frank/Capybara?
+
+`frank` (frankenfirmware) also handles the sensor/frozen hardware communication — capSense, bed temperatures, pump control, piezo. Stopping it would break all biometrics. `Capybara` is only the cloud API client and could be disabled, but null-routing is safer and doesn't risk breaking undiscovered local dependencies.
+
 ## Coexistence with free-sleep
 
 Both `free-sleep.service` and `sleepypod.service` bind to port 3000. Only one can run at a time:

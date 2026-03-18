@@ -3,17 +3,29 @@ set -euo pipefail
 
 usage() {
   cat << EOF
-Usage: $(basename "$0") {block|unblock}
+Usage: $(basename "$0") {block|unblock|hosts-block|hosts-unblock|status}
 
 Control internet access for SleepyPod device.
 
 Commands:
-  block    - Block all internet access (keep local network only)
-  unblock  - Restore full internet access
+  block         - Block all internet access via iptables (keep local network only)
+  unblock       - Restore full internet access via iptables
+  hosts-block   - Null-route Eight Sleep telemetry domains in /etc/hosts
+  hosts-unblock - Remove Eight Sleep null routes from /etc/hosts
+  status        - Show current blocking status (iptables + hosts)
+
+The pod uses two layers of outbound blocking:
+  1. iptables: DROP all non-LAN/NTP outbound traffic (primary)
+  2. /etc/hosts: null-route *.8slp.net domains (defense-in-depth)
+
+Layer 2 prevents data exfiltration when iptables are temporarily
+opened for sp-update or other maintenance.
 
 Examples:
-  sudo $(basename "$0") block
-  sudo $(basename "$0") unblock
+  sudo $(basename "$0") block          # iptables block
+  sudo $(basename "$0") hosts-block    # add /etc/hosts null routes
+  sudo $(basename "$0") hosts-unblock  # remove /etc/hosts null routes
+  sudo $(basename "$0") status         # check both layers
 EOF
   exit 1
 }
@@ -30,6 +42,70 @@ if [ $# -ne 1 ]; then
 fi
 
 COMMAND="$1"
+
+# ---------------------------------------------------------------------------
+# /etc/hosts management for Eight Sleep telemetry blocking
+# ---------------------------------------------------------------------------
+
+# Marker comments used to find our block in /etc/hosts
+HOSTS_MARKER_BEGIN="# BEGIN sleepypod-telemetry-block"
+HOSTS_MARKER_END="# END sleepypod-telemetry-block"
+
+# Known Eight Sleep cloud domains
+EIGHTSLEEP_DOMAINS=(
+  "raw-api-upload.8slp.net"   # frankenfirmware raw sensor data upload
+  "device-api-ws.8slp.net"    # Capybara WebSocket device API hub
+  "api.8slp.net"              # general API
+  "app-api.8slp.net"          # mobile app API
+  "client-api.8slp.net"       # client API
+)
+
+hosts_is_blocked() {
+  grep -q "$HOSTS_MARKER_BEGIN" /etc/hosts 2>/dev/null
+}
+
+add_hosts_block() {
+  if hosts_is_blocked; then
+    echo "Eight Sleep hosts block already present"
+    return 0
+  fi
+
+  # Backup before modifying
+  cp /etc/hosts /etc/hosts.bak.sleepypod
+
+  {
+    echo ""
+    echo "$HOSTS_MARKER_BEGIN"
+    echo "# Null-route Eight Sleep telemetry domains so the stock firmware"
+    echo "# (frankenfirmware + Capybara) cannot phone home, even when"
+    echo "# iptables are temporarily opened for sp-update."
+    echo "# Managed by: scripts/internet-control hosts-block|hosts-unblock"
+    for domain in "${EIGHTSLEEP_DOMAINS[@]}"; do
+      echo "0.0.0.0 $domain"
+    done
+    echo "$HOSTS_MARKER_END"
+  } >> /etc/hosts
+
+  echo "Added ${#EIGHTSLEEP_DOMAINS[@]} Eight Sleep domains to /etc/hosts null route"
+}
+
+remove_hosts_block() {
+  if ! hosts_is_blocked; then
+    echo "No Eight Sleep hosts block found"
+    return 0
+  fi
+
+  # Backup before modifying
+  cp /etc/hosts /etc/hosts.bak.sleepypod
+
+  # Remove everything between (and including) the markers
+  sed -i "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/d" /etc/hosts
+
+  # Clean up any trailing blank lines at end of file
+  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' /etc/hosts
+
+  echo "Removed Eight Sleep domains from /etc/hosts"
+}
 
 case "$COMMAND" in
   block)
@@ -104,8 +180,14 @@ case "$COMMAND" in
       fi
     fi
 
+    # Also install /etc/hosts telemetry block as defense-in-depth
+    echo "Installing /etc/hosts telemetry block..."
+    add_hosts_block
+
     echo ""
     echo "✓ Internet access blocked!"
+    echo "  Layer 1: iptables DROP on all non-LAN/NTP outbound"
+    echo "  Layer 2: /etc/hosts null routes for *.8slp.net"
     echo "  Local network ($LOCAL_SUBNET) is still accessible"
     if command -v ip6tables &>/dev/null; then
       echo "  IPv6 is also blocked"
@@ -152,6 +234,70 @@ case "$COMMAND" in
     echo ""
     echo "✓ Internet access restored!"
     echo "  Both IPv4 and IPv6 are now unblocked"
+    echo ""
+    ;;
+
+  hosts-block)
+    echo "========================================"
+    echo "  Block Eight Sleep Telemetry (hosts)"
+    echo "========================================"
+    echo ""
+    add_hosts_block
+    echo ""
+    echo "✓ Eight Sleep telemetry domains null-routed in /etc/hosts"
+    echo "  frank (raw-api-upload.8slp.net) and Capybara (device-api-ws.8slp.net)"
+    echo "  will resolve to 0.0.0.0 even when iptables are open"
+    echo ""
+    echo "To remove: sudo $(basename "$0") hosts-unblock"
+    echo ""
+    ;;
+
+  hosts-unblock)
+    echo "========================================"
+    echo "  Remove Eight Sleep Telemetry Block"
+    echo "========================================"
+    echo ""
+    remove_hosts_block
+    echo ""
+    echo "✓ /etc/hosts restored — Eight Sleep domains will resolve normally"
+    echo "  Backup at /etc/hosts.bak.sleepypod"
+    echo ""
+    ;;
+
+  status)
+    echo "========================================"
+    echo "  Network Blocking Status"
+    echo "========================================"
+    echo ""
+
+    # Layer 1: iptables
+    if iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP"; then
+      DROP_STATS=$(iptables -L OUTPUT -n -v 2>/dev/null | grep "DROP" | awk '{print $1 " packets, " $2}')
+      echo "  Layer 1 (iptables):  ACTIVE — DROP rule present ($DROP_STATS blocked)"
+    else
+      echo "  Layer 1 (iptables):  INACTIVE — no DROP rule in OUTPUT chain"
+    fi
+
+    # Layer 2: /etc/hosts
+    if hosts_is_blocked; then
+      DOMAIN_COUNT=$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" /etc/hosts | grep "^0.0.0.0" | wc -l)
+      echo "  Layer 2 (/etc/hosts): ACTIVE — $DOMAIN_COUNT domains null-routed"
+    else
+      echo "  Layer 2 (/etc/hosts): INACTIVE — no Eight Sleep null routes"
+    fi
+
+    echo ""
+
+    # Show active Eight Sleep processes
+    FRANK_PID=$(pgrep -f frankenfirmware 2>/dev/null || true)
+    CAPY_PID=$(pgrep -f Eight.Capybara 2>/dev/null || true)
+    if [ -n "$FRANK_PID" ] || [ -n "$CAPY_PID" ]; then
+      echo "  Eight Sleep processes running:"
+      [ -n "$FRANK_PID" ] && echo "    frank (PID $FRANK_PID) — sensor firmware + raw-api-upload.8slp.net"
+      [ -n "$CAPY_PID" ] && echo "    Capybara (PID $CAPY_PID) — device-api-ws.8slp.net"
+    else
+      echo "  No Eight Sleep processes detected"
+    fi
     echo ""
     ;;
 
