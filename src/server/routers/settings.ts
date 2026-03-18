@@ -155,7 +155,12 @@ export const settingsRouter = router({
           return result
         })
 
-        try { await reloadSchedulerIfNeeded(input) } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadSchedulerIfNeeded(input)
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return updated
       }
