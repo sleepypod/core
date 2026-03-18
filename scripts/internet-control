@@ -15,7 +15,7 @@ Commands:
   status        - Show current blocking status (iptables + hosts)
 
 The pod uses two layers of outbound blocking:
-  1. iptables: DROP all non-LAN/NTP outbound traffic (primary)
+  1. iptables: DROP all non-LAN outbound traffic (primary)
   2. /etc/hosts: null-route *.8slp.net domains (defense-in-depth)
 
 Layer 2 prevents data exfiltration when iptables are temporarily
@@ -61,13 +61,29 @@ EIGHTSLEEP_DOMAINS=(
 )
 
 hosts_is_blocked() {
-  grep -q "$HOSTS_MARKER_BEGIN" /etc/hosts 2>/dev/null
+  # Both markers must be present exactly once for a well-formed block
+  local begin_count end_count
+  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" /etc/hosts 2>/dev/null || true)
+  end_count=$(grep -Fc "$HOSTS_MARKER_END" /etc/hosts 2>/dev/null || true)
+  [ "$begin_count" -eq 1 ] && [ "$end_count" -eq 1 ]
+}
+
+hosts_markers_malformed() {
+  local begin_count end_count
+  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" /etc/hosts 2>/dev/null || true)
+  end_count=$(grep -Fc "$HOSTS_MARKER_END" /etc/hosts 2>/dev/null || true)
+  [ "$begin_count" -ne "$end_count" ]
 }
 
 add_hosts_block() {
   if hosts_is_blocked; then
     echo "Eight Sleep hosts block already present"
     return 0
+  fi
+
+  if hosts_markers_malformed; then
+    echo "Warning: malformed hosts markers found, cleaning up first" >&2
+    sed -i "/$HOSTS_MARKER_BEGIN/d;/$HOSTS_MARKER_END/d" /etc/hosts
   fi
 
   # Backup before modifying
@@ -90,6 +106,12 @@ add_hosts_block() {
 }
 
 remove_hosts_block() {
+  if hosts_markers_malformed; then
+    echo "Error: malformed sleepypod hosts markers in /etc/hosts; refusing destructive edit" >&2
+    echo "  Check /etc/hosts manually for mismatched BEGIN/END markers" >&2
+    return 1
+  fi
+
   if ! hosts_is_blocked; then
     echo "No Eight Sleep hosts block found"
     return 0
@@ -186,7 +208,7 @@ case "$COMMAND" in
 
     echo ""
     echo "✓ Internet access blocked!"
-    echo "  Layer 1: iptables DROP on all non-LAN/NTP outbound"
+    echo "  Layer 1: iptables DROP on all non-LAN outbound"
     echo "  Layer 2: /etc/hosts null routes for *.8slp.net"
     echo "  Local network ($LOCAL_SUBNET) is still accessible"
     if command -v ip6tables &>/dev/null; then
@@ -270,12 +292,15 @@ case "$COMMAND" in
     echo "========================================"
     echo ""
 
-    # Layer 1: iptables
-    if iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP"; then
+    # Layer 1: iptables — check both OUTPUT and SLEEPYPOD-BLOCK chains
+    if iptables -L SLEEPYPOD-BLOCK -n 2>/dev/null | grep -q "DROP"; then
+      DROP_STATS=$(iptables -L SLEEPYPOD-BLOCK -n -v 2>/dev/null | grep "DROP" | awk '{print $1 " packets, " $2}')
+      echo "  Layer 1 (iptables):  ACTIVE — SLEEPYPOD-BLOCK chain ($DROP_STATS blocked)"
+    elif iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP"; then
       DROP_STATS=$(iptables -L OUTPUT -n -v 2>/dev/null | grep "DROP" | awk '{print $1 " packets, " $2}')
-      echo "  Layer 1 (iptables):  ACTIVE — DROP rule present ($DROP_STATS blocked)"
+      echo "  Layer 1 (iptables):  ACTIVE — DROP rule in OUTPUT ($DROP_STATS blocked)"
     else
-      echo "  Layer 1 (iptables):  INACTIVE — no DROP rule in OUTPUT chain"
+      echo "  Layer 1 (iptables):  INACTIVE — no DROP rule found"
     fi
 
     # Layer 2: /etc/hosts
