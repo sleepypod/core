@@ -151,6 +151,12 @@ echo "Checking network connectivity..."
 if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
   if wan_is_blocked; then
     echo "WAN is blocked by iptables. Temporarily unblocking for install..."
+    # Ensure /etc/hosts telemetry block is in place before opening WAN
+    # This prevents Eight Sleep processes from phoning home during the window
+    if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+      echo "Installing /etc/hosts telemetry block before opening WAN..."
+      scripts/internet-control hosts-block 2>/dev/null || true
+    fi
     WAN_WAS_BLOCKED=true
     unblock_wan
     # Re-check after unblock
@@ -591,6 +597,11 @@ fi
 
 # Open WAN if blocked
 if wan_is_blocked; then
+  # Ensure /etc/hosts telemetry block is in place before opening WAN
+  if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+    echo "Installing /etc/hosts telemetry block before opening WAN..."
+    "$INSTALL_DIR/scripts/internet-control" hosts-block 2>/dev/null || true
+  fi
   WAN_WAS_BLOCKED=true
   unblock_wan
 fi

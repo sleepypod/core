@@ -250,7 +250,7 @@ function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
       if (recordType === 'piezo-dual') {
         frames.push({
           type: 'piezo-dual',
-          ts: rec.ts ?? Math.floor(Date.now() / 1000),  // epoch seconds (consistent with firmware)
+          ts: rec.ts ?? Math.floor(Date.now() / 1000), // epoch seconds (consistent with firmware)
           freq: rec.freq,
           left1: int32BufferToArray(rec.left1 as Buffer | Uint8Array | undefined),
           right1: int32BufferToArray(rec.right1 as Buffer | Uint8Array | undefined),

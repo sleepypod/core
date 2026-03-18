@@ -110,7 +110,12 @@ export const schedulesRouter = router({
           return result
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return created
       }
@@ -162,7 +167,12 @@ export const schedulesRouter = router({
           return result
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return updated
       }
@@ -206,7 +216,12 @@ export const schedulesRouter = router({
           }
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return { success: true }
       }
@@ -257,7 +272,12 @@ export const schedulesRouter = router({
           return result
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return created
       }
@@ -341,7 +361,12 @@ export const schedulesRouter = router({
           return result
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return updated
       }
@@ -385,7 +410,12 @@ export const schedulesRouter = router({
           }
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return { success: true }
       }
@@ -434,7 +464,12 @@ export const schedulesRouter = router({
           return result
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return created
       }
@@ -489,7 +524,12 @@ export const schedulesRouter = router({
           return result
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return updated
       }
@@ -533,7 +573,12 @@ export const schedulesRouter = router({
           }
         })
 
-        try { await reloadScheduler() } catch (e) { console.error('Scheduler reload failed:', e) }
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
 
         return { success: true }
       }
