@@ -1,4 +1,4 @@
 cbor2==5.8.0
-numpy==2.2.3
+numpy==2.2.6
 scipy==1.15.3  # 1.16+ requires Python 3.11; pod runs 3.10
 heartpy==1.2.7
