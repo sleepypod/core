@@ -318,11 +318,13 @@ def _median(values: List[int]) -> int:
 # Pump artifact gating for capSense2 movement scoring (#230)
 # ---------------------------------------------------------------------------
 
-def _extract_ref_delta(record: dict, side: str) -> Optional[float]:
+def _extract_ref_delta(record: dict, side: str,
+                       baselines: Optional[dict] = None) -> Optional[float]:
     """Extract reference channel delta from nominal for a capSense2 record.
 
-    Returns the deviation of the averaged reference pair from 1.16, or None
-    if the record is not capSense2 or reference channels are unavailable.
+    Returns the deviation of the averaged reference pair from the calibrated
+    reference mean (or 1.16 fallback), or None if the record is not capSense2
+    or reference channels are unavailable.
     """
     if record.get("type") != "capSense2":
         return None
@@ -335,7 +337,10 @@ def _extract_ref_delta(record: dict, side: str) -> Optional[float]:
     if vals[6] == CAPSENSE2_SENTINEL or vals[7] == CAPSENSE2_SENTINEL:
         return None
     ref_avg = (vals[6] + vals[7]) / 2.0
-    return ref_avg - 1.16
+    ref_nominal = 1.16
+    if baselines and baselines.get("ref"):
+        ref_nominal = baselines["ref"].get("mean", 1.16)
+    return ref_avg - ref_nominal
 
 
 class PumpGateCapSense:
@@ -421,7 +426,8 @@ class PumpGateCapSense:
         self._was_pump_active = pump_active
 
     def is_gated(self, record: dict, side: str,
-                 channel_deltas: Optional[List[float]] = None) -> bool:
+                 channel_deltas: Optional[List[float]] = None,
+                 baselines: Optional[dict] = None) -> bool:
         """Check if movement delta should be gated (forced to 0).
 
         Args:
@@ -429,6 +435,8 @@ class PumpGateCapSense:
             side: "left" or "right".
             channel_deltas: Per-channel absolute deltas [|dA|, |dB|, |dC|],
                 if available. Used for reference channel anomaly correlation.
+            baselines: Calibration baselines for this side, used for
+                calibrated reference nominal in anomaly detection.
 
         Returns True if the delta should be suppressed.
         """
@@ -441,7 +449,7 @@ class PumpGateCapSense:
             return True
 
         # Signal 2: Reference channel anomaly (capSense2 only)
-        ref_delta = _extract_ref_delta(record, side)
+        ref_delta = _extract_ref_delta(record, side, baselines)
         if ref_delta is not None and abs(ref_delta) > REF_ANOMALY_THRESHOLD:
             # Reference channel shifted — check if active channels correlate
             # (both spiking together = mechanical coupling from pump, not body movement)
@@ -518,7 +526,7 @@ class SessionTracker:
             self._prev_values = current_values
 
             # Pump gate: suppress delta if pump is active or in guard period (#230)
-            if self.pump_gate.is_gated(record, self.side, channel_deltas):
+            if self.pump_gate.is_gated(record, self.side, channel_deltas, baselines):
                 delta = 0.0
                 self._pump_gated_samples += 1
         else:
@@ -611,6 +619,7 @@ class SessionTracker:
         if not self._movement_buf or self._session_start is None:
             # Only write movement during active sessions (O-2 fix)
             self._movement_buf = []
+            self._pump_gated_samples = 0
             self._last_movement_write = ts
             return
 
@@ -630,7 +639,7 @@ class SessionTracker:
         # Step 2: Baseline subtraction — remove 5th percentile of trailing epochs
         # This eliminates slow-building artifacts (pump vibration residual, thermal drift)
         self._epoch_scores.append(raw_score)
-        if len(self._epoch_scores) >= BASELINE_COLD_START_EPOCHS:
+        if len(self._epoch_scores) > BASELINE_COLD_START_EPOCHS:
             baseline = _percentile(list(self._epoch_scores), BASELINE_PERCENTILE)
             score_after_baseline = max(0, raw_score - baseline)
         else:

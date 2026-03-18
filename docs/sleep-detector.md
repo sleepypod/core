@@ -100,7 +100,7 @@ When any signal is active, the movement delta for that sample is forced to 0.
 
 **Pipeline position.** Pump gating is applied after reference compensation and before delta computation:
 
-```
+```text
 1. Sentinel filter (-1.0 values)
 2. Pair averaging
 3. Reference compensation
@@ -185,4 +185,4 @@ Session records include:
 
 7. **Baseline subtraction cold start.** Movement scores during the first 10 minutes of a session are not baseline-subtracted, which may produce slightly elevated readings compared to later in the night. This is acceptable because the baseline requires sufficient history to be meaningful.
 
-8. **Median filter latency.** The 3-epoch median filter introduces a 1-epoch delay in movement score reporting (the current epoch's score is influenced by the next epoch). In practice this is acceptable since movement data is not used for real-time alerting.
+8. **Median filter smoothing behavior.** The 3-epoch median filter is causal (trailing window), so it does not depend on future epochs. It may still soften abrupt transitions, which is acceptable since movement data is not used for real-time alerting.
