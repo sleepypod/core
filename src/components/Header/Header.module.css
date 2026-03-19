@@ -2,8 +2,14 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   width: 100%;
-  padding: 24px;
-  ;
+  padding: 16px 12px;
+}
+
+@media (min-width: 375px) {
+  .header {
+    margin-bottom: 16px;
+    padding: 24px;
+  }
 }

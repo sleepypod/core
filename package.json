@@ -46,6 +46,7 @@
     "node-schedule": "^2.1.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "recharts": "^3.8.0",
     "shadcn": "^3.8.5",
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.5.0",

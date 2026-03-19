@@ -3,10 +3,17 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
-import { eq, and, gte, lte, desc, avg, min, max, count } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, asc, avg, min, max, count } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { isIosProcessing, getConnectedSince } from '@/src/streaming/processingState'
 import { listRawFiles } from './raw'
+import {
+  classifySleepStages,
+  mergeIntoBlocks,
+  calculateDistribution,
+  calculateQualityScore,
+  type SleepStagesResult,
+} from '@/src/lib/sleep-stages'
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -610,5 +617,167 @@ export const biometricsRouter = router({
       }
 
       return { success: true }
+    }),
+
+  /**
+   * Get classified sleep stages for a specific sleep record or date range.
+   *
+   * Performs server-side sleep stage classification by:
+   * 1. Fetching the sleep record (if sleepRecordId provided) or using date range
+   * 2. Querying vitals + movement data within that window
+   * 3. Running the rule-based classifier (ported from iOS SleepAnalyzer)
+   * 4. Returning epochs, merged blocks, distribution, and quality score
+   *
+   * @param side - Which side to classify
+   * @param sleepRecordId - Optional: classify stages for a specific sleep record
+   * @param startDate - Optional: start of custom date range
+   * @param endDate - Optional: end of custom date range
+   * @returns Classified sleep stages with blocks, distribution, and quality score
+   */
+  getSleepStages: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/sleep-stages', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          sleepRecordId: z.number().int().optional(),
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+        })
+        .strict()
+    )
+    .output(z.any())
+    .query(async ({ input }): Promise<SleepStagesResult> => {
+      try {
+        let windowStart: Date
+        let windowEnd: Date
+        let sleepRecordId: number | null = null
+        let enteredBedAt: number | null = null
+        let leftBedAt: number | null = null
+
+        if (input.sleepRecordId) {
+          // Look up the sleep record to get the time window
+          const [record] = await biometricsDb
+            .select()
+            .from(sleepRecords)
+            .where(eq(sleepRecords.id, input.sleepRecordId))
+            .limit(1)
+
+          if (!record) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Sleep record ${input.sleepRecordId} not found`,
+            })
+          }
+
+          windowStart = record.enteredBedAt
+          windowEnd = record.leftBedAt
+          sleepRecordId = record.id
+          enteredBedAt = record.enteredBedAt.getTime()
+          leftBedAt = record.leftBedAt.getTime()
+        } else if (input.startDate && input.endDate) {
+          if (!validateDateRange(input.startDate, input.endDate)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'startDate must be before or equal to endDate',
+            })
+          }
+          windowStart = input.startDate
+          windowEnd = input.endDate
+        } else {
+          // Default: last night (most recent sleep record for this side)
+          const [record] = await biometricsDb
+            .select()
+            .from(sleepRecords)
+            .where(eq(sleepRecords.side, input.side))
+            .orderBy(desc(sleepRecords.enteredBedAt))
+            .limit(1)
+
+          if (!record) {
+            return {
+              epochs: [],
+              blocks: [],
+              distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
+              qualityScore: 0,
+              totalSleepMs: 0,
+              sleepRecordId: null,
+              enteredBedAt: null,
+              leftBedAt: null,
+            }
+          }
+
+          windowStart = record.enteredBedAt
+          windowEnd = record.leftBedAt
+          sleepRecordId = record.id
+          enteredBedAt = record.enteredBedAt.getTime()
+          leftBedAt = record.leftBedAt.getTime()
+        }
+
+        // Fetch vitals within the window
+        const vitalsData = await biometricsDb
+          .select()
+          .from(vitals)
+          .where(
+            and(
+              eq(vitals.side, input.side),
+              gte(vitals.timestamp, windowStart),
+              lte(vitals.timestamp, windowEnd)
+            )
+          )
+          .orderBy(asc(vitals.timestamp))
+
+        // Fetch movement within the window
+        const movementData = await biometricsDb
+          .select()
+          .from(movement)
+          .where(
+            and(
+              eq(movement.side, input.side),
+              gte(movement.timestamp, windowStart),
+              lte(movement.timestamp, windowEnd)
+            )
+          )
+          .orderBy(asc(movement.timestamp))
+
+        // Classify stages
+        const epochs = classifySleepStages(vitalsData, movementData)
+
+        if (epochs.length === 0) {
+          return {
+            epochs: [],
+            blocks: [],
+            distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
+            qualityScore: 0,
+            totalSleepMs: 0,
+            sleepRecordId,
+            enteredBedAt,
+            leftBedAt,
+          }
+        }
+
+        const blocks = mergeIntoBlocks(epochs)
+        const distribution = calculateDistribution(epochs)
+        const qualityScore = calculateQualityScore(distribution)
+        const totalSleepMs = epochs.reduce((sum, e) => sum + e.duration, 0)
+
+        return {
+          epochs,
+          blocks,
+          distribution,
+          qualityScore,
+          totalSleepMs,
+          sleepRecordId,
+          enteredBedAt,
+          leftBedAt,
+        }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to classify sleep stages: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 })

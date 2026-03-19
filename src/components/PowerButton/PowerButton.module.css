@@ -16,3 +16,20 @@
   background: #252525;
   color: #aaa;
 }
+
+.powerButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Active/powered-on state */
+.powerButtonOn {
+  background: #0ea5e9;
+  border-color: #38bdf8;
+  color: #fff;
+}
+
+.powerButtonOn:hover {
+  background: #0284c7;
+  color: #fff;
+}
