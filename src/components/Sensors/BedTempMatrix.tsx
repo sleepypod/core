@@ -9,7 +9,7 @@ import { trpc } from '@/src/utils/trpc'
  * Map a temperature (Celsius) to a color string.
  * Blue (18C) → Green (28C) → Orange (38C).
  */
-function tempToColor(tempC: number | undefined): string {
+function tempToColor(tempC: number | null | undefined): string {
   if (tempC === undefined || tempC === null) return 'bg-zinc-800 text-zinc-500'
   const clamped = Math.max(18, Math.min(38, tempC))
   const ratio = (clamped - 18) / 20 // 0 = cold, 1 = hot

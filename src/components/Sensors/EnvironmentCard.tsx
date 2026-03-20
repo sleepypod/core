@@ -57,9 +57,9 @@ export function EnvironmentCard() {
   const leftAmbient = formatAmbientC(liveFrame?.ambientTemp)
     || formatAmbientF(latestBedTemp.data?.ambientTemp)
 
-  // For dual-side: check if right-side fields exist in live frame
-  const rightHumidity = formatHumidity((liveFrame as Record<string, unknown>)?.humidityRight as number)
-  const rightAmbient = formatAmbientC((liveFrame as Record<string, unknown>)?.ambientTempRight as number)
+  // Normalized frames combine left/right ambient+humidity into single values
+  const rightHumidity: string | null = null
+  const rightAmbient: string | null = null
 
   // Summary stats from tRPC (24h averages)
   const summaryData = summary.data?.bedTemp
@@ -95,12 +95,12 @@ export function EnvironmentCard() {
         />
         <EnvItem
           icon={<Droplets size={11} className="text-sky-400" />}
-          value={rightHumidity !== '--' ? rightHumidity : leftHumidity}
+          value={rightHumidity ?? leftHumidity}
           label="Humidity R"
         />
         <EnvItem
           icon={<Thermometer size={11} className="text-amber-400" />}
-          value={rightAmbient !== '--' ? rightAmbient : leftAmbient}
+          value={rightAmbient ?? leftAmbient}
           label="Ambient R"
         />
       </div>

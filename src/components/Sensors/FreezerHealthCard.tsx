@@ -5,7 +5,8 @@ import type { FrzTempFrame, FrzHealthFrame, FrzThermFrame } from '@/src/hooks/us
 import { trpc } from '@/src/utils/trpc'
 import { Snowflake, Fan, Droplets, Gauge, AlertTriangle, CheckCircle, TrendingDown, TrendingUp, Minus, X } from 'lucide-react'
 
-function formatTemp(value: number | undefined): string {
+/** Format Celsius value to Fahrenheit display string. */
+function formatTemp(value: number | null | undefined): string {
   if (value === undefined || value === null) return '--'
   const f = (value * 9) / 5 + 32
   return `${f.toFixed(1)}°F`
@@ -199,20 +200,32 @@ export function FreezerHealthCard() {
               <MetricItem
                 icon={<Gauge size={16} className="text-purple-400" />}
                 label="TEC Left"
-                value={typeof frzHealth.left === 'number' ? `${frzHealth.left.toFixed(2)} A` : '--'}
-                status={typeof frzHealth.left === 'number' && frzHealth.left > 5 ? 'warn' : 'ok'}
+                value={`${frzHealth.left.tecCurrent.toFixed(2)} A`}
+                status={frzHealth.left.tecCurrent > 5 ? 'warn' : 'ok'}
               />
               <MetricItem
                 icon={<Gauge size={16} className="text-purple-400" />}
                 label="TEC Right"
-                value={typeof frzHealth.right === 'number' ? `${frzHealth.right.toFixed(2)} A` : '--'}
-                status={typeof frzHealth.right === 'number' && frzHealth.right > 5 ? 'warn' : 'ok'}
+                value={`${frzHealth.right.tecCurrent.toFixed(2)} A`}
+                status={frzHealth.right.tecCurrent > 5 ? 'warn' : 'ok'}
+              />
+              <MetricItem
+                icon={<Droplets size={16} className="text-blue-400" />}
+                label="Pump Left"
+                value={`${frzHealth.left.pumpRpm} RPM`}
+                status={frzHealth.left.pumpRpm > 0 ? 'ok' : 'warn'}
+              />
+              <MetricItem
+                icon={<Droplets size={16} className="text-blue-400" />}
+                label="Pump Right"
+                value={`${frzHealth.right.pumpRpm} RPM`}
+                status={frzHealth.right.pumpRpm > 0 ? 'ok' : 'warn'}
               />
               <MetricItem
                 icon={<Fan size={16} className="text-cyan-400" />}
                 label="Fan"
-                value={typeof frzHealth.fan === 'number' ? `${frzHealth.fan} RPM` : '--'}
-                status={typeof frzHealth.fan === 'number' && frzHealth.fan < 100 ? 'warn' : 'ok'}
+                value={`${frzHealth.fan.rpm} RPM`}
+                status={frzHealth.fan.rpm < 100 ? 'warn' : 'ok'}
               />
             </>
           )}

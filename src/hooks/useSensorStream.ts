@@ -33,55 +33,53 @@ export interface CapSenseFrame {
   right: number
 }
 
-/** Capacitive presence sensor frame (newer pods, ~2 Hz). */
+/** Capacitive presence sensor frame (newer pods, ~2 Hz). Normalized to arrays. */
 export interface CapSense2Frame {
   type: 'capSense2'
   ts: number
-  left: number | number[]
-  right: number | number[]
+  left: number[]
+  right: number[]
   status?: string
 }
 
-/** Bed temperature frame (~0.06 Hz). */
+/** Bed temperature frame (~0.06 Hz). Normalized from nested firmware structure. Values in Celsius. */
 export interface BedTempFrame {
   type: 'bedTemp'
   ts: number
-  ambientTemp?: number
-  mcuTemp?: number
-  humidity?: number
-  leftOuterTemp?: number
-  leftCenterTemp?: number
-  leftInnerTemp?: number
-  rightOuterTemp?: number
-  rightCenterTemp?: number
-  rightInnerTemp?: number
-  [key: string]: unknown
+  ambientTemp: number | null
+  mcuTemp: number | null
+  humidity: number | null
+  leftOuterTemp: number | null
+  leftCenterTemp: number | null
+  leftInnerTemp: number | null
+  rightOuterTemp: number | null
+  rightCenterTemp: number | null
+  rightInnerTemp: number | null
 }
 
-/** Bed temperature frame (newer pods, ~0.06 Hz). */
+/** Bed temperature frame (newer pods, ~0.06 Hz). Normalized from nested firmware structure. Values in Celsius. */
 export interface BedTemp2Frame {
   type: 'bedTemp2'
   ts: number
-  ambientTemp?: number
-  mcuTemp?: number
-  humidity?: number
-  leftOuterTemp?: number
-  leftCenterTemp?: number
-  leftInnerTemp?: number
-  rightOuterTemp?: number
-  rightCenterTemp?: number
-  rightInnerTemp?: number
-  [key: string]: unknown
+  ambientTemp: number | null
+  mcuTemp: number | null
+  humidity: number | null
+  leftOuterTemp: number | null
+  leftCenterTemp: number | null
+  leftInnerTemp: number | null
+  rightOuterTemp: number | null
+  rightCenterTemp: number | null
+  rightInnerTemp: number | null
 }
 
-/** Freezer temperature frame (~0.06 Hz). */
+/** Freezer temperature frame (~0.06 Hz). Values normalized to Celsius. */
 export interface FrzTempFrame {
   type: 'frzTemp'
   ts: number
-  left: number
-  right: number
-  amb: number
-  hs: number
+  left: number | null
+  right: number | null
+  amb: number | null
+  hs: number | null
 }
 
 /** Freezer thermal control status frame. */
@@ -92,13 +90,13 @@ export interface FrzThermFrame {
   right: number
 }
 
-/** Freezer health frame. */
+/** Freezer health frame — normalized from nested firmware structure. */
 export interface FrzHealthFrame {
   type: 'frzHealth'
   ts: number
-  left: number
-  right: number
-  fan: number
+  left: { pumpRpm: number; pumpDuty: number; tecCurrent: number }
+  right: { pumpRpm: number; pumpDuty: number; tecCurrent: number }
+  fan: { rpm: number; duty: number }
 }
 
 /** Firmware log frame. */
@@ -157,8 +155,16 @@ interface ErrorMessage { type: 'error'; message: string }
 interface ClaimedMessage { type: 'claimed'; since: number }
 interface ReleasedMessage { type: 'released' }
 interface SubscribedMessage { type: 'subscribed'; sensors: string[] }
+interface TimeRangeMessage { type: 'time_range'; min: number; max: number; file: string | null }
+interface SeekCompleteMessage { type: 'seek_complete' }
 
-type ServerControlMessage = ErrorMessage | ClaimedMessage | ReleasedMessage | SubscribedMessage
+type ServerControlMessage =
+  | ErrorMessage
+  | ClaimedMessage
+  | ReleasedMessage
+  | SubscribedMessage
+  | TimeRangeMessage
+  | SeekCompleteMessage
 
 type ServerMessage = SensorFrame | ServerControlMessage
 
@@ -167,6 +173,12 @@ type ServerMessage = SensorFrame | ServerControlMessage
 // ---------------------------------------------------------------------------
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
+
+/** Available time range for seeking (epoch seconds). */
+export interface TimeRange {
+  min: number
+  max: number
+}
 
 export interface SensorStreamState {
   status: ConnectionStatus
@@ -180,6 +192,10 @@ export interface SensorStreamState {
   fps: number
   /** Timestamp of the most recently received frame (epoch ms). */
   lastFrameTime: number | null
+  /** Whether the client is currently receiving seek replay frames. */
+  isSeeking: boolean
+  /** Available time range for scrubbing (epoch seconds), or null if unknown. */
+  timeRange: TimeRange | null
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +217,8 @@ interface SensorStreamSingleton {
   intentionalClose: boolean
   activeRefCount: number
   pendingSubscription: SensorType[] | null
+  /** Pending resolvers for getTimeRange() promises. */
+  timeRangeResolvers: Array<(range: TimeRange | null) => void>
 }
 
 const SINGLETON_KEY = '__sleepypod_sensorStream' as const
@@ -216,6 +234,8 @@ if (!g[SINGLETON_KEY]) {
       subscribedSensors: null,
       fps: 0,
       lastFrameTime: null,
+      isSeeking: false,
+      timeRange: null,
     },
     fpsTimestamps: [],
     fpsUpdateTimer: null,
@@ -229,6 +249,7 @@ if (!g[SINGLETON_KEY]) {
     intentionalClose: false,
     activeRefCount: 0,
     pendingSubscription: null,
+    timeRangeResolvers: [],
   } satisfies SensorStreamSingleton
 }
 const singleton: SensorStreamSingleton = g[SINGLETON_KEY]
@@ -366,6 +387,22 @@ function handleMessage(event: MessageEvent) {
       setState({ subscribedSensors: sensors })
       return
     }
+    if (msg.type === 'time_range') {
+      const tr = msg as TimeRangeMessage
+      const range: TimeRange | null =
+        tr.min === 0 && tr.max === 0 ? null : { min: tr.min, max: tr.max }
+      setState({ timeRange: range })
+      // Resolve any pending getTimeRange() promises
+      for (const resolve of singleton.timeRangeResolvers) {
+        resolve(range)
+      }
+      singleton.timeRangeResolvers.length = 0
+      return
+    }
+    if (msg.type === 'seek_complete') {
+      setState({ isSeeking: false })
+      return
+    }
 
     // Sensor frame — update latest + notify callbacks
     const frame = msg as SensorFrame
@@ -449,7 +486,7 @@ function disconnect() {
     singleton.ws.close()
     singleton.ws = null
   }
-  setState({ status: 'disconnected', latestFrames: {}, subscribedSensors: null, fps: 0, lastFrameTime: null })
+  setState({ status: 'disconnected', latestFrames: {}, subscribedSensors: null, fps: 0, lastFrameTime: null, isSeeking: false, timeRange: null })
 }
 
 function sendSubscribe(sensors: SensorType[] | null) {
@@ -460,6 +497,44 @@ function sendSubscribe(sensors: SensorType[] | null) {
       sensors: sensors ?? [],
     }))
   }
+}
+
+// ---------------------------------------------------------------------------
+// Seek API (module-level functions, exposed via hooks)
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a seek request to the server. The server will replay frames from the
+ * nearest indexed position at or before `timestamp` (epoch seconds).
+ */
+function sendSeek(timestamp: number): void {
+  if (singleton.ws?.readyState === WebSocket.OPEN) {
+    setState({ isSeeking: true })
+    singleton.ws.send(JSON.stringify({ type: 'seek', timestamp }))
+  }
+}
+
+/**
+ * Request the available time range from the server. Returns a promise that
+ * resolves when the server responds with a `time_range` message.
+ */
+function sendGetTimeRange(): Promise<TimeRange | null> {
+  return new Promise<TimeRange | null>((resolve) => {
+    if (singleton.ws?.readyState !== WebSocket.OPEN) {
+      resolve(null)
+      return
+    }
+    singleton.timeRangeResolvers.push(resolve)
+    singleton.ws.send(JSON.stringify({ type: 'get_time_range' }))
+    // Timeout after 5 seconds to avoid hanging promises
+    setTimeout(() => {
+      const idx = singleton.timeRangeResolvers.indexOf(resolve)
+      if (idx !== -1) {
+        singleton.timeRangeResolvers.splice(idx, 1)
+        resolve(null)
+      }
+    }, 5_000)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +594,17 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
 
-  return snapshot
+  // Stable references for seek API (no deps — they use the singleton directly)
+  const seek = useCallback((timestamp: number) => sendSeek(timestamp), [])
+  const getTimeRange = useCallback(() => sendGetTimeRange(), [])
+
+  return {
+    ...snapshot,
+    /** Send a seek request — server replays frames from the given timestamp (epoch seconds). */
+    seek,
+    /** Request the available time range for scrubbing. */
+    getTimeRange,
+  }
 }
 
 /**

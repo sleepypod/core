@@ -16,7 +16,7 @@ interface TempPoint {
   rightF: number | null
 }
 
-function celsiusToF(c: number | undefined): number | null {
+function celsiusToF(c: number | null | undefined): number | null {
   if (c === undefined || c === null || c < -200) return null
   return (c * 9) / 5 + 32
 }
