@@ -43,10 +43,38 @@ try {
 
 **Why:** Prevents connection pooling complexity and socket leaks. Trade-off: reconnection overhead for reliability.
 
-**Polling Guidance:**
-- `device.getStatus()`: Safe to poll every 5-10 seconds
-- For high-frequency reads, query `device_state` table instead
-- Hardware can handle multiple concurrent clients
+**Device Status — WebSocket First:**
+
+Device status is now streamed via WebSocket, not polled via tRPC:
+
+```mermaid
+sequenceDiagram
+    participant HW as Pod Hardware
+    participant DM as DacMonitor (2s poll)
+    participant WS as piezoStream WS :3001
+    participant UI as Browser UI
+
+    loop Every 2 seconds
+        DM->>HW: getDeviceStatus()
+        HW-->>DM: temps, power, priming, water
+        DM->>WS: broadcastFrame({ type: 'deviceStatus', ... })
+        WS->>UI: deviceStatus frame (push)
+    end
+
+    Note over UI: useDeviceStatus() hook
+    Note over UI: WS primary, tRPC HTTP fallback for initial load
+    Note over UI: Polling disabled once WS frames arrive
+```
+
+The `useDeviceStatus()` hook (`src/hooks/useDeviceStatus.ts`) provides this:
+- **Primary**: `deviceStatus` frames via `useSensorFrame('deviceStatus')` (~2s push)
+- **Fallback**: `trpc.device.getStatus.useQuery` (HTTP, for initial load or WS disconnect)
+- Consumers: `TempScreen`, `PowerButton`, `SideSelector`
+
+The `device.getStatus` tRPC endpoint still exists for:
+- Initial page load (before WS connects)
+- Non-browser clients (iOS app, CLI tools)
+- Fallback when WS is unavailable
 
 ### 3. Error Handling
 
@@ -256,25 +284,50 @@ const results = await db
 
 ## Frontend Usage
 
-tRPC auto-generates React Query hooks:
+### Device status (WebSocket)
+
+```typescript
+import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
+
+// WS push (~2s) with HTTP fallback — replaces trpc.device.getStatus.useQuery
+const { status, isLoading, refetch, isStreaming } = useDeviceStatus()
+const leftTemp = status?.leftSide.currentTemperature
+```
+
+### Sensor data (WebSocket)
+
+```typescript
+import { useSensorStream, useSensorFrame } from '@/src/hooks/useSensorStream'
+
+// Subscribe to specific sensor types
+const { status, latestFrames } = useSensorStream({ sensors: ['capSense', 'bedTemp'] })
+
+// Or get a single sensor's latest frame
+const presence = useSensorFrame('capSense')
+```
+
+### Queries and mutations (tRPC HTTP)
 
 ```typescript
 import { trpc } from '@/src/utils/trpc'
 
-// Queries (automatic caching, refetching)
-const status = trpc.device.getStatus.useQuery()
-const vitals = trpc.biometrics.getVitals.useQuery({
-  side: 'left',
-  limit: 100
-})
+// Historical data, settings, schedules — still HTTP
+const vitals = trpc.biometrics.getVitals.useQuery({ side: 'left', limit: 100 })
 
-// Mutations
+// Mutations — always HTTP (need success/error confirmation)
 const setTemp = trpc.device.setTemperature.useMutation()
-await setTemp.mutateAsync({
-  side: 'left',
-  temperature: 72
-})
+await setTemp.mutateAsync({ side: 'left', temperature: 72 })
 ```
+
+### When to use which
+
+| Data type | Transport | Hook |
+|-----------|-----------|------|
+| Device status (temp, power, alarm) | WebSocket push | `useDeviceStatus()` |
+| Sensor data (piezo, bed temp) | WebSocket push | `useSensorStream()` / `useSensorFrame()` |
+| Mutations (set temp, power, alarm) | tRPC HTTP | `trpc.device.*.useMutation()` |
+| Historical data (vitals, sleep) | tRPC HTTP | `trpc.biometrics.*.useQuery()` |
+| Settings, schedules | tRPC HTTP | `trpc.settings/schedules.*.useQuery()` |
 
 ## Testing Considerations
 
