@@ -14,7 +14,6 @@ import { EnvironmentCard } from './EnvironmentCard'
 import { TempTrendChart } from './TempTrendChart'
 import { CalibrationCard } from './CalibrationCard'
 import { DataFlowDag } from './DataFlowDag'
-import { RawFrameDrawer } from './RawFrameDrawer'
 
 /**
  * Main Sensors screen composition.
@@ -118,12 +117,7 @@ export function SensorsScreen() {
             <CalibrationCard />
           </SensorCard>
 
-          {/* Raw Frame Inspector (opens as bottom sheet) */}
-          <SensorCard>
-            <RawFrameDrawer />
-          </SensorCard>
-
-          {/* Firmware Log Console */}
+          {/* Console: Firmware Logs + Raw Frames (tabbed) */}
           <SensorCard>
             <FirmwareLogConsole />
           </SensorCard>
