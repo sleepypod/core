@@ -168,88 +168,76 @@ export function FreezerHealthCard() {
           <span className="text-xs text-zinc-600">Waiting for freezer data...</span>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-2">
-          {/* Water temperatures (live or stored fallback) */}
-          {freezerTempData && (
-            <>
-              <MetricItem
-                icon={<Snowflake size={16} className="text-sky-400" />}
-                label="Left Water"
-                value={freezerTempData.leftWater}
-                subLabel="Water temp"
-              />
-              <MetricItem
-                icon={<Snowflake size={16} className="text-teal-400" />}
-                label="Right Water"
-                value={freezerTempData.rightWater}
-                subLabel="Water temp"
-              />
-              <MetricItem
-                icon={<Gauge size={16} className="text-zinc-400" />}
-                label="Ambient"
-                value={freezerTempData.ambient}
-              />
-              <MetricItem
-                icon={<Gauge size={16} className="text-orange-400" />}
-                label="Heatsink"
-                value={freezerTempData.heatsink}
-              />
-            </>
-          )}
+        <div className="space-y-2">
+          {/* Paired left/right metrics */}
+          <div className="grid grid-cols-[auto_1fr_1fr] gap-x-2 gap-y-1.5 items-center">
+            {/* Column headers */}
+            <div />
+            <div className="text-center text-[9px] font-semibold text-sky-400">Left</div>
+            <div className="text-center text-[9px] font-semibold text-teal-400">Right</div>
 
-          {/* Freezer health metrics (live only) */}
-          {frzHealth && (
-            <>
-              <MetricItem
-                icon={<Gauge size={16} className="text-purple-400" />}
-                label="TEC Left"
-                value={`${frzHealth.left.tecCurrent.toFixed(2)} A`}
-                status={frzHealth.left.tecCurrent > 5 ? 'warn' : 'ok'}
-              />
-              <MetricItem
-                icon={<Gauge size={16} className="text-purple-400" />}
-                label="TEC Right"
-                value={`${frzHealth.right.tecCurrent.toFixed(2)} A`}
-                status={frzHealth.right.tecCurrent > 5 ? 'warn' : 'ok'}
-              />
-              <MetricItem
-                icon={<Droplets size={16} className="text-blue-400" />}
-                label="Pump Left"
-                value={`${frzHealth.left.pumpRpm} RPM`}
-                status={frzHealth.left.pumpRpm > 0 ? 'ok' : 'warn'}
-              />
-              <MetricItem
-                icon={<Droplets size={16} className="text-blue-400" />}
-                label="Pump Right"
-                value={`${frzHealth.right.pumpRpm} RPM`}
-                status={frzHealth.right.pumpRpm > 0 ? 'ok' : 'warn'}
-              />
+            {/* Water temps */}
+            {freezerTempData && (
+              <>
+                <RowLabel icon={<Snowflake size={12} />} label="Water" color="text-blue-400" />
+                <MetricCell value={freezerTempData.leftWater} />
+                <MetricCell value={freezerTempData.rightWater} />
+              </>
+            )}
+
+            {/* TEC current */}
+            {frzHealth && (
+              <>
+                <RowLabel icon={<Gauge size={12} />} label="TEC" color="text-purple-400" />
+                <MetricCell value={`${frzHealth.left.tecCurrent.toFixed(2)} A`} warn={frzHealth.left.tecCurrent > 5} />
+                <MetricCell value={`${frzHealth.right.tecCurrent.toFixed(2)} A`} warn={frzHealth.right.tecCurrent > 5} />
+              </>
+            )}
+
+            {/* Pump RPM */}
+            {frzHealth && (
+              <>
+                <RowLabel icon={<Droplets size={12} />} label="Pump" color="text-blue-400" />
+                <MetricCell value={`${frzHealth.left.pumpRpm} RPM`} warn={frzHealth.left.pumpRpm === 0} />
+                <MetricCell value={`${frzHealth.right.pumpRpm} RPM`} warn={frzHealth.right.pumpRpm === 0} />
+              </>
+            )}
+
+            {/* Thermal control signal */}
+            {frzTherm && (
+              <>
+                <RowLabel icon={<Gauge size={12} />} label="Therm" color="text-zinc-400" />
+                <MetricCell value={typeof frzTherm.left === 'number' ? frzTherm.left.toFixed(1) : '--'} />
+                <MetricCell value={typeof frzTherm.right === 'number' ? frzTherm.right.toFixed(1) : '--'} />
+              </>
+            )}
+          </div>
+
+          {/* System-wide metrics (not per-side) */}
+          <div className="grid grid-cols-3 gap-1.5">
+            {frzHealth && (
               <MetricItem
                 icon={<Fan size={16} className="text-cyan-400" />}
                 label="Fan"
                 value={`${frzHealth.fan.rpm} RPM`}
                 status={frzHealth.fan.rpm < 100 ? 'warn' : 'ok'}
               />
-            </>
-          )}
-
-          {/* Thermal control status (live only) */}
-          {frzTherm && (
-            <>
-              <MetricItem
-                icon={<Gauge size={16} className="text-sky-400" />}
-                label="Therm Left"
-                value={typeof frzTherm.left === 'number' ? frzTherm.left.toFixed(1) : '--'}
-                subLabel="Control signal"
-              />
-              <MetricItem
-                icon={<Gauge size={16} className="text-teal-400" />}
-                label="Therm Right"
-                value={typeof frzTherm.right === 'number' ? frzTherm.right.toFixed(1) : '--'}
-                subLabel="Control signal"
-              />
-            </>
-          )}
+            )}
+            {freezerTempData && (
+              <>
+                <MetricItem
+                  icon={<Gauge size={16} className="text-orange-400" />}
+                  label="Heatsink"
+                  value={freezerTempData.heatsink}
+                />
+                <MetricItem
+                  icon={<Gauge size={16} className="text-zinc-400" />}
+                  label="Ambient"
+                  value={freezerTempData.ambient}
+                />
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -383,10 +371,30 @@ function WaterLevelSection({ waterLevel, trend, history, alerts, onDismissAlert,
   )
 }
 
+function RowLabel({ icon, label, color }: { icon: React.ReactNode; label: string; color: string }) {
+  return (
+    <div className={`flex items-center gap-1 ${color}`}>
+      {icon}
+      <span className="text-[9px] font-medium">{label}</span>
+    </div>
+  )
+}
+
+function MetricCell({ value, warn }: { value: string; warn?: boolean }) {
+  return (
+    <div className={`rounded-md bg-zinc-800/50 px-2 py-1.5 text-center text-[11px] font-medium tabular-nums ${
+      warn ? 'text-amber-400' : 'text-zinc-200'
+    }`}>
+      {value}
+    </div>
+  )
+}
+
 /**
- * Canvas sparkline showing water level over time.
- * OK = green bar at top, Low = amber bar at bottom.
- * Each reading gets a thin vertical bar at its time position.
+ * Water level timeline strip — 24h horizontal bar of readings.
+ * Each reading is a colored segment at its time position:
+ *   Green = OK, Amber = Low.
+ * Fills the full height so it's visible even when 100% OK.
  */
 function WaterSparkline({ data }: { data: Array<{ timestamp: Date | string; level: string }> }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -415,7 +423,6 @@ function WaterSparkline({ data }: { data: Array<{ timestamp: Date | string; leve
     ctx.roundRect(0, 0, W, H, 4)
     ctx.fill()
 
-    // Time range
     const toMs = (ts: Date | string) => new Date(ts).getTime()
     const sorted = [...data].sort((a, b) => toMs(a.timestamp) - toMs(b.timestamp))
 
@@ -423,49 +430,50 @@ function WaterSparkline({ data }: { data: Array<{ timestamp: Date | string; leve
     const tMax = toMs(sorted[sorted.length - 1].timestamp)
     const tRange = tMax - tMin || 1
 
-    // Draw bars
-    const barW = Math.max(1, W / sorted.length * 0.8)
-    for (const reading of sorted) {
-      const t = toMs(reading.timestamp)
-      const x = ((t - tMin) / tRange) * (W - barW)
-      const isOk = reading.level === 'ok'
+    // Draw segments between consecutive readings
+    for (let i = 0; i < sorted.length; i++) {
+      const t = toMs(sorted[i].timestamp)
+      const tNext = i < sorted.length - 1 ? toMs(sorted[i + 1].timestamp) : tMax
+      const x = ((t - tMin) / tRange) * W
+      const xEnd = ((tNext - tMin) / tRange) * W
+      const segW = Math.max(1, xEnd - x)
+      const isOk = sorted[i].level === 'ok'
 
-      ctx.fillStyle = isOk ? 'rgba(52, 211, 153, 0.6)' : 'rgba(251, 191, 36, 0.7)'
-      // OK bars fill top half, Low bars fill bottom half
-      if (isOk) {
-        ctx.fillRect(x, 1, barW, H / 2 - 1)
-      } else {
-        ctx.fillRect(x, H / 2, barW, H / 2 - 1)
-      }
+      ctx.fillStyle = isOk ? 'rgba(52, 211, 153, 0.5)' : 'rgba(251, 191, 36, 0.7)'
+      ctx.fillRect(x, 0, segW, H)
     }
 
-    // Center line
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+    // Hour markers
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)'
     ctx.lineWidth = 0.5
-    ctx.beginPath()
-    ctx.moveTo(0, H / 2)
-    ctx.lineTo(W, H / 2)
-    ctx.stroke()
-
-    // Time labels
-    ctx.fillStyle = 'rgba(255,255,255,0.15)'
     ctx.font = '7px monospace'
-    const startLabel = new Date(tMin).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    const endLabel = new Date(tMax).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    ctx.fillText(startLabel, 2, H - 1)
-    ctx.textAlign = 'right'
-    ctx.fillText(endLabel, W - 2, H - 1)
+    ctx.textAlign = 'center'
+
+    const startHour = new Date(tMin)
+    startHour.setMinutes(0, 0, 0)
+    startHour.setHours(startHour.getHours() + 1)
+    for (let t = startHour.getTime(); t < tMax; t += 3600_000) {
+      const x = ((t - tMin) / tRange) * W
+      ctx.beginPath()
+      ctx.moveTo(x, 0)
+      ctx.lineTo(x, H)
+      ctx.stroke()
+      const label = new Date(t).toLocaleTimeString([], { hour: 'numeric' })
+      ctx.fillStyle = 'rgba(255,255,255,0.2)'
+      ctx.fillText(label, x, H - 2)
+    }
   }, [data])
 
   return (
     <div className="space-y-0.5">
-      <canvas ref={canvasRef} className="w-full rounded" style={{ height: 28 }} />
+      <canvas ref={canvasRef} className="w-full rounded" style={{ height: 20 }} />
       <div className="flex justify-between text-[7px] text-zinc-600">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-1.5 w-1.5 rounded-sm bg-emerald-400/60" /> OK
+          <span className="inline-block h-1.5 w-3 rounded-sm bg-emerald-400/50" /> OK
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-1.5 w-1.5 rounded-sm bg-amber-400/70" /> Low
+          <span className="inline-block h-1.5 w-3 rounded-sm bg-amber-400/70" /> Low
         </span>
       </div>
     </div>
