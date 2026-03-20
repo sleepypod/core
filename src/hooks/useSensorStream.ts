@@ -370,6 +370,95 @@ function scheduleReconnect() {
   }, delay)
 }
 
+// ---------------------------------------------------------------------------
+// Frame normalization (browser-side)
+// Firmware sends nested structures; we flatten to consistent schemas.
+// Server sends raw frames so iOS (which expects nested) is unaffected.
+// ---------------------------------------------------------------------------
+
+const NO_SENSOR = -327.68
+
+function isSentinel(v: unknown): boolean {
+  return v === null || v === undefined || v === NO_SENSOR ||
+    (typeof v === 'number' && Math.abs(v - NO_SENSOR) < 0.01)
+}
+
+function safeNum(v: unknown): number | null {
+  if (isSentinel(v)) return null
+  return typeof v === 'number' ? v : null
+}
+
+function cdToC(v: unknown): number | null {
+  if (v === null || v === undefined || typeof v !== 'number') return null
+  return v / 100
+}
+
+function normalizeFrame(rec: Record<string, unknown>): Record<string, unknown> {
+  switch (rec.type) {
+    case 'bedTemp':
+    case 'bedTemp2': {
+      const left = (rec.left ?? {}) as Record<string, unknown>
+      const right = (rec.right ?? {}) as Record<string, unknown>
+      const leftTemps = (left.temps ?? []) as number[]
+      const rightTemps = (right.temps ?? []) as number[]
+      return {
+        type: rec.type, ts: rec.ts,
+        ambientTemp: safeNum(left.amb) ?? safeNum(right.amb),
+        mcuTemp: safeNum(rec.mcu),
+        humidity: safeNum(left.hu) ?? safeNum(right.hu),
+        leftOuterTemp: safeNum(leftTemps[0]),
+        leftCenterTemp: safeNum(leftTemps[1]),
+        leftInnerTemp: safeNum(leftTemps[2]),
+        rightOuterTemp: safeNum(rightTemps[0]),
+        rightCenterTemp: safeNum(rightTemps[1]),
+        rightInnerTemp: safeNum(rightTemps[2]),
+      }
+    }
+    case 'frzTemp':
+      return {
+        type: 'frzTemp', ts: rec.ts,
+        left: cdToC(rec.left), right: cdToC(rec.right),
+        amb: cdToC(rec.amb), hs: cdToC(rec.hs),
+      }
+    case 'frzHealth': {
+      const left = (rec.left ?? {}) as Record<string, unknown>
+      const right = (rec.right ?? {}) as Record<string, unknown>
+      const fan = (rec.fan ?? {}) as Record<string, unknown>
+      return {
+        type: 'frzHealth', ts: rec.ts,
+        left: {
+          pumpRpm: safeNum(left.pumpRpm ?? left.pump_rpm ?? left.rpm) ?? 0,
+          pumpDuty: safeNum(left.pumpDuty ?? left.pump_duty ?? left.duty) ?? 0,
+          tecCurrent: safeNum(left.tecI ?? left.tec ?? left.tecCurrent) ?? 0,
+        },
+        right: {
+          pumpRpm: safeNum(right.pumpRpm ?? right.pump_rpm ?? right.rpm) ?? 0,
+          pumpDuty: safeNum(right.pumpDuty ?? right.pump_duty ?? right.duty) ?? 0,
+          tecCurrent: safeNum(right.tecI ?? right.tec ?? right.tecCurrent) ?? 0,
+        },
+        fan: {
+          rpm: safeNum(fan.rpm ?? fan.fanRpm) ?? 0,
+          duty: safeNum(fan.duty ?? fan.fanDuty) ?? 0,
+        },
+      }
+    }
+    case 'capSense2': {
+      const left = (rec.left ?? {}) as Record<string, unknown>
+      const right = (rec.right ?? {}) as Record<string, unknown>
+      const leftVals = (left.values ?? left) as number[] | unknown
+      const rightVals = (right.values ?? right) as number[] | unknown
+      return {
+        type: rec.type, ts: rec.ts,
+        left: Array.isArray(leftVals) ? leftVals : (typeof rec.left === 'number' ? [rec.left] : []),
+        right: Array.isArray(rightVals) ? rightVals : (typeof rec.right === 'number' ? [rec.right] : []),
+        status: rec.status ?? left.status ?? right.status,
+      }
+    }
+    default:
+      return rec
+  }
+}
+
 function handleMessage(event: MessageEvent) {
   try {
     const msg: ServerMessage = JSON.parse(event.data)
@@ -404,8 +493,9 @@ function handleMessage(event: MessageEvent) {
       return
     }
 
-    // Sensor frame — update latest + notify callbacks
-    const frame = msg as SensorFrame
+    // Sensor frame — normalize nested firmware structures to flat schemas, then update
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const frame = normalizeFrame(msg as any) as unknown as SensorFrame
     trackFrame()
     const newLatest = { ...state.latestFrames, [frame.type]: frame }
     setState({ latestFrames: newLatest, lastFrameTime: Date.now() })

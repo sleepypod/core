@@ -416,8 +416,9 @@ function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
         })
       }
       else {
-        // Normalize nested firmware structures to flat schemas
-        frames.push(normalizeFrame(rec))
+        // Pass through as-is — iOS expects the raw nested firmware format.
+        // Browser normalizes in useSensorStream handleMessage.
+        frames.push(rec)
       }
     })
   }
