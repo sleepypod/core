@@ -1,8 +1,9 @@
 'use client'
 
-import { useMemo } from 'react'
-import { useSensorFrame } from '@/src/hooks/useSensorStream'
-import type { BedTempFrame, BedTemp2Frame } from '@/src/hooks/useSensorStream'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { Brain, PersonStanding, Footprints } from 'lucide-react'
+import { useSensorFrame, useOnSensorFrame } from '@/src/hooks/useSensorStream'
+import type { BedTempFrame, BedTemp2Frame, CapSense2Frame, SensorFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 
 /**
@@ -46,43 +47,69 @@ function formatTempF(value: number | null | undefined): string {
   return `${value.toFixed(1)}°`
 }
 
-function formatTempC(value: unknown): string {
-  if (value === undefined || value === null || typeof value !== 'number') return '--'
-  return `${value.toFixed(1)}°C`
+function formatTimestamp(ts: number | undefined): string {
+  if (!ts) return '--'
+  const date = new Date(ts * 1000)
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-interface TempCellProps {
-  label: string
-  value: unknown
-  zone: string
+// --- Cap sense variance tracking ---
+
+const VARIANCE_WINDOW = 20
+const ACTIVITY_THRESHOLD = 0.15 // glow threshold matching iOS
+
+function computeStddev(values: number[]): number {
+  if (values.length < 2) return 0
+  const mean = values.reduce((a, b) => a + b, 0) / values.length
+  const sq = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length
+  return Math.sqrt(sq)
 }
 
-function TempCell({ label, value, zone }: TempCellProps) {
-  const tempC = typeof value === 'number' ? value : undefined
-  const colorClass = tempToColor(tempC)
-
-  return (
-    <div className={`flex flex-col items-center justify-center rounded-lg p-1.5 sm:p-2 ${colorClass}`}>
-      <span className="text-[8px] font-medium uppercase tracking-wider opacity-70 sm:text-[9px]">
-        {zone}
-      </span>
-      <span className="text-[13px] font-bold tabular-nums sm:text-sm">
-        {formatTemp(value)}
-      </span>
-      <span className="text-[8px] opacity-50 sm:text-[9px]">{label}</span>
-    </div>
-  )
+interface CapVariance {
+  // per-channel stddev, indices 0-5 (channels 6,7 are REF, excluded)
+  left: number[]
+  right: number[]
 }
 
-/** Pre-formatted temp cell that accepts already-computed display and color values. */
-function TempCellFormatted({ display, colorClass, label, zone }: {
+// Zone 0=Head (ch 0,1), Zone 1=Torso (ch 2,3), Zone 2=Legs (ch 4,5)
+function zoneVariance(channelVariances: number[], zone: number): number {
+  return Math.max(channelVariances[zone * 2] ?? 0, channelVariances[zone * 2 + 1] ?? 0)
+}
+
+// --- Cell components ---
+
+const ZONE_LABELS = ['Head', 'Torso', 'Legs'] as const
+const ZONE_ICONS = [
+  <Brain key="head" size={9} />,
+  <PersonStanding key="torso" size={9} />,
+  <Footprints key="legs" size={9} />,
+]
+
+interface TempCellFormattedProps {
   display: string
   colorClass: string
   label: string
   zone: string
-}) {
+  capRaw?: number | null
+  capVariance?: number
+}
+
+/** Pre-formatted temp cell — shows temp (bold), cap raw (dim), variance (tiny). */
+function TempCellFormatted({ display, colorClass, label, zone, capRaw, capVariance }: TempCellFormattedProps) {
+  const hasActivity = typeof capVariance === 'number' && capVariance > ACTIVITY_THRESHOLD
   return (
-    <div className={`flex flex-col items-center justify-center rounded-lg p-1.5 sm:p-2 ${colorClass}`}>
+    <div
+      className={[
+        'relative flex flex-col items-center justify-center rounded-lg p-1.5 sm:p-2 overflow-hidden',
+        colorClass,
+        hasActivity ? 'ring-1 ring-sky-400/30' : '',
+      ].join(' ')}
+    >
+      {/* Activity glow overlay */}
+      {hasActivity && (
+        <div className="pointer-events-none absolute inset-0 rounded-lg bg-sky-400/5" />
+      )}
+
       <span className="text-[8px] font-medium uppercase tracking-wider opacity-70 sm:text-[9px]">
         {zone}
       </span>
@@ -90,21 +117,43 @@ function TempCellFormatted({ display, colorClass, label, zone }: {
         {display}
       </span>
       <span className="text-[8px] opacity-50 sm:text-[9px]">{label}</span>
+
+      {/* Cap raw + variance — only shown when live data present */}
+      {capRaw != null && (
+        <span className="mt-0.5 text-[7px] tabular-nums text-zinc-400/60">
+          {capRaw.toFixed(1)}
+        </span>
+      )}
+      {typeof capVariance === 'number' && (
+        <span className={[
+          'text-[6px] tabular-nums',
+          hasActivity ? 'text-sky-400/70' : 'text-zinc-600',
+        ].join(' ')}>
+          ±{capVariance.toFixed(2)}
+        </span>
+      )}
     </div>
   )
 }
 
-function formatTimestamp(ts: number | undefined): string {
-  if (!ts) return '--'
-  const date = new Date(ts * 1000)
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+/** Center zone label with icon, displayed between left and right columns. */
+function ZoneLabel({ zone }: { zone: number }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-0.5">
+      <span className="text-zinc-600">{ZONE_ICONS[zone]}</span>
+      <span className="text-[7px] font-semibold uppercase tracking-wider text-zinc-600">
+        {ZONE_LABELS[zone]}
+      </span>
+    </div>
+  )
 }
 
 /**
  * Bed temperature matrix display.
- * Shows a 3x2 grid of temperature readings matching the iOS BedMatrixView:
- * - Outer, Center, Inner zones for Left and Right sides.
- * Plus ambient temperature and humidity.
+ * Shows a 3×2 grid of temperature readings matching the iOS BedMatrixView:
+ * Head / Torso / Legs zones for Left and Right sides.
+ * Each cell shows: temp (°F, bold), cap sensor raw value (small dim), variance (tiny).
+ * An activity glow appears when zone variance > 0.15.
  *
  * Combines live WebSocket frames with tRPC fallback from
  * environment.getLatestBedTemp for initial data before WS connects.
@@ -112,6 +161,7 @@ function formatTimestamp(ts: number | undefined): string {
 export function BedTempMatrix() {
   const bedTemp = useSensorFrame('bedTemp')
   const bedTemp2 = useSensorFrame('bedTemp2')
+  const capSense2 = useSensorFrame('capSense2') as CapSense2Frame | undefined
 
   // Prefer bedTemp2 (newer pods)
   const liveFrame: BedTempFrame | BedTemp2Frame | undefined = bedTemp2 ?? bedTemp
@@ -127,6 +177,31 @@ export function BedTempMatrix() {
     },
   )
 
+  // Variance tracking — rolling window of last 20 capSense2 frames
+  const leftHistoryRef = useRef<number[][]>([])
+  const rightHistoryRef = useRef<number[][]>([])
+  const [capVariance, setCapVariance] = useState<CapVariance>({ left: [], right: [] })
+
+  useOnSensorFrame(useCallback((f: SensorFrame) => {
+    if (f.type !== 'capSense2') return
+
+    const leftChannels: number[] = Array.isArray(f.left) ? (f.left as number[]) : []
+    const rightChannels: number[] = Array.isArray(f.right) ? (f.right as number[]) : []
+
+    leftHistoryRef.current = [...leftHistoryRef.current, leftChannels].slice(-VARIANCE_WINDOW)
+    rightHistoryRef.current = [...rightHistoryRef.current, rightChannels].slice(-VARIANCE_WINDOW)
+
+    // Compute stddev for channels 0-5 (skip REF 6,7)
+    const leftVar: number[] = []
+    const rightVar: number[] = []
+    for (let ch = 0; ch < 6; ch++) {
+      leftVar.push(computeStddev(leftHistoryRef.current.map(h => h[ch] ?? 0)))
+      rightVar.push(computeStddev(rightHistoryRef.current.map(h => h[ch] ?? 0)))
+    }
+
+    setCapVariance({ left: leftVar, right: rightVar })
+  }, []))
+
   // Build a unified data source: live WS frame takes priority, tRPC as fallback
   const data = useMemo(() => {
     if (liveFrame) {
@@ -136,13 +211,13 @@ export function BedTempMatrix() {
         ambientTemp: formatTemp(liveFrame.ambientTemp),
         mcuTemp: formatTemp(liveFrame.mcuTemp),
         humidity: typeof liveFrame.humidity === 'number' ? `${liveFrame.humidity.toFixed(0)}%` : undefined,
-        // For live data, TempCell uses raw Celsius values for color mapping
-        leftOuter: { value: liveFrame.leftOuterTemp, display: formatTemp(liveFrame.leftOuterTemp), colorClass: tempToColor(liveFrame.leftOuterTemp) },
-        leftCenter: { value: liveFrame.leftCenterTemp, display: formatTemp(liveFrame.leftCenterTemp), colorClass: tempToColor(liveFrame.leftCenterTemp) },
-        leftInner: { value: liveFrame.leftInnerTemp, display: formatTemp(liveFrame.leftInnerTemp), colorClass: tempToColor(liveFrame.leftInnerTemp) },
-        rightOuter: { value: liveFrame.rightOuterTemp, display: formatTemp(liveFrame.rightOuterTemp), colorClass: tempToColor(liveFrame.rightOuterTemp) },
-        rightCenter: { value: liveFrame.rightCenterTemp, display: formatTemp(liveFrame.rightCenterTemp), colorClass: tempToColor(liveFrame.rightCenterTemp) },
-        rightInner: { value: liveFrame.rightInnerTemp, display: formatTemp(liveFrame.rightInnerTemp), colorClass: tempToColor(liveFrame.rightInnerTemp) },
+        // Zones: Outer→Head, Center→Torso, Inner→Legs
+        leftHead:  { display: formatTemp(liveFrame.leftOuterTemp),  colorClass: tempToColor(liveFrame.leftOuterTemp) },
+        leftTorso: { display: formatTemp(liveFrame.leftCenterTemp), colorClass: tempToColor(liveFrame.leftCenterTemp) },
+        leftLegs:  { display: formatTemp(liveFrame.leftInnerTemp),  colorClass: tempToColor(liveFrame.leftInnerTemp) },
+        rightHead:  { display: formatTemp(liveFrame.rightOuterTemp),  colorClass: tempToColor(liveFrame.rightOuterTemp) },
+        rightTorso: { display: formatTemp(liveFrame.rightCenterTemp), colorClass: tempToColor(liveFrame.rightCenterTemp) },
+        rightLegs:  { display: formatTemp(liveFrame.rightInnerTemp),  colorClass: tempToColor(liveFrame.rightInnerTemp) },
       }
     }
 
@@ -155,14 +230,30 @@ export function BedTempMatrix() {
       ambientTemp: formatTempF(stored.ambientTemp),
       mcuTemp: formatTempF(stored.mcuTemp),
       humidity: stored.humidity != null ? `${Math.round(stored.humidity)}%` : undefined,
-      leftOuter: { value: stored.leftOuterTemp, display: formatTempF(stored.leftOuterTemp), colorClass: tempToColorF(stored.leftOuterTemp) },
-      leftCenter: { value: stored.leftCenterTemp, display: formatTempF(stored.leftCenterTemp), colorClass: tempToColorF(stored.leftCenterTemp) },
-      leftInner: { value: stored.leftInnerTemp, display: formatTempF(stored.leftInnerTemp), colorClass: tempToColorF(stored.leftInnerTemp) },
-      rightOuter: { value: stored.rightOuterTemp, display: formatTempF(stored.rightOuterTemp), colorClass: tempToColorF(stored.rightOuterTemp) },
-      rightCenter: { value: stored.rightCenterTemp, display: formatTempF(stored.rightCenterTemp), colorClass: tempToColorF(stored.rightCenterTemp) },
-      rightInner: { value: stored.rightInnerTemp, display: formatTempF(stored.rightInnerTemp), colorClass: tempToColorF(stored.rightInnerTemp) },
+      leftHead:  { display: formatTempF(stored.leftOuterTemp),  colorClass: tempToColorF(stored.leftOuterTemp) },
+      leftTorso: { display: formatTempF(stored.leftCenterTemp), colorClass: tempToColorF(stored.leftCenterTemp) },
+      leftLegs:  { display: formatTempF(stored.leftInnerTemp),  colorClass: tempToColorF(stored.leftInnerTemp) },
+      rightHead:  { display: formatTempF(stored.rightOuterTemp),  colorClass: tempToColorF(stored.rightOuterTemp) },
+      rightTorso: { display: formatTempF(stored.rightCenterTemp), colorClass: tempToColorF(stored.rightCenterTemp) },
+      rightLegs:  { display: formatTempF(stored.rightInnerTemp),  colorClass: tempToColorF(stored.rightInnerTemp) },
     }
   }, [liveFrame, latestBedTemp.data])
+
+  // Per-zone cap data (raw value = average of the two zone channels from latest frame)
+  const capData = useMemo(() => {
+    if (!capSense2) return null
+    const l = capSense2.left
+    const r = capSense2.right
+    return {
+      // raw: mean of the two channels for the zone
+      leftHeadRaw:  l[0] != null && l[1] != null ? (l[0] + l[1]) / 2 : null,
+      leftTorsoRaw: l[2] != null && l[3] != null ? (l[2] + l[3]) / 2 : null,
+      leftLegsRaw:  l[4] != null && l[5] != null ? (l[4] + l[5]) / 2 : null,
+      rightHeadRaw:  r[0] != null && r[1] != null ? (r[0] + r[1]) / 2 : null,
+      rightTorsoRaw: r[2] != null && r[3] != null ? (r[2] + r[3]) / 2 : null,
+      rightLegsRaw:  r[4] != null && r[5] != null ? (r[4] + r[5]) / 2 : null,
+    }
+  }, [capSense2])
 
   return (
     <div className="space-y-2">
@@ -213,26 +304,92 @@ export function BedTempMatrix() {
             )}
           </div>
 
-          {/* Temperature matrix: Left | Right columns, Outer/Center/Inner rows */}
-          <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
-            {/* Left column header */}
+          {/* Temperature matrix: Left | Zone label | Right columns, Head/Torso/Legs rows */}
+          <div className="grid grid-cols-[1fr_auto_1fr] gap-x-1.5 gap-y-1.5 sm:gap-x-2 sm:gap-y-2">
+            {/* Column headers */}
             <div className="text-center text-[10px] font-semibold text-sky-400">Left</div>
+            <div /> {/* spacer for zone label column */}
             <div className="text-center text-[10px] font-semibold text-teal-400">Right</div>
 
-            {/* Outer zone */}
-            <TempCellFormatted display={data.leftOuter.display} colorClass={data.leftOuter.colorClass} label="Left" zone="Outer" />
-            <TempCellFormatted display={data.rightOuter.display} colorClass={data.rightOuter.colorClass} label="Right" zone="Outer" />
+            {/* Head zone */}
+            <TempCellFormatted
+              display={data.leftHead.display}
+              colorClass={data.leftHead.colorClass}
+              label="Left"
+              zone="Head"
+              capRaw={capData?.leftHeadRaw}
+              capVariance={capVariance.left.length > 0 ? zoneVariance(capVariance.left, 0) : undefined}
+            />
+            <ZoneLabel zone={0} />
+            <TempCellFormatted
+              display={data.rightHead.display}
+              colorClass={data.rightHead.colorClass}
+              label="Right"
+              zone="Head"
+              capRaw={capData?.rightHeadRaw}
+              capVariance={capVariance.right.length > 0 ? zoneVariance(capVariance.right, 0) : undefined}
+            />
 
-            {/* Center zone */}
-            <TempCellFormatted display={data.leftCenter.display} colorClass={data.leftCenter.colorClass} label="Left" zone="Center" />
-            <TempCellFormatted display={data.rightCenter.display} colorClass={data.rightCenter.colorClass} label="Right" zone="Center" />
+            {/* Torso zone */}
+            <TempCellFormatted
+              display={data.leftTorso.display}
+              colorClass={data.leftTorso.colorClass}
+              label="Left"
+              zone="Torso"
+              capRaw={capData?.leftTorsoRaw}
+              capVariance={capVariance.left.length > 0 ? zoneVariance(capVariance.left, 1) : undefined}
+            />
+            <ZoneLabel zone={1} />
+            <TempCellFormatted
+              display={data.rightTorso.display}
+              colorClass={data.rightTorso.colorClass}
+              label="Right"
+              zone="Torso"
+              capRaw={capData?.rightTorsoRaw}
+              capVariance={capVariance.right.length > 0 ? zoneVariance(capVariance.right, 1) : undefined}
+            />
 
-            {/* Inner zone */}
-            <TempCellFormatted display={data.leftInner.display} colorClass={data.leftInner.colorClass} label="Left" zone="Inner" />
-            <TempCellFormatted display={data.rightInner.display} colorClass={data.rightInner.colorClass} label="Right" zone="Inner" />
+            {/* Legs zone */}
+            <TempCellFormatted
+              display={data.leftLegs.display}
+              colorClass={data.leftLegs.colorClass}
+              label="Left"
+              zone="Legs"
+              capRaw={capData?.leftLegsRaw}
+              capVariance={capVariance.left.length > 0 ? zoneVariance(capVariance.left, 2) : undefined}
+            />
+            <ZoneLabel zone={2} />
+            <TempCellFormatted
+              display={data.rightLegs.display}
+              colorClass={data.rightLegs.colorClass}
+              label="Right"
+              zone="Legs"
+              capRaw={capData?.rightLegsRaw}
+              capVariance={capVariance.right.length > 0 ? zoneVariance(capVariance.right, 2) : undefined}
+            />
+          </div>
+
+          {/* Legend */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1">
+            <LegendItem label="Zone temp" example="78.2°" />
+            <LegendItem label="Cap raw" example="1.05" dim />
+            <LegendItem label="Variance" example="±0.32" dim />
+            <div className="flex items-center gap-1">
+              <div className="h-2 w-2 rounded-sm ring-1 ring-sky-400/30 bg-sky-400/5" />
+              <span className="text-[7px] text-zinc-600">= presence detected</span>
+            </div>
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function LegendItem({ label, example, dim }: { label: string; example: string; dim?: boolean }) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className={`font-mono ${dim ? 'text-[7px] text-zinc-500/60' : 'text-[8px] font-bold text-zinc-300'}`}>{example}</span>
+      <span className="text-[7px] text-zinc-600">= {label}</span>
     </div>
   )
 }

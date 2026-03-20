@@ -8,10 +8,13 @@ import { PresenceCard } from './PresenceCard'
 import { BedTempMatrix } from './BedTempMatrix'
 import { FreezerHealthCard } from './FreezerHealthCard'
 import { PiezoWaveform } from './PiezoWaveform'
+import { EventTimeline } from './EventTimeline'
 import { FirmwareLogConsole } from './FirmwareLogConsole'
 import { EnvironmentCard } from './EnvironmentCard'
 import { TempTrendChart } from './TempTrendChart'
 import { CalibrationCard } from './CalibrationCard'
+import { DataFlowDag } from './DataFlowDag'
+import { RawFrameDrawer } from './RawFrameDrawer'
 
 /**
  * Main Sensors screen composition.
@@ -108,6 +111,21 @@ export function SensorsScreen() {
           {/* Sensor Calibration & Quality Monitoring */}
           <SensorCard>
             <CalibrationCard />
+          </SensorCard>
+
+          {/* Event Bus Timeline */}
+          <SensorCard>
+            <EventTimeline />
+          </SensorCard>
+
+          {/* Data Flow DAG — live pipeline visualization */}
+          <SensorCard>
+            <DataFlowDag />
+          </SensorCard>
+
+          {/* Raw Frame Inspector */}
+          <SensorCard>
+            <RawFrameDrawer />
           </SensorCard>
 
           {/* Firmware Log Console */}
