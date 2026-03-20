@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import type { FrzTempFrame, FrzHealthFrame, FrzThermFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
@@ -127,10 +128,21 @@ export function FreezerHealthCard() {
         }
       : null
 
+  // Water level history for sparkline (last 24h)
+  const waterLevelHistory = trpc.waterLevel.getHistory.useQuery(
+    {
+      startDate: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      endDate: new Date(),
+      limit: 1440,
+    },
+    { refetchInterval: 60_000, staleTime: 30_000 },
+  )
+
   // Water level from tRPC (not available via WebSocket frzHealth directly)
   const waterLevel = waterLevelLatest.data
   const trend = waterLevelTrend.data
   const alerts = waterLevelAlerts.data
+  const history = waterLevelHistory.data as Array<{ timestamp: Date | string; level: string }> | undefined
 
   return (
     <div className="space-y-2">
@@ -245,6 +257,7 @@ export function FreezerHealthCard() {
       <WaterLevelSection
         waterLevel={waterLevel}
         trend={trend}
+        history={history}
         alerts={alerts}
         onDismissAlert={(id) => dismissAlert.mutate({ id })}
         isDismissing={dismissAlert.isPending}
@@ -265,12 +278,13 @@ interface WaterLevelSectionProps {
     lowPercent: number
     trend: 'stable' | 'declining' | 'rising' | 'unknown'
   } | undefined
+  history: Array<{ timestamp: Date | string; level: string }> | undefined
   alerts: Array<{ id: number; level: string; createdAt: Date; dismissedAt: Date | null }> | undefined
   onDismissAlert: (id: number) => void
   isDismissing: boolean
 }
 
-function WaterLevelSection({ waterLevel, trend, alerts, onDismissAlert, isDismissing }: WaterLevelSectionProps) {
+function WaterLevelSection({ waterLevel, trend, history, alerts, onDismissAlert, isDismissing }: WaterLevelSectionProps) {
   const hasWaterData = waterLevel || trend
 
   if (!hasWaterData) return null
@@ -331,24 +345,9 @@ function WaterLevelSection({ waterLevel, trend, alerts, onDismissAlert, isDismis
         )}
       </div>
 
-      {/* Water level trend bar */}
-      {trend && trend.totalReadings > 0 && (
-        <div className="space-y-1">
-          <div className="flex h-2 overflow-hidden rounded-full bg-zinc-800">
-            <div
-              className="rounded-l-full bg-emerald-500/60 transition-all"
-              style={{ width: `${trend.okPercent}%` }}
-            />
-            <div
-              className="rounded-r-full bg-amber-500/60 transition-all"
-              style={{ width: `${trend.lowPercent}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-[7px] text-zinc-600">
-            <span>OK {trend.okPercent}%</span>
-            <span>Low {trend.lowPercent}%</span>
-          </div>
-        </div>
+      {/* Water level sparkline (24h) */}
+      {history && history.length > 1 && (
+        <WaterSparkline data={history} />
       )}
 
       {/* Active alerts */}
@@ -380,6 +379,95 @@ function WaterLevelSection({ waterLevel, trend, alerts, onDismissAlert, isDismis
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Canvas sparkline showing water level over time.
+ * OK = green bar at top, Low = amber bar at bottom.
+ * Each reading gets a thin vertical bar at its time position.
+ */
+function WaterSparkline({ data }: { data: Array<{ timestamp: Date | string; level: string }> }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || data.length < 2) return
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const dpr = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * dpr
+    canvas.height = rect.height * dpr
+    ctx.scale(dpr, dpr)
+
+    const W = rect.width
+    const H = rect.height
+
+    ctx.clearRect(0, 0, W, H)
+
+    // Background
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'
+    ctx.beginPath()
+    ctx.roundRect(0, 0, W, H, 4)
+    ctx.fill()
+
+    // Time range
+    const toMs = (ts: Date | string) => new Date(ts).getTime()
+    const sorted = [...data].sort((a, b) => toMs(a.timestamp) - toMs(b.timestamp))
+
+    const tMin = toMs(sorted[0].timestamp)
+    const tMax = toMs(sorted[sorted.length - 1].timestamp)
+    const tRange = tMax - tMin || 1
+
+    // Draw bars
+    const barW = Math.max(1, W / sorted.length * 0.8)
+    for (const reading of sorted) {
+      const t = toMs(reading.timestamp)
+      const x = ((t - tMin) / tRange) * (W - barW)
+      const isOk = reading.level === 'ok'
+
+      ctx.fillStyle = isOk ? 'rgba(52, 211, 153, 0.6)' : 'rgba(251, 191, 36, 0.7)'
+      // OK bars fill top half, Low bars fill bottom half
+      if (isOk) {
+        ctx.fillRect(x, 1, barW, H / 2 - 1)
+      } else {
+        ctx.fillRect(x, H / 2, barW, H / 2 - 1)
+      }
+    }
+
+    // Center line
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+    ctx.lineWidth = 0.5
+    ctx.beginPath()
+    ctx.moveTo(0, H / 2)
+    ctx.lineTo(W, H / 2)
+    ctx.stroke()
+
+    // Time labels
+    ctx.fillStyle = 'rgba(255,255,255,0.15)'
+    ctx.font = '7px monospace'
+    const startLabel = new Date(tMin).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    const endLabel = new Date(tMax).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    ctx.fillText(startLabel, 2, H - 1)
+    ctx.textAlign = 'right'
+    ctx.fillText(endLabel, W - 2, H - 1)
+  }, [data])
+
+  return (
+    <div className="space-y-0.5">
+      <canvas ref={canvasRef} className="w-full rounded" style={{ height: 28 }} />
+      <div className="flex justify-between text-[7px] text-zinc-600">
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-1.5 w-1.5 rounded-sm bg-emerald-400/60" /> OK
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-1.5 w-1.5 rounded-sm bg-amber-400/70" /> Low
+        </span>
+      </div>
     </div>
   )
 }
