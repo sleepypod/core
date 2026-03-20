@@ -39,21 +39,27 @@ export const PowerButton = () => {
     return side?.targetLevel !== 0
   })()
 
-  const handleToggle = useCallback(() => {
+  const handleToggle = useCallback(async () => {
     if (setPower.isPending) return
 
     const newPowered = !isPowered
 
-    // Fire mutations for all active sides (1 side normally, 2 when linked)
-    for (const side of activeSides) {
-      setPower.mutate({
-        side,
-        powered: newPowered,
-        // When powering on, default to 75°F (matches iOS/hardware default)
-        ...(newPowered && { temperature: 75 }),
-      })
+    // Fire mutations for all active sides atomically (both must succeed/fail together)
+    try {
+      await Promise.all(
+        activeSides.map(side =>
+          setPower.mutateAsync({
+            side,
+            powered: newPowered,
+            ...(newPowered && { temperature: 75 }),
+          })
+        )
+      )
+    } catch {
+      // Refetch to show actual state after partial failure
+      utils.device.getStatus.invalidate()
     }
-  }, [isPowered, activeSides, setPower])
+  }, [isPowered, activeSides, setPower, utils])
 
   return (
     <button

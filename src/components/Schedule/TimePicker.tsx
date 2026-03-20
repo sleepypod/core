@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useMemo } from 'react'
-import { minutesToTimeStr, timeStringToMinutes } from '@/src/lib/sleepCurve'
+import { minutesToTimeStr, timeStringToMinutes } from '@/src/lib/sleepCurve/generate'
 
 interface TimePickerProps {
   /** Label shown above the picker */

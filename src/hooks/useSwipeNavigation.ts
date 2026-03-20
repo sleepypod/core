@@ -74,6 +74,10 @@ export function useSwipeNavigation() {
     if (elapsed > 500) return
     if (Math.abs(deltaX) < SWIPE_THRESHOLD) return
 
+    // Don't intercept swipes that started inside horizontally scrollable elements
+    const target = e.target as HTMLElement
+    if (target.closest('[data-no-swipe], [style*="overflow-x"], .overflow-x-auto, .overflow-x-scroll')) return
+
     const basePath = getBasePath()
     const currentIndex = SCREEN_ORDER.findIndex(
       p => basePath === p || (p !== '/' && basePath.startsWith(p))

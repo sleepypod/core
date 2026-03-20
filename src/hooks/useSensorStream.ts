@@ -155,21 +155,59 @@ export interface SensorStreamState {
 
 // ---------------------------------------------------------------------------
 // External store (shared across hook consumers)
+// Wrapped in globalThis to survive HMR module re-evaluation during development.
 // ---------------------------------------------------------------------------
 
-let state: SensorStreamState = {
-  status: 'disconnected',
-  latestFrames: {},
-  lastError: null,
-  subscribedSensors: null,
-  fps: 0,
-  lastFrameTime: null,
+interface SensorStreamSingleton {
+  state: SensorStreamState
+  fpsTimestamps: number[]
+  fpsUpdateTimer: ReturnType<typeof setInterval> | null
+  listeners: Set<() => void>
+  sensorListeners: Map<SensorType, Set<() => void>>
+  frameCallbacks: Set<FrameCallback>
+  ws: WebSocket | null
+  heartbeatInterval: ReturnType<typeof setInterval> | null
+  reconnectTimeout: ReturnType<typeof setTimeout> | null
+  reconnectAttempt: number
+  intentionalClose: boolean
+  activeRefCount: number
+  pendingSubscription: SensorType[] | null
 }
 
-// FPS tracking
-const fpsTimestamps: number[] = []
+const SINGLETON_KEY = '__sleepypod_sensorStream' as const
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const g = globalThis as any
+if (!g[SINGLETON_KEY]) {
+  g[SINGLETON_KEY] = {
+    state: {
+      status: 'disconnected',
+      latestFrames: {},
+      lastError: null,
+      subscribedSensors: null,
+      fps: 0,
+      lastFrameTime: null,
+    },
+    fpsTimestamps: [],
+    fpsUpdateTimer: null,
+    listeners: new Set<() => void>(),
+    sensorListeners: new Map<SensorType, Set<() => void>>(),
+    frameCallbacks: new Set<FrameCallback>(),
+    ws: null,
+    heartbeatInterval: null,
+    reconnectTimeout: null,
+    reconnectAttempt: 0,
+    intentionalClose: false,
+    activeRefCount: 0,
+    pendingSubscription: null,
+  } satisfies SensorStreamSingleton
+}
+const singleton: SensorStreamSingleton = g[SINGLETON_KEY]
+
+// Convenience aliases
+let state = singleton.state
+const fpsTimestamps = singleton.fpsTimestamps
 const FPS_WINDOW_MS = 2_000
-let fpsUpdateTimer: ReturnType<typeof setInterval> | null = null
 
 function trackFrame() {
   const now = Date.now()
@@ -193,7 +231,7 @@ function computeFps(): number {
 
 function startFpsTimer() {
   stopFpsTimer()
-  fpsUpdateTimer = setInterval(() => {
+  singleton.fpsUpdateTimer = setInterval(() => {
     const newFps = computeFps()
     if (newFps !== state.fps) {
       setState({ fps: newFps })
@@ -202,16 +240,16 @@ function startFpsTimer() {
 }
 
 function stopFpsTimer() {
-  if (fpsUpdateTimer) {
-    clearInterval(fpsUpdateTimer)
-    fpsUpdateTimer = null
+  if (singleton.fpsUpdateTimer) {
+    clearInterval(singleton.fpsUpdateTimer)
+    singleton.fpsUpdateTimer = null
   }
   fpsTimestamps.length = 0
 }
 
-const listeners = new Set<() => void>()
+const listeners = singleton.listeners
 /** Per-sensor-type listeners for high-frequency selective re-renders. */
-const sensorListeners = new Map<SensorType, Set<() => void>>()
+const sensorListeners = singleton.sensorListeners
 
 function getSnapshot(): SensorStreamState {
   return state
@@ -223,6 +261,7 @@ function getServerSnapshot(): SensorStreamState {
 
 function setState(partial: Partial<SensorStreamState>) {
   state = { ...state, ...partial }
+  singleton.state = state
   for (const listener of listeners) listener()
 }
 
@@ -236,7 +275,7 @@ function subscribe(listener: () => void): () => void {
 // ---------------------------------------------------------------------------
 
 type FrameCallback = (frame: SensorFrame) => void
-const frameCallbacks = new Set<FrameCallback>()
+const frameCallbacks = singleton.frameCallbacks
 
 // ---------------------------------------------------------------------------
 // WebSocket connection manager (singleton)
@@ -247,14 +286,6 @@ const HEARTBEAT_INTERVAL_MS = 15_000 // send heartbeat every 15s (server timeout
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 30_000
 
-let ws: WebSocket | null = null
-let heartbeatInterval: ReturnType<typeof setInterval> | null = null
-let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
-let reconnectAttempt = 0
-let intentionalClose = false
-let activeRefCount = 0
-let pendingSubscription: SensorType[] | null = null
-
 function getWsUrl(): string {
   if (typeof window === 'undefined') return ''
   const port = Number(process.env.NEXT_PUBLIC_PIEZO_WS_PORT ?? DEFAULT_WS_PORT)
@@ -264,27 +295,27 @@ function getWsUrl(): string {
 
 function startHeartbeat() {
   stopHeartbeat()
-  heartbeatInterval = setInterval(() => {
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'heartbeat' }))
+  singleton.heartbeatInterval = setInterval(() => {
+    if (singleton.ws?.readyState === WebSocket.OPEN) {
+      singleton.ws.send(JSON.stringify({ type: 'heartbeat' }))
     }
   }, HEARTBEAT_INTERVAL_MS)
 }
 
 function stopHeartbeat() {
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval)
-    heartbeatInterval = null
+  if (singleton.heartbeatInterval) {
+    clearInterval(singleton.heartbeatInterval)
+    singleton.heartbeatInterval = null
   }
 }
 
 function scheduleReconnect() {
-  if (intentionalClose || activeRefCount <= 0) return
-  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt), RECONNECT_MAX_MS)
-  reconnectAttempt++
+  if (singleton.intentionalClose || singleton.activeRefCount <= 0) return
+  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, singleton.reconnectAttempt), RECONNECT_MAX_MS)
+  singleton.reconnectAttempt++
   setState({ status: 'reconnecting' })
-  reconnectTimeout = setTimeout(() => {
-    reconnectTimeout = null
+  singleton.reconnectTimeout = setTimeout(() => {
+    singleton.reconnectTimeout = null
     connect()
   }, delay)
 }
@@ -330,72 +361,72 @@ function handleMessage(event: MessageEvent) {
 
 function connect() {
   if (typeof window === 'undefined') return
-  if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return
+  if (singleton.ws?.readyState === WebSocket.OPEN || singleton.ws?.readyState === WebSocket.CONNECTING) return
 
   const url = getWsUrl()
   if (!url) return
 
   setState({ status: 'connecting' })
-  intentionalClose = false
+  singleton.intentionalClose = false
 
   try {
-    ws = new WebSocket(url)
+    singleton.ws = new WebSocket(url)
   } catch {
     setState({ status: 'disconnected', lastError: 'Failed to create WebSocket' })
     scheduleReconnect()
     return
   }
 
-  ws.onopen = () => {
-    reconnectAttempt = 0
+  singleton.ws.onopen = () => {
+    singleton.reconnectAttempt = 0
     setState({ status: 'connected', lastError: null })
     startHeartbeat()
     startFpsTimer()
 
     // Send subscription if one was requested before connection
-    if (pendingSubscription && ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'subscribe', sensors: pendingSubscription }))
+    if (singleton.pendingSubscription && singleton.ws?.readyState === WebSocket.OPEN) {
+      singleton.ws.send(JSON.stringify({ type: 'subscribe', sensors: singleton.pendingSubscription }))
     }
   }
 
-  ws.onmessage = handleMessage
+  singleton.ws.onmessage = handleMessage
 
-  ws.onclose = () => {
+  singleton.ws.onclose = () => {
     stopHeartbeat()
-    ws = null
-    if (!intentionalClose) {
+    singleton.ws = null
+    if (!singleton.intentionalClose) {
       scheduleReconnect()
     } else {
       setState({ status: 'disconnected' })
     }
   }
 
-  ws.onerror = () => {
+  singleton.ws.onerror = () => {
     // onclose will fire after onerror — reconnect handled there
     setState({ lastError: 'WebSocket connection error' })
   }
 }
 
 function disconnect() {
-  intentionalClose = true
+  singleton.intentionalClose = true
   stopHeartbeat()
   stopFpsTimer()
-  if (reconnectTimeout) {
-    clearTimeout(reconnectTimeout)
-    reconnectTimeout = null
+  if (singleton.reconnectTimeout) {
+    clearTimeout(singleton.reconnectTimeout)
+    singleton.reconnectTimeout = null
   }
-  reconnectAttempt = 0
-  if (ws) {
-    ws.close()
-    ws = null
+  singleton.reconnectAttempt = 0
+  if (singleton.ws) {
+    singleton.ws.close()
+    singleton.ws = null
   }
   setState({ status: 'disconnected', latestFrames: {}, subscribedSensors: null, fps: 0, lastFrameTime: null })
 }
 
 function sendSubscribe(sensors: SensorType[] | null) {
-  pendingSubscription = sensors
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
+  singleton.pendingSubscription = sensors
+  if (singleton.ws?.readyState === WebSocket.OPEN) {
+    singleton.ws.send(JSON.stringify({
       type: 'subscribe',
       sensors: sensors ?? [],
     }))
@@ -437,15 +468,15 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   useEffect(() => {
     if (!enabled) return
 
-    activeRefCount++
-    if (activeRefCount === 1) {
+    singleton.activeRefCount++
+    if (singleton.activeRefCount === 1) {
       connect()
     }
 
     return () => {
-      activeRefCount--
-      if (activeRefCount <= 0) {
-        activeRefCount = 0
+      singleton.activeRefCount--
+      if (singleton.activeRefCount <= 0) {
+        singleton.activeRefCount = 0
         disconnect()
       }
     }

@@ -9,10 +9,10 @@ import { trpc } from '@/src/utils/trpc'
 import { WeekNavigator } from '@/src/components/WeekNavigator/WeekNavigator'
 
 // Sub-components from prior ACs
-import { SleepStagesCard } from '@/src/components/SleepStages'
+import { SleepStagesCard } from '@/src/components/SleepStages/SleepStagesCard'
 import { VitalsPanel } from '@/src/components/VitalsPanel/VitalsPanel'
 import { MovementChart } from '@/src/components/MovementChart/MovementChart'
-import { EnvironmentPanel } from '@/src/components/Environment'
+import { EnvironmentPanel } from '@/src/components/Environment/EnvironmentPanel'
 
 // Biometrics composition components
 import { SleepSummaryCard } from '@/src/components/biometrics/SleepSummaryCard'

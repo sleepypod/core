@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -26,6 +26,7 @@ function formatTime(timestamp: string | Date): string {
 }
 
 export function HumidityChart({ data }: HumidityChartProps) {
+  const gradientId = useId()
   const chartData = useMemo(() => {
     const sorted = [...data].reverse()
     const mapped = sorted.map(d => ({
@@ -54,7 +55,7 @@ export function HumidityChart({ data }: HumidityChartProps) {
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
           <defs>
-            <linearGradient id="humidityGradient" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#4a90d9" stopOpacity={0.3} />
               <stop offset="95%" stopColor="#4a90d9" stopOpacity={0.02} />
             </linearGradient>
@@ -91,7 +92,7 @@ export function HumidityChart({ data }: HumidityChartProps) {
             dataKey="humidity"
             stroke="#4a90d9"
             strokeWidth={1.5}
-            fill="url(#humidityGradient)"
+            fill={`url(#${gradientId})`}
             dot={false}
             activeDot={{ r: 3, fill: '#4a90d9' }}
             connectNulls

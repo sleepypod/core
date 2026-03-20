@@ -8,7 +8,7 @@ import {
   curveToScheduleTemperatures,
   timeStringToMinutes,
   minutesToTimeStr,
-} from '@/src/lib/sleepCurve'
+} from '@/src/lib/sleepCurve/generate'
 import type { CoolingIntensity, CurvePoint } from '@/src/lib/sleepCurve/types'
 import { CurveChart } from './CurveChart'
 import { TimePicker } from './TimePicker'

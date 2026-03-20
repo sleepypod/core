@@ -1,10 +1,10 @@
 'use client'
 
-import type { SleepStage, SleepEpoch } from '@/src/lib/sleep-stages'
+import type { SleepStage } from '@/src/lib/sleep-stages'
 import { STAGE_COLORS, formatDurationHM } from '@/src/lib/sleep-stages'
 
 interface StageDurationLegendProps {
-  epochs: SleepEpoch[]
+  epochs: { stage: SleepStage; duration: number }[]
   totalSleepMs: number
 }
 

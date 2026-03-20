@@ -70,6 +70,14 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
     }
   }, [schedule?.vibrationIntensity, schedule?.alarmTemperature])
 
+  // Clean up debounce timers on unmount
+  useEffect(() => {
+    return () => {
+      clearTimeout(intensityCommitRef.current)
+      clearTimeout(alarmTempCommitRef.current)
+    }
+  }, [])
+
   const createMutation = trpc.schedules.createAlarmSchedule.useMutation({
     onSuccess: () => utils.schedules.getAll.invalidate(),
   })

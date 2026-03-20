@@ -646,7 +646,33 @@ export const biometricsRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(z.object({
+      epochs: z.array(z.object({
+        start: z.number(),
+        duration: z.number(),
+        stage: z.enum(['wake', 'light', 'deep', 'rem']),
+        heartRate: z.number().nullable(),
+        hrv: z.number().nullable(),
+        breathingRate: z.number().nullable(),
+        movement: z.number().nullable(),
+      })),
+      blocks: z.array(z.object({
+        start: z.number(),
+        end: z.number(),
+        stage: z.enum(['wake', 'light', 'deep', 'rem']),
+      })),
+      distribution: z.object({
+        wake: z.number(),
+        light: z.number(),
+        deep: z.number(),
+        rem: z.number(),
+      }),
+      qualityScore: z.number(),
+      totalSleepMs: z.number(),
+      sleepRecordId: z.number().nullable(),
+      enteredBedAt: z.number().nullable(),
+      leftBedAt: z.number().nullable(),
+    }))
     .query(async ({ input }): Promise<SleepStagesResult> => {
       try {
         let windowStart: Date

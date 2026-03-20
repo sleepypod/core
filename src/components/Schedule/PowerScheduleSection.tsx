@@ -51,6 +51,11 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
     if (schedule) setLocalTemp(schedule.onTemperature)
   }, [schedule?.onTemperature])
 
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => { clearTimeout(tempCommitRef.current) }
+  }, [])
+
   const createMutation = trpc.schedules.createPowerSchedule.useMutation({
     onSuccess: () => utils.schedules.getAll.invalidate(),
   })

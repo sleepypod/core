@@ -75,6 +75,18 @@ export function TemperatureDial({
   const [isDragging, setIsDragging] = useState(false)
   const lastTempRef = useRef(targetTempF)
 
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!isOn) return
+    let delta = 0
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') delta = 1
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') delta = -1
+    if (delta === 0) return
+    e.preventDefault()
+    const newTemp = Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, targetTempF + delta))
+    onTemperatureChange(newTemp)
+    onTemperatureCommit?.(newTemp)
+  }, [isOn, targetTempF, onTemperatureChange, onTemperatureCommit])
+
   const targetProgress = tempToProgress(targetTempF)
   const currentProgress = tempToProgress(currentTempF)
   const delta = targetTempF - currentTempF
@@ -194,6 +206,14 @@ export function TemperatureDial({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onKeyDown={handleKeyDown}
+        role="slider"
+        aria-label="Temperature dial"
+        aria-valuemin={TEMP.MIN_F}
+        aria-valuemax={TEMP.MAX_F}
+        aria-valuenow={targetTempF}
+        aria-valuetext={`${targetTempF}°F`}
+        tabIndex={isOn ? 0 : -1}
       >
         {/* Background track (full arc) */}
         <path

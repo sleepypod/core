@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { Globe, Lock, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
@@ -28,10 +29,18 @@ export function InternetToggleCard() {
 
   const blocked = internet?.blocked ?? true
   const isPending = toggleMutation.isPending
+  const [confirming, setConfirming] = useState(false)
 
   const handleToggle = () => {
-    toggleMutation.mutate({ blocked: !blocked }) // If currently blocked, unblock. If not blocked, block.
+    if (!confirming) {
+      setConfirming(true)
+      return
+    }
+    setConfirming(false)
+    toggleMutation.mutate({ blocked: !blocked })
   }
+
+  const handleCancel = () => setConfirming(false)
 
   return (
     <div className="rounded-2xl bg-zinc-900/80 p-3 sm:p-4">
@@ -78,6 +87,26 @@ export function InternetToggleCard() {
           )}
         </button>
       </div>
+
+      {confirming && (
+        <div className="mt-2 flex items-center gap-2">
+          <p className="flex-1 text-[10px] text-amber-400">
+            {blocked ? 'Allow internet access?' : 'Block internet access?'}
+          </p>
+          <button
+            onClick={handleToggle}
+            className="rounded-md bg-amber-600/20 px-2.5 py-1 text-[10px] font-medium text-amber-400 active:bg-amber-600/30"
+          >
+            Confirm
+          </button>
+          <button
+            onClick={handleCancel}
+            className="rounded-md px-2.5 py-1 text-[10px] font-medium text-zinc-400 active:bg-zinc-800"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {toggleMutation.isError && (
         <p className="mt-2 text-[10px] text-red-400">

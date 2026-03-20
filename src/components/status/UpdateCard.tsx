@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { CheckCircle, Download, Loader2, RefreshCw, AlertTriangle } from 'lucide-react'
 
@@ -20,6 +20,16 @@ export function UpdateCard() {
 
   const [updateState, setUpdateState] = useState<'idle' | 'confirming' | 'updating' | 'reconnecting' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelledRef = useRef(false)
+
+  // Clean up poll timer on unmount
+  useEffect(() => {
+    return () => {
+      cancelledRef.current = true
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+    }
+  }, [])
 
   const versionData = version.data
 
@@ -56,6 +66,7 @@ export function UpdateCard() {
     const maxAttempts = 60 // ~2 minutes at 2s intervals
 
     const check = async () => {
+      if (cancelledRef.current) return
       attempts++
       try {
         await version.refetch()
@@ -63,10 +74,10 @@ export function UpdateCard() {
         setUpdateState('idle')
       }
       catch {
-        if (attempts < maxAttempts) {
-          setTimeout(check, 2000)
+        if (attempts < maxAttempts && !cancelledRef.current) {
+          pollTimerRef.current = setTimeout(check, 2000)
         }
-        else {
+        else if (!cancelledRef.current) {
           setUpdateState('error')
           setErrorMessage('Service did not come back after update. Check pod manually.')
         }
@@ -74,7 +85,7 @@ export function UpdateCard() {
     }
 
     // Wait a few seconds before first poll to give the service time to stop
-    setTimeout(check, 5000)
+    pollTimerRef.current = setTimeout(check, 5000)
   }
 
   const handleCancel = () => {

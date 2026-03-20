@@ -3,7 +3,7 @@
 import type { DayOfWeek } from '@/src/components/Schedule/DaySelector'
 import { getCurrentDay } from '@/src/components/Schedule/DaySelector'
 import { trpc } from '@/src/utils/trpc'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSide } from './useSide'
 
 type Side = 'left' | 'right'
@@ -55,6 +55,14 @@ export function useSchedule() {
   const [selectedDays, setSelectedDays] = useState<Set<DayOfWeek>>(() => new Set([getCurrentDay()]))
   const [isApplying, setIsApplying] = useState(false)
   const [confirmMessage, setConfirmMessage] = useState<string | null>(null)
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Clean up confirm message timer on unmount
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+    }
+  }, [])
 
   const utils = trpc.useUtils()
 
@@ -159,7 +167,7 @@ export function useSchedule() {
     setConfirmMessage(
       `Schedule ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
     )
-    setTimeout(() => setConfirmMessage(null), 3000)
+    confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 3000)
   }, [allSchedulesQuery.data, isPowerEnabled, selectedDays, updatePowerSchedule])
 
   /**
@@ -215,7 +223,7 @@ export function useSchedule() {
     setConfirmMessage(
       `All schedules ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
     )
-    setTimeout(() => setConfirmMessage(null), 3000)
+    confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 3000)
   }, [
     allSchedulesQuery.data,
     isPowerEnabled,
@@ -316,11 +324,11 @@ export function useSchedule() {
         setConfirmMessage(
           `Schedule applied to ${targetDays.length} day${targetDays.length > 1 ? 's' : ''}. Scheduler reloaded.`
         )
-        setTimeout(() => setConfirmMessage(null), 4000)
+        confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 4000)
       } catch (error) {
         console.error('Failed to apply schedule to other days:', error)
         setConfirmMessage('Failed to apply schedule. Please try again.')
-        setTimeout(() => setConfirmMessage(null), 4000)
+        confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 4000)
       } finally {
         setIsApplying(false)
       }

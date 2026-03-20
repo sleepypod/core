@@ -1,9 +1,8 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
-import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { UserSelector } from '@/src/components/UserSelector/UserSelector'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { TemperatureDial } from '@/src/components/TemperatureDial/TemperatureDial'
@@ -24,11 +23,11 @@ import clsx from 'clsx'
  * 1. PrimingIndicator (when pod is priming water system)
  * 2. PrimeCompleteNotification (dismissible, after priming finishes)
  * 3. AlarmBanner (when vibration alarm is active, with snooze/stop)
- * 4. SideSelector (left/right buttons with temp display)
- * 5. TemperatureDial (270° circular dial with draggable thumb — matches iOS TemperatureDialView)
- * 6. Temp controls (+/- buttons, power toggle)
- * 7. EnvironmentInfoPanel (ambient temp, humidity, bed temp)
- * 8. UserSelector (at bottom for easy thumb reach)
+ * 4. TemperatureDial (270° circular dial with draggable thumb — matches iOS TemperatureDialView)
+ * 5. Temp controls (+/- buttons, power toggle)
+ * 6. EnvironmentInfoPanel (ambient temp, humidity, bed temp)
+ * 7. UserSelector (at bottom for easy thumb reach)
+ * Note: SideSelector is rendered in the global layout, not here.
  *
  * Device router wiring:
  * - device.getStatus (query, 7s poll) → current/target temp, power, alarm, priming, snooze
@@ -64,6 +63,13 @@ export const TempScreen = () => {
   // Optimistic local target temp while dragging
   const [localTarget, setLocalTarget] = useState<number | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
 
   // Get current side's status
   const currentSideStatus = primarySide === 'left' ? status?.leftSide : status?.rightSide
@@ -146,7 +152,7 @@ export const TempScreen = () => {
 
       {/* Prime completion notification — dismissible */}
       {hasPrimeNotification && !isPriming && (
-        <PrimeCompleteNotification onDismiss={refetch} />
+        <PrimeCompleteNotification onDismiss={() => refetch()} />
       )}
 
       {/* Alarm banner — active vibration with snooze/stop, or snoozed countdown */}
@@ -156,9 +162,6 @@ export const TempScreen = () => {
         snooze={snoozeStatus}
         onActionComplete={refetch}
       />
-
-      {/* Side selector with live temp display */}
-      <SideSelector />
 
       {/* Circular temperature dial — matches iOS TemperatureDialView */}
       <TemperatureDial

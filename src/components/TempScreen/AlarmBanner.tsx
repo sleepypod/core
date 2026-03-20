@@ -8,10 +8,10 @@ interface AlarmBannerProps {
   /** Which side(s) have active alarms */
   leftAlarmActive: boolean
   rightAlarmActive: boolean
-  /** Snooze status per side */
+  /** Snooze status per side (from snoozeManager.getSnoozeStatus) */
   snooze?: {
-    left?: { snoozedUntil: number; remainingSeconds: number } | null
-    right?: { snoozedUntil: number; remainingSeconds: number } | null
+    left?: { active: boolean; snoozeUntil: number | null } | null
+    right?: { active: boolean; snoozeUntil: number | null } | null
   }
   /** Called after alarm action to refresh status */
   onActionComplete?: () => void
@@ -33,8 +33,8 @@ export const AlarmBanner = ({
   const snoozeAlarmMutation = trpc.device.snoozeAlarm.useMutation()
 
   const isAnyAlarmActive = leftAlarmActive || rightAlarmActive
-  const leftSnoozed = snooze?.left != null
-  const rightSnoozed = snooze?.right != null
+  const leftSnoozed = snooze?.left?.active === true && snooze.left.snoozeUntil != null
+  const rightSnoozed = snooze?.right?.active === true && snooze.right.snoozeUntil != null
   const isAnySnoozed = leftSnoozed || rightSnoozed
 
   if (!isAnyAlarmActive && !isAnySnoozed) return null
@@ -82,8 +82,9 @@ export const AlarmBanner = ({
     }
   }
 
-  const formatSnoozeRemaining = (seconds: number): string => {
-    const mins = Math.ceil(seconds / 60)
+  const formatSnoozeRemaining = (snoozeUntilSec: number): string => {
+    const remaining = Math.max(0, snoozeUntilSec - Math.floor(Date.now() / 1000))
+    const mins = Math.ceil(remaining / 60)
     return `${mins}m`
   }
 
@@ -131,10 +132,10 @@ export const AlarmBanner = ({
           <Clock size={16} className="shrink-0 text-amber-400/60" />
           <p className="flex-1 text-sm text-amber-300/70">
             Snoozed — {snoozeSides.join(' & ')} resumes in{' '}
-            {snooze?.left
-              ? formatSnoozeRemaining(snooze.left.remainingSeconds)
-              : snooze?.right
-                ? formatSnoozeRemaining(snooze.right.remainingSeconds)
+            {snooze?.left?.snoozeUntil
+              ? formatSnoozeRemaining(snooze.left.snoozeUntil)
+              : snooze?.right?.snoozeUntil
+                ? formatSnoozeRemaining(snooze.right.snoozeUntil)
                 : ''}
           </p>
           <button

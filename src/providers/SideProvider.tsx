@@ -130,7 +130,10 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
         primarySide,
       }}
     >
-      {children}
+      {/* Suppress side-dependent UI flash during hydration */}
+      {hydrated ? children : (
+        <div style={{ visibility: 'hidden' }}>{children}</div>
+      )}
     </SideContext.Provider>
   )
 }
