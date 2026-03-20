@@ -14,6 +14,24 @@ import {
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
 
+// ---------------------------------------------------------------------------
+// Server-side temperature debounce
+// Collapses rapid setTemperature calls (e.g. dial drag) into one hardware command.
+// Each side has its own debounce timer. Last value wins.
+// ---------------------------------------------------------------------------
+
+const TEMP_DEBOUNCE_MS = 200
+
+interface PendingTemp {
+  temperature: number
+  duration?: number
+  timer: ReturnType<typeof setTimeout>
+  resolve: (value: { success: boolean }) => void
+  reject: (error: unknown) => void
+}
+
+const pendingTemps = new Map<string, PendingTemp>()
+
 /**
  * Device control router - direct hardware control for immediate operations.
  *
@@ -154,26 +172,52 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
-      return withHardwareClient(async (client) => {
-        await client.setTemperature(input.side, input.temperature, input.duration)
+      // Server-side debounce: collapse rapid dial-drag calls into one hardware command.
+      // The DB is updated optimistically on every call for responsive UI.
+      try {
+        await db
+          .update(deviceState)
+          .set({
+            targetTemperature: input.temperature,
+            isPowered: true,
+            lastUpdated: new Date(),
+          })
+          .where(eq(deviceState.side, input.side))
+      }
+      catch (dbError) {
+        console.error('Failed to sync temperature state to DB:', dbError)
+      }
 
-        // Best-effort DB sync — next getStatus() call will re-sync if this fails
-        try {
-          await db
-            .update(deviceState)
-            .set({
-              targetTemperature: input.temperature,
-              isPowered: true,
-              lastUpdated: new Date(),
-            })
-            .where(eq(deviceState.side, input.side))
-        }
-        catch (dbError) {
-          console.error('Failed to sync temperature state to DB:', dbError)
-        }
+      // Cancel any pending hardware call for this side — last value wins
+      const existing = pendingTemps.get(input.side)
+      if (existing) {
+        clearTimeout(existing.timer)
+        existing.resolve({ success: true }) // resolve the earlier promise immediately
+      }
 
-        return { success: true }
-      }, 'Failed to set temperature')
+      return new Promise<{ success: boolean }>((resolve, reject) => {
+        const timer = setTimeout(async () => {
+          pendingTemps.delete(input.side)
+          try {
+            await withHardwareClient(async (client) => {
+              await client.setTemperature(input.side, input.temperature, input.duration)
+              return { success: true }
+            }, 'Failed to set temperature')
+            resolve({ success: true })
+          }
+          catch (error) {
+            reject(error)
+          }
+        }, TEMP_DEBOUNCE_MS)
+
+        pendingTemps.set(input.side, {
+          temperature: input.temperature,
+          duration: input.duration,
+          timer,
+          resolve,
+          reject,
+        })
+      })
     }),
 
   /**

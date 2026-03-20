@@ -34,6 +34,8 @@ export declare interface DacMonitor {
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 2000
+const ACTIVE_POLL_INTERVAL_MS = 1000
+const IDLE_POLL_INTERVAL_MS = 5000
 const TAP_TYPES = ['doubleTap', 'tripleTap', 'quadTap'] as const
 
 /**
@@ -72,6 +74,26 @@ export class DacMonitor extends EventEmitter {
   getStatus = (): DacMonitorStatus => this.monitorStatus
 
   getLastStatus = (): DeviceStatus | null => this.lastStatus
+
+  /** Change the poll interval while running. Restarts the interval timer. */
+  setPollInterval = (ms: number): void => {
+    if (ms === this.config.pollIntervalMs) return
+    this.config.pollIntervalMs = ms
+    if (this.intervalHandle !== null && this.monitorStatus !== 'stopped') {
+      clearInterval(this.intervalHandle)
+      this.intervalHandle = setInterval(() => {
+        if (this.isPollInFlight) return
+        this.isPollInFlight = true
+        this.poll().finally(() => { this.isPollInFlight = false })
+      }, ms)
+    }
+  }
+
+  /** Switch to fast polling (1s) — call when clients are actively connected. */
+  setActive = (): void => this.setPollInterval(ACTIVE_POLL_INTERVAL_MS)
+
+  /** Switch to slow polling (5s) — call when no clients are connected. */
+  setIdle = (): void => this.setPollInterval(IDLE_POLL_INTERVAL_MS)
 
   start = async (): Promise<void> => {
     if (this.monitorStatus !== 'stopped') return
