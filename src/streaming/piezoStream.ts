@@ -202,6 +202,7 @@ function findLatestRaw(dir: string): string | null {
 const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
+  'deviceStatus',
 ] as const
 
 /** Valid sensor type string. Used for subscription filtering. */
@@ -500,6 +501,28 @@ export function startPiezoStreamServer(): WebSocketServer {
   }, FILE_POLL_INTERVAL_MS)
 
   return wss
+}
+
+/**
+ * Broadcast a JSON message to all connected WS clients that are subscribed
+ * to the given sensor type. Used by dacMonitor to push device status frames.
+ */
+export function broadcastFrame(frame: Record<string, unknown>): void {
+  const server = wss
+  if (!server || server.clients.size === 0) return
+
+  const frameType = frame.type as string
+  let payload: string | null = null
+
+  for (const client of server.clients) {
+    if (client.readyState !== WebSocket.OPEN) continue
+
+    const subs = clientSubscriptions.get(client)
+    if (subs && !subs.has(frameType as SensorType)) continue
+
+    if (payload === null) payload = JSON.stringify(frame)
+    client.send(payload)
+  }
 }
 
 /**

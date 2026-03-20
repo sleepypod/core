@@ -9,6 +9,7 @@ import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
 export const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
+  'deviceStatus',
 ] as const
 
 export type SensorType = typeof ALL_SENSOR_TYPES[number]
@@ -108,6 +109,33 @@ export interface LogFrame {
   msg: string
 }
 
+/** Device status frame — pushed by dacMonitor every 2s. */
+export interface DeviceStatusFrame {
+  type: 'deviceStatus'
+  ts: number
+  leftSide: {
+    currentTemperature: number
+    targetTemperature: number
+    currentLevel: number
+    targetLevel: number
+    isAlarmVibrating: boolean
+  }
+  rightSide: {
+    currentTemperature: number
+    targetTemperature: number
+    currentLevel: number
+    targetLevel: number
+    isAlarmVibrating: boolean
+  }
+  waterLevel: 'low' | 'ok'
+  isPriming: boolean
+  primeCompletedNotification?: { timestamp: number }
+  snooze: {
+    left: { active: boolean; snoozeUntil: number | null } | null
+    right: { active: boolean; snoozeUntil: number | null } | null
+  }
+}
+
 /** Union of all sensor frame types. */
 export type SensorFrame =
   | PiezoDualFrame
@@ -119,6 +147,7 @@ export type SensorFrame =
   | FrzThermFrame
   | FrzHealthFrame
   | LogFrame
+  | DeviceStatusFrame
 
 // ---------------------------------------------------------------------------
 // Server → Client control messages

@@ -19,9 +19,9 @@ import { DacMonitor } from './dacMonitor'
 import type { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
-import { DeviceStateSync } from './deviceStateSync'
-import { trackPrimingState, resetPrimingState } from './primeNotification'
-import { cancelSnooze } from './snoozeManager'
+import { DeviceStateSync, getAlarmState } from './deviceStateSync'
+import { trackPrimingState, resetPrimingState, getPrimeCompletedAt } from './primeNotification'
+import { cancelSnooze, getSnoozeStatus } from './snoozeManager'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import {
   type AlarmConfig,
@@ -211,6 +211,28 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
         stateSync.sync(status).catch(err =>
           console.error('[DacMonitor] DeviceStateSync error:', err)
         )
+
+        // Broadcast device status to WebSocket clients
+        try {
+          // Lazy-import to avoid circular dependency (piezoStream is started separately)
+          const { broadcastFrame } = require('@/src/streaming/piezoStream')
+          const primeCompletedAt = getPrimeCompletedAt()
+          const alarmState = getAlarmState()
+          broadcastFrame({
+            type: 'deviceStatus',
+            ts: Date.now(),
+            leftSide: { ...status.leftSide, isAlarmVibrating: alarmState.left },
+            rightSide: { ...status.rightSide, isAlarmVibrating: alarmState.right },
+            waterLevel: status.waterLevel,
+            isPriming: status.isPriming,
+            ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+            snooze: {
+              left: getSnoozeStatus('left'),
+              right: getSnoozeStatus('right'),
+            },
+          })
+        }
+        catch { /* WS server may not be started yet */ }
       })
 
       g[KEYS.monitor] = monitor

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
+import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
+import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { UserSelector } from '@/src/components/UserSelector/UserSelector'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { TemperatureDial } from '@/src/components/TemperatureDial/TemperatureDial'
@@ -27,7 +29,7 @@ import clsx from 'clsx'
  * 5. Temp controls (+/- buttons, power toggle)
  * 6. EnvironmentInfoPanel (ambient temp, humidity, bed temp)
  * 7. UserSelector (at bottom for easy thumb reach)
- * Note: SideSelector is rendered in the global layout, not here.
+ * SideSelector is rendered here (Temp screen only, not in the global layout).
  *
  * Device router wiring:
  * - device.getStatus (query, 7s poll) → current/target temp, power, alarm, priming, snooze
@@ -48,11 +50,8 @@ import clsx from 'clsx'
 export const TempScreen = () => {
   const { primarySide, activeSides } = useSide()
 
-  // Primary polling query — 7s interval (within 5-10s spec)
-  const { data: status, isLoading: statusLoading, refetch } = trpc.device.getStatus.useQuery(
-    {},
-    { refetchInterval: 7_000, staleTime: 3_000 },
-  )
+  // Device status via WebSocket (2s push) with HTTP fallback
+  const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
 
   const { data: settings } = trpc.settings.getAll.useQuery({})
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
@@ -143,6 +142,9 @@ export const TempScreen = () => {
 
   return (
     <div className="flex flex-col gap-3 sm:gap-4">
+      {/* Side selector — only on the Temp screen */}
+      <SideSelector />
+
       {/* Priming indicator — shown when pod water system is actively priming */}
       {isPriming && (
         <div className="flex justify-center">

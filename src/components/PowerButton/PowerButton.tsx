@@ -4,6 +4,7 @@ import { Power } from 'lucide-react'
 import { useCallback } from 'react'
 import { useSide } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
+import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import styles from './PowerButton.module.css'
 
 /**
@@ -19,11 +20,8 @@ export const PowerButton = () => {
   const { activeSides, primarySide } = useSide()
   const utils = trpc.useUtils()
 
-  // Fetch current device status to know power state
-  const { data: status } = trpc.device.getStatus.useQuery(
-    {},
-    { refetchInterval: 10_000, staleTime: 5_000 },
-  )
+  // Device status via WebSocket (2s push) with HTTP fallback
+  const { status } = useDeviceStatus()
 
   const setPower = trpc.device.setPower.useMutation({
     onSuccess: () => {

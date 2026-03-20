@@ -3,7 +3,7 @@
 import clsx from 'clsx'
 import { Link, LinkIcon, Power, TrendingDown, TrendingUp } from 'lucide-react'
 import { useSide, type Side } from '@/src/providers/SideProvider'
-import { trpc } from '@/src/utils/trpc'
+import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { determineTrend, ensureF, formatTemp, mapToEightSleepScale } from '@/src/lib/tempUtils'
 
 /**
@@ -18,10 +18,7 @@ import { determineTrend, ensureF, formatTemp, mapToEightSleepScale } from '@/src
 export const SideSelector = () => {
   const { selectedSide, isLinked, selectSide, toggleLink } = useSide()
 
-  const { data: status } = trpc.device.getStatus.useQuery(
-    {},
-    { refetchInterval: 10_000, staleTime: 5_000 },
-  )
+  const { status } = useDeviceStatus()
 
   return (
     <div className="relative my-3 w-full">
