@@ -8,7 +8,7 @@ import { PresenceCard } from './PresenceCard'
 import { BedTempMatrix } from './BedTempMatrix'
 import { FreezerHealthCard } from './FreezerHealthCard'
 import { PiezoWaveform } from './PiezoWaveform'
-import { EventTimeline } from './EventTimeline'
+import { DataPipeline } from './DataPipeline'
 import { FirmwareLogConsole } from './FirmwareLogConsole'
 import { EnvironmentCard } from './EnvironmentCard'
 import { TempTrendChart } from './TempTrendChart'
@@ -78,9 +78,14 @@ export function SensorsScreen() {
 
       {streamEnabled && (
         <>
-          {/* Sensor Matrix — Bed Temperature Grid */}
+          {/* Data Pipeline — DAG with pulsing edges + scrolling timeline */}
           <SensorCard>
-            <BedTempMatrix />
+            <DataPipeline />
+          </SensorCard>
+
+          {/* Piezo Waveform — real-time BCG signal */}
+          <SensorCard>
+            <PiezoWaveform />
           </SensorCard>
 
           {/* Bed Presence — capacitive sensing with zone activity */}
@@ -88,9 +93,9 @@ export function SensorsScreen() {
             <PresenceCard />
           </SensorCard>
 
-          {/* Piezo Waveform — real-time BCG signal */}
+          {/* Sensor Matrix — Bed Temperature Grid */}
           <SensorCard>
-            <PiezoWaveform />
+            <BedTempMatrix />
           </SensorCard>
 
           {/* Temperature Trend — line chart of bed temps over time */}
@@ -113,17 +118,7 @@ export function SensorsScreen() {
             <CalibrationCard />
           </SensorCard>
 
-          {/* Event Bus Timeline */}
-          <SensorCard>
-            <EventTimeline />
-          </SensorCard>
-
-          {/* Data Flow DAG — live pipeline visualization */}
-          <SensorCard>
-            <DataFlowDag />
-          </SensorCard>
-
-          {/* Raw Frame Inspector */}
+          {/* Raw Frame Inspector (opens as bottom sheet) */}
           <SensorCard>
             <RawFrameDrawer />
           </SensorCard>
