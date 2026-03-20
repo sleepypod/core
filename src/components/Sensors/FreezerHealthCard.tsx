@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useMemo } from 'react'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import type { FrzTempFrame, FrzHealthFrame, FrzThermFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import { Snowflake, Fan, Droplets, Gauge, AlertTriangle, CheckCircle, TrendingDown, TrendingUp, Minus, X } from 'lucide-react'
+import { Snowflake, Fan, Droplets, Gauge, AlertTriangle, CheckCircle } from 'lucide-react'
 
 function formatTimestamp(ts: number | undefined): string {
   if (!ts) return '--'
@@ -74,6 +74,13 @@ export function FreezerHealthCard() {
   )
 
   // tRPC: water level data
+  // Flowrate from live frzHealth frames (per-side, °C)
+  const leftFlowrate = frzHealth ? (frzHealth as unknown as { left: { temps?: { flowrate?: number } } }).left?.temps?.flowrate ?? null : null
+  const rightFlowrate = frzHealth ? (frzHealth as unknown as { right: { temps?: { flowrate?: number } } }).right?.temps?.flowrate ?? null : null
+
+  // Bottom fan from live frzHealth (top fan already in frzHealth.fan.rpm)
+  const bottomFanRpm = frzHealth ? (frzHealth as unknown as { fan: { bottom?: { rpm?: number } } }).fan?.bottom?.rpm ?? null : null
+
   const waterLevelLatest = trpc.waterLevel.getLatest.useQuery(
     {},
     {
@@ -82,27 +89,6 @@ export function FreezerHealthCard() {
     },
   )
 
-  const waterLevelTrend = trpc.waterLevel.getTrend.useQuery(
-    { hours: 24 },
-    {
-      refetchInterval: 60_000,
-      staleTime: 30_000,
-    },
-  )
-
-  const waterLevelAlerts = trpc.waterLevel.getAlerts.useQuery(
-    {},
-    {
-      refetchInterval: 30_000,
-      staleTime: 15_000,
-    },
-  )
-
-  const dismissAlert = trpc.waterLevel.dismissAlert.useMutation({
-    onSuccess: () => {
-      void waterLevelAlerts.refetch()
-    },
-  })
 
   const hasLiveData = frzTemp || frzHealth || frzTherm
   const hasTrpcData = latestFreezerTemp.data
@@ -128,21 +114,7 @@ export function FreezerHealthCard() {
         }
       : null
 
-  // Water level history for sparkline (last 24h)
-  const waterLevelHistory = trpc.waterLevel.getHistory.useQuery(
-    {
-      startDate: new Date(Date.now() - 24 * 60 * 60 * 1000),
-      endDate: new Date(),
-      limit: 1440,
-    },
-    { refetchInterval: 60_000, staleTime: 30_000 },
-  )
-
-  // Water level from tRPC (not available via WebSocket frzHealth directly)
   const waterLevel = waterLevelLatest.data
-  const trend = waterLevelTrend.data
-  const alerts = waterLevelAlerts.data
-  const history = waterLevelHistory.data as Array<{ timestamp: Date | string; level: string }> | undefined
 
   return (
     <div className="space-y-2">
@@ -241,130 +213,34 @@ export function FreezerHealthCard() {
         </div>
       )}
 
-      {/* Water Level Section (tRPC) */}
-      <WaterLevelSection
-        waterLevel={waterLevel}
-        trend={trend}
-        history={history}
-        alerts={alerts}
-        onDismissAlert={(id) => dismissAlert.mutate({ id })}
-        isDismissing={dismissAlert.isPending}
-      />
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Water Level sub-components
-// ---------------------------------------------------------------------------
-
-interface WaterLevelSectionProps {
-  waterLevel: { id: number; timestamp: Date; level: string } | null | undefined
-  trend: {
-    totalReadings: number
-    okPercent: number
-    lowPercent: number
-    trend: 'stable' | 'declining' | 'rising' | 'unknown'
-  } | undefined
-  history: Array<{ timestamp: Date | string; level: string }> | undefined
-  alerts: Array<{ id: number; level: string; createdAt: Date; dismissedAt: Date | null }> | undefined
-  onDismissAlert: (id: number) => void
-  isDismissing: boolean
-}
-
-function WaterLevelSection({ waterLevel, trend, history, alerts, onDismissAlert, isDismissing }: WaterLevelSectionProps) {
-  const hasWaterData = waterLevel || trend
-
-  if (!hasWaterData) return null
-
-  const isLow = waterLevel?.level === 'low'
-  const trendIcon = trend?.trend === 'declining'
-    ? <TrendingDown size={10} className="text-red-400" />
-    : trend?.trend === 'rising'
-      ? <TrendingUp size={10} className="text-emerald-400" />
-      : <Minus size={10} className="text-zinc-500" />
-
-  return (
-    <div className="space-y-2 pt-1">
-      <div className="flex items-center gap-1.5">
-        <Droplets size={10} className="text-blue-400" />
-        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-          Water Level
-        </h4>
-      </div>
-
-      {/* Current status + trend */}
-      <div className="flex items-center gap-2 rounded-lg bg-zinc-900 p-2.5">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-800">
-          {isLow ? (
-            <AlertTriangle size={16} className="text-amber-400" />
-          ) : (
-            <CheckCircle size={16} className="text-emerald-400" />
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-medium text-zinc-500">Current Level</div>
-          <div className={`text-sm font-semibold ${isLow ? 'text-amber-400' : 'text-emerald-400'}`}>
-            {waterLevel?.level === 'ok' ? 'OK' : waterLevel?.level === 'low' ? 'Low' : '--'}
+      {/* Flowrate + water status */}
+      {(leftFlowrate != null || rightFlowrate != null || waterLevel) && (
+        <div className="space-y-1.5 pt-1">
+          <div className="flex items-center gap-1.5">
+            <Droplets size={10} className="text-blue-400" />
+            <h4 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Flow</h4>
           </div>
-          {waterLevel?.timestamp && (
-            <div className="text-[9px] text-zinc-600">
-              {formatWaterTimestamp(waterLevel.timestamp)}
-            </div>
-          )}
-        </div>
-        {trend && (
-          <div className="flex flex-col items-end gap-0.5">
-            <div className="flex items-center gap-1">
-              {trendIcon}
-              <span className="text-[9px] font-medium capitalize text-zinc-400">
-                {trend.trend}
+          <div className="grid grid-cols-[auto_1fr_1fr] gap-x-2 gap-y-1.5 items-center">
+            <div />
+            <div className="text-center text-[9px] font-semibold text-sky-400">Left</div>
+            <div className="text-center text-[9px] font-semibold text-teal-400">Right</div>
+
+            <RowLabel icon={<Gauge size={12} />} label="Flow" color="text-blue-400" />
+            <MetricCell value={leftFlowrate != null ? formatTemp(leftFlowrate) : '--'} />
+            <MetricCell value={rightFlowrate != null ? formatTemp(rightFlowrate) : '--'} />
+          </div>
+          {waterLevel && (
+            <div className="flex items-center gap-2 rounded-md bg-zinc-800/50 px-2 py-1.5">
+              {waterLevel.level === 'low' ? (
+                <AlertTriangle size={12} className="text-amber-400" />
+              ) : (
+                <CheckCircle size={12} className="text-emerald-400" />
+              )}
+              <span className={`text-[10px] font-medium ${waterLevel.level === 'low' ? 'text-amber-400' : 'text-emerald-400'}`}>
+                Water {waterLevel.level === 'ok' ? 'OK' : 'Low'}
               </span>
             </div>
-            <span className="text-[8px] text-zinc-600">
-              24h: {trend.okPercent}% OK
-            </span>
-            {trend.totalReadings > 0 && (
-              <span className="text-[7px] text-zinc-700">
-                {trend.totalReadings} readings
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Water level sparkline (24h) */}
-      {history && history.length > 1 && (
-        <WaterSparkline data={history} />
-      )}
-
-      {/* Active alerts */}
-      {alerts && alerts.length > 0 && (
-        <div className="space-y-1">
-          {alerts.map((alert) => (
-            <div
-              key={alert.id}
-              className="flex items-center gap-2 rounded-lg bg-amber-900/20 px-2.5 py-1.5"
-            >
-              <AlertTriangle size={12} className="shrink-0 text-amber-400" />
-              <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-medium text-amber-300">
-                  Water level low
-                </span>
-                <span className="ml-1 text-[8px] text-zinc-500">
-                  {formatWaterTimestamp(alert.createdAt)}
-                </span>
-              </div>
-              <button
-                onClick={() => onDismissAlert(alert.id)}
-                disabled={isDismissing}
-                className="shrink-0 rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300 active:bg-zinc-700 disabled:opacity-50"
-                aria-label="Dismiss alert"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -390,97 +266,3 @@ function MetricCell({ value, warn }: { value: string; warn?: boolean }) {
   )
 }
 
-/**
- * Water level timeline strip — 24h horizontal bar of readings.
- * Each reading is a colored segment at its time position:
- *   Green = OK, Amber = Low.
- * Fills the full height so it's visible even when 100% OK.
- */
-function WaterSparkline({ data }: { data: Array<{ timestamp: Date | string; level: string }> }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas || data.length < 2) return
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const dpr = window.devicePixelRatio || 1
-    const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width * dpr
-    canvas.height = rect.height * dpr
-    ctx.scale(dpr, dpr)
-
-    const W = rect.width
-    const H = rect.height
-
-    ctx.clearRect(0, 0, W, H)
-
-    // Background
-    ctx.fillStyle = 'rgba(0,0,0,0.3)'
-    ctx.beginPath()
-    ctx.roundRect(0, 0, W, H, 4)
-    ctx.fill()
-
-    const toMs = (ts: Date | string) => new Date(ts).getTime()
-    const sorted = [...data].sort((a, b) => toMs(a.timestamp) - toMs(b.timestamp))
-
-    const tMin = toMs(sorted[0].timestamp)
-    const tMax = toMs(sorted[sorted.length - 1].timestamp)
-    const tRange = tMax - tMin || 1
-
-    // Draw segments between consecutive readings
-    for (let i = 0; i < sorted.length; i++) {
-      const t = toMs(sorted[i].timestamp)
-      const tNext = i < sorted.length - 1 ? toMs(sorted[i + 1].timestamp) : tMax
-      const x = ((t - tMin) / tRange) * W
-      const xEnd = ((tNext - tMin) / tRange) * W
-      const segW = Math.max(1, xEnd - x)
-      const isOk = sorted[i].level === 'ok'
-
-      ctx.fillStyle = isOk ? 'rgba(52, 211, 153, 0.5)' : 'rgba(251, 191, 36, 0.7)'
-      ctx.fillRect(x, 0, segW, H)
-    }
-
-    // Hour markers
-    ctx.fillStyle = 'rgba(255,255,255,0.08)'
-    ctx.strokeStyle = 'rgba(255,255,255,0.1)'
-    ctx.lineWidth = 0.5
-    ctx.font = '7px monospace'
-    ctx.textAlign = 'center'
-
-    const startHour = new Date(tMin)
-    startHour.setMinutes(0, 0, 0)
-    startHour.setHours(startHour.getHours() + 1)
-    for (let t = startHour.getTime(); t < tMax; t += 3600_000) {
-      const x = ((t - tMin) / tRange) * W
-      ctx.beginPath()
-      ctx.moveTo(x, 0)
-      ctx.lineTo(x, H)
-      ctx.stroke()
-      const label = new Date(t).toLocaleTimeString([], { hour: 'numeric' })
-      ctx.fillStyle = 'rgba(255,255,255,0.2)'
-      ctx.fillText(label, x, H - 2)
-    }
-  }, [data])
-
-  return (
-    <div className="space-y-0.5">
-      <canvas ref={canvasRef} className="w-full rounded" style={{ height: 20 }} />
-      <div className="flex justify-between text-[7px] text-zinc-600">
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-1.5 w-3 rounded-sm bg-emerald-400/50" /> OK
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-1.5 w-3 rounded-sm bg-amber-400/70" /> Low
-        </span>
-      </div>
-    </div>
-  )
-}
-
-function formatWaterTimestamp(timestamp: Date | string): string {
-  const date = timestamp instanceof Date ? timestamp : new Date(timestamp)
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
