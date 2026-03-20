@@ -304,69 +304,40 @@ export function BedTempMatrix() {
             )}
           </div>
 
-          {/* Temperature matrix: Left | Zone label | Right columns, Head/Torso/Legs rows */}
-          <div className="grid grid-cols-[1fr_auto_1fr] gap-x-1.5 gap-y-1.5 sm:gap-x-2 sm:gap-y-2">
+          {/* Sensor matrix: 2 cells per zone per side (matching iOS BedMatrixView) */}
+          {/* Grid: [L ch0] [L ch1] | Zone label | [R ch0] [R ch1] */}
+          <div className="grid grid-cols-[1fr_1fr_auto_1fr_1fr] gap-0.5">
             {/* Column headers */}
-            <div className="text-center text-[10px] font-semibold text-sky-400">Left</div>
-            <div /> {/* spacer for zone label column */}
-            <div className="text-center text-[10px] font-semibold text-teal-400">Right</div>
+            <div className="col-span-2 text-center text-[10px] font-semibold text-sky-400">Left</div>
+            <div /> {/* zone label spacer */}
+            <div className="col-span-2 text-center text-[10px] font-semibold text-teal-400">Right</div>
 
-            {/* Head zone */}
-            <TempCellFormatted
-              display={data.leftHead.display}
-              colorClass={data.leftHead.colorClass}
-              label="Left"
-              zone="Head"
-              capRaw={capData?.leftHeadRaw}
-              capVariance={capVariance.left.length > 0 ? zoneVariance(capVariance.left, 0) : undefined}
-            />
-            <ZoneLabel zone={0} />
-            <TempCellFormatted
-              display={data.rightHead.display}
-              colorClass={data.rightHead.colorClass}
-              label="Right"
-              zone="Head"
-              capRaw={capData?.rightHeadRaw}
-              capVariance={capVariance.right.length > 0 ? zoneVariance(capVariance.right, 0) : undefined}
-            />
+            {/* 3 zones: Head (ch 0,1), Torso (ch 2,3), Legs (ch 4,5) */}
+            {[0, 1, 2].map(zone => {
+              const zoneData = [data.leftHead, data.leftTorso, data.leftLegs][zone]
+              const zoneDataR = [data.rightHead, data.rightTorso, data.rightLegs][zone]
+              const ch0 = zone * 2
+              const ch1 = zone * 2 + 1
+              const leftCap = capSense2?.left
+              const rightCap = capSense2?.right
 
-            {/* Torso zone */}
-            <TempCellFormatted
-              display={data.leftTorso.display}
-              colorClass={data.leftTorso.colorClass}
-              label="Left"
-              zone="Torso"
-              capRaw={capData?.leftTorsoRaw}
-              capVariance={capVariance.left.length > 0 ? zoneVariance(capVariance.left, 1) : undefined}
-            />
-            <ZoneLabel zone={1} />
-            <TempCellFormatted
-              display={data.rightTorso.display}
-              colorClass={data.rightTorso.colorClass}
-              label="Right"
-              zone="Torso"
-              capRaw={capData?.rightTorsoRaw}
-              capVariance={capVariance.right.length > 0 ? zoneVariance(capVariance.right, 1) : undefined}
-            />
-
-            {/* Legs zone */}
-            <TempCellFormatted
-              display={data.leftLegs.display}
-              colorClass={data.leftLegs.colorClass}
-              label="Left"
-              zone="Legs"
-              capRaw={capData?.leftLegsRaw}
-              capVariance={capVariance.left.length > 0 ? zoneVariance(capVariance.left, 2) : undefined}
-            />
-            <ZoneLabel zone={2} />
-            <TempCellFormatted
-              display={data.rightLegs.display}
-              colorClass={data.rightLegs.colorClass}
-              label="Right"
-              zone="Legs"
-              capRaw={capData?.rightLegsRaw}
-              capVariance={capVariance.right.length > 0 ? zoneVariance(capVariance.right, 2) : undefined}
-            />
+              return (
+                <SensorMatrixRow
+                  key={zone}
+                  zone={zone}
+                  leftTemp={zoneData}
+                  rightTemp={zoneDataR}
+                  leftCap0={leftCap?.[ch0] ?? null}
+                  leftCap1={leftCap?.[ch1] ?? null}
+                  rightCap0={rightCap?.[ch0] ?? null}
+                  rightCap1={rightCap?.[ch1] ?? null}
+                  leftVar0={capVariance.left[ch0]}
+                  leftVar1={capVariance.left[ch1]}
+                  rightVar0={capVariance.right[ch0]}
+                  rightVar1={capVariance.right[ch1]}
+                />
+              )
+            })}
           </div>
 
           {/* Legend */}
@@ -382,6 +353,65 @@ export function BedTempMatrix() {
         </div>
       )}
     </div>
+  )
+}
+
+/** A single sensor cell — shows temp, cap raw value, and per-channel variance. */
+function SensorCell({
+  temp, capRaw, variance, colorClass,
+}: {
+  temp: string
+  capRaw: number | null
+  variance: number | undefined
+  colorClass: string
+}) {
+  const hasActivity = typeof variance === 'number' && variance > ACTIVITY_THRESHOLD
+  return (
+    <div
+      className={[
+        'relative flex flex-col items-center justify-center rounded py-1 overflow-hidden',
+        colorClass,
+        hasActivity ? 'ring-1 ring-sky-400/30' : '',
+      ].join(' ')}
+    >
+      {hasActivity && (
+        <div className="pointer-events-none absolute inset-0 rounded bg-sky-400/5" />
+      )}
+      <span className="text-[11px] font-bold tabular-nums sm:text-xs">{temp}</span>
+      {capRaw != null && (
+        <span className="text-[6px] tabular-nums text-zinc-400/60">{capRaw.toFixed(2)}</span>
+      )}
+      {typeof variance === 'number' && (
+        <span className={`text-[5px] tabular-nums ${hasActivity ? 'text-sky-400/70' : 'text-zinc-600'}`}>
+          ±{variance.toFixed(2)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** One zone row: 2 left cells + zone label + 2 right cells */
+function SensorMatrixRow({
+  zone, leftTemp, rightTemp,
+  leftCap0, leftCap1, rightCap0, rightCap1,
+  leftVar0, leftVar1, rightVar0, rightVar1,
+}: {
+  zone: number
+  leftTemp: { display: string; colorClass: string }
+  rightTemp: { display: string; colorClass: string }
+  leftCap0: number | null; leftCap1: number | null
+  rightCap0: number | null; rightCap1: number | null
+  leftVar0: number | undefined; leftVar1: number | undefined
+  rightVar0: number | undefined; rightVar1: number | undefined
+}) {
+  return (
+    <>
+      <SensorCell temp={leftTemp.display} capRaw={leftCap0} variance={leftVar0} colorClass={leftTemp.colorClass} />
+      <SensorCell temp={leftTemp.display} capRaw={leftCap1} variance={leftVar1} colorClass={leftTemp.colorClass} />
+      <ZoneLabel zone={zone} />
+      <SensorCell temp={rightTemp.display} capRaw={rightCap0} variance={rightVar0} colorClass={rightTemp.colorClass} />
+      <SensorCell temp={rightTemp.display} capRaw={rightCap1} variance={rightVar1} colorClass={rightTemp.colorClass} />
+    </>
   )
 }
 
