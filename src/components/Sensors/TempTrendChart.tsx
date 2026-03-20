@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useOnSensorFrame, type SensorFrame, type BedTempFrame, type BedTemp2Frame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { TrendingUp } from 'lucide-react'
 
 const MAX_HISTORY = 120
@@ -16,7 +17,8 @@ interface TempPoint {
   rightF: number | null
 }
 
-function celsiusToF(c: number | null | undefined): number | null {
+// Legacy helper — kept for the live frame path. Will use hook's convert() once refactored.
+function convert(c: number | null | undefined): number | null {
   if (c === undefined || c === null || c < -200) return null
   return (c * 9) / 5 + 32
 }
@@ -30,6 +32,7 @@ function celsiusToF(c: number | null | undefined): number | null {
  * Matches iOS BedSensorScreen tempTrendCard.
  */
 export function TempTrendChart() {
+  const { unit, convert } = useTemperatureUnit()
   const [history, setHistory] = useState<TempPoint[]>([])
   const seededRef = useRef(false)
 
@@ -42,7 +45,7 @@ export function TempTrendChart() {
       startDate: oneHourAgo,
       endDate: now,
       limit: MAX_HISTORY,
-      unit: 'F',
+      unit,
     },
     {
       staleTime: 60_000,
@@ -87,8 +90,8 @@ export function TempTrendChart() {
     // Average left and right center temps for trend
     const leftC = f.leftCenterTemp ?? f.leftInnerTemp
     const rightC = f.rightCenterTemp ?? f.rightInnerTemp
-    const leftF = celsiusToF(leftC)
-    const rightF = celsiusToF(rightC)
+    const leftF = convert(leftC)
+    const rightF = convert(rightC)
 
     if (leftF === null && rightF === null) return
 

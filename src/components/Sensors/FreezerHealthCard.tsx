@@ -3,19 +3,8 @@
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import type { FrzTempFrame, FrzHealthFrame, FrzThermFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { Snowflake, Fan, Droplets, Gauge, AlertTriangle, CheckCircle, TrendingDown, TrendingUp, Minus, X } from 'lucide-react'
-
-/** Format Celsius value to Fahrenheit display string. */
-function formatTemp(value: number | null | undefined): string {
-  if (value === undefined || value === null) return '--'
-  const f = (value * 9) / 5 + 32
-  return `${f.toFixed(1)}°F`
-}
-
-function formatTempF(value: number | null | undefined): string {
-  if (value === undefined || value === null) return '--'
-  return `${value.toFixed(1)}°F`
-}
 
 function formatTimestamp(ts: number | undefined): string {
   if (!ts) return '--'
@@ -67,6 +56,8 @@ function MetricItem({ icon, label, value, subLabel, status = 'ok' }: MetricItemP
  * - waterLevel.getAlerts for active water level alerts
  */
 export function FreezerHealthCard() {
+  const { unit, formatTemp, formatConverted } = useTemperatureUnit()
+
   // Live WebSocket frames
   const frzTemp = useSensorFrame('frzTemp')
   const frzHealth = useSensorFrame('frzHealth')
@@ -74,7 +65,7 @@ export function FreezerHealthCard() {
 
   // tRPC: latest freezer temp from DB (fallback when WS hasn't sent data)
   const latestFreezerTemp = trpc.environment.getLatestFreezerTemp.useQuery(
-    { unit: 'F' },
+    { unit },
     {
       refetchInterval: 30_000,
       staleTime: 15_000,
@@ -128,10 +119,10 @@ export function FreezerHealthCard() {
       }
     : hasTrpcData
       ? {
-          leftWater: formatTempF(latestFreezerTemp.data?.leftWaterTemp),
-          rightWater: formatTempF(latestFreezerTemp.data?.rightWaterTemp),
-          ambient: formatTempF(latestFreezerTemp.data?.ambientTemp),
-          heatsink: formatTempF(latestFreezerTemp.data?.heatsinkTemp),
+          leftWater: formatConverted(latestFreezerTemp.data?.leftWaterTemp),
+          rightWater: formatConverted(latestFreezerTemp.data?.rightWaterTemp),
+          ambient: formatConverted(latestFreezerTemp.data?.ambientTemp),
+          heatsink: formatConverted(latestFreezerTemp.data?.heatsinkTemp),
           source: 'stored' as const,
         }
       : null

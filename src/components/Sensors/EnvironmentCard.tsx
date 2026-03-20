@@ -4,6 +4,7 @@ import { useMemo } from 'react'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import type { BedTempFrame, BedTemp2Frame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { Cloud, Droplets, Thermometer, Sun } from 'lucide-react'
 
 /**
@@ -16,6 +17,8 @@ import { Cloud, Droplets, Thermometer, Sun } from 'lucide-react'
  * Matches iOS BedSensorScreen envCard layout.
  */
 export function EnvironmentCard() {
+  const { unit, formatTemp, formatConverted, suffix } = useTemperatureUnit()
+
   // Live WebSocket frames
   const bedTemp = useSensorFrame('bedTemp')
   const bedTemp2 = useSensorFrame('bedTemp2')
@@ -23,7 +26,7 @@ export function EnvironmentCard() {
 
   // tRPC fallback: latest bed temp reading from database
   const latestBedTemp = trpc.environment.getLatestBedTemp.useQuery(
-    { unit: 'F' },
+    { unit },
     {
       refetchInterval: 30_000, // refresh every 30s
       staleTime: 15_000,
@@ -54,8 +57,8 @@ export function EnvironmentCard() {
   // Merge live + tRPC data: live WebSocket takes priority, tRPC as fallback
   const leftHumidity = formatHumidity(liveFrame?.humidity)
     || formatHumidityFromTRPC(latestBedTemp.data?.humidity)
-  const leftAmbient = formatAmbientC(liveFrame?.ambientTemp)
-    || formatAmbientF(latestBedTemp.data?.ambientTemp)
+  const leftAmbient = (liveFrame?.ambientTemp != null ? formatTemp(liveFrame.ambientTemp) : null)
+    ?? (latestBedTemp.data?.ambientTemp != null ? formatConverted(latestBedTemp.data.ambientTemp) : '--')
 
   // Normalized frames combine left/right ambient+humidity into single values
   const rightHumidity: string | null = null
@@ -114,7 +117,7 @@ export function EnvironmentCard() {
           <div className="grid grid-cols-3 gap-1">
             <SummaryItem
               label="Avg Ambient"
-              value={summaryData.avgAmbientTemp != null ? `${summaryData.avgAmbientTemp.toFixed(1)}°F` : '--'}
+              value={summaryData.avgAmbientTemp != null ? `${summaryData.avgAmbientTemp.toFixed(1)}${suffix}` : '--'}
             />
             <SummaryItem
               label="Avg Humidity"
@@ -124,7 +127,7 @@ export function EnvironmentCard() {
               label="Ambient Range"
               value={
                 summaryData.minAmbientTemp != null && summaryData.maxAmbientTemp != null
-                  ? `${summaryData.minAmbientTemp.toFixed(0)}–${summaryData.maxAmbientTemp.toFixed(0)}°F`
+                  ? `${summaryData.minAmbientTemp.toFixed(0)}–${summaryData.maxAmbientTemp.toFixed(0)}${suffix}`
                   : '--'
               }
             />
@@ -132,11 +135,11 @@ export function EnvironmentCard() {
           <div className="grid grid-cols-2 gap-1">
             <SummaryItem
               label="Avg Bed L"
-              value={summaryData.avgLeftCenterTemp != null ? `${summaryData.avgLeftCenterTemp.toFixed(1)}°F` : '--'}
+              value={summaryData.avgLeftCenterTemp != null ? `${summaryData.avgLeftCenterTemp.toFixed(1)}${suffix}` : '--'}
             />
             <SummaryItem
               label="Avg Bed R"
-              value={summaryData.avgRightCenterTemp != null ? `${summaryData.avgRightCenterTemp.toFixed(1)}°F` : '--'}
+              value={summaryData.avgRightCenterTemp != null ? `${summaryData.avgRightCenterTemp.toFixed(1)}${suffix}` : '--'}
             />
           </div>
         </div>
@@ -197,15 +200,7 @@ function formatHumidityFromTRPC(value: unknown): string {
   return `${Math.round(value)}%`
 }
 
-function formatAmbientC(value: unknown): string {
-  if (typeof value !== 'number' || value < -100) return '--'
-  return `${Math.round(value)}°C`
-}
-
-function formatAmbientF(value: unknown): string {
-  if (typeof value !== 'number') return '--'
-  return `${value.toFixed(1)}°F`
-}
+// formatAmbientC/F removed — use useTemperatureUnit().formatTemp/formatConverted instead
 
 function formatRelativeTime(timestamp: unknown): string {
   if (!timestamp) return ''

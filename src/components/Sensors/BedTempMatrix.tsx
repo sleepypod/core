@@ -5,6 +5,7 @@ import { Brain, PersonStanding, Footprints } from 'lucide-react'
 import { useSensorFrame, useOnSensorFrame } from '@/src/hooks/useSensorStream'
 import type { BedTempFrame, BedTemp2Frame, CapSense2Frame, SensorFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 
 /**
  * Map a temperature (Celsius) to a color string.
@@ -35,17 +36,8 @@ function tempToColorF(tempF: number | null | undefined): string {
   return tempToColor(tempC)
 }
 
-function formatTemp(value: unknown): string {
-  if (value === undefined || value === null || typeof value !== 'number') return '--'
-  // Convert to Fahrenheit for display
-  const f = (value * 9) / 5 + 32
-  return `${f.toFixed(1)}°`
-}
-
-function formatTempF(value: number | null | undefined): string {
-  if (value === undefined || value === null) return '--'
-  return `${value.toFixed(1)}°`
-}
+// formatTemp and formatTempF are now provided by useTemperatureUnit hook
+// (injected into the component via closure in the useMemo)
 
 function formatTimestamp(ts: number | undefined): string {
   if (!ts) return '--'
@@ -163,12 +155,14 @@ export function BedTempMatrix() {
   const bedTemp2 = useSensorFrame('bedTemp2')
   const capSense2 = useSensorFrame('capSense2') as CapSense2Frame | undefined
 
+  const { unit, formatTemp, formatConverted } = useTemperatureUnit()
+
   // Prefer bedTemp2 (newer pods)
   const liveFrame: BedTempFrame | BedTemp2Frame | undefined = bedTemp2 ?? bedTemp
 
-  // tRPC fallback: latest bed temp from database
+  // tRPC fallback: latest bed temp from database (request in user's unit)
   const latestBedTemp = trpc.environment.getLatestBedTemp.useQuery(
-    { unit: 'F' },
+    { unit },
     {
       refetchInterval: 30_000,
       staleTime: 15_000,
@@ -205,13 +199,13 @@ export function BedTempMatrix() {
   // Build a unified data source: live WS frame takes priority, tRPC as fallback
   const data = useMemo(() => {
     if (liveFrame) {
+      // Live frames are in Celsius — formatTemp converts to user's preferred unit
       return {
         source: 'live' as const,
         timestamp: liveFrame.ts,
         ambientTemp: formatTemp(liveFrame.ambientTemp),
         mcuTemp: formatTemp(liveFrame.mcuTemp),
         humidity: typeof liveFrame.humidity === 'number' ? `${liveFrame.humidity.toFixed(0)}%` : undefined,
-        // Zones: Outer→Head, Center→Torso, Inner→Legs
         leftHead:  { display: formatTemp(liveFrame.leftOuterTemp),  colorClass: tempToColor(liveFrame.leftOuterTemp) },
         leftTorso: { display: formatTemp(liveFrame.leftCenterTemp), colorClass: tempToColor(liveFrame.leftCenterTemp) },
         leftLegs:  { display: formatTemp(liveFrame.leftInnerTemp),  colorClass: tempToColor(liveFrame.leftInnerTemp) },
@@ -224,20 +218,22 @@ export function BedTempMatrix() {
     const stored = latestBedTemp.data
     if (!stored) return null
 
+    // Stored data already converted to user's unit by the tRPC endpoint
     return {
       source: 'stored' as const,
       timestamp: stored.timestamp ? Math.floor(new Date(stored.timestamp as string).getTime() / 1000) : undefined,
-      ambientTemp: formatTempF(stored.ambientTemp),
-      mcuTemp: formatTempF(stored.mcuTemp),
+      ambientTemp: formatConverted(stored.ambientTemp),
+      mcuTemp: formatConverted(stored.mcuTemp),
       humidity: stored.humidity != null ? `${Math.round(stored.humidity)}%` : undefined,
-      leftHead:  { display: formatTempF(stored.leftOuterTemp),  colorClass: tempToColorF(stored.leftOuterTemp) },
-      leftTorso: { display: formatTempF(stored.leftCenterTemp), colorClass: tempToColorF(stored.leftCenterTemp) },
-      leftLegs:  { display: formatTempF(stored.leftInnerTemp),  colorClass: tempToColorF(stored.leftInnerTemp) },
-      rightHead:  { display: formatTempF(stored.rightOuterTemp),  colorClass: tempToColorF(stored.rightOuterTemp) },
-      rightTorso: { display: formatTempF(stored.rightCenterTemp), colorClass: tempToColorF(stored.rightCenterTemp) },
-      rightLegs:  { display: formatTempF(stored.rightInnerTemp),  colorClass: tempToColorF(stored.rightInnerTemp) },
+      leftHead:  { display: formatConverted(stored.leftOuterTemp),  colorClass: tempToColorF(stored.leftOuterTemp) },
+      leftTorso: { display: formatConverted(stored.leftCenterTemp), colorClass: tempToColorF(stored.leftCenterTemp) },
+      leftLegs:  { display: formatConverted(stored.leftInnerTemp),  colorClass: tempToColorF(stored.leftInnerTemp) },
+      rightHead:  { display: formatConverted(stored.rightOuterTemp),  colorClass: tempToColorF(stored.rightOuterTemp) },
+      rightTorso: { display: formatConverted(stored.rightCenterTemp), colorClass: tempToColorF(stored.rightCenterTemp) },
+      rightLegs:  { display: formatConverted(stored.rightInnerTemp),  colorClass: tempToColorF(stored.rightInnerTemp) },
     }
-  }, [liveFrame, latestBedTemp.data])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveFrame, latestBedTemp.data, unit])
 
   // Per-zone cap data (raw value = average of the two zone channels from latest frame)
   const capData = useMemo(() => {
