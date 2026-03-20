@@ -226,87 +226,55 @@ export function DataPipeline() {
           />
         </div>
 
-        {/* Fan-out edges — SVG with animated pulses */}
-        <svg
-          viewBox="0 0 300 24"
-          className="mx-auto w-full max-w-[300px]"
-          preserveAspectRatio="xMidYMid meet"
-        >
-          {/* Trunk from WS */}
-          <line x1="150" y1="0" x2="150" y2="8" stroke="#333" strokeWidth="1" />
-          {/* Horizontal rail */}
-          <line x1="25" y1="8" x2="275" y2="8" stroke="#333" strokeWidth="1" />
+        {/* Fan-out edges + consumer nodes — grid-aligned */}
+        <div className={`grid gap-1`} style={{ gridTemplateColumns: `repeat(${CONSUMER_NODES.length}, 1fr)` }}>
+          {/* SVG edges spanning the full grid — one column per consumer */}
+          <div className="col-span-full relative" style={{ height: 28 }}>
+            <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+              {CONSUMER_NODES.map((node, i) => {
+                const n = CONSUMER_NODES.length
+                // Center of each grid column as a fraction (0-1)
+                const cx = (i + 0.5) / n
+                const centerX = 0.5 // WS node is centered above
+                const intensity = pulseState[node.key] ?? 0
+                return (
+                  <g key={node.key}>
+                    {/* Trunk: center top → rail */}
+                    <line x1={`${centerX * 100}%`} y1="0" x2={`${centerX * 100}%`} y2="35%" stroke="#333" strokeWidth="1" />
+                    {/* Horizontal rail segment: center → this column */}
+                    <line x1={`${Math.min(centerX, cx) * 100}%`} y1="35%" x2={`${Math.max(centerX, cx) * 100}%`} y2="35%" stroke="#333" strokeWidth="1" />
+                    {/* Drop line: rail → bottom */}
+                    <line x1={`${cx * 100}%`} y1="35%" x2={`${cx * 100}%`} y2="100%" stroke="#333" strokeWidth="1" />
 
-          {/* Per-consumer drop lines with pulse overlay */}
-          {CONSUMER_NODES.map((node, i) => {
-            const x = 25 + (i * 250) / (CONSUMER_NODES.length - 1)
-            const intensity = pulseState[node.key] ?? 0
-            return (
-              <g key={node.key}>
-                {/* Base line */}
-                <line x1={x} y1="8" x2={x} y2="24" stroke="#333" strokeWidth="1" />
-                {/* Pulse overlay */}
-                {intensity > 0 && (
-                  <>
-                    {/* Horizontal segment pulse: from center to this node */}
-                    <line
-                      x1="150"
-                      y1="8"
-                      x2={x}
-                      y2="8"
-                      stroke={node.color}
-                      strokeWidth="2"
-                      strokeOpacity={intensity * 0.6}
-                    />
-                    {/* Vertical drop pulse */}
-                    <line
-                      x1={x}
-                      y1="8"
-                      x2={x}
-                      y2="24"
-                      stroke={node.color}
-                      strokeWidth="2"
-                      strokeOpacity={intensity * 0.8}
-                    />
-                    {/* Trunk pulse */}
-                    <line
-                      x1="150"
-                      y1="0"
-                      x2="150"
-                      y2="8"
-                      stroke={node.color}
-                      strokeWidth="2"
-                      strokeOpacity={intensity * 0.4}
-                    />
-                    {/* Arrival glow */}
-                    <circle
-                      cx={x}
-                      cy="24"
-                      r={3 + intensity * 3}
-                      fill={node.color}
-                      fillOpacity={intensity * 0.3}
-                    />
-                  </>
-                )}
-              </g>
-            )
-          })}
-        </svg>
+                    {/* Pulse overlays */}
+                    {intensity > 0 && (
+                      <>
+                        <line x1={`${centerX * 100}%`} y1="0" x2={`${centerX * 100}%`} y2="35%" stroke={node.color} strokeWidth="2" strokeOpacity={intensity * 0.4} />
+                        <line x1={`${Math.min(centerX, cx) * 100}%`} y1="35%" x2={`${Math.max(centerX, cx) * 100}%`} y2="35%" stroke={node.color} strokeWidth="2" strokeOpacity={intensity * 0.6} />
+                        <line x1={`${cx * 100}%`} y1="35%" x2={`${cx * 100}%`} y2="100%" stroke={node.color} strokeWidth="2" strokeOpacity={intensity * 0.8} />
+                        <circle cx={`${cx * 100}%`} cy="100%" r="4" fill={node.color} fillOpacity={intensity * 0.35} />
+                      </>
+                    )}
+                  </g>
+                )
+              })}
+            </svg>
+          </div>
 
-        {/* Consumer nodes */}
-        <div className="flex items-start justify-between px-0.5">
+          {/* Consumer nodes — one per grid column, aligned under their drop line */}
           {CONSUMER_NODES.map(node => {
             const intensity = pulseState[node.key] ?? 0
             const rate = formatRate(rates[node.key] ?? 0, windowSec)
             return (
-              <PipeNode
-                key={node.key}
-                label={node.label}
-                sub={rate}
-                color={node.color}
-                intensity={intensity}
-                small
-              />
+              <div key={node.key} className="flex justify-center">
+                <PipeNode
+                  label={node.label}
+                  sub={rate}
+                  color={node.color}
+                  intensity={intensity}
+                  small
+                />
+              </div>
             )
           })}
         </div>
