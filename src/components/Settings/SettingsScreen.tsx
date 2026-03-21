@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Settings, User, RotateCcw, Wifi } from 'lucide-react'
 import clsx from 'clsx'
 import { trpc } from '@/src/utils/trpc'
+import { useSideNames } from '@/src/hooks/useSideNames'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
 import { SideSettingsForm } from './SideSettingsForm'
 import { TapGestureConfig } from './TapGestureConfig'
@@ -16,6 +17,7 @@ import { HapticsTestCard } from './HapticsTestCard'
 export function SettingsScreen() {
   const [selectedSide, setSelectedSide] = useState<'left' | 'right'>('left')
   const { data, isLoading, error } = trpc.settings.getAll.useQuery({})
+  const { leftName, rightName } = useSideNames()
 
   const rebootMutation = trpc.system.triggerUpdate.useMutation()
 
@@ -42,9 +44,6 @@ export function SettingsScreen() {
   }
 
   if (!data) return null
-
-  const leftName = data.sides.left?.name ?? 'Left'
-  const rightName = data.sides.right?.name ?? 'Right'
 
   return (
     <div className="space-y-6">
