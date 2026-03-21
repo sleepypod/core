@@ -106,6 +106,10 @@ const SIDE_COLORS = {
 interface VitalsPanelProps {
   /** When true, fetch and overlay both sides on each chart */
   dualSide?: boolean
+  /** When true, hide the built-in week navigator + side toggle */
+  hideNav?: boolean
+  /** When true, hide the summary card (BPM/HRV/BR block) */
+  hideSummary?: boolean
 }
 
 /**
@@ -115,7 +119,7 @@ interface VitalsPanelProps {
  *
  * Supports dual-side comparison mode: overlays left and right side data on each chart.
  */
-export function VitalsPanel({ dualSide = false }: VitalsPanelProps) {
+export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = false }: VitalsPanelProps) {
   const { side, toggleSide } = useSide()
   const week = useWeekNavigator()
 
@@ -249,6 +253,7 @@ export function VitalsPanel({ dualSide = false }: VitalsPanelProps) {
   return (
     <div className="space-y-3">
       {/* Week Navigator + Side Toggle */}
+      {!hideNav && (
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
           <button
@@ -290,6 +295,7 @@ export function VitalsPanel({ dualSide = false }: VitalsPanelProps) {
           </span>
         </button>
       </div>
+      )}
 
       {/* Loading state */}
       {isLoading && (
@@ -300,7 +306,8 @@ export function VitalsPanel({ dualSide = false }: VitalsPanelProps) {
 
       {!isLoading && (
         <>
-          {/* Vitals Summary Card */}
+          {/* Vitals Summary Card — hidden when parent provides its own */}
+          {!hideSummary && (
           <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
             {/* Dual-side comparison header */}
             {dualSide && (
@@ -362,6 +369,7 @@ export function VitalsPanel({ dualSide = false }: VitalsPanelProps) {
               </div>
             )}
           </div>
+          )}
 
           {/* Heart Rate Chart Card */}
           <VitalsChartCard

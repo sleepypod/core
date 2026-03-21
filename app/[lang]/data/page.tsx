@@ -10,7 +10,6 @@ import { trpc } from '@/src/utils/trpc'
 import { SleepStagesCard } from '@/src/components/SleepStages/SleepStagesCard'
 import { VitalsPanel } from '@/src/components/VitalsPanel/VitalsPanel'
 import { MovementChart } from '@/src/components/MovementChart/MovementChart'
-import { EnvironmentPanel } from '@/src/components/Environment/EnvironmentPanel'
 import { SleepSummaryCard } from '@/src/components/biometrics/SleepSummaryCard'
 import { VitalsGrid } from '@/src/components/biometrics/VitalsGrid'
 import { RawDataButton } from '@/src/components/biometrics/RawDataButton'
@@ -20,15 +19,15 @@ const SECTIONS = [
   { id: 'sleep', label: 'Sleep' },
   { id: 'stages', label: 'Stages' },
   { id: 'vitals', label: 'Vitals' },
-  { id: 'environment', label: 'Environment' },
   { id: 'movement', label: 'Movement' },
 ] as const
 
 /**
  * Biometrics page — unified scrollable view matching iOS HealthScreen.
  *
- * Header: compact date picker (left) + L/R side toggle (right).
- * All components share side context via the global SideProvider.
+ * Layout: date picker + L/R toggle → section pills →
+ *   Sleep Summary → Stages → VitalsGrid (3-block) → Vitals charts →
+ *   Sleep Sessions → Movement → Raw Data
  */
 export default function DataPage() {
   const { selectedSide, activeSides, primarySide, selectSide } = useSide()
@@ -37,7 +36,6 @@ export default function DataPage() {
 
   const showBothSides = selectedSide === 'both'
 
-  // Tap side toggle: L → R → L (no "both" in this toggle — matches iOS)
   const handleSideToggle = useCallback(() => {
     selectSide(primarySide === 'left' ? 'right' : 'left')
   }, [primarySide, selectSide])
@@ -86,9 +84,8 @@ export default function DataPage() {
 
   return (
     <div ref={scrollContainerRef} className="space-y-4 sm:space-y-5">
-      {/* ── Compact Header: Date Picker + Side Toggle ── */}
+      {/* ── Header: Date Picker + Side Toggle ── */}
       <div className="flex items-center gap-2">
-        {/* Date picker (left) */}
         <button
           onClick={week.goToPreviousWeek}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800/80 text-zinc-400 active:bg-zinc-700"
@@ -115,7 +112,7 @@ export default function DataPage() {
           <ChevronRight size={16} />
         </button>
 
-        {/* Side toggle (right) — tap to swap L ↔ R */}
+        {/* Side toggle — tap to swap L ↔ R */}
         <button
           onClick={handleSideToggle}
           className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-zinc-800/80 px-3 active:bg-zinc-700"
@@ -149,25 +146,21 @@ export default function DataPage() {
         ))}
       </div>
 
-      {/* ── Section 1: Sleep Summary ── */}
+      {/* ── Sleep Summary ── */}
       <section id="section-sleep">
         {showBothSides ? (
           <div className="space-y-3">
             <SideLabel side="left" />
-            <SleepSummaryCard
-              records={allSleepRecords.filter(r => r.side === 'left')}
-            />
+            <SleepSummaryCard records={allSleepRecords.filter(r => r.side === 'left')} />
             <SideLabel side="right" />
-            <SleepSummaryCard
-              records={allSleepRecords.filter(r => r.side === 'right')}
-            />
+            <SleepSummaryCard records={allSleepRecords.filter(r => r.side === 'right')} />
           </div>
         ) : (
           <SleepSummaryCard records={allSleepRecords} />
         )}
       </section>
 
-      {/* ── Section 2: Sleep Stages ── */}
+      {/* ── Sleep Stages ── */}
       <section id="section-stages">
         {showBothSides ? (
           <div className="space-y-4">
@@ -181,20 +174,15 @@ export default function DataPage() {
         )}
       </section>
 
-      {/* ── Section 3: Vitals ── */}
+      {/* ── Vitals: 3-block grid + charts (no duplicate nav/summary) ── */}
       <section id="section-vitals" className="space-y-4">
         <VitalsGrid />
-        <VitalsPanel dualSide={showBothSides} />
+        <VitalsPanel dualSide={showBothSides} hideNav hideSummary />
       </section>
 
-      {/* ── Section 4: Environment ── */}
-      <section id="section-environment">
-        <EnvironmentPanel dualSide={showBothSides} />
-      </section>
-
-      {/* ── Section 5: Movement ── */}
+      {/* ── Movement (no duplicate date picker) ── */}
       <section id="section-movement">
-        <MovementChart dualSide={showBothSides} />
+        <MovementChart dualSide={showBothSides} hideNav />
       </section>
 
       {/* ── Raw Data Export ── */}
@@ -218,16 +206,8 @@ function SideLabel({ side }: { side: 'left' | 'right' }) {
   const isLeft = side === 'left'
   return (
     <div className="flex items-center gap-2">
-      <div
-        className={`h-2 w-2 rounded-full ${
-          isLeft ? 'bg-sky-400' : 'bg-teal-400'
-        }`}
-      />
-      <span
-        className={`text-xs font-semibold capitalize ${
-          isLeft ? 'text-sky-400' : 'text-teal-400'
-        }`}
-      >
+      <div className={`h-2 w-2 rounded-full ${isLeft ? 'bg-sky-400' : 'bg-teal-400'}`} />
+      <span className={`text-xs font-semibold capitalize ${isLeft ? 'text-sky-400' : 'text-teal-400'}`}>
         {side} Side
       </span>
     </div>

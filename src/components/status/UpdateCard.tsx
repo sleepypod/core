@@ -125,7 +125,7 @@ export function UpdateCard() {
       {versionData && (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <VersionTag
-            label={`v${versionData.commitHash !== 'unknown' ? versionData.commitHash.slice(0, 7) : '—'}`}
+            label={versionData.commitHash !== 'unknown' ? versionData.commitHash.slice(0, 7) : '—'}
             color="emerald"
           />
           <span className="text-xs text-zinc-600">on</span>
