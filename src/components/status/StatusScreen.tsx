@@ -1,16 +1,16 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { HealthCircle } from './HealthCircle'
 import { HealthStatusCard } from './HealthStatusCard'
 import { SystemInfoCard } from './SystemInfoCard'
 import { UpdateCard } from './UpdateCard'
-import { WaterLevelCard } from './WaterLevelCard'
+import { WaterModal } from './WaterModal'
+import { CalibrationModal } from './CalibrationModal'
 import { InternetToggleCard } from './InternetToggleCard'
 import { SystemLogViewer } from './SystemLogViewer'
-import { CalibrationCard } from '@/src/components/Sensors/CalibrationCard'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 import {
   Server,
@@ -58,6 +58,9 @@ function formatRelativeTime(isoString: string): string {
 }
 
 export function StatusScreen() {
+  const [waterModalOpen, setWaterModalOpen] = useState(false)
+  const [calibrationModalOpen, setCalibrationModalOpen] = useState(false)
+
   // Health endpoints — poll every 10s
   const system = trpc.health.system.useQuery({}, { refetchInterval: POLL_INTERVAL })
   const hardware = trpc.health.hardware.useQuery({}, { refetchInterval: POLL_INTERVAL })
@@ -70,6 +73,8 @@ export function StatusScreen() {
   const internet = trpc.system.internetStatus.useQuery({}, { refetchInterval: POLL_INTERVAL })
   const wifi = trpc.system.wifiStatus.useQuery({}, { refetchInterval: POLL_INTERVAL })
   const logSources = trpc.system.getLogSources.useQuery({}, { refetchInterval: 30_000 })
+  const waterLatest = trpc.waterLevel.getLatest.useQuery({}, { refetchInterval: 30_000 })
+  const deviceStatus = trpc.device.getStatus.useQuery({}, { refetchInterval: 10_000 })
 
   const utils = trpc.useUtils()
 
@@ -230,8 +235,10 @@ export function StatusScreen() {
         wifiSsid={wifi.data?.ssid ?? undefined}
         wifiSignal={wifi.data?.signal ?? undefined}
         podIP={typeof window !== 'undefined' ? window.location.hostname : undefined}
-        waterLevel={undefined}
-        isPriming={false}
+        waterLevel={waterLatest.data?.level ?? undefined}
+        isPriming={deviceStatus.data?.isPriming ?? false}
+        onWaterClick={() => setWaterModalOpen(true)}
+        onCalibrationClick={() => setCalibrationModalOpen(true)}
       />
 
       {/* Internet access toggle — above service cards */}
@@ -280,12 +287,6 @@ export function StatusScreen() {
         />
       )}
 
-      {/* Water level + priming */}
-      <WaterLevelCard />
-
-      {/* Sensor Calibration */}
-      <CalibrationCard />
-
       {/* Software update */}
       <UpdateCard />
 
@@ -301,6 +302,13 @@ export function StatusScreen() {
         </p>
       )}
     </div>
+
+    {/* Water + Priming modal */}
+    <WaterModal open={waterModalOpen} onClose={() => setWaterModalOpen(false)} />
+
+    {/* Calibration modal */}
+    <CalibrationModal open={calibrationModalOpen} onClose={() => setCalibrationModalOpen(false)} />
+
     </PullToRefresh>
   )
 }

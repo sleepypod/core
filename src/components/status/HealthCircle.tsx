@@ -16,6 +16,8 @@ interface HealthCircleProps {
   podIP?: string
   waterLevel?: string
   isPriming?: boolean
+  onWaterClick?: () => void
+  onCalibrationClick?: () => void
 }
 
 function podModelName(version: string): string {
@@ -42,6 +44,8 @@ export function HealthCircle({
   podIP,
   waterLevel,
   isPriming,
+  onWaterClick,
+  onCalibrationClick,
 }: HealthCircleProps) {
   const progress = total > 0 ? healthy / total : 0
   const allHealthy = healthy === total && total > 0
@@ -120,35 +124,51 @@ export function HealthCircle({
         </>
       )}
 
-      {/* Row 3: Water + branch/version */}
-      {(waterLevel || branch) && (
-        <>
-          <div className="my-2.5 border-t border-zinc-800" />
-          <div className="flex items-center justify-between">
-            {/* Water status */}
-            {isPriming ? (
-              <span className="text-[10px] text-sky-400">&#x1f4a7; Priming...</span>
-            ) : waterLevel ? (
-              <span className={clsx(
-                'flex items-center gap-1 text-[10px]',
+      {/* Row 3: Water + Calibration + branch/version */}
+      <>
+        <div className="my-2.5 border-t border-zinc-800" />
+        <div className="flex items-center gap-2">
+          {/* Water status — tappable */}
+          {isPriming ? (
+            <button onClick={onWaterClick} className="flex items-center gap-1 text-[10px] text-sky-400 active:opacity-70">
+              &#x1f4a7; Priming...
+            </button>
+          ) : waterLevel ? (
+            <button
+              onClick={onWaterClick}
+              className={clsx(
+                'flex items-center gap-1 text-[10px] active:opacity-70',
                 waterLevel === 'low' ? 'text-amber-400' : 'text-emerald-400',
-              )}>
-                &#x1f4a7; Water {waterLevel === 'ok' ? 'OK' : 'Low'}
-              </span>
-            ) : <span />}
+              )}
+            >
+              &#x1f4a7; Water {waterLevel === 'ok' ? 'OK' : 'Low'}
+            </button>
+          ) : (
+            <button onClick={onWaterClick} className="flex items-center gap-1 text-[10px] text-zinc-500 active:opacity-70">
+              &#x1f4a7; Water
+            </button>
+          )}
 
-            {/* Branch chip */}
-            {branch && (
-              <span className="rounded-full bg-zinc-800 px-2 py-1 text-[10px] font-medium text-zinc-400">
-                &#x2387; {branch}
-                {commitHash && (
-                  <span className="ml-1 text-zinc-500">{commitHash.slice(0, 7)}</span>
-                )}
-              </span>
-            )}
-          </div>
-        </>
-      )}
+          {/* Calibration — tappable */}
+          {onCalibrationClick && (
+            <button onClick={onCalibrationClick} className="flex items-center gap-1 text-[10px] text-zinc-500 active:opacity-70">
+              &#x2699; Calibration
+            </button>
+          )}
+
+          <span className="flex-1" />
+
+          {/* Branch chip */}
+          {branch && (
+            <span className="rounded-full bg-zinc-800 px-2 py-1 text-[10px] font-medium text-zinc-400">
+              &#x2387; {branch}
+              {commitHash && (
+                <span className="ml-1 text-zinc-500">{commitHash.slice(0, 7)}</span>
+              )}
+            </span>
+          )}
+        </div>
+      </>
 
       {/* Row 4: Disk usage */}
       {diskPercent !== undefined && (
