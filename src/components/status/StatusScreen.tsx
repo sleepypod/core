@@ -18,7 +18,6 @@ import {
   Activity,
   RefreshCw,
   Radio,
-  Terminal,
 } from 'lucide-react'
 
 const POLL_INTERVAL = 10_000
@@ -324,12 +323,8 @@ export function StatusScreen() {
       {/* System log viewer — journalctl browser */}
       <SystemLogViewer />
 
-      {/* Firmware Console — wrapped in a card */}
+      {/* Firmware Console — wrapped in a card (header is internal) */}
       <section className="rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3 sm:p-4">
-        <div className="mb-2 flex items-center gap-2">
-          <Terminal size={14} className="text-zinc-500" />
-          <span className="text-sm font-medium text-white">Console</span>
-        </div>
         <FirmwareLogConsole />
       </section>
 
