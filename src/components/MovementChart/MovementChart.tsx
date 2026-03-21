@@ -146,6 +146,8 @@ function MovementTooltip({ active, payload, dualSide }: { active?: boolean; payl
 interface MovementChartProps {
   /** When true, show both sides as grouped bars for comparison */
   dualSide?: boolean
+  /** When true, hide the built-in WeekNavigator (used when embedded in another page) */
+  hideNav?: boolean
 }
 
 /**
@@ -154,7 +156,7 @@ interface MovementChartProps {
  *
  * Supports dual-side comparison: grouped bars for left (amber) and right (teal).
  */
-export function MovementChart({ dualSide = false }: MovementChartProps) {
+export function MovementChart({ dualSide = false, hideNav = false }: MovementChartProps) {
   const { side } = useSide()
   const otherSide: 'left' | 'right' = side === 'left' ? 'right' : 'left'
   const {
@@ -249,13 +251,15 @@ export function MovementChart({ dualSide = false }: MovementChartProps) {
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <WeekNavigator
-        label={label}
-        isCurrentWeek={isCurrentWeek}
-        onPrevious={goToPreviousWeek}
-        onNext={goToNextWeek}
-        onToday={goToCurrentWeek}
-      />
+      {!hideNav && (
+        <WeekNavigator
+          label={label}
+          isCurrentWeek={isCurrentWeek}
+          onPrevious={goToPreviousWeek}
+          onNext={goToNextWeek}
+          onToday={goToCurrentWeek}
+        />
+      )}
 
       <Card className="border-zinc-800 bg-zinc-900/50">
         <CardHeader className="pb-2">

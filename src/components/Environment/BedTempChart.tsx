@@ -123,6 +123,7 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
             iconType="circle"
             iconSize={6}
             wrapperStyle={{ fontSize: 10, color: '#a1a1aa' }}
+            align="center"
           />
           <Line
             type="monotone"
