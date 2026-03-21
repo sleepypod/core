@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import { Link, LinkIcon, Power, TrendingDown, TrendingUp } from 'lucide-react'
 import { useSide, type Side } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
+import { useSideNames } from '@/src/hooks/useSideNames'
 import { determineTrend, ensureF, formatTemp } from '@/src/lib/tempUtils'
 import { tempFToOffset, offsetDisplay } from '@/src/lib/tempColors'
 
@@ -18,6 +19,7 @@ import { tempFToOffset, offsetDisplay } from '@/src/lib/tempColors'
  */
 export const SideSelector = () => {
   const { selectedSide, isLinked, selectSide, toggleLink } = useSide()
+  const { leftName, rightName } = useSideNames()
 
   const { status } = useDeviceStatus()
 
@@ -33,7 +35,7 @@ export const SideSelector = () => {
       >
         <SideButton
           side="left"
-          label="Left Side"
+          label={leftName}
           isSelected={selectedSide === 'left' || selectedSide === 'both'}
           isLinked={isLinked}
           sideStatus={status?.leftSide}
@@ -41,7 +43,7 @@ export const SideSelector = () => {
         />
         <SideButton
           side="right"
-          label="Right Side"
+          label={rightName}
           isSelected={selectedSide === 'right' || selectedSide === 'both'}
           isLinked={isLinked}
           sideStatus={status?.rightSide}
