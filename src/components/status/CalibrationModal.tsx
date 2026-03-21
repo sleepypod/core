@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
-import { X, RefreshCw, Activity, Thermometer, Fingerprint, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react'
+import { useSideNames } from '@/src/hooks/useSideNames'
+import { X, RefreshCw, Bed, Thermometer, Fingerprint, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react'
 
 type SensorType = 'piezo' | 'capacitance' | 'temperature'
 
@@ -19,8 +20,8 @@ interface CalibrationProfile {
   errorMessage: string | null
 }
 
-const SENSOR_CONFIG: Record<SensorType, { label: string; icon: typeof Activity; color: string }> = {
-  piezo: { label: 'Piezo', icon: Activity, color: 'text-violet-400' },
+const SENSOR_CONFIG: Record<SensorType, { label: string; icon: typeof Bed; color: string }> = {
+  piezo: { label: 'Piezo', icon: Bed, color: 'text-violet-400' },
   capacitance: { label: 'Capacitance', icon: Fingerprint, color: 'text-cyan-400' },
   temperature: { label: 'Temperature', icon: Thermometer, color: 'text-orange-400' },
 }
@@ -60,6 +61,7 @@ function formatDate(d: Date | null | undefined): string {
  */
 export function CalibrationModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { side } = useSide()
+  const { sideName } = useSideNames()
   const utils = trpc.useUtils()
   const [triggeringType, setTriggeringType] = useState<SensorType | null>(null)
 
@@ -107,8 +109,8 @@ export function CalibrationModal({ open, onClose }: { open: boolean; onClose: ()
           <div className="flex items-center gap-2">
             <RefreshCw size={14} className="text-zinc-400" />
             <span className="text-sm font-medium text-zinc-300">Calibration</span>
-            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium uppercase text-zinc-500">
-              {side}
+            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">
+              {sideName(side)}
             </span>
           </div>
           <button onClick={onClose} className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 active:text-zinc-300">
