@@ -10,7 +10,7 @@ import clsx from 'clsx'
 const tabs = [
   { id: 'temp', icon: Thermometer, label: msg`Temp`, href: '/' },
   { id: 'schedule', icon: Calendar, label: msg`Schedule`, href: '/schedule' },
-  { id: 'data', icon: BarChart3, label: msg`Data`, href: '/data' },
+  { id: 'data', icon: BarChart3, label: msg`Biometrics`, href: '/data' },
   { id: 'sensors', icon: Radio, label: msg`Sensors`, href: '/sensors' },
   { id: 'status', icon: Activity, label: msg`Status`, href: '/status' },
 ]

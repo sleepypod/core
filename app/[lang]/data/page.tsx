@@ -1,24 +1,19 @@
 'use client'
 
 import { useRef, useCallback } from 'react'
+import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSide } from '@/src/providers/SideProvider'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { trpc } from '@/src/utils/trpc'
 
-// Shared navigation components
-import { WeekNavigator } from '@/src/components/WeekNavigator/WeekNavigator'
-
-// Sub-components from prior ACs
+// Sub-components
 import { SleepStagesCard } from '@/src/components/SleepStages/SleepStagesCard'
 import { VitalsPanel } from '@/src/components/VitalsPanel/VitalsPanel'
 import { MovementChart } from '@/src/components/MovementChart/MovementChart'
 import { EnvironmentPanel } from '@/src/components/Environment/EnvironmentPanel'
-
-// Biometrics composition components
 import { SleepSummaryCard } from '@/src/components/biometrics/SleepSummaryCard'
 import { VitalsGrid } from '@/src/components/biometrics/VitalsGrid'
 import { RawDataButton } from '@/src/components/biometrics/RawDataButton'
-import { DataSideFilter } from '@/src/components/biometrics/DataSideFilter'
 
 // Section IDs for scroll navigation
 const SECTIONS = [
@@ -30,21 +25,22 @@ const SECTIONS = [
 ] as const
 
 /**
- * Data/Biometrics page — unified scrollable view matching iOS HealthScreen.
+ * Biometrics page — unified scrollable view matching iOS HealthScreen.
  *
- * The DataSideFilter in the header controls which series appear in all chart views:
- * - "Both": dual-series comparison mode (left & right data shown side-by-side)
- * - "Left" / "Right": single-side mode
- *
- * All components share side context via the global SideProvider which supports
- * 'both' | 'left' | 'right' selection persisted to localStorage.
+ * Header: compact date picker (left) + L/R side toggle (right).
+ * All components share side context via the global SideProvider.
  */
 export default function DataPage() {
-  const { selectedSide, activeSides, primarySide } = useSide()
+  const { selectedSide, activeSides, primarySide, selectSide } = useSide()
   const week = useWeekNavigator()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   const showBothSides = selectedSide === 'both'
+
+  // Tap side toggle: L → R → L (no "both" in this toggle — matches iOS)
+  const handleSideToggle = useCallback(() => {
+    selectSide(primarySide === 'left' ? 'right' : 'left')
+  }, [primarySide, selectSide])
 
   // Fetch sleep records for each active side
   const leftSleepQuery = trpc.biometrics.getSleepRecords.useQuery(
@@ -67,7 +63,6 @@ export default function DataPage() {
     { enabled: activeSides.includes('right') },
   )
 
-  // Combine sleep records based on active sides, sorted most recent first
   const leftRecords = ((leftSleepQuery.data ?? []) as SleepRecordRow[]).map(
     r => ({ ...r, side: 'left' as const }),
   )
@@ -82,7 +77,6 @@ export default function DataPage() {
     (a, b) => new Date(b.enteredBedAt).getTime() - new Date(a.enteredBedAt).getTime(),
   )
 
-  // Scroll to section
   const scrollToSection = useCallback((sectionId: string) => {
     const el = document.getElementById(`section-${sectionId}`)
     if (el) {
@@ -92,19 +86,55 @@ export default function DataPage() {
 
   return (
     <div ref={scrollContainerRef} className="space-y-4 sm:space-y-5">
-      {/* ── Navigation Header ── */}
+      {/* ── Compact Header: Date Picker + Side Toggle ── */}
+      <div className="flex items-center gap-2">
+        {/* Date picker (left) */}
+        <button
+          onClick={week.goToPreviousWeek}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800/80 text-zinc-400 active:bg-zinc-700"
+          aria-label="Previous week"
+        >
+          <ChevronLeft size={16} />
+        </button>
 
-      {/* Week Navigator */}
-      <WeekNavigator
-        label={week.label}
-        isCurrentWeek={week.isCurrentWeek}
-        onPrevious={week.goToPreviousWeek}
-        onNext={week.goToNextWeek}
-        onToday={week.goToCurrentWeek}
-      />
+        <button
+          onClick={week.goToCurrentWeek}
+          className="flex min-h-[36px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-zinc-800/80 px-2 py-1.5 active:bg-zinc-700"
+          aria-label="Go to current week"
+        >
+          <Calendar size={13} className="text-sky-400" />
+          <span className="text-[12px] font-medium text-white sm:text-[13px]">{week.label}</span>
+        </button>
 
-      {/* Side Filter Toggle (Both / Left / Right) */}
-      <DataSideFilter />
+        <button
+          onClick={week.goToNextWeek}
+          disabled={week.isCurrentWeek}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800/80 text-zinc-400 active:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed"
+          aria-label="Next week"
+        >
+          <ChevronRight size={16} />
+        </button>
+
+        {/* Side toggle (right) — tap to swap L ↔ R */}
+        <button
+          onClick={handleSideToggle}
+          className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-zinc-800/80 px-3 active:bg-zinc-700"
+          aria-label={`Showing ${primarySide} side, tap to switch`}
+        >
+          <span
+            className={`flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-bold ${
+              primarySide === 'left'
+                ? 'bg-sky-500/20 text-sky-400'
+                : 'bg-teal-500/20 text-teal-400'
+            }`}
+          >
+            {primarySide === 'left' ? 'L' : 'R'}
+          </span>
+          <span className="text-[11px] font-medium text-zinc-400">
+            {primarySide === 'left' ? 'Left' : 'Right'}
+          </span>
+        </button>
+      </div>
 
       {/* Section Navigation Pills */}
       <div className="no-scrollbar -mx-3 flex gap-1.5 overflow-x-auto px-3 sm:-mx-4 sm:gap-2 sm:px-4">
@@ -153,10 +183,7 @@ export default function DataPage() {
 
       {/* ── Section 3: Vitals ── */}
       <section id="section-vitals" className="space-y-4">
-        {/* Quick summary grid — uses primarySide internally via useSide hook */}
         <VitalsGrid />
-
-        {/* Detailed vitals charts (HR, HRV, Breathing Rate) — dual-side overlay when "Both" */}
         <VitalsPanel dualSide={showBothSides} />
       </section>
 
@@ -187,9 +214,6 @@ interface SleepRecordRow {
   timesExitedBed: number
 }
 
-/**
- * Colored label to distinguish left vs right side in dual-side comparison mode.
- */
 function SideLabel({ side }: { side: 'left' | 'right' }) {
   const isLeft = side === 'left'
   return (
