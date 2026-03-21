@@ -1,6 +1,16 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ReactFlow,
+  Background,
+  Handle,
+  Position,
+  BackgroundVariant,
+  type Node,
+  type Edge,
+} from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
 import { useOnSensorFrame, useSensorStreamStatus } from '@/src/hooks/useSensorStream'
 import type { SensorFrame } from '@/src/hooks/useSensorStream'
 
@@ -27,10 +37,49 @@ for (const node of CONSUMER_NODES) {
 const TIMELINE_WINDOW_MS = 30_000
 const MAX_EVENTS = 500
 const RATE_WINDOW_MS = 10_000
-const PULSE_DURATION_MS = 300
 
 // ---------------------------------------------------------------------------
-// Component
+// Custom ReactFlow node — simplified for mobile, no glow
+// ---------------------------------------------------------------------------
+
+interface PipelineNodeData {
+  label: string
+  sub: string
+  color: string
+  active?: boolean
+  wide?: boolean
+  [key: string]: unknown
+}
+
+function PipelineNode({ data }: { data: PipelineNodeData }) {
+  const { label, sub, color, active = false, wide = false } = data
+  return (
+    <div
+      className="flex flex-col rounded-md border px-2 py-1.5 transition-colors duration-200"
+      style={{
+        minWidth: wide ? 280 : 130,
+        borderColor: active ? color + '80' : '#333',
+        borderLeftWidth: active ? 3 : 1,
+        borderLeftColor: active ? color : '#333',
+        background: '#0a0a0a',
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={{ visibility: 'hidden', width: 0, height: 0 }} />
+      <Handle type="source" position={Position.Bottom} style={{ visibility: 'hidden', width: 0, height: 0 }} />
+      <span className="text-[10px] font-medium leading-tight" style={{ color }}>
+        {label}
+      </span>
+      {sub && (
+        <span className="text-[8px] leading-tight text-zinc-500">
+          {sub}
+        </span>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
 // ---------------------------------------------------------------------------
 
 interface TimelineDot {
@@ -46,11 +95,18 @@ function formatRate(count: number, windowSec: number): string {
   return ''
 }
 
+// ---------------------------------------------------------------------------
+// Tab types
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 /**
- * Unified data pipeline visualization:
- * - Top: DAG showing firmware → CBOR → WS → consumer nodes
- * - Edges pulse/highlight when frames flow through
- * - Bottom: scrolling timeline canvas showing frame cadence per lane
+ * Unified data pipeline: read (↓) and write (↑) paths side by side.
+ * Shared nodes (Firmware, dacTransport, Browser) in center.
+ * Read-only nodes on left, write-only on right.
  */
 export function DataPipeline() {
   const wsStatus = useSensorStreamStatus()
@@ -58,14 +114,10 @@ export function DataPipeline() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animRef = useRef<number>(0)
 
-  // Per-consumer pulse state: timestamp of last frame (for glow decay)
-  const lastPulseRef = useRef<Record<string, number>>({})
-  const [pulseState, setPulseState] = useState<Record<string, number>>({})
-
-  // Rate tracking
+  // Rate tracking per consumer
   const rateWindowRef = useRef<{ type: string; ts: number }[]>([])
   const [rates, setRates] = useState<Record<string, number>>({})
-  const [totalCount, setTotalCount] = useState(0)
+  const [activeConsumers, setActiveConsumers] = useState<Set<string>>(new Set())
 
   useOnSensorFrame(useCallback((frame: SensorFrame) => {
     const consumer = TYPE_TO_CONSUMER.get(frame.type)
@@ -79,39 +131,32 @@ export function DataPipeline() {
       eventsRef.current = eventsRef.current.slice(-MAX_EVENTS)
     }
 
-    // Pulse the consumer node
-    lastPulseRef.current[consumer] = now
-
     // Rate tracking
     rateWindowRef.current.push({ type: frame.type, ts: now })
   }, []))
 
-  // Update pulse state + rates every 100ms for smooth glow decay
+  // Update rates every 500ms (no aggressive pulse tracking)
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now()
-
-      // Pulse state
-      const newPulse: Record<string, number> = {}
-      for (const [key, ts] of Object.entries(lastPulseRef.current)) {
-        const age = now - ts
-        if (age < PULSE_DURATION_MS) {
-          newPulse[key] = 1 - age / PULSE_DURATION_MS // 1 = just fired, 0 = faded
-        }
-      }
-      setPulseState(newPulse)
-
-      // Rates (every second)
       const cutoff = now - RATE_WINDOW_MS
+
       rateWindowRef.current = rateWindowRef.current.filter(e => e.ts >= cutoff)
+
       const perConsumer: Record<string, number> = {}
+      const active = new Set<string>()
+
       for (const e of rateWindowRef.current) {
         const c = TYPE_TO_CONSUMER.get(e.type)
-        if (c) perConsumer[c] = (perConsumer[c] ?? 0) + 1
+        if (c) {
+          perConsumer[c] = (perConsumer[c] ?? 0) + 1
+          active.add(c)
+        }
       }
+
       setRates(perConsumer)
-      setTotalCount(rateWindowRef.current.length)
-    }, 100)
+      setActiveConsumers(active)
+    }, 500)
     return () => clearInterval(interval)
   }, [])
 
@@ -174,7 +219,7 @@ export function DataPipeline() {
         const alpha = Math.max(0.12, 1 - age * 0.85)
         const config = CONSUMER_NODES[laneIdx]
 
-        // Glow for recent dots
+        // Subtle glow for very recent dots
         if (age < 0.02) {
           ctx.beginPath()
           ctx.arc(x, y, 6, 0, Math.PI * 2)
@@ -182,7 +227,6 @@ export function DataPipeline() {
           ctx.fill()
         }
 
-        // Dot
         ctx.beginPath()
         ctx.arc(x, y, age < 0.02 ? 2.5 : 1.5, 0, Math.PI * 2)
         ctx.fillStyle = config.color + Math.round(alpha * 255).toString(16).padStart(2, '0')
@@ -199,88 +243,109 @@ export function DataPipeline() {
     return () => cancelAnimationFrame(animRef.current)
   }, [])
 
+  // ---------------------------------------------------------------------------
+  // ReactFlow graphs — Read & Write tabs
+  // ---------------------------------------------------------------------------
+
   const windowSec = RATE_WINDOW_MS / 1000
-  const totalRate = formatRate(totalCount, windowSec)
   const wsColor = wsStatus === 'connected' ? '#22c55e' : wsStatus === 'connecting' ? '#eab308' : '#ef4444'
+  const wsActive = wsStatus === 'connected'
+
+  const nodeTypes = useMemo(() => ({ pipeline: PipelineNode }), [])
+
+  // Layout: shared center column, read-only left, write-only right
+  // Vertical flow: Firmware (top) → Browser (bottom)
+  const CX = 130  // center column x
+  const LX = 0    // left column (read-only nodes)
+  const RX = 260  // right column (write-only nodes)
+  const RY = 80   // row gap
+
+  const nodes = useMemo<Node[]>(() => {
+    const piezoRate = formatRate(rates['piezo'] ?? 0, windowSec)
+    const statusRate = formatRate(rates['status'] ?? 0, windowSec)
+
+    return [
+      // ─── Row 0: Firmware (shared, center) ───
+      { id: 'firmware', type: 'pipeline', position: { x: CX, y: 0 },
+        data: { label: 'Firmware', sub: 'frankenfirmware', color: '#71717a', active: true } },
+
+      // ─── Row 1: Read sources + shared transport ───
+      { id: 'raw', type: 'pipeline', position: { x: LX, y: RY },
+        data: { label: 'RAW Files', sub: 'CBOR on disk', color: '#71717a', active: activeConsumers.has('piezo') } },
+      { id: 'dac-transport', type: 'pipeline', position: { x: CX, y: RY },
+        data: { label: 'dacTransport', sub: 'dac.sock', color: '#a1a1aa', active: true } },
+
+      // ─── Row 2: Read processors + write entry ───
+      { id: 'piezo-stream', type: 'pipeline', position: { x: LX, y: RY * 2 },
+        data: { label: 'piezoStream', sub: piezoRate ? `parse \u00b7 ${piezoRate}` : 'tails + parses', color: '#8b5cf6', active: activeConsumers.has('piezo') } },
+      { id: 'dac-monitor', type: 'pipeline', position: { x: CX, y: RY * 2 },
+        data: { label: 'DacMonitor', sub: statusRate ? `poll \u00b7 ${statusRate}` : 'polls 2s', color: '#3b82f6', active: activeConsumers.has('status') } },
+      { id: 'trpc', type: 'pipeline', position: { x: RX, y: RY * 2 },
+        data: { label: 'tRPC :3000', sub: 'mutations', color: '#f97316', active: wsActive } },
+
+      // ─── Row 3: broadcastFrame() — the event bus ───
+      { id: 'broadcast', type: 'pipeline', position: { x: LX + 65, y: RY * 3 },
+        data: { label: 'broadcastFrame()', sub: 'event bus', color: '#a78bfa', active: wsActive } },
+
+      // ─── Row 4: WebSocket ───
+      { id: 'ws', type: 'pipeline', position: { x: LX + 65, y: RY * 4 },
+        data: { label: 'WebSocket :3001', sub: wsStatus, color: wsColor, active: wsActive } },
+
+      // ─── Row 5: Browser ───
+      { id: 'browser', type: 'pipeline', position: { x: CX, y: RY * 5 },
+        data: { label: 'Browser', sub: 'React UI', color: '#e2e8f0', active: wsActive } },
+    ]
+  }, [rates, activeConsumers, wsStatus, wsColor, wsActive, windowSec])
+
+  const edges = useMemo<Edge[]>(() => [
+    // ─── Read path (↓) solid blue/purple edges ───
+    { id: 'fw-raw', source: 'firmware', target: 'raw', animated: true, style: { stroke: '#52525b' } },
+    { id: 'fw-dt', source: 'firmware', target: 'dac-transport', animated: true, style: { stroke: '#a1a1aa' } },
+    { id: 'raw-ps', source: 'raw', target: 'piezo-stream', animated: true, style: { stroke: '#8b5cf6' } },
+    { id: 'dt-dm', source: 'dac-transport', target: 'dac-monitor', animated: true, style: { stroke: '#3b82f6' } },
+    // Processors → broadcastFrame() → WebSocket
+    { id: 'ps-bc', source: 'piezo-stream', target: 'broadcast', animated: true, style: { stroke: '#8b5cf6' } },
+    { id: 'dm-bc', source: 'dac-monitor', target: 'broadcast', animated: true, style: { stroke: '#3b82f6' } },
+    { id: 'bc-ws', source: 'broadcast', target: 'ws', animated: true, style: { stroke: '#a78bfa' } },
+    { id: 'ws-browser', source: 'ws', target: 'browser', animated: true, style: { stroke: wsColor } },
+
+    // ─── Write path (↑) dashed orange edges: Browser → tRPC → dacTransport (stops at dac.sock) ───
+    { id: 'browser-trpc', source: 'browser', target: 'trpc', animated: true, style: { stroke: '#f97316', strokeDasharray: '5 3' } },
+    { id: 'trpc-dt', source: 'trpc', target: 'dac-transport', animated: true, style: { stroke: '#f97316', strokeDasharray: '5 3' } },
+  ], [wsColor])
 
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-medium text-zinc-300">Data Pipeline</span>
-        <span className="text-[9px] tabular-nums text-zinc-600">
-          {totalRate && `${totalRate} total · `}30s window
-        </span>
-      </div>
-
-      {/* DAG: source → WS → consumers */}
-      <div className="mb-2 space-y-1">
-        {/* Source row */}
-        <div className="flex items-center justify-center gap-1">
-          <PipeNode label="Firmware" sub="dac.sock + RAW" color="#52525b" />
-          <PipeArrow color="#52525b" />
-          <PipeNode
-            label="WebSocket"
-            sub={`:3001 · ${wsStatus}`}
-            color={wsColor}
-            intensity={wsStatus === 'connected' ? 0.3 : 0}
-          />
-        </div>
-
-        {/* Fan-out edges + consumer nodes — grid-aligned */}
-        <div className={`grid gap-1`} style={{ gridTemplateColumns: `repeat(${CONSUMER_NODES.length}, 1fr)` }}>
-          {/* SVG edges spanning the full grid — one column per consumer */}
-          <div className="col-span-full relative" style={{ height: 28 }}>
-            <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
-              {CONSUMER_NODES.map((node, i) => {
-                const n = CONSUMER_NODES.length
-                // Center of each grid column as a fraction (0-1)
-                const cx = (i + 0.5) / n
-                const centerX = 0.5 // WS node is centered above
-                const intensity = pulseState[node.key] ?? 0
-                return (
-                  <g key={node.key}>
-                    {/* Trunk: center top → rail */}
-                    <line x1={`${centerX * 100}%`} y1="0" x2={`${centerX * 100}%`} y2="35%" stroke="#333" strokeWidth="1" />
-                    {/* Horizontal rail segment: center → this column */}
-                    <line x1={`${Math.min(centerX, cx) * 100}%`} y1="35%" x2={`${Math.max(centerX, cx) * 100}%`} y2="35%" stroke="#333" strokeWidth="1" />
-                    {/* Drop line: rail → bottom */}
-                    <line x1={`${cx * 100}%`} y1="35%" x2={`${cx * 100}%`} y2="100%" stroke="#333" strokeWidth="1" />
-
-                    {/* Pulse overlays */}
-                    {intensity > 0 && (
-                      <>
-                        <line x1={`${centerX * 100}%`} y1="0" x2={`${centerX * 100}%`} y2="35%" stroke={node.color} strokeWidth="2" strokeOpacity={intensity * 0.4} />
-                        <line x1={`${Math.min(centerX, cx) * 100}%`} y1="35%" x2={`${Math.max(centerX, cx) * 100}%`} y2="35%" stroke={node.color} strokeWidth="2" strokeOpacity={intensity * 0.6} />
-                        <line x1={`${cx * 100}%`} y1="35%" x2={`${cx * 100}%`} y2="100%" stroke={node.color} strokeWidth="2" strokeOpacity={intensity * 0.8} />
-                        <circle cx={`${cx * 100}%`} cy="100%" r="4" fill={node.color} fillOpacity={intensity * 0.35} />
-                      </>
-                    )}
-                  </g>
-                )
-              })}
-            </svg>
-          </div>
-
-          {/* Consumer nodes — one per grid column, aligned under their drop line */}
-          {CONSUMER_NODES.map(node => {
-            const intensity = pulseState[node.key] ?? 0
-            const rate = formatRate(rates[node.key] ?? 0, windowSec)
-            return (
-              <div key={node.key} className="flex justify-center">
-                <PipeNode
-                  label={node.label}
-                  sub={rate}
-                  color={node.color}
-                  intensity={intensity}
-                  small
-                />
-              </div>
-            )
-          })}
+        <div className="flex items-center gap-2 text-[8px] text-zinc-600">
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-px bg-blue-400" /> read &darr;</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-px bg-orange-400" style={{ borderBottom: '1px dashed #f97316' }} /> write &uarr;</span>
         </div>
       </div>
 
-      {/* Timeline canvas */}
+      {/* ReactFlow DAG — unified read + write */}
+      <div className="mb-2 rounded-lg" style={{ height: 340, background: '#0a0a0a' }}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.15 }}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          panOnDrag={false}
+          zoomOnScroll={false}
+          zoomOnPinch={false}
+          preventScrolling={false}
+          elementsSelectable={false}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={20} size={0.5} color="#222" />
+        </ReactFlow>
+      </div>
+
+      {/* Timeline canvas with lane labels */}
       <div className="flex gap-1">
         <div className="flex flex-col justify-around shrink-0 w-7">
           {CONSUMER_NODES.map(node => (
@@ -293,66 +358,17 @@ export function DataPipeline() {
             </div>
           ))}
         </div>
-        <canvas
-          ref={canvasRef}
-          className="flex-1 rounded-lg bg-black/40"
-          style={{ height: CONSUMER_NODES.length * 16 }}
-        />
+        <div className="relative flex-1">
+          <canvas
+            ref={canvasRef}
+            className="w-full rounded-lg bg-black/40"
+            style={{ height: CONSUMER_NODES.length * 16 }}
+          />
+          <span className="absolute bottom-1 right-2 text-[8px] tabular-nums text-zinc-600">
+            30s
+          </span>
+        </div>
       </div>
     </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-function PipeNode({
-  label, sub, color, intensity = 0, small,
-}: {
-  label: string
-  sub: string
-  color: string
-  intensity?: number
-  small?: boolean
-}) {
-  return (
-    <div
-      className={[
-        'relative flex flex-col items-center rounded-md border transition-all duration-150',
-        small ? 'min-w-[40px] px-1 py-0.5' : 'min-w-[70px] px-1.5 py-1',
-      ].join(' ')}
-      style={{
-        borderColor: `${color}${Math.round((0.2 + intensity * 0.6) * 255).toString(16).padStart(2, '0')}`,
-        boxShadow: intensity > 0 ? `0 0 ${4 + intensity * 8}px ${color}${Math.round(intensity * 0.3 * 255).toString(16).padStart(2, '0')}` : 'none',
-      }}
-    >
-      {intensity > 0 && (
-        <div
-          className="absolute inset-0 rounded-md transition-opacity duration-150"
-          style={{ backgroundColor: color, opacity: intensity * 0.12 }}
-        />
-      )}
-      <span
-        className={`relative font-medium leading-tight ${small ? 'text-[7px]' : 'text-[9px]'}`}
-        style={{ color }}
-      >
-        {label}
-      </span>
-      {sub && (
-        <span className={`relative leading-tight text-zinc-600 ${small ? 'text-[6px]' : 'text-[7px]'}`}>
-          {sub}
-        </span>
-      )}
-    </div>
-  )
-}
-
-function PipeArrow({ color }: { color: string }) {
-  return (
-    <svg width="16" height="8" viewBox="0 0 16 8" className="shrink-0">
-      <line x1="0" y1="4" x2="11" y2="4" stroke={color} strokeWidth="1" />
-      <path d="M9 1 L14 4 L9 7" fill="none" stroke={color} strokeWidth="1" />
-    </svg>
   )
 }

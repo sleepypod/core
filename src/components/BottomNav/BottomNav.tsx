@@ -13,7 +13,6 @@ const tabs = [
   { id: 'data', icon: BarChart3, label: msg`Data`, href: '/data' },
   { id: 'sensors', icon: Radio, label: msg`Sensors`, href: '/sensors' },
   { id: 'status', icon: Activity, label: msg`Status`, href: '/status' },
-  { id: 'settings', icon: Settings, label: msg`Settings`, href: '/settings' },
 ]
 
 /**

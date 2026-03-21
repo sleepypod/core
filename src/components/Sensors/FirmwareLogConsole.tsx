@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useOnSensorFrame, type LogFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
+import { useOnSensorFrame, type LogFrame, type GestureFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
 import { Terminal, Trash2, Pause, Play } from 'lucide-react'
 
 const MAX_ENTRIES = 100
@@ -26,6 +26,7 @@ const TYPE_COLORS: Record<string, string> = {
   'frzTherm': 'text-blue-400',
   'deviceStatus': 'text-sky-400',
   'log': 'text-amber-400',
+  'gesture': 'text-pink-400',
 }
 
 function getLevelColor(level: string): string {
@@ -71,6 +72,23 @@ export function FirmwareLogConsole() {
       if (!paused) {
         setLogs(prev => {
           const next = [...prev, frame as LogFrame]
+          return next.length > MAX_ENTRIES ? next.slice(-MAX_ENTRIES) : next
+        })
+      }
+    }
+
+    // Surface gesture events as log entries
+    if (frame.type === 'gesture') {
+      if (!paused) {
+        const gf = frame as GestureFrame
+        const gestureLog: LogFrame = {
+          type: 'log',
+          ts: gf.ts,
+          level: 'INFO',
+          msg: `[TAP] ${gf.side} ${gf.tapType}`,
+        }
+        setLogs(prev => {
+          const next = [...prev, gestureLog]
           return next.length > MAX_ENTRIES ? next.slice(-MAX_ENTRIES) : next
         })
       }

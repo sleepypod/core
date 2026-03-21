@@ -187,7 +187,18 @@ export const healthRouter = router({
           drifted,
         }
         if (drifted) {
-          overallStatus = 'degraded'
+          // Auto-correct: reload scheduler from DB to resolve drift
+          try {
+            const { getJobManager } = await import('@/src/scheduler/instance')
+            const manager = await getJobManager()
+            await manager.reloadSchedules()
+            console.log('[health] Schedule drift detected — auto-reloaded scheduler')
+            // Re-check after reload
+            drift.drifted = false
+          } catch (reloadError) {
+            console.error('[health] Failed to auto-reload scheduler:', reloadError)
+            overallStatus = 'degraded'
+          }
         }
       }
       catch {

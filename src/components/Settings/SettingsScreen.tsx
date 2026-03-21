@@ -1,17 +1,23 @@
 'use client'
 
-import { Settings } from 'lucide-react'
+import { useState } from 'react'
+import { Settings, User, RotateCcw, Wifi } from 'lucide-react'
+import clsx from 'clsx'
 import { trpc } from '@/src/utils/trpc'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
 import { SideSettingsForm } from './SideSettingsForm'
 import { TapGestureConfig } from './TapGestureConfig'
+import { HapticsTestCard } from './HapticsTestCard'
 
 /**
- * Settings screen — device-level and side-level configuration.
- * Wired to settings.getAll, settings.updateDevice, and settings.updateSide tRPC calls.
+ * Settings screen matching iOS ProfileAndSettingsSheet.
+ * Layout: Device section (top) → Per-side tabs (name, gestures, haptics).
  */
 export function SettingsScreen() {
+  const [selectedSide, setSelectedSide] = useState<'left' | 'right'>('left')
   const { data, isLoading, error } = trpc.settings.getAll.useQuery({})
+
+  const rebootMutation = trpc.system.triggerUpdate.useMutation()
 
   if (isLoading) {
     return (
@@ -37,6 +43,9 @@ export function SettingsScreen() {
 
   if (!data) return null
 
+  const leftName = data.sides.left?.name ?? 'Left'
+  const rightName = data.sides.right?.name ?? 'Right'
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 px-1">
@@ -44,28 +53,83 @@ export function SettingsScreen() {
         <h1 className="text-lg font-semibold text-white">Settings</h1>
       </div>
 
-      {/* Device Settings */}
+      {/* ─── Device Settings ─── */}
       <section>
         <h2 className="mb-3 px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">
           Device
         </h2>
         <DeviceSettingsForm device={data.device} />
+
+        {/* Reconnect / Reboot actions */}
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={() => window.location.reload()}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800"
+          >
+            <Wifi size={14} />
+            Reconnect
+          </button>
+          <button
+            onClick={() => {
+              if (confirm('Restart the sleepypod service? The pod will be briefly unavailable.')) {
+                rebootMutation.mutate({})
+              }
+            }}
+            disabled={rebootMutation.isPending}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800 disabled:opacity-50"
+          >
+            <RotateCcw size={14} />
+            {rebootMutation.isPending ? 'Restarting...' : 'Restart'}
+          </button>
+        </div>
+        {rebootMutation.isSuccess && (
+          <p className="mt-2 text-center text-xs text-emerald-400">Service restarting — reconnecting...</p>
+        )}
+
+        {/* Vibration patterns — device-level, shared across sides */}
+        <div className="mt-4">
+          <HapticsTestCard />
+        </div>
       </section>
 
-      {/* Side Settings */}
+      {/* ─── Side Settings ─── */}
       <section>
         <h2 className="mb-3 px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">
-          Sides
+          Side
         </h2>
-        <SideSettingsForm left={data.sides.left} right={data.sides.right} />
-      </section>
 
-      {/* Tap Gestures */}
-      <section>
-        <h2 className="mb-3 px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">
-          Gestures
-        </h2>
-        <TapGestureConfig />
+        {/* Side tab switcher */}
+        <div className="mb-4 flex rounded-xl bg-zinc-900 p-1">
+          {([
+            { key: 'left' as const, label: leftName },
+            { key: 'right' as const, label: rightName },
+          ]).map(t => (
+            <button
+              key={t.key}
+              onClick={() => setSelectedSide(t.key)}
+              className={clsx(
+                'flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2.5 text-sm font-medium transition-colors',
+                selectedSide === t.key
+                  ? 'bg-zinc-800 text-white'
+                  : 'text-zinc-500',
+              )}
+            >
+              <User size={14} />
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          {/* Name + away mode */}
+          <SideSettingsForm
+            side={selectedSide}
+            sideData={selectedSide === 'left' ? data.sides.left : data.sides.right}
+          />
+
+          {/* Gestures for this side */}
+          <TapGestureConfig filterSide={selectedSide} />
+        </div>
       </section>
     </div>
   )

@@ -12,22 +12,15 @@ interface SideData {
 }
 
 interface SideSettingsFormProps {
-  left: SideData
-  right: SideData
+  side: 'left' | 'right'
+  sideData: SideData
 }
 
 /**
- * Per-side settings form: side names and away mode toggles.
- * Shows both sides so the user can configure each independently.
- * Matches iOS DeviceSettingsCardView side section.
+ * Per-side settings: name and away mode for a single side.
  */
-export function SideSettingsForm({ left, right }: SideSettingsFormProps) {
-  return (
-    <div className="space-y-4">
-      <SideCard data={left} />
-      <SideCard data={right} />
-    </div>
-  )
+export function SideSettingsForm({ side, sideData }: SideSettingsFormProps) {
+  return <SideCard data={sideData ?? { side, name: side === 'left' ? 'Left' : 'Right', awayMode: false }} />
 }
 
 function SideCard({ data }: { data: SideData }) {

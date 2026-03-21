@@ -36,6 +36,8 @@ const PATTERN_OPTIONS = [
   { value: 'double', label: 'Double', description: 'Pulsing pattern' },
 ] as const
 
+import { VIBRATION_PRESETS } from '@/src/lib/vibrationPatterns'
+
 /**
  * Alarm schedule section with time, vibration intensity slider,
  * pattern selector, duration, temperature, and enable/disable toggle.
@@ -166,6 +168,31 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
 
         <div className="space-y-3">
           <TimeInput label="Alarm Time" value={newTime} onChange={setNewTime} />
+
+          {/* Preset quick-select */}
+          <div>
+            <span className="mb-1.5 block text-xs font-medium text-zinc-400">Presets</span>
+            <div className="flex flex-wrap gap-1.5">
+              {VIBRATION_PRESETS.map((preset) => (
+                <button
+                  key={preset.name}
+                  onClick={() => {
+                    setNewIntensity(preset.intensity)
+                    setNewPattern(preset.pattern)
+                    setNewDuration(preset.duration)
+                  }}
+                  className={clsx(
+                    'rounded-lg px-2.5 min-h-[44px] text-[11px] font-medium transition-colors sm:px-3 sm:text-xs',
+                    newIntensity === preset.intensity && newPattern === preset.pattern && newDuration === preset.duration
+                      ? 'bg-sky-500/20 text-sky-400 ring-1 ring-sky-500/40'
+                      : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
+                  )}
+                >
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+          </div>
 
           {/* Vibration Intensity */}
           <div>
@@ -337,6 +364,35 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                 onChange={handleUpdateTime}
                 disabled={isMutating}
               />
+
+              {/* Preset quick-select */}
+              <div>
+                <span className="mb-1.5 block text-xs font-medium text-zinc-400">Presets</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {VIBRATION_PRESETS.map((preset) => (
+                    <button
+                      key={preset.name}
+                      onClick={() => {
+                        setLocalIntensity(preset.intensity)
+                        handleUpdateIntensity(preset.intensity)
+                        handleUpdatePattern(preset.pattern)
+                        handleUpdateDuration(preset.duration)
+                      }}
+                      disabled={isMutating}
+                      className={clsx(
+                        'rounded-lg px-2.5 min-h-[44px] text-[11px] font-medium transition-colors sm:px-3 sm:text-xs disabled:opacity-50',
+                        schedule.vibrationIntensity === preset.intensity
+                          && schedule.vibrationPattern === preset.pattern
+                          && schedule.duration === preset.duration
+                          ? 'bg-sky-500/20 text-sky-400 ring-1 ring-sky-500/40'
+                          : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
+                      )}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               {/* Vibration Intensity — local state with debounced commit */}
               <div>

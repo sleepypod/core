@@ -213,34 +213,17 @@ export function FreezerHealthCard() {
         </div>
       )}
 
-      {/* Flowrate + water status */}
-      {(leftFlowrate != null || rightFlowrate != null || waterLevel) && (
-        <div className="space-y-1.5 pt-1">
-          <div className="flex items-center gap-1.5">
-            <Droplets size={10} className="text-blue-400" />
-            <h4 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Flow</h4>
-          </div>
-          <div className="grid grid-cols-[auto_1fr_1fr] gap-x-2 gap-y-1.5 items-center">
-            <div />
-            <div className="text-center text-[9px] font-semibold text-sky-400">Left</div>
-            <div className="text-center text-[9px] font-semibold text-teal-400">Right</div>
-
-            <RowLabel icon={<Gauge size={12} />} label="Flow" color="text-blue-400" />
-            <MetricCell value={leftFlowrate != null ? formatTemp(leftFlowrate) : '--'} />
-            <MetricCell value={rightFlowrate != null ? formatTemp(rightFlowrate) : '--'} />
-          </div>
-          {waterLevel && (
-            <div className="flex items-center gap-2 rounded-md bg-zinc-800/50 px-2 py-1.5">
-              {waterLevel.level === 'low' ? (
-                <AlertTriangle size={12} className="text-amber-400" />
-              ) : (
-                <CheckCircle size={12} className="text-emerald-400" />
-              )}
-              <span className={`text-[10px] font-medium ${waterLevel.level === 'low' ? 'text-amber-400' : 'text-emerald-400'}`}>
-                Water {waterLevel.level === 'ok' ? 'OK' : 'Low'}
-              </span>
-            </div>
+      {/* Water status (flow rates removed — not reliable on most pods) */}
+      {waterLevel && (
+        <div className="flex items-center gap-2 rounded-md bg-zinc-800/50 px-2 py-1.5">
+          {waterLevel.level === 'low' ? (
+            <AlertTriangle size={12} className="text-amber-400" />
+          ) : (
+            <CheckCircle size={12} className="text-emerald-400" />
           )}
+          <span className={`text-[10px] font-medium ${waterLevel.level === 'low' ? 'text-amber-400' : 'text-emerald-400'}`}>
+            Water {waterLevel.level === 'ok' ? 'OK' : 'Low'}
+          </span>
         </div>
       )}
     </div>

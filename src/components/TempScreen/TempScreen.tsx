@@ -225,8 +225,6 @@ export const TempScreen = () => {
         <LatestSleepChip />
       </div>
 
-      {/* User selector — at bottom for easy thumb reach */}
-      <UserSelector />
     </div>
   )
 }

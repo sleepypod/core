@@ -56,43 +56,13 @@ export const EnvironmentInfoPanel = ({ secondsRemaining, unit = 'F' }: Environme
   }
 
   return (
-    <div className="flex items-stretch justify-between gap-1 rounded-2xl bg-zinc-900 p-2 sm:gap-2 sm:p-3">
-      {/* Ambient Temperature */}
-      <InfoItem
-        icon={<Home size={14} />}
-        label="Room"
-        value={ambientTemp != null ? formatTemp(ambientTemp, unit) : '--'}
-      />
-
-      <Divider />
-
-      {/* Humidity */}
-      <InfoItem
-        icon={<Droplets size={14} />}
-        label="Humidity"
-        value={humidity != null ? `${Math.round(humidity)}%` : '--'}
-      />
-
-      <Divider />
-
-      {/* Bed Surface Temperature */}
+    <div className="flex items-stretch justify-center gap-3 rounded-2xl bg-zinc-900 p-2 sm:gap-4 sm:p-3">
+      {/* Bed Surface Temperature — the inside temp */}
       <InfoItem
         icon={<Thermometer size={14} />}
         label="Bed"
         value={bedSurfaceTemp != null ? formatTemp(bedSurfaceTemp, unit) : '--'}
       />
-
-      {/* Water Temperature from freezer unit */}
-      {waterTemp != null && (
-        <>
-          <Divider />
-          <InfoItem
-            icon={<Snowflake size={14} />}
-            label="Water"
-            value={formatTemp(waterTemp, unit)}
-          />
-        </>
-      )}
 
       {/* Auto-off Timer (only shown when active) */}
       {secondsRemaining != null && secondsRemaining > 0 && (

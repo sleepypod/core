@@ -337,7 +337,7 @@ export function BedTempMatrix() {
           </div>
 
           {/* Legend */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1">
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 pt-1">
             <LegendItem label="Zone temp" example="78.2°" />
             <LegendItem label="Cap raw" example="1.05" dim />
             <LegendItem label="Variance" example="±0.32" dim />

@@ -10,6 +10,8 @@ import { UpdateCard } from './UpdateCard'
 import { WaterLevelCard } from './WaterLevelCard'
 import { InternetToggleCard } from './InternetToggleCard'
 import { SystemLogViewer } from './SystemLogViewer'
+import { CalibrationCard } from '@/src/components/Sensors/CalibrationCard'
+import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 import {
   Server,
   Cpu,
@@ -225,7 +227,15 @@ export function StatusScreen() {
             : undefined
         }
         internetBlocked={internet.data?.blocked}
+        wifiSsid={wifi.data?.ssid ?? undefined}
+        wifiSignal={wifi.data?.signal ?? undefined}
+        podIP={typeof window !== 'undefined' ? window.location.hostname : undefined}
+        waterLevel={undefined}
+        isPriming={false}
       />
+
+      {/* Internet access toggle — above service cards */}
+      <InternetToggleCard />
 
       <HealthStatusCard
         title="Core"
@@ -273,15 +283,17 @@ export function StatusScreen() {
       {/* Water level + priming */}
       <WaterLevelCard />
 
-      {/* Internet access toggle */}
-      <InternetToggleCard />
+      {/* Sensor Calibration */}
+      <CalibrationCard />
 
-      {/* System info + Software update */}
-      <SystemInfoCard />
+      {/* Software update */}
       <UpdateCard />
 
       {/* System log viewer — journalctl browser */}
       <SystemLogViewer />
+
+      {/* Firmware Console */}
+      <FirmwareLogConsole />
 
       {system.dataUpdatedAt && (
         <p className="text-center text-xs text-zinc-600">

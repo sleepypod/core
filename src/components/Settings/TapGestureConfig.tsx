@@ -75,7 +75,7 @@ function editStateFromGesture(g: GestureRecord): EditState {
  * Allows configuring double/triple/quad tap actions per side.
  * Matches iOS TapGestureConfigView feature set with editable controls.
  */
-export function TapGestureConfig() {
+export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right' } = {}) {
   const utils = trpc.useUtils()
   const settingsQuery = trpc.settings.getAll.useQuery({})
   const setGesture = trpc.settings.setGesture.useMutation({
@@ -246,14 +246,10 @@ export function TapGestureConfig() {
         </p>
       </div>
 
-      {/* Left Side */}
-      {renderSideSection('left')}
-
-      {/* Divider */}
-      <div className="border-t border-zinc-800" />
-
-      {/* Right Side */}
-      {renderSideSection('right')}
+      {/* Side sections — filtered if filterSide is set */}
+      {(!filterSide || filterSide === 'left') && renderSideSection('left')}
+      {!filterSide && <div className="border-t border-zinc-800" />}
+      {(!filterSide || filterSide === 'right') && renderSideSection('right')}
     </div>
   )
 }

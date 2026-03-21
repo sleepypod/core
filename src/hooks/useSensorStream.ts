@@ -9,7 +9,7 @@ import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
 export const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
-  'deviceStatus',
+  'deviceStatus', 'gesture',
 ] as const
 
 export type SensorType = typeof ALL_SENSOR_TYPES[number]
@@ -107,6 +107,14 @@ export interface LogFrame {
   msg: string
 }
 
+/** Gesture event frame — pushed when a tap gesture is detected. */
+export interface GestureFrame {
+  type: 'gesture'
+  ts: number
+  side: 'left' | 'right'
+  tapType: string
+}
+
 /** Device status frame — pushed by dacMonitor every 2s. */
 export interface DeviceStatusFrame {
   type: 'deviceStatus'
@@ -146,6 +154,7 @@ export type SensorFrame =
   | FrzHealthFrame
   | LogFrame
   | DeviceStatusFrame
+  | GestureFrame
 
 // ---------------------------------------------------------------------------
 // Server → Client control messages

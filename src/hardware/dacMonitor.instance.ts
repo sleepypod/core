@@ -200,7 +200,19 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
       const gestureHandler = new GestureActionHandler(DAC_SOCK_PATH, defaultGestureActionDeps)
       const stateSync = new DeviceStateSync()
 
-      monitor.on('gesture:detected', event => gestureHandler.handle(event))
+      monitor.on('gesture:detected', event => {
+        gestureHandler.handle(event)
+        // Broadcast to WS clients so browser UI can show gesture events
+        try {
+          const { broadcastFrame } = require('@/src/streaming/piezoStream')
+          broadcastFrame({
+            type: 'gesture',
+            ts: Date.now(),
+            side: event.side,
+            tapType: event.tapType,
+          })
+        } catch { /* WS not ready */ }
+      })
       monitor.on('status:updated', (status) => {
         try {
           trackPrimingState(status.isPriming)

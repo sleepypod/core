@@ -11,6 +11,7 @@ const LANES = [
   { type: 'bedTemp2', label: 'Bed Temp', color: '#fb923c', shortLabel: 'TMP' },
   { type: 'frzHealth', label: 'Freezer', color: '#60a5fa', shortLabel: 'FRZ' },
   { type: 'log', label: 'Log', color: '#fbbf24', shortLabel: 'LOG' },
+  { type: 'gesture', label: 'Gesture', color: '#f472b6', shortLabel: 'TAP' },
 ] as const
 
 type LaneType = (typeof LANES)[number]['type']

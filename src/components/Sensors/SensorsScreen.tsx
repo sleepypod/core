@@ -9,11 +9,8 @@ import { BedTempMatrix } from './BedTempMatrix'
 import { FreezerHealthCard } from './FreezerHealthCard'
 import { PiezoWaveform } from './PiezoWaveform'
 import { DataPipeline } from './DataPipeline'
-import { FirmwareLogConsole } from './FirmwareLogConsole'
 import { EnvironmentCard } from './EnvironmentCard'
 import { TempTrendChart } from './TempTrendChart'
-import { CalibrationCard } from './CalibrationCard'
-import { DataFlowDag } from './DataFlowDag'
 
 /**
  * Main Sensors screen composition.
@@ -110,16 +107,6 @@ export function SensorsScreen() {
           {/* System — freezer thermal health */}
           <SensorCard>
             <FreezerHealthCard />
-          </SensorCard>
-
-          {/* Sensor Calibration & Quality Monitoring */}
-          <SensorCard>
-            <CalibrationCard />
-          </SensorCard>
-
-          {/* Console: Firmware Logs + Raw Frames (tabbed) */}
-          <SensorCard>
-            <FirmwareLogConsole />
           </SensorCard>
         </>
       )}

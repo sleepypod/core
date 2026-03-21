@@ -1,5 +1,7 @@
 'use client'
 
+import { useState } from 'react'
+import { ChevronRight } from 'lucide-react'
 import { useSchedule } from '@/src/hooks/useSchedule'
 import { DaySelector } from './DaySelector'
 import { PowerScheduleSection } from './PowerScheduleSection'
@@ -43,6 +45,8 @@ export function SchedulePage() {
   // Also keep the direct getAll query for PowerScheduleSection/AlarmScheduleSection props
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
 
+  const [showAdvanced, setShowAdvanced] = useState(false)
+
   return (
     <div className="space-y-3 sm:space-y-4">
       {/* Day Selector — multi-select for bulk operations */}
@@ -82,31 +86,51 @@ export function SchedulePage() {
         </div>
       )}
 
-      {/* Temperature Set Points — interactive CRUD with optimistic updates */}
-      <TemperatureSetPoints selectedDay={selectedDay} />
+      {/* Advanced — Manual Controls (collapsed by default) */}
+      <div className="space-y-3">
+        <button
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="flex items-center gap-2 w-full"
+        >
+          <span className="text-xs font-medium text-zinc-500">Manual Controls</span>
+          <span className="text-[10px] text-zinc-600">Set points, power, alarm</span>
+          <span className="flex-1" />
+          <ChevronRight
+            size={12}
+            className={`text-zinc-600 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
+          />
+        </button>
 
-      {/* Power Schedule — on/off times, start temperature, enable toggle */}
-      <PowerScheduleSection
-        schedules={data?.power ?? []}
-        selectedDay={selectedDay}
-        isLoading={isLoading}
-      />
+        {showAdvanced && (
+          <div className="space-y-3">
+            {/* Temperature Set Points — interactive CRUD with optimistic updates */}
+            <TemperatureSetPoints selectedDay={selectedDay} />
 
-      {/* Alarm Schedule — time, vibration config, pattern, duration */}
-      <AlarmScheduleSection
-        schedules={data?.alarm ?? []}
-        selectedDay={selectedDay}
-        isLoading={isLoading}
-      />
+            {/* Power Schedule — on/off times, start temperature, enable toggle */}
+            <PowerScheduleSection
+              schedules={data?.power ?? []}
+              selectedDay={selectedDay}
+              isLoading={isLoading}
+            />
 
-      {/* Apply to other days — copy current day schedule to target days */}
-      <ApplyToOtherDays
-        sourceDay={selectedDay}
-        selectedDays={selectedDays}
-        onApply={(targetDays) => void applyToOtherDays(targetDays)}
-        isLoading={isApplying}
-        hasSchedule={hasScheduleData}
-      />
+            {/* Alarm Schedule — time, vibration config, pattern, duration */}
+            <AlarmScheduleSection
+              schedules={data?.alarm ?? []}
+              selectedDay={selectedDay}
+              isLoading={isLoading}
+            />
+
+            {/* Apply to other days — copy current day schedule to target days */}
+            <ApplyToOtherDays
+              sourceDay={selectedDay}
+              selectedDays={selectedDays}
+              onApply={(targetDays) => void applyToOtherDays(targetDays)}
+              isLoading={isApplying}
+              hasSchedule={hasScheduleData}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Week Overview — at-a-glance schedule coverage */}
       <ScheduleWeekOverview

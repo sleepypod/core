@@ -224,7 +224,7 @@ function findLatestRaw(dir: string): string | null {
 const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
-  'deviceStatus',
+  'deviceStatus', 'gesture',
 ] as const
 
 /** Valid sensor type string. Used for subscription filtering. */
