@@ -14,8 +14,12 @@ msgstr ""
 "Plural-Forms: \n"
 
 #: src/components/BottomNav/BottomNav.tsx:13
-msgid "Data"
+msgid "Biometrics"
 msgstr ""
+
+#: src/components/BottomNav/BottomNav.tsx:13
+#~ msgid "Data"
+#~ msgstr ""
 
 #: app/[lang]/health/page.tsx:13
 msgid "Hello, tRPC test page!"
@@ -34,8 +38,8 @@ msgid "Sensors"
 msgstr ""
 
 #: src/components/BottomNav/BottomNav.tsx:16
-msgid "Settings"
-msgstr ""
+#~ msgid "Settings"
+#~ msgstr ""
 
 #: src/components/BottomNav/BottomNav.tsx:15
 msgid "Status"

@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { trpc } from '@/src/utils/trpc'
+import { useSideNames } from '@/src/hooks/useSideNames'
 import { Hand, Plus, Trash2, Thermometer, Bell, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -76,6 +77,7 @@ function editStateFromGesture(g: GestureRecord): EditState {
  * Matches iOS TapGestureConfigView feature set with editable controls.
  */
 export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right' } = {}) {
+  const { sideName } = useSideNames()
   const utils = trpc.useUtils()
   const settingsQuery = trpc.settings.getAll.useQuery({})
   const setGesture = trpc.settings.setGesture.useMutation({
@@ -135,11 +137,9 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
   )
 
   const renderSideSection = (side: Side) => {
-    const sideLabel = side === 'left' ? 'Left Side' : 'Right Side'
-
     return (
       <div className="space-y-2">
-        <h4 className="text-xs font-semibold text-sky-400">{sideLabel}</h4>
+        <h4 className="text-xs font-semibold text-sky-400">{sideName(side)}</h4>
 
         {TAP_TYPES.map(({ key, label, taps }) => {
           const gesture = findGesture(side, key)
