@@ -39,6 +39,8 @@ interface HealthStatusCardProps {
   isLoading?: boolean
   /** Additional content to render when expanded (e.g. upcoming jobs) */
   expandedContent?: React.ReactNode
+  /** Optional callback when header is clicked (overrides default expand behavior) */
+  onHeaderClick?: () => void
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -75,6 +77,7 @@ export function HealthStatusCard({
   services,
   isLoading,
   expandedContent,
+  onHeaderClick,
 }: HealthStatusCardProps) {
   const [isExpanded, setIsExpanded] = useState(false)
 
@@ -87,7 +90,7 @@ export function HealthStatusCard({
       <button
         type="button"
         className="flex w-full items-center gap-2.5 text-left sm:gap-3"
-        onClick={() => setIsExpanded(prev => !prev)}
+        onClick={() => onHeaderClick ? onHeaderClick() : setIsExpanded(prev => !prev)}
       >
         {/* Icon badge */}
         <div className={clsx('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', iconBg)}>

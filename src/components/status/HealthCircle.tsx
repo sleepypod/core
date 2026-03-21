@@ -17,7 +17,6 @@ interface HealthCircleProps {
   waterLevel?: string
   isPriming?: boolean
   onWaterClick?: () => void
-  onCalibrationClick?: () => void
 }
 
 function podModelName(version: string): string {
@@ -45,7 +44,6 @@ export function HealthCircle({
   waterLevel,
   isPriming,
   onWaterClick,
-  onCalibrationClick,
 }: HealthCircleProps) {
   const progress = total > 0 ? healthy / total : 0
   const allHealthy = healthy === total && total > 0
@@ -146,13 +144,6 @@ export function HealthCircle({
           ) : (
             <button onClick={onWaterClick} className="flex items-center gap-1 text-[10px] text-zinc-500 active:opacity-70">
               &#x1f4a7; Water
-            </button>
-          )}
-
-          {/* Calibration — tappable */}
-          {onCalibrationClick && (
-            <button onClick={onCalibrationClick} className="flex items-center gap-1 text-[10px] text-zinc-500 active:opacity-70">
-              &#x2699; Calibration
             </button>
           )}
 

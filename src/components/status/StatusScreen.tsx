@@ -5,7 +5,6 @@ import { trpc } from '@/src/utils/trpc'
 import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { HealthCircle } from './HealthCircle'
 import { HealthStatusCard } from './HealthStatusCard'
-import { SystemInfoCard } from './SystemInfoCard'
 import { UpdateCard } from './UpdateCard'
 import { WaterModal } from './WaterModal'
 import { CalibrationModal } from './CalibrationModal'
@@ -17,6 +16,9 @@ import {
   Cpu,
   Calendar,
   Activity,
+  RefreshCw,
+  Radio,
+  Terminal,
 } from 'lucide-react'
 
 const POLL_INTERVAL = 10_000
@@ -76,6 +78,12 @@ export function StatusScreen() {
   const waterLatest = trpc.waterLevel.getLatest.useQuery({}, { refetchInterval: 30_000 })
   const deviceStatus = trpc.device.getStatus.useQuery({}, { refetchInterval: 10_000 })
 
+  // Calibration status for the summary line
+  const calibrationStatus = trpc.calibration.getStatus.useQuery(
+    { side: 'left' },
+    { refetchInterval: 10_000 },
+  )
+
   const utils = trpc.useUtils()
 
   /** Pull-to-refresh: refetch all status queries. */
@@ -107,16 +115,16 @@ export function StatusScreen() {
       detail: system.data?.database?.error,
     },
     {
-      name: 'WiFi',
-      description: wifi.data?.connected
-        ? `${wifi.data.ssid ?? 'Connected'} \u00b7 ${wifi.data.signal ?? 0}%`
-        : 'Not connected',
-      status: (wifi.data?.connected ? 'ok' : 'degraded') as 'ok' | 'degraded',
-    },
-    {
       name: 'System',
       description: system.data?.status === 'ok' ? 'All checks passing' : 'Degraded',
       status: (system.data?.status ?? 'unknown') as 'ok' | 'degraded' | 'unknown',
+    },
+    {
+      name: 'Scheduler',
+      description: scheduler.data?.enabled
+        ? `Enabled \u00b7 ${scheduler.data?.jobCounts?.total ?? 0} jobs`
+        : 'Disabled',
+      status: (scheduler.data?.healthy ? 'ok' : scheduler.data?.enabled ? 'degraded' : 'ok') as 'ok' | 'degraded',
     },
   ]
 
@@ -141,34 +149,48 @@ export function StatusScreen() {
     },
   ]
 
-  const schedulerEnabled = scheduler.data?.enabled ?? false
-  const jobCounts = scheduler.data?.jobCounts
-  const drift = system.data?.scheduler?.drift
+  // Calibration summary for the card
+  const calStatus = calibrationStatus.data
+  const calSensors = ['piezo', 'capacitance', 'temperature'] as const
+  const calCompleted = calSensors.filter(s => calStatus?.[s]?.status === 'completed').length
+  const calRunning = calSensors.some(s => calStatus?.[s]?.status === 'running' || calStatus?.[s]?.status === 'pending')
 
-  const schedulerServices = [
-    {
-      name: 'Scheduler',
-      description: schedulerEnabled
-        ? `Enabled \u00b7 ${jobCounts?.total ?? 0} jobs`
-        : 'Disabled',
-      status: (scheduler.data?.healthy ? 'ok' : schedulerEnabled ? 'degraded' : 'ok') as 'ok' | 'degraded',
-    },
-    ...(drift ? [{
-      name: 'Schedule Sync',
-      description: drift.drifted
-        ? `Drifted: ${drift.dbScheduleCount} DB vs ${drift.schedulerJobCount} active`
-        : `In sync \u00b7 ${drift.dbScheduleCount} schedules`,
-      status: (drift.drifted ? 'degraded' : 'ok') as 'ok' | 'degraded',
-    }] : []),
-  ]
-
-  const systemdServices = (logSources.data?.sources ?? []).map(source => ({
-    name: source.name,
-    description: source.unit,
-    status: (source.active ? 'ok' : 'degraded') as 'ok' | 'degraded',
+  const calibrationServices = calSensors.map(type => ({
+    name: type.charAt(0).toUpperCase() + type.slice(1),
+    description: calStatus?.[type]
+      ? calStatus[type].status === 'completed'
+        ? `Quality: ${calStatus[type].qualityScore != null ? `${Math.round((calStatus[type].qualityScore as number) * 100)}%` : '--'}`
+        : calStatus[type].status
+      : 'No data',
+    status: (calStatus?.[type]?.status === 'completed' ? 'ok'
+      : calStatus?.[type]?.status === 'running' || calStatus?.[type]?.status === 'pending' ? 'degraded'
+      : 'unknown') as 'ok' | 'degraded' | 'unknown',
   }))
 
-  // Upcoming jobs for scheduler expanded view
+  // Network discovery = WiFi + Internet + systemd services
+  const networkServices = [
+    {
+      name: 'WiFi',
+      description: wifi.data?.connected
+        ? `${wifi.data.ssid ?? 'Connected'} \u00b7 ${wifi.data.signal ?? 0}%`
+        : 'Not connected',
+      status: (wifi.data?.connected ? 'ok' : 'degraded') as 'ok' | 'degraded',
+    },
+    {
+      name: 'Internet',
+      description: internet.data?.blocked ? 'Blocked (local only)' : 'Available',
+      status: 'ok' as const,
+    },
+    ...(logSources.data?.sources ?? []).map(source => ({
+      name: source.name,
+      description: source.unit,
+      status: (source.active ? 'ok' : 'degraded') as 'ok' | 'degraded',
+    })),
+  ]
+
+  // Scheduler expanded content
+  const jobCounts = scheduler.data?.jobCounts
+  const drift = system.data?.scheduler?.drift
   const upcomingJobs = scheduler.data?.upcomingJobs as Array<{
     id: string
     type: string
@@ -189,6 +211,13 @@ export function StatusScreen() {
             {jobCounts.prime > 0 && <span className="text-zinc-300">Prime: {jobCounts.prime}</span>}
             {jobCounts.reboot > 0 && <span className="text-zinc-300">Reboot: {jobCounts.reboot}</span>}
           </div>
+        </div>
+      )}
+      {drift && (
+        <div className="text-xs text-zinc-400">
+          {drift.drifted
+            ? `Drifted: ${drift.dbScheduleCount} DB vs ${drift.schedulerJobCount} active`
+            : `In sync \u00b7 ${drift.dbScheduleCount} schedules`}
         </div>
       )}
       {upcomingJobs && upcomingJobs.length > 0 && (
@@ -212,7 +241,7 @@ export function StatusScreen() {
 
   // ─── Aggregate totals ─────────────────────────────────────────────
 
-  const allServices = [...coreServices, ...hardwareServices, ...schedulerServices, ...systemdServices]
+  const allServices = [...coreServices, ...hardwareServices, ...calibrationServices, ...networkServices]
   const totalHealthy = allServices.filter(s => s.status === 'ok').length
   const totalServices = allServices.length
 
@@ -238,22 +267,24 @@ export function StatusScreen() {
         waterLevel={waterLatest.data?.level ?? undefined}
         isPriming={deviceStatus.data?.isPriming ?? false}
         onWaterClick={() => setWaterModalOpen(true)}
-        onCalibrationClick={() => setCalibrationModalOpen(true)}
       />
 
-      {/* Internet access toggle — above service cards */}
+      {/* Internet access toggle */}
       <InternetToggleCard />
 
+      {/* ── Core ── */}
       <HealthStatusCard
         title="Core"
-        description="Server, database, and WiFi"
+        description="Server, database, and scheduler"
         icon={Server}
         iconColor="text-sky-400"
         iconBg="bg-sky-400/20"
         services={coreServices}
-        isLoading={system.isLoading || wifi.isLoading}
+        isLoading={system.isLoading}
+        expandedContent={schedulerExpandedContent}
       />
 
+      {/* ── Hardware ── */}
       <HealthStatusCard
         title="Hardware"
         description="DAC socket and monitoring"
@@ -264,28 +295,28 @@ export function StatusScreen() {
         isLoading={hardware.isLoading || dacMonitor.isLoading}
       />
 
+      {/* ── Calibration ── */}
       <HealthStatusCard
-        title="Schedules"
-        description="Temperature, power, and alarm jobs"
-        icon={Calendar}
-        iconColor="text-amber-400"
-        iconBg="bg-amber-400/20"
-        services={schedulerServices}
-        isLoading={scheduler.isLoading}
-        expandedContent={schedulerExpandedContent}
+        title="Calibration"
+        description={calRunning ? 'Running...' : `${calCompleted}/3 sensors calibrated`}
+        icon={RefreshCw}
+        iconColor="text-orange-400"
+        iconBg="bg-orange-400/20"
+        services={calibrationServices}
+        isLoading={calibrationStatus.isLoading}
+        onHeaderClick={() => setCalibrationModalOpen(true)}
       />
 
-      {systemdServices.length > 0 && (
-        <HealthStatusCard
-          title="Services"
-          description="Systemd service units"
-          icon={Activity}
-          iconColor="text-teal-400"
-          iconBg="bg-teal-400/20"
-          services={systemdServices}
-          isLoading={logSources.isLoading}
-        />
-      )}
+      {/* ── Network & Discovery ── */}
+      <HealthStatusCard
+        title="Network"
+        description="WiFi, internet, and services"
+        icon={Radio}
+        iconColor="text-teal-400"
+        iconBg="bg-teal-400/20"
+        services={networkServices}
+        isLoading={wifi.isLoading || logSources.isLoading}
+      />
 
       {/* Software update */}
       <UpdateCard />
@@ -293,8 +324,14 @@ export function StatusScreen() {
       {/* System log viewer — journalctl browser */}
       <SystemLogViewer />
 
-      {/* Firmware Console */}
-      <FirmwareLogConsole />
+      {/* Firmware Console — wrapped in a card */}
+      <section className="rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3 sm:p-4">
+        <div className="mb-2 flex items-center gap-2">
+          <Terminal size={14} className="text-zinc-500" />
+          <span className="text-sm font-medium text-white">Console</span>
+        </div>
+        <FirmwareLogConsole />
+      </section>
 
       {system.dataUpdatedAt && (
         <p className="text-center text-xs text-zinc-600">
