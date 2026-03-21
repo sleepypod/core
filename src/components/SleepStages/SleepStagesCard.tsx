@@ -18,6 +18,8 @@ import {
 
 interface SleepStagesCardProps {
   side: 'left' | 'right'
+  /** Initial time range view. Defaults to 'night'. */
+  defaultTimeRange?: TimeRange
 }
 
 /** Get the start of the week (Sunday) for a given date */
@@ -59,8 +61,8 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
  *
  * Wired to tRPC biometrics.getSleepStages and biometrics.getSleepRecords.
  */
-export function SleepStagesCard({ side }: SleepStagesCardProps) {
-  const [timeRange, setTimeRange] = useState<TimeRange>('night')
+export function SleepStagesCard({ side, defaultTimeRange = 'night' }: SleepStagesCardProps) {
+  const [timeRange, setTimeRange] = useState<TimeRange>(defaultTimeRange)
   const [weekOffset, setWeekOffset] = useState(0) // 0 = current week, -1 = last week, etc.
   const [monthOffset, setMonthOffset] = useState(0)
   const [selectedWeekNight, setSelectedWeekNight] = useState<string | null>(null)
@@ -353,14 +355,6 @@ export function SleepStagesCard({ side }: SleepStagesCardProps) {
                   {formatNightDate(new Date(stagesData.enteredBedAt))}
                 </p>
               )}
-
-              {/* Hypnogram */}
-              <Hypnogram
-                blocks={stagesData.blocks}
-                epochs={stagesData.epochs}
-                startTime={stagesData.enteredBedAt ?? stagesData.epochs[0].start}
-                endTime={stagesData.leftBedAt ?? stagesData.epochs[stagesData.epochs.length - 1].start + stagesData.epochs[stagesData.epochs.length - 1].duration}
-              />
             </>
           ) : (
             <div className="flex h-32 items-center justify-center text-sm text-zinc-500">

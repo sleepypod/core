@@ -19,6 +19,7 @@ const SECTIONS = [
   { id: 'sleep', label: 'Sleep' },
   { id: 'stages', label: 'Stages' },
   { id: 'vitals', label: 'Vitals' },
+  { id: 'timeline', label: 'Timeline' },
   { id: 'movement', label: 'Movement' },
 ] as const
 
@@ -160,7 +161,7 @@ export default function DataPage() {
         )}
       </section>
 
-      {/* ── Sleep Stages ── */}
+      {/* ── Sleep Stages (quality score + distribution) ── */}
       <section id="section-stages">
         {showBothSides ? (
           <div className="space-y-4">
@@ -174,13 +175,27 @@ export default function DataPage() {
         )}
       </section>
 
-      {/* ── Vitals: 3-block grid + charts (no duplicate nav/summary) ── */}
+      {/* ── Vitals: 3-block grid + charts (HR, HRV, BR) ── */}
       <section id="section-vitals" className="space-y-4">
         <VitalsGrid />
         <VitalsPanel dualSide={showBothSides} hideNav hideSummary />
       </section>
 
-      {/* ── Movement (no duplicate date picker) ── */}
+      {/* ── Sleep Timeline (weekly bar chart — matches iOS) ── */}
+      <section id="section-timeline">
+        {showBothSides ? (
+          <div className="space-y-4">
+            <SideLabel side="left" />
+            <SleepStagesCard side="left" defaultTimeRange="week" />
+            <SideLabel side="right" />
+            <SleepStagesCard side="right" defaultTimeRange="week" />
+          </div>
+        ) : (
+          <SleepStagesCard side={primarySide} defaultTimeRange="week" />
+        )}
+      </section>
+
+      {/* ── Movement ── */}
       <section id="section-movement">
         <MovementChart dualSide={showBothSides} hideNav />
       </section>
