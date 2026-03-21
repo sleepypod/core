@@ -159,16 +159,24 @@ export function useSchedule() {
             enabled: newEnabled,
           })
         }
+      } else if (newEnabled) {
+        // Create a default power schedule when enabling a day that has none
+        await createPowerSchedule.mutateAsync({
+          side,
+          dayOfWeek: day,
+          onTime: '22:00',
+          offTime: '07:00',
+          onTemperature: 75,
+          enabled: true,
+        })
       }
-      // If no power schedule exists for this day and we're enabling,
-      // we can't create one without on/off times — skip silently
     }
 
     setConfirmMessage(
       `Schedule ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
     )
     confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 3000)
-  }, [allSchedulesQuery.data, isPowerEnabled, selectedDays, updatePowerSchedule])
+  }, [allSchedulesQuery.data, isPowerEnabled, selectedDays, side, updatePowerSchedule, createPowerSchedule])
 
   /**
    * Toggle ALL schedule types (temperature + power + alarm) enable/disable
@@ -201,10 +209,21 @@ export function useSchedule() {
       const dayPowerSchedules = allData.power.filter(
         (p: PowerSchedule) => p.dayOfWeek === day
       )
-      for (const ps of dayPowerSchedules) {
-        await updatePowerSchedule.mutateAsync({
-          id: ps.id,
-          enabled: newEnabled,
+      if (dayPowerSchedules.length > 0) {
+        for (const ps of dayPowerSchedules) {
+          await updatePowerSchedule.mutateAsync({
+            id: ps.id,
+            enabled: newEnabled,
+          })
+        }
+      } else if (newEnabled) {
+        await createPowerSchedule.mutateAsync({
+          side,
+          dayOfWeek: day,
+          onTime: '22:00',
+          offTime: '07:00',
+          onTemperature: 75,
+          enabled: true,
         })
       }
 
@@ -228,9 +247,11 @@ export function useSchedule() {
     allSchedulesQuery.data,
     isPowerEnabled,
     selectedDays,
+    side,
     updateTempSchedule,
     updatePowerSchedule,
     updateAlarmSchedule,
+    createPowerSchedule,
   ])
 
   /**

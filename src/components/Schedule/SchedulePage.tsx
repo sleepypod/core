@@ -1,29 +1,32 @@
 'use client'
 
-import { useState } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import { Moon, Sun } from 'lucide-react'
 import { useSchedule } from '@/src/hooks/useSchedule'
 import { DaySelector } from './DaySelector'
-import { PowerScheduleSection } from './PowerScheduleSection'
-import { AlarmScheduleSection } from './AlarmScheduleSection'
-import { TemperatureSetPoints } from './TemperatureSetPoints'
+import { CurvePresets } from './CurvePresets'
+import { CurveChart } from './CurveChart'
+import { PhaseLegend } from './PhaseLegend'
+import { TimePicker } from './TimePicker'
 import { ScheduleWeekOverview } from './ScheduleWeekOverview'
 import { ScheduleToggle } from './ScheduleToggle'
-import { ApplyToOtherDays } from './ApplyToOtherDays'
 import { SchedulerConfirmation } from './SchedulerConfirmation'
+import { ManualControlsSheet } from './ManualControlsSheet'
 import { trpc } from '@/src/utils/trpc'
+import {
+  generateSleepCurve,
+  timeStringToMinutes,
+} from '@/src/lib/sleepCurve/generate'
+import type { CoolingIntensity, CurvePoint } from '@/src/lib/sleepCurve/types'
 
 /**
- * Complete Schedule page layout composing:
- * - Side selector (left/right via global useSide)
- * - Day selector (7 circular day buttons with multi-select for bulk ops)
- * - Schedule enable/disable toggle (bulk across selected days)
- * - Scheduler reload confirmation banner
- * - Temperature set points (interactive CRUD with optimistic updates)
- * - Power schedule section (on/off time, temperature, toggle — with mutations)
- * - Alarm schedule section (time, vibration, pattern, duration — with mutations)
- * - Apply to other days (copy source day schedule to targets)
- * - Week overview summary (schedule coverage across all days)
+ * Redesigned Schedule page layout:
+ * 1. Day selector (multi-select for bulk ops)
+ * 2. Curve presets (horizontal scroll: Hot Sleeper, Balanced, Cold Sleeper)
+ * 3. Bedtime/wake time pickers + visual temperature curve chart
+ * 4. Schedule enable/disable toggle
+ * 5. Manual Controls button → opens bottom sheet
+ * 6. Week overview summary
  */
 export function SchedulePage() {
   const {
@@ -42,14 +45,53 @@ export function SchedulePage() {
     isLoading: hookLoading,
   } = useSchedule()
 
-  // Also keep the direct getAll query for PowerScheduleSection/AlarmScheduleSection props
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
 
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  // Curve state — updated when presets are applied or times change
+  const [bedtime, setBedtime] = useState('22:00')
+  const [wakeTime, setWakeTime] = useState('07:00')
+  const [intensity, setIntensity] = useState<CoolingIntensity>('balanced')
+  const [minTempF, setMinTempF] = useState(68)
+  const [maxTempF, setMaxTempF] = useState(86)
+
+  const bedtimeMinutes = useMemo(() => timeStringToMinutes(bedtime), [bedtime])
+  const wakeMinutes = useMemo(() => timeStringToMinutes(wakeTime), [wakeTime])
+
+  const curvePoints: CurvePoint[] = useMemo(
+    () =>
+      generateSleepCurve({
+        bedtimeMinutes,
+        wakeMinutes,
+        intensity,
+        minTempF,
+        maxTempF,
+      }),
+    [bedtimeMinutes, wakeMinutes, intensity, minTempF, maxTempF],
+  )
+
+  // When a preset is applied, sync curve display state
+  const handlePresetApplied = useCallback(
+    (config: {
+      points: CurvePoint[]
+      bedtimeMinutes: number
+      minTempF: number
+      maxTempF: number
+      intensity: CoolingIntensity
+      bedtime: string
+      wakeTime: string
+    }) => {
+      setBedtime(config.bedtime)
+      setWakeTime(config.wakeTime)
+      setMinTempF(config.minTempF)
+      setMaxTempF(config.maxTempF)
+      setIntensity(config.intensity)
+    },
+    [],
+  )
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      {/* Day Selector — multi-select for bulk operations */}
+      {/* 1. Day Selector */}
       <DaySelector
         activeDay={selectedDay}
         onActiveDayChange={setSelectedDay}
@@ -60,11 +102,51 @@ export function SchedulePage() {
       {/* Multi-day info banner */}
       {selectedDays.size > 1 && (
         <div className="rounded-lg bg-sky-500/10 px-3 py-2 text-xs text-sky-400">
-          {selectedDays.size} days selected — toggle affects all selected days
+          {selectedDays.size} days selected — changes affect all selected days
         </div>
       )}
 
-      {/* Schedule enable/disable toggle (bulk across selected days) */}
+      {/* 2. Curve Presets */}
+      <CurvePresets
+        side={side}
+        selectedDay={selectedDay}
+        selectedDays={selectedDays}
+        onApplied={handlePresetApplied}
+      />
+
+      {/* 3. Time Pickers + Curve Chart */}
+      <div className="space-y-3">
+        <div className="flex gap-4">
+          <TimePicker
+            label="Bedtime"
+            icon={<Moon size={14} />}
+            accentClass="text-purple-400"
+            value={bedtime}
+            onChange={setBedtime}
+          />
+          <TimePicker
+            label="Wake Up"
+            icon={<Sun size={14} />}
+            accentClass="text-amber-400"
+            value={wakeTime}
+            onChange={setWakeTime}
+          />
+        </div>
+
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+          <CurveChart
+            points={curvePoints}
+            bedtimeMinutes={bedtimeMinutes}
+            minTempF={minTempF}
+            maxTempF={maxTempF}
+          />
+          <div className="mt-2">
+            <PhaseLegend />
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Schedule Toggle */}
       <ScheduleToggle
         enabled={isPowerEnabled}
         onToggle={() => void toggleAllSchedules()}
@@ -72,7 +154,7 @@ export function SchedulePage() {
         isLoading={isMutating || hookLoading}
       />
 
-      {/* Scheduler reload confirmation banner */}
+      {/* Confirmation banner */}
       <SchedulerConfirmation
         message={confirmMessage}
         isLoading={isApplying}
@@ -86,53 +168,19 @@ export function SchedulePage() {
         </div>
       )}
 
-      {/* Advanced — Manual Controls (collapsed by default) */}
-      <div className="space-y-3">
-        <button
-          onClick={() => setShowAdvanced((v) => !v)}
-          className="flex items-center gap-2 w-full"
-        >
-          <span className="text-xs font-medium text-zinc-500">Manual Controls</span>
-          <span className="text-[10px] text-zinc-600">Set points, power, alarm</span>
-          <span className="flex-1" />
-          <ChevronRight
-            size={12}
-            className={`text-zinc-600 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
-          />
-        </button>
+      {/* 5. Manual Controls → Bottom Sheet */}
+      <ManualControlsSheet
+        selectedDay={selectedDay}
+        selectedDays={selectedDays}
+        powerSchedules={data?.power ?? []}
+        alarmSchedules={data?.alarm ?? []}
+        isLoading={isLoading}
+        hasScheduleData={hasScheduleData}
+        isApplying={isApplying}
+        onApplyToOtherDays={(targetDays) => void applyToOtherDays(targetDays)}
+      />
 
-        {showAdvanced && (
-          <div className="space-y-3">
-            {/* Temperature Set Points — interactive CRUD with optimistic updates */}
-            <TemperatureSetPoints selectedDay={selectedDay} />
-
-            {/* Power Schedule — on/off times, start temperature, enable toggle */}
-            <PowerScheduleSection
-              schedules={data?.power ?? []}
-              selectedDay={selectedDay}
-              isLoading={isLoading}
-            />
-
-            {/* Alarm Schedule — time, vibration config, pattern, duration */}
-            <AlarmScheduleSection
-              schedules={data?.alarm ?? []}
-              selectedDay={selectedDay}
-              isLoading={isLoading}
-            />
-
-            {/* Apply to other days — copy current day schedule to target days */}
-            <ApplyToOtherDays
-              sourceDay={selectedDay}
-              selectedDays={selectedDays}
-              onApply={(targetDays) => void applyToOtherDays(targetDays)}
-              isLoading={isApplying}
-              hasSchedule={hasScheduleData}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Week Overview — at-a-glance schedule coverage */}
+      {/* 6. Week Overview */}
       <ScheduleWeekOverview
         selectedDay={selectedDay}
         onDayChange={(day) => {

@@ -70,9 +70,13 @@ Achieve visual and functional parity between web and iOS schedule pages. Move fr
 - Verify end-to-end
 
 ## Current State
-- Web: flat layout with all controls visible, toggle bug, no curve chart
-- iOS: has SmartCurveView with presets + chart, manual controls in disclosure (display-only)
-- Both: manual controls need to be in a bottom sheet, not inline
+- Step 1: DONE — toggle bug fixed, creates default power schedule (on=22:00, off=07:00, temp=75) when none exists
+- Step 2: DONE — CurvePresets.tsx created (Hot Sleeper / Balanced / Cold Sleeper horizontal scroll)
+- Step 3: DONE (was already done) — CurveChart.tsx exists with recharts AreaChart
+- Step 4: DONE — SchedulePage restructured: day selector → presets → time pickers + chart → toggle → manual controls sheet → week overview
+- Step 5: DONE — ManualControlsSheet.tsx created (bottom sheet with drag-to-dismiss, contains set points/power/alarm/apply-to-days)
+- Step 6: TODO — iOS parity check
+- Step 7: TODO — Commit + deploy
 
 ## Reference Files
 - Web schedule: `src/components/Schedule/SchedulePage.tsx`
