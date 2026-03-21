@@ -42,32 +42,36 @@ describe('classifySleepStages', () => {
   })
 
   it('classifies low HR ratio as deep sleep', () => {
-    // avg HR will be ~55, so ratio = 55/55 = 1.0... need lower HR
-    // With single point, avg = the HR itself, so ratio = 1
-    // Need multiple points with varying HR
+    // Use a varied window so the low-HR epoch stays within 2×stdDev of the window median.
+    // Window at index 2: [80,65,63,75,72], median=72, stdDev≈6.3, 2×stdDev≈12.6
+    // Deviation of 63 from 72 = 9 < 12.6 → passes outlier filter.
+    // avg HR = 71, ratio = 63/71 = 0.887 < 0.92 → deep
     const vitals = [
-      vitalRow(0, 70, 40, 15),
-      vitalRow(5, 70, 40, 15),
-      vitalRow(10, 60, 50, 14), // low HR ratio relative to avg (~66.6) = 0.9
+      vitalRow(0, 80, 35, 15),
+      vitalRow(5, 65, 40, 15),
+      vitalRow(10, 63, 50, 14),
+      vitalRow(15, 75, 38, 15),
+      vitalRow(20, 72, 36, 15),
     ]
-    const result = classifySleepStages(vitals, [])
-    // The third epoch with HR 60, avg ~66.6, ratio ~0.9 should be deep
+    const result = classifySleepStages(vitals, [], 1.0)
     expect(result[2].stage).toBe('deep')
   })
 
   it('classifies elevated HR + low HRV + low movement as REM', () => {
+    // Use varied baseline so the elevated HR epoch stays within 2×stdDev of its window.
+    // Window at index 4 (last): [65,68,78], median=68, stdDev≈5.6, 2×stdDev≈11.1
+    // Deviation of 78 from 68 = 10 < 11.1 → passes outlier filter.
+    // avg HR = 65.6, ratio = 78/65.6 = 1.19 > 0.95, HRV=18<25, movement=10<30 → REM
+    // Index 4 is last so temporal smoothing cannot affect it.
     const vitals = [
-      vitalRow(0, 60, 20, 14),
-      vitalRow(5, 60, 20, 14),
-      vitalRow(10, 60, 20, 14),
-      vitalRow(15, 60, 20, 14),
-      // Now a higher HR epoch with low HRV
-      vitalRow(20, 68, 18, 16),
+      vitalRow(0, 55, 20, 14),
+      vitalRow(5, 62, 20, 14),
+      vitalRow(10, 65, 20, 14),
+      vitalRow(15, 68, 20, 14),
+      vitalRow(20, 78, 18, 16), // elevated HR + low HRV → REM
     ]
     const movement = [movRow(20, 10)] // low movement
-    const result = classifySleepStages(vitals, movement)
-    // avg HR = (60*4 + 68)/5 = 61.6, epoch 4 ratio = 68/61.6 = 1.10 > 0.95
-    // HRV = 18 < 25, movement = 10 < 30 → REM
+    const result = classifySleepStages(vitals, movement, 1.0)
     expect(result[4].stage).toBe('rem')
   })
 

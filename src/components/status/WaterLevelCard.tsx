@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { Droplets, Play, X, AlertTriangle, TrendingDown, TrendingUp, Minus, Loader2 } from 'lucide-react'
 
@@ -33,6 +33,15 @@ export function WaterLevelCard() {
 
   const { data: trend } = trpc.waterLevel.getTrend.useQuery(
     { hours: 24 },
+    { refetchInterval: 60_000 },
+  )
+
+  // Last 7 days of readings for the trend chart
+  const { data: history } = trpc.waterLevel.getHistory.useQuery(
+    {
+      startDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      limit: 10000,
+    },
     { refetchInterval: 60_000 },
   )
 
@@ -101,7 +110,7 @@ export function WaterLevelCard() {
             <div className="mb-1 text-xs text-zinc-500">
               {trend.direction !== 'stable' && (
                 <span>
-                  {trend.changePercent > 0 ? '+' : ''}{trend.changePercent.toFixed(1)}% / 24h
+                  {(trend.changePercent ?? 0) > 0 ? '+' : ''}{(trend.changePercent ?? 0).toFixed(1)}% / 24h
                 </span>
               )}
               {trend.direction === 'stable' && <span>Stable</span>}
@@ -112,18 +121,8 @@ export function WaterLevelCard() {
         <p className="text-xs text-zinc-600">No water level data</p>
       )}
 
-      {/* Level bar */}
-      {latest?.levelPercent != null && (
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${
-              latest.levelPercent < 20 ? 'bg-red-400' :
-              latest.levelPercent < 40 ? 'bg-amber-400' : 'bg-sky-400'
-            }`}
-            style={{ width: `${Math.min(latest.levelPercent, 100)}%` }}
-          />
-        </div>
-      )}
+      {/* 7-day trend chart */}
+      <WaterLevelChart history={history} />
 
       {/* Active alerts */}
       {activeAlerts.length > 0 && (
@@ -190,6 +189,80 @@ export function WaterLevelCard() {
           {startPrimeMutation.error?.message ?? 'Failed to start prime'}
         </p>
       )}
+    </div>
+  )
+}
+
+// SVG sparkline of water level over time — shows leak trends
+function WaterLevelChart({ history }: { history?: { timestamp: Date; level: string }[] }) {
+  const points = useMemo(() => {
+    if (!history || history.length < 2) return null
+    // History is DESC, reverse to chronological
+    const sorted = [...history].reverse()
+    const values = sorted.map(r => ({
+      ts: new Date(r.timestamp).getTime(),
+      level: r.level === 'low' ? 30 : 80,
+    }))
+    // Downsample to ~200 points for performance
+    const step = Math.max(1, Math.floor(values.length / 200))
+    return values.filter((_, i) => i % step === 0 || i === values.length - 1)
+  }, [history])
+
+  if (!points || points.length < 2) return null
+
+  const W = 300
+  const H = 48
+  const PAD = 2
+  const minTs = points[0].ts
+  const maxTs = points[points.length - 1].ts
+  const tsRange = maxTs - minTs || 1
+
+  const toX = (ts: number) => PAD + ((ts - minTs) / tsRange) * (W - PAD * 2)
+  const toY = (level: number) => H - PAD - ((level - 10) / 90) * (H - PAD * 2)
+
+  const pathD = points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${toX(p.ts).toFixed(1)},${toY(p.level).toFixed(1)}`)
+    .join(' ')
+
+  // Area fill under the line
+  const areaD = `${pathD} L${toX(points[points.length - 1].ts).toFixed(1)},${H} L${toX(points[0].ts).toFixed(1)},${H} Z`
+
+  // Color based on latest level
+  const lastLevel = points[points.length - 1].level
+  const color = lastLevel <= 30 ? '#f87171' : lastLevel <= 50 ? '#fbbf24' : '#38bdf8'
+
+  // Day labels
+  const dayLabels = useMemo(() => {
+    const labels: { x: number; label: string }[] = []
+    const seen = new Set<string>()
+    for (const p of points) {
+      const d = new Date(p.ts)
+      const day = d.toLocaleDateString('en-US', { weekday: 'short' })
+      if (!seen.has(day)) {
+        seen.add(day)
+        labels.push({ x: toX(p.ts), label: day })
+      }
+    }
+    return labels
+  }, [points])
+
+  return (
+    <div className="relative">
+      <svg viewBox={`0 0 ${W} ${H + 14}`} className="w-full h-auto" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="waterFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        <path d={areaD} fill="url(#waterFill)" />
+        <path d={pathD} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
+        {dayLabels.map((d, i) => (
+          <text key={i} x={d.x} y={H + 11} fill="#666" fontSize="8" textAnchor="start">
+            {d.label}
+          </text>
+        ))}
+      </svg>
     </div>
   )
 }

@@ -4,7 +4,8 @@ import clsx from 'clsx'
 import { Link, LinkIcon, Power, TrendingDown, TrendingUp } from 'lucide-react'
 import { useSide, type Side } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
-import { determineTrend, ensureF, formatTemp, mapToEightSleepScale } from '@/src/lib/tempUtils'
+import { determineTrend, ensureF, formatTemp } from '@/src/lib/tempUtils'
+import { tempFToOffset, offsetDisplay } from '@/src/lib/tempColors'
 
 /**
  * Side selector wired to SideContext and real device status via tRPC.
@@ -101,7 +102,7 @@ const SideButton = ({
   const currentF = ensureF(currentTempF, 'F')
   const targetF = ensureF(targetTempF, 'F')
   const trend = determineTrend(currentF, targetF)
-  const scale = mapToEightSleepScale(currentF)
+  const offset = tempFToOffset(targetF)
 
   // When linked, individual buttons skip their own bg — the parent draws a merged one
   const showIndividualHighlight = !isLinked && isSelected
@@ -136,11 +137,10 @@ const SideButton = ({
               <>
                 {trend === 'up' && <TrendingUp size={12} className="text-amber-500" />}
                 {trend === 'down' && <TrendingDown size={12} className="text-sky-500" />}
-                {trend === 'stable' && <TrendingUp size={12} className="text-zinc-400" />}
                 <span className="text-zinc-400">
-                  {formatTemp(currentF, 'F')}
+                  {offsetDisplay(offset)}
                   {' · '}
-                  {scale}/10
+                  {formatTemp(currentF, 'F')}
                 </span>
               </>
             )

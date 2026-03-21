@@ -95,7 +95,7 @@ export function SystemInfoCard() {
                   </div>
                   <div className="mt-1 flex justify-between">
                     <span className="text-[10px] text-zinc-600">
-                      {diskData.usedPercent.toFixed(1)}
+                      {diskData.usedPercent?.toFixed(1) ?? '0'}
                       % used
                     </span>
                     <span className="text-[10px] text-zinc-600">

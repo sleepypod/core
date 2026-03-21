@@ -77,6 +77,26 @@ function avg(values: number[]): string {
   return Math.round(values.reduce((a, b) => a + b, 0) / values.length).toString()
 }
 
+/**
+ * Apply a centered moving average to a numeric field on an array of objects.
+ * Window size of 5 smooths noise while preserving trends.
+ */
+function smoothData<T extends Record<string, unknown>>(
+  data: T[],
+  key: keyof T,
+  windowSize = 5,
+): T[] {
+  return data.map((point, i) => {
+    const start = Math.max(0, i - Math.floor(windowSize / 2))
+    const end = Math.min(data.length, i + Math.ceil(windowSize / 2))
+    const windowSlice = data.slice(start, end)
+    const nums = windowSlice.map(w => w[key]).filter((v): v is T[keyof T] & number => typeof v === 'number')
+    if (nums.length === 0) return point
+    const smoothedAvg = nums.reduce((sum: number, v) => sum + v, 0) / nums.length
+    return { ...point, [key]: smoothedAvg }
+  })
+}
+
 // Side colors for dual-side comparison
 const SIDE_COLORS = {
   left: { primary: '#5cb8e0', label: 'Left' },   // cool blue
@@ -157,42 +177,60 @@ export function VitalsPanel({ dualSide = false }: VitalsPanelProps) {
   const summary = summaryQuery.data
   const otherSummary = otherSummaryQuery.data
 
-  // Extract chart data — primary
+  // Extract chart data — primary (smoothed with window=5 moving average)
   const hrData = useMemo(() =>
-    sortedRecords
-      .filter(r => r.heartRate != null)
-      .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate! })),
+    smoothData(
+      sortedRecords
+        .filter(r => r.heartRate != null)
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate! })),
+      'value',
+    ),
   [sortedRecords])
 
   const hrvData = useMemo(() =>
-    sortedRecords
-      .filter(r => r.hrv != null)
-      .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv! })),
+    smoothData(
+      sortedRecords
+        .filter(r => r.hrv != null)
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv! })),
+      'value',
+    ),
   [sortedRecords])
 
   const brData = useMemo(() =>
-    sortedRecords
-      .filter(r => r.breathingRate != null)
-      .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate! })),
+    smoothData(
+      sortedRecords
+        .filter(r => r.breathingRate != null)
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate! })),
+      'value',
+    ),
   [sortedRecords])
 
-  // Extract chart data — other side (for dual-side overlay)
+  // Extract chart data — other side (for dual-side overlay, also smoothed)
   const otherHrData = useMemo(() =>
-    otherSortedRecords
-      .filter(r => r.heartRate != null)
-      .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate! })),
+    smoothData(
+      otherSortedRecords
+        .filter(r => r.heartRate != null)
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate! })),
+      'value',
+    ),
   [otherSortedRecords])
 
   const otherHrvData = useMemo(() =>
-    otherSortedRecords
-      .filter(r => r.hrv != null)
-      .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv! })),
+    smoothData(
+      otherSortedRecords
+        .filter(r => r.hrv != null)
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv! })),
+      'value',
+    ),
   [otherSortedRecords])
 
   const otherBrData = useMemo(() =>
-    otherSortedRecords
-      .filter(r => r.breathingRate != null)
-      .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate! })),
+    smoothData(
+      otherSortedRecords
+        .filter(r => r.breathingRate != null)
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate! })),
+      'value',
+    ),
   [otherSortedRecords])
 
   // Summary values from smoothed data

@@ -1,8 +1,9 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { biometricsDb } from '@/src/db'
+import { biometricsDb, db } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
+import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gte, lte, desc, asc, avg, min, max, count } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { isIosProcessing, getConnectedSince } from '@/src/streaming/processingState'
@@ -711,13 +712,59 @@ export const biometricsRouter = router({
           windowStart = input.startDate
           windowEnd = input.endDate
         } else {
-          // Default: last night (most recent sleep record for this side)
-          const [record] = await biometricsDb
+          // Default: last night — prefer overnight sleep over daytime naps
+
+          // Fetch device timezone (falls back to 'America/Los_Angeles' if not set)
+          const [settings] = await db.select({ timezone: deviceSettings.timezone }).from(deviceSettings).limit(1)
+          const tz = settings?.timezone ?? 'America/Los_Angeles'
+
+          // Fetch recent records (last 7 days) to search for an overnight session
+          const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+          const recentRecords = await biometricsDb
             .select()
             .from(sleepRecords)
-            .where(eq(sleepRecords.side, input.side))
+            .where(
+              and(
+                eq(sleepRecords.side, input.side),
+                gte(sleepRecords.enteredBedAt, sevenDaysAgo)
+              )
+            )
             .orderBy(desc(sleepRecords.enteredBedAt))
-            .limit(1)
+
+          // Helper: get local hour (0–23) of a Date in the device timezone
+          const localHour = (d: Date): number => {
+            const parts = new Intl.DateTimeFormat('en-US', {
+              timeZone: tz,
+              hour: 'numeric',
+              hour12: false,
+            }).formatToParts(d)
+            return parseInt(parts.find(p => p.type === 'hour')!.value, 10)
+          }
+
+          // 1st try: 3+ hours AND entered bed between 8 PM (20) and 4 AM (4) local time
+          const overnightRecord = recentRecords.find(r => {
+            if (r.sleepDurationSeconds < 10800) return false
+            const hour = localHour(r.enteredBedAt)
+            return hour >= 20 || hour < 4
+          })
+
+          let record = overnightRecord
+
+          if (!record) {
+            // 2nd try: longest record in the last 24 hours
+            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
+            const last24h = recentRecords.filter(r => r.enteredBedAt >= oneDayAgo)
+            if (last24h.length > 0) {
+              record = last24h.reduce((best, r) =>
+                r.sleepDurationSeconds > best.sleepDurationSeconds ? r : best
+              )
+            }
+          }
+
+          if (!record) {
+            // Final fallback: most recent record regardless of time or duration
+            record = recentRecords[0]
+          }
 
           if (!record) {
             return {

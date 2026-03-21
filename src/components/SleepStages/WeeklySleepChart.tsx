@@ -50,7 +50,7 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
             >
               {/* Hours label */}
               <span className="text-[10px] text-zinc-500 tabular-nums">
-                {night.totalSleepHours.toFixed(1)}h
+                {(night.totalSleepHours ?? 0).toFixed(1)}h
               </span>
 
               {/* Stacked bar */}

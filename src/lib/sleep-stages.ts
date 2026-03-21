@@ -74,6 +74,52 @@ export const STAGE_ORDER: Record<SleepStage, number> = {
 }
 
 /**
+ * Filter outlier vitals readings before classification.
+ *
+ * Applies hard limits and a windowed median filter for HR.
+ * Nulls out specific fields rather than removing rows (movement data preserved).
+ */
+function filterOutliers(vitals: VitalsRow[]): VitalsRow[] {
+  return vitals.map((v, i) => {
+    let heartRate = v.heartRate
+    let hrv = v.hrv
+    let breathingRate = v.breathingRate
+
+    // Hard limits
+    if (heartRate !== null && (heartRate < 45 || heartRate > 130)) heartRate = null
+    if (hrv !== null && (hrv < 1 || hrv > 300)) hrv = null
+    if (breathingRate !== null && (breathingRate < 8 || breathingRate > 25)) breathingRate = null
+
+    // Windowed median filter for HR (±2 window = 5 samples)
+    if (heartRate !== null) {
+      const windowStart = Math.max(0, i - 2)
+      const windowEnd = Math.min(vitals.length - 1, i + 2)
+      const windowHRs = vitals
+        .slice(windowStart, windowEnd + 1)
+        .map(w => w.heartRate)
+        .filter((hr): hr is number => hr !== null && hr >= 45 && hr <= 130)
+
+      if (windowHRs.length > 0) {
+        const sorted = [...windowHRs].sort((a, b) => a - b)
+        const median = sorted[Math.floor(sorted.length / 2)]
+
+        // Standard deviation of the window
+        const mean = windowHRs.reduce((s, h) => s + h, 0) / windowHRs.length
+        const variance = windowHRs.reduce((s, h) => s + (h - mean) ** 2, 0) / windowHRs.length
+        const stdDev = Math.sqrt(variance)
+
+        // Null out HR if it deviates more than 2× std dev from the window median
+        if (Math.abs(heartRate - median) > 2 * stdDev) {
+          heartRate = null
+        }
+      }
+    }
+
+    return { ...v, heartRate, hrv, breathingRate }
+  })
+}
+
+/**
  * Classify sleep stages from vitals and movement data.
  *
  * Algorithm ported from iOS SleepAnalyzer (rule-based):
@@ -83,13 +129,15 @@ export const STAGE_ORDER: Record<SleepStage, number> = {
 export function classifySleepStages(
   vitalsData: VitalsRow[],
   movementData: MovementRow[],
-  calibrationQuality: number = 1.0,
+  calibrationQuality: number = 0.0,
 ): SleepEpoch[] {
   if (vitalsData.length === 0) return []
 
   // Sort by timestamp ascending
-  const sortedVitals = [...vitalsData].sort(
-    (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+  const sortedVitals = filterOutliers(
+    [...vitalsData].sort(
+      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    ),
   )
 
   // Build movement lookup (nearest-neighbor by timestamp)
@@ -152,6 +200,14 @@ export function classifySleepStages(
     if (prev === 'deep' && curr === 'wake') {
       epochs[i].stage = 'light'
     }
+    // Deep → REM must pass through Light
+    if (prev === 'deep' && curr === 'rem') {
+      epochs[i].stage = 'light'
+    }
+    // REM → Deep must pass through Light
+    if (prev === 'rem' && curr === 'deep') {
+      epochs[i].stage = 'light'
+    }
   }
 
   return epochs
@@ -168,8 +224,8 @@ function classifyEpoch(
   // Low calibration quality → movement-only mode
   if (calibrationQuality < 0.3) {
     if (movement !== null && movement > 200) return 'wake'
-    if (movement !== null && movement > 50) return 'light'
-    return 'deep'
+    if (movement !== null && movement > 100) return 'light'
+    return 'light'
   }
 
   // Wake: high movement

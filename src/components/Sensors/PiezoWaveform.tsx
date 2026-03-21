@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useOnSensorFrame, type PiezoDualFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
+import { useOnSensorFrame, useSensorStream, type PiezoDualFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
 
 /** Maximum samples to keep in the waveform buffer per channel. */
 const MAX_SAMPLES = 1500
@@ -204,6 +204,12 @@ function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: numb
  *  - Minor/major grid lines with center crosshair
  *  - Legend dots with Left/Right channel toggles
  */
+/** Format an epoch-seconds timestamp as a short time string (e.g. "2:34 AM"). */
+function formatTime(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000)
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
 export function PiezoWaveform() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -220,6 +226,36 @@ export function PiezoWaveform() {
   const [showRight, setShowRight] = useState(true)
   // Reactive sample counts (updated on each frame for display)
   const [sampleCounts, setSampleCounts] = useState({ left: 0, right: 0 })
+
+  // Seek / timeline scrubber state
+  const { seek, getTimeRange, isSeeking, timeRange } = useSensorStream({ sensors: ['piezo-dual'] })
+  const [scrubValue, setScrubValue] = useState<number | null>(null) // null = live
+  const timeRangeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Fetch time range on mount and every 30 seconds
+  useEffect(() => {
+    getTimeRange()
+    timeRangeIntervalRef.current = setInterval(() => {
+      getTimeRange()
+    }, 30_000)
+    return () => {
+      if (timeRangeIntervalRef.current) {
+        clearInterval(timeRangeIntervalRef.current)
+      }
+    }
+  }, [getTimeRange])
+
+  const isLive = scrubValue === null || (timeRange !== null && scrubValue >= timeRange.max)
+
+  const handleScrub = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = Number(e.target.value)
+    setScrubValue(val)
+    seek(val)
+  }, [seek])
+
+  const handleGoLive = useCallback(() => {
+    setScrubValue(null)
+  }, [])
 
   // Receive piezo frames and append to buffers
   useOnSensorFrame(useCallback((frame: SensorFrame) => {
@@ -418,6 +454,58 @@ export function PiezoWaveform() {
         <span>L: {sampleCounts.left} samples</span>
         <span>R: {sampleCounts.right} samples</span>
       </div>
+
+      {/* Timeline scrubber */}
+      {timeRange && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[10px] text-zinc-500">
+              {isLive ? (
+                <>
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-emerald-400 font-medium">Live</span>
+                </>
+              ) : (
+                <>
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-500" />
+                  <span>{scrubValue !== null ? formatTime(scrubValue) : ''}</span>
+                </>
+              )}
+              {isSeeking && (
+                <span className="ml-1 text-amber-400">seeking...</span>
+              )}
+            </div>
+            {!isLive && (
+              <button
+                onClick={handleGoLive}
+                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20 transition-colors"
+              >
+                Go live
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] text-zinc-600 tabular-nums shrink-0">
+              {formatTime(timeRange.min)}
+            </span>
+            <input
+              type="range"
+              min={timeRange.min}
+              max={timeRange.max}
+              step={1}
+              value={scrubValue ?? timeRange.max}
+              onChange={handleScrub}
+              className="h-1 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-blue-500
+                [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full
+                [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:shadow-sm"
+            />
+            <span className="text-[9px] text-zinc-600 tabular-nums shrink-0">
+              {formatTime(timeRange.max)}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

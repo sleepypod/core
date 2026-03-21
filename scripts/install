@@ -95,6 +95,13 @@ block_wan() {
   iptables -I OUTPUT -p udp --dport 123 -j ACCEPT
   iptables -I INPUT  -p udp --sport 123 -j ACCEPT
 
+  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp)
+  # Port 5353 UDP covers IPv4 (224.0.0.251) and IPv6 (ff02::fb)
+  iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT
+  iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT
+  iptables -I INPUT  -p udp --dport 5353 -j ACCEPT
+  iptables -I INPUT  -p udp --sport 5353 -j ACCEPT
+
   # Allow loopback
   iptables -A INPUT  -i lo -j ACCEPT
   iptables -A OUTPUT -o lo -j ACCEPT
@@ -410,11 +417,19 @@ echo "Enabling service..."
 systemctl daemon-reload
 systemctl enable sleepypod.service
 
-# Stop free-sleep if running (both services use port 3000)
-if systemctl is-active --quiet free-sleep.service 2>/dev/null; then
-  echo "Stopping free-sleep.service (port 3000 conflict)..."
-  systemctl stop free-sleep.service
-fi
+# Stop and disable free-sleep services (both use port 3000)
+for fs_svc in free-sleep.service free-sleep-stream.service; do
+  if systemctl list-unit-files "$fs_svc" &>/dev/null; then
+    if systemctl is-active --quiet "$fs_svc" 2>/dev/null; then
+      echo "Stopping $fs_svc (port 3000 conflict)..."
+      systemctl stop "$fs_svc"
+    fi
+    if systemctl is-enabled --quiet "$fs_svc" 2>/dev/null; then
+      echo "Disabling $fs_svc to prevent restart on reboot..."
+      systemctl disable "$fs_svc"
+    fi
+  fi
+done
 
 # Kill anything else holding port 3000
 if command -v fuser &>/dev/null; then
@@ -753,10 +768,49 @@ systemctl start sleepypod.service 2>/dev/null || true
 exit 1
 UPDATEEOF
 
+cat > /usr/local/bin/sp-freesleep << 'EOF'
+#!/bin/bash
+echo "Switching to free-sleep..."
+systemctl stop sleepypod.service 2>/dev/null || true
+for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
+  systemctl stop "$svc.service" 2>/dev/null || true
+done
+systemctl start free-sleep.service free-sleep-stream.service 2>/dev/null || true
+sleep 2
+if systemctl is-active --quiet free-sleep.service; then
+  echo "✓ free-sleep is running on port 3000"
+else
+  echo "✗ free-sleep failed to start — check: journalctl -u free-sleep.service"
+fi
+EOF
+
+cat > /usr/local/bin/sp-sleepypod << 'EOF'
+#!/bin/bash
+echo "Switching to sleepypod..."
+systemctl stop free-sleep.service free-sleep-stream.service 2>/dev/null || true
+# Kill anything on port 3000
+if command -v fuser &>/dev/null; then
+  fuser -k 3000/tcp 2>/dev/null || true
+  sleep 1
+fi
+systemctl restart sleepypod.service
+for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
+  systemctl restart "$svc.service" 2>/dev/null || true
+done
+sleep 3
+if systemctl is-active --quiet sleepypod.service; then
+  echo "✓ sleepypod is running on port 3000"
+else
+  echo "✗ sleepypod failed to start — check: sp-logs"
+fi
+EOF
+
 chmod +x /usr/local/bin/sp-status
 chmod +x /usr/local/bin/sp-restart
 chmod +x /usr/local/bin/sp-logs
 chmod +x /usr/local/bin/sp-update
+chmod +x /usr/local/bin/sp-freesleep
+chmod +x /usr/local/bin/sp-sleepypod
 
 # Optional SSH configuration
 if [ "$SKIP_SSH" = true ]; then

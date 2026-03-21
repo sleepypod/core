@@ -7,7 +7,6 @@ import { StageDistributionBar } from './StageDistributionBar'
 import { QualityScore } from './QualityScore'
 import { TimeRangeSelector, type TimeRange } from './TimeRangeSelector'
 import { WeeklySleepChart } from './WeeklySleepChart'
-import { StageDurationLegend } from './StageDurationLegend'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   type StageDistribution,
@@ -345,10 +344,6 @@ export function SleepStagesCard({ side }: SleepStagesCardProps) {
                 <QualityScore score={stagesData.qualityScore} />
                 <div className="flex-1 space-y-3">
                   <StageDistributionBar distribution={stagesData.distribution} />
-                  <StageDurationLegend
-                    epochs={stagesData.epochs}
-                    totalSleepMs={stagesData.totalSleepMs}
-                  />
                 </div>
               </div>
 
@@ -455,7 +450,7 @@ export function SleepStagesCard({ side }: SleepStagesCardProps) {
                       {night.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                     </span>
                     <span className="text-xs tabular-nums text-zinc-400">
-                      {night.sleepHours.toFixed(1)}h
+                      {(night.sleepHours ?? 0).toFixed(1)}h
                     </span>
                     <span className="text-[10px] text-zinc-500">
                       {night.timesExited} exits

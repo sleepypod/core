@@ -1,7 +1,6 @@
 import '@/app/globals.css'
 import { BottomNav } from '@/src/components/BottomNav/BottomNav'
 import { Header } from '@/src/components/Header/Header'
-import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { SwipeContainer } from '@/src/components/SwipeContainer/SwipeContainer'
 import { allMessages, getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { LinguiClientProvider } from '@/src/providers/LinguiClientProvider'
@@ -43,7 +42,6 @@ export default async function LangLayout({
                 <Header />
 
                 <div className="w-full max-w-md space-y-4 px-3 pt-3 sm:space-y-6 sm:px-4 sm:pt-4">
-                  <SideSelector />
                   <SwipeContainer>
                     {children}
                   </SwipeContainer>
