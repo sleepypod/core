@@ -5,7 +5,6 @@ import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
-import { UserSelector } from '@/src/components/UserSelector/UserSelector'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { TemperatureDial } from '@/src/components/TemperatureDial/TemperatureDial'
 import { AlarmBanner } from '@/src/components/TempScreen/AlarmBanner'
@@ -88,7 +87,12 @@ export const TempScreen = () => {
     for (const side of activeSides) {
       setTempMutation.mutate(
         { side, temperature: tempF },
-        { onSettled: () => { setLocalTarget(null); refetch() } },
+        {
+          onSettled: () => {
+            setLocalTarget(null)
+            refetch()
+          },
+        },
       )
     }
   }, [activeSides, setTempMutation, refetch])
