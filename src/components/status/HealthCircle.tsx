@@ -1,6 +1,7 @@
 'use client'
 
 import clsx from 'clsx'
+import { Wifi, Lock, Globe, Droplet } from 'lucide-react'
 
 interface HealthCircleProps {
   healthy: number
@@ -104,7 +105,7 @@ export function HealthCircle({
                 'flex items-center gap-1',
                 wifiSignal > 60 ? 'text-zinc-400' : wifiSignal > 30 ? 'text-amber-400' : 'text-red-400',
               )}>
-                <span className="text-[10px]">&#x1f4f6;</span>
+                <Wifi size={10} />
                 <span className="text-[10px]">{wifiSsid ?? 'WiFi'} {wifiSignal}%</span>
               </span>
             )}
@@ -112,9 +113,9 @@ export function HealthCircle({
               <>
                 <span className="text-zinc-700">&middot;</span>
                 {internetBlocked ? (
-                  <span className="text-[10px] text-emerald-400">&#x1f512; Local only</span>
+                  <span className="flex items-center gap-1 text-[10px] text-emerald-400"><Lock size={10} /> Local only</span>
                 ) : (
-                  <span className="text-[10px] text-amber-400">&#x1f310; Internet</span>
+                  <span className="flex items-center gap-1 text-[10px] text-amber-400"><Globe size={10} /> Internet</span>
                 )}
               </>
             )}
@@ -129,7 +130,7 @@ export function HealthCircle({
           {/* Water status — tappable */}
           {isPriming ? (
             <button onClick={onWaterClick} className="flex items-center gap-1 text-[10px] text-sky-400 active:opacity-70">
-              &#x1f4a7; Priming...
+              <Droplet size={10} /> Priming...
             </button>
           ) : waterLevel ? (
             <button
@@ -139,11 +140,11 @@ export function HealthCircle({
                 waterLevel === 'low' ? 'text-amber-400' : 'text-emerald-400',
               )}
             >
-              &#x1f4a7; Water {waterLevel === 'ok' ? 'OK' : 'Low'}
+              <Droplet size={10} /> Water {waterLevel === 'ok' ? 'OK' : 'Low'}
             </button>
           ) : (
             <button onClick={onWaterClick} className="flex items-center gap-1 text-[10px] text-zinc-500 active:opacity-70">
-              &#x1f4a7; Water
+              <Droplet size={10} /> Water
             </button>
           )}
 
