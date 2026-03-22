@@ -36,7 +36,11 @@ interface AICurveWizardProps {
   onClose: () => void
   side: Side
   selectedDays: Set<DayOfWeek>
-  onApplied?: () => void
+  onApplied?: (config: {
+    setPoints: Array<{ time: string; tempF: number }>
+    bedtime: string
+    wakeTime: string
+  }) => void
 }
 
 type Step = 0 | 1 | 2 | 3
@@ -270,7 +274,11 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
 
       await utils.schedules.invalidate()
       setApplied(true)
-      onApplied?.()
+      onApplied?.({
+        setPoints: editablePoints,
+        bedtime: curve.bedtime,
+        wakeTime: curve.wake,
+      })
       setTimeout(() => onClose(), 1500)
     } catch (err) {
       console.error('Failed to apply AI curve:', err)

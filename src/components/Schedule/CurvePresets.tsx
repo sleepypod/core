@@ -95,13 +95,19 @@ interface CurvePresetsProps {
     bedtime: string
     wakeTime: string
   }) => void
+  /** Called after applying an AI-generated curve, with raw set points for chart display */
+  onAICurveApplied?: (config: {
+    setPoints: Array<{ time: string; tempF: number }>
+    bedtime: string
+    wakeTime: string
+  }) => void
 }
 
 /**
  * Horizontal scroll of sleep preset cards.
  * Tapping a preset generates a curve and writes it to the schedule for the selected days.
  */
-export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: CurvePresetsProps) {
+export function CurvePresets({ side, selectedDay, selectedDays, onApplied, onAICurveApplied }: CurvePresetsProps) {
   const [applying, setApplying] = useState<PresetId | null>(null)
   const [applied, setApplied] = useState<PresetId | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
@@ -242,7 +248,10 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: Cur
         onClose={() => setWizardOpen(false)}
         side={side}
         selectedDays={selectedDays}
-        onApplied={() => void utils.schedules.invalidate()}
+        onApplied={(config) => {
+          void utils.schedules.invalidate()
+          onAICurveApplied?.(config)
+        }}
       />
     </div>
   )

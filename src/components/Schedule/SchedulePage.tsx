@@ -54,10 +54,13 @@ export function SchedulePage() {
   const [minTempF, setMinTempF] = useState(68)
   const [maxTempF, setMaxTempF] = useState(86)
 
+  // Custom AI curve points override the generated curve
+  const [customPoints, setCustomPoints] = useState<CurvePoint[] | null>(null)
+
   const bedtimeMinutes = useMemo(() => timeStringToMinutes(bedtime), [bedtime])
   const wakeMinutes = useMemo(() => timeStringToMinutes(wakeTime), [wakeTime])
 
-  const curvePoints: CurvePoint[] = useMemo(
+  const generatedPoints: CurvePoint[] = useMemo(
     () =>
       generateSleepCurve({
         bedtimeMinutes,
@@ -68,6 +71,9 @@ export function SchedulePage() {
       }),
     [bedtimeMinutes, wakeMinutes, intensity, minTempF, maxTempF],
   )
+
+  // Use custom AI points if set, otherwise generated
+  const curvePoints = customPoints ?? generatedPoints
 
   // When a preset is applied, sync curve display state
   const handlePresetApplied = useCallback(
@@ -85,6 +91,52 @@ export function SchedulePage() {
       setMinTempF(config.minTempF)
       setMaxTempF(config.maxTempF)
       setIntensity(config.intensity)
+      setCustomPoints(null) // Clear AI curve, back to generated
+    },
+    [],
+  )
+
+  // When AI curve is applied, convert set points to CurvePoints for chart
+  const handleAICurveApplied = useCallback(
+    (config: {
+      setPoints: Array<{ time: string; tempF: number }>
+      bedtime: string
+      wakeTime: string
+    }) => {
+      const btMin = timeStringToMinutes(config.bedtime)
+      const sorted = [...config.setPoints].sort((a, b) => a.time.localeCompare(b.time))
+      const temps = sorted.map(p => p.tempF)
+      const min = Math.min(...temps)
+      const max = Math.max(...temps)
+
+      setBedtime(config.bedtime)
+      setWakeTime(config.wakeTime)
+      setMinTempF(min)
+      setMaxTempF(max)
+
+      // Convert raw set points to CurvePoints
+      const totalMin = sorted.length
+      const points: CurvePoint[] = sorted.map((p, i) => {
+        let tMin = timeStringToMinutes(p.time) - btMin
+        if (tMin < -120) tMin += 24 * 60 // handle overnight wrap
+
+        // Assign phase based on position in the curve
+        const frac = i / (totalMin - 1)
+        const phase = frac < 0.1 ? 'warmUp' as const
+          : frac < 0.25 ? 'coolDown' as const
+          : frac < 0.55 ? 'deepSleep' as const
+          : frac < 0.75 ? 'maintain' as const
+          : frac < 0.9 ? 'preWake' as const
+          : 'wake' as const
+
+        return {
+          minutesFromBedtime: tMin,
+          tempOffset: p.tempF - 80,
+          phase,
+        }
+      })
+
+      setCustomPoints(points)
     },
     [],
   )
@@ -112,6 +164,7 @@ export function SchedulePage() {
         selectedDay={selectedDay}
         selectedDays={selectedDays}
         onApplied={handlePresetApplied}
+        onAICurveApplied={handleAICurveApplied}
       />
 
       {/* 3. Time Pickers + Curve Chart */}
