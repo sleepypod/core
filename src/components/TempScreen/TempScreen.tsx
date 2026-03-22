@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
@@ -60,14 +60,6 @@ export const TempScreen = () => {
 
   // Optimistic local target temp while dragging
   const [localTarget, setLocalTarget] = useState<number | null>(null)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // Clean up debounce timer on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-    }
-  }, [])
 
   // Get current side's status
   const currentSideStatus = primarySide === 'left' ? status?.leftSide : status?.rightSide
@@ -86,23 +78,13 @@ export const TempScreen = () => {
   const hasPrimeNotification = status?.primeCompletedNotification != null
   const snoozeStatus = status?.snooze
 
-  /** Handle continuous drag updates — debounce hardware calls during drag. */
+  /** Handle continuous drag updates — visual only, no hardware calls. */
   const handleDialChange = useCallback((tempF: number) => {
     setLocalTarget(tempF)
+  }, [])
 
-    // Debounce mutation during drag to avoid flooding hardware
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      for (const side of activeSides) {
-        setTempMutation.mutate({ side, temperature: tempF })
-      }
-    }, 300)
-  }, [activeSides, setTempMutation])
-
-  /** Handle drag end — send final value immediately. */
+  /** Handle drag end — send final value to hardware. */
   const handleDialCommit = useCallback((tempF: number) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-
     for (const side of activeSides) {
       setTempMutation.mutate(
         { side, temperature: tempF },
