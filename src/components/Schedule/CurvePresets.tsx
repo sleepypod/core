@@ -14,9 +14,10 @@ import type { CoolingIntensity, CurvePoint } from '@/src/lib/sleepCurve/types'
 import type { DayOfWeek } from './DaySelector'
 
 type Side = 'left' | 'right'
+type PresetId = CoolingIntensity | 'custom'
 
 interface PresetDef {
-  id: CoolingIntensity | 'custom'
+  id: PresetId
   label: string
   subtitle: string
   icon: LucideIcon
@@ -100,8 +101,8 @@ interface CurvePresetsProps {
  * Tapping a preset generates a curve and writes it to the schedule for the selected days.
  */
 export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: CurvePresetsProps) {
-  const [applying, setApplying] = useState<CoolingIntensity | null>(null)
-  const [applied, setApplied] = useState<CoolingIntensity | null>(null)
+  const [applying, setApplying] = useState<PresetId | null>(null)
+  const [applied, setApplied] = useState<PresetId | null>(null)
 
   const utils = trpc.useUtils()
   const createTempSchedule = trpc.schedules.createTemperatureSchedule.useMutation()
