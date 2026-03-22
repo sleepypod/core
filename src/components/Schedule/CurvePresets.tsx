@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
-import { Moon, Sun, Loader2, Check } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { Snowflake, Scale, Flame, Sparkles, Loader2, Check } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { trpc } from '@/src/utils/trpc'
 import {
@@ -15,10 +16,10 @@ import type { DayOfWeek } from './DaySelector'
 type Side = 'left' | 'right'
 
 interface PresetDef {
-  id: CoolingIntensity
+  id: CoolingIntensity | 'custom'
   label: string
   subtitle: string
-  icon: string
+  icon: LucideIcon
   bedtime: string
   wakeTime: string
   minTempF: number
@@ -31,8 +32,8 @@ const PRESETS: PresetDef[] = [
   {
     id: 'cool',
     label: 'Hot Sleeper',
-    subtitle: 'Extra cool through the night',
-    icon: '❄️',
+    subtitle: 'Extra cool all night',
+    icon: Snowflake,
     bedtime: '22:00',
     wakeTime: '06:30',
     minTempF: 65,
@@ -43,8 +44,8 @@ const PRESETS: PresetDef[] = [
   {
     id: 'balanced',
     label: 'Balanced',
-    subtitle: 'Science-backed defaults',
-    icon: '⚖️',
+    subtitle: 'Science-backed',
+    icon: Scale,
     bedtime: '22:00',
     wakeTime: '07:00',
     minTempF: 68,
@@ -55,14 +56,26 @@ const PRESETS: PresetDef[] = [
   {
     id: 'warm',
     label: 'Cold Sleeper',
-    subtitle: 'Gentler cooling, warmer wake',
-    icon: '🔥',
+    subtitle: 'Gentler cooling',
+    icon: Flame,
     bedtime: '22:30',
     wakeTime: '07:00',
     minTempF: 72,
     maxTempF: 88,
     accentActive: 'bg-orange-500/10 text-orange-400 border-orange-500/30',
     accentBorder: 'border-orange-500/50',
+  },
+  {
+    id: 'custom',
+    label: 'Custom AI',
+    subtitle: 'Personalized curve',
+    icon: Sparkles,
+    bedtime: '22:00',
+    wakeTime: '07:00',
+    minTempF: 66,
+    maxTempF: 88,
+    accentActive: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
+    accentBorder: 'border-cyan-500/50',
   },
 ]
 
@@ -99,12 +112,13 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: Cur
   const handleApply = useCallback(async (preset: PresetDef) => {
     setApplying(preset.id)
     try {
+      const intensity: CoolingIntensity = preset.id === 'custom' ? 'balanced' : preset.id
       const bedtimeMinutes = timeStringToMinutes(preset.bedtime)
       const wakeMinutes = timeStringToMinutes(preset.wakeTime)
       const curvePoints = generateSleepCurve({
         bedtimeMinutes,
         wakeMinutes,
-        intensity: preset.id,
+        intensity,
         minTempF: preset.minTempF,
         maxTempF: preset.maxTempF,
       })
@@ -155,7 +169,7 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: Cur
         bedtimeMinutes,
         minTempF: preset.minTempF,
         maxTempF: preset.maxTempF,
-        intensity: preset.id,
+        intensity,
         bedtime: preset.bedtime,
         wakeTime: preset.wakeTime,
       })
@@ -183,10 +197,11 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: Cur
       <div className="text-xs font-medium uppercase tracking-wider text-zinc-500">
         Sleep Profiles
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
+      <div className="grid grid-cols-4 gap-2">
         {PRESETS.map(preset => {
           const isApplying = applying === preset.id
           const isApplied = applied === preset.id
+          const Icon = preset.icon
 
           return (
             <button
@@ -195,7 +210,7 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: Cur
               disabled={applying !== null}
               onClick={() => void handleApply(preset)}
               className={cn(
-                'flex min-w-[140px] flex-col items-center gap-1.5 rounded-xl border px-4 py-3 text-center transition-all duration-200 shrink-0',
+                'flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-center transition-all duration-200',
                 isApplied
                   ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
                   : isApplying
@@ -205,14 +220,14 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: Cur
               )}
             >
               {isApplying ? (
-                <Loader2 size={20} className="animate-spin" />
+                <Loader2 size={18} className="animate-spin" />
               ) : isApplied ? (
-                <Check size={20} />
+                <Check size={18} />
               ) : (
-                <span className="text-xl">{preset.icon}</span>
+                <Icon size={18} />
               )}
-              <span className="text-xs font-semibold">{preset.label}</span>
-              <span className="text-[10px] leading-tight opacity-70">{preset.subtitle}</span>
+              <span className="text-[11px] font-semibold leading-tight">{preset.label}</span>
+              <span className="text-[9px] leading-tight opacity-70">{preset.subtitle}</span>
             </button>
           )
         })}
