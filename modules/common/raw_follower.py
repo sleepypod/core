@@ -46,6 +46,7 @@ class RawFileFollower:
         self._consecutive_failures = 0
 
     def _find_latest(self) -> Optional[Path]:
+        # SEQNO.RAW is a firmware metadata file, not sensor data (see #246)
         candidates = [p for p in self.data_dir.glob("*.RAW")
                       if p.name != "SEQNO.RAW" and _safe_mtime(p) > 0]
         candidates.sort(key=_safe_mtime, reverse=True)
