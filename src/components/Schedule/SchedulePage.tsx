@@ -104,8 +104,7 @@ export function SchedulePage() {
       wakeTime: string
     }) => {
       const btMin = timeStringToMinutes(config.bedtime)
-      const sorted = [...config.setPoints].sort((a, b) => a.time.localeCompare(b.time))
-      const temps = sorted.map(p => p.tempF)
+      const temps = config.setPoints.map(p => p.tempF)
       const min = Math.min(...temps)
       const max = Math.max(...temps)
 
@@ -114,13 +113,15 @@ export function SchedulePage() {
       setMinTempF(min)
       setMaxTempF(max)
 
-      // Convert raw set points to CurvePoints
-      const totalMin = sorted.length
-      const points: CurvePoint[] = sorted.map((p, i) => {
+      // Compute minutesFromBedtime, then sort by that (not by time string — overnight wraps)
+      const withRelative = config.setPoints.map(p => {
         let tMin = timeStringToMinutes(p.time) - btMin
-        if (tMin < -120) tMin += 24 * 60 // handle overnight wrap
+        if (tMin < -120) tMin += 24 * 60
+        return { ...p, minutesFromBedtime: tMin }
+      }).sort((a, b) => a.minutesFromBedtime - b.minutesFromBedtime)
 
-        // Assign phase based on position in the curve
+      const totalMin = withRelative.length
+      const points: CurvePoint[] = withRelative.map((p, i) => {
         const frac = i / (totalMin - 1)
         const phase = frac < 0.1 ? 'warmUp' as const
           : frac < 0.25 ? 'coolDown' as const
@@ -130,7 +131,7 @@ export function SchedulePage() {
           : 'wake' as const
 
         return {
-          minutesFromBedtime: tMin,
+          minutesFromBedtime: p.minutesFromBedtime,
           tempOffset: p.tempF - 80,
           phase,
         }

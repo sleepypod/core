@@ -320,13 +320,16 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
   const chartData = useMemo(() => {
     if (!curve || editablePoints.length < 2) return null
     const btMin = timeStringToMinutes(curve.bedtime)
-    const sorted = [...editablePoints].sort((a, b) => a.time.localeCompare(b.time))
-    const total = sorted.length
 
-    const points: CurvePoint[] = sorted.map((p, i) => {
+    // Compute minutesFromBedtime for each point, then sort by that (not by time string)
+    const withRelative = editablePoints.map(p => {
       let tMin = timeStringToMinutes(p.time) - btMin
-      if (tMin < -120) tMin += 24 * 60
+      if (tMin < -120) tMin += 24 * 60 // overnight wrap
+      return { ...p, minutesFromBedtime: tMin }
+    }).sort((a, b) => a.minutesFromBedtime - b.minutesFromBedtime)
 
+    const total = withRelative.length
+    const points: CurvePoint[] = withRelative.map((p, i) => {
       const frac = i / (total - 1)
       const phase = frac < 0.1 ? 'warmUp' as const
         : frac < 0.25 ? 'coolDown' as const
@@ -335,7 +338,7 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
         : frac < 0.9 ? 'preWake' as const
         : 'wake' as const
 
-      return { minutesFromBedtime: tMin, tempOffset: p.tempF - 80, phase }
+      return { minutesFromBedtime: p.minutesFromBedtime, tempOffset: p.tempF - 80, phase }
     })
 
     return { points, bedtimeMinutes: btMin }
