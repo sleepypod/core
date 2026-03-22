@@ -51,15 +51,23 @@ Device status is now streamed via WebSocket, not polled via tRPC:
 sequenceDiagram
     participant HW as Pod Hardware
     participant DM as DacMonitor (2s poll)
+    participant API as tRPC API :3000
     participant WS as piezoStream WS :3001
     participant UI as Browser UI
 
-    loop Every 2 seconds
+    loop Every 2 seconds (authoritative backstop)
         DM->>HW: getDeviceStatus()
         HW-->>DM: temps, power, priming, water
         DM->>WS: broadcastFrame({ type: 'deviceStatus', ... })
         WS->>UI: deviceStatus frame (push)
     end
+
+    Note over UI: Mutation triggers immediate broadcast
+    UI->>API: setTemperature / setPower / setAlarm
+    API->>HW: hardware command
+    HW-->>API: success
+    API->>WS: broadcastMutationStatus() (overlay onto last polled status)
+    WS->>UI: deviceStatus frame (all clients, ~200ms)
 
     Note over UI: useDeviceStatus() hook
     Note over UI: WS primary, tRPC HTTP fallback for initial load
@@ -119,7 +127,10 @@ Real-time Pod hardware control.
 - `setPower(side, on, temp?)` - Power control (on = heat/cool, off = neutral)
 - `setAlarm(side, config)` - Start vibration alarm (patterns: double/rise, 1-100 intensity, 0-180s max)
 - `clearAlarm(side)` - Stop vibration
+- `snoozeAlarm(side, duration, config)` - Stop alarm, restart after snooze duration
 - `startPriming()` - Run water circulation sequence (2-5 min, loud, don't run during sleep)
+
+**Event bus:** All mutation procedures (`setTemperature`, `setPower`, `setAlarm`, `clearAlarm`, `snoozeAlarm`) call `broadcastMutationStatus()` after hardware success. This overlays the mutation onto `dacMonitor.getLastStatus()` and broadcasts a `deviceStatus` frame to all WS clients. Fire-and-forget — never blocks the HTTP response. DacMonitor's 2s poll remains the authoritative consistency backstop.
 
 **Hardware Timing:**
 - Commands execute in ~100-500ms

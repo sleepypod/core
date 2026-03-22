@@ -26,7 +26,9 @@ graph TD
 
     subgraph core [SleepyPod Core - Next.js]
         UI[React UI]
-        API[tRPC API]
+        API["tRPC API :3000"]
+        WS["piezoStream WS :3001<br/>read-only pub/sub"]
+        DM["DacMonitor<br/>2s poll"]
         SCHED["Scheduler<br/>node-schedule"]
         SYNC[DeviceStateSync]
         DB1[("sleepypod.db<br/>Config & State")]
@@ -38,16 +40,22 @@ graph TD
         DB2[("biometrics.db<br/>Vitals & Sleep")]
     end
 
-    UI -->|queries| API
+    UI -->|queries + mutations| API
     API -->|reads/writes| DB1
     API -->|reads| DB2
+    API -->|after mutation| WS
+    DM -->|status:updated| WS
+    DM -->|status:updated| SYNC
+    DM -->|polls| DAC
+    WS -->|push frames| UI
     SCHED -->|commands| DAC
     SYNC -->|status events| DB1
     RAW -->|tails CBOR| PP
     RAW -->|tails CBOR| SD
+    RAW -->|tails CBOR| WS
     PP -->|writes rows| DB2
     SD -->|writes rows| DB2
-    DAC -.->|status updated| SYNC
+    API -->|commands| DAC
 ```
 
 ### Biometrics data flow
@@ -364,8 +372,8 @@ Config/state and time-series biometrics have fundamentally different access patt
 **Why Python modules, not Node.js?**
 Heart rate extraction from 500 Hz piezoelectric data requires FFT, bandpass filtering, and peak detection. Python's scipy/numpy ecosystem handles this naturally. A crash in a Python module has zero impact on the core app.
 
-**Why not a WebSocket proxy for sensor data?**
-Modules run on the same device and read `/persistent/*.RAW` directly — no proxy needed today. WebSockets are not ruled out for future use (e.g. modules on a separate host, real-time UI push).
+**How does real-time data reach clients?**
+A WebSocket server on port 3001 (`piezoStream`) acts as a read-only pub/sub channel. It streams raw sensor data (piezo, bed temp, capacitance) by tailing `/persistent/*.RAW`, and also pushes `deviceStatus` frames. DacMonitor broadcasts status every 2 seconds as an authoritative backstop, and tRPC mutations (temperature, power, alarm) broadcast immediately after success so all connected clients see changes within ~200ms.
 
 ---
 
