@@ -574,6 +574,12 @@ cat > /usr/local/bin/sp-update << 'UPDATEEOF'
 #!/bin/bash
 set -euo pipefail
 
+# Ensure /usr/local/bin is in PATH (Yocto's root SSH PATH is minimal)
+case ":$PATH:" in
+  *:/usr/local/bin:*) ;;
+  *) export PATH="/usr/local/bin:$PATH" ;;
+esac
+
 # sp-update — self-update sleepypod-core from GitHub via curl+tarball
 #
 # Usage:
