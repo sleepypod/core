@@ -3,7 +3,6 @@
  * Snooze = clear alarm immediately, re-trigger after duration expires.
  */
 import { getSharedHardwareClient } from './dacMonitor.instance'
-import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import type { Side } from './types'
 
 interface SnoozeState {
@@ -29,6 +28,7 @@ export function snoozeAlarm(
     try {
       const client = getSharedHardwareClient()
       await client.setAlarm(side, config)
+      const { broadcastMutationStatus } = await import('@/src/streaming/broadcastMutationStatus')
       broadcastMutationStatus(side, { isAlarmVibrating: true })
     }
     catch (err) {

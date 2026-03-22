@@ -27,6 +27,7 @@ export default defineConfig([
   ...nextVitals,
 
   globalIgnores([
+    '.claude/**',
     '.next/**',
     'build/**',
     'coverage/**',

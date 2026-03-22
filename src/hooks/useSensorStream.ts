@@ -411,7 +411,9 @@ function handleMessage(event: MessageEvent) {
 
     // Notify frame callbacks
     for (const cb of frameCallbacks) {
-      try { cb(frame) }
+      try {
+        cb(frame)
+      }
       catch { /* consumer error */ }
     }
   }
@@ -590,6 +592,7 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   // Stable subscription ID for this hook instance
   const subIdRef = useRef<number | null>(null)
   if (subIdRef.current === null) {
+    // eslint-disable-next-line react-hooks/immutability -- one-time init of external counter is intentional
     subIdRef.current = singleton.nextSubscriptionId++
   }
 
@@ -614,7 +617,7 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   // Subscription management — merge with other active hooks
   useEffect(() => {
     if (!enabled) return
-    const id = subIdRef.current!
+    const id = subIdRef.current ?? 0
     singleton.activeSubscriptions.set(id, sensors ?? null)
     recomputeAndSendSubscription()
 
@@ -660,7 +663,7 @@ export function useSensorFrame<T extends SensorType>(
       if (!sensorListeners.has(sensorType)) {
         sensorListeners.set(sensorType, new Set())
       }
-      sensorListeners.get(sensorType)!.add(listener)
+      sensorListeners.get(sensorType)?.add(listener)
 
       return () => {
         unsub1()
@@ -691,12 +694,17 @@ export function useSensorFrame<T extends SensorType>(
  */
 export function useOnSensorFrame(callback: FrameCallback) {
   const callbackRef = useRef(callback)
-  callbackRef.current = callback
+
+  useEffect(() => {
+    callbackRef.current = callback
+  })
 
   useEffect(() => {
     const handler: FrameCallback = frame => callbackRef.current(frame)
     frameCallbacks.add(handler)
-    return () => { frameCallbacks.delete(handler) }
+    return () => {
+      frameCallbacks.delete(handler)
+    }
   }, [])
 }
 

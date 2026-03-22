@@ -742,7 +742,8 @@ export const biometricsRouter = router({
               hour: 'numeric',
               hour12: false,
             }).formatToParts(d)
-            return parseInt(parts.find(p => p.type === 'hour')!.value, 10)
+            const hourPart = parts.find(p => p.type === 'hour')
+            return parseInt(hourPart?.value ?? '0', 10)
           }
 
           // 1st try: 3+ hours AND entered bed between 8 PM (20) and 4 AM (4) local time

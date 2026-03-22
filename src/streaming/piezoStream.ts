@@ -474,7 +474,9 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
   }
   catch {
     if (fd !== null) {
-      try { fs.closeSync(fd) }
+      try {
+        fs.closeSync(fd)
+      }
       catch { /* ignore */ }
     }
   }
@@ -490,6 +492,7 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
  */
 function updatePollRate(): void {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy import to avoid circular deps
     const { getDacMonitorIfRunning } = require('@/src/hardware/dacMonitor.instance')
     const monitor = getDacMonitorIfRunning()
     if (!monitor) return
@@ -615,7 +618,9 @@ export function startPiezoStreamServer(): WebSocketServer {
 
                 // Lazy serialize — only if at least one client needs it
                 if (payload === null) payload = JSON.stringify(frame)
-                try { client.send(payload) }
+                try {
+                  client.send(payload)
+                }
                 catch { /* client gone between readyState check and send */ }
               }
             }
@@ -668,7 +673,9 @@ export function broadcastFrame(frame: Record<string, unknown>): void {
     if (subs && !subs.has(frameType as SensorType)) continue
 
     if (payload === null) payload = JSON.stringify(frame)
-    try { client.send(payload) }
+    try {
+      client.send(payload)
+    }
     catch { /* client gone between readyState check and send */ }
   }
 }
