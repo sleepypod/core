@@ -18,6 +18,7 @@ import {
   Activity,
   RefreshCw,
   Radio,
+  Cog,
 } from 'lucide-react'
 
 const POLL_INTERVAL = 10_000
@@ -166,7 +167,7 @@ export function StatusScreen() {
       : 'unknown') as 'ok' | 'degraded' | 'unknown',
   }))
 
-  // Network discovery = WiFi + Internet + systemd services
+  // Network — WiFi + Internet only
   const networkServices = [
     {
       name: 'WiFi',
@@ -180,12 +181,14 @@ export function StatusScreen() {
       description: internet.data?.blocked ? 'Blocked (local only)' : 'Available',
       status: 'ok' as const,
     },
-    ...(logSources.data?.sources ?? []).map(source => ({
-      name: source.name,
-      description: source.unit,
-      status: (source.active ? 'ok' : 'degraded') as 'ok' | 'degraded',
-    })),
   ]
+
+  // Systemd service units (separate card matching iOS)
+  const systemdServices = (logSources.data?.sources ?? []).map(source => ({
+    name: source.name,
+    description: source.unit,
+    status: (source.active ? 'ok' : 'degraded') as 'ok' | 'degraded',
+  }))
 
   // Scheduler expanded content
   const jobCounts = scheduler.data?.jobCounts
@@ -240,7 +243,7 @@ export function StatusScreen() {
 
   // ─── Aggregate totals ─────────────────────────────────────────────
 
-  const allServices = [...coreServices, ...hardwareServices, ...calibrationServices, ...networkServices]
+  const allServices = [...coreServices, ...hardwareServices, ...calibrationServices, ...networkServices, ...systemdServices]
   const totalHealthy = allServices.filter(s => s.status === 'ok').length
   const totalServices = allServices.length
 
@@ -306,15 +309,26 @@ export function StatusScreen() {
         onHeaderClick={() => setCalibrationModalOpen(true)}
       />
 
-      {/* ── Network & Discovery ── */}
+      {/* ── Network ── */}
       <HealthStatusCard
         title="Network"
-        description="WiFi, internet, and services"
+        description="WiFi and internet connectivity"
         icon={Radio}
         iconColor="text-teal-400"
         iconBg="bg-teal-400/20"
         services={networkServices}
-        isLoading={wifi.isLoading || logSources.isLoading}
+        isLoading={wifi.isLoading}
+      />
+
+      {/* ── Services ── */}
+      <HealthStatusCard
+        title="Services"
+        description="Systemd service units"
+        icon={Cog}
+        iconColor="text-cyan-400"
+        iconBg="bg-cyan-400/20"
+        services={systemdServices}
+        isLoading={logSources.isLoading}
       />
 
       {/* Software update */}
