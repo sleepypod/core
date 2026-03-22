@@ -18,59 +18,72 @@ A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs dir
 ## Architecture
 
 ```mermaid
-graph TD
-    subgraph hw [Pod Hardware]
+graph LR
+    subgraph HW ["Pod Hardware"]
         DAC["dac.sock"]
-        RAW["RAW Files<br/>/persistent/*.RAW"]
+        RAW["/persistent/*.RAW"]
     end
 
-    subgraph core [sleepypod-core - Next.js]
-        UI[React UI]
-        API["tRPC API :3000"]
-        SCHED["Scheduler<br/>node-schedule"]
+    subgraph TRANSPORT ["Hardware Transport"]
+        DT["DacTransport<br/>+ SequentialQueue"]
+    end
 
-        subgraph hwTransport ["Hardware Transport — dacTransport + SequentialQueue"]
-            DT["DacTransport<br/>serializes all writes"]
-        end
+    subgraph SIDECARS ["Biometrics Sidecars"]
+        PP["piezo-processor"]
+        SD["sleep-detector"]
+        BIODB[("biometrics.db")]
+    end
 
-        subgraph writeBus ["Write Bus — immediate mutation broadcast"]
-            BMS["broadcastMutationStatus()"]
-        end
-
-        subgraph readBus ["Read Bus — 2s authoritative poll"]
+    subgraph CORE ["sleepypod-core"]
+        subgraph READBUS ["Read Bus — 2s poll"]
             DM["DacMonitor"]
-            SYNC[DeviceStateSync]
+            SYNC["DeviceStateSync"]
         end
 
-        WS["piezoStream WS :3001<br/>read-only delivery"]
-        DB1[("sleepypod.db<br/>Config & State")]
+        subgraph WRITEBUS ["Write Bus — immediate"]
+            BMS["broadcastMutation<br/>Status()"]
+        end
+
+        API["tRPC API :3000"]
+        SCHED["Scheduler"]
+        BF["broadcastFrame()"]
+        WS["piezoStream<br/>WS :3001"]
+        DB[("sleepypod.db")]
     end
 
-    subgraph mods [Biometrics Modules]
-        PP["piezo-processor<br/>Python sidecar"]
-        SD["sleep-detector<br/>Python sidecar"]
-        DB2[("biometrics.db<br/>Vitals & Sleep")]
+    subgraph CLIENTS ["Clients"]
+        UI["React UI"]
     end
 
-    UI -->|queries + mutations| API
-    API -->|reads/writes| DB1
-    API -->|reads| DB2
+    %% Hardware transport — single serialization point
+    DAC <--> DT
     API --> DT
     SCHED --> DT
     DM --> DT
-    DT -->|serialized cmds| DAC
-    API -->|after success| BMS
-    SCHED -->|after success| BMS
-    BMS -->|broadcastFrame| WS
-    DM -->|broadcastFrame| WS
+
+    %% Read bus
     DM --> SYNC
+    SYNC --> DB
+    DM --> BF
+
+    %% Write bus
+    API -->|on success| BMS
+    SCHED -->|on success| BMS
+    BMS --> BF
+
+    %% WebSocket delivery
+    BF --> WS
+    RAW -->|tail CBOR| WS
     WS -->|push frames| UI
-    SYNC -->|upsert| DB1
-    RAW -->|tails CBOR| PP
-    RAW -->|tails CBOR| SD
-    RAW -->|tails CBOR| WS
-    PP -->|writes rows| DB2
-    SD -->|writes rows| DB2
+
+    %% Biometrics pipeline
+    RAW --> PP & SD
+    PP & SD --> BIODB
+    BIODB -->|query| API
+
+    %% App layer
+    API <--> DB
+    UI <-->|HTTP| API
 ```
 
 ### Biometrics data flow
