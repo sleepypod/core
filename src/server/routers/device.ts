@@ -6,6 +6,8 @@ import { eq } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
+import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
+import { fahrenheitToLevel } from '@/src/hardware/types'
 import {
   sideSchema,
   temperatureSchema,
@@ -205,6 +207,10 @@ export const deviceRouter = router({
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
             }, 'Failed to set temperature')
+            broadcastMutationStatus(input.side, {
+              targetTemperature: input.temperature,
+              targetLevel: fahrenheitToLevel(input.temperature),
+            })
             resolve({ success: true })
           }
           catch (error) {
@@ -276,6 +282,10 @@ export const deviceRouter = router({
           console.error('Failed to sync power state to DB:', dbError)
         }
 
+        broadcastMutationStatus(input.side, input.powered
+          ? { targetTemperature: input.temperature ?? 75, targetLevel: fahrenheitToLevel(input.temperature ?? 75) }
+          : { targetLevel: 0 },
+        )
         return { success: true }
       }, 'Failed to set power')
     }),
@@ -347,6 +357,7 @@ export const deviceRouter = router({
           console.error('Failed to sync alarm state to DB:', dbError)
         }
 
+        broadcastMutationStatus(input.side, { isAlarmVibrating: true })
         return { success: true }
       }, 'Failed to set alarm')
     }),
@@ -391,6 +402,7 @@ export const deviceRouter = router({
           console.error('Failed to sync alarm clear state to DB:', dbError)
         }
 
+        broadcastMutationStatus(input.side, { isAlarmVibrating: false })
         return { success: true }
       }, 'Failed to clear alarm')
     }),
@@ -430,6 +442,7 @@ export const deviceRouter = router({
           console.error('Failed to sync snooze state to DB:', dbError)
         }
 
+        broadcastMutationStatus(input.side, { isAlarmVibrating: false })
         return { success: true, snoozeUntil: Math.floor(snoozeUntil.getTime() / 1000) }
       }, 'Failed to snooze alarm')
     }),

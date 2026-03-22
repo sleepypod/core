@@ -1,6 +1,6 @@
 # tRPC API Routers
 
-This directory contains all tRPC router definitions for the SleepyPod API.
+This directory contains all tRPC router definitions for the sleepypod API.
 
 ## Router Overview
 

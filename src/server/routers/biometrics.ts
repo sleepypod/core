@@ -6,7 +6,6 @@ import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gte, lte, desc, asc, avg, min, max, count } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
-import { isIosProcessing, getConnectedSince } from '@/src/streaming/processingState'
 import { listRawFiles } from './raw'
 import {
   classifySleepStages,
@@ -488,23 +487,6 @@ export const biometricsRouter = router({
     }),
 
   /**
-   * Check whether an iOS client is actively processing piezo data.
-   */
-  getProcessingStatus: publicProcedure
-    .meta({ openapi: { method: 'GET', path: '/biometrics/processing-status', protect: false, tags: ['Biometrics'] } })
-    .input(z.object({}))
-    .output(z.object({
-      iosProcessingActive: z.boolean(),
-      connectedSince: z.number().nullable(),
-    }))
-    .query(() => {
-      return {
-        iosProcessingActive: isIosProcessing(),
-        connectedSince: getConnectedSince(),
-      }
-    }),
-
-  /**
    * Returns the count of RAW biometrics files and total size.
    * RAW files are dual-channel (left + right interleaved), so left = right = total count.
    * Designed for the iOS Status screen.
@@ -714,14 +696,16 @@ export const biometricsRouter = router({
           if (!record.leftBedAt) {
             windowStart = record.enteredBedAt
             windowEnd = new Date() // use current time for active sessions
-          } else {
+          }
+          else {
             windowStart = record.enteredBedAt
             windowEnd = record.leftBedAt
           }
           sleepRecordId = record.id
           enteredBedAt = record.enteredBedAt.getTime()
           leftBedAt = record.leftBedAt ? record.leftBedAt.getTime() : null
-        } else if (input.startDate && input.endDate) {
+        }
+        else if (input.startDate && input.endDate) {
           if (!validateDateRange(input.startDate, input.endDate)) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
@@ -730,7 +714,8 @@ export const biometricsRouter = router({
           }
           windowStart = input.startDate
           windowEnd = input.endDate
-        } else {
+        }
+        else {
           // Default: last night — prefer overnight sleep over daytime naps
 
           // Fetch device timezone (falls back to 'America/Los_Angeles' if not set)
@@ -757,11 +742,12 @@ export const biometricsRouter = router({
               hour: 'numeric',
               hour12: false,
             }).formatToParts(d)
-            return parseInt(parts.find(p => p.type === 'hour')!.value, 10)
+            const hourPart = parts.find(p => p.type === 'hour')
+            return parseInt(hourPart?.value ?? '0', 10)
           }
 
           // 1st try: 3+ hours AND entered bed between 8 PM (20) and 4 AM (4) local time
-          const overnightRecord = recentRecords.find(r => {
+          const overnightRecord = recentRecords.find((r) => {
             if (r.sleepDurationSeconds < 10800) return false
             const hour = localHour(r.enteredBedAt)
             return hour >= 20 || hour < 4

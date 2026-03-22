@@ -1,6 +1,6 @@
 # sleepypod core
 
-Local control system for Eight Sleep Pods (3/4/5). Type-safe rewrite of free-sleep.
+Local control system for Pods (3/4/5). Type-safe rewrite of free-sleep.
 
 ## tech stack
 
@@ -19,15 +19,17 @@ Local control system for Eight Sleep Pods (3/4/5). Type-safe rewrite of free-sle
 graph TD
     HW[Pod Hardware<br>dac.sock] --> DM[DacMonitor<br>polls every 2s]
     DM -->|status:updated| SS[DeviceStateSync<br>writes device_state]
-    DM -->|status:updated| WS[piezoStream WS :3001<br>broadcasts deviceStatus frames]
+    DM -->|status:updated| WS[piezoStream WS :3001<br>read-only pub/sub]
     DM -->|gesture:detected| GH[GestureActionHandler]
     SS --> DB[(SQLite)]
     HW -->|RAW files| WS
     WS -->|deviceStatus + sensor frames| Browser
     DB --> API[tRPC API :3000]
     API -->|mutations, queries| Browser[Browser UI]
+    API -->|after mutation| WS
     API --> HW
     SCH[Scheduler] --> HW
+    SCH -->|after scheduled job| WS
     SCH --> DB
 ```
 
@@ -35,9 +37,11 @@ graph TD
 
 | Data | Path | Latency |
 |------|------|---------|
-| Device status (temp, power) | Hardware → DacMonitor → WS push | ~2s |
+| Device status (temp, power) | Hardware → DacMonitor → WS push | ~2s (poll backstop) |
+| Device status after mutation | tRPC mutation → broadcastMutationStatus → WS push | ~200ms |
+| Device status after scheduled job | Scheduler → Hardware → broadcastMutationStatus → WS push | immediate |
 | Sensor data (piezo, bed temp) | RAW files → piezoStream → WS push | ~10ms |
-| Mutations (setTemp, setPower) | Browser → tRPC HTTP → Hardware | ~100-500ms |
+| Mutations (setTemp, setPower) | Browser → tRPC HTTP → Hardware → WS broadcast | ~200-500ms |
 | Historical data (vitals, sleep) | Browser → tRPC HTTP → SQLite | on-demand |
 | Schedules, settings | Browser → tRPC HTTP → SQLite | on-demand |
 
@@ -101,7 +105,7 @@ CLI: `sp-status`, `sp-restart`, `sp-logs`, `sp-update`
 
 ## documentation
 
-- `.claude/docs/trpc-api-architecture.md` - Complete tRPC API reference
+- `docs/trpc-api-architecture.md` - Complete tRPC API reference
 - `.claude/docs/documentation-best-practices.md` - Documentation standards
 - `.claude/docs/import-patterns.md` - Import conventions
 - `.claude/docs/pr-review-process.md` - PR workflow

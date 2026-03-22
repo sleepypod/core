@@ -24,7 +24,7 @@ export const SideSelector = () => {
   const { status } = useDeviceStatus()
 
   return (
-    <div className="relative my-3 w-full">
+    <div className="relative mt-2 w-full">
       <div
         className={clsx(
           'flex rounded-[16px] p-1.5 transition-all duration-250',

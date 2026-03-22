@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from 'react'
+import { normalizeFrame } from '@/src/streaming/normalizeFrame'
 
 // ---------------------------------------------------------------------------
 // Sensor frame types (matching piezoStream.ts server output)
@@ -94,9 +95,9 @@ export interface FrzThermFrame {
 export interface FrzHealthFrame {
   type: 'frzHealth'
   ts: number
-  left: { pumpRpm: number; pumpDuty: number; tecCurrent: number }
-  right: { pumpRpm: number; pumpDuty: number; tecCurrent: number }
-  fan: { rpm: number; duty: number }
+  left: { pumpRpm: number, pumpDuty: number, tecCurrent: number, flowrate: number | null }
+  right: { pumpRpm: number, pumpDuty: number, tecCurrent: number, flowrate: number | null }
+  fan: { rpm: number, duty: number, bottomRpm: number | null }
 }
 
 /** Firmware log frame. */
@@ -137,43 +138,39 @@ export interface DeviceStatusFrame {
   isPriming: boolean
   primeCompletedNotification?: { timestamp: number }
   snooze: {
-    left: { active: boolean; snoozeUntil: number | null } | null
-    right: { active: boolean; snoozeUntil: number | null } | null
+    left: { active: boolean, snoozeUntil: number | null } | null
+    right: { active: boolean, snoozeUntil: number | null } | null
   }
 }
 
 /** Union of all sensor frame types. */
-export type SensorFrame =
-  | PiezoDualFrame
-  | CapSenseFrame
-  | CapSense2Frame
-  | BedTempFrame
-  | BedTemp2Frame
-  | FrzTempFrame
-  | FrzThermFrame
-  | FrzHealthFrame
-  | LogFrame
-  | DeviceStatusFrame
-  | GestureFrame
+export type SensorFrame
+  = | PiezoDualFrame
+    | CapSenseFrame
+    | CapSense2Frame
+    | BedTempFrame
+    | BedTemp2Frame
+    | FrzTempFrame
+    | FrzThermFrame
+    | FrzHealthFrame
+    | LogFrame
+    | DeviceStatusFrame
+    | GestureFrame
 
 // ---------------------------------------------------------------------------
 // Server → Client control messages
 // ---------------------------------------------------------------------------
 
-interface ErrorMessage { type: 'error'; message: string }
-interface ClaimedMessage { type: 'claimed'; since: number }
-interface ReleasedMessage { type: 'released' }
-interface SubscribedMessage { type: 'subscribed'; sensors: string[] }
-interface TimeRangeMessage { type: 'time_range'; min: number; max: number; file: string | null }
+interface ErrorMessage { type: 'error', message: string }
+interface SubscribedMessage { type: 'subscribed', sensors: string[] }
+interface TimeRangeMessage { type: 'time_range', min: number, max: number, file: string | null }
 interface SeekCompleteMessage { type: 'seek_complete' }
 
-type ServerControlMessage =
-  | ErrorMessage
-  | ClaimedMessage
-  | ReleasedMessage
-  | SubscribedMessage
-  | TimeRangeMessage
-  | SeekCompleteMessage
+type ServerControlMessage
+  = | ErrorMessage
+    | SubscribedMessage
+    | TimeRangeMessage
+    | SeekCompleteMessage
 
 type ServerMessage = SensorFrame | ServerControlMessage
 
@@ -220,7 +217,6 @@ interface SensorStreamSingleton {
   sensorListeners: Map<SensorType, Set<() => void>>
   frameCallbacks: Set<FrameCallback>
   ws: WebSocket | null
-  heartbeatInterval: ReturnType<typeof setInterval> | null
   reconnectTimeout: ReturnType<typeof setTimeout> | null
   reconnectAttempt: number
   intentionalClose: boolean
@@ -256,7 +252,6 @@ if (!g[SINGLETON_KEY]) {
     sensorListeners: new Map<SensorType, Set<() => void>>(),
     frameCallbacks: new Set<FrameCallback>(),
     ws: null,
-    heartbeatInterval: null,
     reconnectTimeout: null,
     reconnectAttempt: 0,
     intentionalClose: false,
@@ -347,7 +342,6 @@ const frameCallbacks = singleton.frameCallbacks
 // ---------------------------------------------------------------------------
 
 const DEFAULT_WS_PORT = 3001
-const HEARTBEAT_INTERVAL_MS = 15_000 // send heartbeat every 15s (server timeout is 30s)
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 30_000
 
@@ -356,22 +350,6 @@ function getWsUrl(): string {
   const port = Number(process.env.NEXT_PUBLIC_PIEZO_WS_PORT ?? DEFAULT_WS_PORT)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.hostname}:${port}`
-}
-
-function startHeartbeat() {
-  stopHeartbeat()
-  singleton.heartbeatInterval = setInterval(() => {
-    if (singleton.ws?.readyState === WebSocket.OPEN) {
-      singleton.ws.send(JSON.stringify({ type: 'heartbeat' }))
-    }
-  }, HEARTBEAT_INTERVAL_MS)
-}
-
-function stopHeartbeat() {
-  if (singleton.heartbeatInterval) {
-    clearInterval(singleton.heartbeatInterval)
-    singleton.heartbeatInterval = null
-  }
 }
 
 function scheduleReconnect() {
@@ -385,94 +363,7 @@ function scheduleReconnect() {
   }, delay)
 }
 
-// ---------------------------------------------------------------------------
-// Frame normalization (browser-side)
-// Firmware sends nested structures; we flatten to consistent schemas.
-// Server sends raw frames so iOS (which expects nested) is unaffected.
-// ---------------------------------------------------------------------------
-
-const NO_SENSOR = -327.68
-
-function isSentinel(v: unknown): boolean {
-  return v === null || v === undefined || v === NO_SENSOR ||
-    (typeof v === 'number' && Math.abs(v - NO_SENSOR) < 0.01)
-}
-
-function safeNum(v: unknown): number | null {
-  if (isSentinel(v)) return null
-  return typeof v === 'number' ? v : null
-}
-
-function cdToC(v: unknown): number | null {
-  if (v === null || v === undefined || typeof v !== 'number') return null
-  return v / 100
-}
-
-function normalizeFrame(rec: Record<string, unknown>): Record<string, unknown> {
-  switch (rec.type) {
-    case 'bedTemp':
-    case 'bedTemp2': {
-      const left = (rec.left ?? {}) as Record<string, unknown>
-      const right = (rec.right ?? {}) as Record<string, unknown>
-      const leftTemps = (left.temps ?? []) as number[]
-      const rightTemps = (right.temps ?? []) as number[]
-      return {
-        type: rec.type, ts: rec.ts,
-        ambientTemp: safeNum(left.amb) ?? safeNum(right.amb),
-        mcuTemp: safeNum(rec.mcu),
-        humidity: safeNum(left.hu) ?? safeNum(right.hu),
-        leftOuterTemp: safeNum(leftTemps[0]),
-        leftCenterTemp: safeNum(leftTemps[1]),
-        leftInnerTemp: safeNum(leftTemps[2]),
-        rightOuterTemp: safeNum(rightTemps[0]),
-        rightCenterTemp: safeNum(rightTemps[1]),
-        rightInnerTemp: safeNum(rightTemps[2]),
-      }
-    }
-    case 'frzTemp':
-      return {
-        type: 'frzTemp', ts: rec.ts,
-        left: cdToC(rec.left), right: cdToC(rec.right),
-        amb: cdToC(rec.amb), hs: cdToC(rec.hs),
-      }
-    case 'frzHealth': {
-      const left = (rec.left ?? {}) as Record<string, unknown>
-      const right = (rec.right ?? {}) as Record<string, unknown>
-      const fan = (rec.fan ?? {}) as Record<string, unknown>
-      return {
-        type: 'frzHealth', ts: rec.ts,
-        left: {
-          pumpRpm: safeNum(left.pumpRpm ?? left.pump_rpm ?? left.rpm) ?? 0,
-          pumpDuty: safeNum(left.pumpDuty ?? left.pump_duty ?? left.duty) ?? 0,
-          tecCurrent: safeNum(left.tecI ?? left.tec ?? left.tecCurrent) ?? 0,
-        },
-        right: {
-          pumpRpm: safeNum(right.pumpRpm ?? right.pump_rpm ?? right.rpm) ?? 0,
-          pumpDuty: safeNum(right.pumpDuty ?? right.pump_duty ?? right.duty) ?? 0,
-          tecCurrent: safeNum(right.tecI ?? right.tec ?? right.tecCurrent) ?? 0,
-        },
-        fan: {
-          rpm: safeNum(fan.rpm ?? fan.fanRpm) ?? 0,
-          duty: safeNum(fan.duty ?? fan.fanDuty) ?? 0,
-        },
-      }
-    }
-    case 'capSense2': {
-      const left = (rec.left ?? {}) as Record<string, unknown>
-      const right = (rec.right ?? {}) as Record<string, unknown>
-      const leftVals = (left.values ?? left) as number[] | unknown
-      const rightVals = (right.values ?? right) as number[] | unknown
-      return {
-        type: rec.type, ts: rec.ts,
-        left: Array.isArray(leftVals) ? leftVals : (typeof rec.left === 'number' ? [rec.left] : []),
-        right: Array.isArray(rightVals) ? rightVals : (typeof rec.right === 'number' ? [rec.right] : []),
-        status: rec.status ?? left.status ?? right.status,
-      }
-    }
-    default:
-      return rec
-  }
-}
+// Frame normalization imported from @/src/streaming/normalizeFrame
 
 function handleMessage(event: MessageEvent) {
   try {
@@ -483,9 +374,6 @@ function handleMessage(event: MessageEvent) {
       setState({ lastError: (msg as ErrorMessage).message })
       return
     }
-    if (msg.type === 'claimed' || msg.type === 'released') {
-      return
-    }
     if (msg.type === 'subscribed') {
       const sensors = (msg as SubscribedMessage).sensors as SensorType[]
       setState({ subscribedSensors: sensors })
@@ -493,8 +381,8 @@ function handleMessage(event: MessageEvent) {
     }
     if (msg.type === 'time_range') {
       const tr = msg as TimeRangeMessage
-      const range: TimeRange | null =
-        tr.min === 0 && tr.max === 0 ? null : { min: tr.min, max: tr.max }
+      const range: TimeRange | null
+        = tr.min === 0 && tr.max === 0 ? null : { min: tr.min, max: tr.max }
       setState({ timeRange: range })
       // Resolve any pending getTimeRange() promises
       for (const resolve of singleton.timeRangeResolvers) {
@@ -523,9 +411,13 @@ function handleMessage(event: MessageEvent) {
 
     // Notify frame callbacks
     for (const cb of frameCallbacks) {
-      try { cb(frame) } catch { /* consumer error */ }
+      try {
+        cb(frame)
+      }
+      catch { /* consumer error */ }
     }
-  } catch {
+  }
+  catch {
     // Non-JSON message — ignore
   }
 }
@@ -542,7 +434,8 @@ function connect() {
 
   try {
     singleton.ws = new WebSocket(url)
-  } catch {
+  }
+  catch {
     setState({ status: 'disconnected', lastError: 'Failed to create WebSocket' })
     scheduleReconnect()
     return
@@ -551,23 +444,20 @@ function connect() {
   singleton.ws.onopen = () => {
     singleton.reconnectAttempt = 0
     setState({ status: 'connected', lastError: null })
-    startHeartbeat()
     startFpsTimer()
 
-    // Send subscription if one was requested before connection
-    if (singleton.pendingSubscription && singleton.ws?.readyState === WebSocket.OPEN) {
-      singleton.ws.send(JSON.stringify({ type: 'subscribe', sensors: singleton.pendingSubscription }))
-    }
+    // Recompute and send merged subscription now that the connection is open
+    recomputeAndSendSubscription()
   }
 
   singleton.ws.onmessage = handleMessage
 
   singleton.ws.onclose = () => {
-    stopHeartbeat()
     singleton.ws = null
     if (!singleton.intentionalClose) {
       scheduleReconnect()
-    } else {
+    }
+    else {
       setState({ status: 'disconnected' })
     }
   }
@@ -580,7 +470,6 @@ function connect() {
 
 function disconnect() {
   singleton.intentionalClose = true
-  stopHeartbeat()
   stopFpsTimer()
   if (singleton.reconnectTimeout) {
     clearTimeout(singleton.reconnectTimeout)
@@ -609,7 +498,8 @@ function recomputeAndSendSubscription() {
     }
     if (merged === null) {
       merged = [...sensors]
-    } else {
+    }
+    else {
       for (const s of sensors) {
         if (!merged.includes(s)) merged.push(s)
       }
@@ -682,7 +572,7 @@ export interface UseSensorStreamOptions {
 /**
  * React hook that connects to the piezoStream WebSocket server on port 3001,
  * manages connection lifecycle (open/close/reconnect with exponential backoff),
- * sends subscribe/heartbeat messages, and exposes typed sensor frames.
+ * sends subscribe messages, and exposes typed sensor frames.
  *
  * Multiple components can use this hook simultaneously — the WebSocket
  * connection is shared (singleton) and ref-counted.
@@ -702,6 +592,7 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   // Stable subscription ID for this hook instance
   const subIdRef = useRef<number | null>(null)
   if (subIdRef.current === null) {
+    // eslint-disable-next-line react-hooks/immutability -- one-time init of external counter is intentional
     subIdRef.current = singleton.nextSubscriptionId++
   }
 
@@ -726,7 +617,7 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   // Subscription management — merge with other active hooks
   useEffect(() => {
     if (!enabled) return
-    const id = subIdRef.current!
+    const id = subIdRef.current ?? 0
     singleton.activeSubscriptions.set(id, sensors ?? null)
     recomputeAndSendSubscription()
 
@@ -772,7 +663,7 @@ export function useSensorFrame<T extends SensorType>(
       if (!sensorListeners.has(sensorType)) {
         sensorListeners.set(sensorType, new Set())
       }
-      sensorListeners.get(sensorType)!.add(listener)
+      sensorListeners.get(sensorType)?.add(listener)
 
       return () => {
         unsub1()
@@ -803,12 +694,17 @@ export function useSensorFrame<T extends SensorType>(
  */
 export function useOnSensorFrame(callback: FrameCallback) {
   const callbackRef = useRef(callback)
-  callbackRef.current = callback
+
+  useLayoutEffect(() => {
+    callbackRef.current = callback
+  })
 
   useEffect(() => {
-    const handler: FrameCallback = (frame) => callbackRef.current(frame)
+    const handler: FrameCallback = frame => callbackRef.current(frame)
     frameCallbacks.add(handler)
-    return () => { frameCallbacks.delete(handler) }
+    return () => {
+      frameCallbacks.delete(handler)
+    }
   }, [])
 }
 

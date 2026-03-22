@@ -10,7 +10,7 @@ Three expert agents (bash-script-expert, security-expert, devops-expert) reviewe
 
 ## Context
 
-- Jailbroken Eight Sleep Pod (embedded Linux)
+- Jailbroken Pod (embedded Linux)
 - Single-user device, local network only
 - Root access required for dac.sock hardware control
 - No physical access after deployment (bedroom device)
@@ -161,7 +161,7 @@ Additional issues identified and fixed in PR #115 review:
 
 ### Installation Tests
 - [ ] Test one-line curl install: `curl -fsSL ... | sudo bash`
-- [ ] Test install on fresh Eight Sleep Pod
+- [ ] Test install on fresh Pod
 - [ ] Test install on system without wlan0 interface
 - [ ] Test .env preservation on re-run
 - [ ] Verify better-sqlite3 builds correctly

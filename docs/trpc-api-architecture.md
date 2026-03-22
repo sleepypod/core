@@ -43,23 +43,42 @@ try {
 
 **Why:** Prevents connection pooling complexity and socket leaks. Trade-off: reconnection overhead for reliability.
 
-**Device Status — WebSocket First:**
+**Device Status — WebSocket First, tRPC Fallback:**
 
-Device status is now streamed via WebSocket, not polled via tRPC:
+Device status is primarily pushed via WebSocket. tRPC polling remains available for initial page load, non-WebSocket clients (iOS, CLI), and fallback when WS is unavailable:
 
 ```mermaid
 sequenceDiagram
     participant HW as Pod Hardware
-    participant DM as DacMonitor (2s poll)
+    participant DM as DacMonitor (read bus)
+    participant SCH as Scheduler
+    participant API as tRPC API :3000
+    participant BMS as broadcastMutationStatus (write bus)
     participant WS as piezoStream WS :3001
     participant UI as Browser UI
 
+    Note over DM,WS: Read bus — authoritative 2s poll
     loop Every 2 seconds
         DM->>HW: getDeviceStatus()
         HW-->>DM: temps, power, priming, water
-        DM->>WS: broadcastFrame({ type: 'deviceStatus', ... })
+        DM->>WS: broadcastFrame(deviceStatus)
         WS->>UI: deviceStatus frame (push)
     end
+
+    Note over API,BMS: Write bus — immediate after mutation
+    UI->>API: setTemperature / setPower / setAlarm
+    API->>HW: hardware command
+    HW-->>API: success
+    API->>BMS: overlay mutation onto last polled status
+    BMS->>WS: broadcastFrame(deviceStatus)
+    WS->>UI: deviceStatus frame (all clients, ~200ms)
+
+    Note over SCH,BMS: Scheduler uses same write bus
+    SCH->>HW: hardware command (via shared client)
+    HW-->>SCH: success
+    SCH->>BMS: overlay mutation onto last polled status
+    BMS->>WS: broadcastFrame(deviceStatus)
+    WS->>UI: deviceStatus frame (all clients)
 
     Note over UI: useDeviceStatus() hook
     Note over UI: WS primary, tRPC HTTP fallback for initial load
@@ -119,7 +138,10 @@ Real-time Pod hardware control.
 - `setPower(side, on, temp?)` - Power control (on = heat/cool, off = neutral)
 - `setAlarm(side, config)` - Start vibration alarm (patterns: double/rise, 1-100 intensity, 0-180s max)
 - `clearAlarm(side)` - Stop vibration
+- `snoozeAlarm(side, duration, config)` - Stop alarm, restart after snooze duration
 - `startPriming()` - Run water circulation sequence (2-5 min, loud, don't run during sleep)
+
+**Event bus:** All mutation procedures (`setTemperature`, `setPower`, `setAlarm`, `clearAlarm`, `snoozeAlarm`) call `broadcastMutationStatus()` after hardware success. The scheduler's job callbacks (`scheduleTemperature`, `schedulePowerOn/Off`, `scheduleAlarm`) call the same function. This overlays the mutation onto `dacMonitor.getLastStatus()` and broadcasts a `deviceStatus` frame to all WS clients. Fire-and-forget — never blocks the caller. DacMonitor's 2s poll remains the authoritative consistency backstop. The shared helper lives in `src/streaming/broadcastMutationStatus.ts`.
 
 **Hardware Timing:**
 - Commands execute in ~100-500ms

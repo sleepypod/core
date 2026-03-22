@@ -5,7 +5,6 @@ import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
-import { UserSelector } from '@/src/components/UserSelector/UserSelector'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { TemperatureDial } from '@/src/components/TemperatureDial/TemperatureDial'
 import { AlarmBanner } from '@/src/components/TempScreen/AlarmBanner'
@@ -88,7 +87,12 @@ export const TempScreen = () => {
     for (const side of activeSides) {
       setTempMutation.mutate(
         { side, temperature: tempF },
-        { onSettled: () => { setLocalTarget(null); refetch() } },
+        {
+          onSettled: () => {
+            setLocalTarget(null)
+            refetch()
+          },
+        },
       )
     }
   }, [activeSides, setTempMutation, refetch])
@@ -155,16 +159,16 @@ export const TempScreen = () => {
         onTemperatureCommit={handleDialCommit}
       />
 
-      {/* Temperature controls: −/power/+ */}
-      <div className="flex items-center justify-center gap-4 sm:gap-6">
+      {/* Temperature controls: −/power/+ (tight gap to dial to avoid mobile scroll) */}
+      <div className="-mt-2 flex items-center justify-center gap-4 sm:mt-0 sm:gap-6">
         {/* Minus button */}
         <button
           onClick={() => handleTempAdjust(-1)}
           disabled={!isOn || setTempMutation.isPending}
           className={clsx(
-            'flex h-12 w-12 items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
+            'flex h-12 w-12 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
             'bg-zinc-900 text-zinc-400 active:bg-zinc-800 active:scale-95',
-            'disabled:opacity-30 disabled:active:scale-100',
+            'disabled:cursor-default disabled:opacity-30 disabled:active:scale-100',
           )}
         >
           <Minus size={22} />
@@ -175,7 +179,7 @@ export const TempScreen = () => {
           onClick={handlePowerToggle}
           disabled={setPowerMutation.isPending}
           className={clsx(
-            'flex h-14 w-14 items-center justify-center rounded-full transition-all duration-200 sm:h-16 sm:w-16',
+            'flex h-14 w-14 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-16 sm:w-16',
             'active:scale-95',
             isOn
               ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
@@ -190,9 +194,9 @@ export const TempScreen = () => {
           onClick={() => handleTempAdjust(1)}
           disabled={!isOn || setTempMutation.isPending}
           className={clsx(
-            'flex h-12 w-12 items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
+            'flex h-12 w-12 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
             'bg-zinc-900 text-zinc-400 active:bg-zinc-800 active:scale-95',
-            'disabled:opacity-30 disabled:active:scale-100',
+            'disabled:cursor-default disabled:opacity-30 disabled:active:scale-100',
           )}
         >
           <Plus size={22} />

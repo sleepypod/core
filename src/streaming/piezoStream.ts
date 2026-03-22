@@ -10,13 +10,8 @@
  * temperature, freezer health, and firmware logs. Clients can subscribe to
  * specific types to avoid receiving unwanted high-frequency data.
  *
- * Only one iOS client may claim processing ownership at a time.
- *
  * Protocol:
  *   Client → Server:
- *     { type: "claim_processing" }           — claim processing ownership
- *     { type: "heartbeat" }                  — keep-alive (must arrive within 30 s)
- *     { type: "release_processing" }         — voluntarily release ownership
  *     { type: "subscribe", sensors: [...] }  — subscribe to sensor types
  *                                              (default: all types)
  *     { type: "get_time_range" }             — request available scrub range
@@ -33,8 +28,6 @@
  *
  *   Server → Client (control):
  *     { type: "error", message }     — error notification
- *     { type: "claimed", since }     — ack for claim_processing
- *     { type: "released" }           — ack for release / heartbeat timeout
  *     { type: "subscribed", sensors } — ack for subscribe
  *     { type: "time_range", min, max, file } — available scrub range
  *     { type: "seek_complete" }      — seek replay finished
@@ -44,15 +37,12 @@ import { WebSocketServer, WebSocket } from 'ws'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Decoder } from 'cbor-x'
-import { setIosProcessing } from './processingState'
-
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
 const WS_PORT = Number(process.env.PIEZO_WS_PORT ?? 3001)
 const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
-const HEARTBEAT_TIMEOUT_MS = 30_000
 const FILE_POLL_INTERVAL_MS = 10 // match Python's 10 ms poll for new data
 const SEEK_MAX_DURATION_S = 30 // max seconds of data to replay on seek
 
@@ -250,140 +240,6 @@ function int32BufferToArray(raw: Buffer | Uint8Array | undefined): number[] {
   return nums
 }
 
-// ---------------------------------------------------------------------------
-// Frame normalization
-// Firmware sends nested structures; we flatten to a consistent schema so all
-// clients (web, iOS) receive the same shape regardless of pod version.
-// ---------------------------------------------------------------------------
-
-const NO_SENSOR = -327.68
-
-function isSentinel(v: unknown): boolean {
-  return v === null || v === undefined || v === NO_SENSOR ||
-    (typeof v === 'number' && Math.abs(v - NO_SENSOR) < 0.01)
-}
-
-function safeNum(v: unknown): number | null {
-  if (isSentinel(v)) return null
-  return typeof v === 'number' ? v : null
-}
-
-/** centidegrees integer → Celsius float */
-function cdToC(v: unknown): number | null {
-  if (v === null || v === undefined || typeof v !== 'number') return null
-  return v / 100
-}
-
-function normalizeBedTemp(rec: Record<string, unknown>): Record<string, unknown> {
-  const left = (rec.left ?? {}) as Record<string, unknown>
-  const right = (rec.right ?? {}) as Record<string, unknown>
-  const leftTemps = (left.temps ?? []) as number[]
-  const rightTemps = (right.temps ?? []) as number[]
-
-  return {
-    type: rec.type,
-    ts: rec.ts,
-    ambientTemp: safeNum(left.amb) ?? safeNum(right.amb),
-    mcuTemp: safeNum(rec.mcu),
-    humidity: safeNum(left.hu) ?? safeNum(right.hu),
-    leftOuterTemp: safeNum(leftTemps[0]),
-    leftCenterTemp: safeNum(leftTemps[1]),
-    leftInnerTemp: safeNum(leftTemps[2]),
-    rightOuterTemp: safeNum(rightTemps[0]),
-    rightCenterTemp: safeNum(rightTemps[1]),
-    rightInnerTemp: safeNum(rightTemps[2]),
-  }
-}
-
-function normalizeFrzTemp(rec: Record<string, unknown>): Record<string, unknown> {
-  // Firmware sends centidegrees integers — convert to Celsius floats
-  return {
-    type: 'frzTemp',
-    ts: rec.ts,
-    left: cdToC(rec.left),
-    right: cdToC(rec.right),
-    amb: cdToC(rec.amb),
-    hs: cdToC(rec.hs),
-  }
-}
-
-function normalizeFrzHealth(rec: Record<string, unknown>): Record<string, unknown> {
-  const left = (rec.left ?? {}) as Record<string, unknown>
-  const right = (rec.right ?? {}) as Record<string, unknown>
-  const fan = (rec.fan ?? {}) as Record<string, unknown>
-
-  return {
-    type: 'frzHealth',
-    ts: rec.ts,
-    left: {
-      pumpRpm: safeNum(left.pumpRpm ?? left.pump_rpm ?? left.pumpRPM ?? left.rpm) ?? 0,
-      pumpDuty: safeNum(left.pumpDuty ?? left.pump_duty ?? left.duty) ?? 0,
-      tecCurrent: safeNum(left.tecI ?? left.tec ?? left.tecCurrent) ?? 0,
-    },
-    right: {
-      pumpRpm: safeNum(right.pumpRpm ?? right.pump_rpm ?? right.pumpRPM ?? right.rpm) ?? 0,
-      pumpDuty: safeNum(right.pumpDuty ?? right.pump_duty ?? right.duty) ?? 0,
-      tecCurrent: safeNum(right.tecI ?? right.tec ?? right.tecCurrent) ?? 0,
-    },
-    fan: {
-      rpm: safeNum(fan.rpm ?? fan.fanRpm ?? fan.fan_rpm) ?? 0,
-      duty: safeNum(fan.duty ?? fan.fanDuty ?? fan.fan_duty) ?? 0,
-    },
-  }
-}
-
-function normalizeFrzTherm(rec: Record<string, unknown>): Record<string, unknown> {
-  const left = (rec.left ?? {}) as Record<string, unknown>
-  const right = (rec.right ?? {}) as Record<string, unknown>
-
-  // If left/right are plain numbers (older firmware), pass through
-  if (typeof rec.left === 'number' && typeof rec.right === 'number') {
-    return rec
-  }
-
-  return {
-    type: 'frzTherm',
-    ts: rec.ts,
-    left: safeNum(left.pumpDuty ?? left.duty ?? rec.left) ?? 0,
-    right: safeNum(right.pumpDuty ?? right.duty ?? rec.right) ?? 0,
-  }
-}
-
-function normalizeCapSense2(rec: Record<string, unknown>): Record<string, unknown> {
-  const left = (rec.left ?? {}) as Record<string, unknown>
-  const right = (rec.right ?? {}) as Record<string, unknown>
-
-  // Extract values arrays from nested structure
-  const leftVals = (left.values ?? left) as number[] | unknown
-  const rightVals = (right.values ?? right) as number[] | unknown
-
-  return {
-    type: rec.type,
-    ts: rec.ts,
-    left: Array.isArray(leftVals) ? leftVals : (typeof rec.left === 'number' ? [rec.left] : []),
-    right: Array.isArray(rightVals) ? rightVals : (typeof rec.right === 'number' ? [rec.right] : []),
-    status: rec.status ?? left.status ?? right.status,
-  }
-}
-
-function normalizeFrame(rec: Record<string, unknown>): Record<string, unknown> {
-  switch (rec.type) {
-    case 'bedTemp':
-    case 'bedTemp2':
-      return normalizeBedTemp(rec)
-    case 'frzTemp':
-      return normalizeFrzTemp(rec)
-    case 'frzHealth':
-      return normalizeFrzHealth(rec)
-    case 'frzTherm':
-      return normalizeFrzTherm(rec)
-    case 'capSense2':
-      return normalizeCapSense2(rec)
-    default:
-      return rec // capSense (Pod 3), log — already flat
-  }
-}
-
 /**
  * Decode CBOR inner data into JSON-serializable sensor frames.
  *
@@ -435,63 +291,14 @@ function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
 let wss: WebSocketServer | null = null
 let streamingInterval: ReturnType<typeof setInterval> | null = null
 
-/** The single active processing client (if any). */
-let activeClient: WebSocket | null = null
-let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
-
 /** Per-client sensor subscriptions. undefined = all types (default). */
 const clientSubscriptions = new WeakMap<WebSocket, Set<SensorType> | undefined>()
-
-function resetHeartbeatTimer(): void {
-  if (heartbeatTimer) clearTimeout(heartbeatTimer)
-  heartbeatTimer = setTimeout(() => {
-    console.warn('[sensorStream] iOS heartbeat timeout — releasing processing ownership')
-    releaseClient()
-  }, HEARTBEAT_TIMEOUT_MS)
-}
-
-function releaseClient(): void {
-  if (heartbeatTimer) {
-    clearTimeout(heartbeatTimer)
-    heartbeatTimer = null
-  }
-  if (activeClient) {
-    try {
-      activeClient.send(JSON.stringify({ type: 'released' }))
-    }
-    catch { /* client may already be gone */ }
-    activeClient = null
-  }
-  setIosProcessing(false)
-}
 
 function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
   try {
     const msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf-8'))
 
-    if (msg.type === 'claim_processing') {
-      if (activeClient && activeClient !== ws && activeClient.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Another client is already processing' }))
-        return
-      }
-      activeClient = ws
-      setIosProcessing(true)
-      resetHeartbeatTimer()
-      ws.send(JSON.stringify({ type: 'claimed', since: Date.now() }))
-      console.log('[sensorStream] iOS client claimed processing ownership')
-    }
-    else if (msg.type === 'heartbeat') {
-      if (activeClient === ws) {
-        resetHeartbeatTimer()
-      }
-    }
-    else if (msg.type === 'release_processing') {
-      if (activeClient === ws) {
-        releaseClient()
-        console.log('[sensorStream] iOS client voluntarily released processing')
-      }
-    }
-    else if (msg.type === 'subscribe') {
+    if (msg.type === 'subscribe') {
       // Client specifies which sensor types it wants
       const requested = msg.sensors as string[] | undefined
       if (!Array.isArray(requested) || requested.length === 0) {
@@ -567,7 +374,8 @@ function findIndexEntry(targetTs: number): number {
     const mid = (lo + hi) >>> 1
     if (frameIndex[mid].ts <= targetTs) {
       lo = mid + 1
-    } else {
+    }
+    else {
       hi = mid - 1
     }
   }
@@ -651,19 +459,25 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
 
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(frame))
-          } else {
+          }
+          else {
             done = true
             break
           }
         }
-      } catch (e) {
+      }
+      catch (e) {
         if (e instanceof RangeError) break // incomplete record
         bufPos += 1 // skip malformed byte, try to resync
       }
     }
-  } catch {
+  }
+  catch {
     if (fd !== null) {
-      try { fs.closeSync(fd) } catch { /* ignore */ }
+      try {
+        fs.closeSync(fd)
+      }
+      catch { /* ignore */ }
     }
   }
 
@@ -677,17 +491,19 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
  * connected, slower when idle. Lazy-imported to avoid circular deps.
  */
 function updatePollRate(): void {
-  try {
-    const { getDacMonitorIfRunning } = require('@/src/hardware/dacMonitor.instance')
-    const monitor = getDacMonitorIfRunning()
-    if (!monitor) return
-    const clientCount = wss?.clients.size ?? 0
-    if (clientCount > 0) {
-      monitor.setActive()
-    } else {
-      monitor.setIdle()
-    }
-  } catch { /* monitor not started yet */ }
+  import('@/src/hardware/dacMonitor.instance')
+    .then(({ getDacMonitorIfRunning }) => {
+      const monitor = getDacMonitorIfRunning()
+      if (!monitor) return
+      const clientCount = wss?.clients.size ?? 0
+      if (clientCount > 0) {
+        monitor.setActive()
+      }
+      else {
+        monitor.setIdle()
+      }
+    })
+    .catch(() => { /* monitor not started yet */ })
 }
 
 /**
@@ -713,17 +529,11 @@ export function startPiezoStreamServer(): WebSocketServer {
 
     ws.on('close', () => {
       console.log('[sensorStream] Client disconnected')
-      if (activeClient === ws) {
-        releaseClient()
-      }
       updatePollRate()
     })
 
     ws.on('error', (err) => {
       console.error('[sensorStream] WebSocket error:', err.message)
-      if (activeClient === ws) {
-        releaseClient()
-      }
     })
   })
 
@@ -807,7 +617,10 @@ export function startPiezoStreamServer(): WebSocketServer {
 
                 // Lazy serialize — only if at least one client needs it
                 if (payload === null) payload = JSON.stringify(frame)
-                client.send(payload)
+                try {
+                  client.send(payload)
+                }
+                catch { /* client gone between readyState check and send */ }
               }
             }
           }
@@ -859,7 +672,10 @@ export function broadcastFrame(frame: Record<string, unknown>): void {
     if (subs && !subs.has(frameType as SensorType)) continue
 
     if (payload === null) payload = JSON.stringify(frame)
-    client.send(payload)
+    try {
+      client.send(payload)
+    }
+    catch { /* client gone between readyState check and send */ }
   }
 }
 
@@ -872,8 +688,6 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
     clearInterval(streamingInterval)
     streamingInterval = null
   }
-
-  releaseClient()
 
   const server = wss
   if (server) {

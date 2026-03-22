@@ -28,6 +28,8 @@ export function snoozeAlarm(
     try {
       const client = getSharedHardwareClient()
       await client.setAlarm(side, config)
+      const { broadcastMutationStatus } = await import('@/src/streaming/broadcastMutationStatus')
+      broadcastMutationStatus(side, { isAlarmVibrating: true })
     }
     catch (err) {
       console.error(`[Snooze] Failed to restart alarm for ${side}:`, err)

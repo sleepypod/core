@@ -5,7 +5,7 @@
 
 ## Context
 
-The Eight Sleep Pod carries three sensor types relevant to biometrics processing:
+The Pod carries three sensor types relevant to biometrics processing:
 
 - **Piezoelectric (piezo)**: Sampled at 500 Hz. Produces ballistocardiogram (BCG) signals used to derive heart rate, HRV, and breathing rate.
 - **Capacitance**: Sampled at ~1 Hz. Used for bed presence detection.

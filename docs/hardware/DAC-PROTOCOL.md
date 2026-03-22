@@ -1,10 +1,10 @@
 # DAC Hardware Protocol
 
-How sleepypod-core communicates with the Eight Sleep Pod hardware.
+How sleepypod-core communicates with the Pod hardware.
 
 ## Architecture
 
-The Pod runs three stock Eight Sleep processes:
+The Pod runs three stock processes:
 - **frankenfirmware** — controls the hardware (temperature, pumps, sensors, alarms)
 - **Eight.Capybara** — cloud connectivity (hub connection, OTA updates)
 - **DAC** (replaced by sleepypod-core) — user-facing API and control
@@ -13,7 +13,7 @@ sleepypod-core **replaces the DAC** process. frankenfirmware connects TO us.
 
 ```mermaid
 flowchart LR
-    subgraph pod["Eight Sleep Pod"]
+    subgraph pod["Pod"]
         frank["frankenfirmware\n(stock binary)"]
         sp["sleepypod-core\n(our code)"]
         capy["Eight.Capybara\n(stock binary)"]

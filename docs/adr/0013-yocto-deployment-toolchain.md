@@ -1,7 +1,7 @@
 # ADR: Yocto-compatible deployment toolchain
 
 ## Context
-The Eight Sleep Pod runs a Yocto-based embedded Linux distribution ("Eight Layer 4.0.2", kirkstone) on aarch64. This is **not** a Debian/Ubuntu environment — there is no `apt-get`, no `dpkg`, and no general-purpose package manager. The system ships with a minimal set of tools: `curl`, `systemctl`, `python3`, `make`, `scp`, and `iptables`. Notably absent are `rsync`, `git`, and a C/C++ compiler (`gcc`/`g++`).
+The Pod runs a Yocto-based embedded Linux distribution ("Eight Layer 4.0.2", kirkstone) on aarch64. This is **not** a Debian/Ubuntu environment — there is no `apt-get`, no `dpkg`, and no general-purpose package manager. The system ships with a minimal set of tools: `curl`, `systemctl`, `python3`, `make`, `scp`, and `iptables`. Notably absent are `rsync`, `git`, and a C/C++ compiler (`gcc`/`g++`).
 
 Our original install and deploy scripts assumed a Debian environment (apt-get for Node.js, nodesource repo, node-gyp for native modules, rsync for file sync). None of this works on the Pod's actual OS.
 

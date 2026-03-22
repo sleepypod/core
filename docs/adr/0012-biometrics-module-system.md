@@ -5,7 +5,7 @@
 
 ## Context
 
-SleepyPod needs to process raw biometric sensor data from the Pod hardware and display health metrics (heart rate, HRV, breathing rate, sleep sessions, movement) in the UI.
+sleepypod needs to process raw biometric sensor data from the Pod hardware and display health metrics (heart rate, HRV, breathing rate, sleep sessions, movement) in the UI.
 
 The key constraints are:
 

@@ -8,6 +8,8 @@ import {
   deviceSettings,
 } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { fahrenheitToLevel } from '@/src/hardware/types'
+import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 
 /**
  * Job manager - orchestrates all scheduled tasks
@@ -141,6 +143,10 @@ export class JobManager {
         await client.connect()
         try {
           await client.setTemperature(sched.side, sched.temperature)
+          broadcastMutationStatus(sched.side, {
+            targetTemperature: sched.temperature,
+            targetLevel: fahrenheitToLevel(sched.temperature),
+          })
         }
         finally {
           // shared client — don't disconnect
@@ -166,6 +172,11 @@ export class JobManager {
         await client.connect()
         try {
           await client.setPower(sched.side, true, sched.onTemperature)
+          const onTemp = sched.onTemperature ?? 75
+          broadcastMutationStatus(sched.side, {
+            targetTemperature: onTemp,
+            targetLevel: fahrenheitToLevel(onTemp),
+          })
         }
         finally {
           // shared client — don't disconnect
@@ -191,6 +202,7 @@ export class JobManager {
         await client.connect()
         try {
           await client.setPower(sched.side, false)
+          broadcastMutationStatus(sched.side, { targetLevel: 0 })
         }
         finally {
           // shared client — don't disconnect
@@ -223,6 +235,11 @@ export class JobManager {
             vibrationIntensity: sched.vibrationIntensity,
             vibrationPattern: sched.vibrationPattern,
             duration: sched.duration,
+          })
+          broadcastMutationStatus(sched.side, {
+            targetTemperature: sched.alarmTemperature,
+            targetLevel: fahrenheitToLevel(sched.alarmTemperature),
+            isAlarmVibrating: true,
           })
         }
         finally {

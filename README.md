@@ -1,6 +1,6 @@
-# SleepyPod
+# sleepypod
 
-A self-hosted control system for [Eight Sleep](https://www.eightsleep.com/) Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web interface and scheduler.
+A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web interface and scheduler.
 
 ---
 
@@ -18,36 +18,72 @@ A self-hosted control system for [Eight Sleep](https://www.eightsleep.com/) Pod 
 ## Architecture
 
 ```mermaid
-graph TD
-    subgraph hw [Pod Hardware]
-        DAC["dac.sock<br/>Device Control"]
-        RAW["RAW Files<br/>/persistent/*.RAW"]
+graph LR
+    subgraph HW ["Pod Hardware"]
+        DAC["dac.sock"]
+        RAW["/persistent/*.RAW"]
     end
 
-    subgraph core [SleepyPod Core - Next.js]
-        UI[React UI]
-        API[tRPC API]
-        SCHED["Scheduler<br/>node-schedule"]
-        SYNC[DeviceStateSync]
-        DB1[("sleepypod.db<br/>Config & State")]
+    subgraph TRANSPORT ["Hardware Transport"]
+        DT["DacTransport<br/>+ SequentialQueue"]
     end
 
-    subgraph mods [Biometrics Modules]
-        PP["piezo-processor<br/>Python sidecar"]
-        SD["sleep-detector<br/>Python sidecar"]
-        DB2[("biometrics.db<br/>Vitals & Sleep")]
+    subgraph SIDECARS ["Biometrics Sidecars"]
+        PP["piezo-processor"]
+        SD["sleep-detector"]
+        BIODB[("biometrics.db")]
     end
 
-    UI -->|queries| API
-    API -->|reads/writes| DB1
-    API -->|reads| DB2
-    SCHED -->|commands| DAC
-    SYNC -->|status events| DB1
-    RAW -->|tails CBOR| PP
-    RAW -->|tails CBOR| SD
-    PP -->|writes rows| DB2
-    SD -->|writes rows| DB2
-    DAC -.->|status updated| SYNC
+    subgraph CORE ["sleepypod-core"]
+        subgraph READBUS ["Read Bus — 2s poll"]
+            DM["DacMonitor"]
+            SYNC["DeviceStateSync"]
+        end
+
+        subgraph WRITEBUS ["Write Bus — immediate"]
+            BMS["broadcastMutation<br/>Status()"]
+        end
+
+        API["tRPC API :3000"]
+        SCHED["Scheduler"]
+        BF["broadcastFrame()"]
+        WS["piezoStream<br/>WS :3001"]
+        DB[("sleepypod.db")]
+    end
+
+    subgraph CLIENTS ["Clients"]
+        UI["React UI"]
+    end
+
+    %% Hardware transport — single serialization point
+    DAC <--> DT
+    API --> DT
+    SCHED --> DT
+    DM --> DT
+
+    %% Read bus
+    DM --> SYNC
+    SYNC --> DB
+    DM --> BF
+
+    %% Write bus
+    API -->|on success| BMS
+    SCHED -->|on success| BMS
+    BMS --> BF
+
+    %% WebSocket delivery
+    BF --> WS
+    RAW -->|tail CBOR| WS
+    WS -->|push frames| UI
+
+    %% Biometrics pipeline
+    RAW --> PP & SD
+    PP & SD --> BIODB
+    BIODB -->|query| API
+
+    %% App layer
+    API <--> DB
+    UI <-->|HTTP| API
 ```
 
 ### Biometrics data flow
@@ -285,7 +321,7 @@ sp-update    # pull latest, rebuild, migrate, restart (with automatic rollback)
 
 ### Switching between sleepypod and free-sleep
 
-Already running [free-sleep](https://github.com/throwaway31265/free-sleep)? SleepyPod installs alongside it — both use port 3000 but only one runs at a time. Switch freely without losing any settings or data:
+Already running [free-sleep](https://github.com/throwaway31265/free-sleep)? sleepypod installs alongside it — both use port 3000 but only one runs at a time. Switch freely without losing any settings or data:
 
 ```bash
 sp-sleepypod    # Stop free-sleep, start sleepypod + biometrics modules
@@ -347,11 +383,12 @@ Key decisions are documented in [`docs/adr/`](docs/adr/):
 | ADR | Decision |
 |-----|---------|
 | [0003](docs/adr/0003-core-stack.md) | TypeScript strict, React, Lingui for i18n |
-| [0004](docs/adr/0004-nextjs.md) | Next.js App Router as the application framework |
+| [0004](docs/adr/0004-nextjs-unified.md) | Next.js App Router as the application framework |
 | [0005](docs/adr/0005-trpc.md) | tRPC for end-to-end type-safe API |
 | [0006](docs/adr/0006-developer-tooling.md) | ESLint, Vitest, Conventional Commits, pnpm |
-| [0010](docs/adr/0010-drizzle-sqlite.md) | Drizzle ORM + SQLite for embedded constraints |
+| [0010](docs/adr/0010-drizzle-orm-sqlite.md) | Drizzle ORM + SQLite for embedded constraints |
 | [0012](docs/adr/0012-biometrics-module-system.md) | Plugin/sidecar architecture for biometrics |
+| [0015](docs/adr/0015-event-bus-mutation-broadcast.md) | Event bus: broadcast device state after mutations |
 
 ### Key tradeoffs
 
@@ -364,8 +401,10 @@ Config/state and time-series biometrics have fundamentally different access patt
 **Why Python modules, not Node.js?**
 Heart rate extraction from 500 Hz piezoelectric data requires FFT, bandpass filtering, and peak detection. Python's scipy/numpy ecosystem handles this naturally. A crash in a Python module has zero impact on the core app.
 
-**Why not a WebSocket proxy for sensor data?**
-Modules run on the same device and read `/persistent/*.RAW` directly — no proxy needed today. WebSockets are not ruled out for future use (e.g. modules on a separate host, real-time UI push).
+**How does real-time data reach clients?**
+A WebSocket server on port 3001 (`piezoStream`) acts as a read-only pub/sub channel. It streams raw sensor data (piezo, bed temp, capacitance) by tailing `/persistent/*.RAW`, and pushes `deviceStatus` frames via two buses:
+- **Read bus** — DacMonitor polls hardware every 2s and broadcasts the authoritative `deviceStatus` frame. This is the consistency backstop.
+- **Write bus** — After any hardware mutation succeeds (user-initiated via tRPC or automated via Scheduler), `broadcastMutationStatus()` overlays the changed fields onto the last polled status and broadcasts immediately. All connected clients see the change within ~200ms.
 
 ---
 
