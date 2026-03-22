@@ -155,8 +155,8 @@ export const TempScreen = () => {
         onTemperatureCommit={handleDialCommit}
       />
 
-      {/* Temperature controls: −/power/+ */}
-      <div className="flex items-center justify-center gap-4 sm:gap-6">
+      {/* Temperature controls: −/power/+ (tight gap to dial to avoid mobile scroll) */}
+      <div className="-mt-2 flex items-center justify-center gap-4 sm:mt-0 sm:gap-6">
         {/* Minus button */}
         <button
           onClick={() => handleTempAdjust(-1)}
