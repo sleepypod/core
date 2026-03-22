@@ -1,6 +1,6 @@
-# SleepyPod
+# sleepypod
 
-A self-hosted control system for [Eight Sleep](https://www.eightsleep.com/) Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web interface and scheduler.
+A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web interface and scheduler.
 
 ---
 
@@ -24,7 +24,7 @@ graph TD
         RAW["RAW Files<br/>/persistent/*.RAW"]
     end
 
-    subgraph core [SleepyPod Core - Next.js]
+    subgraph core [sleepypod-core - Next.js]
         UI[React UI]
         API["tRPC API :3000"]
         WS["piezoStream WS :3001<br/>read-only pub/sub"]
@@ -293,7 +293,7 @@ sp-update    # pull latest, rebuild, migrate, restart (with automatic rollback)
 
 ### Switching between sleepypod and free-sleep
 
-Already running [free-sleep](https://github.com/throwaway31265/free-sleep)? SleepyPod installs alongside it — both use port 3000 but only one runs at a time. Switch freely without losing any settings or data:
+Already running [free-sleep](https://github.com/throwaway31265/free-sleep)? sleepypod installs alongside it — both use port 3000 but only one runs at a time. Switch freely without losing any settings or data:
 
 ```bash
 sp-sleepypod    # Stop free-sleep, start sleepypod + biometrics modules

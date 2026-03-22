@@ -1,6 +1,6 @@
 # Hardware Layer Test Suite
 
-Comprehensive test infrastructure for the Eight Sleep Pod hardware abstraction layer.
+Comprehensive test infrastructure for the Pod hardware abstraction layer.
 
 ## Structure
 

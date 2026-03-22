@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The piezo-processor module extracts heart rate (HR), HR variability index, and breathing rate (BR) from raw piezoelectric ballistocardiogram (BCG) sensor data on the SleepyPod. It tails CBOR-encoded `.RAW` files written by the pod firmware, processes dual-channel (left/right) signals at 500 Hz, and writes vitals rows to `biometrics.db` every 60 seconds per occupied side.
+The piezo-processor module extracts heart rate (HR), HR variability index, and breathing rate (BR) from raw piezoelectric ballistocardiogram (BCG) sensor data on the pod. It tails CBOR-encoded `.RAW` files written by the pod firmware, processes dual-channel (left/right) signals at 500 Hz, and writes vitals rows to `biometrics.db` every 60 seconds per occupied side.
 
 **Why v2 was needed.** The v1 processor produced garbage readings under real pod conditions:
 

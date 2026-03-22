@@ -5,7 +5,7 @@
 
 ## Context
 
-SleepyPod is a Next.js application targeting embedded Linux hardware. The core stack choices needed to satisfy:
+sleepypod is a Next.js application targeting embedded Linux hardware. The core stack choices needed to satisfy:
 
 - Strong type safety across the full stack (hardware ↔ server ↔ UI)
 - A single language (TypeScript) from hardware client through to the browser

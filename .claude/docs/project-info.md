@@ -1,6 +1,6 @@
 # sleepypod core
 
-Local control system for Eight Sleep Pods (3/4/5). Type-safe rewrite of free-sleep.
+Local control system for Pods (3/4/5). Type-safe rewrite of free-sleep.
 
 ## tech stack
 

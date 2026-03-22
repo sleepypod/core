@@ -1,6 +1,6 @@
 # Deployment Guide
 
-SleepyPod Core runs on the Eight Sleep Pod, a Yocto-based embedded Linux device (aarch64). The pod has no package manager, no C compiler, no `git`, and only 2GB RAM. WAN access is blocked by iptables — only LAN and NTP traffic are allowed.
+sleepypod-core runs on the Pod, a Yocto-based embedded Linux device (aarch64). The pod has no package manager, no C compiler, no `git`, and only 2GB RAM. WAN access is blocked by iptables — only LAN and NTP traffic are allowed.
 
 This guide covers how code gets from development to the pod.
 
@@ -18,7 +18,7 @@ flowchart TB
         release["GitHub Release<br/>sleepypod-core.tar.gz<br/>(source + .next)"]
     end
 
-    subgraph pod["Eight Sleep Pod (LAN only)"]
+    subgraph pod["Pod (LAN only)"]
         spupdate["sp-update"]
         install["install script"]
         iptables["iptables"]
@@ -165,7 +165,7 @@ sp-update [branch]     # self-update from GitHub (handles iptables)
 
 ## Network Security (Telemetry Blocking)
 
-The pod runs two Eight Sleep stock processes that continuously attempt to phone home:
+The pod runs two stock processes that continuously attempt to phone home:
 
 | Process | Service | Target | Purpose |
 |---|---|---|---|
@@ -180,7 +180,7 @@ The OUTPUT chain DROPs all non-LAN, non-NTP traffic. This is the same firewall t
 
 ### Layer 2: /etc/hosts null routes (defense-in-depth)
 
-Eight Sleep domains are null-routed to `0.0.0.0` in `/etc/hosts`. This prevents data exfiltration even when iptables are **temporarily opened** for `sp-update` or other maintenance. DNS resolves to `0.0.0.0` so frank/Capybara can't connect regardless of firewall state.
+Stock firmware domains are null-routed to `0.0.0.0` in `/etc/hosts`. This prevents data exfiltration even when iptables are **temporarily opened** for `sp-update` or other maintenance. DNS resolves to `0.0.0.0` so frank/Capybara can't connect regardless of firewall state.
 
 ### Management
 

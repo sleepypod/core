@@ -1,6 +1,6 @@
-# SleepyPod Installation Scripts
+# sleepypod installation scripts
 
-**Two simple scripts** for deploying SleepyPod to Eight Sleep Pod hardware.
+**Two simple scripts** for deploying sleepypod to Pod hardware.
 
 ## Prerequisites
 
@@ -37,7 +37,7 @@ This will:
 After installation:
 
 - `sp-status` - View service status
-- `sp-restart` - Restart SleepyPod service
+- `sp-restart` - Restart sleepypod service
 - `sp-logs` - View live logs
 - `sp-update` - Update to latest version
 
@@ -96,7 +96,7 @@ ssh root@<POD_IP> -p 8822
 
 ## Features
 
-After installation, SleepyPod provides:
+After installation, sleepypod provides:
 
 - **Temperature Scheduling** - Set temperature by day/time
 - **Power Scheduling** - Daily on/off cycles with temperature
