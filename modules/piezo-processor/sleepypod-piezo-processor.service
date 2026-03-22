@@ -7,6 +7,7 @@ Wants=sleepypod.service
 [Service]
 Type=simple
 User=root
+UMask=0002
 WorkingDirectory=/opt/sleepypod/modules/piezo-processor
 ExecStart=/opt/sleepypod/modules/piezo-processor/venv/bin/python main.py
 Restart=always

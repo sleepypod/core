@@ -142,7 +142,7 @@ if ! flock -n 200; then
 fi
 
 # Check for required commands
-REQUIRED_CMDS=(curl systemctl ip)
+REQUIRED_CMDS=(curl systemctl ip groupadd usermod)
 if [ "$INSTALL_LOCAL" = false ]; then
   REQUIRED_CMDS+=(git)
 fi
@@ -218,11 +218,32 @@ else
   echo "Using dac.sock at: $DAC_SOCK_PATH"
 fi
 
-# Create data directory
+# Create data directory with shared group for multi-user SQLite access.
+# The Node.js app (root) creates biometrics.db, but calibrator and
+# environment-monitor run as User=dac. Setgid ensures all files created
+# inside inherit the sleepypod group; UMask=0002 on services ensures
+# group-write bits are preserved (including SQLite WAL/SHM files).
 DATA_DIR="/persistent/sleepypod-data"
 echo "Creating data directory at $DATA_DIR..."
+getent group sleepypod >/dev/null 2>&1 || groupadd sleepypod
+if id dac &>/dev/null; then
+  usermod -aG sleepypod dac
+else
+  echo "Warning: user 'dac' not found — skipping group membership (not a Pod?)"
+fi
 mkdir -p "$DATA_DIR"
-chmod 755 "$DATA_DIR"
+chown root:sleepypod "$DATA_DIR"
+chmod 2770 "$DATA_DIR"
+
+# Fix permissions on existing database files (upgrades from older installs)
+fix_db_permissions() {
+  if find "$DATA_DIR" -maxdepth 1 \( -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' \) -print -quit | grep -q .; then
+    echo "Fixing database file permissions..."
+    find "$DATA_DIR" -type f \( -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' \) \
+      -exec chown root:sleepypod {} + -exec chmod 660 {} +
+  fi
+}
+fix_db_permissions
 
 # ============================================================================
 # Install Node.js via binary download (works on any Linux, no apt required)
@@ -393,6 +414,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
+UMask=0002
 WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
@@ -525,6 +547,11 @@ else
   install_module "environment-monitor"
   install_module "calibrator"
 fi
+
+# Re-fix DB permissions after all services restarted with new UMask.
+# On upgrades, old services (without UMask=0002) may have recreated WAL/SHM
+# files with 0644 between the initial fixup and the service restarts above.
+fix_db_permissions
 
 # Create CLI shortcuts
 echo "Creating CLI shortcuts..."
@@ -712,7 +739,7 @@ if pnpm install --frozen-lockfile --prod; then
       mkdir -p "$MODULES_DEST/common"
       cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
     fi
-    for mod in piezo-processor sleep-detector environment-monitor; do
+    for mod in piezo-processor sleep-detector environment-monitor calibrator; do
       if [ -d "$INSTALL_DIR/modules/$mod" ]; then
         mkdir -p "$MODULES_DEST/$mod"
         cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
