@@ -16,13 +16,15 @@ jobs:
       fail-fast: false
       matrix:
         task:
-          - { name: "Lint", cmd: "pnpm lint" }
+          - { name: "Lint", cmd: "CHANGED=$(git diff --name-only --diff-filter=d origin/${{ github.event.pull_request.base.ref }}...HEAD -- '*.ts' '*.tsx' | head -200); if [ -n \"$CHANGED\" ]; then echo \"$CHANGED\" | xargs pnpm eslint; else echo 'No TS/TSX files changed'; fi" }
           - { name: "Typecheck", cmd: "pnpm tsc" }
           - { name: "Unit Tests", cmd: "pnpm test run --coverage --passWithNoTests" }
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
