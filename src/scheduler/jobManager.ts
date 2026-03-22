@@ -143,7 +143,10 @@ export class JobManager {
         await client.connect()
         try {
           await client.setTemperature(sched.side, sched.temperature)
-          broadcastMutationStatus(sched.side, { targetTemperature: sched.temperature })
+          broadcastMutationStatus(sched.side, {
+            targetTemperature: sched.temperature,
+            targetLevel: fahrenheitToLevel(sched.temperature),
+          })
         }
         finally {
           // shared client — don't disconnect
@@ -235,6 +238,7 @@ export class JobManager {
           })
           broadcastMutationStatus(sched.side, {
             targetTemperature: sched.alarmTemperature,
+            targetLevel: fahrenheitToLevel(sched.alarmTemperature),
             isAlarmVibrating: true,
           })
         }

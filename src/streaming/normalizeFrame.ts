@@ -100,6 +100,8 @@ function safeNum(v: unknown): number | null {
 
 function cdToC(v: unknown): number | null {
   if (v === null || v === undefined || typeof v !== 'number') return null
+  // Firmware sentinel -32768 means "no sensor" — treat as missing data
+  if (v === -32768 || Math.abs(v - -32768) < 1) return null
   return v / 100
 }
 
@@ -142,15 +144,18 @@ export function normalizeFrame(rec: Record<string, unknown>): Record<string, unk
           pumpRpm: wire.left.pump.rpm ?? 0,
           pumpDuty: wire.left.pump.duty ?? 0,
           tecCurrent: wire.left.tec.current ?? 0,
+          flowrate: wire.left.temps?.flowrate ?? null,
         },
         right: {
           pumpRpm: wire.right.pump.rpm ?? 0,
           pumpDuty: wire.right.pump.duty ?? 0,
           tecCurrent: wire.right.tec.current ?? 0,
+          flowrate: wire.right.temps?.flowrate ?? null,
         },
         fan: {
           rpm: wire.fan.top.rpm ?? 0,
           duty: wire.fan.top.duty ?? 0,
+          bottomRpm: wire.fan.bottom?.rpm ?? null,
         },
       }
     }

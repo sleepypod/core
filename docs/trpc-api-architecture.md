@@ -50,30 +50,34 @@ Device status is primarily pushed via WebSocket. tRPC polling remains available 
 ```mermaid
 sequenceDiagram
     participant HW as Pod Hardware
-    participant DM as DacMonitor (2s poll)
+    participant DM as DacMonitor (read bus)
     participant SCH as Scheduler
     participant API as tRPC API :3000
+    participant BMS as broadcastMutationStatus (write bus)
     participant WS as piezoStream WS :3001
     participant UI as Browser UI
 
-    loop Every 2 seconds (authoritative backstop)
+    Note over DM,WS: Read bus — authoritative 2s poll
+    loop Every 2 seconds
         DM->>HW: getDeviceStatus()
         HW-->>DM: temps, power, priming, water
-        DM->>WS: broadcastFrame({ type: 'deviceStatus', ... })
+        DM->>WS: broadcastFrame(deviceStatus)
         WS->>UI: deviceStatus frame (push)
     end
 
-    Note over UI: User mutation triggers immediate broadcast
+    Note over API,BMS: Write bus — immediate after mutation
     UI->>API: setTemperature / setPower / setAlarm
     API->>HW: hardware command
     HW-->>API: success
-    API->>WS: broadcastMutationStatus()
+    API->>BMS: overlay mutation onto last polled status
+    BMS->>WS: broadcastFrame(deviceStatus)
     WS->>UI: deviceStatus frame (all clients, ~200ms)
 
-    Note over SCH: Scheduled job triggers same broadcast
+    Note over SCH,BMS: Scheduler uses same write bus
     SCH->>HW: hardware command (via shared client)
     HW-->>SCH: success
-    SCH->>WS: broadcastMutationStatus()
+    SCH->>BMS: overlay mutation onto last polled status
+    BMS->>WS: broadcastFrame(deviceStatus)
     WS->>UI: deviceStatus frame (all clients)
 
     Note over UI: useDeviceStatus() hook

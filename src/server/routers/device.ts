@@ -207,7 +207,10 @@ export const deviceRouter = router({
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
             }, 'Failed to set temperature')
-            broadcastMutationStatus(input.side, { targetTemperature: input.temperature })
+            broadcastMutationStatus(input.side, {
+              targetTemperature: input.temperature,
+              targetLevel: fahrenheitToLevel(input.temperature),
+            })
             resolve({ success: true })
           }
           catch (error) {

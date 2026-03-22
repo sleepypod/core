@@ -115,7 +115,7 @@ export function TemperatureDial({
 
     const rect = svg.getBoundingClientRect()
     const scaleX = VIEW_SIZE / rect.width
-    const scaleY = VIEW_SIZE / rect.height
+    const scaleY = VIEW_HEIGHT / rect.height
     const svgX = (clientX - rect.left) * scaleX
     const svgY = (clientY - rect.top) * scaleY
 

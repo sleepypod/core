@@ -75,11 +75,11 @@ export function FreezerHealthCard() {
 
   // tRPC: water level data
   // Flowrate from live frzHealth frames (per-side, °C)
-  const leftFlowrate = frzHealth ? (frzHealth as unknown as { left: { temps?: { flowrate?: number } } }).left?.temps?.flowrate ?? null : null
-  const rightFlowrate = frzHealth ? (frzHealth as unknown as { right: { temps?: { flowrate?: number } } }).right?.temps?.flowrate ?? null : null
+  const leftFlowrate = frzHealth?.left.flowrate ?? null
+  const rightFlowrate = frzHealth?.right.flowrate ?? null
 
   // Bottom fan from live frzHealth (top fan already in frzHealth.fan.rpm)
-  const bottomFanRpm = frzHealth ? (frzHealth as unknown as { fan: { bottom?: { rpm?: number } } }).fan?.bottom?.rpm ?? null : null
+  const bottomFanRpm = frzHealth?.fan.bottomRpm ?? null
 
   const waterLevelLatest = trpc.waterLevel.getLatest.useQuery(
     {},

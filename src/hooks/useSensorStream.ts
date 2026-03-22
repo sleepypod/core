@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from 'react'
 import { normalizeFrame } from '@/src/streaming/normalizeFrame'
 
 // ---------------------------------------------------------------------------
@@ -95,9 +95,9 @@ export interface FrzThermFrame {
 export interface FrzHealthFrame {
   type: 'frzHealth'
   ts: number
-  left: { pumpRpm: number, pumpDuty: number, tecCurrent: number }
-  right: { pumpRpm: number, pumpDuty: number, tecCurrent: number }
-  fan: { rpm: number, duty: number }
+  left: { pumpRpm: number, pumpDuty: number, tecCurrent: number, flowrate: number | null }
+  right: { pumpRpm: number, pumpDuty: number, tecCurrent: number, flowrate: number | null }
+  fan: { rpm: number, duty: number, bottomRpm: number | null }
 }
 
 /** Firmware log frame. */
@@ -695,7 +695,7 @@ export function useSensorFrame<T extends SensorType>(
 export function useOnSensorFrame(callback: FrameCallback) {
   const callbackRef = useRef(callback)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     callbackRef.current = callback
   })
 

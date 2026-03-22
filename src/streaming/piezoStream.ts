@@ -491,20 +491,19 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
  * connected, slower when idle. Lazy-imported to avoid circular deps.
  */
 function updatePollRate(): void {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy import to avoid circular deps
-    const { getDacMonitorIfRunning } = require('@/src/hardware/dacMonitor.instance')
-    const monitor = getDacMonitorIfRunning()
-    if (!monitor) return
-    const clientCount = wss?.clients.size ?? 0
-    if (clientCount > 0) {
-      monitor.setActive()
-    }
-    else {
-      monitor.setIdle()
-    }
-  }
-  catch { /* monitor not started yet */ }
+  import('@/src/hardware/dacMonitor.instance')
+    .then(({ getDacMonitorIfRunning }) => {
+      const monitor = getDacMonitorIfRunning()
+      if (!monitor) return
+      const clientCount = wss?.clients.size ?? 0
+      if (clientCount > 0) {
+        monitor.setActive()
+      }
+      else {
+        monitor.setIdle()
+      }
+    })
+    .catch(() => { /* monitor not started yet */ })
 }
 
 /**

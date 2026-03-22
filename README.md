@@ -20,17 +20,29 @@ A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs dir
 ```mermaid
 graph TD
     subgraph hw [Pod Hardware]
-        DAC["dac.sock<br/>Device Control"]
+        DAC["dac.sock"]
         RAW["RAW Files<br/>/persistent/*.RAW"]
     end
 
     subgraph core [sleepypod-core - Next.js]
         UI[React UI]
         API["tRPC API :3000"]
-        WS["piezoStream WS :3001<br/>read-only pub/sub"]
-        DM["DacMonitor<br/>2s poll"]
         SCHED["Scheduler<br/>node-schedule"]
-        SYNC[DeviceStateSync]
+
+        subgraph hwTransport ["Hardware Transport — dacTransport + SequentialQueue"]
+            DT["DacTransport<br/>serializes all writes"]
+        end
+
+        subgraph writeBus ["Write Bus — immediate mutation broadcast"]
+            BMS["broadcastMutationStatus()"]
+        end
+
+        subgraph readBus ["Read Bus — 2s authoritative poll"]
+            DM["DacMonitor"]
+            SYNC[DeviceStateSync]
+        end
+
+        WS["piezoStream WS :3001<br/>read-only delivery"]
         DB1[("sleepypod.db<br/>Config & State")]
     end
 
@@ -43,20 +55,22 @@ graph TD
     UI -->|queries + mutations| API
     API -->|reads/writes| DB1
     API -->|reads| DB2
-    API -->|after mutation| WS
-    DM -->|status:updated| WS
-    DM -->|status:updated| SYNC
-    DM -->|polls| DAC
+    API --> DT
+    SCHED --> DT
+    DM --> DT
+    DT -->|serialized cmds| DAC
+    API -->|after success| BMS
+    SCHED -->|after success| BMS
+    BMS -->|broadcastFrame| WS
+    DM -->|broadcastFrame| WS
+    DM --> SYNC
     WS -->|push frames| UI
-    SCHED -->|commands| DAC
-    SCHED -->|after scheduled job| WS
-    SYNC -->|status events| DB1
+    SYNC -->|upsert| DB1
     RAW -->|tails CBOR| PP
     RAW -->|tails CBOR| SD
     RAW -->|tails CBOR| WS
     PP -->|writes rows| DB2
     SD -->|writes rows| DB2
-    API -->|commands| DAC
 ```
 
 ### Biometrics data flow
@@ -375,7 +389,9 @@ Config/state and time-series biometrics have fundamentally different access patt
 Heart rate extraction from 500 Hz piezoelectric data requires FFT, bandpass filtering, and peak detection. Python's scipy/numpy ecosystem handles this naturally. A crash in a Python module has zero impact on the core app.
 
 **How does real-time data reach clients?**
-A WebSocket server on port 3001 (`piezoStream`) acts as a read-only pub/sub channel. It streams raw sensor data (piezo, bed temp, capacitance) by tailing `/persistent/*.RAW`, and also pushes `deviceStatus` frames. DacMonitor broadcasts status every 2 seconds as an authoritative backstop, and tRPC mutations (temperature, power, alarm) broadcast immediately after success so all connected clients see changes within ~200ms.
+A WebSocket server on port 3001 (`piezoStream`) acts as a read-only pub/sub channel. It streams raw sensor data (piezo, bed temp, capacitance) by tailing `/persistent/*.RAW`, and pushes `deviceStatus` frames via two buses:
+- **Read bus** — DacMonitor polls hardware every 2s and broadcasts the authoritative `deviceStatus` frame. This is the consistency backstop.
+- **Write bus** — After any hardware mutation succeeds (user-initiated via tRPC or automated via Scheduler), `broadcastMutationStatus()` overlays the changed fields onto the last polled status and broadcasts immediately. All connected clients see the change within ~200ms.
 
 ---
 

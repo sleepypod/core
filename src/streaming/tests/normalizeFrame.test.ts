@@ -7,24 +7,6 @@
  */
 
 import { describe, it, expect } from 'vitest'
-
-// normalizeFrame is not exported — we test it via a re-export helper.
-// We'll import the module and call the function directly.
-// Since it's a client-side module ('use client'), we import the raw function.
-
-// ---------------------------------------------------------------------------
-// Extract normalizeFrame for testing
-// ---------------------------------------------------------------------------
-
-// The normalizeFrame function lives in useSensorStream.ts. We can't import
-// the whole module (it has browser deps). Instead, we duplicate the core
-// logic in a testable helper and assert against the real types.
-//
-// Better approach: extract normalizeFrame into its own module. For now,
-// we inline the test fixtures and expected outputs, and import the function
-// from a small extraction.
-
-// We'll test via the extracted module:
 import { normalizeFrame } from '../normalizeFrame'
 
 // ---------------------------------------------------------------------------
@@ -177,6 +159,30 @@ describe('normalizeFrame', () => {
       expect(left.pumpRpm).toBe(2400)
       expect(left.tecCurrent).toBe(3.5)
     })
+
+    it('extracts flowrate from nested left/right.temps.flowrate', () => {
+      const result = normalizeFrame(FIRMWARE_FIXTURES.frzHealth as Record<string, unknown>)
+      const left = result.left as Record<string, unknown>
+      const right = result.right as Record<string, unknown>
+      expect(left.flowrate).toBeCloseTo(26.0625)
+      expect(right.flowrate).toBeCloseTo(26.0625)
+    })
+
+    it('extracts bottom fan RPM from nested fan.bottom.rpm', () => {
+      const result = normalizeFrame(FIRMWARE_FIXTURES.frzHealth as Record<string, unknown>)
+      const fan = result.fan as Record<string, unknown>
+      expect(fan.bottomRpm).toBe(0)
+    })
+
+    it('returns null flowrate when temps missing', () => {
+      const noTemps = {
+        ...FIRMWARE_FIXTURES.frzHealth,
+        left: { tec: { current: 0 }, pump: { mode: 'pwm', rpm: 0, water: true } },
+      }
+      const result = normalizeFrame(noTemps as Record<string, unknown>)
+      const left = result.left as Record<string, unknown>
+      expect(left.flowrate).toBeNull()
+    })
   })
 
   describe('frzTemp', () => {
@@ -192,6 +198,15 @@ describe('normalizeFrame', () => {
       const result = normalizeFrame(FIRMWARE_FIXTURES.frzTemp as Record<string, unknown>)
       expect(result.type).toBe('frzTemp')
       expect(result.ts).toBe(1774204572)
+    })
+
+    it('treats -32768 sentinel as null (no sensor)', () => {
+      const sentinel = { type: 'frzTemp', ts: 1, left: -32768, right: 2225, amb: -32768, hs: 2531 }
+      const result = normalizeFrame(sentinel as Record<string, unknown>)
+      expect(result.left).toBeNull()
+      expect(result.right).toBeCloseTo(22.25)
+      expect(result.amb).toBeNull()
+      expect(result.hs).toBeCloseTo(25.31)
     })
   })
 
