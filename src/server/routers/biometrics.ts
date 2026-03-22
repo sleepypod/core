@@ -1,12 +1,20 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { biometricsDb } from '@/src/db'
+import { biometricsDb, db } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
-import { eq, and, gte, lte, desc, avg, min, max, count } from 'drizzle-orm'
+import { deviceSettings } from '@/src/db/schema'
+import { eq, and, gte, lte, desc, asc, avg, min, max, count } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { isIosProcessing, getConnectedSince } from '@/src/streaming/processingState'
 import { listRawFiles } from './raw'
+import {
+  classifySleepStages,
+  mergeIntoBlocks,
+  calculateDistribution,
+  calculateQualityScore,
+  type SleepStagesResult,
+} from '@/src/lib/sleep-stages'
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -610,5 +618,258 @@ export const biometricsRouter = router({
       }
 
       return { success: true }
+    }),
+
+  /**
+   * Get classified sleep stages for a specific sleep record or date range.
+   *
+   * Performs server-side sleep stage classification by:
+   * 1. Fetching the sleep record (if sleepRecordId provided) or using date range
+   * 2. Querying vitals + movement data within that window
+   * 3. Running the rule-based classifier (ported from iOS SleepAnalyzer)
+   * 4. Returning epochs, merged blocks, distribution, and quality score
+   *
+   * @param side - Which side to classify
+   * @param sleepRecordId - Optional: classify stages for a specific sleep record
+   * @param startDate - Optional: start of custom date range
+   * @param endDate - Optional: end of custom date range
+   * @returns Classified sleep stages with blocks, distribution, and quality score
+   */
+  getSleepStages: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/sleep-stages', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          sleepRecordId: z.number().int().optional(),
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+        })
+        .strict()
+    )
+    .output(z.object({
+      epochs: z.array(z.object({
+        start: z.number(),
+        duration: z.number(),
+        stage: z.enum(['wake', 'light', 'deep', 'rem']),
+        heartRate: z.number().nullable(),
+        hrv: z.number().nullable(),
+        breathingRate: z.number().nullable(),
+        movement: z.number().nullable(),
+      })),
+      blocks: z.array(z.object({
+        start: z.number(),
+        end: z.number(),
+        stage: z.enum(['wake', 'light', 'deep', 'rem']),
+      })),
+      distribution: z.object({
+        wake: z.number(),
+        light: z.number(),
+        deep: z.number(),
+        rem: z.number(),
+      }),
+      qualityScore: z.number(),
+      totalSleepMs: z.number(),
+      sleepRecordId: z.number().nullable(),
+      enteredBedAt: z.number().nullable(),
+      leftBedAt: z.number().nullable(),
+    }))
+    .query(async ({ input }): Promise<SleepStagesResult> => {
+      try {
+        // Reject ambiguous requests: if sleepRecordId is provided alongside date range, error out
+        if (input.sleepRecordId && (input.startDate || input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Provide either sleepRecordId or startDate/endDate, not both',
+          })
+        }
+
+        let windowStart: Date
+        let windowEnd: Date
+        let sleepRecordId: number | null = null
+        let enteredBedAt: number | null = null
+        let leftBedAt: number | null = null
+
+        if (input.sleepRecordId) {
+          // Look up the sleep record, scoped to the requested side
+          const [record] = await biometricsDb
+            .select()
+            .from(sleepRecords)
+            .where(
+              and(
+                eq(sleepRecords.id, input.sleepRecordId),
+                eq(sleepRecords.side, input.side),
+              )
+            )
+            .limit(1)
+
+          if (!record) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Sleep record ${input.sleepRecordId} not found for side '${input.side}'`,
+            })
+          }
+
+          // Handle active sleep records where leftBedAt may not be set yet
+          if (!record.leftBedAt) {
+            windowStart = record.enteredBedAt
+            windowEnd = new Date() // use current time for active sessions
+          } else {
+            windowStart = record.enteredBedAt
+            windowEnd = record.leftBedAt
+          }
+          sleepRecordId = record.id
+          enteredBedAt = record.enteredBedAt.getTime()
+          leftBedAt = record.leftBedAt ? record.leftBedAt.getTime() : null
+        } else if (input.startDate && input.endDate) {
+          if (!validateDateRange(input.startDate, input.endDate)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'startDate must be before or equal to endDate',
+            })
+          }
+          windowStart = input.startDate
+          windowEnd = input.endDate
+        } else {
+          // Default: last night — prefer overnight sleep over daytime naps
+
+          // Fetch device timezone (falls back to 'America/Los_Angeles' if not set)
+          const [settings] = await db.select({ timezone: deviceSettings.timezone }).from(deviceSettings).limit(1)
+          const tz = settings?.timezone ?? 'America/Los_Angeles'
+
+          // Fetch recent records (last 7 days) to search for an overnight session
+          const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+          const recentRecords = await biometricsDb
+            .select()
+            .from(sleepRecords)
+            .where(
+              and(
+                eq(sleepRecords.side, input.side),
+                gte(sleepRecords.enteredBedAt, sevenDaysAgo)
+              )
+            )
+            .orderBy(desc(sleepRecords.enteredBedAt))
+
+          // Helper: get local hour (0–23) of a Date in the device timezone
+          const localHour = (d: Date): number => {
+            const parts = new Intl.DateTimeFormat('en-US', {
+              timeZone: tz,
+              hour: 'numeric',
+              hour12: false,
+            }).formatToParts(d)
+            return parseInt(parts.find(p => p.type === 'hour')!.value, 10)
+          }
+
+          // 1st try: 3+ hours AND entered bed between 8 PM (20) and 4 AM (4) local time
+          const overnightRecord = recentRecords.find(r => {
+            if (r.sleepDurationSeconds < 10800) return false
+            const hour = localHour(r.enteredBedAt)
+            return hour >= 20 || hour < 4
+          })
+
+          let record = overnightRecord
+
+          if (!record) {
+            // 2nd try: longest record in the last 24 hours
+            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
+            const last24h = recentRecords.filter(r => r.enteredBedAt >= oneDayAgo)
+            if (last24h.length > 0) {
+              record = last24h.reduce((best, r) =>
+                r.sleepDurationSeconds > best.sleepDurationSeconds ? r : best
+              )
+            }
+          }
+
+          if (!record) {
+            // Final fallback: most recent record regardless of time or duration
+            record = recentRecords[0]
+          }
+
+          if (!record) {
+            return {
+              epochs: [],
+              blocks: [],
+              distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
+              qualityScore: 0,
+              totalSleepMs: 0,
+              sleepRecordId: null,
+              enteredBedAt: null,
+              leftBedAt: null,
+            }
+          }
+
+          windowStart = record.enteredBedAt
+          windowEnd = record.leftBedAt
+          sleepRecordId = record.id
+          enteredBedAt = record.enteredBedAt.getTime()
+          leftBedAt = record.leftBedAt.getTime()
+        }
+
+        // Fetch vitals within the window
+        const vitalsData = await biometricsDb
+          .select()
+          .from(vitals)
+          .where(
+            and(
+              eq(vitals.side, input.side),
+              gte(vitals.timestamp, windowStart),
+              lte(vitals.timestamp, windowEnd)
+            )
+          )
+          .orderBy(asc(vitals.timestamp))
+
+        // Fetch movement within the window
+        const movementData = await biometricsDb
+          .select()
+          .from(movement)
+          .where(
+            and(
+              eq(movement.side, input.side),
+              gte(movement.timestamp, windowStart),
+              lte(movement.timestamp, windowEnd)
+            )
+          )
+          .orderBy(asc(movement.timestamp))
+
+        // Classify stages
+        const epochs = classifySleepStages(vitalsData, movementData)
+
+        if (epochs.length === 0) {
+          return {
+            epochs: [],
+            blocks: [],
+            distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
+            qualityScore: 0,
+            totalSleepMs: 0,
+            sleepRecordId,
+            enteredBedAt,
+            leftBedAt,
+          }
+        }
+
+        const blocks = mergeIntoBlocks(epochs)
+        const distribution = calculateDistribution(epochs)
+        const qualityScore = calculateQualityScore(distribution)
+        const totalSleepMs = epochs.reduce((sum, e) => sum + e.duration, 0)
+
+        return {
+          epochs,
+          blocks,
+          distribution,
+          qualityScore,
+          totalSleepMs,
+          sleepRecordId,
+          enteredBedAt,
+          leftBedAt,
+        }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to classify sleep stages: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 })

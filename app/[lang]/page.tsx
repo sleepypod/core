@@ -1,3 +1,4 @@
+import { TempScreen } from '@/src/components/TempScreen/TempScreen'
 import { getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { initLingui } from '@/src/lib/i18n/initLingui'
 import { setI18n } from '@lingui/react/server'
@@ -12,9 +13,5 @@ export default async function Page({
   initLingui(lang)
   setI18n(i18n)
 
-  return (
-    <div>
-
-    </div>
-  )
+  return <TempScreen />
 }

@@ -1,0 +1,1 @@
+/*eslint-disable*/module.exports={messages:JSON.parse("{\"6Aih4U\":[\"Offline\"],\"9RckBe\":[\"¡Hola, tRPC test page!\"],\"HKH+W+\":[\"Data\"],\"Tr7LUu\":[\"Temp\"],\"Tz0i8g\":[\"Settings\"],\"ZzlKVw\":[\"Biometrics\"],\"byXGLw\":[\"Sensors\"],\"gmB6oO\":[\"Schedule\"],\"uAQUqI\":[\"Status\"]}")};

@@ -11,6 +11,9 @@ import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
  * Uses the app-wide singleton HardwareClient (server mode) that listens
  * for frankenfirmware connections. The client persists across requests —
  * it is NOT disconnected after each call.
+ *
+ * If the first attempt fails with a socket error (ended/reset), reconnects
+ * and retries once before throwing.
  */
 export async function withHardwareClient<T>(
   callback: (client: HardwareClient) => Promise<T>,
@@ -29,9 +32,26 @@ export async function withHardwareClient<T>(
       throw error
     }
 
+    // Socket may have died — retry once with a fresh connection
+    const msg = error instanceof Error ? error.message : ''
+    if (msg.includes('socket') || msg.includes('ended') || msg.includes('EPIPE') || msg.includes('ECONNRESET')) {
+      console.warn(`[hardware] Socket error, reconnecting: ${msg}`)
+      try {
+        client.disconnect()
+        await client.connect()
+        return await callback(client)
+      } catch (retryError) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `${errorMessage}: ${retryError instanceof Error ? retryError.message : 'Reconnect failed'}`,
+          cause: retryError,
+        })
+      }
+    }
+
     throw new TRPCError({
       code: 'INTERNAL_SERVER_ERROR',
-      message: `${errorMessage}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      message: `${errorMessage}: ${msg || 'Unknown error'}`,
       cause: error,
     })
   }

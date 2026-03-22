@@ -4,27 +4,42 @@ Local control system for Eight Sleep Pods (3/4/5). Type-safe rewrite of free-sle
 
 ## tech stack
 
-- Frontend: Next.js 16, React 19, TailwindCSS, tRPC
+- Frontend: Next.js 16, React 19, TailwindCSS, tRPC, Recharts
 - Backend: Node.js, tRPC, Drizzle ORM
+- Real-time: WebSocket (piezoStream on port 3001) for sensor data + device status
 - Database: SQLite with WAL
-- Hardware: Unix socket (dac.sock)
+- Hardware: Unix socket (dac.sock), DacMonitor polling at 2s
 - Scheduling: node-schedule
 - i18n: Lingui
 - Testing: Vitest
 
 ## architecture
 
+```mermaid
+graph TD
+    HW[Pod Hardware<br>dac.sock] --> DM[DacMonitor<br>polls every 2s]
+    DM -->|status:updated| SS[DeviceStateSync<br>writes device_state]
+    DM -->|status:updated| WS[piezoStream WS :3001<br>broadcasts deviceStatus frames]
+    DM -->|gesture:detected| GH[GestureActionHandler]
+    SS --> DB[(SQLite)]
+    HW -->|RAW files| WS
+    WS -->|deviceStatus + sensor frames| Browser
+    DB --> API[tRPC API :3000]
+    API -->|mutations, queries| Browser[Browser UI]
+    API --> HW
+    SCH[Scheduler] --> HW
+    SCH --> DB
 ```
-Hardware (src/hardware/)
-    ↓
-Database (src/db/)
-    ↓
-API (src/server/routers/)
-    ↓
-Scheduling (src/scheduler/)
-    ↓
-UI (app/[lang]/)
-```
+
+### data flow by type
+
+| Data | Path | Latency |
+|------|------|---------|
+| Device status (temp, power) | Hardware → DacMonitor → WS push | ~2s |
+| Sensor data (piezo, bed temp) | RAW files → piezoStream → WS push | ~10ms |
+| Mutations (setTemp, setPower) | Browser → tRPC HTTP → Hardware | ~100-500ms |
+| Historical data (vitals, sleep) | Browser → tRPC HTTP → SQLite | on-demand |
+| Schedules, settings | Browser → tRPC HTTP → SQLite | on-demand |
 
 ## project structure
 
@@ -33,9 +48,12 @@ app/[lang]/           # Next.js pages (i18n)
 src/
   ├── components/     # React UI
   ├── db/             # Drizzle schema
-  ├── hardware/       # Pod hardware abstraction
+  ├── hardware/       # Pod hardware abstraction + DacMonitor
+  ├── hooks/          # React hooks (useDeviceStatus, useSensorStream, etc.)
+  ├── providers/      # React context (SideProvider, TRPCProvider)
   ├── scheduler/      # Job automation
-  └── server/routers/ # tRPC API
+  ├── server/routers/ # tRPC API
+  └── streaming/      # WebSocket server (piezoStream)
 ```
 
 ## database (11 tables)

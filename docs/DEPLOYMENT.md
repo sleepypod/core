@@ -208,12 +208,28 @@ sudo scripts/internet-control status
 
 ## Coexistence with free-sleep
 
-Both `free-sleep.service` and `sleepypod.service` bind to port 3000. Only one can run at a time:
+Both `free-sleep.service` and `sleepypod.service` bind to port 3000. Only one can run at a time. The installer creates CLI commands for easy switching:
 
 ```bash
-# Switch to sleepypod
-systemctl stop free-sleep.service && systemctl start sleepypod.service
-
-# Switch back to free-sleep
-systemctl stop sleepypod.service && systemctl start free-sleep.service
+sp-sleepypod    # Switch to sleepypod (stops free-sleep, starts sleepypod + biometrics modules)
+sp-freesleep    # Switch to free-sleep (stops sleepypod + biometrics modules, starts free-sleep)
 ```
+
+Both commands verify the switch and print a status line. Your settings and data are preserved — switching only changes which server handles requests.
+
+### Why switch?
+
+- **Evaluating sleepypod**: Install sleepypod alongside free-sleep, try it out, switch back any time with `sp-freesleep` if you prefer the original
+- **Debugging**: If something isn't working, switch to free-sleep to confirm it's a sleepypod issue vs a hardware issue
+- **Gradual migration**: Run free-sleep during the day, switch to sleepypod at night for sleep tracking, or vice versa
+
+### What each manages
+
+| | sleepypod | free-sleep |
+|---|---|---|
+| Web UI | `http://pod:3000` | `http://pod:3000` |
+| Temperature control | Yes | Yes |
+| Schedules | Yes (database-backed) | Yes (JSON files) |
+| Sleep tracking | Yes (piezo-processor, sleep-detector) | No |
+| Sensor streaming | Yes (WebSocket on :3001) | No |
+| Biometrics modules | Started with `sp-sleepypod` | Stopped with `sp-freesleep` |

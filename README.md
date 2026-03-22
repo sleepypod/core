@@ -283,6 +283,17 @@ sp-logs      # journalctl -u sleepypod.service -f
 sp-update    # pull latest, rebuild, migrate, restart (with automatic rollback)
 ```
 
+### Switching between sleepypod and free-sleep
+
+Already running [free-sleep](https://github.com/throwaway31265/free-sleep)? SleepyPod installs alongside it — both use port 3000 but only one runs at a time. Switch freely without losing any settings or data:
+
+```bash
+sp-sleepypod    # Stop free-sleep, start sleepypod + biometrics modules
+sp-freesleep    # Stop sleepypod, start free-sleep
+```
+
+This makes it easy to evaluate sleepypod: install it, try it out, and switch back any time if you prefer free-sleep. Your temperature schedules, alarm configs, and sleep data are all preserved across switches.
+
 ---
 
 ## Environment variables

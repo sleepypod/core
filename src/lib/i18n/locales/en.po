@@ -13,30 +13,38 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
-#: src/components/BottomNav/BottomNav.tsx:7
-msgid "Data"
-msgstr "Data"
+#: src/components/BottomNav/BottomNav.tsx:13
+msgid "Biometrics"
+msgstr "Biometrics"
 
-#: app/[lang]/health/page.tsx:14
+#: src/components/BottomNav/BottomNav.tsx:13
+#~ msgid "Data"
+#~ msgstr "Data"
+
+#: app/[lang]/health/page.tsx:13
 msgid "Hello, tRPC test page!"
 msgstr "Hello, tRPC test page!"
 
-#: src/components/WifiSignalStrength/WifiSignalStrength.tsx:44
+#: src/components/WifiSignalStrength/WifiSignalStrength.tsx:45
 msgid "Offline"
 msgstr "Offline"
 
-#: src/components/BottomNav/BottomNav.tsx:6
+#: src/components/BottomNav/BottomNav.tsx:12
 msgid "Schedule"
 msgstr "Schedule"
 
-#: src/components/BottomNav/BottomNav.tsx:9
-msgid "Settings"
-msgstr "Settings"
+#: src/components/BottomNav/BottomNav.tsx:14
+msgid "Sensors"
+msgstr "Sensors"
 
-#: src/components/BottomNav/BottomNav.tsx:8
+#: src/components/BottomNav/BottomNav.tsx:16
+#~ msgid "Settings"
+#~ msgstr "Settings"
+
+#: src/components/BottomNav/BottomNav.tsx:15
 msgid "Status"
 msgstr "Status"
 
-#: src/components/BottomNav/BottomNav.tsx:5
+#: src/components/BottomNav/BottomNav.tsx:11
 msgid "Temp"
 msgstr "Temp"

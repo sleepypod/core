@@ -105,7 +105,12 @@ function registerGlobalHandlers(): void {
   })
 
   // Global uncaught exception handler - log and attempt graceful shutdown
-  process.on('uncaughtException', (error: Error) => {
+  process.on('uncaughtException', (error: Error & { code?: string; address?: string; port?: number }) => {
+    // mDNS EPERM is non-fatal — iptables blocks multicast, just log and continue
+    if (error.code === 'EPERM' && error.address === '224.0.0.251' && error.port === 5353) {
+      console.warn('[bonjour] mDNS send blocked by iptables (non-fatal):', error.message)
+      return
+    }
     console.error('Uncaught exception:', error)
     // Process state may be corrupted, attempt graceful shutdown
     gracefulShutdown('uncaughtException')

@@ -19,6 +19,8 @@
  *     { type: "release_processing" }         — voluntarily release ownership
  *     { type: "subscribe", sensors: [...] }  — subscribe to sensor types
  *                                              (default: all types)
+ *     { type: "get_time_range" }             — request available scrub range
+ *     { type: "seek", timestamp: <ms> }      — seek to a timestamp in the RAW file
  *
  *   Server → Client (sensor frames, filtered by subscription):
  *     { type: "piezo-dual", ts, left1, right1, ... }   — piezo BCG (~1 Hz)
@@ -34,6 +36,8 @@
  *     { type: "claimed", since }     — ack for claim_processing
  *     { type: "released" }           — ack for release / heartbeat timeout
  *     { type: "subscribed", sensors } — ack for subscribe
+ *     { type: "time_range", min, max, file } — available scrub range
+ *     { type: "seek_complete" }      — seek replay finished
  */
 
 import { WebSocketServer, WebSocket } from 'ws'
@@ -50,6 +54,24 @@ const WS_PORT = Number(process.env.PIEZO_WS_PORT ?? 3001)
 const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
 const HEARTBEAT_TIMEOUT_MS = 30_000
 const FILE_POLL_INTERVAL_MS = 10 // match Python's 10 ms poll for new data
+const SEEK_MAX_DURATION_S = 30 // max seconds of data to replay on seek
+
+// ---------------------------------------------------------------------------
+// In-memory sidecar index: maps timestamps to byte offsets in the current RAW
+// file. Built incrementally as frames are parsed during live streaming.
+// Reset whenever the active RAW file changes.
+// ---------------------------------------------------------------------------
+
+interface FrameIndexEntry {
+  /** Frame timestamp (epoch seconds, as stored in the RAW file). */
+  ts: number
+  /** Byte offset in the RAW file where the outer CBOR record starts. */
+  offset: number
+}
+
+const frameIndex: FrameIndexEntry[] = []
+/** Path of the RAW file that `frameIndex` corresponds to. */
+let indexedFilePath: string | null = null
 
 // ---------------------------------------------------------------------------
 // CBOR record reader (TypeScript port of Python _read_raw_record)
@@ -202,6 +224,7 @@ function findLatestRaw(dir: string): string | null {
 const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
+  'deviceStatus', 'gesture',
 ] as const
 
 /** Valid sensor type string. Used for subscription filtering. */
@@ -227,6 +250,140 @@ function int32BufferToArray(raw: Buffer | Uint8Array | undefined): number[] {
   return nums
 }
 
+// ---------------------------------------------------------------------------
+// Frame normalization
+// Firmware sends nested structures; we flatten to a consistent schema so all
+// clients (web, iOS) receive the same shape regardless of pod version.
+// ---------------------------------------------------------------------------
+
+const NO_SENSOR = -327.68
+
+function isSentinel(v: unknown): boolean {
+  return v === null || v === undefined || v === NO_SENSOR ||
+    (typeof v === 'number' && Math.abs(v - NO_SENSOR) < 0.01)
+}
+
+function safeNum(v: unknown): number | null {
+  if (isSentinel(v)) return null
+  return typeof v === 'number' ? v : null
+}
+
+/** centidegrees integer → Celsius float */
+function cdToC(v: unknown): number | null {
+  if (v === null || v === undefined || typeof v !== 'number') return null
+  return v / 100
+}
+
+function normalizeBedTemp(rec: Record<string, unknown>): Record<string, unknown> {
+  const left = (rec.left ?? {}) as Record<string, unknown>
+  const right = (rec.right ?? {}) as Record<string, unknown>
+  const leftTemps = (left.temps ?? []) as number[]
+  const rightTemps = (right.temps ?? []) as number[]
+
+  return {
+    type: rec.type,
+    ts: rec.ts,
+    ambientTemp: safeNum(left.amb) ?? safeNum(right.amb),
+    mcuTemp: safeNum(rec.mcu),
+    humidity: safeNum(left.hu) ?? safeNum(right.hu),
+    leftOuterTemp: safeNum(leftTemps[0]),
+    leftCenterTemp: safeNum(leftTemps[1]),
+    leftInnerTemp: safeNum(leftTemps[2]),
+    rightOuterTemp: safeNum(rightTemps[0]),
+    rightCenterTemp: safeNum(rightTemps[1]),
+    rightInnerTemp: safeNum(rightTemps[2]),
+  }
+}
+
+function normalizeFrzTemp(rec: Record<string, unknown>): Record<string, unknown> {
+  // Firmware sends centidegrees integers — convert to Celsius floats
+  return {
+    type: 'frzTemp',
+    ts: rec.ts,
+    left: cdToC(rec.left),
+    right: cdToC(rec.right),
+    amb: cdToC(rec.amb),
+    hs: cdToC(rec.hs),
+  }
+}
+
+function normalizeFrzHealth(rec: Record<string, unknown>): Record<string, unknown> {
+  const left = (rec.left ?? {}) as Record<string, unknown>
+  const right = (rec.right ?? {}) as Record<string, unknown>
+  const fan = (rec.fan ?? {}) as Record<string, unknown>
+
+  return {
+    type: 'frzHealth',
+    ts: rec.ts,
+    left: {
+      pumpRpm: safeNum(left.pumpRpm ?? left.pump_rpm ?? left.pumpRPM ?? left.rpm) ?? 0,
+      pumpDuty: safeNum(left.pumpDuty ?? left.pump_duty ?? left.duty) ?? 0,
+      tecCurrent: safeNum(left.tecI ?? left.tec ?? left.tecCurrent) ?? 0,
+    },
+    right: {
+      pumpRpm: safeNum(right.pumpRpm ?? right.pump_rpm ?? right.pumpRPM ?? right.rpm) ?? 0,
+      pumpDuty: safeNum(right.pumpDuty ?? right.pump_duty ?? right.duty) ?? 0,
+      tecCurrent: safeNum(right.tecI ?? right.tec ?? right.tecCurrent) ?? 0,
+    },
+    fan: {
+      rpm: safeNum(fan.rpm ?? fan.fanRpm ?? fan.fan_rpm) ?? 0,
+      duty: safeNum(fan.duty ?? fan.fanDuty ?? fan.fan_duty) ?? 0,
+    },
+  }
+}
+
+function normalizeFrzTherm(rec: Record<string, unknown>): Record<string, unknown> {
+  const left = (rec.left ?? {}) as Record<string, unknown>
+  const right = (rec.right ?? {}) as Record<string, unknown>
+
+  // If left/right are plain numbers (older firmware), pass through
+  if (typeof rec.left === 'number' && typeof rec.right === 'number') {
+    return rec
+  }
+
+  return {
+    type: 'frzTherm',
+    ts: rec.ts,
+    left: safeNum(left.pumpDuty ?? left.duty ?? rec.left) ?? 0,
+    right: safeNum(right.pumpDuty ?? right.duty ?? rec.right) ?? 0,
+  }
+}
+
+function normalizeCapSense2(rec: Record<string, unknown>): Record<string, unknown> {
+  const left = (rec.left ?? {}) as Record<string, unknown>
+  const right = (rec.right ?? {}) as Record<string, unknown>
+
+  // Extract values arrays from nested structure
+  const leftVals = (left.values ?? left) as number[] | unknown
+  const rightVals = (right.values ?? right) as number[] | unknown
+
+  return {
+    type: rec.type,
+    ts: rec.ts,
+    left: Array.isArray(leftVals) ? leftVals : (typeof rec.left === 'number' ? [rec.left] : []),
+    right: Array.isArray(rightVals) ? rightVals : (typeof rec.right === 'number' ? [rec.right] : []),
+    status: rec.status ?? left.status ?? right.status,
+  }
+}
+
+function normalizeFrame(rec: Record<string, unknown>): Record<string, unknown> {
+  switch (rec.type) {
+    case 'bedTemp':
+    case 'bedTemp2':
+      return normalizeBedTemp(rec)
+    case 'frzTemp':
+      return normalizeFrzTemp(rec)
+    case 'frzHealth':
+      return normalizeFrzHealth(rec)
+    case 'frzTherm':
+      return normalizeFrzTherm(rec)
+    case 'capSense2':
+      return normalizeCapSense2(rec)
+    default:
+      return rec // capSense (Pod 3), log — already flat
+  }
+}
+
 /**
  * Decode CBOR inner data into JSON-serializable sensor frames.
  *
@@ -234,7 +391,7 @@ function int32BufferToArray(raw: Buffer | Uint8Array | undefined): number[] {
  * CBOR values (the firmware packs several sensor readings per outer record).
  *
  * For piezo-dual: converts raw byte buffers (int32 arrays) to number arrays.
- * For all other types: passes the decoded CBOR object through as-is.
+ * For all other types: normalizes nested firmware structures to flat schemas.
  *
  * Returns an array of decoded frames (may be empty on failure).
  */
@@ -259,8 +416,8 @@ function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
         })
       }
       else {
-        // capSense, capSense2, bedTemp, bedTemp2, frzTemp, frzTherm,
-        // frzHealth, log — all JSON-compatible after CBOR decode
+        // Pass through as-is — iOS expects the raw nested firmware format.
+        // Browser normalizes in useSensorStream handleMessage.
         frames.push(rec)
       }
     })
@@ -359,6 +516,27 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
         }
       }
     }
+    else if (msg.type === 'get_time_range') {
+      if (frameIndex.length === 0) {
+        ws.send(JSON.stringify({ type: 'time_range', min: 0, max: 0, file: null }))
+      }
+      else {
+        ws.send(JSON.stringify({
+          type: 'time_range',
+          min: frameIndex[0].ts,
+          max: frameIndex[frameIndex.length - 1].ts,
+          file: indexedFilePath ? path.basename(indexedFilePath) : null,
+        }))
+      }
+    }
+    else if (msg.type === 'seek') {
+      const targetTs = msg.timestamp as number
+      if (typeof targetTs !== 'number' || !isFinite(targetTs)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'seek requires a numeric timestamp' }))
+        return
+      }
+      handleSeek(ws, targetTs)
+    }
     else {
       ws.send(JSON.stringify({ type: 'error', message: `Unknown message type: ${msg.type}` }))
     }
@@ -366,6 +544,150 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
   catch {
     ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }))
   }
+}
+
+// ---------------------------------------------------------------------------
+// Seek: binary search + replay from a separate file descriptor
+// ---------------------------------------------------------------------------
+
+/**
+ * Binary search `frameIndex` for the entry at or just before `targetTs`.
+ * Returns the index into `frameIndex`, or -1 if the index is empty.
+ * If the target is before the earliest entry, returns 0 (the first index).
+ */
+function findIndexEntry(targetTs: number): number {
+  if (frameIndex.length === 0) return -1
+  let lo = 0
+  let hi = frameIndex.length - 1
+
+  // Target is before all indexed frames
+  if (targetTs < frameIndex[0].ts) return 0
+
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1
+    if (frameIndex[mid].ts <= targetTs) {
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  // hi is now the largest index where ts <= targetTs
+  return hi
+}
+
+/**
+ * Handle a seek request: read frames from the RAW file starting at the
+ * indexed byte offset nearest to `targetTs`, send them to the requesting
+ * client only, then send `seek_complete`.
+ *
+ * Uses a separate file descriptor so the main live-streaming loop is
+ * not affected.
+ */
+function handleSeek(ws: WebSocket, targetTs: number): void {
+  if (!indexedFilePath) {
+    ws.send(JSON.stringify({ type: 'error', message: 'No RAW file indexed yet' }))
+    ws.send(JSON.stringify({ type: 'seek_complete' }))
+    return
+  }
+
+  const idx = findIndexEntry(targetTs)
+  if (idx < 0) {
+    ws.send(JSON.stringify({ type: 'error', message: 'No frames indexed yet' }))
+    ws.send(JSON.stringify({ type: 'seek_complete' }))
+    return
+  }
+
+  const startOffset = frameIndex[idx].offset
+  const filePath = indexedFilePath
+
+  // Check subscription filter for this client
+  const subs = clientSubscriptions.get(ws)
+
+  let fd: number | null = null
+  try {
+    fd = fs.openSync(filePath, 'r')
+    const stat = fs.fstatSync(fd)
+    const fileSize = stat.size
+
+    // Read from startOffset to end of file, capped at 64 MB to prevent memory exhaustion
+    const MAX_SEEK_BUFFER = 64 * 1024 * 1024
+    const rawBytesToRead = fileSize - startOffset
+    if (rawBytesToRead <= 0) {
+      fs.closeSync(fd)
+      ws.send(JSON.stringify({ type: 'seek_complete' }))
+      return
+    }
+    const bytesToRead = Math.min(rawBytesToRead, MAX_SEEK_BUFFER)
+
+    const seekBuffer = Buffer.alloc(bytesToRead)
+    fs.readSync(fd, seekBuffer, 0, bytesToRead, startOffset)
+    fs.closeSync(fd)
+    fd = null
+
+    // Parse records and send frames, stopping after SEEK_MAX_DURATION_S
+    let bufPos = 0
+    const maxTs = targetTs + SEEK_MAX_DURATION_S
+    let done = false
+
+    while (bufPos < seekBuffer.length && !done) {
+      try {
+        const { data, nextOffset } = readRawRecord(seekBuffer, bufPos)
+        bufPos = nextOffset
+
+        if (data === null) continue
+
+        const frames = decodeSensorFrames(data)
+        for (const frame of frames) {
+          // Stop if we've exceeded the seek duration window
+          const frameTs = frame.ts as number | undefined
+          if (frameTs !== undefined && frameTs > maxTs) {
+            done = true
+            break
+          }
+
+          // Apply subscription filter
+          const frameType = frame.type as string
+          if (subs && !subs.has(frameType as SensorType)) continue
+
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(frame))
+          } else {
+            done = true
+            break
+          }
+        }
+      } catch (e) {
+        if (e instanceof RangeError) break // incomplete record
+        bufPos += 1 // skip malformed byte, try to resync
+      }
+    }
+  } catch {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch { /* ignore */ }
+    }
+  }
+
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'seek_complete' }))
+  }
+}
+
+/**
+ * Adaptive poll rate: tell DacMonitor to poll faster when clients are
+ * connected, slower when idle. Lazy-imported to avoid circular deps.
+ */
+function updatePollRate(): void {
+  try {
+    const { getDacMonitorIfRunning } = require('@/src/hardware/dacMonitor.instance')
+    const monitor = getDacMonitorIfRunning()
+    if (!monitor) return
+    const clientCount = wss?.clients.size ?? 0
+    if (clientCount > 0) {
+      monitor.setActive()
+    } else {
+      monitor.setIdle()
+    }
+  } catch { /* monitor not started yet */ }
 }
 
 /**
@@ -385,6 +707,7 @@ export function startPiezoStreamServer(): WebSocketServer {
 
   wss.on('connection', (ws) => {
     console.log('[sensorStream] Client connected')
+    updatePollRate()
 
     ws.on('message', data => handleClientMessage(ws, data as Buffer | string))
 
@@ -393,6 +716,7 @@ export function startPiezoStreamServer(): WebSocketServer {
       if (activeClient === ws) {
         releaseClient()
       }
+      updatePollRate()
     })
 
     ws.on('error', (err) => {
@@ -417,6 +741,9 @@ export function startPiezoStreamServer(): WebSocketServer {
       currentPath = latest
       fileBuffer = Buffer.alloc(0)
       readOffset = 0
+      // Reset the sidecar frame index for the new file
+      frameIndex.length = 0
+      indexedFilePath = latest
     }
 
     // Read any new bytes appended since last read
@@ -436,12 +763,18 @@ export function startPiezoStreamServer(): WebSocketServer {
       fs.closeSync(fd)
       fd = null
 
+      // Absolute file offset corresponding to bufferPos=0 in the combined buffer.
+      // The leftover bytes in fileBuffer start at (readOffset - fileBuffer.length)
+      // in the file. Compute BEFORE concat so fileBuffer.length is just leftovers.
+      const bufferBaseFileOffset = readOffset - fileBuffer.length
       fileBuffer = Buffer.concat([fileBuffer, newBytes])
       readOffset = fileSize
 
       // Parse as many complete records as possible
       let bufferPos = 0
       while (bufferPos < fileBuffer.length) {
+        // Capture the record's starting byte offset in the file (for the index)
+        const recordFileOffset = bufferBaseFileOffset + bufferPos
         try {
           const { data, nextOffset } = readRawRecord(fileBuffer, bufferPos)
           bufferPos = nextOffset
@@ -452,6 +785,12 @@ export function startPiezoStreamServer(): WebSocketServer {
 
           for (const frame of frames) {
             const frameType = frame.type as string
+
+            // Record timestamp→offset mapping in the sidecar index
+            const ts = frame.ts as number | undefined
+            if (ts !== undefined) {
+              frameIndex.push({ ts, offset: recordFileOffset })
+            }
 
             // Broadcast to subscribed clients only
             const server = wss
@@ -500,6 +839,28 @@ export function startPiezoStreamServer(): WebSocketServer {
   }, FILE_POLL_INTERVAL_MS)
 
   return wss
+}
+
+/**
+ * Broadcast a JSON message to all connected WS clients that are subscribed
+ * to the given sensor type. Used by dacMonitor to push device status frames.
+ */
+export function broadcastFrame(frame: Record<string, unknown>): void {
+  const server = wss
+  if (!server || server.clients.size === 0) return
+
+  const frameType = frame.type as string
+  let payload: string | null = null
+
+  for (const client of server.clients) {
+    if (client.readyState !== WebSocket.OPEN) continue
+
+    const subs = clientSubscriptions.get(client)
+    if (subs && !subs.has(frameType as SensorType)) continue
+
+    if (payload === null) payload = JSON.stringify(frame)
+    client.send(payload)
+  }
 }
 
 /**

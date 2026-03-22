@@ -19,9 +19,9 @@ import { DacMonitor } from './dacMonitor'
 import type { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
-import { DeviceStateSync } from './deviceStateSync'
-import { trackPrimingState, resetPrimingState } from './primeNotification'
-import { cancelSnooze } from './snoozeManager'
+import { DeviceStateSync, getAlarmState } from './deviceStateSync'
+import { trackPrimingState, resetPrimingState, getPrimeCompletedAt } from './primeNotification'
+import { cancelSnooze, getSnoozeStatus } from './snoozeManager'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import {
   type AlarmConfig,
@@ -200,7 +200,19 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
       const gestureHandler = new GestureActionHandler(DAC_SOCK_PATH, defaultGestureActionDeps)
       const stateSync = new DeviceStateSync()
 
-      monitor.on('gesture:detected', event => gestureHandler.handle(event))
+      monitor.on('gesture:detected', event => {
+        gestureHandler.handle(event)
+        // Broadcast to WS clients so browser UI can show gesture events
+        // Dynamic import to avoid circular dependency (piezoStream is started separately)
+        import('@/src/streaming/piezoStream').then(({ broadcastFrame }) => {
+          broadcastFrame({
+            type: 'gesture',
+            ts: Date.now(),
+            side: event.side,
+            tapType: event.tapType,
+          })
+        }).catch(() => { /* WS not ready */ })
+      })
       monitor.on('status:updated', (status) => {
         try {
           trackPrimingState(status.isPriming)
@@ -211,6 +223,26 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
         stateSync.sync(status).catch(err =>
           console.error('[DacMonitor] DeviceStateSync error:', err)
         )
+
+        // Broadcast device status to WebSocket clients
+        // Dynamic import to avoid circular dependency (piezoStream is started separately)
+        import('@/src/streaming/piezoStream').then(({ broadcastFrame }) => {
+          const primeCompletedAt = getPrimeCompletedAt()
+          const alarmState = getAlarmState()
+          broadcastFrame({
+            type: 'deviceStatus',
+            ts: Date.now(),
+            leftSide: { ...status.leftSide, isAlarmVibrating: alarmState.left },
+            rightSide: { ...status.rightSide, isAlarmVibrating: alarmState.right },
+            waterLevel: status.waterLevel,
+            isPriming: status.isPriming,
+            ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+            snooze: {
+              left: getSnoozeStatus('left'),
+              right: getSnoozeStatus('right'),
+            },
+          })
+        }).catch(() => { /* WS server may not be started yet */ })
       })
 
       g[KEYS.monitor] = monitor

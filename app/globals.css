@@ -83,36 +83,44 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  /* Deep black background matching theme.background (#0a0a0a) */
+  --background: oklch(0.07 0 0);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
+  /* Card bg matching theme.card (#141414) / zinc-900 */
+  --card: oklch(0.12 0 0);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
+  --popover: oklch(0.12 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.87 0.00 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
+  /* Primary: sky-400 accent for active elements */
+  --primary: oklch(0.746 0.108 233);
+  --primary-foreground: oklch(0.985 0 0);
+  /* Secondary: zinc-800 level */
+  --secondary: oklch(0.21 0 0);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.371 0 0);
+  /* Muted: zinc-900 level */
+  --muted: oklch(0.16 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  /* Accent: zinc-800 */
+  --accent: oklch(0.21 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  /* Border: zinc-800 (~#27272a) */
+  --border: oklch(0.24 0 0);
+  /* Input: slightly lighter for contrast */
+  --input: oklch(0.21 0 0);
   --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.809 0.105 251.813);
+  --chart-1: oklch(0.746 0.108 233);
   --chart-2: oklch(0.623 0.214 259.815);
   --chart-3: oklch(0.546 0.245 262.881);
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
-  --sidebar: oklch(0.205 0 0);
+  --sidebar: oklch(0.12 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.746 0.108 233);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent: oklch(0.21 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-border: oklch(0.24 0 0);
   --sidebar-ring: oklch(0.556 0 0);
 }
 
@@ -124,4 +132,96 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Prevent 300ms tap delay on touch devices */
+  a, button, input, select, textarea, [role="button"], [role="switch"] {
+    touch-action: manipulation;
+  }
+
+  /* Ensure range sliders have minimum touch height (44px per WCAG 2.5.5) */
+  input[type="range"] {
+    min-height: 44px;
+  }
+}
+
+/* Hide scrollbar for horizontal scroll navigation */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Safe area bottom padding for notched devices */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Prevent text size adjustment on orientation change */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Touch target utility — apply where needed */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Prevent iOS Safari bounce/overscroll */
+body {
+  overscroll-behavior-y: none;
+  overflow-x: hidden;
+}
+
+/* ─── Dark theme form element styles ──────────────────────────────────── */
+
+/* Ensure <select> <option> elements render with dark background */
+.dark select,
+.dark option {
+  background-color: #1a1a1a;
+  color: #e4e4e7;
+}
+
+/* Style native dropdown arrow for dark theme */
+.dark select {
+  color-scheme: dark;
+}
+
+/* Dark scrollbar for WebKit browsers */
+.dark ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.dark ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+/* Autofill dark styling — prevent white flash on autocomplete */
+.dark input:-webkit-autofill,
+.dark input:-webkit-autofill:hover,
+.dark input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 30px #1a1a1a inset !important;
+  -webkit-text-fill-color: #e4e4e7 !important;
+  caret-color: #e4e4e7;
+}
+
+/* Ensure color-scheme is dark for all form controls */
+html.dark {
+  color-scheme: dark;
+}
+
+/* ─── ReactFlow pipeline node overrides ──────────────────────────────── */
+
+.react-flow__node-pipeline {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  box-shadow: none !important;
 }

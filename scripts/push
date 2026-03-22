@@ -1,0 +1,66 @@
+#!/bin/bash
+set -euo pipefail
+
+# push — fast deploy via scp (skip build, push pre-built .next)
+#
+# Usage:
+#   ./scripts/push              # push to default pod
+#   ./scripts/push 192.168.1.50 # push to specific pod
+#
+# Unlike ./scripts/deploy, this skips the build step entirely.
+# Run `pnpm build` yourself first, then push the result.
+# Useful for rapid iteration when you've already built locally.
+
+SSH_PORT=8822
+SSH_USER=root
+REMOTE_DIR="/home/dac/sleepypod-core"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+DEFAULT_POD_IP="192.168.1.88"
+
+POD_IP="${1:-$DEFAULT_POD_IP}"
+SSH_CMD="ssh -p $SSH_PORT -o ServerAliveInterval=30 $SSH_USER@$POD_IP"
+
+echo "=== SleepyPod Push (no build) ==="
+echo "Target: ${SSH_USER}@${POD_IP}:${SSH_PORT}"
+
+if [ ! -d "$PROJECT_DIR/.next" ]; then
+  echo "Error: No .next directory. Run 'pnpm build' first." >&2
+  exit 1
+fi
+
+# Check SSH connectivity
+if ! ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o BatchMode=yes "$SSH_USER@$POD_IP" "echo ok" >/dev/null 2>&1; then
+  echo "Error: Cannot SSH to $SSH_USER@$POD_IP:$SSH_PORT" >&2
+  exit 1
+fi
+
+# Clean old files on pod (preserve node_modules, .env)
+$SSH_CMD "mkdir -p '$REMOTE_DIR' && \
+  find '$REMOTE_DIR' -mindepth 1 -maxdepth 1 \
+    ! -name 'node_modules' \
+    ! -name '.env' \
+    -exec rm -rf {} +"
+
+# Tar source + build, pipe over SSH
+COPYFILE_DISABLE=1 tar cf - --no-mac-metadata \
+  --exclude='node_modules' \
+  --exclude='*.db' \
+  --exclude='*.db-shm' \
+  --exclude='*.db-wal' \
+  --exclude='*.db-journal' \
+  --exclude='.DS_Store' \
+  --exclude='test-results' \
+  --exclude='.serena' \
+  --exclude='.claude' \
+  -C "$PROJECT_DIR" . \
+  | $SSH_CMD "tar xf - -C '$REMOTE_DIR' 2>/dev/null"
+
+echo "Files synced."
+
+# Run install on pod (local mode, pre-built)
+$SSH_CMD "bash $REMOTE_DIR/scripts/install --local --no-ssh"
+
+echo ""
+echo "=== Push complete ==="
+echo "Web UI: http://$POD_IP:3000/"

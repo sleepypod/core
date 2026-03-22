@@ -12,6 +12,23 @@ import type { DeviceStatus } from './types'
  * uses capacitance sensor data for accurate presence detection rather than
  * power-cycle heuristics.
  */
+/** Read alarm vibration state from DB (set by setAlarm/clearAlarm mutations). */
+export function getAlarmState(): { left: boolean; right: boolean } {
+  try {
+    const rows = db
+      .select({ side: deviceState.side, isAlarmVibrating: deviceState.isAlarmVibrating })
+      .from(deviceState)
+      .all()
+    const left = rows.find(r => r.side === 'left')?.isAlarmVibrating ?? false
+    const right = rows.find(r => r.side === 'right')?.isAlarmVibrating ?? false
+    return { left, right }
+  }
+  catch (error) {
+    console.error('getAlarmState: failed to read alarm state from DB, falling back to false:', error instanceof Error ? error.message : error)
+    return { left: false, right: false }
+  }
+}
+
 export class DeviceStateSync {
   private lastWaterLevelWrite = 0
 
