@@ -8,7 +8,6 @@ import { CurvePresets } from './CurvePresets'
 import { CurveChart } from './CurveChart'
 import { PhaseLegend } from './PhaseLegend'
 import { TimePicker } from './TimePicker'
-import { ScheduleWeekOverview } from './ScheduleWeekOverview'
 import { ScheduleToggle } from './ScheduleToggle'
 import { SchedulerConfirmation } from './SchedulerConfirmation'
 import { ManualControlsSheet } from './ManualControlsSheet'
@@ -234,14 +233,6 @@ export function SchedulePage() {
         onApplyToOtherDays={(targetDays) => void applyToOtherDays(targetDays)}
       />
 
-      {/* 6. Week Overview */}
-      <ScheduleWeekOverview
-        selectedDay={selectedDay}
-        onDayChange={(day) => {
-          setSelectedDay(day)
-          setSelectedDays(new Set([day]))
-        }}
-      />
     </div>
   )
 }
