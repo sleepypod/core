@@ -38,49 +38,23 @@ export const EnvironmentInfoPanel = ({ secondsRemaining, unit = 'F' }: Environme
   }
 
   return (
-    <div className="flex items-stretch justify-center gap-3 rounded-2xl bg-zinc-900 p-2 sm:gap-4 sm:p-3">
-      {/* Home/Inside Temperature */}
+    <div className="flex items-center justify-center gap-4">
+      {/* Home/Inside Temperature — inline: icon + temp + "Inside" */}
       {ambientTemp != null && ambientTemp > 0 && (
-        <InfoItem
-          icon={<Home size={14} />}
-          label="Inside"
-          value={formatTemp(ambientTemp, unit)}
-        />
+        <div className="flex items-center gap-2 text-zinc-500">
+          <Home size={18} />
+          <span className="text-sm">{formatTemp(ambientTemp, unit)}</span>
+          <span className="text-sm">Inside</span>
+        </div>
       )}
 
-      {/* Auto-off Timer (only shown when active) */}
+      {/* Auto-off Timer */}
       {secondsRemaining != null && secondsRemaining > 0 && (
-        <>
-          {ambientTemp != null && ambientTemp > 0 && <Divider />}
-          <InfoItem
-            icon={<Timer size={14} />}
-            label="Auto-off"
-            value={formatTimeRemaining(secondsRemaining)}
-          />
-        </>
+        <div className="flex items-center gap-2 text-zinc-500">
+          <Timer size={18} />
+          <span className="text-sm">{formatTimeRemaining(secondsRemaining)}</span>
+        </div>
       )}
     </div>
   )
 }
-
-const InfoItem = ({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode
-  label: string
-  value: string
-}) => (
-  <div className="flex min-w-0 flex-1 flex-col items-center gap-0.5 sm:gap-1">
-    <div className="flex items-center gap-0.5 text-zinc-500 sm:gap-1">
-      {icon}
-      <span className="truncate text-[9px] font-medium uppercase tracking-wider sm:text-[10px]">{label}</span>
-    </div>
-    <span className="text-[13px] font-semibold text-zinc-200 sm:text-sm">{value}</span>
-  </div>
-)
-
-const Divider = () => (
-  <div className="w-px self-stretch bg-zinc-800" />
-)
