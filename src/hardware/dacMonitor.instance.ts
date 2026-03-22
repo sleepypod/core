@@ -200,11 +200,11 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
       const gestureHandler = new GestureActionHandler(DAC_SOCK_PATH, defaultGestureActionDeps)
       const stateSync = new DeviceStateSync()
 
-      monitor.on('gesture:detected', event => {
+      monitor.on('gesture:detected', (event) => {
         gestureHandler.handle(event)
         // Broadcast to WS clients so browser UI can show gesture events
         // Dynamic import to avoid circular dependency (piezoStream is started separately)
-        import('@/src/streaming/piezoStream').then(({ broadcastFrame }) => {
+        import('../streaming/piezoStream').then(({ broadcastFrame }) => {
           broadcastFrame({
             type: 'gesture',
             ts: Date.now(),
@@ -226,7 +226,7 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
 
         // Broadcast device status to WebSocket clients
         // Dynamic import to avoid circular dependency (piezoStream is started separately)
-        import('@/src/streaming/piezoStream').then(({ broadcastFrame }) => {
+        import('../streaming/piezoStream').then(({ broadcastFrame }) => {
           const primeCompletedAt = getPrimeCompletedAt()
           const alarmState = getAlarmState()
           broadcastFrame({

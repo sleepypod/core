@@ -46,7 +46,8 @@ class RawFileFollower:
         self._consecutive_failures = 0
 
     def _find_latest(self) -> Optional[Path]:
-        candidates = [p for p in self.data_dir.glob("*.RAW") if _safe_mtime(p) > 0]
+        candidates = [p for p in self.data_dir.glob("*.RAW")
+                      if p.name != "SEQNO.RAW" and _safe_mtime(p) > 0]
         candidates.sort(key=_safe_mtime, reverse=True)
         return candidates[0] if candidates else None
 
