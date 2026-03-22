@@ -50,8 +50,8 @@ export function SleepSummaryCard({ records }: SleepSummaryCardProps) {
 
   // Show most recent record (first since ordered DESC)
   const record = records[0]
-  const avgDuration =
-    records.reduce((sum, r) => sum + r.sleepDurationSeconds, 0) / records.length
+  const avgDuration
+    = records.reduce((sum, r) => sum + r.sleepDurationSeconds, 0) / records.length
 
   return (
     <div className="rounded-2xl bg-zinc-900/80 p-3 sm:p-4">
@@ -100,7 +100,11 @@ export function SleepSummaryCard({ records }: SleepSummaryCardProps) {
       {records.length > 1 && (
         <div className="mt-3 border-t border-zinc-800 pt-3">
           <p className="text-[11px] text-zinc-500">
-            Weekly Avg ({records.length} nights) ·{' '}
+            Weekly Avg (
+            {records.length}
+            {' '}
+            nights) ·
+            {' '}
             <span className="text-zinc-300">{formatDuration(Math.round(avgDuration))}</span>
           </p>
         </div>

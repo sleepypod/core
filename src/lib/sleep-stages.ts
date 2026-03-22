@@ -272,7 +272,8 @@ export function mergeIntoBlocks(epochs: SleepEpoch[]): SleepStageBlock[] {
   for (let i = 1; i < epochs.length; i++) {
     if (epochs[i].stage === currentBlock.stage) {
       currentBlock.end = epochs[i].start + epochs[i].duration
-    } else {
+    }
+    else {
       blocks.push(currentBlock)
       currentBlock = {
         start: epochs[i].start,
@@ -325,14 +326,16 @@ export function calculateQualityScore(
   // Deep sleep: target 15-25%
   if (distribution.deep < 15) {
     score -= (15 - distribution.deep) * 2
-  } else if (distribution.deep > 30) {
+  }
+  else if (distribution.deep > 30) {
     score -= (distribution.deep - 30) * 1.5
   }
 
   // REM: target 20-30%
   if (distribution.rem < 20) {
     score -= (20 - distribution.rem) * 1.5
-  } else if (distribution.rem > 35) {
+  }
+  else if (distribution.rem > 35) {
     score -= (distribution.rem - 35) * 1
   }
 

@@ -22,7 +22,7 @@ interface GestureRecord {
   alarmInactiveBehavior: 'power' | 'none' | null
 }
 
-const TAP_TYPES: { key: TapType; label: string; taps: number }[] = [
+const TAP_TYPES: { key: TapType, label: string, taps: number }[] = [
   { key: 'doubleTap', label: 'Double Tap', taps: 2 },
   { key: 'tripleTap', label: 'Triple Tap', taps: 3 },
   { key: 'quadTap', label: 'Quad Tap', taps: 4 },
@@ -95,7 +95,7 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
   const [editing, setEditing] = useState<EditState | null>(null)
 
   const gestures = settingsQuery.data?.gestures as
-    | { left: GestureRecord[]; right: GestureRecord[] }
+    | { left: GestureRecord[], right: GestureRecord[] }
     | undefined
 
   const findGesture = useCallback(
@@ -116,7 +116,8 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
         temperatureChange: editing.temperatureChange,
         temperatureAmount: editing.temperatureAmount,
       })
-    } else {
+    }
+    else {
       setGesture.mutate({
         side: editing.side,
         tapType: editing.tapType,
@@ -143,8 +144,8 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
 
         {TAP_TYPES.map(({ key, label, taps }) => {
           const gesture = findGesture(side, key)
-          const isEditing =
-            editing?.side === side && editing?.tapType === key
+          const isEditing
+            = editing?.side === side && editing?.tapType === key
 
           return (
             <div key={`${side}-${key}`}>
@@ -166,44 +167,44 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
                 </div>
 
                 {/* Actions */}
-                {gesture ? (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() =>
-                        setEditing(
-                          isEditing ? null : editStateFromGesture(gesture)
-                        )
-                      }
-                      className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-500 active:bg-zinc-800 active:text-zinc-300"
-                    >
-                      <ChevronDown
-                        size={14}
-                        className={clsx(
-                          'transition-transform',
-                          isEditing && 'rotate-180'
-                        )}
-                      />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(side, key)}
-                      disabled={deleteGesture.isPending}
-                      className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-600 active:bg-zinc-800 active:text-red-400 disabled:opacity-50"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() =>
-                      setEditing(
-                        isEditing ? null : defaultEditState(side, key)
-                      )
-                    }
-                    className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-600 active:bg-zinc-800 active:text-sky-400"
-                  >
-                    <Plus size={14} />
-                  </button>
-                )}
+                {gesture
+                  ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() =>
+                            setEditing(
+                              isEditing ? null : editStateFromGesture(gesture)
+                            )}
+                          className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-500 active:bg-zinc-800 active:text-zinc-300"
+                        >
+                          <ChevronDown
+                            size={14}
+                            className={clsx(
+                              'transition-transform',
+                              isEditing && 'rotate-180'
+                            )}
+                          />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(side, key)}
+                          disabled={deleteGesture.isPending}
+                          className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-600 active:bg-zinc-800 active:text-red-400 disabled:opacity-50"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    )
+                  : (
+                      <button
+                        onClick={() =>
+                          setEditing(
+                            isEditing ? null : defaultEditState(side, key)
+                          )}
+                        className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-600 active:bg-zinc-800 active:text-sky-400"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    )}
               </div>
 
               {/* Edit panel */}
@@ -309,8 +310,7 @@ function GestureEditPanel({
             <div className="flex rounded-lg bg-zinc-800 p-0.5">
               <button
                 onClick={() =>
-                  onChange({ ...state, temperatureChange: 'increment' })
-                }
+                  onChange({ ...state, temperatureChange: 'increment' })}
                 className={clsx(
                   'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
                   state.temperatureChange === 'increment'
@@ -322,8 +322,7 @@ function GestureEditPanel({
               </button>
               <button
                 onClick={() =>
-                  onChange({ ...state, temperatureChange: 'decrement' })
-                }
+                  onChange({ ...state, temperatureChange: 'decrement' })}
                 className={clsx(
                   'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
                   state.temperatureChange === 'decrement'
@@ -345,22 +344,21 @@ function GestureEditPanel({
                   onChange({
                     ...state,
                     temperatureAmount: Math.max(1, state.temperatureAmount - 1),
-                  })
-                }
+                  })}
                 className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-800 text-zinc-400 active:bg-zinc-700"
               >
                 -
               </button>
               <span className="w-8 text-center text-sm font-medium text-white">
-                {state.temperatureAmount}°
+                {state.temperatureAmount}
+                °
               </span>
               <button
                 onClick={() =>
                   onChange({
                     ...state,
                     temperatureAmount: Math.min(10, state.temperatureAmount + 1),
-                  })
-                }
+                  })}
                 className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-800 text-zinc-400 active:bg-zinc-700"
               >
                 +
@@ -379,8 +377,7 @@ function GestureEditPanel({
             <div className="flex rounded-lg bg-zinc-800 p-0.5">
               <button
                 onClick={() =>
-                  onChange({ ...state, alarmBehavior: 'snooze' })
-                }
+                  onChange({ ...state, alarmBehavior: 'snooze' })}
                 className={clsx(
                   'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
                   state.alarmBehavior === 'snooze'
@@ -392,8 +389,7 @@ function GestureEditPanel({
               </button>
               <button
                 onClick={() =>
-                  onChange({ ...state, alarmBehavior: 'dismiss' })
-                }
+                  onChange({ ...state, alarmBehavior: 'dismiss' })}
                 className={clsx(
                   'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
                   state.alarmBehavior === 'dismiss'
@@ -419,14 +415,14 @@ function GestureEditPanel({
                         60,
                         state.alarmSnoozeDuration - 60
                       ),
-                    })
-                  }
+                    })}
                   className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-800 text-zinc-400 active:bg-zinc-700"
                 >
                   -
                 </button>
                 <span className="w-12 text-center text-sm font-medium text-white">
-                  {Math.round(state.alarmSnoozeDuration / 60)}m
+                  {Math.round(state.alarmSnoozeDuration / 60)}
+                  m
                 </span>
                 <button
                   onClick={() =>
@@ -436,8 +432,7 @@ function GestureEditPanel({
                         600,
                         state.alarmSnoozeDuration + 60
                       ),
-                    })
-                  }
+                    })}
                   className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-800 text-zinc-400 active:bg-zinc-700"
                 >
                   +
@@ -452,8 +447,7 @@ function GestureEditPanel({
             <div className="flex rounded-lg bg-zinc-800 p-0.5">
               <button
                 onClick={() =>
-                  onChange({ ...state, alarmInactiveBehavior: 'none' })
-                }
+                  onChange({ ...state, alarmInactiveBehavior: 'none' })}
                 className={clsx(
                   'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
                   state.alarmInactiveBehavior === 'none'
@@ -465,8 +459,7 @@ function GestureEditPanel({
               </button>
               <button
                 onClick={() =>
-                  onChange({ ...state, alarmInactiveBehavior: 'power' })
-                }
+                  onChange({ ...state, alarmInactiveBehavior: 'power' })}
                 className={clsx(
                   'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
                   state.alarmInactiveBehavior === 'power'

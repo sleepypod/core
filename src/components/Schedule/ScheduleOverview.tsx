@@ -44,7 +44,9 @@ export function ScheduleOverview({ selectedDay }: ScheduleOverviewProps) {
   if (error) {
     return (
       <div className="rounded-2xl bg-zinc-900 p-4 text-center text-sm text-red-400">
-        Failed to load schedules: {error.message}
+        Failed to load schedules:
+        {' '}
+        {error.message}
       </div>
     )
   }
@@ -94,15 +96,24 @@ function PowerScheduleCard({ schedule }: { schedule: any }) {
       <div className="flex items-center gap-4 text-sm">
         <div className="flex items-center gap-1.5 text-zinc-400">
           <Zap size={12} className="text-emerald-400" />
-          <span>On: {formatTime12h(schedule.onTime)}</span>
+          <span>
+            On:
+            {formatTime12h(schedule.onTime)}
+          </span>
         </div>
         <div className="flex items-center gap-1.5 text-zinc-400">
           <Power size={12} className="text-zinc-500" />
-          <span>Off: {formatTime12h(schedule.offTime)}</span>
+          <span>
+            Off:
+            {formatTime12h(schedule.offTime)}
+          </span>
         </div>
       </div>
       <div className="mt-2 text-xs text-zinc-500">
-        Start at {schedule.onTemperature}°F
+        Start at
+        {' '}
+        {schedule.onTemperature}
+        °F
       </div>
     </div>
   )
@@ -138,12 +149,22 @@ function AlarmScheduleCard({ schedule }: { schedule: any }) {
           {schedule.vibrationPattern === 'rise' ? 'Gradual' : 'Double pulse'}
         </span>
         <span>·</span>
-        <span>Intensity {schedule.vibrationIntensity}%</span>
+        <span>
+          Intensity
+          {schedule.vibrationIntensity}
+          %
+        </span>
         <span>·</span>
-        <span>{schedule.duration}s</span>
+        <span>
+          {schedule.duration}
+          s
+        </span>
       </div>
       <div className="mt-1 text-xs text-zinc-500">
-        Alarm temp: {schedule.alarmTemperature}°F
+        Alarm temp:
+        {' '}
+        {schedule.alarmTemperature}
+        °F
       </div>
     </div>
   )

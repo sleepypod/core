@@ -94,16 +94,18 @@ export function ConnectionStatusBar({
     <div className={`flex items-center justify-between rounded-xl border ${config.borderColor} ${config.bg} px-3 py-2`}>
       <div className="flex items-center gap-2">
         {/* Live pulse dot */}
-        {isLoading ? (
-          <Loader2 size={12} className={`animate-spin ${config.color}`} />
-        ) : (
-          <span className="relative flex h-[7px] w-[7px]">
-            {isConnected && (
-              <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${config.dotColor} opacity-60`} />
+        {isLoading
+          ? (
+              <Loader2 size={12} className={`animate-spin ${config.color}`} />
+            )
+          : (
+              <span className="relative flex h-[7px] w-[7px]">
+                {isConnected && (
+                  <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${config.dotColor} opacity-60`} />
+                )}
+                <span className={`relative inline-flex h-[7px] w-[7px] rounded-full ${config.dotColor}`} />
+              </span>
             )}
-            <span className={`relative inline-flex h-[7px] w-[7px] rounded-full ${config.dotColor}`} />
-          </span>
-        )}
 
         {/* Status label */}
         <span className={`text-xs font-semibold ${config.color}`}>
@@ -115,14 +117,18 @@ export function ConnectionStatusBar({
         {/* Subscribed sensor count */}
         {subscribedSensors && (
           <span className="text-[9px] text-zinc-600">
-            {subscribedSensors.length} sensors
+            {subscribedSensors.length}
+            {' '}
+            sensors
           </span>
         )}
 
         {/* FPS counter */}
         {isConnected && fps > 0 && (
           <span className="font-mono text-[9px] text-zinc-500">
-            {fps} fps
+            {fps}
+            {' '}
+            fps
           </span>
         )}
 

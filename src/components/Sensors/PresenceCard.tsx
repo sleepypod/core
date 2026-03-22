@@ -14,7 +14,7 @@ import { Brain, PersonStanding, Footprints } from 'lucide-react'
 
 const VARIANCE_WINDOW = 20
 const PRESENCE_THRESHOLD = 0.05 // variance threshold matching iOS
-const ACTIVITY_NORMALIZE = 0.5  // max variance for 100% bar fill
+const ACTIVITY_NORMALIZE = 0.5 // max variance for 100% bar fill
 
 interface VarianceState {
   leftHistory: number[][] // [frame][channel]
@@ -67,7 +67,8 @@ function ZoneActivityRow({ zone, label, icon, leftVariance, rightVariance }: Zon
         />
         <span className={`absolute left-1 top-1/2 -translate-y-1/2 font-mono text-[7px] ${
           leftPct > 0.1 ? 'text-[#4a9eff]' : 'text-zinc-600'
-        }`}>
+        }`}
+        >
           {leftVar.toFixed(2)}
         </span>
       </div>
@@ -90,7 +91,8 @@ function ZoneActivityRow({ zone, label, icon, leftVariance, rightVariance }: Zon
         />
         <span className={`absolute right-1 top-1/2 -translate-y-1/2 font-mono text-[7px] ${
           rightPct > 0.1 ? 'text-[#40e0d0]' : 'text-zinc-600'
-        }`}>
+        }`}
+        >
           {rightVar.toFixed(2)}
         </span>
       </div>
@@ -125,7 +127,7 @@ export function PresenceCard() {
     const leftChannels = Array.isArray(f.left) ? f.left : [f.left]
     const rightChannels = Array.isArray(f.right) ? f.right : [f.right]
 
-    setVariance(prev => {
+    setVariance((prev) => {
       const newLeftHistory = [...prev.leftHistory, leftChannels].slice(-VARIANCE_WINDOW)
       const newRightHistory = [...prev.rightHistory, rightChannels].slice(-VARIANCE_WINDOW)
 
@@ -179,7 +181,9 @@ export function PresenceCard() {
           occupied={variance.leftOccupied}
           color="#4a9eff"
         />
-        <div className="w-9" /> {/* spacer matching zone labels */}
+        <div className="w-9" />
+        {' '}
+        {/* spacer matching zone labels */}
         <PresenceStatus
           label="Right"
           occupied={variance.rightOccupied}

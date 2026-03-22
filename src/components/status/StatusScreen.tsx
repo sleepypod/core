@@ -162,9 +162,11 @@ export function StatusScreen() {
         ? `Quality: ${calStatus[type].qualityScore != null ? `${Math.round((calStatus[type].qualityScore as number) * 100)}%` : '--'}`
         : calStatus[type].status
       : 'No data',
-    status: (calStatus?.[type]?.status === 'completed' ? 'ok'
-      : calStatus?.[type]?.status === 'running' || calStatus?.[type]?.status === 'pending' ? 'degraded'
-      : 'unknown') as 'ok' | 'degraded' | 'unknown',
+    status: (calStatus?.[type]?.status === 'completed'
+      ? 'ok'
+      : calStatus?.[type]?.status === 'running' || calStatus?.[type]?.status === 'pending'
+        ? 'degraded'
+        : 'unknown') as 'ok' | 'degraded' | 'unknown',
   }))
 
   // Network — WiFi + Internet only
@@ -206,12 +208,42 @@ export function StatusScreen() {
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-zinc-400">Job Breakdown</p>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs sm:grid-cols-3 sm:gap-x-4">
-            {jobCounts.temperature > 0 && <span className="text-zinc-300">Temp: {jobCounts.temperature}</span>}
-            {jobCounts.powerOn > 0 && <span className="text-zinc-300">On: {jobCounts.powerOn}</span>}
-            {jobCounts.powerOff > 0 && <span className="text-zinc-300">Off: {jobCounts.powerOff}</span>}
-            {jobCounts.alarm > 0 && <span className="text-zinc-300">Alarm: {jobCounts.alarm}</span>}
-            {jobCounts.prime > 0 && <span className="text-zinc-300">Prime: {jobCounts.prime}</span>}
-            {jobCounts.reboot > 0 && <span className="text-zinc-300">Reboot: {jobCounts.reboot}</span>}
+            {jobCounts.temperature > 0 && (
+              <span className="text-zinc-300">
+                Temp:
+                {jobCounts.temperature}
+              </span>
+            )}
+            {jobCounts.powerOn > 0 && (
+              <span className="text-zinc-300">
+                On:
+                {jobCounts.powerOn}
+              </span>
+            )}
+            {jobCounts.powerOff > 0 && (
+              <span className="text-zinc-300">
+                Off:
+                {jobCounts.powerOff}
+              </span>
+            )}
+            {jobCounts.alarm > 0 && (
+              <span className="text-zinc-300">
+                Alarm:
+                {jobCounts.alarm}
+              </span>
+            )}
+            {jobCounts.prime > 0 && (
+              <span className="text-zinc-300">
+                Prime:
+                {jobCounts.prime}
+              </span>
+            )}
+            {jobCounts.reboot > 0 && (
+              <span className="text-zinc-300">
+                Reboot:
+                {jobCounts.reboot}
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -225,11 +257,17 @@ export function StatusScreen() {
       {upcomingJobs && upcomingJobs.length > 0 && (
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-zinc-400">Upcoming Jobs</p>
-          {upcomingJobs.slice(0, 5).map((job) => (
+          {upcomingJobs.slice(0, 5).map(job => (
             <div key={job.id} className="flex items-center justify-between text-xs">
               <span className="text-zinc-300">
                 {job.type}
-                {job.side && <span className="ml-1 text-zinc-500">({job.side})</span>}
+                {job.side && (
+                  <span className="ml-1 text-zinc-500">
+                    (
+                    {job.side}
+                    )
+                  </span>
+                )}
               </span>
               <span className="text-zinc-500">
                 {job.nextRun ? formatRelativeTime(job.nextRun) : '\u2014'}
@@ -249,111 +287,113 @@ export function StatusScreen() {
 
   return (
     <PullToRefresh onRefresh={handleRefresh}>
-    <div className="space-y-3">
-      <HealthCircle
-        healthy={totalHealthy}
-        total={totalServices}
-        podVersion={dacMonitor.data?.podVersion}
-        branch={version.data?.branch}
-        commitHash={version.data?.commitHash}
-        diskPercent={disk.data?.usedPercent}
-        diskLabel={
-          disk.data && disk.data.totalBytes > 0
-            ? `${formatBytes(disk.data.usedBytes)} / ${formatBytes(disk.data.totalBytes)}`
-            : undefined
-        }
-        internetBlocked={internet.data?.blocked}
-        wifiSsid={wifi.data?.ssid ?? undefined}
-        wifiSignal={wifi.data?.signal ?? undefined}
-        podIP={typeof window !== 'undefined' ? window.location.hostname : undefined}
-        waterLevel={waterLatest.data?.level ?? undefined}
-        isPriming={deviceStatus.data?.isPriming ?? false}
-        onWaterClick={() => setWaterModalOpen(true)}
-      />
+      <div className="space-y-3">
+        <HealthCircle
+          healthy={totalHealthy}
+          total={totalServices}
+          podVersion={dacMonitor.data?.podVersion}
+          branch={version.data?.branch}
+          commitHash={version.data?.commitHash}
+          diskPercent={disk.data?.usedPercent}
+          diskLabel={
+            disk.data && disk.data.totalBytes > 0
+              ? `${formatBytes(disk.data.usedBytes)} / ${formatBytes(disk.data.totalBytes)}`
+              : undefined
+          }
+          internetBlocked={internet.data?.blocked}
+          wifiSsid={wifi.data?.ssid ?? undefined}
+          wifiSignal={wifi.data?.signal ?? undefined}
+          podIP={typeof window !== 'undefined' ? window.location.hostname : undefined}
+          waterLevel={waterLatest.data?.level ?? undefined}
+          isPriming={deviceStatus.data?.isPriming ?? false}
+          onWaterClick={() => setWaterModalOpen(true)}
+        />
 
-      {/* Internet access toggle */}
-      <InternetToggleCard />
+        {/* Internet access toggle */}
+        <InternetToggleCard />
 
-      {/* ── Core ── */}
-      <HealthStatusCard
-        title="Core"
-        description="Server, database, and scheduler"
-        icon={Server}
-        iconColor="text-sky-400"
-        iconBg="bg-sky-400/20"
-        services={coreServices}
-        isLoading={system.isLoading}
-        expandedContent={schedulerExpandedContent}
-      />
+        {/* ── Core ── */}
+        <HealthStatusCard
+          title="Core"
+          description="Server, database, and scheduler"
+          icon={Server}
+          iconColor="text-sky-400"
+          iconBg="bg-sky-400/20"
+          services={coreServices}
+          isLoading={system.isLoading}
+          expandedContent={schedulerExpandedContent}
+        />
 
-      {/* ── Hardware ── */}
-      <HealthStatusCard
-        title="Hardware"
-        description="DAC socket and monitoring"
-        icon={Cpu}
-        iconColor="text-purple-400"
-        iconBg="bg-purple-400/20"
-        services={hardwareServices}
-        isLoading={hardware.isLoading || dacMonitor.isLoading}
-      />
+        {/* ── Hardware ── */}
+        <HealthStatusCard
+          title="Hardware"
+          description="DAC socket and monitoring"
+          icon={Cpu}
+          iconColor="text-purple-400"
+          iconBg="bg-purple-400/20"
+          services={hardwareServices}
+          isLoading={hardware.isLoading || dacMonitor.isLoading}
+        />
 
-      {/* ── Calibration ── */}
-      <HealthStatusCard
-        title="Calibration"
-        description={calRunning ? 'Running...' : `${calCompleted}/3 sensors calibrated`}
-        icon={RefreshCw}
-        iconColor="text-orange-400"
-        iconBg="bg-orange-400/20"
-        services={calibrationServices}
-        isLoading={calibrationStatus.isLoading}
-        onHeaderClick={() => setCalibrationModalOpen(true)}
-      />
+        {/* ── Calibration ── */}
+        <HealthStatusCard
+          title="Calibration"
+          description={calRunning ? 'Running...' : `${calCompleted}/3 sensors calibrated`}
+          icon={RefreshCw}
+          iconColor="text-orange-400"
+          iconBg="bg-orange-400/20"
+          services={calibrationServices}
+          isLoading={calibrationStatus.isLoading}
+          onHeaderClick={() => setCalibrationModalOpen(true)}
+        />
 
-      {/* ── Network ── */}
-      <HealthStatusCard
-        title="Network"
-        description="WiFi and internet connectivity"
-        icon={Radio}
-        iconColor="text-teal-400"
-        iconBg="bg-teal-400/20"
-        services={networkServices}
-        isLoading={wifi.isLoading}
-      />
+        {/* ── Network ── */}
+        <HealthStatusCard
+          title="Network"
+          description="WiFi and internet connectivity"
+          icon={Radio}
+          iconColor="text-teal-400"
+          iconBg="bg-teal-400/20"
+          services={networkServices}
+          isLoading={wifi.isLoading}
+        />
 
-      {/* ── Services ── */}
-      <HealthStatusCard
-        title="Services"
-        description="Systemd service units"
-        icon={Cog}
-        iconColor="text-cyan-400"
-        iconBg="bg-cyan-400/20"
-        services={systemdServices}
-        isLoading={logSources.isLoading}
-      />
+        {/* ── Services ── */}
+        <HealthStatusCard
+          title="Services"
+          description="Systemd service units"
+          icon={Cog}
+          iconColor="text-cyan-400"
+          iconBg="bg-cyan-400/20"
+          services={systemdServices}
+          isLoading={logSources.isLoading}
+        />
 
-      {/* Software update */}
-      <UpdateCard />
+        {/* Software update */}
+        <UpdateCard />
 
-      {/* System log viewer — journalctl browser */}
-      <SystemLogViewer />
+        {/* System log viewer — journalctl browser */}
+        <SystemLogViewer />
 
-      {/* Firmware Console — wrapped in a card (header is internal) */}
-      <section className="rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3 sm:p-4">
-        <FirmwareLogConsole />
-      </section>
+        {/* Firmware Console — wrapped in a card (header is internal) */}
+        <section className="rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3 sm:p-4">
+          <FirmwareLogConsole />
+        </section>
 
-      {system.dataUpdatedAt && (
-        <p className="text-center text-xs text-zinc-600">
-          Last updated: {new Date(system.dataUpdatedAt).toLocaleTimeString()}
-        </p>
-      )}
-    </div>
+        {system.dataUpdatedAt && (
+          <p className="text-center text-xs text-zinc-600">
+            Last updated:
+            {' '}
+            {new Date(system.dataUpdatedAt).toLocaleTimeString()}
+          </p>
+        )}
+      </div>
 
-    {/* Water + Priming modal */}
-    <WaterModal open={waterModalOpen} onClose={() => setWaterModalOpen(false)} />
+      {/* Water + Priming modal */}
+      <WaterModal open={waterModalOpen} onClose={() => setWaterModalOpen(false)} />
 
-    {/* Calibration modal */}
-    <CalibrationModal open={calibrationModalOpen} onClose={() => setCalibrationModalOpen(false)} />
+      {/* Calibration modal */}
+      <CalibrationModal open={calibrationModalOpen} onClose={() => setCalibrationModalOpen(false)} />
 
     </PullToRefresh>
   )

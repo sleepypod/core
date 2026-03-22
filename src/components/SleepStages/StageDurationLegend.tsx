@@ -4,11 +4,11 @@ import type { SleepStage } from '@/src/lib/sleep-stages'
 import { STAGE_COLORS, formatDurationHM } from '@/src/lib/sleep-stages'
 
 interface StageDurationLegendProps {
-  epochs: { stage: SleepStage; duration: number }[]
+  epochs: { stage: SleepStage, duration: number }[]
   totalSleepMs: number
 }
 
-const STAGES: { key: SleepStage; label: string }[] = [
+const STAGES: { key: SleepStage, label: string }[] = [
   { key: 'deep', label: 'Deep' },
   { key: 'light', label: 'Light' },
   { key: 'rem', label: 'REM' },

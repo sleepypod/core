@@ -34,7 +34,7 @@ interface ChartDataPoint {
 }
 
 /** Custom tooltip for the temperature curve chart */
-function CurveTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ChartDataPoint }> }) {
+function CurveTooltip({ active, payload }: { active?: boolean, payload?: Array<{ payload: ChartDataPoint }> }) {
   if (!active || !payload?.[0]) return null
   const data = payload[0].payload
   return (
@@ -45,7 +45,10 @@ function CurveTooltip({ active, payload }: { active?: boolean; payload?: Array<{
           className="inline-block h-2 w-2 rounded-full"
           style={{ backgroundColor: colorForTempOffset(data.tempOffset) }}
         />
-        <span className="text-zinc-300">{data.tempF}°F</span>
+        <span className="text-zinc-300">
+          {data.tempF}
+          °F
+        </span>
         <span className="text-zinc-500">·</span>
         <span className="text-zinc-400">{data.phase}</span>
       </div>

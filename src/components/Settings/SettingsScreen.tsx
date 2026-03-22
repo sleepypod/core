@@ -28,7 +28,7 @@ export function SettingsScreen() {
           <Settings size={18} className="text-zinc-500" />
           <h1 className="text-lg font-semibold text-white">Settings</h1>
         </div>
-        {[1, 2, 3].map((i) => (
+        {[1, 2, 3].map(i => (
           <div key={i} className="h-24 animate-pulse rounded-2xl bg-zinc-900" />
         ))}
       </div>
@@ -38,7 +38,10 @@ export function SettingsScreen() {
   if (error) {
     return (
       <div className="rounded-2xl bg-zinc-900 p-4">
-        <p className="text-sm text-red-400">Failed to load settings: {error.message}</p>
+        <p className="text-sm text-red-400">
+          Failed to load settings:
+          {error.message}
+        </p>
       </div>
     )
   }

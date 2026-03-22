@@ -6,9 +6,9 @@
 
 export interface VibrationPattern {
   name: string
-  intensity: number       // 1-100
+  intensity: number // 1-100
   pattern: 'rise' | 'double'
-  duration: number        // seconds
+  duration: number // seconds
   description: string
 }
 

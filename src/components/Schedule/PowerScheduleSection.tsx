@@ -140,7 +140,10 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
           <div>
             <div className="mb-1 flex items-center justify-between">
               <span className="text-xs font-medium text-zinc-400">Start Temp</span>
-              <span className="text-xs font-medium text-white">{newOnTemp}°F</span>
+              <span className="text-xs font-medium text-white">
+                {newOnTemp}
+                °F
+              </span>
             </div>
             <input
               type="range"
@@ -148,12 +151,18 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
               max={TEMP_MAX}
               step={1}
               value={newOnTemp}
-              onChange={(e) => setNewOnTemp(parseInt(e.target.value, 10))}
+              onChange={e => setNewOnTemp(parseInt(e.target.value, 10))}
               className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
             />
             <div className="flex justify-between text-[10px] text-zinc-600">
-              <span>{TEMP_MIN}°F</span>
-              <span>{TEMP_MAX}°F</span>
+              <span>
+                {TEMP_MIN}
+                °F
+              </span>
+              <span>
+                {TEMP_MAX}
+                °F
+              </span>
             </div>
           </div>
 
@@ -238,7 +247,10 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
           <div>
             <div className="mb-1 flex items-center justify-between">
               <span className="text-xs font-medium text-zinc-400">Start Temperature</span>
-              <span className="text-xs font-medium text-white">{localTemp}°F</span>
+              <span className="text-xs font-medium text-white">
+                {localTemp}
+                °F
+              </span>
             </div>
             <input
               type="range"
@@ -263,8 +275,14 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
               className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-50 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
             />
             <div className="flex justify-between text-[10px] text-zinc-600">
-              <span>{TEMP_MIN}°F</span>
-              <span>{TEMP_MAX}°F</span>
+              <span>
+                {TEMP_MIN}
+                °F
+              </span>
+              <span>
+                {TEMP_MAX}
+                °F
+              </span>
             </div>
           </div>
         </div>

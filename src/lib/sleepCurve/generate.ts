@@ -69,15 +69,15 @@ export function generateSleepCurve(options: GenerateOptions): CurvePoint[] {
   const ratios = INTENSITY_RATIOS[intensity]
 
   // Map intensity ratios to the user's actual temp range
-  const coolRange = BASE_TEMP_F - minTempF  // e.g. 80-70 = 10
-  const warmRange = maxTempF - BASE_TEMP_F  // e.g. 86-80 = 6
+  const coolRange = BASE_TEMP_F - minTempF // e.g. 80-70 = 10
+  const warmRange = maxTempF - BASE_TEMP_F // e.g. 86-80 = 6
 
   const offsets = {
     warmUp: Math.round(warmRange * ratios.warmUp),
     fallAsleep: -Math.round(coolRange * ratios.fallAsleep),
-    deepSleep: -coolRange,        // always hits min
+    deepSleep: -coolRange, // always hits min
     maintain: -Math.round(coolRange * ratios.maintain),
-    preWake: warmRange,           // always hits max
+    preWake: warmRange, // always hits max
   }
 
   const points: CurvePoint[] = []

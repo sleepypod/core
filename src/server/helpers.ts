@@ -40,7 +40,8 @@ export async function withHardwareClient<T>(
         client.disconnect()
         await client.connect()
         return await callback(client)
-      } catch (retryError) {
+      }
+      catch (retryError) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `${errorMessage}: ${retryError instanceof Error ? retryError.message : 'Reconnect failed'}`,

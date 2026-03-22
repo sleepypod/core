@@ -38,7 +38,7 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
     <div className="w-full">
       {/* Bars */}
       <div className="flex items-end gap-2" style={{ height: 120 }}>
-        {nights.map(night => {
+        {nights.map((night) => {
           const barHeight = Math.max((night.totalSleepHours / MAX_HOURS) * 100, 4)
           const isSelected = selectedDate === night.date
 
@@ -50,7 +50,8 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
             >
               {/* Hours label */}
               <span className="text-[10px] text-zinc-500 tabular-nums">
-                {(night.totalSleepHours ?? 0).toFixed(1)}h
+                {(night.totalSleepHours ?? 0).toFixed(1)}
+                h
               </span>
 
               {/* Stacked bar */}
@@ -63,7 +64,7 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
                   outlineOffset: 1,
                 }}
               >
-                {STAGES.map(stage => {
+                {STAGES.map((stage) => {
                   const pct = night.distribution[stage]
                   if (pct === 0) return null
                   return (

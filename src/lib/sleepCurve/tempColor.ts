@@ -8,10 +8,10 @@ export function colorForTempOffset(offset: number): string {
   if (offset <= -8) return '#2563eb' // deep blue
   if (offset <= -5) return '#4a90d9' // cold mid
   if (offset <= -2) return '#7ab5e0' // cold soft
-  if (offset <= 1) return '#9ca3af'  // neutral gray
-  if (offset <= 4) return '#e0976a'  // warm soft
-  if (offset <= 7) return '#dc6646'  // warm mid
-  return '#dc2626'                   // warm deep
+  if (offset <= 1) return '#9ca3af' // neutral gray
+  if (offset <= 4) return '#e0976a' // warm soft
+  if (offset <= 7) return '#dc6646' // warm mid
+  return '#dc2626' // warm deep
 }
 
 /** Get a color for an absolute temperature in °F */
@@ -34,7 +34,7 @@ export function tempGradientStops(minOffset: number, maxOffset: number): string 
   const range = maxOffset - minOffset || 1
   return steps
     .filter(s => s.offset >= minOffset - 2 && s.offset <= maxOffset + 2)
-    .map(s => {
+    .map((s) => {
       const pct = ((s.offset - minOffset) / range) * 100
       return `${s.color} ${Math.max(0, Math.min(100, pct))}%`
     })

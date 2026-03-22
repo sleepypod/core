@@ -13,7 +13,7 @@ import type { DeviceStatus } from './types'
  * power-cycle heuristics.
  */
 /** Read alarm vibration state from DB (set by setAlarm/clearAlarm mutations). */
-export function getAlarmState(): { left: boolean; right: boolean } {
+export function getAlarmState(): { left: boolean, right: boolean } {
   try {
     const rows = db
       .select({ side: deviceState.side, isAlarmVibrating: deviceState.isAlarmVibrating })

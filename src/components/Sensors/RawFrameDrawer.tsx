@@ -83,7 +83,21 @@ export function RawFrameDrawer() {
                     paused ? 'bg-amber-500/20 text-amber-400' : 'bg-zinc-800 text-zinc-500'
                   }`}
                 >
-                  {paused ? <><Pause size={8} className="inline mr-0.5" /> Paused</> : <><Play size={8} className="inline mr-0.5" /> Live</>}
+                  {paused
+                    ? (
+                        <>
+                          <Pause size={8} className="inline mr-0.5" />
+                          {' '}
+                          Paused
+                        </>
+                      )
+                    : (
+                        <>
+                          <Play size={8} className="inline mr-0.5" />
+                          {' '}
+                          Live
+                        </>
+                      )}
                 </button>
               </div>
               <button onClick={handleClose} className="p-1 text-zinc-500 active:text-zinc-300">
@@ -103,30 +117,35 @@ export function RawFrameDrawer() {
             <div className="flex flex-1 overflow-hidden">
               {/* Frame list */}
               <div className={`overflow-y-auto border-r border-zinc-800/50 ${selectedFrame ? 'w-1/3 min-w-[120px]' : 'flex-1'}`}>
-                {filtered.length === 0 ? (
-                  <p className="py-8 text-center text-[10px] text-zinc-600">Waiting for frames...</p>
-                ) : (
-                  filtered.map((frame, i) => {
-                    const isSelected = selectedFrame?.ts === frame.ts && selectedFrame?.type === frame.type
-                    const age = ((Date.now() - frame.ts) / 1000).toFixed(1)
-                    return (
-                      <button
-                        key={`${frame.ts}-${i}`}
-                        onClick={() => {
-                          setSelectedFrame(isSelected ? null : frame)
-                          if (!paused) setPaused(true)
-                        }}
-                        className={`flex w-full items-center gap-1.5 px-2 py-1.5 text-left border-b border-zinc-900 ${
-                          isSelected ? 'bg-sky-500/10' : 'active:bg-zinc-900'
-                        }`}
-                      >
-                        <span className="text-[8px] font-mono font-medium text-sky-400">{frame.type}</span>
-                        <span className="flex-1" />
-                        <span className="text-[7px] tabular-nums text-zinc-600">{age}s</span>
-                      </button>
+                {filtered.length === 0
+                  ? (
+                      <p className="py-8 text-center text-[10px] text-zinc-600">Waiting for frames...</p>
                     )
-                  })
-                )}
+                  : (
+                      filtered.map((frame, i) => {
+                        const isSelected = selectedFrame?.ts === frame.ts && selectedFrame?.type === frame.type
+                        const age = ((Date.now() - frame.ts) / 1000).toFixed(1)
+                        return (
+                          <button
+                            key={`${frame.ts}-${i}`}
+                            onClick={() => {
+                              setSelectedFrame(isSelected ? null : frame)
+                              if (!paused) setPaused(true)
+                            }}
+                            className={`flex w-full items-center gap-1.5 px-2 py-1.5 text-left border-b border-zinc-900 ${
+                              isSelected ? 'bg-sky-500/10' : 'active:bg-zinc-900'
+                            }`}
+                          >
+                            <span className="text-[8px] font-mono font-medium text-sky-400">{frame.type}</span>
+                            <span className="flex-1" />
+                            <span className="text-[7px] tabular-nums text-zinc-600">
+                              {age}
+                              s
+                            </span>
+                          </button>
+                        )
+                      })
+                    )}
               </div>
 
               {/* Detail panel */}
@@ -151,7 +170,7 @@ export function RawFrameDrawer() {
   )
 }
 
-function FilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function FilterPill({ label, active, onClick }: { label: string, active: boolean, onClick: () => void }) {
   return (
     <button
       onClick={onClick}

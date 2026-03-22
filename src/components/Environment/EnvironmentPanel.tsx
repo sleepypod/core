@@ -15,7 +15,7 @@ interface EnvironmentPanelProps {
   dualSide?: boolean
 }
 
-function CardSection({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function CardSection({ title, icon, children }: { title: string, icon: React.ReactNode, children: React.ReactNode }) {
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3 sm:p-4">
       <div className="mb-2 flex items-center gap-2 sm:mb-3">
@@ -150,57 +150,59 @@ export function EnvironmentPanel({ unit = 'F', dualSide = false }: EnvironmentPa
       </div>
 
       {/* Current Readings Grid — side-aware, dual-side shows both bed temps */}
-      {dualSide ? (
-        <div className="grid grid-cols-2 gap-2">
-          <EnvironmentStatCard
-            icon={<Thermometer size={14} />}
-            label="Bed Left"
-            value={side === 'left' ? currentBedTempStr : otherBedTempStr}
-            colorClass="text-[#5cb8e0]"
-          />
-          <EnvironmentStatCard
-            icon={<Thermometer size={14} />}
-            label="Bed Right"
-            value={side === 'right' ? currentBedTempStr : otherBedTempStr}
-            colorClass="text-[#40e0d0]"
-          />
-          <EnvironmentStatCard
-            icon={<ThermometerSun size={14} />}
-            label="Ambient"
-            value={currentAmbient}
-            subValue={ambientTrend === 'warming' ? '↑ warming' : ambientTrend === 'cooling' ? '↓ cooling' : undefined}
-            colorClass="text-[#d4a84a]"
-          />
-          <EnvironmentStatCard
-            icon={<Droplets size={14} />}
-            label="Humidity"
-            value={currentHumidity}
-            colorClass="text-[#4a90d9]"
-          />
-        </div>
-      ) : (
-        <div className="grid grid-cols-3 gap-2">
-          <EnvironmentStatCard
-            icon={<Thermometer size={14} />}
-            label={`Bed ${side === 'left' ? 'L' : 'R'}`}
-            value={currentBedTempStr}
-            colorClass={side === 'left' ? 'text-[#5cb8e0]' : 'text-[#40e0d0]'}
-          />
-          <EnvironmentStatCard
-            icon={<ThermometerSun size={14} />}
-            label="Ambient"
-            value={currentAmbient}
-            subValue={ambientTrend === 'warming' ? '↑ warming' : ambientTrend === 'cooling' ? '↓ cooling' : undefined}
-            colorClass="text-[#d4a84a]"
-          />
-          <EnvironmentStatCard
-            icon={<Droplets size={14} />}
-            label="Humidity"
-            value={currentHumidity}
-            colorClass="text-[#4a90d9]"
-          />
-        </div>
-      )}
+      {dualSide
+        ? (
+            <div className="grid grid-cols-2 gap-2">
+              <EnvironmentStatCard
+                icon={<Thermometer size={14} />}
+                label="Bed Left"
+                value={side === 'left' ? currentBedTempStr : otherBedTempStr}
+                colorClass="text-[#5cb8e0]"
+              />
+              <EnvironmentStatCard
+                icon={<Thermometer size={14} />}
+                label="Bed Right"
+                value={side === 'right' ? currentBedTempStr : otherBedTempStr}
+                colorClass="text-[#40e0d0]"
+              />
+              <EnvironmentStatCard
+                icon={<ThermometerSun size={14} />}
+                label="Ambient"
+                value={currentAmbient}
+                subValue={ambientTrend === 'warming' ? '↑ warming' : ambientTrend === 'cooling' ? '↓ cooling' : undefined}
+                colorClass="text-[#d4a84a]"
+              />
+              <EnvironmentStatCard
+                icon={<Droplets size={14} />}
+                label="Humidity"
+                value={currentHumidity}
+                colorClass="text-[#4a90d9]"
+              />
+            </div>
+          )
+        : (
+            <div className="grid grid-cols-3 gap-2">
+              <EnvironmentStatCard
+                icon={<Thermometer size={14} />}
+                label={`Bed ${side === 'left' ? 'L' : 'R'}`}
+                value={currentBedTempStr}
+                colorClass={side === 'left' ? 'text-[#5cb8e0]' : 'text-[#40e0d0]'}
+              />
+              <EnvironmentStatCard
+                icon={<ThermometerSun size={14} />}
+                label="Ambient"
+                value={currentAmbient}
+                subValue={ambientTrend === 'warming' ? '↑ warming' : ambientTrend === 'cooling' ? '↓ cooling' : undefined}
+                colorClass="text-[#d4a84a]"
+              />
+              <EnvironmentStatCard
+                icon={<Droplets size={14} />}
+                label="Humidity"
+                value={currentHumidity}
+                colorClass="text-[#4a90d9]"
+              />
+            </div>
+          )}
 
       {/* Bed Temperature Trend Chart */}
       <CardSection
@@ -209,40 +211,46 @@ export function EnvironmentPanel({ unit = 'F', dualSide = false }: EnvironmentPa
           <TrendIcon trend={ambientTrend} />
         }
       >
-        {isLoading ? (
-          <div className="flex h-[200px] items-center justify-center">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
-          </div>
-        ) : isError ? (
-          <div className="flex h-[200px] items-center justify-center text-sm text-red-400">
-            Failed to load temperature data
-          </div>
-        ) : (
-          <BedTempChart
-            data={bedTempQuery.data ?? []}
-            unit={unit}
-            showAmbient
-            highlightSide={dualSide ? 'both' : side}
-          />
-        )}
+        {isLoading
+          ? (
+              <div className="flex h-[200px] items-center justify-center">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
+              </div>
+            )
+          : isError
+            ? (
+                <div className="flex h-[200px] items-center justify-center text-sm text-red-400">
+                  Failed to load temperature data
+                </div>
+              )
+            : (
+                <BedTempChart
+                  data={bedTempQuery.data ?? []}
+                  unit={unit}
+                  showAmbient
+                  highlightSide={dualSide ? 'both' : side}
+                />
+              )}
 
         {/* Summary Stats Row */}
         {summary && (
           <div className="mt-3 flex flex-wrap justify-between gap-y-2 border-t border-zinc-800 pt-3">
-            {dualSide ? (
-              <>
-                <SummaryItem
-                  label="Avg Bed L"
-                  value={summary.avgLeftCenterTemp != null ? `${Math.round(summary.avgLeftCenterTemp)}°` : '--'}
-                />
-                <SummaryItem
-                  label="Avg Bed R"
-                  value={summary.avgRightCenterTemp != null ? `${Math.round(summary.avgRightCenterTemp)}°` : '--'}
-                />
-              </>
-            ) : (
-              <SummaryItem label={`Avg Bed ${side === 'left' ? 'L' : 'R'}`} value={avgBedTempStr} />
-            )}
+            {dualSide
+              ? (
+                  <>
+                    <SummaryItem
+                      label="Avg Bed L"
+                      value={summary.avgLeftCenterTemp != null ? `${Math.round(summary.avgLeftCenterTemp)}°` : '--'}
+                    />
+                    <SummaryItem
+                      label="Avg Bed R"
+                      value={summary.avgRightCenterTemp != null ? `${Math.round(summary.avgRightCenterTemp)}°` : '--'}
+                    />
+                  </>
+                )
+              : (
+                  <SummaryItem label={`Avg Bed ${side === 'left' ? 'L' : 'R'}`} value={avgBedTempStr} />
+                )}
             <SummaryItem label="Avg Ambient" value={avgAmbient} />
             <SummaryItem label="Min" value={minAmbient} />
             <SummaryItem label="Max" value={maxAmbient} />
@@ -256,17 +264,21 @@ export function EnvironmentPanel({ unit = 'F', dualSide = false }: EnvironmentPa
         title="Humidity"
         icon={<Droplets size={12} className="text-[#4a90d9]" />}
       >
-        {isLoading ? (
-          <div className="flex h-[140px] items-center justify-center">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
-          </div>
-        ) : isError ? (
-          <div className="flex h-[140px] items-center justify-center text-sm text-red-400">
-            Failed to load humidity data
-          </div>
-        ) : (
-          <HumidityChart data={bedTempQuery.data ?? []} />
-        )}
+        {isLoading
+          ? (
+              <div className="flex h-[140px] items-center justify-center">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
+              </div>
+            )
+          : isError
+            ? (
+                <div className="flex h-[140px] items-center justify-center text-sm text-red-400">
+                  Failed to load humidity data
+                </div>
+              )
+            : (
+                <HumidityChart data={bedTempQuery.data ?? []} />
+              )}
       </CardSection>
     </div>
   )
@@ -278,7 +290,7 @@ function TrendIcon({ trend }: { trend: string | null }) {
   return <Minus size={12} className="text-zinc-500" />
 }
 
-function SummaryItem({ label, value }: { label: string; value: string }) {
+function SummaryItem({ label, value }: { label: string, value: string }) {
   return (
     <div className="flex flex-col items-center">
       <span className="text-xs font-medium tabular-nums text-zinc-300">{value}</span>

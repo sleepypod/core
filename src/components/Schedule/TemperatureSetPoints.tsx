@@ -82,7 +82,11 @@ export function TemperatureSetPoints({ selectedDay }: TemperatureSetPointsProps)
           <Thermometer size={16} className="text-sky-400" />
           <span className="text-xs font-medium text-zinc-400">Set Points</span>
           {phases.length > 0 && (
-            <span className="text-[10px] text-zinc-600">({phases.length})</span>
+            <span className="text-[10px] text-zinc-600">
+              (
+              {phases.length}
+              )
+            </span>
           )}
           {isMutating && (
             <Loader2 size={12} className="animate-spin text-sky-400" />
@@ -101,19 +105,21 @@ export function TemperatureSetPoints({ selectedDay }: TemperatureSetPointsProps)
         {/* Expanded content */}
         {expanded && (
           <div className="mt-3 space-y-3">
-            {phases.length > 0 ? (
-              <SetPointList
-                phases={phases}
-                onAdjustTemp={adjustTemperature}
-                onDelete={deleteSetPoint}
-                onTapCard={handleTapCard}
-                disabled={isMutating}
-              />
-            ) : (
-              <p className="py-3 text-center text-xs text-zinc-600">
-                No temperature set points configured
-              </p>
-            )}
+            {phases.length > 0
+              ? (
+                  <SetPointList
+                    phases={phases}
+                    onAdjustTemp={adjustTemperature}
+                    onDelete={deleteSetPoint}
+                    onTapCard={handleTapCard}
+                    disabled={isMutating}
+                  />
+                )
+              : (
+                  <p className="py-3 text-center text-xs text-zinc-600">
+                    No temperature set points configured
+                  </p>
+                )}
 
             {/* Add set point button */}
             <button

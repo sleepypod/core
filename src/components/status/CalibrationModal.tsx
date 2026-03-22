@@ -20,7 +20,7 @@ interface CalibrationProfile {
   errorMessage: string | null
 }
 
-const SENSOR_CONFIG: Record<SensorType, { label: string; icon: typeof Bed; color: string }> = {
+const SENSOR_CONFIG: Record<SensorType, { label: string, icon: typeof Bed, color: string }> = {
   piezo: { label: 'Piezo', icon: Bed, color: 'text-violet-400' },
   capacitance: { label: 'Capacitance', icon: Fingerprint, color: 'text-cyan-400' },
   temperature: { label: 'Temperature', icon: Thermometer, color: 'text-orange-400' },
@@ -51,15 +51,15 @@ function qualityLabel(score: number | null): string {
 function formatDate(d: Date | null | undefined): string {
   if (!d) return '--'
   const date = new Date(d)
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
-    ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 /**
  * Calibration modal. Opens from the HealthCircle or status page.
  * Contains: per-sensor calibration status, trigger buttons, and full calibration.
  */
-export function CalibrationModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function CalibrationModal({ open, onClose }: { open: boolean, onClose: () => void }) {
   const { side } = useSide()
   const { sideName } = useSideNames()
   const utils = trpc.useUtils()
@@ -88,9 +88,9 @@ export function CalibrationModal({ open, onClose }: { open: boolean; onClose: ()
   }
 
   const isAnyActive = status && (
-    status.piezo?.status === 'running' || status.piezo?.status === 'pending' ||
-    status.capacitance?.status === 'running' || status.capacitance?.status === 'pending' ||
-    status.temperature?.status === 'running' || status.temperature?.status === 'pending'
+    status.piezo?.status === 'running' || status.piezo?.status === 'pending'
+    || status.capacitance?.status === 'running' || status.capacitance?.status === 'pending'
+    || status.temperature?.status === 'running' || status.temperature?.status === 'pending'
   )
 
   if (!open) return null
@@ -133,64 +133,76 @@ export function CalibrationModal({ open, onClose }: { open: boolean; onClose: ()
           )}
 
           {/* Sensor rows */}
-          {statusLoading ? (
-            <div className="flex h-24 items-center justify-center">
-              <Loader2 size={18} className="animate-spin text-zinc-600" />
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {(['piezo', 'capacitance', 'temperature'] as const).map((type) => {
-                const config = SENSOR_CONFIG[type]
-                const Icon = config.icon
-                const profile = status?.[type] as CalibrationProfile | null | undefined
-                const isTriggering = triggeringType === type
-                const isActive = profile?.status === 'running' || profile?.status === 'pending'
+          {statusLoading
+            ? (
+                <div className="flex h-24 items-center justify-center">
+                  <Loader2 size={18} className="animate-spin text-zinc-600" />
+                </div>
+              )
+            : (
+                <div className="space-y-2">
+                  {(['piezo', 'capacitance', 'temperature'] as const).map((type) => {
+                    const config = SENSOR_CONFIG[type]
+                    const Icon = config.icon
+                    const profile = status?.[type] as CalibrationProfile | null | undefined
+                    const isTriggering = triggeringType === type
+                    const isActive = profile?.status === 'running' || profile?.status === 'pending'
 
-                return (
-                  <div key={type} className="flex items-center gap-2.5 rounded-xl bg-zinc-900 p-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800">
-                      <Icon size={16} className={config.color} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-medium text-zinc-300">{config.label}</span>
-                        {profile && statusIcon(profile.status)}
-                      </div>
-                      {profile ? (
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs font-semibold tabular-nums ${qualityColor(profile.qualityScore)}`}>
-                            {qualityLabel(profile.qualityScore)}
-                          </span>
-                          {profile.samplesUsed !== null && (
-                            <span className="text-[10px] text-zinc-600">{profile.samplesUsed} samples</span>
-                          )}
-                          <span className="text-[10px] text-zinc-600">{formatDate(profile.createdAt)}</span>
+                    return (
+                      <div key={type} className="flex items-center gap-2.5 rounded-xl bg-zinc-900 p-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800">
+                          <Icon size={16} className={config.color} />
                         </div>
-                      ) : (
-                        <span className="text-[10px] text-zinc-600">No calibration</span>
-                      )}
-                      {profile?.errorMessage && (
-                        <p className="mt-0.5 text-[10px] text-red-400/80 line-clamp-2">{profile.errorMessage}</p>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => handleTrigger(type)}
-                      disabled={isTriggering || isActive}
-                      className="shrink-0 rounded-lg bg-zinc-800 px-3 py-2 text-[11px] font-semibold text-zinc-300 transition-colors active:bg-zinc-700 disabled:text-zinc-600"
-                    >
-                      {isTriggering ? (
-                        <Loader2 size={12} className="animate-spin" />
-                      ) : isActive ? (
-                        profile?.status === 'running' ? 'Running...' : 'Pending'
-                      ) : (
-                        'Calibrate'
-                      )}
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium text-zinc-300">{config.label}</span>
+                            {profile && statusIcon(profile.status)}
+                          </div>
+                          {profile
+                            ? (
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-xs font-semibold tabular-nums ${qualityColor(profile.qualityScore)}`}>
+                                    {qualityLabel(profile.qualityScore)}
+                                  </span>
+                                  {profile.samplesUsed !== null && (
+                                    <span className="text-[10px] text-zinc-600">
+                                      {profile.samplesUsed}
+                                      {' '}
+                                      samples
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] text-zinc-600">{formatDate(profile.createdAt)}</span>
+                                </div>
+                              )
+                            : (
+                                <span className="text-[10px] text-zinc-600">No calibration</span>
+                              )}
+                          {profile?.errorMessage && (
+                            <p className="mt-0.5 text-[10px] text-red-400/80 line-clamp-2">{profile.errorMessage}</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleTrigger(type)}
+                          disabled={isTriggering || isActive}
+                          className="shrink-0 rounded-lg bg-zinc-800 px-3 py-2 text-[11px] font-semibold text-zinc-300 transition-colors active:bg-zinc-700 disabled:text-zinc-600"
+                        >
+                          {isTriggering
+                            ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              )
+                            : isActive
+                              ? (
+                                  profile?.status === 'running' ? 'Running...' : 'Pending'
+                                )
+                              : (
+                                  'Calibrate'
+                                )}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
 
           {/* Full calibration button */}
           <button
@@ -198,11 +210,13 @@ export function CalibrationModal({ open, onClose }: { open: boolean; onClose: ()
             disabled={triggerFull.isPending || !!isAnyActive}
             className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl border border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800 disabled:opacity-50"
           >
-            {triggerFull.isPending ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <RefreshCw size={14} />
-            )}
+            {triggerFull.isPending
+              ? (
+                  <Loader2 size={14} className="animate-spin" />
+                )
+              : (
+                  <RefreshCw size={14} />
+                )}
             Calibrate All Sensors
           </button>
         </div>

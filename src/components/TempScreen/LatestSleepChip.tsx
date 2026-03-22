@@ -31,7 +31,10 @@ export function LatestSleepChip() {
   return (
     <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
       <Moon size={12} className="text-indigo-400" />
-      <span>Last night: {formatDuration(latest.sleepDurationSeconds)}</span>
+      <span>
+        Last night:
+        {formatDuration(latest.sleepDurationSeconds)}
+      </span>
     </div>
   )
 }

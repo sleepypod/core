@@ -48,7 +48,7 @@ export interface DualSideChartProps {
 // ── Constants ──
 
 const PADDING = { top: 8, right: 8, bottom: 24, left: 36 }
-const LEFT_COLOR_DEFAULT = '#38bdf8'  // sky-400
+const LEFT_COLOR_DEFAULT = '#38bdf8' // sky-400
 const RIGHT_COLOR_DEFAULT = '#fbbf24' // amber-400
 
 function defaultFormatTime(date: Date): string {
@@ -194,7 +194,7 @@ export function DualSideChart({
     const allPoints = [...sortedLeft, ...sortedRight]
     if (allPoints.length < 2) return []
     const count = 4
-    const ticks: { x: number; label: string }[] = []
+    const ticks: { x: number, label: string }[] = []
     for (let i = 0; i < count; i++) {
       const t = minTime + (i / (count - 1)) * (maxTime - minTime)
       ticks.push({ x: scaleX(t), label: formatTime(new Date(t)) })
@@ -205,7 +205,7 @@ export function DualSideChart({
   // Y-axis tick labels (3 ticks)
   const yTicks = useMemo(() => {
     const count = 3
-    const ticks: { y: number; label: string }[] = []
+    const ticks: { y: number, label: string }[] = []
     for (let i = 0; i < count; i++) {
       const v = minVal + (i / (count - 1)) * (maxVal - minVal)
       ticks.push({ y: scaleY(v), label: Math.round(v).toString() })
@@ -310,10 +310,15 @@ export function DualSideChart({
               style={{ backgroundColor: selectedColor }}
             />
             <span className="text-xs font-medium" style={{ color: selectedColor }}>
-              {formatValue(selectedPoint.point.value)} {unit}
+              {formatValue(selectedPoint.point.value)}
+              {' '}
+              {unit}
             </span>
             <span className="text-[10px] text-zinc-500">
-              {selectedLabel} · {formatTime(selectedPoint.point.timestamp)}
+              {selectedLabel}
+              {' '}
+              ·
+              {formatTime(selectedPoint.point.timestamp)}
             </span>
           </div>
         )}
@@ -344,7 +349,7 @@ export function DualSideChart({
           </defs>
 
           {/* Zone backgrounds */}
-          {zones.map(zone => {
+          {zones.map((zone) => {
             const y1 = scaleY(zone.max)
             const y2 = scaleY(zone.min)
             return (

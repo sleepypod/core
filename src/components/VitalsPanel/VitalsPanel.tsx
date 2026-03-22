@@ -44,7 +44,7 @@ interface VitalsRecord {
  * Filter physiologically impossible values matching iOS smoothedVitals logic.
  */
 function filterOutliers(records: VitalsRecord[]): VitalsRecord[] {
-  return records.filter(r => {
+  return records.filter((r) => {
     if (r.heartRate != null && (r.heartRate < 45 || r.heartRate > 130)) return false
     if (r.hrv != null && r.hrv > 300) return false
     if (r.breathingRate != null && (r.breathingRate < 8 || r.breathingRate > 25)) return false
@@ -52,7 +52,7 @@ function filterOutliers(records: VitalsRecord[]): VitalsRecord[] {
   })
 }
 
-function computeTrend(records: VitalsRecord[]): { text: string; direction: 'up' | 'down' | 'stable' } | null {
+function computeTrend(records: VitalsRecord[]): { text: string, direction: 'up' | 'down' | 'stable' } | null {
   const values = records.map(r => r.hrv).filter((v): v is number => v != null)
   if (values.length < 10) return null
 
@@ -99,8 +99,8 @@ function smoothData<T extends Record<string, unknown>>(
 
 // Side colors for dual-side comparison
 const SIDE_COLORS = {
-  left: { primary: '#5cb8e0', label: 'Left' },   // cool blue
-  right: { primary: '#40e0d0', label: 'Right' },  // turquoise
+  left: { primary: '#5cb8e0', label: 'Left' }, // cool blue
+  right: { primary: '#40e0d0', label: 'Right' }, // turquoise
 } as const
 
 interface VitalsPanelProps {
@@ -254,47 +254,47 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     <div className="space-y-3">
       {/* Week Navigator + Side Toggle */}
       {!hideNav && (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1">
-          <button
-            onClick={week.goToPreviousWeek}
-            className="p-2 text-zinc-500 active:text-white transition-colors"
-            aria-label="Previous week"
-          >
-            <ChevronLeft size={18} />
-          </button>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={week.goToPreviousWeek}
+              className="p-2 text-zinc-500 active:text-white transition-colors"
+              aria-label="Previous week"
+            >
+              <ChevronLeft size={18} />
+            </button>
 
-          <button
-            onClick={week.goToCurrentWeek}
-            className="flex items-center gap-2 rounded-xl bg-zinc-900 px-3 py-2"
-          >
-            <Calendar size={13} className="text-sky-400" />
-            <span className="text-sm font-medium text-white">{week.label}</span>
-          </button>
+            <button
+              onClick={week.goToCurrentWeek}
+              className="flex items-center gap-2 rounded-xl bg-zinc-900 px-3 py-2"
+            >
+              <Calendar size={13} className="text-sky-400" />
+              <span className="text-sm font-medium text-white">{week.label}</span>
+            </button>
 
+            <button
+              onClick={week.goToNextWeek}
+              disabled={week.isCurrentWeek}
+              className="p-2 text-zinc-500 active:text-white transition-colors disabled:opacity-30"
+              aria-label="Next week"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+
+          {/* Side toggle pill matching iOS sideTogglePill */}
           <button
-            onClick={week.goToNextWeek}
-            disabled={week.isCurrentWeek}
-            className="p-2 text-zinc-500 active:text-white transition-colors disabled:opacity-30"
-            aria-label="Next week"
+            onClick={toggleSide}
+            className="flex items-center gap-1.5 rounded-full bg-sky-400/10 px-3 py-1.5"
           >
-            <ChevronRight size={18} />
+            <span className="text-xs font-semibold text-sky-400 capitalize">
+              {side}
+            </span>
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-400/50 text-[9px] font-bold text-white">
+              {side === 'left' ? 'L' : 'R'}
+            </span>
           </button>
         </div>
-
-        {/* Side toggle pill matching iOS sideTogglePill */}
-        <button
-          onClick={toggleSide}
-          className="flex items-center gap-1.5 rounded-full bg-sky-400/10 px-3 py-1.5"
-        >
-          <span className="text-xs font-semibold text-sky-400 capitalize">
-            {side}
-          </span>
-          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-400/50 text-[9px] font-bold text-white">
-            {side === 'left' ? 'L' : 'R'}
-          </span>
-        </button>
-      </div>
       )}
 
       {/* Loading state */}
@@ -308,67 +308,75 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
         <>
           {/* Vitals Summary Card — hidden when parent provides its own */}
           {!hideSummary && (
-          <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-            {/* Dual-side comparison header */}
-            {dualSide && (
-              <div className="mb-3 flex items-center justify-center gap-4 text-[10px]">
-                <div className="flex items-center gap-1.5">
-                  <span className="inline-block h-2 w-4 rounded-sm" style={{ backgroundColor: SIDE_COLORS[primarySide].primary }} />
-                  <span className="text-zinc-400">{SIDE_COLORS[primarySide].label} (solid)</span>
+            <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+              {/* Dual-side comparison header */}
+              {dualSide && (
+                <div className="mb-3 flex items-center justify-center gap-4 text-[10px]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-block h-2 w-4 rounded-sm" style={{ backgroundColor: SIDE_COLORS[primarySide].primary }} />
+                    <span className="text-zinc-400">
+                      {SIDE_COLORS[primarySide].label}
+                      {' '}
+                      (solid)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-block h-2 w-4 rounded-sm border border-dashed" style={{ borderColor: SIDE_COLORS[otherSide].primary }} />
+                    <span className="text-zinc-400">
+                      {SIDE_COLORS[otherSide].label}
+                      {' '}
+                      (dashed)
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="inline-block h-2 w-4 rounded-sm border border-dashed" style={{ borderColor: SIDE_COLORS[otherSide].primary }} />
-                  <span className="text-zinc-400">{SIDE_COLORS[otherSide].label} (dashed)</span>
-                </div>
-              </div>
-            )}
+              )}
 
-            <div className="flex items-center justify-around">
-              <SummaryItem
-                icon={<Heart size={14} className="text-red-400" />}
-                value={avg(hrValues)}
-                unit="BPM"
-                secondaryValue={dualSide ? avg(otherHrValues) : undefined}
-              />
-              <SummaryItem
-                icon={<Activity size={14} className="text-sky-400" />}
-                value={avg(hrvValues)}
-                unit="ms"
-                secondaryValue={dualSide ? avg(otherHrvValues) : undefined}
-              />
-              <SummaryItem
-                icon={<Wind size={14} className="text-green-400" />}
-                value={avg(brValues)}
-                unit="BR"
-                secondaryValue={dualSide ? avg(otherBrValues) : undefined}
-              />
+              <div className="flex items-center justify-around">
+                <SummaryItem
+                  icon={<Heart size={14} className="text-red-400" />}
+                  value={avg(hrValues)}
+                  unit="BPM"
+                  secondaryValue={dualSide ? avg(otherHrValues) : undefined}
+                />
+                <SummaryItem
+                  icon={<Activity size={14} className="text-sky-400" />}
+                  value={avg(hrvValues)}
+                  unit="ms"
+                  secondaryValue={dualSide ? avg(otherHrvValues) : undefined}
+                />
+                <SummaryItem
+                  icon={<Wind size={14} className="text-green-400" />}
+                  value={avg(brValues)}
+                  unit="BR"
+                  secondaryValue={dualSide ? avg(otherBrValues) : undefined}
+                />
+              </div>
+
+              {trend && (
+                <div className="mt-2.5 flex items-center justify-center gap-1.5">
+                  {trend.direction === 'up' && (
+                    <span className="text-green-400 text-[10px]">&#x2197;</span>
+                  )}
+                  {trend.direction === 'down' && (
+                    <span className="text-amber-400 text-[10px]">&#x2198;</span>
+                  )}
+                  {trend.direction === 'stable' && (
+                    <span className="text-zinc-500 text-[10px]">=</span>
+                  )}
+                  <span
+                    className={`text-[11px] ${
+                      trend.direction === 'up'
+                        ? 'text-green-400'
+                        : trend.direction === 'down'
+                          ? 'text-amber-400'
+                          : 'text-zinc-500'
+                    }`}
+                  >
+                    {trend.text}
+                  </span>
+                </div>
+              )}
             </div>
-
-            {trend && (
-              <div className="mt-2.5 flex items-center justify-center gap-1.5">
-                {trend.direction === 'up' && (
-                  <span className="text-green-400 text-[10px]">&#x2197;</span>
-                )}
-                {trend.direction === 'down' && (
-                  <span className="text-amber-400 text-[10px]">&#x2198;</span>
-                )}
-                {trend.direction === 'stable' && (
-                  <span className="text-zinc-500 text-[10px]">=</span>
-                )}
-                <span
-                  className={`text-[11px] ${
-                    trend.direction === 'up'
-                      ? 'text-green-400'
-                      : trend.direction === 'down'
-                        ? 'text-amber-400'
-                        : 'text-zinc-500'
-                  }`}
-                >
-                  {trend.text}
-                </span>
-              </div>
-            )}
-          </div>
           )}
 
           {/* Heart Rate Chart Card */}
@@ -383,14 +391,16 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
             average={summary?.avgHeartRate ?? null}
             values={hrValues}
             label={dualSide ? SIDE_COLORS[primarySide].label : undefined}
-            secondary={dualSide ? {
-              data: otherHrData,
-              color: SIDE_COLORS[otherSide].primary,
-              gradientId: 'hr-gradient-other',
-              label: SIDE_COLORS[otherSide].label,
-              average: otherSummary?.avgHeartRate ?? null,
-              values: otherHrValues,
-            } : undefined}
+            secondary={dualSide
+              ? {
+                  data: otherHrData,
+                  color: SIDE_COLORS[otherSide].primary,
+                  gradientId: 'hr-gradient-other',
+                  label: SIDE_COLORS[otherSide].label,
+                  average: otherSummary?.avgHeartRate ?? null,
+                  values: otherHrValues,
+                }
+              : undefined}
           />
 
           {/* HRV Chart Card */}
@@ -405,14 +415,16 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
             average={summary?.avgHRV ?? null}
             values={hrvValues}
             label={dualSide ? SIDE_COLORS[primarySide].label : undefined}
-            secondary={dualSide ? {
-              data: otherHrvData,
-              color: SIDE_COLORS[otherSide].primary,
-              gradientId: 'hrv-gradient-other',
-              label: SIDE_COLORS[otherSide].label,
-              average: otherSummary?.avgHRV ?? null,
-              values: otherHrvValues,
-            } : undefined}
+            secondary={dualSide
+              ? {
+                  data: otherHrvData,
+                  color: SIDE_COLORS[otherSide].primary,
+                  gradientId: 'hrv-gradient-other',
+                  label: SIDE_COLORS[otherSide].label,
+                  average: otherSummary?.avgHRV ?? null,
+                  values: otherHrvValues,
+                }
+              : undefined}
           />
 
           {/* Breathing Rate Chart Card */}
@@ -427,14 +439,16 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
             average={summary?.avgBreathingRate ?? null}
             values={brValues}
             label={dualSide ? SIDE_COLORS[primarySide].label : undefined}
-            secondary={dualSide ? {
-              data: otherBrData,
-              color: SIDE_COLORS[otherSide].primary,
-              gradientId: 'br-gradient-other',
-              label: SIDE_COLORS[otherSide].label,
-              average: otherSummary?.avgBreathingRate ?? null,
-              values: otherBrValues,
-            } : undefined}
+            secondary={dualSide
+              ? {
+                  data: otherBrData,
+                  color: SIDE_COLORS[otherSide].primary,
+                  gradientId: 'br-gradient-other',
+                  label: SIDE_COLORS[otherSide].label,
+                  average: otherSummary?.avgBreathingRate ?? null,
+                  values: otherBrValues,
+                }
+              : undefined}
           />
         </>
       )}
@@ -474,7 +488,10 @@ function SummaryItem({
       <div className="flex items-baseline gap-1">
         <span className="text-lg font-semibold tabular-nums text-white sm:text-xl">{value}</span>
         {secondaryValue && secondaryValue !== '--' && (
-          <span className="text-xs tabular-nums text-zinc-500">/ {secondaryValue}</span>
+          <span className="text-xs tabular-nums text-zinc-500">
+            /
+            {secondaryValue}
+          </span>
         )}
       </div>
       <span className="text-[10px] text-zinc-500">{unit}</span>
@@ -483,7 +500,7 @@ function SummaryItem({
 }
 
 interface SecondarySeriesData {
-  data: { timestamp: Date; value: number }[]
+  data: { timestamp: Date, value: number }[]
   color: string
   gradientId: string
   label: string
@@ -509,8 +526,8 @@ function VitalsChartCard({
   color: string
   gradientId: string
   unit: string
-  data: { timestamp: Date; value: number }[]
-  zones: { label: string; min: number; max: number; color: string }[]
+  data: { timestamp: Date, value: number }[]
+  zones: { label: string, min: number, max: number, color: string }[]
   average: number | null
   values: number[]
   /** Side label shown in dual-side mode (e.g. "Left") */
@@ -544,13 +561,17 @@ function VitalsChartCard({
           {data.length > 0 && (
             <span className="text-xs font-medium" style={{ color }}>
               {label && <span className="text-zinc-500 mr-1">{label}</span>}
-              {Math.round(data[data.length - 1]?.value ?? 0)} {unit}
+              {Math.round(data[data.length - 1]?.value ?? 0)}
+              {' '}
+              {unit}
             </span>
           )}
           {secondary && secondary.data.length > 0 && (
             <span className="text-xs font-medium" style={{ color: secondary.color }}>
               <span className="text-zinc-500 mr-1">{secondary.label}</span>
-              {Math.round(secondary.data[secondary.data.length - 1]?.value ?? 0)} {unit}
+              {Math.round(secondary.data[secondary.data.length - 1]?.value ?? 0)}
+              {' '}
+              {unit}
             </span>
           )}
         </div>
@@ -566,19 +587,26 @@ function VitalsChartCard({
         unit={unit}
         height={180}
         label={label}
-        secondary={secondary && secondary.data.length > 0 ? {
-          data: secondary.data,
-          color: secondary.color,
-          gradientId: secondary.gradientId,
-          label: secondary.label,
-          average: secondary.average,
-        } : undefined}
+        secondary={secondary && secondary.data.length > 0
+          ? {
+              data: secondary.data,
+              color: secondary.color,
+              gradientId: secondary.gradientId,
+              label: secondary.label,
+              average: secondary.average,
+            }
+          : undefined}
       />
 
       {/* Legend: min / avg / max + zone labels */}
       {data.length > 0 && (
         <div className="flex flex-wrap items-center mt-2 gap-x-4 gap-y-1">
-          {label && <span className="text-[9px] font-semibold text-zinc-500">{label}:</span>}
+          {label && (
+            <span className="text-[9px] font-semibold text-zinc-500">
+              {label}
+              :
+            </span>
+          )}
           <LegendValue label="Min" value={minVal} className="text-zinc-500" />
           <LegendValue label="Avg" value={avgVal} color={color} />
           <LegendValue label="Max" value={maxVal} className="text-zinc-500" />
@@ -586,7 +614,10 @@ function VitalsChartCard({
           {/* Secondary legend */}
           {secondary && secondary.values.length > 0 && (
             <>
-              <span className="text-[9px] font-semibold text-zinc-500">{secondary.label}:</span>
+              <span className="text-[9px] font-semibold text-zinc-500">
+                {secondary.label}
+                :
+              </span>
               <LegendValue label="Min" value={secMinVal} className="text-zinc-500" />
               <LegendValue label="Avg" value={secAvgVal} color={secondary.color} />
               <LegendValue label="Max" value={secMaxVal} className="text-zinc-500" />

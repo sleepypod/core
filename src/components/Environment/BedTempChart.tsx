@@ -67,7 +67,7 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
   }
 
   // Compute Y-axis domain with padding
-  const allTemps = chartData.flatMap(d => {
+  const allTemps = chartData.flatMap((d) => {
     const temps: number[] = []
     if (d.left !== null) temps.push(d.left)
     if (d.right !== null) temps.push(d.right)
@@ -113,7 +113,7 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
               fontSize: 12,
               color: '#fff',
             }}
-            labelFormatter={(v) => formatTooltipTime(new Date(v as number))}
+            labelFormatter={v => formatTooltipTime(new Date(v as number))}
             formatter={(value, name) => [
               `${Number(value).toFixed(1)}°${unit}`,
               String(name),

@@ -249,17 +249,24 @@ export function Hypnogram({ blocks, epochs, startTime, endTime }: HypnogramProps
           </span>
           {selectedEpoch.heartRate !== null && (
             <span className="text-zinc-400">
-              {Math.round(selectedEpoch.heartRate)} bpm
+              {Math.round(selectedEpoch.heartRate)}
+              {' '}
+              bpm
             </span>
           )}
           {selectedEpoch.hrv !== null && (
             <span className="text-zinc-400">
-              HRV {Math.round(selectedEpoch.hrv)}ms
+              HRV
+              {' '}
+              {Math.round(selectedEpoch.hrv)}
+              ms
             </span>
           )}
           {selectedEpoch.breathingRate !== null && (
             <span className="text-zinc-400">
-              {Math.round(selectedEpoch.breathingRate)} br/m
+              {Math.round(selectedEpoch.breathingRate)}
+              {' '}
+              br/m
             </span>
           )}
         </div>

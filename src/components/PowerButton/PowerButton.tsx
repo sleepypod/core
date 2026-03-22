@@ -53,7 +53,8 @@ export const PowerButton = () => {
           })
         )
       )
-    } catch {
+    }
+    catch {
       // Refetch to show actual state after partial failure
       utils.device.getStatus.invalidate()
     }

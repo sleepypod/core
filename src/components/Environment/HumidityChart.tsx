@@ -84,8 +84,8 @@ export function HumidityChart({ data }: HumidityChartProps) {
               fontSize: 12,
               color: '#fff',
             }}
-            labelFormatter={(v) => formatTime(new Date(v as number))}
-            formatter={(value) => [`${Number(value).toFixed(1)}%`, 'Humidity']}
+            labelFormatter={v => formatTime(new Date(v as number))}
+            formatter={value => [`${Number(value).toFixed(1)}%`, 'Humidity']}
           />
           <Area
             type="monotone"

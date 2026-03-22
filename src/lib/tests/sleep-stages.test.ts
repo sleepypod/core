@@ -78,8 +78,8 @@ describe('classifySleepStages', () => {
   it('applies temporal smoothing (A-B-A → A-A-A)', () => {
     // Create a sequence where middle epoch is different from neighbors
     const vitals = [
-      vitalRow(0, 60, 40, 14),  // light (ratio ~1.0, hrRatio between 0.92-0.95 → light)
-      vitalRow(5, 60, 40, 14),  // light
+      vitalRow(0, 60, 40, 14), // light (ratio ~1.0, hrRatio between 0.92-0.95 → light)
+      vitalRow(5, 60, 40, 14), // light
       vitalRow(10, 60, 40, 14), // light
     ]
     // Set movement to force middle to wake, but smoothing should fix it

@@ -6,7 +6,7 @@ import type { DayOfWeek } from './DaySelector'
 import { Calendar, Check } from 'lucide-react'
 import clsx from 'clsx'
 
-const DAYS_OF_WEEK: { key: DayOfWeek; label: string }[] = [
+const DAYS_OF_WEEK: { key: DayOfWeek, label: string }[] = [
   { key: 'sunday', label: 'Sun' },
   { key: 'monday', label: 'Mon' },
   { key: 'tuesday', label: 'Tue' },
@@ -64,7 +64,7 @@ export function ScheduleWeekOverview({
         <h3 className="text-sm font-medium text-zinc-400">Week Overview</h3>
       </div>
       <div className="flex justify-between gap-0.5 sm:gap-1">
-        {DAYS_OF_WEEK.map(day => {
+        {DAYS_OF_WEEK.map((day) => {
           const hasSchedule = daysWithSchedules.has(day.key)
           const isSelected = selectedDay === day.key
           return (
@@ -84,16 +84,18 @@ export function ScheduleWeekOverview({
               >
                 {day.label}
               </span>
-              {hasSchedule ? (
-                <Check
-                  size={12}
-                  className={clsx(
-                    isSelected ? 'text-sky-400' : 'text-emerald-500'
+              {hasSchedule
+                ? (
+                    <Check
+                      size={12}
+                      className={clsx(
+                        isSelected ? 'text-sky-400' : 'text-emerald-500'
+                      )}
+                    />
+                  )
+                : (
+                    <div className="h-3 w-3 rounded-full border border-zinc-700" />
                   )}
-                />
-              ) : (
-                <div className="h-3 w-3 rounded-full border border-zinc-700" />
-              )}
             </button>
           )
         })}

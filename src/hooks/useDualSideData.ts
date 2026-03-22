@@ -60,7 +60,7 @@ export interface SleepStageDistribution {
 
 export interface LabeledSleepStages {
   side: Side
-  epochs: Array<{ timestamp: number; stage: string; duration: number }>
+  epochs: Array<{ timestamp: number, stage: string, duration: number }>
   blocks: SleepStageBlock[]
   distribution: SleepStageDistribution
   qualityScore: number
@@ -330,8 +330,8 @@ export function groupBySide<T extends { side: Side }>(data: T[]): Record<Side, T
  */
 export function getSideColor(side: Side, variant: 'primary' | 'muted' = 'primary'): string {
   const colors = {
-    left: { primary: '#38bdf8', muted: '#38bdf833' },   // sky-400 / sky-400/20
-    right: { primary: '#a78bfa', muted: '#a78bfa33' },  // violet-400 / violet-400/20
+    left: { primary: '#38bdf8', muted: '#38bdf833' }, // sky-400 / sky-400/20
+    right: { primary: '#a78bfa', muted: '#a78bfa33' }, // violet-400 / violet-400/20
   }
   return colors[side][variant]
 }

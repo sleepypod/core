@@ -57,7 +57,8 @@ export function EnvironmentCard() {
   // Merge live + tRPC data: live WebSocket takes priority, tRPC as fallback.
   // formatHumidity returns '--' for missing values (truthy), so use nullish check.
   const liveHumidity = formatHumidity(liveFrame?.humidity)
-  const leftHumidity = liveHumidity !== '--' ? liveHumidity
+  const leftHumidity = liveHumidity !== '--'
+    ? liveHumidity
     : formatHumidityFromTRPC(latestBedTemp.data?.humidity)
   const leftAmbient = (liveFrame?.ambientTemp != null ? formatTemp(liveFrame.ambientTemp) : null)
     ?? (latestBedTemp.data?.ambientTemp != null ? formatConverted(latestBedTemp.data.ambientTemp) : '--')
@@ -81,7 +82,10 @@ export function EnvironmentCard() {
         </h3>
         {latestBedTemp.data?.timestamp && !liveFrame && (
           <span className="text-[8px] text-zinc-600">
-            (stored {formatRelativeTime(latestBedTemp.data.timestamp)})
+            (stored
+            {' '}
+            {formatRelativeTime(latestBedTemp.data.timestamp)}
+            )
           </span>
         )}
       </div>
@@ -183,7 +187,7 @@ function EnvItem({
   )
 }
 
-function SummaryItem({ label, value }: { label: string; value: string }) {
+function SummaryItem({ label, value }: { label: string, value: string }) {
   return (
     <div className="flex flex-col items-center rounded-md bg-zinc-800/50 px-1.5 py-1">
       <span className="text-[7px] text-zinc-600">{label}</span>

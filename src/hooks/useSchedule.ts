@@ -159,7 +159,8 @@ export function useSchedule() {
             enabled: newEnabled,
           })
         }
-      } else if (newEnabled) {
+      }
+      else if (newEnabled) {
         // Create a default power schedule when enabling a day that has none
         await createPowerSchedule.mutateAsync({
           side,
@@ -216,7 +217,8 @@ export function useSchedule() {
             enabled: newEnabled,
           })
         }
-      } else if (newEnabled) {
+      }
+      else if (newEnabled) {
         await createPowerSchedule.mutateAsync({
           side,
           dayOfWeek: day,
@@ -346,11 +348,13 @@ export function useSchedule() {
           `Schedule applied to ${targetDays.length} day${targetDays.length > 1 ? 's' : ''}. Scheduler reloaded.`
         )
         confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 4000)
-      } catch (error) {
+      }
+      catch (error) {
         console.error('Failed to apply schedule to other days:', error)
         setConfirmMessage('Failed to apply schedule. Please try again.')
         confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 4000)
-      } finally {
+      }
+      finally {
         setIsApplying(false)
       }
     },
@@ -379,8 +383,8 @@ export function useSchedule() {
     // Schedule data
     daySchedule,
     allSchedules: allSchedulesQuery.data as
-      | { temperature: TemperatureSchedule[]; power: PowerSchedule[]; alarm: AlarmSchedule[] }
-      | undefined,
+    | { temperature: TemperatureSchedule[], power: PowerSchedule[], alarm: AlarmSchedule[] }
+    | undefined,
     isPowerEnabled,
     hasScheduleData,
 

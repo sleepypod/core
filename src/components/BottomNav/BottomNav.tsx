@@ -39,7 +39,7 @@ export const BottomNav = () => {
   return (
     <nav className="pb-safe fixed inset-x-0 bottom-0 border-t border-zinc-900 bg-black/90 px-2 py-2 sm:px-4 sm:py-3">
       <div className="mx-auto flex max-w-md justify-between">
-        {tabs.map(tab => {
+        {tabs.map((tab) => {
           const isActive = getIsActive(tab.href)
           return (
             <Link

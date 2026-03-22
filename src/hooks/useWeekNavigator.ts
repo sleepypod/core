@@ -35,7 +35,7 @@ export function useWeekNavigator() {
   const isCurrentWeek = getWeekStart(new Date()).getTime() === weekStart.getTime()
 
   const goToPreviousWeek = useCallback(() => {
-    setWeekStart(prev => {
+    setWeekStart((prev) => {
       const d = new Date(prev)
       d.setDate(d.getDate() - 7)
       return d
@@ -43,7 +43,7 @@ export function useWeekNavigator() {
   }, [])
 
   const goToNextWeek = useCallback(() => {
-    setWeekStart(prev => {
+    setWeekStart((prev) => {
       const next = new Date(prev)
       next.setDate(next.getDate() + 7)
       const currentWeekStart = getWeekStart(new Date())

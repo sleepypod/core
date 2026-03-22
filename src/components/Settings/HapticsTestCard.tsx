@@ -78,7 +78,11 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
             <h3 className="text-sm font-medium text-white">Test Vibration Patterns</h3>
           </div>
           <p className="mt-1 text-xs text-zinc-500">
-            Test vibration patterns on the {side} side
+            Test vibration patterns on the
+            {' '}
+            {side}
+            {' '}
+            side
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -107,7 +111,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
 
       {/* Sample patterns */}
       <div className="space-y-1.5">
-        {VIBRATION_PRESETS.map((p) => (
+        {VIBRATION_PRESETS.map(p => (
           <div
             key={p.name}
             className="flex min-h-[44px] items-center gap-3 rounded-xl bg-zinc-800/60 px-3 py-2.5"
@@ -117,7 +121,11 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium text-zinc-200">{p.name}</span>
                 <span className="text-[9px] text-zinc-600">
-                  {p.pattern} &middot; {p.duration}s
+                  {p.pattern}
+                  {' '}
+                  &middot;
+                  {p.duration}
+                  s
                 </span>
               </div>
               <p className="text-[10px] text-zinc-500 truncate">{p.description}</p>
@@ -130,7 +138,8 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
                   />
                 </div>
                 <span className={clsx('text-[9px] font-medium tabular-nums', intensityTextColor(p.intensity))}>
-                  {p.intensity}%
+                  {p.intensity}
+                  %
                 </span>
               </div>
             </div>
@@ -171,7 +180,8 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
               <div className="mb-1 flex items-center justify-between">
                 <span className="text-xs font-medium text-zinc-400">Intensity</span>
                 <span className={clsx('text-xs font-medium', intensityTextColor(customIntensity))}>
-                  {customIntensity}%
+                  {customIntensity}
+                  %
                 </span>
               </div>
               <div className="relative">
@@ -187,7 +197,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
                   max={100}
                   step={1}
                   value={customIntensity}
-                  onChange={(e) => setCustomIntensity(parseInt(e.target.value, 10))}
+                  onChange={e => setCustomIntensity(parseInt(e.target.value, 10))}
                   className="relative z-10 h-1.5 w-full cursor-pointer appearance-none bg-transparent [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow"
                 />
               </div>
@@ -201,7 +211,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
             <div>
               <span className="mb-1.5 block text-xs font-medium text-zinc-400">Pattern</span>
               <div className="grid grid-cols-2 gap-2">
-                {(['double', 'rise'] as const).map((pat) => (
+                {(['double', 'rise'] as const).map(pat => (
                   <button
                     key={pat}
                     onClick={() => setCustomPattern(pat)}
@@ -222,7 +232,10 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
             <div>
               <div className="mb-1 flex items-center justify-between">
                 <span className="text-xs font-medium text-zinc-400">Duration</span>
-                <span className="text-xs font-medium text-white">{customDuration}s</span>
+                <span className="text-xs font-medium text-white">
+                  {customDuration}
+                  s
+                </span>
               </div>
               <input
                 type="range"
@@ -230,7 +243,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
                 max={60}
                 step={1}
                 value={customDuration}
-                onChange={(e) => setCustomDuration(parseInt(e.target.value, 10))}
+                onChange={e => setCustomDuration(parseInt(e.target.value, 10))}
                 className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
               />
               <div className="flex justify-between text-[10px] text-zinc-600">

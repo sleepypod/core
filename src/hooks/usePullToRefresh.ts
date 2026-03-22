@@ -101,10 +101,12 @@ export function usePullToRefresh({ onRefresh, enabled = true }: PullToRefreshOpt
 
       try {
         await onRefresh()
-      } finally {
+      }
+      finally {
         setState({ isRefreshing: false, pullDistance: 0, isPastThreshold: false })
       }
-    } else {
+    }
+    else {
       setState({ isRefreshing: false, pullDistance: 0, isPastThreshold: false })
     }
   }, [state.isPastThreshold, state.isRefreshing, onRefresh])

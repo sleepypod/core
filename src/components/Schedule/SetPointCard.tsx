@@ -15,7 +15,7 @@ const ICON_MAP: Record<PhaseIcon, typeof Moon> = {
  * Get temperature color based on offset from neutral (80°F).
  * Cool = blue, Neutral = zinc, Warm = amber/orange.
  */
-function getTempColor(temp: number): { text: string; border: string; bg: string } {
+function getTempColor(temp: number): { text: string, border: string, bg: string } {
   if (temp <= 68) return { text: 'text-sky-400', border: 'border-sky-500/20', bg: 'bg-sky-500/10' }
   if (temp <= 74) return { text: 'text-sky-300', border: 'border-sky-400/20', bg: 'bg-sky-400/10' }
   if (temp <= 80) return { text: 'text-zinc-400', border: 'border-zinc-600/30', bg: 'bg-zinc-700/20' }
@@ -74,7 +74,7 @@ export function SetPointCard({
       </span>
 
       {/* Temperature controls */}
-      <div className="flex items-center gap-0" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-0" onClick={e => e.stopPropagation()}>
         <button
           onClick={() => onAdjustTemp(phase.id, -2)}
           disabled={phase.temperature <= 55}
@@ -87,7 +87,8 @@ export function SetPointCard({
         </button>
 
         <span className={clsx('min-w-[36px] text-center text-sm font-bold tabular-nums', color.text)}>
-          {phase.temperature}°
+          {phase.temperature}
+          °
         </span>
 
         <button
@@ -138,7 +139,7 @@ export function SetPointList({
   return (
     <div className="group -mx-1 overflow-x-auto scrollbar-none">
       <div className="flex gap-2.5 px-1 py-1">
-        {phases.map((phase) => (
+        {phases.map(phase => (
           <SetPointCard
             key={phase.id}
             phase={phase}

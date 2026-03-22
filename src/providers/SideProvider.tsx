@@ -111,13 +111,13 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
     })
   }, [])
 
-  const activeSides: Side[] =
-    selectedSide === 'both'
+  const activeSides: Side[]
+    = selectedSide === 'both'
       ? ['left', 'right']
       : [selectedSide]
 
-  const primarySide: Side =
-    selectedSide === 'right' ? 'right' : 'left'
+  const primarySide: Side
+    = selectedSide === 'right' ? 'right' : 'left'
 
   return (
     <SideContext.Provider
@@ -131,9 +131,11 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
       }}
     >
       {/* Suppress side-dependent UI flash during hydration */}
-      {hydrated ? children : (
-        <div style={{ visibility: 'hidden' }}>{children}</div>
-      )}
+      {hydrated
+        ? children
+        : (
+            <div style={{ visibility: 'hidden' }}>{children}</div>
+          )}
     </SideContext.Provider>
   )
 }

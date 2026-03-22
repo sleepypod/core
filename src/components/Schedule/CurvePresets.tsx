@@ -97,7 +97,7 @@ interface CurvePresetsProps {
   }) => void
   /** Called after applying an AI-generated curve, with raw set points for chart display */
   onAICurveApplied?: (config: {
-    setPoints: Array<{ time: string; tempF: number }>
+    setPoints: Array<{ time: string, tempF: number }>
     bedtime: string
     wakeTime: string
   }) => void
@@ -185,9 +185,11 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied, onAIC
 
       setApplied(preset.id)
       setTimeout(() => setApplied(null), 2000)
-    } catch (err) {
+    }
+    catch (err) {
       console.error('Failed to apply preset:', err)
-    } finally {
+    }
+    finally {
       setApplying(null)
     }
   }, [
@@ -207,7 +209,7 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied, onAIC
         Sleep Profiles
       </div>
       <div className="grid grid-cols-4 gap-2">
-        {PRESETS.map(preset => {
+        {PRESETS.map((preset) => {
           const isApplying = applying === preset.id
           const isApplied = applied === preset.id
           const Icon = preset.icon
@@ -228,13 +230,17 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied, onAIC
                 applying !== null && !isApplying && 'opacity-50',
               )}
             >
-              {isApplying ? (
-                <Loader2 size={18} className="animate-spin" />
-              ) : isApplied ? (
-                <Check size={18} />
-              ) : (
-                <Icon size={18} />
-              )}
+              {isApplying
+                ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  )
+                : isApplied
+                  ? (
+                      <Check size={18} />
+                    )
+                  : (
+                      <Icon size={18} />
+                    )}
               <span className="text-[11px] font-semibold leading-tight">{preset.label}</span>
               <span className="text-[9px] leading-tight opacity-70">{preset.subtitle}</span>
             </button>

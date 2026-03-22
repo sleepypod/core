@@ -14,7 +14,7 @@ function trendIcon(direction: string) {
  * Water level + priming modal. Opens from the HealthCircle water status chip.
  * Contains: current level, 24h trend, 7-day chart, alerts, and prime controls.
  */
-export function WaterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function WaterModal({ open, onClose }: { open: boolean, onClose: () => void }) {
   const utils = trpc.useUtils()
   const [showPrimeConfirm, setShowPrimeConfirm] = useState(false)
 
@@ -87,39 +87,43 @@ export function WaterModal({ open, onClose }: { open: boolean; onClose: () => vo
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto px-4 pb-8 space-y-4">
           {/* Current level */}
-          {isLoading ? (
-            <div className="flex h-16 items-center justify-center">
-              <Loader2 size={18} className="animate-spin text-zinc-600" />
-            </div>
-          ) : latest ? (
-            <div className="flex items-end gap-3">
-              <div>
-                <p className="text-3xl font-bold tabular-nums text-white">
-                  {typeof latest.levelPercent === 'number'
-                    ? `${Math.round(latest.levelPercent)}%`
-                    : '--'}
-                </p>
-                <p className="text-[11px] text-zinc-500">
-                  {new Date(latest.timestamp).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </p>
-              </div>
-              {trend && (
-                <div className="mb-1.5 flex items-center gap-1.5">
-                  {trendIcon(trend.direction)}
-                  <span className="text-xs text-zinc-500">
-                    {trend.direction !== 'stable'
-                      ? `${(trend.changePercent ?? 0) > 0 ? '+' : ''}${(trend.changePercent ?? 0).toFixed(1)}% / 24h`
-                      : 'Stable'}
-                  </span>
+          {isLoading
+            ? (
+                <div className="flex h-16 items-center justify-center">
+                  <Loader2 size={18} className="animate-spin text-zinc-600" />
                 </div>
-              )}
-            </div>
-          ) : (
-            <p className="text-xs text-zinc-600">No water level data</p>
-          )}
+              )
+            : latest
+              ? (
+                  <div className="flex items-end gap-3">
+                    <div>
+                      <p className="text-3xl font-bold tabular-nums text-white">
+                        {typeof latest.levelPercent === 'number'
+                          ? `${Math.round(latest.levelPercent)}%`
+                          : '--'}
+                      </p>
+                      <p className="text-[11px] text-zinc-500">
+                        {new Date(latest.timestamp).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </p>
+                    </div>
+                    {trend && (
+                      <div className="mb-1.5 flex items-center gap-1.5">
+                        {trendIcon(trend.direction)}
+                        <span className="text-xs text-zinc-500">
+                          {trend.direction !== 'stable'
+                            ? `${(trend.changePercent ?? 0) > 0 ? '+' : ''}${(trend.changePercent ?? 0).toFixed(1)}% / 24h`
+                            : 'Stable'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )
+              : (
+                  <p className="text-xs text-zinc-600">No water level data</p>
+                )}
 
           {/* 7-day chart */}
           <WaterLevelChart history={history} />
@@ -127,7 +131,7 @@ export function WaterModal({ open, onClose }: { open: boolean; onClose: () => vo
           {/* Active alerts */}
           {activeAlerts.length > 0 && (
             <div className="space-y-1.5">
-              {activeAlerts.map((alert: { id: number; alertType: string; message: string }) => (
+              {activeAlerts.map((alert: { id: number, alertType: string, message: string }) => (
                 <div key={alert.id} className="flex items-center gap-2 rounded-lg bg-amber-900/20 px-3 py-2">
                   <AlertTriangle size={12} className="shrink-0 text-amber-400" />
                   <span className="flex-1 text-[11px] text-amber-300">{alert.message}</span>
@@ -144,41 +148,45 @@ export function WaterModal({ open, onClose }: { open: boolean; onClose: () => vo
           )}
 
           {/* Prime controls */}
-          {!showPrimeConfirm ? (
-            <button
-              onClick={() => setShowPrimeConfirm(true)}
-              className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl border border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800"
-            >
-              <Play size={16} />
-              Start Prime
-            </button>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-xs text-amber-400">
-                Priming circulates water through the system. This takes ~5 minutes.
-              </p>
-              <div className="flex gap-2">
+          {!showPrimeConfirm
+            ? (
                 <button
-                  onClick={handleStartPrime}
-                  disabled={startPrimeMutation.isPending}
-                  className="flex flex-1 min-h-[44px] items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-medium text-white active:bg-sky-700 disabled:opacity-50"
+                  onClick={() => setShowPrimeConfirm(true)}
+                  className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl border border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800"
                 >
-                  {startPrimeMutation.isPending ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Play size={14} />
-                  )}
-                  Confirm Prime
+                  <Play size={16} />
+                  Start Prime
                 </button>
-                <button
-                  onClick={() => setShowPrimeConfirm(false)}
-                  className="rounded-xl border border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-400 active:bg-zinc-800"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
+              )
+            : (
+                <div className="space-y-2">
+                  <p className="text-xs text-amber-400">
+                    Priming circulates water through the system. This takes ~5 minutes.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleStartPrime}
+                      disabled={startPrimeMutation.isPending}
+                      className="flex flex-1 min-h-[44px] items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-medium text-white active:bg-sky-700 disabled:opacity-50"
+                    >
+                      {startPrimeMutation.isPending
+                        ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          )
+                        : (
+                            <Play size={14} />
+                          )}
+                      Confirm Prime
+                    </button>
+                    <button
+                      onClick={() => setShowPrimeConfirm(false)}
+                      className="rounded-xl border border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-400 active:bg-zinc-800"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
 
           {startPrimeMutation.isError && (
             <p className="text-[10px] text-red-400">
@@ -191,7 +199,7 @@ export function WaterModal({ open, onClose }: { open: boolean; onClose: () => vo
   )
 }
 
-function WaterLevelChart({ history }: { history?: { timestamp: Date; level: string }[] }) {
+function WaterLevelChart({ history }: { history?: { timestamp: Date, level: string }[] }) {
   const points = useMemo(() => {
     if (!history || history.length < 2) return null
     const sorted = [...history].reverse()
@@ -225,7 +233,7 @@ function WaterLevelChart({ history }: { history?: { timestamp: Date; level: stri
   const color = lastLevel <= 30 ? '#f87171' : lastLevel <= 50 ? '#fbbf24' : '#38bdf8'
 
   const dayLabels = useMemo(() => {
-    const labels: { x: number; label: string }[] = []
+    const labels: { x: number, label: string }[] = []
     const seen = new Set<string>()
     for (const p of points) {
       const d = new Date(p.ts)

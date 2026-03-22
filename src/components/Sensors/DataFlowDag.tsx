@@ -20,7 +20,7 @@ interface NodeRate {
   perType: Record<string, number>
 }
 
-const TYPE_GROUPS: Record<string, { label: string; color: string; types: string[] }> = {
+const TYPE_GROUPS: Record<string, { label: string, color: string, types: string[] }> = {
   piezo: { label: 'Piezo BCG', color: '#a78bfa', types: ['piezo-dual'] },
   presence: { label: 'Presence', color: '#4ade80', types: ['capSense', 'capSense2'] },
   bedTemp: { label: 'Bed Temp', color: '#fb923c', types: ['bedTemp', 'bedTemp2'] },
@@ -39,7 +39,7 @@ function formatRate(count: number, windowSec: number): string {
 export function DataFlowDag() {
   const wsStatus = useSensorStreamStatus()
   const countsRef = useRef<Record<string, number>>({})
-  const windowRef = useRef<{ type: string; ts: number }[]>([])
+  const windowRef = useRef<{ type: string, ts: number }[]>([])
   const [rates, setRates] = useState<NodeRate>({ total: 0, perType: {} })
 
   const RATE_WINDOW_MS = 10_000
@@ -71,7 +71,11 @@ export function DataFlowDag() {
     <div>
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-medium text-zinc-300">Data Flow</span>
-        <span className="text-[9px] tabular-nums text-zinc-600">{totalRate} total</span>
+        <span className="text-[9px] tabular-nums text-zinc-600">
+          {totalRate}
+          {' '}
+          total
+        </span>
       </div>
 
       {/* Pipeline visualization */}

@@ -73,13 +73,15 @@ export function DaySelector({
         const first = DAYS.find(d => next.has(d.key))
         if (first) onActiveDayChange(first.key)
       }
-    } else if (!isSelected) {
+    }
+    else if (!isSelected) {
       // Add to selection and make primary
       const next = new Set(selectedDays)
       next.add(day)
       onSelectedDaysChange(next)
       onActiveDayChange(day)
-    } else {
+    }
+    else {
       // Sole selected day — just ensure it's primary
       onActiveDayChange(day)
     }

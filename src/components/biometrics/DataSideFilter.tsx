@@ -6,7 +6,7 @@ import { useSide, type SideSelection } from '@/src/providers/SideProvider'
 
 type DataFilter = 'both' | 'left' | 'right'
 
-const FILTERS: { value: DataFilter; label: string; icon?: typeof Users }[] = [
+const FILTERS: { value: DataFilter, label: string, icon?: typeof Users }[] = [
   { value: 'both', label: 'Both', icon: Users },
   { value: 'left', label: 'Left', icon: User },
   { value: 'right', label: 'Right', icon: User },

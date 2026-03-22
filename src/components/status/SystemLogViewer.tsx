@@ -85,18 +85,20 @@ export function SystemLogViewer() {
           <Terminal size={16} className="text-zinc-400" />
           <span className="text-sm font-medium text-white">System Logs</span>
         </div>
-        {isExpanded ? (
-          <ChevronUp size={16} className="text-zinc-500" />
-        ) : (
-          <ChevronDown size={16} className="text-zinc-500" />
-        )}
+        {isExpanded
+          ? (
+              <ChevronUp size={16} className="text-zinc-500" />
+            )
+          : (
+              <ChevronDown size={16} className="text-zinc-500" />
+            )}
       </button>
 
       {isExpanded && (
         <div className="border-t border-zinc-800 px-3 pb-3 pt-2 space-y-2 sm:px-4 sm:pb-4 sm:pt-3 sm:space-y-3">
           {/* Service selector */}
           <div className="no-scrollbar -mx-1 flex gap-1.5 overflow-x-auto px-1">
-            {(sources?.sources ?? []).map((src: { name: string; unit: string; active: boolean }) => (
+            {(sources?.sources ?? []).map((src: { name: string, unit: string, active: boolean }) => (
               <button
                 key={src.unit}
                 onClick={() => setSelectedUnit(src.unit)}
@@ -136,11 +138,13 @@ export function SystemLogViewer() {
               disabled={logsLoading}
               className="ml-auto rounded-md p-1 text-zinc-500 active:bg-zinc-800"
             >
-              {logsLoading ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : (
-                <RefreshCw size={12} />
-              )}
+              {logsLoading
+                ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  )
+                : (
+                    <RefreshCw size={12} />
+                  )}
             </button>
           </div>
 

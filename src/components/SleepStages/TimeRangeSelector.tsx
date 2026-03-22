@@ -9,7 +9,7 @@ interface TimeRangeSelectorProps {
   onChange: (range: TimeRange) => void
 }
 
-const ranges: { id: TimeRange; label: string }[] = [
+const ranges: { id: TimeRange, label: string }[] = [
   { id: 'night', label: 'Night' },
   { id: 'week', label: 'Week' },
   { id: 'month', label: 'Month' },

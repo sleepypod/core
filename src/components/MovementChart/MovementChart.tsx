@@ -59,7 +59,7 @@ function computeStats(records: MovementRecord[], sleepDurationSeconds?: number) 
 function toChartData(records: MovementRecord[]): ChartDataPoint[] {
   return [...records]
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-    .map(record => {
+    .map((record) => {
       const date = new Date(record.timestamp)
       return {
         time: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
@@ -91,7 +91,8 @@ function mergeDualSideData(
     const existing = map.get(key)
     if (existing) {
       existing.movement += r.totalMovement
-    } else {
+    }
+    else {
       const date = new Date(key)
       map.set(key, {
         time: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
@@ -107,7 +108,8 @@ function mergeDualSideData(
     const existing = map.get(key)
     if (existing) {
       existing.movementOther = (existing.movementOther ?? 0) + r.totalMovement
-    } else {
+    }
+    else {
       const date = new Date(key)
       map.set(key, {
         time: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
@@ -125,18 +127,21 @@ function mergeDualSideData(
  * Custom tooltip for the movement bar chart.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function MovementTooltip({ active, payload, dualSide }: { active?: boolean; payload?: any[]; dualSide?: boolean }) {
+function MovementTooltip({ active, payload, dualSide }: { active?: boolean, payload?: any[], dualSide?: boolean }) {
   if (!active || !payload?.[0]) return null
   const data = payload[0].payload as ChartDataPoint
   return (
     <div className="rounded-lg bg-zinc-800 px-3 py-2 text-xs shadow-lg ring-1 ring-white/10">
       <p className="text-zinc-400">{data.time}</p>
       <p className="font-semibold text-amber-400">
-        {dualSide ? 'Left: ' : 'Movement: '}{data.movement}
+        {dualSide ? 'Left: ' : 'Movement: '}
+        {data.movement}
       </p>
       {dualSide && data.movementOther != null && (
         <p className="font-semibold text-teal-400">
-          Right: {data.movementOther}
+          Right:
+          {' '}
+          {data.movementOther}
         </p>
       )}
     </div>
@@ -242,8 +247,8 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
     return Math.floor(chartData.length / 5) - 1
   }, [chartData.length])
 
-  const restlessnessColor =
-    stats.restlessnessLevel === 'High'
+  const restlessnessColor
+    = stats.restlessnessLevel === 'High'
       ? 'text-red-400'
       : stats.restlessnessLevel === 'Medium'
         ? 'text-amber-400'
@@ -271,7 +276,11 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
               </CardTitle>
             </div>
             <span className="text-xs text-amber-400">
-              Restless: {stats.restlessMinutes} min
+              Restless:
+              {' '}
+              {stats.restlessMinutes}
+              {' '}
+              min
             </span>
           </div>
         </CardHeader>
@@ -312,66 +321,72 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
           )}
 
           {/* Bar chart */}
-          {movementLoading ? (
-            <div className="flex h-[140px] items-center justify-center">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-600 border-t-amber-400" />
-            </div>
-          ) : movementError ? (
-            <div className="flex h-[140px] items-center justify-center">
-              <p className="text-sm text-red-400">Failed to load movement data</p>
-            </div>
-          ) : chartData.length === 0 ? (
-            <div className="flex h-[140px] items-center justify-center">
-              <p className="text-sm text-zinc-500">No movement data available</p>
-            </div>
-          ) : (
-            <div className="h-[140px] w-full">
-              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                <BarChart
-                  data={chartData}
-                  margin={{ top: 4, right: 4, bottom: 0, left: -20 }}
-                  barCategoryGap="15%"
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="rgba(255,255,255,0.06)"
-                    vertical={false}
-                  />
-                  <XAxis
-                    dataKey="time"
-                    tick={{ fontSize: 10, fill: '#71717a' }}
-                    tickLine={false}
-                    axisLine={false}
-                    interval={tickInterval}
-                  />
-                  <YAxis
-                    tick={{ fontSize: 10, fill: '#71717a' }}
-                    tickLine={false}
-                    axisLine={false}
-                    width={36}
-                  />
-                  <Tooltip
-                    content={<MovementTooltip dualSide={dualSide} />}
-                    cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-                  />
-                  <Bar
-                    dataKey="movement"
-                    fill="#f59e0b"
-                    radius={[2, 2, 0, 0]}
-                    maxBarSize={dualSide ? 8 : 12}
-                  />
-                  {dualSide && (
-                    <Bar
-                      dataKey="movementOther"
-                      fill="#2dd4bf"
-                      radius={[2, 2, 0, 0]}
-                      maxBarSize={8}
-                    />
+          {movementLoading
+            ? (
+                <div className="flex h-[140px] items-center justify-center">
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-600 border-t-amber-400" />
+                </div>
+              )
+            : movementError
+              ? (
+                  <div className="flex h-[140px] items-center justify-center">
+                    <p className="text-sm text-red-400">Failed to load movement data</p>
+                  </div>
+                )
+              : chartData.length === 0
+                ? (
+                    <div className="flex h-[140px] items-center justify-center">
+                      <p className="text-sm text-zinc-500">No movement data available</p>
+                    </div>
+                  )
+                : (
+                    <div className="h-[140px] w-full">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                        <BarChart
+                          data={chartData}
+                          margin={{ top: 4, right: 4, bottom: 0, left: -20 }}
+                          barCategoryGap="15%"
+                        >
+                          <CartesianGrid
+                            strokeDasharray="3 3"
+                            stroke="rgba(255,255,255,0.06)"
+                            vertical={false}
+                          />
+                          <XAxis
+                            dataKey="time"
+                            tick={{ fontSize: 10, fill: '#71717a' }}
+                            tickLine={false}
+                            axisLine={false}
+                            interval={tickInterval}
+                          />
+                          <YAxis
+                            tick={{ fontSize: 10, fill: '#71717a' }}
+                            tickLine={false}
+                            axisLine={false}
+                            width={36}
+                          />
+                          <Tooltip
+                            content={<MovementTooltip dualSide={dualSide} />}
+                            cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                          />
+                          <Bar
+                            dataKey="movement"
+                            fill="#f59e0b"
+                            radius={[2, 2, 0, 0]}
+                            maxBarSize={dualSide ? 8 : 12}
+                          />
+                          {dualSide && (
+                            <Bar
+                              dataKey="movementOther"
+                              fill="#2dd4bf"
+                              radius={[2, 2, 0, 0]}
+                              maxBarSize={8}
+                            />
+                          )}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
                   )}
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
         </CardContent>
       </Card>
     </div>
@@ -397,7 +412,10 @@ function StatItem({
       <div className="flex items-baseline gap-1">
         <span className={`text-base font-semibold sm:text-lg ${valueClassName}`}>{value}</span>
         {secondaryValue && (
-          <span className="text-xs text-zinc-500">/ {secondaryValue}</span>
+          <span className="text-xs text-zinc-500">
+            /
+            {secondaryValue}
+          </span>
         )}
       </div>
       <span className="text-[10px] text-zinc-500">{label}</span>

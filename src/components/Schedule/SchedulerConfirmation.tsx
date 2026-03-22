@@ -34,13 +34,17 @@ export function SchedulerConfirmation({
       role="status"
       aria-live="polite"
     >
-      {isLoading ? (
-        <Loader2 size={16} className="animate-spin" />
-      ) : variant === 'error' ? (
-        <AlertCircle size={16} />
-      ) : (
-        <CheckCircle size={16} />
-      )}
+      {isLoading
+        ? (
+            <Loader2 size={16} className="animate-spin" />
+          )
+        : variant === 'error'
+          ? (
+              <AlertCircle size={16} />
+            )
+          : (
+              <CheckCircle size={16} />
+            )}
       <span>{isLoading ? 'Updating scheduler...' : message}</span>
     </div>
   )

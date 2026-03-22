@@ -4,13 +4,13 @@
  */
 
 /** Sleep phase identifiers for the temperature curve */
-export type Phase =
-  | 'warmUp'     // Wind Down — gentle warming before bed
-  | 'coolDown'   // Fall Asleep — gradual cooling
-  | 'deepSleep'  // Deep Sleep — coldest hold
-  | 'maintain'   // Maintain — slight rise from deep
-  | 'preWake'    // Pre-Wake — warming toward wake
-  | 'wake'       // Wake — return to neutral
+export type Phase
+  = | 'warmUp' // Wind Down — gentle warming before bed
+    | 'coolDown' // Fall Asleep — gradual cooling
+    | 'deepSleep' // Deep Sleep — coldest hold
+    | 'maintain' // Maintain — slight rise from deep
+    | 'preWake' // Pre-Wake — warming toward wake
+    | 'wake' // Wake — return to neutral
 
 /** Display labels for each phase */
 export const phaseLabels: Record<Phase, string> = {
@@ -24,12 +24,12 @@ export const phaseLabels: Record<Phase, string> = {
 
 /** Phase color mapping for chart visualization */
 export const phaseColors: Record<Phase, string> = {
-  warmUp: '#f59e0b',    // amber
-  coolDown: '#6366f1',   // indigo
-  deepSleep: '#2563eb',  // blue
-  maintain: '#8b5cf6',   // violet
-  preWake: '#f97316',    // orange
-  wake: '#eab308',       // yellow
+  warmUp: '#f59e0b', // amber
+  coolDown: '#6366f1', // indigo
+  deepSleep: '#2563eb', // blue
+  maintain: '#8b5cf6', // violet
+  preWake: '#f97316', // orange
+  wake: '#eab308', // yellow
 }
 
 /** A single point on the temperature curve */
@@ -46,7 +46,7 @@ export interface CurvePoint {
 export type CoolingIntensity = 'cool' | 'balanced' | 'warm'
 
 /** Display metadata for cooling intensity */
-export const coolingIntensityMeta: Record<CoolingIntensity, { label: string; description: string }> = {
+export const coolingIntensityMeta: Record<CoolingIntensity, { label: string, description: string }> = {
   cool: { label: 'Cool', description: 'Extra cooling for hot sleepers' },
   balanced: { label: 'Balanced', description: 'Science-backed defaults for most people' },
   warm: { label: 'Warm', description: 'Gentler cooling, warmer wake-up' },

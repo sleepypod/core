@@ -149,30 +149,34 @@ export default function DataPage() {
 
       {/* ── Sleep Summary ── */}
       <section id="section-sleep">
-        {showBothSides ? (
-          <div className="space-y-3">
-            <SideLabel side="left" />
-            <SleepSummaryCard records={allSleepRecords.filter(r => r.side === 'left')} />
-            <SideLabel side="right" />
-            <SleepSummaryCard records={allSleepRecords.filter(r => r.side === 'right')} />
-          </div>
-        ) : (
-          <SleepSummaryCard records={allSleepRecords} />
-        )}
+        {showBothSides
+          ? (
+              <div className="space-y-3">
+                <SideLabel side="left" />
+                <SleepSummaryCard records={allSleepRecords.filter(r => r.side === 'left')} />
+                <SideLabel side="right" />
+                <SleepSummaryCard records={allSleepRecords.filter(r => r.side === 'right')} />
+              </div>
+            )
+          : (
+              <SleepSummaryCard records={allSleepRecords} />
+            )}
       </section>
 
       {/* ── Nightly Sleep Analysis (quality + distribution — matches iOS) ── */}
       <section id="section-stages">
-        {showBothSides ? (
-          <div className="space-y-4">
-            <SideLabel side="left" />
-            <SleepStagesCard side="left" defaultTimeRange="night" hideTimeRangeSelector />
-            <SideLabel side="right" />
-            <SleepStagesCard side="right" defaultTimeRange="night" hideTimeRangeSelector />
-          </div>
-        ) : (
-          <SleepStagesCard side={primarySide} defaultTimeRange="night" hideTimeRangeSelector />
-        )}
+        {showBothSides
+          ? (
+              <div className="space-y-4">
+                <SideLabel side="left" />
+                <SleepStagesCard side="left" defaultTimeRange="night" hideTimeRangeSelector />
+                <SideLabel side="right" />
+                <SleepStagesCard side="right" defaultTimeRange="night" hideTimeRangeSelector />
+              </div>
+            )
+          : (
+              <SleepStagesCard side={primarySide} defaultTimeRange="night" hideTimeRangeSelector />
+            )}
       </section>
 
       {/* ── Vitals: 3-block grid + charts (HR, HRV, BR) ── */}
@@ -183,16 +187,18 @@ export default function DataPage() {
 
       {/* ── Weekly Sleep Timeline (bar chart — matches iOS) ── */}
       <section id="section-timeline">
-        {showBothSides ? (
-          <div className="space-y-4">
-            <SideLabel side="left" />
-            <SleepStagesCard side="left" defaultTimeRange="week" hideTimeRangeSelector />
-            <SideLabel side="right" />
-            <SleepStagesCard side="right" defaultTimeRange="week" hideTimeRangeSelector />
-          </div>
-        ) : (
-          <SleepStagesCard side={primarySide} defaultTimeRange="week" hideTimeRangeSelector />
-        )}
+        {showBothSides
+          ? (
+              <div className="space-y-4">
+                <SideLabel side="left" />
+                <SleepStagesCard side="left" defaultTimeRange="week" hideTimeRangeSelector />
+                <SideLabel side="right" />
+                <SleepStagesCard side="right" defaultTimeRange="week" hideTimeRangeSelector />
+              </div>
+            )
+          : (
+              <SleepStagesCard side={primarySide} defaultTimeRange="week" hideTimeRangeSelector />
+            )}
       </section>
 
       {/* ── Movement ── */}
@@ -223,7 +229,9 @@ function SideLabel({ side }: { side: 'left' | 'right' }) {
     <div className="flex items-center gap-2">
       <div className={`h-2 w-2 rounded-full ${isLeft ? 'bg-sky-400' : 'bg-teal-400'}`} />
       <span className={`text-xs font-semibold capitalize ${isLeft ? 'text-sky-400' : 'text-teal-400'}`}>
-        {side} Side
+        {side}
+        {' '}
+        Side
       </span>
     </div>
   )

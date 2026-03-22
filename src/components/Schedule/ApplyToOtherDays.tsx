@@ -38,11 +38,12 @@ export function ApplyToOtherDays({
   const availableDays = DAYS.filter(d => d.key !== sourceDay)
 
   const toggleTarget = (day: DayOfWeek) => {
-    setTargetDays(prev => {
+    setTargetDays((prev) => {
       const next = new Set(prev)
       if (next.has(day)) {
         next.delete(day)
-      } else {
+      }
+      else {
         next.add(day)
       }
       return next
@@ -55,13 +56,14 @@ export function ApplyToOtherDays({
     const groupDays = new Set([...group].filter(d => d !== sourceDay))
     const allSelected = [...groupDays].every(d => targetDays.has(d))
     if (allSelected) {
-      setTargetDays(prev => {
+      setTargetDays((prev) => {
         const next = new Set(prev)
         for (const d of groupDays) next.delete(d)
         return next
       })
-    } else {
-      setTargetDays(prev => {
+    }
+    else {
+      setTargetDays((prev) => {
         const next = new Set(prev)
         for (const d of groupDays) next.add(d)
         return next
@@ -110,7 +112,8 @@ export function ApplyToOtherDays({
         <div className="space-y-3 border-t border-zinc-800 px-4 pb-4 pt-3">
           {/* Source day label */}
           <p className="text-xs text-zinc-500">
-            Copy{' '}
+            Copy
+            {' '}
             <span className="text-zinc-300">
               {DAYS.find(d => d.key === sourceDay)?.label}
             </span>
@@ -141,7 +144,7 @@ export function ApplyToOtherDays({
 
           {/* Day checkboxes */}
           <div className="grid grid-cols-3 gap-2">
-            {availableDays.map(day => {
+            {availableDays.map((day) => {
               const isTarget = targetDays.has(day.key)
               return (
                 <button

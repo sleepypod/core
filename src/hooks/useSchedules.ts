@@ -169,7 +169,7 @@ export function useSchedules(selectedDay: DayOfWeek) {
   )
 
   const updateSetPoint = useCallback(
-    (id: number, updates: { time?: string; temperature?: number; enabled?: boolean }) => {
+    (id: number, updates: { time?: string, temperature?: number, enabled?: boolean }) => {
       updateMutation.mutate({ id, ...updates })
     },
     [updateMutation]
@@ -177,7 +177,7 @@ export function useSchedules(selectedDay: DayOfWeek) {
 
   const adjustTemperature = useCallback(
     (id: number, delta: number) => {
-      const phase = phases.find((p) => p.id === id)
+      const phase = phases.find(p => p.id === id)
       if (!phase) return
       const newTemp = Math.max(55, Math.min(110, phase.temperature + delta))
       updateMutation.mutate({ id, temperature: newTemp })

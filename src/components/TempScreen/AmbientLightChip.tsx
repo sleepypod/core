@@ -25,12 +25,18 @@ export function AmbientLightChip() {
 
   return (
     <div className="flex items-center gap-1 text-[11px] text-zinc-500">
-      {isDark ? (
-        <Moon size={12} className="text-indigo-400" />
-      ) : (
-        <Sun size={12} className="text-amber-400" />
-      )}
-      <span className="tabular-nums">{Math.round(lux)} lux</span>
+      {isDark
+        ? (
+            <Moon size={12} className="text-indigo-400" />
+          )
+        : (
+            <Sun size={12} className="text-amber-400" />
+          )}
+      <span className="tabular-nums">
+        {Math.round(lux)}
+        {' '}
+        lux
+      </span>
     </div>
   )
 }

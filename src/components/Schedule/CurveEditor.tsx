@@ -81,12 +81,13 @@ export function CurveEditor({ side }: CurveEditorProps) {
 
   // ── Day toggle ──
   const handleDayToggle = useCallback((day: DayOfWeek) => {
-    setSelectedDays(prev => {
+    setSelectedDays((prev) => {
       const next = new Set(prev)
       if (next.has(day)) {
         // Don't allow deselecting the last day
         if (next.size > 1) next.delete(day)
-      } else {
+      }
+      else {
         next.add(day)
       }
       return next
@@ -147,7 +148,8 @@ export function CurveEditor({ side }: CurveEditorProps) {
 
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2000)
-    } catch (err) {
+    }
+    catch (err) {
       console.error('Failed to apply curve:', err)
       setSaveStatus('error')
       setTimeout(() => setSaveStatus('idle'), 3000)
@@ -199,7 +201,9 @@ export function CurveEditor({ side }: CurveEditorProps) {
       {/* Sleep duration badge */}
       <div className="flex justify-center">
         <span className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-400">
-          {sleepDuration} sleep window
+          {sleepDuration}
+          {' '}
+          sleep window
         </span>
       </div>
 
@@ -272,21 +276,27 @@ export function CurveEditor({ side }: CurveEditorProps) {
               : 'bg-sky-500 text-white hover:bg-sky-600 active:scale-[0.98]'
         } disabled:opacity-60`}
       >
-        {saveStatus === 'saving' ? (
-          <>
-            <Loader2 size={16} className="animate-spin" />
-            Applying...
-          </>
-        ) : saveStatus === 'saved' ? (
-          <>
-            <Check size={16} />
-            Applied!
-          </>
-        ) : saveStatus === 'error' ? (
-          'Failed — tap to retry'
-        ) : (
-          `Apply to ${selectedDays.size} ${selectedDays.size === 1 ? 'day' : 'days'}`
-        )}
+        {saveStatus === 'saving'
+          ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Applying...
+              </>
+            )
+          : saveStatus === 'saved'
+            ? (
+                <>
+                  <Check size={16} />
+                  Applied!
+                </>
+              )
+            : saveStatus === 'error'
+              ? (
+                  'Failed — tap to retry'
+                )
+              : (
+                  `Apply to ${selectedDays.size} ${selectedDays.size === 1 ? 'day' : 'days'}`
+                )}
       </button>
     </div>
   )

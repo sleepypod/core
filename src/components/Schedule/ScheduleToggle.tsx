@@ -52,7 +52,8 @@ export function ScheduleToggle({
           <span className={cn(
             'relative h-7 w-12 rounded-full transition-colors duration-200',
             enabled ? 'bg-sky-500' : 'bg-zinc-700',
-          )}>
+          )}
+          >
             <span
               className={cn(
                 'absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white transition-transform duration-200',

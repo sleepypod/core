@@ -6,7 +6,7 @@ import { coolingIntensityMeta } from '@/src/lib/sleepCurve/types'
 
 const intensities: CoolingIntensity[] = ['cool', 'balanced', 'warm']
 
-const intensityStyles: Record<CoolingIntensity, { active: string; icon: string }> = {
+const intensityStyles: Record<CoolingIntensity, { active: string, icon: string }> = {
   cool: {
     active: 'border-blue-500/40 bg-blue-500/10 text-blue-400',
     icon: '❄️',
@@ -37,7 +37,7 @@ export function IntensitySelector({ value, onChange }: IntensitySelectorProps) {
         Cooling Profile
       </div>
       <div className="grid grid-cols-3 gap-2">
-        {intensities.map(intensity => {
+        {intensities.map((intensity) => {
           const meta = coolingIntensityMeta[intensity]
           const styles = intensityStyles[intensity]
           const isActive = value === intensity

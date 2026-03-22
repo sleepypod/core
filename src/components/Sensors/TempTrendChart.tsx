@@ -97,7 +97,7 @@ export function TempTrendChart() {
 
     seededRef.current = true // Mark as seeded even from live data
 
-    setHistory(prev => {
+    setHistory((prev) => {
       const next = [...prev, { time: Date.now(), leftF, rightF }]
       return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
     })
@@ -167,7 +167,9 @@ export function TempTrendChart() {
           </h3>
         </div>
         <span className="text-[8px] text-zinc-600">
-          {history.length} points
+          {history.length}
+          {' '}
+          points
         </span>
       </div>
 
@@ -196,7 +198,8 @@ export function TempTrendChart() {
             fill="#52525b"
             fontSize={7}
           >
-            {t.toFixed(0)}°
+            {t.toFixed(0)}
+            °
           </text>
         ))}
 

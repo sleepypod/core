@@ -131,7 +131,8 @@ function drawCatmullRomTrace(
 
     if (isFinite(cp1x) && isFinite(cp1y) && isFinite(cp2x) && isFinite(cp2y)) {
       ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
-    } else {
+    }
+    else {
       ctx.lineTo(p2.x, p2.y)
     }
   }
@@ -451,8 +452,18 @@ export function PiezoWaveform() {
 
       {/* Sample count footer */}
       <div className="flex justify-between text-[10px] text-zinc-600">
-        <span>L: {sampleCounts.left} samples</span>
-        <span>R: {sampleCounts.right} samples</span>
+        <span>
+          L:
+          {sampleCounts.left}
+          {' '}
+          samples
+        </span>
+        <span>
+          R:
+          {sampleCounts.right}
+          {' '}
+          samples
+        </span>
       </div>
 
       {/* Timeline scrubber */}
@@ -460,17 +471,19 @@ export function PiezoWaveform() {
         <div className="space-y-1">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-[10px] text-zinc-500">
-              {isLive ? (
-                <>
-                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-emerald-400 font-medium">Live</span>
-                </>
-              ) : (
-                <>
-                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-500" />
-                  <span>{scrubValue !== null ? formatTime(scrubValue) : ''}</span>
-                </>
-              )}
+              {isLive
+                ? (
+                    <>
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-emerald-400 font-medium">Live</span>
+                    </>
+                  )
+                : (
+                    <>
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-500" />
+                      <span>{scrubValue !== null ? formatTime(scrubValue) : ''}</span>
+                    </>
+                  )}
               {isSeeking && (
                 <span className="ml-1 text-amber-400">seeking...</span>
               )}

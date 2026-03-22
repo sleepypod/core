@@ -195,7 +195,8 @@ export const healthRouter = router({
             console.log('[health] Schedule drift detected — auto-reloaded scheduler')
             // Re-check after reload
             drift.drifted = false
-          } catch (reloadError) {
+          }
+          catch (reloadError) {
             console.error('[health] Failed to auto-reload scheduler:', reloadError)
             overallStatus = 'degraded'
           }

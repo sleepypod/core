@@ -104,18 +104,22 @@ export function HealthStatusCard({
         </div>
 
         {/* Status badge */}
-        {isLoading ? (
-          <span className="flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-400">
-            …
-          </span>
-        ) : (
-          <span className="flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-1">
-            {statusBadgeIcon(healthyCount, totalCount)}
-            <span className="text-xs font-medium text-zinc-400">
-              {healthyCount}/{totalCount}
-            </span>
-          </span>
-        )}
+        {isLoading
+          ? (
+              <span className="flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-400">
+                …
+              </span>
+            )
+          : (
+              <span className="flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-1">
+                {statusBadgeIcon(healthyCount, totalCount)}
+                <span className="text-xs font-medium text-zinc-400">
+                  {healthyCount}
+                  /
+                  {totalCount}
+                </span>
+              </span>
+            )}
 
         {/* Chevron */}
         <ChevronRight
@@ -131,7 +135,7 @@ export function HealthStatusCard({
       {isExpanded && (
         <div className="mt-3 border-t border-zinc-800 pt-3">
           <div className="space-y-2">
-            {services.map((service) => (
+            {services.map(service => (
               <div key={service.name} className="flex items-start gap-2.5 py-1">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm text-white">{service.name}</p>

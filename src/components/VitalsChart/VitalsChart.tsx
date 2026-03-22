@@ -175,7 +175,7 @@ export function VitalsChart({
   const xTicks = useMemo(() => {
     if (sorted.length < 2) return []
     const count = 4
-    const ticks: { x: number; label: string }[] = []
+    const ticks: { x: number, label: string }[] = []
     for (let i = 0; i < count; i++) {
       const t = minTime + (i / (count - 1)) * (maxTime - minTime)
       ticks.push({ x: scaleX(t), label: formatTime(new Date(t)) })
@@ -186,7 +186,7 @@ export function VitalsChart({
   // Y-axis tick labels (3 ticks)
   const yTicks = useMemo(() => {
     const count = 3
-    const ticks: { y: number; label: string }[] = []
+    const ticks: { y: number, label: string }[] = []
     for (let i = 0; i < count; i++) {
       const v = minVal + (i / (count - 1)) * (maxVal - minVal)
       ticks.push({ y: scaleY(v), label: Math.round(v).toString() })
@@ -266,9 +266,16 @@ export function VitalsChart({
       {selectedPoint && (
         <div className="flex justify-end mb-1 gap-3">
           <div className="text-xs">
-            {label && <span className="text-zinc-500 mr-1">{label}:</span>}
+            {label && (
+              <span className="text-zinc-500 mr-1">
+                {label}
+                :
+              </span>
+            )}
             <span style={{ color }} className="font-medium">
-              {Math.round(selectedPoint.value)} {unit}
+              {Math.round(selectedPoint.value)}
+              {' '}
+              {unit}
             </span>
             <span className="text-zinc-500 ml-1.5">
               {formatTime(selectedPoint.timestamp)}
@@ -276,9 +283,14 @@ export function VitalsChart({
           </div>
           {secondary && selectedSecondaryPoint && (
             <div className="text-xs">
-              <span className="text-zinc-500 mr-1">{secondary.label}:</span>
+              <span className="text-zinc-500 mr-1">
+                {secondary.label}
+                :
+              </span>
               <span style={{ color: secondary.color }} className="font-medium">
-                {Math.round(selectedSecondaryPoint.value)} {unit}
+                {Math.round(selectedSecondaryPoint.value)}
+                {' '}
+                {unit}
               </span>
             </div>
           )}
@@ -308,7 +320,7 @@ export function VitalsChart({
         </defs>
 
         {/* Zone backgrounds */}
-        {zones.map(zone => {
+        {zones.map((zone) => {
           const y1 = scaleY(zone.max)
           const y2 = scaleY(zone.min)
           return (

@@ -45,7 +45,8 @@ export function ManualControlsSheet({
   useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden'
-    } else {
+    }
+    else {
       document.body.style.overflow = ''
     }
     return () => {

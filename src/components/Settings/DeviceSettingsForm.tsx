@@ -93,7 +93,8 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     setRebootDaily(newVal)
     if (newVal) {
       save({ rebootDaily: true, rebootTime })
-    } else {
+    }
+    else {
       save({ rebootDaily: false })
     }
   }
@@ -108,7 +109,8 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     setPrimePodDaily(newVal)
     if (newVal) {
       save({ primePodDaily: true, primePodTime })
-    } else {
+    }
+    else {
       save({ primePodDaily: false })
     }
   }
@@ -128,11 +130,11 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
         </div>
         <select
           value={timezone}
-          onChange={(e) => handleTimezoneChange(e.target.value)}
+          onChange={e => handleTimezoneChange(e.target.value)}
           disabled={isPending}
           className="h-11 w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {TIMEZONES.map((tz) => (
+          {TIMEZONES.map(tz => (
             <option key={tz} value={tz}>
               {tz.replace(/_/g, ' ')}
             </option>

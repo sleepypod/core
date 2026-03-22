@@ -121,7 +121,7 @@ export function SleepRecordActions({
           <input
             type="datetime-local"
             value={editBedTime}
-            onChange={(e) => setEditBedTime(e.target.value)}
+            onChange={e => setEditBedTime(e.target.value)}
             className="w-full rounded-md bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 outline-none focus:ring-1 focus:ring-sky-500"
           />
         </div>
@@ -130,7 +130,7 @@ export function SleepRecordActions({
           <input
             type="datetime-local"
             value={editWakeTime}
-            onChange={(e) => setEditWakeTime(e.target.value)}
+            onChange={e => setEditWakeTime(e.target.value)}
             className="w-full rounded-md bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 outline-none focus:ring-1 focus:ring-sky-500"
           />
         </div>
@@ -152,11 +152,13 @@ export function SleepRecordActions({
           disabled={isPending}
           className="flex h-8 items-center gap-1 rounded-lg bg-sky-600 px-3 text-[10px] font-semibold text-white active:bg-sky-700 disabled:opacity-50"
         >
-          {updateMutation.isPending ? (
-            <Loader2 size={10} className="animate-spin" />
-          ) : (
-            <Check size={10} />
-          )}
+          {updateMutation.isPending
+            ? (
+                <Loader2 size={10} className="animate-spin" />
+              )
+            : (
+                <Check size={10} />
+              )}
           Save
         </button>
       </div>

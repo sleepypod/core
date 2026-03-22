@@ -124,8 +124,8 @@ export function RawDataButton() {
   const movement = movementQuery.data ?? []
   const fileCount = fileCountQuery.data
   const diskUsage = diskUsageQuery.data
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rawFiles = (rawFilesQuery.data ?? []) as Array<{ name: string; sizeBytes: number; modifiedAt: string }>
+
+  const rawFiles = (rawFilesQuery.data ?? []) as Array<{ name: string, sizeBytes: number, modifiedAt: string }>
 
   const exportVitals = useCallback(() => {
     downloadCSV(generateVitalsCSV(vitals), `vitals-${side}.csv`)
@@ -238,8 +238,16 @@ export function RawDataButton() {
               >
                 <FileText size={14} className="text-red-400 shrink-0" />
                 <div className="flex-1 text-left">
-                  <div className="font-mono text-xs">vitals-{side}.csv</div>
-                  <div className="text-[10px] text-zinc-500">{vitals.length} rows</div>
+                  <div className="font-mono text-xs">
+                    vitals-
+                    {side}
+                    .csv
+                  </div>
+                  <div className="text-[10px] text-zinc-500">
+                    {vitals.length}
+                    {' '}
+                    rows
+                  </div>
                 </div>
                 <Download size={16} className="text-sky-400 shrink-0" />
               </button>
@@ -253,8 +261,16 @@ export function RawDataButton() {
               >
                 <FileText size={14} className="text-sky-400 shrink-0" />
                 <div className="flex-1 text-left">
-                  <div className="font-mono text-xs">sleep-{side}.csv</div>
-                  <div className="text-[10px] text-zinc-500">{sleepRecords.length} rows</div>
+                  <div className="font-mono text-xs">
+                    sleep-
+                    {side}
+                    .csv
+                  </div>
+                  <div className="text-[10px] text-zinc-500">
+                    {sleepRecords.length}
+                    {' '}
+                    rows
+                  </div>
                 </div>
                 <Download size={16} className="text-sky-400 shrink-0" />
               </button>
@@ -268,8 +284,16 @@ export function RawDataButton() {
               >
                 <FileText size={14} className="text-amber-400 shrink-0" />
                 <div className="flex-1 text-left">
-                  <div className="font-mono text-xs">movement-{side}.csv</div>
-                  <div className="text-[10px] text-zinc-500">{movement.length} rows</div>
+                  <div className="font-mono text-xs">
+                    movement-
+                    {side}
+                    .csv
+                  </div>
+                  <div className="text-[10px] text-zinc-500">
+                    {movement.length}
+                    {' '}
+                    rows
+                  </div>
                 </div>
                 <Download size={16} className="text-sky-400 shrink-0" />
               </button>
@@ -356,11 +380,13 @@ export function RawDataButton() {
                         className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-700/50 active:bg-zinc-600 disabled:opacity-30"
                         title={idx === 0 ? 'Cannot delete active file' : `Delete ${file.name}`}
                       >
-                        {deletingFile === file.name ? (
-                          <span className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" />
-                        ) : (
-                          <Trash2 size={12} className="text-red-400" />
-                        )}
+                        {deletingFile === file.name
+                          ? (
+                              <span className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" />
+                            )
+                          : (
+                              <Trash2 size={12} className="text-red-400" />
+                            )}
                       </button>
                     </div>
                   ))}

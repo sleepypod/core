@@ -53,7 +53,8 @@ export function startBonjourAnnouncement(): void {
     // Reload avahi to pick up the service file
     try {
       execSync('kill -HUP $(pidof avahi-daemon) 2>/dev/null', { stdio: 'ignore' })
-    } catch {
+    }
+    catch {
       // avahi-daemon might not be running
     }
 
@@ -79,7 +80,8 @@ export function stopBonjourAnnouncement(): void {
       unlinkSync(SERVICE_FILE)
       try {
         execSync('kill -HUP $(pidof avahi-daemon) 2>/dev/null', { stdio: 'ignore' })
-      } catch { /* ok */ }
+      }
+      catch { /* ok */ }
     }
     console.log('[bonjour] mDNS announcement stopped')
   }

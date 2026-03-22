@@ -46,11 +46,13 @@ export function InternetToggleCard() {
     <div className="rounded-2xl bg-zinc-900/80 p-3 sm:p-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {blocked ? (
-            <Lock size={16} className="text-emerald-400" />
-          ) : (
-            <Globe size={16} className="text-amber-400" />
-          )}
+          {blocked
+            ? (
+                <Lock size={16} className="text-emerald-400" />
+              )
+            : (
+                <Globe size={16} className="text-amber-400" />
+              )}
           <div>
             <span className="text-sm font-medium text-white">
               {blocked ? 'Local Only' : 'Internet Enabled'}
@@ -75,19 +77,21 @@ export function InternetToggleCard() {
             'disabled:opacity-50',
           )}
         >
-          {isPending ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Loader2 size={14} className="animate-spin text-white" />
-            </div>
-          ) : (
-            <div
-              className={clsx(
-                'h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200',
-                'absolute top-1',
-                blocked ? 'left-1' : 'left-6',
+          {isPending
+            ? (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 size={14} className="animate-spin text-white" />
+                </div>
+              )
+            : (
+                <div
+                  className={clsx(
+                    'h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200',
+                    'absolute top-1',
+                    blocked ? 'left-1' : 'left-6',
+                  )}
+                />
               )}
-            />
-          )}
         </button>
       </div>
 

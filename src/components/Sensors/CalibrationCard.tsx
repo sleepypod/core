@@ -19,7 +19,7 @@ interface CalibrationProfile {
   errorMessage: string | null
 }
 
-const SENSOR_CONFIG: Record<SensorType, { label: string; icon: typeof Activity; color: string }> = {
+const SENSOR_CONFIG: Record<SensorType, { label: string, icon: typeof Activity, color: string }> = {
   piezo: { label: 'Piezo', icon: Activity, color: 'text-violet-400' },
   capacitance: { label: 'Capacitance', icon: Fingerprint, color: 'text-cyan-400' },
   temperature: { label: 'Temperature', icon: Thermometer, color: 'text-orange-400' },
@@ -50,8 +50,8 @@ function qualityLabel(score: number | null): string {
 function formatDate(d: Date | null | undefined): string {
   if (!d) return '--'
   const date = new Date(d)
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
-    ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function SensorCalibrationRow({
@@ -80,23 +80,27 @@ function SensorCalibrationRow({
           <span className="text-xs font-medium text-zinc-300">{config.label}</span>
           {profile && statusIcon(profile.status)}
         </div>
-        {profile ? (
-          <div className="flex items-center gap-2">
-            <span className={`text-xs font-semibold tabular-nums ${qualityColor(profile.qualityScore)}`}>
-              {qualityLabel(profile.qualityScore)}
-            </span>
-            {profile.samplesUsed !== null && (
-              <span className="text-[10px] text-zinc-600">
-                {profile.samplesUsed} samples
-              </span>
+        {profile
+          ? (
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-semibold tabular-nums ${qualityColor(profile.qualityScore)}`}>
+                  {qualityLabel(profile.qualityScore)}
+                </span>
+                {profile.samplesUsed !== null && (
+                  <span className="text-[10px] text-zinc-600">
+                    {profile.samplesUsed}
+                    {' '}
+                    samples
+                  </span>
+                )}
+                <span className="text-[10px] text-zinc-600">
+                  {formatDate(profile.createdAt)}
+                </span>
+              </div>
+            )
+          : (
+              <span className="text-[10px] text-zinc-600">No calibration</span>
             )}
-            <span className="text-[10px] text-zinc-600">
-              {formatDate(profile.createdAt)}
-            </span>
-          </div>
-        ) : (
-          <span className="text-[10px] text-zinc-600">No calibration</span>
-        )}
         {profile?.errorMessage && (
           <p className="mt-0.5 text-[10px] text-red-400/80 line-clamp-2">{profile.errorMessage}</p>
         )}
@@ -106,13 +110,17 @@ function SensorCalibrationRow({
         disabled={isTriggering || isActive}
         className="shrink-0 rounded-lg bg-zinc-800 px-2.5 py-1.5 text-[10px] font-semibold text-zinc-300 transition-colors active:bg-zinc-700 disabled:text-zinc-600 disabled:active:bg-zinc-800"
       >
-        {isTriggering ? (
-          <Loader2 size={12} className="animate-spin" />
-        ) : isActive ? (
-          profile?.status === 'running' ? 'Running...' : 'Pending'
-        ) : (
-          'Calibrate'
-        )}
+        {isTriggering
+          ? (
+              <Loader2 size={12} className="animate-spin" />
+            )
+          : isActive
+            ? (
+                profile?.status === 'running' ? 'Running...' : 'Pending'
+              )
+            : (
+                'Calibrate'
+              )}
       </button>
     </div>
   )
@@ -180,9 +188,9 @@ export function CalibrationCard() {
   }
 
   const isAnyActive = status && (
-    status.piezo?.status === 'running' || status.piezo?.status === 'pending' ||
-    status.capacitance?.status === 'running' || status.capacitance?.status === 'pending' ||
-    status.temperature?.status === 'running' || status.temperature?.status === 'pending'
+    status.piezo?.status === 'running' || status.piezo?.status === 'pending'
+    || status.capacitance?.status === 'running' || status.capacitance?.status === 'pending'
+    || status.temperature?.status === 'running' || status.temperature?.status === 'pending'
   )
 
   return (
@@ -203,14 +211,16 @@ export function CalibrationCard() {
           disabled={triggerFull.isPending || !!isAnyActive}
           className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[10px] font-semibold text-zinc-300 transition-colors active:bg-zinc-700 disabled:text-zinc-600"
         >
-          {triggerFull.isPending ? (
-            <span className="flex items-center gap-1">
-              <Loader2 size={10} className="animate-spin" />
-              Queued
-            </span>
-          ) : (
-            'Calibrate All'
-          )}
+          {triggerFull.isPending
+            ? (
+                <span className="flex items-center gap-1">
+                  <Loader2 size={10} className="animate-spin" />
+                  Queued
+                </span>
+              )
+            : (
+                'Calibrate All'
+              )}
         </button>
       </div>
 
@@ -227,23 +237,25 @@ export function CalibrationCard() {
       )}
 
       {/* Sensor calibration rows */}
-      {statusLoading ? (
-        <div className="flex h-24 items-center justify-center">
-          <Loader2 size={18} className="animate-spin text-zinc-600" />
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          {(['piezo', 'capacitance', 'temperature'] as const).map((type) => (
-            <SensorCalibrationRow
-              key={type}
-              type={type}
-              profile={status?.[type] ?? null}
-              onTrigger={handleTrigger}
-              isTriggeringType={triggeringType}
-            />
-          ))}
-        </div>
-      )}
+      {statusLoading
+        ? (
+            <div className="flex h-24 items-center justify-center">
+              <Loader2 size={18} className="animate-spin text-zinc-600" />
+            </div>
+          )
+        : (
+            <div className="space-y-1.5">
+              {(['piezo', 'capacitance', 'temperature'] as const).map(type => (
+                <SensorCalibrationRow
+                  key={type}
+                  type={type}
+                  profile={status?.[type] ?? null}
+                  onTrigger={handleTrigger}
+                  isTriggeringType={triggeringType}
+                />
+              ))}
+            </div>
+          )}
 
     </div>
   )

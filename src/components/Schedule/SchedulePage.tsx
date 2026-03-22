@@ -98,7 +98,7 @@ export function SchedulePage() {
   // When AI curve is applied, convert set points to CurvePoints for chart
   const handleAICurveApplied = useCallback(
     (config: {
-      setPoints: Array<{ time: string; tempF: number }>
+      setPoints: Array<{ time: string, tempF: number }>
       bedtime: string
       wakeTime: string
     }) => {
@@ -113,7 +113,7 @@ export function SchedulePage() {
       setMaxTempF(max)
 
       // Compute minutesFromBedtime, then sort by that (not by time string — overnight wraps)
-      const withRelative = config.setPoints.map(p => {
+      const withRelative = config.setPoints.map((p) => {
         let tMin = timeStringToMinutes(p.time) - btMin
         if (tMin < -120) tMin += 24 * 60
         return { ...p, minutesFromBedtime: tMin }
@@ -122,12 +122,17 @@ export function SchedulePage() {
       const totalMin = withRelative.length
       const points: CurvePoint[] = withRelative.map((p, i) => {
         const frac = i / (totalMin - 1)
-        const phase = frac < 0.1 ? 'warmUp' as const
-          : frac < 0.25 ? 'coolDown' as const
-          : frac < 0.55 ? 'deepSleep' as const
-          : frac < 0.75 ? 'maintain' as const
-          : frac < 0.9 ? 'preWake' as const
-          : 'wake' as const
+        const phase = frac < 0.1
+          ? 'warmUp' as const
+          : frac < 0.25
+            ? 'coolDown' as const
+            : frac < 0.55
+              ? 'deepSleep' as const
+              : frac < 0.75
+                ? 'maintain' as const
+                : frac < 0.9
+                  ? 'preWake' as const
+                  : 'wake' as const
 
         return {
           minutesFromBedtime: p.minutesFromBedtime,
@@ -154,7 +159,9 @@ export function SchedulePage() {
       {/* Multi-day info banner */}
       {selectedDays.size > 1 && (
         <div className="rounded-lg bg-sky-500/10 px-3 py-2 text-xs text-sky-400">
-          {selectedDays.size} days selected — changes affect all selected days
+          {selectedDays.size}
+          {' '}
+          days selected — changes affect all selected days
         </div>
       )}
 
@@ -217,7 +224,9 @@ export function SchedulePage() {
       {/* Error state */}
       {error && (
         <div className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-400">
-          Failed to load schedules: {error.message}
+          Failed to load schedules:
+          {' '}
+          {error.message}
         </div>
       )}
 
@@ -230,7 +239,7 @@ export function SchedulePage() {
         isLoading={isLoading}
         hasScheduleData={hasScheduleData}
         isApplying={isApplying}
-        onApplyToOtherDays={(targetDays) => void applyToOtherDays(targetDays)}
+        onApplyToOtherDays={targetDays => void applyToOtherDays(targetDays)}
       />
 
     </div>

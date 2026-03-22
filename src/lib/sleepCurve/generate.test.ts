@@ -12,7 +12,7 @@ describe('generateSleepCurve', () => {
   it('generates sorted points for a typical 8-hour sleep', () => {
     const points = generateSleepCurve({
       bedtimeMinutes: 22 * 60, // 10 PM
-      wakeMinutes: 6 * 60,     // 6 AM
+      wakeMinutes: 6 * 60, // 6 AM
     })
 
     expect(points.length).toBeGreaterThan(15)
@@ -73,7 +73,7 @@ describe('generateSleepCurve', () => {
   it('handles overnight wrap (bedtime after midnight handled)', () => {
     const points = generateSleepCurve({
       bedtimeMinutes: 23 * 60, // 11 PM
-      wakeMinutes: 7 * 60,     // 7 AM
+      wakeMinutes: 7 * 60, // 7 AM
     })
 
     expect(points.length).toBeGreaterThan(15)

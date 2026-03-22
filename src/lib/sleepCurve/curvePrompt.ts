@@ -8,14 +8,14 @@
 
 export interface GeneratedCurve {
   name: string
-  bedtime: string    // "HH:mm"
-  wake: string       // "HH:mm"
-  points: Record<string, number>  // "HH:mm" → tempF
+  bedtime: string // "HH:mm"
+  wake: string // "HH:mm"
+  points: Record<string, number> // "HH:mm" → tempF
   reasoning: string
 }
 
 export interface CurveTemplate extends GeneratedCurve {
-  createdAt: number  // Date.now()
+  createdAt: number // Date.now()
 }
 
 // ─── Prompt Generation ───────────────────────────────────────────────
@@ -67,10 +67,10 @@ IMPORTANT: The "name" field must be 2-3 words maximum. It is used as a label in 
 // ─── Example Suggestions ─────────────────────────────────────────────
 
 export const EXAMPLE_SUGGESTIONS = [
-  "I run hot, bed at 11pm, wake 6:30. Really cold first few hours.",
-  "Light sleeper, cold feet. Warm start, gentle cooling, warm wake at 7am.",
-  "Post-workout recovery. Bed 10pm, wake 6am. Extra cold for muscles.",
-  "I'm always cold. Minimal cooling, cozy all night. Bed 11:30, wake 7:30.",
+  'I run hot, bed at 11pm, wake 6:30. Really cold first few hours.',
+  'Light sleeper, cold feet. Warm start, gentle cooling, warm wake at 7am.',
+  'Post-workout recovery. Bed 10pm, wake 6am. Extra cold for muscles.',
+  'I\'m always cold. Minimal cooling, cozy all night. Bed 11:30, wake 7:30.',
 ]
 
 // ─── JSON Parsing & Validation ───────────────────────────────────────
@@ -100,7 +100,8 @@ export function parseAIResponse(raw: string): ParseResult {
   let parsed: Record<string, unknown>
   try {
     parsed = JSON.parse(json)
-  } catch {
+  }
+  catch {
     return { success: false, error: 'Invalid JSON. Make sure you copied the complete response.' }
   }
 
@@ -159,7 +160,8 @@ export function loadTemplates(): CurveTemplate[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     return raw ? JSON.parse(raw) : []
-  } catch {
+  }
+  catch {
     return []
   }
 }
@@ -172,7 +174,8 @@ export function saveTemplate(curve: GeneratedCurve): CurveTemplate {
   const idx = templates.findIndex(t => t.name === curve.name)
   if (idx >= 0) {
     templates[idx] = template
-  } else {
+  }
+  else {
     templates.unshift(template)
   }
 

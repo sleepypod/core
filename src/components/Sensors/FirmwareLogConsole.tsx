@@ -70,7 +70,7 @@ export function FirmwareLogConsole() {
   useOnSensorFrame(useCallback((frame: SensorFrame) => {
     if (frame.type === 'log') {
       if (!paused) {
-        setLogs(prev => {
+        setLogs((prev) => {
           const next = [...prev, frame as LogFrame]
           return next.length > MAX_ENTRIES ? next.slice(-MAX_ENTRIES) : next
         })
@@ -87,7 +87,7 @@ export function FirmwareLogConsole() {
           level: 'INFO',
           msg: `[TAP] ${gf.side} ${gf.tapType}`,
         }
-        setLogs(prev => {
+        setLogs((prev) => {
           const next = [...prev, gestureLog]
           return next.length > MAX_ENTRIES ? next.slice(-MAX_ENTRIES) : next
         })
@@ -206,53 +206,62 @@ export function FirmwareLogConsole() {
         onScroll={handleScroll}
         className="h-52 overflow-y-auto rounded-xl bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed"
       >
-        {mode === 'logs' ? (
-          logs.length === 0 ? (
-            <Empty text="Waiting for firmware logs..." />
-          ) : (
-            logs.map((log, i) => (
-              <div key={`${log.ts}-${i}`} className="flex gap-2">
-                <span className="shrink-0 text-zinc-600">{formatTime(log.ts)}</span>
-                <span className={`shrink-0 w-11 text-right font-semibold ${getLevelColor(log.level)}`}>
-                  {log.level.toUpperCase().slice(0, 5)}
-                </span>
-                <span className="text-zinc-300 break-all">{log.msg}</span>
-              </div>
-            ))
-          )
-        ) : (
-          filteredFrames.length === 0 ? (
-            <Empty text="Waiting for frames..." />
-          ) : (
-            filteredFrames.map((entry, i) => {
-              const isExpanded = expandedIdx === i
-              const age = ((Date.now() - entry.ts) / 1000).toFixed(1)
-              return (
-                <div key={`${entry.ts}-${i}`}>
-                  <button
-                    onClick={() => {
-                      setExpandedIdx(isExpanded ? null : i)
-                      if (!paused) setPaused(true)
-                    }}
-                    className={`flex w-full items-center gap-2 rounded px-1 py-0.5 text-left ${
-                      isExpanded ? 'bg-sky-500/10' : 'hover:bg-zinc-900'
-                    }`}
-                  >
-                    <span className="shrink-0 text-zinc-600">{formatTime(entry.ts)}</span>
-                    <span className={`shrink-0 font-semibold ${getTypeColor(entry.type)}`}>{entry.type}</span>
-                    <span className="flex-1" />
-                    <span className="text-zinc-700">{age}s</span>
-                  </button>
-                  {isExpanded && (
-                    <pre className="ml-4 max-h-48 overflow-auto py-1 text-[9px] text-zinc-500">
-                      {entry.json}
-                    </pre>
-                  )}
-                </div>
-              )
-            })
-          )
-        )}
+        {mode === 'logs'
+          ? (
+              logs.length === 0
+                ? (
+                    <Empty text="Waiting for firmware logs..." />
+                  )
+                : (
+                    logs.map((log, i) => (
+                      <div key={`${log.ts}-${i}`} className="flex gap-2">
+                        <span className="shrink-0 text-zinc-600">{formatTime(log.ts)}</span>
+                        <span className={`shrink-0 w-11 text-right font-semibold ${getLevelColor(log.level)}`}>
+                          {log.level.toUpperCase().slice(0, 5)}
+                        </span>
+                        <span className="text-zinc-300 break-all">{log.msg}</span>
+                      </div>
+                    ))
+                  )
+            )
+          : (
+              filteredFrames.length === 0
+                ? (
+                    <Empty text="Waiting for frames..." />
+                  )
+                : (
+                    filteredFrames.map((entry, i) => {
+                      const isExpanded = expandedIdx === i
+                      const age = ((Date.now() - entry.ts) / 1000).toFixed(1)
+                      return (
+                        <div key={`${entry.ts}-${i}`}>
+                          <button
+                            onClick={() => {
+                              setExpandedIdx(isExpanded ? null : i)
+                              if (!paused) setPaused(true)
+                            }}
+                            className={`flex w-full items-center gap-2 rounded px-1 py-0.5 text-left ${
+                              isExpanded ? 'bg-sky-500/10' : 'hover:bg-zinc-900'
+                            }`}
+                          >
+                            <span className="shrink-0 text-zinc-600">{formatTime(entry.ts)}</span>
+                            <span className={`shrink-0 font-semibold ${getTypeColor(entry.type)}`}>{entry.type}</span>
+                            <span className="flex-1" />
+                            <span className="text-zinc-700">
+                              {age}
+                              s
+                            </span>
+                          </button>
+                          {isExpanded && (
+                            <pre className="ml-4 max-h-48 overflow-auto py-1 text-[9px] text-zinc-500">
+                              {entry.json}
+                            </pre>
+                          )}
+                        </div>
+                      )
+                    })
+                  )
+            )}
       </div>
     </div>
   )
@@ -266,7 +275,7 @@ function Empty({ text }: { text: string }) {
   )
 }
 
-function FilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function FilterPill({ label, active, onClick }: { label: string, active: boolean, onClick: () => void }) {
   return (
     <button
       onClick={onClick}

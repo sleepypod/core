@@ -203,11 +203,11 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
         // Filter vitals/movement for this night's window
         const nightStart = dayRecords[0].enteredBedAt
         const nightEnd = dayRecords[dayRecords.length - 1].leftBedAt
-        const nightVitals = vitalsData.filter(v => {
+        const nightVitals = vitalsData.filter((v) => {
           const t = new Date(v.timestamp).getTime()
           return t >= new Date(nightStart).getTime() && t <= new Date(nightEnd).getTime()
         })
-        const nightMovement = movData.filter(m => {
+        const nightMovement = movData.filter((m) => {
           const t = new Date(m.timestamp).getTime()
           return t >= new Date(nightStart).getTime() && t <= new Date(nightEnd).getTime()
         })
@@ -246,7 +246,7 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
       timesExitedBed: number
     }>
 
-    return records.map(record => {
+    return records.map((record) => {
       const bedDate = new Date(record.enteredBedAt)
       return {
         id: record.id,
@@ -279,9 +279,9 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
   }, [])
 
   // Loading state
-  const isLoading =
-    (timeRange === 'night' && nightStages.isLoading) ||
-    (timeRange !== 'night' && sleepRecords.isLoading)
+  const isLoading
+    = (timeRange === 'night' && nightStages.isLoading)
+      || (timeRange !== 'night' && sleepRecords.isLoading)
 
   // Error state
   const error = nightStages.error || sleepRecords.error
@@ -299,10 +299,13 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
           {timeRange === 'week' ? 'Sleep Timeline' : 'Sleep Stages'}
         </h2>
         {!hideTimeRangeSelector && (
-          <TimeRangeSelector value={timeRange} onChange={(r) => {
-            setTimeRange(r)
-            setSelectedWeekNight(null)
-          }} />
+          <TimeRangeSelector
+            value={timeRange}
+            onChange={(r) => {
+              setTimeRange(r)
+              setSelectedWeekNight(null)
+            }}
+          />
         )}
       </div>
 
@@ -427,7 +430,8 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
                 </div>
                 <div className="text-center">
                   <div className="text-lg font-semibold text-white">
-                    {(monthlySummaries.reduce((s, n) => s + n.sleepHours, 0) / monthlySummaries.length).toFixed(1)}h
+                    {(monthlySummaries.reduce((s, n) => s + n.sleepHours, 0) / monthlySummaries.length).toFixed(1)}
+                    h
                   </div>
                   <div className="text-[10px] text-zinc-500">Avg Sleep</div>
                 </div>
@@ -450,10 +454,13 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
                       {night.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                     </span>
                     <span className="text-xs tabular-nums text-zinc-400">
-                      {(night.sleepHours ?? 0).toFixed(1)}h
+                      {(night.sleepHours ?? 0).toFixed(1)}
+                      h
                     </span>
                     <span className="text-[10px] text-zinc-500">
-                      {night.timesExited} exits
+                      {night.timesExited}
+                      {' '}
+                      exits
                     </span>
                   </div>
                 ))}

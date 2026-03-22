@@ -16,7 +16,7 @@ interface SetPointEditorProps {
   /** Called with (time, temperature) for creation */
   onCreate: (time: string, temperature: number) => void
   /** Called with (id, { time, temperature, enabled }) for updates */
-  onUpdate: (id: number, updates: { time?: string; temperature?: number; enabled?: boolean }) => void
+  onUpdate: (id: number, updates: { time?: string, temperature?: number, enabled?: boolean }) => void
   /** Called with (id) for deletion */
   onDelete: (id: number) => void
 }
@@ -52,7 +52,8 @@ export function SetPointEditor({
       setTime(editingPhase.time)
       setTemperature(editingPhase.temperature)
       setEnabled(editingPhase.enabled)
-    } else {
+    }
+    else {
       setTime(DEFAULT_TIME)
       setTemperature(DEFAULT_TEMP)
       setEnabled(true)
@@ -62,7 +63,7 @@ export function SetPointEditor({
 
   const handleSave = useCallback(() => {
     if (isEditing && editingPhase) {
-      const updates: { time?: string; temperature?: number; enabled?: boolean } = {}
+      const updates: { time?: string, temperature?: number, enabled?: boolean } = {}
       if (time !== editingPhase.time) updates.time = time
       if (temperature !== editingPhase.temperature) updates.temperature = temperature
       if (enabled !== editingPhase.enabled) updates.enabled = enabled
@@ -70,7 +71,8 @@ export function SetPointEditor({
       if (Object.keys(updates).length > 0) {
         onUpdate(editingPhase.id, updates)
       }
-    } else {
+    }
+    else {
       onCreate(time, temperature)
     }
     onClose()
@@ -84,12 +86,12 @@ export function SetPointEditor({
   }, [editingPhase, onDelete, onClose])
 
   const adjustTemp = (delta: number) => {
-    setTemperature((prev) => Math.max(MIN_TEMP, Math.min(MAX_TEMP, prev + delta)))
+    setTemperature(prev => Math.max(MIN_TEMP, Math.min(MAX_TEMP, prev + delta)))
   }
 
   // Temperature color
-  const tempColor =
-    temperature <= 74
+  const tempColor
+    = temperature <= 74
       ? 'text-sky-400'
       : temperature <= 80
         ? 'text-zinc-300'
@@ -147,10 +149,14 @@ export function SetPointEditor({
 
             <div className="flex flex-col items-center">
               <span className={clsx('text-4xl font-bold tabular-nums', tempColor)}>
-                {temperature}°F
+                {temperature}
+                °F
               </span>
               <span className="mt-1 text-[10px] text-zinc-600">
-                {MIN_TEMP}° – {MAX_TEMP}°
+                {MIN_TEMP}
+                ° –
+                {MAX_TEMP}
+                °
               </span>
             </div>
 
@@ -172,7 +178,7 @@ export function SetPointEditor({
               max={MAX_TEMP}
               step={1}
               value={temperature}
-              onChange={(e) => setTemperature(Number(e.target.value))}
+              onChange={e => setTemperature(Number(e.target.value))}
               className="w-full accent-sky-500"
               aria-label="Temperature slider"
             />
@@ -192,7 +198,8 @@ export function SetPointEditor({
               <span className={clsx(
                 'relative h-7 w-12 rounded-full transition-colors',
                 enabled ? 'bg-sky-500' : 'bg-zinc-700'
-              )}>
+              )}
+              >
                 <span
                   className={clsx(
                     'absolute top-0.5 h-6 w-6 rounded-full bg-white transition-transform',
@@ -211,7 +218,8 @@ export function SetPointEditor({
               onClick={() => {
                 if (showDeleteConfirm) {
                   handleDelete()
-                } else {
+                }
+                else {
                   setShowDeleteConfirm(true)
                 }
               }}

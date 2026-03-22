@@ -43,7 +43,7 @@ export function colorForDelta(delta: number): string {
 }
 
 /** Glow color with intensity based on delta magnitude. */
-export function glowColorForDelta(delta: number): { color: string; opacity: number } {
+export function glowColorForDelta(delta: number): { color: string, opacity: number } {
   const intensity = Math.min(Math.abs(delta) / 8, 1) * 0.8
   return {
     color: colorForDelta(delta),

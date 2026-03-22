@@ -45,7 +45,8 @@ function SideCard({ data }: { data: SideData }) {
     const trimmed = name.trim()
     if (trimmed && trimmed !== data.name) {
       mutation.mutate({ side: data.side, name: trimmed })
-    } else {
+    }
+    else {
       setName(data.name) // revert
     }
   }
@@ -66,7 +67,11 @@ function SideCard({ data }: { data: SideData }) {
     <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
       <div className="mb-3 flex items-center gap-2">
         <User size={16} className="text-zinc-400" />
-        <span className="text-sm font-medium text-zinc-300">{sideLabel} Side</span>
+        <span className="text-sm font-medium text-zinc-300">
+          {sideLabel}
+          {' '}
+          Side
+        </span>
       </div>
 
       {/* Name input */}
@@ -75,7 +80,7 @@ function SideCard({ data }: { data: SideData }) {
         <input
           type="text"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={e => setName(e.target.value)}
           onBlur={handleNameBlur}
           onKeyDown={handleNameKeyDown}
           maxLength={20}

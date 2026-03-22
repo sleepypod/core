@@ -174,7 +174,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
           <div>
             <span className="mb-1.5 block text-xs font-medium text-zinc-400">Presets</span>
             <div className="flex flex-wrap gap-1.5">
-              {VIBRATION_PRESETS.map((preset) => (
+              {VIBRATION_PRESETS.map(preset => (
                 <button
                   key={preset.name}
                   onClick={() => {
@@ -199,7 +199,10 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
           <div>
             <div className="mb-1 flex items-center justify-between">
               <span className="text-xs font-medium text-zinc-400">Vibration Intensity</span>
-              <span className="text-xs font-medium text-white">{newIntensity}%</span>
+              <span className="text-xs font-medium text-white">
+                {newIntensity}
+                %
+              </span>
             </div>
             <input
               type="range"
@@ -207,12 +210,18 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
               max={INTENSITY_MAX}
               step={1}
               value={newIntensity}
-              onChange={(e) => setNewIntensity(parseInt(e.target.value, 10))}
+              onChange={e => setNewIntensity(parseInt(e.target.value, 10))}
               className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
             />
             <div className="flex justify-between text-[10px] text-zinc-600">
-              <span>{INTENSITY_MIN}%</span>
-              <span>{INTENSITY_MAX}%</span>
+              <span>
+                {INTENSITY_MIN}
+                %
+              </span>
+              <span>
+                {INTENSITY_MAX}
+                %
+              </span>
             </div>
           </div>
 
@@ -220,7 +229,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
           <div>
             <span className="mb-1.5 block text-xs font-medium text-zinc-400">Pattern</span>
             <div className="grid grid-cols-2 gap-2">
-              {PATTERN_OPTIONS.map((opt) => (
+              {PATTERN_OPTIONS.map(opt => (
                 <button
                   key={opt.value}
                   onClick={() => setNewPattern(opt.value)}
@@ -242,7 +251,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
           <div>
             <span className="mb-1.5 block text-xs font-medium text-zinc-400">Duration</span>
             <div className="flex flex-wrap gap-1.5">
-              {DURATION_OPTIONS.map((d) => (
+              {DURATION_OPTIONS.map(d => (
                 <button
                   key={d}
                   onClick={() => setNewDuration(d)}
@@ -253,7 +262,8 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                       : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
                   )}
                 >
-                  {d}s
+                  {d}
+                  s
                 </button>
               ))}
             </div>
@@ -263,7 +273,10 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
           <div>
             <div className="mb-1 flex items-center justify-between">
               <span className="text-xs font-medium text-zinc-400">Alarm Temperature</span>
-              <span className="text-xs font-medium text-white">{newAlarmTemp}°F</span>
+              <span className="text-xs font-medium text-white">
+                {newAlarmTemp}
+                °F
+              </span>
             </div>
             <input
               type="range"
@@ -271,12 +284,18 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
               max={TEMP_MAX}
               step={1}
               value={newAlarmTemp}
-              onChange={(e) => setNewAlarmTemp(parseInt(e.target.value, 10))}
+              onChange={e => setNewAlarmTemp(parseInt(e.target.value, 10))}
               className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
             />
             <div className="flex justify-between text-[10px] text-zinc-600">
-              <span>{TEMP_MIN}°F</span>
-              <span>{TEMP_MAX}°F</span>
+              <span>
+                {TEMP_MIN}
+                °F
+              </span>
+              <span>
+                {TEMP_MAX}
+                °F
+              </span>
             </div>
           </div>
 
@@ -305,8 +324,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
         <div className="flex items-center gap-2">
           {schedule.enabled
             ? <Bell size={16} className="text-sky-400" />
-            : <BellOff size={16} className="text-zinc-500" />
-          }
+            : <BellOff size={16} className="text-zinc-500" />}
           <span className="text-sm font-medium text-zinc-300">Vibration Alarm</span>
         </div>
         <button
@@ -328,11 +346,20 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
         <div className="min-w-0 flex-1">
           <span className="text-base font-semibold text-white sm:text-lg">{formatTime12h(schedule.time)}</span>
           <span className="block truncate text-[9px] text-zinc-500 sm:text-[10px]">
-            {schedule.vibrationPattern === 'rise' ? 'Rise' : 'Double'} · {schedule.duration}s · {schedule.vibrationIntensity}%
+            {schedule.vibrationPattern === 'rise' ? 'Rise' : 'Double'}
+            {' '}
+            ·
+            {schedule.duration}
+            s ·
+            {schedule.vibrationIntensity}
+            %
           </span>
         </div>
         <div className="flex shrink-0 flex-col items-end">
-          <span className="text-[13px] font-medium text-white sm:text-sm">{schedule.alarmTemperature}°F</span>
+          <span className="text-[13px] font-medium text-white sm:text-sm">
+            {schedule.alarmTemperature}
+            °F
+          </span>
           <span className="text-[9px] text-zinc-500 sm:text-[10px]">Alarm temp</span>
         </div>
       </div>
@@ -370,7 +397,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
               <div>
                 <span className="mb-1.5 block text-xs font-medium text-zinc-400">Presets</span>
                 <div className="flex flex-wrap gap-1.5">
-                  {VIBRATION_PRESETS.map((preset) => (
+                  {VIBRATION_PRESETS.map(preset => (
                     <button
                       key={preset.name}
                       onClick={() => {
@@ -383,8 +410,8 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                       className={clsx(
                         'rounded-lg px-2.5 min-h-[44px] text-[11px] font-medium transition-colors sm:px-3 sm:text-xs disabled:opacity-50',
                         schedule.vibrationIntensity === preset.intensity
-                          && schedule.vibrationPattern === preset.pattern
-                          && schedule.duration === preset.duration
+                        && schedule.vibrationPattern === preset.pattern
+                        && schedule.duration === preset.duration
                           ? 'bg-sky-500/20 text-sky-400 ring-1 ring-sky-500/40'
                           : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
                       )}
@@ -402,7 +429,10 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                     <Vibrate size={12} className="text-zinc-500" />
                     <span className="text-xs font-medium text-zinc-400">Vibration Intensity</span>
                   </div>
-                  <span className="text-xs font-medium text-white">{localIntensity}%</span>
+                  <span className="text-xs font-medium text-white">
+                    {localIntensity}
+                    %
+                  </span>
                 </div>
                 <input
                   type="range"
@@ -425,8 +455,14 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                   className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-50 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
                 />
                 <div className="flex justify-between text-[10px] text-zinc-600">
-                  <span>{INTENSITY_MIN}%</span>
-                  <span>{INTENSITY_MAX}%</span>
+                  <span>
+                    {INTENSITY_MIN}
+                    %
+                  </span>
+                  <span>
+                    {INTENSITY_MAX}
+                    %
+                  </span>
                 </div>
               </div>
 
@@ -437,7 +473,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                   <span className="text-xs font-medium text-zinc-400">Pattern</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {PATTERN_OPTIONS.map((opt) => (
+                  {PATTERN_OPTIONS.map(opt => (
                     <button
                       key={opt.value}
                       onClick={() => handleUpdatePattern(opt.value)}
@@ -464,7 +500,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                   <span className="text-xs font-medium text-zinc-400">Duration</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {DURATION_OPTIONS.map((d) => (
+                  {DURATION_OPTIONS.map(d => (
                     <button
                       key={d}
                       onClick={() => handleUpdateDuration(d)}
@@ -476,7 +512,8 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                           : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
                       )}
                     >
-                      {d}s
+                      {d}
+                      s
                     </button>
                   ))}
                 </div>
@@ -486,7 +523,10 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
               <div>
                 <div className="mb-1 flex items-center justify-between">
                   <span className="text-xs font-medium text-zinc-400">Alarm Temperature</span>
-                  <span className="text-xs font-medium text-white">{localAlarmTemp}°F</span>
+                  <span className="text-xs font-medium text-white">
+                    {localAlarmTemp}
+                    °F
+                  </span>
                 </div>
                 <input
                   type="range"
@@ -509,8 +549,14 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                   className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-50 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
                 />
                 <div className="flex justify-between text-[10px] text-zinc-600">
-                  <span>{TEMP_MIN}°F</span>
-                  <span>{TEMP_MAX}°F</span>
+                  <span>
+                    {TEMP_MIN}
+                    °F
+                  </span>
+                  <span>
+                    {TEMP_MAX}
+                    °F
+                  </span>
                 </div>
               </div>
             </div>

@@ -7,7 +7,7 @@ interface StageDistributionBarProps {
   distribution: StageDistribution
 }
 
-const STAGES: { key: SleepStage; label: string }[] = [
+const STAGES: { key: SleepStage, label: string }[] = [
   { key: 'deep', label: 'Deep' },
   { key: 'light', label: 'Light' },
   { key: 'rem', label: 'REM' },
@@ -53,7 +53,10 @@ export function StageDistributionBar({ distribution }: StageDistributionBarProps
             <span className="text-[11px] text-zinc-400">
               {label}
               {' '}
-              <span className="text-zinc-300 font-medium">{distribution[key]}%</span>
+              <span className="text-zinc-300 font-medium">
+                {distribution[key]}
+                %
+              </span>
             </span>
           </div>
         ))}

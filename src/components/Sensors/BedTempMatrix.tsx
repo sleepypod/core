@@ -120,8 +120,10 @@ function TempCellFormatted({ display, colorClass, label, zone, capRaw, capVarian
         <span className={[
           'text-[6px] tabular-nums',
           hasActivity ? 'text-sky-400/70' : 'text-zinc-600',
-        ].join(' ')}>
-          ±{capVariance.toFixed(2)}
+        ].join(' ')}
+        >
+          ±
+          {capVariance.toFixed(2)}
         </span>
       )}
     </div>
@@ -206,12 +208,12 @@ export function BedTempMatrix() {
         ambientTemp: formatTemp(liveFrame.ambientTemp),
         mcuTemp: formatTemp(liveFrame.mcuTemp),
         humidity: typeof liveFrame.humidity === 'number' ? `${liveFrame.humidity.toFixed(0)}%` : undefined,
-        leftHead:  { display: formatTemp(liveFrame.leftOuterTemp),  colorClass: tempToColor(liveFrame.leftOuterTemp) },
+        leftHead: { display: formatTemp(liveFrame.leftOuterTemp), colorClass: tempToColor(liveFrame.leftOuterTemp) },
         leftTorso: { display: formatTemp(liveFrame.leftCenterTemp), colorClass: tempToColor(liveFrame.leftCenterTemp) },
-        leftLegs:  { display: formatTemp(liveFrame.leftInnerTemp),  colorClass: tempToColor(liveFrame.leftInnerTemp) },
-        rightHead:  { display: formatTemp(liveFrame.rightOuterTemp),  colorClass: tempToColor(liveFrame.rightOuterTemp) },
+        leftLegs: { display: formatTemp(liveFrame.leftInnerTemp), colorClass: tempToColor(liveFrame.leftInnerTemp) },
+        rightHead: { display: formatTemp(liveFrame.rightOuterTemp), colorClass: tempToColor(liveFrame.rightOuterTemp) },
         rightTorso: { display: formatTemp(liveFrame.rightCenterTemp), colorClass: tempToColor(liveFrame.rightCenterTemp) },
-        rightLegs:  { display: formatTemp(liveFrame.rightInnerTemp),  colorClass: tempToColor(liveFrame.rightInnerTemp) },
+        rightLegs: { display: formatTemp(liveFrame.rightInnerTemp), colorClass: tempToColor(liveFrame.rightInnerTemp) },
       }
     }
 
@@ -225,12 +227,12 @@ export function BedTempMatrix() {
       ambientTemp: formatConverted(stored.ambientTemp),
       mcuTemp: formatConverted(stored.mcuTemp),
       humidity: stored.humidity != null ? `${Math.round(stored.humidity)}%` : undefined,
-      leftHead:  { display: formatConverted(stored.leftOuterTemp),  colorClass: tempToColorF(stored.leftOuterTemp) },
+      leftHead: { display: formatConverted(stored.leftOuterTemp), colorClass: tempToColorF(stored.leftOuterTemp) },
       leftTorso: { display: formatConverted(stored.leftCenterTemp), colorClass: tempToColorF(stored.leftCenterTemp) },
-      leftLegs:  { display: formatConverted(stored.leftInnerTemp),  colorClass: tempToColorF(stored.leftInnerTemp) },
-      rightHead:  { display: formatConverted(stored.rightOuterTemp),  colorClass: tempToColorF(stored.rightOuterTemp) },
+      leftLegs: { display: formatConverted(stored.leftInnerTemp), colorClass: tempToColorF(stored.leftInnerTemp) },
+      rightHead: { display: formatConverted(stored.rightOuterTemp), colorClass: tempToColorF(stored.rightOuterTemp) },
       rightTorso: { display: formatConverted(stored.rightCenterTemp), colorClass: tempToColorF(stored.rightCenterTemp) },
-      rightLegs:  { display: formatConverted(stored.rightInnerTemp),  colorClass: tempToColorF(stored.rightInnerTemp) },
+      rightLegs: { display: formatConverted(stored.rightInnerTemp), colorClass: tempToColorF(stored.rightInnerTemp) },
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveFrame, latestBedTemp.data, unit])
@@ -242,12 +244,12 @@ export function BedTempMatrix() {
     const r = capSense2.right
     return {
       // raw: mean of the two channels for the zone
-      leftHeadRaw:  l[0] != null && l[1] != null ? (l[0] + l[1]) / 2 : null,
+      leftHeadRaw: l[0] != null && l[1] != null ? (l[0] + l[1]) / 2 : null,
       leftTorsoRaw: l[2] != null && l[3] != null ? (l[2] + l[3]) / 2 : null,
-      leftLegsRaw:  l[4] != null && l[5] != null ? (l[4] + l[5]) / 2 : null,
-      rightHeadRaw:  r[0] != null && r[1] != null ? (r[0] + r[1]) / 2 : null,
+      leftLegsRaw: l[4] != null && l[5] != null ? (l[4] + l[5]) / 2 : null,
+      rightHeadRaw: r[0] != null && r[1] != null ? (r[0] + r[1]) / 2 : null,
       rightTorsoRaw: r[2] != null && r[3] != null ? (r[2] + r[3]) / 2 : null,
-      rightLegsRaw:  r[4] != null && r[5] != null ? (r[4] + r[5]) / 2 : null,
+      rightLegsRaw: r[4] != null && r[5] != null ? (r[4] + r[5]) / 2 : null,
     }
   }, [capSense2])
 
@@ -305,11 +307,13 @@ export function BedTempMatrix() {
           <div className="grid grid-cols-[1fr_1fr_auto_1fr_1fr] gap-0.5">
             {/* Column headers */}
             <div className="col-span-2 text-center text-[10px] font-semibold text-sky-400">Left</div>
-            <div /> {/* zone label spacer */}
+            <div />
+            {' '}
+            {/* zone label spacer */}
             <div className="col-span-2 text-center text-[10px] font-semibold text-teal-400">Right</div>
 
             {/* 3 zones: Head (ch 0,1), Torso (ch 2,3), Legs (ch 4,5) */}
-            {[0, 1, 2].map(zone => {
+            {[0, 1, 2].map((zone) => {
               const zoneData = [data.leftHead, data.leftTorso, data.leftLegs][zone]
               const zoneDataR = [data.rightHead, data.rightTorso, data.rightLegs][zone]
               const ch0 = zone * 2
@@ -379,7 +383,8 @@ function SensorCell({
       )}
       {typeof variance === 'number' && (
         <span className={`text-[5px] tabular-nums ${hasActivity ? 'text-sky-400/70' : 'text-zinc-600'}`}>
-          ±{variance.toFixed(2)}
+          ±
+          {variance.toFixed(2)}
         </span>
       )}
     </div>
@@ -393,8 +398,8 @@ function SensorMatrixRow({
   leftVar0, leftVar1, rightVar0, rightVar1,
 }: {
   zone: number
-  leftTemp: { display: string; colorClass: string }
-  rightTemp: { display: string; colorClass: string }
+  leftTemp: { display: string, colorClass: string }
+  rightTemp: { display: string, colorClass: string }
   leftCap0: number | null; leftCap1: number | null
   rightCap0: number | null; rightCap1: number | null
   leftVar0: number | undefined; leftVar1: number | undefined
@@ -411,11 +416,14 @@ function SensorMatrixRow({
   )
 }
 
-function LegendItem({ label, example, dim }: { label: string; example: string; dim?: boolean }) {
+function LegendItem({ label, example, dim }: { label: string, example: string, dim?: boolean }) {
   return (
     <div className="flex items-center gap-1">
       <span className={`font-mono ${dim ? 'text-[7px] text-zinc-500/60' : 'text-[8px] font-bold text-zinc-300'}`}>{example}</span>
-      <span className="text-[7px] text-zinc-600">= {label}</span>
+      <span className="text-[7px] text-zinc-600">
+        =
+        {label}
+      </span>
     </div>
   )
 }

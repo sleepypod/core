@@ -10,8 +10,8 @@ interface AlarmBannerProps {
   rightAlarmActive: boolean
   /** Snooze status per side (from snoozeManager.getSnoozeStatus) */
   snooze?: {
-    left?: { active: boolean; snoozeUntil: number | null } | null
-    right?: { active: boolean; snoozeUntil: number | null } | null
+    left?: { active: boolean, snoozeUntil: number | null } | null
+    right?: { active: boolean, snoozeUntil: number | null } | null
   }
   /** Called after alarm action to refresh status */
   onActionComplete?: () => void
@@ -51,7 +51,7 @@ export const AlarmBanner = ({
 
   const handleStop = () => {
     const sidesToClear = activeSides.filter(
-      (s) => (s === 'left' && leftAlarmActive) || (s === 'right' && rightAlarmActive),
+      s => (s === 'left' && leftAlarmActive) || (s === 'right' && rightAlarmActive),
     )
     // If no active sides match, clear all active alarms
     const targets = sidesToClear.length > 0
@@ -68,7 +68,7 @@ export const AlarmBanner = ({
 
   const handleSnooze = () => {
     const sidesToSnooze = activeSides.filter(
-      (s) => (s === 'left' && leftAlarmActive) || (s === 'right' && rightAlarmActive),
+      s => (s === 'left' && leftAlarmActive) || (s === 'right' && rightAlarmActive),
     )
     const targets = sidesToSnooze.length > 0
       ? sidesToSnooze
@@ -100,7 +100,9 @@ export const AlarmBanner = ({
             <div className="flex-1">
               <p className="text-sm font-semibold text-amber-200">Alarm Active</p>
               <p className="text-xs text-amber-400/70">
-                {alarmSides.join(' & ')} side vibrating
+                {alarmSides.join(' & ')}
+                {' '}
+                side vibrating
               </p>
             </div>
           </div>
@@ -131,7 +133,12 @@ export const AlarmBanner = ({
         <div className="flex items-center gap-2">
           <Clock size={16} className="shrink-0 text-amber-400/60" />
           <p className="flex-1 text-sm text-amber-300/70">
-            Snoozed — {snoozeSides.join(' & ')} resumes in{' '}
+            Snoozed —
+            {' '}
+            {snoozeSides.join(' & ')}
+            {' '}
+            resumes in
+            {' '}
             {snooze?.left?.snoozeUntil
               ? formatSnoozeRemaining(snooze.left.snoozeUntil)
               : snooze?.right?.snoozeUntil

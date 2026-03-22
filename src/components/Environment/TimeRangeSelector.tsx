@@ -4,14 +4,14 @@ import { cn } from '@/lib/utils'
 
 export type TimeRange = '1h' | '6h' | '12h' | '24h'
 
-const ranges: { value: TimeRange; label: string }[] = [
+const ranges: { value: TimeRange, label: string }[] = [
   { value: '1h', label: '1H' },
   { value: '6h', label: '6H' },
   { value: '12h', label: '12H' },
   { value: '24h', label: '24H' },
 ]
 
-export function getDateRangeFromTimeRange(range: TimeRange): { startDate: Date; endDate: Date } {
+export function getDateRangeFromTimeRange(range: TimeRange): { startDate: Date, endDate: Date } {
   const now = new Date()
   const hours = parseInt(range)
   const startDate = new Date(now.getTime() - hours * 60 * 60 * 1000)

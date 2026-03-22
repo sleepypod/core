@@ -56,7 +56,8 @@ export function TempStepper({
           <Minus size={14} />
         </button>
         <span className="w-12 text-center font-mono text-base font-semibold text-white tabular-nums">
-          {value}°F
+          {value}
+          °F
         </span>
         <button
           type="button"

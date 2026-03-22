@@ -42,7 +42,7 @@ interface AICurveWizardProps {
   side: Side
   selectedDays: Set<DayOfWeek>
   onApplied?: (config: {
-    setPoints: Array<{ time: string; tempF: number }>
+    setPoints: Array<{ time: string, tempF: number }>
     bedtime: string
     wakeTime: string
   }) => void
@@ -71,7 +71,7 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
 
   // Step 4: Preview
   const [curve, setCurve] = useState<GeneratedCurve | null>(null)
-  const [editablePoints, setEditablePoints] = useState<Array<{ time: string; tempF: number }>>([])
+  const [editablePoints, setEditablePoints] = useState<Array<{ time: string, tempF: number }>>([])
   const [applying, setApplying] = useState(false)
   const [applied, setApplied] = useState(false)
   const [savedTemplates, setSavedTemplates] = useState<CurveTemplate[]>([])
@@ -138,11 +138,13 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
       const next: Step = 1
       setStep(next)
       setHighestStep(prev => Math.max(prev, next) as Step)
-    } else if (step === 1) {
+    }
+    else if (step === 1) {
       const next: Step = 2
       setStep(next)
       setHighestStep(prev => Math.max(prev, next) as Step)
-    } else if (step === 2 && parseResult?.success) {
+    }
+    else if (step === 2 && parseResult?.success) {
       const next: Step = 3
       setStep(next)
       setHighestStep(prev => Math.max(prev, next) as Step)
@@ -173,7 +175,8 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
         setCopied(true)
         setTimeout(() => setCopied(false), 2000)
         return
-      } catch { /* fall through */ }
+      }
+      catch { /* fall through */ }
     }
     // Fallback: select the text in the prompt display so user can Cmd+C / long-press copy
     const el = document.getElementById('ai-prompt-text')
@@ -192,7 +195,8 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     if (navigator.share) {
       try {
         await navigator.share({ text: prompt })
-      } catch { /* user cancelled */ }
+      }
+      catch { /* user cancelled */ }
     }
   }, [prompt])
 
@@ -204,7 +208,8 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
         const text = await navigator.clipboard.readText()
         setJsonInput(text)
         return
-      } catch { /* fall through */ }
+      }
+      catch { /* fall through */ }
     }
     // Can't read clipboard over HTTP — focus the textarea so user can paste manually
   }, [])
@@ -236,7 +241,7 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
 
   // Set point editing
   const updatePoint = useCallback((idx: number, field: 'time' | 'tempF', value: string | number) => {
-    setEditablePoints(prev => {
+    setEditablePoints((prev) => {
       const next = [...prev]
       if (field === 'time') next[idx] = { ...next[idx], time: value as string }
       else next[idx] = { ...next[idx], tempF: Math.max(55, Math.min(110, value as number)) }
@@ -245,7 +250,7 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
   }, [])
 
   const addPoint = useCallback(() => {
-    setEditablePoints(prev => {
+    setEditablePoints((prev) => {
       const last = prev[prev.length - 1]
       const newTime = last ? incrementTime(last.time, 15) : '22:00'
       return [...prev, { time: newTime, tempF: 78 }].sort((a, b) => a.time.localeCompare(b.time))
@@ -253,7 +258,7 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
   }, [])
 
   const removePoint = useCallback((idx: number) => {
-    setEditablePoints(prev => {
+    setEditablePoints((prev) => {
       if (prev.length <= 3) return prev
       return prev.filter((_, i) => i !== idx)
     })
@@ -308,9 +313,11 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
         wakeTime: curve.wake,
       })
       setTimeout(() => onClose(), 1500)
-    } catch (err) {
+    }
+    catch (err) {
       console.error('Failed to apply AI curve:', err)
-    } finally {
+    }
+    finally {
       setApplying(false)
     }
   }, [curve, editablePoints, selectedDays, side, utils, createTempSchedule, deleteTempSchedule, createPowerSchedule, deletePowerSchedule, onApplied, onClose])
@@ -328,7 +335,7 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     const btMin = timeStringToMinutes(curve.bedtime)
 
     // Compute minutesFromBedtime for each point, then sort by that (not by time string)
-    const withRelative = editablePoints.map(p => {
+    const withRelative = editablePoints.map((p) => {
       let tMin = timeStringToMinutes(p.time) - btMin
       if (tMin < -120) tMin += 24 * 60 // overnight wrap
       return { ...p, minutesFromBedtime: tMin }
@@ -337,12 +344,17 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     const total = withRelative.length
     const points: CurvePoint[] = withRelative.map((p, i) => {
       const frac = i / (total - 1)
-      const phase = frac < 0.1 ? 'warmUp' as const
-        : frac < 0.25 ? 'coolDown' as const
-        : frac < 0.55 ? 'deepSleep' as const
-        : frac < 0.75 ? 'maintain' as const
-        : frac < 0.9 ? 'preWake' as const
-        : 'wake' as const
+      const phase = frac < 0.1
+        ? 'warmUp' as const
+        : frac < 0.25
+          ? 'coolDown' as const
+          : frac < 0.55
+            ? 'deepSleep' as const
+            : frac < 0.75
+              ? 'maintain' as const
+              : frac < 0.9
+                ? 'preWake' as const
+                : 'wake' as const
 
       return { minutesFromBedtime: p.minutesFromBedtime, tempOffset: p.tempF - 80, phase }
     })
@@ -382,7 +394,9 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
                 i === step ? 'text-cyan-400' : i <= highestStep ? 'text-zinc-500' : 'text-zinc-700',
               )}
             >
-              {i + 1}. {label}
+              {i + 1}
+              .
+              {label}
             </button>
           ))}
         </div>
@@ -440,7 +454,9 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
             disabled={step === 0}
             className="flex items-center gap-1 text-xs text-zinc-400 disabled:opacity-30"
           >
-            <ChevronLeft size={14} /> Back
+            <ChevronLeft size={14} />
+            {' '}
+            Back
           </button>
 
           {step === 0 && (
@@ -449,14 +465,18 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
                 onClick={handleSkipToImport}
                 className="flex items-center gap-1 rounded-lg border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700"
               >
-                <ClipboardPaste size={12} /> Import
+                <ClipboardPaste size={12} />
+                {' '}
+                Import
               </button>
               <button
                 onClick={goNext}
                 disabled={!preferences.trim()}
                 className="flex items-center gap-1 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-cyan-600 disabled:opacity-40"
               >
-                Generate <ChevronRight size={14} />
+                Generate
+                {' '}
+                <ChevronRight size={14} />
               </button>
             </div>
           )}
@@ -467,7 +487,9 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
               disabled={step === 2 && !parseResult?.success}
               className="flex items-center gap-1 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-cyan-600 disabled:opacity-40"
             >
-              Next <ChevronRight size={14} />
+              Next
+              {' '}
+              <ChevronRight size={14} />
             </button>
           )}
         </div>
@@ -533,7 +555,10 @@ function StepDescribe({
                 <span className="h-2 w-2 rounded-full bg-cyan-400" />
                 <span className="flex-1 text-xs font-medium text-zinc-300">{t.name}</span>
                 <span className="text-[10px] text-zinc-600">
-                  {t.bedtime} → {t.wake}
+                  {t.bedtime}
+                  {' '}
+                  →
+                  {t.wake}
                 </span>
               </button>
               <button
@@ -583,7 +608,9 @@ function StepReview({
             onClick={onShare}
             className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-white transition-all hover:bg-cyan-600 active:scale-[0.98]"
           >
-            <Share2 size={16} /> Share Prompt
+            <Share2 size={16} />
+            {' '}
+            Share Prompt
           </button>
         )}
 
@@ -595,11 +622,25 @@ function StepReview({
             copied
               ? 'bg-emerald-500/20 text-emerald-400'
               : !canShare
-                ? 'bg-cyan-500 text-white hover:bg-cyan-600 active:scale-[0.98]'
-                : '',
+                  ? 'bg-cyan-500 text-white hover:bg-cyan-600 active:scale-[0.98]'
+                  : '',
           )}
         >
-          {copied ? <><Check size={16} /> Selected!</> : <><Copy size={16} /> {canShare ? 'Copy' : 'Select All'}</>}
+          {copied
+            ? (
+                <>
+                  <Check size={16} />
+                  {' '}
+                  Selected!
+                </>
+              )
+            : (
+                <>
+                  <Copy size={16} />
+                  {' '}
+                  {canShare ? 'Copy' : 'Select All'}
+                </>
+              )}
         </button>
       </div>
     </div>
@@ -637,27 +678,41 @@ function StepImport({
         onClick={onPaste}
         className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-800/50 px-4 py-2.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700"
       >
-        <ClipboardPaste size={14} /> Paste from Clipboard
+        <ClipboardPaste size={14} />
+        {' '}
+        Paste from Clipboard
       </button>
 
       {/* Parse result */}
       {parseResult && (
-        parseResult.success ? (
-          <div className="flex items-start gap-2 rounded-xl bg-emerald-500/10 px-3 py-2.5">
-            <Check size={14} className="mt-0.5 shrink-0 text-emerald-400" />
-            <div className="text-xs text-emerald-400">
-              <span className="font-semibold">{parseResult.curve.name}</span>
-              <span className="ml-1 text-emerald-400/70">
-                — {Object.keys(parseResult.curve.points).length} set points, {parseResult.curve.bedtime} → {parseResult.curve.wake}
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-start gap-2 rounded-xl bg-red-500/10 px-3 py-2.5">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-400" />
-            <p className="text-xs text-red-400">{parseResult.error}</p>
-          </div>
-        )
+        parseResult.success
+          ? (
+              <div className="flex items-start gap-2 rounded-xl bg-emerald-500/10 px-3 py-2.5">
+                <Check size={14} className="mt-0.5 shrink-0 text-emerald-400" />
+                <div className="text-xs text-emerald-400">
+                  <span className="font-semibold">{parseResult.curve.name}</span>
+                  <span className="ml-1 text-emerald-400/70">
+                    —
+                    {' '}
+                    {Object.keys(parseResult.curve.points).length}
+                    {' '}
+                    set points,
+                    {' '}
+                    {parseResult.curve.bedtime}
+                    {' '}
+                    →
+                    {' '}
+                    {parseResult.curve.wake}
+                  </span>
+                </div>
+              </div>
+            )
+          : (
+              <div className="flex items-start gap-2 rounded-xl bg-red-500/10 px-3 py-2.5">
+                <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-400" />
+                <p className="text-xs text-red-400">{parseResult.error}</p>
+              </div>
+            )
       )}
     </div>
   )
@@ -680,9 +735,9 @@ function StepPreview({
   onApply,
 }: {
   curve: GeneratedCurve
-  editablePoints: Array<{ time: string; tempF: number }>
-  tempRange: { min: number; max: number }
-  chartData: { points: CurvePoint[]; bedtimeMinutes: number } | null
+  editablePoints: Array<{ time: string, tempF: number }>
+  tempRange: { min: number, max: number }
+  chartData: { points: CurvePoint[], bedtimeMinutes: number } | null
   onUpdatePoint: (idx: number, field: 'time' | 'tempF', value: string | number) => void
   onAddPoint: () => void
   onRemovePoint: (idx: number) => void
@@ -698,7 +753,10 @@ function StepPreview({
       <div className="flex items-center justify-between">
         <span className="text-sm font-semibold text-white">{curve.name}</span>
         <span className="rounded-full bg-zinc-800 px-2.5 py-1 text-[10px] font-medium text-zinc-400">
-          {curve.bedtime} → {curve.wake}
+          {curve.bedtime}
+          {' '}
+          →
+          {curve.wake}
         </span>
       </div>
 
@@ -728,13 +786,17 @@ function StepPreview({
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-            Set Points ({editablePoints.length})
+            Set Points (
+            {editablePoints.length}
+            )
           </p>
           <button
             onClick={onAddPoint}
             className="flex items-center gap-1 text-[10px] text-cyan-400"
           >
-            <Plus size={10} /> Add
+            <Plus size={10} />
+            {' '}
+            Add
           </button>
         </div>
 
@@ -779,8 +841,10 @@ function StepPreview({
                 <span className={cn(
                   'w-10 text-center text-xs font-medium tabular-nums',
                   point.tempF <= 74 ? 'text-blue-400' : point.tempF <= 82 ? 'text-zinc-300' : 'text-orange-400',
-                )}>
-                  {point.tempF}°
+                )}
+                >
+                  {point.tempF}
+                  °
                 </span>
                 <button
                   onClick={() => onUpdatePoint(idx, 'tempF', point.tempF + 1)}
@@ -809,7 +873,9 @@ function StepPreview({
           onClick={onSaveTemplate}
           className="flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-800/50 px-4 py-3 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700"
         >
-          <Save size={14} /> Save
+          <Save size={14} />
+          {' '}
+          Save
         </button>
 
         <button
@@ -823,13 +889,25 @@ function StepPreview({
             'disabled:opacity-60',
           )}
         >
-          {applying ? (
-            <><Loader2 size={16} className="animate-spin" /> Applying...</>
-          ) : applied ? (
-            <><Check size={16} /> Applied!</>
-          ) : (
-            `Apply to ${dayCount} ${dayCount === 1 ? 'day' : 'days'}`
-          )}
+          {applying
+            ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  {' '}
+                  Applying...
+                </>
+              )
+            : applied
+              ? (
+                  <>
+                    <Check size={16} />
+                    {' '}
+                    Applied!
+                  </>
+                )
+              : (
+                  `Apply to ${dayCount} ${dayCount === 1 ? 'day' : 'days'}`
+                )}
         </button>
       </div>
     </div>
