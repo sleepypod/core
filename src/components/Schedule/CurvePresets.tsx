@@ -12,6 +12,7 @@ import {
 } from '@/src/lib/sleepCurve/generate'
 import type { CoolingIntensity, CurvePoint } from '@/src/lib/sleepCurve/types'
 import type { DayOfWeek } from './DaySelector'
+import { AICurveWizard } from './AICurveWizard'
 
 type Side = 'left' | 'right'
 type PresetId = CoolingIntensity | 'custom'
@@ -103,6 +104,7 @@ interface CurvePresetsProps {
 export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: CurvePresetsProps) {
   const [applying, setApplying] = useState<PresetId | null>(null)
   const [applied, setApplied] = useState<PresetId | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   const utils = trpc.useUtils()
   const createTempSchedule = trpc.schedules.createTemperatureSchedule.useMutation()
@@ -209,7 +211,7 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: Cur
               key={preset.id}
               type="button"
               disabled={applying !== null}
-              onClick={() => void handleApply(preset)}
+              onClick={() => preset.id === 'custom' ? setWizardOpen(true) : void handleApply(preset)}
               className={cn(
                 'flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-center transition-all duration-200',
                 isApplied
@@ -233,6 +235,15 @@ export function CurvePresets({ side, selectedDay, selectedDays, onApplied }: Cur
           )
         })}
       </div>
+
+      {/* AI Curve Wizard */}
+      <AICurveWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        side={side}
+        selectedDays={selectedDays}
+        onApplied={() => void utils.schedules.invalidate()}
+      />
     </div>
   )
 }
