@@ -145,21 +145,54 @@ pnpm db:push
 sp-restart
 ```
 
-## Updating
+## Deployment
+
+The pod has limited RAM (~512MB) and cannot reliably build the Next.js app. All deployment paths build locally or in CI and ship pre-built artifacts.
+
+### Production Updates (sp-update)
+
+From the pod or the web UI's Software card:
 
 ```bash
-sp-update
+sp-update              # update to latest main
+sp-update feat/alarms  # update to a specific branch
 ```
 
-Or manually:
+How it works:
+1. Opens WAN temporarily (toggles iptables)
+2. Tries to download a **CI release tarball** first (includes pre-built `.next`) — no build needed on pod
+3. Falls back to a **source tarball** from GitHub if no CI release exists
+4. Only builds on-pod if `.next` is missing (risky on low-RAM pods — avoid if possible)
+5. Installs prod dependencies, runs migrations on startup, restarts service
+6. Re-blocks WAN, rolls back on failure
+
+### Dev Deploys (scripts/deploy)
+
+From your development machine:
+
 ```bash
-cd /home/dac/sleepypod-core
-systemctl stop sleepypod.service
-git pull
-pnpm install --frozen-lockfile --ignore-scripts
-cd node_modules/better-sqlite3 && npm run build-release && cd ../..
-pnpm db:generate
-pnpm db:migrate
-pnpm build
-systemctl start sleepypod.service
+./scripts/deploy                           # current branch → default pod (192.168.1.88)
+./scripts/deploy 192.168.1.50              # current branch → different pod
+./scripts/deploy 192.168.1.88 feat/alarms  # checkout + deploy a branch
 ```
+
+How it works:
+1. Builds Next.js **locally** on your Mac (fast, full RAM)
+2. Tars source + `.next` build, pipes over SSH to the pod
+3. Runs `scripts/install --local --no-ssh` on the pod (prod deps only, no build)
+4. Service restarts automatically
+
+### Fast Push (scripts/push)
+
+Skip the build entirely — push an already-built `.next` directory:
+
+```bash
+./scripts/push                # push pre-built .next to default pod
+./scripts/push 192.168.1.50   # push to different pod
+```
+
+Use this when you've already run `pnpm build` locally and just want to sync.
+
+### Why the pod can't build
+
+Next.js production builds require 1-2GB RAM for Turbopack. The pod has ~512MB. Attempting `pnpm build` on-pod may OOM-kill the process or produce a corrupted build. All deployment paths avoid this by shipping pre-built `.next` artifacts.
