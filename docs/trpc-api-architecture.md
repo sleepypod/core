@@ -51,6 +51,7 @@ Device status is primarily pushed via WebSocket. tRPC polling remains available 
 sequenceDiagram
     participant HW as Pod Hardware
     participant DM as DacMonitor (2s poll)
+    participant SCH as Scheduler
     participant API as tRPC API :3000
     participant WS as piezoStream WS :3001
     participant UI as Browser UI
@@ -62,12 +63,18 @@ sequenceDiagram
         WS->>UI: deviceStatus frame (push)
     end
 
-    Note over UI: Mutation triggers immediate broadcast
+    Note over UI: User mutation triggers immediate broadcast
     UI->>API: setTemperature / setPower / setAlarm
     API->>HW: hardware command
     HW-->>API: success
-    API->>WS: broadcastMutationStatus() (overlay onto last polled status)
+    API->>WS: broadcastMutationStatus()
     WS->>UI: deviceStatus frame (all clients, ~200ms)
+
+    Note over SCH: Scheduled job triggers same broadcast
+    SCH->>HW: hardware command (via shared client)
+    HW-->>SCH: success
+    SCH->>WS: broadcastMutationStatus()
+    WS->>UI: deviceStatus frame (all clients)
 
     Note over UI: useDeviceStatus() hook
     Note over UI: WS primary, tRPC HTTP fallback for initial load
@@ -130,7 +137,7 @@ Real-time Pod hardware control.
 - `snoozeAlarm(side, duration, config)` - Stop alarm, restart after snooze duration
 - `startPriming()` - Run water circulation sequence (2-5 min, loud, don't run during sleep)
 
-**Event bus:** All mutation procedures (`setTemperature`, `setPower`, `setAlarm`, `clearAlarm`, `snoozeAlarm`) call `broadcastMutationStatus()` after hardware success. This overlays the mutation onto `dacMonitor.getLastStatus()` and broadcasts a `deviceStatus` frame to all WS clients. Fire-and-forget — never blocks the HTTP response. DacMonitor's 2s poll remains the authoritative consistency backstop.
+**Event bus:** All mutation procedures (`setTemperature`, `setPower`, `setAlarm`, `clearAlarm`, `snoozeAlarm`) call `broadcastMutationStatus()` after hardware success. The scheduler's job callbacks (`scheduleTemperature`, `schedulePowerOn/Off`, `scheduleAlarm`) call the same function. This overlays the mutation onto `dacMonitor.getLastStatus()` and broadcasts a `deviceStatus` frame to all WS clients. Fire-and-forget — never blocks the caller. DacMonitor's 2s poll remains the authoritative consistency backstop. The shared helper lives in `src/streaming/broadcastMutationStatus.ts`.
 
 **Hardware Timing:**
 - Commands execute in ~100-500ms

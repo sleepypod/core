@@ -29,6 +29,7 @@ graph TD
     API -->|after mutation| WS
     API --> HW
     SCH[Scheduler] --> HW
+    SCH -->|after scheduled job| WS
     SCH --> DB
 ```
 
@@ -37,7 +38,8 @@ graph TD
 | Data | Path | Latency |
 |------|------|---------|
 | Device status (temp, power) | Hardware → DacMonitor → WS push | ~2s (poll backstop) |
-| Device status after mutation | tRPC mutation → broadcastFrame → WS push | ~200ms |
+| Device status after mutation | tRPC mutation → broadcastMutationStatus → WS push | ~200ms |
+| Device status after scheduled job | Scheduler → Hardware → broadcastMutationStatus → WS push | immediate |
 | Sensor data (piezo, bed temp) | RAW files → piezoStream → WS push | ~10ms |
 | Mutations (setTemp, setPower) | Browser → tRPC HTTP → Hardware → WS broadcast | ~200-500ms |
 | Historical data (vitals, sleep) | Browser → tRPC HTTP → SQLite | on-demand |

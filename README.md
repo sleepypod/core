@@ -49,6 +49,7 @@ graph TD
     DM -->|polls| DAC
     WS -->|push frames| UI
     SCHED -->|commands| DAC
+    SCHED -->|after scheduled job| WS
     SYNC -->|status events| DB1
     RAW -->|tails CBOR| PP
     RAW -->|tails CBOR| SD

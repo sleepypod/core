@@ -13,11 +13,11 @@ Additionally, the `claim_processing` / `activeClient` / `processingState` protoc
 
 ## Decision
 
-### 1. Broadcast device status after mutations
+### 1. Broadcast device status after all hardware writes
 
-Add `broadcastMutationStatus()` to the device router. After `setTemperature`, `setPower`, `setAlarm`, `clearAlarm`, and `snoozeAlarm` succeed at the hardware level, overlay the mutation onto `dacMonitor.getLastStatus()` and call `broadcastFrame()` with a `deviceStatus` frame.
+Extract `broadcastMutationStatus()` into a shared module (`src/streaming/broadcastMutationStatus.ts`). Both the **device router** (user-initiated mutations: `setTemperature`, `setPower`, `setAlarm`, `clearAlarm`, `snoozeAlarm`) and the **scheduler** (automated jobs: temperature, power on/off, alarm) call it after hardware success. This overlays the mutation onto `dacMonitor.getLastStatus()` and calls `broadcastFrame()` with a `deviceStatus` frame.
 
-This is fire-and-forget — it never blocks the HTTP response. DacMonitor's 2-second poll remains the authoritative consistency backstop (it reads actual hardware state).
+Fire-and-forget — never blocks the caller. DacMonitor's 2-second poll remains the authoritative consistency backstop (it reads actual hardware state). All hardware commands go through `dacTransport`'s `SequentialQueue`, so writes from concurrent sources (user mutation + scheduled job) are serialized at the transport level.
 
 ### 2. Remove claim_processing
 
@@ -37,7 +37,8 @@ graph LR
     end
 
     subgraph "sleepypod-core"
-        API["tRPC API :3000<br/>(all writes)"]
+        API["tRPC API :3000<br/>(user writes)"]
+        SCH["Scheduler<br/>(automated jobs)"]
         WS["WebSocket :3001<br/>(read-only pub/sub)"]
         MON["DacMonitor<br/>(2s poll)"]
         DAC["dac.sock<br/>(hardware)"]
@@ -46,10 +47,12 @@ graph LR
     PhoneA -- "POST /device/temperature" --> API
     Dial -- "POST /device/temperature" --> API
     API -- "after success" --> WS
+    SCH -- "after job success" --> WS
     MON -- "status:updated" --> WS
     WS -- "deviceStatus frame" --> PhoneA & PhoneB & Dial & Web
     MON -- "poll 2s" --> DAC
     API -- "SequentialQueue" --> DAC
+    SCH -- "SequentialQueue" --> DAC
 ```
 
 ### Data flow overview
@@ -58,13 +61,18 @@ graph LR
 graph TD
     Client["Client<br/>(phone, dial, browser)"]
     API["tRPC API :3000"]
+    SCH["Scheduler"]
     DAC["dac.sock<br/>hardware"]
     MON["DacMonitor<br/>2s poll"]
+    BMS["broadcastMutationStatus()"]
     WS["WebSocket :3001<br/>read-only pub/sub"]
 
     Client -->|"HTTP mutation"| API
     API -->|"hardware cmd"| DAC
-    API -->|"broadcastMutationStatus()"| WS
+    SCH -->|"scheduled job"| DAC
+    API --> BMS
+    SCH --> BMS
+    BMS -->|"overlay onto last status"| WS
     DAC -->|"poll response"| MON
     MON -->|"status:updated"| WS
     WS -->|"deviceStatus frame"| Client
