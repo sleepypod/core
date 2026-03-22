@@ -1,9 +1,9 @@
 'use client'
 
 import { useCallback, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { Droplets, Minus, TrendingDown, TrendingUp } from 'lucide-react'
 import { useSensorStream } from '@/src/hooks/useSensorStream'
-import { useSide } from '@/src/hooks/useSide'
 import { trpc } from '@/src/utils/trpc'
 import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { TimeRangeSelector, getDateRangeFromTimeRange, type TimeRange } from '@/src/components/Environment/TimeRangeSelector'
@@ -15,7 +15,12 @@ import { PresenceCard } from './PresenceCard'
 import { BedTempMatrix } from './BedTempMatrix'
 import { FreezerHealthCard } from './FreezerHealthCard'
 import { PiezoWaveform } from './PiezoWaveform'
-import { DataPipeline } from './DataPipeline'
+
+// Dynamic import — ReactFlow (@xyflow/react) accesses window during init, crashes SSR
+const DataPipeline = dynamic(() => import('./DataPipeline').then(m => ({ default: m.DataPipeline })), {
+  ssr: false,
+  loading: () => <div className="flex h-[400px] items-center justify-center text-xs text-zinc-600">Loading pipeline...</div>,
+})
 
 /**
  * Main Sensors screen composition.
@@ -29,7 +34,6 @@ import { DataPipeline } from './DataPipeline'
  */
 export function SensorsScreen() {
   const [streamEnabled, setStreamEnabled] = useState(true)
-  const { side } = useSide()
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
 
   // Connect to the sensor stream
