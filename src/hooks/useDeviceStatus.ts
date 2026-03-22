@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSensorStream, useSensorFrame } from './useSensorStream'
 import type { DeviceStatusFrame } from './useSensorStream'
@@ -13,25 +13,25 @@ import type { DeviceStatusFrame } from './useSensorStream'
  *
  * Fallback: `device.getStatus` tRPC query for initial load and when WS
  * is disconnected.
- *
- * The WS frame shape matches the tRPC getStatus response so consumers
- * can use either transparently.
  */
 export function useDeviceStatus() {
-  // Ensure the WS stream is connected (ref-counted — safe if other hooks also connect)
-  const { lastFrameTime } = useSensorStream({ sensors: ['deviceStatus'], enabled: true })
+  // Start WS connection (ref-counted). Don't destructure — the full snapshot
+  // changes on every frame which would cause unnecessary re-renders.
+  useSensorStream({ sensors: ['deviceStatus'], enabled: true })
 
+  // This only re-renders when a deviceStatus frame arrives (per-sensor listener)
   const wsFrame = useSensorFrame('deviceStatus') as DeviceStatusFrame | undefined
 
-  // Use the presence of a WS frame as the freshness signal.
-  // lastFrameTime is set via setState so it's stable between renders (no Date.now() in render).
-  const hasWsData = wsFrame != null && lastFrameTime != null
+  // Once we've received a WS frame, stop HTTP polling. Use a ref so the
+  // value is sticky (doesn't flip back to false between frames).
+  const hasReceivedWs = useRef(false)
+  if (wsFrame != null) hasReceivedWs.current = true
 
-  // HTTP fallback — poll when WS hasn't delivered any frames
+  // HTTP fallback — poll only until the first WS frame arrives
   const { data: httpStatus, isLoading, refetch } = trpc.device.getStatus.useQuery(
     {},
     {
-      refetchInterval: hasWsData ? false : 7_000,
+      refetchInterval: hasReceivedWs.current ? false : 7_000,
       staleTime: 3_000,
     },
   )
@@ -45,7 +45,7 @@ export function useDeviceStatus() {
   }
 
   // Merge: prefer WS frame (fresher, ~2s cadence) over HTTP
-  const status = hasWsData && wsFrame
+  const status = hasReceivedWs.current && wsFrame
     ? {
         leftSide: wsFrame.leftSide,
         rightSide: wsFrame.rightSide,
@@ -65,9 +65,9 @@ export function useDeviceStatus() {
 
   return {
     status,
-    isLoading: !hasWsData && isLoading,
+    isLoading: !hasReceivedWs.current && isLoading,
     refetch: refetchStatus,
     /** Whether device status is being received via WebSocket */
-    isStreaming: hasWsData,
+    isStreaming: hasReceivedWs.current,
   }
 }
