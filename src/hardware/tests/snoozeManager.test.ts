@@ -2,13 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const mockSetAlarm = vi.fn().mockResolvedValue(undefined)
 
-// Mock piezoStream before dacMonitor.instance — Vitest's import analysis
-// resolves the dynamic import("@/src/streaming/piezoStream") in dacMonitor.instance.ts
-// even when the module itself is mocked.
-vi.mock('@/src/streaming/piezoStream', () => ({
-  broadcastFrame: vi.fn(),
-}))
-
 vi.mock('../dacMonitor.instance', () => ({
   getSharedHardwareClient: vi.fn(() => ({
     setAlarm: mockSetAlarm,

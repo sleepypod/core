@@ -47,7 +47,8 @@ export function broadcastMutationStatus(
         right: getSnoozeStatus('right'),
       },
     })
-  } catch {
+  }
+  catch {
     // Fire-and-forget — never block the mutation response
   }
 }

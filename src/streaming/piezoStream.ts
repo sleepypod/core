@@ -249,8 +249,8 @@ function int32BufferToArray(raw: Buffer | Uint8Array | undefined): number[] {
 const NO_SENSOR = -327.68
 
 function isSentinel(v: unknown): boolean {
-  return v === null || v === undefined || v === NO_SENSOR ||
-    (typeof v === 'number' && Math.abs(v - NO_SENSOR) < 0.01)
+  return v === null || v === undefined || v === NO_SENSOR
+    || (typeof v === 'number' && Math.abs(v - NO_SENSOR) < 0.01)
 }
 
 function safeNum(v: unknown): number | null {
@@ -514,7 +514,8 @@ function findIndexEntry(targetTs: number): number {
     const mid = (lo + hi) >>> 1
     if (frameIndex[mid].ts <= targetTs) {
       lo = mid + 1
-    } else {
+    }
+    else {
       hi = mid - 1
     }
   }
@@ -598,19 +599,23 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
 
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(frame))
-          } else {
+          }
+          else {
             done = true
             break
           }
         }
-      } catch (e) {
+      }
+      catch (e) {
         if (e instanceof RangeError) break // incomplete record
         bufPos += 1 // skip malformed byte, try to resync
       }
     }
-  } catch {
+  }
+  catch {
     if (fd !== null) {
-      try { fs.closeSync(fd) } catch { /* ignore */ }
+      try { fs.closeSync(fd) }
+      catch { /* ignore */ }
     }
   }
 
@@ -631,10 +636,12 @@ function updatePollRate(): void {
     const clientCount = wss?.clients.size ?? 0
     if (clientCount > 0) {
       monitor.setActive()
-    } else {
+    }
+    else {
       monitor.setIdle()
     }
-  } catch { /* monitor not started yet */ }
+  }
+  catch { /* monitor not started yet */ }
 }
 
 /**
@@ -748,7 +755,8 @@ export function startPiezoStreamServer(): WebSocketServer {
 
                 // Lazy serialize — only if at least one client needs it
                 if (payload === null) payload = JSON.stringify(frame)
-                try { client.send(payload) } catch { /* client gone between readyState check and send */ }
+                try { client.send(payload) }
+                catch { /* client gone between readyState check and send */ }
               }
             }
           }
@@ -800,7 +808,8 @@ export function broadcastFrame(frame: Record<string, unknown>): void {
     if (subs && !subs.has(frameType as SensorType)) continue
 
     if (payload === null) payload = JSON.stringify(frame)
-    try { client.send(payload) } catch { /* client gone between readyState check and send */ }
+    try { client.send(payload) }
+    catch { /* client gone between readyState check and send */ }
   }
 }
 

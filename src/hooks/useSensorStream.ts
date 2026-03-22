@@ -95,9 +95,9 @@ export interface FrzThermFrame {
 export interface FrzHealthFrame {
   type: 'frzHealth'
   ts: number
-  left: { pumpRpm: number; pumpDuty: number; tecCurrent: number }
-  right: { pumpRpm: number; pumpDuty: number; tecCurrent: number }
-  fan: { rpm: number; duty: number }
+  left: { pumpRpm: number, pumpDuty: number, tecCurrent: number }
+  right: { pumpRpm: number, pumpDuty: number, tecCurrent: number }
+  fan: { rpm: number, duty: number }
 }
 
 /** Firmware log frame. */
@@ -138,43 +138,43 @@ export interface DeviceStatusFrame {
   isPriming: boolean
   primeCompletedNotification?: { timestamp: number }
   snooze: {
-    left: { active: boolean; snoozeUntil: number | null } | null
-    right: { active: boolean; snoozeUntil: number | null } | null
+    left: { active: boolean, snoozeUntil: number | null } | null
+    right: { active: boolean, snoozeUntil: number | null } | null
   }
 }
 
 /** Union of all sensor frame types. */
-export type SensorFrame =
-  | PiezoDualFrame
-  | CapSenseFrame
-  | CapSense2Frame
-  | BedTempFrame
-  | BedTemp2Frame
-  | FrzTempFrame
-  | FrzThermFrame
-  | FrzHealthFrame
-  | LogFrame
-  | DeviceStatusFrame
-  | GestureFrame
+export type SensorFrame
+  = | PiezoDualFrame
+    | CapSenseFrame
+    | CapSense2Frame
+    | BedTempFrame
+    | BedTemp2Frame
+    | FrzTempFrame
+    | FrzThermFrame
+    | FrzHealthFrame
+    | LogFrame
+    | DeviceStatusFrame
+    | GestureFrame
 
 // ---------------------------------------------------------------------------
 // Server → Client control messages
 // ---------------------------------------------------------------------------
 
-interface ErrorMessage { type: 'error'; message: string }
-interface ClaimedMessage { type: 'claimed'; since: number }
+interface ErrorMessage { type: 'error', message: string }
+interface ClaimedMessage { type: 'claimed', since: number }
 interface ReleasedMessage { type: 'released' }
-interface SubscribedMessage { type: 'subscribed'; sensors: string[] }
-interface TimeRangeMessage { type: 'time_range'; min: number; max: number; file: string | null }
+interface SubscribedMessage { type: 'subscribed', sensors: string[] }
+interface TimeRangeMessage { type: 'time_range', min: number, max: number, file: string | null }
 interface SeekCompleteMessage { type: 'seek_complete' }
 
-type ServerControlMessage =
-  | ErrorMessage
-  | ClaimedMessage
-  | ReleasedMessage
-  | SubscribedMessage
-  | TimeRangeMessage
-  | SeekCompleteMessage
+type ServerControlMessage
+  = | ErrorMessage
+    | ClaimedMessage
+    | ReleasedMessage
+    | SubscribedMessage
+    | TimeRangeMessage
+    | SeekCompleteMessage
 
 type ServerMessage = SensorFrame | ServerControlMessage
 
@@ -388,8 +388,8 @@ function handleMessage(event: MessageEvent) {
     }
     if (msg.type === 'time_range') {
       const tr = msg as TimeRangeMessage
-      const range: TimeRange | null =
-        tr.min === 0 && tr.max === 0 ? null : { min: tr.min, max: tr.max }
+      const range: TimeRange | null
+        = tr.min === 0 && tr.max === 0 ? null : { min: tr.min, max: tr.max }
       setState({ timeRange: range })
       // Resolve any pending getTimeRange() promises
       for (const resolve of singleton.timeRangeResolvers) {
@@ -418,9 +418,11 @@ function handleMessage(event: MessageEvent) {
 
     // Notify frame callbacks
     for (const cb of frameCallbacks) {
-      try { cb(frame) } catch { /* consumer error */ }
+      try { cb(frame) }
+      catch { /* consumer error */ }
     }
-  } catch {
+  }
+  catch {
     // Non-JSON message — ignore
   }
 }
@@ -437,7 +439,8 @@ function connect() {
 
   try {
     singleton.ws = new WebSocket(url)
-  } catch {
+  }
+  catch {
     setState({ status: 'disconnected', lastError: 'Failed to create WebSocket' })
     scheduleReconnect()
     return
@@ -458,7 +461,8 @@ function connect() {
     singleton.ws = null
     if (!singleton.intentionalClose) {
       scheduleReconnect()
-    } else {
+    }
+    else {
       setState({ status: 'disconnected' })
     }
   }
@@ -499,7 +503,8 @@ function recomputeAndSendSubscription() {
     }
     if (merged === null) {
       merged = [...sensors]
-    } else {
+    }
+    else {
       for (const s of sensors) {
         if (!merged.includes(s)) merged.push(s)
       }
@@ -696,7 +701,7 @@ export function useOnSensorFrame(callback: FrameCallback) {
   callbackRef.current = callback
 
   useEffect(() => {
-    const handler: FrameCallback = (frame) => callbackRef.current(frame)
+    const handler: FrameCallback = frame => callbackRef.current(frame)
     frameCallbacks.add(handler)
     return () => { frameCallbacks.delete(handler) }
   }, [])
