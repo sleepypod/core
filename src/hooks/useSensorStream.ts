@@ -220,7 +220,6 @@ interface SensorStreamSingleton {
   sensorListeners: Map<SensorType, Set<() => void>>
   frameCallbacks: Set<FrameCallback>
   ws: WebSocket | null
-  heartbeatInterval: ReturnType<typeof setInterval> | null
   reconnectTimeout: ReturnType<typeof setTimeout> | null
   reconnectAttempt: number
   intentionalClose: boolean
@@ -256,7 +255,6 @@ if (!g[SINGLETON_KEY]) {
     sensorListeners: new Map<SensorType, Set<() => void>>(),
     frameCallbacks: new Set<FrameCallback>(),
     ws: null,
-    heartbeatInterval: null,
     reconnectTimeout: null,
     reconnectAttempt: 0,
     intentionalClose: false,
@@ -347,7 +345,6 @@ const frameCallbacks = singleton.frameCallbacks
 // ---------------------------------------------------------------------------
 
 const DEFAULT_WS_PORT = 3001
-const HEARTBEAT_INTERVAL_MS = 15_000 // send heartbeat every 15s (server timeout is 30s)
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 30_000
 
@@ -356,22 +353,6 @@ function getWsUrl(): string {
   const port = Number(process.env.NEXT_PUBLIC_PIEZO_WS_PORT ?? DEFAULT_WS_PORT)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.hostname}:${port}`
-}
-
-function startHeartbeat() {
-  stopHeartbeat()
-  singleton.heartbeatInterval = setInterval(() => {
-    if (singleton.ws?.readyState === WebSocket.OPEN) {
-      singleton.ws.send(JSON.stringify({ type: 'heartbeat' }))
-    }
-  }, HEARTBEAT_INTERVAL_MS)
-}
-
-function stopHeartbeat() {
-  if (singleton.heartbeatInterval) {
-    clearInterval(singleton.heartbeatInterval)
-    singleton.heartbeatInterval = null
-  }
 }
 
 function scheduleReconnect() {
@@ -551,7 +532,6 @@ function connect() {
   singleton.ws.onopen = () => {
     singleton.reconnectAttempt = 0
     setState({ status: 'connected', lastError: null })
-    startHeartbeat()
     startFpsTimer()
 
     // Send subscription if one was requested before connection
@@ -563,7 +543,6 @@ function connect() {
   singleton.ws.onmessage = handleMessage
 
   singleton.ws.onclose = () => {
-    stopHeartbeat()
     singleton.ws = null
     if (!singleton.intentionalClose) {
       scheduleReconnect()
@@ -580,7 +559,6 @@ function connect() {
 
 function disconnect() {
   singleton.intentionalClose = true
-  stopHeartbeat()
   stopFpsTimer()
   if (singleton.reconnectTimeout) {
     clearTimeout(singleton.reconnectTimeout)
@@ -682,7 +660,7 @@ export interface UseSensorStreamOptions {
 /**
  * React hook that connects to the piezoStream WebSocket server on port 3001,
  * manages connection lifecycle (open/close/reconnect with exponential backoff),
- * sends subscribe/heartbeat messages, and exposes typed sensor frames.
+ * sends subscribe messages, and exposes typed sensor frames.
  *
  * Multiple components can use this hook simultaneously — the WebSocket
  * connection is shared (singleton) and ref-counted.

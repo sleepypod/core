@@ -10,13 +10,8 @@
  * temperature, freezer health, and firmware logs. Clients can subscribe to
  * specific types to avoid receiving unwanted high-frequency data.
  *
- * Only one iOS client may claim processing ownership at a time.
- *
  * Protocol:
  *   Client → Server:
- *     { type: "claim_processing" }           — claim processing ownership
- *     { type: "heartbeat" }                  — keep-alive (must arrive within 30 s)
- *     { type: "release_processing" }         — voluntarily release ownership
  *     { type: "subscribe", sensors: [...] }  — subscribe to sensor types
  *                                              (default: all types)
  *     { type: "get_time_range" }             — request available scrub range
@@ -33,8 +28,6 @@
  *
  *   Server → Client (control):
  *     { type: "error", message }     — error notification
- *     { type: "claimed", since }     — ack for claim_processing
- *     { type: "released" }           — ack for release / heartbeat timeout
  *     { type: "subscribed", sensors } — ack for subscribe
  *     { type: "time_range", min, max, file } — available scrub range
  *     { type: "seek_complete" }      — seek replay finished
@@ -44,15 +37,12 @@ import { WebSocketServer, WebSocket } from 'ws'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Decoder } from 'cbor-x'
-import { setIosProcessing } from './processingState'
-
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
 const WS_PORT = Number(process.env.PIEZO_WS_PORT ?? 3001)
 const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
-const HEARTBEAT_TIMEOUT_MS = 30_000
 const FILE_POLL_INTERVAL_MS = 10 // match Python's 10 ms poll for new data
 const SEEK_MAX_DURATION_S = 30 // max seconds of data to replay on seek
 
@@ -435,63 +425,14 @@ function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
 let wss: WebSocketServer | null = null
 let streamingInterval: ReturnType<typeof setInterval> | null = null
 
-/** The single active processing client (if any). */
-let activeClient: WebSocket | null = null
-let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
-
 /** Per-client sensor subscriptions. undefined = all types (default). */
 const clientSubscriptions = new WeakMap<WebSocket, Set<SensorType> | undefined>()
-
-function resetHeartbeatTimer(): void {
-  if (heartbeatTimer) clearTimeout(heartbeatTimer)
-  heartbeatTimer = setTimeout(() => {
-    console.warn('[sensorStream] iOS heartbeat timeout — releasing processing ownership')
-    releaseClient()
-  }, HEARTBEAT_TIMEOUT_MS)
-}
-
-function releaseClient(): void {
-  if (heartbeatTimer) {
-    clearTimeout(heartbeatTimer)
-    heartbeatTimer = null
-  }
-  if (activeClient) {
-    try {
-      activeClient.send(JSON.stringify({ type: 'released' }))
-    }
-    catch { /* client may already be gone */ }
-    activeClient = null
-  }
-  setIosProcessing(false)
-}
 
 function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
   try {
     const msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf-8'))
 
-    if (msg.type === 'claim_processing') {
-      if (activeClient && activeClient !== ws && activeClient.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Another client is already processing' }))
-        return
-      }
-      activeClient = ws
-      setIosProcessing(true)
-      resetHeartbeatTimer()
-      ws.send(JSON.stringify({ type: 'claimed', since: Date.now() }))
-      console.log('[sensorStream] iOS client claimed processing ownership')
-    }
-    else if (msg.type === 'heartbeat') {
-      if (activeClient === ws) {
-        resetHeartbeatTimer()
-      }
-    }
-    else if (msg.type === 'release_processing') {
-      if (activeClient === ws) {
-        releaseClient()
-        console.log('[sensorStream] iOS client voluntarily released processing')
-      }
-    }
-    else if (msg.type === 'subscribe') {
+    if (msg.type === 'subscribe') {
       // Client specifies which sensor types it wants
       const requested = msg.sensors as string[] | undefined
       if (!Array.isArray(requested) || requested.length === 0) {
@@ -713,17 +654,11 @@ export function startPiezoStreamServer(): WebSocketServer {
 
     ws.on('close', () => {
       console.log('[sensorStream] Client disconnected')
-      if (activeClient === ws) {
-        releaseClient()
-      }
       updatePollRate()
     })
 
     ws.on('error', (err) => {
       console.error('[sensorStream] WebSocket error:', err.message)
-      if (activeClient === ws) {
-        releaseClient()
-      }
     })
   })
 
@@ -872,8 +807,6 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
     clearInterval(streamingInterval)
     streamingInterval = null
   }
-
-  releaseClient()
 
   const server = wss
   if (server) {

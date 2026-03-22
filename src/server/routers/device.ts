@@ -6,6 +6,9 @@ import { eq } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
+import { getAlarmState } from '@/src/hardware/deviceStateSync'
+import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
+import { broadcastFrame } from '@/src/streaming/piezoStream'
 import {
   sideSchema,
   temperatureSchema,
@@ -13,6 +16,49 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
+
+// ---------------------------------------------------------------------------
+// Event bus: broadcast device status after mutations
+// Overlays mutation onto the last polled status so all WS clients see the
+// change immediately. dacMonitor's 2s poll remains the authoritative backstop.
+// ---------------------------------------------------------------------------
+
+function broadcastMutationStatus(
+  side?: 'left' | 'right',
+  sideOverlay?: Record<string, unknown>,
+): void {
+  try {
+    const monitor = getDacMonitorIfRunning()
+    const lastStatus = monitor?.getLastStatus()
+    if (!lastStatus) return
+
+    const primeCompletedAt = getPrimeCompletedAt()
+    const alarmState = getAlarmState()
+    const leftSide = { ...lastStatus.leftSide, isAlarmVibrating: alarmState.left }
+    const rightSide = { ...lastStatus.rightSide, isAlarmVibrating: alarmState.right }
+
+    if (side && sideOverlay) {
+      if (side === 'left') Object.assign(leftSide, sideOverlay)
+      else Object.assign(rightSide, sideOverlay)
+    }
+
+    broadcastFrame({
+      type: 'deviceStatus',
+      ts: Date.now(),
+      leftSide,
+      rightSide,
+      waterLevel: lastStatus.waterLevel,
+      isPriming: lastStatus.isPriming,
+      ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+      snooze: {
+        left: getSnoozeStatus('left'),
+        right: getSnoozeStatus('right'),
+      },
+    })
+  } catch {
+    // Fire-and-forget — never block the mutation response
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Server-side temperature debounce
@@ -205,6 +251,7 @@ export const deviceRouter = router({
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
             }, 'Failed to set temperature')
+            broadcastMutationStatus(input.side, { targetTemperature: input.temperature })
             resolve({ success: true })
           }
           catch (error) {
@@ -276,6 +323,10 @@ export const deviceRouter = router({
           console.error('Failed to sync power state to DB:', dbError)
         }
 
+        broadcastMutationStatus(input.side, {
+          ...(input.temperature && { targetTemperature: input.temperature }),
+          targetLevel: input.powered ? undefined : 0,
+        })
         return { success: true }
       }, 'Failed to set power')
     }),
@@ -347,6 +398,7 @@ export const deviceRouter = router({
           console.error('Failed to sync alarm state to DB:', dbError)
         }
 
+        broadcastMutationStatus(input.side, { isAlarmVibrating: true })
         return { success: true }
       }, 'Failed to set alarm')
     }),
@@ -391,6 +443,7 @@ export const deviceRouter = router({
           console.error('Failed to sync alarm clear state to DB:', dbError)
         }
 
+        broadcastMutationStatus(input.side, { isAlarmVibrating: false })
         return { success: true }
       }, 'Failed to clear alarm')
     }),
@@ -430,6 +483,7 @@ export const deviceRouter = router({
           console.error('Failed to sync snooze state to DB:', dbError)
         }
 
+        broadcastMutationStatus(input.side, { isAlarmVibrating: false })
         return { success: true, snoozeUntil: Math.floor(snoozeUntil.getTime() / 1000) }
       }, 'Failed to snooze alarm')
     }),

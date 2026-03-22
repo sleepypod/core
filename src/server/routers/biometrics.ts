@@ -6,7 +6,6 @@ import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gte, lte, desc, asc, avg, min, max, count } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
-import { isIosProcessing, getConnectedSince } from '@/src/streaming/processingState'
 import { listRawFiles } from './raw'
 import {
   classifySleepStages,
@@ -484,23 +483,6 @@ export const biometricsRouter = router({
           message: `Failed to report vitals batch: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
-      }
-    }),
-
-  /**
-   * Check whether an iOS client is actively processing piezo data.
-   */
-  getProcessingStatus: publicProcedure
-    .meta({ openapi: { method: 'GET', path: '/biometrics/processing-status', protect: false, tags: ['Biometrics'] } })
-    .input(z.object({}))
-    .output(z.object({
-      iosProcessingActive: z.boolean(),
-      connectedSince: z.number().nullable(),
-    }))
-    .query(() => {
-      return {
-        iosProcessingActive: isIosProcessing(),
-        connectedSince: getConnectedSince(),
       }
     }),
 
