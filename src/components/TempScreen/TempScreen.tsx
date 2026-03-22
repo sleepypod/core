@@ -12,7 +12,6 @@ import { AlarmBanner } from '@/src/components/TempScreen/AlarmBanner'
 import { PrimingIndicator } from '@/src/components/TempScreen/PrimingIndicator'
 import { PrimeCompleteNotification } from '@/src/components/TempScreen/PrimeCompleteNotification'
 import { AmbientLightChip } from '@/src/components/TempScreen/AmbientLightChip'
-import { LatestSleepChip } from '@/src/components/TempScreen/LatestSleepChip'
 import { type TempUnit } from '@/src/lib/tempUtils'
 import { TEMP } from '@/src/lib/tempColors'
 import { Minus, Plus, Power } from 'lucide-react'
@@ -218,11 +217,10 @@ export const TempScreen = () => {
         </button>
       </div>
 
-      {/* Environment info panel + ambient light + last night sleep */}
+      {/* Environment info: home temp + lux (matching iOS) */}
       <EnvironmentInfoPanel unit={unit} />
-      <div className="flex items-center justify-center gap-4">
+      <div className="flex items-center justify-center">
         <AmbientLightChip />
-        <LatestSleepChip />
       </div>
 
     </div>

@@ -157,6 +157,12 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     if (target <= highestStep) setStep(target)
   }, [highestStep])
 
+  // Skip directly to Import (step 2) — user already has JSON
+  const handleSkipToImport = useCallback(() => {
+    setStep(2)
+    setHighestStep(prev => Math.max(prev, 2) as Step)
+  }, [])
+
   // ── Actions ──
 
   const handleCopy = useCallback(async () => {
@@ -437,16 +443,31 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
             <ChevronLeft size={14} /> Back
           </button>
 
-          {step < 3 && (
+          {step === 0 && (
+            <div className="flex gap-2">
+              <button
+                onClick={handleSkipToImport}
+                className="flex items-center gap-1 rounded-lg border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700"
+              >
+                <ClipboardPaste size={12} /> Import
+              </button>
+              <button
+                onClick={goNext}
+                disabled={!preferences.trim()}
+                className="flex items-center gap-1 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-cyan-600 disabled:opacity-40"
+              >
+                Generate <ChevronRight size={14} />
+              </button>
+            </div>
+          )}
+
+          {step > 0 && step < 3 && (
             <button
               onClick={goNext}
-              disabled={
-                (step === 0 && !preferences.trim()) ||
-                (step === 2 && !parseResult?.success)
-              }
+              disabled={step === 2 && !parseResult?.success}
               className="flex items-center gap-1 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-cyan-600 disabled:opacity-40"
             >
-              {step === 0 ? 'Generate Prompt' : 'Next'} <ChevronRight size={14} />
+              Next <ChevronRight size={14} />
             </button>
           )}
         </div>

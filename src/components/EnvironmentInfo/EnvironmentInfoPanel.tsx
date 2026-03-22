@@ -1,8 +1,7 @@
 'use client'
 
-import { Droplets, Home, Snowflake, Thermometer, Timer } from 'lucide-react'
+import { Home, Timer } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { useSide } from '@/src/providers/SideProvider'
 import { formatTemp, type TempUnit } from '@/src/lib/tempUtils'
 
 interface EnvironmentInfoProps {
@@ -13,40 +12,19 @@ interface EnvironmentInfoProps {
 }
 
 /**
- * Horizontal info bar showing environment data:
- * - Ambient temperature (from bed temp sensor)
- * - Humidity
- * - Bed surface temperature (left/right center)
- * - Auto-off timer countdown
- *
- * Matches iOS EnvironmentInfoView layout.
+ * Horizontal info bar showing environment data.
+ * Matches iOS EnvironmentInfoView layout:
+ * - Home/inside temperature (ambient sensor)
+ * - Auto-off timer countdown (when active)
  */
 export const EnvironmentInfoPanel = ({ secondsRemaining, unit = 'F' }: EnvironmentInfoProps) => {
-  const { primarySide } = useSide()
-
   const { data: bedTemp } = trpc.environment.getLatestBedTemp.useQuery(
     { unit },
     { refetchInterval: 10_000 },
   )
 
-  const { data: freezerTemp } = trpc.environment.getLatestFreezerTemp.useQuery(
-    { unit },
-    { refetchInterval: 10_000 },
-  )
-
-  // Ambient temp comes from bed temp sensor
+  // Ambient/room temp comes from bed temp sensor
   const ambientTemp = bedTemp?.ambientTemp
-  const humidity = bedTemp?.humidity
-
-  // Bed surface temp — use center sensor for the primary side
-  const bedSurfaceTemp = primarySide === 'left'
-    ? bedTemp?.leftCenterTemp
-    : bedTemp?.rightCenterTemp
-
-  // Water temperature from freezer unit for the primary side
-  const waterTemp = primarySide === 'left'
-    ? freezerTemp?.leftWaterTemp
-    : freezerTemp?.rightWaterTemp
 
   const formatTimeRemaining = (seconds: number): string => {
     const hours = Math.floor(seconds / 3600)
@@ -55,19 +33,25 @@ export const EnvironmentInfoPanel = ({ secondsRemaining, unit = 'F' }: Environme
     return `${minutes}m`
   }
 
+  if (ambientTemp == null && !(secondsRemaining != null && secondsRemaining > 0)) {
+    return null
+  }
+
   return (
     <div className="flex items-stretch justify-center gap-3 rounded-2xl bg-zinc-900 p-2 sm:gap-4 sm:p-3">
-      {/* Bed Surface Temperature — the inside temp */}
-      <InfoItem
-        icon={<Thermometer size={14} />}
-        label="Bed"
-        value={bedSurfaceTemp != null ? formatTemp(bedSurfaceTemp, unit) : '--'}
-      />
+      {/* Home/Inside Temperature */}
+      {ambientTemp != null && ambientTemp > 0 && (
+        <InfoItem
+          icon={<Home size={14} />}
+          label="Inside"
+          value={formatTemp(ambientTemp, unit)}
+        />
+      )}
 
       {/* Auto-off Timer (only shown when active) */}
       {secondsRemaining != null && secondsRemaining > 0 && (
         <>
-          <Divider />
+          {ambientTemp != null && ambientTemp > 0 && <Divider />}
           <InfoItem
             icon={<Timer size={14} />}
             label="Auto-off"
