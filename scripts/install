@@ -218,11 +218,25 @@ else
   echo "Using dac.sock at: $DAC_SOCK_PATH"
 fi
 
-# Create data directory
+# Create data directory with shared group for multi-user SQLite access.
+# The Node.js app (root) creates biometrics.db, but calibrator and
+# environment-monitor run as User=dac. Setgid ensures all files created
+# inside inherit the sleepypod group; UMask=0002 on services ensures
+# group-write bits are preserved (including SQLite WAL/SHM files).
 DATA_DIR="/persistent/sleepypod-data"
 echo "Creating data directory at $DATA_DIR..."
+groupadd -f sleepypod
+usermod -aG sleepypod dac
 mkdir -p "$DATA_DIR"
-chmod 755 "$DATA_DIR"
+chown root:sleepypod "$DATA_DIR"
+chmod 2770 "$DATA_DIR"
+
+# Fix permissions on existing database files (upgrades from older installs)
+if ls "$DATA_DIR"/*.db &>/dev/null; then
+  echo "Fixing database file permissions..."
+  chown -R root:sleepypod "$DATA_DIR"
+  find "$DATA_DIR" -type f -exec chmod 660 {} +
+fi
 
 # ============================================================================
 # Install Node.js via binary download (works on any Linux, no apt required)
@@ -393,6 +407,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
+UMask=0002
 WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
