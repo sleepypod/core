@@ -161,17 +161,17 @@ export default function DataPage() {
         )}
       </section>
 
-      {/* ── Sleep Stages (quality score + distribution) ── */}
+      {/* ── Nightly Sleep Analysis (quality + distribution — matches iOS) ── */}
       <section id="section-stages">
         {showBothSides ? (
           <div className="space-y-4">
             <SideLabel side="left" />
-            <SleepStagesCard side="left" />
+            <SleepStagesCard side="left" defaultTimeRange="night" hideTimeRangeSelector />
             <SideLabel side="right" />
-            <SleepStagesCard side="right" />
+            <SleepStagesCard side="right" defaultTimeRange="night" hideTimeRangeSelector />
           </div>
         ) : (
-          <SleepStagesCard side={primarySide} />
+          <SleepStagesCard side={primarySide} defaultTimeRange="night" hideTimeRangeSelector />
         )}
       </section>
 
@@ -181,17 +181,17 @@ export default function DataPage() {
         <VitalsPanel dualSide={showBothSides} hideNav hideSummary />
       </section>
 
-      {/* ── Sleep Timeline (weekly bar chart — matches iOS) ── */}
+      {/* ── Weekly Sleep Timeline (bar chart — matches iOS) ── */}
       <section id="section-timeline">
         {showBothSides ? (
           <div className="space-y-4">
             <SideLabel side="left" />
-            <SleepStagesCard side="left" defaultTimeRange="week" />
+            <SleepStagesCard side="left" defaultTimeRange="week" hideTimeRangeSelector />
             <SideLabel side="right" />
-            <SleepStagesCard side="right" defaultTimeRange="week" />
+            <SleepStagesCard side="right" defaultTimeRange="week" hideTimeRangeSelector />
           </div>
         ) : (
-          <SleepStagesCard side={primarySide} defaultTimeRange="week" />
+          <SleepStagesCard side={primarySide} defaultTimeRange="week" hideTimeRangeSelector />
         )}
       </section>
 

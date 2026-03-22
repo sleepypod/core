@@ -20,6 +20,8 @@ interface SleepStagesCardProps {
   side: 'left' | 'right'
   /** Initial time range view. Defaults to 'night'. */
   defaultTimeRange?: TimeRange
+  /** When true, hide the night/week/month picker (locks to defaultTimeRange) */
+  hideTimeRangeSelector?: boolean
 }
 
 /** Get the start of the week (Sunday) for a given date */
@@ -61,7 +63,7 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
  *
  * Wired to tRPC biometrics.getSleepStages and biometrics.getSleepRecords.
  */
-export function SleepStagesCard({ side, defaultTimeRange = 'night' }: SleepStagesCardProps) {
+export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRangeSelector = false }: SleepStagesCardProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>(defaultTimeRange)
   const [weekOffset, setWeekOffset] = useState(0) // 0 = current week, -1 = last week, etc.
   const [monthOffset, setMonthOffset] = useState(0)
@@ -293,11 +295,15 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night' }: SleepStage
     <div className="space-y-3 rounded-2xl bg-zinc-900/50 p-3 sm:space-y-4 sm:p-4">
       {/* Header with title and time range */}
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-white">Sleep Stages</h2>
-        <TimeRangeSelector value={timeRange} onChange={(r) => {
-          setTimeRange(r)
-          setSelectedWeekNight(null)
-        }} />
+        <h2 className="text-base font-semibold text-white">
+          {timeRange === 'week' ? 'Sleep Timeline' : 'Sleep Stages'}
+        </h2>
+        {!hideTimeRangeSelector && (
+          <TimeRangeSelector value={timeRange} onChange={(r) => {
+            setTimeRange(r)
+            setSelectedWeekNight(null)
+          }} />
+        )}
       </div>
 
       {/* Navigation for week/month */}
