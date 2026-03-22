@@ -102,7 +102,7 @@ export function CurveChart({ points, bedtimeMinutes, minTempF, maxTempF }: Curve
 
   return (
     <div className="w-full" style={{ height: 220 }}>
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
         <AreaChart
           data={chartData}
           margin={{ top: 8, right: 8, bottom: 0, left: -16 }}

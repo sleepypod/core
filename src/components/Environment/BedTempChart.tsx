@@ -87,7 +87,7 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
 
   return (
     <div className="h-[200px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
         <LineChart data={downsampled} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#333" strokeOpacity={0.5} />
           <XAxis
