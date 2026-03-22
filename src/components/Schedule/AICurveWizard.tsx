@@ -28,6 +28,10 @@ import {
   deleteTemplate,
 } from '@/src/lib/sleepCurve/curvePrompt'
 import type { GeneratedCurve, CurveTemplate, ParseResult } from '@/src/lib/sleepCurve/curvePrompt'
+import { timeStringToMinutes } from '@/src/lib/sleepCurve/generate'
+import type { CurvePoint } from '@/src/lib/sleepCurve/types'
+import { CurveChart } from './CurveChart'
+import { PhaseLegend } from './PhaseLegend'
 import type { DayOfWeek } from './DaySelector'
 
 type Side = 'left' | 'right'
@@ -312,6 +316,31 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     return { min: Math.min(...temps), max: Math.max(...temps) }
   }, [editablePoints])
 
+  // Convert editable set points → CurvePoint[] for chart
+  const chartData = useMemo(() => {
+    if (!curve || editablePoints.length < 2) return null
+    const btMin = timeStringToMinutes(curve.bedtime)
+    const sorted = [...editablePoints].sort((a, b) => a.time.localeCompare(b.time))
+    const total = sorted.length
+
+    const points: CurvePoint[] = sorted.map((p, i) => {
+      let tMin = timeStringToMinutes(p.time) - btMin
+      if (tMin < -120) tMin += 24 * 60
+
+      const frac = i / (total - 1)
+      const phase = frac < 0.1 ? 'warmUp' as const
+        : frac < 0.25 ? 'coolDown' as const
+        : frac < 0.55 ? 'deepSleep' as const
+        : frac < 0.75 ? 'maintain' as const
+        : frac < 0.9 ? 'preWake' as const
+        : 'wake' as const
+
+      return { minutesFromBedtime: tMin, tempOffset: p.tempF - 80, phase }
+    })
+
+    return { points, bedtimeMinutes: btMin }
+  }, [curve, editablePoints])
+
   if (!open) return null
 
   return (
@@ -382,6 +411,7 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
               curve={curve}
               editablePoints={editablePoints}
               tempRange={tempRange}
+              chartData={chartData}
               onUpdatePoint={updatePoint}
               onAddPoint={addPoint}
               onRemovePoint={removePoint}
@@ -615,6 +645,7 @@ function StepPreview({
   curve,
   editablePoints,
   tempRange,
+  chartData,
   onUpdatePoint,
   onAddPoint,
   onRemovePoint,
@@ -627,6 +658,7 @@ function StepPreview({
   curve: GeneratedCurve
   editablePoints: Array<{ time: string; tempF: number }>
   tempRange: { min: number; max: number }
+  chartData: { points: CurvePoint[]; bedtimeMinutes: number } | null
   onUpdatePoint: (idx: number, field: 'time' | 'tempF', value: string | number) => void
   onAddPoint: () => void
   onRemovePoint: (idx: number) => void
@@ -646,19 +678,27 @@ function StepPreview({
         </span>
       </div>
 
+      {/* Temperature curve chart */}
+      {chartData && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+          <CurveChart
+            points={chartData.points}
+            bedtimeMinutes={chartData.bedtimeMinutes}
+            minTempF={tempRange.min}
+            maxTempF={tempRange.max}
+          />
+          <div className="mt-2">
+            <PhaseLegend />
+          </div>
+        </div>
+      )}
+
       {/* Reasoning callout */}
       {curve.reasoning && (
         <div className="rounded-xl border border-zinc-800 bg-zinc-800/30 px-3 py-2.5">
           <p className="text-[11px] leading-relaxed text-zinc-400">{curve.reasoning}</p>
         </div>
       )}
-
-      {/* Temperature range badge */}
-      <div className="flex justify-center">
-        <span className="rounded-full bg-zinc-800 px-3 py-1 text-[10px] font-medium text-zinc-400">
-          {tempRange.min}°F – {tempRange.max}°F
-        </span>
-      </div>
 
       {/* Set point list */}
       <div className="space-y-1">
