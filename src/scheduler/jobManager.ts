@@ -8,6 +8,7 @@ import {
   deviceSettings,
 } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 
 /**
  * Job manager - orchestrates all scheduled tasks
@@ -141,6 +142,7 @@ export class JobManager {
         await client.connect()
         try {
           await client.setTemperature(sched.side, sched.temperature)
+          broadcastMutationStatus(sched.side, { targetTemperature: sched.temperature })
         }
         finally {
           // shared client — don't disconnect
@@ -166,6 +168,9 @@ export class JobManager {
         await client.connect()
         try {
           await client.setPower(sched.side, true, sched.onTemperature)
+          broadcastMutationStatus(sched.side, {
+            ...(sched.onTemperature && { targetTemperature: sched.onTemperature }),
+          })
         }
         finally {
           // shared client — don't disconnect
@@ -191,6 +196,7 @@ export class JobManager {
         await client.connect()
         try {
           await client.setPower(sched.side, false)
+          broadcastMutationStatus(sched.side, { targetLevel: 0 })
         }
         finally {
           // shared client — don't disconnect
@@ -223,6 +229,10 @@ export class JobManager {
             vibrationIntensity: sched.vibrationIntensity,
             vibrationPattern: sched.vibrationPattern,
             duration: sched.duration,
+          })
+          broadcastMutationStatus(sched.side, {
+            targetTemperature: sched.alarmTemperature,
+            isAlarmVibrating: true,
           })
         }
         finally {

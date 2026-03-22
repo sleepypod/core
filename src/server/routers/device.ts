@@ -6,9 +6,7 @@ import { eq } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
-import { getAlarmState } from '@/src/hardware/deviceStateSync'
-import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
-import { broadcastFrame } from '@/src/streaming/piezoStream'
+import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import {
   sideSchema,
   temperatureSchema,
@@ -16,49 +14,6 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
-
-// ---------------------------------------------------------------------------
-// Event bus: broadcast device status after mutations
-// Overlays mutation onto the last polled status so all WS clients see the
-// change immediately. dacMonitor's 2s poll remains the authoritative backstop.
-// ---------------------------------------------------------------------------
-
-function broadcastMutationStatus(
-  side?: 'left' | 'right',
-  sideOverlay?: Record<string, unknown>,
-): void {
-  try {
-    const monitor = getDacMonitorIfRunning()
-    const lastStatus = monitor?.getLastStatus()
-    if (!lastStatus) return
-
-    const primeCompletedAt = getPrimeCompletedAt()
-    const alarmState = getAlarmState()
-    const leftSide = { ...lastStatus.leftSide, isAlarmVibrating: alarmState.left }
-    const rightSide = { ...lastStatus.rightSide, isAlarmVibrating: alarmState.right }
-
-    if (side && sideOverlay) {
-      if (side === 'left') Object.assign(leftSide, sideOverlay)
-      else Object.assign(rightSide, sideOverlay)
-    }
-
-    broadcastFrame({
-      type: 'deviceStatus',
-      ts: Date.now(),
-      leftSide,
-      rightSide,
-      waterLevel: lastStatus.waterLevel,
-      isPriming: lastStatus.isPriming,
-      ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
-      snooze: {
-        left: getSnoozeStatus('left'),
-        right: getSnoozeStatus('right'),
-      },
-    })
-  } catch {
-    // Fire-and-forget — never block the mutation response
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Server-side temperature debounce
