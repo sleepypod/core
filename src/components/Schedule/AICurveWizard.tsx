@@ -1,11 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   X,
   Sparkles,
   Copy,
   Check,
+  Share2,
   ClipboardPaste,
   AlertTriangle,
   ChevronLeft,
@@ -155,30 +156,47 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
   // ── Actions ──
 
   const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(prompt)
-    } catch {
-      // Fallback for non-HTTPS (pod served over HTTP on LAN)
-      const textarea = document.createElement('textarea')
-      textarea.value = prompt
-      textarea.style.position = 'fixed'
-      textarea.style.opacity = '0'
-      document.body.appendChild(textarea)
-      textarea.select()
-      document.execCommand('copy')
-      document.body.removeChild(textarea)
+    // Try clipboard API first (works on HTTPS / localhost)
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(prompt)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+        return
+      } catch { /* fall through */ }
+    }
+    // Fallback: select the text in the prompt display so user can Cmd+C / long-press copy
+    const el = document.getElementById('ai-prompt-text')
+    if (el) {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const sel = window.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(range)
     }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }, [prompt])
 
-  const handlePaste = useCallback(async () => {
-    try {
-      const text = await navigator.clipboard.readText()
-      setJsonInput(text)
-    } catch {
-      // Clipboard read not available over HTTP — user must paste manually
+  const handleShare = useCallback(async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({ text: prompt })
+      } catch { /* user cancelled */ }
     }
+  }, [prompt])
+
+  const canShare = typeof navigator !== 'undefined' && !!navigator.share
+
+  const handlePaste = useCallback(async () => {
+    if (navigator.clipboard?.readText) {
+      try {
+        const text = await navigator.clipboard.readText()
+        setJsonInput(text)
+        return
+      } catch { /* fall through */ }
+    }
+    // Can't read clipboard over HTTP — focus the textarea so user can paste manually
   }, [])
 
   const handleLoadTemplate = useCallback((template: CurveTemplate) => {
@@ -347,6 +365,8 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
               prompt={prompt}
               copied={copied}
               onCopy={handleCopy}
+              canShare={canShare}
+              onShare={handleShare}
             />
           )}
           {step === 2 && (
@@ -482,32 +502,52 @@ function StepReview({
   prompt,
   copied,
   onCopy,
+  canShare,
+  onShare,
 }: {
   prompt: string
   copied: boolean
   onCopy: () => void
+  canShare: boolean
+  onShare: () => void
 }) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-zinc-400">
-        Copy this prompt and paste it into ChatGPT, Claude, or Gemini. Then paste the JSON response in the next step.
+        {canShare
+          ? 'Share this prompt to ChatGPT, Claude, or Gemini. Then paste the JSON response in the next step.'
+          : 'Select and copy this prompt, then paste it into ChatGPT, Claude, or Gemini. Paste the JSON response in the next step.'}
       </p>
 
       <div className="max-h-[40vh] overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-3">
-        <pre className="whitespace-pre-wrap text-[11px] leading-relaxed text-zinc-300">{prompt}</pre>
+        <pre id="ai-prompt-text" className="whitespace-pre-wrap text-[11px] leading-relaxed text-zinc-300 select-all">{prompt}</pre>
       </div>
 
-      <button
-        onClick={onCopy}
-        className={cn(
-          'flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition-all',
-          copied
-            ? 'bg-emerald-500/20 text-emerald-400'
-            : 'bg-cyan-500 text-white hover:bg-cyan-600 active:scale-[0.98]',
+      <div className="flex gap-2">
+        {canShare && (
+          <button
+            onClick={onShare}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-white transition-all hover:bg-cyan-600 active:scale-[0.98]"
+          >
+            <Share2 size={16} /> Share Prompt
+          </button>
         )}
-      >
-        {copied ? <><Check size={16} /> Copied!</> : <><Copy size={16} /> Copy Prompt</>}
-      </button>
+
+        <button
+          onClick={onCopy}
+          className={cn(
+            'flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition-all',
+            canShare ? 'border border-zinc-800 bg-zinc-800/50 text-zinc-400' : 'flex-1',
+            copied
+              ? 'bg-emerald-500/20 text-emerald-400'
+              : !canShare
+                ? 'bg-cyan-500 text-white hover:bg-cyan-600 active:scale-[0.98]'
+                : '',
+          )}
+        >
+          {copied ? <><Check size={16} /> Selected!</> : <><Copy size={16} /> {canShare ? 'Copy' : 'Select All'}</>}
+        </button>
+      </div>
     </div>
   )
 }
