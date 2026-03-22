@@ -38,7 +38,7 @@ export const EnvironmentInfoPanel = ({ secondsRemaining, unit = 'F' }: Environme
   }
 
   return (
-    <div className="flex items-center justify-center gap-4">
+    <div className="flex items-center justify-center gap-4 mt-6">
       {/* Home/Inside Temperature — inline: icon + temp + "Inside" */}
       {ambientTemp != null && ambientTemp > 0 && (
         <div className="flex items-center gap-2 text-zinc-500">
