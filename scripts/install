@@ -142,7 +142,7 @@ if ! flock -n 200; then
 fi
 
 # Check for required commands
-REQUIRED_CMDS=(curl systemctl ip)
+REQUIRED_CMDS=(curl systemctl ip groupadd usermod)
 if [ "$INSTALL_LOCAL" = false ]; then
   REQUIRED_CMDS+=(git)
 fi
@@ -225,18 +225,25 @@ fi
 # group-write bits are preserved (including SQLite WAL/SHM files).
 DATA_DIR="/persistent/sleepypod-data"
 echo "Creating data directory at $DATA_DIR..."
-groupadd -f sleepypod
-usermod -aG sleepypod dac
+getent group sleepypod >/dev/null 2>&1 || groupadd sleepypod
+if id dac &>/dev/null; then
+  usermod -aG sleepypod dac
+else
+  echo "Warning: user 'dac' not found — skipping group membership (not a Pod?)"
+fi
 mkdir -p "$DATA_DIR"
 chown root:sleepypod "$DATA_DIR"
 chmod 2770 "$DATA_DIR"
 
 # Fix permissions on existing database files (upgrades from older installs)
-if ls "$DATA_DIR"/*.db &>/dev/null; then
-  echo "Fixing database file permissions..."
-  chown -R root:sleepypod "$DATA_DIR"
-  find "$DATA_DIR" -type f -exec chmod 660 {} +
-fi
+fix_db_permissions() {
+  if ls "$DATA_DIR"/*.db &>/dev/null; then
+    echo "Fixing database file permissions..."
+    find "$DATA_DIR" -type f \( -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' \) \
+      -exec chown root:sleepypod {} + -exec chmod 660 {} +
+  fi
+}
+fix_db_permissions
 
 # ============================================================================
 # Install Node.js via binary download (works on any Linux, no apt required)
@@ -541,6 +548,11 @@ else
   install_module "calibrator"
 fi
 
+# Re-fix DB permissions after all services restarted with new UMask.
+# On upgrades, old services (without UMask=0002) may have recreated WAL/SHM
+# files with 0644 between the initial fixup and the service restarts above.
+fix_db_permissions
+
 # Create CLI shortcuts
 echo "Creating CLI shortcuts..."
 cat > /usr/local/bin/sp-status << 'EOF'
@@ -727,7 +739,7 @@ if pnpm install --frozen-lockfile --prod; then
       mkdir -p "$MODULES_DEST/common"
       cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
     fi
-    for mod in piezo-processor sleep-detector environment-monitor; do
+    for mod in piezo-processor sleep-detector environment-monitor calibrator; do
       if [ -d "$INSTALL_DIR/modules/$mod" ]; then
         mkdir -p "$MODULES_DEST/$mod"
         cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
