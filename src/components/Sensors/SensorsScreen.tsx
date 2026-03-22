@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { Droplets, Minus, TrendingDown, TrendingUp } from 'lucide-react'
 import { useSensorStream } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
@@ -15,6 +16,10 @@ import { BedTempMatrix } from './BedTempMatrix'
 import { FreezerHealthCard } from './FreezerHealthCard'
 import { PiezoWaveform } from './PiezoWaveform'
 
+const DataPipeline = dynamic(() => import('./DataPipeline').then(m => ({ default: m.DataPipeline })), {
+  ssr: false,
+  loading: () => <div className="flex h-[400px] items-center justify-center text-xs text-zinc-600">Loading pipeline...</div>,
+})
 
 /**
  * Main Sensors screen composition.
@@ -132,6 +137,11 @@ export function SensorsScreen() {
 
       {streamEnabled && (
         <>
+          {/* Data Pipeline — static DAG + live canvas timeline */}
+          <SensorCard>
+            <DataPipeline />
+          </SensorCard>
+
           {/* Piezo Waveform — real-time BCG signal */}
           <SensorCard>
             <PiezoWaveform />

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -36,31 +36,28 @@ for (const node of CONSUMER_NODES) {
 
 const TIMELINE_WINDOW_MS = 30_000
 const MAX_EVENTS = 500
-const RATE_WINDOW_MS = 10_000
 
 // ---------------------------------------------------------------------------
-// Custom ReactFlow node — simplified for mobile, no glow
+// Custom ReactFlow node — static, no dynamic data
 // ---------------------------------------------------------------------------
 
 interface PipelineNodeData {
   label: string
   sub: string
   color: string
-  active?: boolean
-  wide?: boolean
   [key: string]: unknown
 }
 
 function PipelineNode({ data }: { data: PipelineNodeData }) {
-  const { label, sub, color, active = false, wide = false } = data
+  const { label, sub, color } = data
   return (
     <div
-      className="flex flex-col rounded-md border px-2 py-1.5 transition-colors duration-200"
+      className="flex flex-col rounded-md border px-2 py-1.5"
       style={{
-        minWidth: wide ? 280 : 130,
-        borderColor: active ? color + '80' : '#333',
-        borderLeftWidth: active ? 3 : 1,
-        borderLeftColor: active ? color : '#333',
+        minWidth: 130,
+        borderColor: '#333',
+        borderLeftWidth: 1,
+        borderLeftColor: color,
         background: '#0a0a0a',
       }}
     >
@@ -79,7 +76,7 @@ function PipelineNode({ data }: { data: PipelineNodeData }) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Timeline dot type
 // ---------------------------------------------------------------------------
 
 interface TimelineDot {
@@ -88,25 +85,16 @@ interface TimelineDot {
   ts: number
 }
 
-function formatRate(count: number, windowSec: number): string {
-  const rate = count / windowSec
-  if (rate >= 1) return `${rate.toFixed(1)}/s`
-  if (rate > 0) return `${(rate * 60).toFixed(0)}/m`
-  return ''
-}
-
-// ---------------------------------------------------------------------------
-// Tab types
-// ---------------------------------------------------------------------------
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 /**
- * Unified data pipeline: read (↓) and write (↑) paths side by side.
- * Shared nodes (Firmware, dacTransport, Browser) in center.
- * Read-only nodes on left, write-only on right.
+ * Data pipeline visualization: static ReactFlow DAG + live canvas timeline.
+ *
+ * ReactFlow renders a static DAG (no dynamic node data) to avoid infinite
+ * render loops from its internal zustand store. All live data (rates, activity)
+ * is rendered via the canvas timeline only.
  */
 export function DataPipeline() {
   const wsStatus = useSensorStreamStatus()
@@ -114,51 +102,15 @@ export function DataPipeline() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animRef = useRef<number>(0)
 
-  // Rate tracking per consumer
-  const rateWindowRef = useRef<{ type: string; ts: number }[]>([])
-  const [rates, setRates] = useState<Record<string, number>>({})
-  const [activeConsumers, setActiveConsumers] = useState<Set<string>>(new Set())
-
+  // Track frames via ref only — no React state for high-frequency data
   useOnSensorFrame(useCallback((frame: SensorFrame) => {
     const consumer = TYPE_TO_CONSUMER.get(frame.type)
     if (!consumer) return
-
-    const now = Date.now()
-
-    // Timeline event
-    eventsRef.current.push({ type: frame.type, consumer, ts: now })
+    eventsRef.current.push({ type: frame.type, consumer, ts: Date.now() })
     if (eventsRef.current.length > MAX_EVENTS) {
       eventsRef.current = eventsRef.current.slice(-MAX_EVENTS)
     }
-
-    // Rate tracking
-    rateWindowRef.current.push({ type: frame.type, ts: now })
   }, []))
-
-  // Update rates every 500ms (no aggressive pulse tracking)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now()
-      const cutoff = now - RATE_WINDOW_MS
-
-      rateWindowRef.current = rateWindowRef.current.filter(e => e.ts >= cutoff)
-
-      const perConsumer: Record<string, number> = {}
-      const active = new Set<string>()
-
-      for (const e of rateWindowRef.current) {
-        const c = TYPE_TO_CONSUMER.get(e.type)
-        if (c) {
-          perConsumer[c] = (perConsumer[c] ?? 0) + 1
-          active.add(c)
-        }
-      }
-
-      setRates(perConsumer)
-      setActiveConsumers(active)
-    }, 500)
-    return () => clearInterval(interval)
-  }, [])
 
   // Canvas animation for timeline
   useEffect(() => {
@@ -219,7 +171,6 @@ export function DataPipeline() {
         const alpha = Math.max(0.12, 1 - age * 0.85)
         const config = CONSUMER_NODES[laneIdx]
 
-        // Subtle glow for very recent dots
         if (age < 0.02) {
           ctx.beginPath()
           ctx.arc(x, y, 6, 0, Math.PI * 2)
@@ -233,7 +184,7 @@ export function DataPipeline() {
         ctx.fill()
       }
 
-      // Prune
+      // Prune old events
       eventsRef.current = events.filter(ev => ev.ts >= windowStart)
 
       animRef.current = requestAnimationFrame(draw)
@@ -244,72 +195,48 @@ export function DataPipeline() {
   }, [])
 
   // ---------------------------------------------------------------------------
-  // ReactFlow graphs — Read & Write tabs
+  // Static ReactFlow DAG — no dynamic data in nodes to avoid render loops
   // ---------------------------------------------------------------------------
-
-  const windowSec = RATE_WINDOW_MS / 1000
-  const wsColor = wsStatus === 'connected' ? '#22c55e' : wsStatus === 'connecting' ? '#eab308' : '#ef4444'
-  const wsActive = wsStatus === 'connected'
 
   const nodeTypes = useMemo(() => ({ pipeline: PipelineNode }), [])
 
-  // Layout: shared center column, read-only left, write-only right
-  // Vertical flow: Firmware (top) → Browser (bottom)
-  const CX = 130  // center column x
-  const LX = 0    // left column (read-only nodes)
-  const RX = 260  // right column (write-only nodes)
-  const RY = 80   // row gap
+  const CX = 130
+  const LX = 0
+  const RX = 260
+  const RY = 80
 
-  const nodes = useMemo<Node[]>(() => {
-    const piezoRate = formatRate(rates['piezo'] ?? 0, windowSec)
-    const statusRate = formatRate(rates['status'] ?? 0, windowSec)
+  const wsColor = wsStatus === 'connected' ? '#22c55e' : wsStatus === 'connecting' ? '#eab308' : '#ef4444'
 
-    return [
-      // ─── Row 0: Firmware (shared, center) ───
-      { id: 'firmware', type: 'pipeline', position: { x: CX, y: 0 },
-        data: { label: 'Firmware', sub: 'frankenfirmware', color: '#71717a', active: true } },
-
-      // ─── Row 1: Read sources + shared transport ───
-      { id: 'raw', type: 'pipeline', position: { x: LX, y: RY },
-        data: { label: 'RAW Files', sub: 'CBOR on disk', color: '#71717a', active: activeConsumers.has('piezo') } },
-      { id: 'dac-transport', type: 'pipeline', position: { x: CX, y: RY },
-        data: { label: 'dacTransport', sub: 'dac.sock', color: '#a1a1aa', active: true } },
-
-      // ─── Row 2: Read processors + write entry ───
-      { id: 'piezo-stream', type: 'pipeline', position: { x: LX, y: RY * 2 },
-        data: { label: 'piezoStream', sub: piezoRate ? `parse \u00b7 ${piezoRate}` : 'tails + parses', color: '#8b5cf6', active: activeConsumers.has('piezo') } },
-      { id: 'dac-monitor', type: 'pipeline', position: { x: CX, y: RY * 2 },
-        data: { label: 'DacMonitor', sub: statusRate ? `poll \u00b7 ${statusRate}` : 'polls 2s', color: '#3b82f6', active: activeConsumers.has('status') } },
-      { id: 'trpc', type: 'pipeline', position: { x: RX, y: RY * 2 },
-        data: { label: 'tRPC :3000', sub: 'mutations', color: '#f97316', active: wsActive } },
-
-      // ─── Row 3: broadcastFrame() — the event bus ───
-      { id: 'broadcast', type: 'pipeline', position: { x: LX + 65, y: RY * 3 },
-        data: { label: 'broadcastFrame()', sub: 'event bus', color: '#a78bfa', active: wsActive } },
-
-      // ─── Row 4: WebSocket ───
-      { id: 'ws', type: 'pipeline', position: { x: LX + 65, y: RY * 4 },
-        data: { label: 'WebSocket :3001', sub: wsStatus, color: wsColor, active: wsActive } },
-
-      // ─── Row 5: Browser ───
-      { id: 'browser', type: 'pipeline', position: { x: CX, y: RY * 5 },
-        data: { label: 'Browser', sub: 'React UI', color: '#e2e8f0', active: wsActive } },
-    ]
-  }, [rates, activeConsumers, wsStatus, wsColor, wsActive, windowSec])
+  const nodes = useMemo<Node[]>(() => [
+    { id: 'firmware', type: 'pipeline', position: { x: CX, y: 0 },
+      data: { label: 'Firmware', sub: 'frankenfirmware', color: '#71717a' } },
+    { id: 'raw', type: 'pipeline', position: { x: LX, y: RY },
+      data: { label: 'RAW Files', sub: 'CBOR on disk', color: '#71717a' } },
+    { id: 'dac-transport', type: 'pipeline', position: { x: CX, y: RY },
+      data: { label: 'dacTransport', sub: 'dac.sock', color: '#a1a1aa' } },
+    { id: 'piezo-stream', type: 'pipeline', position: { x: LX, y: RY * 2 },
+      data: { label: 'piezoStream', sub: 'tails + parses', color: '#8b5cf6' } },
+    { id: 'dac-monitor', type: 'pipeline', position: { x: CX, y: RY * 2 },
+      data: { label: 'DacMonitor', sub: 'polls 2s', color: '#3b82f6' } },
+    { id: 'trpc', type: 'pipeline', position: { x: RX, y: RY * 2 },
+      data: { label: 'tRPC :3000', sub: 'mutations', color: '#f97316' } },
+    { id: 'broadcast', type: 'pipeline', position: { x: LX + 65, y: RY * 3 },
+      data: { label: 'broadcastFrame()', sub: 'event bus', color: '#a78bfa' } },
+    { id: 'ws', type: 'pipeline', position: { x: LX + 65, y: RY * 4 },
+      data: { label: 'WebSocket :3001', sub: wsStatus, color: wsColor } },
+    { id: 'browser', type: 'pipeline', position: { x: CX, y: RY * 5 },
+      data: { label: 'Browser', sub: 'React UI', color: '#e2e8f0' } },
+  ], [wsStatus, wsColor])
 
   const edges = useMemo<Edge[]>(() => [
-    // ─── Read path (↓) solid blue/purple edges ───
     { id: 'fw-raw', source: 'firmware', target: 'raw', animated: true, style: { stroke: '#52525b' } },
     { id: 'fw-dt', source: 'firmware', target: 'dac-transport', animated: true, style: { stroke: '#a1a1aa' } },
     { id: 'raw-ps', source: 'raw', target: 'piezo-stream', animated: true, style: { stroke: '#8b5cf6' } },
     { id: 'dt-dm', source: 'dac-transport', target: 'dac-monitor', animated: true, style: { stroke: '#3b82f6' } },
-    // Processors → broadcastFrame() → WebSocket
     { id: 'ps-bc', source: 'piezo-stream', target: 'broadcast', animated: true, style: { stroke: '#8b5cf6' } },
     { id: 'dm-bc', source: 'dac-monitor', target: 'broadcast', animated: true, style: { stroke: '#3b82f6' } },
     { id: 'bc-ws', source: 'broadcast', target: 'ws', animated: true, style: { stroke: '#a78bfa' } },
     { id: 'ws-browser', source: 'ws', target: 'browser', animated: true, style: { stroke: wsColor } },
-
-    // ─── Write path (↑) dashed orange edges: Browser → tRPC → dacTransport (stops at dac.sock) ───
     { id: 'browser-trpc', source: 'browser', target: 'trpc', animated: true, style: { stroke: '#f97316', strokeDasharray: '5 3' } },
     { id: 'trpc-dt', source: 'trpc', target: 'dac-transport', animated: true, style: { stroke: '#f97316', strokeDasharray: '5 3' } },
   ], [wsColor])
@@ -324,7 +251,7 @@ export function DataPipeline() {
         </div>
       </div>
 
-      {/* ReactFlow DAG — unified read + write */}
+      {/* ReactFlow DAG — static nodes, no dynamic data */}
       <div className="mb-2 rounded-lg" style={{ height: 340, background: '#0a0a0a' }}>
         <ReactFlow
           nodes={nodes}
