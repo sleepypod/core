@@ -355,11 +355,12 @@ Key decisions are documented in [`docs/adr/`](docs/adr/):
 | ADR | Decision |
 |-----|---------|
 | [0003](docs/adr/0003-core-stack.md) | TypeScript strict, React, Lingui for i18n |
-| [0004](docs/adr/0004-nextjs.md) | Next.js App Router as the application framework |
+| [0004](docs/adr/0004-nextjs-unified.md) | Next.js App Router as the application framework |
 | [0005](docs/adr/0005-trpc.md) | tRPC for end-to-end type-safe API |
 | [0006](docs/adr/0006-developer-tooling.md) | ESLint, Vitest, Conventional Commits, pnpm |
-| [0010](docs/adr/0010-drizzle-sqlite.md) | Drizzle ORM + SQLite for embedded constraints |
+| [0010](docs/adr/0010-drizzle-orm-sqlite.md) | Drizzle ORM + SQLite for embedded constraints |
 | [0012](docs/adr/0012-biometrics-module-system.md) | Plugin/sidecar architecture for biometrics |
+| [0015](docs/adr/0015-event-bus-mutation-broadcast.md) | Event bus: broadcast device state after mutations |
 
 ### Key tradeoffs
 

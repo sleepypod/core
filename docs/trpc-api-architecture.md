@@ -43,9 +43,9 @@ try {
 
 **Why:** Prevents connection pooling complexity and socket leaks. Trade-off: reconnection overhead for reliability.
 
-**Device Status — WebSocket First:**
+**Device Status — WebSocket First, tRPC Fallback:**
 
-Device status is now streamed via WebSocket, not polled via tRPC:
+Device status is primarily pushed via WebSocket. tRPC polling remains available for initial page load, non-WebSocket clients (iOS, CLI), and fallback when WS is unavailable:
 
 ```mermaid
 sequenceDiagram
