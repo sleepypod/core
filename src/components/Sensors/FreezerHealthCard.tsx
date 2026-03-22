@@ -1,8 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
-import type { FrzTempFrame, FrzHealthFrame, FrzThermFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { Snowflake, Fan, Droplets, Gauge, AlertTriangle, CheckCircle } from 'lucide-react'
@@ -73,14 +71,6 @@ export function FreezerHealthCard() {
     },
   )
 
-  // tRPC: water level data
-  // Flowrate from live frzHealth frames (per-side, °C)
-  const leftFlowrate = frzHealth?.left.flowrate ?? null
-  const rightFlowrate = frzHealth?.right.flowrate ?? null
-
-  // Bottom fan from live frzHealth (top fan already in frzHealth.fan.rpm)
-  const bottomFanRpm = frzHealth?.fan.bottomRpm ?? null
-
   const waterLevelLatest = trpc.waterLevel.getLatest.useQuery(
     {},
     {
@@ -88,7 +78,6 @@ export function FreezerHealthCard() {
       staleTime: 15_000,
     },
   )
-
 
   const hasLiveData = frzTemp || frzHealth || frzTherm
   const hasTrpcData = latestFreezerTemp.data
@@ -135,94 +124,100 @@ export function FreezerHealthCard() {
         </div>
       </div>
 
-      {!hasData ? (
-        <div className="flex h-24 items-center justify-center rounded-xl bg-zinc-900">
-          <span className="text-xs text-zinc-600">Waiting for freezer data...</span>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {/* Paired left/right metrics */}
-          <div className="grid grid-cols-[auto_1fr_1fr] gap-x-2 gap-y-1.5 items-center">
-            {/* Column headers */}
-            <div />
-            <div className="text-center text-[9px] font-semibold text-sky-400">Left</div>
-            <div className="text-center text-[9px] font-semibold text-teal-400">Right</div>
+      {!hasData
+        ? (
+            <div className="flex h-24 items-center justify-center rounded-xl bg-zinc-900">
+              <span className="text-xs text-zinc-600">Waiting for freezer data...</span>
+            </div>
+          )
+        : (
+            <div className="space-y-2">
+              {/* Paired left/right metrics */}
+              <div className="grid grid-cols-[auto_1fr_1fr] gap-x-2 gap-y-1.5 items-center">
+                {/* Column headers */}
+                <div />
+                <div className="text-center text-[9px] font-semibold text-sky-400">Left</div>
+                <div className="text-center text-[9px] font-semibold text-teal-400">Right</div>
 
-            {/* Water temps */}
-            {freezerTempData && (
-              <>
-                <RowLabel icon={<Snowflake size={12} />} label="Water" color="text-blue-400" />
-                <MetricCell value={freezerTempData.leftWater} />
-                <MetricCell value={freezerTempData.rightWater} />
-              </>
-            )}
+                {/* Water temps */}
+                {freezerTempData && (
+                  <>
+                    <RowLabel icon={<Snowflake size={12} />} label="Water" color="text-blue-400" />
+                    <MetricCell value={freezerTempData.leftWater} />
+                    <MetricCell value={freezerTempData.rightWater} />
+                  </>
+                )}
 
-            {/* TEC current */}
-            {frzHealth && (
-              <>
-                <RowLabel icon={<Gauge size={12} />} label="TEC" color="text-purple-400" />
-                <MetricCell value={`${frzHealth.left.tecCurrent.toFixed(2)} A`} warn={frzHealth.left.tecCurrent > 5} />
-                <MetricCell value={`${frzHealth.right.tecCurrent.toFixed(2)} A`} warn={frzHealth.right.tecCurrent > 5} />
-              </>
-            )}
+                {/* TEC current */}
+                {frzHealth && (
+                  <>
+                    <RowLabel icon={<Gauge size={12} />} label="TEC" color="text-purple-400" />
+                    <MetricCell value={`${frzHealth.left.tecCurrent.toFixed(2)} A`} warn={frzHealth.left.tecCurrent > 5} />
+                    <MetricCell value={`${frzHealth.right.tecCurrent.toFixed(2)} A`} warn={frzHealth.right.tecCurrent > 5} />
+                  </>
+                )}
 
-            {/* Pump RPM */}
-            {frzHealth && (
-              <>
-                <RowLabel icon={<Droplets size={12} />} label="Pump" color="text-blue-400" />
-                <MetricCell value={`${frzHealth.left.pumpRpm} RPM`} warn={frzHealth.left.pumpRpm === 0} />
-                <MetricCell value={`${frzHealth.right.pumpRpm} RPM`} warn={frzHealth.right.pumpRpm === 0} />
-              </>
-            )}
+                {/* Pump RPM */}
+                {frzHealth && (
+                  <>
+                    <RowLabel icon={<Droplets size={12} />} label="Pump" color="text-blue-400" />
+                    <MetricCell value={`${frzHealth.left.pumpRpm} RPM`} warn={frzHealth.left.pumpRpm === 0} />
+                    <MetricCell value={`${frzHealth.right.pumpRpm} RPM`} warn={frzHealth.right.pumpRpm === 0} />
+                  </>
+                )}
 
-            {/* Thermal control signal */}
-            {frzTherm && (
-              <>
-                <RowLabel icon={<Gauge size={12} />} label="Therm" color="text-zinc-400" />
-                <MetricCell value={typeof frzTherm.left === 'number' ? frzTherm.left.toFixed(1) : '--'} />
-                <MetricCell value={typeof frzTherm.right === 'number' ? frzTherm.right.toFixed(1) : '--'} />
-              </>
-            )}
-          </div>
+                {/* Thermal control signal */}
+                {frzTherm && (
+                  <>
+                    <RowLabel icon={<Gauge size={12} />} label="Therm" color="text-zinc-400" />
+                    <MetricCell value={typeof frzTherm.left === 'number' ? frzTherm.left.toFixed(1) : '--'} />
+                    <MetricCell value={typeof frzTherm.right === 'number' ? frzTherm.right.toFixed(1) : '--'} />
+                  </>
+                )}
+              </div>
 
-          {/* System-wide metrics (not per-side) */}
-          <div className="grid grid-cols-3 gap-1.5">
-            {frzHealth && (
-              <MetricItem
-                icon={<Fan size={16} className="text-cyan-400" />}
-                label="Fan"
-                value={`${frzHealth.fan.rpm} RPM`}
-                status={frzHealth.fan.rpm < 100 ? 'warn' : 'ok'}
-              />
-            )}
-            {freezerTempData && (
-              <>
-                <MetricItem
-                  icon={<Gauge size={16} className="text-orange-400" />}
-                  label="Heatsink"
-                  value={freezerTempData.heatsink}
-                />
-                <MetricItem
-                  icon={<Gauge size={16} className="text-zinc-400" />}
-                  label="Ambient"
-                  value={freezerTempData.ambient}
-                />
-              </>
-            )}
-          </div>
-        </div>
-      )}
+              {/* System-wide metrics (not per-side) */}
+              <div className="grid grid-cols-3 gap-1.5">
+                {frzHealth && (
+                  <MetricItem
+                    icon={<Fan size={16} className="text-cyan-400" />}
+                    label="Fan"
+                    value={`${frzHealth.fan.rpm} RPM`}
+                    status={frzHealth.fan.rpm < 100 ? 'warn' : 'ok'}
+                  />
+                )}
+                {freezerTempData && (
+                  <>
+                    <MetricItem
+                      icon={<Gauge size={16} className="text-orange-400" />}
+                      label="Heatsink"
+                      value={freezerTempData.heatsink}
+                    />
+                    <MetricItem
+                      icon={<Gauge size={16} className="text-zinc-400" />}
+                      label="Ambient"
+                      value={freezerTempData.ambient}
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+          )}
 
       {/* Water status (flow rates removed — not reliable on most pods) */}
       {waterLevel && (
         <div className="flex items-center gap-2 rounded-md bg-zinc-800/50 px-2 py-1.5">
-          {waterLevel.level === 'low' ? (
-            <AlertTriangle size={12} className="text-amber-400" />
-          ) : (
-            <CheckCircle size={12} className="text-emerald-400" />
-          )}
+          {waterLevel.level === 'low'
+            ? (
+                <AlertTriangle size={12} className="text-amber-400" />
+              )
+            : (
+                <CheckCircle size={12} className="text-emerald-400" />
+              )}
           <span className={`text-[10px] font-medium ${waterLevel.level === 'low' ? 'text-amber-400' : 'text-emerald-400'}`}>
-            Water {waterLevel.level === 'ok' ? 'OK' : 'Low'}
+            Water
+            {' '}
+            {waterLevel.level === 'ok' ? 'OK' : 'Low'}
           </span>
         </div>
       )}
@@ -230,7 +225,7 @@ export function FreezerHealthCard() {
   )
 }
 
-function RowLabel({ icon, label, color }: { icon: React.ReactNode; label: string; color: string }) {
+function RowLabel({ icon, label, color }: { icon: React.ReactNode, label: string, color: string }) {
   return (
     <div className={`flex items-center gap-1 ${color}`}>
       {icon}
@@ -239,11 +234,12 @@ function RowLabel({ icon, label, color }: { icon: React.ReactNode; label: string
   )
 }
 
-function MetricCell({ value, warn }: { value: string; warn?: boolean }) {
+function MetricCell({ value, warn }: { value: string, warn?: boolean }) {
   return (
     <div className={`rounded-md bg-zinc-800/50 px-2 py-1.5 text-center text-[11px] font-medium tabular-nums ${
       warn ? 'text-amber-400' : 'text-zinc-200'
-    }`}>
+    }`}
+    >
       {value}
     </div>
   )

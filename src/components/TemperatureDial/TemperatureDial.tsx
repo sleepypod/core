@@ -304,69 +304,71 @@ export function TemperatureDial({
             className="flex h-full flex-col items-center justify-center"
             style={{ pointerEvents: 'none' }}
           >
-            {isOn ? (
-              <>
-                {/* Direction label */}
-                {direction && (
-                  <div className="mb-1 flex items-center gap-1.5">
-                    <span style={{ color: direction.color, fontSize: 10, fontWeight: 700 }}>
-                      {direction.text === 'WARMING' ? '🔥' : '❄️'}
-                    </span>
+            {isOn
+              ? (
+                  <>
+                    {/* Direction label */}
+                    {direction && (
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <span style={{ color: direction.color, fontSize: 10, fontWeight: 700 }}>
+                          {direction.text === 'WARMING' ? '🔥' : '❄️'}
+                        </span>
+                        <span
+                          className="tracking-widest"
+                          style={{
+                            color: direction.color,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            opacity: 0.9,
+                          }}
+                        >
+                          {direction.text}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Target temperature (hero) */}
                     <span
-                      className="tracking-widest"
+                      className="font-light tabular-nums"
                       style={{
-                        color: direction.color,
-                        fontSize: 11,
-                        fontWeight: 600,
-                        opacity: 0.9,
+                        color: tempColor,
+                        fontSize: 52,
+                        lineHeight: 1,
+                        fontVariantNumeric: 'tabular-nums',
                       }}
                     >
-                      {direction.text}
+                      {formatTemp(targetTempF)}
                     </span>
-                  </div>
-                )}
 
-                {/* Target temperature (hero) */}
-                <span
-                  className="font-light tabular-nums"
-                  style={{
-                    color: tempColor,
-                    fontSize: 52,
-                    lineHeight: 1,
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatTemp(targetTempF)}
-                </span>
-
-                {/* Offset + current temp */}
-                <div className="mt-1.5 flex items-center gap-2">
+                    {/* Offset + current temp */}
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <span
+                        className="font-semibold tabular-nums"
+                        style={{
+                          color: tempColor,
+                          fontSize: 15,
+                          opacity: 0.7,
+                        }}
+                      >
+                        {offsetDisplay(offset)}
+                      </span>
+                      <span style={{ color: theme.textMuted, fontSize: 13 }}>·</span>
+                      <span style={{ color: theme.textMuted, fontSize: 13 }}>
+                        Now
+                        {' '}
+                        {formatTemp(currentTempF)}
+                      </span>
+                    </div>
+                  </>
+                )
+              : (
                   <span
-                    className="font-semibold tabular-nums"
-                    style={{
-                      color: tempColor,
-                      fontSize: 15,
-                      opacity: 0.7,
-                    }}
+                    className="font-light"
+                    style={{ color: theme.textMuted, fontSize: 48 }}
                   >
-                    {offsetDisplay(offset)}
+                    OFF
                   </span>
-                  <span style={{ color: theme.textMuted, fontSize: 13 }}>·</span>
-                  <span style={{ color: theme.textMuted, fontSize: 13 }}>
-                    Now
-                    {' '}
-                    {formatTemp(currentTempF)}
-                  </span>
-                </div>
-              </>
-            ) : (
-              <span
-                className="font-light"
-                style={{ color: theme.textMuted, fontSize: 48 }}
-              >
-                OFF
-              </span>
-            )}
+                )}
           </div>
         </foreignObject>
       </svg>

@@ -12,7 +12,13 @@ export default function SensorsError({
       <p className="text-sm text-red-400">Sensors crashed</p>
       <p className="text-xs text-zinc-500">
         Something went wrong loading sensor data.
-        {error.digest && <span className="ml-1 text-zinc-600">({error.digest})</span>}
+        {error.digest && (
+          <span className="ml-1 text-zinc-600">
+            (
+            {error.digest}
+            )
+          </span>
+        )}
       </p>
       <button
         onClick={reset}
