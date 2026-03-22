@@ -173,6 +173,14 @@ export const deviceRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       // Server-side debounce: collapse rapid dial-drag calls into one hardware command.
+      // Cancel any pending hardware call for this side BEFORE the first await
+      // so ordering is consistent with other side commands (setPower, setAlarm, etc.)
+      const existing = pendingTemps.get(input.side)
+      if (existing) {
+        clearTimeout(existing.timer)
+        existing.resolve({ success: true }) // resolve the earlier promise immediately
+      }
+
       // The DB is updated optimistically on every call for responsive UI.
       try {
         await db
@@ -188,14 +196,8 @@ export const deviceRouter = router({
         console.error('Failed to sync temperature state to DB:', dbError)
       }
 
-      // Cancel any pending hardware call for this side — last value wins
-      const existing = pendingTemps.get(input.side)
-      if (existing) {
-        clearTimeout(existing.timer)
-        existing.resolve({ success: true }) // resolve the earlier promise immediately
-      }
-
       return new Promise<{ success: boolean }>((resolve, reject) => {
+        // Register the pending entry synchronously so later calls can cancel it
         const timer = setTimeout(async () => {
           pendingTemps.delete(input.side)
           try {

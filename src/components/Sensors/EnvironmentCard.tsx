@@ -38,7 +38,7 @@ export function EnvironmentCard() {
   const twentyFourHoursAgo = useMemo(() => new Date(now.getTime() - 24 * 60 * 60 * 1000), [now])
 
   const summary = trpc.environment.getSummary.useQuery(
-    { startDate: twentyFourHoursAgo, endDate: now, unit: 'F' },
+    { startDate: twentyFourHoursAgo, endDate: now, unit },
     {
       refetchInterval: 60_000, // refresh every minute
       staleTime: 30_000,
@@ -54,9 +54,11 @@ export function EnvironmentCard() {
     },
   )
 
-  // Merge live + tRPC data: live WebSocket takes priority, tRPC as fallback
-  const leftHumidity = formatHumidity(liveFrame?.humidity)
-    || formatHumidityFromTRPC(latestBedTemp.data?.humidity)
+  // Merge live + tRPC data: live WebSocket takes priority, tRPC as fallback.
+  // formatHumidity returns '--' for missing values (truthy), so use nullish check.
+  const liveHumidity = formatHumidity(liveFrame?.humidity)
+  const leftHumidity = liveHumidity !== '--' ? liveHumidity
+    : formatHumidityFromTRPC(latestBedTemp.data?.humidity)
   const leftAmbient = (liveFrame?.ambientTemp != null ? formatTemp(liveFrame.ambientTemp) : null)
     ?? (latestBedTemp.data?.ambientTemp != null ? formatConverted(latestBedTemp.data.ambientTemp) : '--')
 

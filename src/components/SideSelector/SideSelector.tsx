@@ -95,7 +95,8 @@ const SideButton = ({
   sideStatus,
   onSelect,
 }: SideButtonProps) => {
-  const sideIsOn = sideStatus ? (sideStatus.targetLevel ?? 0) !== 0 : false
+  const hasStatus = sideStatus != null
+  const sideIsOn = hasStatus ? (sideStatus.targetLevel ?? 0) !== 0 : false
 
   // Use Fahrenheit temperatures from status
   const currentTempF = sideStatus?.currentTemperature ?? 80
@@ -134,24 +135,28 @@ const SideButton = ({
       </div>
 
       <div className="flex items-center gap-1.5 text-[13px] mt-1">
-        {sideIsOn
+        {!hasStatus
           ? (
-              <>
-                {trend === 'up' && <TrendingUp size={12} className="text-amber-500" />}
-                {trend === 'down' && <TrendingDown size={12} className="text-sky-500" />}
-                <span className="text-zinc-400">
-                  {offsetDisplay(offset)}
-                  {' · '}
-                  {formatTemp(currentF, 'F')}
-                </span>
-              </>
+              <span className="text-zinc-600 animate-pulse">Loading...</span>
             )
-          : (
-              <>
-                <Power size={12} className="text-zinc-600" />
-                <span className="text-zinc-600">Off</span>
-              </>
-            )}
+          : sideIsOn
+            ? (
+                <>
+                  {trend === 'up' && <TrendingUp size={12} className="text-amber-500" />}
+                  {trend === 'down' && <TrendingDown size={12} className="text-sky-500" />}
+                  <span className="text-zinc-400">
+                    {offsetDisplay(offset)}
+                    {' · '}
+                    {formatTemp(currentF, 'F')}
+                  </span>
+                </>
+              )
+            : (
+                <>
+                  <Power size={12} className="text-zinc-600" />
+                  <span className="text-zinc-600">Off</span>
+                </>
+              )}
       </div>
     </button>
   )

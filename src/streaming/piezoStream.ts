@@ -552,8 +552,8 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
 
 /**
  * Binary search `frameIndex` for the entry at or just before `targetTs`.
- * Returns the index into `frameIndex`, or -1 if the index is empty or
- * the target is before the earliest entry.
+ * Returns the index into `frameIndex`, or -1 if the index is empty.
+ * If the target is before the earliest entry, returns 0 (the first index).
  */
 function findIndexEntry(targetTs: number): number {
   if (frameIndex.length === 0) return -1
@@ -609,13 +609,15 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
     const stat = fs.fstatSync(fd)
     const fileSize = stat.size
 
-    // Read from startOffset to end of file (or a reasonable chunk)
-    const bytesToRead = fileSize - startOffset
-    if (bytesToRead <= 0) {
+    // Read from startOffset to end of file, capped at 64 MB to prevent memory exhaustion
+    const MAX_SEEK_BUFFER = 64 * 1024 * 1024
+    const rawBytesToRead = fileSize - startOffset
+    if (rawBytesToRead <= 0) {
       fs.closeSync(fd)
       ws.send(JSON.stringify({ type: 'seek_complete' }))
       return
     }
+    const bytesToRead = Math.min(rawBytesToRead, MAX_SEEK_BUFFER)
 
     const seekBuffer = Buffer.alloc(bytesToRead)
     fs.readSync(fd, seekBuffer, 0, bytesToRead, startOffset)

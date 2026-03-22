@@ -37,7 +37,7 @@ export function usePullToRefresh({ onRefresh, enabled = true }: PullToRefreshOpt
     isPastThreshold: false,
   })
 
-  const startYRef = useRef(0)
+  const startYRef = useRef<number | null>(null)
   const isPullingRef = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -47,7 +47,7 @@ export function usePullToRefresh({ onRefresh, enabled = true }: PullToRefreshOpt
 
     // Only activate when scrolled to the top
     const container = containerRef.current
-    const scrollParent = container?.closest('[data-scroll-container]') ?? document.documentElement
+    const scrollParent = (container?.closest('[data-scroll-container]') as HTMLElement | null) ?? document.documentElement
     if (scrollParent.scrollTop > 5) return
 
     startYRef.current = e.touches[0].clientY
@@ -56,7 +56,7 @@ export function usePullToRefresh({ onRefresh, enabled = true }: PullToRefreshOpt
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
     if (!enabled || state.isRefreshing) return
-    if (!startYRef.current) return
+    if (startYRef.current === null) return
 
     const deltaY = e.touches[0].clientY - startYRef.current
 
@@ -71,7 +71,7 @@ export function usePullToRefresh({ onRefresh, enabled = true }: PullToRefreshOpt
 
     // Check scroll position — only activate at scroll top
     const container = containerRef.current
-    const scrollParent = container?.closest('[data-scroll-container]') ?? document.documentElement
+    const scrollParent = (container?.closest('[data-scroll-container]') as HTMLElement | null) ?? document.documentElement
     if (scrollParent.scrollTop > 5) return
 
     isPullingRef.current = true
@@ -89,12 +89,12 @@ export function usePullToRefresh({ onRefresh, enabled = true }: PullToRefreshOpt
 
   const onTouchEnd = useCallback(async () => {
     if (!isPullingRef.current) {
-      startYRef.current = 0
+      startYRef.current = null
       return
     }
 
     isPullingRef.current = false
-    startYRef.current = 0
+    startYRef.current = null
 
     if (state.isPastThreshold && !state.isRefreshing) {
       setState({ isRefreshing: true, pullDistance: 0, isPastThreshold: false })

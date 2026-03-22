@@ -676,6 +676,14 @@ export const biometricsRouter = router({
     }))
     .query(async ({ input }): Promise<SleepStagesResult> => {
       try {
+        // Reject ambiguous requests: if sleepRecordId is provided alongside date range, error out
+        if (input.sleepRecordId && (input.startDate || input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Provide either sleepRecordId or startDate/endDate, not both',
+          })
+        }
+
         let windowStart: Date
         let windowEnd: Date
         let sleepRecordId: number | null = null
@@ -683,25 +691,36 @@ export const biometricsRouter = router({
         let leftBedAt: number | null = null
 
         if (input.sleepRecordId) {
-          // Look up the sleep record to get the time window
+          // Look up the sleep record, scoped to the requested side
           const [record] = await biometricsDb
             .select()
             .from(sleepRecords)
-            .where(eq(sleepRecords.id, input.sleepRecordId))
+            .where(
+              and(
+                eq(sleepRecords.id, input.sleepRecordId),
+                eq(sleepRecords.side, input.side),
+              )
+            )
             .limit(1)
 
           if (!record) {
             throw new TRPCError({
               code: 'NOT_FOUND',
-              message: `Sleep record ${input.sleepRecordId} not found`,
+              message: `Sleep record ${input.sleepRecordId} not found for side '${input.side}'`,
             })
           }
 
-          windowStart = record.enteredBedAt
-          windowEnd = record.leftBedAt
+          // Handle active sleep records where leftBedAt may not be set yet
+          if (!record.leftBedAt) {
+            windowStart = record.enteredBedAt
+            windowEnd = new Date() // use current time for active sessions
+          } else {
+            windowStart = record.enteredBedAt
+            windowEnd = record.leftBedAt
+          }
           sleepRecordId = record.id
           enteredBedAt = record.enteredBedAt.getTime()
-          leftBedAt = record.leftBedAt.getTime()
+          leftBedAt = record.leftBedAt ? record.leftBedAt.getTime() : null
         } else if (input.startDate && input.endDate) {
           if (!validateDateRange(input.startDate, input.endDate)) {
             throw new TRPCError({

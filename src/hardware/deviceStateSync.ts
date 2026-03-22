@@ -23,7 +23,8 @@ export function getAlarmState(): { left: boolean; right: boolean } {
     const right = rows.find(r => r.side === 'right')?.isAlarmVibrating ?? false
     return { left, right }
   }
-  catch {
+  catch (error) {
+    console.error('getAlarmState: failed to read alarm state from DB, falling back to false:', error instanceof Error ? error.message : error)
     return { left: false, right: false }
   }
 }

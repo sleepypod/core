@@ -34,7 +34,7 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
   const { side } = useSide()
   const utils = trpc.useUtils()
 
-  const schedule = schedules.find(s => s.dayOfWeek === selectedDay)
+  const schedule = schedules.find(s => s.side === side && s.dayOfWeek === selectedDay)
   const hasSchedule = !!schedule
 
   // Local state for new schedule creation
@@ -46,10 +46,11 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
   const [localTemp, setLocalTemp] = useState(schedule?.onTemperature ?? 78)
   const tempCommitRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
-  // Sync local slider state when server data changes
+  // Sync local slider state when the schedule identity or values change.
+  // Keying on schedule?.id ensures state resets when switching sides/days.
   useEffect(() => {
     if (schedule) setLocalTemp(schedule.onTemperature)
-  }, [schedule?.onTemperature])
+  }, [schedule?.id, schedule?.onTemperature])
 
   // Clean up debounce timer on unmount
   useEffect(() => {
@@ -258,6 +259,7 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
                 handleUpdateTemperature(localTemp)
               }}
               disabled={isMutating}
+              aria-label={`Start temperature for ${selectedDay} power schedule`}
               className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-50 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
             />
             <div className="flex justify-between text-[10px] text-zinc-600">

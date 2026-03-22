@@ -1,9 +1,12 @@
 'use client'
 
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { trpc } from '@/src/utils/trpc'
-import { useSensorFrame } from './useSensorStream'
+import { useSensorStream, useSensorFrame } from './useSensorStream'
 import type { DeviceStatusFrame } from './useSensorStream'
+
+/** If no WS frame arrives within this window, fall back to HTTP polling. */
+const WS_STALE_MS = 10_000
 
 /**
  * Device status via WebSocket with tRPC HTTP fallback.
@@ -12,35 +15,47 @@ import type { DeviceStatusFrame } from './useSensorStream'
  * existing piezoStream WebSocket (port 3001).
  *
  * Fallback: `device.getStatus` tRPC query for initial load and when WS
- * is disconnected. Polling is disabled once WS frames arrive.
+ * is disconnected. Polling resumes if WS frames stop arriving for 10s.
  *
  * The WS frame shape matches the tRPC getStatus response so consumers
  * can use either transparently.
  */
 export function useDeviceStatus() {
+  // Ensure the WS stream is connected (ref-counted — safe if other hooks also connect)
+  useSensorStream({ sensors: ['deviceStatus'], enabled: true })
+
   const wsFrame = useSensorFrame('deviceStatus') as DeviceStatusFrame | undefined
-  const hasReceivedWsRef = useRef(false)
 
-  if (wsFrame) hasReceivedWsRef.current = true
+  // Determine whether WS data is fresh (received within the stale window).
+  // If WS disconnects or stops sending, this becomes false and HTTP polling resumes.
+  const wsIsFresh = wsFrame != null && (Date.now() - wsFrame.ts) < WS_STALE_MS
 
-  // HTTP fallback — poll only when WS hasn't delivered yet
+  // HTTP fallback — poll when WS hasn't delivered recently
   const { data: httpStatus, isLoading, refetch } = trpc.device.getStatus.useQuery(
     {},
     {
-      refetchInterval: hasReceivedWsRef.current ? false : 7_000,
+      refetchInterval: wsIsFresh ? false : 7_000,
       staleTime: 3_000,
     },
   )
 
+  // Normalize primeCompletedNotification.timestamp to Date for both transports
+  const normalizePrimeTimestamp = (ts: unknown): Date => {
+    if (ts instanceof Date) return ts
+    if (typeof ts === 'number') return new Date(ts)
+    if (typeof ts === 'string') return new Date(ts)
+    return new Date()
+  }
+
   // Merge: prefer WS frame (fresher, ~2s cadence) over HTTP
-  const status = wsFrame
+  const status = wsIsFresh && wsFrame
     ? {
         leftSide: wsFrame.leftSide,
         rightSide: wsFrame.rightSide,
         waterLevel: wsFrame.waterLevel,
         isPriming: wsFrame.isPriming,
         primeCompletedNotification: wsFrame.primeCompletedNotification
-          ? { timestamp: new Date(wsFrame.primeCompletedNotification.timestamp) }
+          ? { timestamp: normalizePrimeTimestamp(wsFrame.primeCompletedNotification.timestamp) }
           : undefined,
         snooze: wsFrame.snooze,
       }
@@ -53,9 +68,9 @@ export function useDeviceStatus() {
 
   return {
     status,
-    isLoading: !wsFrame && isLoading,
+    isLoading: !wsIsFresh && isLoading,
     refetch: refetchStatus,
     /** Whether device status is being received via WebSocket */
-    isStreaming: hasReceivedWsRef.current,
+    isStreaming: wsIsFresh,
   }
 }

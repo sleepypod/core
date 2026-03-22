@@ -47,7 +47,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
   const { side } = useSide()
   const utils = trpc.useUtils()
 
-  const schedule = schedules.find(s => s.dayOfWeek === selectedDay)
+  const schedule = schedules.find(s => s.side === side && s.dayOfWeek === selectedDay)
   const hasSchedule = !!schedule
 
   // Local state for new alarm creation
@@ -64,13 +64,14 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
   const intensityCommitRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const alarmTempCommitRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
-  // Sync local slider state when server data changes
+  // Sync local slider state when the schedule identity or values change.
+  // Keying on schedule?.id ensures state resets when switching sides/days.
   useEffect(() => {
     if (schedule) {
       setLocalIntensity(schedule.vibrationIntensity)
       setLocalAlarmTemp(schedule.alarmTemperature)
     }
-  }, [schedule?.vibrationIntensity, schedule?.alarmTemperature])
+  }, [schedule?.id, schedule?.vibrationIntensity, schedule?.alarmTemperature])
 
   // Clean up debounce timers on unmount
   useEffect(() => {
@@ -420,6 +421,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                     handleUpdateIntensity(localIntensity)
                   }}
                   disabled={isMutating}
+                  aria-label={`Vibration intensity for ${selectedDay} alarm`}
                   className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-50 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
                 />
                 <div className="flex justify-between text-[10px] text-zinc-600">
@@ -503,6 +505,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
                     handleUpdateAlarmTemp(localAlarmTemp)
                   }}
                   disabled={isMutating}
+                  aria-label={`Alarm temperature for ${selectedDay} alarm`}
                   className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-50 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
                 />
                 <div className="flex justify-between text-[10px] text-zinc-600">

@@ -66,6 +66,9 @@ export function InternetToggleCard() {
         <button
           onClick={handleToggle}
           disabled={isPending || isLoading}
+          role="switch"
+          aria-checked={!blocked}
+          aria-label={blocked ? 'Enable internet access' : 'Disable internet access'}
           className={clsx(
             'relative h-7 w-12 rounded-full transition-colors duration-200',
             blocked ? 'bg-emerald-600' : 'bg-amber-600',

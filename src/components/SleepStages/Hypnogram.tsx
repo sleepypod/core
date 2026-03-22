@@ -63,20 +63,15 @@ export function Hypnogram({ blocks, epochs, startTime, endTime }: HypnogramProps
   const svgRef = useRef<SVGSVGElement>(null)
 
   const totalDuration = endTime - startTime
-  if (totalDuration <= 0 || blocks.length === 0) {
-    return (
-      <div className="flex h-40 items-center justify-center text-zinc-500 text-sm">
-        No sleep stage data available
-      </div>
-    )
-  }
-
   const chartWidth = 360 // will be responsive via viewBox
   const plotWidth = chartWidth - CHART_PADDING_LEFT - CHART_PADDING_RIGHT
 
   // Map time to x position
   const timeToX = useCallback(
-    (t: number) => CHART_PADDING_LEFT + ((t - startTime) / totalDuration) * plotWidth,
+    (t: number) => {
+      if (totalDuration <= 0) return CHART_PADDING_LEFT
+      return CHART_PADDING_LEFT + ((t - startTime) / totalDuration) * plotWidth
+    },
     [startTime, totalDuration, plotWidth],
   )
 
@@ -124,6 +119,15 @@ export function Hypnogram({ blocks, epochs, startTime, endTime }: HypnogramProps
     },
     [epochs, startTime, totalDuration, plotWidth, chartWidth],
   )
+
+  // Early return AFTER all hooks to satisfy Rules of Hooks
+  if (totalDuration <= 0 || blocks.length === 0) {
+    return (
+      <div className="flex h-40 items-center justify-center text-zinc-500 text-sm">
+        No sleep stage data available
+      </div>
+    )
+  }
 
   return (
     <div className="w-full">

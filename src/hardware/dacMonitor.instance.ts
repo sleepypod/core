@@ -203,15 +203,15 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
       monitor.on('gesture:detected', event => {
         gestureHandler.handle(event)
         // Broadcast to WS clients so browser UI can show gesture events
-        try {
-          const { broadcastFrame } = require('@/src/streaming/piezoStream')
+        // Dynamic import to avoid circular dependency (piezoStream is started separately)
+        import('@/src/streaming/piezoStream').then(({ broadcastFrame }) => {
           broadcastFrame({
             type: 'gesture',
             ts: Date.now(),
             side: event.side,
             tapType: event.tapType,
           })
-        } catch { /* WS not ready */ }
+        }).catch(() => { /* WS not ready */ })
       })
       monitor.on('status:updated', (status) => {
         try {
@@ -225,9 +225,8 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
         )
 
         // Broadcast device status to WebSocket clients
-        try {
-          // Lazy-import to avoid circular dependency (piezoStream is started separately)
-          const { broadcastFrame } = require('@/src/streaming/piezoStream')
+        // Dynamic import to avoid circular dependency (piezoStream is started separately)
+        import('@/src/streaming/piezoStream').then(({ broadcastFrame }) => {
           const primeCompletedAt = getPrimeCompletedAt()
           const alarmState = getAlarmState()
           broadcastFrame({
@@ -243,8 +242,7 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
               right: getSnoozeStatus('right'),
             },
           })
-        }
-        catch { /* WS server may not be started yet */ }
+        }).catch(() => { /* WS server may not be started yet */ })
       })
 
       g[KEYS.monitor] = monitor

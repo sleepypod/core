@@ -226,6 +226,10 @@ interface SensorStreamSingleton {
   intentionalClose: boolean
   activeRefCount: number
   pendingSubscription: SensorType[] | null
+  /** Per-hook active sensor requests. Keyed by a unique hook ID. */
+  activeSubscriptions: Map<number, SensorType[] | null>
+  /** Counter for generating unique hook subscription IDs. */
+  nextSubscriptionId: number
   /** Pending resolvers for getTimeRange() promises. */
   timeRangeResolvers: Array<(range: TimeRange | null) => void>
 }
@@ -258,6 +262,8 @@ if (!g[SINGLETON_KEY]) {
     intentionalClose: false,
     activeRefCount: 0,
     pendingSubscription: null,
+    activeSubscriptions: new Map<number, SensorType[] | null>(),
+    nextSubscriptionId: 0,
     timeRangeResolvers: [],
   } satisfies SensorStreamSingleton
 }
@@ -588,12 +594,38 @@ function disconnect() {
   setState({ status: 'disconnected', latestFrames: {}, subscribedSensors: null, fps: 0, lastFrameTime: null, isSeeking: false, timeRange: null })
 }
 
-function sendSubscribe(sensors: SensorType[] | null) {
-  singleton.pendingSubscription = sensors
+/**
+ * Merge all active subscriptions and send the combined set to the server.
+ * If any hook requests all sensors (null), subscribe to all.
+ */
+function recomputeAndSendSubscription() {
+  let merged: SensorType[] | null = null
+
+  for (const sensors of singleton.activeSubscriptions.values()) {
+    if (sensors === null) {
+      // One hook wants all sensors — subscribe to all
+      merged = null
+      break
+    }
+    if (merged === null) {
+      merged = [...sensors]
+    } else {
+      for (const s of sensors) {
+        if (!merged.includes(s)) merged.push(s)
+      }
+    }
+  }
+
+  // If no active subscriptions, default to empty
+  if (singleton.activeSubscriptions.size === 0) {
+    merged = []
+  }
+
+  singleton.pendingSubscription = merged
   if (singleton.ws?.readyState === WebSocket.OPEN) {
     singleton.ws.send(JSON.stringify({
       type: 'subscribe',
-      sensors: sensors ?? [],
+      sensors: merged ?? [],
     }))
   }
 }
@@ -667,6 +699,12 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   const { sensors = null, enabled = true } = options
   const sensorsKey = sensors ? sensors.slice().sort().join(',') : 'all'
 
+  // Stable subscription ID for this hook instance
+  const subIdRef = useRef<number | null>(null)
+  if (subIdRef.current === null) {
+    subIdRef.current = singleton.nextSubscriptionId++
+  }
+
   // Ref-counted connection management
   useEffect(() => {
     if (!enabled) return
@@ -685,10 +723,17 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
     }
   }, [enabled])
 
-  // Subscription management — update when sensors change
+  // Subscription management — merge with other active hooks
   useEffect(() => {
     if (!enabled) return
-    sendSubscribe(sensors ?? null)
+    const id = subIdRef.current!
+    singleton.activeSubscriptions.set(id, sensors ?? null)
+    recomputeAndSendSubscription()
+
+    return () => {
+      singleton.activeSubscriptions.delete(id)
+      recomputeAndSendSubscription()
+    }
   }, [sensorsKey, enabled])
 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
