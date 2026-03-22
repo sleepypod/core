@@ -151,14 +151,30 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
   // ── Actions ──
 
   const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(prompt)
+    try {
+      await navigator.clipboard.writeText(prompt)
+    } catch {
+      // Fallback for non-HTTPS (pod served over HTTP on LAN)
+      const textarea = document.createElement('textarea')
+      textarea.value = prompt
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }, [prompt])
 
   const handlePaste = useCallback(async () => {
-    const text = await navigator.clipboard.readText()
-    setJsonInput(text)
+    try {
+      const text = await navigator.clipboard.readText()
+      setJsonInput(text)
+    } catch {
+      // Clipboard read not available over HTTP — user must paste manually
+    }
   }, [])
 
   const handleLoadTemplate = useCallback((template: CurveTemplate) => {
