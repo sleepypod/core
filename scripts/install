@@ -237,7 +237,7 @@ chmod 2770 "$DATA_DIR"
 
 # Fix permissions on existing database files (upgrades from older installs)
 fix_db_permissions() {
-  if ls "$DATA_DIR"/*.db &>/dev/null; then
+  if find "$DATA_DIR" -maxdepth 1 \( -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' \) -print -quit | grep -q .; then
     echo "Fixing database file permissions..."
     find "$DATA_DIR" -type f \( -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' \) \
       -exec chown root:sleepypod {} + -exec chmod 660 {} +
