@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useEffect, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -11,7 +11,7 @@ import {
   type Edge,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useOnSensorFrame, useSensorStreamStatus } from '@/src/hooks/useSensorStream'
+import { useOnSensorFrame } from '@/src/hooks/useSensorStream'
 import type { SensorFrame } from '@/src/hooks/useSensorStream'
 
 // ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ const TIMELINE_WINDOW_MS = 30_000
 const MAX_EVENTS = 500
 
 // ---------------------------------------------------------------------------
-// Custom ReactFlow node — static, no dynamic data
+// Custom ReactFlow node
 // ---------------------------------------------------------------------------
 
 interface PipelineNodeData {
@@ -76,6 +76,79 @@ function PipelineNode({ data }: { data: PipelineNodeData }) {
 }
 
 // ---------------------------------------------------------------------------
+// Static ReactFlow DAG — module-level constants, memo'd wrapper.
+// Nothing here changes at runtime. Parent re-renders never propagate in.
+// ---------------------------------------------------------------------------
+
+const NODE_TYPES = { pipeline: PipelineNode }
+
+const CX = 130
+const LX = 0
+const RX = 260
+const RY = 80
+
+const STATIC_NODES: Node[] = [
+  { id: 'firmware', type: 'pipeline', position: { x: CX, y: 0 },
+    data: { label: 'Firmware', sub: 'frankenfirmware', color: '#71717a' } },
+  { id: 'raw', type: 'pipeline', position: { x: LX, y: RY },
+    data: { label: 'RAW Files', sub: 'CBOR on disk', color: '#71717a' } },
+  { id: 'dac-transport', type: 'pipeline', position: { x: CX, y: RY },
+    data: { label: 'dacTransport', sub: 'dac.sock', color: '#a1a1aa' } },
+  { id: 'piezo-stream', type: 'pipeline', position: { x: LX, y: RY * 2 },
+    data: { label: 'piezoStream', sub: 'tails + parses', color: '#8b5cf6' } },
+  { id: 'dac-monitor', type: 'pipeline', position: { x: CX, y: RY * 2 },
+    data: { label: 'DacMonitor', sub: 'polls 2s', color: '#3b82f6' } },
+  { id: 'trpc', type: 'pipeline', position: { x: RX, y: RY * 2 },
+    data: { label: 'tRPC :3000', sub: 'mutations', color: '#f97316' } },
+  { id: 'broadcast', type: 'pipeline', position: { x: LX + 65, y: RY * 3 },
+    data: { label: 'broadcastFrame()', sub: 'event bus', color: '#a78bfa' } },
+  { id: 'ws', type: 'pipeline', position: { x: LX + 65, y: RY * 4 },
+    data: { label: 'WebSocket :3001', sub: ':3001', color: '#a78bfa' } },
+  { id: 'browser', type: 'pipeline', position: { x: CX, y: RY * 5 },
+    data: { label: 'Browser', sub: 'React UI', color: '#e2e8f0' } },
+]
+
+const STATIC_EDGES: Edge[] = [
+  { id: 'fw-raw', source: 'firmware', target: 'raw', animated: true, style: { stroke: '#52525b' } },
+  { id: 'fw-dt', source: 'firmware', target: 'dac-transport', animated: true, style: { stroke: '#a1a1aa' } },
+  { id: 'raw-ps', source: 'raw', target: 'piezo-stream', animated: true, style: { stroke: '#8b5cf6' } },
+  { id: 'dt-dm', source: 'dac-transport', target: 'dac-monitor', animated: true, style: { stroke: '#3b82f6' } },
+  { id: 'ps-bc', source: 'piezo-stream', target: 'broadcast', animated: true, style: { stroke: '#8b5cf6' } },
+  { id: 'dm-bc', source: 'dac-monitor', target: 'broadcast', animated: true, style: { stroke: '#3b82f6' } },
+  { id: 'bc-ws', source: 'broadcast', target: 'ws', animated: true, style: { stroke: '#a78bfa' } },
+  { id: 'ws-browser', source: 'ws', target: 'browser', animated: true, style: { stroke: '#a78bfa' } },
+  { id: 'browser-trpc', source: 'browser', target: 'trpc', animated: true, style: { stroke: '#f97316', strokeDasharray: '5 3' } },
+  { id: 'trpc-dt', source: 'trpc', target: 'dac-transport', animated: true, style: { stroke: '#f97316', strokeDasharray: '5 3' } },
+]
+
+const FIT_VIEW_OPTIONS = { padding: 0.15 }
+const PRO_OPTIONS = { hideAttribution: true }
+
+const StaticDag = memo(function StaticDag() {
+  return (
+    <div className="mb-2 rounded-lg" style={{ height: 340, background: '#0a0a0a' }}>
+      <ReactFlow
+        nodes={STATIC_NODES}
+        edges={STATIC_EDGES}
+        nodeTypes={NODE_TYPES}
+        fitView
+        fitViewOptions={FIT_VIEW_OPTIONS}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        panOnDrag={false}
+        zoomOnScroll={false}
+        zoomOnPinch={false}
+        preventScrolling={false}
+        elementsSelectable={false}
+        proOptions={PRO_OPTIONS}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={20} size={0.5} color="#222" />
+      </ReactFlow>
+    </div>
+  )
+})
+
+// ---------------------------------------------------------------------------
 // Timeline dot type
 // ---------------------------------------------------------------------------
 
@@ -92,12 +165,11 @@ interface TimelineDot {
 /**
  * Data pipeline visualization: static ReactFlow DAG + live canvas timeline.
  *
- * ReactFlow renders a static DAG (no dynamic node data) to avoid infinite
- * render loops from its internal zustand store. All live data (rates, activity)
- * is rendered via the canvas timeline only.
+ * ReactFlow is isolated inside a memo'd zero-prop component with all data
+ * as module-level constants. Parent re-renders from useOnSensorFrame never
+ * reach ReactFlow's internal zustand store.
  */
 export function DataPipeline() {
-  const wsStatus = useSensorStreamStatus()
   const eventsRef = useRef<TimelineDot[]>([])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animRef = useRef<number>(0)
@@ -194,53 +266,6 @@ export function DataPipeline() {
     return () => cancelAnimationFrame(animRef.current)
   }, [])
 
-  // ---------------------------------------------------------------------------
-  // Static ReactFlow DAG — no dynamic data in nodes to avoid render loops
-  // ---------------------------------------------------------------------------
-
-  const nodeTypes = useMemo(() => ({ pipeline: PipelineNode }), [])
-
-  const CX = 130
-  const LX = 0
-  const RX = 260
-  const RY = 80
-
-  const wsColor = wsStatus === 'connected' ? '#22c55e' : wsStatus === 'connecting' ? '#eab308' : '#ef4444'
-
-  const nodes = useMemo<Node[]>(() => [
-    { id: 'firmware', type: 'pipeline', position: { x: CX, y: 0 },
-      data: { label: 'Firmware', sub: 'frankenfirmware', color: '#71717a' } },
-    { id: 'raw', type: 'pipeline', position: { x: LX, y: RY },
-      data: { label: 'RAW Files', sub: 'CBOR on disk', color: '#71717a' } },
-    { id: 'dac-transport', type: 'pipeline', position: { x: CX, y: RY },
-      data: { label: 'dacTransport', sub: 'dac.sock', color: '#a1a1aa' } },
-    { id: 'piezo-stream', type: 'pipeline', position: { x: LX, y: RY * 2 },
-      data: { label: 'piezoStream', sub: 'tails + parses', color: '#8b5cf6' } },
-    { id: 'dac-monitor', type: 'pipeline', position: { x: CX, y: RY * 2 },
-      data: { label: 'DacMonitor', sub: 'polls 2s', color: '#3b82f6' } },
-    { id: 'trpc', type: 'pipeline', position: { x: RX, y: RY * 2 },
-      data: { label: 'tRPC :3000', sub: 'mutations', color: '#f97316' } },
-    { id: 'broadcast', type: 'pipeline', position: { x: LX + 65, y: RY * 3 },
-      data: { label: 'broadcastFrame()', sub: 'event bus', color: '#a78bfa' } },
-    { id: 'ws', type: 'pipeline', position: { x: LX + 65, y: RY * 4 },
-      data: { label: 'WebSocket :3001', sub: wsStatus, color: wsColor } },
-    { id: 'browser', type: 'pipeline', position: { x: CX, y: RY * 5 },
-      data: { label: 'Browser', sub: 'React UI', color: '#e2e8f0' } },
-  ], [wsStatus, wsColor])
-
-  const edges = useMemo<Edge[]>(() => [
-    { id: 'fw-raw', source: 'firmware', target: 'raw', animated: true, style: { stroke: '#52525b' } },
-    { id: 'fw-dt', source: 'firmware', target: 'dac-transport', animated: true, style: { stroke: '#a1a1aa' } },
-    { id: 'raw-ps', source: 'raw', target: 'piezo-stream', animated: true, style: { stroke: '#8b5cf6' } },
-    { id: 'dt-dm', source: 'dac-transport', target: 'dac-monitor', animated: true, style: { stroke: '#3b82f6' } },
-    { id: 'ps-bc', source: 'piezo-stream', target: 'broadcast', animated: true, style: { stroke: '#8b5cf6' } },
-    { id: 'dm-bc', source: 'dac-monitor', target: 'broadcast', animated: true, style: { stroke: '#3b82f6' } },
-    { id: 'bc-ws', source: 'broadcast', target: 'ws', animated: true, style: { stroke: '#a78bfa' } },
-    { id: 'ws-browser', source: 'ws', target: 'browser', animated: true, style: { stroke: wsColor } },
-    { id: 'browser-trpc', source: 'browser', target: 'trpc', animated: true, style: { stroke: '#f97316', strokeDasharray: '5 3' } },
-    { id: 'trpc-dt', source: 'trpc', target: 'dac-transport', animated: true, style: { stroke: '#f97316', strokeDasharray: '5 3' } },
-  ], [wsColor])
-
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
@@ -251,26 +276,8 @@ export function DataPipeline() {
         </div>
       </div>
 
-      {/* ReactFlow DAG — static nodes, no dynamic data */}
-      <div className="mb-2 rounded-lg" style={{ height: 340, background: '#0a0a0a' }}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.15 }}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          panOnDrag={false}
-          zoomOnScroll={false}
-          zoomOnPinch={false}
-          preventScrolling={false}
-          elementsSelectable={false}
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={0.5} color="#222" />
-        </ReactFlow>
-      </div>
+      {/* ReactFlow DAG — memo'd, zero-prop, fully isolated */}
+      <StaticDag />
 
       {/* Timeline canvas with lane labels */}
       <div className="flex gap-1">

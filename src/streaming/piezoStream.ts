@@ -301,23 +301,29 @@ function normalizeFrzHealth(rec: Record<string, unknown>): Record<string, unknow
   const left = (rec.left ?? {}) as Record<string, unknown>
   const right = (rec.right ?? {}) as Record<string, unknown>
   const fan = (rec.fan ?? {}) as Record<string, unknown>
+  // Firmware nests: left.pump.rpm, left.tec.current, fan.top.rpm
+  const leftPump = (left.pump ?? {}) as Record<string, unknown>
+  const rightPump = (right.pump ?? {}) as Record<string, unknown>
+  const leftTec = (left.tec ?? {}) as Record<string, unknown>
+  const rightTec = (right.tec ?? {}) as Record<string, unknown>
+  const fanTop = (fan.top ?? {}) as Record<string, unknown>
 
   return {
     type: 'frzHealth',
     ts: rec.ts,
     left: {
-      pumpRpm: safeNum(left.pumpRpm ?? left.pump_rpm ?? left.pumpRPM ?? left.rpm) ?? 0,
-      pumpDuty: safeNum(left.pumpDuty ?? left.pump_duty ?? left.duty) ?? 0,
-      tecCurrent: safeNum(left.tecI ?? left.tec ?? left.tecCurrent) ?? 0,
+      pumpRpm: safeNum(left.pumpRpm ?? leftPump.rpm ?? left.pump_rpm ?? left.rpm) ?? 0,
+      pumpDuty: safeNum(left.pumpDuty ?? leftPump.duty ?? left.pump_duty ?? left.duty) ?? 0,
+      tecCurrent: safeNum(leftTec.current ?? left.tecI ?? left.tecCurrent) ?? 0,
     },
     right: {
-      pumpRpm: safeNum(right.pumpRpm ?? right.pump_rpm ?? right.pumpRPM ?? right.rpm) ?? 0,
-      pumpDuty: safeNum(right.pumpDuty ?? right.pump_duty ?? right.duty) ?? 0,
-      tecCurrent: safeNum(right.tecI ?? right.tec ?? right.tecCurrent) ?? 0,
+      pumpRpm: safeNum(right.pumpRpm ?? rightPump.rpm ?? right.pump_rpm ?? right.rpm) ?? 0,
+      pumpDuty: safeNum(right.pumpDuty ?? rightPump.duty ?? right.pump_duty ?? right.duty) ?? 0,
+      tecCurrent: safeNum(rightTec.current ?? right.tecI ?? right.tecCurrent) ?? 0,
     },
     fan: {
-      rpm: safeNum(fan.rpm ?? fan.fanRpm ?? fan.fan_rpm) ?? 0,
-      duty: safeNum(fan.duty ?? fan.fanDuty ?? fan.fan_duty) ?? 0,
+      rpm: safeNum(fan.rpm ?? fanTop.rpm ?? fan.fanRpm) ?? 0,
+      duty: safeNum(fan.duty ?? fanTop.duty ?? fan.fanDuty) ?? 0,
     },
   }
 }
@@ -742,7 +748,7 @@ export function startPiezoStreamServer(): WebSocketServer {
 
                 // Lazy serialize — only if at least one client needs it
                 if (payload === null) payload = JSON.stringify(frame)
-                client.send(payload)
+                try { client.send(payload) } catch { /* client gone between readyState check and send */ }
               }
             }
           }
@@ -794,7 +800,7 @@ export function broadcastFrame(frame: Record<string, unknown>): void {
     if (subs && !subs.has(frameType as SensorType)) continue
 
     if (payload === null) payload = JSON.stringify(frame)
-    client.send(payload)
+    try { client.send(payload) } catch { /* client gone between readyState check and send */ }
   }
 }
 

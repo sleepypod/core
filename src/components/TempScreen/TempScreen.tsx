@@ -162,9 +162,9 @@ export const TempScreen = () => {
           onClick={() => handleTempAdjust(-1)}
           disabled={!isOn || setTempMutation.isPending}
           className={clsx(
-            'flex h-12 w-12 items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
+            'flex h-12 w-12 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
             'bg-zinc-900 text-zinc-400 active:bg-zinc-800 active:scale-95',
-            'disabled:opacity-30 disabled:active:scale-100',
+            'disabled:cursor-default disabled:opacity-30 disabled:active:scale-100',
           )}
         >
           <Minus size={22} />
@@ -175,7 +175,7 @@ export const TempScreen = () => {
           onClick={handlePowerToggle}
           disabled={setPowerMutation.isPending}
           className={clsx(
-            'flex h-14 w-14 items-center justify-center rounded-full transition-all duration-200 sm:h-16 sm:w-16',
+            'flex h-14 w-14 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-16 sm:w-16',
             'active:scale-95',
             isOn
               ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
@@ -190,9 +190,9 @@ export const TempScreen = () => {
           onClick={() => handleTempAdjust(1)}
           disabled={!isOn || setTempMutation.isPending}
           className={clsx(
-            'flex h-12 w-12 items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
+            'flex h-12 w-12 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
             'bg-zinc-900 text-zinc-400 active:bg-zinc-800 active:scale-95',
-            'disabled:opacity-30 disabled:active:scale-100',
+            'disabled:cursor-default disabled:opacity-30 disabled:active:scale-100',
           )}
         >
           <Plus size={22} />

@@ -9,7 +9,6 @@ import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { TimeRangeSelector, getDateRangeFromTimeRange, type TimeRange } from '@/src/components/Environment/TimeRangeSelector'
 import { BedTempChart } from '@/src/components/Environment/BedTempChart'
 import { HumidityChart } from '@/src/components/Environment/HumidityChart'
-import { MovementChart } from '@/src/components/MovementChart/MovementChart'
 import { ConnectionStatusBar } from './ConnectionStatusBar'
 import { PresenceCard } from './PresenceCard'
 import { BedTempMatrix } from './BedTempMatrix'
@@ -101,7 +100,7 @@ export function SensorsScreen() {
 
   return (
     <PullToRefresh onRefresh={handleRefresh} enabled={streamEnabled}>
-    <div className="space-y-3 pb-4">
+    <div className="-mt-1 space-y-3 pb-4">
       {/* Connection status bar + stream toggle */}
       <div className="flex items-center gap-2">
         <div className="flex-1">
@@ -228,11 +227,6 @@ export function SensorsScreen() {
                 <HumidityChart data={bedTempQuery.data ?? []} />
               )}
             </div>
-          </SensorCard>
-
-          {/* Movement — keep chart, no duplicate date picker */}
-          <SensorCard>
-            <MovementChart hideNav />
           </SensorCard>
 
           {/* System — freezer thermal health */}

@@ -16,6 +16,9 @@ const RADIUS = DIAL_SIZE / 2
 const PADDING = THUMB_SIZE
 const VIEW_SIZE = DIAL_SIZE + PADDING * 2
 const CENTER = VIEW_SIZE / 2
+// Crop bottom of viewBox: arc endpoints are at y ≈ CENTER + R*sin(45°) + thumb
+// No content below the arc endpoints, so trim dead space
+const VIEW_HEIGHT = CENTER + RADIUS * Math.sin(Math.PI / 4) + THUMB_SIZE + 4
 
 interface TemperatureDialProps {
   /** Current bed temperature in °F */
@@ -200,8 +203,8 @@ export function TemperatureDial({
     <div className="flex items-center justify-center py-2 sm:py-4" style={{ touchAction: 'none' }}>
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${VIEW_SIZE} ${VIEW_SIZE}`}
-        className="aspect-square w-full max-w-[302px] select-none"
+        viewBox={`0 0 ${VIEW_SIZE} ${VIEW_HEIGHT}`}
+        className="w-full max-w-[302px] select-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
