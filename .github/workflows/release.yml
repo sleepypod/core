@@ -22,23 +22,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Enable Corepack
-        run: corepack enable
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "lts/*"
-          cache: yarn         
-          registry-url: 'https://npm.pkg.github.com'
-      
+          cache: pnpm
+
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
-      
-      - name: Verify the integrity of provenance attestations and registry signatures for installed dependencies
-        run: npm audit signatures
-      
+        run: pnpm install --frozen-lockfile
+
       - name: Semantic Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
-        run: npx semantic-release
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm dlx semantic-release
