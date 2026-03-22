@@ -10,7 +10,7 @@
  */
 
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
-import { broadcastFrame } from '@/src/streaming/piezoStream'
+import { broadcastFrame } from './piezoStream'
 import { getPrimeCompletedAt } from '@/src/hardware/primeNotification'
 import { getAlarmState } from '@/src/hardware/deviceStateSync'
 import { getSnoozeStatus } from '@/src/hardware/snoozeManager'
@@ -48,7 +48,7 @@ export function broadcastMutationStatus(
       },
     })
   }
-  catch {
-    // Fire-and-forget — never block the mutation response
+  catch (e) {
+    console.warn('[broadcastMutationStatus]', e)
   }
 }

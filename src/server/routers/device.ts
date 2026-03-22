@@ -7,6 +7,7 @@ import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
+import { fahrenheitToLevel } from '@/src/hardware/types'
 import {
   sideSchema,
   temperatureSchema,
@@ -278,10 +279,10 @@ export const deviceRouter = router({
           console.error('Failed to sync power state to DB:', dbError)
         }
 
-        broadcastMutationStatus(input.side, {
-          ...(input.temperature && { targetTemperature: input.temperature }),
-          ...(!input.powered && { targetLevel: 0 }),
-        })
+        broadcastMutationStatus(input.side, input.powered
+          ? { targetTemperature: input.temperature ?? 75, targetLevel: fahrenheitToLevel(input.temperature ?? 75) }
+          : { targetLevel: 0 },
+        )
         return { success: true }
       }, 'Failed to set power')
     }),

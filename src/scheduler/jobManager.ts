@@ -8,6 +8,7 @@ import {
   deviceSettings,
 } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { fahrenheitToLevel } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 
 /**
@@ -168,8 +169,10 @@ export class JobManager {
         await client.connect()
         try {
           await client.setPower(sched.side, true, sched.onTemperature)
+          const onTemp = sched.onTemperature ?? 75
           broadcastMutationStatus(sched.side, {
-            ...(sched.onTemperature && { targetTemperature: sched.onTemperature }),
+            targetTemperature: onTemp,
+            targetLevel: fahrenheitToLevel(onTemp),
           })
         }
         finally {

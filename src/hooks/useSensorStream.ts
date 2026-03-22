@@ -162,16 +162,12 @@ export type SensorFrame
 // ---------------------------------------------------------------------------
 
 interface ErrorMessage { type: 'error', message: string }
-interface ClaimedMessage { type: 'claimed', since: number }
-interface ReleasedMessage { type: 'released' }
 interface SubscribedMessage { type: 'subscribed', sensors: string[] }
 interface TimeRangeMessage { type: 'time_range', min: number, max: number, file: string | null }
 interface SeekCompleteMessage { type: 'seek_complete' }
 
 type ServerControlMessage
   = | ErrorMessage
-    | ClaimedMessage
-    | ReleasedMessage
     | SubscribedMessage
     | TimeRangeMessage
     | SeekCompleteMessage
@@ -376,9 +372,6 @@ function handleMessage(event: MessageEvent) {
     // Control messages
     if (msg.type === 'error') {
       setState({ lastError: (msg as ErrorMessage).message })
-      return
-    }
-    if (msg.type === 'claimed' || msg.type === 'released') {
       return
     }
     if (msg.type === 'subscribed') {
