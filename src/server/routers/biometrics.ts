@@ -696,14 +696,16 @@ export const biometricsRouter = router({
           if (!record.leftBedAt) {
             windowStart = record.enteredBedAt
             windowEnd = new Date() // use current time for active sessions
-          } else {
+          }
+          else {
             windowStart = record.enteredBedAt
             windowEnd = record.leftBedAt
           }
           sleepRecordId = record.id
           enteredBedAt = record.enteredBedAt.getTime()
           leftBedAt = record.leftBedAt ? record.leftBedAt.getTime() : null
-        } else if (input.startDate && input.endDate) {
+        }
+        else if (input.startDate && input.endDate) {
           if (!validateDateRange(input.startDate, input.endDate)) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
@@ -712,7 +714,8 @@ export const biometricsRouter = router({
           }
           windowStart = input.startDate
           windowEnd = input.endDate
-        } else {
+        }
+        else {
           // Default: last night — prefer overnight sleep over daytime naps
 
           // Fetch device timezone (falls back to 'America/Los_Angeles' if not set)
@@ -743,7 +746,7 @@ export const biometricsRouter = router({
           }
 
           // 1st try: 3+ hours AND entered bed between 8 PM (20) and 4 AM (4) local time
-          const overnightRecord = recentRecords.find(r => {
+          const overnightRecord = recentRecords.find((r) => {
             if (r.sleepDurationSeconds < 10800) return false
             const hour = localHour(r.enteredBedAt)
             return hour >= 20 || hour < 4

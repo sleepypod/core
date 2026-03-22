@@ -271,8 +271,16 @@ export function DataPipeline() {
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-medium text-zinc-300">Data Pipeline</span>
         <div className="flex items-center gap-2 text-[8px] text-zinc-600">
-          <span className="flex items-center gap-1"><span className="inline-block w-3 h-px bg-blue-400" /> read &darr;</span>
-          <span className="flex items-center gap-1"><span className="inline-block w-3 h-px bg-orange-400" style={{ borderBottom: '1px dashed #f97316' }} /> write &uarr;</span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-px bg-blue-400" />
+            {' '}
+            read &darr;
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-px bg-orange-400" style={{ borderBottom: '1px dashed #f97316' }} />
+            {' '}
+            write &uarr;
+          </span>
         </div>
       </div>
 

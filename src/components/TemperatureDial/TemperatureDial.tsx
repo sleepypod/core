@@ -45,7 +45,7 @@ function tempToProgress(tempF: number): number {
 }
 
 /** Calculate (x, y) position on the arc for a given progress. */
-function progressToPoint(progress: number, r: number = RADIUS): { x: number; y: number } {
+function progressToPoint(progress: number, r: number = RADIUS): { x: number, y: number } {
   const angle = START_ANGLE + progress * TOTAL_SWEEP
   const rad = toRad(angle)
   return {
@@ -353,7 +353,9 @@ export function TemperatureDial({
                   </span>
                   <span style={{ color: theme.textMuted, fontSize: 13 }}>·</span>
                   <span style={{ color: theme.textMuted, fontSize: 13 }}>
-                    Now {formatTemp(currentTempF)}
+                    Now
+                    {' '}
+                    {formatTemp(currentTempF)}
                   </span>
                 </div>
               </>

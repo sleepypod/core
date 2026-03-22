@@ -100,142 +100,148 @@ export function SensorsScreen() {
 
   return (
     <PullToRefresh onRefresh={handleRefresh} enabled={streamEnabled}>
-    <div className="-mt-1 space-y-3 pb-4">
-      {/* Connection status bar + stream toggle */}
-      <div className="flex items-center gap-2">
-        <div className="flex-1">
-          <ConnectionStatusBar
-            status={stream.status}
-            fps={stream.fps}
-            lastError={stream.lastError}
-            subscribedSensors={stream.subscribedSensors}
-            lastFrameTime={stream.lastFrameTime}
-          />
-        </div>
-        <button
-          onClick={() => setStreamEnabled(v => !v)}
-          className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
-            streamEnabled
-              ? 'bg-red-900/30 text-red-400 active:bg-red-900/50'
-              : 'bg-emerald-900/30 text-emerald-400 active:bg-emerald-900/50'
-          }`}
-        >
-          {streamEnabled ? 'Stop' : 'Start'}
-        </button>
-      </div>
-
-      {/* Paused state */}
-      {!streamEnabled && (
-        <div className="flex h-32 items-center justify-center rounded-2xl bg-zinc-900">
-          <div className="text-center">
-            <p className="text-sm text-zinc-400">Stream paused</p>
-            <p className="text-xs text-zinc-600">Tap Start to resume live data</p>
+      <div className="-mt-1 space-y-3 pb-4">
+        {/* Connection status bar + stream toggle */}
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <ConnectionStatusBar
+              status={stream.status}
+              fps={stream.fps}
+              lastError={stream.lastError}
+              subscribedSensors={stream.subscribedSensors}
+              lastFrameTime={stream.lastFrameTime}
+            />
           </div>
+          <button
+            onClick={() => setStreamEnabled(v => !v)}
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+              streamEnabled
+                ? 'bg-red-900/30 text-red-400 active:bg-red-900/50'
+                : 'bg-emerald-900/30 text-emerald-400 active:bg-emerald-900/50'
+            }`}
+          >
+            {streamEnabled ? 'Stop' : 'Start'}
+          </button>
         </div>
-      )}
 
-      {streamEnabled && (
-        <>
-          {/* Data Pipeline — static DAG + live canvas timeline */}
-          <SensorCard>
-            <DataPipeline />
-          </SensorCard>
+        {/* Paused state */}
+        {!streamEnabled && (
+          <div className="flex h-32 items-center justify-center rounded-2xl bg-zinc-900">
+            <div className="text-center">
+              <p className="text-sm text-zinc-400">Stream paused</p>
+              <p className="text-xs text-zinc-600">Tap Start to resume live data</p>
+            </div>
+          </div>
+        )}
 
-          {/* Piezo Waveform — real-time BCG signal */}
-          <SensorCard>
-            <PiezoWaveform />
-          </SensorCard>
+        {streamEnabled && (
+          <>
+            {/* Data Pipeline — static DAG + live canvas timeline */}
+            <SensorCard>
+              <DataPipeline />
+            </SensorCard>
 
-          {/* Bed Presence — capacitive sensing with zone activity */}
-          <SensorCard>
-            <PresenceCard />
-          </SensorCard>
+            {/* Piezo Waveform — real-time BCG signal */}
+            <SensorCard>
+              <PiezoWaveform />
+            </SensorCard>
 
-          {/* Sensor Matrix — Bed Temperature Grid */}
-          <SensorCard>
-            <BedTempMatrix />
-          </SensorCard>
+            {/* Bed Presence — capacitive sensing with zone activity */}
+            <SensorCard>
+              <PresenceCard />
+            </SensorCard>
 
-          {/* Bed Temperature Trend — recharts LineChart (from biometrics) */}
-          <SensorCard>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
+            {/* Sensor Matrix — Bed Temperature Grid */}
+            <SensorCard>
+              <BedTempMatrix />
+            </SensorCard>
+
+            {/* Bed Temperature Trend — recharts LineChart (from biometrics) */}
+            <SensorCard>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <TrendIcon trend={ambientTrend} />
+                    <h3 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                      Bed Temperature Trend
+                    </h3>
+                  </div>
+                  <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
+                </div>
+
+                {bedTempQuery.isLoading
+                  ? (
+                      <div className="flex h-[200px] items-center justify-center">
+                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
+                      </div>
+                    )
+                  : bedTempQuery.isError
+                    ? (
+                        <div className="flex h-[200px] items-center justify-center text-sm text-red-400">
+                          Failed to load temperature data
+                        </div>
+                      )
+                    : (
+                        <BedTempChart
+                          data={bedTempQuery.data ?? []}
+                          unit="F"
+                          showAmbient
+                          highlightSide="both"
+                        />
+                      )}
+
+                {/* Summary stats */}
+                {summary && (
+                  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-t border-zinc-800 pt-2">
+                    <SummaryItem
+                      label="Avg Bed L"
+                      value={summary.avgLeftCenterTemp != null ? `${Math.round(summary.avgLeftCenterTemp)}°` : '--'}
+                    />
+                    <SummaryItem
+                      label="Avg Bed R"
+                      value={summary.avgRightCenterTemp != null ? `${Math.round(summary.avgRightCenterTemp)}°` : '--'}
+                    />
+                    <SummaryItem
+                      label="Avg Ambient"
+                      value={summary.avgAmbientTemp != null ? `${Math.round(summary.avgAmbientTemp)}°` : '--'}
+                    />
+                    <SummaryItem
+                      label="Humidity"
+                      value={summary.avgHumidity != null ? `${Math.round(summary.avgHumidity)}%` : '--'}
+                    />
+                  </div>
+                )}
+              </div>
+            </SensorCard>
+
+            {/* Humidity Trend — recharts AreaChart (from biometrics) */}
+            <SensorCard>
+              <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
-                  <TrendIcon trend={ambientTrend} />
+                  <Droplets size={10} className="text-[#4a90d9]" />
                   <h3 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-                    Bed Temperature Trend
+                    Humidity
                   </h3>
                 </div>
-                <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
+                {bedTempQuery.isLoading
+                  ? (
+                      <div className="flex h-[140px] items-center justify-center">
+                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
+                      </div>
+                    )
+                  : (
+                      <HumidityChart data={bedTempQuery.data ?? []} />
+                    )}
               </div>
+            </SensorCard>
 
-              {bedTempQuery.isLoading ? (
-                <div className="flex h-[200px] items-center justify-center">
-                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
-                </div>
-              ) : bedTempQuery.isError ? (
-                <div className="flex h-[200px] items-center justify-center text-sm text-red-400">
-                  Failed to load temperature data
-                </div>
-              ) : (
-                <BedTempChart
-                  data={bedTempQuery.data ?? []}
-                  unit="F"
-                  showAmbient
-                  highlightSide="both"
-                />
-              )}
-
-              {/* Summary stats */}
-              {summary && (
-                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-t border-zinc-800 pt-2">
-                  <SummaryItem
-                    label="Avg Bed L"
-                    value={summary.avgLeftCenterTemp != null ? `${Math.round(summary.avgLeftCenterTemp)}°` : '--'}
-                  />
-                  <SummaryItem
-                    label="Avg Bed R"
-                    value={summary.avgRightCenterTemp != null ? `${Math.round(summary.avgRightCenterTemp)}°` : '--'}
-                  />
-                  <SummaryItem
-                    label="Avg Ambient"
-                    value={summary.avgAmbientTemp != null ? `${Math.round(summary.avgAmbientTemp)}°` : '--'}
-                  />
-                  <SummaryItem
-                    label="Humidity"
-                    value={summary.avgHumidity != null ? `${Math.round(summary.avgHumidity)}%` : '--'}
-                  />
-                </div>
-              )}
-            </div>
-          </SensorCard>
-
-          {/* Humidity Trend — recharts AreaChart (from biometrics) */}
-          <SensorCard>
-            <div className="space-y-2">
-              <div className="flex items-center gap-1.5">
-                <Droplets size={10} className="text-[#4a90d9]" />
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-                  Humidity
-                </h3>
-              </div>
-              {bedTempQuery.isLoading ? (
-                <div className="flex h-[140px] items-center justify-center">
-                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
-                </div>
-              ) : (
-                <HumidityChart data={bedTempQuery.data ?? []} />
-              )}
-            </div>
-          </SensorCard>
-
-          {/* System — freezer thermal health */}
-          <SensorCard>
-            <FreezerHealthCard />
-          </SensorCard>
-        </>
-      )}
-    </div>
+            {/* System — freezer thermal health */}
+            <SensorCard>
+              <FreezerHealthCard />
+            </SensorCard>
+          </>
+        )}
+      </div>
     </PullToRefresh>
   )
 }
@@ -255,7 +261,7 @@ function TrendIcon({ trend }: { trend: string | null }) {
   return <Minus size={10} className="text-zinc-500" />
 }
 
-function SummaryItem({ label, value }: { label: string; value: string }) {
+function SummaryItem({ label, value }: { label: string, value: string }) {
   return (
     <div className="flex flex-col items-center">
       <span className="text-xs font-medium tabular-nums text-zinc-300">{value}</span>

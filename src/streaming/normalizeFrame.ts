@@ -22,16 +22,16 @@ export interface WireFrzHealth {
   version?: number
   left: {
     tec: { current: number }
-    pump: { mode: string; rpm: number; water: boolean; duty?: number }
+    pump: { mode: string, rpm: number, water: boolean, duty?: number }
     temps?: { flowrate?: number }
   }
   right: {
     tec: { current: number }
-    pump: { mode: string; rpm: number; water: boolean; duty?: number }
+    pump: { mode: string, rpm: number, water: boolean, duty?: number }
     temps?: { flowrate?: number }
   }
   fan: {
-    top: { rpm: number; duty?: number }
+    top: { rpm: number, duty?: number }
     bottom?: { rpm: number }
   }
 }
@@ -41,8 +41,8 @@ export interface WireFrzTherm {
   type: 'frzTherm'
   ts: number
   version?: number
-  left: { target: number; power: number; valid: boolean; enabled: boolean } | number
-  right: { target: number; power: number; valid: boolean; enabled: boolean } | number
+  left: { target: number, power: number, valid: boolean, enabled: boolean } | number
+  right: { target: number, power: number, valid: boolean, enabled: boolean } | number
 }
 
 /** frzTemp as the firmware writes it (centidegrees integers). */
@@ -78,8 +78,8 @@ export interface WireBedTemp {
 export interface WireCapSense2 {
   type: 'capSense2'
   ts: number
-  left: { values: number[]; status?: string } | number
-  right: { values: number[]; status?: string } | number
+  left: { values: number[], status?: string } | number
+  right: { values: number[], status?: string } | number
 }
 
 // ---------------------------------------------------------------------------
@@ -89,8 +89,8 @@ export interface WireCapSense2 {
 const NO_SENSOR = -327.68
 
 function isSentinel(v: unknown): boolean {
-  return v === null || v === undefined || v === NO_SENSOR ||
-    (typeof v === 'number' && Math.abs(v - NO_SENSOR) < 0.01)
+  return v === null || v === undefined || v === NO_SENSOR
+    || (typeof v === 'number' && Math.abs(v - NO_SENSOR) < 0.01)
 }
 
 function safeNum(v: unknown): number | null {
