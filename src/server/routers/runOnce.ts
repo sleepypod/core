@@ -37,21 +37,24 @@ export const runOnceRouter = router({
     .mutation(async ({ input }) => {
       const jobManager = await getJobManager()
 
-      // Cancel any existing active session for this side
-      const existing = await db
-        .select({ id: runOnceSessions.id })
-        .from(runOnceSessions)
-        .where(and(
-          eq(runOnceSessions.side, input.side),
-          eq(runOnceSessions.status, 'active'),
-        ))
+      // Cancel any existing active session for this side (atomic)
+      db.transaction((tx) => {
+        const existing = tx
+          .select({ id: runOnceSessions.id })
+          .from(runOnceSessions)
+          .where(and(
+            eq(runOnceSessions.side, input.side),
+            eq(runOnceSessions.status, 'active'),
+          ))
+          .all()
 
-      for (const row of existing) {
-        await db
-          .update(runOnceSessions)
-          .set({ status: 'cancelled' })
-          .where(eq(runOnceSessions.id, row.id))
-      }
+        for (const row of existing) {
+          tx.update(runOnceSessions)
+            .set({ status: 'cancelled' })
+            .where(eq(runOnceSessions.id, row.id))
+            .run()
+        }
+      })
       jobManager.cancelRunOnceSession(input.side)
 
       // Compute expiry from wake time
@@ -72,12 +75,12 @@ export const runOnceRouter = router({
         })
         .returning({ id: runOnceSessions.id })
 
-      // Fire first set point immediately
+      // Power on + fire first set point immediately
       const firstTemp = input.setPoints[0].temperature
       await withHardwareClient(async (client) => {
-        await client.setTemperature(input.side, firstTemp)
+        await client.setPower(input.side, true, firstTemp)
         return { success: true }
-      }, 'Failed to set initial run-once temperature')
+      }, 'Failed to start run-once session')
 
       broadcastMutationStatus(input.side, {
         targetTemperature: firstTemp,
@@ -120,10 +123,14 @@ export const runOnceRouter = router({
 
       if (!session) return null
 
+      let setPoints: unknown = []
+      try { setPoints = JSON.parse(session.setPoints) }
+      catch { /* malformed — return empty */ }
+
       return {
         id: session.id,
         side: session.side,
-        setPoints: JSON.parse(session.setPoints),
+        setPoints,
         wakeTime: session.wakeTime,
         startedAt: Math.floor(session.startedAt.getTime() / 1000),
         expiresAt: Math.floor(session.expiresAt.getTime() / 1000),
@@ -141,7 +148,7 @@ export const runOnceRouter = router({
     .mutation(async ({ input }) => {
       const jobManager = await getJobManager()
 
-      const updated = await db
+      await db
         .update(runOnceSessions)
         .set({ status: 'cancelled' })
         .where(and(

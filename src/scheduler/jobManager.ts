@@ -441,12 +441,14 @@ export class JobManager {
    * Check if a run-once session is active for a given side.
    */
   async hasActiveRunOnceSession(side: string): Promise<boolean> {
+    const now = new Date()
     const [session] = await db
       .select({ id: runOnceSessions.id })
       .from(runOnceSessions)
       .where(and(
         eq(runOnceSessions.side, side as 'left' | 'right'),
         eq(runOnceSessions.status, 'active'),
+        gt(runOnceSessions.expiresAt, now),
       ))
       .limit(1)
     return !!session
@@ -493,7 +495,7 @@ export class JobManager {
       )
     }
 
-    // Cleanup job at wake time
+    // Cleanup job at wake time — mark completed + power off the side
     const cleanupDate = this.timeToDate(wakeTime, timezone, now)
     this.scheduler.scheduleOneTimeJob(
       `runonce-cleanup-${sessionId}`,
@@ -504,7 +506,19 @@ export class JobManager {
           .update(runOnceSessions)
           .set({ status: 'completed' })
           .where(eq(runOnceSessions.id, sessionId))
-        console.log(`Run-once session ${sessionId} completed`)
+
+        // Power off the side at wake time
+        try {
+          const client = getSharedHardwareClient()
+          await client.connect()
+          await client.setPower(side, false)
+          broadcastMutationStatus(side, { targetLevel: 0 })
+        }
+        catch (e) {
+          console.warn(`[runOnce] Failed to power off ${side} at wake:`, e)
+        }
+
+        console.log(`Run-once session ${sessionId} completed — ${side} powered off`)
       },
       { sessionId, side, cleanup: true },
     )
@@ -533,15 +547,32 @@ export class JobManager {
 
     for (const session of sessions) {
       if (session.expiresAt <= now) {
-        // Expired — mark completed
+        // Expired — mark completed and power off
         await db
           .update(runOnceSessions)
           .set({ status: 'completed' })
           .where(eq(runOnceSessions.id, session.id))
+        try {
+          const client = getSharedHardwareClient()
+          await client.connect()
+          await client.setPower(session.side, false)
+          broadcastMutationStatus(session.side, { targetLevel: 0 })
+        }
+        catch { /* best effort */ }
+        console.log(`Expired run-once session ${session.id} — ${session.side} powered off`)
         continue
       }
 
-      const setPoints = JSON.parse(session.setPoints) as Array<{ time: string, temperature: number }>
+      let setPoints: Array<{ time: string, temperature: number }>
+      try {
+        setPoints = JSON.parse(session.setPoints)
+      }
+      catch {
+        console.warn(`[runOnce] Malformed setPoints for session ${session.id}, marking completed`)
+        await db.update(runOnceSessions).set({ status: 'completed' }).where(eq(runOnceSessions.id, session.id))
+        continue
+      }
+
       const [settings] = await db.select().from(deviceSettings).limit(1)
       const timezone = settings?.timezone ?? 'America/Los_Angeles'
 
