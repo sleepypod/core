@@ -66,6 +66,42 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
+   * Schedule a one-time job that fires at an absolute Date.
+   * Auto-removes from the jobs map after firing.
+   */
+  scheduleOneTimeJob(
+    id: string,
+    type: JobType,
+    fireDate: Date,
+    handler: () => Promise<void>,
+    metadata?: Record<string, unknown>,
+  ): ScheduledJob {
+    this.cancelJob(id)
+
+    const job = schedule.scheduleJob(fireDate, async () => {
+      const result = await this.executeJob(id, handler)
+      this.emit('jobExecuted', id, result)
+      this.jobs.delete(id)
+    })
+
+    if (!job) {
+      throw new Error(`Failed to schedule one-time job: ${id} at ${fireDate.toISOString()}`)
+    }
+
+    const scheduledJob: ScheduledJob = {
+      id,
+      type,
+      schedule: fireDate.toISOString(),
+      job,
+      metadata,
+    }
+
+    this.jobs.set(id, scheduledJob)
+    this.emit('jobScheduled', scheduledJob)
+    return scheduledJob
+  }
+
+  /**
    * Execute a job and handle errors
    */
   private async executeJob(

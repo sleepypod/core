@@ -6,7 +6,9 @@ import {
   powerSchedules,
   alarmSchedules,
   deviceSettings,
+  runOnceSessions,
 } from '@/src/db/schema'
+import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { fahrenheitToLevel } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
@@ -122,6 +124,9 @@ export class JobManager {
       }
     }
 
+    // Restore active run-once sessions (reboot survival)
+    await this.loadRunOnceSessions()
+
     console.log(`Loaded ${this.scheduler.getJobs().length} scheduled jobs`)
   }
 
@@ -139,6 +144,10 @@ export class JobManager {
       JobType.TEMPERATURE,
       cron,
       async () => {
+        if (await this.hasActiveRunOnceSession(sched.side)) {
+          console.log(`Skipping recurring temp job temp-${sched.id} — run-once session active for ${sched.side}`)
+          return
+        }
         const client = getSharedHardwareClient()
         await client.connect()
         try {
@@ -422,6 +431,159 @@ export class JobManager {
    */
   getScheduler(): Scheduler {
     return this.scheduler
+  }
+
+  // ---------------------------------------------------------------------------
+  // Run-once sessions — one-off curve application
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check if a run-once session is active for a given side.
+   */
+  async hasActiveRunOnceSession(side: string): Promise<boolean> {
+    const [session] = await db
+      .select({ id: runOnceSessions.id })
+      .from(runOnceSessions)
+      .where(and(
+        eq(runOnceSessions.side, side as 'left' | 'right'),
+        eq(runOnceSessions.status, 'active'),
+      ))
+      .limit(1)
+    return !!session
+  }
+
+  /**
+   * Schedule a run-once session: Date-based jobs for each set point + cleanup at wake time.
+   */
+  scheduleRunOnceSession(
+    sessionId: number,
+    side: 'left' | 'right',
+    setPoints: Array<{ time: string, temperature: number }>,
+    wakeTime: string,
+    timezone: string,
+  ): void {
+    const now = new Date()
+
+    for (let i = 0; i < setPoints.length; i++) {
+      const sp = setPoints[i]
+      const fireDate = this.timeToDate(sp.time, timezone, now)
+
+      // Skip set points that are already in the past
+      if (fireDate <= now) continue
+
+      this.scheduler.scheduleOneTimeJob(
+        `runonce-${sessionId}-${i}`,
+        JobType.RUN_ONCE,
+        fireDate,
+        async () => {
+          const client = getSharedHardwareClient()
+          await client.connect()
+          try {
+            await client.setTemperature(side, sp.temperature)
+            broadcastMutationStatus(side, {
+              targetTemperature: sp.temperature,
+              targetLevel: fahrenheitToLevel(sp.temperature),
+            })
+          }
+          finally {
+            // shared client — don't disconnect
+          }
+        },
+        { sessionId, side, index: i },
+      )
+    }
+
+    // Cleanup job at wake time
+    const cleanupDate = this.timeToDate(wakeTime, timezone, now)
+    this.scheduler.scheduleOneTimeJob(
+      `runonce-cleanup-${sessionId}`,
+      JobType.RUN_ONCE,
+      cleanupDate,
+      async () => {
+        await db
+          .update(runOnceSessions)
+          .set({ status: 'completed' })
+          .where(eq(runOnceSessions.id, sessionId))
+        console.log(`Run-once session ${sessionId} completed`)
+      },
+      { sessionId, side, cleanup: true },
+    )
+  }
+
+  /**
+   * Cancel an active run-once session for a side.
+   */
+  cancelRunOnceSession(side: 'left' | 'right'): void {
+    for (const job of this.scheduler.getJobs()) {
+      if (job.type === JobType.RUN_ONCE && job.metadata?.side === side) {
+        this.scheduler.cancelJob(job.id)
+      }
+    }
+  }
+
+  /**
+   * Restore active run-once sessions from DB after reboot.
+   */
+  private async loadRunOnceSessions(): Promise<void> {
+    const now = new Date()
+    const sessions = await db
+      .select()
+      .from(runOnceSessions)
+      .where(eq(runOnceSessions.status, 'active'))
+
+    for (const session of sessions) {
+      if (session.expiresAt <= now) {
+        // Expired — mark completed
+        await db
+          .update(runOnceSessions)
+          .set({ status: 'completed' })
+          .where(eq(runOnceSessions.id, session.id))
+        continue
+      }
+
+      const setPoints = JSON.parse(session.setPoints) as Array<{ time: string, temperature: number }>
+      const [settings] = await db.select().from(deviceSettings).limit(1)
+      const timezone = settings?.timezone ?? 'America/Los_Angeles'
+
+      this.scheduleRunOnceSession(
+        session.id,
+        session.side,
+        setPoints,
+        session.wakeTime,
+        timezone,
+      )
+      console.log(`Restored run-once session ${session.id} for ${session.side}`)
+    }
+  }
+
+  /**
+   * Convert an HH:mm time string to a Date for today or tomorrow.
+   * If the resulting time is before `referenceDate`, it's assumed to be tomorrow.
+   */
+  private timeToDate(time: string, timezone: string, referenceDate: Date): Date {
+    const [hour, minute] = this.parseTime(time)
+    // Build a date in the device timezone
+    const dateStr = referenceDate.toLocaleDateString('en-CA', { timeZone: timezone })
+    const candidate = new Date(`${dateStr}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`)
+
+    // Adjust for timezone offset
+    const tzOffset = this.getTimezoneOffsetMs(timezone, candidate)
+    const adjusted = new Date(candidate.getTime() + tzOffset)
+
+    // If it's in the past, assume tomorrow
+    if (adjusted <= referenceDate) {
+      return new Date(adjusted.getTime() + 24 * 60 * 60 * 1000)
+    }
+    return adjusted
+  }
+
+  /**
+   * Get the offset in ms between UTC and a named timezone for a given date.
+   */
+  private getTimezoneOffsetMs(timezone: string, date: Date): number {
+    const utcStr = date.toLocaleString('en-US', { timeZone: 'UTC' })
+    const tzStr = date.toLocaleString('en-US', { timeZone: timezone })
+    return new Date(utcStr).getTime() - new Date(tzStr).getTime()
   }
 
   /**
