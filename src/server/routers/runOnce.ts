@@ -9,7 +9,7 @@ import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus
 import { fahrenheitToLevel } from '@/src/hardware/types'
 import { sideSchema, temperatureSchema } from '@/src/server/validation-schemas'
 
-const timeStringSchema = z.string().regex(/^\d{2}:\d{2}$/, 'Must be HH:mm format')
+const timeStringSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Must be HH:mm format (00:00-23:59)')
 
 const setPointSchema = z.object({
   time: timeStringSchema,
@@ -124,7 +124,9 @@ export const runOnceRouter = router({
       if (!session) return null
 
       let setPoints: unknown = []
-      try { setPoints = JSON.parse(session.setPoints) }
+      try {
+        setPoints = JSON.parse(session.setPoints)
+      }
       catch { /* malformed — return empty */ }
 
       return {
