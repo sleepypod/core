@@ -177,6 +177,10 @@ export class JobManager {
       JobType.POWER_ON,
       cron,
       async () => {
+        if (await this.hasActiveRunOnceSession(sched.side)) {
+          console.log(`Skipping recurring power-on job — run-once session active for ${sched.side}`)
+          return
+        }
         const client = getSharedHardwareClient()
         await client.connect()
         try {
@@ -207,6 +211,10 @@ export class JobManager {
       JobType.POWER_OFF,
       cron,
       async () => {
+        if (await this.hasActiveRunOnceSession(sched.side)) {
+          console.log(`Skipping recurring power-off job — run-once session active for ${sched.side}`)
+          return
+        }
         const client = getSharedHardwareClient()
         await client.connect()
         try {
@@ -440,15 +448,14 @@ export class JobManager {
   /**
    * Check if a run-once session is active for a given side.
    */
-  async hasActiveRunOnceSession(side: string): Promise<boolean> {
-    const now = new Date()
+  async hasActiveRunOnceSession(side: 'left' | 'right'): Promise<boolean> {
     const [session] = await db
       .select({ id: runOnceSessions.id })
       .from(runOnceSessions)
       .where(and(
-        eq(runOnceSessions.side, side as 'left' | 'right'),
+        eq(runOnceSessions.side, side),
         eq(runOnceSessions.status, 'active'),
-        gt(runOnceSessions.expiresAt, now),
+        gt(runOnceSessions.expiresAt, new Date()),
       ))
       .limit(1)
     return !!session
@@ -502,10 +509,14 @@ export class JobManager {
       JobType.RUN_ONCE,
       cleanupDate,
       async () => {
+        // Only mark completed if still active (don't overwrite cancelled)
         await db
           .update(runOnceSessions)
           .set({ status: 'completed' })
-          .where(eq(runOnceSessions.id, sessionId))
+          .where(and(
+            eq(runOnceSessions.id, sessionId),
+            eq(runOnceSessions.status, 'active'),
+          ))
 
         // Power off the side at wake time
         try {
@@ -540,18 +551,18 @@ export class JobManager {
    */
   private async loadRunOnceSessions(): Promise<void> {
     const now = new Date()
-    const sessions = await db
+
+    // Mark any expired-but-still-active sessions as completed + power off
+    const expired = await db
       .select()
       .from(runOnceSessions)
-      .where(eq(runOnceSessions.status, 'active'))
+      .where(and(
+        eq(runOnceSessions.status, 'active'),
+      ))
 
-    for (const session of sessions) {
+    for (const session of expired) {
       if (session.expiresAt <= now) {
-        // Expired — mark completed and power off
-        await db
-          .update(runOnceSessions)
-          .set({ status: 'completed' })
-          .where(eq(runOnceSessions.id, session.id))
+        await db.update(runOnceSessions).set({ status: 'completed' }).where(eq(runOnceSessions.id, session.id))
         try {
           const client = getSharedHardwareClient()
           await client.connect()
@@ -560,9 +571,19 @@ export class JobManager {
         }
         catch { /* best effort */ }
         console.log(`Expired run-once session ${session.id} — ${session.side} powered off`)
-        continue
       }
+    }
 
+    // Restore sessions that are still active and not expired
+    const sessions = await db
+      .select()
+      .from(runOnceSessions)
+      .where(and(
+        eq(runOnceSessions.status, 'active'),
+        gt(runOnceSessions.expiresAt, now),
+      ))
+
+    for (const session of sessions) {
       let setPoints: Array<{ time: string, temperature: number }>
       try {
         setPoints = JSON.parse(session.setPoints)
@@ -576,14 +597,22 @@ export class JobManager {
       const [settings] = await db.select().from(deviceSettings).limit(1)
       const timezone = settings?.timezone ?? 'America/Los_Angeles'
 
+      // Filter out set points that already fired before the reboot
+      // (use session.startedAt as anchor — any set point whose scheduled time
+      // falls between startedAt and now has already been executed)
+      const futurePoints = setPoints.filter((sp) => {
+        const fireDate = this.timeToDate(sp.time, timezone, session.startedAt)
+        return fireDate > now
+      })
+
       this.scheduleRunOnceSession(
         session.id,
         session.side,
-        setPoints,
+        futurePoints,
         session.wakeTime,
         timezone,
       )
-      console.log(`Restored run-once session ${session.id} for ${session.side}`)
+      console.log(`Restored run-once session ${session.id} for ${session.side} (${futurePoints.length}/${setPoints.length} points remaining)`)
     }
   }
 
