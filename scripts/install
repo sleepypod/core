@@ -25,9 +25,13 @@ done
 
 # Cleanup handler — re-blocks WAN if we unblocked it
 WAN_WAS_BLOCKED=false
+DOWNLOAD_DIR=""
 
 cleanup() {
   local exit_code=$?
+
+  # Clean up temp download directory
+  [ -n "$DOWNLOAD_DIR" ] && rm -rf "$DOWNLOAD_DIR"
 
   # Restore iptables if we temporarily unblocked
   if [ "$WAN_WAS_BLOCKED" = true ]; then
@@ -144,7 +148,7 @@ fi
 
 # Check for required commands
 REQUIRED_CMDS=(curl systemctl ip groupadd usermod)
-if [ "$INSTALL_LOCAL" = false ]; then
+if [ "$INSTALL_LOCAL" = true ] && [ -n "$INSTALL_BRANCH" ]; then
   REQUIRED_CMDS+=(git)
 fi
 for cmd in "${REQUIRED_CMDS[@]}"; do
@@ -326,41 +330,46 @@ else
   DOWNLOAD_BRANCH="${INSTALL_BRANCH:-main}"
   echo "Downloading $DOWNLOAD_BRANCH from GitHub..."
 
-  TMPDIR=$(mktemp -d)
+  DOWNLOAD_DIR=$(mktemp -d)
   HAS_BUILD=false
 
-  # Try CI release first (includes pre-built .next) for main branch
+  # Try CI release first (includes pre-built .next) for main/latest
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
     RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
-      | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
+      | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
       | grep -o 'https://[^"]*' || true)
 
     if [ -n "$RELEASE_URL" ]; then
       echo "Downloading CI release..."
-      if curl -fSL "$RELEASE_URL" | tar xz -C "$TMPDIR"; then
+      if curl -fSL "$RELEASE_URL" | tar xz -C "$DOWNLOAD_DIR"; then
         HAS_BUILD=true
         echo "CI release downloaded (pre-built)."
+      else
+        # Clean partial download before fallback
+        find "$DOWNLOAD_DIR" -mindepth 1 -delete 2>/dev/null || true
       fi
     fi
   fi
 
   # Fall back to source tarball
   if [ "$HAS_BUILD" = false ]; then
-    TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${DOWNLOAD_BRANCH}.tar.gz"
-    if ! curl -fSL "$TARBALL_URL" | tar xz -C "$TMPDIR"; then
-      echo "Error: Failed to download branch '$DOWNLOAD_BRANCH'" >&2
-      rm -rf "$TMPDIR"
+    # "latest" is not a real branch — use main for the source tarball
+    SOURCE_BRANCH="$DOWNLOAD_BRANCH"
+    [ "$SOURCE_BRANCH" = "latest" ] && SOURCE_BRANCH="main"
+
+    TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${SOURCE_BRANCH}.tar.gz"
+    if ! curl -fSL "$TARBALL_URL" | tar xz -C "$DOWNLOAD_DIR"; then
+      echo "Error: Failed to download branch '$SOURCE_BRANCH'" >&2
       exit 1
     fi
     # Source tarball extracts to a subdirectory (e.g., core-main/)
-    SUBDIR=$(ls "$TMPDIR" | head -1)
-    if [ -z "$SUBDIR" ] || [ ! -d "$TMPDIR/$SUBDIR" ]; then
-      echo "Error: Unexpected tarball structure in $TMPDIR" >&2
-      rm -rf "$TMPDIR"
+    SUBDIR=$(ls "$DOWNLOAD_DIR" | head -1)
+    if [ -z "$SUBDIR" ] || [ ! -d "$DOWNLOAD_DIR/$SUBDIR" ]; then
+      echo "Error: Unexpected tarball structure in $DOWNLOAD_DIR" >&2
       exit 1
     fi
-    mv "$TMPDIR/$SUBDIR"/* "$TMPDIR/$SUBDIR"/.[!.]* "$TMPDIR/" 2>/dev/null || true
-    rmdir "$TMPDIR/$SUBDIR" 2>/dev/null || true
+    mv "$DOWNLOAD_DIR/$SUBDIR"/* "$DOWNLOAD_DIR/$SUBDIR"/.[!.]* "$DOWNLOAD_DIR/" 2>/dev/null || true
+    rmdir "$DOWNLOAD_DIR/$SUBDIR" 2>/dev/null || true
   fi
 
   # Clean old files if updating (preserve node_modules, .env, data)
@@ -374,8 +383,8 @@ else
     mkdir -p "$INSTALL_DIR"
   fi
 
-  cp -r "$TMPDIR/." "$INSTALL_DIR/"
-  rm -rf "$TMPDIR"
+  cp -r "$DOWNLOAD_DIR/." "$INSTALL_DIR/"
+  DOWNLOAD_DIR=""
   cd "$INSTALL_DIR"
   echo "Source downloaded."
 fi
