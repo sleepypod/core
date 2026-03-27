@@ -47,14 +47,13 @@ describe('Scheduler.scheduleOneTimeJob', () => {
 
   it('auto-removes from jobs map after firing', async () => {
     const soon = new Date(Date.now() + 100)
-    let resolved = false
-    const handler = vi.fn(async () => { resolved = true })
+    const handler = vi.fn(async () => {})
 
     scheduler.scheduleOneTimeJob('once-fire', JobType.RUN_ONCE, soon, handler)
     expect(scheduler.getJob('once-fire')).toBeDefined()
 
     // Wait for job to fire
-    await new Promise((r) => setTimeout(r, 500))
+    await new Promise(r => setTimeout(r, 500))
 
     expect(handler).toHaveBeenCalledOnce()
     expect(scheduler.getJob('once-fire')).toBeUndefined()
@@ -105,15 +104,17 @@ describe('RunOnce validation schemas', () => {
 })
 
 describe('RunOnce setPoints max validation', () => {
-  it('rejects more than 96 set points', () => {
-    const { z } = require('zod')
+  it('rejects more than 96 set points', async () => {
+    const { z } = await import('zod')
+    const { temperatureSchema, timeStringSchema } = await import('@/src/server/validation-schemas')
+
     const schema = z.array(z.object({
-      time: z.string(),
-      temperature: z.number(),
+      time: timeStringSchema,
+      temperature: temperatureSchema,
     })).min(1).max(96)
 
     const tooMany = Array.from({ length: 97 }, (_, i) => ({
-      time: `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`,
+      time: `${String(Math.floor(i / 4) % 24).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`,
       temperature: 75,
     }))
 

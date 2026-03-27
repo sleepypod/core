@@ -509,14 +509,23 @@ export class JobManager {
       JobType.RUN_ONCE,
       cleanupDate,
       async () => {
-        // Only mark completed if still active (don't overwrite cancelled)
+        // Check if session is still active — if cancelled or replaced, bail out
+        // to avoid powering off a side that a replacement session is using
+        const [current] = await db
+          .select({ status: runOnceSessions.status })
+          .from(runOnceSessions)
+          .where(eq(runOnceSessions.id, sessionId))
+          .limit(1)
+
+        if (current?.status !== 'active') {
+          console.log(`Run-once cleanup ${sessionId} skipped — status is ${current?.status ?? 'missing'}`)
+          return
+        }
+
         await db
           .update(runOnceSessions)
           .set({ status: 'completed' })
-          .where(and(
-            eq(runOnceSessions.id, sessionId),
-            eq(runOnceSessions.status, 'active'),
-          ))
+          .where(eq(runOnceSessions.id, sessionId))
 
         // Power off the side at wake time
         try {
