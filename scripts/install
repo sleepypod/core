@@ -8,9 +8,9 @@ echo ""
 
 # --------------------------------------------------------------------------------
 # Mode flags
-#   --local    Skip git clone/pull (code already on disk, e.g. via scp/deploy)
+#   --local    Skip download (code already on disk, e.g. via scp/deploy)
 #   --no-ssh   Skip interactive SSH setup prompt
-#   --branch X Checkout a specific branch before installing
+#   --branch X Install a specific branch (default: main)
 INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
@@ -132,6 +132,7 @@ case ":$PATH:" in
 esac
 
 INSTALL_DIR="/home/dac/sleepypod-core"
+GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
 
 # Lock file to prevent concurrent installs
 LOCKFILE="/var/run/sleepypod-install.lock"
@@ -321,16 +322,62 @@ if [ "$INSTALL_LOCAL" = true ]; then
     git reset --hard "origin/$INSTALL_BRANCH"
   fi
 else
+  # Download code via tarball (no git required on device)
+  DOWNLOAD_BRANCH="${INSTALL_BRANCH:-main}"
+  echo "Downloading $DOWNLOAD_BRANCH from GitHub..."
+
+  TMPDIR=$(mktemp -d)
+  HAS_BUILD=false
+
+  # Try CI release first (includes pre-built .next) for main branch
+  if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
+    RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+      | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
+      | grep -o 'https://[^"]*' || true)
+
+    if [ -n "$RELEASE_URL" ]; then
+      echo "Downloading CI release..."
+      if curl -fSL "$RELEASE_URL" | tar xz -C "$TMPDIR"; then
+        HAS_BUILD=true
+        echo "CI release downloaded (pre-built)."
+      fi
+    fi
+  fi
+
+  # Fall back to source tarball
+  if [ "$HAS_BUILD" = false ]; then
+    TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${DOWNLOAD_BRANCH}.tar.gz"
+    if ! curl -fSL "$TARBALL_URL" | tar xz -C "$TMPDIR"; then
+      echo "Error: Failed to download branch '$DOWNLOAD_BRANCH'" >&2
+      rm -rf "$TMPDIR"
+      exit 1
+    fi
+    # Source tarball extracts to a subdirectory (e.g., core-main/)
+    SUBDIR=$(ls "$TMPDIR" | head -1)
+    if [ -z "$SUBDIR" ] || [ ! -d "$TMPDIR/$SUBDIR" ]; then
+      echo "Error: Unexpected tarball structure in $TMPDIR" >&2
+      rm -rf "$TMPDIR"
+      exit 1
+    fi
+    mv "$TMPDIR/$SUBDIR"/* "$TMPDIR/$SUBDIR"/.[!.]* "$TMPDIR/" 2>/dev/null || true
+    rmdir "$TMPDIR/$SUBDIR" 2>/dev/null || true
+  fi
+
+  # Clean old files if updating (preserve node_modules, .env, data)
   if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
-    cd "$INSTALL_DIR"
-    git fetch origin
-    git reset --hard origin/main
+    find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+      ! -name 'node_modules' \
+      ! -name '.env' \
+      -exec rm -rf {} +
   else
-    echo "Cloning repository..."
-    git clone https://github.com/sleepypod/core.git "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
   fi
+
+  cp -r "$TMPDIR/." "$INSTALL_DIR/"
+  rm -rf "$TMPDIR"
+  cd "$INSTALL_DIR"
+  echo "Source downloaded."
 fi
 
 # Install production dependencies (prebuild-install downloads prebuilt better-sqlite3)
