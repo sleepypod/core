@@ -59,7 +59,7 @@
   },
   "devDependencies": {
     "@babel/preset-typescript": "^7.28.5",
-    "@eslint/css": "^0.14.1",
+    "@eslint/css": "^1.0.0",
     "@eslint/js": "^9.39.3",
     "@eslint/json": "^1.0.0",
     "@lingui/babel-plugin-lingui-macro": "^5.9.2",
