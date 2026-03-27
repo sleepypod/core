@@ -2,6 +2,17 @@
 
 A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web interface and scheduler.
 
+<p align="center">
+  <img src="docs/images/temperature-control.png" width="280" alt="Temperature control" />
+  <img src="docs/images/schedule.png" width="280" alt="Sleep schedule" />
+</p>
+
+<p align="center">
+  <img src="docs/images/ux-walkthrough-1.gif" width="280" alt="UX walkthrough 1" />
+  <img src="docs/images/ux-walkthrough-2.gif" width="280" alt="UX walkthrough 2" />
+  <img src="docs/images/ux-walkthrough-3.gif" width="280" alt="UX walkthrough 3" />
+</p>
+
 ---
 
 ## What it does
