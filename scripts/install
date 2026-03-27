@@ -277,6 +277,7 @@ if [ "$CURRENT_NODE_MAJOR" -lt "$NODE_WANTED" ]; then
   curl -fSL "$NODE_URL" | tar -xz -C "$NODE_DIR"
 
   # Symlink binaries into /usr/local/bin
+  mkdir -p /usr/local/bin
   NODE_BIN="$NODE_DIR/node-v${NODE_FULL}-linux-${NODE_ARCH}/bin"
   for bin in node npm npx; do
     ln -sf "$NODE_BIN/$bin" "/usr/local/bin/$bin"
