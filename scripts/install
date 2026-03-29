@@ -411,7 +411,9 @@ fi
 if [ -d "$INSTALL_DIR/.next" ]; then
   echo "Pre-built .next found, skipping build."
 else
-  echo "Building application (this may take a while on low-memory devices)..."
+  echo "No pre-built .next found, building from source..."
+  echo "Installing all dependencies (including devDependencies for build)..."
+  pnpm install --frozen-lockfile
   pnpm build
 fi
 

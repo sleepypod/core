@@ -3,9 +3,10 @@ name: Build & Package
 on:
   push:
     branches: ['**']
-    tags: ['v*']
   pull_request:
     branches: [main, dev]
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -53,10 +54,10 @@ jobs:
           path: sleepypod-core.tar.gz
           retention-days: 30
 
-      # Create GitHub Release with deploy tarball on tags
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Attach deploy tarball to the release (triggered by release.yml → semantic-release)
+      - name: Upload Release Asset
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           files: sleepypod-core.tar.gz
-          generate_release_notes: true
