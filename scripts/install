@@ -203,18 +203,31 @@ if [ "$DISK_AVAIL" -lt 500 ]; then
   exit 1
 fi
 
-# Detect dac.sock path (skip if .env already has it)
+# Detect dac.sock path — must be within a writable path (ProtectSystem=strict)
+ALLOWED_DAC_PREFIXES="/persistent/deviceinfo/ /run/dac/"
 DAC_SOCK_PATH=""
 
+is_allowed_dac_path() {
+  for prefix in $ALLOWED_DAC_PREFIXES; do
+    case "$1" in "$prefix"*) return 0 ;; esac
+  done
+  return 1
+}
+
+# Check .env but validate the path is still writable
 if [ -f "$INSTALL_DIR/.env" ]; then
-  DAC_SOCK_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+  EXISTING_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+  if [ -n "$EXISTING_PATH" ] && is_allowed_dac_path "$EXISTING_PATH"; then
+    DAC_SOCK_PATH="$EXISTING_PATH"
+  elif [ -n "$EXISTING_PATH" ]; then
+    echo "Warning: Existing DAC_SOCK_PATH=$EXISTING_PATH is outside writable paths, re-detecting..."
+  fi
 fi
 
 if [ -z "$DAC_SOCK_PATH" ]; then
   echo "Detecting dac.sock path..."
   for sock_path in \
-    /run/dac.sock \
-    /var/run/dac.sock \
+    /run/dac/dac.sock \
     /persistent/deviceinfo/dac.sock \
   ; do
     if [ -S "$sock_path" ]; then
@@ -225,11 +238,7 @@ if [ -z "$DAC_SOCK_PATH" ]; then
 fi
 
 if [ -z "$DAC_SOCK_PATH" ]; then
-  DAC_SOCK_PATH=$(find / -name 'dac.sock' -type s 2>/dev/null | head -1)
-fi
-
-if [ -z "$DAC_SOCK_PATH" ]; then
-  # Default to known path even if socket isn't present yet (daemon may not be running)
+  # Default to known writable path even if socket isn't present yet
   DAC_SOCK_PATH="/persistent/deviceinfo/dac.sock"
   echo "Warning: dac.sock not found as active socket, using default: $DAC_SOCK_PATH"
 else
@@ -548,12 +557,19 @@ fi
 
 systemctl restart sleepypod.service
 
-# Restart frankenfirmware so it discovers our dac.sock server.
-# frankenfirmware connects to dac.sock on startup — it won't retry if the
-# socket didn't exist when it started.
+# Wait for sleepypod to create dac.sock before killing frankenfirmware.
+# frankenfirmware connects on startup and won't retry — if it restarts
+# before the socket exists, it silently fails to connect.
+echo "Waiting for dac.sock..."
+for i in $(seq 1 10); do
+  [ -S "$DAC_SOCK_PATH" ] && break
+  sleep 1
+done
+
+# Kill frankenfirmware so its supervisor restarts it against the new dac.sock
 FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
 if [ -n "$FRANKEN_PID" ]; then
-  echo "Restarting frankenfirmware (PID $FRANKEN_PID) to discover dac.sock..."
+  echo "Killing frankenfirmware (PID $FRANKEN_PID) so supervisor reconnects to dac.sock..."
   kill "$FRANKEN_PID" 2>/dev/null || true
 fi
 
@@ -643,10 +659,21 @@ cat > /usr/local/bin/sp-status << 'EOF'
 systemctl status sleepypod.service
 EOF
 
-cat > /usr/local/bin/sp-restart << 'EOF'
+cat > /usr/local/bin/sp-restart << 'RESTARTEOF'
 #!/bin/bash
+set -euo pipefail
 systemctl restart sleepypod.service
-EOF
+# Wait for sleepypod to create dac.sock before killing frankenfirmware
+DAC_SOCK=$(grep '^DAC_SOCK_PATH=' /home/dac/sleepypod-core/.env 2>/dev/null | cut -d= -f2- || echo "")
+if [ -n "$DAC_SOCK" ]; then
+  for i in $(seq 1 10); do
+    [ -S "$DAC_SOCK" ] && break
+    sleep 1
+  done
+fi
+# Kill frankenfirmware so its supervisor restarts it against the new dac.sock
+pkill frankenfirmware 2>/dev/null || true
+RESTARTEOF
 
 cat > /usr/local/bin/sp-logs << 'EOF'
 #!/bin/bash
