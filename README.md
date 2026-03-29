@@ -13,6 +13,53 @@ A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs dir
   <img src="docs/images/ux-walkthrough-3.gif" width="280" alt="UX walkthrough 3" />
 </p>
 
+<p align="center">
+  <a href="https://discord.gg/UMmv5R6MXa">Discord</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
+</p>
+
+---
+
+## Installation
+
+Requires a Pod running its stock embedded Linux. Run as root on the device:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install | sudo bash
+```
+
+The script:
+1. Installs Node.js and pnpm (if absent)
+2. Downloads the latest release (pre-built) or builds from source as fallback
+3. Installs dependencies and detects `dac.sock` path
+4. Runs database migrations and writes `.env`
+5. Installs and starts the `sleepypod.service` systemd unit
+6. Installs Python biometrics modules with isolated virtualenvs
+7. Optionally configures SSH on port 8822 with key-only auth
+
+### CLI helpers
+
+After install, these are available system-wide:
+
+```bash
+sp-status    # systemctl status sleepypod.service
+sp-restart   # restart the service
+sp-logs      # journalctl -u sleepypod.service -f
+sp-update    # pull latest, rebuild, migrate, restart (with automatic rollback)
+```
+
+### Switching between sleepypod and free-sleep
+
+Already running [free-sleep](https://github.com/throwaway31265/free-sleep)? sleepypod installs alongside it — both use port 3000 but only one runs at a time. Switch freely without losing any settings or data:
+
+```bash
+sp-sleepypod    # Stop free-sleep, start sleepypod + biometrics modules
+sp-freesleep    # Stop sleepypod, start free-sleep
+```
+
+This makes it easy to evaluate sleepypod: install it, try it out, and switch back any time if you prefer free-sleep. Your temperature schedules, alarm configs, and sleep data are all preserved across switches.
+
+Need help? Join the [Discord](https://discord.gg/UMmv5R6MXa) or [open an issue](https://github.com/sleepypod/core/issues).
+
 ---
 
 ## What it does
@@ -298,48 +345,6 @@ sleepypod-core/
 ├── drizzle.config.ts               # Drizzle config for sleepypod.db
 └── drizzle.biometrics.config.ts    # Drizzle config for biometrics.db
 ```
-
----
-
-## Installation
-
-Requires a Pod running its stock embedded Linux. Run as root on the device:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install | sudo bash
-```
-
-The script:
-1. Installs Node.js 20 and pnpm (if absent)
-2. Clones the repo to `/home/dac/sleepypod-core`
-3. Installs dependencies and builds the app
-4. Detects `dac.sock` path and writes `.env`
-5. Runs database migrations for both DBs
-6. Installs and starts the `sleepypod.service` systemd unit
-7. Installs Python biometrics modules with isolated virtualenvs
-8. Optionally configures SSH on port 8822 with key-only auth
-
-### CLI helpers
-
-After install, these are available system-wide:
-
-```bash
-sp-status    # systemctl status sleepypod.service
-sp-restart   # restart the service
-sp-logs      # journalctl -u sleepypod.service -f
-sp-update    # pull latest, rebuild, migrate, restart (with automatic rollback)
-```
-
-### Switching between sleepypod and free-sleep
-
-Already running [free-sleep](https://github.com/throwaway31265/free-sleep)? sleepypod installs alongside it — both use port 3000 but only one runs at a time. Switch freely without losing any settings or data:
-
-```bash
-sp-sleepypod    # Stop free-sleep, start sleepypod + biometrics modules
-sp-freesleep    # Stop sleepypod, start free-sleep
-```
-
-This makes it easy to evaluate sleepypod: install it, try it out, and switch back any time if you prefer free-sleep. Your temperature schedules, alarm configs, and sleep data are all preserved across switches.
 
 ---
 
