@@ -35,6 +35,7 @@ jobs:
           tar czf sleepypod-core.tar.gz \
             --exclude='node_modules' \
             --exclude='.git' \
+            --exclude='.env*' \
             --exclude='*.db' \
             --exclude='*.db-*' \
             --exclude='test-results' \
