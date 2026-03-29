@@ -12,6 +12,7 @@ import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { fahrenheitToLevel } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
+import { timeToDate } from './timeUtils'
 
 /**
  * Job manager - orchestrates all scheduled tasks
@@ -415,7 +416,7 @@ export class JobManager {
     // Set the mutex and perform the reload
     this.reloadInProgress = (async () => {
       try {
-        this.scheduler.cancelAllJobs()
+        this.scheduler.cancelRecurringJobs()
         await this.loadSchedules()
       }
       finally {
@@ -475,7 +476,7 @@ export class JobManager {
 
     for (let i = 0; i < setPoints.length; i++) {
       const sp = setPoints[i]
-      const fireDate = this.timeToDate(sp.time, timezone, now)
+      const fireDate = timeToDate(sp.time, timezone, now)
 
       // Skip set points that are already in the past
       if (fireDate <= now) continue
@@ -503,7 +504,7 @@ export class JobManager {
     }
 
     // Cleanup job at wake time — mark completed + power off the side
-    const cleanupDate = this.timeToDate(wakeTime, timezone, now)
+    const cleanupDate = timeToDate(wakeTime, timezone, now)
     this.scheduler.scheduleOneTimeJob(
       `runonce-cleanup-${sessionId}`,
       JobType.RUN_ONCE,
@@ -610,7 +611,7 @@ export class JobManager {
       // (use session.startedAt as anchor — any set point whose scheduled time
       // falls between startedAt and now has already been executed)
       const futurePoints = setPoints.filter((sp) => {
-        const fireDate = this.timeToDate(sp.time, timezone, session.startedAt)
+        const fireDate = timeToDate(sp.time, timezone, session.startedAt)
         return fireDate > now
       })
 
@@ -623,36 +624,6 @@ export class JobManager {
       )
       console.log(`Restored run-once session ${session.id} for ${session.side} (${futurePoints.length}/${setPoints.length} points remaining)`)
     }
-  }
-
-  /**
-   * Convert an HH:mm time string to a Date for today or tomorrow.
-   * If the resulting time is before `referenceDate`, it's assumed to be tomorrow.
-   */
-  private timeToDate(time: string, timezone: string, referenceDate: Date): Date {
-    const [hour, minute] = this.parseTime(time)
-    // Build a date in the device timezone
-    const dateStr = referenceDate.toLocaleDateString('en-CA', { timeZone: timezone })
-    const candidate = new Date(`${dateStr}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`)
-
-    // Adjust for timezone offset
-    const tzOffset = this.getTimezoneOffsetMs(timezone, candidate)
-    const adjusted = new Date(candidate.getTime() + tzOffset)
-
-    // If it's in the past, assume tomorrow
-    if (adjusted <= referenceDate) {
-      return new Date(adjusted.getTime() + 24 * 60 * 60 * 1000)
-    }
-    return adjusted
-  }
-
-  /**
-   * Get the offset in ms between UTC and a named timezone for a given date.
-   */
-  private getTimezoneOffsetMs(timezone: string, date: Date): number {
-    const utcStr = date.toLocaleString('en-US', { timeZone: 'UTC' })
-    const tzStr = date.toLocaleString('en-US', { timeZone: timezone })
-    return new Date(utcStr).getTime() - new Date(tzStr).getTime()
   }
 
   /**

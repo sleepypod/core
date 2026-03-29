@@ -1,9 +1,9 @@
 import * as schedule from 'node-schedule'
 import { EventEmitter } from 'events'
+import { JobType } from './types'
 import type {
   ScheduledJob,
   SchedulerConfig,
-  JobType,
   JobExecutionResult,
   SchedulerEvents,
 } from './types'
@@ -171,6 +171,19 @@ export class Scheduler extends EventEmitter {
     }
 
     this.jobs.clear()
+  }
+
+  /**
+   * Cancel all recurring (cron) jobs, preserving one-time run-once jobs.
+   * Used by reloadSchedules to avoid dropping active run-once sessions.
+   */
+  cancelRecurringJobs(): void {
+    for (const [id, scheduledJob] of this.jobs.entries()) {
+      if (scheduledJob.type === JobType.RUN_ONCE) continue
+      scheduledJob.job.cancel()
+      this.emit('jobCancelled', id)
+      this.jobs.delete(id)
+    }
   }
 
   /**

@@ -9,6 +9,7 @@ import { withHardwareClient } from '@/src/server/helpers'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { fahrenheitToLevel } from '@/src/hardware/types'
 import { sideSchema, temperatureSchema, timeStringSchema } from '@/src/server/validation-schemas'
+import { timeToDate } from '@/src/scheduler/timeUtils'
 
 const setPointSchema = z.object({
   time: timeStringSchema,
@@ -62,6 +63,15 @@ export const runOnceRouter = router({
       const timezone = settings?.timezone ?? 'America/Los_Angeles'
       const now = new Date()
       const expiresAt = timeToDate(input.wakeTime, timezone, now)
+
+      // Reject sessions longer than 14 hours (guards against wake time = now wrapping to 24h)
+      const MAX_SESSION_MS = 14 * 60 * 60 * 1000
+      if (expiresAt.getTime() - now.getTime() > MAX_SESSION_MS) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Session too long (${Math.round((expiresAt.getTime() - now.getTime()) / 3600000)}h). Wake time may have already passed.`,
+        })
+      }
 
       // Power on + fire first set point immediately (before inserting session,
       // so a hardware failure doesn't leave an orphaned active session)
@@ -167,27 +177,9 @@ export const runOnceRouter = router({
         ))
 
       jobManager.cancelRunOnceSession(input.side)
+      broadcastMutationStatus(input.side)
       console.log(`Run-once session cancelled for ${input.side}`)
       return { success: true }
     }),
 })
 
-/**
- * Convert HH:mm to a Date. If the time is in the past, returns tomorrow.
- */
-function timeToDate(time: string, timezone: string, now: Date): Date {
-  const [hour, minute] = time.split(':').map(Number)
-  const dateStr = now.toLocaleDateString('en-CA', { timeZone: timezone })
-  const candidate = new Date(`${dateStr}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`)
-
-  const utcStr = candidate.toLocaleString('en-US', { timeZone: 'UTC' })
-  const tzStr = candidate.toLocaleString('en-US', { timeZone: timezone })
-  const offset = new Date(utcStr).getTime() - new Date(tzStr).getTime()
-  if (isNaN(offset)) throw new Error(`Invalid timezone offset for: ${timezone}`)
-  const adjusted = new Date(candidate.getTime() + offset)
-
-  if (adjusted <= now) {
-    return new Date(adjusted.getTime() + 24 * 60 * 60 * 1000)
-  }
-  return adjusted
-}

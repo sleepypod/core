@@ -3,7 +3,7 @@
  *
  * Required rules:
  * - UDP 5353 (mDNS) — needed for Bonjour discovery by iOS/web clients
- * - LAN subnets (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12) — needed for all API access
+ * - LAN subnet (192.168.0.0/16) — needed for API access from home network devices
  * - UDP 123 (NTP) — needed for accurate system clock
  *
  * Called on startup (instrumentation.ts) and exposed via health.system endpoint.
@@ -79,12 +79,27 @@ export function checkIptables(): IptablesStatus {
   for (const rule of REQUIRED_RULES) {
     let present = false
     try {
-      const output = execSync(`iptables -L ${rule.chain} -n 2>/dev/null`, { encoding: 'utf-8' })
+      const output = execSync(`iptables -L ${rule.chain} -n 2>/dev/null`, {
+        encoding: 'utf-8',
+        timeout: 5000,
+      })
       present = output.includes(rule.check)
     }
-    catch {
-      // iptables not available (dev environment) — assume ok
-      present = true
+    catch (e) {
+      const msg = e instanceof Error ? e.message : ''
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const exitCode = (e as any)?.status
+      const isNotFound = msg.includes('not found') || msg.includes('ENOENT')
+        || msg.includes('No such file') || exitCode === 127
+      if (isNotFound) {
+        // iptables binary not available (dev/CI environment) — assume ok
+        present = true
+      }
+      else {
+        // Production error (permission denied, timeout, etc.) — rule status unknown
+        present = false
+        console.warn(`[iptables] Failed to check ${rule.name}: ${msg}`)
+      }
     }
 
     rules.push({
@@ -114,7 +129,7 @@ export function checkAndRepairIptables(): IptablesStatus {
       if (!def) continue
 
       try {
-        execSync(def.repair, { encoding: 'utf-8' })
+        execSync(def.repair, { encoding: 'utf-8', timeout: 5000 })
         repaired.push(rule.name)
         console.log(`[iptables] Repaired missing rule: ${rule.name}`)
       }
@@ -127,7 +142,7 @@ export function checkAndRepairIptables(): IptablesStatus {
   if (repaired.length > 0) {
     // Persist the repaired rules
     try {
-      execSync('iptables-save > /etc/iptables/rules.v4', { encoding: 'utf-8' })
+      execSync('iptables-save > /etc/iptables/rules.v4', { encoding: 'utf-8', timeout: 5000 })
       console.log(`[iptables] Saved ${repaired.length} repaired rules to rules.v4`)
     }
     catch {
