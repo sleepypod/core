@@ -48,11 +48,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete dev --yes 2>/dev/null || true
+          gh release delete dev --yes --cleanup-tag 2>/dev/null || true
           git tag -f dev
-          git push -f origin dev
+          git push -f origin refs/tags/dev
           gh release create dev sleepypod-core.tar.gz \
-            --target dev \
+            --target "${{ github.sha }}" \
             --title "Dev (latest)" \
             --notes "Rolling pre-built release from the \`dev\` branch.
 
