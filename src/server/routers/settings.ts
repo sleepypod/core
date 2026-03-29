@@ -194,22 +194,26 @@ export const settingsRouter = router({
       try {
         const { side, ...updates } = input
 
-        const [updated] = await db
-          .update(sideSettings)
-          .set({
-            ...updates,
-            updatedAt: new Date(),
-          })
-          .where(eq(sideSettings.side, side))
-          .returning()
-          .all()
+        const updated = db.transaction((tx) => {
+          const [result] = tx
+            .update(sideSettings)
+            .set({
+              ...updates,
+              updatedAt: new Date(),
+            })
+            .where(eq(sideSettings.side, side))
+            .returning()
+            .all()
 
-        if (!updated) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Side settings for ${side} not found`,
-          })
-        }
+          if (!result) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Side settings for ${side} not found`,
+            })
+          }
+
+          return result
+        })
 
         return updated
       }
@@ -257,59 +261,63 @@ export const settingsRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        // Check if gesture already exists
-        const existing = await db
-          .select()
-          .from(tapGestures)
-          .where(
-            and(
-              eq(tapGestures.side, input.side),
-              eq(tapGestures.tapType, input.tapType)
+        const result = db.transaction((tx) => {
+          // Check if gesture already exists
+          const existing = tx
+            .select()
+            .from(tapGestures)
+            .where(
+              and(
+                eq(tapGestures.side, input.side),
+                eq(tapGestures.tapType, input.tapType)
+              )
             )
-          )
-          .limit(1)
-          .all()
-
-        if (existing.length > 0) {
-          // Update existing
-          const [updated] = await db
-            .update(tapGestures)
-            .set({
-              ...input,
-              updatedAt: new Date(),
-            })
-            .where(eq(tapGestures.id, existing[0].id))
-            .returning()
+            .limit(1)
             .all()
 
-          if (!updated) {
-            throw new TRPCError({
-              code: 'INTERNAL_SERVER_ERROR',
-              message: 'Failed to update gesture - no record returned',
-            })
+          if (existing.length > 0) {
+            // Update existing
+            const [updated] = tx
+              .update(tapGestures)
+              .set({
+                ...input,
+                updatedAt: new Date(),
+              })
+              .where(eq(tapGestures.id, existing[0].id))
+              .returning()
+              .all()
+
+            if (!updated) {
+              throw new TRPCError({
+                code: 'INTERNAL_SERVER_ERROR',
+                message: 'Failed to update gesture - no record returned',
+              })
+            }
+
+            return updated
           }
+          else {
+            // Create new
+            const [created] = tx
+              .insert(tapGestures)
+              .values({
+                ...input,
+              })
+              .returning()
+              .all()
 
-          return updated
-        }
-        else {
-          // Create new
-          const [created] = await db
-            .insert(tapGestures)
-            .values({
-              ...input,
-            })
-            .returning()
-            .all()
+            if (!created) {
+              throw new TRPCError({
+                code: 'INTERNAL_SERVER_ERROR',
+                message: 'Failed to create gesture - no record returned',
+              })
+            }
 
-          if (!created) {
-            throw new TRPCError({
-              code: 'INTERNAL_SERVER_ERROR',
-              message: 'Failed to create gesture - no record returned',
-            })
+            return created
           }
+        })
 
-          return created
-        }
+        return result
       }
       catch (error) {
         if (error instanceof TRPCError) throw error
@@ -338,23 +346,25 @@ export const settingsRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        const [deleted] = await db
-          .delete(tapGestures)
-          .where(
-            and(
-              eq(tapGestures.side, input.side),
-              eq(tapGestures.tapType, input.tapType)
+        db.transaction((tx) => {
+          const [deleted] = tx
+            .delete(tapGestures)
+            .where(
+              and(
+                eq(tapGestures.side, input.side),
+                eq(tapGestures.tapType, input.tapType)
+              )
             )
-          )
-          .returning()
-          .all()
+            .returning()
+            .all()
 
-        if (!deleted) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Gesture for ${input.side} ${input.tapType} not found`,
-          })
-        }
+          if (!deleted) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Gesture for ${input.side} ${input.tapType} not found`,
+            })
+          }
+        })
 
         return { success: true }
       }
