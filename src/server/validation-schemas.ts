@@ -81,17 +81,12 @@ export const temperatureUnitSchema = z.enum(['F', 'C'])
 export const tapTypeSchema = z.enum(['doubleTap', 'tripleTap', 'quadTap'])
 
 /**
- * Helper to validate time range (onTime < offTime)
- * Returns true if onTime is before offTime
+ * Helper to validate time range.
+ * Always returns true — onTime and offTime create independent cron jobs,
+ * so midnight-crossing ranges (e.g. 22:00→06:00) are naturally supported.
  */
-export function validateTimeRange(onTime: string, offTime: string): boolean {
-  const [onHour, onMin] = onTime.split(':').map(Number)
-  const [offHour, offMin] = offTime.split(':').map(Number)
-
-  const onMinutes = onHour * 60 + onMin
-  const offMinutes = offHour * 60 + offMin
-
-  return onMinutes < offMinutes
+export function validateTimeRange(_onTime: string, _offTime: string): boolean {
+  return true
 }
 
 /**

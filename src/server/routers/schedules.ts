@@ -17,7 +17,6 @@ import {
   vibrationIntensitySchema,
   vibrationPatternSchema,
   alarmDurationSchema,
-  validateTimeRange,
 } from '@/src/server/validation-schemas'
 import { getJobManager } from '@/src/scheduler'
 
@@ -256,10 +255,6 @@ export const schedulesRouter = router({
     .output(z.any())
     .mutation(async ({ input }) => {
       try {
-        if (!validateTimeRange(input.onTime, input.offTime)) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'onTime must be before offTime' })
-        }
-
         const created = db.transaction((tx) => {
           const [result] = tx.insert(powerSchedules).values(input).returning().all()
           if (!result) {
@@ -311,40 +306,9 @@ export const schedulesRouter = router({
     .output(z.any())
     .mutation(async ({ input }) => {
       try {
-        if (input.onTime && input.offTime && !validateTimeRange(input.onTime, input.offTime)) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'onTime must be before offTime' })
-        }
-
         const { id, ...updates } = input
 
         const updated = db.transaction((tx) => {
-          // If partial time update, validate final computed state
-          if ((input.onTime || input.offTime) && !(input.onTime && input.offTime)) {
-            const [existing] = tx
-              .select({ onTime: powerSchedules.onTime, offTime: powerSchedules.offTime })
-              .from(powerSchedules)
-              .where(eq(powerSchedules.id, id))
-              .limit(1)
-              .all()
-
-            if (!existing) {
-              throw new TRPCError({
-                code: 'NOT_FOUND',
-                message: `Power schedule with ID ${id} not found`,
-              })
-            }
-
-            const finalOnTime = input.onTime ?? existing.onTime
-            const finalOffTime = input.offTime ?? existing.offTime
-
-            if (!validateTimeRange(finalOnTime, finalOffTime)) {
-              throw new TRPCError({
-                code: 'BAD_REQUEST',
-                message: 'onTime must be before offTime',
-              })
-            }
-          }
-
           const [result] = tx
             .update(powerSchedules)
             .set({ ...updates, updatedAt: new Date() })
