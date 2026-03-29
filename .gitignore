@@ -35,3 +35,8 @@ sleepypod.test.db-shm
 sleepypod.test.db-wal
 sleepypod.local.db-shm
 sleepypod.local.db-wal
+
+# Claude Code
+.claude/worktrees
+.claude/reviews
+.reviews
