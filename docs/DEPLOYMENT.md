@@ -141,7 +141,7 @@ Downloaded from `nodejs.org/dist/` for `linux-arm64`. No package manager require
 | curl / tar | Available |
 | systemd | 250 |
 | iptables | 1.8.7 |
-| DAC socket | `/persistent/deviceinfo/dac.sock` |
+| DAC socket | `/persistent/deviceinfo/dac.sock` (Pod 5) or `/deviceinfo/dac.sock` (Pod 3/4) — auto-detected from `frank.sh` |
 
 ## File Locations
 
