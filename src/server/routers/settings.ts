@@ -17,7 +17,11 @@ import { getJobManager } from '@/src/scheduler'
  * that affect scheduling (timezone, priming, reboot)
  */
 async function reloadSchedulerIfNeeded(input: Record<string, unknown>): Promise<void> {
-  const schedulingKeys = ['timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime']
+  const schedulingKeys = [
+    'timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime',
+    'ledNightModeEnabled', 'ledDayBrightness', 'ledNightBrightness',
+    'ledNightStartTime', 'ledNightEndTime',
+  ]
   const hasSchedulingChanges = schedulingKeys.some(key => key in input)
 
   if (hasSchedulingChanges) {
@@ -95,6 +99,11 @@ export const settingsRouter = router({
           rebootTime: timeStringSchema.optional(),
           primePodDaily: z.boolean().optional(),
           primePodTime: timeStringSchema.optional(),
+          ledNightModeEnabled: z.boolean().optional(),
+          ledDayBrightness: z.number().int().min(0).max(100).optional(),
+          ledNightBrightness: z.number().int().min(0).max(100).optional(),
+          ledNightStartTime: timeStringSchema.optional(),
+          ledNightEndTime: timeStringSchema.optional(),
         })
         .strict()
     )

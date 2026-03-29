@@ -10,7 +10,8 @@ import {
 } from '@/src/db/schema'
 import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
-import { fahrenheitToLevel } from '@/src/hardware/types'
+import { sendCommand } from '@/src/hardware/dacTransport'
+import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { timeToDate } from './timeUtils'
 
@@ -122,6 +123,15 @@ export class JobManager {
 
       if (settings.rebootDaily && settings.rebootTime) {
         this.scheduleDailyReboot(settings.rebootTime)
+      }
+
+      if (settings.ledNightModeEnabled && settings.ledNightStartTime && settings.ledNightEndTime) {
+        this.scheduleLedNightMode(
+          settings.ledNightStartTime,
+          settings.ledNightEndTime,
+          settings.ledDayBrightness,
+          settings.ledNightBrightness,
+        )
       }
     }
 
@@ -297,6 +307,33 @@ export class JobManager {
     this.scheduler.scheduleJob('daily-reboot', JobType.REBOOT, cron, async () => {
       console.log('Executing daily system reboot...')
       await this.executeReboot()
+    })
+  }
+
+  /**
+   * Schedule LED night mode — two daily cron jobs:
+   * one at nightStartTime to dim LEDs, one at nightEndTime to restore brightness.
+   */
+  private scheduleLedNightMode(
+    nightStartTime: string,
+    nightEndTime: string,
+    dayBrightness: number,
+    nightBrightness: number,
+  ): void {
+    const [startHour, startMinute] = this.parseTime(nightStartTime)
+    const startCron = `${startMinute} ${startHour} * * *`
+
+    this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
+      console.log(`LED night mode: setting brightness to ${nightBrightness}`)
+      await sendCommand(HardwareCommand.SET_SETTINGS, JSON.stringify({ ledBrightness: nightBrightness }))
+    })
+
+    const [endHour, endMinute] = this.parseTime(nightEndTime)
+    const endCron = `${endMinute} ${endHour} * * *`
+
+    this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
+      console.log(`LED night mode: setting brightness to ${dayBrightness}`)
+      await sendCommand(HardwareCommand.SET_SETTINGS, JSON.stringify({ ledBrightness: dayBrightness }))
     })
   }
 
