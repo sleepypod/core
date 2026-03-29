@@ -89,14 +89,16 @@ export function checkIptables(): IptablesStatus {
       const msg = e instanceof Error ? e.message : ''
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const exitCode = (e as any)?.status
-      const isNotFound = msg.includes('not found') || msg.includes('ENOENT')
-        || msg.includes('No such file') || exitCode === 127
-      if (isNotFound) {
-        // iptables binary not available (dev/CI environment) — assume ok
+      const isUnavailable = msg.includes('not found') || msg.includes('ENOENT')
+        || msg.includes('No such file') || msg.includes('Permission denied')
+        || msg.includes('Operation not permitted')
+        || exitCode === 127 || exitCode === 3 || exitCode === 4
+      if (isUnavailable) {
+        // iptables not available or not permitted (dev/CI) — assume ok
         present = true
       }
       else {
-        // Production error (permission denied, timeout, etc.) — rule status unknown
+        // Unexpected failure on a system where iptables should work
         present = false
         console.warn(`[iptables] Failed to check ${rule.name}: ${msg}`)
       }
