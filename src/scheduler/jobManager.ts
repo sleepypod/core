@@ -12,6 +12,7 @@ import {
 import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { sendCommand } from '@/src/hardware/dacTransport'
+import { encode as cborEncode } from 'cbor-x'
 import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { timeToDate } from './timeUtils'
@@ -334,7 +335,8 @@ export class JobManager {
 
     this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
       console.log(`LED night mode: setting brightness to ${nightBrightness}`)
-      await sendCommand(HardwareCommand.SET_SETTINGS, JSON.stringify({ ledBrightness: nightBrightness }))
+      const hexCbor = Buffer.from(cborEncode({ ledBrightness: nightBrightness })).toString('hex')
+      await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
     })
 
     const [endHour, endMinute] = this.parseTime(nightEndTime)
@@ -342,7 +344,8 @@ export class JobManager {
 
     this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
       console.log(`LED night mode: setting brightness to ${dayBrightness}`)
-      await sendCommand(HardwareCommand.SET_SETTINGS, JSON.stringify({ ledBrightness: dayBrightness }))
+      const hexCbor = Buffer.from(cborEncode({ ledBrightness: dayBrightness })).toString('hex')
+      await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
     })
   }
 
@@ -367,7 +370,7 @@ export class JobManager {
           startDate,
           async () => {
             console.log(`Away mode: activating for ${side}`)
-            db.transaction((tx) => {
+            await db.transaction((tx) => {
               tx.update(sideSettings)
                 .set({ awayMode: true, updatedAt: new Date() })
                 .where(eq(sideSettings.side, side))
@@ -398,7 +401,7 @@ export class JobManager {
           returnDate,
           async () => {
             console.log(`Away mode: deactivating for ${side}`)
-            db.transaction((tx) => {
+            await db.transaction((tx) => {
               tx.update(sideSettings)
                 .set({ awayMode: false, updatedAt: new Date() })
                 .where(eq(sideSettings.side, side))
