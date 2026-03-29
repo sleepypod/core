@@ -27,8 +27,8 @@ interface IptablesRule {
 const REQUIRED_RULES: Array<{
   name: string
   chain: 'INPUT' | 'OUTPUT'
-  check: string    // grep pattern to verify rule exists
-  repair: string   // iptables command to add the rule
+  check: string // grep pattern to verify rule exists
+  repair: string // iptables command to add the rule
   critical: boolean
 }> = [
   {

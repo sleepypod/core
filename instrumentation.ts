@@ -300,7 +300,8 @@ export async function register(): Promise<void> {
       const result = checkAndRepairIptables()
       if (result.repaired.length > 0) {
         console.warn(`[startup] Repaired ${result.repaired.length} missing iptables rules:`, result.repaired.join(', '))
-      } else if (result.ok) {
+      }
+      else if (result.ok) {
         console.log('[startup] iptables rules verified')
       }
     }
