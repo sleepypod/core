@@ -38,6 +38,10 @@
             "release": "patch"
           },
           {
+            "type": "deploy",
+            "release": "minor"
+          },
+          {
             "type": "no-release",
             "release": false
           }
