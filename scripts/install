@@ -347,9 +347,15 @@ else
   DOWNLOAD_DIR=$(mktemp -d)
   HAS_BUILD=false
 
-  # Try CI release first (includes pre-built .next) for main/latest
+  # Try CI release first (includes pre-built .next)
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
-    RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+  elif [ "$DOWNLOAD_BRANCH" = "dev" ]; then
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev"
+  fi
+
+  if [ -n "${RELEASE_API:-}" ]; then
+    RELEASE_URL=$(curl -sf "$RELEASE_API" \
       | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
       | grep -o 'https://[^"]*' || true)
 
