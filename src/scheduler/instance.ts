@@ -13,14 +13,23 @@ const DEFAULT_TIMEZONE = 'America/Los_Angeles'
 
 let jobManagerInstance: JobManager | null = null
 let jobManagerInitPromise: Promise<JobManager> | null = null
+let cachedTimezone: string | null = null
 
 /**
  * Load timezone from database with fallback to safe default.
+ * Caches the result on first successful read to ensure consistent
+ * timezone across retries if loadSchedules() fails.
  */
 async function loadTimezone(): Promise<string> {
+  if (cachedTimezone) {
+    return cachedTimezone
+  }
+
   try {
     const [settings] = await db.select().from(deviceSettings).limit(1)
-    return settings?.timezone || DEFAULT_TIMEZONE
+    const tz = settings?.timezone || DEFAULT_TIMEZONE
+    cachedTimezone = tz
+    return tz
   }
   catch (error) {
     console.warn(
