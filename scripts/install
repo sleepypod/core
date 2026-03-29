@@ -1,9 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+LOG_FILE="/tmp/sleepypod-install.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 echo "========================================"
 echo "  SleepyPod Core Installation Script"
 echo "========================================"
+echo ""
+echo "Logging to $LOG_FILE"
 echo ""
 
 # --------------------------------------------------------------------------------
@@ -40,9 +45,16 @@ cleanup() {
   fi
 
   if [ $exit_code -ne 0 ]; then
-    echo "ERROR: Installation failed at line $1 (exit code: $exit_code)" >&2
-    echo "The system may be in a partially installed state." >&2
-    echo "Check logs and try running the script again." >&2
+    echo "" >&2
+    echo "========================================" >&2
+    echo "  Installation failed" >&2
+    echo "========================================" >&2
+    echo "  Exit code: $exit_code" >&2
+    echo "  Full log:  $LOG_FILE" >&2
+    echo "" >&2
+    echo "  For help, share the log file above at:" >&2
+    echo "  https://github.com/sleepypod/core/issues" >&2
+    echo "========================================" >&2
   fi
 }
 trap 'cleanup $LINENO' EXIT
@@ -230,7 +242,7 @@ fi
 # group-write bits are preserved (including SQLite WAL/SHM files).
 DATA_DIR="/persistent/sleepypod-data"
 echo "Creating data directory at $DATA_DIR..."
-getent group sleepypod >/dev/null 2>&1 || groupadd sleepypod
+groupadd --force sleepypod
 if id dac &>/dev/null; then
   usermod -aG sleepypod dac
 else
