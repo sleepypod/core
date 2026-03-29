@@ -203,46 +203,45 @@ if [ "$DISK_AVAIL" -lt 500 ]; then
   exit 1
 fi
 
-# Detect dac.sock path — must be within a writable path (ProtectSystem=strict)
-ALLOWED_DAC_PREFIXES="/persistent/deviceinfo/ /run/dac/"
+# Detect dac.sock path — read from frank.sh (the firmware launcher) to match
+# whatever path frankenfirmware actually connects to. Different pod hardware
+# versions use different paths:
+#   Pod 3/4: /deviceinfo/dac.sock (tmpfs)
+#   Pod 5:   /persistent/deviceinfo/dac.sock (ext4)
 DAC_SOCK_PATH=""
 
-is_allowed_dac_path() {
-  for prefix in $ALLOWED_DAC_PREFIXES; do
-    case "$1" in "$prefix"*) return 0 ;; esac
-  done
-  return 1
-}
-
-# Check .env but validate the path is still writable
+# Priority 1: Read from existing .env
 if [ -f "$INSTALL_DIR/.env" ]; then
-  EXISTING_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
-  if [ -n "$EXISTING_PATH" ] && is_allowed_dac_path "$EXISTING_PATH"; then
-    DAC_SOCK_PATH="$EXISTING_PATH"
-  elif [ -n "$EXISTING_PATH" ]; then
-    echo "Warning: Existing DAC_SOCK_PATH=$EXISTING_PATH is outside writable paths, re-detecting..."
+  DAC_SOCK_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+fi
+
+# Priority 2: Extract from frank.sh (what frankenfirmware actually uses)
+if [ -z "$DAC_SOCK_PATH" ] && [ -f /opt/eight/bin/frank.sh ]; then
+  FRANK_PATH=$(grep -oP '(?<=DAC_SOCKET=)[^ ]*dac\.sock' /opt/eight/bin/frank.sh 2>/dev/null || true)
+  if [ -n "$FRANK_PATH" ]; then
+    DAC_SOCK_PATH="$FRANK_PATH"
+    echo "Detected dac.sock path from frank.sh: $DAC_SOCK_PATH"
   fi
 fi
 
+# Priority 3: Check known socket locations
 if [ -z "$DAC_SOCK_PATH" ]; then
-  echo "Detecting dac.sock path..."
   for sock_path in \
-    /run/dac/dac.sock \
     /persistent/deviceinfo/dac.sock \
+    /deviceinfo/dac.sock \
   ; do
     if [ -S "$sock_path" ]; then
       DAC_SOCK_PATH="$sock_path"
+      echo "Found active dac.sock at: $DAC_SOCK_PATH"
       break
     fi
   done
 fi
 
+# Priority 4: Default to /persistent/deviceinfo/dac.sock
 if [ -z "$DAC_SOCK_PATH" ]; then
-  # Default to known writable path even if socket isn't present yet
   DAC_SOCK_PATH="/persistent/deviceinfo/dac.sock"
-  echo "Warning: dac.sock not found as active socket, using default: $DAC_SOCK_PATH"
-else
-  echo "Using dac.sock at: $DAC_SOCK_PATH"
+  echo "Warning: dac.sock not found, using default: $DAC_SOCK_PATH"
 fi
 
 # Create data directory with shared group for multi-user SQLite access.
@@ -252,10 +251,11 @@ fi
 # group-write bits are preserved (including SQLite WAL/SHM files).
 DATA_DIR="/persistent/sleepypod-data"
 echo "Creating data directory at $DATA_DIR..."
-# Ensure /persistent/deviceinfo exists — systemd's ProtectSystem=strict
-# requires all ReadWritePaths to exist or the namespace setup fails.
+# Ensure ReadWritePaths directories exist — systemd's ProtectSystem=strict
+# requires all listed paths to exist or the namespace setup fails.
 # /run/dac is handled by RuntimeDirectory=dac in the service unit.
 mkdir -p /persistent/deviceinfo
+mkdir -p "$(dirname "$DAC_SOCK_PATH")"
 groupadd --force sleepypod
 if id dac &>/dev/null; then
   usermod -aG sleepypod dac
@@ -510,7 +510,7 @@ WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
-ExecStartPre=/bin/sh -c 'ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null || true'
+ExecStartPre=/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStart=/usr/local/bin/pnpm start
 Restart=always
 RestartSec=10
