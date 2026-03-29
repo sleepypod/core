@@ -5,11 +5,9 @@ on:
     branches: ['**']
   pull_request:
     branches: [main, dev]
-  release:
-    types: [published]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -39,6 +37,7 @@ jobs:
           tar czf /tmp/sleepypod-core.tar.gz \
             --exclude='node_modules' \
             --exclude='.git' \
+            --exclude='.env*' \
             --exclude='*.db' \
             --exclude='*.db-*' \
             --exclude='test-results' \
@@ -54,10 +53,3 @@ jobs:
           path: sleepypod-core.tar.gz
           retention-days: 30
 
-      # Attach deploy tarball to the release (triggered by release.yml → semantic-release)
-      - name: Upload Release Asset
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.release.tag_name }}
-          files: sleepypod-core.tar.gz

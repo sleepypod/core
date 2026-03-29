@@ -1,37 +1,28 @@
-name: Analyze & Release
+name: Dev Release
 
 on:
   push:
     branches:
-      - main
+      - dev
 
 permissions:
-  contents: read 
+  contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # to be able to publish a GitHub release
-      issues: write # to be able to comment on released issues
-      pull-requests: write # to be able to comment on released pull requests
-      id-token: write # to enable use of OIDC for trusted publishing and npm provenance
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
-      - name: Install pnpm
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          run_install: false
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "lts/*"
-          cache: pnpm
+          node-version: 'lts/*'
+          cache: 'pnpm'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -52,7 +43,18 @@ jobs:
             --exclude='.claude' \
             .
 
-      - name: Semantic Release
+      - name: Update dev release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: pnpm dlx semantic-release
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete dev --yes 2>/dev/null || true
+          git tag -f dev
+          git push -f origin dev
+          gh release create dev sleepypod-core.tar.gz \
+            --target dev \
+            --title "Dev (latest)" \
+            --notes "Rolling pre-built release from the \`dev\` branch.
+
+          **Commit:** ${{ github.sha }}
+          **Updated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --prerelease
