@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
@@ -8,6 +9,7 @@ import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/pr
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
+import { sendCommand } from '@/src/hardware/dacTransport'
 import {
   sideSchema,
   temperatureSchema,
@@ -545,13 +547,8 @@ export const deviceRouter = router({
     .mutation(async ({ input }) => {
       const hwCommand = COMMAND_MAP[input.command]
 
-      return withHardwareClient(async (client) => {
-        const rawClient = client.getRawClient()
-        if (!rawClient) {
-          throw new Error('No raw hardware client available')
-        }
-
-        const response = await rawClient.executeCommand(hwCommand, input.args ?? '')
+      try {
+        const response = await sendCommand(hwCommand, input.args)
 
         return {
           command: input.command,
@@ -559,6 +556,13 @@ export const deviceRouter = router({
           response,
           disclaimer: 'WARNING: Raw command execution. No validation, no safety checks. Misuse can damage hardware or cause unexpected behavior. Use at your own risk. This feature is unsupported.',
         }
-      }, 'Failed to execute raw command')
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to execute raw command: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 })

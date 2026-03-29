@@ -234,5 +234,6 @@ export const waterLevelRouter = router({
         .from(flowReadings)
         .where(gt(flowReadings.timestamp, since))
         .orderBy(flowReadings.timestamp)
+        .limit(10080)
     }),
 })
