@@ -217,7 +217,8 @@ fi
 
 # Priority 2: Extract from frank.sh (what frankenfirmware actually uses)
 if [ -z "$DAC_SOCK_PATH" ] && [ -f /opt/eight/bin/frank.sh ]; then
-  FRANK_PATH=$(grep -oP '(?<=DAC_SOCKET=)[^ ]*dac\.sock' /opt/eight/bin/frank.sh 2>/dev/null || true)
+  FRANK_PATH=$(grep 'DAC_SOCKET=' /opt/eight/bin/frank.sh 2>/dev/null \
+    | grep -o '[^ ]*dac\.sock' | head -1 || true)
   if [ -n "$FRANK_PATH" ]; then
     DAC_SOCK_PATH="$FRANK_PATH"
     echo "Detected dac.sock path from frank.sh: $DAC_SOCK_PATH"
@@ -255,6 +256,7 @@ echo "Creating data directory at $DATA_DIR..."
 # requires all listed paths to exist or the namespace setup fails.
 # /run/dac is handled by RuntimeDirectory=dac in the service unit.
 mkdir -p /persistent/deviceinfo
+mkdir -p /deviceinfo
 mkdir -p "$(dirname "$DAC_SOCK_PATH")"
 groupadd --force sleepypod
 if id dac &>/dev/null; then
@@ -566,6 +568,9 @@ for i in $(seq 1 10); do
   [ -S "$DAC_SOCK_PATH" ] && break
   sleep 1
 done
+if ! [ -S "$DAC_SOCK_PATH" ]; then
+  echo "Warning: dac.sock not found after 10s — frankenfirmware may not reconnect" >&2
+fi
 
 # Kill frankenfirmware so its supervisor restarts it against the new dac.sock
 FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
@@ -660,17 +665,19 @@ cat > /usr/local/bin/sp-status << 'EOF'
 systemctl status sleepypod.service
 EOF
 
-cat > /usr/local/bin/sp-restart << 'RESTARTEOF'
+cat > /usr/local/bin/sp-restart << RESTARTEOF
 #!/bin/bash
 set -euo pipefail
 systemctl restart sleepypod.service
 # Wait for sleepypod to create dac.sock before killing frankenfirmware
-DAC_SOCK=$(grep '^DAC_SOCK_PATH=' /home/dac/sleepypod-core/.env 2>/dev/null | cut -d= -f2- || echo "")
-if [ -n "$DAC_SOCK" ]; then
-  for i in $(seq 1 10); do
-    [ -S "$DAC_SOCK" ] && break
-    sleep 1
-  done
+DAC_SOCK=\$(grep '^DAC_SOCK_PATH=' $INSTALL_DIR/.env 2>/dev/null | cut -d= -f2- || echo "")
+[ -z "\$DAC_SOCK" ] && DAC_SOCK="$DAC_SOCK_PATH"
+for i in \$(seq 1 10); do
+  [ -S "\$DAC_SOCK" ] && break
+  sleep 1
+done
+if ! [ -S "\$DAC_SOCK" ]; then
+  echo "Warning: dac.sock not found after 10s — frankenfirmware may not reconnect" >&2
 fi
 # Kill frankenfirmware so its supervisor restarts it against the new dac.sock
 pkill frankenfirmware 2>/dev/null || true
