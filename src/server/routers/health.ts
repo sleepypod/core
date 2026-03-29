@@ -206,6 +206,21 @@ export const healthRouter = router({
       // If drift detection fails, don't block the health check
       }
 
+      // Iptables health — verify critical firewall rules
+      let iptables: { ok: boolean, missing: string[] } = { ok: true, missing: [] }
+      try {
+        const { checkIptables } = await import('@/src/hardware/iptablesCheck')
+        const result = checkIptables()
+        iptables = {
+          ok: result.ok,
+          missing: result.rules.filter(r => !r.present && r.critical).map(r => r.name),
+        }
+        if (!result.ok) overallStatus = 'degraded'
+      }
+      catch {
+        // Dev environment — iptables not available
+      }
+
       return {
         status: overallStatus,
         timestamp: new Date().toISOString(),
@@ -219,6 +234,7 @@ export const healthRouter = router({
           jobCount: schedulerJobCount,
           ...(drift && { drift }),
         },
+        iptables,
       }
     }),
 
