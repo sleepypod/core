@@ -5,6 +5,7 @@ import { db } from '@/src/db'
 import { deviceSettings, sideSettings, tapGestures } from '@/src/db/schema'
 import { eq, and } from 'drizzle-orm'
 import {
+  isoDatetimeSchema,
   sideSchema,
   tapTypeSchema,
   temperatureUnitSchema,
@@ -195,8 +196,8 @@ export const settingsRouter = router({
           side: sideSchema,
           name: z.string().min(1).max(20).optional(),
           awayMode: z.boolean().optional(),
-          awayStart: z.string().nullable().optional(),
-          awayReturn: z.string().nullable().optional(),
+          awayStart: isoDatetimeSchema.nullable().optional(),
+          awayReturn: isoDatetimeSchema.nullable().optional(),
         })
         .strict()
     )

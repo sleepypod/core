@@ -81,13 +81,14 @@ export const temperatureUnitSchema = z.enum(['F', 'C'])
 export const tapTypeSchema = z.enum(['doubleTap', 'tripleTap', 'quadTap'])
 
 /**
- * Helper to validate time range.
- * Always returns true — onTime and offTime create independent cron jobs,
- * so midnight-crossing ranges (e.g. 22:00→06:00) are naturally supported.
+ * ISO 8601 datetime string validation
  */
-export function validateTimeRange(_onTime: string, _offTime: string): boolean {
-  return true
-}
+export const isoDatetimeSchema = z
+  .string()
+  .refine(
+    (s) => !Number.isNaN(new Date(s).getTime()),
+    'Must be a valid ISO 8601 datetime string'
+  )
 
 /**
  * Helper to validate date range (startDate <= endDate)
