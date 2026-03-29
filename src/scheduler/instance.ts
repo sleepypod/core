@@ -85,6 +85,7 @@ export async function shutdownJobManager(): Promise<void> {
     await jobManagerInstance.shutdown()
     jobManagerInstance = null
     jobManagerInitPromise = null
+    cachedTimezone = null
     console.log('JobManager shut down')
   }
 }
