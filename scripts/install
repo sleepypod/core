@@ -243,6 +243,9 @@ fi
 # group-write bits are preserved (including SQLite WAL/SHM files).
 DATA_DIR="/persistent/sleepypod-data"
 echo "Creating data directory at $DATA_DIR..."
+# Ensure ReadWritePaths directories exist — systemd's ProtectSystem=strict
+# requires all listed paths to exist or the namespace setup fails
+mkdir -p /persistent/deviceinfo /run/dac
 groupadd --force sleepypod
 if id dac &>/dev/null; then
   usermod -aG sleepypod dac
