@@ -105,7 +105,7 @@ function registerGlobalHandlers(): void {
   })
 
   // Global uncaught exception handler - log and attempt graceful shutdown
-  process.on('uncaughtException', (error: Error & { code?: string; address?: string; port?: number }) => {
+  process.on('uncaughtException', (error: Error & { code?: string, address?: string, port?: number }) => {
     // mDNS EPERM is non-fatal — iptables blocks multicast, just log and continue
     if (error.code === 'EPERM' && error.address === '224.0.0.251' && error.port === 5353) {
       console.warn('[bonjour] mDNS send blocked by iptables (non-fatal):', error.message)
@@ -292,6 +292,20 @@ export async function register(): Promise<void> {
     if (process.env.CI) {
       console.log('CI environment detected — skipping hardware initialization')
       return
+    }
+
+    // Validate and auto-repair iptables rules (mDNS, LAN access, NTP)
+    try {
+      const { checkAndRepairIptables } = await import('@/src/hardware/iptablesCheck')
+      const result = checkAndRepairIptables()
+      if (result.repaired.length > 0) {
+        console.warn(`[startup] Repaired ${result.repaired.length} missing iptables rules:`, result.repaired.join(', '))
+      } else if (result.ok) {
+        console.log('[startup] iptables rules verified')
+      }
+    }
+    catch (e) {
+      console.warn('[startup] iptables check skipped:', e instanceof Error ? e.message : e)
     }
 
     await initializeScheduler()
