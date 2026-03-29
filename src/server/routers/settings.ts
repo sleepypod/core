@@ -186,6 +186,8 @@ export const settingsRouter = router({
           side: sideSchema,
           name: z.string().min(1).max(20).optional(),
           awayMode: z.boolean().optional(),
+          autoOffEnabled: z.boolean().optional(),
+          autoOffMinutes: z.number().int().min(5).max(120).optional(),
         })
         .strict()
     )
