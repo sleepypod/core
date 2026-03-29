@@ -41,7 +41,7 @@ jobs:
 
       - name: Create deploy tarball
         run: |
-          tar czf sleepypod-core.tar.gz \
+          tar czf /tmp/sleepypod-core.tar.gz \
             --exclude='node_modules' \
             --exclude='.git' \
             --exclude='.env*' \
@@ -51,6 +51,7 @@ jobs:
             --exclude='.serena' \
             --exclude='.claude' \
             .
+          mv /tmp/sleepypod-core.tar.gz .
 
       - name: Semantic Release
         env:
