@@ -210,9 +210,22 @@ fi
 #   Pod 5:   /persistent/deviceinfo/dac.sock (ext4)
 DAC_SOCK_PATH=""
 
-# Priority 1: Read from existing .env
+# Only accept known firmware-supported socket locations
+is_supported_dac_path() {
+  case "$1" in
+    /deviceinfo/dac.sock|/persistent/deviceinfo/dac.sock) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Priority 1: Read from existing .env (validate against known paths)
 if [ -f "$INSTALL_DIR/.env" ]; then
-  DAC_SOCK_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+  EXISTING_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+  if [ -n "$EXISTING_PATH" ] && is_supported_dac_path "$EXISTING_PATH"; then
+    DAC_SOCK_PATH="$EXISTING_PATH"
+  elif [ -n "$EXISTING_PATH" ]; then
+    echo "Warning: Ignoring unsupported DAC_SOCK_PATH from .env: $EXISTING_PATH"
+  fi
 fi
 
 # Priority 2: Extract from frank.sh (what frankenfirmware actually uses)
@@ -568,15 +581,15 @@ for i in $(seq 1 10); do
   [ -S "$DAC_SOCK_PATH" ] && break
   sleep 1
 done
-if ! [ -S "$DAC_SOCK_PATH" ]; then
-  echo "Warning: dac.sock not found after 10s — frankenfirmware may not reconnect" >&2
-fi
-
-# Kill frankenfirmware so its supervisor restarts it against the new dac.sock
-FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
-if [ -n "$FRANKEN_PID" ]; then
-  echo "Killing frankenfirmware (PID $FRANKEN_PID) so supervisor reconnects to dac.sock..."
-  kill "$FRANKEN_PID" 2>/dev/null || true
+if [ -S "$DAC_SOCK_PATH" ]; then
+  # Kill frankenfirmware so its supervisor restarts it against the new dac.sock
+  FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
+  if [ -n "$FRANKEN_PID" ]; then
+    echo "Killing frankenfirmware (PID $FRANKEN_PID) so supervisor reconnects to dac.sock..."
+    kill "$FRANKEN_PID" 2>/dev/null || true
+  fi
+else
+  echo "Warning: dac.sock not found after 10s — skipping frankenfirmware restart" >&2
 fi
 
 # ============================================================================
@@ -676,11 +689,12 @@ for i in \$(seq 1 10); do
   [ -S "\$DAC_SOCK" ] && break
   sleep 1
 done
-if ! [ -S "\$DAC_SOCK" ]; then
-  echo "Warning: dac.sock not found after 10s — frankenfirmware may not reconnect" >&2
+if [ -S "\$DAC_SOCK" ]; then
+  # Kill frankenfirmware so its supervisor restarts it against the new dac.sock
+  pkill frankenfirmware 2>/dev/null || true
+else
+  echo "Warning: dac.sock not found after 10s — skipping frankenfirmware restart" >&2
 fi
-# Kill frankenfirmware so its supervisor restarts it against the new dac.sock
-pkill frankenfirmware 2>/dev/null || true
 RESTARTEOF
 
 cat > /usr/local/bin/sp-logs << 'EOF'
