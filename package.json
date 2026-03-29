@@ -103,6 +103,6 @@
   },
   "packageManager": "pnpm@10.33.0",
   "pnpm": {
-    "onlyBuiltDependencies": ["cbor-extract", "better-sqlite3"]
+    "onlyBuiltDependencies": ["cbor-extract", "better-sqlite3", "esbuild", "sharp", "msw", "unrs-resolver"]
   }
 }
