@@ -52,8 +52,9 @@ cleanup() {
     echo "  Exit code: $exit_code" >&2
     echo "  Full log:  $LOG_FILE" >&2
     echo "" >&2
-    echo "  For help, share the log file above at:" >&2
-    echo "  https://github.com/sleepypod/core/issues" >&2
+    echo "  For help, share the log file above:" >&2
+    echo "  Discord: https://discord.gg/UMmv5R6MXa" >&2
+    echo "  GitHub:  https://github.com/sleepypod/core/issues" >&2
     echo "========================================" >&2
   fi
 }
