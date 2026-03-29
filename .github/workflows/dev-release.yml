@@ -1,0 +1,59 @@
+name: Dev Release
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'lts/*'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Create deploy tarball
+        run: |
+          tar czf sleepypod-core.tar.gz \
+            --exclude='node_modules' \
+            --exclude='.git' \
+            --exclude='*.db' \
+            --exclude='*.db-*' \
+            --exclude='test-results' \
+            --exclude='.serena' \
+            --exclude='.claude' \
+            .
+
+      - name: Update dev release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete dev --yes 2>/dev/null || true
+          git tag -f dev
+          git push -f origin dev
+          gh release create dev sleepypod-core.tar.gz \
+            --target dev \
+            --title "Dev (latest)" \
+            --notes "Rolling pre-built release from the \`dev\` branch.
+
+          **Commit:** ${{ github.sha }}
+          **Updated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --prerelease
