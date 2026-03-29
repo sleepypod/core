@@ -6,6 +6,7 @@ import {
   powerSchedules,
   alarmSchedules,
   deviceSettings,
+  sideSettings,
   runOnceSessions,
 } from '@/src/db/schema'
 import { and, eq, gt } from 'drizzle-orm'
@@ -132,6 +133,14 @@ export class JobManager {
           settings.ledDayBrightness,
           settings.ledNightBrightness,
         )
+      }
+    }
+
+    // Load away mode schedules from side settings
+    const sides = await db.select().from(sideSettings)
+    for (const side of sides) {
+      if (side.awayStart || side.awayReturn) {
+        this.scheduleAwayMode(side.side, side.awayStart, side.awayReturn)
       }
     }
 
@@ -335,6 +344,71 @@ export class JobManager {
       console.log(`LED night mode: setting brightness to ${dayBrightness}`)
       await sendCommand(HardwareCommand.SET_SETTINGS, JSON.stringify({ ledBrightness: dayBrightness }))
     })
+  }
+
+  /**
+   * Schedule away mode — one-shot jobs for a side:
+   * at awayStart, set awayMode=true + power off;
+   * at awayReturn, set awayMode=false.
+   */
+  private scheduleAwayMode(
+    side: 'left' | 'right',
+    awayStart: string | null,
+    awayReturn: string | null,
+  ): void {
+    const now = new Date()
+
+    if (awayStart) {
+      const startDate = new Date(awayStart)
+      if (startDate > now) {
+        this.scheduler.scheduleOneTimeJob(
+          `away-start-${side}`,
+          JobType.AWAY_MODE,
+          startDate,
+          async () => {
+            console.log(`Away mode: activating for ${side}`)
+            db.transaction((tx) => {
+              tx.update(sideSettings)
+                .set({ awayMode: true, updatedAt: new Date() })
+                .where(eq(sideSettings.side, side))
+                .run()
+            })
+            // Power off the side
+            try {
+              const client = getSharedHardwareClient()
+              await client.connect()
+              await client.setPower(side, false)
+              broadcastMutationStatus(side, { targetLevel: 0 })
+            }
+            catch (e) {
+              console.warn(`[awayMode] Failed to power off ${side}:`, e)
+            }
+          },
+          { side },
+        )
+      }
+    }
+
+    if (awayReturn) {
+      const returnDate = new Date(awayReturn)
+      if (returnDate > now) {
+        this.scheduler.scheduleOneTimeJob(
+          `away-return-${side}`,
+          JobType.AWAY_MODE,
+          returnDate,
+          async () => {
+            console.log(`Away mode: deactivating for ${side}`)
+            db.transaction((tx) => {
+              tx.update(sideSettings)
+                .set({ awayMode: false, updatedAt: new Date() })
+                .where(eq(sideSettings.side, side))
+                .run()
+            })
+          },
+          { side },
+        )
+      }
+    }
   }
 
   /**

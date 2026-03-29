@@ -195,6 +195,8 @@ export const settingsRouter = router({
           side: sideSchema,
           name: z.string().min(1).max(20).optional(),
           awayMode: z.boolean().optional(),
+          awayStart: z.string().nullable().optional(),
+          awayReturn: z.string().nullable().optional(),
         })
         .strict()
     )
@@ -223,6 +225,17 @@ export const settingsRouter = router({
 
           return result
         })
+
+        // Reload scheduler if away mode scheduling changed
+        if ('awayStart' in input || 'awayReturn' in input) {
+          try {
+            const jobManager = await getJobManager()
+            await jobManager.reloadSchedules()
+          }
+          catch (e) {
+            console.error('Scheduler reload failed:', e)
+          }
+        }
 
         return updated
       }
