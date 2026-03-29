@@ -15,6 +15,13 @@
       "when": 1774228685390,
       "tag": "0001_groovy_human_robot",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1774803397876,
+      "tag": "0002_nappy_warpath",
+      "breakpoints": true
     }
   ]
 }
