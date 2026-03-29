@@ -225,15 +225,24 @@ export const waterLevelRouter = router({
     .meta({ openapi: { method: 'GET', path: '/water-level/flow', protect: false, tags: ['Water Level'] } })
     .input(z.object({
       hours: z.number().int().min(1).max(168).default(24),
-    }))
+    }).strict())
     .output(z.any())
     .query(async ({ input }) => {
-      const since = new Date(Date.now() - input.hours * 60 * 60 * 1000)
-      return biometricsDb
-        .select()
-        .from(flowReadings)
-        .where(gt(flowReadings.timestamp, since))
-        .orderBy(flowReadings.timestamp)
-        .limit(10080)
+      try {
+        const since = new Date(Date.now() - input.hours * 60 * 60 * 1000)
+        return biometricsDb
+          .select()
+          .from(flowReadings)
+          .where(gt(flowReadings.timestamp, since))
+          .orderBy(flowReadings.timestamp)
+          .limit(10080)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch flow readings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 })
