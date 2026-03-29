@@ -2,8 +2,8 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
-import { waterLevelReadings, waterLevelAlerts } from '@/src/db/biometrics-schema'
-import { eq, and, gte, lte, desc, isNull, count } from 'drizzle-orm'
+import { waterLevelReadings, waterLevelAlerts, flowReadings } from '@/src/db/biometrics-schema'
+import { eq, and, gte, gt, lte, desc, isNull, count } from 'drizzle-orm'
 import { idSchema, validateDateRange } from '@/src/server/validation-schemas'
 
 export const waterLevelRouter = router({
@@ -216,5 +216,23 @@ export const waterLevelRouter = router({
           cause: error,
         })
       }
+    }),
+
+  /**
+   * Get historical flow rate and pump RPM readings.
+   */
+  getFlowReadings: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/water-level/flow', protect: false, tags: ['Water Level'] } })
+    .input(z.object({
+      hours: z.number().int().min(1).max(168).default(24),
+    }))
+    .output(z.any())
+    .query(async ({ input }) => {
+      const since = new Date(Date.now() - input.hours * 60 * 60 * 1000)
+      return biometricsDb
+        .select()
+        .from(flowReadings)
+        .where(gt(flowReadings.timestamp, since))
+        .orderBy(flowReadings.timestamp)
     }),
 })

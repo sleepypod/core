@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
-import { waterLevelReadings } from '@/src/db/biometrics-schema'
+import { waterLevelReadings, flowReadings } from '@/src/db/biometrics-schema'
 import type { DeviceStatus } from './types'
 
 /**
@@ -31,6 +31,7 @@ export function getAlarmState(): { left: boolean, right: boolean } {
 
 export class DeviceStateSync {
   private lastWaterLevelWrite = 0
+  private lastFlowWrite = 0
 
   sync = async (status: DeviceStatus): Promise<void> => {
     this.recordWaterLevel(status)
@@ -118,6 +119,32 @@ export class DeviceStateSync {
     }
     catch (error) {
       console.error('DeviceStateSync: failed to write water level:', error instanceof Error ? error.message : error)
+    }
+  }
+
+  /** Write flow/pump data to biometrics DB, rate-limited to once per 60s. */
+  recordFlowData(frzHealth: {
+    left: { pump: { rpm: number }, temps: { flowrate: number } }
+    right: { pump: { rpm: number }, temps: { flowrate: number } }
+  }): void {
+    const now = Date.now()
+    if (now - this.lastFlowWrite < 60_000) return
+
+    try {
+      biometricsDb
+        .insert(flowReadings)
+        .values({
+          timestamp: new Date(now),
+          leftFlowrateCd: Math.round(frzHealth.left.temps.flowrate * 100),
+          rightFlowrateCd: Math.round(frzHealth.right.temps.flowrate * 100),
+          leftPumpRpm: frzHealth.left.pump.rpm,
+          rightPumpRpm: frzHealth.right.pump.rpm,
+        })
+        .run()
+      this.lastFlowWrite = now
+    }
+    catch (error) {
+      console.error('DeviceStateSync: failed to write flow readings:', error instanceof Error ? error.message : error)
     }
   }
 }
