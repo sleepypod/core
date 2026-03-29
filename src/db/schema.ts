@@ -195,5 +195,28 @@ export const systemHealth = sqliteTable('system_health', {
     .default(sql`(unixepoch())`),
 })
 
+// ============================================================================
+// Run-Once Sessions (one-off curve application)
+// ============================================================================
+
+export const runOnceSessions = sqliteTable('run_once_sessions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  setPoints: text('set_points').notNull(), // JSON: [{"time":"22:15","temperature":82}, ...]
+  wakeTime: text('wake_time').notNull(), // HH:mm
+  startedAt: integer('started_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  status: text('status', { enum: ['active', 'completed', 'cancelled'] })
+    .notNull()
+    .default('active'),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+}, t => [
+  index('idx_run_once_side_status').on(t.side, t.status),
+])
+
 // Indexes are now defined inline within each table definition above using index()
 // This ensures Drizzle Kit generates them in migrations

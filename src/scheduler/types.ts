@@ -11,6 +11,7 @@ export enum JobType {
   PRIME = 'prime',
   CALIBRATION = 'calibration',
   REBOOT = 'reboot',
+  RUN_ONCE = 'run_once',
 }
 
 /**
