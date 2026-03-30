@@ -86,7 +86,7 @@ export const tapTypeSchema = z.enum(['doubleTap', 'tripleTap', 'quadTap'])
 export const isoDatetimeSchema = z
   .string()
   .refine(
-    (s) => !Number.isNaN(new Date(s).getTime()),
+    s => !Number.isNaN(new Date(s).getTime()),
     'Must be a valid ISO 8601 datetime string'
   )
 
