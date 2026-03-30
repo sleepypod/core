@@ -623,6 +623,16 @@ export function startPiezoStreamServer(): WebSocketServer {
                 catch { /* client gone between readyState check and send */ }
               }
             }
+
+            // Notify server-side listeners (only frzHealth currently has consumers)
+            if (frameType === 'frzHealth' && serverFrameListeners.size > 0) {
+              for (const cb of serverFrameListeners) {
+                try {
+                  cb(frame as Record<string, unknown>)
+                }
+                catch { /* consumer error */ }
+              }
+            }
           }
         }
         catch (e) {
@@ -652,6 +662,19 @@ export function startPiezoStreamServer(): WebSocketServer {
   }, FILE_POLL_INTERVAL_MS)
 
   return wss
+}
+
+// Server-side frame listeners — called for every decoded sensor frame.
+// Used by DeviceStateSync to record flow data without circular imports.
+type ServerFrameListener = (frame: Record<string, unknown>) => void
+const serverFrameListeners = new Set<ServerFrameListener>()
+
+/** Register a callback invoked for every decoded sensor frame. Returns unsubscribe fn. */
+export function onServerFrame(cb: ServerFrameListener): () => void {
+  serverFrameListeners.add(cb)
+  return () => {
+    serverFrameListeners.delete(cb)
+  }
 }
 
 /**

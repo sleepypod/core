@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
@@ -7,7 +8,8 @@ import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
-import { fahrenheitToLevel } from '@/src/hardware/types'
+import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
+import { sendCommand } from '@/src/hardware/dacTransport'
 import {
   sideSchema,
   temperatureSchema,
@@ -15,6 +17,21 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
+
+// ---------------------------------------------------------------------------
+// Command name → HardwareCommand mapping for the raw execute endpoint
+// ---------------------------------------------------------------------------
+
+const COMMAND_MAP: Record<string, HardwareCommand> = {
+  SET_TEMP: HardwareCommand.SET_TEMP,
+  SET_ALARM: HardwareCommand.SET_ALARM,
+  ALARM_LEFT: HardwareCommand.ALARM_LEFT,
+  ALARM_RIGHT: HardwareCommand.ALARM_RIGHT,
+  SET_SETTINGS: HardwareCommand.SET_SETTINGS,
+  PRIME: HardwareCommand.PRIME,
+  DEVICE_STATUS: HardwareCommand.DEVICE_STATUS,
+  ALARM_CLEAR: HardwareCommand.ALARM_CLEAR,
+}
 
 // ---------------------------------------------------------------------------
 // Server-side temperature debounce
@@ -501,5 +518,51 @@ export const deviceRouter = router({
     .mutation(() => {
       dismissPrimeNotification()
       return { success: true }
+    }),
+
+  // ---------------------------------------------------------------------------
+  // POWER USER / DEBUG FEATURE — Raw Hardware Command Execution
+  //
+  // This endpoint is a passthrough to the hardware command protocol. It does
+  // NOT validate arguments, does NOT apply safety/debounce mechanisms, and
+  // does NOT sync state to the database. Misuse can damage hardware or cause
+  // unexpected behavior. Use at your own risk.
+  //
+  // See ADR 0016 for rationale and consequences.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Execute a raw hardware command by name.
+   *
+   * Bypasses all high-level validation, debounce, and DB sync. The command
+   * name is allowlisted but the args string is passed through verbatim.
+   */
+  execute: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/execute', protect: false, tags: ['Device'] } })
+    .input(z.object({
+      command: z.enum(['SET_TEMP', 'SET_ALARM', 'ALARM_LEFT', 'ALARM_RIGHT', 'SET_SETTINGS', 'PRIME', 'DEVICE_STATUS', 'ALARM_CLEAR']),
+      args: z.string().optional(),
+    }).strict())
+    .output(z.any())
+    .mutation(async ({ input }) => {
+      const hwCommand = COMMAND_MAP[input.command]
+
+      try {
+        const response = await sendCommand(hwCommand, input.args)
+
+        return {
+          command: input.command,
+          args: input.args ?? null,
+          response,
+          disclaimer: 'WARNING: Raw command execution. No validation, no safety checks. Misuse can damage hardware or cause unexpected behavior. Use at your own risk. This feature is unsupported.',
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to execute raw command: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 })

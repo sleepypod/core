@@ -38,6 +38,8 @@ export const sideSettings = sqliteTable('side_settings', {
   side: text('side', { enum: ['left', 'right'] }).primaryKey(),
   name: text('name').notNull(), // Must be provided explicitly during insert
   awayMode: integer('away_mode', { mode: 'boolean' }).notNull().default(false),
+  autoOffEnabled: integer('auto_off_enabled', { mode: 'boolean' }).notNull().default(false),
+  autoOffMinutes: integer('auto_off_minutes').notNull().default(30),
   awayStart: text('away_start'), // ISO datetime when away mode activates
   awayReturn: text('away_return'), // ISO datetime when away mode deactivates
   createdAt: integer('created_at', { mode: 'timestamp' })

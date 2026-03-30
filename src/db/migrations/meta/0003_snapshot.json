@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "e16c8e67-9502-4b3d-b3e0-d29eb84e7090",
-  "prevId": "6802fcdb-766e-4be4-b2f6-ea671b664a75",
+  "id": "a578bda9-6bb5-48fe-be74-65002e304ccd",
+  "prevId": "e16c8e67-9502-4b3d-b3e0-d29eb84e7090",
   "tables": {
     "alarm_schedules": {
       "name": "alarm_schedules",
@@ -161,6 +161,46 @@
           "notNull": false,
           "autoincrement": false,
           "default": "'14:00'"
+        },
+        "led_night_mode_enabled": {
+          "name": "led_night_mode_enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "led_day_brightness": {
+          "name": "led_day_brightness",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 100
+        },
+        "led_night_brightness": {
+          "name": "led_night_brightness",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "led_night_start_time": {
+          "name": "led_night_start_time",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "'22:00'"
+        },
+        "led_night_end_time": {
+          "name": "led_night_end_time",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "'07:00'"
         },
         "created_at": {
           "name": "created_at",
@@ -458,6 +498,20 @@
           "notNull": true,
           "autoincrement": false,
           "default": 30
+        },
+        "away_start": {
+          "name": "away_start",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "away_return": {
+          "name": "away_return",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "created_at": {
           "name": "created_at",

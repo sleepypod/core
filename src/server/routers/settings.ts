@@ -68,8 +68,8 @@ export const settingsRouter = router({
             updatedAt: new Date(),
           },
           sides: {
-            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', awayMode: false, createdAt: new Date(), updatedAt: new Date() },
-            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', awayMode: false, createdAt: new Date(), updatedAt: new Date() },
+            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
+            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
           },
           gestures: {
             left: gestures.filter(g => g.side === 'left'),
@@ -196,6 +196,8 @@ export const settingsRouter = router({
           side: sideSchema,
           name: z.string().min(1).max(20).optional(),
           awayMode: z.boolean().optional(),
+          autoOffEnabled: z.boolean().optional(),
+          autoOffMinutes: z.number().int().min(5).max(120).optional(),
           awayStart: isoDatetimeSchema.nullable().optional(),
           awayReturn: isoDatetimeSchema.nullable().optional(),
         })
