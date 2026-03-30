@@ -627,7 +627,10 @@ export function startPiezoStreamServer(): WebSocketServer {
             // Notify server-side listeners (only frzHealth currently has consumers)
             if (frameType === 'frzHealth' && serverFrameListeners.size > 0) {
               for (const cb of serverFrameListeners) {
-                try { cb(frame as Record<string, unknown>) } catch { /* consumer error */ }
+                try {
+                  cb(frame as Record<string, unknown>)
+                }
+                catch { /* consumer error */ }
               }
             }
           }
@@ -669,7 +672,9 @@ const serverFrameListeners = new Set<ServerFrameListener>()
 /** Register a callback invoked for every decoded sensor frame. Returns unsubscribe fn. */
 export function onServerFrame(cb: ServerFrameListener): () => void {
   serverFrameListeners.add(cb)
-  return () => { serverFrameListeners.delete(cb) }
+  return () => {
+    serverFrameListeners.delete(cb)
+  }
 }
 
 /**
