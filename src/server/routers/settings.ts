@@ -209,6 +209,34 @@ export const settingsRouter = router({
         const { side, ...updates } = input
 
         const updated = db.transaction((tx) => {
+          // Read current row to merge away window for validation
+          const [current] = tx
+            .select()
+            .from(sideSettings)
+            .where(eq(sideSettings.side, side))
+            .limit(1)
+            .all()
+
+          if (!current) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Side settings for ${side} not found`,
+            })
+          }
+
+          // Validate merged away window — reject reversed ranges
+          if ('awayStart' in updates || 'awayReturn' in updates) {
+            const finalStart = updates.awayStart !== undefined ? updates.awayStart : current.awayStart
+            const finalReturn = updates.awayReturn !== undefined ? updates.awayReturn : current.awayReturn
+
+            if (finalStart && finalReturn && new Date(finalReturn) < new Date(finalStart)) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'awayReturn must not be before awayStart',
+              })
+            }
+          }
+
           const [result] = tx
             .update(sideSettings)
             .set({

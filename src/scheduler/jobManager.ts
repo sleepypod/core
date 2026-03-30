@@ -128,7 +128,7 @@ export class JobManager {
       }
 
       if (settings.ledNightModeEnabled && settings.ledNightStartTime && settings.ledNightEndTime) {
-        this.scheduleLedNightMode(
+        await this.scheduleLedNightMode(
           settings.ledNightStartTime,
           settings.ledNightEndTime,
           settings.ledDayBrightness,
@@ -321,22 +321,32 @@ export class JobManager {
   }
 
   /**
+   * Send a LED brightness command via the shared hardware client.
+   */
+  private async sendLedBrightness(brightness: number): Promise<void> {
+    const client = getSharedHardwareClient()
+    await client.connect()
+    const hexCbor = Buffer.from(cborEncode({ ledBrightness: brightness })).toString('hex')
+    await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
+  }
+
+  /**
    * Schedule LED night mode — two daily cron jobs:
    * one at nightStartTime to dim LEDs, one at nightEndTime to restore brightness.
+   * Also applies the correct brightness immediately based on current time.
    */
-  private scheduleLedNightMode(
+  private async scheduleLedNightMode(
     nightStartTime: string,
     nightEndTime: string,
     dayBrightness: number,
     nightBrightness: number,
-  ): void {
+  ): Promise<void> {
     const [startHour, startMinute] = this.parseTime(nightStartTime)
     const startCron = `${startMinute} ${startHour} * * *`
 
     this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
       console.log(`LED night mode: setting brightness to ${nightBrightness}`)
-      const hexCbor = Buffer.from(cborEncode({ ledBrightness: nightBrightness })).toString('hex')
-      await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
+      await this.sendLedBrightness(nightBrightness)
     })
 
     const [endHour, endMinute] = this.parseTime(nightEndTime)
@@ -344,9 +354,27 @@ export class JobManager {
 
     this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
       console.log(`LED night mode: setting brightness to ${dayBrightness}`)
-      const hexCbor = Buffer.from(cborEncode({ ledBrightness: dayBrightness })).toString('hex')
-      await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
+      await this.sendLedBrightness(dayBrightness)
     })
+
+    // Apply correct brightness immediately based on whether we're in the night window
+    const now = new Date()
+    const nowMinutes = now.getHours() * 60 + now.getMinutes()
+    const startMinutes = startHour * 60 + startMinute
+    const endMinutes = endHour * 60 + endMinute
+
+    const isNight = startMinutes <= endMinutes
+      ? nowMinutes >= startMinutes && nowMinutes < endMinutes // same-day window (e.g. 01:00-06:00)
+      : nowMinutes >= startMinutes || nowMinutes < endMinutes // midnight-crossing window (e.g. 22:00-06:00)
+
+    const targetBrightness = isNight ? nightBrightness : dayBrightness
+    try {
+      console.log(`LED night mode: applying initial brightness ${targetBrightness} (${isNight ? 'night' : 'day'} window)`)
+      await this.sendLedBrightness(targetBrightness)
+    }
+    catch (e) {
+      console.warn('LED night mode: failed to apply initial brightness:', e)
+    }
   }
 
   /**
@@ -407,6 +435,16 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
+            // Restore power for the side
+            try {
+              const client = getSharedHardwareClient()
+              await client.connect()
+              await client.setPower(side, true)
+              broadcastMutationStatus(side, {})
+            }
+            catch (e) {
+              console.warn(`[awayMode] Failed to power on ${side}:`, e)
+            }
           },
           { side },
         )
