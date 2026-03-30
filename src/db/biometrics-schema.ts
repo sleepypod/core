@@ -104,6 +104,17 @@ export const ambientLight = sqliteTable('ambient_light', {
   uniqueIndex('idx_ambient_light_timestamp').on(t.timestamp),
 ])
 
+export const flowReadings = sqliteTable('flow_readings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  leftFlowrateCd: integer('left_flowrate_cd'), // centidegrees, matching bed_temp convention
+  rightFlowrateCd: integer('right_flowrate_cd'),
+  leftPumpRpm: integer('left_pump_rpm'),
+  rightPumpRpm: integer('right_pump_rpm'),
+}, t => [
+  uniqueIndex('idx_flow_readings_timestamp').on(t.timestamp),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {

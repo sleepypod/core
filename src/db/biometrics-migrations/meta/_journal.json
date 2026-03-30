@@ -43,6 +43,13 @@
       "when": 1773626902925,
       "tag": "0005_gorgeous_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1774803436479,
+      "tag": "0006_tired_gressill",
+      "breakpoints": true
     }
   ]
 }
