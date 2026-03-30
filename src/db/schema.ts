@@ -19,6 +19,13 @@ export const deviceSettings = sqliteTable('device_settings', {
     .notNull()
     .default(false),
   primePodTime: text('prime_pod_time').default('14:00'), // HH:mm format
+  ledNightModeEnabled: integer('led_night_mode_enabled', { mode: 'boolean' })
+    .notNull()
+    .default(false),
+  ledDayBrightness: integer('led_day_brightness').notNull().default(100), // 0-100
+  ledNightBrightness: integer('led_night_brightness').notNull().default(0), // 0-100
+  ledNightStartTime: text('led_night_start_time').default('22:00'), // HH:mm format
+  ledNightEndTime: text('led_night_end_time').default('07:00'), // HH:mm format
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -33,6 +40,8 @@ export const sideSettings = sqliteTable('side_settings', {
   awayMode: integer('away_mode', { mode: 'boolean' }).notNull().default(false),
   autoOffEnabled: integer('auto_off_enabled', { mode: 'boolean' }).notNull().default(false),
   autoOffMinutes: integer('auto_off_minutes').notNull().default(30),
+  awayStart: text('away_start'), // ISO datetime when away mode activates
+  awayReturn: text('away_return'), // ISO datetime when away mode deactivates
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

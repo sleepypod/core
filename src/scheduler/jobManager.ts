@@ -6,11 +6,14 @@ import {
   powerSchedules,
   alarmSchedules,
   deviceSettings,
+  sideSettings,
   runOnceSessions,
 } from '@/src/db/schema'
 import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
-import { fahrenheitToLevel } from '@/src/hardware/types'
+import { sendCommand } from '@/src/hardware/dacTransport'
+import { encode as cborEncode } from 'cbor-x'
+import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { timeToDate } from './timeUtils'
 
@@ -122,6 +125,23 @@ export class JobManager {
 
       if (settings.rebootDaily && settings.rebootTime) {
         this.scheduleDailyReboot(settings.rebootTime)
+      }
+
+      if (settings.ledNightModeEnabled && settings.ledNightStartTime && settings.ledNightEndTime) {
+        await this.scheduleLedNightMode(
+          settings.ledNightStartTime,
+          settings.ledNightEndTime,
+          settings.ledDayBrightness,
+          settings.ledNightBrightness,
+        )
+      }
+    }
+
+    // Load away mode schedules from side settings
+    const sides = await db.select().from(sideSettings)
+    for (const side of sides) {
+      if (side.awayStart || side.awayReturn) {
+        this.scheduleAwayMode(side.side, side.awayStart, side.awayReturn)
       }
     }
 
@@ -298,6 +318,138 @@ export class JobManager {
       console.log('Executing daily system reboot...')
       await this.executeReboot()
     })
+  }
+
+  /**
+   * Send a LED brightness command via the shared hardware client.
+   */
+  private async sendLedBrightness(brightness: number): Promise<void> {
+    const client = getSharedHardwareClient()
+    await client.connect()
+    const hexCbor = Buffer.from(cborEncode({ ledBrightness: brightness })).toString('hex')
+    await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
+  }
+
+  /**
+   * Schedule LED night mode — two daily cron jobs:
+   * one at nightStartTime to dim LEDs, one at nightEndTime to restore brightness.
+   * Also applies the correct brightness immediately based on current time.
+   */
+  private async scheduleLedNightMode(
+    nightStartTime: string,
+    nightEndTime: string,
+    dayBrightness: number,
+    nightBrightness: number,
+  ): Promise<void> {
+    const [startHour, startMinute] = this.parseTime(nightStartTime)
+    const startCron = `${startMinute} ${startHour} * * *`
+
+    this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
+      console.log(`LED night mode: setting brightness to ${nightBrightness}`)
+      await this.sendLedBrightness(nightBrightness)
+    })
+
+    const [endHour, endMinute] = this.parseTime(nightEndTime)
+    const endCron = `${endMinute} ${endHour} * * *`
+
+    this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
+      console.log(`LED night mode: setting brightness to ${dayBrightness}`)
+      await this.sendLedBrightness(dayBrightness)
+    })
+
+    // Apply correct brightness immediately based on whether we're in the night window
+    const now = new Date()
+    const nowMinutes = now.getHours() * 60 + now.getMinutes()
+    const startMinutes = startHour * 60 + startMinute
+    const endMinutes = endHour * 60 + endMinute
+
+    const isNight = startMinutes <= endMinutes
+      ? nowMinutes >= startMinutes && nowMinutes < endMinutes // same-day window (e.g. 01:00-06:00)
+      : nowMinutes >= startMinutes || nowMinutes < endMinutes // midnight-crossing window (e.g. 22:00-06:00)
+
+    const targetBrightness = isNight ? nightBrightness : dayBrightness
+    try {
+      console.log(`LED night mode: applying initial brightness ${targetBrightness} (${isNight ? 'night' : 'day'} window)`)
+      await this.sendLedBrightness(targetBrightness)
+    }
+    catch (e) {
+      console.warn('LED night mode: failed to apply initial brightness:', e)
+    }
+  }
+
+  /**
+   * Schedule away mode — one-shot jobs for a side:
+   * at awayStart, set awayMode=true + power off;
+   * at awayReturn, set awayMode=false.
+   */
+  private scheduleAwayMode(
+    side: 'left' | 'right',
+    awayStart: string | null,
+    awayReturn: string | null,
+  ): void {
+    const now = new Date()
+
+    if (awayStart) {
+      const startDate = new Date(awayStart)
+      if (startDate > now) {
+        this.scheduler.scheduleOneTimeJob(
+          `away-start-${side}`,
+          JobType.AWAY_MODE,
+          startDate,
+          async () => {
+            console.log(`Away mode: activating for ${side}`)
+            await db.transaction((tx) => {
+              tx.update(sideSettings)
+                .set({ awayMode: true, updatedAt: new Date() })
+                .where(eq(sideSettings.side, side))
+                .run()
+            })
+            // Power off the side
+            try {
+              const client = getSharedHardwareClient()
+              await client.connect()
+              await client.setPower(side, false)
+              broadcastMutationStatus(side, { targetLevel: 0 })
+            }
+            catch (e) {
+              console.warn(`[awayMode] Failed to power off ${side}:`, e)
+            }
+          },
+          { side },
+        )
+      }
+    }
+
+    if (awayReturn) {
+      const returnDate = new Date(awayReturn)
+      if (returnDate > now) {
+        this.scheduler.scheduleOneTimeJob(
+          `away-return-${side}`,
+          JobType.AWAY_MODE,
+          returnDate,
+          async () => {
+            console.log(`Away mode: deactivating for ${side}`)
+            await db.transaction((tx) => {
+              tx.update(sideSettings)
+                .set({ awayMode: false, updatedAt: new Date() })
+                .where(eq(sideSettings.side, side))
+                .run()
+            })
+            // Restore power for the side
+            try {
+              const client = getSharedHardwareClient()
+              await client.connect()
+              await client.setPower(side, true)
+              broadcastMutationStatus(side, {})
+            }
+            catch (e) {
+              console.warn(`[awayMode] Failed to power on ${side}:`, e)
+            }
+          },
+          { side },
+        )
+      }
+    }
   }
 
   /**
