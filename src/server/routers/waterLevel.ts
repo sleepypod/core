@@ -230,7 +230,7 @@ export const waterLevelRouter = router({
     .query(async ({ input }) => {
       try {
         const since = new Date(Date.now() - input.hours * 60 * 60 * 1000)
-        return biometricsDb
+        return await biometricsDb
           .select()
           .from(flowReadings)
           .where(gt(flowReadings.timestamp, since))
