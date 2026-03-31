@@ -132,10 +132,20 @@ export class DeviceStateSync {
   }
 
   /** Write flow/pump data to biometrics DB, rate-limited to once per 60s. */
-  recordFlowData(frzHealth: {
-    left: { pump: { rpm: number }, temps: { flowrate: number } }
-    right: { pump: { rpm: number }, temps: { flowrate: number } }
-  }): void {
+  recordFlowData(frame: Record<string, unknown>): void {
+    // Guard: only process frzHealth frames (could be piezo, capSense, bedTemp, etc.)
+    const left = (frame as Record<string, unknown>)?.left
+    const right = (frame as Record<string, unknown>)?.right
+    if (
+      !left || typeof left !== 'object' || !('pump' in left) || !('temps' in left)
+      || !right || typeof right !== 'object' || !('pump' in right) || !('temps' in right)
+    ) return
+
+    const frzHealth = frame as {
+      left: { pump: { rpm: number }, temps: { flowrate?: number } }
+      right: { pump: { rpm: number }, temps: { flowrate?: number } }
+    }
+
     const now = Date.now()
 
     // Run anomaly checks on every frame (not rate-limited)
@@ -148,8 +158,8 @@ export class DeviceStateSync {
         .insert(flowReadings)
         .values({
           timestamp: new Date(now),
-          leftFlowrateCd: Math.round(frzHealth.left.temps.flowrate * 100),
-          rightFlowrateCd: Math.round(frzHealth.right.temps.flowrate * 100),
+          leftFlowrateCd: frzHealth.left.temps?.flowrate != null ? Math.round(frzHealth.left.temps.flowrate * 100) : null,
+          rightFlowrateCd: frzHealth.right.temps?.flowrate != null ? Math.round(frzHealth.right.temps.flowrate * 100) : null,
           leftPumpRpm: frzHealth.left.pump.rpm,
           rightPumpRpm: frzHealth.right.pump.rpm,
         })
@@ -171,13 +181,13 @@ export class DeviceStateSync {
 
   /** Check for flow/pump anomalies on each frzHealth frame. */
   private checkFlowAnomalies(frzHealth: {
-    left: { pump: { rpm: number }, temps: { flowrate: number } }
-    right: { pump: { rpm: number }, temps: { flowrate: number } }
+    left: { pump: { rpm: number }, temps: { flowrate?: number } }
+    right: { pump: { rpm: number }, temps: { flowrate?: number } }
   }, now: number): void {
     const leftRpm = frzHealth.left.pump.rpm
     const rightRpm = frzHealth.right.pump.rpm
-    const leftFlowCd = Math.round(frzHealth.left.temps.flowrate * 100)
-    const rightFlowCd = Math.round(frzHealth.right.temps.flowrate * 100)
+    const leftFlowCd = frzHealth.left.temps?.flowrate != null ? Math.round(frzHealth.left.temps.flowrate * 100) : NaN
+    const rightFlowCd = frzHealth.right.temps?.flowrate != null ? Math.round(frzHealth.right.temps.flowrate * 100) : NaN
 
     // Pump running but no flow — possible pump failure or blockage
     if (leftRpm >= PUMP_FAILURE_RPM_MIN && Math.abs(leftFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
@@ -187,6 +197,15 @@ export class DeviceStateSync {
     if (rightRpm >= PUMP_FAILURE_RPM_MIN && Math.abs(rightFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
       this.logAnomaly('right_pump_no_flow',
         `Right pump running at ${rightRpm} RPM but flowrate near zero (${rightFlowCd} cd)`, now)
+    }
+
+    // Asymmetric flowrate — possible partial blockage
+    const ASYMMETRY_THRESHOLD_CD = 300
+    if (Math.abs(leftFlowCd - rightFlowCd) > ASYMMETRY_THRESHOLD_CD
+      && Math.abs(leftFlowCd) > FLOWRATE_NEAR_ZERO_CD
+      && Math.abs(rightFlowCd) > FLOWRATE_NEAR_ZERO_CD) {
+      this.logAnomaly('flow_asymmetry',
+        `Left/right flowrate diverged: ${leftFlowCd} vs ${rightFlowCd} cd`, now)
     }
 
     // Sudden large flowrate change — possible leak or sensor fault
@@ -205,7 +224,7 @@ export class DeviceStateSync {
       }
     }
 
-    this.prevFlowLeft = leftFlowCd
-    this.prevFlowRight = rightFlowCd
+    this.prevFlowLeft = Number.isFinite(leftFlowCd) ? leftFlowCd : this.prevFlowLeft
+    this.prevFlowRight = Number.isFinite(rightFlowCd) ? rightFlowCd : this.prevFlowRight
   }
 }

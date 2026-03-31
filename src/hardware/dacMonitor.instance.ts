@@ -249,7 +249,7 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
       // Subscribe to frzHealth frames from the sensor stream to record flow data
       import('../streaming/piezoStream').then(({ onServerFrame }) => {
         g[KEYS.unsubFlow] = onServerFrame((frame) => {
-          stateSync.recordFlowData(frame as { left: { pump: { rpm: number }, temps: { flowrate: number } }, right: { pump: { rpm: number }, temps: { flowrate: number } } })
+          stateSync.recordFlowData(frame as Record<string, unknown>)
         })
       }).catch(() => { /* WS server may not be started yet */ })
 
