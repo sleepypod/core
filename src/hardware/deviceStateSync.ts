@@ -29,9 +29,18 @@ export function getAlarmState(): { left: boolean, right: boolean } {
   }
 }
 
+// ── Flow anomaly detection thresholds ──
+const PUMP_FAILURE_RPM_MIN = 50 // pump "running" but below this = suspicious
+const FLOWRATE_NEAR_ZERO_CD = 5 // centidegrees — effectively zero flow
+const FLOWRATE_SUDDEN_CHANGE_CD = 500 // centidegrees — large delta between consecutive reads
+const ANOMALY_LOG_COOLDOWN_MS = 300_000 // 5 min between repeated warnings per type
+
 export class DeviceStateSync {
   private lastWaterLevelWrite = 0
   private lastFlowWrite = 0
+  private lastAnomalyLog: Record<string, number> = {}
+  private prevFlowLeft: number | null = null
+  private prevFlowRight: number | null = null
 
   sync = async (status: DeviceStatus): Promise<void> => {
     this.recordWaterLevel(status)
@@ -128,6 +137,10 @@ export class DeviceStateSync {
     right: { pump: { rpm: number }, temps: { flowrate: number } }
   }): void {
     const now = Date.now()
+
+    // Run anomaly checks on every frame (not rate-limited)
+    this.checkFlowAnomalies(frzHealth, now)
+
     if (now - this.lastFlowWrite < 60_000) return
 
     try {
@@ -146,5 +159,53 @@ export class DeviceStateSync {
     catch (error) {
       console.error('DeviceStateSync: failed to write flow readings:', error instanceof Error ? error.message : error)
     }
+  }
+
+  /** Log an anomaly warning, rate-limited per anomaly type. */
+  private logAnomaly(type: string, message: string, now: number): void {
+    const lastLog = this.lastAnomalyLog[type] ?? 0
+    if (now - lastLog < ANOMALY_LOG_COOLDOWN_MS) return
+    console.warn(`[FlowAnomaly] ${type}: ${message}`)
+    this.lastAnomalyLog[type] = now
+  }
+
+  /** Check for flow/pump anomalies on each frzHealth frame. */
+  private checkFlowAnomalies(frzHealth: {
+    left: { pump: { rpm: number }, temps: { flowrate: number } }
+    right: { pump: { rpm: number }, temps: { flowrate: number } }
+  }, now: number): void {
+    const leftRpm = frzHealth.left.pump.rpm
+    const rightRpm = frzHealth.right.pump.rpm
+    const leftFlowCd = Math.round(frzHealth.left.temps.flowrate * 100)
+    const rightFlowCd = Math.round(frzHealth.right.temps.flowrate * 100)
+
+    // Pump running but no flow — possible pump failure or blockage
+    if (leftRpm >= PUMP_FAILURE_RPM_MIN && Math.abs(leftFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
+      this.logAnomaly('left_pump_no_flow',
+        `Left pump running at ${leftRpm} RPM but flowrate near zero (${leftFlowCd} cd)`, now)
+    }
+    if (rightRpm >= PUMP_FAILURE_RPM_MIN && Math.abs(rightFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
+      this.logAnomaly('right_pump_no_flow',
+        `Right pump running at ${rightRpm} RPM but flowrate near zero (${rightFlowCd} cd)`, now)
+    }
+
+    // Sudden large flowrate change — possible leak or sensor fault
+    if (this.prevFlowLeft !== null) {
+      const deltaLeft = Math.abs(leftFlowCd - this.prevFlowLeft)
+      if (deltaLeft > FLOWRATE_SUDDEN_CHANGE_CD) {
+        this.logAnomaly('left_flow_spike',
+          `Left flowrate sudden change: ${this.prevFlowLeft} -> ${leftFlowCd} cd (delta ${deltaLeft})`, now)
+      }
+    }
+    if (this.prevFlowRight !== null) {
+      const deltaRight = Math.abs(rightFlowCd - this.prevFlowRight)
+      if (deltaRight > FLOWRATE_SUDDEN_CHANGE_CD) {
+        this.logAnomaly('right_flow_spike',
+          `Right flowrate sudden change: ${this.prevFlowRight} -> ${rightFlowCd} cd (delta ${deltaRight})`, now)
+      }
+    }
+
+    this.prevFlowLeft = leftFlowCd
+    this.prevFlowRight = rightFlowCd
   }
 }
