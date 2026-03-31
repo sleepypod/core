@@ -14,6 +14,7 @@ import { db, biometricsDb } from '@/src/db'
 import { sideSettings, deviceState, runOnceSessions } from '@/src/db/schema'
 import { sleepRecords } from '@/src/db/biometrics-schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -154,6 +155,7 @@ async function powerOffSide(side: Side): Promise<void> {
       // next status poll will re-sync
     }
 
+    broadcastMutationStatus(side, { isPowered: false, targetLevel: 0 })
     console.log(`[auto-off] Powered off ${side} side (no presence detected)`)
   }
   catch (error) {
@@ -178,8 +180,7 @@ async function powerOffSide(side: Side): Promise<void> {
  * long ago and the side is still powered, we assume they are in bed
  * (the session hasn't closed yet).
  */
-function evaluateSide(side: Side): void {
-  const config = getAutoOffConfig()
+function evaluateSide(side: Side, config: Record<Side, { enabled: boolean; minutes: number }>): void {
   const cfg = config[side]
 
   // Feature disabled for this side
@@ -259,6 +260,15 @@ function evaluateSide(side: Side): void {
       const freshConfig = getAutoOffConfig()
       if (!freshConfig[side].enabled) return
 
+      // Verify the bed-exit that armed this timer is still the latest
+      const latestRecord = getLatestSleepRecord(side)
+      if (latestRecord) {
+        const latestLeftBedMs = latestRecord.leftBedAt instanceof Date
+          ? latestRecord.leftBedAt.getTime()
+          : (latestRecord.leftBedAt as number) * 1000
+        if (latestLeftBedMs !== leftBedAtMs) return // newer event; evaluateSide will re-arm
+      }
+
       powerOffSide(side)
     }, remainingMs),
     startedAt: leftBedAtMs,
@@ -267,9 +277,10 @@ function evaluateSide(side: Side): void {
 }
 
 function poll(): void {
+  const config = getAutoOffConfig()
   for (const side of SIDES) {
     try {
-      evaluateSide(side)
+      evaluateSide(side, config)
     }
     catch (error) {
       console.error(
