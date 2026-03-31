@@ -13,6 +13,7 @@ import {
 } from '@/src/server/validation-schemas'
 import { getJobManager } from '@/src/scheduler'
 import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
+import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
 
 /**
  * Reload schedules in the job manager after settings changes
@@ -277,6 +278,16 @@ export const settingsRouter = router({
           }
           else {
             stopKeepalive(input.side)
+          }
+        }
+
+        // Restart auto-off timers if auto-off settings changed
+        if ('autoOffEnabled' in input || 'autoOffMinutes' in input) {
+          try {
+            restartAutoOffTimers()
+          }
+          catch (e) {
+            console.error('Auto-off timer restart failed:', e)
           }
         }
 
