@@ -29,7 +29,7 @@ const timers = new Map<Side, ReturnType<typeof setInterval>>()
 export function startKeepalive(side: Side): void {
   stopKeepalive(side)
 
-  const interval = setInterval(async () => {
+  const tick = async () => {
     try {
       // Read current device state to get target temperature
       const [state] = db
@@ -68,7 +68,12 @@ export function startKeepalive(side: Side): void {
         error instanceof Error ? error.message : error,
       )
     }
-  }, KEEPALIVE_INTERVAL_MS)
+  }
+
+  // Fire immediately to reset firmware duration timer right away
+  tick()
+
+  const interval = setInterval(tick, KEEPALIVE_INTERVAL_MS)
 
   // Allow Node process to exit even if timer is running
   interval.unref()
@@ -91,8 +96,8 @@ export function stopKeepalive(side: Side): void {
 }
 
 /**
- * Initialize keepalive timers for all sides that have alwaysOn enabled
- * and are currently powered on. Called once at startup.
+ * Initialize keepalive timers for all sides that have alwaysOn enabled.
+ * Called once at startup.
  */
 export function initializeKeepalives(): void {
   const sides: Side[] = ['left', 'right']
@@ -106,16 +111,7 @@ export function initializeKeepalives(): void {
         .limit(1)
         .all()
 
-      if (!settings?.alwaysOn) continue
-
-      const [state] = db
-        .select()
-        .from(deviceState)
-        .where(eq(deviceState.side, side))
-        .limit(1)
-        .all()
-
-      if (state?.isPowered && state.targetTemperature != null) {
+      if (settings?.alwaysOn) {
         startKeepalive(side)
       }
     }
