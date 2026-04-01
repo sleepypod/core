@@ -148,13 +148,17 @@ export function FlowrateChart() {
 
           <div className="flex items-center gap-1 text-blue-400">
             <Droplets size={10} />
-            <span className="text-[9px] font-medium">Flow</span>
+            <span className="text-[9px] font-medium">{viewMode === 'flowrate' ? 'Flow' : 'RPM'}</span>
           </div>
           <div className="rounded-md bg-zinc-800/50 px-2 py-1 text-center text-[11px] font-medium tabular-nums text-zinc-200">
-            {frzHealth.left.flowrate !== null ? `${frzHealth.left.flowrate.toFixed(1)}` : '--'}
+            {viewMode === 'flowrate'
+              ? (frzHealth.left.flowrate !== null ? frzHealth.left.flowrate.toFixed(1) : '--')
+              : frzHealth.left.pumpRpm}
           </div>
           <div className="rounded-md bg-zinc-800/50 px-2 py-1 text-center text-[11px] font-medium tabular-nums text-zinc-200">
-            {frzHealth.right.flowrate !== null ? `${frzHealth.right.flowrate.toFixed(1)}` : '--'}
+            {viewMode === 'flowrate'
+              ? (frzHealth.right.flowrate !== null ? frzHealth.right.flowrate.toFixed(1) : '--')
+              : frzHealth.right.pumpRpm}
           </div>
         </div>
       )}

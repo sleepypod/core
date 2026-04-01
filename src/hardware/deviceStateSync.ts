@@ -33,6 +33,7 @@ export function getAlarmState(): { left: boolean, right: boolean } {
 const PUMP_FAILURE_RPM_MIN = 50 // pump "running" but below this = suspicious
 const FLOWRATE_NEAR_ZERO_CD = 5 // centidegrees — effectively zero flow
 const FLOWRATE_SUDDEN_CHANGE_CD = 500 // centidegrees — large delta between consecutive reads
+const ASYMMETRY_THRESHOLD_CD = 300 // centidegrees — left/right divergence threshold
 const ANOMALY_LOG_COOLDOWN_MS = 300_000 // 5 min between repeated warnings per type
 
 export class DeviceStateSync {
@@ -134,8 +135,8 @@ export class DeviceStateSync {
   /** Write flow/pump data to biometrics DB, rate-limited to once per 60s. */
   recordFlowData(frame: Record<string, unknown>): void {
     // Guard: only process frzHealth frames (could be piezo, capSense, bedTemp, etc.)
-    const left = (frame as Record<string, unknown>)?.left
-    const right = (frame as Record<string, unknown>)?.right
+    const left = frame.left
+    const right = frame.right
     if (
       !left || typeof left !== 'object' || !('pump' in left) || !('temps' in left)
       || !right || typeof right !== 'object' || !('pump' in right) || !('temps' in right)
@@ -189,18 +190,27 @@ export class DeviceStateSync {
     const leftFlowCd = frzHealth.left.temps?.flowrate != null ? Math.round(frzHealth.left.temps.flowrate * 100) : NaN
     const rightFlowCd = frzHealth.right.temps?.flowrate != null ? Math.round(frzHealth.right.temps.flowrate * 100) : NaN
 
+    // Pump running but flowrate missing — possible sensor fault
+    if (leftRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(leftFlowCd)) {
+      this.logAnomaly('left_flowrate_missing',
+        `Left pump running at ${leftRpm} RPM but flowrate unavailable`, now)
+    }
+    if (rightRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(rightFlowCd)) {
+      this.logAnomaly('right_flowrate_missing',
+        `Right pump running at ${rightRpm} RPM but flowrate unavailable`, now)
+    }
+
     // Pump running but no flow — possible pump failure or blockage
-    if (leftRpm >= PUMP_FAILURE_RPM_MIN && Math.abs(leftFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
+    if (leftRpm >= PUMP_FAILURE_RPM_MIN && !Number.isNaN(leftFlowCd) && Math.abs(leftFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
       this.logAnomaly('left_pump_no_flow',
         `Left pump running at ${leftRpm} RPM but flowrate near zero (${leftFlowCd} cd)`, now)
     }
-    if (rightRpm >= PUMP_FAILURE_RPM_MIN && Math.abs(rightFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
+    if (rightRpm >= PUMP_FAILURE_RPM_MIN && !Number.isNaN(rightFlowCd) && Math.abs(rightFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
       this.logAnomaly('right_pump_no_flow',
         `Right pump running at ${rightRpm} RPM but flowrate near zero (${rightFlowCd} cd)`, now)
     }
 
     // Asymmetric flowrate — possible partial blockage
-    const ASYMMETRY_THRESHOLD_CD = 300
     if (Math.abs(leftFlowCd - rightFlowCd) > ASYMMETRY_THRESHOLD_CD
       && Math.abs(leftFlowCd) > FLOWRATE_NEAR_ZERO_CD
       && Math.abs(rightFlowCd) > FLOWRATE_NEAR_ZERO_CD) {
