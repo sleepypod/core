@@ -142,6 +142,7 @@ function getLatestSleepRecord(side: Side) {
 async function powerOffSide(side: Side): Promise<void> {
   try {
     const client = getSharedHardwareClient()
+    await client.connect()
     await client.setPower(side, false)
 
     // Best-effort DB sync
@@ -155,7 +156,7 @@ async function powerOffSide(side: Side): Promise<void> {
       // next status poll will re-sync
     }
 
-    broadcastMutationStatus(side, { isPowered: false, targetLevel: 0 })
+    broadcastMutationStatus(side, { targetLevel: 0 })
     console.log(`[auto-off] Powered off ${side} side (no presence detected)`)
   }
   catch (error) {
