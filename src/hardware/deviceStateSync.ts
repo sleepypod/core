@@ -29,9 +29,19 @@ export function getAlarmState(): { left: boolean, right: boolean } {
   }
 }
 
+// ── Flow anomaly detection thresholds ──
+const PUMP_FAILURE_RPM_MIN = 50 // pump "running" but below this = suspicious
+const FLOWRATE_NEAR_ZERO_CD = 5 // centidegrees — effectively zero flow
+const FLOWRATE_SUDDEN_CHANGE_CD = 500 // centidegrees — large delta between consecutive reads
+const ASYMMETRY_THRESHOLD_CD = 300 // centidegrees — left/right divergence threshold
+const ANOMALY_LOG_COOLDOWN_MS = 300_000 // 5 min between repeated warnings per type
+
 export class DeviceStateSync {
   private lastWaterLevelWrite = 0
   private lastFlowWrite = 0
+  private lastAnomalyLog: Record<string, number> = {}
+  private prevFlowLeft: number | null = null
+  private prevFlowRight: number | null = null
 
   sync = async (status: DeviceStatus): Promise<void> => {
     this.recordWaterLevel(status)
@@ -123,11 +133,25 @@ export class DeviceStateSync {
   }
 
   /** Write flow/pump data to biometrics DB, rate-limited to once per 60s. */
-  recordFlowData(frzHealth: {
-    left: { pump: { rpm: number }, temps: { flowrate: number } }
-    right: { pump: { rpm: number }, temps: { flowrate: number } }
-  }): void {
+  recordFlowData(frame: Record<string, unknown>): void {
+    // Guard: only process frzHealth frames (could be piezo, capSense, bedTemp, etc.)
+    const left = frame.left
+    const right = frame.right
+    if (
+      !left || typeof left !== 'object' || !('pump' in left) || !('temps' in left)
+      || !right || typeof right !== 'object' || !('pump' in right) || !('temps' in right)
+    ) return
+
+    const frzHealth = frame as {
+      left: { pump: { rpm: number }, temps: { flowrate?: number } }
+      right: { pump: { rpm: number }, temps: { flowrate?: number } }
+    }
+
     const now = Date.now()
+
+    // Run anomaly checks on every frame (not rate-limited)
+    this.checkFlowAnomalies(frzHealth, now)
+
     if (now - this.lastFlowWrite < 60_000) return
 
     try {
@@ -135,8 +159,8 @@ export class DeviceStateSync {
         .insert(flowReadings)
         .values({
           timestamp: new Date(now),
-          leftFlowrateCd: Math.round(frzHealth.left.temps.flowrate * 100),
-          rightFlowrateCd: Math.round(frzHealth.right.temps.flowrate * 100),
+          leftFlowrateCd: frzHealth.left.temps?.flowrate != null ? Math.round(frzHealth.left.temps.flowrate * 100) : null,
+          rightFlowrateCd: frzHealth.right.temps?.flowrate != null ? Math.round(frzHealth.right.temps.flowrate * 100) : null,
           leftPumpRpm: frzHealth.left.pump.rpm,
           rightPumpRpm: frzHealth.right.pump.rpm,
         })
@@ -146,5 +170,71 @@ export class DeviceStateSync {
     catch (error) {
       console.error('DeviceStateSync: failed to write flow readings:', error instanceof Error ? error.message : error)
     }
+  }
+
+  /** Log an anomaly warning, rate-limited per anomaly type. */
+  private logAnomaly(type: string, message: string, now: number): void {
+    const lastLog = this.lastAnomalyLog[type] ?? 0
+    if (now - lastLog < ANOMALY_LOG_COOLDOWN_MS) return
+    console.warn(`[FlowAnomaly] ${type}: ${message}`)
+    this.lastAnomalyLog[type] = now
+  }
+
+  /** Check for flow/pump anomalies on each frzHealth frame. */
+  private checkFlowAnomalies(frzHealth: {
+    left: { pump: { rpm: number }, temps: { flowrate?: number } }
+    right: { pump: { rpm: number }, temps: { flowrate?: number } }
+  }, now: number): void {
+    const leftRpm = frzHealth.left.pump.rpm
+    const rightRpm = frzHealth.right.pump.rpm
+    const leftFlowCd = frzHealth.left.temps?.flowrate != null ? Math.round(frzHealth.left.temps.flowrate * 100) : NaN
+    const rightFlowCd = frzHealth.right.temps?.flowrate != null ? Math.round(frzHealth.right.temps.flowrate * 100) : NaN
+
+    // Pump running but flowrate missing — possible sensor fault
+    if (leftRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(leftFlowCd)) {
+      this.logAnomaly('left_flowrate_missing',
+        `Left pump running at ${leftRpm} RPM but flowrate unavailable`, now)
+    }
+    if (rightRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(rightFlowCd)) {
+      this.logAnomaly('right_flowrate_missing',
+        `Right pump running at ${rightRpm} RPM but flowrate unavailable`, now)
+    }
+
+    // Pump running but no flow — possible pump failure or blockage
+    if (leftRpm >= PUMP_FAILURE_RPM_MIN && !Number.isNaN(leftFlowCd) && Math.abs(leftFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
+      this.logAnomaly('left_pump_no_flow',
+        `Left pump running at ${leftRpm} RPM but flowrate near zero (${leftFlowCd} cd)`, now)
+    }
+    if (rightRpm >= PUMP_FAILURE_RPM_MIN && !Number.isNaN(rightFlowCd) && Math.abs(rightFlowCd) < FLOWRATE_NEAR_ZERO_CD) {
+      this.logAnomaly('right_pump_no_flow',
+        `Right pump running at ${rightRpm} RPM but flowrate near zero (${rightFlowCd} cd)`, now)
+    }
+
+    // Asymmetric flowrate — possible partial blockage
+    if (Math.abs(leftFlowCd - rightFlowCd) > ASYMMETRY_THRESHOLD_CD
+      && Math.abs(leftFlowCd) > FLOWRATE_NEAR_ZERO_CD
+      && Math.abs(rightFlowCd) > FLOWRATE_NEAR_ZERO_CD) {
+      this.logAnomaly('flow_asymmetry',
+        `Left/right flowrate diverged: ${leftFlowCd} vs ${rightFlowCd} cd`, now)
+    }
+
+    // Sudden large flowrate change — possible leak or sensor fault
+    if (this.prevFlowLeft !== null) {
+      const deltaLeft = Math.abs(leftFlowCd - this.prevFlowLeft)
+      if (deltaLeft > FLOWRATE_SUDDEN_CHANGE_CD) {
+        this.logAnomaly('left_flow_spike',
+          `Left flowrate sudden change: ${this.prevFlowLeft} -> ${leftFlowCd} cd (delta ${deltaLeft})`, now)
+      }
+    }
+    if (this.prevFlowRight !== null) {
+      const deltaRight = Math.abs(rightFlowCd - this.prevFlowRight)
+      if (deltaRight > FLOWRATE_SUDDEN_CHANGE_CD) {
+        this.logAnomaly('right_flow_spike',
+          `Right flowrate sudden change: ${this.prevFlowRight} -> ${rightFlowCd} cd (delta ${deltaRight})`, now)
+      }
+    }
+
+    this.prevFlowLeft = Number.isFinite(leftFlowCd) ? leftFlowCd : this.prevFlowLeft
+    this.prevFlowRight = Number.isFinite(rightFlowCd) ? rightFlowCd : this.prevFlowRight
   }
 }

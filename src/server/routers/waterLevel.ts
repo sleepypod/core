@@ -245,4 +245,29 @@ export const waterLevelRouter = router({
         })
       }
     }),
+
+  /**
+   * Get the most recent flow reading.
+   */
+  getLatestFlowReading: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/water-level/flow/latest', protect: false, tags: ['Water Level'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
+      try {
+        const [row] = await biometricsDb
+          .select()
+          .from(flowReadings)
+          .orderBy(desc(flowReadings.timestamp))
+          .limit(1)
+        return row || null
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch latest flow reading: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
 })
