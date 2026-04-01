@@ -311,19 +311,23 @@ export const settingsRouter = router({
     .output(z.any())
     .mutation(async ({ input }) => {
       try {
-        const [updated] = db
-          .update(sideSettings)
-          .set({ alwaysOn: input.alwaysOn, updatedAt: new Date() })
-          .where(eq(sideSettings.side, input.side))
-          .returning()
-          .all()
+        const updated = db.transaction((tx) => {
+          const [row] = tx
+            .update(sideSettings)
+            .set({ alwaysOn: input.alwaysOn, updatedAt: new Date() })
+            .where(eq(sideSettings.side, input.side))
+            .returning()
+            .all()
 
-        if (!updated) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Side settings for ${input.side} not found`,
-          })
-        }
+          if (!row) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Side settings for ${input.side} not found`,
+            })
+          }
+
+          return row
+        })
 
         if (input.alwaysOn) {
           startKeepalive(input.side)
