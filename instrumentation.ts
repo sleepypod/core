@@ -20,6 +20,7 @@ import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
 import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
 import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
+import { initializeKeepalives, shutdownKeepalives } from '@/src/services/temperatureKeepalive'
 
 let isInitialized = false
 let isShuttingDown = false
@@ -41,6 +42,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
     process.exit(1)
   }, 10_000)
   forceExitTimer.unref()
+
+  // Step 0: Stop keepalive timers
+  try {
+    shutdownKeepalives()
+  }
+  catch (error) {
+    console.error('Error shutting down keepalives:', error)
+  }
 
   // Step 1: Shutdown scheduler (waits for in-flight jobs internally)
   try {
@@ -251,6 +260,9 @@ export async function initializeScheduler(): Promise<void> {
 
     // Start DAC monitor (non-blocking — waits for frankenfirmware to connect)
     initializeDacMonitor()
+
+    // Initialize temperature keepalive timers for sides with alwaysOn enabled
+    initializeKeepalives()
 
     // Start piezo WebSocket stream server (non-blocking)
     try {

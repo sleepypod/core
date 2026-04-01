@@ -68,7 +68,13 @@ export class DeviceStateSync {
   private upsertSide = async (side: 'left' | 'right', status: DeviceStatus): Promise<void> => {
     const sideStatus = side === 'left' ? status.leftSide : status.rightSide
     const now = new Date()
-    const isNowPowered = sideStatus.currentLevel !== 0
+
+    // Stale display fix: if firmware reports targetLevel=0 AND heatingDuration=0,
+    // the pod has returned to neutral after its duration expired. Force isPowered
+    // to false regardless of currentLevel (which may still be non-zero while the
+    // water temperature equalizes back to ambient).
+    const durationExpired = sideStatus.targetLevel === 0 && sideStatus.heatingDuration === 0
+    const isNowPowered = durationExpired ? false : sideStatus.currentLevel !== 0
 
     db.transaction((tx) => {
       const [prev] = tx
@@ -88,12 +94,16 @@ export class DeviceStateSync {
         poweredOnAt = null
       }
 
+      // When duration has expired, clear the target temperature so the UI
+      // doesn't show a stale "warming to X°F" when the pod is actually neutral.
+      const targetTemp = durationExpired ? null : sideStatus.targetTemperature
+
       tx
         .insert(deviceState)
         .values({
           side,
           currentTemperature: sideStatus.currentTemperature,
-          targetTemperature: sideStatus.targetTemperature,
+          targetTemperature: targetTemp,
           isPowered: isNowPowered,
           waterLevel: status.waterLevel,
           poweredOnAt,
@@ -103,7 +113,7 @@ export class DeviceStateSync {
           target: deviceState.side,
           set: {
             currentTemperature: sideStatus.currentTemperature,
-            targetTemperature: sideStatus.targetTemperature,
+            targetTemperature: targetTemp,
             isPowered: isNowPowered,
             waterLevel: status.waterLevel,
             poweredOnAt,

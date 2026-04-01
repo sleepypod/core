@@ -12,6 +12,7 @@ import {
   timeStringSchema,
 } from '@/src/server/validation-schemas'
 import { getJobManager } from '@/src/scheduler'
+import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
 
 /**
  * Reload schedules in the job manager after settings changes
@@ -68,8 +69,8 @@ export const settingsRouter = router({
             updatedAt: new Date(),
           },
           sides: {
-            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
-            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
+            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', alwaysOn: false, awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
+            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', alwaysOn: false, awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
           },
           gestures: {
             left: gestures.filter(g => g.side === 'left'),
@@ -195,6 +196,7 @@ export const settingsRouter = router({
         .object({
           side: sideSchema,
           name: z.string().min(1).max(20).optional(),
+          alwaysOn: z.boolean().optional(),
           awayMode: z.boolean().optional(),
           autoOffEnabled: z.boolean().optional(),
           autoOffMinutes: z.number().int().min(5).max(120).optional(),
@@ -268,6 +270,16 @@ export const settingsRouter = router({
           }
         }
 
+        // Start/stop keepalive if alwaysOn changed
+        if ('alwaysOn' in input) {
+          if (input.alwaysOn) {
+            startKeepalive(input.side)
+          }
+          else {
+            stopKeepalive(input.side)
+          }
+        }
+
         return updated
       }
       catch (error) {
@@ -276,6 +288,62 @@ export const settingsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to update side settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Set alwaysOn mode for a side.
+   * When enabled, the keepalive service periodically re-sends the current
+   * target temperature to prevent the firmware's 8-hour duration timeout.
+   */
+  setAlwaysOn: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/settings/always-on', protect: false, tags: ['Settings'] } })
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          alwaysOn: z.boolean(),
+        })
+        .strict()
+    )
+    .output(z.any())
+    .mutation(async ({ input }) => {
+      try {
+        const updated = db.transaction((tx) => {
+          const [row] = tx
+            .update(sideSettings)
+            .set({ alwaysOn: input.alwaysOn, updatedAt: new Date() })
+            .where(eq(sideSettings.side, input.side))
+            .returning()
+            .all()
+
+          if (!row) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Side settings for ${input.side} not found`,
+            })
+          }
+
+          return row
+        })
+
+        if (input.alwaysOn) {
+          startKeepalive(input.side)
+        }
+        else {
+          stopKeepalive(input.side)
+        }
+
+        return updated
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to set alwaysOn: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }
