@@ -44,6 +44,7 @@ const KEYS = {
   client: '__sp_hw_client__',
   monitor: '__sp_dac_monitor__',
   gesture: '__sp_gesture_handler__',
+  unsubFlow: '__sp_unsub_flow__',
 } as const
 
 const g = globalThis as Record<string, unknown>
@@ -245,6 +246,13 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
         }).catch(() => { /* WS server may not be started yet */ })
       })
 
+      // Subscribe to frzHealth frames from the sensor stream to record flow data
+      import('../streaming/piezoStream').then(({ onServerFrame }) => {
+        g[KEYS.unsubFlow] = onServerFrame((frame) => {
+          stateSync.recordFlowData(frame as Record<string, unknown>)
+        })
+      }).catch(() => { /* WS server may not be started yet */ })
+
       g[KEYS.monitor] = monitor
       g[KEYS.gesture] = gestureHandler
 
@@ -284,10 +292,14 @@ export const shutdownDacMonitor = async (): Promise<void> => {
   cancelSnooze('right')
   resetPrimingState()
 
+  const unsubFlow = g[KEYS.unsubFlow] as (() => void) | undefined
+  unsubFlow?.()
+
   g[KEYS.monitor] = null
   g[KEYS.gesture] = null
   g[KEYS.client] = null
   g[KEYS.server] = null
+  g[KEYS.unsubFlow] = null
   monitorInitPromise = null
 
   gestureHandler?.cleanup()

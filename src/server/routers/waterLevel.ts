@@ -2,8 +2,8 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
-import { waterLevelReadings, waterLevelAlerts } from '@/src/db/biometrics-schema'
-import { eq, and, gte, lte, desc, isNull, count } from 'drizzle-orm'
+import { waterLevelReadings, waterLevelAlerts, flowReadings } from '@/src/db/biometrics-schema'
+import { eq, and, gte, gt, lte, desc, isNull, count } from 'drizzle-orm'
 import { idSchema, validateDateRange } from '@/src/server/validation-schemas'
 
 export const waterLevelRouter = router({
@@ -213,6 +213,59 @@ export const waterLevelRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to dismiss alert: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Get historical flow rate and pump RPM readings.
+   */
+  getFlowReadings: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/water-level/flow', protect: false, tags: ['Water Level'] } })
+    .input(z.object({
+      hours: z.number().int().min(1).max(168).default(24),
+    }).strict())
+    .output(z.any())
+    .query(async ({ input }) => {
+      try {
+        const since = new Date(Date.now() - input.hours * 60 * 60 * 1000)
+        return await biometricsDb
+          .select()
+          .from(flowReadings)
+          .where(gt(flowReadings.timestamp, since))
+          .orderBy(flowReadings.timestamp)
+          .limit(10080)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch flow readings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Get the most recent flow reading.
+   */
+  getLatestFlowReading: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/water-level/flow/latest', protect: false, tags: ['Water Level'] } })
+    .input(z.object({}))
+    .output(z.any())
+    .query(async () => {
+      try {
+        const [row] = await biometricsDb
+          .select()
+          .from(flowReadings)
+          .orderBy(desc(flowReadings.timestamp))
+          .limit(1)
+        return row || null
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch latest flow reading: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

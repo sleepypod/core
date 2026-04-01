@@ -5,19 +5,25 @@ import { db } from '@/src/db'
 import { deviceSettings, sideSettings, tapGestures } from '@/src/db/schema'
 import { eq, and } from 'drizzle-orm'
 import {
+  isoDatetimeSchema,
   sideSchema,
   tapTypeSchema,
   temperatureUnitSchema,
   timeStringSchema,
 } from '@/src/server/validation-schemas'
 import { getJobManager } from '@/src/scheduler'
+import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
 
 /**
  * Reload schedules in the job manager after settings changes
  * that affect scheduling (timezone, priming, reboot)
  */
 async function reloadSchedulerIfNeeded(input: Record<string, unknown>): Promise<void> {
-  const schedulingKeys = ['timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime']
+  const schedulingKeys = [
+    'timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime',
+    'ledNightModeEnabled', 'ledDayBrightness', 'ledNightBrightness',
+    'ledNightStartTime', 'ledNightEndTime',
+  ]
   const hasSchedulingChanges = schedulingKeys.some(key => key in input)
 
   if (hasSchedulingChanges) {
@@ -63,8 +69,8 @@ export const settingsRouter = router({
             updatedAt: new Date(),
           },
           sides: {
-            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', awayMode: false, createdAt: new Date(), updatedAt: new Date() },
-            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', awayMode: false, createdAt: new Date(), updatedAt: new Date() },
+            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', alwaysOn: false, awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
+            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', alwaysOn: false, awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
           },
           gestures: {
             left: gestures.filter(g => g.side === 'left'),
@@ -95,6 +101,11 @@ export const settingsRouter = router({
           rebootTime: timeStringSchema.optional(),
           primePodDaily: z.boolean().optional(),
           primePodTime: timeStringSchema.optional(),
+          ledNightModeEnabled: z.boolean().optional(),
+          ledDayBrightness: z.number().int().min(0).max(100).optional(),
+          ledNightBrightness: z.number().int().min(0).max(100).optional(),
+          ledNightStartTime: timeStringSchema.optional(),
+          ledNightEndTime: timeStringSchema.optional(),
         })
         .strict()
     )
@@ -185,7 +196,12 @@ export const settingsRouter = router({
         .object({
           side: sideSchema,
           name: z.string().min(1).max(20).optional(),
+          alwaysOn: z.boolean().optional(),
           awayMode: z.boolean().optional(),
+          autoOffEnabled: z.boolean().optional(),
+          autoOffMinutes: z.number().int().min(5).max(120).optional(),
+          awayStart: isoDatetimeSchema.nullable().optional(),
+          awayReturn: isoDatetimeSchema.nullable().optional(),
         })
         .strict()
     )
@@ -194,21 +210,74 @@ export const settingsRouter = router({
       try {
         const { side, ...updates } = input
 
-        const [updated] = await db
-          .update(sideSettings)
-          .set({
-            ...updates,
-            updatedAt: new Date(),
-          })
-          .where(eq(sideSettings.side, side))
-          .returning()
-          .all()
+        const updated = db.transaction((tx) => {
+          // Read current row to merge away window for validation
+          const [current] = tx
+            .select()
+            .from(sideSettings)
+            .where(eq(sideSettings.side, side))
+            .limit(1)
+            .all()
 
-        if (!updated) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Side settings for ${side} not found`,
-          })
+          if (!current) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Side settings for ${side} not found`,
+            })
+          }
+
+          // Validate merged away window — reject reversed ranges
+          if ('awayStart' in updates || 'awayReturn' in updates) {
+            const finalStart = updates.awayStart !== undefined ? updates.awayStart : current.awayStart
+            const finalReturn = updates.awayReturn !== undefined ? updates.awayReturn : current.awayReturn
+
+            if (finalStart && finalReturn && new Date(finalReturn) < new Date(finalStart)) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'awayReturn must not be before awayStart',
+              })
+            }
+          }
+
+          const [result] = tx
+            .update(sideSettings)
+            .set({
+              ...updates,
+              updatedAt: new Date(),
+            })
+            .where(eq(sideSettings.side, side))
+            .returning()
+            .all()
+
+          if (!result) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Side settings for ${side} not found`,
+            })
+          }
+
+          return result
+        })
+
+        // Reload scheduler if away mode scheduling changed
+        if ('awayStart' in input || 'awayReturn' in input) {
+          try {
+            const jobManager = await getJobManager()
+            await jobManager.reloadSchedules()
+          }
+          catch (e) {
+            console.error('Scheduler reload failed:', e)
+          }
+        }
+
+        // Start/stop keepalive if alwaysOn changed
+        if ('alwaysOn' in input) {
+          if (input.alwaysOn) {
+            startKeepalive(input.side)
+          }
+          else {
+            stopKeepalive(input.side)
+          }
         }
 
         return updated
@@ -219,6 +288,62 @@ export const settingsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to update side settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Set alwaysOn mode for a side.
+   * When enabled, the keepalive service periodically re-sends the current
+   * target temperature to prevent the firmware's 8-hour duration timeout.
+   */
+  setAlwaysOn: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/settings/always-on', protect: false, tags: ['Settings'] } })
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          alwaysOn: z.boolean(),
+        })
+        .strict()
+    )
+    .output(z.any())
+    .mutation(async ({ input }) => {
+      try {
+        const updated = db.transaction((tx) => {
+          const [row] = tx
+            .update(sideSettings)
+            .set({ alwaysOn: input.alwaysOn, updatedAt: new Date() })
+            .where(eq(sideSettings.side, input.side))
+            .returning()
+            .all()
+
+          if (!row) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Side settings for ${input.side} not found`,
+            })
+          }
+
+          return row
+        })
+
+        if (input.alwaysOn) {
+          startKeepalive(input.side)
+        }
+        else {
+          stopKeepalive(input.side)
+        }
+
+        return updated
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to set alwaysOn: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }
@@ -257,59 +382,63 @@ export const settingsRouter = router({
     )
     .mutation(async ({ input }) => {
       try {
-        // Check if gesture already exists
-        const existing = await db
-          .select()
-          .from(tapGestures)
-          .where(
-            and(
-              eq(tapGestures.side, input.side),
-              eq(tapGestures.tapType, input.tapType)
+        const result = db.transaction((tx) => {
+          // Check if gesture already exists
+          const existing = tx
+            .select()
+            .from(tapGestures)
+            .where(
+              and(
+                eq(tapGestures.side, input.side),
+                eq(tapGestures.tapType, input.tapType)
+              )
             )
-          )
-          .limit(1)
-          .all()
-
-        if (existing.length > 0) {
-          // Update existing
-          const [updated] = await db
-            .update(tapGestures)
-            .set({
-              ...input,
-              updatedAt: new Date(),
-            })
-            .where(eq(tapGestures.id, existing[0].id))
-            .returning()
+            .limit(1)
             .all()
 
-          if (!updated) {
-            throw new TRPCError({
-              code: 'INTERNAL_SERVER_ERROR',
-              message: 'Failed to update gesture - no record returned',
-            })
+          if (existing.length > 0) {
+            // Update existing
+            const [updated] = tx
+              .update(tapGestures)
+              .set({
+                ...input,
+                updatedAt: new Date(),
+              })
+              .where(eq(tapGestures.id, existing[0].id))
+              .returning()
+              .all()
+
+            if (!updated) {
+              throw new TRPCError({
+                code: 'INTERNAL_SERVER_ERROR',
+                message: 'Failed to update gesture - no record returned',
+              })
+            }
+
+            return updated
           }
+          else {
+            // Create new
+            const [created] = tx
+              .insert(tapGestures)
+              .values({
+                ...input,
+              })
+              .returning()
+              .all()
 
-          return updated
-        }
-        else {
-          // Create new
-          const [created] = await db
-            .insert(tapGestures)
-            .values({
-              ...input,
-            })
-            .returning()
-            .all()
+            if (!created) {
+              throw new TRPCError({
+                code: 'INTERNAL_SERVER_ERROR',
+                message: 'Failed to create gesture - no record returned',
+              })
+            }
 
-          if (!created) {
-            throw new TRPCError({
-              code: 'INTERNAL_SERVER_ERROR',
-              message: 'Failed to create gesture - no record returned',
-            })
+            return created
           }
+        })
 
-          return created
-        }
+        return result
       }
       catch (error) {
         if (error instanceof TRPCError) throw error
@@ -338,23 +467,25 @@ export const settingsRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        const [deleted] = await db
-          .delete(tapGestures)
-          .where(
-            and(
-              eq(tapGestures.side, input.side),
-              eq(tapGestures.tapType, input.tapType)
+        db.transaction((tx) => {
+          const [deleted] = tx
+            .delete(tapGestures)
+            .where(
+              and(
+                eq(tapGestures.side, input.side),
+                eq(tapGestures.tapType, input.tapType)
+              )
             )
-          )
-          .returning()
-          .all()
+            .returning()
+            .all()
 
-        if (!deleted) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Gesture for ${input.side} ${input.tapType} not found`,
-          })
-        }
+          if (!deleted) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Gesture for ${input.side} ${input.tapType} not found`,
+            })
+          }
+        })
 
         return { success: true }
       }

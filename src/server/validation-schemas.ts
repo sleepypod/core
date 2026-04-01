@@ -81,18 +81,11 @@ export const temperatureUnitSchema = z.enum(['F', 'C'])
 export const tapTypeSchema = z.enum(['doubleTap', 'tripleTap', 'quadTap'])
 
 /**
- * Helper to validate time range (onTime < offTime)
- * Returns true if onTime is before offTime
+ * ISO 8601 datetime string validation
  */
-export function validateTimeRange(onTime: string, offTime: string): boolean {
-  const [onHour, onMin] = onTime.split(':').map(Number)
-  const [offHour, offMin] = offTime.split(':').map(Number)
-
-  const onMinutes = onHour * 60 + onMin
-  const offMinutes = offHour * 60 + offMin
-
-  return onMinutes < offMinutes
-}
+export const isoDatetimeSchema = z
+  .string()
+  .datetime({ offset: true, message: 'Must be a valid ISO 8601 datetime string' })
 
 /**
  * Helper to validate date range (startDate <= endDate)
