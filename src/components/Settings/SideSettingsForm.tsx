@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { User, Plane, Timer } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Toggle } from './Toggle'
@@ -24,15 +24,19 @@ const AUTO_OFF_DURATION_OPTIONS = [5, 10, 15, 30, 45, 60, 90, 120] as const
  * Per-side settings: name, away mode, and auto-off for a single side.
  */
 export function SideSettingsForm({ side, sideData }: SideSettingsFormProps) {
+  const d = sideData ?? {
+    side,
+    name: side === 'left' ? 'Left' : 'Right',
+    awayMode: false,
+    autoOffEnabled: false,
+    autoOffMinutes: 30,
+  }
+
+  // key forces remount when server data changes, replacing the useEffect sync pattern
   return (
     <SideCard
-      data={sideData ?? {
-        side,
-        name: side === 'left' ? 'Left' : 'Right',
-        awayMode: false,
-        autoOffEnabled: false,
-        autoOffMinutes: 30,
-      }}
+      key={`${d.name}-${d.awayMode}-${d.autoOffEnabled}-${d.autoOffMinutes}`}
+      data={d}
     />
   )
 }
@@ -43,14 +47,6 @@ function SideCard({ data }: { data: SideData }) {
   const [awayMode, setAwayMode] = useState(data.awayMode)
   const [autoOffEnabled, setAutoOffEnabled] = useState(data.autoOffEnabled)
   const [autoOffMinutes, setAutoOffMinutes] = useState(data.autoOffMinutes)
-
-  // Sync from server
-  useEffect(() => {
-    setName(data.name)
-    setAwayMode(data.awayMode)
-    setAutoOffEnabled(data.autoOffEnabled)
-    setAutoOffMinutes(data.autoOffMinutes)
-  }, [data.name, data.awayMode, data.autoOffEnabled, data.autoOffMinutes])
 
   const mutation = trpc.settings.updateSide.useMutation({
     onSuccess: () => utils.settings.getAll.invalidate(),

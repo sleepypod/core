@@ -96,7 +96,7 @@ function hasActiveRunOnce(side: Side): boolean {
 }
 
 /** Read auto-off config for both sides. */
-function getAutoOffConfig(): Record<Side, { enabled: boolean; minutes: number }> {
+function getAutoOffConfig(): Record<Side, { enabled: boolean, minutes: number }> {
   const defaults = { enabled: false, minutes: 30 }
   try {
     const rows = db.select().from(sideSettings).all()
@@ -180,7 +180,7 @@ async function powerOffSide(side: Side): Promise<void> {
  * long ago and the side is still powered, we assume they are in bed
  * (the session hasn't closed yet).
  */
-function evaluateSide(side: Side, config: Record<Side, { enabled: boolean; minutes: number }>): void {
+function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minutes: number }>): void {
   const cfg = config[side]
 
   // Feature disabled for this side
