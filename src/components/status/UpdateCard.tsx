@@ -35,12 +35,18 @@ export function UpdateCard() {
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancelledRef = useRef(false)
 
-  // Clean up poll timer on unmount
+  // Clean up poll timer on unmount and re-block internet if needed
   useEffect(() => {
     return () => {
       cancelledRef.current = true
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+      // Fire-and-forget re-block if we unblocked internet and the user navigates away
+      if (didUnblockRef.current) {
+        didUnblockRef.current = false
+        setInternetAccess.mutate({ blocked: true })
+      }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup-only ref, stable mutation object
   }, [])
 
   const versionData = version.data
