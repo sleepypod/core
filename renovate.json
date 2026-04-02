@@ -5,6 +5,7 @@
   ],
   "automerge": true,
   "automergeType": "branch",
+  "minimumReleaseAge": "3 days",
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
