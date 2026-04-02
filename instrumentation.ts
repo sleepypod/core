@@ -76,9 +76,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error stopping Bonjour:', error)
   }
 
-  // Step 4: Stop auto-off watcher
+  // Step 4: Stop auto-off watcher (await in-flight power-off calls)
   try {
-    stopAutoOffWatcher()
+    await stopAutoOffWatcher()
   }
   catch (error) {
     console.error('Error stopping auto-off watcher:', error)

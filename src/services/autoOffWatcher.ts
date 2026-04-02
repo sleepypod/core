@@ -44,6 +44,9 @@ const timers: Record<Side, SideTimer> = {
 
 let pollHandle: ReturnType<typeof setInterval> | null = null
 
+/** Track in-flight powerOffSide() calls so shutdown can await them. */
+const pendingPowerOffs = new Set<Promise<void>>()
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -138,6 +141,25 @@ function getLatestSleepRecord(side: Side) {
   }
 }
 
+/**
+ * Check whether the user is currently in bed by comparing enteredBedAt
+ * and leftBedAt from the latest sleep record. If `enteredBedAt > leftBedAt`,
+ * a new session started after the last exit — the user is back in bed.
+ */
+function isUserInBed(side: Side): boolean {
+  const record = getLatestSleepRecord(side)
+  if (!record) return false
+
+  const enteredMs = record.enteredBedAt instanceof Date
+    ? record.enteredBedAt.getTime()
+    : (record.enteredBedAt as number) * 1000
+  const leftMs = record.leftBedAt instanceof Date
+    ? record.leftBedAt.getTime()
+    : (record.leftBedAt as number) * 1000
+
+  return enteredMs > leftMs
+}
+
 /** Power off a side via the shared hardware client. */
 async function powerOffSide(side: Side): Promise<void> {
   try {
@@ -165,6 +187,16 @@ async function powerOffSide(side: Side): Promise<void> {
       error instanceof Error ? error.message : error,
     )
   }
+}
+
+/**
+ * Fire powerOffSide and track the promise so shutdown can await it.
+ */
+function firePowerOff(side: Side): void {
+  const p = powerOffSide(side).finally(() => {
+    pendingPowerOffs.delete(p)
+  })
+  pendingPowerOffs.add(p)
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +241,13 @@ function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minut
     return
   }
 
+  // Fix 1: Don't arm if the user has returned to bed
+  // (enteredBedAt > leftBedAt means a new session started after the exit)
+  if (isUserInBed(side)) {
+    clearSideTimer(side)
+    return
+  }
+
   const leftBedAtMs = record.leftBedAt instanceof Date
     ? record.leftBedAt.getTime()
     : (record.leftBedAt as number) * 1000
@@ -228,8 +267,27 @@ function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minut
   // Heuristic: if leftBedAt is older than the timeout, the timer should have
   // already fired. If the side is still on, either it was manually turned on
   // or a new session is in progress -- don't start a new timer.
+  // Fix 5: Add grace window for server restarts during countdown.
+  // If msSinceBedExit is within timeoutMs + 2 * POLL_INTERVAL_MS, the timer
+  // may have been lost during a restart — fire immediately rather than skip.
+  const graceMs = timeoutMs + 2 * POLL_INTERVAL_MS
+  if (msSinceBedExit > graceMs) {
+    clearSideTimer(side)
+    return
+  }
+
+  // Fix 5: If past the timeout but within the grace window, fire immediately
   if (msSinceBedExit > timeoutMs) {
     clearSideTimer(side)
+    // Re-check conditions before actually powering off
+    if (!isSidePowered(side)) return
+    if (hasActiveRunOnce(side)) return
+    if (isUserInBed(side)) return
+    const freshConfig = getAutoOffConfig()
+    if (!freshConfig[side].enabled) return
+
+    console.log(`[auto-off] ${side}: bed exit was ${Math.round(msSinceBedExit / 1000)}s ago (within grace window), firing immediately`)
+    firePowerOff(side)
     return
   }
 
@@ -270,7 +328,13 @@ function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minut
         if (latestLeftBedMs !== leftBedAtMs) return // newer event; evaluateSide will re-arm
       }
 
-      powerOffSide(side)
+      // Fix 1: Check live presence before firing — user may have returned
+      if (isUserInBed(side)) {
+        console.log(`[auto-off] ${side}: user returned to bed, skipping power-off`)
+        return
+      }
+
+      firePowerOff(side)
     }, remainingMs),
     startedAt: leftBedAtMs,
     timeoutMs,
@@ -304,14 +368,21 @@ export function startAutoOffWatcher(): void {
   pollHandle = setInterval(poll, POLL_INTERVAL_MS)
 }
 
-/** Stop the watcher and clear all pending timers. */
-export function stopAutoOffWatcher(): void {
+/** Stop the watcher, clear all pending timers, and await in-flight power-offs. */
+export async function stopAutoOffWatcher(): Promise<void> {
   if (pollHandle) {
     clearInterval(pollHandle)
     pollHandle = null
   }
   clearSideTimer('left')
   clearSideTimer('right')
+
+  // Await any in-flight powerOffSide() calls
+  if (pendingPowerOffs.size > 0) {
+    console.log(`[auto-off] Waiting for ${pendingPowerOffs.size} in-flight power-off(s)...`)
+    await Promise.allSettled([...pendingPowerOffs])
+  }
+
   console.log('[auto-off] Watcher stopped')
 }
 
@@ -320,7 +391,22 @@ export function stopAutoOffWatcher(): void {
  * Called when autoOffEnabled or autoOffMinutes is updated via the API.
  */
 export function restartAutoOffTimers(): void {
+  // Fix 3: Don't poll if watcher is not running (e.g. in CI)
+  if (!pollHandle) return
+
   clearSideTimer('left')
   clearSideTimer('right')
   poll()
+}
+
+/**
+ * Cancel the auto-off timer for a specific side without re-evaluating.
+ * Called when a scheduled power-on fires — the side is being turned on
+ * intentionally, so any pending auto-off countdown should be aborted.
+ */
+export function cancelAutoOffTimer(side: Side): void {
+  if (timers[side].timer) {
+    console.log(`[auto-off] ${side}: timer cancelled (scheduled power-on)`)
+    clearSideTimer(side)
+  }
 }
