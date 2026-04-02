@@ -14,8 +14,6 @@ import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 import {
   Server,
   Cpu,
-  Calendar,
-  Activity,
   RefreshCw,
   Radio,
   Cog,

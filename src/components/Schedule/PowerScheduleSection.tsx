@@ -50,11 +50,14 @@ export function PowerScheduleSection({ schedules, selectedDay, isLoading }: Powe
   // Keying on schedule?.id ensures state resets when switching sides/days.
   useEffect(() => {
     if (schedule) setLocalTemp(schedule.onTemperature)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule?.id, schedule?.onTemperature])
 
   // Clean up debounce timer on unmount
   useEffect(() => {
-    return () => { clearTimeout(tempCommitRef.current) }
+    return () => {
+      clearTimeout(tempCommitRef.current)
+    }
   }, [])
 
   const createMutation = trpc.schedules.createPowerSchedule.useMutation({

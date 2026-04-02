@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSensorStream, useSensorFrame } from './useSensorStream'
 import type { DeviceStatusFrame } from './useSensorStream'
@@ -22,16 +22,15 @@ export function useDeviceStatus() {
   // This only re-renders when a deviceStatus frame arrives (per-sensor listener)
   const wsFrame = useSensorFrame('deviceStatus') as DeviceStatusFrame | undefined
 
-  // Once we've received a WS frame, stop HTTP polling. Use a ref so the
-  // value is sticky (doesn't flip back to false between frames).
-  const hasReceivedWs = useRef(false)
-  if (wsFrame != null) hasReceivedWs.current = true
+  // Once we've received a WS frame, stop HTTP polling.
+  // wsFrame is non-null iff we've received WS data.
+  const hasReceivedWs = wsFrame != null
 
   // HTTP fallback — poll only until the first WS frame arrives
   const { data: httpStatus, isLoading, refetch } = trpc.device.getStatus.useQuery(
     {},
     {
-      refetchInterval: hasReceivedWs.current ? false : 7_000,
+      refetchInterval: hasReceivedWs ? false : 7_000,
       staleTime: 3_000,
     },
   )
@@ -45,7 +44,7 @@ export function useDeviceStatus() {
   }
 
   // Merge: prefer WS frame (fresher, ~2s cadence) over HTTP
-  const status = hasReceivedWs.current && wsFrame
+  const status = hasReceivedWs && wsFrame
     ? {
         leftSide: wsFrame.leftSide,
         rightSide: wsFrame.rightSide,
@@ -65,9 +64,9 @@ export function useDeviceStatus() {
 
   return {
     status,
-    isLoading: !hasReceivedWs.current && isLoading,
+    isLoading: !hasReceivedWs && isLoading,
     refetch: refetchStatus,
     /** Whether device status is being received via WebSocket */
-    isStreaming: hasReceivedWs.current,
+    isStreaming: hasReceivedWs,
   }
 }

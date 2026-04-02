@@ -3,6 +3,7 @@
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
 import type { DayOfWeek } from './DaySelector'
+import type { PowerSchedule, AlarmSchedule } from '@/src/hooks/useSchedules'
 import { AlarmClock, Power, Zap } from 'lucide-react'
 import clsx from 'clsx'
 import { TemperatureSetPoints } from './TemperatureSetPoints'
@@ -56,7 +57,7 @@ export function ScheduleOverview({ selectedDay }: ScheduleOverviewProps) {
   return (
     <div className="space-y-3">
       {/* Power Schedules */}
-      {power.map((ps: any) => (
+      {power.map((ps: PowerSchedule) => (
         <PowerScheduleCard key={ps.id} schedule={ps} />
       ))}
 
@@ -64,14 +65,14 @@ export function ScheduleOverview({ selectedDay }: ScheduleOverviewProps) {
       <TemperatureSetPoints selectedDay={selectedDay} />
 
       {/* Alarm Schedules */}
-      {alarm.map((as: any) => (
+      {alarm.map((as: AlarmSchedule) => (
         <AlarmScheduleCard key={as.id} schedule={as} />
       ))}
     </div>
   )
 }
 
-function PowerScheduleCard({ schedule }: { schedule: any }) {
+function PowerScheduleCard({ schedule }: { schedule: PowerSchedule }) {
   return (
     <div
       className={clsx(
@@ -119,7 +120,7 @@ function PowerScheduleCard({ schedule }: { schedule: any }) {
   )
 }
 
-function AlarmScheduleCard({ schedule }: { schedule: any }) {
+function AlarmScheduleCard({ schedule }: { schedule: AlarmSchedule }) {
   return (
     <div
       className={clsx(

@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { Plane, Settings } from 'lucide-react'
 import { useSide } from '@/src/providers/SideProvider'
 import { useSideNames } from '@/src/hooks/useSideNames'
@@ -29,13 +30,13 @@ export const Header = () => {
           </span>
         )}
       </div>
-      <a
+      <Link
         href="/en/settings"
         className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition-colors active:bg-zinc-800"
         aria-label="Settings"
       >
         <Settings size={18} />
-      </a>
+      </Link>
     </header>
   )
 }

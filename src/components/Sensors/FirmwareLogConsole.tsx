@@ -127,7 +127,10 @@ export function FirmwareLogConsole() {
 
   const handleClear = () => {
     if (mode === 'logs') setLogs([])
-    else { framesRef.current = []; setFrames([]) }
+    else {
+      framesRef.current = []
+      setFrames([])
+    }
   }
 
   const handleModeSwitch = (m: ViewMode) => {
@@ -232,6 +235,7 @@ export function FirmwareLogConsole() {
                 : (
                     filteredFrames.map((entry, i) => {
                       const isExpanded = expandedIdx === i
+                      // eslint-disable-next-line react-hooks/purity
                       const age = ((Date.now() - entry.ts) / 1000).toFixed(1)
                       return (
                         <div key={`${entry.ts}-${i}`}>

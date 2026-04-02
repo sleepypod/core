@@ -13,19 +13,11 @@
 import type {
   CoolingIntensity,
   CurvePoint,
-  PhaseOffsets,
   PhaseRatios,
   ScheduleTemperatures,
 } from './types'
 
 const BASE_TEMP_F = 80
-
-/** Phase offsets per intensity (relative to 80°F base) */
-const INTENSITY_OFFSETS: Record<CoolingIntensity, PhaseOffsets> = {
-  cool: { warmUp: 1, fallAsleep: -6, deepSleep: -8, maintain: -6, preWake: 2 },
-  balanced: { warmUp: 2, fallAsleep: -4, deepSleep: -6, maintain: -4, preWake: 4 },
-  warm: { warmUp: 3, fallAsleep: -2, deepSleep: -4, maintain: -2, preWake: 6 },
-}
 
 /** Ratios: how much of available range each transition phase uses */
 const INTENSITY_RATIOS: Record<CoolingIntensity, PhaseRatios> = {

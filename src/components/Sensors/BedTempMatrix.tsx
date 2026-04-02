@@ -63,11 +63,6 @@ interface CapVariance {
   right: number[]
 }
 
-// Zone 0=Head (ch 0,1), Zone 1=Torso (ch 2,3), Zone 2=Legs (ch 4,5)
-function zoneVariance(channelVariances: number[], zone: number): number {
-  return Math.max(channelVariances[zone * 2] ?? 0, channelVariances[zone * 2 + 1] ?? 0)
-}
-
 // --- Cell components ---
 
 const ZONE_LABELS = ['Head', 'Torso', 'Legs'] as const
@@ -76,59 +71,6 @@ const ZONE_ICONS = [
   <PersonStanding key="torso" size={9} />,
   <Footprints key="legs" size={9} />,
 ]
-
-interface TempCellFormattedProps {
-  display: string
-  colorClass: string
-  label: string
-  zone: string
-  capRaw?: number | null
-  capVariance?: number
-}
-
-/** Pre-formatted temp cell — shows temp (bold), cap raw (dim), variance (tiny). */
-function TempCellFormatted({ display, colorClass, label, zone, capRaw, capVariance }: TempCellFormattedProps) {
-  const hasActivity = typeof capVariance === 'number' && capVariance > ACTIVITY_THRESHOLD
-  return (
-    <div
-      className={[
-        'relative flex flex-col items-center justify-center rounded-lg p-1.5 sm:p-2 overflow-hidden',
-        colorClass,
-        hasActivity ? 'ring-1 ring-sky-400/30' : '',
-      ].join(' ')}
-    >
-      {/* Activity glow overlay */}
-      {hasActivity && (
-        <div className="pointer-events-none absolute inset-0 rounded-lg bg-sky-400/5" />
-      )}
-
-      <span className="text-[8px] font-medium uppercase tracking-wider opacity-70 sm:text-[9px]">
-        {zone}
-      </span>
-      <span className="text-[13px] font-bold tabular-nums sm:text-sm">
-        {display}
-      </span>
-      <span className="text-[8px] opacity-50 sm:text-[9px]">{label}</span>
-
-      {/* Cap raw + variance — only shown when live data present */}
-      {capRaw != null && (
-        <span className="mt-0.5 text-[7px] tabular-nums text-zinc-400/60">
-          {capRaw.toFixed(1)}
-        </span>
-      )}
-      {typeof capVariance === 'number' && (
-        <span className={[
-          'text-[6px] tabular-nums',
-          hasActivity ? 'text-sky-400/70' : 'text-zinc-600',
-        ].join(' ')}
-        >
-          ±
-          {capVariance.toFixed(2)}
-        </span>
-      )}
-    </div>
-  )
-}
 
 /** Center zone label with icon, displayed between left and right columns. */
 function ZoneLabel({ zone }: { zone: number }) {
@@ -237,22 +179,6 @@ export function BedTempMatrix() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveFrame, latestBedTemp.data, unit])
 
-  // Per-zone cap data (raw value = average of the two zone channels from latest frame)
-  const capData = useMemo(() => {
-    if (!capSense2) return null
-    const l = capSense2.left
-    const r = capSense2.right
-    return {
-      // raw: mean of the two channels for the zone
-      leftHeadRaw: l[0] != null && l[1] != null ? (l[0] + l[1]) / 2 : null,
-      leftTorsoRaw: l[2] != null && l[3] != null ? (l[2] + l[3]) / 2 : null,
-      leftLegsRaw: l[4] != null && l[5] != null ? (l[4] + l[5]) / 2 : null,
-      rightHeadRaw: r[0] != null && r[1] != null ? (r[0] + r[1]) / 2 : null,
-      rightTorsoRaw: r[2] != null && r[3] != null ? (r[2] + r[3]) / 2 : null,
-      rightLegsRaw: r[4] != null && r[5] != null ? (r[4] + r[5]) / 2 : null,
-    }
-  }, [capSense2])
-
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -270,88 +196,90 @@ export function BedTempMatrix() {
         )}
       </div>
 
-      {!data ? (
-        <div className="flex h-36 items-center justify-center rounded-xl bg-zinc-900">
-          <span className="text-xs text-zinc-600">
-            {latestBedTemp.isLoading ? 'Loading temperature data...' : 'Waiting for temperature data...'}
-          </span>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {/* Environment row */}
-          <div className="flex gap-1.5 sm:gap-2">
-            <div className="flex flex-1 flex-col items-center rounded-lg bg-zinc-900 p-1.5 sm:p-2">
-              <span className="text-[8px] font-medium uppercase text-zinc-500 sm:text-[9px]">Ambient</span>
-              <span className="text-[13px] font-semibold text-zinc-200 sm:text-sm">
-                {data.ambientTemp}
+      {!data
+        ? (
+            <div className="flex h-36 items-center justify-center rounded-xl bg-zinc-900">
+              <span className="text-xs text-zinc-600">
+                {latestBedTemp.isLoading ? 'Loading temperature data...' : 'Waiting for temperature data...'}
               </span>
             </div>
-            <div className="flex flex-1 flex-col items-center rounded-lg bg-zinc-900 p-1.5 sm:p-2">
-              <span className="text-[8px] font-medium uppercase text-zinc-500 sm:text-[9px]">MCU</span>
-              <span className="text-[13px] font-semibold text-zinc-200 sm:text-sm">
-                {data.mcuTemp}
-              </span>
-            </div>
-            {data.humidity !== undefined && (
-              <div className="flex flex-1 flex-col items-center rounded-lg bg-zinc-900 p-1.5 sm:p-2">
-                <span className="text-[8px] font-medium uppercase text-zinc-500 sm:text-[9px]">Humidity</span>
-                <span className="text-[13px] font-semibold text-zinc-200 sm:text-sm">
-                  {data.humidity}
-                </span>
+          )
+        : (
+            <div className="space-y-3">
+              {/* Environment row */}
+              <div className="flex gap-1.5 sm:gap-2">
+                <div className="flex flex-1 flex-col items-center rounded-lg bg-zinc-900 p-1.5 sm:p-2">
+                  <span className="text-[8px] font-medium uppercase text-zinc-500 sm:text-[9px]">Ambient</span>
+                  <span className="text-[13px] font-semibold text-zinc-200 sm:text-sm">
+                    {data.ambientTemp}
+                  </span>
+                </div>
+                <div className="flex flex-1 flex-col items-center rounded-lg bg-zinc-900 p-1.5 sm:p-2">
+                  <span className="text-[8px] font-medium uppercase text-zinc-500 sm:text-[9px]">MCU</span>
+                  <span className="text-[13px] font-semibold text-zinc-200 sm:text-sm">
+                    {data.mcuTemp}
+                  </span>
+                </div>
+                {data.humidity !== undefined && (
+                  <div className="flex flex-1 flex-col items-center rounded-lg bg-zinc-900 p-1.5 sm:p-2">
+                    <span className="text-[8px] font-medium uppercase text-zinc-500 sm:text-[9px]">Humidity</span>
+                    <span className="text-[13px] font-semibold text-zinc-200 sm:text-sm">
+                      {data.humidity}
+                    </span>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Sensor matrix: 2 cells per zone per side (matching iOS BedMatrixView) */}
-          {/* Grid: [L ch0] [L ch1] | Zone label | [R ch0] [R ch1] */}
-          <div className="grid grid-cols-[1fr_1fr_auto_1fr_1fr] gap-0.5">
-            {/* Column headers */}
-            <div className="col-span-2 text-center text-[10px] font-semibold text-sky-400">Left</div>
-            <div />
-            {' '}
-            {/* zone label spacer */}
-            <div className="col-span-2 text-center text-[10px] font-semibold text-teal-400">Right</div>
+              {/* Sensor matrix: 2 cells per zone per side (matching iOS BedMatrixView) */}
+              {/* Grid: [L ch0] [L ch1] | Zone label | [R ch0] [R ch1] */}
+              <div className="grid grid-cols-[1fr_1fr_auto_1fr_1fr] gap-0.5">
+                {/* Column headers */}
+                <div className="col-span-2 text-center text-[10px] font-semibold text-sky-400">Left</div>
+                <div />
+                {' '}
+                {/* zone label spacer */}
+                <div className="col-span-2 text-center text-[10px] font-semibold text-teal-400">Right</div>
 
-            {/* 3 zones: Head (ch 0,1), Torso (ch 2,3), Legs (ch 4,5) */}
-            {[0, 1, 2].map((zone) => {
-              const zoneData = [data.leftHead, data.leftTorso, data.leftLegs][zone]
-              const zoneDataR = [data.rightHead, data.rightTorso, data.rightLegs][zone]
-              const ch0 = zone * 2
-              const ch1 = zone * 2 + 1
-              const leftCap = capSense2?.left
-              const rightCap = capSense2?.right
+                {/* 3 zones: Head (ch 0,1), Torso (ch 2,3), Legs (ch 4,5) */}
+                {[0, 1, 2].map((zone) => {
+                  const zoneData = [data.leftHead, data.leftTorso, data.leftLegs][zone]
+                  const zoneDataR = [data.rightHead, data.rightTorso, data.rightLegs][zone]
+                  const ch0 = zone * 2
+                  const ch1 = zone * 2 + 1
+                  const leftCap = capSense2?.left
+                  const rightCap = capSense2?.right
 
-              return (
-                <SensorMatrixRow
-                  key={zone}
-                  zone={zone}
-                  leftTemp={zoneData}
-                  rightTemp={zoneDataR}
-                  leftCap0={leftCap?.[ch0] ?? null}
-                  leftCap1={leftCap?.[ch1] ?? null}
-                  rightCap0={rightCap?.[ch0] ?? null}
-                  rightCap1={rightCap?.[ch1] ?? null}
-                  leftVar0={capVariance.left[ch0]}
-                  leftVar1={capVariance.left[ch1]}
-                  rightVar0={capVariance.right[ch0]}
-                  rightVar1={capVariance.right[ch1]}
-                />
-              )
-            })}
-          </div>
+                  return (
+                    <SensorMatrixRow
+                      key={zone}
+                      zone={zone}
+                      leftTemp={zoneData}
+                      rightTemp={zoneDataR}
+                      leftCap0={leftCap?.[ch0] ?? null}
+                      leftCap1={leftCap?.[ch1] ?? null}
+                      rightCap0={rightCap?.[ch0] ?? null}
+                      rightCap1={rightCap?.[ch1] ?? null}
+                      leftVar0={capVariance.left[ch0]}
+                      leftVar1={capVariance.left[ch1]}
+                      rightVar0={capVariance.right[ch0]}
+                      rightVar1={capVariance.right[ch1]}
+                    />
+                  )
+                })}
+              </div>
 
-          {/* Legend */}
-          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 pt-1">
-            <LegendItem label="Zone temp" example="78.2°" />
-            <LegendItem label="Cap raw" example="1.05" dim />
-            <LegendItem label="Variance" example="±0.32" dim />
-            <div className="flex items-center gap-1">
-              <div className="h-2 w-2 rounded-sm ring-1 ring-sky-400/30 bg-sky-400/5" />
-              <span className="text-[7px] text-zinc-600">= presence detected</span>
+              {/* Legend */}
+              <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 pt-1">
+                <LegendItem label="Zone temp" example="78.2°" />
+                <LegendItem label="Cap raw" example="1.05" dim />
+                <LegendItem label="Variance" example="±0.32" dim />
+                <div className="flex items-center gap-1">
+                  <div className="h-2 w-2 rounded-sm ring-1 ring-sky-400/30 bg-sky-400/5" />
+                  <span className="text-[7px] text-zinc-600">= presence detected</span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
     </div>
   )
 }
@@ -400,10 +328,14 @@ function SensorMatrixRow({
   zone: number
   leftTemp: { display: string, colorClass: string }
   rightTemp: { display: string, colorClass: string }
-  leftCap0: number | null; leftCap1: number | null
-  rightCap0: number | null; rightCap1: number | null
-  leftVar0: number | undefined; leftVar1: number | undefined
-  rightVar0: number | undefined; rightVar1: number | undefined
+  leftCap0: number | null
+  leftCap1: number | null
+  rightCap0: number | null
+  rightCap1: number | null
+  leftVar0: number | undefined
+  leftVar1: number | undefined
+  rightVar0: number | undefined
+  rightVar1: number | undefined
 }) {
   return (
     <>

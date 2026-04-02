@@ -2,7 +2,7 @@
 
 import { msg } from '@lingui/core/macro'
 import { useLingui } from '@lingui/react'
-import { Activity, BarChart3, Calendar, Radio, Settings, Thermometer } from 'lucide-react'
+import { Activity, BarChart3, Calendar, Radio, Thermometer } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import clsx from 'clsx'

@@ -592,7 +592,6 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   // Stable subscription ID for this hook instance
   const subIdRef = useRef<number | null>(null)
   if (subIdRef.current === null) {
-    // eslint-disable-next-line react-hooks/immutability -- one-time init of external counter is intentional
     subIdRef.current = singleton.nextSubscriptionId++
   }
 
@@ -625,6 +624,7 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
       singleton.activeSubscriptions.delete(id)
       recomputeAndSendSubscription()
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sensorsKey, enabled])
 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
@@ -680,6 +680,7 @@ export function useSensorFrame<T extends SensorType>(
 
   const getServerSnap = useCallback(
     () => undefined as Extract<SensorFrame, { type: T }> | undefined,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [sensorType]
   )
 
