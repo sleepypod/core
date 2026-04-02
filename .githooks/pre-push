@@ -9,8 +9,9 @@ pnpm lint
 
 echo "→ Drizzle schema validation..."
 pnpm drizzle-kit check
+pnpm drizzle-kit check --config=drizzle.biometrics.config.ts
 
-CHANGED=$(git diff --name-only @{push}.. -- '*.ts' '*.tsx' 2>/dev/null || true)
+CHANGED=$(git diff --name-only @{push}.. -- '*.ts' '*.tsx' 2>/dev/null || git diff --name-only origin/dev...HEAD -- '*.ts' '*.tsx' 2>/dev/null || true)
 if [ -n "$CHANGED" ]; then
   echo "→ Tests (changed files)..."
   pnpm vitest related --run $CHANGED
