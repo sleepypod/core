@@ -71,6 +71,7 @@ export function AlarmScheduleSection({ schedules, selectedDay, isLoading }: Alar
       setLocalIntensity(schedule.vibrationIntensity)
       setLocalAlarmTemp(schedule.alarmTemperature)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule?.id, schedule?.vibrationIntensity, schedule?.alarmTemperature])
 
   // Clean up debounce timers on unmount

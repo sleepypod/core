@@ -7,7 +7,6 @@ import {
   generateSleepCurve,
   curveToScheduleTemperatures,
   timeStringToMinutes,
-  minutesToTimeStr,
 } from '@/src/lib/sleepCurve/generate'
 import type { CoolingIntensity, CurvePoint } from '@/src/lib/sleepCurve/types'
 import { CurveChart } from './CurveChart'

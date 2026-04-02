@@ -107,7 +107,7 @@ interface CurvePresetsProps {
  * Horizontal scroll of sleep preset cards.
  * Tapping a preset generates a curve and writes it to the schedule for the selected days.
  */
-export function CurvePresets({ side, selectedDay, selectedDays, onApplied, onAICurveApplied }: CurvePresetsProps) {
+export function CurvePresets({ side, selectedDays, onApplied, onAICurveApplied }: CurvePresetsProps) {
   const [applying, setApplying] = useState<PresetId | null>(null)
   const [applied, setApplied] = useState<PresetId | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)

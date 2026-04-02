@@ -16,10 +16,32 @@ export interface TemperatureSchedule {
   updatedAt: string | Date
 }
 
+export interface PowerSchedule {
+  id: number
+  side: 'left' | 'right'
+  dayOfWeek: DayOfWeek
+  onTime: string
+  offTime: string
+  onTemperature: number
+  enabled: boolean
+}
+
+export interface AlarmSchedule {
+  id: number
+  side: 'left' | 'right'
+  dayOfWeek: DayOfWeek
+  time: string
+  vibrationPattern: string
+  vibrationIntensity: number
+  duration: number
+  alarmTemperature: number
+  enabled: boolean
+}
+
 export interface ScheduleData {
   temperature: TemperatureSchedule[]
-  power: any[]
-  alarm: any[]
+  power: PowerSchedule[]
+  alarm: AlarmSchedule[]
 }
 
 const PHASE_NAMES = ['Bedtime', 'Deep Sleep', 'Pre-Wake', 'Wake Up']
@@ -45,15 +67,15 @@ export function useSchedules(selectedDay: DayOfWeek) {
   const { side } = useSide()
   const utils = trpc.useUtils()
 
-  const queryKey = { side, dayOfWeek: selectedDay }
+  const queryKey = useMemo(() => ({ side, dayOfWeek: selectedDay }), [side, selectedDay])
   const schedulesQuery = trpc.schedules.getByDay.useQuery(queryKey)
 
   // Derive phases from temperature schedules (sorted by time, named by position)
   const phases: SchedulePhase[] = useMemo(() => {
     const temps = schedulesQuery.data?.temperature
     if (!temps || temps.length === 0) return []
-    const sorted = [...temps].sort((a: any, b: any) => a.time.localeCompare(b.time))
-    return sorted.map((t: any, i: number) => ({
+    const sorted = [...temps].sort((a, b) => a.time.localeCompare(b.time))
+    return sorted.map((t, i: number) => ({
       id: t.id,
       name: i < PHASE_NAMES.length ? PHASE_NAMES[i] : `Phase ${i + 1}`,
       icon: (i < PHASE_ICONS.length ? PHASE_ICONS[i] : 'sun') as PhaseIcon,
@@ -61,12 +83,12 @@ export function useSchedules(selectedDay: DayOfWeek) {
       temperature: t.temperature,
       enabled: t.enabled,
     }))
-  }, [schedulesQuery.data?.temperature])
+  }, [schedulesQuery.data])
 
   const invalidate = useCallback(() => {
     void utils.schedules.getByDay.invalidate(queryKey)
     void utils.schedules.getAll.invalidate({ side })
-  }, [utils, side, selectedDay])
+  }, [utils, queryKey, side])
 
   // ── Create temperature schedule with optimistic update ──
   const createMutation = trpc.schedules.createTemperatureSchedule.useMutation({
@@ -74,7 +96,7 @@ export function useSchedules(selectedDay: DayOfWeek) {
       await utils.schedules.getByDay.cancel(queryKey)
       const previous = utils.schedules.getByDay.getData(queryKey)
 
-      utils.schedules.getByDay.setData(queryKey, (old: any) => {
+      utils.schedules.getByDay.setData(queryKey, (old: ScheduleData | undefined) => {
         if (!old) return old
         const optimistic = {
           id: -Date.now(),
@@ -104,11 +126,11 @@ export function useSchedules(selectedDay: DayOfWeek) {
       await utils.schedules.getByDay.cancel(queryKey)
       const previous = utils.schedules.getByDay.getData(queryKey)
 
-      utils.schedules.getByDay.setData(queryKey, (old: any) => {
+      utils.schedules.getByDay.setData(queryKey, (old: ScheduleData | undefined) => {
         if (!old) return old
         return {
           ...old,
-          temperature: old.temperature.map((t: any) =>
+          temperature: old.temperature.map((t: TemperatureSchedule) =>
             t.id === updates.id
               ? {
                   ...t,
@@ -136,11 +158,11 @@ export function useSchedules(selectedDay: DayOfWeek) {
       await utils.schedules.getByDay.cancel(queryKey)
       const previous = utils.schedules.getByDay.getData(queryKey)
 
-      utils.schedules.getByDay.setData(queryKey, (old: any) => {
+      utils.schedules.getByDay.setData(queryKey, (old: ScheduleData | undefined) => {
         if (!old) return old
         return {
           ...old,
-          temperature: old.temperature.filter((t: any) => t.id !== id),
+          temperature: old.temperature.filter((t: TemperatureSchedule) => t.id !== id),
         }
       })
       return { previous }

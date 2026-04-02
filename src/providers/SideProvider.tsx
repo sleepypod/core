@@ -51,6 +51,7 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
       const storedSide = localStorage.getItem(STORAGE_KEY_SIDE) as SideSelection | null
       const storedLinked = localStorage.getItem(STORAGE_KEY_LINKED)
 
+      /* eslint-disable react-hooks/set-state-in-effect */
       if (storedSide && ['left', 'right', 'both'].includes(storedSide)) {
         setSelectedSide(storedSide)
       }
@@ -64,6 +65,7 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
       if (storedLinked !== null) {
         setIsLinked(storedLinked === 'true')
       }
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
     catch {
       // localStorage unavailable (SSR or privacy mode) — try cookie only

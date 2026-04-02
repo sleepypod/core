@@ -56,6 +56,7 @@ export function SystemLogViewer() {
   // Auto-select first source when data loads
   useEffect(() => {
     if (!selectedUnit && sources?.sources?.length) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedUnit(sources.sources[0].unit)
     }
   }, [sources, selectedUnit])
@@ -153,28 +154,32 @@ export function SystemLogViewer() {
             ref={scrollRef}
             className="h-60 overflow-y-auto rounded-xl bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed"
           >
-            {logsLoading && logLines.length === 0 ? (
-              <div className="flex h-full items-center justify-center">
-                <Loader2 size={16} className="animate-spin text-zinc-600" />
-              </div>
-            ) : logLines.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-zinc-600">
-                No logs found
-              </div>
-            ) : (
-              logLines.map((line, i) => {
-                // Detect priority level from journalctl output for color-coding
-                const levelMatch = line.match(/\b(emerg|alert|crit|err|warning|notice|info|debug)\b/i)
-                const level = levelMatch?.[1]?.toLowerCase() ?? ''
-                const color = LEVEL_COLORS[level] ?? 'text-zinc-400'
-
-                return (
-                  <div key={i} className="py-0.5">
-                    <span className={clsx('break-all', color)}>{line}</span>
+            {logsLoading && logLines.length === 0
+              ? (
+                  <div className="flex h-full items-center justify-center">
+                    <Loader2 size={16} className="animate-spin text-zinc-600" />
                   </div>
                 )
-              })
-            )}
+              : logLines.length === 0
+                ? (
+                    <div className="flex h-full items-center justify-center text-zinc-600">
+                      No logs found
+                    </div>
+                  )
+                : (
+                    logLines.map((line, i) => {
+                      // Detect priority level from journalctl output for color-coding
+                      const levelMatch = line.match(/\b(emerg|alert|crit|err|warning|notice|info|debug)\b/i)
+                      const level = levelMatch?.[1]?.toLowerCase() ?? ''
+                      const color = LEVEL_COLORS[level] ?? 'text-zinc-400'
+
+                      return (
+                        <div key={i} className="py-0.5">
+                          <span className={clsx('break-all', color)}>{line}</span>
+                        </div>
+                      )
+                    })
+                  )}
           </div>
         </div>
       )}

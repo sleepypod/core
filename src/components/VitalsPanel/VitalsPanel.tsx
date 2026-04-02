@@ -163,7 +163,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     { enabled: dualSide },
   )
 
-  const rawRecords: VitalsRecord[] = vitalsQuery.data ?? []
+  const rawRecords = useMemo<VitalsRecord[]>(() => vitalsQuery.data ?? [], [vitalsQuery.data])
   const smoothed = useMemo(() => filterOutliers(rawRecords), [rawRecords])
   const sortedRecords = useMemo(
     () => [...smoothed].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
@@ -171,7 +171,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
   )
 
   // Other side records
-  const otherRawRecords: VitalsRecord[] = otherVitalsQuery.data ?? []
+  const otherRawRecords = useMemo<VitalsRecord[]>(() => otherVitalsQuery.data ?? [], [otherVitalsQuery.data])
   const otherSmoothed = useMemo(() => filterOutliers(otherRawRecords), [otherRawRecords])
   const otherSortedRecords = useMemo(
     () => [...otherSmoothed].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
@@ -186,7 +186,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     smoothData(
       sortedRecords
         .filter(r => r.heartRate != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate! })),
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate ?? 0 })),
       'value',
     ),
   [sortedRecords])
@@ -195,7 +195,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     smoothData(
       sortedRecords
         .filter(r => r.hrv != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv! })),
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv ?? 0 })),
       'value',
     ),
   [sortedRecords])
@@ -204,7 +204,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     smoothData(
       sortedRecords
         .filter(r => r.breathingRate != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate! })),
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate ?? 0 })),
       'value',
     ),
   [sortedRecords])
@@ -214,7 +214,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     smoothData(
       otherSortedRecords
         .filter(r => r.heartRate != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate! })),
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate ?? 0 })),
       'value',
     ),
   [otherSortedRecords])
@@ -223,7 +223,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     smoothData(
       otherSortedRecords
         .filter(r => r.hrv != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv! })),
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv ?? 0 })),
       'value',
     ),
   [otherSortedRecords])
@@ -232,7 +232,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     smoothData(
       otherSortedRecords
         .filter(r => r.breathingRate != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate! })),
+        .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate ?? 0 })),
       'value',
     ),
   [otherSortedRecords])

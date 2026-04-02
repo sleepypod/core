@@ -76,6 +76,7 @@ export function startBonjourAnnouncement(): void {
 export function stopBonjourAnnouncement(): void {
   try {
     if (existsSync(SERVICE_FILE)) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { unlinkSync } = require('node:fs')
       unlinkSync(SERVICE_FILE)
       try {

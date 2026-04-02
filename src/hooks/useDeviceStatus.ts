@@ -22,8 +22,9 @@ export function useDeviceStatus() {
   // This only re-renders when a deviceStatus frame arrives (per-sensor listener)
   const wsFrame = useSensorFrame('deviceStatus') as DeviceStatusFrame | undefined
 
-  // Once we've received a WS frame, stop HTTP polling. Use a ref so the
-  // value is sticky (doesn't flip back to false between frames).
+  // Sticky flag: once we've received a WS frame, never revert to HTTP polling
+  // even during brief reconnection gaps where wsFrame may be transiently undefined.
+  /* eslint-disable react-hooks/refs */
   const hasReceivedWs = useRef(false)
   if (wsFrame != null) hasReceivedWs.current = true
 
@@ -70,4 +71,5 @@ export function useDeviceStatus() {
     /** Whether device status is being received via WebSocket */
     isStreaming: hasReceivedWs.current,
   }
+  /* eslint-enable react-hooks/refs */
 }

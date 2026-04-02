@@ -212,10 +212,10 @@ export function useDualSideData(options: UseDualSideDataOptions = {}): DualSideD
   // ── Merge vitals ──
   const mergedVitals = useMemo<LabeledVital[]>(() => {
     const left: LabeledVital[] = hasLeft && leftVitals.data
-      ? (leftVitals.data as any[]).map(v => ({ ...v, side: 'left' as const }))
+      ? (leftVitals.data as unknown as Omit<LabeledVital, 'side'>[]).map(v => ({ ...v, side: 'left' as const }))
       : []
     const right: LabeledVital[] = hasRight && rightVitals.data
-      ? (rightVitals.data as any[]).map(v => ({ ...v, side: 'right' as const }))
+      ? (rightVitals.data as unknown as Omit<LabeledVital, 'side'>[]).map(v => ({ ...v, side: 'right' as const }))
       : []
     return [...left, ...right].sort(
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
@@ -225,10 +225,10 @@ export function useDualSideData(options: UseDualSideDataOptions = {}): DualSideD
   // ── Merge sleep records ──
   const mergedSleep = useMemo<LabeledSleepRecord[]>(() => {
     const left: LabeledSleepRecord[] = hasLeft && leftSleep.data
-      ? (leftSleep.data as any[]).map(r => ({ ...r, side: 'left' as const }))
+      ? (leftSleep.data as unknown as Omit<LabeledSleepRecord, 'side'>[]).map(r => ({ ...r, side: 'left' as const }))
       : []
     const right: LabeledSleepRecord[] = hasRight && rightSleep.data
-      ? (rightSleep.data as any[]).map(r => ({ ...r, side: 'right' as const }))
+      ? (rightSleep.data as unknown as Omit<LabeledSleepRecord, 'side'>[]).map(r => ({ ...r, side: 'right' as const }))
       : []
     return [...left, ...right].sort(
       (a, b) => new Date(b.enteredBedAt).getTime() - new Date(a.enteredBedAt).getTime(),
@@ -238,10 +238,10 @@ export function useDualSideData(options: UseDualSideDataOptions = {}): DualSideD
   // ── Merge movement ──
   const mergedMovement = useMemo<LabeledMovement[]>(() => {
     const left: LabeledMovement[] = hasLeft && leftMovement.data
-      ? (leftMovement.data as any[]).map(m => ({ ...m, side: 'left' as const }))
+      ? (leftMovement.data as unknown as Omit<LabeledMovement, 'side'>[]).map(m => ({ ...m, side: 'left' as const }))
       : []
     const right: LabeledMovement[] = hasRight && rightMovement.data
-      ? (rightMovement.data as any[]).map(m => ({ ...m, side: 'right' as const }))
+      ? (rightMovement.data as unknown as Omit<LabeledMovement, 'side'>[]).map(m => ({ ...m, side: 'right' as const }))
       : []
     return [...left, ...right].sort(
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
@@ -264,10 +264,10 @@ export function useDualSideData(options: UseDualSideDataOptions = {}): DualSideD
   const sleepStages = useMemo<LabeledSleepStages[]>(() => {
     const stages: LabeledSleepStages[] = []
     if (hasLeft && leftStages.data) {
-      stages.push({ ...(leftStages.data as any), side: 'left' as const })
+      stages.push({ ...(leftStages.data as unknown as Omit<LabeledSleepStages, 'side'>), side: 'left' as const })
     }
     if (hasRight && rightStages.data) {
-      stages.push({ ...(rightStages.data as any), side: 'right' as const })
+      stages.push({ ...(rightStages.data as unknown as Omit<LabeledSleepStages, 'side'>), side: 'right' as const })
     }
     return stages
   }, [hasLeft, hasRight, leftStages.data, rightStages.data])
@@ -285,7 +285,7 @@ export function useDualSideData(options: UseDualSideDataOptions = {}): DualSideD
   const isError = allQueries.some(q => q.isError)
   const errors = allQueries
     .filter(q => q.error)
-    .map(q => q.error!.message)
+    .map(q => q.error?.message ?? 'Unknown error')
 
   const refetch = () => {
     allQueries.forEach(q => void q.refetch())

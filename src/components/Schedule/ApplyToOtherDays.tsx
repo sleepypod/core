@@ -25,7 +25,6 @@ interface ApplyToOtherDaysProps {
  */
 export function ApplyToOtherDays({
   sourceDay,
-  selectedDays,
   onApply,
   isLoading = false,
   hasSchedule,

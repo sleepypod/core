@@ -124,6 +124,7 @@ export function RawFrameDrawer() {
                   : (
                       filtered.map((frame, i) => {
                         const isSelected = selectedFrame?.ts === frame.ts && selectedFrame?.type === frame.type
+                        // eslint-disable-next-line react-hooks/purity
                         const age = ((Date.now() - frame.ts) / 1000).toFixed(1)
                         return (
                           <button

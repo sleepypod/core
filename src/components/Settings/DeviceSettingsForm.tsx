@@ -53,12 +53,14 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
 
   // Sync from server data when it changes
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     setTimezone(device.timezone)
     setTempUnit(device.temperatureUnit)
     setRebootDaily(device.rebootDaily)
     setRebootTime(device.rebootTime ?? '03:00')
     setPrimePodDaily(device.primePodDaily)
     setPrimePodTime(device.primePodTime ?? '14:00')
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [device])
 
   const mutation = trpc.settings.updateDevice.useMutation({
