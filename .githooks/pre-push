@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+set -e
+
+echo "→ TypeScript..."
+pnpm tsc
+
+echo "→ ESLint..."
+pnpm lint
+
+echo "→ Drizzle schema validation..."
+pnpm drizzle-kit check
+
+CHANGED=$(git diff --name-only @{push}.. -- '*.ts' '*.tsx' 2>/dev/null || true)
+if [ -n "$CHANGED" ]; then
+  echo "→ Tests (changed files)..."
+  pnpm vitest related --run $CHANGED
+else
+  echo "→ Tests skipped (no TS/TSX changes)"
+fi
+
+echo "✓ All pre-push checks passed"
