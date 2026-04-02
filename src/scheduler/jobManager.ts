@@ -15,6 +15,7 @@ import { sendCommand } from '@/src/hardware/dacTransport'
 import { encode as cborEncode } from 'cbor-x'
 import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
+import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { timeToDate } from './timeUtils'
 
 /**
@@ -206,6 +207,7 @@ export class JobManager {
         await client.connect()
         try {
           await client.setPower(sched.side, true, sched.onTemperature)
+          cancelAutoOffTimer(sched.side)
           const onTemp = sched.onTemperature ?? 75
           broadcastMutationStatus(sched.side, {
             targetTemperature: onTemp,
@@ -440,6 +442,7 @@ export class JobManager {
               const client = getSharedHardwareClient()
               await client.connect()
               await client.setPower(side, true)
+              cancelAutoOffTimer(side)
               broadcastMutationStatus(side, {})
             }
             catch (e) {
