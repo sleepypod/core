@@ -1,0 +1,48 @@
+#!/bin/bash
+# Create a Python virtual environment with pip, handling Yocto image quirks.
+#
+# Pod 3 (Python 3.9): venv module may be entirely missing
+# Pod 4 (Python 3.10): venv exists but ensurepip fails — Yocto image lacks
+#                       plistlib.py and pyexpat.so in the stdlib
+# Pod 5+ (Python 3.10+): typically works out of the box
+#
+# Strategy: try normal venv first, fall back to --without-pip + get-pip.py.
+#
+# Usage: setup-python-venv <dest_dir>
+#   Creates <dest_dir>/venv with pip available.
+#   Exits 0 on success, 1 on failure.
+
+set -euo pipefail
+
+DEST="${1:?Usage: setup-python-venv <dest_dir>}"
+VENV_DIR="$DEST/venv"
+
+if [ -d "$VENV_DIR" ]; then
+  echo "  venv already exists at $VENV_DIR"
+  exit 0
+fi
+
+if ! command -v python3 &>/dev/null; then
+  echo "Error: python3 not found" >&2
+  exit 1
+fi
+
+# Try 1: normal venv (works on Pod 5+ and Debian/Ubuntu)
+if python3 -m venv "$VENV_DIR" 2>/dev/null; then
+  exit 0
+fi
+# Clean up partial venv from failed attempt (ensurepip can fail after dir creation)
+rm -rf "$VENV_DIR"
+
+# Try 2: venv without pip + bootstrap (works on Pod 3/4 with broken ensurepip)
+if python3 -m venv --without-pip "$VENV_DIR" 2>/dev/null; then
+  echo "  ensurepip not available, bootstrapping pip via get-pip.py..."
+  if curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$VENV_DIR/bin/python3"; then
+    exit 0
+  fi
+  # get-pip.py failed — clean up the broken venv
+  rm -rf "$VENV_DIR"
+fi
+
+echo "Error: could not create Python venv at $VENV_DIR" >&2
+exit 1
