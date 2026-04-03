@@ -574,7 +574,8 @@ if command -v fuser &>/dev/null; then
 fi
 
 # Install Avahi mDNS service file (must happen here, not at runtime,
-# because ProtectSystem=strict makes /etc read-only for the service process)
+# because ProtectSystem=strict makes /etc read-only for the service process).
+# Port values are baked in at install time; sp-update re-runs this to refresh.
 if [ -d /etc/avahi ]; then
   mkdir -p /etc/avahi/services
   TRPC_PORT=${PORT:-3000}
