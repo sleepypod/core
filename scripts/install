@@ -939,6 +939,7 @@ echo "Switching to free-sleep..."
 systemctl stop sleepypod.service 2>/dev/null || true
 for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
   systemctl stop "$svc.service" 2>/dev/null || true
+  systemctl disable "$svc.service" 2>/dev/null || true
 done
 # Persist across reboots
 systemctl disable sleepypod.service 2>/dev/null || true
@@ -966,6 +967,7 @@ if command -v fuser &>/dev/null; then
 fi
 systemctl restart sleepypod.service
 for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
+  systemctl enable "$svc.service" 2>/dev/null || true
   systemctl restart "$svc.service" 2>/dev/null || true
 done
 sleep 3
