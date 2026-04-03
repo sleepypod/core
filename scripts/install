@@ -231,10 +231,12 @@ fi
 # Priority 2: Extract from frank.sh (what frankenfirmware actually uses)
 if [ -z "$DAC_SOCK_PATH" ] && [ -f /opt/eight/bin/frank.sh ]; then
   FRANK_PATH=$(grep 'DAC_SOCKET=' /opt/eight/bin/frank.sh 2>/dev/null \
-    | grep -o '[^ ]*dac\.sock' | head -1 || true)
-  if [ -n "$FRANK_PATH" ]; then
+    | sed -n 's/.*DAC_SOCKET=\([^ ]*dac\.sock\).*/\1/p' | head -1 || true)
+  if [ -n "$FRANK_PATH" ] && is_supported_dac_path "$FRANK_PATH"; then
     DAC_SOCK_PATH="$FRANK_PATH"
     echo "Detected dac.sock path from frank.sh: $DAC_SOCK_PATH"
+  elif [ -n "$FRANK_PATH" ]; then
+    echo "Warning: Ignoring unsupported DAC_SOCK_PATH from frank.sh: $FRANK_PATH"
   fi
 fi
 
@@ -569,6 +571,30 @@ if command -v fuser &>/dev/null; then
     kill "$PORT_PID" 2>/dev/null || true
     sleep 1
   fi
+fi
+
+# Install Avahi mDNS service file (must happen here, not at runtime,
+# because ProtectSystem=strict makes /etc read-only for the service process)
+if [ -d /etc/avahi ]; then
+  mkdir -p /etc/avahi/services
+  TRPC_PORT=${PORT:-3000}
+  WS_PORT=${PIEZO_WS_PORT:-3001}
+  cat > /etc/avahi/services/sleepypod.service << AVAHI_EOF
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name>sleepypod</name>
+  <service>
+    <type>_sleepypod._tcp</type>
+    <port>$TRPC_PORT</port>
+    <txt-record>wsPort=$WS_PORT</txt-record>
+    <txt-record>version=1.0.0</txt-record>
+  </service>
+</service-group>
+AVAHI_EOF
+  # Reload avahi to pick up the new service file
+  kill -HUP "$(pidof avahi-daemon 2>/dev/null)" 2>/dev/null || true
+  echo "Avahi mDNS service installed (_sleepypod._tcp on port $TRPC_PORT)"
 fi
 
 systemctl restart sleepypod.service

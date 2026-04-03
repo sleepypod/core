@@ -47,8 +47,22 @@ export function startBonjourAnnouncement(): void {
       return
     }
 
-    mkdirSync('/etc/avahi/services', { recursive: true })
-    writeFileSync(SERVICE_FILE, SERVICE_XML)
+    // The service file is installed by scripts/install (which runs as root
+    // before ProtectSystem=strict makes /etc read-only). If it's already
+    // there, just reload Avahi. Only attempt to write as a fallback.
+    if (!existsSync(SERVICE_FILE)) {
+      try {
+        mkdirSync('/etc/avahi/services', { recursive: true })
+        writeFileSync(SERVICE_FILE, SERVICE_XML)
+      }
+      catch {
+        // ProtectSystem=strict or read-only rootfs — can't write to /etc.
+        // The install script should have placed the file already.
+        console.log('[bonjour] Service file not found and /etc is read-only — mDNS unavailable')
+        console.log('[bonjour] Re-run the installer to create /etc/avahi/services/sleepypod.service')
+        return
+      }
+    }
 
     // Reload avahi to pick up the service file
     try {
