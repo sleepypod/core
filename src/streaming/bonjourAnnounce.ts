@@ -14,7 +14,7 @@
  * TXT records include the WebSocket port and protocol version.
  */
 
-import { writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 
 const TRPC_PORT = Number(process.env.PORT ?? 3000)
@@ -47,8 +47,22 @@ export function startBonjourAnnouncement(): void {
       return
     }
 
-    mkdirSync('/etc/avahi/services', { recursive: true })
-    writeFileSync(SERVICE_FILE, SERVICE_XML)
+    // The service file is installed by scripts/install (which runs as root
+    // before ProtectSystem=strict makes /etc read-only). If it's already
+    // there, just reload Avahi. Only attempt to write as a fallback.
+    if (!existsSync(SERVICE_FILE)) {
+      try {
+        mkdirSync('/etc/avahi/services', { recursive: true })
+        writeFileSync(SERVICE_FILE, SERVICE_XML)
+      }
+      catch {
+        // ProtectSystem=strict or read-only rootfs — can't write to /etc.
+        // The install script should have placed the file already.
+        console.log('[bonjour] Service file not found and /etc is read-only — mDNS unavailable')
+        console.log('[bonjour] Re-run the installer to create /etc/avahi/services/sleepypod.service')
+        return
+      }
+    }
 
     // Reload avahi to pick up the service file
     try {
@@ -76,13 +90,15 @@ export function startBonjourAnnouncement(): void {
 export function stopBonjourAnnouncement(): void {
   try {
     if (existsSync(SERVICE_FILE)) {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { unlinkSync } = require('node:fs')
-      unlinkSync(SERVICE_FILE)
       try {
+        unlinkSync(SERVICE_FILE)
         execSync('kill -HUP $(pidof avahi-daemon) 2>/dev/null', { stdio: 'ignore' })
       }
-      catch { /* ok */ }
+      catch {
+        // ProtectSystem=strict makes /etc read-only — the service file
+        // persists until the next install run. Avahi keeps advertising,
+        // which is acceptable (the iOS app handles offline pods gracefully).
+      }
     }
     console.log('[bonjour] mDNS announcement stopped')
   }
