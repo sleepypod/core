@@ -939,11 +939,15 @@ echo "Switching to free-sleep..."
 systemctl stop sleepypod.service 2>/dev/null || true
 for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
   systemctl stop "$svc.service" 2>/dev/null || true
+  systemctl disable "$svc.service" 2>/dev/null || true
 done
+# Persist across reboots
+systemctl disable sleepypod.service 2>/dev/null || true
+systemctl enable free-sleep.service free-sleep-stream.service 2>/dev/null || true
 systemctl start free-sleep.service free-sleep-stream.service 2>/dev/null || true
 sleep 2
 if systemctl is-active --quiet free-sleep.service; then
-  echo "✓ free-sleep is running on port 3000"
+  echo "✓ free-sleep is running on port 3000 (persists across reboots)"
 else
   echo "✗ free-sleep failed to start — check: journalctl -u free-sleep.service"
 fi
@@ -953,6 +957,9 @@ cat > /usr/local/bin/sp-sleepypod << 'EOF'
 #!/bin/bash
 echo "Switching to sleepypod..."
 systemctl stop free-sleep.service free-sleep-stream.service 2>/dev/null || true
+# Persist across reboots
+systemctl disable free-sleep.service free-sleep-stream.service 2>/dev/null || true
+systemctl enable sleepypod.service 2>/dev/null || true
 # Kill anything on port 3000
 if command -v fuser &>/dev/null; then
   fuser -k 3000/tcp 2>/dev/null || true
@@ -960,11 +967,12 @@ if command -v fuser &>/dev/null; then
 fi
 systemctl restart sleepypod.service
 for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
+  systemctl enable "$svc.service" 2>/dev/null || true
   systemctl restart "$svc.service" 2>/dev/null || true
 done
 sleep 3
 if systemctl is-active --quiet sleepypod.service; then
-  echo "✓ sleepypod is running on port 3000"
+  echo "✓ sleepypod is running on port 3000 (persists across reboots)"
 else
   echo "✗ sleepypod failed to start — check: sp-logs"
 fi
