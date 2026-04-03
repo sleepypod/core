@@ -98,7 +98,7 @@ if grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
   sed -i '/# BEGIN sleepypod-telemetry-block/,/# END sleepypod-telemetry-block/d' /etc/hosts
 fi
 
-# Restore iptables to allow all traffic
+# Restore iptables to allow all traffic (IPv4 and IPv6)
 echo "Restoring iptables (allowing all traffic)..."
 iptables -F 2>/dev/null || true
 iptables -X 2>/dev/null || true
@@ -107,11 +107,18 @@ iptables -t nat -X 2>/dev/null || true
 iptables -P INPUT ACCEPT 2>/dev/null || true
 iptables -P OUTPUT ACCEPT 2>/dev/null || true
 iptables -P FORWARD ACCEPT 2>/dev/null || true
-rm -f /etc/iptables/iptables.rules
+ip6tables -F 2>/dev/null || true
+ip6tables -X 2>/dev/null || true
+ip6tables -t nat -F 2>/dev/null || true
+ip6tables -t nat -X 2>/dev/null || true
+ip6tables -P INPUT ACCEPT 2>/dev/null || true
+ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
+ip6tables -P FORWARD ACCEPT 2>/dev/null || true
+rm -f /etc/iptables/iptables.rules /etc/iptables/rules.v4 /etc/iptables/rules.v6
 
 # Re-enable free-sleep if available
 for fs_svc in free-sleep.service free-sleep-stream.service; do
-  if systemctl list-unit-files "$fs_svc" &>/dev/null; then
+  if systemctl list-unit-files "$fs_svc" 2>/dev/null | grep -q "$fs_svc"; then
     echo "Re-enabling $fs_svc..."
     systemctl enable "$fs_svc" 2>/dev/null || true
     systemctl start "$fs_svc" 2>/dev/null || true
