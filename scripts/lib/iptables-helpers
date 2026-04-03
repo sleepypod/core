@@ -15,10 +15,10 @@ wan_is_blocked() {
 unblock_wan() {
   echo "Temporarily unblocking WAN access..."
   SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
-  iptables -F
-  iptables -X
-  iptables -t nat -F
-  iptables -t nat -X
+  iptables -F 2>/dev/null || true
+  iptables -X 2>/dev/null || true
+  iptables -t nat -F 2>/dev/null || true
+  iptables -t nat -X 2>/dev/null || true
   echo "WAN unblocked."
 }
 

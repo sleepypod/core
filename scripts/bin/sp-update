@@ -53,14 +53,40 @@ else
   }
 fi
 
-# Cleanup — always re-block WAN and restart service on failure
+# Cleanup — re-block WAN, rollback code, and restart service on failure
+ROLLBACK_READY=false
 cleanup() {
   local exit_code=$?
   if [ "$WAN_WAS_BLOCKED" = true ]; then
     restore_wan
+    WAN_WAS_BLOCKED=false
   fi
-  if [ "$exit_code" -ne 0 ]; then
-    echo "Update failed, starting service with existing code..." >&2
+  if [ "$exit_code" -ne 0 ] && [ "$ROLLBACK_READY" = true ]; then
+    echo "Update failed, rolling back..." >&2
+    if [ -d "$BACKUP_DIR" ]; then
+      find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+        ! -name 'node_modules' \
+        ! -name '.env' \
+        -exec rm -rf {} +
+      cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
+      # Restore CLI tools from rolled-back code
+      if [ -d "$INSTALL_DIR/scripts/bin" ]; then
+        for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
+          cp "$tool" /usr/local/bin/
+          chmod +x "/usr/local/bin/$(basename "$tool")"
+        done
+      fi
+      echo "Previous code restored."
+    fi
+    if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
+      cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
+      [ -f "$DATA_DIR/sleepypod.db-wal.bak" ] && cp "$DATA_DIR/sleepypod.db-wal.bak" "$DATA_DIR/sleepypod.db-wal"
+      [ -f "$DATA_DIR/sleepypod.db-shm.bak" ] && cp "$DATA_DIR/sleepypod.db-shm.bak" "$DATA_DIR/sleepypod.db-shm"
+      echo "Database restored."
+    fi
+    systemctl start sleepypod.service 2>/dev/null || true
+  elif [ "$exit_code" -ne 0 ]; then
+    echo "Update failed before rollback point, starting service with existing code..." >&2
     systemctl start sleepypod.service 2>/dev/null || true
   fi
 }
@@ -90,20 +116,22 @@ if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
   exit 1
 fi
 
-# Backup database
-if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
-  echo "Database backed up."
-fi
-
 # Backup current code for rollback (everything except node_modules)
 BACKUP_DIR="/tmp/sleepypod-rollback"
 rm -rf "$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C "$BACKUP_DIR" || true
 
-# Stop service
+# Stop service before DB backup (ensures WAL is flushed)
 systemctl stop sleepypod.service
+
+# Backup database (after stop so WAL/SHM are consistent)
+if [ -f "$DATA_DIR/sleepypod.db" ]; then
+  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
+  [ -f "$DATA_DIR/sleepypod.db-wal" ] && cp "$DATA_DIR/sleepypod.db-wal" "$DATA_DIR/sleepypod.db-wal.bak"
+  [ -f "$DATA_DIR/sleepypod.db-shm" ] && cp "$DATA_DIR/sleepypod.db-shm" "$DATA_DIR/sleepypod.db-shm.bak"
+  echo "Database backed up."
+fi
 
 # Download code — try CI release first (includes pre-built .next), fall back to source tarball
 WORK_DIR=$(mktemp -d)
@@ -127,8 +155,11 @@ fi
 
 if [ "$HAS_BUILD" = false ]; then
   # Fall back to source tarball (no .next — would need build on pod)
-  echo "Downloading $BRANCH from GitHub..."
-  TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${BRANCH}.tar.gz"
+  # "latest" is not a real branch — use main for the source tarball
+  SOURCE_BRANCH="$BRANCH"
+  [ "$SOURCE_BRANCH" = "latest" ] && SOURCE_BRANCH="main"
+  echo "Downloading $SOURCE_BRANCH from GitHub..."
+  TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${SOURCE_BRANCH}.tar.gz"
   if ! curl -fSL "$TARBALL_URL" | tar xz -C "$WORK_DIR"; then
     echo "Error: Failed to download branch '$BRANCH'" >&2
     exit 1
@@ -149,6 +180,7 @@ find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
   ! -name 'node_modules' \
   ! -name '.env' \
   -exec rm -rf {} +
+ROLLBACK_READY=true
 
 # Move new code into place
 cp -r "$WORK_DIR/." "$INSTALL_DIR/"
@@ -220,27 +252,6 @@ if pnpm install --frozen-lockfile --prod; then
   fi
 fi
 
-# Rollback on failure — restore full previous code and database
-echo "Update failed, restoring previous code..." >&2
-if [ -d "$BACKUP_DIR" ]; then
-  find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-    ! -name 'node_modules' \
-    ! -name '.env' \
-    -exec rm -rf {} +
-  cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
-  # Restore CLI tools from rolled-back code
-  if [ -d "$INSTALL_DIR/scripts/bin" ]; then
-    for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
-      cp "$tool" /usr/local/bin/
-      chmod +x "/usr/local/bin/$(basename "$tool")"
-    done
-  fi
-  echo "Previous code restored."
-fi
-if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
-  cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
-  echo "Database restored."
-fi
-systemctl start sleepypod.service 2>/dev/null || true
-
+# If we get here, update failed (pnpm install returned non-zero or service didn't start).
+# Cleanup trap handles rollback — just exit with failure.
 exit 1
