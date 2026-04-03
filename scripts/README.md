@@ -21,25 +21,28 @@ curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install
 
 This will:
 1. **Pre-flight checks** - Verify disk space, network, dependencies
-2. **Detect dac.sock** - Auto-detect hardware socket location
-3. **Install Node.js 20** - Via nodesource repository
-4. **Clone repository** - From GitHub main branch
-5. **Install dependencies** - With `--frozen-lockfile` and `--ignore-scripts` for security
-6. **Build application** - Next.js production build
-7. **Database migrations** - Safe schema updates (not destructive push)
+2. **Download code** - From GitHub tarball (or use `--local`)
+3. **Detect pod generation** - Auto-detect dac.sock path and pod hardware (`scripts/pod/detect`)
+4. **Install Node.js 22** - Binary download (no apt required)
+5. **Install dependencies** - With `--frozen-lockfile`
+6. **Build application** - Next.js production build (skipped if pre-built)
+7. **Database migrations** - Run automatically on startup
 8. **Create systemd service** - With auto-restart and hardening
-9. **CLI shortcuts** - sp-status, sp-restart, sp-logs, sp-update
-10. **Start scheduler** - Automated temperature/power/alarm jobs
+9. **Install CLI tools** - From `scripts/bin/` to `/usr/local/bin/`
+10. **Install biometrics modules** - Python venvs + systemd services
 11. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
 
 ## CLI Commands
 
-After installation:
+After installation (installed from `scripts/bin/`):
 
 - `sp-status` - View service status
-- `sp-restart` - Restart sleepypod service
+- `sp-restart` - Restart sleepypod + reconnect frankenfirmware
 - `sp-logs` - View live logs
-- `sp-update` - Update to latest version
+- `sp-update` - Update to latest version from GitHub
+- `sp-freesleep` - Switch to free-sleep (persists across reboots)
+- `sp-sleepypod` - Switch to sleepypod (persists across reboots)
+- `sp-uninstall` - Remove sleepypod and all related services
 
 ## Internet Control
 
@@ -105,6 +108,28 @@ After installation, sleepypod provides:
 - **Hardware Control** - Direct DAC socket communication
 - **Health Monitoring** - Scheduler status and hardware connectivity checks
 - **Timezone Support** - Full timezone awareness for all schedules
+
+## Script Structure
+
+```
+scripts/
+├── install                # Core orchestrator
+├── lib/
+│   └── iptables-helpers   # Shared WAN/iptables functions (sourced by sp-update)
+├── pod/
+│   └── detect             # Pod detection: DAC_SOCK_PATH, POD_GEN
+├── bin/                   # CLI tools — copied to /usr/local/bin/ during install
+│   ├── sp-status
+│   ├── sp-restart
+│   ├── sp-logs
+│   ├── sp-update
+│   ├── sp-freesleep
+│   ├── sp-sleepypod
+│   └── sp-uninstall
+├── deploy                 # Dev deploy (build local, push to pod)
+├── push                   # Fast push (pre-built .next only)
+└── internet-control       # WAN block/unblock utility
+```
 
 ## File Locations
 
