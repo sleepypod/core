@@ -655,16 +655,10 @@ else
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
 
-    # Check if python3 venv is available (built-in on most distros, separate package on Debian)
-    if ! python3 -m venv --help >/dev/null 2>&1; then
-      echo "Warning: python3-venv not available, skipping module $name"
-      echo "On Debian/Ubuntu: apt-get install -y python3-venv"
+    # Create Python virtualenv (handles Pod 3/4 Yocto quirks — see scripts/setup-python-venv)
+    if ! "$INSTALL_DIR/scripts/setup-python-venv" "$dest"; then
+      echo "Warning: python3 venv creation failed, skipping module $name"
       return
-    fi
-
-    # Create Python virtualenv and install deps
-    if [ ! -d "$dest/venv" ]; then
-      python3 -m venv "$dest/venv"
     fi
     "$dest/venv/bin/pip" install --quiet --upgrade pip
     "$dest/venv/bin/pip" install --quiet -r "$dest/requirements.txt"
@@ -909,7 +903,7 @@ if pnpm install --frozen-lockfile --prod; then
         mkdir -p "$MODULES_DEST/$mod"
         cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
         if [ ! -d "$MODULES_DEST/$mod/venv" ] && command -v python3 &>/dev/null; then
-          python3 -m venv "$MODULES_DEST/$mod/venv" 2>/dev/null || true
+          "$INSTALL_DIR/scripts/setup-python-venv" "$MODULES_DEST/$mod" 2>/dev/null || true
         fi
         if [ -d "$MODULES_DEST/$mod/venv" ] && [ -f "$MODULES_DEST/$mod/requirements.txt" ]; then
           "$MODULES_DEST/$mod/venv/bin/pip" install --quiet -r "$MODULES_DEST/$mod/requirements.txt" 2>/dev/null || true
