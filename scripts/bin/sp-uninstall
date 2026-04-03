@@ -1,0 +1,127 @@
+#!/bin/bash
+set -euo pipefail
+
+# sp-uninstall — remove sleepypod-core and all installed artifacts
+#
+# Usage:
+#   sp-uninstall              # interactive (prompts for confirmation)
+#   sp-uninstall --force      # skip confirmation
+#   sp-uninstall --keep-data  # remove everything except databases
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: Must run as root (use sudo)" >&2
+  exit 1
+fi
+
+KEEP_DATA=false
+FORCE=false
+for arg in "$@"; do
+  case "$arg" in
+    --keep-data) KEEP_DATA=true ;;
+    --force)     FORCE=true ;;
+  esac
+done
+
+INSTALL_DIR="/home/dac/sleepypod-core"
+DATA_DIR="/persistent/sleepypod-data"
+MODULES_DIR="/opt/sleepypod/modules"
+
+if [ "$FORCE" != true ]; then
+  echo "This will remove sleepypod-core and all related services."
+  if [ "$KEEP_DATA" = true ]; then
+    echo "Databases at $DATA_DIR will be preserved."
+  else
+    echo "WARNING: Databases at $DATA_DIR will be DELETED."
+  fi
+  echo ""
+  read -rp "Continue? [y/N] " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 0
+  fi
+fi
+
+echo "=== Uninstalling SleepyPod ==="
+
+# Stop and disable services
+echo "Stopping services..."
+SERVICES=(
+  sleepypod.service
+  sleepypod-piezo-processor.service
+  sleepypod-sleep-detector.service
+  sleepypod-environment-monitor.service
+  sleepypod-calibrator.service
+)
+for svc in "${SERVICES[@]}"; do
+  systemctl stop "$svc" 2>/dev/null || true
+  systemctl disable "$svc" 2>/dev/null || true
+  rm -f "/etc/systemd/system/$svc"
+done
+systemctl daemon-reload
+
+# Remove CLI tools
+echo "Removing CLI tools..."
+rm -f /usr/local/bin/sp-status
+rm -f /usr/local/bin/sp-restart
+rm -f /usr/local/bin/sp-logs
+rm -f /usr/local/bin/sp-update
+rm -f /usr/local/bin/sp-freesleep
+rm -f /usr/local/bin/sp-sleepypod
+rm -f /usr/local/bin/sp-uninstall
+
+# Remove Python modules
+if [ -d "$MODULES_DIR" ]; then
+  echo "Removing Python modules..."
+  rm -rf "$MODULES_DIR"
+fi
+rm -rf /etc/sleepypod
+
+# Remove application code
+if [ -d "$INSTALL_DIR" ]; then
+  echo "Removing application code..."
+  rm -rf "$INSTALL_DIR"
+fi
+
+# Remove data (unless --keep-data)
+if [ "$KEEP_DATA" = true ]; then
+  echo "Keeping databases at $DATA_DIR"
+else
+  if [ -d "$DATA_DIR" ]; then
+    echo "Removing databases..."
+    rm -rf "$DATA_DIR"
+  fi
+fi
+
+# Remove /etc/hosts telemetry block
+if grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+  echo "Removing /etc/hosts telemetry block..."
+  sed -i '/# BEGIN sleepypod-telemetry-block/,/# END sleepypod-telemetry-block/d' /etc/hosts
+fi
+
+# Restore iptables to allow all traffic
+echo "Restoring iptables (allowing all traffic)..."
+iptables -F 2>/dev/null || true
+iptables -X 2>/dev/null || true
+iptables -t nat -F 2>/dev/null || true
+iptables -t nat -X 2>/dev/null || true
+iptables -P INPUT ACCEPT 2>/dev/null || true
+iptables -P OUTPUT ACCEPT 2>/dev/null || true
+iptables -P FORWARD ACCEPT 2>/dev/null || true
+rm -f /etc/iptables/iptables.rules
+
+# Re-enable free-sleep if available
+for fs_svc in free-sleep.service free-sleep-stream.service; do
+  if systemctl list-unit-files "$fs_svc" &>/dev/null; then
+    echo "Re-enabling $fs_svc..."
+    systemctl enable "$fs_svc" 2>/dev/null || true
+    systemctl start "$fs_svc" 2>/dev/null || true
+  fi
+done
+
+echo ""
+echo "=== SleepyPod uninstalled ==="
+if [ "$KEEP_DATA" = true ]; then
+  echo "Databases preserved at: $DATA_DIR"
+fi
+echo "Note: Node.js and pnpm were left in place (/usr/local/lib/nodejs)"
+echo "Note: SSH config changes (if any) were not reverted — edit /etc/ssh/sshd_config manually"

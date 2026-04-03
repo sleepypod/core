@@ -1,0 +1,78 @@
+#!/bin/bash
+# Shared iptables helpers for WAN access control.
+# Sourced by scripts/bin/sp-update at runtime.
+# NOTE: scripts/install has an inline copy of these functions because it needs
+# them before the source tree exists on disk (curl-pipe install case).
+
+SAVED_IPTABLES=""
+WAN_WAS_BLOCKED=false
+
+wan_is_blocked() {
+  # Check if the OUTPUT chain has a DROP rule (WAN is blocked)
+  iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
+}
+
+unblock_wan() {
+  echo "Temporarily unblocking WAN access..."
+  SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+  iptables -F
+  iptables -X
+  iptables -t nat -F
+  iptables -t nat -X
+  echo "WAN unblocked."
+}
+
+restore_wan() {
+  if [ -n "$SAVED_IPTABLES" ]; then
+    echo "Restoring saved iptables rules..."
+    echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || block_wan
+  else
+    block_wan
+  fi
+}
+
+block_wan() {
+  echo "Re-blocking WAN access..."
+
+  # Flush first to avoid duplicate rules
+  iptables -F 2>/dev/null || true
+  iptables -X 2>/dev/null || true
+  iptables -t nat -F 2>/dev/null || true
+  iptables -t nat -X 2>/dev/null || true
+
+  # Allow established connections
+  iptables -I INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+  # Allow LAN traffic (RFC 1918)
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+    iptables -A INPUT  -s "$cidr" -j ACCEPT
+    iptables -A OUTPUT -d "$cidr" -j ACCEPT
+  done
+
+  # Allow NTP
+  iptables -I OUTPUT -p udp --dport 123 -j ACCEPT
+  iptables -I INPUT  -p udp --sport 123 -j ACCEPT
+
+  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp)
+  iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT
+  iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT
+  iptables -I INPUT  -p udp --dport 5353 -j ACCEPT
+  iptables -I INPUT  -p udp --sport 5353 -j ACCEPT
+
+  # Allow loopback
+  iptables -A INPUT  -i lo -j ACCEPT
+  iptables -A OUTPUT -o lo -j ACCEPT
+
+  # Block everything else
+  iptables -A INPUT  -j DROP
+  iptables -A OUTPUT -j DROP
+
+  # Persist
+  if command -v iptables-save &>/dev/null; then
+    mkdir -p /etc/iptables
+    iptables-save > /etc/iptables/iptables.rules
+  fi
+
+  echo "WAN blocked."
+}
