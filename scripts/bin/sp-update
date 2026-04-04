@@ -189,72 +189,77 @@ echo "Source updated."
 
 cd "$INSTALL_DIR"
 
-# Install prod deps (migrations run automatically on app startup via instrumentation.ts)
-if pnpm install --frozen-lockfile --prod; then
-
-  # Build only if no pre-built .next exists
-  if [ ! -d "$INSTALL_DIR/.next" ]; then
-    echo "No pre-built .next found, building..."
-    pnpm install --frozen-lockfile
-    SP_BRANCH="$BRANCH" pnpm build
-  else
-    # Regenerate .git-info with the correct branch for pre-built releases
-    SP_BRANCH="$BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
-  fi
-
-  # Sync biometrics modules
-  if [ -d "$INSTALL_DIR/modules" ]; then
-    MODULES_DEST="/opt/sleepypod/modules"
-    mkdir -p "$MODULES_DEST"
-    if [ -d "$INSTALL_DIR/modules/common" ]; then
-      mkdir -p "$MODULES_DEST/common"
-      cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
-    fi
-    for mod in piezo-processor sleep-detector environment-monitor calibrator; do
-      if [ -d "$INSTALL_DIR/modules/$mod" ]; then
-        mkdir -p "$MODULES_DEST/$mod"
-        cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
-        if [ ! -d "$MODULES_DEST/$mod/venv" ] && command -v python3 &>/dev/null; then
-          python3 -m venv "$MODULES_DEST/$mod/venv" 2>/dev/null || true
-        fi
-        if [ -d "$MODULES_DEST/$mod/venv" ] && [ -f "$MODULES_DEST/$mod/requirements.txt" ]; then
-          "$MODULES_DEST/$mod/venv/bin/pip" install --quiet -r "$MODULES_DEST/$mod/requirements.txt" || true
-        fi
-        svc="sleepypod-$mod.service"
-        if [ -f "$MODULES_DEST/$mod/$svc" ]; then
-          cp "$MODULES_DEST/$mod/$svc" "/etc/systemd/system/$svc"
-          systemctl daemon-reload
-          systemctl enable "$svc" 2>/dev/null || true
-          systemctl restart "$svc" 2>/dev/null || true
-        fi
-      fi
-    done
-  fi
-
-  # Install CLI tools from new source
-  if [ -d "$INSTALL_DIR/scripts/bin" ]; then
-    for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
-      cp "$tool" /usr/local/bin/
-      chmod +x "/usr/local/bin/$(basename "$tool")"
-    done
-  fi
-
-  # Re-block WAN before starting service
-  if [ "$WAN_WAS_BLOCKED" = true ]; then
-    restore_wan
-    WAN_WAS_BLOCKED=false
-  fi
-
-  echo "Starting service..."
-  systemctl start sleepypod.service
-
-  sleep 5
-  if systemctl is-active --quiet sleepypod.service; then
-    echo "Update complete! Service is running."
-    exit 0
-  fi
+# Install prod deps only if node_modules wasn't included in the tarball
+# CI tarballs ship node_modules to avoid native module hash mismatches on arm64
+if [ -d "$INSTALL_DIR/node_modules/next" ]; then
+  echo "node_modules included in tarball, skipping install."
+else
+  echo "Installing production dependencies..."
+  pnpm install --frozen-lockfile --prod
 fi
 
-# If we get here, update failed (pnpm install returned non-zero or service didn't start).
+# Build only if no pre-built .next exists
+if [ ! -d "$INSTALL_DIR/.next" ]; then
+  echo "No pre-built .next found, building..."
+  pnpm install --frozen-lockfile
+  SP_BRANCH="$BRANCH" pnpm build
+else
+  # Regenerate .git-info with the correct branch for pre-built releases
+  SP_BRANCH="$BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
+fi
+
+# Sync biometrics modules
+if [ -d "$INSTALL_DIR/modules" ]; then
+  MODULES_DEST="/opt/sleepypod/modules"
+  mkdir -p "$MODULES_DEST"
+  if [ -d "$INSTALL_DIR/modules/common" ]; then
+    mkdir -p "$MODULES_DEST/common"
+    cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
+  fi
+  for mod in piezo-processor sleep-detector environment-monitor calibrator; do
+    if [ -d "$INSTALL_DIR/modules/$mod" ]; then
+      mkdir -p "$MODULES_DEST/$mod"
+      cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
+      if [ ! -d "$MODULES_DEST/$mod/venv" ] && command -v python3 &>/dev/null; then
+        python3 -m venv "$MODULES_DEST/$mod/venv" 2>/dev/null || true
+      fi
+      if [ -d "$MODULES_DEST/$mod/venv" ] && [ -f "$MODULES_DEST/$mod/requirements.txt" ]; then
+        "$MODULES_DEST/$mod/venv/bin/pip" install --quiet -r "$MODULES_DEST/$mod/requirements.txt" || true
+      fi
+      svc="sleepypod-$mod.service"
+      if [ -f "$MODULES_DEST/$mod/$svc" ]; then
+        cp "$MODULES_DEST/$mod/$svc" "/etc/systemd/system/$svc"
+        systemctl daemon-reload
+        systemctl enable "$svc" 2>/dev/null || true
+        systemctl restart "$svc" 2>/dev/null || true
+      fi
+    fi
+  done
+fi
+
+# Install CLI tools from new source
+if [ -d "$INSTALL_DIR/scripts/bin" ]; then
+  for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
+    cp "$tool" /usr/local/bin/
+    chmod +x "/usr/local/bin/$(basename "$tool")"
+  done
+fi
+
+# Re-block WAN before starting service
+if [ "$WAN_WAS_BLOCKED" = true ]; then
+  restore_wan
+  WAN_WAS_BLOCKED=false
+fi
+
+echo "Starting service..."
+systemctl start sleepypod.service
+
+sleep 5
+if systemctl is-active --quiet sleepypod.service; then
+  echo "Update complete! Service is running."
+  exit 0
+fi
+
+# If we get here, service didn't start.
 # Cleanup trap handles rollback — just exit with failure.
 exit 1
