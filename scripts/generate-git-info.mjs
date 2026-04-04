@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 
 const run = (cmd) => {
   try {
@@ -11,13 +11,29 @@ const run = (cmd) => {
   }
 }
 
+const branch = process.env.SP_BRANCH || run('git rev-parse --abbrev-ref HEAD')
+
 try {
-  writeFileSync('.git-info', JSON.stringify({
-    branch: run('git rev-parse --abbrev-ref HEAD'),
-    commitHash: run('git rev-parse --short HEAD'),
-    commitTitle: run('git log -1 --format=%s'),
-    buildDate: new Date().toISOString(),
-  }))
+  // If SP_BRANCH is set and a .git-info already exists (e.g. from CI build),
+  // patch the branch in-place to preserve the correct commitHash/commitTitle.
+  if (process.env.SP_BRANCH) {
+    let existing = {}
+    try { existing = JSON.parse(readFileSync('.git-info', 'utf-8')) } catch {}
+    writeFileSync('.git-info', JSON.stringify({
+      branch,
+      commitHash: existing.commitHash || run('git rev-parse --short HEAD'),
+      commitTitle: existing.commitTitle || run('git log -1 --format=%s'),
+      buildDate: new Date().toISOString(),
+    }))
+  }
+  else {
+    writeFileSync('.git-info', JSON.stringify({
+      branch,
+      commitHash: run('git rev-parse --short HEAD'),
+      commitTitle: run('git log -1 --format=%s'),
+      buildDate: new Date().toISOString(),
+    }))
+  }
   console.log('Generated .git-info')
 }
 catch (err) {

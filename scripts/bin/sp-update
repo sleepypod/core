@@ -196,7 +196,10 @@ if pnpm install --frozen-lockfile --prod; then
   if [ ! -d "$INSTALL_DIR/.next" ]; then
     echo "No pre-built .next found, building..."
     pnpm install --frozen-lockfile
-    pnpm build
+    SP_BRANCH="$BRANCH" pnpm build
+  else
+    # Regenerate .git-info with the correct branch for pre-built releases
+    SP_BRANCH="$BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
   fi
 
   # Sync biometrics modules

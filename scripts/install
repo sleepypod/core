@@ -416,13 +416,17 @@ if [ ! -f "$INSTALL_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3
 fi
 
 # Build application (skip if .next already exists — pre-built by deploy script or CI)
+# Effective branch: --branch flag, download branch, or script default
+EFFECTIVE_BRANCH="${INSTALL_BRANCH:-${DOWNLOAD_BRANCH:-$SCRIPT_DEFAULT_BRANCH}}"
 if [ -d "$INSTALL_DIR/.next" ]; then
   echo "Pre-built .next found, skipping build."
+  # Regenerate .git-info with the correct branch (CI builds may have a different branch baked in)
+  SP_BRANCH="$EFFECTIVE_BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
 else
   echo "No pre-built .next found, building from source..."
   echo "Installing all dependencies (including devDependencies for build)..."
   pnpm install --frozen-lockfile
-  pnpm build
+  SP_BRANCH="$EFFECTIVE_BRANCH" pnpm build
 fi
 
 # Turbopack hashes the better-sqlite3 module name — create a symlink so the
