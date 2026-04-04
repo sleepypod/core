@@ -1,12 +1,16 @@
 'use client'
 
+import { useState } from 'react'
 import clsx from 'clsx'
-import { Wifi, Lock, Globe, Droplet } from 'lucide-react'
+import { Wifi, Lock, Globe, Droplet, Eye, EyeOff } from 'lucide-react'
+import { POD_CAPS } from '@/src/hardware/pods'
+import type { PodVersion } from '@/src/hardware/types'
 
 interface HealthCircleProps {
   healthy: number
   total: number
   podVersion?: string | null
+  sensorLabel?: string | null
   branch?: string
   commitHash?: string
   diskPercent?: number
@@ -21,18 +25,15 @@ interface HealthCircleProps {
 }
 
 function podModelName(version: string): string {
-  switch (version.toUpperCase()) {
-    case 'H00': return 'Pod 3'
-    case 'I00': return 'Pod 4'
-    case 'J00': return 'Pod 5'
-    default: return version
-  }
+  const caps = POD_CAPS[version as PodVersion]
+  return caps?.modelName ?? version
 }
 
 export function HealthCircle({
   healthy,
   total,
   podVersion,
+  sensorLabel,
   branch,
   commitHash,
   diskPercent,
@@ -45,6 +46,7 @@ export function HealthCircle({
   isPriming,
   onWaterClick,
 }: HealthCircleProps) {
+  const [showHardwareInfo, setShowHardwareInfo] = useState(false)
   const progress = total > 0 ? healthy / total : 0
   const allHealthy = healthy === total && total > 0
   const circumference = 2 * Math.PI * 18
@@ -170,6 +172,7 @@ export function HealthCircle({
                     <Droplet size={10} />
                     {' '}
                     Water
+                    {' '}
                     {waterLevel === 'ok' ? 'OK' : 'Low'}
                   </button>
                 )
@@ -223,6 +226,40 @@ export function HealthCircle({
                 style={{ width: `${Math.min(diskPercent, 100)}%` }}
               />
             </div>
+          </div>
+        </>
+      )}
+
+      {/* Row 5: Hardware info — hidden by default */}
+      {podVersion && (
+        <>
+          <div className="my-2.5 border-t border-zinc-800" />
+          <div className="space-y-1.5">
+            <button
+              onClick={() => setShowHardwareInfo(v => !v)}
+              className="flex items-center gap-1.5 text-[10px] text-zinc-500 active:opacity-70"
+            >
+              {showHardwareInfo ? <EyeOff size={10} /> : <Eye size={10} />}
+              Hardware Info
+            </button>
+            {showHardwareInfo && (
+              <div className="space-y-1 rounded-lg bg-zinc-800/50 px-2.5 py-2 text-[10px]">
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Pod Version</span>
+                  <span className="font-mono text-zinc-300">{podVersion}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Model</span>
+                  <span className="text-zinc-300">{podModelName(podVersion)}</span>
+                </div>
+                {sensorLabel && (
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Serial</span>
+                    <span className="font-mono text-zinc-300">{sensorLabel}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}
