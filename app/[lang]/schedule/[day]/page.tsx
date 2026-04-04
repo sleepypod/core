@@ -1,8 +1,15 @@
 import { ScheduleDayDetail } from '@/src/components/Schedule/ScheduleDayDetail'
-import { DAYS } from '@/src/components/Schedule/DaySelector'
 
 export function generateStaticParams() {
-  return DAYS.map(d => ({ day: d.key }))
+  return [
+    { day: 'sunday' },
+    { day: 'monday' },
+    { day: 'tuesday' },
+    { day: 'wednesday' },
+    { day: 'thursday' },
+    { day: 'friday' },
+    { day: 'saturday' },
+  ]
 }
 
 export default async function ScheduleDayPage({
