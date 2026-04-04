@@ -18,7 +18,12 @@ try {
   // patch the branch in-place to preserve the correct commitHash/commitTitle.
   if (process.env.SP_BRANCH) {
     let existing = {}
-    try { existing = JSON.parse(readFileSync('.git-info', 'utf-8')) } catch {}
+    try {
+      existing = JSON.parse(readFileSync('.git-info', 'utf-8'))
+    }
+    catch {
+      // no existing .git-info
+    }
     writeFileSync('.git-info', JSON.stringify({
       branch,
       commitHash: existing.commitHash || run('git rev-parse --short HEAD'),

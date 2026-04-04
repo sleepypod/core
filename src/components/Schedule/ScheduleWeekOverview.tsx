@@ -1,20 +1,16 @@
 'use client'
 
+import { useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
 import type { DayOfWeek } from './DaySelector'
-import { Calendar, Check } from 'lucide-react'
+import { DAYS } from './DaySelector'
+import { CurveChart } from './CurveChart'
+import { timeStringToMinutes } from '@/src/lib/sleepCurve/generate'
+import type { CurvePoint, Phase } from '@/src/lib/sleepCurve/types'
+import { Calendar, Pencil } from 'lucide-react'
+import { useRouter, usePathname } from 'next/navigation'
 import clsx from 'clsx'
-
-const DAYS_OF_WEEK: { key: DayOfWeek, label: string }[] = [
-  { key: 'sunday', label: 'Sun' },
-  { key: 'monday', label: 'Mon' },
-  { key: 'tuesday', label: 'Tue' },
-  { key: 'wednesday', label: 'Wed' },
-  { key: 'thursday', label: 'Thu' },
-  { key: 'friday', label: 'Fri' },
-  { key: 'saturday', label: 'Sat' },
-]
 
 const GROUP_COLORS = [
   'bg-sky-500',
@@ -24,23 +20,123 @@ const GROUP_COLORS = [
   'bg-rose-500',
 ]
 
-interface ScheduleWeekOverviewProps {
-  selectedDay: DayOfWeek
-  onDayChange: (day: DayOfWeek) => void
+interface ScheduleGroup {
+  id: number
+  name: string
+  side: string
+  days: string[]
 }
 
-/**
- * Shows a week-at-a-glance summary using schedules.getAll,
- * indicating which days have schedules configured.
- */
+interface ScheduleWeekOverviewProps {
+  onGroupDaysChange: (days: Set<DayOfWeek>) => void
+}
+
+function formatDayLabels(days: string[]): string {
+  const ordered = DAYS.map(d => d.key).filter(k => days.includes(k))
+  if (ordered.length === 0) return ''
+
+  const labels = ordered.map((k) => {
+    const d = DAYS.find(d => d.key === k)
+    return d?.label ?? k
+  })
+
+  // Check for contiguous ranges
+  const indices = ordered.map(k => DAYS.findIndex(d => d.key === k))
+  let isContiguous = true
+  for (let i = 1; i < indices.length; i++) {
+    if (indices[i] !== indices[i - 1] + 1) {
+      isContiguous = false
+      break
+    }
+  }
+
+  if (isContiguous && labels.length > 2) {
+    return `${labels[0]}\u2013${labels[labels.length - 1]}`
+  }
+  return labels.join(', ')
+}
+
 export function ScheduleWeekOverview({
-  selectedDay,
-  onDayChange,
+  onGroupDaysChange,
 }: ScheduleWeekOverviewProps) {
   const { side } = useSide()
+  const router = useRouter()
+  const pathname = usePathname()
+  const lang = pathname.split('/')[1] || 'en'
 
-  const { data, isLoading } = trpc.schedules.getAll.useQuery({ side })
-  const { data: groups } = trpc.scheduleGroups.getAll.useQuery({ side })
+  const { data: groups, isLoading: groupsLoading } = trpc.scheduleGroups.getAll.useQuery({ side })
+  const { data: scheduleData, isLoading: schedulesLoading } = trpc.schedules.getAll.useQuery({ side })
+
+  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null)
+
+  const isLoading = groupsLoading || schedulesLoading
+
+  // Get temperature range for a group's days
+  const getGroupTempRange = (days: string[]) => {
+    if (!scheduleData) return null
+    const temps = (scheduleData.temperature ?? []).filter(
+      (t: { dayOfWeek: string, temperature: number }) => days.includes(t.dayOfWeek)
+    )
+    if (temps.length === 0) return null
+    const values = temps.map((t: { temperature: number }) => t.temperature)
+    return { min: Math.min(...values), max: Math.max(...values) }
+  }
+
+  // Derive curve points for the selected group
+  const curveData = useMemo(() => {
+    if (!selectedGroupId || !scheduleData || !groups) return null
+
+    const group = (groups as ScheduleGroup[]).find(g => g.id === selectedGroupId)
+    if (!group || group.days.length === 0) return null
+
+    const firstDay = group.days[0]
+    const temps = (scheduleData.temperature ?? []).filter(
+      (t: { dayOfWeek: string }) => t.dayOfWeek === firstDay
+    )
+    const power = (scheduleData.power ?? []).find(
+      (p: { dayOfWeek: string }) => p.dayOfWeek === firstDay
+    )
+    const bedtime = power?.onTime ?? '22:00'
+    const btMin = timeStringToMinutes(bedtime)
+
+    if (temps.length === 0) return null
+
+    const sorted = [...temps]
+      .map((t: { time: string, temperature: number }) => {
+        let mfb = timeStringToMinutes(t.time) - btMin
+        if (mfb < -120) mfb += 24 * 60
+        return { ...t, minutesFromBedtime: mfb }
+      })
+      .sort((a: { minutesFromBedtime: number }, b: { minutesFromBedtime: number }) => a.minutesFromBedtime - b.minutesFromBedtime)
+
+    const tempValues = sorted.map((t: { temperature: number }) => t.temperature)
+    const min = Math.min(...tempValues)
+    const max = Math.max(...tempValues)
+    const total = sorted.length
+
+    const points: CurvePoint[] = sorted.map((t: { minutesFromBedtime: number, temperature: number }, i: number) => {
+      const frac = total > 1 ? i / (total - 1) : 0
+      const phase: Phase = frac < 0.1
+        ? 'warmUp'
+        : frac < 0.25
+          ? 'coolDown'
+          : frac < 0.55
+            ? 'deepSleep'
+            : frac < 0.75
+              ? 'maintain'
+              : frac < 0.9
+                ? 'preWake'
+                : 'wake'
+
+      return {
+        minutesFromBedtime: t.minutesFromBedtime,
+        tempOffset: t.temperature - 80,
+        phase,
+      }
+    })
+
+    return { curvePoints: points, bedtimeMinutes: btMin, minTempF: min, maxTempF: max }
+  }, [selectedGroupId, scheduleData, groups])
 
   if (isLoading) {
     return (
@@ -48,112 +144,116 @@ export function ScheduleWeekOverview({
     )
   }
 
-  // Build a set of days that have at least one schedule
-  const daysWithSchedules = new Set<string>()
-  if (data) {
-    for (const ps of data.power ?? []) {
-      daysWithSchedules.add(ps.dayOfWeek)
+  const typedGroups = (groups ?? []) as ScheduleGroup[]
+
+  if (typedGroups.length === 0) {
+    return (
+      <div className="rounded-2xl bg-zinc-900 p-4">
+        <div className="flex items-center gap-2">
+          <Calendar size={16} className="text-zinc-500" />
+          <h3 className="text-sm font-medium text-zinc-400">Schedule Groups</h3>
+        </div>
+        <p className="mt-2 text-xs text-zinc-500">No schedule groups configured.</p>
+      </div>
+    )
+  }
+
+  const handleGroupTap = (group: ScheduleGroup) => {
+    const days = new Set(group.days as DayOfWeek[])
+    if (selectedGroupId === group.id) {
+      // Deselect
+      setSelectedGroupId(null)
+      onGroupDaysChange(new Set())
     }
-    for (const ts of data.temperature ?? []) {
-      daysWithSchedules.add(ts.dayOfWeek)
-    }
-    for (const as of data.alarm ?? []) {
-      daysWithSchedules.add(as.dayOfWeek)
+    else {
+      setSelectedGroupId(group.id)
+      onGroupDaysChange(days)
     }
   }
 
-  if (daysWithSchedules.size === 0) {
-    return null
-  }
-
-  // Build day → group color map
-  const dayGroupColor = new Map<string, string>()
-  const dayGroupName = new Map<string, string>()
-  if (groups) {
-    groups.forEach((group: { days: string[], name: string }, i: number) => {
-      const color = GROUP_COLORS[i % GROUP_COLORS.length]
-      for (const day of group.days) {
-        dayGroupColor.set(day, color)
-        dayGroupName.set(day, group.name)
-      }
-    })
-  }
-
-  // Build unique group labels for display
-  const groupLabels = new Map<string, { color: string, days: string[] }>()
-  if (groups) {
-    groups.forEach((group: { name: string, days: string[] }, i: number) => {
-      groupLabels.set(group.name, {
-        color: GROUP_COLORS[i % GROUP_COLORS.length],
-        days: group.days,
-      })
-    })
+  const handleEdit = (group: ScheduleGroup) => {
+    const firstDay = group.days[0]
+    if (firstDay) {
+      router.push(`/${lang}/schedule/${firstDay}`)
+    }
   }
 
   return (
-    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-      <div className="mb-2 flex items-center gap-2 sm:mb-3">
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
         <Calendar size={16} className="text-zinc-500" />
-        <h3 className="text-sm font-medium text-zinc-400">Week Overview</h3>
+        <h3 className="text-sm font-medium text-zinc-400">Schedule Groups</h3>
       </div>
 
-      {/* Group labels */}
-      {groupLabels.size > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2">
-          {Array.from(groupLabels.entries()).map(([name, { color }]) => (
-            <div key={name} className="flex items-center gap-1.5">
-              <div className={clsx('h-2 w-2 rounded-full', color)} />
-              <span className="text-[10px] text-zinc-500">{name}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="space-y-2">
+        {typedGroups.map((group, i) => {
+          const isSelected = selectedGroupId === group.id
+          const tempRange = getGroupTempRange(group.days)
+          const color = GROUP_COLORS[i % GROUP_COLORS.length]
 
-      <div className="flex justify-between gap-0.5 sm:gap-1">
-        {DAYS_OF_WEEK.map((day) => {
-          const hasSchedule = daysWithSchedules.has(day.key)
-          const isSelected = selectedDay === day.key
-          const groupColor = dayGroupColor.get(day.key)
           return (
             <button
-              key={day.key}
-              onClick={() => onDayChange(day.key)}
+              key={group.id}
+              type="button"
+              onClick={() => handleGroupTap(group)}
               className={clsx(
-                'flex flex-col items-center gap-1 rounded-lg px-1.5 py-1 transition-colors sm:px-2 sm:py-1.5',
-                isSelected && 'bg-zinc-800'
+                'flex w-full items-center justify-between rounded-2xl p-3 text-left transition-colors sm:p-4',
+                isSelected
+                  ? 'bg-zinc-800 ring-1 ring-sky-500/40'
+                  : 'bg-zinc-900 active:bg-zinc-800',
               )}
             >
-              <span
-                className={clsx(
-                  'text-[10px] font-medium',
-                  isSelected ? 'text-sky-400' : 'text-zinc-500'
-                )}
-              >
-                {day.label}
-              </span>
-              {hasSchedule
-                ? (
-                    <Check
-                      size={12}
-                      className={clsx(
-                        isSelected ? 'text-sky-400' : 'text-emerald-500'
-                      )}
-                    />
-                  )
-                : (
-                    <div className="h-3 w-3 rounded-full border border-zinc-700" />
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <div className={clsx('h-2.5 w-2.5 rounded-full', color)} />
+                  <span className="text-sm font-medium text-white">{group.name}</span>
+                </div>
+                <div className="mt-1 flex items-center gap-3">
+                  <span className="text-xs text-zinc-500">
+                    {formatDayLabels(group.days)}
+                  </span>
+                  {tempRange && (
+                    <span className="text-xs text-zinc-400">
+                      {`${tempRange.min}–${tempRange.max}°F`}
+                    </span>
                   )}
-              {/* Group color indicator */}
-              <div
-                className={clsx(
-                  'h-0.5 w-4 rounded-full',
-                  groupColor ?? 'bg-transparent',
-                )}
-              />
+                </div>
+              </div>
+              {isSelected && (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleEdit(group)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.stopPropagation()
+                      handleEdit(group)
+                    }
+                  }}
+                  className="flex items-center gap-1 rounded-lg bg-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition-colors hover:bg-zinc-600"
+                >
+                  <Pencil size={12} />
+                  Edit
+                </div>
+              )}
             </button>
           )
         })}
       </div>
+
+      {curveData && curveData.curvePoints.length > 0 && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+          <CurveChart
+            points={curveData.curvePoints}
+            bedtimeMinutes={curveData.bedtimeMinutes}
+            minTempF={curveData.minTempF}
+            maxTempF={curveData.maxTempF}
+          />
+        </div>
+      )}
     </div>
   )
 }

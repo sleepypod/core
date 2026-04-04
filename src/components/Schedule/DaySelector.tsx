@@ -27,6 +27,10 @@ interface DaySelectorProps {
   selectedDays?: Set<DayOfWeek>
   /** Called when the selected days set changes (multi-select mode) */
   onSelectedDaysChange?: (days: Set<DayOfWeek>) => void
+  /** When true, renders non-interactive divs instead of buttons */
+  readOnly?: boolean
+  /** Days to highlight when in readOnly mode */
+  highlightedDays?: Set<DayOfWeek>
 }
 
 export function DaySelector({
@@ -34,6 +38,8 @@ export function DaySelector({
   onActiveDayChange,
   selectedDays,
   onSelectedDaysChange,
+  readOnly,
+  highlightedDays,
 }: DaySelectorProps) {
   const isMultiSelect = !!selectedDays && !!onSelectedDaysChange
 
@@ -69,6 +75,30 @@ export function DaySelector({
       // Sole selected day — just ensure it's primary
       onActiveDayChange(day)
     }
+  }
+
+  if (readOnly) {
+    return (
+      <div className="flex items-center justify-between gap-0.5 sm:gap-1">
+        {DAYS.map(({ key, short }) => {
+          const isHighlighted = highlightedDays?.has(key) ?? false
+
+          return (
+            <div
+              key={key}
+              className={cn(
+                'flex h-11 w-11 items-center justify-center rounded-full text-[13px] font-semibold sm:text-sm',
+                isHighlighted
+                  ? 'bg-sky-500 text-white'
+                  : 'bg-zinc-900 text-zinc-500',
+              )}
+            >
+              {short}
+            </div>
+          )
+        })}
+      </div>
+    )
   }
 
   return (
