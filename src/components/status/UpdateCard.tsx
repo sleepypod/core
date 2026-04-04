@@ -71,6 +71,8 @@ export function UpdateCard() {
 
   const handleUpdate = async () => {
     if (updateState === 'idle') {
+      // No version data yet — do nothing
+      if (!versionData) return
       // Non-standard branch → let user pick main or dev first
       if (!isStandardBranch) {
         setUpdateState('branch-picker')
@@ -239,7 +241,7 @@ export function UpdateCard() {
       {updateState === 'branch-picker' && (
         <div className="mb-3">
           <p className="mb-2 text-xs text-amber-400">
-            Current branch ({versionData?.branch}) is not a release channel. Pick a channel to update to:
+            {`Current branch (${versionData?.branch}) is not a release channel. Pick a channel to update to:`}
           </p>
           <div className="flex gap-2">
             <button
