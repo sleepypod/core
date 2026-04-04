@@ -64,7 +64,7 @@ importers:
         version: 2.1.1
       dotenv:
         specifier: ^17.3.1
-        version: 17.3.1
+        version: 17.4.0
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.8.0)
@@ -3576,8 +3576,8 @@ packages:
     resolution: {integrity: sha512-QM8q3zDe58hqUqjraQOmzZ1LIH9SWQJTlEKCH4kJ2oQvLZk7RbQXvtDM2XEq3fwkV9CCvvH4LA0AV+ogFsBM2Q==}
     engines: {node: '>=8'}
 
-  dotenv@17.3.1:
-    resolution: {integrity: sha512-IO8C/dzEb6O3F9/twg6ZLXz164a2fhTnEWb95H23Dm4OuN+92NmEAlTrupP9VW6Jm3sO26tQlqyvyi4CsnY9GA==}
+  dotenv@17.4.0:
+    resolution: {integrity: sha512-kCKF62fwtzwYm0IGBNjRUjtJgMfGapII+FslMHIjMR5KTnwEmBmWLDRSnc3XSNP8bNy34tekgQyDT0hr7pERRQ==}
     engines: {node: '>=12'}
 
   drizzle-kit@0.31.10:
@@ -7425,7 +7425,7 @@ snapshots:
   '@dotenvx/dotenvx@1.51.2':
     dependencies:
       commander: 11.1.0
-      dotenv: 17.3.1
+      dotenv: 17.4.0
       eciesjs: 0.4.16
       execa: 5.1.1
       fdir: 6.5.0(picomatch@4.0.4)
@@ -10193,7 +10193,7 @@ snapshots:
     dependencies:
       is-obj: 2.0.0
 
-  dotenv@17.3.1: {}
+  dotenv@17.4.0: {}
 
   drizzle-kit@0.31.10:
     dependencies:
