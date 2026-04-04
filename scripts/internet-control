@@ -153,11 +153,10 @@ case "$COMMAND" in
     echo "Local subnet: $LOCAL_SUBNET"
     echo ""
 
-    # Install iptables and iptables-persistent if not present
-    if ! command -v iptables &>/dev/null || ! dpkg -l | grep -q iptables-persistent; then
-      echo "Installing iptables..."
-      apt-get update
-      apt-get install -y iptables iptables-persistent
+    # Verify iptables is available (Yocto images have no package manager)
+    if ! command -v iptables &>/dev/null; then
+      echo "Error: iptables not found. Cannot block WAN access without iptables." >&2
+      exit 1
     fi
 
     # Create custom chain for SleepyPod rules (IPv4)
