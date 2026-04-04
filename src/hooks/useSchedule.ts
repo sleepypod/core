@@ -124,6 +124,21 @@ export function useSchedule() {
     return daySchedule.power.some((p: PowerSchedule) => p.enabled)
   }, [daySchedule])
 
+  // Check if ANY day has enabled schedules (global view)
+  const isGlobalEnabled = useMemo(() => {
+    const allData = allSchedulesQuery.data as {
+      temperature: TemperatureSchedule[]
+      power: PowerSchedule[]
+      alarm: AlarmSchedule[]
+    } | undefined
+    if (!allData) return false
+    return (
+      allData.power.some(p => p.enabled)
+      || allData.temperature.some(t => t.enabled)
+      || allData.alarm.some(a => a.enabled)
+    )
+  }, [allSchedulesQuery.data])
+
   // Check if this day has any schedule data
   const hasScheduleData = useMemo(() => {
     if (!daySchedule) return false
@@ -250,6 +265,46 @@ export function useSchedule() {
   }, [allSchedulesQuery.data, isPowerEnabled, selectedDays, side, batchUpdate])
 
   /**
+   * Toggle ALL schedule types across ALL 7 days globally.
+   * Uses isGlobalEnabled to determine new state.
+   */
+  const toggleGlobalSchedules = useCallback(async () => {
+    if (!allSchedulesQuery.data) return
+
+    const allData = allSchedulesQuery.data as {
+      temperature: TemperatureSchedule[]
+      power: PowerSchedule[]
+      alarm: AlarmSchedule[]
+    }
+    const newEnabled = !isGlobalEnabled
+
+    const tempUpdates: Array<{ id: number, enabled: boolean }> = []
+    const powerUpdates: Array<{ id: number, enabled: boolean }> = []
+    const alarmUpdates: Array<{ id: number, enabled: boolean }> = []
+
+    for (const ts of allData.temperature) {
+      tempUpdates.push({ id: ts.id, enabled: newEnabled })
+    }
+    for (const ps of allData.power) {
+      powerUpdates.push({ id: ps.id, enabled: newEnabled })
+    }
+    for (const as_ of allData.alarm) {
+      alarmUpdates.push({ id: as_.id, enabled: newEnabled })
+    }
+
+    if (tempUpdates.length > 0 || powerUpdates.length > 0 || alarmUpdates.length > 0) {
+      await batchUpdate.mutateAsync({
+        updates: { temperature: tempUpdates, power: powerUpdates, alarm: alarmUpdates },
+      })
+    }
+
+    setConfirmMessage(
+      `All schedules ${newEnabled ? 'enabled' : 'disabled'}`
+    )
+    confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 3000)
+  }, [allSchedulesQuery.data, isGlobalEnabled, batchUpdate])
+
+  /**
    * Apply the source day's schedule to target days.
    * Uses the iOS pattern: delete all existing schedules for target days,
    * then recreate from source day's data.
@@ -371,6 +426,7 @@ export function useSchedule() {
     | { temperature: TemperatureSchedule[], power: PowerSchedule[], alarm: AlarmSchedule[] }
     | undefined,
     isPowerEnabled,
+    isGlobalEnabled,
     hasScheduleData,
 
     // Loading states
@@ -391,6 +447,7 @@ export function useSchedule() {
     // Actions
     togglePowerSchedule,
     toggleAllSchedules,
+    toggleGlobalSchedules,
     applyToOtherDays,
 
     // Refetch

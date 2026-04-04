@@ -1,3 +1,8 @@
+/**
+ * @deprecated Replaced by ScheduleDayDetail route (/schedule/[day]).
+ * Kept for reference — will be removed in a future cleanup.
+ */
+
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
