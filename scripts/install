@@ -16,17 +16,81 @@ echo ""
 #   --local    Skip download (code already on disk, e.g. via scp/deploy)
 #   --no-ssh   Skip interactive SSH setup prompt
 #   --branch X Install a specific branch (default: main)
+#   --restore  List available DB backups and restore a selected one
 INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
+RESTORE_MODE=false
 while [ $# -gt 0 ]; do
   case "$1" in
-    --local)  INSTALL_LOCAL=true ;;
-    --no-ssh) SKIP_SSH=true ;;
-    --branch) shift; INSTALL_BRANCH="${1:-}" ;;
+    --local)   INSTALL_LOCAL=true ;;
+    --no-ssh)  SKIP_SSH=true ;;
+    --branch)  shift; INSTALL_BRANCH="${1:-}" ;;
+    --restore) RESTORE_MODE=true ;;
   esac
   shift
 done
+
+# --------------------------------------------------------------------------------
+# Restore mode — list and restore a DB backup, then exit
+if [ "$RESTORE_MODE" = true ]; then
+  DATA_DIR="/persistent/sleepypod-data"
+
+  # Collect all backup files for both databases
+  mapfile -t BACKUPS < <(ls -1t "$DATA_DIR"/*.db.bak.* 2>/dev/null)
+
+  if [ ${#BACKUPS[@]} -eq 0 ]; then
+    echo "No backups found in $DATA_DIR"
+    exit 0
+  fi
+
+  echo ""
+  echo "Available backups:"
+  echo ""
+  for i in "${!BACKUPS[@]}"; do
+    bak="${BACKUPS[$i]}"
+    fname="$(basename "$bak")"
+    # Extract epoch from filename (last dot-separated field)
+    epoch="${fname##*.bak.}"
+    ts="$(date -d "@$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r "$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$epoch")"
+    size="$(du -h "$bak" | cut -f1)"
+    printf "  [%d] %s  (%s, %s)\n" "$((i + 1))" "$fname" "$ts" "$size"
+  done
+
+  echo ""
+  read -rp "Enter number to restore (or q to quit): " choice
+
+  if [ "$choice" = "q" ] || [ -z "$choice" ]; then
+    echo "Aborted."
+    exit 0
+  fi
+
+  idx=$((choice - 1))
+  if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#BACKUPS[@]} ]; then
+    echo "Invalid selection." >&2
+    exit 1
+  fi
+
+  selected="${BACKUPS[$idx]}"
+  fname="$(basename "$selected")"
+
+  # Determine which database this backup belongs to
+  if [[ "$fname" == sleepypod.db.bak.* ]]; then
+    target="$DATA_DIR/sleepypod.db"
+  elif [[ "$fname" == biometrics.db.bak.* ]]; then
+    target="$DATA_DIR/biometrics.db"
+  else
+    echo "Unrecognized backup format: $fname" >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "Restoring $fname -> $(basename "$target")"
+  cp "$selected" "$target"
+  echo "Done. Restart the service to pick up the restored database:"
+  echo "  systemctl restart sleepypod"
+  exit 0
+fi
 
 # Cleanup handler — re-blocks WAN if we unblocked it
 WAN_WAS_BLOCKED=false
@@ -454,11 +518,24 @@ NODE_ENV=production
 EOF
 fi
 
-# Initialize database with migrations (not destructive push)
+# Back up existing databases before migrations
+BACKUP_TS="$(date +%s)"
 if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  echo "Existing database found, backing up..."
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak.$(date +%s)"
+  echo "Existing config database found, backing up..."
+  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak.$BACKUP_TS"
 fi
+if [ -f "$DATA_DIR/biometrics.db" ]; then
+  echo "Existing biometrics database found, backing up..."
+  cp "$DATA_DIR/biometrics.db" "$DATA_DIR/biometrics.db.bak.$BACKUP_TS"
+fi
+
+# Prune old backups (keep last 5 per database)
+for db in sleepypod.db biometrics.db; do
+  mapfile -t old < <(ls -1t "$DATA_DIR/$db.bak."* 2>/dev/null | tail -n +6)
+  for f in "${old[@]}"; do
+    rm -f "$f"
+  done
+done
 
 # Database migrations run automatically on app startup (instrumentation.ts)
 echo "Database migrations will run on first startup."
