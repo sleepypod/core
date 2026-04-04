@@ -5,6 +5,11 @@
 # Keeps a --without-pip fallback for safety, but the normal path should work
 # on all pod generations after patching.
 #
+# Per-pod behavior (see src/hardware/pods.ts for full capabilities manifest):
+#   Pod 3 (H00, Yocto, Python 3.9):  hasEnsurepip=false — uses Try 2 fallback
+#   Pod 4 (I00, Yocto, Python 3.10): hasEnsurepip=false — uses Try 2 fallback
+#   Pod 5 (J00, Debian, Python 3.10): hasEnsurepip=true  — uses Try 1 (normal)
+#
 # Usage: setup-python-venv <dest_dir>
 #   Creates <dest_dir>/venv with pip available.
 #   Exits 0 on success, 1 on failure.
