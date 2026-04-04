@@ -32,7 +32,7 @@ PY_VERSION=$(python3 --version 2>&1)
 log "Creating venv at $VENV_DIR ($PY_VERSION)"
 
 # Try 1: normal venv (should work after patch-python-stdlib)
-if python3 -m venv "$VENV_DIR" 2>&1; then
+if python3 -m venv "$VENV_DIR"; then
   log "venv created successfully"
   exit 0
 fi

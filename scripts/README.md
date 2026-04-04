@@ -29,8 +29,59 @@ This will:
 7. **Database migrations** - Run automatically on startup
 8. **Create systemd service** - With auto-restart and hardening
 9. **Install CLI tools** - From `scripts/bin/` to `/usr/local/bin/`
-10. **Install biometrics modules** - Python venvs + systemd services
-11. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
+10. **Patch Python stdlib** - Download matching CPython source, fill missing modules (Pod 3/4 only)
+11. **Install biometrics modules** - Python venvs + systemd services
+12. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
+
+### Install Flow
+
+```mermaid
+flowchart TD
+    Start([curl install | bash]) --> Preflight[Pre-flight checks\ndisk, network, deps]
+    Preflight --> Download{Code source?}
+
+    Download -->|--local| Local[Use code on disk]
+    Download -->|default| Release{CI release\navailable?}
+    Release -->|yes| Tarball[Download pre-built tarball]
+    Release -->|no| Source[Download source tarball\nfallback build on pod]
+
+    Local --> Detect
+    Tarball --> Detect
+    Source --> Detect
+
+    Detect[Detect pod generation\nscripts/pod/detect] --> Node[Install Node.js 22 + pnpm]
+    Node --> Deps[pnpm install --frozen-lockfile --prod]
+    Deps --> Build{.next exists?}
+    Build -->|yes| Skip[Skip build]
+    Build -->|no| BuildApp[pnpm build\n⚠️ needs ~1GB RAM]
+    Skip --> Env
+    BuildApp --> Env
+
+    Env[Write .env\nDAC_SOCK_PATH, DATABASE_URL] --> DB[Backup existing DB\nMigrations run on startup]
+    DB --> Service[Create systemd service\nstart sleepypod]
+    Service --> CLI[Install CLI tools\nscripts/bin/ → /usr/local/bin/]
+
+    CLI --> Python{python3\navailable?}
+    Python -->|no| SkipBio[Skip biometrics]
+    Python -->|yes| Patch[Patch Python stdlib\nscripts/patch-python-stdlib]
+
+    Patch --> PatchCheck{stdlib\ncomplete?}
+    PatchCheck -->|yes| Noop[No-op Pod 5+]
+    PatchCheck -->|no| CPython[Download CPython source\ncopy missing .py files]
+
+    Noop --> Modules
+    CPython --> Modules
+
+    Modules[Install biometrics modules] --> Venv[Create venv per module\nscripts/setup-python-venv]
+    Venv --> Pip[pip install -r requirements.txt]
+    Pip --> ModService[Create module systemd services]
+
+    ModService --> SSH{Interactive\nterminal?}
+    SkipBio --> SSH
+    SSH -->|yes| SSHSetup[Optional SSH setup\nport 8822, keys only]
+    SSH -->|no| Done
+    SSHSetup --> Done([Installation complete])
+```
 
 ## CLI Commands
 
@@ -113,12 +164,14 @@ After installation, sleepypod provides:
 
 ```
 scripts/
-├── install                # Core orchestrator
+├── install                  # Core orchestrator
+├── patch-python-stdlib      # Fix incomplete Yocto Python (Pod 3/4)
+├── setup-python-venv        # Create venv per biometrics module
 ├── lib/
-│   └── iptables-helpers   # Shared WAN/iptables functions (sourced by sp-update)
+│   └── iptables-helpers     # Shared WAN/iptables functions (sourced by sp-update)
 ├── pod/
-│   └── detect             # Pod detection: DAC_SOCK_PATH, POD_GEN
-├── bin/                   # CLI tools — copied to /usr/local/bin/ during install
+│   └── detect               # Pod detection: DAC_SOCK_PATH, POD_GEN
+├── bin/                     # CLI tools — copied to /usr/local/bin/ during install
 │   ├── sp-status
 │   ├── sp-restart
 │   ├── sp-logs
@@ -126,9 +179,35 @@ scripts/
 │   ├── sp-freesleep
 │   ├── sp-sleepypod
 │   └── sp-uninstall
-├── deploy                 # Dev deploy (build local, push to pod)
-├── push                   # Fast push (pre-built .next only)
-└── internet-control       # WAN block/unblock utility
+├── deploy                   # Dev deploy (build local, push to pod)
+├── push                     # Fast push (pre-built .next only)
+└── internet-control         # WAN block/unblock utility
+```
+
+## Python Stdlib Patching (Pod 3/4)
+
+Pod 3 and Pod 4 Yocto images ship with an incomplete Python stdlib — missing modules like `plistlib`, `pyexpat`, and `ensurepip` internals. This breaks `python3 -m venv`.
+
+`scripts/patch-python-stdlib` runs once before biometrics module installation and:
+
+1. Detects the exact Python version (e.g. `3.10.4`)
+2. Checks if critical modules (`plistlib`, `ensurepip`, `pyexpat`) are importable
+3. If any are missing, downloads the matching CPython source tarball
+4. Copies missing `.py` files into the system lib dir (non-destructive — skips existing)
+5. Verifies critical modules now import
+
+Pod 5+ has a complete stdlib and the script no-ops.
+
+All output is prefixed with `[patch-python-stdlib]` for easy grep in install logs:
+
+```
+[patch-python-stdlib] Detected Python 3.10.4
+[patch-python-stdlib] Module 'plistlib' is missing — patching needed
+[patch-python-stdlib] Downloading CPython 3.10.4 source...
+[patch-python-stdlib] Stdlib patching complete: 147 copied, 312 already present, 0 failed
+[patch-python-stdlib]   ✓ plistlib
+[patch-python-stdlib]   ✓ ensurepip
+[patch-python-stdlib] Python stdlib is ready for venv creation
 ```
 
 ## File Locations

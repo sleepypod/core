@@ -39,7 +39,6 @@ PY_LIB_DIR=""
 for candidate in \
   "/usr/lib64/python${PY_MAJOR_MINOR}" \
   "/usr/lib/python${PY_MAJOR_MINOR}" \
-  "/usr/lib/python3/dist-packages/../" \
 ; do
   if [ -d "$candidate" ]; then
     PY_LIB_DIR="$candidate"
@@ -74,13 +73,12 @@ for mod in plistlib ensurepip; do
 done
 
 if [ "$NEEDS_PATCH" = false ]; then
-  # Also check pyexpat (C extension) — if present, stdlib is likely complete
   if python3 -c "import pyexpat" 2>/dev/null; then
     log "Python stdlib appears complete, no patching needed"
-    exit 0
   else
-    log "Module 'pyexpat' is missing — patching needed"
+    warn "pyexpat C extension missing — cannot fix via .py patching, pip/venv still work"
   fi
+  exit 0
 fi
 
 # --------------------------------------------------------------------------
@@ -97,7 +95,7 @@ trap cleanup EXIT
 log "Downloading CPython $PY_VERSION source..."
 log "  URL: $CPYTHON_URL"
 
-if ! curl -fSL --max-time 120 "$CPYTHON_URL" -o "$WORK_DIR/cpython.tar.gz" 2>&1; then
+if ! curl -fsSL --max-time 120 "$CPYTHON_URL" -o "$WORK_DIR/cpython.tar.gz"; then
   err "Failed to download CPython source"
   err "  URL: $CPYTHON_URL"
   err "  This may mean Python $PY_VERSION is not a tagged CPython release"
@@ -105,9 +103,9 @@ if ! curl -fSL --max-time 120 "$CPYTHON_URL" -o "$WORK_DIR/cpython.tar.gz" 2>&1;
 fi
 
 log "Extracting Lib/ directory..."
-if ! tar xzf "$WORK_DIR/cpython.tar.gz" -C "$WORK_DIR" --strip-components=1 "cpython-${PY_VERSION}/Lib/" 2>&1; then
+if ! tar xzf "$WORK_DIR/cpython.tar.gz" -C "$WORK_DIR" --strip-components=1 "cpython-${PY_VERSION}/Lib/"; then
   # Try alternate archive directory name format
-  if ! tar xzf "$WORK_DIR/cpython.tar.gz" -C "$WORK_DIR" --strip-components=1 "cpython-v${PY_VERSION}/Lib/" 2>&1; then
+  if ! tar xzf "$WORK_DIR/cpython.tar.gz" -C "$WORK_DIR" --strip-components=1 "cpython-v${PY_VERSION}/Lib/"; then
     err "Failed to extract Lib/ from CPython source tarball"
     err "  Listing top-level contents for debugging:"
     tar tzf "$WORK_DIR/cpython.tar.gz" | head -5 >&2 || true
