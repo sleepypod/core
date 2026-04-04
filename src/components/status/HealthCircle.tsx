@@ -22,10 +22,9 @@ interface HealthCircleProps {
 
 function podModelName(version: string): string {
   switch (version.toUpperCase()) {
-    case 'H00': return 'Pod 5'
-    case 'H01': return 'Pod 4'
-    case 'H02': return 'Pod 3'
-    case 'H03': return 'Pod 2'
+    case 'H00': return 'Pod 3'
+    case 'I00': return 'Pod 4'
+    case 'J00': return 'Pod 5'
     default: return version
   }
 }
