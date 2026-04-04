@@ -1,12 +1,9 @@
 #!/bin/bash
-# Create a Python virtual environment with pip, handling Yocto image quirks.
+# Create a Python virtual environment with pip.
 #
-# Pod 3 (Python 3.9): venv module may be entirely missing
-# Pod 4 (Python 3.10): venv exists but ensurepip fails — Yocto image lacks
-#                       plistlib.py and pyexpat.so in the stdlib
-# Pod 5+ (Python 3.10+): typically works out of the box
-#
-# Strategy: try normal venv first, fall back to --without-pip + get-pip.py.
+# Expects patch-python-stdlib to have run first (fixes Yocto stdlib gaps).
+# Keeps a --without-pip fallback for safety, but the normal path should work
+# on all pod generations after patching.
 #
 # Usage: setup-python-venv <dest_dir>
 #   Creates <dest_dir>/venv with pip available.
@@ -17,32 +14,51 @@ set -euo pipefail
 DEST="${1:?Usage: setup-python-venv <dest_dir>}"
 VENV_DIR="$DEST/venv"
 
+log()  { echo "  [setup-python-venv] $*"; }
+warn() { echo "  [setup-python-venv] WARNING: $*" >&2; }
+err()  { echo "  [setup-python-venv] ERROR: $*" >&2; }
+
 if [ -d "$VENV_DIR" ]; then
-  echo "  venv already exists at $VENV_DIR"
+  log "venv already exists at $VENV_DIR, skipping"
   exit 0
 fi
 
 if ! command -v python3 &>/dev/null; then
-  echo "Error: python3 not found" >&2
+  err "python3 not found"
   exit 1
 fi
 
-# Try 1: normal venv (works on Pod 5+ and Debian/Ubuntu)
-if python3 -m venv "$VENV_DIR" 2>/dev/null; then
+PY_VERSION=$(python3 --version 2>&1)
+log "Creating venv at $VENV_DIR ($PY_VERSION)"
+
+# Try 1: normal venv (should work after patch-python-stdlib)
+if python3 -m venv "$VENV_DIR" 2>&1; then
+  log "venv created successfully"
   exit 0
 fi
-# Clean up partial venv from failed attempt (ensurepip can fail after dir creation)
+
+# Clean up partial venv from failed attempt
+warn "Normal venv creation failed, cleaning up partial directory"
 rm -rf "$VENV_DIR"
 
-# Try 2: venv without pip + bootstrap (works on Pod 3/4 with broken ensurepip)
-if python3 -m venv --without-pip "$VENV_DIR" 2>/dev/null; then
-  echo "  ensurepip not available, bootstrapping pip via get-pip.py..."
-  if curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$VENV_DIR/bin/python3"; then
-    exit 0
-  fi
-  # get-pip.py failed — clean up the broken venv
+# Try 2: venv without pip + bootstrap via get-pip.py
+log "Falling back to --without-pip + get-pip.py"
+if ! python3 -m venv --without-pip "$VENV_DIR" 2>&1; then
+  err "python3 -m venv --without-pip also failed"
+  err "  This usually means the venv module itself is missing"
+  err "  Check: python3 -c 'import venv'"
   rm -rf "$VENV_DIR"
+  exit 1
 fi
 
-echo "Error: could not create Python venv at $VENV_DIR" >&2
+log "venv created without pip, bootstrapping via get-pip.py..."
+if curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$VENV_DIR/bin/python3" 2>&1; then
+  log "pip bootstrapped successfully"
+  exit 0
+fi
+
+err "get-pip.py bootstrap failed"
+err "  venv exists at $VENV_DIR but has no pip"
+err "  Check network connectivity and Python stdlib completeness"
+rm -rf "$VENV_DIR"
 exit 1
