@@ -44,6 +44,21 @@ fi
 COMMAND="$1"
 
 # ---------------------------------------------------------------------------
+# Pod OS / iptables detection
+# ---------------------------------------------------------------------------
+# Pod 3/4 run Yocto (no apt, iptables at /sbin/iptables)
+# Pod 5 runs Debian (has apt, iptables at /usr/sbin/iptables)
+if [ -x /usr/bin/apt-get ]; then
+  POD_OS="debian"
+  IPTABLES="/usr/sbin/iptables"
+  IP6TABLES="/usr/sbin/ip6tables"
+else
+  POD_OS="yocto"
+  IPTABLES="/sbin/iptables"
+  IP6TABLES="/sbin/ip6tables"
+fi
+
+# ---------------------------------------------------------------------------
 # /etc/hosts management for Eight Sleep telemetry blocking
 # ---------------------------------------------------------------------------
 
@@ -153,51 +168,59 @@ case "$COMMAND" in
     echo "Local subnet: $LOCAL_SUBNET"
     echo ""
 
-    # Verify iptables is available (Yocto images have no package manager)
-    if ! command -v iptables &>/dev/null; then
-      echo "Error: iptables not found. Cannot block WAN access without iptables." >&2
-      exit 1
+    # Install iptables + persistence on Debian; on Yocto it must be pre-installed
+    if [ "$POD_OS" = "debian" ]; then
+      if ! command -v "$IPTABLES" &>/dev/null || ! dpkg -l | grep -q iptables-persistent; then
+        echo "Installing iptables..."
+        apt-get update
+        apt-get install -y iptables iptables-persistent
+      fi
+    else
+      if ! command -v "$IPTABLES" &>/dev/null; then
+        echo "Error: iptables not found at $IPTABLES. Cannot block WAN access." >&2
+        exit 1
+      fi
     fi
 
     # Create custom chain for SleepyPod rules (IPv4)
-    iptables -N SLEEPYPOD-BLOCK 2>/dev/null || iptables -F SLEEPYPOD-BLOCK
-    iptables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
-    iptables -I OUTPUT -j SLEEPYPOD-BLOCK
+    "$IPTABLES" -N SLEEPYPOD-BLOCK 2>/dev/null || "$IPTABLES" -F SLEEPYPOD-BLOCK
+    "$IPTABLES" -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+    "$IPTABLES" -I OUTPUT -j SLEEPYPOD-BLOCK
 
     # Allow loopback
-    iptables -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
 
     # Allow established/related connections
-    iptables -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
 
     # Allow local network
-    iptables -A SLEEPYPOD-BLOCK -d "$LOCAL_SUBNET" -j ACCEPT
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -d "$LOCAL_SUBNET" -j ACCEPT
 
     # Allow mDNS for local discovery
-    iptables -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --dport 5353 -j ACCEPT
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --dport 5353 -j ACCEPT
 
     # Block all other outbound traffic
-    iptables -A SLEEPYPOD-BLOCK -j DROP
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -j DROP
 
     # Save IPv4 rules
     mkdir -p /etc/iptables
-    iptables-save > /etc/iptables/rules.v4
+    "${IPTABLES}-save" > /etc/iptables/rules.v4
 
     # Block IPv6 as well (prevents bypass)
-    if command -v ip6tables &>/dev/null; then
+    if command -v "$IP6TABLES" &>/dev/null; then
       echo "Configuring IPv6 rules..."
 
-      ip6tables -N SLEEPYPOD-BLOCK 2>/dev/null || ip6tables -F SLEEPYPOD-BLOCK
-      ip6tables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
-      ip6tables -I OUTPUT -j SLEEPYPOD-BLOCK
+      "$IP6TABLES" -N SLEEPYPOD-BLOCK 2>/dev/null || "$IP6TABLES" -F SLEEPYPOD-BLOCK
+      "$IP6TABLES" -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+      "$IP6TABLES" -I OUTPUT -j SLEEPYPOD-BLOCK
 
-      ip6tables -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
-      ip6tables -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
-      ip6tables -A SLEEPYPOD-BLOCK -d fe80::/10 -j ACCEPT
-      ip6tables -A SLEEPYPOD-BLOCK -j DROP
+      "$IP6TABLES" -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
+      "$IP6TABLES" -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
+      "$IP6TABLES" -A SLEEPYPOD-BLOCK -d fe80::/10 -j ACCEPT
+      "$IP6TABLES" -A SLEEPYPOD-BLOCK -j DROP
 
-      if command -v ip6tables-save &>/dev/null; then
-        ip6tables-save > /etc/iptables/rules.v6
+      if command -v "${IP6TABLES}-save" &>/dev/null; then
+        "${IP6TABLES}-save" > /etc/iptables/rules.v6
       fi
     fi
 
@@ -210,7 +233,7 @@ case "$COMMAND" in
     echo "  Layer 1: iptables DROP on all non-LAN outbound"
     echo "  Layer 2: /etc/hosts null routes for *.8slp.net"
     echo "  Local network ($LOCAL_SUBNET) is still accessible"
-    if command -v ip6tables &>/dev/null; then
+    if command -v "$IP6TABLES" &>/dev/null; then
       echo "  IPv6 is also blocked"
     fi
     echo ""
@@ -225,30 +248,30 @@ case "$COMMAND" in
     echo ""
 
     # Remove custom chains (IPv4)
-    if iptables -L SLEEPYPOD-BLOCK &>/dev/null; then
+    if "$IPTABLES" -L SLEEPYPOD-BLOCK &>/dev/null; then
       echo "Removing IPv4 firewall rules..."
-      iptables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
-      iptables -F SLEEPYPOD-BLOCK
-      iptables -X SLEEPYPOD-BLOCK
+      "$IPTABLES" -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+      "$IPTABLES" -F SLEEPYPOD-BLOCK
+      "$IPTABLES" -X SLEEPYPOD-BLOCK
     fi
 
-    iptables -P OUTPUT ACCEPT
+    "$IPTABLES" -P OUTPUT ACCEPT
 
-    if command -v iptables-save &>/dev/null; then
+    if command -v "${IPTABLES}-save" &>/dev/null; then
       mkdir -p /etc/iptables
-      iptables-save > /etc/iptables/rules.v4
+      "${IPTABLES}-save" > /etc/iptables/rules.v4
     fi
 
     # Remove IPv6 rules
-    if command -v ip6tables &>/dev/null && ip6tables -L SLEEPYPOD-BLOCK &>/dev/null; then
+    if command -v "$IP6TABLES" &>/dev/null && "$IP6TABLES" -L SLEEPYPOD-BLOCK &>/dev/null; then
       echo "Removing IPv6 firewall rules..."
-      ip6tables -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
-      ip6tables -F SLEEPYPOD-BLOCK
-      ip6tables -X SLEEPYPOD-BLOCK
-      ip6tables -P OUTPUT ACCEPT
+      "$IP6TABLES" -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+      "$IP6TABLES" -F SLEEPYPOD-BLOCK
+      "$IP6TABLES" -X SLEEPYPOD-BLOCK
+      "$IP6TABLES" -P OUTPUT ACCEPT
 
-      if command -v ip6tables-save &>/dev/null; then
-        ip6tables-save > /etc/iptables/rules.v6
+      if command -v "${IP6TABLES}-save" &>/dev/null; then
+        "${IP6TABLES}-save" > /etc/iptables/rules.v6
       fi
     fi
 
@@ -292,11 +315,11 @@ case "$COMMAND" in
     echo ""
 
     # Layer 1: iptables — check both OUTPUT and SLEEPYPOD-BLOCK chains
-    if iptables -L SLEEPYPOD-BLOCK -n 2>/dev/null | grep -q "DROP"; then
-      DROP_STATS=$(iptables -L SLEEPYPOD-BLOCK -n -v 2>/dev/null | grep "DROP" | awk '{print $1 " packets, " $2}')
+    if "$IPTABLES" -L SLEEPYPOD-BLOCK -n 2>/dev/null | grep -q "DROP"; then
+      DROP_STATS=$("$IPTABLES" -L SLEEPYPOD-BLOCK -n -v 2>/dev/null | grep "DROP" | awk '{print $1 " packets, " $2}')
       echo "  Layer 1 (iptables):  ACTIVE — SLEEPYPOD-BLOCK chain ($DROP_STATS blocked)"
-    elif iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP"; then
-      DROP_STATS=$(iptables -L OUTPUT -n -v 2>/dev/null | grep "DROP" | awk '{print $1 " packets, " $2}')
+    elif "$IPTABLES" -L OUTPUT -n 2>/dev/null | grep -q "DROP"; then
+      DROP_STATS=$("$IPTABLES" -L OUTPUT -n -v 2>/dev/null | grep "DROP" | awk '{print $1 " packets, " $2}')
       echo "  Layer 1 (iptables):  ACTIVE — DROP rule in OUTPUT ($DROP_STATS blocked)"
     else
       echo "  Layer 1 (iptables):  INACTIVE — no DROP rule found"

@@ -11,6 +11,8 @@
 
 import { execSync } from 'node:child_process'
 
+import { POD_CAPS } from './pods'
+
 export interface IptablesStatus {
   ok: boolean
   rules: IptablesRule[]
@@ -24,62 +26,91 @@ interface IptablesRule {
   critical: boolean
 }
 
-const REQUIRED_RULES: Array<{
-  name: string
-  chain: 'INPUT' | 'OUTPUT'
-  check: string // grep pattern to verify rule exists
-  repair: string // iptables command to add the rule
-  critical: boolean
-}> = [
-  {
-    name: 'mDNS outbound (UDP 5353)',
-    chain: 'OUTPUT',
-    check: 'udp dpt:5353',
-    repair: 'iptables -I OUTPUT 2 -p udp --dport 5353 -j ACCEPT',
-    critical: true,
-  },
-  {
-    name: 'mDNS inbound (UDP 5353)',
-    chain: 'INPUT',
-    check: 'udp dpt:5353',
-    repair: 'iptables -I INPUT 2 -p udp --dport 5353 -j ACCEPT',
-    critical: true,
-  },
-  {
-    name: 'mDNS outbound source (UDP 5353)',
-    chain: 'OUTPUT',
-    check: 'udp spt:5353',
-    repair: 'iptables -I OUTPUT 2 -p udp --sport 5353 -j ACCEPT',
-    critical: true,
-  },
-  {
-    name: 'LAN access (192.168.0.0/16)',
-    chain: 'INPUT',
-    check: '192.168.0.0/16',
-    repair: 'iptables -A INPUT -s 192.168.0.0/16 -j ACCEPT',
-    critical: true,
-  },
-  {
-    name: 'NTP outbound (UDP 123)',
-    chain: 'OUTPUT',
-    check: 'udp dpt:123',
-    repair: 'iptables -I OUTPUT 2 -p udp --dport 123 -j ACCEPT',
-    critical: true,
-  },
-]
+/** Known iptables paths from the pod capabilities manifest, used as fallbacks */
+const KNOWN_IPTABLES_PATHS = [...new Set(Object.values(POD_CAPS).map(c => c.iptablesPath))]
+
+/**
+ * Resolve the absolute path to the iptables binary.
+ * Tries `which iptables` first, then falls back to known paths from the manifest.
+ */
+function resolveIptablesPath(override?: string): string {
+  if (override) return override
+
+  try {
+    return execSync('which iptables 2>/dev/null', { encoding: 'utf-8', timeout: 3000 }).trim()
+  }
+  catch {
+    // `which` failed — try known paths
+  }
+
+  for (const candidate of KNOWN_IPTABLES_PATHS) {
+    try {
+      execSync(`test -x ${candidate}`, { timeout: 2000 })
+      return candidate
+    }
+    catch {
+      // not found at this path
+    }
+  }
+
+  // Fall back to bare name and let execSync resolve via PATH
+  return 'iptables'
+}
+
+function buildRequiredRules(iptables: string) {
+  return [
+    {
+      name: 'mDNS outbound (UDP 5353)',
+      chain: 'OUTPUT' as const,
+      check: 'udp dpt:5353',
+      repair: `${iptables} -I OUTPUT 2 -p udp --dport 5353 -j ACCEPT`,
+      critical: true,
+    },
+    {
+      name: 'mDNS inbound (UDP 5353)',
+      chain: 'INPUT' as const,
+      check: 'udp dpt:5353',
+      repair: `${iptables} -I INPUT 2 -p udp --dport 5353 -j ACCEPT`,
+      critical: true,
+    },
+    {
+      name: 'mDNS outbound source (UDP 5353)',
+      chain: 'OUTPUT' as const,
+      check: 'udp spt:5353',
+      repair: `${iptables} -I OUTPUT 2 -p udp --sport 5353 -j ACCEPT`,
+      critical: true,
+    },
+    {
+      name: 'LAN access (192.168.0.0/16)',
+      chain: 'INPUT' as const,
+      check: '192.168.0.0/16',
+      repair: `${iptables} -A INPUT -s 192.168.0.0/16 -j ACCEPT`,
+      critical: true,
+    },
+    {
+      name: 'NTP outbound (UDP 123)',
+      chain: 'OUTPUT' as const,
+      check: 'udp dpt:123',
+      repair: `${iptables} -I OUTPUT 2 -p udp --dport 123 -j ACCEPT`,
+      critical: true,
+    },
+  ]
+}
 
 /**
  * Check if all required iptables rules are present.
  * Returns status without modifying anything.
  */
-export function checkIptables(): IptablesStatus {
+export function checkIptables(iptablesPath?: string): IptablesStatus {
+  const iptables = resolveIptablesPath(iptablesPath)
+  const requiredRules = buildRequiredRules(iptables)
   const rules: IptablesRule[] = []
   let allOk = true
 
-  for (const rule of REQUIRED_RULES) {
+  for (const rule of requiredRules) {
     let present = false
     try {
-      const output = execSync(`iptables -L ${rule.chain} -n 2>/dev/null`, {
+      const output = execSync(`${iptables} -L ${rule.chain} -n 2>/dev/null`, {
         encoding: 'utf-8',
         timeout: 5000,
       })
@@ -121,13 +152,15 @@ export function checkIptables(): IptablesStatus {
  * Check and auto-repair missing iptables rules.
  * Returns list of rules that were repaired.
  */
-export function checkAndRepairIptables(): IptablesStatus {
-  const status = checkIptables()
+export function checkAndRepairIptables(iptablesPath?: string): IptablesStatus {
+  const iptables = resolveIptablesPath(iptablesPath)
+  const requiredRules = buildRequiredRules(iptables)
+  const status = checkIptables(iptables)
   const repaired: string[] = []
 
   for (const rule of status.rules) {
     if (!rule.present) {
-      const def = REQUIRED_RULES.find(r => r.name === rule.name)
+      const def = requiredRules.find(r => r.name === rule.name)
       if (!def) continue
 
       try {
@@ -142,9 +175,10 @@ export function checkAndRepairIptables(): IptablesStatus {
   }
 
   if (repaired.length > 0) {
-    // Persist the repaired rules
+    // Persist the repaired rules — derive iptables-save path from iptables path
+    const iptablesSave = iptables.replace(/iptables$/, 'iptables-save')
     try {
-      execSync('iptables-save > /etc/iptables/rules.v4', { encoding: 'utf-8', timeout: 5000 })
+      execSync(`${iptablesSave} > /etc/iptables/rules.v4`, { encoding: 'utf-8', timeout: 5000 })
       console.log(`[iptables] Saved ${repaired.length} repaired rules to rules.v4`)
     }
     catch {
