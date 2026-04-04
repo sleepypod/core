@@ -137,19 +137,19 @@ fi
 WORK_DIR=$(mktemp -d)
 HAS_BUILD=false
 
-if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "latest" ]; then
-  # Try latest GitHub Release (CI-built, includes .next)
-  echo "Checking for CI release..."
-  RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
-    | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
-    | grep -o 'https://[^"]*' || true)
+# Try CI release by tag — works for any branch with a GitHub Release (main, dev, etc.)
+RELEASE_TAG="$BRANCH"
+[ "$RELEASE_TAG" = "latest" ] && RELEASE_TAG="main"
+echo "Checking for CI release (tag: $RELEASE_TAG)..."
+RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
+  | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
+  | grep -o 'https://[^"]*' || true)
 
-  if [ -n "$RELEASE_URL" ]; then
-    echo "Downloading CI release..."
-    if curl -fSL "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
-      HAS_BUILD=true
-      echo "CI release downloaded (pre-built)."
-    fi
+if [ -n "$RELEASE_URL" ]; then
+  echo "Downloading CI release..."
+  if curl -fSL "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
+    HAS_BUILD=true
+    echo "CI release downloaded (pre-built)."
   fi
 fi
 
