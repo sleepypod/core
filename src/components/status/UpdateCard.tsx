@@ -27,8 +27,9 @@ export function UpdateCard() {
   const setInternetAccess = trpc.system.setInternetAccess.useMutation()
 
   const [updateState, setUpdateState] = useState<
-    'idle' | 'confirming' | 'internet-prompt' | 'unblocking' | 'updating' | 'reconnecting' | 'error'
+    'idle' | 'confirming' | 'branch-picker' | 'internet-prompt' | 'unblocking' | 'updating' | 'reconnecting' | 'error'
   >('idle')
+  const [selectedBranch, setSelectedBranch] = useState<string | undefined>(undefined)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   /** Tracks whether we temporarily unblocked internet and need to re-block */
   const didUnblockRef = useRef(false)
@@ -50,6 +51,7 @@ export function UpdateCard() {
   }, [])
 
   const versionData = version.data
+  const isStandardBranch = versionData?.branch === 'main' || versionData?.branch === 'dev'
 
   /**
    * Re-block internet if we temporarily unblocked it.
@@ -69,6 +71,11 @@ export function UpdateCard() {
 
   const handleUpdate = async () => {
     if (updateState === 'idle') {
+      // Non-standard branch → let user pick main or dev first
+      if (!isStandardBranch) {
+        setUpdateState('branch-picker')
+        return
+      }
       setUpdateState('confirming')
       return
     }
@@ -92,6 +99,11 @@ export function UpdateCard() {
     }
   }
 
+  const handleBranchSelected = (branch: string) => {
+    setSelectedBranch(branch)
+    setUpdateState('confirming')
+  }
+
   /** Unblock internet then proceed with the update */
   const handleAllowInternet = async () => {
     setUpdateState('unblocking')
@@ -113,10 +125,11 @@ export function UpdateCard() {
   const startUpdate = async () => {
     setUpdateState('updating')
 
+    const branch = selectedBranch
+      ?? (versionData?.branch !== 'unknown' ? versionData?.branch : undefined)
+
     try {
-      await triggerUpdate.mutateAsync({
-        branch: versionData?.branch !== 'unknown' ? versionData?.branch : undefined,
-      })
+      await triggerUpdate.mutateAsync({ branch })
       setUpdateState('reconnecting')
       pollForReconnection()
     }
@@ -159,6 +172,7 @@ export function UpdateCard() {
 
   const handleCancel = () => {
     setUpdateState('idle')
+    setSelectedBranch(undefined)
     setErrorMessage(null)
   }
 
@@ -166,7 +180,7 @@ export function UpdateCard() {
     <div className="rounded-2xl bg-zinc-900/80 p-3 sm:p-4">
       {/* Header */}
       <div className="mb-2 flex items-center gap-2 sm:mb-3">
-        {updateState === 'idle' || updateState === 'confirming' || updateState === 'internet-prompt'
+        {updateState === 'idle' || updateState === 'confirming' || updateState === 'branch-picker' || updateState === 'internet-prompt'
           ? (
               <>
                 <CheckCircle size={16} className="text-emerald-400" />
@@ -221,10 +235,41 @@ export function UpdateCard() {
         <p className="mb-3 text-xs text-red-400">{errorMessage}</p>
       )}
 
+      {/* Branch picker for non-standard branches */}
+      {updateState === 'branch-picker' && (
+        <div className="mb-3">
+          <p className="mb-2 text-xs text-amber-400">
+            Current branch ({versionData?.branch}) is not a release channel. Pick a channel to update to:
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleBranchSelected('main')}
+              className="flex-1 rounded-lg border border-zinc-800 bg-zinc-800/50 px-4 py-2.5 text-xs font-medium text-emerald-400 transition-colors active:bg-zinc-700"
+            >
+              main
+            </button>
+            <button
+              onClick={() => handleBranchSelected('dev')}
+              className="flex-1 rounded-lg border border-zinc-800 bg-zinc-800/50 px-4 py-2.5 text-xs font-medium text-sky-400 transition-colors active:bg-zinc-700"
+            >
+              dev
+            </button>
+            <button
+              onClick={handleCancel}
+              className="rounded-lg border border-zinc-800 px-4 py-2.5 text-xs font-medium text-zinc-400 transition-colors active:bg-zinc-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Confirmation prompt */}
       {updateState === 'confirming' && (
         <p className="mb-3 text-xs text-amber-400">
-          This will download the latest code, rebuild, and restart the service. The pod will be briefly unavailable.
+          {selectedBranch
+            ? `This will switch to ${selectedBranch}, rebuild, and restart the service. The pod will be briefly unavailable.`
+            : 'This will download the latest code, rebuild, and restart the service. The pod will be briefly unavailable.'}
         </p>
       )}
 

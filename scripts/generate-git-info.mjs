@@ -11,9 +11,11 @@ const run = (cmd) => {
   }
 }
 
+const branch = process.env.SP_BRANCH || run('git rev-parse --abbrev-ref HEAD')
+
 try {
   writeFileSync('.git-info', JSON.stringify({
-    branch: run('git rev-parse --abbrev-ref HEAD'),
+    branch,
     commitHash: run('git rev-parse --short HEAD'),
     commitTitle: run('git log -1 --format=%s'),
     buildDate: new Date().toISOString(),
