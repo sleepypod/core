@@ -203,8 +203,12 @@ case "$COMMAND" in
     "$IPTABLES" -A SLEEPYPOD-BLOCK -j DROP
 
     # Save IPv4 rules
+    IPTABLES_SAVE="${IPTABLES}-save"
+    if ! command -v "$IPTABLES_SAVE" &>/dev/null; then
+      IPTABLES_SAVE="iptables-save"
+    fi
     mkdir -p /etc/iptables
-    "${IPTABLES}-save" > /etc/iptables/rules.v4
+    "$IPTABLES_SAVE" > /etc/iptables/rules.v4
 
     # Block IPv6 as well (prevents bypass)
     if command -v "$IP6TABLES" &>/dev/null; then

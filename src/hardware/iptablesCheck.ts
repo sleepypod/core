@@ -10,6 +10,7 @@
  */
 
 import { execSync } from 'node:child_process'
+import { accessSync, constants } from 'node:fs'
 
 import { POD_CAPS } from './pods'
 
@@ -45,7 +46,7 @@ function resolveIptablesPath(override?: string): string {
 
   for (const candidate of KNOWN_IPTABLES_PATHS) {
     try {
-      execSync(`test -x ${candidate}`, { timeout: 2000 })
+      accessSync(candidate, constants.X_OK)
       return candidate
     }
     catch {

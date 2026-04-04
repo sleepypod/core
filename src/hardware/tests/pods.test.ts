@@ -43,6 +43,7 @@ describe('POD_CAPS manifest', () => {
       if (caps.os === 'debian') {
         expect(caps.hasEnsurepip).toBe(true)
         expect(caps.hasPackageManager).toBe(true)
+        expect(caps.hasIptablesPersistent).toBe(true)
       }
     }
   })

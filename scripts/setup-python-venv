@@ -1,9 +1,8 @@
 #!/bin/bash
 # Create a Python virtual environment with pip.
 #
-# Expects patch-python-stdlib to have run first (fixes Yocto stdlib gaps).
-# Keeps a --without-pip fallback for safety, but the normal path should work
-# on all pod generations after patching.
+# Called by scripts/install. Includes a --without-pip + get-pip.py fallback
+# for pod generations where ensurepip is broken (Pod 3/4 on Yocto).
 #
 # Per-pod behavior (see src/hardware/pods.ts for full capabilities manifest):
 #   Pod 3 (H00, Yocto, Python 3.9):  hasEnsurepip=false — uses Try 2 fallback
@@ -57,7 +56,7 @@ if ! python3 -m venv --without-pip "$VENV_DIR" 2>&1; then
 fi
 
 log "venv created without pip, bootstrapping via get-pip.py..."
-if curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$VENV_DIR/bin/python3" 2>&1; then
+if curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$VENV_DIR/bin/python3"; then
   log "pip bootstrapped successfully"
   exit 0
 fi
