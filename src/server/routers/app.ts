@@ -11,6 +11,7 @@ import { rawRouter } from './raw'
 import { calibrationRouter } from './calibration'
 import { waterLevelRouter } from './waterLevel'
 import { runOnceRouter } from './runOnce'
+import { scheduleGroupsRouter } from './scheduleGroups'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -33,6 +34,7 @@ export const appRouter = router({
   calibration: calibrationRouter,
   waterLevel: waterLevelRouter,
   runOnce: runOnceRouter,
+  scheduleGroups: scheduleGroupsRouter,
 })
 
 export type AppRouter = typeof appRouter

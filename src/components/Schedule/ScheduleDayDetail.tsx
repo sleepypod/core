@@ -18,6 +18,48 @@ import { AlarmScheduleSection } from './AlarmScheduleSection'
 import { ApplyToOtherDays } from './ApplyToOtherDays'
 import { SchedulerConfirmation } from './SchedulerConfirmation'
 
+const GROUP_COLORS = [
+  'bg-sky-500',
+  'bg-amber-500',
+  'bg-emerald-500',
+  'bg-purple-500',
+  'bg-rose-500',
+]
+
+function ScheduleGroupChip({ dayOfWeek }: { dayOfWeek: DayOfWeek }) {
+  const { side } = useSide()
+  const { data: group, isLoading } = trpc.scheduleGroups.getByDay.useQuery(
+    { side, dayOfWeek },
+    { enabled: !!dayOfWeek },
+  )
+  const { data: allGroups } = trpc.scheduleGroups.getAll.useQuery({ side })
+
+  if (isLoading || !group) return null
+
+  // Determine the color index by position in the full list
+  const groupIndex = allGroups?.findIndex((g: { id: number }) => g.id === group.id) ?? 0
+  const color = GROUP_COLORS[groupIndex % GROUP_COLORS.length]
+
+  const otherDays = (group.days as string[])
+    .filter((d: string) => d !== dayOfWeek)
+    .map((d: string) => d.charAt(0).toUpperCase() + d.slice(1, 3))
+    .join(', ')
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className={`inline-flex items-center gap-1.5 rounded-full ${color}/20 px-2.5 py-1`}>
+        <div className={`h-2 w-2 rounded-full ${color}`} />
+        <span className="text-xs font-medium text-zinc-300">{group.name}</span>
+      </div>
+      {otherDays && (
+        <span className="text-[10px] text-zinc-500">
+          also {otherDays}
+        </span>
+      )}
+    </div>
+  )
+}
+
 interface ScheduleDayDetailProps {
   day: string
 }
@@ -119,6 +161,9 @@ export function ScheduleDayDetail({ day }: ScheduleDayDetailProps) {
       </div>
 
       <h1 className="text-lg font-semibold text-white">{dayLabel}</h1>
+
+      {/* Schedule Group Info */}
+      <ScheduleGroupChip dayOfWeek={dayOfWeek} />
 
       {/* Curve Presets */}
       <CurvePresets
