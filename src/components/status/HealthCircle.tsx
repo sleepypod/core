@@ -171,6 +171,7 @@ export function HealthCircle({
                     <Droplet size={10} />
                     {' '}
                     Water
+                    {' '}
                     {waterLevel === 'ok' ? 'OK' : 'Low'}
                   </button>
                 )

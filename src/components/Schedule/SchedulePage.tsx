@@ -11,6 +11,7 @@ import { TimePicker } from './TimePicker'
 import { ScheduleToggle } from './ScheduleToggle'
 import { SchedulerConfirmation } from './SchedulerConfirmation'
 import { ManualControlsSheet } from './ManualControlsSheet'
+import { ScheduleWeekOverview } from './ScheduleWeekOverview'
 import { trpc } from '@/src/utils/trpc'
 import {
   generateSleepCurve,
@@ -240,6 +241,12 @@ export function SchedulePage() {
         hasScheduleData={hasScheduleData}
         isApplying={isApplying}
         onApplyToOtherDays={targetDays => void applyToOtherDays(targetDays)}
+      />
+
+      {/* 6. Week Overview */}
+      <ScheduleWeekOverview
+        selectedDay={selectedDay}
+        onDayChange={setSelectedDay}
       />
 
     </div>
