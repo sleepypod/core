@@ -597,6 +597,9 @@ if ! command -v python3 &>/dev/null; then
   echo "Warning: python3 not found — skipping biometrics module installation"
   echo "Install Python 3 and re-run the installer to enable health monitoring"
 else
+  # Patch incomplete Python stdlib on Yocto images (Pod 3/4) so venv/ensurepip work
+  "$INSTALL_DIR/scripts/patch-python-stdlib"
+
   install_module() {
     local name="$1"
     local src="$MODULES_SRC/$name"

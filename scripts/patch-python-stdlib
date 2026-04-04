@@ -1,0 +1,188 @@
+#!/bin/bash
+# Patch the system Python stdlib on Yocto images that ship incomplete installs.
+#
+# Pod 3 (Python 3.9) and Pod 4 (Python 3.10) Yocto images are missing stdlib
+# modules (plistlib, pyexpat, ensurepip internals, etc.) which breaks venv
+# creation. This script downloads the matching CPython source and copies any
+# missing .py files into the system lib directory.
+#
+# Idempotent: skips files that already exist. Safe to re-run.
+#
+# Usage: patch-python-stdlib
+#   Exits 0 on success or if no patching needed.
+#   Exits 1 on failure.
+
+set -euo pipefail
+
+# --------------------------------------------------------------------------
+# Logging helpers
+# --------------------------------------------------------------------------
+log()  { echo "[patch-python-stdlib] $*"; }
+warn() { echo "[patch-python-stdlib] WARNING: $*" >&2; }
+err()  { echo "[patch-python-stdlib] ERROR: $*" >&2; }
+
+# --------------------------------------------------------------------------
+# Detect Python version and lib directory
+# --------------------------------------------------------------------------
+if ! command -v python3 &>/dev/null; then
+  err "python3 not found in PATH"
+  exit 1
+fi
+
+PY_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")
+PY_MAJOR_MINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+
+log "Detected Python $PY_VERSION"
+
+# Find the system lib directory (varies by distro/arch)
+PY_LIB_DIR=""
+for candidate in \
+  "/usr/lib64/python${PY_MAJOR_MINOR}" \
+  "/usr/lib/python${PY_MAJOR_MINOR}" \
+; do
+  if [ -d "$candidate" ]; then
+    PY_LIB_DIR="$candidate"
+    break
+  fi
+done
+
+if [ -z "$PY_LIB_DIR" ]; then
+  # Ask Python itself
+  PY_LIB_DIR=$(python3 -c "import sysconfig; print(sysconfig.get_path('stdlib'))")
+  if [ ! -d "$PY_LIB_DIR" ]; then
+    err "Could not locate Python stdlib directory"
+    err "  Tried: /usr/lib64/python${PY_MAJOR_MINOR}, /usr/lib/python${PY_MAJOR_MINOR}"
+    err "  sysconfig reported: $PY_LIB_DIR"
+    exit 1
+  fi
+fi
+
+log "System lib directory: $PY_LIB_DIR"
+
+# --------------------------------------------------------------------------
+# Quick check: is patching needed?
+# --------------------------------------------------------------------------
+# Test the modules that are known to break venv/ensurepip on Yocto
+NEEDS_PATCH=false
+for mod in plistlib ensurepip; do
+  if ! python3 -c "import $mod" 2>/dev/null; then
+    log "Module '$mod' is missing — patching needed"
+    NEEDS_PATCH=true
+    break
+  fi
+done
+
+if [ "$NEEDS_PATCH" = false ]; then
+  if python3 -c "import pyexpat" 2>/dev/null; then
+    log "Python stdlib appears complete, no patching needed"
+  else
+    warn "pyexpat C extension missing — cannot fix via .py patching, pip/venv still work"
+  fi
+  exit 0
+fi
+
+# --------------------------------------------------------------------------
+# Download matching CPython source
+# --------------------------------------------------------------------------
+CPYTHON_URL="https://github.com/python/cpython/archive/refs/tags/v${PY_VERSION}.tar.gz"
+WORK_DIR=$(mktemp -d)
+
+cleanup() {
+  rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+
+log "Downloading CPython $PY_VERSION source..."
+log "  URL: $CPYTHON_URL"
+
+if ! curl -fsSL --max-time 120 "$CPYTHON_URL" -o "$WORK_DIR/cpython.tar.gz"; then
+  err "Failed to download CPython source"
+  err "  URL: $CPYTHON_URL"
+  err "  This may mean Python $PY_VERSION is not a tagged CPython release"
+  exit 1
+fi
+
+log "Extracting Lib/ directory..."
+if ! tar xzf "$WORK_DIR/cpython.tar.gz" -C "$WORK_DIR" --strip-components=1 "cpython-${PY_VERSION}/Lib/"; then
+  # Try alternate archive directory name format
+  if ! tar xzf "$WORK_DIR/cpython.tar.gz" -C "$WORK_DIR" --strip-components=1 "cpython-v${PY_VERSION}/Lib/"; then
+    err "Failed to extract Lib/ from CPython source tarball"
+    err "  Listing top-level contents for debugging:"
+    tar tzf "$WORK_DIR/cpython.tar.gz" | head -5 >&2 || true
+    exit 1
+  fi
+fi
+
+SRC_LIB="$WORK_DIR/Lib"
+if [ ! -d "$SRC_LIB" ]; then
+  err "Expected $SRC_LIB after extraction but directory not found"
+  ls -la "$WORK_DIR" >&2
+  exit 1
+fi
+
+# --------------------------------------------------------------------------
+# Copy missing .py files (non-destructive)
+# --------------------------------------------------------------------------
+COPIED=0
+SKIPPED=0
+FAILED=0
+
+log "Copying missing stdlib .py files to $PY_LIB_DIR..."
+
+# Use find to get all .py files, preserving directory structure
+while IFS= read -r src_file; do
+  # Get the relative path from the Lib/ directory
+  rel_path="${src_file#$SRC_LIB/}"
+  dest_file="$PY_LIB_DIR/$rel_path"
+
+  if [ -f "$dest_file" ]; then
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
+
+  # Create parent directory if needed
+  dest_dir=$(dirname "$dest_file")
+  if [ ! -d "$dest_dir" ]; then
+    mkdir -p "$dest_dir"
+  fi
+
+  if cp "$src_file" "$dest_file" 2>/dev/null; then
+    COPIED=$((COPIED + 1))
+  else
+    warn "Failed to copy: $rel_path"
+    FAILED=$((FAILED + 1))
+  fi
+done < <(find "$SRC_LIB" -name '*.py' -type f)
+
+log "Stdlib patching complete: $COPIED copied, $SKIPPED already present, $FAILED failed"
+
+# --------------------------------------------------------------------------
+# Verify critical modules now import
+# --------------------------------------------------------------------------
+VERIFY_OK=true
+for mod in plistlib ensurepip; do
+  if python3 -c "import $mod" 2>/dev/null; then
+    log "  ✓ $mod"
+  else
+    err "  ✗ $mod — still not importable after patching"
+    VERIFY_OK=false
+  fi
+done
+
+# pyexpat is a C extension — .py patching won't fix it, but log the status
+if python3 -c "import pyexpat" 2>/dev/null; then
+  log "  ✓ pyexpat"
+else
+  warn "  ✗ pyexpat — C extension, not fixable via .py patching"
+  warn "    pip/venv should still work without pyexpat"
+fi
+
+if [ "$VERIFY_OK" = false ]; then
+  err "Some critical modules still missing after patching"
+  err "  Python: $PY_VERSION"
+  err "  Lib dir: $PY_LIB_DIR"
+  err "  Source: $CPYTHON_URL"
+  exit 1
+fi
+
+log "Python stdlib is ready for venv creation"
