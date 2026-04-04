@@ -20,8 +20,9 @@ try {
     let existing = {}
     try { existing = JSON.parse(readFileSync('.git-info', 'utf-8')) } catch {}
     writeFileSync('.git-info', JSON.stringify({
-      ...existing,
       branch,
+      commitHash: existing.commitHash || run('git rev-parse --short HEAD'),
+      commitTitle: existing.commitTitle || run('git log -1 --format=%s'),
       buildDate: new Date().toISOString(),
     }))
   }
