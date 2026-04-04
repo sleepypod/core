@@ -152,6 +152,7 @@ esac
 
 INSTALL_DIR="/home/dac/sleepypod-core"
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+SCRIPT_DEFAULT_BRANCH="dev"  # must match target branch (CI validates on PR)
 
 # Lock file to prevent concurrent installs
 LOCKFILE="/var/run/sleepypod-install.lock"
@@ -318,7 +319,7 @@ if [ "$INSTALL_LOCAL" = true ]; then
   fi
 else
   # Download code via tarball (no git required on device)
-  DOWNLOAD_BRANCH="${INSTALL_BRANCH:-main}"
+  DOWNLOAD_BRANCH="${INSTALL_BRANCH:-$SCRIPT_DEFAULT_BRANCH}"
   echo "Downloading $DOWNLOAD_BRANCH from GitHub..."
 
   DOWNLOAD_DIR=$(mktemp -d)
@@ -387,7 +388,14 @@ else
 fi
 
 # Detect pod generation and DAC socket path (code is now on disk)
-source "$INSTALL_DIR/scripts/pod/detect"
+if [ -f "$INSTALL_DIR/scripts/pod/detect" ]; then
+  source "$INSTALL_DIR/scripts/pod/detect"
+else
+  echo "Error: $INSTALL_DIR/scripts/pod/detect not found." >&2
+  echo "  The downloaded code does not match this install script." >&2
+  echo "  Try: curl -fsSL <url> | sudo bash -s -- --branch $SCRIPT_DEFAULT_BRANCH" >&2
+  exit 1
+fi
 echo "Pod generation: $POD_GEN (DAC: $DAC_SOCK_PATH)"
 
 # Install production dependencies (prebuild-install downloads prebuilt better-sqlite3)
@@ -644,11 +652,14 @@ fi
 fix_db_permissions
 
 # Install CLI tools from scripts/bin/
-echo "Installing CLI tools..."
-for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
-  cp "$tool" /usr/local/bin/
-  chmod +x "/usr/local/bin/$(basename "$tool")"
-done
+if [ -d "$INSTALL_DIR/scripts/bin" ]; then
+  echo "Installing CLI tools..."
+  for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
+    [ -f "$tool" ] || continue
+    cp "$tool" /usr/local/bin/
+    chmod +x "/usr/local/bin/$(basename "$tool")"
+  done
+fi
 
 # Optional SSH configuration
 if [ "$SKIP_SSH" = true ]; then
