@@ -558,6 +558,139 @@ export const schedulesRouter = router({
     }),
 
   /**
+   * Batch update schedules — deletes, creates, and updates in one transaction with one scheduler reload.
+   * Used by bulk operations (apply to other days, toggle all) to avoid N+1 API calls.
+   */
+  batchUpdate: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/schedules/batch', protect: false, tags: ['Schedules'] } })
+    .input(
+      z.object({
+        deletes: z.object({
+          temperature: z.array(idSchema).default([]),
+          power: z.array(idSchema).default([]),
+          alarm: z.array(idSchema).default([]),
+        }).default({ temperature: [], power: [], alarm: [] }),
+        creates: z.object({
+          temperature: z.array(z.object({
+            side: sideSchema,
+            dayOfWeek: dayOfWeekSchema,
+            time: timeStringSchema,
+            temperature: temperatureSchema,
+            enabled: z.boolean().default(true),
+          })).default([]),
+          power: z.array(z.object({
+            side: sideSchema,
+            dayOfWeek: dayOfWeekSchema,
+            onTime: timeStringSchema,
+            offTime: timeStringSchema,
+            onTemperature: temperatureSchema,
+            enabled: z.boolean().default(true),
+          })).default([]),
+          alarm: z.array(z.object({
+            side: sideSchema,
+            dayOfWeek: dayOfWeekSchema,
+            time: timeStringSchema,
+            vibrationIntensity: vibrationIntensitySchema,
+            vibrationPattern: vibrationPatternSchema.default('rise'),
+            duration: alarmDurationSchema,
+            alarmTemperature: temperatureSchema,
+            enabled: z.boolean().default(true),
+          })).default([]),
+        }).default({ temperature: [], power: [], alarm: [] }),
+        updates: z.object({
+          temperature: z.array(z.object({
+            id: idSchema,
+            time: timeStringSchema.optional(),
+            temperature: temperatureSchema.optional(),
+            enabled: z.boolean().optional(),
+          })).default([]),
+          power: z.array(z.object({
+            id: idSchema,
+            onTime: timeStringSchema.optional(),
+            offTime: timeStringSchema.optional(),
+            onTemperature: temperatureSchema.optional(),
+            enabled: z.boolean().optional(),
+          })).default([]),
+          alarm: z.array(z.object({
+            id: idSchema,
+            time: timeStringSchema.optional(),
+            vibrationIntensity: vibrationIntensitySchema.optional(),
+            vibrationPattern: vibrationPatternSchema.optional(),
+            duration: alarmDurationSchema.optional(),
+            alarmTemperature: temperatureSchema.optional(),
+            enabled: z.boolean().optional(),
+          })).default([]),
+        }).default({ temperature: [], power: [], alarm: [] }),
+      })
+    )
+    .output(z.object({ success: z.boolean() }))
+    .mutation(async ({ input }) => {
+      try {
+        db.transaction((tx) => {
+          // Deletes first
+          for (const id of input.deletes.temperature) {
+            tx.delete(temperatureSchedules).where(eq(temperatureSchedules.id, id)).run()
+          }
+          for (const id of input.deletes.power) {
+            tx.delete(powerSchedules).where(eq(powerSchedules.id, id)).run()
+          }
+          for (const id of input.deletes.alarm) {
+            tx.delete(alarmSchedules).where(eq(alarmSchedules.id, id)).run()
+          }
+
+          // Creates
+          for (const entry of input.creates.temperature) {
+            tx.insert(temperatureSchedules).values(entry).run()
+          }
+          for (const entry of input.creates.power) {
+            tx.insert(powerSchedules).values(entry).run()
+          }
+          for (const entry of input.creates.alarm) {
+            tx.insert(alarmSchedules).values(entry).run()
+          }
+
+          // Updates
+          for (const { id, ...updates } of input.updates.temperature) {
+            tx.update(temperatureSchedules)
+              .set({ ...updates, updatedAt: new Date() })
+              .where(eq(temperatureSchedules.id, id))
+              .run()
+          }
+          for (const { id, ...updates } of input.updates.power) {
+            tx.update(powerSchedules)
+              .set({ ...updates, updatedAt: new Date() })
+              .where(eq(powerSchedules.id, id))
+              .run()
+          }
+          for (const { id, ...updates } of input.updates.alarm) {
+            tx.update(alarmSchedules)
+              .set({ ...updates, updatedAt: new Date() })
+              .where(eq(alarmSchedules.id, id))
+              .run()
+          }
+        })
+
+        try {
+          await reloadScheduler()
+        }
+        catch (e) {
+          console.error('Scheduler reload failed:', e)
+        }
+
+        return { success: true }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to batch update schedules: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
    * Get schedules for a specific day
    */
   getByDay: publicProcedure
