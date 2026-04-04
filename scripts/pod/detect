@@ -1,0 +1,70 @@
+#!/bin/bash
+# Pod detection — determines DAC socket path and pod generation.
+# Sourced by scripts/install (after code is on disk) and usable by CLI tools.
+#
+# Sets in caller's scope: INSTALL_DIR, DATA_DIR, DAC_SOCK_PATH, POD_GEN
+#
+# POD_GEN is "3_4" or "5" — enough for install-time branching.
+# Precise pod version (H00/I00/J00) is only available at runtime
+# via the hardware sensor label (see src/hardware/responseParser.ts).
+
+INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
+DATA_DIR="${DATA_DIR:-/persistent/sleepypod-data}"
+
+# Only accept known firmware-supported socket locations
+is_supported_dac_path() {
+  case "$1" in
+    /deviceinfo/dac.sock|/persistent/deviceinfo/dac.sock) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_dac_sock() {
+  local path=""
+
+  # Priority 1: Read from existing .env (validate against known paths)
+  if [ -f "$INSTALL_DIR/.env" ]; then
+    path=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    if [ -n "$path" ] && is_supported_dac_path "$path"; then
+      echo "$path"
+      return
+    elif [ -n "$path" ]; then
+      echo "Warning: Ignoring unsupported DAC_SOCK_PATH from .env: $path" >&2
+    fi
+  fi
+
+  # Priority 2: Extract from frank.sh (what frankenfirmware actually uses)
+  if [ -f /opt/eight/bin/frank.sh ]; then
+    path=$(grep 'DAC_SOCKET=' /opt/eight/bin/frank.sh 2>/dev/null \
+      | grep -o '[^ ]*dac\.sock' | head -1 || true)
+    if [ -n "$path" ] && is_supported_dac_path "$path"; then
+      echo "Detected dac.sock path from frank.sh: $path" >&2
+      echo "$path"
+      return
+    elif [ -n "$path" ]; then
+      echo "Warning: Ignoring unsupported DAC_SOCK_PATH from frank.sh: $path" >&2
+    fi
+  fi
+
+  # Priority 3: Check known socket locations
+  for sock in /persistent/deviceinfo/dac.sock /deviceinfo/dac.sock; do
+    if [ -S "$sock" ]; then
+      echo "Found active dac.sock at: $sock" >&2
+      echo "$sock"
+      return
+    fi
+  done
+
+  # Priority 4: Default to Pod 5 path
+  echo "Warning: dac.sock not found, using default: /persistent/deviceinfo/dac.sock" >&2
+  echo "/persistent/deviceinfo/dac.sock"
+}
+
+DAC_SOCK_PATH="$(detect_dac_sock)"
+
+# Derive pod generation from socket path
+case "$DAC_SOCK_PATH" in
+  /persistent/deviceinfo/dac.sock) POD_GEN="5" ;;
+  /deviceinfo/dac.sock)            POD_GEN="3_4" ;;
+  *)                               POD_GEN="5" ;;
+esac

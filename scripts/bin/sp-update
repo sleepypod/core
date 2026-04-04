@@ -1,0 +1,257 @@
+#!/bin/bash
+set -euo pipefail
+
+# Ensure /usr/local/bin is in PATH (Yocto's root SSH PATH is minimal)
+case ":$PATH:" in
+  *:/usr/local/bin:*) ;;
+  *) export PATH="/usr/local/bin:$PATH" ;;
+esac
+
+# sp-update — self-update sleepypod-core from GitHub via curl+tarball
+#
+# Usage:
+#   sp-update              # update to latest main
+#   sp-update feat/alarms  # update to a specific branch
+#
+# Handles iptables toggle automatically (opens WAN, downloads, closes WAN).
+# No git required — uses GitHub's tarball API.
+
+INSTALL_DIR="/home/dac/sleepypod-core"
+DATA_DIR="/persistent/sleepypod-data"
+GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+BRANCH="${1:-main}"
+
+echo "=== SleepyPod Update ==="
+echo "Branch: $BRANCH"
+echo "Repo:   $GITHUB_REPO"
+echo ""
+
+# Source shared iptables helpers (with inline fallback for transitional installs)
+if [ -f "$INSTALL_DIR/scripts/lib/iptables-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/iptables-helpers"
+else
+  # Inline fallback — remove once all pods have scripts/lib/
+  SAVED_IPTABLES=""
+  WAN_WAS_BLOCKED=false
+  wan_is_blocked() {
+    iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
+  }
+  unblock_wan() {
+    echo "Opening WAN access..."
+    SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+    iptables -F && iptables -X && iptables -t nat -F && iptables -t nat -X
+    echo "WAN open."
+  }
+  restore_wan() {
+    if [ -n "$SAVED_IPTABLES" ]; then
+      echo "Restoring iptables rules..."
+      echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || iptables -P OUTPUT DROP
+    else
+      iptables -P OUTPUT DROP
+    fi
+    echo "WAN blocked."
+  }
+fi
+
+# Cleanup — re-block WAN, rollback code, and restart service on failure
+ROLLBACK_READY=false
+cleanup() {
+  local exit_code=$?
+  if [ "$WAN_WAS_BLOCKED" = true ]; then
+    restore_wan
+    WAN_WAS_BLOCKED=false
+  fi
+  if [ "$exit_code" -ne 0 ] && [ "$ROLLBACK_READY" = true ]; then
+    echo "Update failed, rolling back..." >&2
+    if [ -d "$BACKUP_DIR" ]; then
+      find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+        ! -name 'node_modules' \
+        ! -name '.env' \
+        -exec rm -rf {} +
+      cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
+      # Restore CLI tools from rolled-back code
+      if [ -d "$INSTALL_DIR/scripts/bin" ]; then
+        for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
+          cp "$tool" /usr/local/bin/
+          chmod +x "/usr/local/bin/$(basename "$tool")"
+        done
+      fi
+      echo "Previous code restored."
+    fi
+    if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
+      cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
+      [ -f "$DATA_DIR/sleepypod.db-wal.bak" ] && cp "$DATA_DIR/sleepypod.db-wal.bak" "$DATA_DIR/sleepypod.db-wal"
+      [ -f "$DATA_DIR/sleepypod.db-shm.bak" ] && cp "$DATA_DIR/sleepypod.db-shm.bak" "$DATA_DIR/sleepypod.db-shm"
+      echo "Database restored."
+    fi
+    systemctl start sleepypod.service 2>/dev/null || true
+  elif [ "$exit_code" -ne 0 ]; then
+    echo "Update failed before rollback point, starting service with existing code..." >&2
+    systemctl start sleepypod.service 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+# Pre-flight: disk space
+DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
+if [ "$DISK_AVAIL" -lt 300 ]; then
+  echo "Error: Need 300MB free, only ${DISK_AVAIL}MB available" >&2
+  exit 1
+fi
+
+# Open WAN if blocked
+if wan_is_blocked; then
+  # Ensure /etc/hosts telemetry block is in place before opening WAN
+  if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+    echo "Installing /etc/hosts telemetry block before opening WAN..."
+    "$INSTALL_DIR/scripts/internet-control" hosts-block 2>/dev/null || true
+  fi
+  WAN_WAS_BLOCKED=true
+  unblock_wan
+fi
+
+# Check connectivity
+if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
+  echo "Error: Cannot reach GitHub. Check network." >&2
+  exit 1
+fi
+
+# Backup current code for rollback (everything except node_modules)
+BACKUP_DIR="/tmp/sleepypod-rollback"
+rm -rf "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR"
+tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C "$BACKUP_DIR" || true
+
+# Stop service before DB backup (ensures WAL is flushed)
+systemctl stop sleepypod.service
+
+# Backup database (after stop so WAL/SHM are consistent)
+if [ -f "$DATA_DIR/sleepypod.db" ]; then
+  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
+  [ -f "$DATA_DIR/sleepypod.db-wal" ] && cp "$DATA_DIR/sleepypod.db-wal" "$DATA_DIR/sleepypod.db-wal.bak"
+  [ -f "$DATA_DIR/sleepypod.db-shm" ] && cp "$DATA_DIR/sleepypod.db-shm" "$DATA_DIR/sleepypod.db-shm.bak"
+  echo "Database backed up."
+fi
+
+# Download code — try CI release first (includes pre-built .next), fall back to source tarball
+WORK_DIR=$(mktemp -d)
+HAS_BUILD=false
+
+if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "latest" ]; then
+  # Try latest GitHub Release (CI-built, includes .next)
+  echo "Checking for CI release..."
+  RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+    | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
+    | grep -o 'https://[^"]*' || true)
+
+  if [ -n "$RELEASE_URL" ]; then
+    echo "Downloading CI release..."
+    if curl -fSL "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
+      HAS_BUILD=true
+      echo "CI release downloaded (pre-built)."
+    fi
+  fi
+fi
+
+if [ "$HAS_BUILD" = false ]; then
+  # Fall back to source tarball (no .next — would need build on pod)
+  # "latest" is not a real branch — use main for the source tarball
+  SOURCE_BRANCH="$BRANCH"
+  [ "$SOURCE_BRANCH" = "latest" ] && SOURCE_BRANCH="main"
+  echo "Downloading $SOURCE_BRANCH from GitHub..."
+  TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${SOURCE_BRANCH}.tar.gz"
+  if ! curl -fSL "$TARBALL_URL" | tar xz -C "$WORK_DIR"; then
+    echo "Error: Failed to download branch '$BRANCH'" >&2
+    exit 1
+  fi
+  # Source tarball extracts to a subdirectory (e.g., core-main/)
+  SUBDIR=$(ls "$WORK_DIR" | head -1)
+  if [ -z "$SUBDIR" ] || [ ! -d "$WORK_DIR/$SUBDIR" ]; then
+    echo "Error: Unexpected tarball structure in $WORK_DIR" >&2
+    exit 1
+  fi
+  # Move contents up so WORK_DIR is the root
+  mv "$WORK_DIR/$SUBDIR"/* "$WORK_DIR/$SUBDIR"/.[!.]* "$WORK_DIR/" 2>/dev/null || true
+  rmdir "$WORK_DIR/$SUBDIR" 2>/dev/null || true
+fi
+
+# Clean old files (preserve node_modules, .env)
+find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+  ! -name 'node_modules' \
+  ! -name '.env' \
+  -exec rm -rf {} +
+ROLLBACK_READY=true
+
+# Move new code into place
+cp -r "$WORK_DIR/." "$INSTALL_DIR/"
+rm -rf "$WORK_DIR"
+echo "Source updated."
+
+cd "$INSTALL_DIR"
+
+# Install prod deps (migrations run automatically on app startup via instrumentation.ts)
+if pnpm install --frozen-lockfile --prod; then
+
+  # Build only if no pre-built .next exists
+  if [ ! -d "$INSTALL_DIR/.next" ]; then
+    echo "No pre-built .next found, building..."
+    pnpm install --frozen-lockfile
+    pnpm build
+  fi
+
+  # Sync biometrics modules
+  if [ -d "$INSTALL_DIR/modules" ]; then
+    MODULES_DEST="/opt/sleepypod/modules"
+    mkdir -p "$MODULES_DEST"
+    if [ -d "$INSTALL_DIR/modules/common" ]; then
+      mkdir -p "$MODULES_DEST/common"
+      cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
+    fi
+    for mod in piezo-processor sleep-detector environment-monitor calibrator; do
+      if [ -d "$INSTALL_DIR/modules/$mod" ]; then
+        mkdir -p "$MODULES_DEST/$mod"
+        cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
+        if [ ! -d "$MODULES_DEST/$mod/venv" ] && command -v python3 &>/dev/null; then
+          python3 -m venv "$MODULES_DEST/$mod/venv" 2>/dev/null || true
+        fi
+        if [ -d "$MODULES_DEST/$mod/venv" ] && [ -f "$MODULES_DEST/$mod/requirements.txt" ]; then
+          "$MODULES_DEST/$mod/venv/bin/pip" install --quiet -r "$MODULES_DEST/$mod/requirements.txt" || true
+        fi
+        svc="sleepypod-$mod.service"
+        if [ -f "$MODULES_DEST/$mod/$svc" ]; then
+          cp "$MODULES_DEST/$mod/$svc" "/etc/systemd/system/$svc"
+          systemctl daemon-reload
+          systemctl enable "$svc" 2>/dev/null || true
+          systemctl restart "$svc" 2>/dev/null || true
+        fi
+      fi
+    done
+  fi
+
+  # Install CLI tools from new source
+  if [ -d "$INSTALL_DIR/scripts/bin" ]; then
+    for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
+      cp "$tool" /usr/local/bin/
+      chmod +x "/usr/local/bin/$(basename "$tool")"
+    done
+  fi
+
+  # Re-block WAN before starting service
+  if [ "$WAN_WAS_BLOCKED" = true ]; then
+    restore_wan
+    WAN_WAS_BLOCKED=false
+  fi
+
+  echo "Starting service..."
+  systemctl start sleepypod.service
+
+  sleep 5
+  if systemctl is-active --quiet sleepypod.service; then
+    echo "Update complete! Service is running."
+    exit 0
+  fi
+fi
+
+# If we get here, update failed (pnpm install returned non-zero or service didn't start).
+# Cleanup trap handles rollback — just exit with failure.
+exit 1
