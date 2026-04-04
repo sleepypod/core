@@ -152,7 +152,7 @@ esac
 
 INSTALL_DIR="/home/dac/sleepypod-core"
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
-SCRIPT_DEFAULT_BRANCH="dev"  # must match the branch this script lives on
+SCRIPT_DEFAULT_BRANCH="dev"  # must match target branch (CI validates on PR)
 
 # Lock file to prevent concurrent installs
 LOCKFILE="/var/run/sleepypod-install.lock"
