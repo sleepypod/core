@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { accessSync, constants } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
@@ -14,7 +15,7 @@ const execFileAsync = promisify(execFile)
 function resolveExec(name: string, candidates: string[]): string {
   for (const p of candidates) {
     try {
-      execFileSync('test', ['-x', p], { stdio: 'ignore' })
+      accessSync(p, constants.X_OK)
       return p
     }
     catch { /* not found, try next */ }
