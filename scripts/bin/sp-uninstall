@@ -93,9 +93,12 @@ else
 fi
 
 # Remove /etc/hosts telemetry block
-if grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+if grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null && \
+   grep -q "# END sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
   echo "Removing /etc/hosts telemetry block..."
   sed -i '/# BEGIN sleepypod-telemetry-block/,/# END sleepypod-telemetry-block/d' /etc/hosts
+elif grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+  echo "Warning: Incomplete telemetry block in /etc/hosts (missing END marker), skipping removal"
 fi
 
 # Restore iptables to allow all traffic (IPv4 and IPv6)
