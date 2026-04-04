@@ -53,7 +53,9 @@ function ScheduleGroupChip({ dayOfWeek }: { dayOfWeek: DayOfWeek }) {
       </div>
       {otherDays && (
         <span className="text-[10px] text-zinc-500">
-          also {otherDays}
+          also
+          {' '}
+          {otherDays}
         </span>
       )}
     </div>
