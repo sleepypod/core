@@ -60,7 +60,7 @@ jobs:
           gh release delete dev --yes 2>/dev/null || true
           git push -d origin refs/tags/dev 2>/dev/null || true
           git tag -f dev
-          git push -f origin refs/tags/dev
+          git push -f --no-verify origin refs/tags/dev
           gh release create dev sleepypod-core.tar.gz \
             --target "${{ github.sha }}" \
             --title "Dev (latest)" \
