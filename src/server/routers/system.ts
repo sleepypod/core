@@ -1,14 +1,29 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
-const IPTABLES = '/usr/sbin/iptables'
-const IPTABLES_SAVE = '/usr/sbin/iptables-save'
+/**
+ * Resolve an executable path, checking common locations on Yocto and Debian.
+ * Falls back to bare name (relies on PATH) if no candidate is found.
+ */
+function resolveExec(name: string, candidates: string[]): string {
+  for (const p of candidates) {
+    try {
+      execFileSync('test', ['-x', p], { stdio: 'ignore' })
+      return p
+    }
+    catch { /* not found, try next */ }
+  }
+  return name // bare name — let PATH resolve it
+}
+
+const IPTABLES = resolveExec('iptables', ['/sbin/iptables', '/usr/sbin/iptables'])
+const IPTABLES_SAVE = resolveExec('iptables-save', ['/sbin/iptables-save', '/usr/sbin/iptables-save'])
 
 /**
  * Simple async mutex to serialize iptables mutations.
