@@ -174,10 +174,12 @@ export function useSchedule() {
       }
     }
 
-    await batchUpdate.mutateAsync({
-      updates: { power: powerUpdates },
-      creates: { power: powerCreates },
-    })
+    if (powerUpdates.length > 0 || powerCreates.length > 0) {
+      await batchUpdate.mutateAsync({
+        updates: { power: powerUpdates },
+        creates: { power: powerCreates },
+      })
+    }
 
     setConfirmMessage(
       `Schedule ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
@@ -234,10 +236,12 @@ export function useSchedule() {
       }
     }
 
-    await batchUpdate.mutateAsync({
-      updates: { temperature: tempUpdates, power: powerUpdates, alarm: alarmUpdates },
-      creates: { power: powerCreates },
-    })
+    if (tempUpdates.length > 0 || powerUpdates.length > 0 || alarmUpdates.length > 0 || powerCreates.length > 0) {
+      await batchUpdate.mutateAsync({
+        updates: { temperature: tempUpdates, power: powerUpdates, alarm: alarmUpdates },
+        creates: { power: powerCreates },
+      })
+    }
 
     setConfirmMessage(
       `All schedules ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
@@ -326,10 +330,14 @@ export function useSchedule() {
           }
         }
 
-        await batchUpdate.mutateAsync({
-          deletes: { temperature: tempDeletes, power: powerDeletes, alarm: alarmDeletes },
-          creates: { temperature: tempCreates, power: powerCreates, alarm: alarmCreates },
-        })
+        const hasChanges = tempDeletes.length > 0 || powerDeletes.length > 0 || alarmDeletes.length > 0
+          || tempCreates.length > 0 || powerCreates.length > 0 || alarmCreates.length > 0
+        if (hasChanges) {
+          await batchUpdate.mutateAsync({
+            deletes: { temperature: tempDeletes, power: powerDeletes, alarm: alarmDeletes },
+            creates: { temperature: tempCreates, power: powerCreates, alarm: alarmCreates },
+          })
+        }
 
         setConfirmMessage(
           `Schedule applied to ${targetDays.length} day${targetDays.length > 1 ? 's' : ''}. Scheduler reloaded.`

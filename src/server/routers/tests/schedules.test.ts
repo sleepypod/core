@@ -189,16 +189,11 @@ describe('schedules.batchUpdate', () => {
     expect(result).toEqual({ success: true })
   })
 
-  it('rolls back all changes on transaction failure', async () => {
-    // Seed a valid record
+  it('applies deletes and creates atomically', async () => {
     await caller.createTemperatureSchedule({ side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68 })
 
     const before = await caller.getAll({ side: 'left' })
     expect(before.temperature).toHaveLength(1)
-
-    // Attempt a batch with an update referencing a non-existent table column
-    // won't work — drizzle builds SQL at call time. Instead, test that a valid
-    // batch with deletes + creates is atomic by verifying final state.
     const id = before.temperature[0].id
 
     await caller.batchUpdate({
@@ -212,8 +207,19 @@ describe('schedules.batchUpdate', () => {
     })
 
     const after = await caller.getAll({ side: 'left' })
-    // Old record gone, two new ones present
     expect(after.temperature).toHaveLength(2)
     expect(after.temperature.find((t: any) => t.id === id)).toBeUndefined()
+  })
+
+  it('throws NOT_FOUND for missing delete IDs', async () => {
+    await expect(
+      caller.batchUpdate({ deletes: { temperature: [99999] } })
+    ).rejects.toThrow('not found')
+  })
+
+  it('throws NOT_FOUND for missing update IDs', async () => {
+    await expect(
+      caller.batchUpdate({ updates: { power: [{ id: 99999, enabled: false }] } })
+    ).rejects.toThrow('not found')
   })
 })

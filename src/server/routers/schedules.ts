@@ -566,9 +566,9 @@ export const schedulesRouter = router({
     .input(
       z.object({
         deletes: z.object({
-          temperature: z.array(idSchema).default([]),
-          power: z.array(idSchema).default([]),
-          alarm: z.array(idSchema).default([]),
+          temperature: z.array(idSchema).max(100).default([]),
+          power: z.array(idSchema).max(100).default([]),
+          alarm: z.array(idSchema).max(100).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
         creates: z.object({
           temperature: z.array(z.object({
@@ -577,7 +577,7 @@ export const schedulesRouter = router({
             time: timeStringSchema,
             temperature: temperatureSchema,
             enabled: z.boolean().default(true),
-          })).default([]),
+          })).max(100).default([]),
           power: z.array(z.object({
             side: sideSchema,
             dayOfWeek: dayOfWeekSchema,
@@ -585,7 +585,7 @@ export const schedulesRouter = router({
             offTime: timeStringSchema,
             onTemperature: temperatureSchema,
             enabled: z.boolean().default(true),
-          })).default([]),
+          })).max(100).default([]),
           alarm: z.array(z.object({
             side: sideSchema,
             dayOfWeek: dayOfWeekSchema,
@@ -595,7 +595,7 @@ export const schedulesRouter = router({
             duration: alarmDurationSchema,
             alarmTemperature: temperatureSchema,
             enabled: z.boolean().default(true),
-          })).default([]),
+          })).max(100).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
         updates: z.object({
           temperature: z.array(z.object({
@@ -603,14 +603,14 @@ export const schedulesRouter = router({
             time: timeStringSchema.optional(),
             temperature: temperatureSchema.optional(),
             enabled: z.boolean().optional(),
-          })).default([]),
+          })).max(100).default([]),
           power: z.array(z.object({
             id: idSchema,
             onTime: timeStringSchema.optional(),
             offTime: timeStringSchema.optional(),
             onTemperature: temperatureSchema.optional(),
             enabled: z.boolean().optional(),
-          })).default([]),
+          })).max(100).default([]),
           alarm: z.array(z.object({
             id: idSchema,
             time: timeStringSchema.optional(),
@@ -619,7 +619,7 @@ export const schedulesRouter = router({
             duration: alarmDurationSchema.optional(),
             alarmTemperature: temperatureSchema.optional(),
             enabled: z.boolean().optional(),
-          })).default([]),
+          })).max(100).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
       })
     )
@@ -629,13 +629,16 @@ export const schedulesRouter = router({
         db.transaction((tx) => {
           // Deletes first
           for (const id of input.deletes.temperature) {
-            tx.delete(temperatureSchedules).where(eq(temperatureSchedules.id, id)).run()
+            const [deleted] = tx.delete(temperatureSchedules).where(eq(temperatureSchedules.id, id)).returning().all()
+            if (!deleted) throw new TRPCError({ code: 'NOT_FOUND', message: `Temperature schedule with ID ${id} not found` })
           }
           for (const id of input.deletes.power) {
-            tx.delete(powerSchedules).where(eq(powerSchedules.id, id)).run()
+            const [deleted] = tx.delete(powerSchedules).where(eq(powerSchedules.id, id)).returning().all()
+            if (!deleted) throw new TRPCError({ code: 'NOT_FOUND', message: `Power schedule with ID ${id} not found` })
           }
           for (const id of input.deletes.alarm) {
-            tx.delete(alarmSchedules).where(eq(alarmSchedules.id, id)).run()
+            const [deleted] = tx.delete(alarmSchedules).where(eq(alarmSchedules.id, id)).returning().all()
+            if (!deleted) throw new TRPCError({ code: 'NOT_FOUND', message: `Alarm schedule with ID ${id} not found` })
           }
 
           // Creates
@@ -651,22 +654,16 @@ export const schedulesRouter = router({
 
           // Updates
           for (const { id, ...updates } of input.updates.temperature) {
-            tx.update(temperatureSchedules)
-              .set({ ...updates, updatedAt: new Date() })
-              .where(eq(temperatureSchedules.id, id))
-              .run()
+            const [updated] = tx.update(temperatureSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(temperatureSchedules.id, id)).returning().all()
+            if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Temperature schedule with ID ${id} not found` })
           }
           for (const { id, ...updates } of input.updates.power) {
-            tx.update(powerSchedules)
-              .set({ ...updates, updatedAt: new Date() })
-              .where(eq(powerSchedules.id, id))
-              .run()
+            const [updated] = tx.update(powerSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(powerSchedules.id, id)).returning().all()
+            if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Power schedule with ID ${id} not found` })
           }
           for (const { id, ...updates } of input.updates.alarm) {
-            tx.update(alarmSchedules)
-              .set({ ...updates, updatedAt: new Date() })
-              .where(eq(alarmSchedules.id, id))
-              .run()
+            const [updated] = tx.update(alarmSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(alarmSchedules.id, id)).returning().all()
+            if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Alarm schedule with ID ${id} not found` })
           }
         })
 
