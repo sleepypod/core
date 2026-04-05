@@ -160,7 +160,7 @@ log "Stdlib patching complete: $COPIED copied, $SKIPPED already present, $FAILED
 # Verify critical modules now import
 # --------------------------------------------------------------------------
 VERIFY_OK=true
-for mod in plistlib ensurepip; do
+for mod in ensurepip; do
   if python3 -c "import $mod" 2>/dev/null; then
     log "  ✓ $mod"
   else
@@ -168,6 +168,13 @@ for mod in plistlib ensurepip; do
     VERIFY_OK=false
   fi
 done
+
+# plistlib depends on pyexpat (C extension) — can't be fixed via .py patching
+if python3 -c "import plistlib" 2>/dev/null; then
+  log "  ✓ plistlib"
+else
+  warn "  ✗ plistlib — depends on pyexpat C extension, not needed for biometrics"
+fi
 
 # pyexpat is a C extension — .py patching won't fix it, but log the status
 if python3 -c "import pyexpat" 2>/dev/null; then

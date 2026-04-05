@@ -400,7 +400,7 @@ echo "Pod generation: $POD_GEN (DAC: $DAC_SOCK_PATH)"
 
 # Install production dependencies (prebuild-install downloads prebuilt better-sqlite3)
 echo "Installing dependencies..."
-pnpm install --frozen-lockfile --prod
+CI=true pnpm install --frozen-lockfile --prod
 
 # Verify better-sqlite3 native module is ready
 if [ ! -f "$INSTALL_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" ] && \
@@ -425,7 +425,7 @@ if [ -d "$INSTALL_DIR/.next" ]; then
 else
   echo "No pre-built .next found, building from source..."
   echo "Installing all dependencies (including devDependencies for build)..."
-  pnpm install --frozen-lockfile
+  CI=true pnpm install --frozen-lockfile
   SP_BRANCH="$EFFECTIVE_BRANCH" pnpm build
 fi
 
