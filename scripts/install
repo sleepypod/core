@@ -637,9 +637,6 @@ ensure_uv
 if ! command -v uv &>/dev/null; then
   echo "Warning: uv not found, skipping module $name"
 else
-  # Patch incomplete Python stdlib on Yocto images (Pod 3/4) so venv/ensurepip work
-  "$INSTALL_DIR/scripts/patch-python-stdlib"
-
   install_module() {
     local name="$1"
     local src="$MODULES_SRC/$name"
