@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "prebuild": "node scripts/generate-git-info.mjs && lingui compile",
-    "build": "next build --no-turbopack",
+    "build": "next build",
     "dev": "next dev",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
