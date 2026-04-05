@@ -491,6 +491,7 @@ Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 ExecStartPre=/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
+ExecStartPre=$INSTALL_DIR/scripts/bin/sp-maintenance
 ExecStart=/usr/local/bin/pnpm start
 Restart=always
 RestartSec=10
@@ -506,6 +507,16 @@ ProtectKernelModules=true
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Cap journal size to prevent unbounded log growth on limited disk
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/sleepypod.conf << 'JOURNALD'
+[Journal]
+SystemMaxUse=50M
+SystemKeepFree=200M
+MaxFileSec=1week
+JOURNALD
+systemctl restart systemd-journald 2>/dev/null || true
 
 # Reload systemd and enable service
 echo "Enabling service..."

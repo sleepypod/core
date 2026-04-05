@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail
+
+# sp-maintenance — housekeeping tasks run on every boot
+#
+# Called by sleepypod.service ExecStartPre so it runs before the app starts.
+# Keeps disk usage in check on the pod's limited storage (~6GB).
+
+DATA_DIR="/persistent/sleepypod-data"
+INSTALL_DIR="/home/dac/sleepypod-core"
+
+echo "=== SleepyPod Maintenance ==="
+
+# 1. Vacuum systemd journal (cap at 50MB)
+if command -v journalctl &>/dev/null; then
+  JOURNAL_SIZE=$(du -sm /persistent/journal 2>/dev/null | awk '{print $1}' || echo 0)
+  if [ "$JOURNAL_SIZE" -gt 50 ]; then
+    echo "Vacuuming journal (${JOURNAL_SIZE}MB → 50MB)..."
+    journalctl --vacuum-size=50M 2>/dev/null || true
+  fi
+fi
+
+# 2. Clean stale temp files (leftover from failed updates, builds, etc.)
+TEMP_CLEANED=0
+for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*; do
+  if [ -e "$d" ]; then
+    rm -rf "$d" 2>/dev/null && TEMP_CLEANED=$((TEMP_CLEANED + 1))
+  fi
+done
+[ "$TEMP_CLEANED" -gt 0 ] && echo "Cleaned $TEMP_CLEANED stale temp entries."
+
+# 3. Prune old database backups (keep 3 most recent)
+if [ -d "$DATA_DIR" ]; then
+  BAK_COUNT=$(ls "$DATA_DIR"/sleepypod.db.bak.* 2>/dev/null | wc -l)
+  if [ "$BAK_COUNT" -gt 3 ]; then
+    PRUNE=$((BAK_COUNT - 3))
+    ls -t "$DATA_DIR"/sleepypod.db.bak.* | tail -n "$PRUNE" | xargs rm -f
+    echo "Pruned $PRUNE old DB backups (kept 3)."
+  fi
+fi
+
+# 4. Prune pnpm content-addressable store
+if command -v pnpm &>/dev/null; then
+  STORE_SIZE=$(du -sm /home/root/.local/share/pnpm/store 2>/dev/null | awk '{print $1}' || echo 0)
+  if [ "$STORE_SIZE" -gt 100 ]; then
+    echo "Pruning pnpm store (${STORE_SIZE}MB)..."
+    pnpm store prune 2>/dev/null || true
+  fi
+fi
+
+DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
+echo "Maintenance complete. ${DISK_AVAIL}MB free."
