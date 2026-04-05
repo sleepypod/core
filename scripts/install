@@ -176,7 +176,7 @@ case ":$PATH:" in
 esac
 
 INSTALL_DIR="/home/dac/sleepypod-core"
-GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-onemec/core}"
 SCRIPT_DEFAULT_BRANCH="dev"  # must match target branch (CI validates on PR)
 
 # Lock file to prevent concurrent installs
