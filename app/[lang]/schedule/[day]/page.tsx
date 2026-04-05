@@ -1,16 +1,7 @@
 import { ScheduleDayDetail } from '@/src/components/Schedule/ScheduleDayDetail'
 
-export function generateStaticParams() {
-  return [
-    { day: 'sunday' },
-    { day: 'monday' },
-    { day: 'tuesday' },
-    { day: 'wednesday' },
-    { day: 'thursday' },
-    { day: 'friday' },
-    { day: 'saturday' },
-  ]
-}
+export const dynamic = 'force-dynamic'
+export const dynamicParams = true
 
 export default async function ScheduleDayPage({
   params,
