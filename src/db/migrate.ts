@@ -1,25 +1,26 @@
-import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { db, sqlite } from './index'
 import { biometricsDb, closeBiometricsDatabase } from './biometrics'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-
 /**
  * Run pending database migrations for all databases.
  * This should be called on server startup.
+ *
+ * Uses process.cwd() instead of __dirname because Turbopack bakes __dirname
+ * at build time — when deploying a local build to the pod, the baked path
+ * doesn't exist on the target. process.cwd() resolves at runtime.
  */
 export async function runMigrations() {
   try {
     console.log('Running database migrations...')
 
     migrate(db, {
-      migrationsFolder: path.resolve(__dirname, 'migrations'),
+      migrationsFolder: path.resolve(process.cwd(), 'src/db/migrations'),
     })
 
     migrate(biometricsDb, {
-      migrationsFolder: path.resolve(__dirname, 'biometrics-migrations'),
+      migrationsFolder: path.resolve(process.cwd(), 'src/db/biometrics-migrations'),
     })
 
     console.log('✓ Database migrations completed successfully')
