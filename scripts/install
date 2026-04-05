@@ -492,7 +492,7 @@ Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 ExecStartPre=/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStartPre=$INSTALL_DIR/scripts/bin/sp-maintenance
-ExecStart=/usr/local/bin/pnpm start
+ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec node .next/standalone/server.js; else exec /usr/local/bin/pnpm start; fi'
 Restart=always
 RestartSec=10
 
