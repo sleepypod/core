@@ -31,10 +31,10 @@ Trigger files use atomic writes (`.tmp` then rename) with unique filenames for q
 
 ## Calibration Profiles
 
-One row per (side, sensor_type) in `calibration_profiles` table. Key fields:
+One row per (side, sensor_type) in `calibration_profiles` table. The sensor-specific thresholds are stored as keys inside the `parameters` JSON column (not separate DB columns):
 
-| Field | Sensor | Purpose |
-|-------|--------|---------|
+| `parameters` key | Sensor | Purpose |
+|-------------------|--------|---------|
 | `noise_floor_rms` | All | Adaptive threshold computation |
 | `noise_floor_p95` | All | Spike rejection |
 | `baseline_mean/std` | All | DC offset and stability |
@@ -76,7 +76,7 @@ quality = 0.35 × SNR + 0.30 × HR_confidence + 0.15 × BR_confidence + 0.20 × 
 Load profile from DB; if none exists (fresh install), use hardcoded defaults. If profile > 48h old, use with warning.
 
 ### Running
-Poll `calibrated_at` every 60s. If newer, hot-swap thresholds (no restart needed).
+Poll `created_at` every 60s. If newer, hot-swap thresholds (no restart needed).
 
 ### Graceful Degradation
 | State | Behavior |

@@ -30,7 +30,7 @@ Node.js was rejected for signal processing (FFT at 500 Hz requires native addons
 | Database | Purpose | Access Pattern |
 |----------|---------|----------------|
 | `sleepypod.db` | Config, schedules, runtime state | Read-heavy, random access |
-| `biometrics.db` | Vitals, sleep records, movement, [[sensor-calibration\|calibration]] | Append-heavy, time-range queries |
+| `biometrics.db` | Vitals, sleep records, movement, [[sensor-calibration|calibration]] | Append-heavy, time-range queries |
 
 Different access patterns warrant different SQLite pragmas. Biometrics data can be cleared, backed up, or handed off independently.
 
@@ -74,9 +74,9 @@ The core app reads manifests to populate the system health/status page.
 
 | Module | Service | Writes | Language |
 |--------|---------|--------|----------|
-| [[piezo-processing\|piezo-processor]] | sleepypod-piezo-processor.service | vitals | Python |
-| [[sleep-detection\|sleep-detector]] | sleepypod-sleep-detector.service | sleep_records, movement | Python |
-| [[sensor-calibration\|calibrator]] | sleepypod-calibrator.service | calibration_profiles, calibration_runs | Python |
+| [[piezo-processing|piezo-processor]] | sleepypod-piezo-processor.service | vitals | Python |
+| [[sleep-detection|sleep-detector]] | sleepypod-sleep-detector.service | sleep_records, movement | Python |
+| [[sensor-calibration|calibrator]] | sleepypod-calibrator.service | calibration_profiles, calibration_runs | Python |
 
 Community modules can be installed by dropping a directory into `/opt/sleepypod/modules/` with the same structure.
 

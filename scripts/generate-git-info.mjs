@@ -21,8 +21,10 @@ try {
     try {
       existing = JSON.parse(readFileSync('.git-info', 'utf-8'))
     }
-    catch {
-      // no existing .git-info
+    catch (err) {
+      if (err?.code !== 'ENOENT') {
+        console.warn('Existing .git-info unreadable; regenerating metadata:', err.message)
+      }
     }
     writeFileSync('.git-info', JSON.stringify({
       branch,

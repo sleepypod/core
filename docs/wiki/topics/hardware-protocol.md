@@ -68,7 +68,7 @@ Formula: `F = 82.5 + (level / 100) × 27.5`
 
 ### Raw Command Execution
 
-A `POST /device/execute` endpoint provides passthrough access to the frank command protocol. Power user feature for debugging and testing — no input validation beyond command name allowlisting. Not covered by standard safety/debounce mechanisms.
+The `device.execute` tRPC mutation (OpenAPI: `POST /device/execute`) provides passthrough access to the frank command protocol. Power user feature for debugging and testing — no input validation beyond command name allowlisting. Not covered by standard safety/debounce mechanisms.
 
 ### Timing
 

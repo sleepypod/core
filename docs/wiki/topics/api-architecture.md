@@ -16,7 +16,7 @@ Type-safe API layer providing frontend access to hardware control, settings, sch
 Device status is primarily pushed via WebSocket on port 3001. tRPC HTTP remains for initial page load, non-WS clients (iOS, CLI), and fallback.
 
 ### Read Bus (DacMonitor)
-Every 2 seconds, DacMonitor polls [[hardware-protocol|dac.sock]] for device status and broadcasts a `deviceStatus` frame via WebSocket to all clients.
+DacMonitor polls [[hardware-protocol|dac.sock]] for device status (defaults to 2s, adapts based on activity: 1s active / 2s normal / 5s idle) and broadcasts a `deviceStatus` frame via WebSocket to all clients.
 
 ### Write Bus (Mutation Broadcast)
 After any hardware mutation (user-initiated via device router OR automated via scheduler), `broadcastMutationStatus()` overlays the mutation onto the last polled status and broadcasts immediately (~200ms). Fire-and-forget — DacMonitor's 2s poll is the consistency backstop.
@@ -45,7 +45,8 @@ const setTemp = trpc.device.setTemperature.useMutation()
 | Sensor data | WebSocket push | `useSensorStream()` / `useSensorFrame()` |
 | Mutations | tRPC HTTP | `trpc.device.*.useMutation()` |
 | Historical data | tRPC HTTP | `trpc.biometrics.*.useQuery()` |
-| Settings, schedules | tRPC HTTP | `trpc.settings/schedules.*.useQuery()` |
+| Settings | tRPC HTTP | `trpc.settings.*.useQuery()` |
+| Schedules | tRPC HTTP | `trpc.schedules.*.useQuery()` |
 
 ## Device Router
 

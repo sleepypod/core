@@ -18,3 +18,7 @@ Wiki initialized on 2026-04-05.
   - privacy (1 source)
 - **Schema**: generated (`schema.md`)
 - **Cross-references**: Obsidian `[[wiki-link]]` style between all related topics
+
+### Note on `.compile-state.json`
+
+`source_hashes` in `.compile-state.json` uses the placeholder value `"compiled"` for every file. These are staging markers indicating a source was processed, not real content hashes. Future iterations may replace them with SHA-256 content hashes for incremental recompilation.
