@@ -14,8 +14,8 @@ set -euo pipefail
 #
 # What it does:
 #   1. Optionally checks out and pulls the specified branch
-#   2. Builds the Next.js app locally (fast, full RAM)
-#   3. Syncs source + .next build to the pod via tar+ssh
+#   2. Builds the Next.js app locally (fast, full RAM) with output: 'standalone'
+#   3. Syncs standalone build to the pod via tar+ssh
 #   4. Runs the install script on the pod (prod deps only, no build)
 #
 # Requirements:
@@ -67,7 +67,7 @@ echo ""
 echo "Syncing to pod..."
 SSH_CMD="ssh -p $SSH_PORT -o ServerAliveInterval=30 $SSH_USER@$POD_IP"
 
-# Clean old files on pod (preserve node_modules, .env)
+# Clean old files on pod (preserve node_modules, .env, persistent data)
 $SSH_CMD "mkdir -p '$REMOTE_DIR' && \
   find '$REMOTE_DIR' -mindepth 1 -maxdepth 1 \
     ! -name 'node_modules' \
