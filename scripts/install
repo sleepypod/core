@@ -138,6 +138,31 @@ block_wan() {
   echo "WAN blocked."
 }
 
+ensure_uv() {
+  if command -v uv &>/dev/null; then
+    echo "uv already installed: $(uv --version)"
+    return
+  fi
+
+  echo "Installing uv..."
+
+  # Install uv (static binary, works on Yocto/musl)
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+
+  # Ensure PATH is updated for current shell
+  if [ -f "$HOME/.local/bin/env" ]; then
+    # shellcheck disable=SC1090
+    source "$HOME/.local/bin/env"
+  fi
+
+  if ! command -v uv &>/dev/null; then
+    echo "Error: uv installation failed" >&2
+    exit 1
+  fi
+
+  echo "uv installed: $(uv --version)"
+}
+
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
   echo "Error: This script must be run as root (use sudo)" >&2
@@ -607,10 +632,10 @@ MODULES_DEST="/opt/sleepypod/modules"
 mkdir -p "$MODULES_DEST"
 mkdir -p /etc/sleepypod/modules
 
-# Check Python 3 is available
-if ! command -v python3 &>/dev/null; then
-  echo "Warning: python3 not found — skipping biometrics module installation"
-  echo "Install Python 3 and re-run the installer to enable health monitoring"
+ensure_uv
+# Check `uv` is available
+if ! command -v uv &>/dev/null; then
+  echo "Warning: uv not found, skipping module $name"
 else
   # Patch incomplete Python stdlib on Yocto images (Pod 3/4) so venv/ensurepip work
   "$INSTALL_DIR/scripts/patch-python-stdlib"
@@ -632,13 +657,16 @@ else
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
 
-    # Create Python virtualenv (handles Pod 3/4 Yocto quirks — see scripts/setup-python-venv)
-    if ! "$INSTALL_DIR/scripts/setup-python-venv" "$dest"; then
-      echo "Warning: python3 venv creation failed, skipping module $name"
+    # Create Python virtualenv (handles Pod 3/4 Yocto quirks)
+    echo "Setting up Python environment with uv..."
+    (
+      cd "$dest" || exit 1
+      uv sync
+    ) || {
+      echo "Warning: uv setup failed for module $name"
       return
-    fi
-    "$dest/venv/bin/pip" install --quiet --upgrade pip
-    "$dest/venv/bin/pip" install --quiet -r "$dest/requirements.txt"
+    }
+    echo "uv environment ready"
 
     # Install systemd service
     if [ -f "$dest/$service" ]; then
