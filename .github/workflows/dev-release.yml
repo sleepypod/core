@@ -58,7 +58,7 @@ jobs:
         run: |
           # --cleanup-tag removed: it can delete a branch named 'dev' on older gh versions
           gh release delete dev --yes 2>/dev/null || true
-          git push -d origin refs/tags/dev 2>/dev/null || true
+          git push -d --no-verify origin refs/tags/dev 2>/dev/null || true
           git tag -f dev
           git push -f --no-verify origin refs/tags/dev
           gh release create dev sleepypod-core.tar.gz \
