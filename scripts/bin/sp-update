@@ -190,9 +190,21 @@ echo "Source updated."
 cd "$INSTALL_DIR"
 
 # Install production dependencies
-# better-sqlite3 is hoisted via .npmrc so the resolution path is stable
-# across CI (x86_64) and pod (arm64) — pnpm rebuilds the native addon
 pnpm install --frozen-lockfile --prod
+
+# Turbopack mangles native module requires with pnpm virtual store hashes
+# that differ between CI (x86_64) and pod (arm64). Create symlinks so the
+# hashed names in .next resolve to the real modules.
+for chunk in "$INSTALL_DIR"/.next/server/chunks/*.js; do
+  [ -f "$chunk" ] || continue
+  for hashed in $(grep -o 'better-sqlite3-[a-f0-9]\{16\}' "$chunk" 2>/dev/null | sort -u); do
+    if [ ! -e "$INSTALL_DIR/node_modules/$hashed" ]; then
+      ln -sf better-sqlite3 "$INSTALL_DIR/node_modules/$hashed"
+      echo "Linked $hashed → better-sqlite3"
+    fi
+  done
+  break  # only need to scan one chunk
+done
 
 # Build only if no pre-built .next exists
 if [ ! -d "$INSTALL_DIR/.next" ]; then
