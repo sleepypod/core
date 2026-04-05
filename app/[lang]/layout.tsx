@@ -7,12 +7,14 @@ import { LinguiClientProvider } from '@/src/providers/LinguiClientProvider'
 import { SideProvider } from '@/src/providers/SideProvider'
 import { TRPCProvider } from '@/src/providers/TRPCProvider'
 import { setI18n } from '@lingui/react/server'
-import linguiConfig from 'lingui.config'
+// Locales inlined to avoid importing lingui.config.ts at SSG time.
+// Turbopack's module resolution fails for this import on cross-platform deploys.
+const LOCALES = ['en', 'es', 'pseudo']
 
 export const dynamicParams = false
 
 export function generateStaticParams() {
-  return linguiConfig.locales.map((lang: string) => ({ lang }))
+  return LOCALES.map(lang => ({ lang }))
 }
 
 export default async function LangLayout({
