@@ -34,14 +34,10 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Prune to production dependencies
-        run: |
-          pnpm install --frozen-lockfile --prod
-          pnpm store prune
-
       - name: Create deploy tarball
         run: |
           tar czf /tmp/sleepypod-core.tar.gz \
+            --exclude='node_modules' \
             --exclude='.git' \
             --exclude='.env*' \
             --exclude='*.db' \

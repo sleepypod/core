@@ -189,14 +189,10 @@ echo "Source updated."
 
 cd "$INSTALL_DIR"
 
-# Install prod deps only if node_modules wasn't included in the tarball
-# CI tarballs ship node_modules to avoid native module hash mismatches on arm64
-if [ -d "$INSTALL_DIR/node_modules/next" ]; then
-  echo "node_modules included in tarball, skipping install."
-else
-  echo "Installing production dependencies..."
-  pnpm install --frozen-lockfile --prod
-fi
+# Install production dependencies
+# better-sqlite3 is hoisted via .npmrc so the resolution path is stable
+# across CI (x86_64) and pod (arm64) — pnpm rebuilds the native addon
+pnpm install --frozen-lockfile --prod
 
 # Build only if no pre-built .next exists
 if [ ! -d "$INSTALL_DIR/.next" ]; then
