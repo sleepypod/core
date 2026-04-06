@@ -1,7 +1,7 @@
 [project]
 name = "sleep-detector"
 version = "0.1.0"
-requires-python = ">=3.9,<3.11"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "cbor2>=5.9.0",
     "numpy>=2.0.2",
