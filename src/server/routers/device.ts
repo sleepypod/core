@@ -1,9 +1,10 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { db } from '@/src/db'
+import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
-import { eq } from 'drizzle-orm'
+import { bedTemp, waterLevelReadings } from '@/src/db/biometrics-schema'
+import { eq, desc } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
@@ -17,7 +18,8 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
-import { toC } from '@/src/lib/tempUtils'
+import { toC, centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
+import { getWifiInfo } from '@/src/hardware/wifi'
 
 // ---------------------------------------------------------------------------
 // Command name → HardwareCommand mapping for the raw execute endpoint
@@ -142,6 +144,28 @@ export const deviceRouter = router({
 
         const convertTemp = (f: number) => input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f
 
+        // Best-effort enrichment — nulls on failure
+        let roomClimate: { temperatureF: number | null, humidity: number | null, timestamp: Date | null } = { temperatureF: null, humidity: null, timestamp: null }
+        let waterLevel: { level: string | null, timestamp: Date | null } = { level: null, timestamp: null }
+        try {
+          const [latestBed] = await biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1)
+          if (latestBed) {
+            roomClimate = {
+              temperatureF: latestBed.ambientTemp !== null ? centiDegreesToF(latestBed.ambientTemp) : null,
+              humidity: latestBed.humidity !== null ? centiPercentToPercent(latestBed.humidity) : null,
+              timestamp: latestBed.timestamp,
+            }
+          }
+          const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
+          if (latestWater) {
+            waterLevel = {
+              level: latestWater.level,
+              timestamp: latestWater.timestamp,
+            }
+          }
+        }
+        catch { /* enrichment is best-effort */ }
+
         return {
           ...status,
           leftSide: {
@@ -156,6 +180,9 @@ export const deviceRouter = router({
           },
           ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
           snooze: { left: leftSnooze, right: rightSnooze },
+          wifi: getWifiInfo(),
+          roomClimate,
+          waterLevel,
         }
       }, 'Failed to get device status')
     }),
