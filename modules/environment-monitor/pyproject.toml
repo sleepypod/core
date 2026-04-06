@@ -1,0 +1,7 @@
+[project]
+name = "environment-monitor"
+version = "0.1.0"
+requires-python = ">=3.9,<3.11"
+dependencies = [
+    "cbor2>=5.9.0",
+]

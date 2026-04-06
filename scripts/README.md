@@ -29,8 +29,8 @@ This will:
 7. **Database migrations** - Run automatically on startup
 8. **Create systemd service** - With auto-restart and hardening
 9. **Install CLI tools** - From `scripts/bin/` to `/usr/local/bin/`
-10. **Patch Python stdlib** - Download matching CPython source, fill missing modules (Pod 3/4 only)
-11. **Install biometrics modules** - Python venvs + systemd services
+10. **Install uv** - Rust-based Python package manager (bypasses broken Yocto stdlib)
+11. **Install biometrics modules** - `uv sync` for each module + systemd services
 12. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
 
 ### Install Flow
@@ -61,20 +61,13 @@ flowchart TD
     DB --> Service[Create systemd service\nstart sleepypod]
     Service --> CLI[Install CLI tools\nscripts/bin/ → /usr/local/bin/]
 
-    CLI --> Python{python3\navailable?}
-    Python -->|no| SkipBio[Skip biometrics]
-    Python -->|yes| Patch[Patch Python stdlib\nscripts/patch-python-stdlib]
+    CLI --> UV{uv\navailable?}
+    UV -->|no| InstallUV[Install uv\ncurl astral.sh]
+    UV -->|yes| Modules
+    InstallUV --> Modules
 
-    Patch --> PatchCheck{stdlib\ncomplete?}
-    PatchCheck -->|yes| Noop[No-op Pod 5+]
-    PatchCheck -->|no| CPython[Download CPython source\ncopy missing .py files]
-
-    Noop --> Modules
-    CPython --> Modules
-
-    Modules[Install biometrics modules] --> Venv[Create venv per module\nscripts/setup-python-venv]
-    Venv --> Pip[pip install -r requirements.txt]
-    Pip --> ModService[Create module systemd services]
+    Modules[Install biometrics modules] --> UVSync[uv sync per module\ncreates .venv + installs deps]
+    UVSync --> ModService[Create module systemd services]
 
     ModService --> SSH{Interactive\nterminal?}
     SkipBio --> SSH
@@ -165,8 +158,6 @@ After installation, sleepypod provides:
 ```
 scripts/
 ├── install                  # Core orchestrator
-├── patch-python-stdlib      # Fix incomplete Yocto Python (Pod 3/4)
-├── setup-python-venv        # Create venv per biometrics module
 ├── lib/
 │   └── iptables-helpers     # Shared WAN/iptables functions (sourced by sp-update)
 ├── pod/
@@ -184,31 +175,11 @@ scripts/
 └── internet-control         # WAN block/unblock utility
 ```
 
-## Python Stdlib Patching (Pod 3/4)
+## Python Environment (uv)
 
-Pod 3 and Pod 4 Yocto images ship with an incomplete Python stdlib — missing modules like `plistlib`, `pyexpat`, and `ensurepip` internals. This breaks `python3 -m venv`.
+Biometrics modules use [uv](https://docs.astral.sh/uv/) for Python environment management. uv is a Rust-based tool that creates virtualenvs and installs packages without relying on Python's stdlib (`ensurepip`, `pyexpat`, etc.) — which are broken on Pod 3/4 Yocto images.
 
-`scripts/patch-python-stdlib` runs once before biometrics module installation and:
-
-1. Detects the exact Python version (e.g. `3.10.4`)
-2. Checks if critical modules (`plistlib`, `ensurepip`, `pyexpat`) are importable
-3. If any are missing, downloads the matching CPython source tarball
-4. Copies missing `.py` files into the system lib dir (non-destructive — skips existing)
-5. Verifies critical modules now import
-
-Pod 5+ has a complete stdlib and the script no-ops.
-
-All output is prefixed with `[patch-python-stdlib]` for easy grep in install logs:
-
-```
-[patch-python-stdlib] Detected Python 3.10.4
-[patch-python-stdlib] Module 'plistlib' is missing — patching needed
-[patch-python-stdlib] Downloading CPython 3.10.4 source...
-[patch-python-stdlib] Stdlib patching complete: 147 copied, 312 already present, 0 failed
-[patch-python-stdlib]   ✓ plistlib
-[patch-python-stdlib]   ✓ ensurepip
-[patch-python-stdlib] Python stdlib is ready for venv creation
-```
+Each module has a `pyproject.toml` and `uv.lock`. The install script runs `uv sync` per module, which creates a `.venv` and installs locked dependencies.
 
 ## File Locations
 

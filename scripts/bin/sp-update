@@ -228,11 +228,8 @@ if [ -d "$INSTALL_DIR/modules" ]; then
     if [ -d "$INSTALL_DIR/modules/$mod" ]; then
       mkdir -p "$MODULES_DEST/$mod"
       cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
-      if [ ! -d "$MODULES_DEST/$mod/venv" ] && command -v python3 &>/dev/null; then
-        python3 -m venv "$MODULES_DEST/$mod/venv" 2>/dev/null || true
-      fi
-      if [ -d "$MODULES_DEST/$mod/venv" ] && [ -f "$MODULES_DEST/$mod/requirements.txt" ]; then
-        "$MODULES_DEST/$mod/venv/bin/pip" install --quiet -r "$MODULES_DEST/$mod/requirements.txt" || true
+      if command -v uv &>/dev/null; then
+        (cd "$MODULES_DEST/$mod" && uv sync) || true
       fi
       svc="sleepypod-$mod.service"
       if [ -f "$MODULES_DEST/$mod/$svc" ]; then

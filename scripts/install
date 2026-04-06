@@ -607,14 +607,16 @@ MODULES_DEST="/opt/sleepypod/modules"
 mkdir -p "$MODULES_DEST"
 mkdir -p /etc/sleepypod/modules
 
-# Check Python 3 is available
-if ! command -v python3 &>/dev/null; then
-  echo "Warning: python3 not found — skipping biometrics module installation"
-  echo "Install Python 3 and re-run the installer to enable health monitoring"
-else
-  # Patch incomplete Python stdlib on Yocto images (Pod 3/4) so venv/ensurepip work
-  "$INSTALL_DIR/scripts/patch-python-stdlib"
+# Install uv (Rust-based Python package manager — bypasses broken ensurepip/pyexpat on Yocto)
+if ! command -v uv &>/dev/null; then
+  echo "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+fi
 
+if ! command -v uv &>/dev/null; then
+  echo "Warning: uv installation failed — skipping biometrics module installation"
+else
   install_module() {
     local name="$1"
     local src="$MODULES_SRC/$name"
@@ -632,13 +634,11 @@ else
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
 
-    # Create Python virtualenv (handles Pod 3/4 Yocto quirks — see scripts/setup-python-venv)
-    if ! "$INSTALL_DIR/scripts/setup-python-venv" "$dest"; then
-      echo "Warning: python3 venv creation failed, skipping module $name"
+    # Create Python environment with uv (no ensurepip/pyexpat needed)
+    (cd "$dest" && uv sync) || {
+      echo "Warning: uv sync failed for module $name"
       return
-    fi
-    "$dest/venv/bin/pip" install --quiet --upgrade pip
-    "$dest/venv/bin/pip" install --quiet -r "$dest/requirements.txt"
+    }
 
     # Install systemd service
     if [ -f "$dest/$service" ]; then
