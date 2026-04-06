@@ -16,13 +16,13 @@ jobs:
       fail-fast: false
       matrix:
         task:
-          - { name: "Lint", cmd: "CHANGED=$(git diff --name-only --diff-filter=d origin/${{ github.event.pull_request.base.ref }}...HEAD -- '*.ts' '*.tsx' | head -200); if [ -n \"$CHANGED\" ]; then echo \"$CHANGED\" | xargs pnpm eslint; else echo 'No TS/TSX files changed'; fi" }
+          - { name: "Lint", cmd: "CHANGED=$(git diff --name-only --diff-filter=d origin/${{ github.event.pull_request.base.ref }}...HEAD -- '*.ts' '*.tsx' | head -200); if [ -n \"$CHANGED\" ]; then echo \"$CHANGED\" | xargs -d '\\n' pnpm eslint; else echo 'No TS/TSX files changed'; fi" }
           - { name: "Typecheck", cmd: "pnpm tsc" }
           - { name: "Unit Tests", cmd: "pnpm test run --coverage --passWithNoTests" }
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -32,9 +32,9 @@ jobs:
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: "lts/*"
+          node-version-file: '.node-version'
           cache: 'pnpm'
           registry-url: 'https://npm.pkg.github.com'
 
