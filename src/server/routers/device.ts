@@ -18,7 +18,7 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
-import { toC, centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
+import { toC, centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { getWifiInfo } from '@/src/hardware/wifi'
 
 // ---------------------------------------------------------------------------
@@ -145,22 +145,28 @@ export const deviceRouter = router({
         const convertTemp = (f: number) => input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f
 
         // Best-effort enrichment — nulls on failure
-        let roomClimate: { temperatureF: number | null, humidity: number | null, timestamp: Date | null } = { temperatureF: null, humidity: null, timestamp: null }
-        let waterLevel: { level: string | null, timestamp: Date | null } = { level: null, timestamp: null }
+        let wifiStrength: number = -1
+        let wifiSSID: string = 'unknown'
+        let roomClimate: { temperatureC: number | null, humidity: number | null, timestamp: number | null } = { temperatureC: null, humidity: null, timestamp: null }
+        let waterLevel: { level: 'low' | 'ok' | null, timestamp: number | null } = { level: null, timestamp: null }
         try {
+          const wifi = getWifiInfo()
+          wifiStrength = wifi.wifiStrength
+          wifiSSID = wifi.wifiSSID
+
           const [latestBed] = await biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1)
           if (latestBed) {
             roomClimate = {
-              temperatureF: latestBed.ambientTemp !== null ? centiDegreesToF(latestBed.ambientTemp) : null,
+              temperatureC: latestBed.ambientTemp !== null ? centiDegreesToC(latestBed.ambientTemp) : null,
               humidity: latestBed.humidity !== null ? centiPercentToPercent(latestBed.humidity) : null,
-              timestamp: latestBed.timestamp,
+              timestamp: latestBed.timestamp ? latestBed.timestamp.getTime() : null,
             }
           }
           const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
           if (latestWater) {
             waterLevel = {
               level: latestWater.level,
-              timestamp: latestWater.timestamp,
+              timestamp: latestWater.timestamp ? latestWater.timestamp.getTime() : null,
             }
           }
         }
@@ -180,7 +186,8 @@ export const deviceRouter = router({
           },
           ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
           snooze: { left: leftSnooze, right: rightSnooze },
-          wifi: getWifiInfo(),
+          wifiStrength,
+          wifiSSID,
           roomClimate,
           waterLevel,
         }
