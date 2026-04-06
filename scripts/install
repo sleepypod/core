@@ -610,8 +610,7 @@ mkdir -p /etc/sleepypod/modules
 # Install uv (Rust-based Python package manager — bypasses broken ensurepip/pyexpat on Yocto)
 if ! command -v uv &>/dev/null; then
   echo "Installing uv..."
-  UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 \
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+  curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
 fi
 
 if ! command -v uv &>/dev/null; then
