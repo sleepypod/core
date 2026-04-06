@@ -60,6 +60,20 @@ Blocked domains: `raw-api-upload.8slp.net`, `device-api-ws.8slp.net`, `api.8slp.
 
 Why not stop frankenfirmware? It also handles sensor/hardware communication (capSense, temperatures, pump, piezo). Stopping it breaks all biometrics. See [[hardware-protocol]].
 
+## Python Environment (uv)
+
+Pod 3 (Python 3.9) and Pod 4 (Python 3.10) run Yocto with an incomplete Python stdlib — `pyexpat` (C extension) and `ensurepip` are missing, which breaks the entire `venv` + `pip` chain. See [[biometrics-system]] for what the Python modules do.
+
+**Solution**: [uv](https://docs.astral.sh/uv/) — a Rust-based package manager that bypasses Python's stdlib entirely. Single static binary, no `pyexpat`/`pip`/`ensurepip` needed.
+
+| Before | After |
+|--------|-------|
+| `scripts/patch-python-stdlib` + `scripts/setup-python-venv` | Deleted |
+| `requirements.txt` per module | `pyproject.toml` + `uv.lock` per module |
+| `venv/bin/pip install -r requirements.txt` | `uv sync` |
+
+uv (~30MB) is downloaded during install. Each biometrics module gets a `.venv/` created by `uv sync` with locked dependencies. Works identically on Pod 3, 4, and 5 — no pod-generation-specific branching.
+
 ## Pod Environment
 
 | Component | Detail |
@@ -80,3 +94,4 @@ Both services bind to port 3000. Switch with `sp-sleepypod` / `sp-freesleep`. Se
 
 - `docs/DEPLOYMENT.md`
 - `docs/adr/0013-yocto-deployment-toolchain.md`
+- `docs/adr/0017-uv-python-package-management.md`

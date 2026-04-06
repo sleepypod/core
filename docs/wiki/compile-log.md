@@ -19,6 +19,14 @@ Wiki initialized on 2026-04-05.
 - **Schema**: generated (`schema.md`)
 - **Cross-references**: Obsidian `[[wiki-link]]` style between all related topics
 
+## 2026-04-05 — Incremental compilation
+
+- **New sources**: 1 (`docs/adr/0017-uv-python-package-management.md`)
+- **Topics updated**: 1
+  - deployment (+1 source: ADR 0017 uv Python package management)
+- **Topics created**: 0
+- **Schema**: unchanged (ADR 0017 classified under existing `deployment` topic)
+
 ### Note on `.compile-state.json`
 
 `source_hashes` in `.compile-state.json` uses the placeholder value `"compiled"` for every file. These are staging markers indicating a source was processed, not real content hashes. Future iterations may replace them with SHA-256 content hashes for incremental recompilation.
