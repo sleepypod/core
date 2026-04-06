@@ -610,8 +610,8 @@ mkdir -p /etc/sleepypod/modules
 # Install uv (Rust-based Python package manager — bypasses broken ensurepip/pyexpat on Yocto)
 if ! command -v uv &>/dev/null; then
   echo "Installing uv..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
+  UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 \
+    curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 
 if ! command -v uv &>/dev/null; then
@@ -634,8 +634,11 @@ else
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
 
+    # Remove orphaned venv/ from pre-uv installs
+    rm -rf "$dest/venv"
+
     # Create Python environment with uv (no ensurepip/pyexpat needed)
-    (cd "$dest" && uv sync) || {
+    (cd "$dest" && uv sync --frozen) || {
       echo "Warning: uv sync failed for module $name"
       return
     }

@@ -224,12 +224,16 @@ if [ -d "$INSTALL_DIR/modules" ]; then
     mkdir -p "$MODULES_DEST/common"
     cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
   fi
+  if ! command -v uv &>/dev/null; then
+    echo "Warning: uv not found — biometrics modules not synced. Re-run the full installer."
+  fi
   for mod in piezo-processor sleep-detector environment-monitor calibrator; do
     if [ -d "$INSTALL_DIR/modules/$mod" ]; then
       mkdir -p "$MODULES_DEST/$mod"
       cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
+      rm -rf "$MODULES_DEST/$mod/venv"
       if command -v uv &>/dev/null; then
-        (cd "$MODULES_DEST/$mod" && uv sync) || true
+        (cd "$MODULES_DEST/$mod" && uv sync --frozen) || true
       fi
       svc="sleepypod-$mod.service"
       if [ -f "$MODULES_DEST/$mod/$svc" ]; then
