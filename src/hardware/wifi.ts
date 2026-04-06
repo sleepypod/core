@@ -1,24 +1,25 @@
-import { execSync } from 'child_process'
+import { readFileSync } from 'fs'
+import { spawnSync } from 'child_process'
 
 export interface WifiInfo {
-  signalStrength: number
-  ssid: string
+  wifiStrength: number
+  wifiSSID: string
 }
 
 export function getWifiInfo(): WifiInfo {
   try {
-    const signal = parseSignalStrength()
-    const ssid = parseSSID()
-    return { signalStrength: signal, ssid }
+    const wifiStrength = parseSignalStrength()
+    const wifiSSID = parseSSID()
+    return { wifiStrength, wifiSSID }
   }
   catch {
-    return { signalStrength: -1, ssid: 'unknown' }
+    return { wifiStrength: -1, wifiSSID: 'unknown' }
   }
 }
 
 function parseSignalStrength(): number {
   try {
-    const raw = execSync('cat /proc/net/wireless', { encoding: 'utf-8', timeout: 2000 })
+    const raw = readFileSync('/proc/net/wireless', 'utf-8')
     const lines = raw.trim().split('\n')
     // Skip header lines, parse the interface line
     const dataLine = lines.find(l => l.includes(':'))
@@ -37,7 +38,8 @@ function parseSignalStrength(): number {
 
 function parseSSID(): string {
   try {
-    return execSync('iwgetid -r', { encoding: 'utf-8', timeout: 2000 }).trim() || 'unknown'
+    const result = spawnSync('iwgetid', ['-r'], { encoding: 'utf-8', timeout: 2000 })
+    return result.stdout?.trim() || 'unknown'
   }
   catch {
     return 'unknown'
