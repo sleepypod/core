@@ -148,7 +148,7 @@ export const deviceRouter = router({
         let wifiStrength: number = -1
         let wifiSSID: string = 'unknown'
         let roomClimate: { temperatureC: number | null, humidity: number | null, timestamp: number | null } = { temperatureC: null, humidity: null, timestamp: null }
-        let waterLevel: { level: 'low' | 'ok' | null, timestamp: number | null } = { level: null, timestamp: null }
+        let waterLevelRaw: { raw: number | null, calibratedEmpty: number | null, calibratedFull: number | null, timestamp: number | null } = { raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null }
         try {
           const wifi = getWifiInfo()
           wifiStrength = wifi.wifiStrength
@@ -164,8 +164,10 @@ export const deviceRouter = router({
           }
           const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
           if (latestWater) {
-            waterLevel = {
-              level: latestWater.level,
+            waterLevelRaw = {
+              raw: latestWater.raw ?? null,
+              calibratedEmpty: latestWater.calibratedEmpty ?? null,
+              calibratedFull: latestWater.calibratedFull ?? null,
               timestamp: latestWater.timestamp ? latestWater.timestamp.getTime() : null,
             }
           }
@@ -189,7 +191,7 @@ export const deviceRouter = router({
           wifiStrength,
           wifiSSID,
           roomClimate,
-          waterLevel,
+          waterLevelRaw,
         }
       }, 'Failed to get device status')
     }),
