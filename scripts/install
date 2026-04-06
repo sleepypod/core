@@ -637,7 +637,7 @@ else
     rm -rf "$dest/venv"
 
     # Create Python environment with uv (no ensurepip/pyexpat needed)
-    (cd "$dest" && uv sync --frozen) || {
+    (cd "$dest" && uv sync --frozen --python python3) || {
       echo "Warning: uv sync failed for module $name"
       return
     }

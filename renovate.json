@@ -133,6 +133,16 @@
       "commitMessageAction": "Update {{packageName}}"
     },
     {
+      "description": "Pin requires-python to pod range — Pod 3 is 3.9, Pod 4/5 is 3.10",
+      "matchPackageNames": [
+        "python"
+      ],
+      "matchManagers": [
+        "pep621"
+      ],
+      "allowedVersions": "<3.11"
+    },
+    {
       "description": "Pin scipy <1.16 — pod runs Python 3.10, scipy 1.16+ requires 3.11",
       "matchPackageNames": [
         "scipy"
