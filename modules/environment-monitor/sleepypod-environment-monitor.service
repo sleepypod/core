@@ -9,7 +9,7 @@ Type=simple
 User=dac
 UMask=0002
 WorkingDirectory=/opt/sleepypod/modules/environment-monitor
-ExecStart=/opt/sleepypod/modules/environment-monitor/venv/bin/python main.py
+ExecStart=/opt/sleepypod/modules/environment-monitor/.venv/bin/python main.py
 Restart=always
 RestartSec=10
 
