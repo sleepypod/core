@@ -51,7 +51,10 @@ function resetSchema(): void {
     CREATE TABLE water_level_readings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp INTEGER NOT NULL,
-      level TEXT NOT NULL
+      level TEXT NOT NULL,
+      raw INTEGER,
+      calibrated_empty INTEGER,
+      calibrated_full INTEGER
     );
     CREATE TABLE flow_readings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
