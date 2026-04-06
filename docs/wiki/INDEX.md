@@ -1,6 +1,6 @@
 # sleepypod core Wiki
 
-Knowledge base compiled from project documentation. 10 topics from 21 source files.
+Knowledge base compiled from project documentation. 10 topics from 22 source files.
 
 ## Topics
 

@@ -7,7 +7,7 @@ Defines the topic taxonomy for the sleepypod core knowledge base. Used by the co
 | Slug | Title | Description | Key Sources |
 |------|-------|-------------|-------------|
 | `architecture-and-stack` | Architecture and Stack | Core technology decisions: TypeScript, React, Next.js, tRPC, Drizzle/SQLite, tooling | ADRs 0001-0010 |
-| `deployment` | Deployment | Getting code to the Pod: 3 paths, Yocto constraints, network security, free-sleep coexistence | DEPLOYMENT.md, ADR 0013 |
+| `deployment` | Deployment | Getting code to the Pod: 3 paths, Yocto constraints, network security, Python/uv setup, free-sleep coexistence | DEPLOYMENT.md, ADR 0013, ADR 0017 |
 | `hardware-protocol` | Hardware Protocol | DAC socket communication: wire protocol, commands, connection lifecycle | DAC-PROTOCOL.md, ADR 0016 |
 | `biometrics-system` | Biometrics System | Plugin/sidecar module architecture, schema contract, manifest discovery | ADR 0012 |
 | `piezo-processing` | Piezo Processing | HR, HRV, breathing rate from 500 Hz BCG: SHS, pump gating, presence, validation | piezo-processor.md |
