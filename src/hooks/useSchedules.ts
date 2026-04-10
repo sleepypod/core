@@ -33,7 +33,7 @@ export interface AlarmSchedule {
   side: 'left' | 'right'
   dayOfWeek: DayOfWeek
   time: string
-  vibrationPattern: string
+  vibrationPattern: 'double' | 'rise'
   vibrationIntensity: number
   duration: number
   alarmTemperature: number
