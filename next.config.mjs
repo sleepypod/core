@@ -35,7 +35,7 @@ const nextConfig = {
     if (!enableMini) {
       config.resolve.alias = {
         ...config.resolve.alias,
-        'pubnub': false,
+        pubnub: false,
       }
     }
 
