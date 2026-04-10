@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const enableMini = process.env.ENABLE_MINI === 'true'
+
 const nextConfig = {
   // Source maps for debugging production crashes
   productionBrowserSourceMaps: true,
@@ -27,6 +29,16 @@ const nextConfig = {
       test: /\.po$/,
       use: ['@lingui/loader'],
     })
+
+    // When ENABLE_MINI is not set, replace Mini modules with empty stubs
+    // so zero Mini code (including PubNub SDK) is bundled.
+    if (!enableMini) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'pubnub': false,
+      }
+    }
+
     return config
   },
   reactCompiler: false,
