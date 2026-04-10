@@ -88,7 +88,36 @@ export const deviceRouter = router({
   getStatus: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/device/status', protect: false, tags: ['Device'] } })
     .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
-    .output(z.any())
+    .output(z.object({
+      leftSide: z.object({
+        currentTemperature: z.number(),
+        targetTemperature: z.number(),
+        currentLevel: z.number(),
+        targetLevel: z.number(),
+        heatingDuration: z.number(),
+      }),
+      rightSide: z.object({
+        currentTemperature: z.number(),
+        targetTemperature: z.number(),
+        currentLevel: z.number(),
+        targetLevel: z.number(),
+        heatingDuration: z.number(),
+      }),
+      waterLevel: z.enum(['low', 'ok']),
+      isPriming: z.boolean(),
+      podVersion: z.enum(['H00', 'I00', 'J00']),
+      sensorLabel: z.string(),
+      gestures: z.object({
+        doubleTap: z.object({ l: z.number(), r: z.number() }).optional(),
+        tripleTap: z.object({ l: z.number(), r: z.number() }).optional(),
+        quadTap: z.object({ l: z.number(), r: z.number() }).optional(),
+      }).optional(),
+      primeCompletedNotification: z.object({ timestamp: z.number() }).optional(),
+      snooze: z.object({
+        left: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
+        right: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
+      }),
+    }))
     .query(async ({ input }) => {
       return withHardwareClient(async (client) => {
         const status = await client.getDeviceStatus()
@@ -594,7 +623,12 @@ export const deviceRouter = router({
       command: z.enum(['SET_TEMP', 'SET_ALARM', 'ALARM_LEFT', 'ALARM_RIGHT', 'SET_SETTINGS', 'PRIME', 'DEVICE_STATUS', 'ALARM_CLEAR']),
       args: z.string().optional(),
     }).strict())
-    .output(z.any())
+    .output(z.object({
+      command: z.string(),
+      args: z.string().nullable(),
+      response: z.unknown(),
+      disclaimer: z.string(),
+    }))
     .mutation(async ({ input }) => {
       const hwCommand = COMMAND_MAP[input.command]
 

@@ -33,7 +33,25 @@ export const healthRouter = router({
   scheduler: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/health/scheduler', protect: false, tags: ['Health'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.object({
+      enabled: z.boolean(),
+      jobCounts: z.object({
+        temperature: z.number(),
+        powerOn: z.number(),
+        powerOff: z.number(),
+        alarm: z.number(),
+        prime: z.number(),
+        reboot: z.number(),
+        total: z.number(),
+      }),
+      upcomingJobs: z.array(z.object({
+        id: z.string(),
+        type: z.number(),
+        side: z.string().optional(),
+        nextRun: z.string().nullable(),
+      })),
+      healthy: z.boolean(),
+    }))
     .query(async () => {
       try {
         const jobManager = await getJobManager()
@@ -114,7 +132,28 @@ export const healthRouter = router({
   system: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/health/system', protect: false, tags: ['Health'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.object({
+      status: z.enum(['ok', 'degraded']),
+      timestamp: z.string(),
+      database: z.object({
+        status: z.enum(['ok', 'degraded']),
+        latencyMs: z.number(),
+        error: z.string().optional(),
+      }),
+      scheduler: z.object({
+        enabled: z.boolean(),
+        jobCount: z.number(),
+        drift: z.object({
+          dbScheduleCount: z.number(),
+          schedulerJobCount: z.number(),
+          drifted: z.boolean(),
+        }).optional(),
+      }),
+      iptables: z.object({
+        ok: z.boolean(),
+        missing: z.array(z.string()),
+      }),
+    }))
     .query(async () => {
       let overallStatus: 'ok' | 'degraded' = 'ok'
 
@@ -245,7 +284,11 @@ export const healthRouter = router({
   dacMonitor: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/health/dac-monitor', protect: false, tags: ['Health'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.object({
+      status: z.string(),
+      podVersion: z.string().nullable(),
+      gesturesSupported: z.boolean(),
+    }))
     .query(() => {
       const monitor = getDacMonitorIfRunning()
       if (!monitor) {
@@ -265,7 +308,12 @@ export const healthRouter = router({
   hardware: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/health/hardware', protect: false, tags: ['Health'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.object({
+      status: z.enum(['ok', 'degraded']),
+      socketPath: z.string(),
+      latencyMs: z.number(),
+      error: z.string().optional(),
+    }))
     .query(async () => {
       let status: 'ok' | 'degraded' = 'ok'
       let latencyMs = 0

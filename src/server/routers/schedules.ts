@@ -18,6 +18,49 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
+
+const temperatureScheduleOutput = z.object({
+  id: z.number(),
+  side: sideSchema,
+  dayOfWeek: dayOfWeekSchema,
+  time: z.string(),
+  temperature: z.number(),
+  enabled: z.boolean(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+})
+
+const powerScheduleOutput = z.object({
+  id: z.number(),
+  side: sideSchema,
+  dayOfWeek: dayOfWeekSchema,
+  onTime: z.string(),
+  offTime: z.string(),
+  onTemperature: z.number(),
+  enabled: z.boolean(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+})
+
+const alarmScheduleOutput = z.object({
+  id: z.number(),
+  side: sideSchema,
+  dayOfWeek: dayOfWeekSchema,
+  time: z.string(),
+  vibrationIntensity: z.number(),
+  vibrationPattern: vibrationPatternSchema,
+  duration: z.number(),
+  alarmTemperature: z.number(),
+  enabled: z.boolean(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+})
+
+const schedulesCollectionOutput = z.object({
+  temperature: z.array(temperatureScheduleOutput),
+  power: z.array(powerScheduleOutput),
+  alarm: z.array(alarmScheduleOutput),
+})
 import { getJobManager } from '@/src/scheduler'
 import { toC } from '@/src/lib/tempUtils'
 
@@ -61,7 +104,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(schedulesCollectionOutput)
     .query(async ({ input }) => {
       try {
         const temperatureSchedulesList = db
@@ -111,7 +154,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(temperatureScheduleOutput)
     .mutation(async ({ input }) => {
       try {
         const created = db.transaction((tx) => {
@@ -161,7 +204,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(temperatureScheduleOutput)
     .mutation(async ({ input }) => {
       try {
         const { id, ...updates } = input
@@ -269,7 +312,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(powerScheduleOutput)
     .mutation(async ({ input }) => {
       try {
         const created = db.transaction((tx) => {
@@ -320,7 +363,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(powerScheduleOutput)
     .mutation(async ({ input }) => {
       try {
         const { id, ...updates } = input
@@ -430,7 +473,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(alarmScheduleOutput)
     .mutation(async ({ input }) => {
       try {
         const created = db.transaction((tx) => {
@@ -483,7 +526,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(alarmScheduleOutput)
     .mutation(async ({ input }) => {
       try {
         const { id, ...updates } = input
@@ -718,7 +761,7 @@ export const schedulesRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(schedulesCollectionOutput)
     .query(async ({ input }) => {
       try {
         const temperatureSchedulesList = db

@@ -125,7 +125,15 @@ export const runOnceRouter = router({
   getActive: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/run-once/active', protect: false, tags: ['RunOnce'] } })
     .input(z.object({ side: sideSchema }).strict())
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      side: z.enum(['left', 'right']),
+      setPoints: z.unknown(),
+      wakeTime: z.string(),
+      startedAt: z.number(),
+      expiresAt: z.number(),
+      status: z.enum(['active', 'completed', 'cancelled']),
+    }).nullable())
     .query(async ({ input }) => {
       const [session] = await db
         .select()
