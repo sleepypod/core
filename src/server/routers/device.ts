@@ -95,6 +95,7 @@ export const deviceRouter = router({
         currentLevel: z.number(),
         targetLevel: z.number(),
         heatingDuration: z.number(),
+        isAlarmVibrating: z.boolean().optional(),
       }),
       rightSide: z.object({
         currentTemperature: z.number(),
@@ -102,6 +103,7 @@ export const deviceRouter = router({
         currentLevel: z.number(),
         targetLevel: z.number(),
         heatingDuration: z.number(),
+        isAlarmVibrating: z.boolean().optional(),
       }),
       waterLevel: z.enum(['low', 'ok']),
       isPriming: z.boolean(),
