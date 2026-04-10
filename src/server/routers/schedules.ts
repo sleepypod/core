@@ -19,6 +19,7 @@ import {
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
 import { getJobManager } from '@/src/scheduler'
+import { toC } from '@/src/lib/tempUtils'
 
 /**
  * Reload schedules in the job manager after database changes
@@ -26,6 +27,21 @@ import { getJobManager } from '@/src/scheduler'
 async function reloadScheduler(): Promise<void> {
   const jobManager = await getJobManager()
   await jobManager.reloadSchedules()
+}
+
+const unitSchema = z.enum(['F', 'C']).default('F')
+
+function convertScheduleTemps(
+  data: { temperature: (typeof temperatureSchedules.$inferSelect)[], power: (typeof powerSchedules.$inferSelect)[], alarm: (typeof alarmSchedules.$inferSelect)[] },
+  unit: 'F' | 'C',
+) {
+  if (unit === 'F') return data
+  const c = (f: number) => Math.round(toC(f) * 10) / 10
+  return {
+    temperature: data.temperature.map(s => ({ ...s, temperature: c(s.temperature) })),
+    power: data.power.map(s => ({ ...s, onTemperature: c(s.onTemperature) })),
+    alarm: data.alarm.map(s => ({ ...s, alarmTemperature: c(s.alarmTemperature) })),
+  }
 }
 
 /**
@@ -41,6 +57,7 @@ export const schedulesRouter = router({
       z
         .object({
           side: sideSchema,
+          unit: unitSchema,
         })
         .strict()
     )
@@ -63,11 +80,11 @@ export const schedulesRouter = router({
               .where(eq(alarmSchedules.side, input.side)),
           ])
 
-        return {
+        return convertScheduleTemps({
           temperature: temperatureSchedulesList,
           power: powerSchedulesList,
           alarm: alarmSchedulesList,
-        }
+        }, input.unit)
       }
       catch (error) {
         throw new TRPCError({
@@ -697,6 +714,7 @@ export const schedulesRouter = router({
         .object({
           side: sideSchema,
           dayOfWeek: dayOfWeekSchema,
+          unit: unitSchema,
         })
         .strict()
     )
@@ -734,11 +752,11 @@ export const schedulesRouter = router({
               ),
           ])
 
-        return {
+        return convertScheduleTemps({
           temperature: temperatureSchedulesList,
           power: powerSchedulesList,
           alarm: alarmSchedulesList,
-        }
+        }, input.unit)
       }
       catch (error) {
         throw new TRPCError({

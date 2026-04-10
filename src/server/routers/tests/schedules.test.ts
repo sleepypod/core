@@ -222,4 +222,44 @@ describe('schedules.batchUpdate', () => {
       caller.batchUpdate({ updates: { power: [{ id: 99999, enabled: false }] } })
     ).rejects.toThrow('not found')
   })
+
+  it('getAll converts temperatures to Celsius when unit=C', async () => {
+    await caller.batchUpdate({
+      creates: {
+        temperature: [
+          { side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68 },
+        ],
+        power: [
+          { side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 77 },
+        ],
+        alarm: [
+          { side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 95 },
+        ],
+      },
+    })
+
+    const celsius = await caller.getAll({ side: 'left', unit: 'C' })
+    expect(celsius.temperature[0].temperature).toBe(20) // 68°F = 20°C
+    expect(celsius.power[0].onTemperature).toBe(25) // 77°F = 25°C
+    expect(celsius.alarm[0].alarmTemperature).toBe(35) // 95°F = 35°C
+
+    // Fahrenheit (default) returns raw values
+    const fahrenheit = await caller.getAll({ side: 'left' })
+    expect(fahrenheit.temperature[0].temperature).toBe(68)
+    expect(fahrenheit.power[0].onTemperature).toBe(77)
+    expect(fahrenheit.alarm[0].alarmTemperature).toBe(95)
+  })
+
+  it('getByDay converts temperatures to Celsius when unit=C', async () => {
+    await caller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'wednesday', time: '23:00', temperature: 86,
+    })
+
+    const celsius = await caller.getByDay({ side: 'left', dayOfWeek: 'wednesday', unit: 'C' })
+    expect(celsius.temperature[0].temperature).toBe(30) // 86°F = 30°C
+
+    const fahrenheit = await caller.getByDay({ side: 'left', dayOfWeek: 'wednesday', unit: 'F' })
+    expect(fahrenheit.temperature[0].temperature).toBe(86)
+  })
 })
+
