@@ -13,6 +13,13 @@ import { waterLevelRouter } from './waterLevel'
 import { runOnceRouter } from './runOnce'
 import { scheduleGroupsRouter } from './scheduleGroups'
 
+// Mini router — conditional dynamic import, only loaded when ENABLE_MINI=true.
+// When disabled: no Mini code is bundled (webpack resolve alias → false),
+// no PubNub SDK loaded, no Mini routes registered.
+const miniRouter = process.env.ENABLE_MINI === 'true'
+  ? (await import('./mini')).miniRouter
+  : null
+
 export const appRouter = router({
   healthcheck: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/healthcheck', protect: false, tags: ['Health'] } })
@@ -35,6 +42,7 @@ export const appRouter = router({
   waterLevel: waterLevelRouter,
   runOnce: runOnceRouter,
   scheduleGroups: scheduleGroupsRouter,
+  ...(miniRouter ? { mini: miniRouter } : {}),
 })
 
 export type AppRouter = typeof appRouter
