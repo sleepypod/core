@@ -46,7 +46,7 @@ export const healthRouter = router({
       }),
       upcomingJobs: z.array(z.object({
         id: z.string(),
-        type: z.number(),
+        type: z.string(),
         side: z.string().optional(),
         nextRun: z.string().nullable(),
       })),

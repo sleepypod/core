@@ -161,7 +161,8 @@ describe('schedules.batchUpdate', () => {
     const after = await caller.getAll({ side: 'left' })
     expect(after.temperature).toHaveLength(2)
 
-    const tuesday = after.temperature.find((t: any) => t.dayOfWeek === 'tuesday')
+    const tuesday = after.temperature.find(t => t.dayOfWeek === 'tuesday')
+    if (!tuesday) throw new Error('Expected to find tuesday schedule')
     expect(tuesday.time).toBe('22:00')
     expect(tuesday.temperature).toBe(68)
   })
