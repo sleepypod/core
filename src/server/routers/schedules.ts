@@ -64,21 +64,21 @@ export const schedulesRouter = router({
     .output(z.any())
     .query(async ({ input }) => {
       try {
-        const [temperatureSchedulesList, powerSchedulesList, alarmSchedulesList]
-          = await Promise.all([
-            db
-              .select()
-              .from(temperatureSchedules)
-              .where(eq(temperatureSchedules.side, input.side)),
-            db
-              .select()
-              .from(powerSchedules)
-              .where(eq(powerSchedules.side, input.side)),
-            db
-              .select()
-              .from(alarmSchedules)
-              .where(eq(alarmSchedules.side, input.side)),
-          ])
+        const temperatureSchedulesList = db
+          .select()
+          .from(temperatureSchedules)
+          .where(eq(temperatureSchedules.side, input.side))
+          .all()
+        const powerSchedulesList = db
+          .select()
+          .from(powerSchedules)
+          .where(eq(powerSchedules.side, input.side))
+          .all()
+        const alarmSchedulesList = db
+          .select()
+          .from(alarmSchedules)
+          .where(eq(alarmSchedules.side, input.side))
+          .all()
 
         return convertScheduleTemps({
           temperature: temperatureSchedulesList,
@@ -721,36 +721,36 @@ export const schedulesRouter = router({
     .output(z.any())
     .query(async ({ input }) => {
       try {
-        const [temperatureSchedulesList, powerSchedulesList, alarmSchedulesList]
-          = await Promise.all([
-            db
-              .select()
-              .from(temperatureSchedules)
-              .where(
-                and(
-                  eq(temperatureSchedules.side, input.side),
-                  eq(temperatureSchedules.dayOfWeek, input.dayOfWeek)
-                )
-              ),
-            db
-              .select()
-              .from(powerSchedules)
-              .where(
-                and(
-                  eq(powerSchedules.side, input.side),
-                  eq(powerSchedules.dayOfWeek, input.dayOfWeek)
-                )
-              ),
-            db
-              .select()
-              .from(alarmSchedules)
-              .where(
-                and(
-                  eq(alarmSchedules.side, input.side),
-                  eq(alarmSchedules.dayOfWeek, input.dayOfWeek)
-                )
-              ),
-          ])
+        const temperatureSchedulesList = db
+          .select()
+          .from(temperatureSchedules)
+          .where(
+            and(
+              eq(temperatureSchedules.side, input.side),
+              eq(temperatureSchedules.dayOfWeek, input.dayOfWeek)
+            )
+          )
+          .all()
+        const powerSchedulesList = db
+          .select()
+          .from(powerSchedules)
+          .where(
+            and(
+              eq(powerSchedules.side, input.side),
+              eq(powerSchedules.dayOfWeek, input.dayOfWeek)
+            )
+          )
+          .all()
+        const alarmSchedulesList = db
+          .select()
+          .from(alarmSchedules)
+          .where(
+            and(
+              eq(alarmSchedules.side, input.side),
+              eq(alarmSchedules.dayOfWeek, input.dayOfWeek)
+            )
+          )
+          .all()
 
         return convertScheduleTemps({
           temperature: temperatureSchedulesList,
