@@ -149,17 +149,18 @@ export const healthRouter = router({
       // Scheduler drift detection: compare DB enabled schedule count vs scheduler job count
       let drift: { dbScheduleCount: number, schedulerJobCount: number, drifted: boolean } | undefined
       try {
-        const [tempSchedules, powSchedules, almSchedules] = await Promise.all([
-          db.select({ id: temperatureSchedules.id })
-            .from(temperatureSchedules)
-            .where(eq(temperatureSchedules.enabled, true)),
-          db.select({ id: powerSchedules.id })
-            .from(powerSchedules)
-            .where(eq(powerSchedules.enabled, true)),
-          db.select({ id: alarmSchedules.id })
-            .from(alarmSchedules)
-            .where(eq(alarmSchedules.enabled, true)),
-        ])
+        const tempSchedules = db.select({ id: temperatureSchedules.id })
+          .from(temperatureSchedules)
+          .where(eq(temperatureSchedules.enabled, true))
+          .all()
+        const powSchedules = db.select({ id: powerSchedules.id })
+          .from(powerSchedules)
+          .where(eq(powerSchedules.enabled, true))
+          .all()
+        const almSchedules = db.select({ id: alarmSchedules.id })
+          .from(alarmSchedules)
+          .where(eq(alarmSchedules.enabled, true))
+          .all()
 
         // Each power schedule creates 2 jobs (on + off), others create 1 each
         const expectedJobCount = tempSchedules.length + (powSchedules.length * 2) + almSchedules.length
