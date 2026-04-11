@@ -7,7 +7,7 @@ export interface MiniSession {
   sessionId: string
   startTime: string
   endTime?: string
-  levels: string[]
+  levels: MiniLevel[]
 }
 
 export interface MiniStatus {
