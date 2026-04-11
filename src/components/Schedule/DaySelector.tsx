@@ -1,9 +1,25 @@
 'use client'
 
 import { cn } from '@/lib/utils'
-import { DAYS, type DayOfWeek } from './days'
 
-export { DAYS, DAY_GROUPS, getCurrentDay, type DayOfWeek } from './days'
+export const DAYS = [
+  { key: 'sunday', short: 'S', label: 'Sun' },
+  { key: 'monday', short: 'M', label: 'Mon' },
+  { key: 'tuesday', short: 'T', label: 'Tue' },
+  { key: 'wednesday', short: 'W', label: 'Wed' },
+  { key: 'thursday', short: 'T', label: 'Thu' },
+  { key: 'friday', short: 'F', label: 'Fri' },
+  { key: 'saturday', short: 'S', label: 'Sat' },
+] as const
+
+export type DayOfWeek = (typeof DAYS)[number]['key']
+
+/** Predefined day groups for "Apply to" shortcuts */
+export const DAY_GROUPS = {
+  weekdays: new Set<DayOfWeek>(['monday', 'tuesday', 'wednesday', 'thursday', 'friday']),
+  weekends: new Set<DayOfWeek>(['saturday', 'sunday']),
+  allDays: new Set<DayOfWeek>(['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']),
+}
 
 /**
  * DaySelector supports two modes:
@@ -27,10 +43,6 @@ interface DaySelectorProps {
   selectedDays?: Set<DayOfWeek>
   /** Called when the selected days set changes (multi-select mode) */
   onSelectedDaysChange?: (days: Set<DayOfWeek>) => void
-  /** When true, renders non-interactive divs instead of buttons */
-  readOnly?: boolean
-  /** Days to highlight when in readOnly mode */
-  highlightedDays?: Set<DayOfWeek>
 }
 
 export function DaySelector({
@@ -38,8 +50,6 @@ export function DaySelector({
   onActiveDayChange,
   selectedDays,
   onSelectedDaysChange,
-  readOnly,
-  highlightedDays,
 }: DaySelectorProps) {
   const isMultiSelect = !!selectedDays && !!onSelectedDaysChange
 
@@ -77,30 +87,6 @@ export function DaySelector({
     }
   }
 
-  if (readOnly) {
-    return (
-      <div className="flex items-center justify-between gap-0.5 sm:gap-1">
-        {DAYS.map(({ key, short }) => {
-          const isHighlighted = highlightedDays?.has(key) ?? false
-
-          return (
-            <div
-              key={key}
-              className={cn(
-                'flex h-11 w-11 items-center justify-center rounded-full text-[13px] font-semibold sm:text-sm',
-                isHighlighted
-                  ? 'bg-sky-500 text-white'
-                  : 'bg-zinc-900 text-zinc-500',
-              )}
-            >
-              {short}
-            </div>
-          )
-        })}
-      </div>
-    )
-  }
-
   return (
     <div className="flex items-center justify-between gap-0.5 sm:gap-1">
       {DAYS.map(({ key, short, label }) => {
@@ -116,11 +102,9 @@ export function DaySelector({
             aria-pressed={isSelected}
             className={cn(
               'flex h-11 w-11 items-center justify-center rounded-full text-[13px] font-semibold transition-all duration-150 sm:text-sm',
-              isPrimary
+              isSelected
                 ? 'bg-sky-500 text-white'
-                : isMultiSelect && isSelected
-                  ? 'bg-sky-500/30 text-sky-300'
-                  : 'bg-zinc-900 text-zinc-500 active:bg-zinc-800',
+                : 'bg-zinc-900 text-zinc-500 active:bg-zinc-800',
             )}
           >
             {short}
@@ -131,3 +115,16 @@ export function DaySelector({
   )
 }
 
+/**
+ * Get the current day of week as a DayOfWeek string.
+ * Adjusts for early morning (before 4am counts as previous day).
+ */
+export function getCurrentDay(): DayOfWeek {
+  const now = new Date()
+  const adjusted = new Date(now)
+  if (now.getHours() < 4) {
+    adjusted.setDate(adjusted.getDate() - 1)
+  }
+  const dayIndex = adjusted.getDay()
+  return DAYS[dayIndex].key
+}

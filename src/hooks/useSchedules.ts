@@ -44,10 +44,7 @@ export interface ScheduleData {
   alarm: AlarmSchedule[]
 }
 
-const PHASE_NAMES = ['Bedtime', 'Deep Sleep', 'Pre-Wake', 'Wake Up']
-const PHASE_ICONS = ['moon', 'moon', 'sunrise', 'sun'] as const
-
-export type PhaseIcon = typeof PHASE_ICONS[number]
+export type PhaseIcon = 'moon' | 'sunrise' | 'sun'
 
 export interface SchedulePhase {
   id: number
@@ -56,6 +53,16 @@ export interface SchedulePhase {
   time: string
   temperature: number
   enabled: boolean
+}
+
+/** Derive a short label from the time of day */
+function labelForTime(time: string): { name: string, icon: PhaseIcon } {
+  const [h] = time.split(':').map(Number)
+  if (h >= 21 || h < 1) return { name: 'Evening', icon: 'moon' }
+  if (h >= 1 && h < 5) return { name: 'Overnight', icon: 'moon' }
+  if (h >= 5 && h < 8) return { name: 'Morning', icon: 'sunrise' }
+  if (h >= 8 && h < 17) return { name: 'Daytime', icon: 'sun' }
+  return { name: 'Evening', icon: 'sun' }
 }
 
 /**
@@ -74,16 +81,19 @@ export function useSchedules(selectedDay: DayOfWeek) {
   const phases: SchedulePhase[] = useMemo(() => {
     const temps = schedulesQuery.data?.temperature
     if (!temps || temps.length === 0) return []
-    const sorted = [...temps].sort((a, b) => a.time.localeCompare(b.time))
-    return sorted.map((t, i: number) => ({
-      id: t.id,
-      name: i < PHASE_NAMES.length ? PHASE_NAMES[i] : `Phase ${i + 1}`,
-      icon: (i < PHASE_ICONS.length ? PHASE_ICONS[i] : 'sun') as PhaseIcon,
-      time: t.time,
-      temperature: t.temperature,
-      enabled: t.enabled,
-    }))
-  }, [schedulesQuery.data])
+    const sorted = [...temps].sort((a: { time: string }, b: { time: string }) => a.time.localeCompare(b.time))
+    return sorted.map((t: { id: number, time: string, temperature: number, enabled: boolean }) => {
+      const { name, icon } = labelForTime(t.time)
+      return {
+        id: t.id,
+        name,
+        icon,
+        time: t.time,
+        temperature: t.temperature,
+        enabled: t.enabled,
+      }
+    })
+  }, [schedulesQuery.data?.temperature])
 
   const invalidate = useCallback(() => {
     void utils.schedules.getByDay.invalidate(queryKey)

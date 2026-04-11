@@ -1,259 +1,271 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { ChevronRight, Calendar } from 'lucide-react'
+import clsx from 'clsx'
+import { AreaChart, Area, ResponsiveContainer, YAxis } from 'recharts'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
+import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
+import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from './DaySelector'
 import { DAYS } from './DaySelector'
-import { CurveChart } from './CurveChart'
-import { timeStringToMinutes } from '@/src/lib/sleepCurve/generate'
-import type { CurvePoint, Phase } from '@/src/lib/sleepCurve/types'
-import { Calendar, Pencil } from 'lucide-react'
-import { useRouter, usePathname } from 'next/navigation'
-import clsx from 'clsx'
+import { colorForTempF } from '@/src/lib/sleepCurve/tempColor'
 
-const GROUP_COLORS = [
-  'bg-sky-500',
-  'bg-amber-500',
-  'bg-emerald-500',
-  'bg-purple-500',
-  'bg-rose-500',
-]
-
-interface ScheduleGroup {
-  id: number
-  name: string
-  side: string
-  days: string[]
+/** Short labels keyed by DayOfWeek */
+const DAY_SHORT: Record<DayOfWeek, string> = {
+  sunday: 'Sun',
+  monday: 'Mon',
+  tuesday: 'Tue',
+  wednesday: 'Wed',
+  thursday: 'Thu',
+  friday: 'Fri',
+  saturday: 'Sat',
 }
 
 interface ScheduleWeekOverviewProps {
-  onGroupDaysChange: (days: Set<DayOfWeek>) => void
+  /** Called when the user taps a group to edit it */
+  onSelectGroup?: (group: ScheduleGroup) => void
+  /** Controlled expanded state */
+  expanded?: boolean
+  /** Called when expanded state changes */
+  onExpandedChange?: (expanded: boolean) => void
 }
 
-function formatDayLabels(days: string[]): string {
-  const ordered = DAYS.map(d => d.key).filter(k => days.includes(k))
-  if (ordered.length === 0) return ''
-
-  const labels = ordered.map((k) => {
-    const d = DAYS.find(d => d.key === k)
-    return d?.label ?? k
-  })
-
-  // Check for contiguous ranges
-  const indices = ordered.map(k => DAYS.findIndex(d => d.key === k))
-  let isContiguous = true
-  for (let i = 1; i < indices.length; i++) {
-    if (indices[i] !== indices[i - 1] + 1) {
-      isContiguous = false
-      break
-    }
-  }
-
-  if (isContiguous && labels.length > 2) {
-    return `${labels[0]}\u2013${labels[labels.length - 1]}`
-  }
-  return labels.join(', ')
-}
-
-export function ScheduleWeekOverview({
-  onGroupDaysChange,
-}: ScheduleWeekOverviewProps) {
+export function ScheduleWeekOverview({ onSelectGroup, expanded: controlledExpanded, onExpandedChange }: ScheduleWeekOverviewProps) {
   const { side } = useSide()
-  const router = useRouter()
-  const pathname = usePathname()
-  const lang = pathname.split('/')[1] || 'en'
+  const [internalExpanded, setInternalExpanded] = useState(false)
+  const expanded = controlledExpanded ?? internalExpanded
+  const setExpanded = onExpandedChange ?? setInternalExpanded
 
-  const { data: groups, isLoading: groupsLoading } = trpc.scheduleGroups.getAll.useQuery({ side })
-  const { data: scheduleData, isLoading: schedulesLoading } = trpc.schedules.getAll.useQuery({ side })
+  const { data, isLoading } = trpc.schedules.getAll.useQuery({ side })
 
-  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null)
+  const temperature = data?.temperature
+  const groups = useMemo<ScheduleGroup[]>(() => {
+    if (!temperature) return []
+    return groupDaysBySharedCurve(temperature)
+  }, [temperature])
 
-  const isLoading = groupsLoading || schedulesLoading
-
-  // Get temperature range for a group's days
-  const getGroupTempRange = (days: string[]) => {
-    if (!scheduleData) return null
-    const temps = (scheduleData.temperature ?? []).filter(
-      (t: { dayOfWeek: string, temperature: number }) => days.includes(t.dayOfWeek)
-    )
-    if (temps.length === 0) return null
-    const values = temps.map((t: { temperature: number }) => t.temperature)
-    return { min: Math.min(...values), max: Math.max(...values) }
-  }
-
-  // Derive curve points for the selected group
-  const curveData = useMemo(() => {
-    if (!selectedGroupId || !scheduleData || !groups) return null
-
-    const group = (groups as ScheduleGroup[]).find(g => g.id === selectedGroupId)
-    if (!group || group.days.length === 0) return null
-
-    const firstDay = group.days[0]
-    const temps = (scheduleData.temperature ?? []).filter(
-      (t: { dayOfWeek: string }) => t.dayOfWeek === firstDay
-    )
-    const power = (scheduleData.power ?? []).find(
-      (p: { dayOfWeek: string }) => p.dayOfWeek === firstDay
-    )
-    const bedtime = power?.onTime ?? '22:00'
-    const btMin = timeStringToMinutes(bedtime)
-
-    if (temps.length === 0) return null
-
-    const sorted = [...temps]
-      .map((t: { time: string, temperature: number }) => {
-        let mfb = timeStringToMinutes(t.time) - btMin
-        if (mfb < -120) mfb += 24 * 60
-        return { ...t, minutesFromBedtime: mfb }
-      })
-      .sort((a: { minutesFromBedtime: number }, b: { minutesFromBedtime: number }) => a.minutesFromBedtime - b.minutesFromBedtime)
-
-    const tempValues = sorted.map((t: { temperature: number }) => t.temperature)
-    const min = Math.min(...tempValues)
-    const max = Math.max(...tempValues)
-    const total = sorted.length
-
-    const points: CurvePoint[] = sorted.map((t: { minutesFromBedtime: number, temperature: number }, i: number) => {
-      const frac = total > 1 ? i / (total - 1) : 0
-      const phase: Phase = frac < 0.1
-        ? 'warmUp'
-        : frac < 0.25
-          ? 'coolDown'
-          : frac < 0.55
-            ? 'deepSleep'
-            : frac < 0.75
-              ? 'maintain'
-              : frac < 0.9
-                ? 'preWake'
-                : 'wake'
-
-      return {
-        minutesFromBedtime: t.minutesFromBedtime,
-        tempOffset: t.temperature - 80,
-        phase,
-      }
-    })
-
-    return { curvePoints: points, bedtimeMinutes: btMin, minTempF: min, maxTempF: max }
-  }, [selectedGroupId, scheduleData, groups])
+  // Don't render anything if there are no schedules at all
+  const hasAnyContent = groups.some(g => g.setPoints.length > 0 || g.allDisabled)
+  if (!isLoading && !hasAnyContent) return null
 
   if (isLoading) {
     return (
-      <div className="h-16 animate-pulse rounded-2xl bg-zinc-900" />
+      <div className="h-12 animate-pulse rounded-2xl bg-zinc-900" />
     )
-  }
-
-  const typedGroups = (groups ?? []) as ScheduleGroup[]
-
-  if (typedGroups.length === 0) {
-    return (
-      <div className="rounded-2xl bg-zinc-900 p-4">
-        <div className="flex items-center gap-2">
-          <Calendar size={16} className="text-zinc-500" />
-          <h3 className="text-sm font-medium text-zinc-400">Schedule Groups</h3>
-        </div>
-        <p className="mt-2 text-xs text-zinc-500">No schedule groups configured.</p>
-      </div>
-    )
-  }
-
-  const handleGroupTap = (group: ScheduleGroup) => {
-    const days = new Set(group.days as DayOfWeek[])
-    if (selectedGroupId === group.id) {
-      // Deselect
-      setSelectedGroupId(null)
-      onGroupDaysChange(new Set())
-    }
-    else {
-      setSelectedGroupId(group.id)
-      onGroupDaysChange(days)
-    }
-  }
-
-  const handleEdit = (group: ScheduleGroup) => {
-    const firstDay = group.days[0]
-    if (firstDay) {
-      router.push(`/${lang}/schedule/${firstDay}`)
-    }
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
+    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+      {/* Header */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-2"
+      >
         <Calendar size={16} className="text-zinc-500" />
-        <h3 className="text-sm font-medium text-zinc-400">Schedule Groups</h3>
-      </div>
+        <span className="text-sm font-medium text-zinc-400">Week Overview</span>
+        <span className="ml-auto text-[10px] text-zinc-600">
+          {groups.filter(g => g.setPoints.length > 0).length}
+          {' '}
+          {groups.filter(g => g.setPoints.length > 0).length === 1 ? 'curve' : 'curves'}
+        </span>
+        <ChevronRight
+          size={14}
+          className={clsx(
+            'text-zinc-600 transition-transform duration-200',
+            expanded && 'rotate-90',
+          )}
+        />
+      </button>
 
-      <div className="space-y-2">
-        {typedGroups.map((group, i) => {
-          const isSelected = selectedGroupId === group.id
-          const tempRange = getGroupTempRange(group.days)
-          const color = GROUP_COLORS[i % GROUP_COLORS.length]
-
-          return (
-            <button
-              key={group.id}
-              type="button"
-              onClick={() => handleGroupTap(group)}
-              className={clsx(
-                'flex w-full items-center justify-between rounded-2xl p-3 text-left transition-colors sm:p-4',
-                isSelected
-                  ? 'bg-zinc-800 ring-1 ring-sky-500/40'
-                  : 'bg-zinc-900 active:bg-zinc-800',
-              )}
-            >
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <div className={clsx('h-2.5 w-2.5 rounded-full', color)} />
-                  <span className="text-sm font-medium text-white">{group.name}</span>
-                </div>
-                <div className="mt-1 flex items-center gap-3">
-                  <span className="text-xs text-zinc-500">
-                    {formatDayLabels(group.days)}
-                  </span>
-                  {tempRange && (
-                    <span className="text-xs text-zinc-400">
-                      {`${tempRange.min}–${tempRange.max}°F`}
-                    </span>
-                  )}
-                </div>
-              </div>
-              {isSelected && (
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleEdit(group)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.stopPropagation()
-                      handleEdit(group)
-                    }
-                  }}
-                  className="flex items-center gap-1 rounded-lg bg-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition-colors hover:bg-zinc-600"
-                >
-                  <Pencil size={12} />
-                  Edit
-                </div>
-              )}
-            </button>
-          )
-        })}
-      </div>
-
-      {curveData && curveData.curvePoints.length > 0 && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-          <CurveChart
-            points={curveData.curvePoints}
-            bedtimeMinutes={curveData.bedtimeMinutes}
-            minTempF={curveData.minTempF}
-            maxTempF={curveData.maxTempF}
-          />
+      {/* Expanded content — only show groups that have set points or are explicitly paused */}
+      {expanded && (
+        <div className="mt-3 space-y-2">
+          {groups.filter(g => g.setPoints.length > 0 || g.allDisabled).map(group => (
+            <GroupCard
+              key={group.key}
+              group={group}
+              onTap={onSelectGroup ? () => onSelectGroup(group) : undefined}
+            />
+          ))}
         </div>
       )}
     </div>
+  )
+}
+
+// ── Group Card ──────────────────────────────────────────────────────
+
+interface GroupCardProps {
+  group: ScheduleGroup
+  onTap?: () => void
+}
+
+function GroupCard({ group, onTap }: GroupCardProps) {
+  const hasSetPoints = group.setPoints.length > 0
+
+  return (
+    <button
+      onClick={onTap}
+      disabled={!onTap}
+      className={clsx(
+        'w-full rounded-xl border p-2.5 text-left transition-colors sm:p-3',
+        hasSetPoints
+          ? 'border-zinc-800 bg-zinc-800/50 active:border-sky-500/40'
+          : group.allDisabled
+            ? 'border-dashed border-zinc-700/50 bg-zinc-900/50'
+            : 'border-zinc-800/50 bg-zinc-900/50',
+        onTap && 'cursor-pointer',
+      )}
+    >
+      <div className="flex items-center gap-2.5">
+        {/* Day pills */}
+        <div className="flex flex-wrap gap-1">
+          {DAYS.map(({ key }) => {
+            const isInGroup = group.days.includes(key)
+            return (
+              <span
+                key={key}
+                className={clsx(
+                  'inline-flex h-6 min-w-[2rem] items-center justify-center rounded-full px-1.5 text-[10px] font-semibold transition-colors',
+                  isInGroup
+                    ? hasSetPoints
+                      ? 'bg-sky-500/20 text-sky-400'
+                      : group.allDisabled
+                        ? 'bg-amber-500/10 text-amber-600/70'
+                        : 'bg-zinc-700/50 text-zinc-500'
+                    : 'bg-transparent text-zinc-700',
+                )}
+              >
+                {DAY_SHORT[key]}
+              </span>
+            )
+          })}
+        </div>
+
+        {/* Temp range + set point count */}
+        <div className="ml-auto shrink-0 text-right">
+          {hasSetPoints && (
+            <span className="block text-[11px] font-medium text-zinc-300">
+              {Math.min(...group.setPoints.map(p => p.temperature))}
+              °–
+              {Math.max(...group.setPoints.map(p => p.temperature))}
+              °
+            </span>
+          )}
+          <span className={clsx(
+            'text-[10px]',
+            group.allDisabled ? 'text-amber-600/70' : 'text-zinc-500',
+          )}
+          >
+            {hasSetPoints
+              ? `${group.setPoints.length} set ${group.setPoints.length === 1 ? 'point' : 'points'}`
+              : 'Schedule paused'}
+          </span>
+        </div>
+      </div>
+
+      {/* Mini curve sparkline */}
+      {hasSetPoints && (
+        <div className="mt-2">
+          <MiniCurve setPoints={group.setPoints} />
+        </div>
+      )}
+    </button>
+  )
+}
+
+// ── Mini Curve Sparkline ────────────────────────────────────────────
+
+interface MiniCurveProps {
+  setPoints: Array<{ time: string, temperature: number }>
+}
+
+/**
+ * Mini Recharts sparkline showing temperature set points.
+ * No axes, no tooltips — just a smooth monotone curve.
+ *
+ * Handles overnight schedules: if set points span midnight
+ * (e.g. 22:00, 00:30, 06:00), early-morning times are shifted
+ * by +24h so the sparkline reads left-to-right chronologically.
+ */
+let miniCurveCounter = 0
+
+function MiniCurve({ setPoints }: MiniCurveProps) {
+  const gradientId = useMemo(() => `miniCurveGrad-${miniCurveCounter++}`, [])
+
+  const { chartData, gradientStops } = useMemo(() => {
+    if (setPoints.length === 0) return { chartData: [], gradientStops: [] }
+
+    const HALF_DAY = 12 * 60
+
+    const withMinutes = setPoints.map((p) => {
+      const [h, m] = p.time.split(':').map(Number)
+      return { ...p, minutes: h * 60 + m }
+    })
+
+    // Detect overnight wrap
+    const byClock = [...withMinutes].sort((a, b) => a.minutes - b.minutes)
+    let isOvernight = false
+    const hasEarlyMorning = byClock.some(p => p.minutes < HALF_DAY)
+    const hasEvening = byClock.some(p => p.minutes >= HALF_DAY)
+    if (hasEarlyMorning && hasEvening) {
+      for (let i = 0; i < byClock.length - 1; i++) {
+        if (byClock[i + 1].minutes - byClock[i].minutes > HALF_DAY) {
+          isOvernight = true
+          break
+        }
+      }
+    }
+
+    const sorted = withMinutes
+      .map(p => ({
+        minutes: isOvernight && p.minutes < HALF_DAY ? p.minutes + 24 * 60 : p.minutes,
+        temp: p.temperature,
+      }))
+      .sort((a, b) => a.minutes - b.minutes)
+
+    const minM = sorted[0].minutes
+    const maxM = sorted[sorted.length - 1].minutes
+    const range = maxM - minM || 1
+    const stops = sorted.map(d => ({
+      offset: `${((d.minutes - minM) / range) * 100}%`,
+      color: colorForTempF(d.temp),
+    }))
+
+    return { chartData: sorted, gradientStops: stops }
+  }, [setPoints])
+
+  if (chartData.length === 0) return null
+
+  return (
+    <ResponsiveContainer width="100%" height={36} minWidth={1} minHeight={1}>
+      <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
+            {gradientStops.map((stop, i) => (
+              <stop key={i} offset={stop.offset} stopColor={stop.color} stopOpacity={0.6} />
+            ))}
+          </linearGradient>
+          <linearGradient id={`${gradientId}-line`} x1="0" y1="0" x2="1" y2="0">
+            {gradientStops.map((stop, i) => (
+              <stop key={i} offset={stop.offset} stopColor={stop.color} stopOpacity={1} />
+            ))}
+          </linearGradient>
+        </defs>
+        <YAxis domain={['dataMin - 2', 'dataMax + 2']} hide />
+        <Area
+          type="monotone"
+          dataKey="temp"
+          stroke={`url(#${gradientId}-line)`}
+          strokeWidth={1.5}
+          fill={`url(#${gradientId})`}
+          fillOpacity={0.15}
+          dot={false}
+          isAnimationActive={false}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
   )
 }

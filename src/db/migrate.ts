@@ -6,10 +6,6 @@ import { biometricsDb, closeBiometricsDatabase } from './biometrics'
 /**
  * Run pending database migrations for all databases.
  * This should be called on server startup.
- *
- * Uses process.cwd() instead of __dirname because Turbopack bakes __dirname
- * at build time — when deploying a local build to the pod, the baked path
- * doesn't exist on the target. process.cwd() resolves at runtime.
  */
 export async function runMigrations() {
   try {

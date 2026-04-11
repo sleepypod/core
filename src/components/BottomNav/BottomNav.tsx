@@ -6,6 +6,7 @@ import { Activity, BarChart3, Calendar, Radio, Thermometer } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
+import { useScheduleActive } from '@/src/hooks/useScheduleActive'
 
 const tabs = [
   { id: 'temp', icon: Thermometer, label: msg`Temp`, href: '/' },
@@ -22,6 +23,7 @@ const tabs = [
 export const BottomNav = () => {
   const { i18n } = useLingui()
   const pathname = usePathname()
+  const { isActive: scheduleActive } = useScheduleActive()
 
   // Extract the path segment after /[lang]/ to determine active tab
   const getIsActive = (href: string) => {
@@ -47,13 +49,18 @@ export const BottomNav = () => {
               href={`/${lang}${tab.href}`}
               className="group flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 sm:gap-1"
             >
-              <tab.icon
-                size={18}
-                className={clsx(
-                  'shrink-0',
-                  isActive ? 'text-sky-400' : 'text-zinc-600'
+              <span className="relative">
+                <tab.icon
+                  size={18}
+                  className={clsx(
+                    'shrink-0',
+                    isActive ? 'text-sky-400' : 'text-zinc-600'
+                  )}
+                />
+                {tab.id === 'schedule' && scheduleActive && (
+                  <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-emerald-400" />
                 )}
-              />
+              </span>
               <span
                 className={clsx(
                   'truncate text-[8px] font-bold uppercase leading-tight sm:text-[9px]',
