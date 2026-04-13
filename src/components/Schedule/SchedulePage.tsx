@@ -102,7 +102,7 @@ export function SchedulePage() {
   return (
     <div className="space-y-3 sm:space-y-4">
       {/* Side selector — left / right / both (writes apply to selection) */}
-      <div className="mb-1">
+      <div className="mb-4 sm:mb-5">
         <SideSelector
           value={selectedSide}
           onChange={selectSide}
