@@ -17,12 +17,6 @@ interface TempPoint {
   rightF: number | null
 }
 
-// Legacy helper — kept for the live frame path. Will use hook's convert() once refactored.
-function convert(c: number | null | undefined): number | null {
-  if (c === undefined || c === null || c < -200) return null
-  return (c * 9) / 5 + 32
-}
-
 /**
  * Temperature trend chart showing historical bed temperature readings.
  * Draws a simple SVG line chart of left vs right temps over time.
@@ -37,7 +31,9 @@ export function TempTrendChart() {
   const seededRef = useRef(false)
 
   // tRPC: fetch last hour of bed temp history to pre-populate the chart
+  // eslint-disable-next-line react-hooks/purity
   const oneHourAgo = useMemo(() => new Date(Date.now() - 60 * 60 * 1000), [])
+
   const now = useMemo(() => new Date(), [])
 
   const historicalBedTemp = trpc.environment.getBedTemp.useQuery(
@@ -101,7 +97,7 @@ export function TempTrendChart() {
       const next = [...prev, { time: Date.now(), leftF, rightF }]
       return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
     })
-  }, []))
+  }, [convert]))
 
   if (history.length < 2) {
     return (

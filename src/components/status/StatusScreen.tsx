@@ -14,8 +14,6 @@ import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 import {
   Server,
   Cpu,
-  Calendar,
-  Activity,
   RefreshCw,
   Radio,
   Cog,
@@ -292,6 +290,7 @@ export function StatusScreen() {
           healthy={totalHealthy}
           total={totalServices}
           podVersion={dacMonitor.data?.podVersion}
+          sensorLabel={deviceStatus.data?.sensorLabel ?? undefined}
           branch={version.data?.branch}
           commitHash={version.data?.commitHash}
           diskPercent={disk.data?.usedPercent}

@@ -9,7 +9,7 @@ Type=simple
 User=root
 UMask=0002
 WorkingDirectory=/opt/sleepypod/modules/piezo-processor
-ExecStart=/opt/sleepypod/modules/piezo-processor/venv/bin/python main.py
+ExecStart=/opt/sleepypod/modules/piezo-processor/.venv/bin/python main.py
 Restart=always
 RestartSec=10
 

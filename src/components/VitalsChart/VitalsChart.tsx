@@ -89,7 +89,7 @@ export function VitalsChart({
     secondary?.data
       ? [...secondary.data].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       : [],
-  [secondary?.data])
+  [secondary])
 
   const { minVal, maxVal, minTime, maxTime } = useMemo(() => {
     const allPoints = [...sorted, ...sortedSecondary]

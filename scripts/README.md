@@ -21,25 +21,72 @@ curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install
 
 This will:
 1. **Pre-flight checks** - Verify disk space, network, dependencies
-2. **Detect dac.sock** - Auto-detect hardware socket location
-3. **Install Node.js 20** - Via nodesource repository
-4. **Clone repository** - From GitHub main branch
-5. **Install dependencies** - With `--frozen-lockfile` and `--ignore-scripts` for security
-6. **Build application** - Next.js production build
-7. **Database migrations** - Safe schema updates (not destructive push)
+2. **Download code** - From GitHub tarball (or use `--local`)
+3. **Detect pod generation** - Auto-detect dac.sock path and pod hardware (`scripts/pod/detect`)
+4. **Install Node.js 22** - Binary download (no apt required)
+5. **Install dependencies** - With `--frozen-lockfile`
+6. **Build application** - Next.js production build (skipped if pre-built)
+7. **Database migrations** - Run automatically on startup
 8. **Create systemd service** - With auto-restart and hardening
-9. **CLI shortcuts** - sp-status, sp-restart, sp-logs, sp-update
-10. **Start scheduler** - Automated temperature/power/alarm jobs
-11. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
+9. **Install CLI tools** - From `scripts/bin/` to `/usr/local/bin/`
+10. **Install uv** - Rust-based Python package manager (bypasses broken Yocto stdlib)
+11. **Install biometrics modules** - `uv sync` for each module + systemd services
+12. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
+
+### Install Flow
+
+```mermaid
+flowchart TD
+    Start([curl install | bash]) --> Preflight[Pre-flight checks\ndisk, network, deps]
+    Preflight --> Download{Code source?}
+
+    Download -->|--local| Local[Use code on disk]
+    Download -->|default| Release{CI release\navailable?}
+    Release -->|yes| Tarball[Download pre-built tarball]
+    Release -->|no| Source[Download source tarball\nfallback build on pod]
+
+    Local --> Detect
+    Tarball --> Detect
+    Source --> Detect
+
+    Detect[Detect pod generation\nscripts/pod/detect] --> Node[Install Node.js 22 + pnpm]
+    Node --> Deps[pnpm install --frozen-lockfile --prod]
+    Deps --> Build{.next exists?}
+    Build -->|yes| Skip[Skip build]
+    Build -->|no| BuildApp[pnpm build\n⚠️ needs ~1GB RAM]
+    Skip --> Env
+    BuildApp --> Env
+
+    Env[Write .env\nDAC_SOCK_PATH, DATABASE_URL] --> DB[Backup existing DB\nMigrations run on startup]
+    DB --> Service[Create systemd service\nstart sleepypod]
+    Service --> CLI[Install CLI tools\nscripts/bin/ → /usr/local/bin/]
+
+    CLI --> UV{uv\navailable?}
+    UV -->|no| InstallUV[Install uv\ncurl astral.sh]
+    UV -->|yes| Modules
+    InstallUV --> Modules
+
+    Modules[Install biometrics modules] --> UVSync[uv sync per module\ncreates .venv + installs deps]
+    UVSync --> ModService[Create module systemd services]
+
+    ModService --> SSH{Interactive\nterminal?}
+    SkipBio --> SSH
+    SSH -->|yes| SSHSetup[Optional SSH setup\nport 8822, keys only]
+    SSH -->|no| Done
+    SSHSetup --> Done([Installation complete])
+```
 
 ## CLI Commands
 
-After installation:
+After installation (installed from `scripts/bin/`):
 
 - `sp-status` - View service status
-- `sp-restart` - Restart sleepypod service
+- `sp-restart` - Restart sleepypod + reconnect frankenfirmware
 - `sp-logs` - View live logs
-- `sp-update` - Update to latest version
+- `sp-update` - Update to latest version from GitHub
+- `sp-freesleep` - Switch to free-sleep (persists across reboots)
+- `sp-sleepypod` - Switch to sleepypod (persists across reboots)
+- `sp-uninstall` - Remove sleepypod and all related services
 
 ## Internet Control
 
@@ -105,6 +152,34 @@ After installation, sleepypod provides:
 - **Hardware Control** - Direct DAC socket communication
 - **Health Monitoring** - Scheduler status and hardware connectivity checks
 - **Timezone Support** - Full timezone awareness for all schedules
+
+## Script Structure
+
+```
+scripts/
+├── install                  # Core orchestrator
+├── lib/
+│   └── iptables-helpers     # Shared WAN/iptables functions (sourced by sp-update)
+├── pod/
+│   └── detect               # Pod detection: DAC_SOCK_PATH, POD_GEN
+├── bin/                     # CLI tools — copied to /usr/local/bin/ during install
+│   ├── sp-status
+│   ├── sp-restart
+│   ├── sp-logs
+│   ├── sp-update
+│   ├── sp-freesleep
+│   ├── sp-sleepypod
+│   └── sp-uninstall
+├── deploy                   # Dev deploy (build local, push to pod)
+├── push                     # Fast push (pre-built .next only)
+└── internet-control         # WAN block/unblock utility
+```
+
+## Python Environment (uv)
+
+Biometrics modules use [uv](https://docs.astral.sh/uv/) for Python environment management. uv is a Rust-based tool that creates virtualenvs and installs packages without relying on Python's stdlib (`ensurepip`, `pyexpat`, etc.) — which are broken on Pod 3/4 Yocto images.
+
+Each module has a `pyproject.toml` and `uv.lock`. The install script runs `uv sync` per module, which creates a `.venv` and installs locked dependencies.
 
 ## File Locations
 

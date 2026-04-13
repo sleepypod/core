@@ -16,16 +16,35 @@ export interface TemperatureSchedule {
   updatedAt: string | Date
 }
 
-export interface ScheduleData {
-  temperature: TemperatureSchedule[]
-  power: any[]
-  alarm: any[]
+export interface PowerSchedule {
+  id: number
+  side: 'left' | 'right'
+  dayOfWeek: DayOfWeek
+  onTime: string
+  offTime: string
+  onTemperature: number
+  enabled: boolean
 }
 
-const PHASE_NAMES = ['Bedtime', 'Deep Sleep', 'Pre-Wake', 'Wake Up']
-const PHASE_ICONS = ['moon', 'moon', 'sunrise', 'sun'] as const
+export interface AlarmSchedule {
+  id: number
+  side: 'left' | 'right'
+  dayOfWeek: DayOfWeek
+  time: string
+  vibrationPattern: string
+  vibrationIntensity: number
+  duration: number
+  alarmTemperature: number
+  enabled: boolean
+}
 
-export type PhaseIcon = typeof PHASE_ICONS[number]
+export interface ScheduleData {
+  temperature: TemperatureSchedule[]
+  power: PowerSchedule[]
+  alarm: AlarmSchedule[]
+}
+
+export type PhaseIcon = 'moon' | 'sunrise' | 'sun'
 
 export interface SchedulePhase {
   id: number
@@ -34,6 +53,16 @@ export interface SchedulePhase {
   time: string
   temperature: number
   enabled: boolean
+}
+
+/** Derive a short label from the time of day */
+function labelForTime(time: string): { name: string, icon: PhaseIcon } {
+  const [h] = time.split(':').map(Number)
+  if (h >= 21 || h < 1) return { name: 'Evening', icon: 'moon' }
+  if (h >= 1 && h < 5) return { name: 'Overnight', icon: 'moon' }
+  if (h >= 5 && h < 8) return { name: 'Morning', icon: 'sunrise' }
+  if (h >= 8 && h < 17) return { name: 'Daytime', icon: 'sun' }
+  return { name: 'Evening', icon: 'sun' }
 }
 
 /**
@@ -45,28 +74,31 @@ export function useSchedules(selectedDay: DayOfWeek) {
   const { side } = useSide()
   const utils = trpc.useUtils()
 
-  const queryKey = { side, dayOfWeek: selectedDay }
+  const queryKey = useMemo(() => ({ side, dayOfWeek: selectedDay }), [side, selectedDay])
   const schedulesQuery = trpc.schedules.getByDay.useQuery(queryKey)
 
   // Derive phases from temperature schedules (sorted by time, named by position)
   const phases: SchedulePhase[] = useMemo(() => {
     const temps = schedulesQuery.data?.temperature
     if (!temps || temps.length === 0) return []
-    const sorted = [...temps].sort((a: any, b: any) => a.time.localeCompare(b.time))
-    return sorted.map((t: any, i: number) => ({
-      id: t.id,
-      name: i < PHASE_NAMES.length ? PHASE_NAMES[i] : `Phase ${i + 1}`,
-      icon: (i < PHASE_ICONS.length ? PHASE_ICONS[i] : 'sun') as PhaseIcon,
-      time: t.time,
-      temperature: t.temperature,
-      enabled: t.enabled,
-    }))
+    const sorted = [...temps].sort((a: { time: string }, b: { time: string }) => a.time.localeCompare(b.time))
+    return sorted.map((t: { id: number, time: string, temperature: number, enabled: boolean }) => {
+      const { name, icon } = labelForTime(t.time)
+      return {
+        id: t.id,
+        name,
+        icon,
+        time: t.time,
+        temperature: t.temperature,
+        enabled: t.enabled,
+      }
+    })
   }, [schedulesQuery.data?.temperature])
 
   const invalidate = useCallback(() => {
     void utils.schedules.getByDay.invalidate(queryKey)
     void utils.schedules.getAll.invalidate({ side })
-  }, [utils, side, selectedDay])
+  }, [utils, queryKey, side])
 
   // ── Create temperature schedule with optimistic update ──
   const createMutation = trpc.schedules.createTemperatureSchedule.useMutation({
@@ -74,7 +106,7 @@ export function useSchedules(selectedDay: DayOfWeek) {
       await utils.schedules.getByDay.cancel(queryKey)
       const previous = utils.schedules.getByDay.getData(queryKey)
 
-      utils.schedules.getByDay.setData(queryKey, (old: any) => {
+      utils.schedules.getByDay.setData(queryKey, (old: ScheduleData | undefined) => {
         if (!old) return old
         const optimistic = {
           id: -Date.now(),
@@ -104,11 +136,11 @@ export function useSchedules(selectedDay: DayOfWeek) {
       await utils.schedules.getByDay.cancel(queryKey)
       const previous = utils.schedules.getByDay.getData(queryKey)
 
-      utils.schedules.getByDay.setData(queryKey, (old: any) => {
+      utils.schedules.getByDay.setData(queryKey, (old: ScheduleData | undefined) => {
         if (!old) return old
         return {
           ...old,
-          temperature: old.temperature.map((t: any) =>
+          temperature: old.temperature.map((t: TemperatureSchedule) =>
             t.id === updates.id
               ? {
                   ...t,
@@ -136,11 +168,11 @@ export function useSchedules(selectedDay: DayOfWeek) {
       await utils.schedules.getByDay.cancel(queryKey)
       const previous = utils.schedules.getByDay.getData(queryKey)
 
-      utils.schedules.getByDay.setData(queryKey, (old: any) => {
+      utils.schedules.getByDay.setData(queryKey, (old: ScheduleData | undefined) => {
         if (!old) return old
         return {
           ...old,
-          temperature: old.temperature.filter((t: any) => t.id !== id),
+          temperature: old.temperature.filter((t: TemperatureSchedule) => t.id !== id),
         }
       })
       return { previous }

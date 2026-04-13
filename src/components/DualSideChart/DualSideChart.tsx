@@ -200,7 +200,7 @@ export function DualSideChart({
       ticks.push({ x: scaleX(t), label: formatTime(new Date(t)) })
     }
     return ticks
-  }, [sortedLeft.length, sortedRight.length, minTime, maxTime, scaleX, formatTime])
+  }, [sortedLeft, sortedRight, minTime, maxTime, scaleX, formatTime])
 
   // Y-axis tick labels (3 ticks)
   const yTicks = useMemo(() => {

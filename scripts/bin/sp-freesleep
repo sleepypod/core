@@ -1,0 +1,18 @@
+#!/bin/bash
+set -euo pipefail
+echo "Switching to free-sleep..."
+systemctl stop sleepypod.service 2>/dev/null || true
+for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
+  systemctl stop "$svc.service" 2>/dev/null || true
+  systemctl disable "$svc.service" 2>/dev/null || true
+done
+# Persist across reboots
+systemctl disable sleepypod.service 2>/dev/null || true
+systemctl enable free-sleep.service free-sleep-stream.service 2>/dev/null || true
+systemctl start free-sleep.service free-sleep-stream.service 2>/dev/null || true
+sleep 2
+if systemctl is-active --quiet free-sleep.service; then
+  echo "✓ free-sleep is running on port 3000 (persists across reboots)"
+else
+  echo "✗ free-sleep failed to start — check: journalctl -u free-sleep.service"
+fi

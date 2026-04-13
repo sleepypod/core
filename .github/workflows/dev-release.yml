@@ -17,15 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: 'lts/*'
+          node-version-file: '.node-version'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -33,6 +33,9 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Set install script default branch
+        run: sed -i 's/__BRANCH__/${{ github.ref_name }}/' scripts/install
 
       - name: Create deploy tarball
         run: |
@@ -54,9 +57,9 @@ jobs:
         run: |
           # --cleanup-tag removed: it can delete a branch named 'dev' on older gh versions
           gh release delete dev --yes 2>/dev/null || true
-          git push -d origin refs/tags/dev 2>/dev/null || true
+          git push -d --no-verify origin refs/tags/dev 2>/dev/null || true
           git tag -f dev
-          git push -f origin refs/tags/dev
+          git push -f --no-verify origin refs/tags/dev
           gh release create dev sleepypod-core.tar.gz \
             --target "${{ github.sha }}" \
             --title "Dev (latest)" \

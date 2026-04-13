@@ -21,6 +21,7 @@ import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.ins
 import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
 import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
 import { initializeKeepalives, shutdownKeepalives } from '@/src/services/temperatureKeepalive'
+import { startAutoOffWatcher, stopAutoOffWatcher } from '@/src/services/autoOffWatcher'
 
 let isInitialized = false
 let isShuttingDown = false
@@ -75,7 +76,15 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error stopping Bonjour:', error)
   }
 
-  // Step 4: Shutdown DAC monitor
+  // Step 4: Stop auto-off watcher (await in-flight power-off calls)
+  try {
+    await stopAutoOffWatcher()
+  }
+  catch (error) {
+    console.error('Error stopping auto-off watcher:', error)
+  }
+
+  // Step 5: Shutdown DAC monitor
   try {
     await shutdownDacMonitor()
   }
@@ -83,7 +92,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down DacMonitor:', error)
   }
 
-  // Step 5: Close database connections
+  // Step 6: Close database connections
   try {
     closeDatabase()
     closeBiometricsDatabase()
@@ -274,6 +283,9 @@ export async function initializeScheduler(): Promise<void> {
         error instanceof Error ? error.message : error
       )
     }
+
+    // Start auto-off watcher (polls biometrics DB for bed-exit events)
+    startAutoOffWatcher()
 
     // Start Bonjour/mDNS announcement (non-blocking)
     startBonjourAnnouncement()

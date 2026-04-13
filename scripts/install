@@ -62,6 +62,8 @@ trap 'cleanup $LINENO' EXIT
 
 # --------------------------------------------------------------------------------
 # iptables helpers
+# Canonical copy: scripts/lib/iptables-helpers (sourced by sp-update at runtime).
+# Kept inline here because install needs them before the source tree is on disk.
 
 wan_is_blocked() {
   # Check if the OUTPUT chain has a DROP rule (WAN is blocked)
@@ -150,6 +152,7 @@ esac
 
 INSTALL_DIR="/home/dac/sleepypod-core"
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+SCRIPT_DEFAULT_BRANCH="__BRANCH__"  # substituted at release time by .github/workflows/{release,dev-release}.yml
 
 # Lock file to prevent concurrent installs
 LOCKFILE="/var/run/sleepypod-install.lock"
@@ -203,60 +206,8 @@ if [ "$DISK_AVAIL" -lt 500 ]; then
   exit 1
 fi
 
-# Detect dac.sock path — read from frank.sh (the firmware launcher) to match
-# whatever path frankenfirmware actually connects to. Different pod hardware
-# versions use different paths:
-#   Pod 3/4: /deviceinfo/dac.sock (tmpfs)
-#   Pod 5:   /persistent/deviceinfo/dac.sock (ext4)
-DAC_SOCK_PATH=""
-
-# Only accept known firmware-supported socket locations
-is_supported_dac_path() {
-  case "$1" in
-    /deviceinfo/dac.sock|/persistent/deviceinfo/dac.sock) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-# Priority 1: Read from existing .env (validate against known paths)
-if [ -f "$INSTALL_DIR/.env" ]; then
-  EXISTING_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
-  if [ -n "$EXISTING_PATH" ] && is_supported_dac_path "$EXISTING_PATH"; then
-    DAC_SOCK_PATH="$EXISTING_PATH"
-  elif [ -n "$EXISTING_PATH" ]; then
-    echo "Warning: Ignoring unsupported DAC_SOCK_PATH from .env: $EXISTING_PATH"
-  fi
-fi
-
-# Priority 2: Extract from frank.sh (what frankenfirmware actually uses)
-if [ -z "$DAC_SOCK_PATH" ] && [ -f /opt/eight/bin/frank.sh ]; then
-  FRANK_PATH=$(grep 'DAC_SOCKET=' /opt/eight/bin/frank.sh 2>/dev/null \
-    | grep -o '[^ ]*dac\.sock' | head -1 || true)
-  if [ -n "$FRANK_PATH" ]; then
-    DAC_SOCK_PATH="$FRANK_PATH"
-    echo "Detected dac.sock path from frank.sh: $DAC_SOCK_PATH"
-  fi
-fi
-
-# Priority 3: Check known socket locations
-if [ -z "$DAC_SOCK_PATH" ]; then
-  for sock_path in \
-    /persistent/deviceinfo/dac.sock \
-    /deviceinfo/dac.sock \
-  ; do
-    if [ -S "$sock_path" ]; then
-      DAC_SOCK_PATH="$sock_path"
-      echo "Found active dac.sock at: $DAC_SOCK_PATH"
-      break
-    fi
-  done
-fi
-
-# Priority 4: Default to /persistent/deviceinfo/dac.sock
-if [ -z "$DAC_SOCK_PATH" ]; then
-  DAC_SOCK_PATH="/persistent/deviceinfo/dac.sock"
-  echo "Warning: dac.sock not found, using default: $DAC_SOCK_PATH"
-fi
+# DAC_SOCK_PATH detection is in scripts/pod/detect — sourced after code is on disk.
+# Pre-create both possible parent directories so mkdir works before detection runs.
 
 # Create data directory with shared group for multi-user SQLite access.
 # The Node.js app (root) creates biometrics.db, but calibrator and
@@ -270,7 +221,6 @@ echo "Creating data directory at $DATA_DIR..."
 # /run/dac is handled by RuntimeDirectory=dac in the service unit.
 mkdir -p /persistent/deviceinfo
 mkdir -p /deviceinfo
-mkdir -p "$(dirname "$DAC_SOCK_PATH")"
 groupadd --force sleepypod
 if id dac &>/dev/null; then
   usermod -aG sleepypod dac
@@ -369,7 +319,7 @@ if [ "$INSTALL_LOCAL" = true ]; then
   fi
 else
   # Download code via tarball (no git required on device)
-  DOWNLOAD_BRANCH="${INSTALL_BRANCH:-main}"
+  DOWNLOAD_BRANCH="${INSTALL_BRANCH:-$SCRIPT_DEFAULT_BRANCH}"
   echo "Downloading $DOWNLOAD_BRANCH from GitHub..."
 
   DOWNLOAD_DIR=$(mktemp -d)
@@ -437,9 +387,20 @@ else
   echo "Source downloaded."
 fi
 
+# Detect pod generation and DAC socket path (code is now on disk)
+if [ -f "$INSTALL_DIR/scripts/pod/detect" ]; then
+  source "$INSTALL_DIR/scripts/pod/detect"
+else
+  echo "Error: $INSTALL_DIR/scripts/pod/detect not found." >&2
+  echo "  The downloaded code does not match this install script." >&2
+  echo "  Try: curl -fsSL <url> | sudo bash -s -- --branch $SCRIPT_DEFAULT_BRANCH" >&2
+  exit 1
+fi
+echo "Pod generation: $POD_GEN (DAC: $DAC_SOCK_PATH)"
+
 # Install production dependencies (prebuild-install downloads prebuilt better-sqlite3)
 echo "Installing dependencies..."
-pnpm install --frozen-lockfile --prod
+CI=true pnpm install --frozen-lockfile --prod
 
 # Verify better-sqlite3 native module is ready
 if [ ! -f "$INSTALL_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" ] && \
@@ -455,13 +416,17 @@ if [ ! -f "$INSTALL_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3
 fi
 
 # Build application (skip if .next already exists — pre-built by deploy script or CI)
+# Effective branch: --branch flag, download branch, or script default
+EFFECTIVE_BRANCH="${INSTALL_BRANCH:-${DOWNLOAD_BRANCH:-$SCRIPT_DEFAULT_BRANCH}}"
 if [ -d "$INSTALL_DIR/.next" ]; then
   echo "Pre-built .next found, skipping build."
+  # Regenerate .git-info with the correct branch (CI builds may have a different branch baked in)
+  SP_BRANCH="$EFFECTIVE_BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
 else
   echo "No pre-built .next found, building from source..."
   echo "Installing all dependencies (including devDependencies for build)..."
-  pnpm install --frozen-lockfile
-  pnpm build
+  CI=true pnpm install --frozen-lockfile
+  SP_BRANCH="$EFFECTIVE_BRANCH" pnpm build
 fi
 
 # Turbopack hashes the better-sqlite3 module name — create a symlink so the
@@ -526,7 +491,9 @@ Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 ExecStartPre=/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
-ExecStart=/usr/local/bin/pnpm start
+ExecStartPre=$INSTALL_DIR/scripts/bin/sp-maintenance
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; else exec /usr/local/bin/pnpm start; fi'
 Restart=always
 RestartSec=10
 
@@ -541,6 +508,16 @@ ProtectKernelModules=true
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Cap journal size to prevent unbounded log growth on limited disk
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/sleepypod.conf << 'JOURNALD'
+[Journal]
+SystemMaxUse=50M
+SystemKeepFree=200M
+MaxFileSec=1week
+JOURNALD
+systemctl restart systemd-journald 2>/dev/null || true
 
 # Reload systemd and enable service
 echo "Enabling service..."
@@ -569,6 +546,31 @@ if command -v fuser &>/dev/null; then
     kill "$PORT_PID" 2>/dev/null || true
     sleep 1
   fi
+fi
+
+# Install Avahi mDNS service file (must happen here, not at runtime,
+# because ProtectSystem=strict makes /etc read-only for the service process).
+# Port values are baked in at install time; sp-update re-runs this to refresh.
+if [ -d /etc/avahi ]; then
+  mkdir -p /etc/avahi/services
+  TRPC_PORT=${PORT:-3000}
+  WS_PORT=${PIEZO_WS_PORT:-3001}
+  cat > /etc/avahi/services/sleepypod.service << AVAHI_EOF
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name>sleepypod</name>
+  <service>
+    <type>_sleepypod._tcp</type>
+    <port>$TRPC_PORT</port>
+    <txt-record>wsPort=$WS_PORT</txt-record>
+    <txt-record>version=1.0.0</txt-record>
+  </service>
+</service-group>
+AVAHI_EOF
+  # Reload avahi to pick up the new service file
+  kill -HUP "$(pidof avahi-daemon 2>/dev/null)" 2>/dev/null || true
+  echo "Avahi mDNS service installed (_sleepypod._tcp on port $TRPC_PORT)"
 fi
 
 systemctl restart sleepypod.service
@@ -606,10 +608,14 @@ MODULES_DEST="/opt/sleepypod/modules"
 mkdir -p "$MODULES_DEST"
 mkdir -p /etc/sleepypod/modules
 
-# Check Python 3 is available
-if ! command -v python3 &>/dev/null; then
-  echo "Warning: python3 not found — skipping biometrics module installation"
-  echo "Install Python 3 and re-run the installer to enable health monitoring"
+# Install uv (Rust-based Python package manager — bypasses broken ensurepip/pyexpat on Yocto)
+if ! command -v uv &>/dev/null; then
+  echo "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
+fi
+
+if ! command -v uv &>/dev/null; then
+  echo "Warning: uv installation failed — skipping biometrics module installation"
 else
   install_module() {
     local name="$1"
@@ -628,19 +634,14 @@ else
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
 
-    # Check if python3 venv is available (built-in on most distros, separate package on Debian)
-    if ! python3 -m venv --help >/dev/null 2>&1; then
-      echo "Warning: python3-venv not available, skipping module $name"
-      echo "On Debian/Ubuntu: apt-get install -y python3-venv"
-      return
-    fi
+    # Remove orphaned venv/ from pre-uv installs
+    rm -rf "$dest/venv"
 
-    # Create Python virtualenv and install deps
-    if [ ! -d "$dest/venv" ]; then
-      python3 -m venv "$dest/venv"
-    fi
-    "$dest/venv/bin/pip" install --quiet --upgrade pip
-    "$dest/venv/bin/pip" install --quiet -r "$dest/requirements.txt"
+    # Create Python environment with uv (no ensurepip/pyexpat needed)
+    (cd "$dest" && uv sync --frozen --python python3) || {
+      echo "Warning: uv sync failed for module $name"
+      return
+    }
 
     # Install systemd service
     if [ -f "$dest/$service" ]; then
@@ -671,311 +672,15 @@ fi
 # files with 0644 between the initial fixup and the service restarts above.
 fix_db_permissions
 
-# Create CLI shortcuts
-echo "Creating CLI shortcuts..."
-cat > /usr/local/bin/sp-status << 'EOF'
-#!/bin/bash
-systemctl status sleepypod.service
-EOF
-
-cat > /usr/local/bin/sp-restart << RESTARTEOF
-#!/bin/bash
-set -euo pipefail
-systemctl restart sleepypod.service
-# Wait for sleepypod to create dac.sock before killing frankenfirmware
-DAC_SOCK=\$(grep '^DAC_SOCK_PATH=' $INSTALL_DIR/.env 2>/dev/null | cut -d= -f2- || echo "")
-[ -z "\$DAC_SOCK" ] && DAC_SOCK="$DAC_SOCK_PATH"
-for i in \$(seq 1 10); do
-  [ -S "\$DAC_SOCK" ] && break
-  sleep 1
-done
-if [ -S "\$DAC_SOCK" ]; then
-  # Kill frankenfirmware so its supervisor restarts it against the new dac.sock
-  pkill frankenfirmware 2>/dev/null || true
-else
-  echo "Warning: dac.sock not found after 10s — skipping frankenfirmware restart" >&2
+# Install CLI tools from scripts/bin/
+if [ -d "$INSTALL_DIR/scripts/bin" ]; then
+  echo "Installing CLI tools..."
+  for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
+    [ -f "$tool" ] || continue
+    cp "$tool" /usr/local/bin/
+    chmod +x "/usr/local/bin/$(basename "$tool")"
+  done
 fi
-RESTARTEOF
-
-cat > /usr/local/bin/sp-logs << 'EOF'
-#!/bin/bash
-journalctl -u sleepypod.service -f
-EOF
-
-cat > /usr/local/bin/sp-update << 'UPDATEEOF'
-#!/bin/bash
-set -euo pipefail
-
-# Ensure /usr/local/bin is in PATH (Yocto's root SSH PATH is minimal)
-case ":$PATH:" in
-  *:/usr/local/bin:*) ;;
-  *) export PATH="/usr/local/bin:$PATH" ;;
-esac
-
-# sp-update — self-update sleepypod-core from GitHub via curl+tarball
-#
-# Usage:
-#   sp-update              # update to latest main
-#   sp-update feat/alarms  # update to a specific branch
-#
-# Handles iptables toggle automatically (opens WAN, downloads, closes WAN).
-# No git required — uses GitHub's tarball API.
-
-INSTALL_DIR="/home/dac/sleepypod-core"
-DATA_DIR="/persistent/sleepypod-data"
-GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
-BRANCH="${1:-main}"
-IPTABLES="/usr/sbin/iptables"
-
-echo "=== SleepyPod Update ==="
-echo "Branch: $BRANCH"
-echo "Repo:   $GITHUB_REPO"
-echo ""
-
-# iptables helpers
-wan_is_blocked() {
-  $IPTABLES -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
-}
-
-SAVED_IPTABLES=""
-WAN_WAS_BLOCKED=false
-
-unblock_wan() {
-  echo "Opening WAN access..."
-  SAVED_IPTABLES="$(/usr/sbin/iptables-save 2>/dev/null || true)"
-  $IPTABLES -F && $IPTABLES -X && $IPTABLES -t nat -F && $IPTABLES -t nat -X
-  echo "WAN open."
-}
-
-restore_wan() {
-  if [ -n "$SAVED_IPTABLES" ]; then
-    echo "Restoring iptables rules..."
-    echo "$SAVED_IPTABLES" | /usr/sbin/iptables-restore 2>/dev/null || true
-  fi
-  echo "WAN blocked."
-}
-
-# Cleanup — always re-block WAN and restart service on failure
-cleanup() {
-  local exit_code=$?
-  if [ "$WAN_WAS_BLOCKED" = true ]; then
-    restore_wan
-  fi
-  if [ $exit_code -ne 0 ]; then
-    echo "Update failed, starting service with existing code..." >&2
-    systemctl start sleepypod.service 2>/dev/null || true
-  fi
-}
-trap cleanup EXIT
-
-# Pre-flight: disk space
-DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
-if [ "$DISK_AVAIL" -lt 300 ]; then
-  echo "Error: Need 300MB free, only ${DISK_AVAIL}MB available" >&2
-  exit 1
-fi
-
-# Open WAN if blocked
-if wan_is_blocked; then
-  # Ensure /etc/hosts telemetry block is in place before opening WAN
-  if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
-    echo "Installing /etc/hosts telemetry block before opening WAN..."
-    "$INSTALL_DIR/scripts/internet-control" hosts-block 2>/dev/null || true
-  fi
-  WAN_WAS_BLOCKED=true
-  unblock_wan
-fi
-
-# Check connectivity
-if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
-  echo "Error: Cannot reach GitHub. Check network." >&2
-  exit 1
-fi
-
-# Backup database
-if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
-  echo "Database backed up."
-fi
-
-# Backup current code for rollback (everything except node_modules)
-BACKUP_DIR="/tmp/sleepypod-rollback"
-rm -rf "$BACKUP_DIR"
-mkdir -p "$BACKUP_DIR"
-tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C "$BACKUP_DIR" || true
-
-# Stop service
-systemctl stop sleepypod.service
-
-# Download code — try CI release first (includes pre-built .next), fall back to source tarball
-TMPDIR=$(mktemp -d)
-HAS_BUILD=false
-
-if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "latest" ]; then
-  # Try latest GitHub Release (CI-built, includes .next)
-  echo "Checking for CI release..."
-  RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
-    | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
-    | grep -o 'https://[^"]*' || true)
-
-  if [ -n "$RELEASE_URL" ]; then
-    echo "Downloading CI release..."
-    if curl -fSL "$RELEASE_URL" | tar xz -C "$TMPDIR"; then
-      HAS_BUILD=true
-      echo "CI release downloaded (pre-built)."
-    fi
-  fi
-fi
-
-if [ "$HAS_BUILD" = false ]; then
-  # Fall back to source tarball (no .next — would need build on pod)
-  echo "Downloading $BRANCH from GitHub..."
-  TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${BRANCH}.tar.gz"
-  if ! curl -fSL "$TARBALL_URL" | tar xz -C "$TMPDIR"; then
-    echo "Error: Failed to download branch '$BRANCH'" >&2
-    exit 1
-  fi
-  # Source tarball extracts to a subdirectory (e.g., core-main/)
-  SUBDIR=$(ls "$TMPDIR" | head -1)
-  if [ -z "$SUBDIR" ] || [ ! -d "$TMPDIR/$SUBDIR" ]; then
-    echo "Error: Unexpected tarball structure in $TMPDIR" >&2
-    exit 1
-  fi
-  # Move contents up so TMPDIR is the root
-  mv "$TMPDIR/$SUBDIR"/* "$TMPDIR/$SUBDIR"/.[!.]* "$TMPDIR/" 2>/dev/null || true
-  rmdir "$TMPDIR/$SUBDIR" 2>/dev/null || true
-fi
-
-# Clean old files (preserve node_modules, .env)
-find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-  ! -name 'node_modules' \
-  ! -name '.env' \
-  -exec rm -rf {} +
-
-# Move new code into place
-cp -r "$TMPDIR/." "$INSTALL_DIR/"
-rm -rf "$TMPDIR"
-echo "Source updated."
-
-cd "$INSTALL_DIR"
-
-# Install prod deps (migrations run automatically on app startup via instrumentation.ts)
-if pnpm install --frozen-lockfile --prod; then
-
-  # Build only if no pre-built .next exists
-  if [ ! -d "$INSTALL_DIR/.next" ]; then
-    echo "No pre-built .next found, building..."
-    pnpm install --frozen-lockfile
-    pnpm build
-  fi
-
-  # Sync biometrics modules
-  if [ -d "$INSTALL_DIR/modules" ]; then
-    MODULES_DEST="/opt/sleepypod/modules"
-    mkdir -p "$MODULES_DEST"
-    if [ -d "$INSTALL_DIR/modules/common" ]; then
-      mkdir -p "$MODULES_DEST/common"
-      cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
-    fi
-    for mod in piezo-processor sleep-detector environment-monitor calibrator; do
-      if [ -d "$INSTALL_DIR/modules/$mod" ]; then
-        mkdir -p "$MODULES_DEST/$mod"
-        cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
-        if [ ! -d "$MODULES_DEST/$mod/venv" ] && command -v python3 &>/dev/null; then
-          python3 -m venv "$MODULES_DEST/$mod/venv" 2>/dev/null || true
-        fi
-        if [ -d "$MODULES_DEST/$mod/venv" ] && [ -f "$MODULES_DEST/$mod/requirements.txt" ]; then
-          "$MODULES_DEST/$mod/venv/bin/pip" install --quiet -r "$MODULES_DEST/$mod/requirements.txt" 2>/dev/null || true
-        fi
-        svc="sleepypod-$mod.service"
-        if [ -f "$MODULES_DEST/$mod/$svc" ]; then
-          cp "$MODULES_DEST/$mod/$svc" "/etc/systemd/system/$svc"
-          systemctl daemon-reload
-          systemctl enable "$svc" 2>/dev/null || true
-          systemctl restart "$svc" 2>/dev/null || true
-        fi
-      fi
-    done
-  fi
-
-  # Re-block WAN before starting service
-  if [ "$WAN_WAS_BLOCKED" = true ]; then
-    restore_wan
-    WAN_WAS_BLOCKED=false
-  fi
-
-  echo "Starting service..."
-  systemctl start sleepypod.service
-
-  sleep 5
-  if systemctl is-active --quiet sleepypod.service; then
-    echo "Update complete! Service is running."
-    exit 0
-  fi
-fi
-
-# Rollback on failure — restore full previous code and database
-echo "Update failed, restoring previous code..." >&2
-if [ -d "$BACKUP_DIR" ]; then
-  find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-    ! -name 'node_modules' \
-    ! -name '.env' \
-    -exec rm -rf {} +
-  cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
-  echo "Previous code restored."
-fi
-if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
-  cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
-  echo "Database restored."
-fi
-systemctl start sleepypod.service 2>/dev/null || true
-
-exit 1
-UPDATEEOF
-
-cat > /usr/local/bin/sp-freesleep << 'EOF'
-#!/bin/bash
-echo "Switching to free-sleep..."
-systemctl stop sleepypod.service 2>/dev/null || true
-for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
-  systemctl stop "$svc.service" 2>/dev/null || true
-done
-systemctl start free-sleep.service free-sleep-stream.service 2>/dev/null || true
-sleep 2
-if systemctl is-active --quiet free-sleep.service; then
-  echo "✓ free-sleep is running on port 3000"
-else
-  echo "✗ free-sleep failed to start — check: journalctl -u free-sleep.service"
-fi
-EOF
-
-cat > /usr/local/bin/sp-sleepypod << 'EOF'
-#!/bin/bash
-echo "Switching to sleepypod..."
-systemctl stop free-sleep.service free-sleep-stream.service 2>/dev/null || true
-# Kill anything on port 3000
-if command -v fuser &>/dev/null; then
-  fuser -k 3000/tcp 2>/dev/null || true
-  sleep 1
-fi
-systemctl restart sleepypod.service
-for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
-  systemctl restart "$svc.service" 2>/dev/null || true
-done
-sleep 3
-if systemctl is-active --quiet sleepypod.service; then
-  echo "✓ sleepypod is running on port 3000"
-else
-  echo "✗ sleepypod failed to start — check: sp-logs"
-fi
-EOF
-
-chmod +x /usr/local/bin/sp-status
-chmod +x /usr/local/bin/sp-restart
-chmod +x /usr/local/bin/sp-logs
-chmod +x /usr/local/bin/sp-update
-chmod +x /usr/local/bin/sp-freesleep
-chmod +x /usr/local/bin/sp-sleepypod
 
 # Optional SSH configuration
 if [ "$SKIP_SSH" = true ]; then
@@ -1077,10 +782,13 @@ echo "  - Sleep session detection and movement tracking (sleep-detector)"
 echo "  - Ambient, bed zone, and freezer temperature monitoring (environment-monitor)"
 echo ""
 echo "CLI Commands:"
-echo "  sp-status   - View service status"
-echo "  sp-restart  - Restart service"
-echo "  sp-logs     - View live logs"
-echo "  sp-update   - Update to latest version"
+echo "  sp-status      - View service status"
+echo "  sp-restart     - Restart service"
+echo "  sp-logs        - View live logs"
+echo "  sp-update      - Update to latest version"
+echo "  sp-freesleep   - Switch to free-sleep"
+echo "  sp-sleepypod   - Switch to sleepypod"
+echo "  sp-uninstall   - Remove sleepypod"
 echo ""
 echo "Files:"
 echo "  Config DB:      $DATA_DIR/sleepypod.db"

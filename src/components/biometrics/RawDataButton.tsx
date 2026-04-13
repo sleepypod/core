@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { Download, X, FileText, HardDrive, Trash2, Database } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
@@ -119,9 +119,9 @@ export function RawDataButton() {
     },
   })
 
-  const vitals = vitalsQuery.data ?? []
-  const sleepRecords = sleepQuery.data ?? []
-  const movement = movementQuery.data ?? []
+  const vitals = useMemo(() => vitalsQuery.data ?? [], [vitalsQuery.data])
+  const sleepRecords = useMemo(() => sleepQuery.data ?? [], [sleepQuery.data])
+  const movement = useMemo(() => movementQuery.data ?? [], [movementQuery.data])
   const fileCount = fileCountQuery.data
   const diskUsage = diskUsageQuery.data
 
@@ -194,7 +194,10 @@ export function RawDataButton() {
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-zinc-100">Raw Data</h3>
               <button
-                onClick={() => { setIsOpen(false); setShowFiles(false) }}
+                onClick={() => {
+                  setIsOpen(false)
+                  setShowFiles(false)
+                }}
                 className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800"
               >
                 <X size={16} className="text-zinc-400" />

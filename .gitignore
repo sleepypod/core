@@ -16,6 +16,9 @@ node_modules
 !.yarn/sdks
 !.yarn/versions
 
+# Python (uv)
+.venv
+
 # Build artifacts
 .git-info
 
@@ -40,3 +43,8 @@ sleepypod.local.db-wal
 .claude/worktrees
 .claude/reviews
 .reviews
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

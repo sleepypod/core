@@ -18,19 +18,19 @@ jobs:
       id-token: write # to enable use of OIDC for trusted publishing and npm provenance
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: "lts/*"
+          node-version-file: '.node-version'
           cache: pnpm
 
       - name: Install dependencies
@@ -38,6 +38,9 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Set install script default branch
+        run: sed -i 's/__BRANCH__/${{ github.ref_name }}/' scripts/install
 
       - name: Create deploy tarball
         run: |

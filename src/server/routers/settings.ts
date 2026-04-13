@@ -11,8 +11,67 @@ import {
   temperatureUnitSchema,
   timeStringSchema,
 } from '@/src/server/validation-schemas'
+
+const timestampSchema = z.coerce.date()
+
+const deviceSettingsSchema = z.object({
+  id: z.number(),
+  timezone: z.string(),
+  temperatureUnit: temperatureUnitSchema,
+  rebootDaily: z.boolean(),
+  rebootTime: z.string().nullable(),
+  primePodDaily: z.boolean(),
+  primePodTime: z.string().nullable(),
+  ledNightModeEnabled: z.boolean(),
+  ledDayBrightness: z.number(),
+  ledNightBrightness: z.number(),
+  ledNightStartTime: z.string().nullable(),
+  ledNightEndTime: z.string().nullable(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+})
+
+const sideSettingsSchema = z.object({
+  side: sideSchema,
+  name: z.string(),
+  awayMode: z.boolean(),
+  alwaysOn: z.boolean(),
+  autoOffEnabled: z.boolean(),
+  autoOffMinutes: z.number(),
+  awayStart: z.string().nullable().optional(),
+  awayReturn: z.string().nullable().optional(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+})
+
+const tapGestureSchema = z.object({
+  id: z.number(),
+  side: sideSchema,
+  tapType: tapTypeSchema,
+  actionType: z.enum(['temperature', 'alarm']),
+  temperatureChange: z.enum(['increment', 'decrement']).nullable().optional(),
+  temperatureAmount: z.number().nullable().optional(),
+  alarmBehavior: z.enum(['snooze', 'dismiss']).nullable().optional(),
+  alarmSnoozeDuration: z.number().nullable().optional(),
+  alarmInactiveBehavior: z.enum(['power', 'none']).nullable().optional(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+})
+
+const getAllSettingsResponse = z.object({
+  device: deviceSettingsSchema,
+  sides: z.object({
+    left: sideSettingsSchema,
+    right: sideSettingsSchema,
+  }),
+  gestures: z.object({
+    left: z.array(tapGestureSchema),
+    right: z.array(tapGestureSchema),
+  }),
+})
 import { getJobManager } from '@/src/scheduler'
 import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
+import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
 
 /**
  * Reload schedules in the job manager after settings changes
@@ -49,7 +108,7 @@ export const settingsRouter = router({
   getAll: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/settings', protect: false, tags: ['Settings'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(getAllSettingsResponse)
     .query(async () => {
       try {
         const [device] = await db.select().from(deviceSettings).limit(1)
@@ -65,6 +124,11 @@ export const settingsRouter = router({
             rebootTime: '03:00',
             primePodDaily: false,
             primePodTime: '14:00',
+            ledNightModeEnabled: false,
+            ledDayBrightness: 100,
+            ledNightBrightness: 0,
+            ledNightStartTime: '22:00',
+            ledNightEndTime: '07:00',
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -277,6 +341,16 @@ export const settingsRouter = router({
           }
           else {
             stopKeepalive(input.side)
+          }
+        }
+
+        // Restart auto-off timers if auto-off settings changed
+        if ('autoOffEnabled' in input || 'autoOffMinutes' in input) {
+          try {
+            restartAutoOffTimers()
+          }
+          catch (e) {
+            console.error('Auto-off timer restart failed:', e)
           }
         }
 

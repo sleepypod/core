@@ -17,6 +17,7 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
+import { toC } from '@/src/lib/tempUtils'
 
 // ---------------------------------------------------------------------------
 // Command name → HardwareCommand mapping for the raw execute endpoint
@@ -85,9 +86,9 @@ export const deviceRouter = router({
    */
   getStatus: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/device/status', protect: false, tags: ['Device'] } })
-    .input(z.object({}))
+    .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
     .output(z.any())
-    .query(async () => {
+    .query(async ({ input }) => {
       return withHardwareClient(async (client) => {
         const status = await client.getDeviceStatus()
 
@@ -138,8 +139,21 @@ export const deviceRouter = router({
         const primeCompletedAt = getPrimeCompletedAt()
         const leftSnooze = getSnoozeStatus('left')
         const rightSnooze = getSnoozeStatus('right')
+
+        const convertTemp = (f: number) => input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f
+
         return {
           ...status,
+          leftSide: {
+            ...status.leftSide,
+            currentTemperature: convertTemp(status.leftSide.currentTemperature),
+            targetTemperature: convertTemp(status.leftSide.targetTemperature),
+          },
+          rightSide: {
+            ...status.rightSide,
+            currentTemperature: convertTemp(status.rightSide.currentTemperature),
+            targetTemperature: convertTemp(status.rightSide.targetTemperature),
+          },
           ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
           snooze: { left: leftSnooze, right: rightSnooze },
         }

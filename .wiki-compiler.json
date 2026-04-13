@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "sleepypod core",
+  "sources": [
+    { "path": "docs/", "exclude": ["wiki/"] }
+  ],
+  "output": "docs/wiki/",
+  "mode": "staging",
+  "topic_hints": [],
+  "link_style": "obsidian"
+}

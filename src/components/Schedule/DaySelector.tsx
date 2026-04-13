@@ -102,11 +102,9 @@ export function DaySelector({
             aria-pressed={isSelected}
             className={cn(
               'flex h-11 w-11 items-center justify-center rounded-full text-[13px] font-semibold transition-all duration-150 sm:text-sm',
-              isPrimary
+              isSelected
                 ? 'bg-sky-500 text-white'
-                : isMultiSelect && isSelected
-                  ? 'bg-sky-500/30 text-sky-300'
-                  : 'bg-zinc-900 text-zinc-500 active:bg-zinc-800',
+                : 'bg-zinc-900 text-zinc-500 active:bg-zinc-800',
             )}
           >
             {short}

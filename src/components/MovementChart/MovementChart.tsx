@@ -220,8 +220,8 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
     }
   )
 
-  const records = (movementData ?? []) as MovementRecord[]
-  const otherRecords = (otherMovementData ?? []) as MovementRecord[]
+  const records = useMemo(() => (movementData ?? []) as MovementRecord[], [movementData])
+  const otherRecords = useMemo(() => (otherMovementData ?? []) as MovementRecord[], [otherMovementData])
 
   // Compute total sleep duration for the week
   const totalSleepSeconds = useMemo(() => {
