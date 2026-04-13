@@ -5,8 +5,10 @@ import { Pencil, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { AreaChart, Area, ResponsiveContainer, YAxis } from 'recharts'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
+import { sortChronological } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from './DaySelector'
 import { colorForTempF } from '@/src/lib/sleepCurve/tempColor'
+import { formatTime12h } from './TimeInput'
 
 interface CurveCardProps {
   group: ScheduleGroup
@@ -47,6 +49,16 @@ export function CurveCard({ group, onEdit, onDelete }: CurveCardProps) {
   const minTemp = hasSetPoints ? Math.min(...group.setPoints.map(p => p.temperature)) : 0
   const maxTemp = hasSetPoints ? Math.max(...group.setPoints.map(p => p.temperature)) : 0
   const label = formatDayRange(group.days)
+
+  // Derive on/off times from set points (chronological with overnight wrap)
+  const onOffRange = useMemo(() => {
+    if (!hasSetPoints || group.setPoints.length < 2) return null
+    const sorted = sortChronological(group.setPoints)
+    return {
+      on: formatTime12h(sorted[0].time),
+      off: formatTime12h(sorted[sorted.length - 1].time),
+    }
+  }, [group.setPoints, hasSetPoints])
 
   return (
     <div
@@ -92,24 +104,26 @@ export function CurveCard({ group, onEdit, onDelete }: CurveCardProps) {
         </div>
       )}
 
-      {/* Footer: temp range + count */}
+      {/* Footer: on/off range + temp range */}
       <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
         {hasSetPoints
           ? (
               <>
-                <span className="font-medium text-zinc-300">
+                {onOffRange && (
+                  <>
+                    <span className="font-medium text-zinc-300">
+                      {onOffRange.on}
+                      {' – '}
+                      {onOffRange.off}
+                    </span>
+                    <span>·</span>
+                  </>
+                )}
+                <span>
                   {minTemp}
                   °–
                   {maxTemp}
                   °F
-                </span>
-                <span>·</span>
-                <span>
-                  {group.setPoints.length}
-                  {' '}
-                  set
-                  {' '}
-                  {group.setPoints.length === 1 ? 'point' : 'points'}
                 </span>
               </>
             )

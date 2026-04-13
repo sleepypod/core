@@ -5,6 +5,7 @@ import { getCurrentDay } from '@/src/components/Schedule/DaySelector'
 import { trpc } from '@/src/utils/trpc'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSide } from './useSide'
+import { sortChronological } from '@/src/lib/scheduleGrouping'
 
 type Side = 'left' | 'right'
 
@@ -463,10 +464,11 @@ export function useSchedule() {
   )
 
   /**
-   * Save a curve atomically: delete temperature schedules for the union of
+   * Save a curve atomically: delete temperature + power schedules for the union of
    * `originalDays ∪ targetDays`, then create new ones for `targetDays × setPoints`.
-   * Days in `originalDays` but not `targetDays` get cleared. Days in `targetDays`
-   * that previously belonged to other curves get reassigned.
+   * The Pod's auto on/off times are derived from the chronologically-first and
+   * -last set points (with overnight wrap detection), so the schedule respects
+   * a sleep window instead of running 24/7.
    */
   const saveCurve = useCallback(
     async ({
@@ -480,15 +482,29 @@ export function useSchedule() {
     }): Promise<void> => {
       if (targetDays.length === 0 && originalDays.length === 0) return
 
-      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      const allData = allSchedulesQuery.data as
+        | { temperature: TemperatureSchedule[], power: PowerSchedule[] }
+        | undefined
       if (!allData) return
 
       const daysToClear = new Set<DayOfWeek>([...originalDays, ...targetDays])
       const tempDeletes = allData.temperature
         .filter(t => daysToClear.has(t.dayOfWeek))
         .map(t => t.id)
+      const powerDeletes = allData.power
+        .filter(p => daysToClear.has(p.dayOfWeek))
+        .map(p => p.id)
 
       const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
+      const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
+
+      // Derive on/off times from set points (chronological with overnight wrap)
+      const sortedPoints = sortChronological(setPoints)
+      const onTime = sortedPoints[0]?.time
+      const offTime = sortedPoints[sortedPoints.length - 1]?.time
+      const onTemperature = sortedPoints[0]?.temperature
+      const canCreatePower = onTime && offTime && onTemperature !== undefined && onTime !== offTime
+
       for (const day of targetDays) {
         for (const sp of setPoints) {
           tempCreates.push({
@@ -499,37 +515,55 @@ export function useSchedule() {
             enabled: true,
           })
         }
+        if (canCreatePower) {
+          powerCreates.push({
+            side,
+            dayOfWeek: day,
+            onTime,
+            offTime,
+            onTemperature: Math.round(Math.max(55, Math.min(110, onTemperature))),
+            enabled: true,
+          })
+        }
       }
 
-      if (tempDeletes.length === 0 && tempCreates.length === 0) return
+      const hasChanges
+        = tempDeletes.length > 0 || tempCreates.length > 0
+          || powerDeletes.length > 0 || powerCreates.length > 0
+      if (!hasChanges) return
 
       await batchUpdate.mutateAsync({
-        deletes: { temperature: tempDeletes },
-        creates: { temperature: tempCreates },
+        deletes: { temperature: tempDeletes, power: powerDeletes },
+        creates: { temperature: tempCreates, power: powerCreates },
       })
     },
     [allSchedulesQuery.data, side, batchUpdate]
   )
 
   /**
-   * Delete a curve: removes all temperature schedules for the given days.
+   * Delete a curve: removes all temperature + power schedules for the given days.
    */
   const deleteCurve = useCallback(
     async (days: DayOfWeek[]): Promise<void> => {
       if (days.length === 0) return
 
-      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      const allData = allSchedulesQuery.data as
+        | { temperature: TemperatureSchedule[], power: PowerSchedule[] }
+        | undefined
       if (!allData) return
 
       const daySet = new Set(days)
       const tempDeletes = allData.temperature
         .filter(t => daySet.has(t.dayOfWeek))
         .map(t => t.id)
+      const powerDeletes = allData.power
+        .filter(p => daySet.has(p.dayOfWeek))
+        .map(p => p.id)
 
-      if (tempDeletes.length === 0) return
+      if (tempDeletes.length === 0 && powerDeletes.length === 0) return
 
       await batchUpdate.mutateAsync({
-        deletes: { temperature: tempDeletes },
+        deletes: { temperature: tempDeletes, power: powerDeletes },
       })
     },
     [allSchedulesQuery.data, batchUpdate]

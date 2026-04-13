@@ -44,7 +44,7 @@ function fingerprint(points: SetPoint[]): string {
  * For schedules spanning midnight (e.g. 22:00 -> 00:30 -> 06:00),
  * early-morning times are shifted by +24h so they sort after evening times.
  */
-function sortChronological(points: SetPoint[]): SetPoint[] {
+export function sortChronological(points: SetPoint[]): SetPoint[] {
   if (points.length <= 1) return [...points]
 
   const withMinutes = points.map((p) => {
