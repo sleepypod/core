@@ -14,6 +14,10 @@ interface CurveCardProps {
   group: ScheduleGroup
   onEdit: () => void
   onDelete: () => void
+  /** True when this curve covers today and the schedule is enabled */
+  isActive?: boolean
+  /** Next upcoming set point (only meaningful when isActive) */
+  nextEvent?: { time: string, temperature: number } | null
 }
 
 const DAY_SHORT: Record<DayOfWeek, string> = {
@@ -44,7 +48,7 @@ function formatDayRange(days: DayOfWeek[]): string {
   return ordered.map(d => DAY_SHORT[d]).join(', ')
 }
 
-export function CurveCard({ group, onEdit, onDelete }: CurveCardProps) {
+export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null }: CurveCardProps) {
   const hasSetPoints = group.setPoints.length > 0
   const minTemp = hasSetPoints ? Math.min(...group.setPoints.map(p => p.temperature)) : 0
   const maxTemp = hasSetPoints ? Math.max(...group.setPoints.map(p => p.temperature)) : 0
@@ -64,16 +68,24 @@ export function CurveCard({ group, onEdit, onDelete }: CurveCardProps) {
     <div
       className={clsx(
         'rounded-2xl border p-3 sm:p-4',
-        hasSetPoints
-          ? 'border-zinc-800 bg-zinc-900'
-          : group.allDisabled
-            ? 'border-dashed border-amber-500/30 bg-zinc-900/50'
-            : 'border-zinc-800/50 bg-zinc-900/50',
+        isActive && hasSetPoints
+          ? 'border-emerald-500/40 bg-zinc-900 ring-1 ring-emerald-500/20'
+          : hasSetPoints
+            ? 'border-zinc-800 bg-zinc-900'
+            : group.allDisabled
+              ? 'border-dashed border-amber-500/30 bg-zinc-900/50'
+              : 'border-zinc-800/50 bg-zinc-900/50',
       )}
     >
       {/* Header row: label + actions */}
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-white">{label}</span>
+        {isActive && hasSetPoints && (
+          <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[9px] font-medium uppercase text-emerald-400">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            Active
+          </span>
+        )}
         {group.allDisabled && (
           <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-medium uppercase text-amber-500">
             Paused
@@ -131,6 +143,19 @@ export function CurveCard({ group, onEdit, onDelete }: CurveCardProps) {
               <span>Schedule paused</span>
             )}
       </div>
+
+      {/* Next-event line — only on the active curve */}
+      {isActive && nextEvent && (
+        <div className="mt-2 flex items-center gap-1.5 border-t border-zinc-800 pt-2 text-[11px]">
+          <span className="text-zinc-500">Next set point</span>
+          <span className="font-medium text-emerald-400">{nextEvent.time}</span>
+          <span className="text-zinc-600">·</span>
+          <span className="font-medium text-zinc-300">
+            {nextEvent.temperature}
+            °F
+          </span>
+        </div>
+      )}
     </div>
   )
 }

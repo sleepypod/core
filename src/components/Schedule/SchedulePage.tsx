@@ -12,6 +12,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from './DaySelector'
+import { getCurrentDay } from './DaySelector'
 import { CurveCard } from './CurveCard'
 import { CurveEditor } from './CurveEditor'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -57,6 +58,14 @@ export function SchedulePage() {
 
   const hasAnyCurves = visibleGroups.length > 0
 
+  // The "active" curve = the one whose days include today; gets the
+  // next-event annotation since that's what's actually running.
+  const activeCurveKey = useMemo(() => {
+    if (!isPowerEnabled) return null
+    const today = getCurrentDay()
+    return visibleGroups.find(g => g.days.includes(today) && g.setPoints.length > 0)?.key ?? null
+  }, [visibleGroups, isPowerEnabled])
+
   const handleEdit = useCallback((group: ScheduleGroup) => {
     setEditingCurve({ days: group.days, setPoints: group.setPoints })
     setSelectedDays(new Set(group.days))
@@ -101,20 +110,6 @@ export function SchedulePage() {
           rightName={rightName}
         />
       </div>
-
-      {/* Next scheduled event hint */}
-      {isPowerEnabled && nextEvent && (
-        <p className="px-1 text-[11px] uppercase tracking-wider text-zinc-500">
-          Next set point
-          {' '}
-          <span className="font-medium text-zinc-300">{nextEvent.time}</span>
-          {' · '}
-          <span className="font-medium text-zinc-300">
-            {nextEvent.temperature}
-            °F
-          </span>
-        </p>
-      )}
 
       {/* Schedule on/off toggle */}
       <ScheduleToggle
@@ -174,6 +169,8 @@ export function SchedulePage() {
                 group={group}
                 onEdit={() => handleEdit(group)}
                 onDelete={() => handleDelete(group)}
+                isActive={group.key === activeCurveKey}
+                nextEvent={group.key === activeCurveKey ? nextEvent : null}
               />
             ))}
           </div>
