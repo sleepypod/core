@@ -55,12 +55,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # --cleanup-tag removed: it can delete a branch named 'dev' on older gh versions
-          gh release delete dev --yes 2>/dev/null || true
-          git push -d --no-verify origin refs/tags/dev 2>/dev/null || true
-          git tag -f dev
-          git push -f --no-verify origin refs/tags/dev
-          gh release create dev sleepypod-core.tar.gz \
+          gh release delete dev-latest --yes 2>/dev/null || true
+          git push -d --no-verify origin refs/tags/dev-latest 2>/dev/null || true
+          git tag -f dev-latest
+          git push -f --no-verify origin refs/tags/dev-latest
+          gh release create dev-latest sleepypod-core.tar.gz \
             --target "${{ github.sha }}" \
             --title "Dev (latest)" \
             --notes "Rolling pre-built release from the \`dev\` branch.
