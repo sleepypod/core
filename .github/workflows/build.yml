@@ -28,16 +28,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate install script branch default
-        if: github.event_name == 'pull_request'
-        run: |
-          expected="${{ github.base_ref }}"
-          actual=$(grep -oP 'SCRIPT_DEFAULT_BRANCH="\K[^"]+' scripts/install)
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::scripts/install has SCRIPT_DEFAULT_BRANCH=\"$actual\" but PR targets \"$expected\". Update it before merging."
-            exit 1
-          fi
-
       - name: Build
         run: pnpm build
 

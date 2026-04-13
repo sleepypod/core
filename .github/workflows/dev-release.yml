@@ -34,6 +34,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Set install script default branch
+        run: sed -i 's/__BRANCH__/${{ github.ref_name }}/' scripts/install
+
       - name: Create deploy tarball
         run: |
           tar czf /tmp/sleepypod-core.tar.gz \
