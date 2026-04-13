@@ -8,6 +8,7 @@ import { useSchedule } from '@/src/hooks/useSchedule'
 import { useScheduleActive } from '@/src/hooks/useScheduleActive'
 import { useSide } from '@/src/providers/SideProvider'
 import type { SideSelection } from '@/src/providers/SideProvider'
+import { useSideNames } from '@/src/hooks/useSideNames'
 import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from './DaySelector'
@@ -35,7 +36,8 @@ export function SchedulePage() {
     isLoading: hookLoading,
   } = useSchedule()
 
-  const { nextTime: nextScheduleTime } = useScheduleActive()
+  const { nextEvent } = useScheduleActive()
+  const { leftName, rightName } = useSideNames()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
 
   const [editingCurve, setEditingCurve] = useState<{ days: DayOfWeek[], setPoints: Array<{ time: string, temperature: number }> } | null>(null)
@@ -91,14 +93,26 @@ export function SchedulePage() {
   return (
     <div className="space-y-3 sm:space-y-4">
       {/* Side selector — left / right / both (writes apply to selection) */}
-      <SideSelector value={selectedSide} onChange={selectSide} />
+      <div className="mb-1">
+        <SideSelector
+          value={selectedSide}
+          onChange={selectSide}
+          leftName={leftName}
+          rightName={rightName}
+        />
+      </div>
 
       {/* Next scheduled event hint */}
-      {isPowerEnabled && nextScheduleTime && (
+      {isPowerEnabled && nextEvent && (
         <p className="px-1 text-[11px] uppercase tracking-wider text-zinc-500">
-          Next at
+          Next set point
           {' '}
-          <span className="font-medium text-zinc-300">{nextScheduleTime}</span>
+          <span className="font-medium text-zinc-300">{nextEvent.time}</span>
+          {' · '}
+          <span className="font-medium text-zinc-300">
+            {nextEvent.temperature}
+            °F
+          </span>
         </p>
       )}
 
@@ -199,25 +213,26 @@ export function SchedulePage() {
 interface SideSelectorProps {
   value: SideSelection
   onChange: (side: SideSelection) => void
+  leftName: string
+  rightName: string
 }
 
-const SIDE_TABS: Array<{ value: SideSelection, label: string }> = [
-  { value: 'left', label: 'Left' },
-  { value: 'right', label: 'Right' },
-  { value: 'both', label: 'Both' },
-]
-
-function SideSelector({ value, onChange }: SideSelectorProps) {
+function SideSelector({ value, onChange, leftName, rightName }: SideSelectorProps) {
+  const tabs: Array<{ value: SideSelection, label: string }> = [
+    { value: 'left', label: leftName },
+    { value: 'right', label: rightName },
+    { value: 'both', label: 'Both' },
+  ]
   return (
     <div className="flex rounded-xl bg-zinc-900 p-1">
-      {SIDE_TABS.map(tab => (
+      {tabs.map(tab => (
         <button
           key={tab.value}
           type="button"
           onClick={() => onChange(tab.value)}
           aria-pressed={value === tab.value}
           className={clsx(
-            'flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors',
+            'flex-1 truncate rounded-lg px-3 py-2 text-xs font-semibold transition-colors',
             value === tab.value
               ? 'bg-sky-500 text-white'
               : 'text-zinc-400 active:bg-zinc-800',
