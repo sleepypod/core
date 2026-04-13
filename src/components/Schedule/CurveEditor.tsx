@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Snowflake, Scale, Flame, X, Minus } from 'lucide-react'
+import { Plus, Snowflake, Scale, Flame, X, Minus, Moon, Sun } from 'lucide-react'
 import clsx from 'clsx'
 import { CurveChart } from './CurveChart'
 import { SetPointCard } from './SetPointCard'
@@ -312,7 +312,7 @@ export function CurveEditor({
       </div>
 
       {/* Day picker */}
-      <div className="border-b border-zinc-800 px-4 py-3">
+      <div className="border-b border-zinc-800 px-4 pt-3 pb-5">
         <p className="mb-2 text-[11px] uppercase tracking-wider text-zinc-500">Days</p>
         <div className="flex items-center justify-between gap-1">
           {DAYS.map(({ key, short, label }) => {
@@ -342,8 +342,20 @@ export function CurveEditor({
           Sleep window
         </p>
         <div className="grid grid-cols-2 gap-3">
-          <TimeInput label="Bedtime" value={bedtime} onChange={setBedtime} />
-          <TimeInput label="Wake up" value={wakeTime} onChange={setWakeTime} />
+          <TimeInput
+            label="Bedtime"
+            value={bedtime}
+            onChange={setBedtime}
+            icon={<Moon size={12} />}
+            accentClass="text-purple-400"
+          />
+          <TimeInput
+            label="Wake up"
+            value={wakeTime}
+            onChange={setWakeTime}
+            icon={<Sun size={12} />}
+            accentClass="text-amber-400"
+          />
         </div>
       </div>
 
@@ -357,11 +369,15 @@ export function CurveEditor({
             label="Coolest"
             value={minTemp}
             onChange={v => setMinTemp(Math.min(v, maxTemp - 2))}
+            icon={<Snowflake size={12} />}
+            accentClass="text-blue-400"
           />
           <TempStepper
             label="Warmest"
             value={maxTemp}
             onChange={v => setMaxTemp(Math.max(v, minTemp + 2))}
+            icon={<Flame size={12} />}
+            accentClass="text-orange-400"
           />
         </div>
       </div>
@@ -497,12 +513,17 @@ interface TempStepperProps {
   label: string
   value: number
   onChange: (value: number) => void
+  icon?: React.ReactNode
+  accentClass?: string
 }
 
-function TempStepper({ label, value, onChange }: TempStepperProps) {
+function TempStepper({ label, value, onChange, icon, accentClass }: TempStepperProps) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-medium text-zinc-400">{label}</label>
+      <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-400">
+        {icon && <span className={accentClass}>{icon}</span>}
+        {label}
+      </label>
       <div className="flex h-11 items-center rounded-lg border border-zinc-700 bg-zinc-800/50">
         <button
           type="button"
