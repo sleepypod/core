@@ -4,7 +4,8 @@ import type { DayOfWeek } from '@/src/components/Schedule/DaySelector'
 import { getCurrentDay } from '@/src/components/Schedule/DaySelector'
 import { trpc } from '@/src/utils/trpc'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSide } from './useSide'
+import { useSide } from '@/src/providers/SideProvider'
+import { sortChronological } from '@/src/lib/scheduleGrouping'
 
 type Side = 'left' | 'right'
 
@@ -50,7 +51,7 @@ export interface DayScheduleData {
  * Handles multi-day selection, bulk operations, and scheduler reload.
  */
 export function useSchedule() {
-  const { side } = useSide()
+  const { primarySide: side, activeSides } = useSide()
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>(getCurrentDay())
   const [selectedDays, setSelectedDays] = useState<Set<DayOfWeek>>(() => new Set([getCurrentDay()]))
   const [isApplying, setIsApplying] = useState(false)
@@ -66,8 +67,15 @@ export function useSchedule() {
 
   const utils = trpc.useUtils()
 
-  // Fetch all schedules for current side
+  // Fetch all schedules for the primary side (drives the curve view)
   const allSchedulesQuery = trpc.schedules.getAll.useQuery({ side })
+
+  // In "both" mode also fetch the other side so deletes can target both
+  const otherSide: Side = side === 'left' ? 'right' : 'left'
+  const otherSchedulesQuery = trpc.schedules.getAll.useQuery(
+    { side: otherSide },
+    { enabled: activeSides.length > 1 },
+  )
 
   // Fetch schedules for the selected day specifically
   const dayScheduleQuery = trpc.schedules.getByDay.useQuery({
@@ -411,6 +419,191 @@ export function useSchedule() {
     [daySchedule, allSchedulesQuery.data, side, batchUpdate]
   )
 
+  /**
+   * Find which days share a curve with the given day (the curve's days).
+   * Returns the union of all days that have the same enabled set point map
+   * as `day`. If `day` has no temperature schedules, returns just `[day]`.
+   */
+  const getCurveForDay = useCallback(
+    (day: DayOfWeek): { days: DayOfWeek[], setPoints: Array<{ time: string, temperature: number }> } => {
+      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      if (!allData) return { days: [day], setPoints: [] }
+
+      const fingerprint = (rows: TemperatureSchedule[]) =>
+        rows
+          .filter(r => r.enabled)
+          .map(r => `${r.time}@${r.temperature}`)
+          .sort()
+          .join('|')
+
+      const dayRows = allData.temperature.filter(t => t.dayOfWeek === day)
+      const targetFp = fingerprint(dayRows)
+      const allDays: DayOfWeek[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+      const matchingDays = allDays.filter((d) => {
+        const rows = allData.temperature.filter(t => t.dayOfWeek === d)
+        return fingerprint(rows) === targetFp
+      })
+
+      const setPoints = dayRows
+        .filter(r => r.enabled)
+        .map(r => ({ time: r.time, temperature: r.temperature }))
+
+      return { days: matchingDays, setPoints }
+    },
+    [allSchedulesQuery.data]
+  )
+
+  /**
+   * Detect day conflicts before saving a curve.
+   * Returns days from `targetDays` that are part of an existing curve other than `originalDays`.
+   */
+  const detectCurveConflicts = useCallback(
+    (targetDays: DayOfWeek[], originalDays: DayOfWeek[] = []): DayOfWeek[] => {
+      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      if (!allData) return []
+      const originalSet = new Set(originalDays)
+      return targetDays.filter((d) => {
+        if (originalSet.has(d)) return false
+        return allData.temperature.some(t => t.dayOfWeek === d && t.enabled)
+      })
+    },
+    [allSchedulesQuery.data]
+  )
+
+  /**
+   * Save a curve atomically: delete temperature + power schedules for the union of
+   * `originalDays ∪ targetDays` across all active sides, then create new ones for
+   * `targetDays × setPoints × activeSides`. In "both" mode this writes to both
+   * sides in a single batch so they stay in sync.
+   *
+   * The Pod's auto on/off times are derived from the chronologically-first and
+   * -last set points (with overnight wrap detection), so the schedule respects
+   * a sleep window instead of running 24/7.
+   *
+   * NOTE: deletes/creates are scoped to the primary side's loaded data — in
+   * "both" mode the secondary side's existing rows for those days won't be
+   * cleared by this call (the primary write still wins for the days it
+   * targets, which matches iOS linked-mode behavior).
+   */
+  const saveCurve = useCallback(
+    async ({
+      targetDays,
+      setPoints,
+      originalDays = [],
+    }: {
+      targetDays: DayOfWeek[]
+      setPoints: Array<{ time: string, temperature: number }>
+      originalDays?: DayOfWeek[]
+    }): Promise<void> => {
+      if (targetDays.length === 0 && originalDays.length === 0) return
+
+      const allData = allSchedulesQuery.data as
+        | { temperature: TemperatureSchedule[], power: PowerSchedule[] }
+        | undefined
+      if (!allData) return
+
+      // In "both" mode we also need to clear the other side's rows
+      const otherData = activeSides.length > 1
+        ? otherSchedulesQuery.data as
+        | { temperature: TemperatureSchedule[], power: PowerSchedule[] }
+        | undefined
+        : undefined
+
+      const daysToClear = new Set<DayOfWeek>([...originalDays, ...targetDays])
+      const tempDeletes = [
+        ...allData.temperature.filter(t => daysToClear.has(t.dayOfWeek)).map(t => t.id),
+        ...(otherData?.temperature.filter(t => daysToClear.has(t.dayOfWeek)).map(t => t.id) ?? []),
+      ]
+      const powerDeletes = [
+        ...allData.power.filter(p => daysToClear.has(p.dayOfWeek)).map(p => p.id),
+        ...(otherData?.power.filter(p => daysToClear.has(p.dayOfWeek)).map(p => p.id) ?? []),
+      ]
+
+      const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
+      const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
+
+      // Derive on/off times from set points (chronological with overnight wrap)
+      const sortedPoints = sortChronological(setPoints)
+      const onTime = sortedPoints[0]?.time
+      const offTime = sortedPoints[sortedPoints.length - 1]?.time
+      const onTemperature = sortedPoints[0]?.temperature
+      const canCreatePower = onTime && offTime && onTemperature !== undefined && onTime !== offTime
+
+      for (const writeSide of activeSides) {
+        for (const day of targetDays) {
+          for (const sp of setPoints) {
+            tempCreates.push({
+              side: writeSide,
+              dayOfWeek: day,
+              time: sp.time,
+              temperature: Math.round(sp.temperature),
+              enabled: true,
+            })
+          }
+          if (canCreatePower) {
+            powerCreates.push({
+              side: writeSide,
+              dayOfWeek: day,
+              onTime,
+              offTime,
+              onTemperature: Math.round(Math.max(55, Math.min(110, onTemperature))),
+              enabled: true,
+            })
+          }
+        }
+      }
+
+      const hasChanges
+        = tempDeletes.length > 0 || tempCreates.length > 0
+          || powerDeletes.length > 0 || powerCreates.length > 0
+      if (!hasChanges) return
+
+      await batchUpdate.mutateAsync({
+        deletes: { temperature: tempDeletes, power: powerDeletes },
+        creates: { temperature: tempCreates, power: powerCreates },
+      })
+    },
+    [allSchedulesQuery.data, otherSchedulesQuery.data, activeSides, batchUpdate]
+  )
+
+  /**
+   * Delete a curve: removes all temperature + power schedules for the given days,
+   * across all currently active sides.
+   */
+  const deleteCurve = useCallback(
+    async (days: DayOfWeek[]): Promise<void> => {
+      if (days.length === 0) return
+
+      const allData = allSchedulesQuery.data as
+        | { temperature: TemperatureSchedule[], power: PowerSchedule[] }
+        | undefined
+      if (!allData) return
+
+      const otherData = activeSides.length > 1
+        ? otherSchedulesQuery.data as
+        | { temperature: TemperatureSchedule[], power: PowerSchedule[] }
+        | undefined
+        : undefined
+
+      const daySet = new Set(days)
+      const tempDeletes = [
+        ...allData.temperature.filter(t => daySet.has(t.dayOfWeek)).map(t => t.id),
+        ...(otherData?.temperature.filter(t => daySet.has(t.dayOfWeek)).map(t => t.id) ?? []),
+      ]
+      const powerDeletes = [
+        ...allData.power.filter(p => daySet.has(p.dayOfWeek)).map(p => p.id),
+        ...(otherData?.power.filter(p => daySet.has(p.dayOfWeek)).map(p => p.id) ?? []),
+      ]
+
+      if (tempDeletes.length === 0 && powerDeletes.length === 0) return
+
+      await batchUpdate.mutateAsync({
+        deletes: { temperature: tempDeletes, power: powerDeletes },
+      })
+    },
+    [allSchedulesQuery.data, otherSchedulesQuery.data, activeSides, batchUpdate]
+  )
+
   return {
     // State
     side,
@@ -449,6 +642,10 @@ export function useSchedule() {
     toggleAllSchedules,
     toggleGlobalSchedules,
     applyToOtherDays,
+    saveCurve,
+    deleteCurve,
+    getCurveForDay,
+    detectCurveConflicts,
 
     // Refetch
     refetch: () => {

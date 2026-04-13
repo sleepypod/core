@@ -11,10 +11,6 @@ interface ScheduleToggleProps {
   isLoading?: boolean
 }
 
-/**
- * Schedule enable/disable toggle card.
- * Shows "Schedule Active" with a toggle switch for all days.
- */
 export function ScheduleToggle({
   enabled,
   onToggle,
@@ -24,11 +20,16 @@ export function ScheduleToggle({
     <div className="rounded-xl bg-zinc-900 px-4 py-3">
       <div className="flex items-center justify-between">
         <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium text-white">
-            Schedule Active
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-white">Schedule</span>
+            <span className={cn(
+              'inline-block h-2 w-2 rounded-full',
+              enabled ? 'bg-emerald-400' : 'bg-zinc-600',
+            )}
+            />
+          </div>
           <span className="text-xs text-zinc-400">
-            All days
+            Automatically control power and temperature
           </span>
         </div>
 

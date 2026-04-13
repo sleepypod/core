@@ -168,21 +168,6 @@ export const alarmSchedules = sqliteTable('alarm_schedules', {
   index('idx_alarm_schedules_side_day').on(t.side, t.dayOfWeek),
 ])
 
-export const scheduleGroups = sqliteTable('schedule_groups', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  side: text('side', { enum: ['left', 'right'] }).notNull(),
-  name: text('name').notNull(),
-  days: text('days').notNull(), // JSON array of day-of-week strings
-  createdAt: integer('created_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-  updatedAt: integer('updated_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-}, t => [
-  index('idx_schedule_groups_side').on(t.side),
-])
-
 // ============================================================================
 // Device State (Runtime)
 // ============================================================================

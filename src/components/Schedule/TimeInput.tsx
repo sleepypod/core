@@ -1,22 +1,30 @@
 'use client'
 
 import { Clock } from 'lucide-react'
+import type { ReactNode } from 'react'
 
 interface TimeInputProps {
   label: string
   value: string
   onChange: (value: string) => void
   disabled?: boolean
+  /** Optional icon shown next to the label */
+  icon?: ReactNode
+  /** Tailwind text-color class for the icon and label accent */
+  accentClass?: string
 }
 
 /**
  * Touch-friendly time input with HH:MM format.
  * Uses native time input for mobile pickers.
  */
-export function TimeInput({ label, value, onChange, disabled = false }: TimeInputProps) {
+export function TimeInput({ label, value, onChange, disabled = false, icon, accentClass }: TimeInputProps) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-medium text-zinc-400">{label}</label>
+      <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-400">
+        {icon && <span className={accentClass}>{icon}</span>}
+        {label}
+      </label>
       <div className="relative">
         <input
           type="time"
