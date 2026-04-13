@@ -12,6 +12,8 @@ interface SetPointCardProps {
   onDelete: (id: number) => void
   onTapCard: (phase: SchedulePhase) => void
   disabled?: boolean
+  /** Optional badge shown next to the time (e.g. "Auto on", "Auto off") */
+  autoLabel?: 'on' | 'off' | null
 }
 
 /**
@@ -23,6 +25,7 @@ export function SetPointCard({
   onDelete,
   onTapCard,
   disabled = false,
+  autoLabel = null,
 }: SetPointCardProps) {
   const tempColor = colorForTempF(phase.temperature)
 
@@ -65,8 +68,21 @@ export function SetPointCard({
         </span>
       </div>
 
-      {/* Phase name */}
-      <span className="text-xs text-zinc-500">{phase.name}</span>
+      {/* Auto on/off badge */}
+      {autoLabel && (
+        <span
+          className={clsx(
+            'rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
+            autoLabel === 'on'
+              ? 'bg-emerald-500/10 text-emerald-400'
+              : 'bg-zinc-700/50 text-zinc-400',
+          )}
+        >
+          Auto
+          {' '}
+          {autoLabel === 'on' ? 'on' : 'off'}
+        </span>
+      )}
 
       {/* Spacer */}
       <div className="flex-1" />

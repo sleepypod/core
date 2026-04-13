@@ -6,6 +6,7 @@ import clsx from 'clsx'
 import { CurveChart } from './CurveChart'
 import { SetPointCard } from './SetPointCard'
 import { SetPointEditor } from './SetPointEditor'
+import { TimeInput } from './TimeInput'
 import { DAYS, type DayOfWeek } from './DaySelector'
 import { useSchedule } from '@/src/hooks/useSchedule'
 import type { SchedulePhase } from '@/src/hooks/useSchedules'
@@ -15,6 +16,7 @@ import {
   curveToScheduleTemperatures,
   timeStringToMinutes,
 } from '@/src/lib/sleepCurve/generate'
+import { sortChronological } from '@/src/lib/scheduleGrouping'
 
 interface CurveEditorProps {
   open: boolean
@@ -35,24 +37,23 @@ interface PresetDef {
   id: CoolingIntensity
   label: string
   icon: typeof Snowflake
-  bedtime: string
-  wakeTime: string
   minTempF: number
   maxTempF: number
 }
 
 const PRESETS: PresetDef[] = [
-  { id: 'cool', label: 'Hot Sleeper', icon: Snowflake, bedtime: '22:00', wakeTime: '06:30', minTempF: 65, maxTempF: 84 },
-  { id: 'balanced', label: 'Balanced', icon: Scale, bedtime: '22:00', wakeTime: '07:00', minTempF: 68, maxTempF: 86 },
-  { id: 'warm', label: 'Cold Sleeper', icon: Flame, bedtime: '22:30', wakeTime: '07:00', minTempF: 72, maxTempF: 88 },
+  { id: 'cool', label: 'Hot Sleeper', icon: Snowflake, minTempF: 65, maxTempF: 84 },
+  { id: 'balanced', label: 'Balanced', icon: Scale, minTempF: 68, maxTempF: 86 },
+  { id: 'warm', label: 'Cold Sleeper', icon: Flame, minTempF: 72, maxTempF: 88 },
 ]
 
-const PHASE_NAMES = ['Bedtime', 'Deep Sleep', 'Pre-Wake', 'Wake Up']
+const DEFAULT_BEDTIME = '22:00'
+const DEFAULT_WAKE = '07:00'
 
-function toPhase(point: LocalSetPoint, index: number): SchedulePhase {
+function toPhase(point: LocalSetPoint): SchedulePhase {
   return {
     id: point.localId,
-    name: index < PHASE_NAMES.length ? PHASE_NAMES[index] : `Phase ${index + 1}`,
+    name: '',
     icon: 'moon',
     time: point.time,
     temperature: point.temperature,
@@ -103,10 +104,16 @@ export function CurveEditor({
   const { saveCurve, detectCurveConflicts, isMutating } = useSchedule()
 
   const isEdit = initialDays.length > 0
+  const initialSorted = useMemo(() => sortChronological(initialSetPoints), [initialSetPoints])
+  const initialBedtime = initialSorted[0]?.time ?? DEFAULT_BEDTIME
+  const initialWake = initialSorted[initialSorted.length - 1]?.time ?? DEFAULT_WAKE
+
   const [days, setDays] = useState<Set<DayOfWeek>>(new Set(initialDays))
   const [points, setPoints] = useState<LocalSetPoint[]>(() =>
     initialSetPoints.map((p, i) => ({ localId: -(i + 1), time: p.time, temperature: p.temperature })),
   )
+  const [bedtime, setBedtime] = useState(initialBedtime)
+  const [wakeTime, setWakeTime] = useState(initialWake)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [pendingConflict, setPendingConflict] = useState<DayOfWeek[] | null>(null)
@@ -121,6 +128,10 @@ export function CurveEditor({
 
     setPoints(initialSetPoints.map((p, i) => ({ localId: -(i + 1), time: p.time, temperature: p.temperature })))
 
+    setBedtime(initialBedtime)
+
+    setWakeTime(initialWake)
+
     setEditorOpen(false)
 
     setEditingId(null)
@@ -128,7 +139,7 @@ export function CurveEditor({
     setPendingConflict(null)
 
     setSaveError(null)
-  }, [open, initialDays, initialSetPoints])
+  }, [open, initialDays, initialSetPoints, initialBedtime, initialWake])
 
   // Lock body scroll when open
   useEffect(() => {
@@ -142,12 +153,19 @@ export function CurveEditor({
 
   const curveData = useMemo(() => buildCurveData(points), [points])
 
-  const phases = useMemo(
-    () => [...points]
-      .sort((a, b) => a.time.localeCompare(b.time))
-      .map((p, i) => toPhase(p, i)),
-    [points],
-  )
+  // Phases sorted chronologically (handles overnight wrap), with auto-on/off
+  // labels for the first and last entries so the user knows which point drives
+  // the Pod's auto power-on and auto power-off times.
+  const orderedPhases = useMemo(() => {
+    const sorted = sortChronological(points.map(p => ({ time: p.time, temperature: p.temperature })))
+    return sorted.map((sp) => {
+      const original = points.find(p => p.time === sp.time && p.temperature === sp.temperature)
+      return original
+    }).filter((p): p is LocalSetPoint => p !== undefined).map(p => toPhase(p))
+  }, [points])
+
+  const autoOnId = orderedPhases[0]?.id ?? null
+  const autoOffId = orderedPhases.length > 1 ? orderedPhases[orderedPhases.length - 1].id : null
 
   const toggleDay = useCallback((day: DayOfWeek) => {
     setDays((prev) => {
@@ -201,8 +219,8 @@ export function CurveEditor({
   }, [handleDeletePoint])
 
   const handleApplyPreset = useCallback((preset: PresetDef) => {
-    const bedtimeMinutes = timeStringToMinutes(preset.bedtime)
-    const wakeMinutes = timeStringToMinutes(preset.wakeTime)
+    const bedtimeMinutes = timeStringToMinutes(bedtime)
+    const wakeMinutes = timeStringToMinutes(wakeTime)
     const curvePoints = generateSleepCurve({
       bedtimeMinutes,
       wakeMinutes,
@@ -217,7 +235,7 @@ export function CurveEditor({
       temperature: Math.round(Math.max(55, Math.min(110, temperature))),
     }))
     setPoints(next)
-  }, [])
+  }, [bedtime, wakeTime])
 
   const performSave = useCallback(async (force = false) => {
     const targetDays = Array.from(days)
@@ -254,7 +272,7 @@ export function CurveEditor({
 
   if (!open) return null
 
-  const editingPhase = editingId !== null ? phases.find(p => p.id === editingId) ?? null : null
+  const editingPhase = editingId !== null ? orderedPhases.find(p => p.id === editingId) ?? null : null
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950">
@@ -304,9 +322,20 @@ export function CurveEditor({
         </div>
       </div>
 
+      {/* Bedtime / Wake — drives preset generation and Pod auto on/off */}
+      <div className="border-b border-zinc-800 px-4 py-3">
+        <p className="mb-2 text-[11px] uppercase tracking-wider text-zinc-500">
+          Sleep window
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <TimeInput label="Bedtime" value={bedtime} onChange={setBedtime} />
+          <TimeInput label="Wake up" value={wakeTime} onChange={setWakeTime} />
+        </div>
+      </div>
+
       {/* Chart preview */}
       {curveData && (
-        <div className="shrink-0 border-b border-zinc-800 bg-zinc-900/40 px-3 py-2">
+        <div className="shrink-0 border-b border-zinc-800 bg-zinc-900/40 px-3 pt-4 pb-3 mt-2">
           <CurveChart
             points={curveData.points}
             bedtimeMinutes={curveData.bedtimeMinutes}
@@ -345,7 +374,7 @@ export function CurveEditor({
             )
           : (
               <div className="space-y-1.5">
-                {phases.map(phase => (
+                {orderedPhases.map(phase => (
                   <SetPointCard
                     key={phase.id}
                     phase={phase}
@@ -353,6 +382,13 @@ export function CurveEditor({
                     onDelete={handleDeletePoint}
                     onTapCard={handleEditPoint}
                     disabled={isMutating}
+                    autoLabel={
+                      phase.id === autoOnId
+                        ? 'on'
+                        : phase.id === autoOffId
+                          ? 'off'
+                          : null
+                    }
                   />
                 ))}
               </div>

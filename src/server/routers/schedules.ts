@@ -566,9 +566,9 @@ export const schedulesRouter = router({
     .input(
       z.object({
         deletes: z.object({
-          temperature: z.array(idSchema).max(100).default([]),
-          power: z.array(idSchema).max(100).default([]),
-          alarm: z.array(idSchema).max(100).default([]),
+          temperature: z.array(idSchema).max(1000).default([]),
+          power: z.array(idSchema).max(1000).default([]),
+          alarm: z.array(idSchema).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
         creates: z.object({
           temperature: z.array(z.object({
@@ -577,7 +577,7 @@ export const schedulesRouter = router({
             time: timeStringSchema,
             temperature: temperatureSchema,
             enabled: z.boolean().default(true),
-          })).max(100).default([]),
+          })).max(1000).default([]),
           power: z.array(z.object({
             side: sideSchema,
             dayOfWeek: dayOfWeekSchema,
@@ -585,7 +585,7 @@ export const schedulesRouter = router({
             offTime: timeStringSchema,
             onTemperature: temperatureSchema,
             enabled: z.boolean().default(true),
-          })).max(100).default([]),
+          })).max(1000).default([]),
           alarm: z.array(z.object({
             side: sideSchema,
             dayOfWeek: dayOfWeekSchema,
@@ -595,7 +595,7 @@ export const schedulesRouter = router({
             duration: alarmDurationSchema,
             alarmTemperature: temperatureSchema,
             enabled: z.boolean().default(true),
-          })).max(100).default([]),
+          })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
         updates: z.object({
           temperature: z.array(z.object({
@@ -603,14 +603,14 @@ export const schedulesRouter = router({
             time: timeStringSchema.optional(),
             temperature: temperatureSchema.optional(),
             enabled: z.boolean().optional(),
-          })).max(100).default([]),
+          })).max(1000).default([]),
           power: z.array(z.object({
             id: idSchema,
             onTime: timeStringSchema.optional(),
             offTime: timeStringSchema.optional(),
             onTemperature: temperatureSchema.optional(),
             enabled: z.boolean().optional(),
-          })).max(100).default([]),
+          })).max(1000).default([]),
           alarm: z.array(z.object({
             id: idSchema,
             time: timeStringSchema.optional(),
@@ -619,7 +619,7 @@ export const schedulesRouter = router({
             duration: alarmDurationSchema.optional(),
             alarmTemperature: temperatureSchema.optional(),
             enabled: z.boolean().optional(),
-          })).max(100).default([]),
+          })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
       })
     )
