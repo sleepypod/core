@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Snowflake, Scale, Flame, X } from 'lucide-react'
+import { Plus, Snowflake, Scale, Flame, X, Minus } from 'lucide-react'
 import clsx from 'clsx'
 import { CurveChart } from './CurveChart'
 import { SetPointCard } from './SetPointCard'
@@ -37,18 +37,20 @@ interface PresetDef {
   id: CoolingIntensity
   label: string
   icon: typeof Snowflake
-  minTempF: number
-  maxTempF: number
 }
 
 const PRESETS: PresetDef[] = [
-  { id: 'cool', label: 'Hot Sleeper', icon: Snowflake, minTempF: 65, maxTempF: 84 },
-  { id: 'balanced', label: 'Balanced', icon: Scale, minTempF: 68, maxTempF: 86 },
-  { id: 'warm', label: 'Cold Sleeper', icon: Flame, minTempF: 72, maxTempF: 88 },
+  { id: 'cool', label: 'Hot Sleeper', icon: Snowflake },
+  { id: 'balanced', label: 'Balanced', icon: Scale },
+  { id: 'warm', label: 'Cold Sleeper', icon: Flame },
 ]
 
 const DEFAULT_BEDTIME = '22:00'
 const DEFAULT_WAKE = '07:00'
+const DEFAULT_MIN_TEMP = 68
+const DEFAULT_MAX_TEMP = 86
+const TEMP_FLOOR = 55
+const TEMP_CEIL = 110
 
 function toPhase(point: LocalSetPoint): SchedulePhase {
   return {
@@ -107,6 +109,12 @@ export function CurveEditor({
   const initialSorted = useMemo(() => sortChronological(initialSetPoints), [initialSetPoints])
   const initialBedtime = initialSorted[0]?.time ?? DEFAULT_BEDTIME
   const initialWake = initialSorted[initialSorted.length - 1]?.time ?? DEFAULT_WAKE
+  const initialMinTemp = initialSetPoints.length > 0
+    ? Math.min(...initialSetPoints.map(p => p.temperature))
+    : DEFAULT_MIN_TEMP
+  const initialMaxTemp = initialSetPoints.length > 0
+    ? Math.max(...initialSetPoints.map(p => p.temperature))
+    : DEFAULT_MAX_TEMP
 
   const [days, setDays] = useState<Set<DayOfWeek>>(new Set(initialDays))
   const [points, setPoints] = useState<LocalSetPoint[]>(() =>
@@ -114,6 +122,8 @@ export function CurveEditor({
   )
   const [bedtime, setBedtime] = useState(initialBedtime)
   const [wakeTime, setWakeTime] = useState(initialWake)
+  const [minTemp, setMinTemp] = useState(initialMinTemp)
+  const [maxTemp, setMaxTemp] = useState(initialMaxTemp)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [pendingConflict, setPendingConflict] = useState<DayOfWeek[] | null>(null)
@@ -132,6 +142,10 @@ export function CurveEditor({
 
     setWakeTime(initialWake)
 
+    setMinTemp(initialMinTemp)
+
+    setMaxTemp(initialMaxTemp)
+
     setEditorOpen(false)
 
     setEditingId(null)
@@ -139,7 +153,7 @@ export function CurveEditor({
     setPendingConflict(null)
 
     setSaveError(null)
-  }, [open, initialDays, initialSetPoints, initialBedtime, initialWake])
+  }, [open, initialDays, initialSetPoints, initialBedtime, initialWake, initialMinTemp, initialMaxTemp])
 
   // Lock body scroll when open
   useEffect(() => {
@@ -225,17 +239,17 @@ export function CurveEditor({
       bedtimeMinutes,
       wakeMinutes,
       intensity: preset.id,
-      minTempF: preset.minTempF,
-      maxTempF: preset.maxTempF,
+      minTempF: minTemp,
+      maxTempF: maxTemp,
     })
     const scheduleTemps = curveToScheduleTemperatures(curvePoints, bedtimeMinutes)
     const next: LocalSetPoint[] = Object.entries(scheduleTemps).map(([time, temperature], i) => ({
       localId: -(i + 1),
       time,
-      temperature: Math.round(Math.max(55, Math.min(110, temperature))),
+      temperature: Math.round(Math.max(TEMP_FLOOR, Math.min(TEMP_CEIL, temperature))),
     }))
     setPoints(next)
-  }, [bedtime, wakeTime])
+  }, [bedtime, wakeTime, minTemp, maxTemp])
 
   const performSave = useCallback(async (force = false) => {
     const targetDays = Array.from(days)
@@ -330,6 +344,25 @@ export function CurveEditor({
         <div className="grid grid-cols-2 gap-3">
           <TimeInput label="Bedtime" value={bedtime} onChange={setBedtime} />
           <TimeInput label="Wake up" value={wakeTime} onChange={setWakeTime} />
+        </div>
+      </div>
+
+      {/* Min / Max temp — drives preset generation */}
+      <div className="border-b border-zinc-800 px-4 py-3">
+        <p className="mb-2 text-[11px] uppercase tracking-wider text-zinc-500">
+          Temperature range
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <TempStepper
+            label="Coolest"
+            value={minTemp}
+            onChange={v => setMinTemp(Math.min(v, maxTemp - 2))}
+          />
+          <TempStepper
+            label="Warmest"
+            value={maxTemp}
+            onChange={v => setMaxTemp(Math.max(v, minTemp + 2))}
+          />
         </div>
       </div>
 
@@ -456,6 +489,44 @@ export function CurveEditor({
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+interface TempStepperProps {
+  label: string
+  value: number
+  onChange: (value: number) => void
+}
+
+function TempStepper({ label, value, onChange }: TempStepperProps) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-xs font-medium text-zinc-400">{label}</label>
+      <div className="flex h-11 items-center rounded-lg border border-zinc-700 bg-zinc-800/50">
+        <button
+          type="button"
+          onClick={() => onChange(Math.max(TEMP_FLOOR, value - 1))}
+          disabled={value <= TEMP_FLOOR}
+          className="flex h-full w-10 items-center justify-center text-zinc-400 transition-colors active:text-white disabled:opacity-30"
+          aria-label={`Decrease ${label}`}
+        >
+          <Minus size={14} strokeWidth={3} />
+        </button>
+        <span className="flex-1 text-center text-sm font-semibold tabular-nums text-white">
+          {value}
+          °F
+        </span>
+        <button
+          type="button"
+          onClick={() => onChange(Math.min(TEMP_CEIL, value + 1))}
+          disabled={value >= TEMP_CEIL}
+          className="flex h-full w-10 items-center justify-center text-zinc-400 transition-colors active:text-white disabled:opacity-30"
+          aria-label={`Increase ${label}`}
+        >
+          <Plus size={14} strokeWidth={3} />
+        </button>
+      </div>
     </div>
   )
 }
