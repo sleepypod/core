@@ -1,301 +1,100 @@
 'use client'
 
 import { useCallback, useMemo, useState } from 'react'
-import { Moon, Sun, X } from 'lucide-react'
+import { Plus } from 'lucide-react'
+import { trpc } from '@/src/utils/trpc'
 import { useSchedule } from '@/src/hooks/useSchedule'
-import { DaySelector, DAYS } from './DaySelector'
+import { useScheduleActive } from '@/src/hooks/useScheduleActive'
+import { useSide } from '@/src/hooks/useSide'
+import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
+import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from './DaySelector'
-import { CurvePresets } from './CurvePresets'
-import { CurveChart } from './CurveChart'
-import { PhaseLegend } from './PhaseLegend'
-import { TimePicker } from './TimePicker'
+import { CurveCard } from './CurveCard'
+import { CurveEditor } from './CurveEditor'
+import { ConfirmDialog } from './ConfirmDialog'
 import { ScheduleToggle } from './ScheduleToggle'
 import { SchedulerConfirmation } from './SchedulerConfirmation'
-import { ManualControlsSheet } from './ManualControlsSheet'
-import { ScheduleWeekOverview } from './ScheduleWeekOverview'
-import { TemperatureSetPoints } from './TemperatureSetPoints'
-import { trpc } from '@/src/utils/trpc'
-import {
-  generateSleepCurve,
-  timeStringToMinutes,
-} from '@/src/lib/sleepCurve/generate'
-import type { CoolingIntensity, CurvePoint } from '@/src/lib/sleepCurve/types'
-import type { SetPoint } from '@/src/lib/scheduleGrouping'
-import { useScheduleActive } from '@/src/hooks/useScheduleActive'
 
 /**
- * Redesigned Schedule page layout:
- * 1. Day selector (multi-select for bulk ops)
- * 2. Curve presets (horizontal scroll: Hot Sleeper, Balanced, Cold Sleeper)
- * 3. Bedtime/wake time pickers + visual temperature curve chart
- * 4. Schedule enable/disable toggle
- * 5. Manual Controls button → opens bottom sheet
- * 6. Week overview summary
+ * Read-only schedule view: lists curves (groups of days sharing a temperature
+ * schedule) with Edit/Delete actions per curve and a "+ Create New Curve"
+ * button. All editing happens in the full-screen `CurveEditor`.
  */
 export function SchedulePage() {
+  const { side } = useSide()
   const {
-    side,
-    selectedDay,
-    selectedDays,
-    setSelectedDay,
-    setSelectedDays,
     confirmMessage,
     isPowerEnabled,
-    hasScheduleData,
     isApplying,
     isMutating,
     toggleAllSchedules,
-    applyToOtherDays,
+    deleteCurve,
+    setSelectedDays,
     isLoading: hookLoading,
   } = useSchedule()
 
   const { nextTime: nextScheduleTime } = useScheduleActive()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
 
-  // Curve state — updated when presets are applied or times change
-  const [bedtime, setBedtime] = useState('22:00')
-  const [wakeTime, setWakeTime] = useState('07:00')
-  const [intensity, setIntensity] = useState<CoolingIntensity>('balanced')
-  const [minTempF, setMinTempF] = useState(68)
-  const [maxTempF, setMaxTempF] = useState(86)
+  const [editingCurve, setEditingCurve] = useState<{ days: DayOfWeek[], setPoints: Array<{ time: string, temperature: number }> } | null>(null)
+  const [creatingCurve, setCreatingCurve] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<{ days: DayOfWeek[], label: string } | null>(null)
 
-  // Custom AI curve points override the generated curve
-  const [customPoints, setCustomPoints] = useState<CurvePoint[] | null>(null)
+  const groups = useMemo<ScheduleGroup[]>(() => {
+    if (!data?.temperature) return []
+    return groupDaysBySharedCurve(data.temperature)
+  }, [data?.temperature])
 
-  // Week overview / group editing state
-  const [overviewExpanded, setOverviewExpanded] = useState(true)
-  const [editingGroup, setEditingGroup] = useState<{ days: DayOfWeek[], setPoints: SetPoint[] } | null>(null)
-
-  const bedtimeMinutes = useMemo(() => timeStringToMinutes(bedtime), [bedtime])
-  const wakeMinutes = useMemo(() => timeStringToMinutes(wakeTime), [wakeTime])
-
-  const generatedPoints: CurvePoint[] = useMemo(
-    () =>
-      generateSleepCurve({
-        bedtimeMinutes,
-        wakeMinutes,
-        intensity,
-        minTempF,
-        maxTempF,
-      }),
-    [bedtimeMinutes, wakeMinutes, intensity, minTempF, maxTempF],
+  // Curves to render: ones with set points OR explicitly paused
+  const visibleGroups = useMemo(
+    () => groups.filter(g => g.setPoints.length > 0 || g.allDisabled),
+    [groups],
   )
 
-  // Convert editing group's set points to CurvePoints for chart display
-  const groupCurve = useMemo<{ points: CurvePoint[], bedtimeMinutes: number, minTempF: number, maxTempF: number } | null>(() => {
-    if (!editingGroup || editingGroup.setPoints.length === 0) return null
+  const hasAnyCurves = visibleGroups.length > 0
 
-    const sp = editingGroup.setPoints
-    const temps = sp.map(p => p.temperature)
-    const min = Math.min(...temps)
-    const max = Math.max(...temps)
+  const handleEdit = useCallback((group: ScheduleGroup) => {
+    setEditingCurve({ days: group.days, setPoints: group.setPoints })
+    setSelectedDays(new Set(group.days))
+  }, [setSelectedDays])
 
-    // Derive bedtime from first set point
-    const firstTime = sp[0].time
-    const btMin = timeStringToMinutes(firstTime)
+  const handleCreate = useCallback(() => {
+    setCreatingCurve(true)
+  }, [])
 
-    const withRelative = sp.map((p) => {
-      let tMin = timeStringToMinutes(p.time) - btMin
-      if (tMin < -120) tMin += 24 * 60
-      return { ...p, minutesFromBedtime: tMin }
-    }).sort((a, b) => a.minutesFromBedtime - b.minutesFromBedtime)
+  const handleDelete = useCallback((group: ScheduleGroup) => {
+    const labelDays = group.days.length === 7
+      ? 'every day'
+      : group.days.length === 1
+        ? group.days[0]
+        : `${group.days.length} days`
+    setPendingDelete({ days: group.days, label: labelDays })
+  }, [])
 
-    const total = withRelative.length
-    const points: CurvePoint[] = withRelative.map((p, i) => {
-      const frac = total > 1 ? i / (total - 1) : 0
-      const phase = frac < 0.1
-        ? 'warmUp' as const
-        : frac < 0.25
-          ? 'coolDown' as const
-          : frac < 0.55
-            ? 'deepSleep' as const
-            : frac < 0.75
-              ? 'maintain' as const
-              : frac < 0.9
-                ? 'preWake' as const
-                : 'wake' as const
+  const confirmDelete = useCallback(async () => {
+    if (!pendingDelete) return
+    try {
+      await deleteCurve(pendingDelete.days)
+    }
+    finally {
+      setPendingDelete(null)
+    }
+  }, [pendingDelete, deleteCurve])
 
-      return {
-        minutesFromBedtime: p.minutesFromBedtime,
-        tempOffset: p.temperature - 80,
-        phase,
-      }
-    })
-
-    return { points, bedtimeMinutes: btMin, minTempF: min, maxTempF: max }
-  }, [editingGroup])
-
-  // Use group curve when editing, otherwise custom AI or generated
-  const curvePoints = groupCurve?.points ?? customPoints ?? generatedPoints
-
-  // When a preset is applied, sync curve display state
-  const handlePresetApplied = useCallback(
-    (config: {
-      points: CurvePoint[]
-      bedtimeMinutes: number
-      minTempF: number
-      maxTempF: number
-      intensity: CoolingIntensity
-      bedtime: string
-      wakeTime: string
-    }) => {
-      setBedtime(config.bedtime)
-      setWakeTime(config.wakeTime)
-      setMinTempF(config.minTempF)
-      setMaxTempF(config.maxTempF)
-      setIntensity(config.intensity)
-      setCustomPoints(null) // Clear AI curve, back to generated
-    },
-    [],
-  )
-
-  // When AI curve is applied, convert set points to CurvePoints for chart
-  const handleAICurveApplied = useCallback(
-    (config: {
-      setPoints: Array<{ time: string, tempF: number }>
-      bedtime: string
-      wakeTime: string
-    }) => {
-      const btMin = timeStringToMinutes(config.bedtime)
-      const temps = config.setPoints.map(p => p.tempF)
-      const min = Math.min(...temps)
-      const max = Math.max(...temps)
-
-      setBedtime(config.bedtime)
-      setWakeTime(config.wakeTime)
-      setMinTempF(min)
-      setMaxTempF(max)
-
-      // Compute minutesFromBedtime, then sort by that (not by time string — overnight wraps)
-      const withRelative = config.setPoints.map((p) => {
-        let tMin = timeStringToMinutes(p.time) - btMin
-        if (tMin < -120) tMin += 24 * 60
-        return { ...p, minutesFromBedtime: tMin }
-      }).sort((a, b) => a.minutesFromBedtime - b.minutesFromBedtime)
-
-      const totalMin = withRelative.length
-      const points: CurvePoint[] = withRelative.map((p, i) => {
-        const frac = i / (totalMin - 1)
-        const phase = frac < 0.1
-          ? 'warmUp' as const
-          : frac < 0.25
-            ? 'coolDown' as const
-            : frac < 0.55
-              ? 'deepSleep' as const
-              : frac < 0.75
-                ? 'maintain' as const
-                : frac < 0.9
-                  ? 'preWake' as const
-                  : 'wake' as const
-
-        return {
-          minutesFromBedtime: p.minutesFromBedtime,
-          tempOffset: p.tempF - 80,
-          phase,
-        }
-      })
-
-      setCustomPoints(points)
-    },
-    [],
-  )
+  const closeEditor = useCallback(() => {
+    setEditingCurve(null)
+    setCreatingCurve(false)
+  }, [])
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      {/* 1. Day Selector */}
-      <DaySelector
-        activeDay={selectedDay}
-        onActiveDayChange={(day) => {
-          setSelectedDay(day)
-          if (editingGroup) {
-            setEditingGroup(null)
-            setSelectedDays(new Set([day]))
-            setOverviewExpanded(true)
-          }
-        }}
-        selectedDays={selectedDays}
-        onSelectedDaysChange={setSelectedDays}
+      {/* Schedule on/off toggle */}
+      <ScheduleToggle
+        enabled={isPowerEnabled}
+        onToggle={() => void toggleAllSchedules()}
+        isLoading={isMutating || hookLoading}
+        nextScheduleTime={nextScheduleTime}
       />
-
-      {/* Editing group banner */}
-      {editingGroup && (
-        <div className="flex items-center gap-2 rounded-lg bg-sky-500/10 px-3 py-2">
-          <span className="text-xs text-sky-400">
-            Editing
-            {' '}
-            {editingGroup.days.map(d => DAYS.find(x => x.key === d)?.label).join(', ')}
-            {' '}
-            schedule
-          </span>
-          <button
-            onClick={() => {
-              setEditingGroup(null)
-              setOverviewExpanded(true)
-            }}
-            className="ml-auto rounded p-0.5 text-sky-400 transition-colors hover:bg-sky-500/20"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
-
-      {/* Week Overview — groups days by shared temperature curve */}
-      <ScheduleWeekOverview
-        expanded={overviewExpanded}
-        onExpandedChange={setOverviewExpanded}
-        onSelectGroup={(group) => {
-          const daySet = new Set(group.days)
-          setSelectedDays(daySet)
-          setSelectedDay(group.days[0])
-          setEditingGroup({ days: group.days, setPoints: group.setPoints })
-          setOverviewExpanded(false)
-        }}
-      />
-
-      {/* Curve Presets — hidden when editing a group */}
-      {!editingGroup && (
-        <CurvePresets
-          side={side}
-          selectedDay={selectedDay}
-          selectedDays={selectedDays}
-          onApplied={handlePresetApplied}
-          onAICurveApplied={handleAICurveApplied}
-        />
-      )}
-
-      {/* Time Pickers — always visible */}
-      <div className="flex gap-4">
-        <TimePicker
-          label="Bedtime"
-          icon={<Moon size={14} />}
-          accentClass="text-purple-400"
-          value={bedtime}
-          onChange={setBedtime}
-        />
-        <TimePicker
-          label="Wake Up"
-          icon={<Sun size={14} />}
-          accentClass="text-amber-400"
-          value={wakeTime}
-          onChange={setWakeTime}
-        />
-      </div>
-
-      {/* Curve Chart */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-        <CurveChart
-          points={curvePoints}
-          bedtimeMinutes={groupCurve?.bedtimeMinutes ?? bedtimeMinutes}
-          minTempF={groupCurve?.minTempF ?? minTempF}
-          maxTempF={groupCurve?.maxTempF ?? maxTempF}
-        />
-        <div className="mt-2">
-          <PhaseLegend />
-        </div>
-      </div>
-
-      {/* 4. Temperature Set Points — inline editing */}
-      <TemperatureSetPoints selectedDay={selectedDay} selectedDays={selectedDays} />
 
       {/* Confirmation banner */}
       <SchedulerConfirmation
@@ -313,26 +112,73 @@ export function SchedulePage() {
         </div>
       )}
 
-      {/* Schedule Toggle */}
-      <ScheduleToggle
-        enabled={isPowerEnabled}
-        onToggle={() => void toggleAllSchedules()}
-        affectedDayCount={selectedDays.size}
-        isLoading={isMutating || hookLoading}
-        nextScheduleTime={nextScheduleTime}
+      {/* Loading state */}
+      {isLoading && !data && (
+        <div className="h-24 animate-pulse rounded-2xl bg-zinc-900" />
+      )}
+
+      {/* Empty state */}
+      {!isLoading && !hasAnyCurves && (
+        <div className="rounded-2xl border border-dashed border-sky-500/30 bg-sky-500/5 p-6 text-center">
+          <p className="text-sm font-medium text-white">No schedule yet</p>
+          <p className="mt-1 text-xs text-zinc-400">
+            Create a sleep curve to automatically control bed temperature
+          </p>
+          <button
+            onClick={handleCreate}
+            className="mt-4 inline-flex h-10 items-center gap-1.5 rounded-xl bg-sky-500 px-4 text-sm font-semibold text-white active:bg-sky-600"
+          >
+            <Plus size={14} />
+            Create Sleep Curve
+          </button>
+        </div>
+      )}
+
+      {/* Curves list */}
+      {hasAnyCurves && (
+        <>
+          <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+            Curves
+          </p>
+          <div className="space-y-2">
+            {visibleGroups.map(group => (
+              <CurveCard
+                key={group.key}
+                group={group}
+                onEdit={() => handleEdit(group)}
+                onDelete={() => handleDelete(group)}
+              />
+            ))}
+          </div>
+
+          <button
+            onClick={handleCreate}
+            className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-zinc-700 text-sm font-medium text-zinc-400 active:bg-zinc-900"
+          >
+            <Plus size={14} />
+            Create New Curve
+          </button>
+        </>
+      )}
+
+      {/* Edit / Create editor */}
+      <CurveEditor
+        open={editingCurve !== null || creatingCurve}
+        onClose={closeEditor}
+        initialDays={editingCurve?.days ?? []}
+        initialSetPoints={editingCurve?.setPoints ?? []}
       />
 
-      {/* Manual Controls → Bottom Sheet */}
-      <ManualControlsSheet
-        selectedDay={selectedDay}
-        selectedDays={selectedDays}
-        alarmSchedules={data?.alarm ?? []}
-        isLoading={isLoading}
-        hasScheduleData={hasScheduleData}
-        isApplying={isApplying}
-        onApplyToOtherDays={targetDays => void applyToOtherDays(targetDays)}
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete curve?"
+        message={`This will remove the schedule for ${pendingDelete?.label ?? ''}. The Pod won't change temperature on those days until you create a new curve.`}
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
       />
-
     </div>
   )
 }

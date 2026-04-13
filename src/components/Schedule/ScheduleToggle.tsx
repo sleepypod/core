@@ -7,8 +7,6 @@ interface ScheduleToggleProps {
   enabled: boolean
   /** Called when user toggles the switch */
   onToggle: () => void
-  /** Number of days affected by this toggle */
-  affectedDayCount: number
   /** Whether a mutation is in-flight */
   isLoading?: boolean
   /** Next scheduled time string (e.g. "10:30 PM") */
@@ -18,7 +16,6 @@ interface ScheduleToggleProps {
 export function ScheduleToggle({
   enabled,
   onToggle,
-  affectedDayCount,
   isLoading = false,
   nextScheduleTime,
 }: ScheduleToggleProps) {
@@ -35,11 +32,9 @@ export function ScheduleToggle({
             />
           </div>
           <span className="text-xs text-zinc-400">
-            {affectedDayCount > 1
-              ? `Applies to ${affectedDayCount} selected days`
-              : nextScheduleTime
-                ? `Automatically control power and temperature · Next at ${nextScheduleTime}`
-                : 'Automatically control power and temperature'}
+            {enabled && nextScheduleTime
+              ? `Automatically control power and temperature · Next at ${nextScheduleTime}`
+              : 'Automatically control power and temperature'}
           </span>
         </div>
 

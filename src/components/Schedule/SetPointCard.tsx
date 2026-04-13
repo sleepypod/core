@@ -31,12 +31,20 @@ export function SetPointCard({
       className={clsx(
         'flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 transition-opacity',
         !phase.enabled && 'opacity-40',
-        disabled && 'pointer-events-none',
+        disabled && 'opacity-60',
       )}
-      onClick={() => onTapCard(phase)}
+      onClick={() => {
+        if (!disabled) onTapCard(phase)
+      }}
       role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') onTapCard(phase) }}
+      aria-disabled={disabled}
+      tabIndex={disabled ? -1 : 0}
+      onKeyDown={(e) => {
+        if (!disabled && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault()
+          onTapCard(phase)
+        }
+      }}
     >
       {/* Time */}
       <div className="min-w-[60px]">
@@ -67,7 +75,7 @@ export function SetPointCard({
       <div className="flex items-center gap-0" onClick={e => e.stopPropagation()}>
         <button
           onClick={() => onAdjustTemp(phase.id, -2)}
-          disabled={phase.temperature <= 55}
+          disabled={disabled || phase.temperature <= 55}
           className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors active:text-zinc-200 disabled:opacity-30"
           aria-label="Decrease temperature"
         >
@@ -75,7 +83,7 @@ export function SetPointCard({
         </button>
         <button
           onClick={() => onAdjustTemp(phase.id, 2)}
-          disabled={phase.temperature >= 110}
+          disabled={disabled || phase.temperature >= 110}
           className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors active:text-zinc-200 disabled:opacity-30"
           aria-label="Increase temperature"
         >
@@ -89,7 +97,8 @@ export function SetPointCard({
           e.stopPropagation()
           onDelete(phase.id)
         }}
-        className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-600 transition-colors active:text-red-400"
+        disabled={disabled}
+        className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-600 transition-colors active:text-red-400 disabled:opacity-30"
         aria-label={`Delete ${phase.name}`}
       >
         <Trash2 size={12} />

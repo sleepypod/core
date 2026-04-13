@@ -106,6 +106,10 @@ export function useSchedule() {
     onSuccess: () => invalidateAll(),
   })
 
+  const batchUpdate = trpc.schedules.batchUpdate.useMutation({
+    onSuccess: () => invalidateAll(),
+  })
+
   function invalidateAll() {
     void utils.schedules.getAll.invalidate()
     void utils.schedules.getByDay.invalidate()
@@ -114,11 +118,25 @@ export function useSchedule() {
   // Get current day's schedule from the query
   const daySchedule = dayScheduleQuery.data as DayScheduleData | undefined
 
-  // Derive schedule enabled state — any enabled temp schedule across all days
+  // Derive power schedule enabled state for current day
   const isPowerEnabled = useMemo(() => {
-    const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
-    if (!allData?.temperature?.length) return false
-    return allData.temperature.some((t: TemperatureSchedule) => t.enabled)
+    if (!daySchedule?.power?.length) return false
+    return daySchedule.power.some((p: PowerSchedule) => p.enabled)
+  }, [daySchedule])
+
+  // Check if ANY day has enabled schedules (global view)
+  const isGlobalEnabled = useMemo(() => {
+    const allData = allSchedulesQuery.data as {
+      temperature: TemperatureSchedule[]
+      power: PowerSchedule[]
+      alarm: AlarmSchedule[]
+    } | undefined
+    if (!allData) return false
+    return (
+      allData.power.some(p => p.enabled)
+      || allData.temperature.some(t => t.enabled)
+      || allData.alarm.some(a => a.enabled)
+    )
   }, [allSchedulesQuery.data])
 
   // Check if this day has any schedule data
@@ -146,24 +164,21 @@ export function useSchedule() {
 
     setConfirmMessage(null)
 
-    // Process each selected day
+    const powerUpdates: Array<{ id: number, enabled: boolean }> = []
+    const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
+
     for (const day of selectedDays) {
       const dayPowerSchedules = allData.power.filter(
         (p: PowerSchedule) => p.dayOfWeek === day
       )
 
       if (dayPowerSchedules.length > 0) {
-        // Update existing power schedules
         for (const ps of dayPowerSchedules) {
-          await updatePowerSchedule.mutateAsync({
-            id: ps.id,
-            enabled: newEnabled,
-          })
+          powerUpdates.push({ id: ps.id, enabled: newEnabled })
         }
       }
       else if (newEnabled) {
-        // Create a default power schedule when enabling a day that has none
-        await createPowerSchedule.mutateAsync({
+        powerCreates.push({
           side,
           dayOfWeek: day,
           onTime: '22:00',
@@ -174,11 +189,18 @@ export function useSchedule() {
       }
     }
 
+    if (powerUpdates.length > 0 || powerCreates.length > 0) {
+      await batchUpdate.mutateAsync({
+        updates: { power: powerUpdates },
+        creates: { power: powerCreates },
+      })
+    }
+
     setConfirmMessage(
       `Schedule ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
     )
     confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 3000)
-  }, [allSchedulesQuery.data, isPowerEnabled, selectedDays, side, updatePowerSchedule, createPowerSchedule])
+  }, [allSchedulesQuery.data, isPowerEnabled, selectedDays, side, batchUpdate])
 
   /**
    * Toggle ALL schedule types (temperature + power + alarm) enable/disable
@@ -194,37 +216,93 @@ export function useSchedule() {
     }
     const newEnabled = !isPowerEnabled
 
-    // Collect all mutations to fire in parallel
-    const mutations: Promise<unknown>[] = []
+    const tempUpdates: Array<{ id: number, enabled: boolean }> = []
+    const powerUpdates: Array<{ id: number, enabled: boolean }> = []
+    const alarmUpdates: Array<{ id: number, enabled: boolean }> = []
+    const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
 
     for (const day of selectedDays) {
+      // Temperature schedules
       for (const ts of allData.temperature.filter((t: TemperatureSchedule) => t.dayOfWeek === day)) {
-        mutations.push(updateTempSchedule.mutateAsync({ id: ts.id, enabled: newEnabled }))
+        tempUpdates.push({ id: ts.id, enabled: newEnabled })
       }
+
+      // Power schedules
+      const dayPowerSchedules = allData.power.filter((p: PowerSchedule) => p.dayOfWeek === day)
+      if (dayPowerSchedules.length > 0) {
+        for (const ps of dayPowerSchedules) {
+          powerUpdates.push({ id: ps.id, enabled: newEnabled })
+        }
+      }
+      else if (newEnabled) {
+        powerCreates.push({
+          side,
+          dayOfWeek: day,
+          onTime: '22:00',
+          offTime: '07:00',
+          onTemperature: 75,
+          enabled: true,
+        })
+      }
+
+      // Alarm schedules
       for (const as_ of allData.alarm.filter((a: AlarmSchedule) => a.dayOfWeek === day)) {
-        mutations.push(updateAlarmSchedule.mutateAsync({ id: as_.id, enabled: newEnabled }))
+        alarmUpdates.push({ id: as_.id, enabled: newEnabled })
       }
     }
 
-    await Promise.all(mutations)
-
-    // Explicitly refetch all schedule queries so every consumer (toggle, nav dot) updates
-    await Promise.all([
-      utils.schedules.getAll.invalidate(),
-      utils.schedules.getByDay.invalidate(),
-    ])
+    if (tempUpdates.length > 0 || powerUpdates.length > 0 || alarmUpdates.length > 0 || powerCreates.length > 0) {
+      await batchUpdate.mutateAsync({
+        updates: { temperature: tempUpdates, power: powerUpdates, alarm: alarmUpdates },
+        creates: { power: powerCreates },
+      })
+    }
 
     setConfirmMessage(
-      `Schedule ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
+      `All schedules ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
     )
     confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 3000)
-  }, [
-    allSchedulesQuery.data,
-    isPowerEnabled,
-    selectedDays,
-    updateTempSchedule,
-    updateAlarmSchedule,
-  ])
+  }, [allSchedulesQuery.data, isPowerEnabled, selectedDays, side, batchUpdate])
+
+  /**
+   * Toggle ALL schedule types across ALL 7 days globally.
+   * Uses isGlobalEnabled to determine new state.
+   */
+  const toggleGlobalSchedules = useCallback(async () => {
+    if (!allSchedulesQuery.data) return
+
+    const allData = allSchedulesQuery.data as {
+      temperature: TemperatureSchedule[]
+      power: PowerSchedule[]
+      alarm: AlarmSchedule[]
+    }
+    const newEnabled = !isGlobalEnabled
+
+    const tempUpdates: Array<{ id: number, enabled: boolean }> = []
+    const powerUpdates: Array<{ id: number, enabled: boolean }> = []
+    const alarmUpdates: Array<{ id: number, enabled: boolean }> = []
+
+    for (const ts of allData.temperature) {
+      tempUpdates.push({ id: ts.id, enabled: newEnabled })
+    }
+    for (const ps of allData.power) {
+      powerUpdates.push({ id: ps.id, enabled: newEnabled })
+    }
+    for (const as_ of allData.alarm) {
+      alarmUpdates.push({ id: as_.id, enabled: newEnabled })
+    }
+
+    if (tempUpdates.length > 0 || powerUpdates.length > 0 || alarmUpdates.length > 0) {
+      await batchUpdate.mutateAsync({
+        updates: { temperature: tempUpdates, power: powerUpdates, alarm: alarmUpdates },
+      })
+    }
+
+    setConfirmMessage(
+      `All schedules ${newEnabled ? 'enabled' : 'disabled'}`
+    )
+    confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 3000)
+  }, [allSchedulesQuery.data, isGlobalEnabled, batchUpdate])
 
   /**
    * Apply the source day's schedule to target days.
@@ -242,7 +320,6 @@ export function useSchedule() {
       setConfirmMessage(null)
 
       try {
-        // Get the full schedule data for current side
         const allData = allSchedulesQuery.data as {
           temperature: TemperatureSchedule[]
           power: PowerSchedule[]
@@ -251,35 +328,51 @@ export function useSchedule() {
 
         if (!allData) return
 
-        // Delete all existing schedules for target days in parallel
-        const deletes: Promise<unknown>[] = []
-        for (const targetDay of targetDays) {
-          for (const t of allData.temperature.filter((t: TemperatureSchedule) => t.dayOfWeek === targetDay)) {
-            deletes.push(deleteTempSchedule.mutateAsync({ id: t.id }))
-          }
-          for (const a of allData.alarm.filter((a: AlarmSchedule) => a.dayOfWeek === targetDay)) {
-            deletes.push(deleteAlarmSchedule.mutateAsync({ id: a.id }))
-          }
-        }
-        await Promise.all(deletes)
+        const tempDeletes: number[] = []
+        const powerDeletes: number[] = []
+        const alarmDeletes: number[] = []
+        const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
+        const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
+        const alarmCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number, alarmTemperature: number, enabled: boolean }> = []
 
-        // Recreate from source day's schedule in parallel
-        const creates: Promise<unknown>[] = []
         const sourceTemp = daySchedule.temperature || []
+        const sourcePower = daySchedule.power || []
         const sourceAlarm = daySchedule.alarm || []
 
         for (const targetDay of targetDays) {
+          // Collect IDs to delete
+          for (const t of allData.temperature.filter((t: TemperatureSchedule) => t.dayOfWeek === targetDay)) {
+            tempDeletes.push(t.id)
+          }
+          for (const p of allData.power.filter((p: PowerSchedule) => p.dayOfWeek === targetDay)) {
+            powerDeletes.push(p.id)
+          }
+          for (const a of allData.alarm.filter((a: AlarmSchedule) => a.dayOfWeek === targetDay)) {
+            alarmDeletes.push(a.id)
+          }
+
+          // Collect creates from source day
           for (const t of sourceTemp) {
-            creates.push(createTempSchedule.mutateAsync({
+            tempCreates.push({
               side,
               dayOfWeek: targetDay,
               time: t.time,
               temperature: Math.round(t.temperature),
               enabled: t.enabled,
-            }))
+            })
+          }
+          for (const p of sourcePower) {
+            powerCreates.push({
+              side,
+              dayOfWeek: targetDay,
+              onTime: p.onTime,
+              offTime: p.offTime,
+              onTemperature: Math.round(p.onTemperature),
+              enabled: p.enabled,
+            })
           }
           for (const a of sourceAlarm) {
-            creates.push(createAlarmSchedule.mutateAsync({
+            alarmCreates.push({
               side,
               dayOfWeek: targetDay,
               time: a.time,
@@ -288,13 +381,21 @@ export function useSchedule() {
               duration: a.duration,
               alarmTemperature: Math.round(a.alarmTemperature),
               enabled: a.enabled,
-            }))
+            })
           }
         }
-        await Promise.all(creates)
+
+        const hasChanges = tempDeletes.length > 0 || powerDeletes.length > 0 || alarmDeletes.length > 0
+          || tempCreates.length > 0 || powerCreates.length > 0 || alarmCreates.length > 0
+        if (hasChanges) {
+          await batchUpdate.mutateAsync({
+            deletes: { temperature: tempDeletes, power: powerDeletes, alarm: alarmDeletes },
+            creates: { temperature: tempCreates, power: powerCreates, alarm: alarmCreates },
+          })
+        }
 
         setConfirmMessage(
-          `Schedule applied to ${targetDays.length} day${targetDays.length > 1 ? 's' : ''}`
+          `Schedule applied to ${targetDays.length} day${targetDays.length > 1 ? 's' : ''}. Scheduler reloaded.`
         )
         confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 4000)
       }
@@ -307,15 +408,131 @@ export function useSchedule() {
         setIsApplying(false)
       }
     },
-    [
-      daySchedule,
-      allSchedulesQuery.data,
-      side,
-      createTempSchedule,
-      createAlarmSchedule,
-      deleteTempSchedule,
-      deleteAlarmSchedule,
-    ]
+    [daySchedule, allSchedulesQuery.data, side, batchUpdate]
+  )
+
+  /**
+   * Find which days share a curve with the given day (the curve's days).
+   * Returns the union of all days that have the same enabled set point map
+   * as `day`. If `day` has no temperature schedules, returns just `[day]`.
+   */
+  const getCurveForDay = useCallback(
+    (day: DayOfWeek): { days: DayOfWeek[], setPoints: Array<{ time: string, temperature: number }> } => {
+      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      if (!allData) return { days: [day], setPoints: [] }
+
+      const fingerprint = (rows: TemperatureSchedule[]) =>
+        rows
+          .filter(r => r.enabled)
+          .map(r => `${r.time}@${r.temperature}`)
+          .sort()
+          .join('|')
+
+      const dayRows = allData.temperature.filter(t => t.dayOfWeek === day)
+      const targetFp = fingerprint(dayRows)
+      const allDays: DayOfWeek[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+      const matchingDays = allDays.filter((d) => {
+        const rows = allData.temperature.filter(t => t.dayOfWeek === d)
+        return fingerprint(rows) === targetFp
+      })
+
+      const setPoints = dayRows
+        .filter(r => r.enabled)
+        .map(r => ({ time: r.time, temperature: r.temperature }))
+
+      return { days: matchingDays, setPoints }
+    },
+    [allSchedulesQuery.data]
+  )
+
+  /**
+   * Detect day conflicts before saving a curve.
+   * Returns days from `targetDays` that are part of an existing curve other than `originalDays`.
+   */
+  const detectCurveConflicts = useCallback(
+    (targetDays: DayOfWeek[], originalDays: DayOfWeek[] = []): DayOfWeek[] => {
+      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      if (!allData) return []
+      const originalSet = new Set(originalDays)
+      return targetDays.filter((d) => {
+        if (originalSet.has(d)) return false
+        return allData.temperature.some(t => t.dayOfWeek === d && t.enabled)
+      })
+    },
+    [allSchedulesQuery.data]
+  )
+
+  /**
+   * Save a curve atomically: delete temperature schedules for the union of
+   * `originalDays ∪ targetDays`, then create new ones for `targetDays × setPoints`.
+   * Days in `originalDays` but not `targetDays` get cleared. Days in `targetDays`
+   * that previously belonged to other curves get reassigned.
+   */
+  const saveCurve = useCallback(
+    async ({
+      targetDays,
+      setPoints,
+      originalDays = [],
+    }: {
+      targetDays: DayOfWeek[]
+      setPoints: Array<{ time: string, temperature: number }>
+      originalDays?: DayOfWeek[]
+    }): Promise<void> => {
+      if (targetDays.length === 0 && originalDays.length === 0) return
+
+      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      if (!allData) return
+
+      const daysToClear = new Set<DayOfWeek>([...originalDays, ...targetDays])
+      const tempDeletes = allData.temperature
+        .filter(t => daysToClear.has(t.dayOfWeek))
+        .map(t => t.id)
+
+      const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
+      for (const day of targetDays) {
+        for (const sp of setPoints) {
+          tempCreates.push({
+            side,
+            dayOfWeek: day,
+            time: sp.time,
+            temperature: Math.round(sp.temperature),
+            enabled: true,
+          })
+        }
+      }
+
+      if (tempDeletes.length === 0 && tempCreates.length === 0) return
+
+      await batchUpdate.mutateAsync({
+        deletes: { temperature: tempDeletes },
+        creates: { temperature: tempCreates },
+      })
+    },
+    [allSchedulesQuery.data, side, batchUpdate]
+  )
+
+  /**
+   * Delete a curve: removes all temperature schedules for the given days.
+   */
+  const deleteCurve = useCallback(
+    async (days: DayOfWeek[]): Promise<void> => {
+      if (days.length === 0) return
+
+      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      if (!allData) return
+
+      const daySet = new Set(days)
+      const tempDeletes = allData.temperature
+        .filter(t => daySet.has(t.dayOfWeek))
+        .map(t => t.id)
+
+      if (tempDeletes.length === 0) return
+
+      await batchUpdate.mutateAsync({
+        deletes: { temperature: tempDeletes },
+      })
+    },
+    [allSchedulesQuery.data, batchUpdate]
   )
 
   return {
@@ -333,13 +550,15 @@ export function useSchedule() {
     | { temperature: TemperatureSchedule[], power: PowerSchedule[], alarm: AlarmSchedule[] }
     | undefined,
     isPowerEnabled,
+    isGlobalEnabled,
     hasScheduleData,
 
     // Loading states
     isLoading: allSchedulesQuery.isLoading || dayScheduleQuery.isLoading,
     isApplying,
     isMutating:
-      createTempSchedule.isPending
+      batchUpdate.isPending
+      || createTempSchedule.isPending
       || updateTempSchedule.isPending
       || deleteTempSchedule.isPending
       || createPowerSchedule.isPending
@@ -352,7 +571,12 @@ export function useSchedule() {
     // Actions
     togglePowerSchedule,
     toggleAllSchedules,
+    toggleGlobalSchedules,
     applyToOtherDays,
+    saveCurve,
+    deleteCurve,
+    getCurveForDay,
+    detectCurveConflicts,
 
     // Refetch
     refetch: () => {

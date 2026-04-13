@@ -99,44 +99,47 @@ export function groupDaysBySharedCurve(
     enabled: boolean
   }>,
 ): ScheduleGroup[] {
-  // Collect set points per day (only enabled schedules)
-  const dayMap = new Map<DayOfWeek, SetPoint[]>()
-  // Track which days have any schedules at all (including disabled)
-  const dayHasAnySchedule = new Set<DayOfWeek>()
+  // Collect enabled set points per day (used for the rendered curve)
+  const enabledByDay = new Map<DayOfWeek, SetPoint[]>()
+  // Collect ALL saved set points per day (used to keep paused-day curves distinct)
+  const allByDay = new Map<DayOfWeek, SetPoint[]>()
   for (const day of ALL_DAYS) {
-    dayMap.set(day, [])
+    enabledByDay.set(day, [])
+    allByDay.set(day, [])
   }
 
   for (const s of temperatureSchedules) {
-    dayHasAnySchedule.add(s.dayOfWeek as DayOfWeek)
+    const day = s.dayOfWeek as DayOfWeek
+    allByDay.get(day)?.push({ time: s.time, temperature: s.temperature })
     if (!s.enabled) continue
-    const existing = dayMap.get(s.dayOfWeek as DayOfWeek)
-    if (existing) {
-      existing.push({ time: s.time, temperature: s.temperature })
-    }
+    enabledByDay.get(day)?.push({ time: s.time, temperature: s.temperature })
   }
 
-  // Group days by fingerprint, separating disabled from truly empty
+  // Group days by fingerprint. Paused days fingerprint by their saved curve
+  // prefixed with a marker, so two days that "share" being paused only group
+  // together when their saved set points actually match.
   const groups = new Map<string, { days: DayOfWeek[], setPoints: SetPoint[], allDisabled?: boolean }>()
 
   for (const day of ALL_DAYS) {
-    const points = dayMap.get(day) ?? []
-    const hasSchedulesButAllDisabled = points.length === 0 && dayHasAnySchedule.has(day)
+    const enabled = enabledByDay.get(day) ?? []
+    const all = allByDay.get(day) ?? []
+    const isPaused = enabled.length === 0 && all.length > 0
 
-    // Use a separate key for disabled days so they don't merge with truly empty
-    const fp = hasSchedulesButAllDisabled ? '__disabled__' : fingerprint(points)
+    const fp = isPaused ? `__disabled__:${fingerprint(all)}` : fingerprint(enabled)
+    // For paused days, render the saved curve (sorted) so the user still
+    // sees what's defined; we just mark it as disabled.
+    const sourcePoints = isPaused ? all : enabled
 
     const existing = groups.get(fp)
     if (existing) {
       existing.days.push(day)
     }
     else {
-      // Store set points sorted chronologically (with overnight wrap detection)
-      const sorted = sortChronological(points)
+      const sorted = sortChronological(sourcePoints)
       groups.set(fp, {
         days: [day],
         setPoints: sorted,
-        ...(hasSchedulesButAllDisabled ? { allDisabled: true } : {}),
+        ...(isPaused ? { allDisabled: true } : {}),
       })
     }
   }
