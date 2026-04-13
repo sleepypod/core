@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Snowflake, Scale, Flame, X, Minus, Moon, Sun } from 'lucide-react'
+import { Plus, Snowflake, Scale, Flame, X, Minus, Moon, Sun, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
 import { CurveChart } from './CurveChart'
 import { SetPointCard } from './SetPointCard'
@@ -305,9 +305,10 @@ export function CurveEditor({
         <button
           onClick={() => void performSave()}
           disabled={isMutating || days.size === 0 || points.length === 0}
-          className="rounded-full bg-sky-500 px-4 py-1.5 text-xs font-semibold text-white active:bg-sky-600 disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-full bg-sky-500 px-4 py-1.5 text-xs font-semibold text-white active:bg-sky-600 disabled:opacity-60"
         >
-          Save
+          {isMutating && <Loader2 size={12} className="animate-spin" />}
+          {isMutating ? 'Saving…' : 'Save'}
         </button>
       </div>
 
@@ -497,9 +498,11 @@ export function CurveEditor({
               </button>
               <button
                 onClick={() => void performSave(true)}
-                className="flex-1 rounded-xl bg-sky-500 px-3 py-2 text-xs font-semibold text-white active:bg-sky-600"
+                disabled={isMutating}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3 py-2 text-xs font-semibold text-white active:bg-sky-600 disabled:opacity-60"
               >
-                Move &amp; Save
+                {isMutating && <Loader2 size={12} className="animate-spin" />}
+                {isMutating ? 'Saving…' : 'Move & Save'}
               </button>
             </div>
           </div>

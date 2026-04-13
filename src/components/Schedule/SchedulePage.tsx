@@ -2,10 +2,12 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
+import clsx from 'clsx'
 import { trpc } from '@/src/utils/trpc'
 import { useSchedule } from '@/src/hooks/useSchedule'
 import { useScheduleActive } from '@/src/hooks/useScheduleActive'
-import { useSide } from '@/src/hooks/useSide'
+import { useSide } from '@/src/providers/SideProvider'
+import type { SideSelection } from '@/src/providers/SideProvider'
 import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from './DaySelector'
@@ -21,7 +23,7 @@ import { SchedulerConfirmation } from './SchedulerConfirmation'
  * button. All editing happens in the full-screen `CurveEditor`.
  */
 export function SchedulePage() {
-  const { side } = useSide()
+  const { primarySide: side, selectedSide, selectSide } = useSide()
   const {
     confirmMessage,
     isPowerEnabled,
@@ -88,12 +90,23 @@ export function SchedulePage() {
 
   return (
     <div className="space-y-3 sm:space-y-4">
+      {/* Side selector — left / right / both (writes apply to selection) */}
+      <SideSelector value={selectedSide} onChange={selectSide} />
+
+      {/* Next scheduled event hint */}
+      {isPowerEnabled && nextScheduleTime && (
+        <p className="px-1 text-[11px] uppercase tracking-wider text-zinc-500">
+          Next at
+          {' '}
+          <span className="font-medium text-zinc-300">{nextScheduleTime}</span>
+        </p>
+      )}
+
       {/* Schedule on/off toggle */}
       <ScheduleToggle
         enabled={isPowerEnabled}
         onToggle={() => void toggleAllSchedules()}
         isLoading={isMutating || hookLoading}
-        nextScheduleTime={nextScheduleTime}
       />
 
       {/* Confirmation banner */}
@@ -179,6 +192,40 @@ export function SchedulePage() {
         onConfirm={() => void confirmDelete()}
         onCancel={() => setPendingDelete(null)}
       />
+    </div>
+  )
+}
+
+interface SideSelectorProps {
+  value: SideSelection
+  onChange: (side: SideSelection) => void
+}
+
+const SIDE_TABS: Array<{ value: SideSelection, label: string }> = [
+  { value: 'left', label: 'Left' },
+  { value: 'right', label: 'Right' },
+  { value: 'both', label: 'Both' },
+]
+
+function SideSelector({ value, onChange }: SideSelectorProps) {
+  return (
+    <div className="flex rounded-xl bg-zinc-900 p-1">
+      {SIDE_TABS.map(tab => (
+        <button
+          key={tab.value}
+          type="button"
+          onClick={() => onChange(tab.value)}
+          aria-pressed={value === tab.value}
+          className={clsx(
+            'flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors',
+            value === tab.value
+              ? 'bg-sky-500 text-white'
+              : 'text-zinc-400 active:bg-zinc-800',
+          )}
+        >
+          {tab.label}
+        </button>
+      ))}
     </div>
   )
 }

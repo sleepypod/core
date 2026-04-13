@@ -9,15 +9,12 @@ interface ScheduleToggleProps {
   onToggle: () => void
   /** Whether a mutation is in-flight */
   isLoading?: boolean
-  /** Next scheduled time string (e.g. "10:30 PM") */
-  nextScheduleTime?: string | null
 }
 
 export function ScheduleToggle({
   enabled,
   onToggle,
   isLoading = false,
-  nextScheduleTime,
 }: ScheduleToggleProps) {
   return (
     <div className="rounded-xl bg-zinc-900 px-4 py-3">
@@ -32,9 +29,7 @@ export function ScheduleToggle({
             />
           </div>
           <span className="text-xs text-zinc-400">
-            {enabled && nextScheduleTime
-              ? `Automatically control power and temperature · Next at ${nextScheduleTime}`
-              : 'Automatically control power and temperature'}
+            Automatically control power and temperature
           </span>
         </div>
 
