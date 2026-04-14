@@ -1,0 +1,37 @@
+name: Ref Collision Check
+
+# Fails if any branch and tag share a name. A collision (e.g. branch `dev` +
+# tag `dev`) breaks `git fetch --tags`, which is what semantic-release runs
+# before every release. We hit this when the dev rolling release used a tag
+# literally named `dev`; PR #427 renamed it to `dev-latest`. This guard makes
+# sure the same shape of bug can't silently come back.
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect branch/tag name collisions
+        run: |
+          set -euo pipefail
+          branches=$(git for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin \
+            | grep -vx HEAD | sort -u)
+          tags=$(git for-each-ref --format='%(refname:lstrip=2)' refs/tags | sort -u)
+          collisions=$(comm -12 <(echo "$branches") <(echo "$tags") || true)
+          if [ -n "$collisions" ]; then
+            echo "::error::Branch/tag name collision detected — semantic-release will fail on next release. Offending names:"
+            echo "$collisions" | sed 's/^/  - /'
+            exit 1
+          fi
+          echo "No branch/tag name collisions."
