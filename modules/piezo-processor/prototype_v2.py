@@ -69,8 +69,8 @@ class PumpGate:
         guard = int(self.GUARD_S * self.fs)
 
         for i in range(0, n - self.chunk_size, self.chunk_size):
-            le = float(np.mean(left_arr[i:i+self.chunk_size].astype(np.float64)**2))
-            re = float(np.mean(right_arr[i:i+self.chunk_size].astype(np.float64)**2))
+            le = float(np.var(left_arr[i:i+self.chunk_size].astype(np.float64)))
+            re = float(np.var(right_arr[i:i+self.chunk_size].astype(np.float64)))
             if le == 0 or re == 0:
                 continue
             ratio = min(le, re) / max(le, re)
@@ -447,7 +447,7 @@ def run(raw_file):
             # Presence (hysteresis + autocorr quality)
             filt = _bandpass(clean, 1.0, 10.0, SAMPLE_RATE)
             w = int(5 * SAMPLE_RATE)
-            stds = [np.std(filt[j:j+w]) for j in range(0, len(filt)-w, w)]
+            stds = [np.var(filt[j:j+w]) for j in range(0, len(filt)-w, w)]
             med_std = float(np.median(stds)) if stds else 0
             acr_q = autocorr_quality(clean)
             pres = presence.update(med_std, acr_q)

@@ -174,9 +174,9 @@ class PumpGate:
         if self.is_pump_active():
             return True
 
-        # Compute energy for both channels
-        le = float(np.mean(left_chunk.astype(np.float64) ** 2))
-        re = float(np.mean(right_chunk.astype(np.float64) ** 2))
+        # Compute energy for both channels using variance to eliminate DC bias
+        le = float(np.var(left_chunk.astype(np.float64)))
+        re = float(np.var(right_chunk.astype(np.float64)))
 
         if le == 0 or re == 0:
             return False
@@ -651,7 +651,7 @@ class SideProcessor:
         # --- Presence detection (hysteresis + autocorrelation quality) ---
         filt = _bandpass(hr_arr, 1.0, 10.0, SAMPLE_RATE)
         w = int(5 * SAMPLE_RATE)
-        stds = [np.std(filt[j:j + w])
+        stds = [np.var(filt[j:j + w])
                 for j in range(0, len(filt) - w + 1, w)]
         med_std = float(np.median(stds)) if stds else 0.0
         acr_qual = _autocorr_quality(hr_arr)
