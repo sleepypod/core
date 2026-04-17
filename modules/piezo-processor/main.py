@@ -42,6 +42,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
 from common.raw_follower import RawFileFollower
+from common.calibration import (
+    CalibrationStore, CalibrationCache,
+    is_present_capsense_calibrated
+)
 import numpy as np
 from scipy.signal import butter, sosfiltfilt, hilbert, find_peaks
 
@@ -103,14 +107,16 @@ def open_biometrics_db() -> sqlite3.Connection:
     return conn
 
 
-def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
-                 heart_rate: Optional[float], hrv: Optional[float],
-                 breathing_rate: Optional[float]) -> None:
-    ts_unix = int(ts.timestamp())
+def write_vitals(conn: sqlite3.Connection, side: str, ts: float,
+                 hr: Optional[float], hrv: Optional[float],
+                 br: Optional[float]) -> None:
+    """Record a single row of vitals to the database."""
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
     with conn:
         conn.execute(
-            "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate) VALUES (?, ?, ?, ?, ?)",
-            (side, ts_unix, heart_rate, hrv, breathing_rate),
+            """INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate)
+               VALUES (?, ?, ?, ?, ?)""",
+            (side, int(dt.timestamp()), hr, hrv, br),
         )
 
 
@@ -175,36 +181,37 @@ class PumpGate:
             return True
 
         # Compute energy for both channels using variance to eliminate DC bias
-        le = float(np.var(left_chunk.astype(np.float64)))
-        re = float(np.var(right_chunk.astype(np.float64)))
+    def check(self, ts: float, left: np.ndarray, right: np.ndarray) -> bool:
+        """Return True if pump activity is detected and data should be dropped."""
+        if ts < self._pump_until:
+            return True
 
-        if le == 0 or re == 0:
-            return False
-
-        ratio = min(le, re) / max(le, re)
-
+        le = np.var(left) if left.size > 0 else 0
+        re = np.var(right) if right.size > 0 else 0
+        
         if self._baseline is not None and self._baseline > 0:
-            spike = max(le, re) / self._baseline
+            avg = (le + re) / 2
+            spike = avg / self._baseline
+            # Ratio of energy between sides (0.0 to 1.0)
+            ratio = min(le, re) / max(le, re) if max(le, re) > 0 else 0.0
+
             if ratio > PUMP_CORRELATION_MIN and spike > PUMP_ENERGY_MULTIPLIER:
-                # Pump detected — set guard period
-                self._pump_until = time.monotonic() + PUMP_GUARD_S
-                log.debug("Pump detected (spike=%.1f, ratio=%.2f), "
-                          "guard until +%.0fs", spike, ratio, PUMP_GUARD_S)
+                self._pump_until = ts + PUMP_GUARD_S
+                log.debug("Pump detected (spike=%.1f, ratio=%.2f), guard until +%.0fs", 
+                          spike, ratio, PUMP_GUARD_S)
                 return True
 
         # Update baseline with exponential moving average (only on clean data).
-        # Guard: if first record has unusually high energy (module started during
-        # pump), don't initialize baseline from it — wait for a quieter sample.
+        # We allow the baseline to adapt to sustained noise (like circulation)
+        # as long as the current chunk isn't a sharp spike relative to it.
+        # This prevents the gate from locking shut permanently if noise floor raises.
         avg = (le + re) / 2
         if self._baseline is None:
             self._baseline = avg
-            self._baseline_samples = 1
-        elif avg < self._baseline * 3:
-            self._baseline = 0.95 * self._baseline + 0.05 * avg
-            self._baseline_samples = getattr(self, '_baseline_samples', 0) + 1
-            # If early samples are settling, allow baseline to drop faster
-            if self._baseline_samples < 10:
-                self._baseline = min(self._baseline, avg)
+        else:
+            # Slower adaptation (0.1%) to ignore heartbeat ripples, 
+            # but always update to ensure we don't get 'stupidly stuck' on old low noise.
+            self._baseline = 0.999 * self._baseline + 0.001 * avg
 
         return False
 
@@ -620,9 +627,11 @@ def compute_hrv(samples: np.ndarray,
 # ---------------------------------------------------------------------------
 
 class SideProcessor:
-    def __init__(self, side: str, db_conn: sqlite3.Connection):
+    def __init__(self, side: str, db_conn: sqlite3.Connection, 
+                 cal_cache: CalibrationCache):
         self.side = side
         self.db = db_conn
+        self.cal = cal_cache
         self._hr_buf: deque = deque(maxlen=HR_WINDOW_S * SAMPLE_RATE)
         self._hrv_buf: deque = deque(maxlen=HRV_WINDOW_S * SAMPLE_RATE)
         self._br_buf: deque = deque(maxlen=BREATHING_WINDOW_S * SAMPLE_RATE)
@@ -632,35 +641,16 @@ class SideProcessor:
         self._other: Optional['SideProcessor'] = None  # set after both sides created
         self._last_med_std: float = 0.0  # cached for cross-channel comparison
         self._last_acr_qual: float = 0.0
-        self._cap_baseline: Optional[float] = None
-        self._cap_present: bool = False
-        self._last_cap_ts: float = 0.0
+        self._last_cap_record: Optional[dict] = None
 
-    def update_cap(self, cap_val: int) -> None:
-        if self._cap_baseline is None:
-            self._cap_baseline = float(cap_val)
-        else:
-            # Slow adaptation to ambient, skip if drastically occupied
-            if abs(cap_val - self._cap_baseline) < 50:
-                self._cap_baseline = 0.999 * self._cap_baseline + 0.001 * float(cap_val)
-
-        # Threshold triggers
-        if self._cap_baseline is not None:
-            if cap_val > self._cap_baseline + 100:
-                self._cap_present = True
-                self._last_cap_ts = time.time()
-            elif cap_val < self._cap_baseline + 50:
-                self._cap_present = False
-
-    def ingest(self, samples: np.ndarray) -> None:
+    def ingest(self, ts: float, samples: np.ndarray) -> None:
         self._hr_buf.extend(samples)
         self._hrv_buf.extend(samples)
         self._br_buf.extend(samples)
-        self._maybe_write()
+        self._maybe_write(ts)
 
-    def _maybe_write(self) -> None:
-        now = time.time()
-        if now - self._last_write < VITALS_INTERVAL_S:
+    def _maybe_write(self, ts: float) -> None:
+        if ts - self._last_write < VITALS_INTERVAL_S:
             return
 
         hr_arr = np.array(self._hr_buf)
@@ -694,14 +684,14 @@ class SideProcessor:
                     and med_std < self._presence.enter_threshold):
                 acr_qual = 0.0
 
-        # Cache AFTER suppression so the other side sees post-suppression values
-        self._last_med_std = med_std
-        self._last_acr_qual = acr_qual
-
+        # --- Presence detection (calibrated capsense + hysteresis) ---
+        baselines = self.cal.get_baselines(self.side)
         present = self._presence.update(med_std, acr_qual)
-
-        # CapSense override (last active within 3 minutes)
-        if self._cap_present and (time.time() - self._last_cap_ts < 180):
+        
+        # Override with calibrated capacitive presence
+        # (This is the source of truth from sleep-detector/calibrator)
+        if self._last_cap_record and is_present_capsense_calibrated(
+                self._last_cap_record, self.side, baselines):
             present = True
 
         if not present:
@@ -720,12 +710,10 @@ class SideProcessor:
             HRV_WINDOW_S * SAMPLE_RATE) else None
 
         if hr is not None or hrv is not None or br is not None:
-            ts = datetime.now(timezone.utc)
+            self._last_write = ts
             write_vitals(self.db, self.side, ts, hr, hrv, br)
             log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f", self.side,
                      hr or 0, hrv or 0, br or 0)
-
-        self._last_write = now
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -739,9 +727,11 @@ def main() -> None:
         sys.exit(1)
 
     db_conn = open_biometrics_db()
+    cal_store = CalibrationStore(BIOMETRICS_DB)
+    cal_cache = CalibrationCache(cal_store)
     pump_gate = PumpGate()
-    left = SideProcessor("left", db_conn)
-    right = SideProcessor("right", db_conn)
+    left = SideProcessor("left", db_conn, cal_cache)
+    right = SideProcessor("right", db_conn, cal_cache)
     left._other = right
     right._other = left
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
@@ -753,30 +743,26 @@ def main() -> None:
             rtype = record.get("type", "")
             
             if rtype == "capSense":
-                l_in = record.get("left", {}).get("in")
-                r_in = record.get("right", {}).get("in")
-                if l_in is not None:
-                    left.update_cap(l_in)
-                if r_in is not None:
-                    right.update_cap(r_in)
+                # Feed record to processors so they can use it for presence gating
+                left._last_cap_record = record
+                right._last_cap_record = record
                 continue
 
             if rtype != "piezo-dual":
                 continue
 
             # Each record contains ~500 int32 samples per channel
-            l_samples = np.frombuffer(record.get("left1", b""), dtype=np.int32)
-            r_samples = np.frombuffer(record.get("right1", b""), dtype=np.int32)
+            ts = record.get("ts", time.time())
+            left_samples = np.frombuffer(record.get("left1", b""), dtype=np.int32)
+            right_samples = np.frombuffer(record.get("right1", b""), dtype=np.int32)
 
-            if l_samples.size == 0 or r_samples.size == 0:
+            if left_samples.size == 0 or right_samples.size == 0:
                 continue
 
             # Pump gating — drop entire record if pump detected or guard active
-            if pump_gate.check(l_samples, r_samples):
-                continue
-
-            left.ingest(l_samples)
-            right.ingest(r_samples)
+            if not pump_gate.check(ts, left_samples, right_samples):
+                left.ingest(ts, left_samples)
+                right.ingest(ts, right_samples)
 
     except Exception as e:
         log.exception("Fatal error in main loop: %s", e)

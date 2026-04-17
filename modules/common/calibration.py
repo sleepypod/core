@@ -270,6 +270,46 @@ class CapCalibrator:
         )
 
 
+# ── CalibrationCache ──
+
+class CalibrationCache:
+    """Periodically reloads calibration profiles from the DB.
+    
+    Processing modules use this to stay in sync with the daily bd calibrate
+    runs without querying the DB on every sample (O-2 optimization).
+    """
+
+    def __init__(self, store: CalibrationStore, reload_seconds: int = 60):
+        self._store = store
+        self._reload_seconds = reload_seconds
+        self._profiles: dict[str, dict[str, Optional[dict]]] = {
+            "left": {}, "right": {}
+        }
+        self._last_reload = 0.0
+
+    def get_baselines(self, side: str, 
+                      sensor_type: str = "capacitance") -> Optional[dict]:
+        self._maybe_reload(sensor_type)
+        return self._profiles.get(side, {}).get(sensor_type)
+
+    def _maybe_reload(self, sensor_type: str) -> None:
+        now = time.time()
+        if now - self._last_reload < self._reload_seconds:
+            return
+        self._last_reload = now
+        for side in ("left", "right"):
+            try:
+                profile = self._store.get_active(side, sensor_type)
+                if profile:
+                    params = profile["parameters"]
+                    self._profiles[side][sensor_type] = json.loads(params) if isinstance(params, str) else params
+                else:
+                    self._profiles[side][sensor_type] = None
+            except Exception:
+                # Fallback to local log or ignore in shared lib
+                pass
+
+
 # ── CapSense2Calibrator ──
 
 class CapSense2Calibrator:

@@ -66,7 +66,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import cbor2
 from common.raw_follower import RawFileFollower
 from common.calibration import (
-    CalibrationStore,
+    CalibrationStore, CalibrationCache,
     is_present_capsense_calibrated,
     is_present_capsense2_calibrated,
 )
@@ -261,33 +261,6 @@ def compute_movement_delta(current: list, previous: list) -> float:
     return sum(abs(c - p) for c, p in zip(current, previous))
 
 
-class CalibrationCache:
-    """Periodically reloads capacitance calibration profiles for both sides."""
-
-    def __init__(self, store: CalibrationStore):
-        self._store = store
-        self._profiles: Dict[str, Optional[dict]] = {"left": None, "right": None}
-        self._last_reload = 0.0
-
-    def get_baselines(self, side: str) -> Optional[dict]:
-        self._maybe_reload()
-        return self._profiles.get(side)
-
-    def _maybe_reload(self) -> None:
-        now = time.time()
-        if now - self._last_reload < CALIBRATION_RELOAD_S:
-            return
-        self._last_reload = now
-        for side in ("left", "right"):
-            try:
-                profile = self._store.get_active(side, "capacitance")
-                if profile:
-                    params = profile["parameters"]
-                    self._profiles[side] = json.loads(params) if isinstance(params, str) else params
-                else:
-                    self._profiles[side] = None
-            except Exception as e:
-                log.warning("Failed to load calibration for %s: %s", side, e)
 
 # ---------------------------------------------------------------------------
 # Numeric helpers (no numpy dependency)
@@ -657,8 +630,10 @@ class SessionTracker:
         # Step 4: Final clamp to [0, 1000]
         total = max(0, min(1000, filtered_score))
 
-        write_movement(self.db, self.side,
-                       datetime.fromtimestamp(ts, tz=timezone.utc), total)
+        if total > 0:
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            write_movement(self.db, self.side, dt, total)
+            log.debug("movement %s recorded at %s: %d", self.side, dt, total)
         self._movement_buf = []
         self._last_movement_write = ts
 
