@@ -110,28 +110,43 @@ def _safe_temp(temps: list, idx: int) -> int | None:
 
 
 def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
-    """Parse bedTemp2 record and write to bed_temp table.
-
-    bedTemp2 format:
-      mcu: float (MCU temp °C)
-      left:  {amb, hu, board, temps: [outer, center, inner, ?]}
-      right: {amb, hu, board, temps: [outer, center, inner, ?]}
-    """
+    is_v2 = record.get("type") == "bedTemp2"
     left = record.get("left", {})
     right = record.get("right", {})
-    left_temps = left.get("temps", [])
-    right_temps = right.get("temps", [])
-
-    # Use left ambient as the primary ambient reading (both sides share the room)
-    ambient = left.get("amb") if left.get("amb") != NO_SENSOR else right.get("amb")
-    # Average humidity from both sides (if available)
-    lhu = left.get("hu")
-    rhu = right.get("hu")
-    humidity = None
-    if lhu is not None and lhu != NO_SENSOR:
-        humidity = lhu
-    elif rhu is not None and rhu != NO_SENSOR:
-        humidity = rhu
+    
+    if is_v2:
+        ambient = left.get("amb") if left.get("amb") != NO_SENSOR else right.get("amb")
+        lhu = left.get("hu")
+        rhu = right.get("hu")
+        humidity = None
+        if lhu is not None and lhu != NO_SENSOR:
+            humidity = lhu
+        elif rhu is not None and rhu != NO_SENSOR:
+            humidity = rhu
+            
+        mcu_val = _to_centidegrees(record.get("mcu"))
+        amb_val = _to_centidegrees(ambient)
+        hu_val = _to_centipercent(humidity)
+        
+        lt = left.get("temps", [])
+        rt = right.get("temps", [])
+        l_out, l_cen, l_in = _safe_temp(lt, 0), _safe_temp(lt, 1), _safe_temp(lt, 2)
+        r_out, r_cen, r_in = _safe_temp(rt, 0), _safe_temp(rt, 1), _safe_temp(rt, 2)
+    else:
+        # V1 format: values are natively integer representations
+        amb_val = record.get("amb")
+        mcu_val = record.get("mcu")
+        hu_val = record.get("hu")
+        
+        # Clean sentinel -32768 if unpopulated
+        if amb_val and amb_val < -30000: amb_val = None
+        if mcu_val and mcu_val < -30000: mcu_val = None
+        if hu_val and hu_val < -30000: hu_val = None
+        
+        def _safe_i(v): return None if (v is None or v < -30000) else v
+        
+        l_out, l_cen, l_in = _safe_i(left.get("out")), _safe_i(left.get("cen")), _safe_i(left.get("in"))
+        r_out, r_cen, r_in = _safe_i(right.get("out")), _safe_i(right.get("cen")), _safe_i(right.get("in"))
 
     with conn:
         conn.execute(
@@ -141,16 +156,9 @@ def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
                 right_outer_temp, right_center_temp, right_inner_temp)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                int(ts),
-                _to_centidegrees(ambient),
-                _to_centidegrees(record.get("mcu")),
-                _to_centipercent(humidity),
-                _safe_temp(left_temps, 0),
-                _safe_temp(left_temps, 1),
-                _safe_temp(left_temps, 2),
-                _safe_temp(right_temps, 0),
-                _safe_temp(right_temps, 1),
-                _safe_temp(right_temps, 2),
+                int(ts), amb_val, mcu_val, hu_val,
+                l_out, l_cen, l_in,
+                r_out, r_cen, r_in,
             ),
         )
 

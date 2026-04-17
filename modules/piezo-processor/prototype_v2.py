@@ -506,10 +506,23 @@ def run(raw_file):
 
 
 if __name__ == "__main__":
-    raw_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/persistent")
-    raw_files = sorted(raw_dir.glob("*.RAW"), key=lambda p: p.stat().st_mtime, reverse=True)
-    raw_files = [f for f in raw_files if f.name != "SEQNO.RAW" and f.stat().st_size > 100_000]
-    if len(raw_files) < 2:
-        print("Need at least 2 complete RAW files.")
-        sys.exit(1)
-    run(raw_files[1])
+    if len(sys.argv) > 1:
+        target = Path(sys.argv[1])
+        if target.is_file():
+            run(target)
+        else:
+            raw_files = sorted(target.glob("*.RAW"), key=lambda p: p.stat().st_mtime, reverse=True)
+            raw_files = [f for f in raw_files if f.name != "SEQNO.RAW" and f.stat().st_size > 100_000]
+            if len(raw_files) > 0:
+                run(raw_files[0])
+            else:
+                print("No suitable RAW files found.")
+                sys.exit(1)
+    else:
+        raw_dir = Path("/persistent")
+        raw_files = sorted(raw_dir.glob("*.RAW"), key=lambda p: p.stat().st_mtime, reverse=True)
+        raw_files = [f for f in raw_files if f.name != "SEQNO.RAW" and f.stat().st_size > 100_000]
+        if len(raw_files) < 2:
+            print("Need at least 2 complete RAW files.")
+            sys.exit(1)
+        run(raw_files[1])

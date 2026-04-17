@@ -632,6 +632,25 @@ class SideProcessor:
         self._other: Optional['SideProcessor'] = None  # set after both sides created
         self._last_med_std: float = 0.0  # cached for cross-channel comparison
         self._last_acr_qual: float = 0.0
+        self._cap_baseline: Optional[float] = None
+        self._cap_present: bool = False
+        self._last_cap_ts: float = 0.0
+
+    def update_cap(self, cap_val: int) -> None:
+        if self._cap_baseline is None:
+            self._cap_baseline = float(cap_val)
+        else:
+            # Slow adaptation to ambient, skip if drastically occupied
+            if abs(cap_val - self._cap_baseline) < 50:
+                self._cap_baseline = 0.999 * self._cap_baseline + 0.001 * float(cap_val)
+
+        # Threshold triggers
+        if self._cap_baseline is not None:
+            if cap_val > self._cap_baseline + 100:
+                self._cap_present = True
+                self._last_cap_ts = time.time()
+            elif cap_val < self._cap_baseline + 50:
+                self._cap_present = False
 
     def ingest(self, samples: np.ndarray) -> None:
         self._hr_buf.extend(samples)
@@ -681,6 +700,10 @@ class SideProcessor:
 
         present = self._presence.update(med_std, acr_qual)
 
+        # CapSense override (last active within 3 minutes)
+        if self._cap_present and (time.time() - self._last_cap_ts < 180):
+            present = True
+
         if not present:
             return  # No user detected — skip
 
@@ -727,7 +750,18 @@ def main() -> None:
 
     try:
         for record in follower.read_records():
-            if record.get("type") != "piezo-dual":
+            rtype = record.get("type", "")
+            
+            if rtype == "capSense":
+                l_in = record.get("left", {}).get("in")
+                r_in = record.get("right", {}).get("in")
+                if l_in is not None:
+                    left.update_cap(l_in)
+                if r_in is not None:
+                    right.update_cap(r_in)
+                continue
+
+            if rtype != "piezo-dual":
                 continue
 
             # Each record contains ~500 int32 samples per channel
