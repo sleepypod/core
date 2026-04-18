@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import type BetterSqlite3 from 'better-sqlite3'
 
 // ── Shared mocks ──────────────────────────────────────────────────────────
 const setPower = vi.fn(async () => {})
@@ -34,11 +35,11 @@ vi.mock('@/src/db', async () => {
 })
 
 // The mock above adds `biometricsSqlite` alongside the real module's exports.
-// Cast through `any` because the real `@/src/db` doesn't export it.
+// Cast the import so TypeScript sees the augmented shape.
 import * as dbModule from '@/src/db'
 import { startAutoOffWatcher, stopAutoOffWatcher } from '@/src/services/autoOffWatcher'
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
-  biometricsSqlite: import('better-sqlite3').Database
+  biometricsSqlite: BetterSqlite3.Database
 }
 
 function resetSchema(): void {
