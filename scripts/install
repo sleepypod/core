@@ -153,6 +153,11 @@ esac
 INSTALL_DIR="/home/dac/sleepypod-core"
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
 SCRIPT_DEFAULT_BRANCH="__BRANCH__"  # substituted at release time by .github/workflows/{release,dev-release}.yml
+# Guard for users curling the raw source from main: the substitution only
+# happens inside the release tarball, so the file at raw.githubusercontent
+# still has the literal placeholder. Fall back to main so the install
+# doesn't try to download a branch literally named "__BRANCH__".
+[ "$SCRIPT_DEFAULT_BRANCH" = "__BRANCH__" ] && SCRIPT_DEFAULT_BRANCH="main"
 
 # Lock file to prevent concurrent installs
 LOCKFILE="/var/run/sleepypod-install.lock"
