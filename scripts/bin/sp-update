@@ -233,7 +233,8 @@ if [ -d "$INSTALL_DIR/modules" ]; then
       cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
       rm -rf "$MODULES_DEST/$mod/venv"
       if command -v uv &>/dev/null; then
-        (cd "$MODULES_DEST/$mod" && uv sync --frozen) || true
+        (cd "$MODULES_DEST/$mod" && uv sync --frozen) \
+          || echo "Warning: uv sync failed for module $mod"
       fi
       svc="sleepypod-$mod.service"
       if [ -f "$MODULES_DEST/$mod/$svc" ]; then
