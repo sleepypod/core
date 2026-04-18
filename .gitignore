@@ -45,5 +45,4 @@ sleepypod.local.db-wal
 .reviews
 
 # SQLite databases (local)
-.dolt/
 *.db
