@@ -1,11 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Ensure /usr/local/bin is in PATH (Yocto's root SSH PATH is minimal)
-case ":$PATH:" in
-  *:/usr/local/bin:*) ;;
-  *) export PATH="/usr/local/bin:$PATH" ;;
-esac
+# Force /usr/local/bin to the front of PATH. Pod 3 ships Volta at
+# ~/.volta/bin ahead of /usr/local/bin; without this its node/npm/pnpm
+# shim shadows ours and fails with "Volta error: Node is not available".
+export PATH="/usr/local/bin:$PATH"
 
 # sp-update — self-update sleepypod-core from GitHub via curl+tarball
 #
