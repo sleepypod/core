@@ -11,7 +11,7 @@
 
 import { eq, and, desc } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
-import { sideSettings, deviceState, runOnceSessions } from '@/src/db/schema'
+import { deviceSettings, sideSettings, deviceState, runOnceSessions } from '@/src/db/schema'
 import { sleepRecords } from '@/src/db/biometrics-schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
@@ -98,9 +98,15 @@ function hasActiveRunOnce(side: Side): boolean {
   }
 }
 
+interface SideConfig {
+  enabled: boolean
+  minutes: number
+  alwaysOn: boolean
+}
+
 /** Read auto-off config for both sides. */
-function getAutoOffConfig(): Record<Side, { enabled: boolean, minutes: number }> {
-  const defaults = { enabled: false, minutes: 30 }
+function getAutoOffConfig(): Record<Side, SideConfig> {
+  const defaults: SideConfig = { enabled: false, minutes: 30, alwaysOn: false }
   try {
     const rows = db.select().from(sideSettings).all()
     const left = rows.find(r => r.side === 'left')
@@ -109,15 +115,53 @@ function getAutoOffConfig(): Record<Side, { enabled: boolean, minutes: number }>
       left: {
         enabled: left?.autoOffEnabled ?? defaults.enabled,
         minutes: left?.autoOffMinutes ?? defaults.minutes,
+        alwaysOn: left?.alwaysOn ?? defaults.alwaysOn,
       },
       right: {
         enabled: right?.autoOffEnabled ?? defaults.enabled,
         minutes: right?.autoOffMinutes ?? defaults.minutes,
+        alwaysOn: right?.alwaysOn ?? defaults.alwaysOn,
       },
     }
   }
   catch {
     return { left: defaults, right: defaults }
+  }
+}
+
+/**
+ * Read the global wall-clock auto-off cap (device_settings.globalMaxOnHours).
+ * Returns null when disabled or on error.
+ */
+function getGlobalMaxOnHours(): number | null {
+  try {
+    const [row] = db
+      .select({ globalMaxOnHours: deviceSettings.globalMaxOnHours })
+      .from(deviceSettings)
+      .limit(1)
+      .all()
+    return row?.globalMaxOnHours ?? null
+  }
+  catch {
+    return null
+  }
+}
+
+/** Read poweredOnAt (ms epoch) for a side, or null. */
+function getPoweredOnAtMs(side: Side): number | null {
+  try {
+    const [row] = db
+      .select({ poweredOnAt: deviceState.poweredOnAt })
+      .from(deviceState)
+      .where(eq(deviceState.side, side))
+      .limit(1)
+      .all()
+    const v = row?.poweredOnAt
+    if (!v) return null
+    return v instanceof Date ? v.getTime() : (v as number) * 1000
+  }
+  catch {
+    return null
   }
 }
 
@@ -167,10 +211,12 @@ async function powerOffSide(side: Side): Promise<void> {
     await client.connect()
     await client.setPower(side, false)
 
-    // Best-effort DB sync
+    // Best-effort DB sync — also clear poweredOnAt so the global cap doesn't
+    // see a stale "powered on X hours ago" after the side comes back on later
+    // via a path that doesn't stamp through deviceStateSync.
     try {
       db.update(deviceState)
-        .set({ isPowered: false, lastUpdated: new Date() })
+        .set({ isPowered: false, poweredOnAt: null, lastUpdated: new Date() })
         .where(eq(deviceState.side, side))
         .run()
     }
@@ -213,35 +259,67 @@ function firePowerOff(side: Side): void {
  * long ago and the side is still powered, we assume they are in bed
  * (the session hasn't closed yet).
  */
-function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minutes: number }>): void {
+function evaluateSide(
+  side: Side,
+  config: Record<Side, SideConfig>,
+  globalMaxOnHours: number | null,
+): void {
   const cfg = config[side]
 
+  // Side already off — nothing to evaluate for either cap
+  if (!isSidePowered(side)) {
+    clearSideTimer(side)
+    return
+  }
+
+  // Run-once and always-on exempt a side from BOTH the per-side timer and
+  // the global cap. Run-once is the user's explicit "keep on until X"; the
+  // always-on flag is the perpetual-stay-on directive.
+  if (hasActiveRunOnce(side) || cfg.alwaysOn) {
+    clearSideTimer(side)
+    return
+  }
+
+  // ── Global wall-clock cap (runs independently of sleep_records) ──────────
+  // If a side has been powered for > globalMaxOnHours, force it off. This is
+  // the safety net that fires even when the biometrics pipeline is broken or
+  // the sleep-detector missed a bed-exit.
+  if (globalMaxOnHours != null && globalMaxOnHours > 0) {
+    const poweredOnAtMs = getPoweredOnAtMs(side)
+    if (poweredOnAtMs != null) {
+      const msSincePowerOn = Date.now() - poweredOnAtMs
+      const capMs = globalMaxOnHours * 3600_000
+      // Clock-sanity guard: skip the cap if poweredOnAt is in the future
+      // (NTP reset, clock drift). The 7-day upper bound protects against a
+      // stale row from a pre-2024 clock-seeded migration.
+      const suspicious = msSincePowerOn < 0 || msSincePowerOn > 7 * 86_400_000
+      if (!suspicious && msSincePowerOn > capMs) {
+        console.log(
+          `[auto-off] ${side}: global max-on cap exceeded (${globalMaxOnHours}h), powering off`,
+        )
+        clearSideTimer(side)
+        firePowerOff(side)
+        return
+      }
+    }
+  }
+
+  // ── Per-side bed-exit timer ──────────────────────────────────────────────
   // Feature disabled for this side
   if (!cfg.enabled) {
     clearSideTimer(side)
     return
   }
 
-  // Side already off -- nothing to do
-  if (!isSidePowered(side)) {
-    clearSideTimer(side)
-    return
-  }
-
-  // Suppress if a run-once session is active
-  if (hasActiveRunOnce(side)) {
-    clearSideTimer(side)
-    return
-  }
-
   const record = getLatestSleepRecord(side)
   if (!record) {
-    // No sleep records yet -- cannot determine presence
+    // No sleep records yet — cannot determine presence for the bed-exit path.
+    // The global cap above still applies independently.
     clearSideTimer(side)
     return
   }
 
-  // Fix 1: Don't arm if the user has returned to bed
+  // Don't arm if the user has returned to bed
   // (enteredBedAt > leftBedAt means a new session started after the exit)
   if (isUserInBed(side)) {
     clearSideTimer(side)
@@ -253,30 +331,14 @@ function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minut
     : (record.leftBedAt as number) * 1000
   const nowMs = Date.now()
   const timeoutMs = cfg.minutes * 60_000
-
-  // If the most recent bed exit is in the future or very recent
-  // and we don't have a timer yet, start one.
   const msSinceBedExit = nowMs - leftBedAtMs
 
-  // Check: has the person re-entered bed since this exit?
-  // If the sleep_records entry has been superseded by a newer entry with
-  // enteredBedAt > leftBedAt of the previous record, the person is back in bed.
-  // The sleep-detector only writes a record when a session ENDS, so if the side
-  // is powered and the most recent record's leftBedAt was long ago, a new session
-  // may be in progress (person is currently in bed).
-  // Heuristic: if leftBedAt is older than the timeout, the timer should have
-  // already fired. If the side is still on, either it was manually turned on
-  // or a new session is in progress -- don't start a new timer.
-  // Fix 5: Add grace window for server restarts during countdown.
-  // If msSinceBedExit is within timeoutMs + 2 * POLL_INTERVAL_MS, the timer
-  // may have been lost during a restart — fire immediately rather than skip.
-  const graceMs = timeoutMs + 2 * POLL_INTERVAL_MS
-  if (msSinceBedExit > graceMs) {
-    clearSideTimer(side)
-    return
-  }
-
-  // Fix 5: If past the timeout but within the grace window, fire immediately
+  // If past the timeout, fire immediately. Previously this branch was gated
+  // by `msSinceBedExit <= timeoutMs + 2 * POLL_INTERVAL_MS`; that "grace
+  // window" would give up past ~32min and leave the side on forever when
+  // the user left bed long ago and didn't return. The global cap is the
+  // catch-all for wall-clock staleness; here we just fire on any past-due
+  // bed-exit so long as the user hasn't re-entered bed.
   if (msSinceBedExit > timeoutMs) {
     clearSideTimer(side)
     // Re-check conditions before actually powering off
@@ -284,9 +346,11 @@ function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minut
     if (hasActiveRunOnce(side)) return
     if (isUserInBed(side)) return
     const freshConfig = getAutoOffConfig()
-    if (!freshConfig[side].enabled) return
+    if (!freshConfig[side].enabled || freshConfig[side].alwaysOn) return
 
-    console.log(`[auto-off] ${side}: bed exit was ${Math.round(msSinceBedExit / 1000)}s ago (within grace window), firing immediately`)
+    console.log(
+      `[auto-off] ${side}: bed exit ${Math.round(msSinceBedExit / 1000)}s ago (past ${cfg.minutes}min timeout), powering off`,
+    )
     firePowerOff(side)
     return
   }
@@ -317,7 +381,7 @@ function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minut
       if (!isSidePowered(side)) return
       if (hasActiveRunOnce(side)) return
       const freshConfig = getAutoOffConfig()
-      if (!freshConfig[side].enabled) return
+      if (!freshConfig[side].enabled || freshConfig[side].alwaysOn) return
 
       // Verify the bed-exit that armed this timer is still the latest
       const latestRecord = getLatestSleepRecord(side)
@@ -343,9 +407,10 @@ function evaluateSide(side: Side, config: Record<Side, { enabled: boolean, minut
 
 function poll(): void {
   const config = getAutoOffConfig()
+  const globalMaxOnHours = getGlobalMaxOnHours()
   for (const side of SIDES) {
     try {
-      evaluateSide(side, config)
+      evaluateSide(side, config, globalMaxOnHours)
     }
     catch (error) {
       console.error(

@@ -216,12 +216,22 @@ export const deviceRouter = router({
 
       // The DB is updated optimistically on every call for responsive UI.
       try {
+        const now = new Date()
+        // Only stamp poweredOnAt on OFF→ON transitions (preserve the existing
+        // timestamp if this is a temperature change while already on).
+        const [prev] = await db
+          .select({ isPowered: deviceState.isPowered, poweredOnAt: deviceState.poweredOnAt })
+          .from(deviceState)
+          .where(eq(deviceState.side, input.side))
+          .limit(1)
+        const poweredOnAt = prev?.isPowered ? prev.poweredOnAt : now
         await db
           .update(deviceState)
           .set({
             targetTemperature: input.temperature,
             isPowered: true,
-            lastUpdated: new Date(),
+            poweredOnAt,
+            lastUpdated: now,
           })
           .where(eq(deviceState.side, input.side))
       }
@@ -300,12 +310,23 @@ export const deviceRouter = router({
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
         try {
+          const now = new Date()
+          const [prev] = await db
+            .select({ isPowered: deviceState.isPowered, poweredOnAt: deviceState.poweredOnAt })
+            .from(deviceState)
+            .where(eq(deviceState.side, input.side))
+            .limit(1)
+          // OFF→ON stamps poweredOnAt; ON→OFF clears it; same-state preserves.
+          const poweredOnAt = input.powered
+            ? (prev?.isPowered ? prev.poweredOnAt : now)
+            : null
           await db
             .update(deviceState)
             .set({
               isPowered: input.powered,
+              poweredOnAt,
               ...(input.temperature && { targetTemperature: input.temperature }),
-              lastUpdated: new Date(),
+              lastUpdated: now,
             })
             .where(eq(deviceState.side, input.side))
         }
