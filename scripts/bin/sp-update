@@ -139,6 +139,8 @@ HAS_BUILD=false
 # Try CI release by tag — works for any branch with a GitHub Release (main, dev, etc.)
 RELEASE_TAG="$BRANCH"
 [ "$RELEASE_TAG" = "latest" ] && RELEASE_TAG="main"
+# Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
+[ "$RELEASE_TAG" = "dev" ] && RELEASE_TAG="dev-latest"
 echo "Checking for CI release (tag: $RELEASE_TAG)..."
 RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
   | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \

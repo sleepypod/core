@@ -334,7 +334,8 @@ else
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
   elif [ "$DOWNLOAD_BRANCH" = "dev" ]; then
-    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev"
+    # Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
   fi
 
   if [ -n "${RELEASE_API:-}" ]; then
