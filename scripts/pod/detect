@@ -35,8 +35,12 @@ detect_dac_sock() {
 
   # Priority 2: Extract from frank.sh (what frankenfirmware actually uses)
   if [ -f /opt/eight/bin/frank.sh ]; then
-    path=$(grep 'DAC_SOCKET=' /opt/eight/bin/frank.sh 2>/dev/null \
-      | grep -o '[^ ]*dac\.sock' | head -1 || true)
+    # grep -o '[^ ]*dac\.sock' is greedy against the left; on a line like
+    # `DAC_SOCKET=/deviceinfo/dac.sock` (no spaces), it matches the whole
+    # string including `DAC_SOCKET=`. Anchor the capture to the prefix and
+    # strip it so we get just the path — on Pod 4 this is `/deviceinfo/dac.sock`.
+    path=$(grep -oE 'DAC_SOCKET=[^ ]*dac\.sock' /opt/eight/bin/frank.sh 2>/dev/null \
+      | head -1 | cut -d= -f2- || true)
     if [ -n "$path" ] && is_supported_dac_path "$path"; then
       echo "Detected dac.sock path from frank.sh: $path" >&2
       echo "$path"
