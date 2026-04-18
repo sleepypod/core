@@ -252,28 +252,38 @@ case "$COMMAND" in
     echo "========================================"
     echo ""
 
-    # Remove custom chains (IPv4)
-    if "$IPTABLES" -L SLEEPYPOD-BLOCK &>/dev/null; then
-      echo "Removing IPv4 firewall rules..."
-      "$IPTABLES" -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
-      "$IPTABLES" -F SLEEPYPOD-BLOCK
-      "$IPTABLES" -X SLEEPYPOD-BLOCK
-    fi
-
+    # Nuclear flush: previous versions only tried to remove SLEEPYPOD-BLOCK
+    # and flip the default policy, but that's a no-op when the pod has
+    # pre-existing narrow-whitelist rules from stock firmware (e.g. cloud
+    # telemetry ACCEPTs + terminal INPUT DROP). We need to match the install
+    # script's unblock_wan() behavior so the unblock actually reaches GitHub.
+    echo "Flushing IPv4 rules and setting default policies to ACCEPT..."
+    "$IPTABLES" -P INPUT ACCEPT
     "$IPTABLES" -P OUTPUT ACCEPT
+    "$IPTABLES" -P FORWARD ACCEPT
+    "$IPTABLES" -F
+    "$IPTABLES" -X
+    "$IPTABLES" -t nat -F 2>/dev/null || true
+    "$IPTABLES" -t nat -X 2>/dev/null || true
+    "$IPTABLES" -t mangle -F 2>/dev/null || true
+    "$IPTABLES" -t mangle -X 2>/dev/null || true
 
     if command -v "${IPTABLES}-save" &>/dev/null; then
       mkdir -p /etc/iptables
       "${IPTABLES}-save" > /etc/iptables/rules.v4
     fi
 
-    # Remove IPv6 rules
-    if command -v "$IP6TABLES" &>/dev/null && "$IP6TABLES" -L SLEEPYPOD-BLOCK &>/dev/null; then
-      echo "Removing IPv6 firewall rules..."
-      "$IP6TABLES" -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
-      "$IP6TABLES" -F SLEEPYPOD-BLOCK
-      "$IP6TABLES" -X SLEEPYPOD-BLOCK
+    if command -v "$IP6TABLES" &>/dev/null; then
+      echo "Flushing IPv6 rules and setting default policies to ACCEPT..."
+      "$IP6TABLES" -P INPUT ACCEPT
       "$IP6TABLES" -P OUTPUT ACCEPT
+      "$IP6TABLES" -P FORWARD ACCEPT
+      "$IP6TABLES" -F
+      "$IP6TABLES" -X
+      "$IP6TABLES" -t nat -F 2>/dev/null || true
+      "$IP6TABLES" -t nat -X 2>/dev/null || true
+      "$IP6TABLES" -t mangle -F 2>/dev/null || true
+      "$IP6TABLES" -t mangle -X 2>/dev/null || true
 
       if command -v "${IP6TABLES}-save" &>/dev/null; then
         "${IP6TABLES}-save" > /etc/iptables/rules.v6
