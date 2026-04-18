@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Globe, Thermometer, RotateCcw, Droplets } from 'lucide-react'
+import { Globe, Thermometer, RotateCcw, Droplets, Timer } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Toggle } from './Toggle'
 import { TimeInput } from '../Schedule/TimeInput'
@@ -13,7 +13,10 @@ interface DeviceSettings {
   rebootTime: string | null
   primePodDaily: boolean
   primePodTime: string | null
+  globalMaxOnHours: number | null
 }
+
+const DEFAULT_MAX_ON_HOURS = 12
 
 // Common US/international timezones
 const TIMEZONES = [
@@ -50,6 +53,8 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   const [rebootTime, setRebootTime] = useState(device.rebootTime ?? '03:00')
   const [primePodDaily, setPrimePodDaily] = useState(device.primePodDaily)
   const [primePodTime, setPrimePodTime] = useState(device.primePodTime ?? '14:00')
+  const [maxOnEnabled, setMaxOnEnabled] = useState(device.globalMaxOnHours != null)
+  const [maxOnHours, setMaxOnHours] = useState(device.globalMaxOnHours ?? DEFAULT_MAX_ON_HOURS)
 
   // Sync from server data when it changes
   useEffect(() => {
@@ -60,6 +65,8 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     setRebootTime(device.rebootTime ?? '03:00')
     setPrimePodDaily(device.primePodDaily)
     setPrimePodTime(device.primePodTime ?? '14:00')
+    setMaxOnEnabled(device.globalMaxOnHours != null)
+    setMaxOnHours(device.globalMaxOnHours ?? DEFAULT_MAX_ON_HOURS)
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [device])
 
@@ -76,6 +83,7 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     rebootTime: string
     primePodDaily: boolean
     primePodTime: string
+    globalMaxOnHours: number | null
   }>) {
     mutation.mutate(updates)
   }
@@ -120,6 +128,19 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   function handlePrimeTimeChange(time: string) {
     setPrimePodTime(time)
     save({ primePodTime: time })
+  }
+
+  function handleMaxOnToggle() {
+    const newVal = !maxOnEnabled
+    setMaxOnEnabled(newVal)
+    save({ globalMaxOnHours: newVal ? maxOnHours : null })
+  }
+
+  function handleMaxOnHoursChange(hours: number) {
+    // Clamp to the router's 1–48 range before emitting.
+    const clamped = Math.max(1, Math.min(48, Math.round(hours)))
+    setMaxOnHours(clamped)
+    if (maxOnEnabled) save({ globalMaxOnHours: clamped })
   }
 
   return (
@@ -227,6 +248,43 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
               value={primePodTime}
               onChange={handlePrimeTimeChange}
               disabled={isPending}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Global auto-off cap (wall-clock safety net) */}
+      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Timer size={16} className={maxOnEnabled ? 'text-sky-400' : 'text-zinc-400'} />
+            <span className="text-sm font-medium text-zinc-300">Auto Power-Off Cap</span>
+          </div>
+          <Toggle
+            enabled={maxOnEnabled}
+            onToggle={handleMaxOnToggle}
+            disabled={isPending}
+            label="Toggle global auto power-off cap"
+          />
+        </div>
+        <p className="mb-2 text-xs text-zinc-500">
+          Forces any side that has been on for longer than this to power off. Runs on top of the per-side auto-off. Always-on sides and active run-once sessions are exempt.
+        </p>
+        {maxOnEnabled && (
+          <div className="mt-2 flex items-center gap-2">
+            <label htmlFor="maxOnHours" className="text-sm text-zinc-300">
+              Hours
+            </label>
+            <input
+              id="maxOnHours"
+              type="number"
+              min={1}
+              max={48}
+              step={1}
+              value={maxOnHours}
+              onChange={e => handleMaxOnHoursChange(Number(e.target.value))}
+              disabled={isPending}
+              className="h-11 w-24 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
             />
           </div>
         )}

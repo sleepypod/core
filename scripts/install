@@ -144,15 +144,20 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# Ensure /usr/local/bin is in PATH (Yocto's root PATH is minimal)
-case ":$PATH:" in
-  *:/usr/local/bin:*) ;;
-  *) export PATH="/usr/local/bin:$PATH" ;;
-esac
+# Force /usr/local/bin to the front of PATH. Pod 3 stock firmware ships
+# Volta at ~/.volta/bin ahead of /usr/local/bin; without this our freshly
+# installed node/npm/pnpm symlinks are shadowed by Volta's shim, which
+# fails with "Volta error: Node is not available".
+export PATH="/usr/local/bin:$PATH"
 
 INSTALL_DIR="/home/dac/sleepypod-core"
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
 SCRIPT_DEFAULT_BRANCH="__BRANCH__"  # substituted at release time by .github/workflows/{release,dev-release}.yml
+# Guard for users curling the raw source from main: the substitution only
+# happens inside the release tarball, so the file at raw.githubusercontent
+# still has the literal placeholder. Fall back to main so the install
+# doesn't try to download a branch literally named "__BRANCH__".
+[ "$SCRIPT_DEFAULT_BRANCH" = "__BRANCH__" ] && SCRIPT_DEFAULT_BRANCH="main"
 
 # Lock file to prevent concurrent installs
 LOCKFILE="/var/run/sleepypod-install.lock"
@@ -329,7 +334,8 @@ else
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
   elif [ "$DOWNLOAD_BRANCH" = "dev" ]; then
-    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev"
+    # Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
   fi
 
   if [ -n "${RELEASE_API:-}" ]; then
@@ -397,6 +403,14 @@ else
   exit 1
 fi
 echo "Pod generation: $POD_GEN (DAC: $DAC_SOCK_PATH)"
+
+# Probe environment capabilities (Volta, system Python, ensurepip, ...).
+# Future Pod-specific install paths should branch on these vars rather
+# than re-probing inline. See scripts/pod/capabilities.
+if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
+  source "$INSTALL_DIR/scripts/pod/capabilities"
+  print_pod_capabilities
+fi
 
 # Install production dependencies (prebuild-install downloads prebuilt better-sqlite3)
 echo "Installing dependencies..."
@@ -489,6 +503,7 @@ UMask=0002
 WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
+Environment="BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 ExecStartPre=/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStartPre=$INSTALL_DIR/scripts/bin/sp-maintenance
@@ -637,8 +652,11 @@ else
     # Remove orphaned venv/ from pre-uv installs
     rm -rf "$dest/venv"
 
-    # Create Python environment with uv (no ensurepip/pyexpat needed)
-    (cd "$dest" && uv sync --frozen --python python3) || {
+    # Create Python environment with uv (no ensurepip/pyexpat needed).
+    # No --python flag: let uv pick from requires-python in pyproject.toml.
+    # If system python3 is in range it's used; otherwise uv downloads a
+    # compatible managed interpreter.
+    (cd "$dest" && uv sync --frozen) || {
       echo "Warning: uv sync failed for module $name"
       return
     }

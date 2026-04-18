@@ -27,6 +27,7 @@ const deviceSettingsSchema = z.object({
   ledNightBrightness: z.number(),
   ledNightStartTime: z.string().nullable(),
   ledNightEndTime: z.string().nullable(),
+  globalMaxOnHours: z.number().nullable(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
 })
@@ -129,6 +130,7 @@ export const settingsRouter = router({
             ledNightBrightness: 0,
             ledNightStartTime: '22:00',
             ledNightEndTime: '07:00',
+            globalMaxOnHours: null,
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -170,6 +172,8 @@ export const settingsRouter = router({
           ledNightBrightness: z.number().int().min(0).max(100).optional(),
           ledNightStartTime: timeStringSchema.optional(),
           ledNightEndTime: timeStringSchema.optional(),
+          // Global wall-clock auto-off cap. `null` disables; 1–48 hours when set.
+          globalMaxOnHours: z.number().int().min(1).max(48).nullable().optional(),
         })
         .strict()
     )
@@ -235,6 +239,17 @@ export const settingsRouter = router({
         }
         catch (e) {
           console.error('Scheduler reload failed:', e)
+        }
+
+        // Re-evaluate autoOffWatcher immediately so a tightened cap fires
+        // without waiting for the 30s poll. Idempotent; no-op if watcher isn't running.
+        if ('globalMaxOnHours' in input) {
+          try {
+            restartAutoOffTimers()
+          }
+          catch (e) {
+            console.error('autoOff restart failed:', e)
+          }
         }
 
         return updated

@@ -26,6 +26,10 @@ export const deviceSettings = sqliteTable('device_settings', {
   ledNightBrightness: integer('led_night_brightness').notNull().default(0), // 0-100
   ledNightStartTime: text('led_night_start_time').default('22:00'), // HH:mm format
   ledNightEndTime: text('led_night_end_time').default('07:00'), // HH:mm format
+  // Global wall-clock safety cap: if a side has been powered for this many
+  // hours with no run-once or always-on override, autoOffWatcher forces it
+  // off. NULL = disabled. Independent of per-side bed-exit auto-off.
+  globalMaxOnHours: integer('global_max_on_hours'),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

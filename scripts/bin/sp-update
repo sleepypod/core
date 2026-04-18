@@ -1,11 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Ensure /usr/local/bin is in PATH (Yocto's root SSH PATH is minimal)
-case ":$PATH:" in
-  *:/usr/local/bin:*) ;;
-  *) export PATH="/usr/local/bin:$PATH" ;;
-esac
+# Force /usr/local/bin to the front of PATH. Pod 3 ships Volta at
+# ~/.volta/bin ahead of /usr/local/bin; without this its node/npm/pnpm
+# shim shadows ours and fails with "Volta error: Node is not available".
+export PATH="/usr/local/bin:$PATH"
 
 # sp-update — self-update sleepypod-core from GitHub via curl+tarball
 #
@@ -140,6 +139,8 @@ HAS_BUILD=false
 # Try CI release by tag — works for any branch with a GitHub Release (main, dev, etc.)
 RELEASE_TAG="$BRANCH"
 [ "$RELEASE_TAG" = "latest" ] && RELEASE_TAG="main"
+# Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
+[ "$RELEASE_TAG" = "dev" ] && RELEASE_TAG="dev-latest"
 echo "Checking for CI release (tag: $RELEASE_TAG)..."
 RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
   | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
@@ -233,7 +234,8 @@ if [ -d "$INSTALL_DIR/modules" ]; then
       cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
       rm -rf "$MODULES_DEST/$mod/venv"
       if command -v uv &>/dev/null; then
-        (cd "$MODULES_DEST/$mod" && uv sync --frozen --python python3) || true
+        (cd "$MODULES_DEST/$mod" && uv sync --frozen) \
+          || echo "Warning: uv sync failed for module $mod"
       fi
       svc="sleepypod-$mod.service"
       if [ -f "$MODULES_DEST/$mod/$svc" ]; then
