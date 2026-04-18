@@ -33,8 +33,13 @@ vi.mock('@/src/db', async () => {
   }
 })
 
-import { sqlite, biometricsSqlite } from '@/src/db'
+// The mock above adds `biometricsSqlite` alongside the real module's exports.
+// Cast through `any` because the real `@/src/db` doesn't export it.
+import * as dbModule from '@/src/db'
 import { startAutoOffWatcher, stopAutoOffWatcher } from '@/src/services/autoOffWatcher'
+const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
+  biometricsSqlite: import('better-sqlite3').Database
+}
 
 function resetSchema(): void {
   // Wipe and recreate everything the watcher reads.
