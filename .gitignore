@@ -44,7 +44,6 @@ sleepypod.local.db-wal
 .claude/reviews
 .reviews
 
-# Beads / Dolt files (added by bd init)
+# SQLite databases (local)
 .dolt/
 *.db
-.beads-credential-key
