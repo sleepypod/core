@@ -13,7 +13,15 @@ echo "=== SleepyPod Maintenance ==="
 
 # 1. Vacuum systemd journal (cap at 50MB)
 if command -v journalctl &>/dev/null; then
-  JOURNAL_SIZE=$(du -sm /persistent/journal 2>/dev/null | awk '{print $1}' || echo 0)
+  # Guard against two failure modes reported on a fresh Pod 4:
+  # (a) /persistent/journal missing → `du` fails, pipefail propagates, the
+  #     whole $(…) subshell errors under `set -e` unless we tolerate it.
+  # (b) directory exists but awk output is empty → `[ "" -gt 50 ]` errors
+  #     with "integer expression expected" under `set -e`.
+  # Belt-and-suspenders: tolerate pipeline failure with `|| true`, then
+  # default the variable to 0 if still unset/empty.
+  JOURNAL_SIZE=$(du -sm /persistent/journal 2>/dev/null | awk '{print $1}' || true)
+  JOURNAL_SIZE=${JOURNAL_SIZE:-0}
   if [ "$JOURNAL_SIZE" -gt 50 ]; then
     echo "Vacuuming journal (${JOURNAL_SIZE}MB → 50MB)..."
     journalctl --vacuum-size=50M 2>/dev/null || true
@@ -41,7 +49,8 @@ fi
 
 # 4. Prune pnpm content-addressable store
 if command -v pnpm &>/dev/null; then
-  STORE_SIZE=$(du -sm /home/root/.local/share/pnpm/store 2>/dev/null | awk '{print $1}' || echo 0)
+  STORE_SIZE=$(du -sm /home/root/.local/share/pnpm/store 2>/dev/null | awk '{print $1}' || true)
+  STORE_SIZE=${STORE_SIZE:-0}
   if [ "$STORE_SIZE" -gt 100 ]; then
     echo "Pruning pnpm store (${STORE_SIZE}MB)..."
     pnpm store prune 2>/dev/null || true
