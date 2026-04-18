@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "sleepypod_core",
-  "project_id": "5a4f3fbf-e881-4cce-9028-6182a505b21b"
-}
