@@ -56,6 +56,12 @@ jobs:
             .
           mv /tmp/sleepypod-core.tar.gz .
 
+      - name: Refresh tags (force, prune)
+        # semantic-release runs `git fetch --tags` unconditionally and aborts
+        # on any "would clobber existing tag" conflict. Force-prune up front so
+        # a stale or colliding tag can't block the release.
+        run: git fetch --tags --force --prune --prune-tags origin
+
       - name: Semantic Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
