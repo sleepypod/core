@@ -651,8 +651,11 @@ else
     # Remove orphaned venv/ from pre-uv installs
     rm -rf "$dest/venv"
 
-    # Create Python environment with uv (no ensurepip/pyexpat needed)
-    (cd "$dest" && uv sync --frozen --python python3) || {
+    # Create Python environment with uv (no ensurepip/pyexpat needed).
+    # No --python flag: let uv pick from requires-python in pyproject.toml.
+    # If system python3 is in range it's used; otherwise uv downloads a
+    # compatible managed interpreter.
+    (cd "$dest" && uv sync --frozen) || {
       echo "Warning: uv sync failed for module $name"
       return
     }
