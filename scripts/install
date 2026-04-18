@@ -502,6 +502,7 @@ UMask=0002
 WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
+Environment="BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 ExecStartPre=/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStartPre=$INSTALL_DIR/scripts/bin/sp-maintenance
