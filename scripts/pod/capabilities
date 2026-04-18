@@ -74,31 +74,31 @@ _probe_has_iptables_persistent() {
   echo "false"
 }
 
-# --- Defaults from POD_GEN (fallback when probes can't tell us) -----------
+# --- Defaults ---------------------------------------------------------------
+# Model name + OS class come from POD_GEN since they can't be probed cheaply.
+# Everything else is probed below — firmware variants (seen in the wild:
+# Pod 5 with no apt-get, mediatek kirkstone with python 3.14) break any
+# hardcoded-by-gen assumption.
 
 case "${POD_GEN:-}" in
-  3_4)
-    MODEL_NAME="Pod 3 / Pod 4"
-    POD_OS="yocto"
-    HAS_PACKAGE_MANAGER="false"
-    PACKAGE_MANAGER=""
-    HAS_NFTABLES="false"
-    ;;
-  5)
-    MODEL_NAME="Pod 5"
-    POD_OS="debian"
-    HAS_PACKAGE_MANAGER="true"
-    PACKAGE_MANAGER="apt"
-    HAS_NFTABLES="$(command -v nft >/dev/null 2>&1 && echo true || echo false)"
-    ;;
-  *)
-    MODEL_NAME="Pod (unknown)"
-    POD_OS="unknown"
-    HAS_PACKAGE_MANAGER="$(command -v apt >/dev/null 2>&1 && echo true || echo false)"
-    PACKAGE_MANAGER="$(command -v apt >/dev/null 2>&1 && echo apt || echo '')"
-    HAS_NFTABLES="$(command -v nft >/dev/null 2>&1 && echo true || echo false)"
-    ;;
+  3_4) MODEL_NAME="Pod 3 / Pod 4"; POD_OS="yocto" ;;
+  5)   MODEL_NAME="Pod 5";         POD_OS="debian" ;;
+  *)   MODEL_NAME="Pod (unknown)"; POD_OS="unknown" ;;
 esac
+
+if command -v apt-get >/dev/null 2>&1; then
+  HAS_PACKAGE_MANAGER="true"
+  PACKAGE_MANAGER="apt"
+else
+  HAS_PACKAGE_MANAGER="false"
+  PACKAGE_MANAGER=""
+fi
+
+if command -v nft >/dev/null 2>&1; then
+  HAS_NFTABLES="true"
+else
+  HAS_NFTABLES="false"
+fi
 
 IPTABLES_PATH="$(_probe_iptables_path)"
 SYSTEM_PYTHON_VERSION="$(_probe_python_version)"

@@ -46,16 +46,21 @@ COMMAND="$1"
 # ---------------------------------------------------------------------------
 # Pod OS / iptables detection
 # ---------------------------------------------------------------------------
-# Pod 3/4 run Yocto (no apt, iptables at /sbin/iptables)
-# Pod 5 runs Debian (has apt, iptables at /usr/sbin/iptables)
-if [ -x /usr/bin/apt-get ]; then
-  POD_OS="debian"
-  IPTABLES="/usr/sbin/iptables"
-  IP6TABLES="/usr/sbin/ip6tables"
-else
-  POD_OS="yocto"
-  IPTABLES="/sbin/iptables"
-  IP6TABLES="/sbin/ip6tables"
+# Probe for iptables directly — firmware variants exist where the
+# apt-get-presence assumption breaks (e.g. Pod 5 with iptables at
+# /usr/sbin but no apt-get). Fall back to the canonical paths by OS class.
+POD_OS="$(command -v apt-get >/dev/null 2>&1 && echo debian || echo yocto)"
+IPTABLES="$(command -v iptables 2>/dev/null || true)"
+IP6TABLES="$(command -v ip6tables 2>/dev/null || true)"
+if [ -z "$IPTABLES" ]; then
+  for p in /usr/sbin/iptables /sbin/iptables; do
+    [ -x "$p" ] && { IPTABLES="$p"; break; }
+  done
+fi
+if [ -z "$IP6TABLES" ]; then
+  for p in /usr/sbin/ip6tables /sbin/ip6tables; do
+    [ -x "$p" ] && { IP6TABLES="$p"; break; }
+  done
 fi
 
 # ---------------------------------------------------------------------------
