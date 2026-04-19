@@ -643,6 +643,18 @@ MODULES_DEST="/opt/sleepypod/modules"
 mkdir -p "$MODULES_DEST"
 mkdir -p /etc/sleepypod/modules
 
+# Shared world-readable cache for uv-managed Python interpreters. Without
+# this, uv defaults to ~/.local/share/uv which (running as root via sudo)
+# is /root/.local/share/uv — mode 0700, unreadable by `dac` user. Modules
+# whose unit has User=dac (calibrator, environment-monitor) then fail to
+# even execve the .venv/bin/python symlink → systemd status 203/EXEC.
+# Reported on a Pod 4 install where uv downloaded cpython-3.10.20.
+UV_PYTHON_INSTALL_DIR="/opt/sleepypod/python"
+UV_CACHE_DIR="/opt/sleepypod/uv-cache"
+mkdir -p "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+chmod 0755 /opt/sleepypod "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+export UV_PYTHON_INSTALL_DIR UV_CACHE_DIR
+
 # Install uv (Rust-based Python package manager — bypasses broken ensurepip/pyexpat on Yocto)
 if ! command -v uv &>/dev/null; then
   echo "Installing uv..."
@@ -675,11 +687,16 @@ else
     # Create Python environment with uv (no ensurepip/pyexpat needed).
     # No --python flag: let uv pick from requires-python in pyproject.toml.
     # If system python3 is in range it's used; otherwise uv downloads a
-    # compatible managed interpreter.
+    # compatible managed interpreter into UV_PYTHON_INSTALL_DIR (set above
+    # to /opt/sleepypod/python so User=dac modules can execute it).
     (cd "$dest" && uv sync --frozen) || {
       echo "Warning: uv sync failed for module $name"
       return
     }
+
+    # Ensure non-root service users (User=dac on calibrator + env-monitor)
+    # can read the venv dir + traverse the managed-Python symlink target.
+    chmod -R o+rX "$dest/.venv" 2>/dev/null || true
 
     # Install systemd service
     if [ -f "$dest/$service" ]; then
