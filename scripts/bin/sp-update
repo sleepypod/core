@@ -221,6 +221,13 @@ fi
 if [ -d "$INSTALL_DIR/modules" ]; then
   MODULES_DEST="/opt/sleepypod/modules"
   mkdir -p "$MODULES_DEST"
+  # Match the install script's shared uv cache + Python install dir so
+  # User=dac modules can execute the managed Python (otherwise it lives
+  # under root's home at 0700 and the .venv symlink fails with 203/EXEC).
+  export UV_PYTHON_INSTALL_DIR="/opt/sleepypod/python"
+  export UV_CACHE_DIR="/opt/sleepypod/uv-cache"
+  mkdir -p "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+  chmod 0755 /opt/sleepypod "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR" 2>/dev/null || true
   if [ -d "$INSTALL_DIR/modules/common" ]; then
     mkdir -p "$MODULES_DEST/common"
     cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
@@ -236,6 +243,7 @@ if [ -d "$INSTALL_DIR/modules" ]; then
       if command -v uv &>/dev/null; then
         (cd "$MODULES_DEST/$mod" && uv sync --frozen) \
           || echo "Warning: uv sync failed for module $mod"
+        chmod -R o+rX "$MODULES_DEST/$mod/.venv" 2>/dev/null || true
       fi
       svc="sleepypod-$mod.service"
       if [ -f "$MODULES_DEST/$mod/$svc" ]; then
