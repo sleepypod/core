@@ -222,10 +222,8 @@ interface SensorStreamSingleton {
   intentionalClose: boolean
   activeRefCount: number
   pendingSubscription: SensorType[] | null
-  /** Per-hook active sensor requests. Keyed by a unique hook ID. */
-  activeSubscriptions: Map<number, SensorType[] | null>
-  /** Counter for generating unique hook subscription IDs. */
-  nextSubscriptionId: number
+  /** Per-hook active sensor requests. Keyed by a unique per-instance Symbol. */
+  activeSubscriptions: Map<symbol, SensorType[] | null>
   /** Pending resolvers for getTimeRange() promises. */
   timeRangeResolvers: Array<(range: TimeRange | null) => void>
 }
@@ -257,8 +255,7 @@ if (!g[SINGLETON_KEY]) {
     intentionalClose: false,
     activeRefCount: 0,
     pendingSubscription: null,
-    activeSubscriptions: new Map<number, SensorType[] | null>(),
-    nextSubscriptionId: 0,
+    activeSubscriptions: new Map<symbol, SensorType[] | null>(),
     timeRangeResolvers: [],
   } satisfies SensorStreamSingleton
 }
@@ -589,12 +586,11 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   const { sensors = null, enabled = true } = options
   const sensorsKey = sensors ? sensors.slice().sort().join(',') : 'all'
 
-  // Stable subscription ID for this hook instance. Allocating during
-  // render (ref.current === null branch) trips react-hooks/immutability
-  // and would burn IDs on StrictMode double-renders. useState's lazy
-  // initializer runs exactly once per instance and is the idiomatic way
-  // to bind a shared-store identity to a component.
-  const [subId] = useState(() => singleton.nextSubscriptionId++)
+  // Stable subscription token for this hook instance. Symbol() is pure —
+  // unlike a counter increment it's safe to call twice (StrictMode dev
+  // double-render of useState lazy initializers) without burning IDs or
+  // mutating shared state.
+  const [subId] = useState(() => Symbol('sensor-stream-subscription'))
 
   // Ref-counted connection management
   useEffect(() => {
