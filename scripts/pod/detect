@@ -22,12 +22,29 @@ is_supported_dac_path() {
 detect_dac_sock() {
   local path=""
 
-  # Priority 1: Read from existing .env (validate against known paths)
+  # Priority 1: Read from existing .env, but cross-check the value against
+  # hardware. A previous mis-detected install can cache a path that's on the
+  # allowlist but wrong for the current pod (e.g. Pod 5 path on Pod 4), and
+  # the cache stays sticky until .env is deleted. Only honor the cache if
+  # the socket is live OR frank.sh confirms it.
   if [ -f "$INSTALL_DIR/.env" ]; then
     path=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
     if [ -n "$path" ] && is_supported_dac_path "$path"; then
-      echo "$path"
-      return
+      local verified=false
+      # (a) Socket is a live socket → authoritative
+      [ -S "$path" ] && verified=true
+      # (b) frank.sh agrees with .env → authoritative
+      if [ "$verified" = false ] && [ -f /opt/eight/bin/frank.sh ]; then
+        local frank_path
+        frank_path=$(grep -oE 'DAC_SOCKET=[^ ]*dac\.sock' /opt/eight/bin/frank.sh 2>/dev/null \
+          | head -1 | cut -d= -f2- || true)
+        [ -n "$frank_path" ] && [ "$frank_path" = "$path" ] && verified=true
+      fi
+      if [ "$verified" = true ]; then
+        echo "$path"
+        return
+      fi
+      echo "Warning: Ignoring stale DAC_SOCK_PATH from .env ($path); re-detecting from hardware" >&2
     elif [ -n "$path" ]; then
       echo "Warning: Ignoring unsupported DAC_SOCK_PATH from .env: $path" >&2
     fi
