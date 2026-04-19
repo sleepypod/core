@@ -39,10 +39,16 @@ done
 
 # 3. Prune old database backups (keep 3 most recent)
 if [ -d "$DATA_DIR" ]; then
-  BAK_COUNT=$(ls "$DATA_DIR"/sleepypod.db.bak.* 2>/dev/null | wc -l)
+  # `ls $DIR/glob | wc -l` dies under set -euo pipefail when the glob
+  # doesn't match (ls exits 1 on "no such file", pipefail propagates,
+  # set -e kills the command substitution). Use `find` instead: clean
+  # exit 0 whether or not matches exist.
+  BAK_COUNT=$(find "$DATA_DIR" -maxdepth 1 -name 'sleepypod.db.bak.*' -type f 2>/dev/null | wc -l)
+  BAK_COUNT=${BAK_COUNT:-0}
   if [ "$BAK_COUNT" -gt 3 ]; then
     PRUNE=$((BAK_COUNT - 3))
-    ls -t "$DATA_DIR"/sleepypod.db.bak.* | tail -n "$PRUNE" | xargs rm -f
+    find "$DATA_DIR" -maxdepth 1 -name 'sleepypod.db.bak.*' -type f -printf '%T@ %p\n' 2>/dev/null \
+      | sort -rn | tail -n "$PRUNE" | awk '{print $2}' | xargs -r rm -f
     echo "Pruned $PRUNE old DB backups (kept 3)."
   fi
 fi
