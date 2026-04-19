@@ -25,12 +25,19 @@ export function RawFrameDrawer() {
   const [selectedFrame, setSelectedFrame] = useState<StoredFrame | null>(null)
   const framesRef = useRef<StoredFrame[]>([])
   const [frames, setFrames] = useState<StoredFrame[]>([])
+  // Track every frame type ever seen so the filter dropdown stays
+  // populated even while paused or when the displayed `frames` slice
+  // doesn't include a given type. Reading framesRef.current during
+  // render trips react-hooks/refs.
+  const [seenTypes, setSeenTypes] = useState<readonly string[]>([])
 
   useOnSensorFrame(useCallback((frame: SensorFrame) => {
     framesRef.current = [
       { ts: Date.now(), type: frame.type, data: JSON.stringify(frame, null, 2) },
       ...framesRef.current,
     ].slice(0, MAX_FRAMES * 5)
+
+    setSeenTypes(prev => prev.includes(frame.type) ? prev : [...prev, frame.type])
 
     if (open && !paused) {
       setFrames([...framesRef.current])
@@ -52,7 +59,7 @@ export function RawFrameDrawer() {
     ? frames.filter(f => f.type === filter).slice(0, MAX_FRAMES)
     : frames.slice(0, MAX_FRAMES)
 
-  const types = [...new Set(framesRef.current.map(f => f.type))]
+  const types = seenTypes
 
   return (
     <>
