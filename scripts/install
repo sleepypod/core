@@ -4,6 +4,15 @@ set -euo pipefail
 LOG_FILE="/tmp/sleepypod-install.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
+# Capture the failing command + line for post-mortem. `set -E` propagates
+# the ERR trap into subshells and functions. When set -e fires, the ERR
+# trap runs first — this is the only place we learn *which line* died.
+set -E
+FAILED_LINE=""
+FAILED_CMD=""
+FAILED_CODE=0
+trap 'FAILED_CODE=$?; FAILED_LINE=$LINENO; FAILED_CMD=$BASH_COMMAND' ERR
+
 echo "========================================"
 echo "  SleepyPod Core Installation Script"
 echo "========================================"
@@ -50,6 +59,17 @@ cleanup() {
     echo "  Installation failed" >&2
     echo "========================================" >&2
     echo "  Exit code: $exit_code" >&2
+    if [ -n "$FAILED_LINE" ]; then
+      echo "  Failed line:    $FAILED_LINE" >&2
+      echo "  Failed command: $FAILED_CMD" >&2
+      echo "  Command exit:   $FAILED_CODE"
+      case "$FAILED_CODE" in
+        141) echo "  Hint: exit 141 = SIGPIPE (pipeline reader closed early, e.g. awk/head with 'exit' on multi-line input)" >&2 ;;
+        130) echo "  Hint: exit 130 = SIGINT (Ctrl-C)" >&2 ;;
+        137) echo "  Hint: exit 137 = SIGKILL (likely OOM — check dmesg)" >&2 ;;
+        143) echo "  Hint: exit 143 = SIGTERM (something killed the process)" >&2 ;;
+      esac
+    fi
     echo "  Full log:  $LOG_FILE" >&2
     echo "" >&2
     echo "  For help, share the log file above:" >&2
@@ -765,8 +785,16 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
 fi
 
 # Auto-detect network interface and get IP
-DEFAULT_IFACE=$(ip route | awk '/default/ {print $5; exit}')
+# `ip route | awk '…; exit'` closes the pipe before `ip route` finishes
+# writing when there are multiple routes, causing SIGPIPE (exit 141)
+# which set -e then kills the whole install script one line before the
+# completion banner. Reported on Pod 4. Limit the stream at the source
+# (`ip route show default`) so awk's `exit` can't orphan unread input,
+# and guard with `|| true` + default for extra safety.
+DEFAULT_IFACE=$(ip route show default 2>/dev/null | awk '{print $5; exit}' || true)
+DEFAULT_IFACE=${DEFAULT_IFACE:-}
 POD_IP=$(ip -4 addr show "$DEFAULT_IFACE" 2>/dev/null | grep -o 'inet [0-9.]*' | awk '{print $2}') || POD_IP="<unknown>"
+[ -z "$POD_IP" ] && POD_IP="<unknown>"
 
 # Wait for service to start with polling
 echo "Waiting for service to start..."
