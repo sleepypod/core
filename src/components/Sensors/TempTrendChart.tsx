@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useOnSensorFrame, type SensorFrame, type BedTempFrame, type BedTemp2Frame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
@@ -17,6 +17,13 @@ interface TempPoint {
   rightF: number | null
 }
 
+/** Raw Celsius point — what the WebSocket frames carry, converted at display time. */
+interface RawTempPoint {
+  time: number
+  leftC: number | null
+  rightC: number | null
+}
+
 /**
  * Temperature trend chart showing historical bed temperature readings.
  * Draws a simple SVG line chart of left vs right temps over time.
@@ -27,8 +34,11 @@ interface TempPoint {
  */
 export function TempTrendChart() {
   const { unit, convert } = useTemperatureUnit()
-  const [history, setHistory] = useState<TempPoint[]>([])
-  const seededRef = useRef(false)
+  // Live frames are stored in raw Celsius (what the WebSocket carries) and
+  // converted at display time via `history`. This keeps the buffer immune
+  // to mid-session unit changes — when `unit` flips F↔C, the seed re-fetches
+  // in the new unit and previously buffered live points re-convert from raw.
+  const [liveFrames, setLiveFrames] = useState<RawTempPoint[]>([])
 
   // tRPC: fetch last hour of bed temp history to pre-populate the chart
   // eslint-disable-next-line react-hooks/purity
@@ -52,52 +62,55 @@ export function TempTrendChart() {
     },
   )
 
-  // Seed the chart with historical data from tRPC (once)
-  useEffect(() => {
-    if (seededRef.current || !historicalBedTemp.data) return
+  // Derive the seed from tRPC data each render. Combining derived seed +
+  // live state in useMemo avoids the `set-state-in-effect` anti-pattern of
+  // copying async data into state via an effect.
+  const seed = useMemo<TempPoint[]>(() => {
     const data = historicalBedTemp.data as Array<{
       timestamp: Date | string
       leftCenterTemp: number | null
       leftInnerTemp: number | null
       rightCenterTemp: number | null
       rightInnerTemp: number | null
-    }>
-
-    if (data.length === 0) return
-
-    // Data comes in descending order from tRPC, reverse for chronological
-    const points: TempPoint[] = [...data].reverse().map(row => ({
-      time: new Date(row.timestamp).getTime(),
-      leftF: row.leftCenterTemp ?? row.leftInnerTemp ?? null,
-      rightF: row.rightCenterTemp ?? row.rightInnerTemp ?? null,
-    })).filter(p => p.leftF !== null || p.rightF !== null)
-
-    if (points.length > 0) {
-      setHistory(points.slice(-MAX_HISTORY))
-      seededRef.current = true
-    }
+    }> | undefined
+    if (!data || data.length === 0) return []
+    return [...data]
+      .reverse() // tRPC returns descending; chart wants chronological
+      .map(row => ({
+        time: new Date(row.timestamp).getTime(),
+        leftF: row.leftCenterTemp ?? row.leftInnerTemp ?? null,
+        rightF: row.rightCenterTemp ?? row.rightInnerTemp ?? null,
+      }))
+      .filter(p => p.leftF !== null || p.rightF !== null)
+      .slice(-MAX_HISTORY)
   }, [historicalBedTemp.data])
 
-  // Append live WebSocket frames
+  const history = useMemo<TempPoint[]>(() => {
+    const liveConverted: TempPoint[] = liveFrames
+      .map(p => ({
+        time: p.time,
+        leftF: convert(p.leftC),
+        rightF: convert(p.rightC),
+      }))
+      .filter(p => p.leftF !== null || p.rightF !== null)
+    const combined = seed.length === 0 ? liveConverted : [...seed, ...liveConverted]
+    return combined.length > MAX_HISTORY ? combined.slice(-MAX_HISTORY) : combined
+  }, [seed, liveFrames, convert])
+
+  // Append raw Celsius live frames; history derives + converts at display.
   useOnSensorFrame(useCallback((frame: SensorFrame) => {
     if (frame.type !== 'bedTemp' && frame.type !== 'bedTemp2') return
     const f = frame as BedTempFrame | BedTemp2Frame
 
-    // Average left and right center temps for trend
-    const leftC = f.leftCenterTemp ?? f.leftInnerTemp
-    const rightC = f.rightCenterTemp ?? f.rightInnerTemp
-    const leftF = convert(leftC)
-    const rightF = convert(rightC)
+    const leftC = f.leftCenterTemp ?? f.leftInnerTemp ?? null
+    const rightC = f.rightCenterTemp ?? f.rightInnerTemp ?? null
+    if (leftC === null && rightC === null) return
 
-    if (leftF === null && rightF === null) return
-
-    seededRef.current = true // Mark as seeded even from live data
-
-    setHistory((prev) => {
-      const next = [...prev, { time: Date.now(), leftF, rightF }]
+    setLiveFrames((prev) => {
+      const next = [...prev, { time: Date.now(), leftC, rightC }]
       return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
     })
-  }, [convert]))
+  }, []))
 
   if (history.length < 2) {
     return (
