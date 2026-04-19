@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useOnSensorFrame, type SensorFrame, type BedTempFrame, type BedTemp2Frame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
@@ -27,8 +27,7 @@ interface TempPoint {
  */
 export function TempTrendChart() {
   const { unit, convert } = useTemperatureUnit()
-  const [history, setHistory] = useState<TempPoint[]>([])
-  const seededRef = useRef(false)
+  const [liveFrames, setLiveFrames] = useState<TempPoint[]>([])
 
   // tRPC: fetch last hour of bed temp history to pre-populate the chart
   // eslint-disable-next-line react-hooks/purity
@@ -52,33 +51,35 @@ export function TempTrendChart() {
     },
   )
 
-  // Seed the chart with historical data from tRPC (once)
-  useEffect(() => {
-    if (seededRef.current || !historicalBedTemp.data) return
+  // Derive the seed from tRPC data each render. Combining derived seed +
+  // live state in useMemo avoids the `set-state-in-effect` anti-pattern of
+  // copying async data into state via an effect.
+  const seed = useMemo<TempPoint[]>(() => {
     const data = historicalBedTemp.data as Array<{
       timestamp: Date | string
       leftCenterTemp: number | null
       leftInnerTemp: number | null
       rightCenterTemp: number | null
       rightInnerTemp: number | null
-    }>
-
-    if (data.length === 0) return
-
-    // Data comes in descending order from tRPC, reverse for chronological
-    const points: TempPoint[] = [...data].reverse().map(row => ({
-      time: new Date(row.timestamp).getTime(),
-      leftF: row.leftCenterTemp ?? row.leftInnerTemp ?? null,
-      rightF: row.rightCenterTemp ?? row.rightInnerTemp ?? null,
-    })).filter(p => p.leftF !== null || p.rightF !== null)
-
-    if (points.length > 0) {
-      setHistory(points.slice(-MAX_HISTORY))
-      seededRef.current = true
-    }
+    }> | undefined
+    if (!data || data.length === 0) return []
+    return [...data]
+      .reverse() // tRPC returns descending; chart wants chronological
+      .map(row => ({
+        time: new Date(row.timestamp).getTime(),
+        leftF: row.leftCenterTemp ?? row.leftInnerTemp ?? null,
+        rightF: row.rightCenterTemp ?? row.rightInnerTemp ?? null,
+      }))
+      .filter(p => p.leftF !== null || p.rightF !== null)
+      .slice(-MAX_HISTORY)
   }, [historicalBedTemp.data])
 
-  // Append live WebSocket frames
+  const history = useMemo<TempPoint[]>(() => {
+    const combined = seed.length === 0 ? liveFrames : [...seed, ...liveFrames]
+    return combined.length > MAX_HISTORY ? combined.slice(-MAX_HISTORY) : combined
+  }, [seed, liveFrames])
+
+  // Append live WebSocket frames to a dedicated buffer; history derives.
   useOnSensorFrame(useCallback((frame: SensorFrame) => {
     if (frame.type !== 'bedTemp' && frame.type !== 'bedTemp2') return
     const f = frame as BedTempFrame | BedTemp2Frame
@@ -91,9 +92,7 @@ export function TempTrendChart() {
 
     if (leftF === null && rightF === null) return
 
-    seededRef.current = true // Mark as seeded even from live data
-
-    setHistory((prev) => {
+    setLiveFrames((prev) => {
       const next = [...prev, { time: Date.now(), leftF, rightF }]
       return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
     })

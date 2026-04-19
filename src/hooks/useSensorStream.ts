@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react'
 import { normalizeFrame } from '@/src/streaming/normalizeFrame'
 
 // ---------------------------------------------------------------------------
@@ -589,11 +589,12 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   const { sensors = null, enabled = true } = options
   const sensorsKey = sensors ? sensors.slice().sort().join(',') : 'all'
 
-  // Stable subscription ID for this hook instance
-  const subIdRef = useRef<number | null>(null)
-  if (subIdRef.current === null) {
-    subIdRef.current = singleton.nextSubscriptionId++
-  }
+  // Stable subscription ID for this hook instance. Allocating during
+  // render (ref.current === null branch) trips react-hooks/immutability
+  // and would burn IDs on StrictMode double-renders. useState's lazy
+  // initializer runs exactly once per instance and is the idiomatic way
+  // to bind a shared-store identity to a component.
+  const [subId] = useState(() => singleton.nextSubscriptionId++)
 
   // Ref-counted connection management
   useEffect(() => {
@@ -616,16 +617,15 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   // Subscription management — merge with other active hooks
   useEffect(() => {
     if (!enabled) return
-    const id = subIdRef.current ?? 0
-    singleton.activeSubscriptions.set(id, sensors ?? null)
+    singleton.activeSubscriptions.set(subId, sensors ?? null)
     recomputeAndSendSubscription()
 
     return () => {
-      singleton.activeSubscriptions.delete(id)
+      singleton.activeSubscriptions.delete(subId)
       recomputeAndSendSubscription()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sensorsKey, enabled])
+  }, [sensorsKey, enabled, subId])
 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
 

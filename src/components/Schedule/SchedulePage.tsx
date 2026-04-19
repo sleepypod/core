@@ -45,16 +45,16 @@ export function SchedulePage() {
   const [creatingCurve, setCreatingCurve] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<{ days: DayOfWeek[], label: string } | null>(null)
 
-  const groups = useMemo<ScheduleGroup[]>(() => {
-    if (!data?.temperature) return []
-    return groupDaysBySharedCurve(data.temperature)
-  }, [data?.temperature])
+  // Recompute each render — React Compiler's lint (react-hooks/
+  // preserve-manual-memoization) objects to the previous useMemo here
+  // because it can't match the manual memo to its own plan. The
+  // computation is cheap relative to the tRPC fetch that precedes it.
+  const groups: ScheduleGroup[] = data?.temperature
+    ? groupDaysBySharedCurve(data.temperature)
+    : []
 
   // Curves to render: ones with set points OR explicitly paused
-  const visibleGroups = useMemo(
-    () => groups.filter(g => g.setPoints.length > 0 || g.allDisabled),
-    [groups],
-  )
+  const visibleGroups = groups.filter(g => g.setPoints.length > 0 || g.allDisabled)
 
   const hasAnyCurves = visibleGroups.length > 0
 
