@@ -29,6 +29,10 @@ ReadOnlyPaths=/persistent
 ReadWritePaths=/persistent/sleepypod-data
 ProtectSystem=strict
 ProtectKernelTunables=true
+# Isolated /tmp — otherwise ProtectSystem=strict + narrow ReadWritePaths
+# hide host /tmp → Python tempfile.mkstemp() errors "No usable temporary
+# directory found". See piezo-processor.service for the full rationale.
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

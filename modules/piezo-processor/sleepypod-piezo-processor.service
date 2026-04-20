@@ -29,6 +29,13 @@ ReadOnlyPaths=/persistent
 ReadWritePaths=/persistent/sleepypod-data
 ProtectSystem=strict
 ProtectKernelTunables=true
+# Give the service its own isolated /tmp + /var/tmp namespace. Without
+# this, ProtectSystem=strict + the narrow ReadWritePaths hide the host
+# /tmp from the service → Python's tempfile.mkstemp() fails with
+# "No usable temporary directory found" → scipy/heartpy intermediate
+# computations crash → no vitals rows ever get written. Reported on
+# Pod 3 (Xcessive Overlord).
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
