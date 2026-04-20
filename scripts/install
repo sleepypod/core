@@ -324,9 +324,21 @@ if [ ! -x /usr/local/bin/pnpm ]; then
   # Ensure pnpm ends up at /usr/local/bin/pnpm (npm global bin may be
   # elsewhere, e.g. under /home/root/.npm-global).
   NPM_BIN="$(npm config get prefix)/bin"
-  if [ ! -f "/usr/local/bin/pnpm" ] && [ -f "$NPM_BIN/pnpm" ]; then
+  if [ ! -x "/usr/local/bin/pnpm" ] && [ -x "$NPM_BIN/pnpm" ]; then
     ln -sf "$NPM_BIN/pnpm" /usr/local/bin/pnpm
   fi
+fi
+
+# Verify pnpm is now at the concrete path. Without this, a silently-failed
+# install (e.g. npm prefix points somewhere the symlink fallback above
+# didn't find) would let the script proceed and hit the Volta shim at
+# `pnpm install --frozen-lockfile` ~120 lines down with the same exit 126
+# this PR was meant to fix. Matches the Node verification pattern above.
+if [ ! -x /usr/local/bin/pnpm ]; then
+  echo "Error: pnpm not found at /usr/local/bin/pnpm after install." >&2
+  echo "  npm prefix: $(npm config get prefix 2>/dev/null || echo unknown)" >&2
+  echo "  Try: npm install -g pnpm, then re-run this installer." >&2
+  exit 1
 fi
 
 # Get the code in place
