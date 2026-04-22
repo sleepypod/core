@@ -1,0 +1,152 @@
+name: Mutation Testing
+
+on:
+  # Manual trigger from Actions tab
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Override glob of files to mutate (blank = use shard default)'
+        required: false
+        default: ''
+  # Weekly full run, Saturday 06:00 UTC — off-peak and gives a fresh baseline
+  schedule:
+    - cron: '0 6 * * 6'
+  # Opt-in per PR via the `mutation-test` label
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: write # for PR comment with the mutation summary
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutate:
+    # Only run on PR if the `mutation-test` label was just applied
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.label.name == 'mutation-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      # Don't cancel the whole matrix when one shard fails — the report
+      # from the healthy shard is still useful.
+      fail-fast: false
+      matrix:
+        shard:
+          - name: services-scheduler
+            mutate: "src/services/**/*.ts,src/scheduler/**/*.ts"
+          - name: hardware-lib
+            mutate: "src/hardware/**/*.ts,src/lib/**/*.ts"
+    name: mutate (${{ matrix.shard.name }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Incremental cache, keyed per-shard so the two shards don't stomp
+      # on each other. `restore-keys` lets us fall back to older branch
+      # baselines or the trunk baseline when the current commit is new.
+      - name: Restore mutation-incremental cache
+        uses: actions/cache@v4
+        with:
+          path: reports/mutation/incremental.json
+          key: stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-
+            stryker-incremental-${{ matrix.shard.name }}-
+
+      - name: Run mutation tests
+        run: |
+          SCOPE="${{ inputs.scope }}"
+          SCOPE="${SCOPE:-${{ matrix.shard.mutate }}}"
+          pnpm stryker run --mutate "$SCOPE" --incremental
+
+      - name: Save mutation-incremental cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: reports/mutation/incremental.json
+          key: stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-${{ github.sha }}
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report-${{ matrix.shard.name }}
+          path: reports/mutation/
+          retention-days: 30
+
+  summarize:
+    # Aggregate both shards' JSON reports into a single PR comment.
+    needs: mutate
+    if: github.event_name == 'pull_request' && always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all shard reports
+        uses: actions/download-artifact@v4
+        with:
+          path: shards/
+          pattern: mutation-report-*
+
+      - name: Aggregate + comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = require('path')
+            const shards = fs.readdirSync('shards').map(name => {
+              const p = path.join('shards', name, 'mutation.json')
+              if (!fs.existsSync(p)) return { name, missing: true }
+              const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+              const mutants = Object.values(data.files ?? {}).flatMap(f => f.mutants ?? [])
+              const count = s => mutants.filter(m => m.status === s).length
+              return {
+                name: name.replace(/^mutation-report-/, ''),
+                total: mutants.length,
+                killed: count('Killed'),
+                survived: count('Survived'),
+                noCov: count('NoCoverage'),
+                timeout: count('Timeout'),
+                err: count('CompileError') + count('RuntimeError'),
+              }
+            })
+            const rows = shards.map(s => {
+              if (s.missing) return `| ${s.name} | — | — | — | — | — | (report missing) |`
+              const scoreBase = s.killed + s.survived + s.timeout + s.noCov
+              const score = scoreBase > 0 ? ((s.killed / scoreBase) * 100).toFixed(1) : '—'
+              return `| ${s.name} | ${score}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.total} |`
+            }).join('\n')
+            const body = [
+              '## Mutation test report',
+              '',
+              '| Shard | Score | Killed | Survived | No cov | Timeout | Total |',
+              '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+              rows,
+              '',
+              'Full HTML reports attached as `mutation-report-<shard>` artifacts.',
+            ].join('\n')
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            })
