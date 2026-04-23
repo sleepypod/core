@@ -31,8 +31,12 @@ export default {
     '!src/**/*.d.ts',
   ],
 
-  // Skip files that have no test coverage at all — Stryker will flag every
-  // mutation as "No coverage", which is noise rather than signal.
+  // Skip "static mutants" — mutations inside module-level / constant
+  // initializer code that runs once at load time. Because they mutate
+  // values captured at import, they'd require a full test-process restart
+  // to re-evaluate, which Stryker can't do cheaply. `true` marks them as
+  // `Ignored` rather than wasting runner cycles. Does NOT skip whole
+  // uncovered files — use the `mutate` globs for that.
   ignoreStatic: true,
 
   // Type-check each mutant so we don't waste runner cycles on mutants that

@@ -37,10 +37,13 @@ jobs:
       fail-fast: false
       matrix:
         shard:
+          # The --mutate CLI flag overrides the config's exclude patterns,
+          # so we have to repeat them here per shard. Keep these three
+          # exclusions in sync with stryker.config.mjs's mutate: block.
           - name: services-scheduler
-            mutate: "src/services/**/*.ts,src/scheduler/**/*.ts"
+            mutate: "src/services/**/*.ts,src/scheduler/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.d.ts"
           - name: hardware-lib
-            mutate: "src/hardware/**/*.ts,src/lib/**/*.ts"
+            mutate: "src/hardware/**/*.ts,src/lib/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.d.ts"
     name: mutate (${{ matrix.shard.name }})
     steps:
       - name: Checkout
@@ -97,10 +100,12 @@ jobs:
 
   summarize:
     # Aggregate both shards' reports: PR comment on labeled PRs, pinned
-    # tracking issue on scheduled (weekly) runs. Always runs so a failed
-    # shard still gets a report attached.
+    # tracking issue on scheduled (weekly) runs. Runs when the mutate
+    # job completed (success or failure) so a partially-failed matrix
+    # still gets a report attached — but skips when mutate was skipped
+    # (e.g., a PR without the mutation-test label).
     needs: mutate
-    if: always()
+    if: ${{ !cancelled() && needs.mutate.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -160,19 +165,20 @@ jobs:
                 survived: count('Survived'),
                 noCov: count('NoCoverage'),
                 timeout: count('Timeout'),
+                err: count('CompileError') + count('RuntimeError'),
               }
             })
             const rows = shards.map(s => {
-              if (s.missing) return `| ${s.name} | — | — | — | — | — | (report missing) |`
+              if (s.missing) return `| ${s.name} | — | — | — | — | — | — | (report missing) |`
               const scoreBase = s.killed + s.survived + s.timeout + s.noCov
               const score = scoreBase > 0 ? ((s.killed / scoreBase) * 100).toFixed(1) : '—'
-              return `| ${s.name} | ${score}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.total} |`
+              return `| ${s.name} | ${score}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.err} | ${s.total} |`
             }).join('\n')
             const body = [
               '## Mutation test report',
               '',
-              '| Shard | Score | Killed | Survived | No cov | Timeout | Total |',
-              '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+              '| Shard | Score | Killed | Survived | No cov | Timeout | Errors | Total |',
+              '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
               rows,
               '',
               'Full HTML reports: `mutation-report-<shard>` artifacts. Actionable hit list: `mutation-hitlist` artifact.',
@@ -208,16 +214,17 @@ jobs:
                 survived: count('Survived'),
                 noCov: count('NoCoverage'),
                 timeout: count('Timeout'),
+                err: count('CompileError') + count('RuntimeError'),
               }
             })
 
             const totals = shards.reduce((acc, s) => {
               if (s.missing) return acc
-              for (const k of ['total', 'killed', 'survived', 'noCov', 'timeout']) {
+              for (const k of ['total', 'killed', 'survived', 'noCov', 'timeout', 'err']) {
                 acc[k] += s[k] ?? 0
               }
               return acc
-            }, { total: 0, killed: 0, survived: 0, noCov: 0, timeout: 0 })
+            }, { total: 0, killed: 0, survived: 0, noCov: 0, timeout: 0, err: 0 })
             const scoreBase = totals.killed + totals.survived + totals.timeout + totals.noCov
             const score = scoreBase > 0 ? ((totals.killed / scoreBase) * 100).toFixed(1) : '—'
 
@@ -249,10 +256,10 @@ jobs:
             }
 
             const shardRows = shards.map(s => {
-              if (s.missing) return `| ${s.name} | — | — | — | — | — | (missing) |`
+              if (s.missing) return `| ${s.name} | — | — | — | — | — | — | (missing) |`
               const base = s.killed + s.survived + s.timeout + s.noCov
               const sc = base > 0 ? ((s.killed / base) * 100).toFixed(1) : '—'
-              return `| ${s.name} | ${sc}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.total} |`
+              return `| ${s.name} | ${sc}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.err} | ${s.total} |`
             }).join('\n')
 
             // Embed the hit-list summary (truncated to fit GitHub issue limits).
@@ -268,8 +275,8 @@ jobs:
               '',
               '### Per-shard breakdown',
               '',
-              '| Shard | Score | Killed | Survived | No cov | Timeout | Total |',
-              '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+              '| Shard | Score | Killed | Survived | No cov | Timeout | Errors | Total |',
+              '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
               shardRows,
               '',
               `- HTML reports: attached as \`mutation-report-<shard>\` artifacts on [run ${context.runId}](${runUrl}).`,
