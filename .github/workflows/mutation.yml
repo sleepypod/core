@@ -96,18 +96,52 @@ jobs:
           retention-days: 30
 
   summarize:
-    # Aggregate both shards' JSON reports into a single PR comment.
+    # Aggregate both shards' reports: PR comment on labeled PRs, pinned
+    # tracking issue on scheduled (weekly) runs. Always runs so a failed
+    # shard still gets a report attached.
     needs: mutate
-    if: github.event_name == 'pull_request' && always()
+    if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
       - name: Download all shard reports
         uses: actions/download-artifact@v4
         with:
           path: shards/
           pattern: mutation-report-*
 
-      - name: Aggregate + comment
+      - name: Build aggregated hit list
+        run: |
+          node scripts/mutation-hitlist.mjs shards/ > /tmp/hitlist.md || true
+          head -c 5000 /tmp/hitlist.md > /tmp/hitlist-trunc.md
+          echo "" >> /tmp/hitlist-trunc.md
+          if [ "$(wc -c < /tmp/hitlist.md)" -gt 5000 ]; then
+            echo "*(truncated — full hit list in the \`mutation-hitlist\` artifact)*" >> /tmp/hitlist-trunc.md
+          fi
+
+      - name: Upload aggregated hit list
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-hitlist
+          path: reports/mutation/hitlist.md
+          retention-days: 30
+
+      - name: Comment on PR (labeled PR runs only)
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
@@ -126,7 +160,6 @@ jobs:
                 survived: count('Survived'),
                 noCov: count('NoCoverage'),
                 timeout: count('Timeout'),
-                err: count('CompileError') + count('RuntimeError'),
               }
             })
             const rows = shards.map(s => {
@@ -142,7 +175,7 @@ jobs:
               '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
               rows,
               '',
-              'Full HTML reports attached as `mutation-report-<shard>` artifacts.',
+              'Full HTML reports: `mutation-report-<shard>` artifacts. Actionable hit list: `mutation-hitlist` artifact.',
             ].join('\n')
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -150,3 +183,118 @@ jobs:
               issue_number: context.issue.number,
               body,
             })
+
+      - name: Update pinned tracking issue (scheduled runs only)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v7
+        env:
+          ISSUE_TITLE: '📊 Mutation testing — weekly baseline'
+        with:
+          script: |
+            const fs = require('fs')
+            const path = require('path')
+
+            // Aggregate per-shard tallies from the downloaded artifacts.
+            const shards = fs.readdirSync('shards').map(name => {
+              const p = path.join('shards', name, 'mutation.json')
+              if (!fs.existsSync(p)) return { name, missing: true }
+              const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+              const mutants = Object.values(data.files ?? {}).flatMap(f => f.mutants ?? [])
+              const count = s => mutants.filter(m => m.status === s).length
+              return {
+                name: name.replace(/^mutation-report-/, ''),
+                total: mutants.length,
+                killed: count('Killed'),
+                survived: count('Survived'),
+                noCov: count('NoCoverage'),
+                timeout: count('Timeout'),
+              }
+            })
+
+            const totals = shards.reduce((acc, s) => {
+              if (s.missing) return acc
+              for (const k of ['total', 'killed', 'survived', 'noCov', 'timeout']) {
+                acc[k] += s[k] ?? 0
+              }
+              return acc
+            }, { total: 0, killed: 0, survived: 0, noCov: 0, timeout: 0 })
+            const scoreBase = totals.killed + totals.survived + totals.timeout + totals.noCov
+            const score = scoreBase > 0 ? ((totals.killed / scoreBase) * 100).toFixed(1) : '—'
+
+            // Find-or-create the pinned issue by title. No label-based
+            // lookup because labels don't enforce uniqueness.
+            const title = process.env.ISSUE_TITLE
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'mutation-testing',
+              per_page: 50,
+            })
+            const hit = existing.find(i => i.title === title)
+
+            // Parse previous score out of the prior body for delta display.
+            let deltaStr = ''
+            if (hit && hit.body) {
+              const m = hit.body.match(/\*\*Score:\*\* ([\d.]+|—)%/)
+              if (m && m[1] !== '—') {
+                const prev = Number(m[1])
+                const curr = Number(score)
+                if (!Number.isNaN(prev) && !Number.isNaN(curr)) {
+                  const diff = curr - prev
+                  const arrow = diff > 0.1 ? '↑' : diff < -0.1 ? '↓' : '→'
+                  deltaStr = ` (${arrow} ${diff >= 0 ? '+' : ''}${diff.toFixed(1)} vs prior)`
+                }
+              }
+            }
+
+            const shardRows = shards.map(s => {
+              if (s.missing) return `| ${s.name} | — | — | — | — | — | (missing) |`
+              const base = s.killed + s.survived + s.timeout + s.noCov
+              const sc = base > 0 ? ((s.killed / base) * 100).toFixed(1) : '—'
+              return `| ${s.name} | ${sc}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.total} |`
+            }).join('\n')
+
+            // Embed the hit-list summary (truncated to fit GitHub issue limits).
+            let hitlist = ''
+            if (fs.existsSync('/tmp/hitlist-trunc.md')) {
+              hitlist = '\n\n---\n\n' + fs.readFileSync('/tmp/hitlist-trunc.md', 'utf8')
+            }
+
+            const ts = new Date().toISOString()
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const body = [
+              `**Score:** ${score}%${deltaStr}`,
+              '',
+              '### Per-shard breakdown',
+              '',
+              '| Shard | Score | Killed | Survived | No cov | Timeout | Total |',
+              '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+              shardRows,
+              '',
+              `- HTML reports: attached as \`mutation-report-<shard>\` artifacts on [run ${context.runId}](${runUrl}).`,
+              `- Hit list artifact: \`mutation-hitlist\` on the same run.`,
+              `- Last updated: ${ts} (commit \`${context.sha.slice(0, 7)}\`, trigger: \`${context.eventName}\`).`,
+              '',
+              '> This issue is updated automatically by `.github/workflows/mutation.yml` on each scheduled / manual mutation run. Do not edit the body — it will be overwritten. Comment freely to track work on surviving mutants.',
+              hitlist,
+            ].join('\n')
+
+            if (hit) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: hit.number,
+                body,
+              })
+              core.info(`Updated pinned issue #${hit.number}`)
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['mutation-testing', 'tracking'],
+              })
+              core.info(`Created pinned issue #${created.data.number}`)
+            }
