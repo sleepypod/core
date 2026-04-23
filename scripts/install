@@ -705,6 +705,15 @@ else
     # Remove orphaned venv/ from pre-uv installs
     rm -rf "$dest/venv"
 
+    # Also wipe any existing .venv. An upgraded install from pre-v1.7.3
+    # would otherwise retain a .venv whose bin/python symlink points at
+    # /home/root/.local/share/uv/… (root-only, mode 0700) and User=dac
+    # services (calibrator, environment-monitor) would still fail 203/EXEC
+    # even though we've since set UV_PYTHON_INSTALL_DIR. Fresh recreation
+    # is cheap: uv's content-addressable cache reuses the managed Python
+    # and wheels, only the venv metadata is re-linked.
+    rm -rf "$dest/.venv"
+
     # Create Python environment with uv (no ensurepip/pyexpat needed).
     # No --python flag: let uv pick from requires-python in pyproject.toml.
     # If system python3 is in range it's used; otherwise uv downloads a
