@@ -240,6 +240,12 @@ if [ -d "$INSTALL_DIR/modules" ]; then
       mkdir -p "$MODULES_DEST/$mod"
       cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
       rm -rf "$MODULES_DEST/$mod/venv"
+      # Also wipe .venv so OTAs pick up the shared UV_PYTHON_INSTALL_DIR
+      # set above — otherwise a pre-v1.7.3 venv's bin/python symlink keeps
+      # pointing at /home/root/.local/share/uv/… and User=dac modules fail
+      # to exec. uv's content-addressable cache means this is a cheap
+      # re-link, not a full re-download.
+      rm -rf "$MODULES_DEST/$mod/.venv"
       if command -v uv &>/dev/null; then
         (cd "$MODULES_DEST/$mod" && uv sync --frozen) \
           || echo "Warning: uv sync failed for module $mod"
