@@ -25,6 +25,8 @@ node_modules
 # Testing
 test-results
 coverage
+.stryker-tmp
+reports/mutation
 
 # SQLite Database (development)
 sleepypod.dev.db

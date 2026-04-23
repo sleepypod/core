@@ -20,8 +20,12 @@ Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
 Environment="CALIBRATION_HOUR=6"
 
-# Resource limits (calibration is bursty but short-lived)
-MemoryMax=256M
+# Resource limits (calibration loads up to 6h of sensor data into numpy
+# arrays for scipy processing — 500Hz piezo × 6h easily exceeds a few
+# hundred MB). 256M was tripping systemd's kill at ~6s into capacitance
+# calibration on Pod 3 (status=9/KILL). 1G is conservative vs total
+# Pod RAM (~6GB) and leaves plenty of headroom.
+MemoryMax=1G
 CPUQuota=25%
 
 # Sandboxing
