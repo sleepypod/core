@@ -18,7 +18,7 @@ import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
-import { timeToDate } from './timeUtils'
+import { timeToDate, nowInTimezone } from './timeUtils'
 
 const HEARTBEAT_INTERVAL_MS_DEFAULT = 60_000
 const HEARTBEAT_STALE_MS_DEFAULT = 90_000
@@ -35,6 +35,7 @@ interface JobManagerOptions {
 export class JobManager {
   private scheduler: Scheduler
   private reloadInProgress: Promise<void> | null = null
+  private reloadPending: boolean = false
   private sideLocks: Record<'left' | 'right', Promise<void>> = {
     left: Promise.resolve(),
     right: Promise.resolve(),
@@ -528,9 +529,12 @@ export class JobManager {
       await this.sendLedBrightness(dayBrightness)
     })
 
-    // Apply correct brightness immediately based on whether we're in the night window
-    const now = new Date()
-    const nowMinutes = now.getHours() * 60 + now.getMinutes()
+    // Apply correct brightness immediately based on whether we're in the night window.
+    // Use the configured scheduler timezone (which matches the cron jobs above) rather
+    // than the OS clock, which on embedded targets is often UTC and would flip the
+    // window for any user not on UTC.
+    const { hour: nowHour, minute: nowMinute } = nowInTimezone(this.scheduler.getTimezone())
+    const nowMinutes = nowHour * 60 + nowMinute
     const startMinutes = startHour * 60 + startMinute
     const endMinutes = endHour * 60 + endMinute
 
@@ -728,20 +732,29 @@ export class JobManager {
 
   /**
    * Reload all schedules (useful after database changes).
-   * Uses a mutex to prevent concurrent reloads which could cause race conditions.
+   *
+   * Uses a dirty-flag mutex so concurrent reload requests never drop DB
+   * changes. Naive coalescing (second caller awaits first and returns) is
+   * unsafe: caller A may have snapshotted the DB before caller B's write
+   * committed, so B's changes would be missed. Instead, if another reload
+   * is requested while one is in flight, we set a pending flag and the
+   * in-flight cycle loops to perform one more pass. All overlapping callers
+   * await the same final promise, so they all observe the latest DB state.
    */
   async reloadSchedules(): Promise<void> {
-    // If a reload is already in progress, wait for it to complete
     if (this.reloadInProgress) {
+      this.reloadPending = true
       await this.reloadInProgress
       return
     }
 
-    // Set the mutex and perform the reload
     this.reloadInProgress = (async () => {
       try {
-        this.scheduler.cancelRecurringJobs()
-        await this.loadSchedules()
+        do {
+          this.reloadPending = false
+          this.scheduler.cancelRecurringJobs()
+          await this.loadSchedules()
+        } while (this.reloadPending)
       }
       finally {
         this.reloadInProgress = null
