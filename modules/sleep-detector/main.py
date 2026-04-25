@@ -168,36 +168,87 @@ def sanitize_ts(raw_ts) -> float:
     return ts
 
 
+# After this many consecutive write failures, discard the current biometrics
+# connection and open a fresh one on the next write (#325).
+_DB_RECONNECT_THRESHOLD = 5
+_db_write_failures = 0
+
+
+def _reconnect_db(old: sqlite3.Connection) -> sqlite3.Connection:
+    """Close *old* and open a fresh biometrics connection. On failure returns
+    *old* so callers can keep retrying — never raises."""
+    try:
+        try:
+            old.close()
+        except sqlite3.Error:
+            pass
+        new = open_biometrics_db()
+        log.info("Reopened biometrics DB connection after write failures")
+        return new
+    except sqlite3.Error as e:
+        log.error("Failed to reopen biometrics DB: %s", e)
+        return old
+
+
 def write_sleep_record(conn: sqlite3.Connection, side: str,
                        entered: datetime, left: datetime,
                        duration_s: int, exits: int,
-                       present_intervals: list, absent_intervals: list) -> None:
-    with conn:
-        conn.execute(
-            """INSERT INTO sleep_records
-               (side, entered_bed_at, left_bed_at, sleep_duration_seconds,
-                times_exited_bed, present_intervals, not_present_intervals, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                side,
-                int(entered.timestamp()),
-                int(left.timestamp()),
-                duration_s,
-                exits,
-                json.dumps(present_intervals),
-                json.dumps(absent_intervals),
-                int(time.time()),
-            ),
-        )
+                       present_intervals: list, absent_intervals: list) -> sqlite3.Connection:
+    """Insert one sleep_records row. Logs and swallows sqlite3 errors so the
+    main loop survives transient WAL/disk issues. After _DB_RECONNECT_THRESHOLD
+    consecutive failures, the connection is replaced; callers MUST use the
+    returned connection for subsequent writes (#325)."""
+    global _db_write_failures
+    try:
+        with conn:
+            conn.execute(
+                """INSERT INTO sleep_records
+                   (side, entered_bed_at, left_bed_at, sleep_duration_seconds,
+                    times_exited_bed, present_intervals, not_present_intervals, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    side,
+                    int(entered.timestamp()),
+                    int(left.timestamp()),
+                    duration_s,
+                    exits,
+                    json.dumps(present_intervals),
+                    json.dumps(absent_intervals),
+                    int(time.time()),
+                ),
+            )
+        _db_write_failures = 0
+        return conn
+    except sqlite3.Error as e:
+        _db_write_failures += 1
+        log.warning("write_sleep_record failed (%d consecutive): %s",
+                    _db_write_failures, e)
+        if _db_write_failures >= _DB_RECONNECT_THRESHOLD:
+            _db_write_failures = 0
+            return _reconnect_db(conn)
+        return conn
 
 
 def write_movement(conn: sqlite3.Connection, side: str,
-                   ts: datetime, total_movement: int) -> None:
-    with conn:
-        conn.execute(
-            "INSERT INTO movement (side, timestamp, total_movement) VALUES (?, ?, ?)",
-            (side, int(ts.timestamp()), total_movement),
-        )
+                   ts: datetime, total_movement: int) -> sqlite3.Connection:
+    """Insert one movement row. See write_sleep_record for error semantics (#325)."""
+    global _db_write_failures
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO movement (side, timestamp, total_movement) VALUES (?, ?, ?)",
+                (side, int(ts.timestamp()), total_movement),
+            )
+        _db_write_failures = 0
+        return conn
+    except sqlite3.Error as e:
+        _db_write_failures += 1
+        log.warning("write_movement failed (%d consecutive): %s",
+                    _db_write_failures, e)
+        if _db_write_failures >= _DB_RECONNECT_THRESHOLD:
+            _db_write_failures = 0
+            return _reconnect_db(conn)
+        return conn
 
 
 def report_health(status: str, message: str) -> None:
@@ -619,7 +670,7 @@ class SessionTracker:
                 elif left_ts > self._interval_start:
                     self._absent_intervals.append([self._interval_start, left_ts])
 
-            write_sleep_record(
+            self.db = write_sleep_record(
                 self.db, self.side,
                 self._session_start, left_at,
                 duration_s, self._exit_count,
@@ -686,8 +737,8 @@ class SessionTracker:
         # Step 4: Final clamp to [0, 1000]
         total = max(0, min(1000, filtered_score))
 
-        write_movement(self.db, self.side,
-                       datetime.fromtimestamp(ts, tz=timezone.utc), total)
+        self.db = write_movement(self.db, self.side,
+                                 datetime.fromtimestamp(ts, tz=timezone.utc), total)
         self._movement_buf = []
         self._last_movement_write = ts
 
