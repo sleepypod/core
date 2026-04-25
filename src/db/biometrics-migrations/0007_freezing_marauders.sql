@@ -1,0 +1,1 @@
+DROP INDEX `idx_vitals_side_timestamp`;

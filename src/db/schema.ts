@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 // ============================================================================
 // Device Settings & Configuration
@@ -79,7 +79,9 @@ export const tapGestures = sqliteTable('tap_gestures', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
-})
+}, t => [
+  uniqueIndex('uq_tap_side_type').on(t.side, t.tapType),
+])
 
 // ============================================================================
 // Schedules

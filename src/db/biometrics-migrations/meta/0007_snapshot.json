@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8eef0e05-1ae3-42be-8e7e-02fcb2c0313d",
-  "prevId": "7b3c2d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+  "id": "703a9740-bde4-4ede-90f0-fcdd367c0749",
+  "prevId": "3ac0eb7e-8dfb-41b1-99a1-41b80065ef0c",
   "tables": {
     "ambient_light": {
       "name": "ambient_light",
@@ -361,6 +361,66 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "flow_readings": {
+      "name": "flow_readings",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "timestamp": {
+          "name": "timestamp",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "left_flowrate_cd": {
+          "name": "left_flowrate_cd",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "right_flowrate_cd": {
+          "name": "right_flowrate_cd",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "left_pump_rpm": {
+          "name": "left_pump_rpm",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "right_pump_rpm": {
+          "name": "right_pump_rpm",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_flow_readings_timestamp": {
+          "name": "idx_flow_readings_timestamp",
+          "columns": [
+            "timestamp"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "freezer_temp": {
       "name": "freezer_temp",
       "columns": {
@@ -598,14 +658,6 @@
         }
       },
       "indexes": {
-        "idx_vitals_side_timestamp": {
-          "name": "idx_vitals_side_timestamp",
-          "columns": [
-            "side",
-            "timestamp"
-          ],
-          "isUnique": false
-        },
         "uq_vitals_side_timestamp": {
           "name": "uq_vitals_side_timestamp",
           "columns": [
@@ -748,7 +800,15 @@
           "autoincrement": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "idx_water_level_alerts_dismissed": {
+          "name": "idx_water_level_alerts_dismissed",
+          "columns": [
+            "dismissed_at"
+          ],
+          "isUnique": false
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
@@ -785,7 +845,7 @@
           "columns": [
             "timestamp"
           ],
-          "isUnique": false
+          "isUnique": true
         }
       },
       "foreignKeys": {},

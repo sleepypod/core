@@ -50,6 +50,13 @@
       "when": 1774803436479,
       "tag": "0006_tired_gressill",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1777089517744,
+      "tag": "0007_freezing_marauders",
+      "breakpoints": true
     }
   ]
 }

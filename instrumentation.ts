@@ -17,6 +17,7 @@
 
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
+import { startBiometricsRetention, stopBiometricsRetention } from '@/src/db/retention'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
 import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
 import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
@@ -92,7 +93,15 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down DacMonitor:', error)
   }
 
-  // Step 6: Close database connections
+  // Step 6: Stop biometrics retention loop before closing DB
+  try {
+    stopBiometricsRetention()
+  }
+  catch (error) {
+    console.error('Error stopping biometrics retention:', error)
+  }
+
+  // Step 7: Close database connections
   try {
     closeDatabase()
     closeBiometricsDatabase()
@@ -289,6 +298,9 @@ export async function initializeScheduler(): Promise<void> {
 
     // Start Bonjour/mDNS announcement (non-blocking)
     startBonjourAnnouncement()
+
+    // Start biometrics time-series retention loop (non-blocking)
+    startBiometricsRetention()
   }
   catch (error) {
     console.error('Failed to initialize job scheduler:', error)
