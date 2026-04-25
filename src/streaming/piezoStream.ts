@@ -45,6 +45,15 @@ const WS_PORT = Number(process.env.PIEZO_WS_PORT ?? 3001)
 const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
 const FILE_POLL_INTERVAL_MS = 10 // match Python's 10 ms poll for new data
 const SEEK_MAX_DURATION_S = 30 // max seconds of data to replay on seek
+// Keep frame-index entries within the seek window plus a small margin so the
+// index stays bounded on long-running streams (24h at 50fps was ~70MB).
+const FRAME_INDEX_RETENTION_S = SEEK_MAX_DURATION_S + 10
+// Drop outbound frames for a client whose send buffer exceeds this many bytes.
+// Prevents a slow/stalled client from pinning unbounded server memory.
+const MAX_BUFFERED_BYTES = 1024 * 1024 // 1 MB
+// Cap inbound client messages. All client→server messages are tiny JSON
+// (subscribe / get_time_range / seek) — 1 KiB is well above the largest.
+const WS_MAX_PAYLOAD_BYTES = 1024
 
 // ---------------------------------------------------------------------------
 // In-memory sidecar index: maps timestamps to byte offsets in the current RAW
@@ -62,6 +71,24 @@ interface FrameIndexEntry {
 const frameIndex: FrameIndexEntry[] = []
 /** Path of the RAW file that `frameIndex` corresponds to. */
 let indexedFilePath: string | null = null
+
+/**
+ * Append an entry and evict anything older than the seek-retention window.
+ * Seek is capped at `SEEK_MAX_DURATION_S` so older entries are unreachable.
+ * Called on every decoded frame — keep the hot path cheap (amortized O(1)).
+ */
+function appendFrameIndex(entry: FrameIndexEntry): void {
+  frameIndex.push(entry)
+  const cutoff = entry.ts - FRAME_INDEX_RETENTION_S
+  // Drop the prefix of entries older than the cutoff. Entries are monotonic
+  // in `ts` because frames are parsed in file order, so a single leading
+  // slice is correct. Batch the splice to avoid O(n) shift per push.
+  if (frameIndex.length > 0 && frameIndex[0].ts < cutoff) {
+    let drop = 0
+    while (drop < frameIndex.length && frameIndex[drop].ts < cutoff) drop += 1
+    if (drop > 0) frameIndex.splice(0, drop)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // CBOR record reader (TypeScript port of Python _read_raw_record)
@@ -292,7 +319,39 @@ let wss: WebSocketServer | null = null
 let streamingInterval: ReturnType<typeof setInterval> | null = null
 
 /** Per-client sensor subscriptions. undefined = all types (default). */
-const clientSubscriptions = new WeakMap<WebSocket, Set<SensorType> | undefined>()
+const clientSubscriptions = new Map<WebSocket, Set<SensorType> | undefined>()
+/** Per-client count of frames dropped due to send-buffer backpressure. */
+const clientDroppedFrames = new Map<WebSocket, number>()
+
+/**
+ * Forget all per-client state. Must be called from the `close` handler so
+ * disconnected clients do not pin memory until the next GC cycle.
+ */
+function cleanupClient(ws: WebSocket): void {
+  clientSubscriptions.delete(ws)
+  clientDroppedFrames.delete(ws)
+}
+
+/**
+ * Send `payload` to `client` unless its send buffer already exceeds
+ * `MAX_BUFFERED_BYTES`. Returns true if sent, false if skipped. Skipping
+ * preserves the live stream for healthy clients when a single slow client
+ * would otherwise cause unbounded server memory growth.
+ */
+function sendWithBackpressure(client: WebSocket, payload: string): boolean {
+  if (client.readyState !== WebSocket.OPEN) return false
+  if (client.bufferedAmount > MAX_BUFFERED_BYTES) {
+    clientDroppedFrames.set(client, (clientDroppedFrames.get(client) ?? 0) + 1)
+    return false
+  }
+  try {
+    client.send(payload)
+    return true
+  }
+  catch {
+    return false
+  }
+}
 
 function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
   try {
@@ -457,13 +516,11 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
           const frameType = frame.type as string
           if (subs && !subs.has(frameType as SensorType)) continue
 
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(frame))
-          }
-          else {
+          if (ws.readyState !== WebSocket.OPEN) {
             done = true
             break
           }
+          sendWithBackpressure(ws, JSON.stringify(frame))
         }
       }
       catch (e) {
@@ -513,7 +570,7 @@ function updatePollRate(): void {
 export function startPiezoStreamServer(): WebSocketServer {
   if (wss) return wss
 
-  wss = new WebSocketServer({ port: WS_PORT })
+  wss = new WebSocketServer({ port: WS_PORT, maxPayload: WS_MAX_PAYLOAD_BYTES })
   console.log(`[sensorStream] WebSocket server listening on port ${WS_PORT}`)
 
   // State for file tailing
@@ -528,7 +585,14 @@ export function startPiezoStreamServer(): WebSocketServer {
     ws.on('message', data => handleClientMessage(ws, data as Buffer | string))
 
     ws.on('close', () => {
-      console.log('[sensorStream] Client disconnected')
+      const dropped = clientDroppedFrames.get(ws) ?? 0
+      cleanupClient(ws)
+      if (dropped > 0) {
+        console.log(`[sensorStream] Client disconnected (dropped ${dropped} frames due to backpressure)`)
+      }
+      else {
+        console.log('[sensorStream] Client disconnected')
+      }
       updatePollRate()
     })
 
@@ -599,7 +663,7 @@ export function startPiezoStreamServer(): WebSocketServer {
             // Record timestamp→offset mapping in the sidecar index
             const ts = frame.ts as number | undefined
             if (ts !== undefined) {
-              frameIndex.push({ ts, offset: recordFileOffset })
+              appendFrameIndex({ ts, offset: recordFileOffset })
             }
 
             // Broadcast to subscribed clients only
@@ -617,10 +681,7 @@ export function startPiezoStreamServer(): WebSocketServer {
 
                 // Lazy serialize — only if at least one client needs it
                 if (payload === null) payload = JSON.stringify(frame)
-                try {
-                  client.send(payload)
-                }
-                catch { /* client gone between readyState check and send */ }
+                sendWithBackpressure(client, payload)
               }
             }
 
@@ -695,11 +756,25 @@ export function broadcastFrame(frame: Record<string, unknown>): void {
     if (subs && !subs.has(frameType as SensorType)) continue
 
     if (payload === null) payload = JSON.stringify(frame)
-    try {
-      client.send(payload)
-    }
-    catch { /* client gone between readyState check and send */ }
+    sendWithBackpressure(client, payload)
   }
+}
+
+/**
+ * Internal hooks exposed for unit tests. Not part of the public API — the
+ * `__test__` prefix keeps them out of autocomplete for production callers.
+ */
+export const __test__ = {
+  appendFrameIndex,
+  cleanupClient,
+  sendWithBackpressure,
+  get frameIndex(): readonly FrameIndexEntry[] { return frameIndex },
+  clientSubscriptions,
+  clientDroppedFrames,
+  FRAME_INDEX_RETENTION_S,
+  MAX_BUFFERED_BYTES,
+  WS_MAX_PAYLOAD_BYTES,
+  resetFrameIndex(): void { frameIndex.length = 0 },
 }
 
 /**
