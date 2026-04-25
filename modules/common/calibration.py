@@ -444,8 +444,11 @@ class PiezoCalibrator:
             "baseline_mean_range": round(best_mean_range, 2),
         }
 
-        # Quality: very low baseline range = clean baseline
-        quality = max(0.0, min(1.0, 1.0 - (best_mean_range / 50000)))
+        # Quality: how cleanly the baseline sits below the presence threshold.
+        # Self-scaling against threshold (rather than a fixed constant) keeps the
+        # metric meaningful regardless of ADC range — raw int32 piezo values run
+        # in the 1e8–1e9 range, where a fixed 50k denominator clamps to 0.
+        quality = max(0.0, min(1.0, 1.0 - (best_mean_range / max(threshold, 1.0))))
 
         return CalibrationResult(
             params=params,
