@@ -28,6 +28,7 @@ Signal processing pipeline (per side):
 
 import os
 import sys
+import json
 import time
 import signal
 import logging
@@ -105,12 +106,21 @@ def open_biometrics_db() -> sqlite3.Connection:
 
 def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
                  heart_rate: Optional[float], hrv: Optional[float],
-                 breathing_rate: Optional[float]) -> None:
+                 breathing_rate: Optional[float],
+                 quality_score: float,
+                 flags: Optional[list] = None,
+                 hr_raw: Optional[float] = None) -> None:
     ts_unix = int(ts.timestamp())
+    flags_json = json.dumps(flags) if flags else None
     with conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate) VALUES (?, ?, ?, ?, ?)",
             (side, ts_unix, heart_rate, hrv, breathing_rate),
+        )
+        conn.execute(
+            "INSERT INTO vitals_quality (vitals_id, side, timestamp, quality_score, flags, hr_raw, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, ts_unix),
         )
 
 
@@ -698,9 +708,23 @@ class SideProcessor:
 
         if hr is not None or hrv is not None or br is not None:
             ts = datetime.now(timezone.utc)
-            write_vitals(self.db, self.side, ts, hr, hrv, br)
-            log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f", self.side,
-                     hr or 0, hrv or 0, br or 0)
+            snr = max(0.0, min(1.0, acr_qual))
+            hr_conf = max(0.0, min(1.0, hr_score)) if hr is not None else 0.0
+            quality = round(0.55 * snr + 0.45 * hr_conf, 3)
+            flags = []
+            if hr is None:
+                flags.append("no_hr")
+            if hrv is None:
+                flags.append("no_hrv")
+            if br is None:
+                flags.append("no_br")
+            if med_std < self._presence.enter_threshold:
+                flags.append("low_signal")
+            write_vitals(self.db, self.side, ts, hr, hrv, br,
+                         quality_score=quality, flags=flags or None,
+                         hr_raw=hr_raw)
+            log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f q=%.2f", self.side,
+                     hr or 0, hrv or 0, br or 0, quality)
 
         self._last_write = now
 
