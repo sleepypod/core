@@ -111,6 +111,7 @@ def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
                  flags: Optional[list] = None,
                  hr_raw: Optional[float] = None) -> None:
     ts_unix = int(ts.timestamp())
+    now_unix = int(time.time())
     flags_json = json.dumps(flags) if flags else None
     with conn:
         cur = conn.execute(
@@ -120,7 +121,7 @@ def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
         conn.execute(
             "INSERT INTO vitals_quality (vitals_id, side, timestamp, quality_score, flags, hr_raw, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, ts_unix),
+            (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, now_unix),
         )
 
 
