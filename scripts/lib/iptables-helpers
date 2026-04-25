@@ -14,7 +14,19 @@ wan_is_blocked() {
 
 unblock_wan() {
   echo "Temporarily unblocking WAN access..."
-  SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+  # Capture state verbatim. `|| true` would mask a failed save and
+  # quietly fall through to a minimal block_wan ruleset on restore —
+  # silent data loss. Fail loudly instead so the caller can bail.
+  if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+    echo "Error: iptables-save failed — refusing to unblock WAN." >&2
+    echo "$SAVED_IPTABLES" >&2
+    SAVED_IPTABLES=""
+    return 1
+  fi
+  if [ -z "$SAVED_IPTABLES" ]; then
+    echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
+    return 1
+  fi
   iptables -F 2>/dev/null || true
   iptables -X 2>/dev/null || true
   iptables -t nat -F 2>/dev/null || true

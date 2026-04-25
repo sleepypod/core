@@ -37,7 +37,18 @@ else
   }
   unblock_wan() {
     echo "Opening WAN access..."
-    SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+    # Capture state verbatim. `|| true` would mask a failed save and
+    # quietly fall through on restore — silent data loss.
+    if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+      echo "Error: iptables-save failed — refusing to unblock WAN." >&2
+      echo "$SAVED_IPTABLES" >&2
+      SAVED_IPTABLES=""
+      return 1
+    fi
+    if [ -z "$SAVED_IPTABLES" ]; then
+      echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
+      return 1
+    fi
     iptables -F && iptables -X && iptables -t nat -F && iptables -t nat -X
     echo "WAN open."
   }
@@ -77,11 +88,11 @@ cleanup() {
       fi
       echo "Previous code restored."
     fi
-    if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
-      cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
-      [ -f "$DATA_DIR/sleepypod.db-wal.bak" ] && cp "$DATA_DIR/sleepypod.db-wal.bak" "$DATA_DIR/sleepypod.db-wal"
-      [ -f "$DATA_DIR/sleepypod.db-shm.bak" ] && cp "$DATA_DIR/sleepypod.db-shm.bak" "$DATA_DIR/sleepypod.db-shm"
-      echo "Database restored."
+    if [ -n "${DB_BACKUP:-}" ] && [ -f "$DB_BACKUP" ]; then
+      cp "$DB_BACKUP" "$DATA_DIR/sleepypod.db"
+      [ -f "$DATA_DIR/sleepypod.db-wal.bak.${BACKUP_TS:-}" ] && cp "$DATA_DIR/sleepypod.db-wal.bak.${BACKUP_TS:-}" "$DATA_DIR/sleepypod.db-wal"
+      [ -f "$DATA_DIR/sleepypod.db-shm.bak.${BACKUP_TS:-}" ] && cp "$DATA_DIR/sleepypod.db-shm.bak.${BACKUP_TS:-}" "$DATA_DIR/sleepypod.db-shm"
+      echo "Database restored from $DB_BACKUP."
     fi
     systemctl start sleepypod.service 2>/dev/null || true
   elif [ "$exit_code" -ne 0 ]; then
@@ -125,11 +136,15 @@ tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C 
 systemctl stop sleepypod.service
 
 # Backup database (after stop so WAL/SHM are consistent)
+# Timestamped name so two rapid updates don't clobber the previous backup.
+# Matches scripts/install's naming; sp-maintenance prunes to 3 most recent.
+BACKUP_TS=$(date +%s)
+DB_BACKUP="$DATA_DIR/sleepypod.db.bak.$BACKUP_TS"
 if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
-  [ -f "$DATA_DIR/sleepypod.db-wal" ] && cp "$DATA_DIR/sleepypod.db-wal" "$DATA_DIR/sleepypod.db-wal.bak"
-  [ -f "$DATA_DIR/sleepypod.db-shm" ] && cp "$DATA_DIR/sleepypod.db-shm" "$DATA_DIR/sleepypod.db-shm.bak"
-  echo "Database backed up."
+  cp "$DATA_DIR/sleepypod.db" "$DB_BACKUP"
+  [ -f "$DATA_DIR/sleepypod.db-wal" ] && cp "$DATA_DIR/sleepypod.db-wal" "$DATA_DIR/sleepypod.db-wal.bak.$BACKUP_TS"
+  [ -f "$DATA_DIR/sleepypod.db-shm" ] && cp "$DATA_DIR/sleepypod.db-shm" "$DATA_DIR/sleepypod.db-shm.bak.$BACKUP_TS"
+  echo "Database backed up to $DB_BACKUP."
 fi
 
 # Download code — try CI release first (includes pre-built .next), fall back to source tarball

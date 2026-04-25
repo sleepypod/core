@@ -1,7 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Source maps for debugging production crashes
-  productionBrowserSourceMaps: true,
+  // Keep production browser source maps off — serving .map files on LAN
+  // exposes TypeScript source, API route internals, and file paths.
+  // Use server-side-only source maps + a private error monitor for prod debugging.
+  productionBrowserSourceMaps: false,
   // Standalone output for cross-machine deploys (build on macOS, run on pod).
   // Turbopack bakes RELATIVE_ROOT_PATH at build time — without standalone,
   // the .next bundle only works on the machine that built it.

@@ -94,7 +94,19 @@ SAVED_IPTABLES=""
 
 unblock_wan() {
   echo "Temporarily unblocking WAN access..."
-  SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+  # Capture state verbatim. `|| true` would mask a failed save and
+  # quietly fall through to a minimal block_wan ruleset on restore —
+  # silent data loss. Fail loudly instead so the caller can bail.
+  if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+    echo "Error: iptables-save failed — refusing to unblock WAN." >&2
+    echo "$SAVED_IPTABLES" >&2
+    SAVED_IPTABLES=""
+    exit 1
+  fi
+  if [ -z "$SAVED_IPTABLES" ]; then
+    echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
+    exit 1
+  fi
   iptables -F
   iptables -X
   iptables -t nat -F
@@ -252,6 +264,23 @@ if id dac &>/dev/null; then
 else
   echo "Warning: user 'dac' not found — skipping group membership (not a Pod?)"
 fi
+
+# Create a dedicated system user for the Node.js service so it doesn't
+# run as UID 0. Membership:
+#   - sleepypod:  write access to $DATA_DIR (SQLite files)
+#   - dac:        read/write access to dac.sock (hardware control)
+# Runtime capabilities (CAP_NET_ADMIN, CAP_NET_RAW) are granted via the
+# service unit — they're only needed for iptables check/repair.
+if ! id sleepypod &>/dev/null; then
+  echo "Creating sleepypod system user..."
+  useradd --system --no-create-home --shell /usr/sbin/nologin \
+    --home-dir /nonexistent --gid sleepypod sleepypod
+fi
+# Add sleepypod to dac group (if dac exists) so it can reach dac.sock
+if id dac &>/dev/null; then
+  usermod -aG dac sleepypod
+fi
+
 mkdir -p "$DATA_DIR"
 chown root:sleepypod "$DATA_DIR"
 chmod 2770 "$DATA_DIR"
@@ -287,10 +316,47 @@ CURRENT_NODE_MAJOR=$(node -v 2>/dev/null | cut -d. -f1 | tr -d v || echo "0")
 if [ "$CURRENT_NODE_MAJOR" -lt "$NODE_WANTED" ]; then
   echo "Installing Node.js $NODE_FULL ($NODE_ARCH)..."
   NODE_TARBALL="node-v${NODE_FULL}-linux-${NODE_ARCH}.tar.gz"
-  NODE_URL="https://nodejs.org/dist/v${NODE_FULL}/${NODE_TARBALL}"
+  NODE_BASE_URL="https://nodejs.org/dist/v${NODE_FULL}"
+  NODE_URL="${NODE_BASE_URL}/${NODE_TARBALL}"
+
+  # Download tarball + SHASUMS256.txt to a scratch dir so we can verify
+  # integrity before extracting. A compromised CDN or MITM would otherwise
+  # install a backdoored binary silently (curl … | tar -xz has no checks).
+  NODE_TMP=$(mktemp -d)
+  if ! curl -fSL -o "$NODE_TMP/$NODE_TARBALL" "$NODE_URL"; then
+    echo "Error: Failed to download Node.js tarball from $NODE_URL" >&2
+    rm -rf "$NODE_TMP"
+    exit 1
+  fi
+  if ! curl -fSL -o "$NODE_TMP/SHASUMS256.txt" "$NODE_BASE_URL/SHASUMS256.txt"; then
+    echo "Error: Failed to download Node.js SHASUMS256.txt from $NODE_BASE_URL" >&2
+    rm -rf "$NODE_TMP"
+    exit 1
+  fi
+
+  # Verify with sha256sum (coreutils); fall back to shasum -a 256 (busybox/mac)
+  if command -v sha256sum &>/dev/null; then
+    NODE_HASH_CMD=(sha256sum --check --ignore-missing)
+  elif command -v shasum &>/dev/null; then
+    NODE_HASH_CMD=(shasum -a 256 --check --ignore-missing)
+  else
+    echo "Error: Neither sha256sum nor shasum available; cannot verify Node.js integrity." >&2
+    rm -rf "$NODE_TMP"
+    exit 1
+  fi
+
+  if ! (cd "$NODE_TMP" && "${NODE_HASH_CMD[@]}" SHASUMS256.txt) >/dev/null 2>&1; then
+    echo "Error: Node.js tarball SHA-256 verification failed." >&2
+    echo "  Expected hash from: $NODE_BASE_URL/SHASUMS256.txt" >&2
+    echo "  Tarball:            $NODE_URL" >&2
+    rm -rf "$NODE_TMP"
+    exit 1
+  fi
+  echo "Node.js tarball verified (SHA-256)."
 
   mkdir -p "$NODE_DIR"
-  curl -fSL "$NODE_URL" | tar -xz -C "$NODE_DIR"
+  tar -xz -C "$NODE_DIR" -f "$NODE_TMP/$NODE_TARBALL"
+  rm -rf "$NODE_TMP"
 
   # Symlink binaries into /usr/local/bin
   mkdir -p /usr/local/bin
@@ -512,13 +578,19 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 else
   echo "Creating environment file..."
   touch "$INSTALL_DIR/.env"
-  chmod 600 "$INSTALL_DIR/.env"
+  chmod 640 "$INSTALL_DIR/.env"
   cat > "$INSTALL_DIR/.env" << EOF
 DATABASE_URL=file:$DATA_DIR/sleepypod.db
 BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db
 DAC_SOCK_PATH=$DAC_SOCK_PATH
 NODE_ENV=production
 EOF
+fi
+
+# Ensure the unprivileged service user can read .env (mode 640 + group owner).
+if [ -f "$INSTALL_DIR/.env" ] && id sleepypod &>/dev/null; then
+  chown root:sleepypod "$INSTALL_DIR/.env"
+  chmod 640 "$INSTALL_DIR/.env"
 fi
 
 # Initialize database with migrations (not destructive push)
@@ -530,8 +602,20 @@ fi
 # Database migrations run automatically on app startup (instrumentation.ts)
 echo "Database migrations will run on first startup."
 
+# Ensure the unprivileged service user can traverse /home/dac to reach
+# $INSTALL_DIR. Default /home/dac perms on some Pods are 0700 which
+# would block a service running as sleepypod. Chmod o+x grants
+# traverse-only (no read/list) so dac's privacy is preserved.
+if id dac &>/dev/null && [ -d /home/dac ]; then
+  chmod o+x /home/dac
+fi
+
 # Create systemd service
 echo "Creating systemd service..."
+# Ensure /etc/iptables exists so ReadWritePaths= below doesn't fail the
+# namespace setup (ProtectSystem=strict makes /etc read-only by default;
+# the runtime's checkAndRepairIptables() writes /etc/iptables/rules.v4).
+mkdir -p /etc/iptables
 cat > /etc/systemd/system/sleepypod.service << EOF
 [Unit]
 Description=SleepyPod Core Service
@@ -539,27 +623,58 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+# Drop privileges: the Node.js app no longer runs as UID 0. It needs
+# group membership for dac.sock (dac) + data dir (sleepypod), and
+# CAP_NET_ADMIN/CAP_NET_RAW for runtime iptables check+repair. Anything
+# else that needs root runs via ExecStartPre with the \`+\` prefix.
+User=sleepypod
+Group=sleepypod
+SupplementaryGroups=dac
 UMask=0002
 WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
-ExecStartPre=/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
-ExecStartPre=$INSTALL_DIR/scripts/bin/sp-maintenance
+# The \`+\` prefix runs ExecStartPre as root regardless of User=. Needed
+# for /deviceinfo symlink creation (root-owned) and sp-maintenance
+# (journal vacuum, /tmp cleanup, pnpm store prune).
+ExecStartPre=+/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
+ExecStartPre=+$INSTALL_DIR/scripts/bin/sp-maintenance
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; else exec /usr/local/bin/pnpm start; fi'
 Restart=always
 RestartSec=10
 
-# Hardening (optional, doesn't interfere with dac.sock)
+# Capabilities — only what the runtime needs for iptables manipulation.
+# Bound everything else so a process compromise can't CAP_SYS_ADMIN etc.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+
+# Hardening — doesn't interfere with dac.sock or iptables writes
 NoNewPrivileges=true
 RuntimeDirectory=dac
-ReadWritePaths=$DATA_DIR /persistent/deviceinfo /deviceinfo /run/dac
+# /etc/iptables is writable because checkAndRepairIptables() persists
+# rules to /etc/iptables/rules.v4 after auto-repairing missing rules.
+# ProtectHome is NOT set: INSTALL_DIR lives at /home/dac/sleepypod-core
+# and the service needs to read .next, node_modules, .env there.
+ReadWritePaths=$DATA_DIR /persistent/deviceinfo /deviceinfo /run/dac /etc/iptables
 ProtectSystem=strict
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
