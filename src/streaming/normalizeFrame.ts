@@ -55,9 +55,9 @@ export interface WireFrzTemp {
   hs: number
 }
 
-/** bedTemp/bedTemp2 as the firmware writes it. */
-export interface WireBedTemp {
-  type: 'bedTemp' | 'bedTemp2'
+/** bedTemp2 (Pod 4 / Pod 5) — float degrees C, nested temps[] array per side. */
+export interface WireBedTemp2 {
+  type: 'bedTemp2'
   ts: number
   mcu?: number
   left: {
@@ -74,12 +74,31 @@ export interface WireBedTemp {
   }
 }
 
-/** capSense2 as the firmware writes it. */
+/** bedTemp (Pod 3, v1) — integer centidegrees, flat out/cen/in keys per side. */
+export interface WireBedTempV1 {
+  type: 'bedTemp'
+  ts: number
+  amb?: number // centidegrees
+  mcu?: number // centidegrees
+  hu?: number // centipercent
+  left: { side?: number, out?: number, cen?: number, in?: number }
+  right: { side?: number, out?: number, cen?: number, in?: number }
+}
+
+/** capSense2 (Pod 4 / Pod 5) — float values[] per side. */
 export interface WireCapSense2 {
   type: 'capSense2'
   ts: number
   left: { values: number[], status?: string } | number
   right: { values: number[], status?: string } | number
+}
+
+/** capSense (Pod 3, v1) — integer out/cen/in keys per side. */
+export interface WireCapSenseV1 {
+  type: 'capSense'
+  ts: number
+  left: { out?: number, cen?: number, in?: number, status?: string }
+  right: { out?: number, cen?: number, in?: number, status?: string }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +130,8 @@ function cdToC(v: unknown): number | null {
 
 export function normalizeFrame(rec: Record<string, unknown>): Record<string, unknown> {
   switch (rec.type) {
-    case 'bedTemp':
     case 'bedTemp2': {
+      // v2 (Pod 4 / Pod 5): floats in degrees, nested temps[] array.
       const left = (rec.left ?? {}) as Record<string, unknown>
       const right = (rec.right ?? {}) as Record<string, unknown>
       const leftTemps = (left.temps ?? []) as number[]
@@ -128,6 +147,45 @@ export function normalizeFrame(rec: Record<string, unknown>): Record<string, unk
         rightOuterTemp: safeNum(rightTemps[0]),
         rightCenterTemp: safeNum(rightTemps[1]),
         rightInnerTemp: safeNum(rightTemps[2]),
+      }
+    }
+    case 'bedTemp': {
+      // v1 (Pod 3): integer centidegrees, flat out/cen/in keys per side.
+      // Convert centidegrees → degrees C to match the canonical (v2) units.
+      const left = (rec.left ?? {}) as Record<string, unknown>
+      const right = (rec.right ?? {}) as Record<string, unknown>
+      return {
+        type: rec.type, ts: rec.ts,
+        ambientTemp: cdToC(rec.amb),
+        mcuTemp: cdToC(rec.mcu),
+        humidity: cdToC(rec.hu), // centipercent → percent (same /100 scale)
+        leftOuterTemp: cdToC(left.out),
+        leftCenterTemp: cdToC(left.cen),
+        leftInnerTemp: cdToC(left.in),
+        rightOuterTemp: cdToC(right.out),
+        rightCenterTemp: cdToC(right.cen),
+        rightInnerTemp: cdToC(right.in),
+      }
+    }
+    case 'capSense': {
+      // v1 (Pod 3): integer out/cen/in keys per side. Project into the same
+      // 6-slot paired-channel layout capSense2 uses so subscribers can read
+      // both. Missing slots stay as null to preserve zone position — never
+      // compact, or a partial frame would shift inner readings into outer
+      // slots and confuse downstream indexing.
+      const left = (rec.left ?? {}) as Record<string, unknown>
+      const right = (rec.right ?? {}) as Record<string, unknown>
+      const lOut = safeNum(left.out)
+      const lCen = safeNum(left.cen)
+      const lIn = safeNum(left.in)
+      const rOut = safeNum(right.out)
+      const rCen = safeNum(right.cen)
+      const rIn = safeNum(right.in)
+      return {
+        type: rec.type, ts: rec.ts,
+        left: [lOut, lOut, lCen, lCen, lIn, lIn],
+        right: [rOut, rOut, rCen, rCen, rIn, rIn],
+        status: left.status ?? right.status,
       }
     }
     case 'frzTemp':

@@ -185,6 +185,18 @@ function readRawRecord(
   return { data, nextOffset: pos }
 }
 
+/**
+ * Find the next outer-record marker (0xa2) at or after `from`. Returns the
+ * absolute buffer offset, or -1 if no marker exists in the remaining bytes.
+ *
+ * Used for resync after a malformed record — fast-forwarding to the next
+ * 0xa2 instead of advancing one byte at a time avoids log-spamming every
+ * null byte inside a partial piezo payload.
+ */
+function findNextRecordMarker(buf: Buffer, from: number): number {
+  return buf.indexOf(0xa2, from)
+}
+
 // ---------------------------------------------------------------------------
 // RAW file follower
 // ---------------------------------------------------------------------------
@@ -468,7 +480,9 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
       }
       catch (e) {
         if (e instanceof RangeError) break // incomplete record
-        bufPos += 1 // skip malformed byte, try to resync
+        const next = findNextRecordMarker(seekBuffer, bufPos + 1)
+        if (next < 0) break // no marker in remaining bytes
+        bufPos = next
       }
     }
   }
@@ -639,9 +653,21 @@ export function startPiezoStreamServer(): WebSocketServer {
           if (e instanceof RangeError) {
             break // incomplete record — wait for more data
           }
-          // Malformed record — skip forward one byte and try to resync
-          console.warn('[sensorStream] Skipping malformed record:', (e as Error).message)
-          bufferPos += 1
+          // Malformed record — fast-forward to the next 0xa2 marker. Avoids
+          // log-spamming every byte inside a partial piezo payload (the v1
+          // 0x00 nulls that motivated this) and recovers in O(remaining bytes).
+          const next = findNextRecordMarker(fileBuffer, bufferPos + 1)
+          if (next < 0) {
+            // No marker in remaining bytes — drop what we have and wait for
+            // more data on the next poll.
+            console.warn('[sensorStream] Resync: no 0xa2 marker in remaining %d bytes (%s)',
+              fileBuffer.length - bufferPos, (e as Error).message)
+            bufferPos = fileBuffer.length
+            break
+          }
+          console.warn('[sensorStream] Resync: skipped %d bytes to next record (%s)',
+            next - bufferPos, (e as Error).message)
+          bufferPos = next
         }
       }
 
