@@ -169,7 +169,10 @@ export function normalizeFrame(rec: Record<string, unknown>): Record<string, unk
     }
     case 'capSense': {
       // v1 (Pod 3): integer out/cen/in keys per side. Project into the same
-      // values:[] array shape capSense2 uses so subscribers can read both.
+      // 6-slot paired-channel layout capSense2 uses so subscribers can read
+      // both. Missing slots stay as null to preserve zone position — never
+      // compact, or a partial frame would shift inner readings into outer
+      // slots and confuse downstream indexing.
       const left = (rec.left ?? {}) as Record<string, unknown>
       const right = (rec.right ?? {}) as Record<string, unknown>
       const lOut = safeNum(left.out)
@@ -180,8 +183,8 @@ export function normalizeFrame(rec: Record<string, unknown>): Record<string, unk
       const rIn = safeNum(right.in)
       return {
         type: rec.type, ts: rec.ts,
-        left: [lOut, lOut, lCen, lCen, lIn, lIn].filter(v => v !== null) as number[],
-        right: [rOut, rOut, rCen, rCen, rIn, rIn].filter(v => v !== null) as number[],
+        left: [lOut, lOut, lCen, lCen, lIn, lIn],
+        right: [rOut, rOut, rCen, rCen, rIn, rIn],
         status: left.status ?? right.status,
       }
     }

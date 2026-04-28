@@ -347,5 +347,19 @@ describe('normalizeFrame', () => {
       const result = normalizeFrame(FIRMWARE_FIXTURES.capSenseV1 as Record<string, unknown>)
       expect(result.status).toBe('good')
     })
+
+    it('keeps zone positions stable when a field is missing', () => {
+      // If `out` is absent on a partial Pod 3 frame, the inner/center readings
+      // must NOT shift left into the outer slot — slot 0 stays null so
+      // subscribers indexing by zone aren't lied to.
+      const partial = {
+        type: 'capSense', ts: 1776463227,
+        left: { cen: 241, in: 339, status: 'good' },
+        right: { out: 372, cen: 498, in: 526, status: 'good' },
+      }
+      const result = normalizeFrame(partial as Record<string, unknown>)
+      expect((result.left as (number | null)[])).toEqual([null, null, 241, 241, 339, 339])
+      expect((result.right as (number | null)[])).toEqual([372, 372, 498, 498, 526, 526])
+    })
   })
 })
