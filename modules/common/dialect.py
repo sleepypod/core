@@ -109,7 +109,7 @@ def normalize_bed_temp(rec: dict) -> Optional[dict]:
             "ts": ts,
             "ambient_temp": _to_centidegrees(_ambient()),
             "mcu_temp": _to_centidegrees(rec.get("mcu")),
-            "humidity": _to_centidegrees(_humidity()),  # both percent and degrees use ×100
+            "humidity": _to_centidegrees(_humidity()),  # both percent and degrees use x100
             "left_outer_temp": _to_centidegrees(ltemps[0] if len(ltemps) > 0 else None),
             "left_center_temp": _to_centidegrees(ltemps[1] if len(ltemps) > 1 else None),
             "left_inner_temp": _to_centidegrees(ltemps[2] if len(ltemps) > 2 else None),

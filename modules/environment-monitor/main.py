@@ -86,15 +86,18 @@ def open_biometrics_db() -> sqlite3.Connection:
     return conn
 
 
-def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
+def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> bool:
     """Normalize a bedTemp/bedTemp2 record and write to bed_temp table.
 
     Dialect handling lives in common.dialect.normalize_bed_temp — this
     function consumes the canonical row-shape and writes it.
+
+    Returns True on a successful insert, False if the record didn't match
+    a known dialect (caller should not advance the downsample cursor).
     """
     canonical = normalize_bed_temp(record)
     if canonical is None:
-        return
+        return False
 
     with conn:
         conn.execute(
@@ -116,6 +119,7 @@ def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
                 canonical["right_inner_temp"],
             ),
         )
+    return True
 
 
 def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
@@ -199,8 +203,8 @@ def main() -> None:
 
             if rtype in ("bedTemp", "bedTemp2"):
                 if ts - last_bed_write >= DOWNSAMPLE_INTERVAL_S:
-                    write_bed_temp(db_conn, ts, record)
-                    last_bed_write = ts
+                    if write_bed_temp(db_conn, ts, record):
+                        last_bed_write = ts
 
             elif rtype == "frzTemp":
                 if ts - last_frz_write >= DOWNSAMPLE_INTERVAL_S:
