@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
 from common.raw_follower import RawFileFollower
+from common.dialect import normalize_bed_temp
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -45,9 +46,6 @@ SLEEPYPOD_DB = Path(os.environ.get(
 
 # Write at most once per 60s per record type
 DOWNSAMPLE_INTERVAL_S = 60
-
-# Hardware sentinel for "no sensor connected"
-NO_SENSOR = -327.68
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -88,50 +86,15 @@ def open_biometrics_db() -> sqlite3.Connection:
     return conn
 
 
-def _to_centidegrees(val) -> int | None:
-    """Convert a degrees-C float to centidegrees integer, or None if sentinel."""
-    if val is None or val == NO_SENSOR or abs(val - NO_SENSOR) < 0.01:
-        return None
-    return round(val * 100)
-
-
-def _to_centipercent(val) -> int | None:
-    """Convert a percent float to centipercent integer, or None if sentinel."""
-    if val is None or val == NO_SENSOR or abs(val - NO_SENSOR) < 0.01:
-        return None
-    return round(val * 100)
-
-
-def _safe_temp(temps: list, idx: int) -> int | None:
-    """Extract a thermistor value from a temps array by index."""
-    if not isinstance(temps, list) or idx >= len(temps):
-        return None
-    return _to_centidegrees(temps[idx])
-
-
 def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
-    """Parse bedTemp2 record and write to bed_temp table.
+    """Normalize a bedTemp/bedTemp2 record and write to bed_temp table.
 
-    bedTemp2 format:
-      mcu: float (MCU temp °C)
-      left:  {amb, hu, board, temps: [outer, center, inner, ?]}
-      right: {amb, hu, board, temps: [outer, center, inner, ?]}
+    Dialect handling lives in common.dialect.normalize_bed_temp — this
+    function consumes the canonical row-shape and writes it.
     """
-    left = record.get("left", {})
-    right = record.get("right", {})
-    left_temps = left.get("temps", [])
-    right_temps = right.get("temps", [])
-
-    # Use left ambient as the primary ambient reading (both sides share the room)
-    ambient = left.get("amb") if left.get("amb") != NO_SENSOR else right.get("amb")
-    # Average humidity from both sides (if available)
-    lhu = left.get("hu")
-    rhu = right.get("hu")
-    humidity = None
-    if lhu is not None and lhu != NO_SENSOR:
-        humidity = lhu
-    elif rhu is not None and rhu != NO_SENSOR:
-        humidity = rhu
+    canonical = normalize_bed_temp(record)
+    if canonical is None:
+        return
 
     with conn:
         conn.execute(
@@ -142,15 +105,15 @@ def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 int(ts),
-                _to_centidegrees(ambient),
-                _to_centidegrees(record.get("mcu")),
-                _to_centipercent(humidity),
-                _safe_temp(left_temps, 0),
-                _safe_temp(left_temps, 1),
-                _safe_temp(left_temps, 2),
-                _safe_temp(right_temps, 0),
-                _safe_temp(right_temps, 1),
-                _safe_temp(right_temps, 2),
+                canonical["ambient_temp"],
+                canonical["mcu_temp"],
+                canonical["humidity"],
+                canonical["left_outer_temp"],
+                canonical["left_center_temp"],
+                canonical["left_inner_temp"],
+                canonical["right_outer_temp"],
+                canonical["right_center_temp"],
+                canonical["right_inner_temp"],
             ),
         )
 
