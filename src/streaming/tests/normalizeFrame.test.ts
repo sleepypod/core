@@ -97,6 +97,24 @@ const FIRMWARE_FIXTURES = {
     level: 'debug',
     msg: 'test message',
   },
+
+  // v1 (Pod 3) — captured from issue #437 attached RAW (PR #437)
+  bedTempV1: {
+    type: 'bedTemp',
+    ts: 1776463233,
+    amb: 2514, // centidegrees → 25.14 °C
+    mcu: 3428,
+    hu: 3956,
+    left: { side: 2334, out: 2280, cen: 2301, in: 2359 },
+    right: { side: 2417, out: 2351, cen: 2420, in: 2396 },
+  },
+
+  capSenseV1: {
+    type: 'capSense',
+    ts: 1776463227,
+    left: { out: 290, cen: 241, in: 339, status: 'good' },
+    right: { out: 372, cen: 498, in: 526, status: 'good' },
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +292,60 @@ describe('normalizeFrame', () => {
       expect(result.type).toBe('log')
       expect(result.msg).toBe('test message')
       expect(result.level).toBe('debug')
+    })
+  })
+
+  describe('bedTemp v1 (Pod 3)', () => {
+    it('converts integer centidegrees to degrees C', () => {
+      const result = normalizeFrame(FIRMWARE_FIXTURES.bedTempV1 as Record<string, unknown>)
+      expect(result.ambientTemp).toBeCloseTo(25.14)
+      expect(result.mcuTemp).toBeCloseTo(34.28)
+      expect(result.humidity).toBeCloseTo(39.56)
+    })
+
+    it('extracts per-zone thermistors from flat out/cen/in keys', () => {
+      const result = normalizeFrame(FIRMWARE_FIXTURES.bedTempV1 as Record<string, unknown>)
+      expect(result.leftOuterTemp).toBeCloseTo(22.80)
+      expect(result.leftCenterTemp).toBeCloseTo(23.01)
+      expect(result.leftInnerTemp).toBeCloseTo(23.59)
+      expect(result.rightOuterTemp).toBeCloseTo(23.51)
+      expect(result.rightCenterTemp).toBeCloseTo(24.20)
+      expect(result.rightInnerTemp).toBeCloseTo(23.96)
+    })
+
+    it('preserves type tag and timestamp', () => {
+      const result = normalizeFrame(FIRMWARE_FIXTURES.bedTempV1 as Record<string, unknown>)
+      expect(result.type).toBe('bedTemp')
+      expect(result.ts).toBe(1776463233)
+    })
+
+    it('returns null for missing zone keys', () => {
+      const partial = {
+        type: 'bedTemp', ts: 1776463233,
+        amb: 2514, mcu: 3428, hu: 3956,
+        left: { out: 2280 }, // no cen, no in
+        right: {},
+      }
+      const result = normalizeFrame(partial as Record<string, unknown>)
+      expect(result.leftOuterTemp).toBeCloseTo(22.80)
+      expect(result.leftCenterTemp).toBeNull()
+      expect(result.rightInnerTemp).toBeNull()
+    })
+  })
+
+  describe('capSense v1 (Pod 3)', () => {
+    it('projects flat out/cen/in into a values array', () => {
+      const result = normalizeFrame(FIRMWARE_FIXTURES.capSenseV1 as Record<string, unknown>)
+      expect(Array.isArray(result.left)).toBe(true)
+      expect(Array.isArray(result.right)).toBe(true)
+      // Per-zone values duplicated to mimic the capSense2 paired-channel layout
+      expect((result.left as number[])).toEqual([290, 290, 241, 241, 339, 339])
+      expect((result.right as number[])).toEqual([372, 372, 498, 498, 526, 526])
+    })
+
+    it('preserves status', () => {
+      const result = normalizeFrame(FIRMWARE_FIXTURES.capSenseV1 as Record<string, unknown>)
+      expect(result.status).toBe('good')
     })
   })
 })
