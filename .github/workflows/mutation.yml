@@ -69,7 +69,7 @@ jobs:
       # on each other. `restore-keys` lets us fall back to older branch
       # baselines or the trunk baseline when the current commit is new.
       - name: Restore mutation-incremental cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: reports/mutation/incremental.json
           key: stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-${{ github.sha }}
@@ -85,7 +85,7 @@ jobs:
 
       - name: Save mutation-incremental cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: reports/mutation/incremental.json
           key: stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-${{ github.sha }}
