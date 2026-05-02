@@ -4,7 +4,9 @@ SleepyPod cover-buttons module.
 
 Tails /persistent/*.RAW for `buttonEvent` CBOR records emitted by the TTC
 cover (top/middle/bottom buttons on each side) and logs each press to the
-systemd journal. Pure observability — no DB writes, no action dispatch.
+systemd journal. No biometrics-data writes and no action dispatch — only
+the standard system_health lifecycle markers (start / fatal / stopped)
+that match the other Python sidecars.
 
 Wire schema (sparse — only sides/buttons that fired are present):
 
