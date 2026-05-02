@@ -59,6 +59,13 @@ def test_non_buttonevent_filtered_out():
     assert list(iter_presses(rec)) == []
 
 
+def test_non_dict_record_skipped():
+    # RawFileFollower yields decoded CBOR — corrupt frames can be lists,
+    # strings, ints, None. Service must not crash.
+    for bad in [None, [], "buttonEvent", 42, b"buttonEvent"]:
+        assert list(iter_presses(bad)) == []
+
+
 def test_both_sides_yielded():
     rec = {"type": "buttonEvent", "ts": 100,
            "left": {"top": 1}, "right": {"middle": 1, "bottom": 1}}

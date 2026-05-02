@@ -91,10 +91,11 @@ def report_health(status: str, message: str) -> None:
 def iter_presses(record):
     """Yield (side, button, count, ts) tuples from a buttonEvent record.
 
-    Skips malformed records (non-dict side payloads, unknown button keys)
-    without raising. Non-buttonEvent records yield nothing.
+    Skips malformed records (non-dict records, non-dict side payloads,
+    unknown button keys) without raising. Non-buttonEvent records yield
+    nothing. Corrupt RAW frames must not tear down the service.
     """
-    if record.get("type") != "buttonEvent":
+    if not isinstance(record, dict) or record.get("type") != "buttonEvent":
         return
     ts = record.get("ts")
     for side in VALID_SIDES:
@@ -133,8 +134,6 @@ def main() -> None:
 
     try:
         for record in follower.read_records():
-            if record.get("type") != "buttonEvent":
-                continue
             for side, button, count, ts in iter_presses(record):
                 for _ in range(count):
                     log.info("press: side=%s button=%s count=1 ts=%s",
