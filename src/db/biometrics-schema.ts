@@ -81,6 +81,9 @@ export const waterLevelReadings = sqliteTable('water_level_readings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   level: text('level', { enum: ['low', 'ok'] }).notNull(),
+  raw: integer('raw'),
+  calibratedEmpty: integer('calibrated_empty'),
+  calibratedFull: integer('calibrated_full'),
 }, t => [
   uniqueIndex('idx_water_level_timestamp').on(t.timestamp),
 ])
