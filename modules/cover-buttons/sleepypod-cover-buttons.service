@@ -1,0 +1,38 @@
+[Unit]
+Description=SleepyPod Cover Buttons (TTC button press observability)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/cover-buttons
+After=network.target sleepypod.service
+Wants=sleepypod.service
+
+[Service]
+Type=simple
+User=root
+UMask=0002
+WorkingDirectory=/opt/sleepypod/modules/cover-buttons
+ExecStart=/opt/sleepypod/modules/cover-buttons/.venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+# Environment — override via /etc/sleepypod/modules/cover-buttons.env
+EnvironmentFile=-/etc/sleepypod/modules/cover-buttons.env
+Environment="RAW_DATA_DIR=/persistent"
+Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
+Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
+
+# Resource limits
+MemoryMax=64M
+CPUQuota=20%
+
+# Sandboxing
+NoNewPrivileges=true
+ReadOnlyPaths=/persistent
+ReadWritePaths=/persistent/sleepypod-data
+ProtectSystem=strict
+ProtectKernelTunables=true
+# Isolated /tmp — otherwise ProtectSystem=strict + narrow ReadWritePaths
+# hide host /tmp → Python tempfile.mkstemp() errors "No usable temporary
+# directory found". See piezo-processor.service for the full rationale.
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
