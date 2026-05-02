@@ -8,6 +8,7 @@ import {
   deviceSettings,
   sideSettings,
   runOnceSessions,
+  deviceState,
 } from '@/src/db/schema'
 import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
@@ -18,20 +19,104 @@ import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { timeToDate } from './timeUtils'
 
+const HEARTBEAT_INTERVAL_MS_DEFAULT = 60_000
+const HEARTBEAT_STALE_MS_DEFAULT = 90_000
+const HEARTBEAT_RELOAD_COOLDOWN_MS = 300_000
+
+interface JobManagerOptions {
+  heartbeatIntervalMs?: number
+  heartbeatStaleMs?: number
+}
+
 /**
  * Job manager - orchestrates all scheduled tasks
  */
 export class JobManager {
   private scheduler: Scheduler
   private reloadInProgress: Promise<void> | null = null
+  private sideLocks: Record<'left' | 'right', Promise<void>> = {
+    left: Promise.resolve(),
+    right: Promise.resolve(),
+  }
 
-  constructor(timezone: string) {
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private readonly heartbeatIntervalMs: number
+  private readonly heartbeatStaleMs: number
+  private lastHeartbeatReloadAt = 0
+
+  constructor(timezone: string, options: JobManagerOptions = {}) {
     this.scheduler = new Scheduler({
       timezone,
       enabled: true,
     })
 
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS_DEFAULT
+    this.heartbeatStaleMs = options.heartbeatStaleMs ?? HEARTBEAT_STALE_MS_DEFAULT
+
     this.setupEventListeners()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Per-side serialization
+  //
+  // Power-off, power-on, temperature, alarm, and run-once temp handlers all
+  // mutate the same hardware side. node-schedule fires same-minute jobs in
+  // parallel inside the event loop, which previously let a `temperature` job
+  // win the race against a same-minute `power_off` (the temp's setTemperature
+  // command landed last and re-enabled heat). Wrapping the handlers in a
+  // per-side mutex serializes them; combined with power_off updating
+  // device_state.isPowered before sending hardware, any temp/alarm that
+  // acquires the lock after power_off observes isPowered=false and skips.
+  // ---------------------------------------------------------------------------
+  private async withSideLock<T>(side: 'left' | 'right', fn: () => Promise<T>): Promise<T> {
+    const prev = this.sideLocks[side]
+    let release!: () => void
+    this.sideLocks[side] = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    try {
+      await prev
+      return await fn()
+    }
+    finally {
+      release()
+    }
+  }
+
+  /**
+   * Read the current powered state for a side from device_state.
+   * Returns false if no row exists (treat as off).
+   */
+  private async isSidePowered(side: 'left' | 'right'): Promise<boolean> {
+    const [row] = await db
+      .select({ isPowered: deviceState.isPowered })
+      .from(deviceState)
+      .where(eq(deviceState.side, side))
+      .limit(1)
+    return row?.isPowered ?? false
+  }
+
+  /**
+   * Synchronously mark a side as powered off in device_state. Called by
+   * power_off handlers BEFORE sending the hardware command so concurrent
+   * temp/alarm jobs that acquire the side lock after see isPowered=false
+   * and skip. The DAC monitor's status poll will reconcile shortly after.
+   */
+  private async markSideOff(side: 'left' | 'right'): Promise<void> {
+    try {
+      await db
+        .update(deviceState)
+        .set({
+          isPowered: false,
+          poweredOnAt: null,
+          targetTemperature: null,
+          lastUpdated: new Date(),
+        })
+        .where(eq(deviceState.side, side))
+    }
+    catch (e) {
+      console.warn(`[jobManager] markSideOff failed for ${side}:`, e instanceof Error ? e.message : e)
+    }
   }
 
   /**
@@ -150,6 +235,75 @@ export class JobManager {
     await this.loadRunOnceSessions()
 
     console.log(`Loaded ${this.scheduler.getJobs().length} scheduled jobs`)
+
+    this.startHeartbeat()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Liveness heartbeat
+  //
+  // node-schedule's internal cron loop has been observed to silently stop
+  // firing jobs while the host process keeps running (status 200 on tRPC,
+  // no exception, just no fires). On 2026-05-02 this caused the 17:00 UTC
+  // power-off jobs to be missed entirely, leaving the bed heating until the
+  // user noticed. The heartbeat scans for jobs whose nextInvocation() has
+  // slipped into the past and, if any are stale, forces a reloadSchedules()
+  // to re-register fresh node-schedule timers. Cooldown prevents spinning
+  // on a persistent failure.
+  // ---------------------------------------------------------------------------
+  startHeartbeat(): void {
+    if (this.heartbeatTimer) return
+    this.heartbeatTimer = setInterval(() => {
+      void this.checkLiveness()
+    }, this.heartbeatIntervalMs)
+  }
+
+  stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+  }
+
+  /**
+   * Detect overdue jobs and force a schedule reload if any are found.
+   * Public so health endpoints / tests can trigger an on-demand check.
+   * Returns the list of stale job IDs found this tick (empty if healthy).
+   */
+  async checkLiveness(): Promise<string[]> {
+    const now = Date.now()
+    const stale: string[] = []
+    for (const job of this.scheduler.getJobs()) {
+      if (job.type === JobType.RUN_ONCE) continue
+      const next = this.scheduler.getNextInvocation(job.id)
+      if (!next) continue
+      const nextMs = next.getTime()
+      if (nextMs < now - this.heartbeatStaleMs) {
+        stale.push(job.id)
+      }
+    }
+    if (stale.length === 0) return stale
+
+    const cooldownLeft = HEARTBEAT_RELOAD_COOLDOWN_MS - (now - this.lastHeartbeatReloadAt)
+    if (cooldownLeft > 0) {
+      console.warn(
+        `[scheduler] ${stale.length} jobs overdue past nextRun by >${this.heartbeatStaleMs}ms `
+        + `(examples: ${stale.slice(0, 3).join(', ')}). Reload cooldown active for ${Math.round(cooldownLeft / 1000)}s.`
+      )
+      return stale
+    }
+    console.warn(
+      `[scheduler] ${stale.length} jobs overdue past nextRun by >${this.heartbeatStaleMs}ms `
+      + `(examples: ${stale.slice(0, 3).join(', ')}). Forcing reloadSchedules().`
+    )
+    this.lastHeartbeatReloadAt = now
+    try {
+      await this.reloadSchedules()
+    }
+    catch (e) {
+      console.error('[scheduler] heartbeat-triggered reload failed:', e instanceof Error ? e.message : e)
+    }
+    return stale
   }
 
   /**
@@ -165,26 +319,34 @@ export class JobManager {
       `temp-${sched.id}`,
       JobType.TEMPERATURE,
       cron,
-      async () => {
-        if (await this.hasActiveRunOnceSession(sched.side)) {
-          console.log(`Skipping recurring temp job temp-${sched.id} — run-once session active for ${sched.side}`)
-          return
-        }
-        const client = getSharedHardwareClient()
-        await client.connect()
-        try {
-          await client.setTemperature(sched.side, sched.temperature)
-          broadcastMutationStatus(sched.side, {
-            targetTemperature: sched.temperature,
-            targetLevel: fahrenheitToLevel(sched.temperature),
-          })
-        }
-        finally {
-          // shared client — don't disconnect
-        }
-      },
+      () => this.runTemperatureJob(sched),
       { scheduleId: sched.id, side: sched.side }
     )
+  }
+
+  /**
+   * Execute a temperature job's body. Exposed so tests can drive the handler
+   * directly without going through cron timing. Same gating + side-lock as
+   * the registered scheduler handler.
+   */
+  async runTemperatureJob(sched: typeof temperatureSchedules.$inferSelect): Promise<void> {
+    if (await this.hasActiveRunOnceSession(sched.side)) {
+      console.log(`Skipping recurring temp job temp-${sched.id} — run-once session active for ${sched.side}`)
+      return
+    }
+    await this.withSideLock(sched.side, async () => {
+      if (!(await this.isSidePowered(sched.side))) {
+        console.log(`Skipping temp job temp-${sched.id} — ${sched.side} is not powered`)
+        return
+      }
+      const client = getSharedHardwareClient()
+      await client.connect()
+      await client.setTemperature(sched.side, sched.temperature)
+      broadcastMutationStatus(sched.side, {
+        targetTemperature: sched.temperature,
+        targetLevel: fahrenheitToLevel(sched.temperature),
+      })
+    })
   }
 
   /**
@@ -198,28 +360,27 @@ export class JobManager {
       `power-on-${sched.id}`,
       JobType.POWER_ON,
       cron,
-      async () => {
-        if (await this.hasActiveRunOnceSession(sched.side)) {
-          console.log(`Skipping recurring power-on job — run-once session active for ${sched.side}`)
-          return
-        }
-        const client = getSharedHardwareClient()
-        await client.connect()
-        try {
-          await client.setPower(sched.side, true, sched.onTemperature)
-          cancelAutoOffTimer(sched.side)
-          const onTemp = sched.onTemperature ?? 75
-          broadcastMutationStatus(sched.side, {
-            targetTemperature: onTemp,
-            targetLevel: fahrenheitToLevel(onTemp),
-          })
-        }
-        finally {
-          // shared client — don't disconnect
-        }
-      },
+      () => this.runPowerOnJob(sched),
       { scheduleId: sched.id, side: sched.side }
     )
+  }
+
+  async runPowerOnJob(sched: typeof powerSchedules.$inferSelect): Promise<void> {
+    if (await this.hasActiveRunOnceSession(sched.side)) {
+      console.log(`Skipping recurring power-on job — run-once session active for ${sched.side}`)
+      return
+    }
+    await this.withSideLock(sched.side, async () => {
+      const client = getSharedHardwareClient()
+      await client.connect()
+      await client.setPower(sched.side, true, sched.onTemperature)
+      cancelAutoOffTimer(sched.side)
+      const onTemp = sched.onTemperature ?? 75
+      broadcastMutationStatus(sched.side, {
+        targetTemperature: onTemp,
+        targetLevel: fahrenheitToLevel(onTemp),
+      })
+    })
   }
 
   /**
@@ -233,23 +394,26 @@ export class JobManager {
       `power-off-${sched.id}`,
       JobType.POWER_OFF,
       cron,
-      async () => {
-        if (await this.hasActiveRunOnceSession(sched.side)) {
-          console.log(`Skipping recurring power-off job — run-once session active for ${sched.side}`)
-          return
-        }
-        const client = getSharedHardwareClient()
-        await client.connect()
-        try {
-          await client.setPower(sched.side, false)
-          broadcastMutationStatus(sched.side, { targetLevel: 0 })
-        }
-        finally {
-          // shared client — don't disconnect
-        }
-      },
+      () => this.runPowerOffJob(sched),
       { scheduleId: sched.id, side: sched.side }
     )
+  }
+
+  async runPowerOffJob(sched: typeof powerSchedules.$inferSelect): Promise<void> {
+    if (await this.hasActiveRunOnceSession(sched.side)) {
+      console.log(`Skipping recurring power-off job — run-once session active for ${sched.side}`)
+      return
+    }
+    await this.withSideLock(sched.side, async () => {
+      // Mark off in DB BEFORE hardware so any temp/alarm job that acquires
+      // the side lock after this one observes isPowered=false and skips its
+      // setTemperature command.
+      await this.markSideOff(sched.side)
+      const client = getSharedHardwareClient()
+      await client.connect()
+      await client.setPower(sched.side, false)
+      broadcastMutationStatus(sched.side, { targetLevel: 0 })
+    })
   }
 
   /**
@@ -263,31 +427,31 @@ export class JobManager {
       `alarm-${sched.id}`,
       JobType.ALARM,
       cron,
-      async () => {
-        const client = getSharedHardwareClient()
-        await client.connect()
-        try {
-          // Set alarm temperature first
-          await client.setTemperature(sched.side, sched.alarmTemperature)
-
-          // Trigger alarm
-          await client.setAlarm(sched.side, {
-            vibrationIntensity: sched.vibrationIntensity,
-            vibrationPattern: sched.vibrationPattern,
-            duration: sched.duration,
-          })
-          broadcastMutationStatus(sched.side, {
-            targetTemperature: sched.alarmTemperature,
-            targetLevel: fahrenheitToLevel(sched.alarmTemperature),
-            isAlarmVibrating: true,
-          })
-        }
-        finally {
-          // shared client — don't disconnect
-        }
-      },
+      () => this.runAlarmJob(sched),
       { scheduleId: sched.id, side: sched.side }
     )
+  }
+
+  async runAlarmJob(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
+    await this.withSideLock(sched.side, async () => {
+      if (!(await this.isSidePowered(sched.side))) {
+        console.log(`Skipping alarm job alarm-${sched.id} — ${sched.side} is not powered`)
+        return
+      }
+      const client = getSharedHardwareClient()
+      await client.connect()
+      await client.setTemperature(sched.side, sched.alarmTemperature)
+      await client.setAlarm(sched.side, {
+        vibrationIntensity: sched.vibrationIntensity,
+        vibrationPattern: sched.vibrationPattern,
+        duration: sched.duration,
+      })
+      broadcastMutationStatus(sched.side, {
+        targetTemperature: sched.alarmTemperature,
+        targetLevel: fahrenheitToLevel(sched.alarmTemperature),
+        isAlarmVibrating: true,
+      })
+    })
   }
 
   /**
@@ -641,18 +805,15 @@ export class JobManager {
         JobType.RUN_ONCE,
         fireDate,
         async () => {
-          const client = getSharedHardwareClient()
-          await client.connect()
-          try {
+          await this.withSideLock(side, async () => {
+            const client = getSharedHardwareClient()
+            await client.connect()
             await client.setTemperature(side, sp.temperature)
             broadcastMutationStatus(side, {
               targetTemperature: sp.temperature,
               targetLevel: fahrenheitToLevel(sp.temperature),
             })
-          }
-          finally {
-            // shared client — don't disconnect
-          }
+          })
         },
         { sessionId, side, index: i },
       )
@@ -683,16 +844,18 @@ export class JobManager {
           .set({ status: 'completed' })
           .where(eq(runOnceSessions.id, sessionId))
 
-        // Power off the side at wake time
-        try {
-          const client = getSharedHardwareClient()
-          await client.connect()
-          await client.setPower(side, false)
-          broadcastMutationStatus(side, { targetLevel: 0 })
-        }
-        catch (e) {
-          console.warn(`[runOnce] Failed to power off ${side} at wake:`, e)
-        }
+        await this.withSideLock(side, async () => {
+          await this.markSideOff(side)
+          try {
+            const client = getSharedHardwareClient()
+            await client.connect()
+            await client.setPower(side, false)
+            broadcastMutationStatus(side, { targetLevel: 0 })
+          }
+          catch (e) {
+            console.warn(`[runOnce] Failed to power off ${side} at wake:`, e)
+          }
+        })
 
         console.log(`Run-once session ${sessionId} completed — ${side} powered off`)
       },
@@ -785,6 +948,7 @@ export class JobManager {
    * Gracefully shutdown
    */
   async shutdown(): Promise<void> {
+    this.stopHeartbeat()
     this.removeEventListeners()
     await this.scheduler.shutdown()
   }
