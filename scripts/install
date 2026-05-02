@@ -750,6 +750,7 @@ else
   install_module "sleep-detector"
   install_module "environment-monitor"
   install_module "calibrator"
+  install_module "cover-buttons"
 fi
 
 # Re-fix DB permissions after all services restarted with new UMask.
@@ -890,5 +891,6 @@ echo "  Config:         $INSTALL_DIR/.env"
 echo "  Module logs:    journalctl -u sleepypod-piezo-processor.service"
 echo "                  journalctl -u sleepypod-sleep-detector.service"
 echo "                  journalctl -u sleepypod-environment-monitor.service"
+echo "                  journalctl -u sleepypod-cover-buttons.service"
 echo "  App logs:       journalctl -u sleepypod.service"
 echo ""

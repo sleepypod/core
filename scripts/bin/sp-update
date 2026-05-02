@@ -235,7 +235,7 @@ if [ -d "$INSTALL_DIR/modules" ]; then
   if ! command -v uv &>/dev/null; then
     echo "Warning: uv not found — biometrics modules not synced. Re-run the full installer."
   fi
-  for mod in piezo-processor sleep-detector environment-monitor calibrator; do
+  for mod in piezo-processor sleep-detector environment-monitor calibrator cover-buttons; do
     if [ -d "$INSTALL_DIR/modules/$mod" ]; then
       mkdir -p "$MODULES_DEST/$mod"
       cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
@@ -262,11 +262,17 @@ if [ -d "$INSTALL_DIR/modules" ]; then
   done
 fi
 
-# Install CLI tools from new source
+# Install CLI tools from new source.
+#
+# Use `install` (atomic mkstemp + rename) instead of `cp` — sp-update is
+# one of the sp-* tools being replaced here. `cp` truncates+writes into
+# the same inode, so the running bash reads garbage from its own script
+# after the overwrite ("line N: ): command not found" mid-run). `install`
+# stages new bytes at a fresh inode and renames over the path, so the
+# running process's open fd keeps pointing at the original content.
 if [ -d "$INSTALL_DIR/scripts/bin" ]; then
   for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
-    cp "$tool" /usr/local/bin/
-    chmod +x "/usr/local/bin/$(basename "$tool")"
+    install -m 0755 "$tool" "/usr/local/bin/$(basename "$tool")"
   done
 fi
 
