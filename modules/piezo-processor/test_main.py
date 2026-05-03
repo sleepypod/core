@@ -32,6 +32,9 @@ from main import (  # noqa: E402
     compute_breathing_rate,
     compute_hrv,
     subharmonic_summation_hr,
+    FrzHealthPumpState,
+    ASYMMETRIC_PUMP_GUARD_S,
+    ASYMMETRIC_PUMP_RPM_MIN,
     HRTracker,
     PresenceDetector,
     PumpGate,
@@ -851,3 +854,144 @@ class TestIntegration:
 
         # At least one of these should indicate "nobody home"
         assert not present or hr is None or score < 0.15
+
+
+# ===================================================================
+# FrzHealthPumpState — asymmetric pump-coupling guard
+# ===================================================================
+
+class TestFrzHealthPumpState:
+    """Tracks per-side pump RPM from frzHealth records and identifies
+    asymmetric pump-on configurations (own pump active, other idle) that
+    cause phantom presence on Pod 3. Bug observed live 2026-05-02:
+    right-side heating with pump@2000RPM produced 23 vitals rows in
+    30 min with no occupant."""
+
+    def test_ignores_non_frzhealth_records(self):
+        ps = FrzHealthPumpState()
+        ps.update({"type": "piezo-dual", "left": {"pumpRpm": 5000}, "right": {"pumpRpm": 5000}})
+        assert ps.is_side_pump_active("left") is False
+        assert ps.is_side_pump_active("right") is False
+
+    def test_marks_pump_active_above_threshold(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": ASYMMETRIC_PUMP_RPM_MIN + 100},
+        })
+        assert ps.is_side_pump_active("left") is False
+        assert ps.is_side_pump_active("right") is True
+
+    def test_below_threshold_is_idle(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": ASYMMETRIC_PUMP_RPM_MIN - 1},
+            "right": {"pumpRpm": ASYMMETRIC_PUMP_RPM_MIN - 1},
+        })
+        assert ps.is_side_pump_active("left") is False
+        assert ps.is_side_pump_active("right") is False
+
+    def test_alternative_field_names(self):
+        """Different firmware versions emit pumpRpm / pump_rpm / rpm /
+        pumpDuty. The state tracker must read all of them."""
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pump_rpm": 2000},
+            "right": {"rpm": 2000},
+        })
+        assert ps.is_side_pump_active("left") is True
+        assert ps.is_side_pump_active("right") is True
+
+    def test_pumpDuty_fallback(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpDuty": 50},
+            "right": {"pumpDuty": 0},
+        })
+        assert ps.is_side_pump_active("left") is True
+        assert ps.is_side_pump_active("right") is False
+
+    def test_is_asymmetric_true_when_only_own_side_running(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 2000},
+        })
+        # The exact live observation: right is heating, left is off.
+        assert ps.is_asymmetric_for("right") is True
+        assert ps.is_asymmetric_for("left") is False
+
+    def test_is_asymmetric_false_when_both_running(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 2000},
+            "right": {"pumpRpm": 2000},
+        })
+        # Both pumps on → balanced; broadband PumpGate handles this case.
+        # Asymmetric guard should not fire.
+        assert ps.is_asymmetric_for("left") is False
+        assert ps.is_asymmetric_for("right") is False
+
+    def test_is_asymmetric_false_when_both_idle(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 0},
+        })
+        assert ps.is_asymmetric_for("left") is False
+        assert ps.is_asymmetric_for("right") is False
+
+    def test_guard_period_after_pump_off(self):
+        """After own-side pump turns off, ringing in piezo continues for
+        a few seconds — keep the gate active during that trailing window."""
+        ps = FrzHealthPumpState()
+        # Pump on
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 2000},
+        })
+        assert ps.is_side_pump_active("right") is True
+
+        # Pump off — should still be "active" within guard
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 0},
+        })
+        assert ps.is_side_pump_active("right") is True
+        assert ps.is_asymmetric_for("right") is True
+
+    def test_guard_period_expires(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 2000},
+        })
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 0},
+        })
+        # Force guard expiry
+        ps._pump_off_at["right"] = time.monotonic() - ASYMMETRIC_PUMP_GUARD_S - 1
+        assert ps.is_side_pump_active("right") is False
+
+    def test_handles_malformed_record_safely(self):
+        ps = FrzHealthPumpState()
+        # No left/right keys
+        ps.update({"type": "frzHealth"})
+        # Wrong types
+        ps.update({"type": "frzHealth", "left": "not a dict", "right": [1, 2, 3]})
+        # Non-numeric rpm
+        ps.update({"type": "frzHealth", "left": {"pumpRpm": "abc"}, "right": {"pumpRpm": None}})
+        assert ps.is_side_pump_active("left") is False
+        assert ps.is_side_pump_active("right") is False

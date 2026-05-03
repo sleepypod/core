@@ -65,6 +65,17 @@ PUMP_ENERGY_MULTIPLIER = 10.0
 PUMP_CORRELATION_MIN = 0.5
 PUMP_GUARD_S = 5.0
 
+# Per-side pump activity threshold (frzHealth pump RPM). When one side's
+# pump is running and the opposite side's is idle, observed live on
+# 2026-05-02: a heating cycle on right with left idle drove pump@2000RPM
+# coupling into the right piezo and produced phantom HR/HRV/BR. The
+# existing PumpGate (broadband-symmetric energy spike) does not catch
+# asymmetric pump activity because min/max ratio is small.
+ASYMMETRIC_PUMP_RPM_MIN = 50          # pump considered "running" above this
+ASYMMETRIC_PUMP_GUARD_S = 5.0         # trailing guard after own-side pump-off
+ASYMMETRIC_PRESENCE_STD_FACTOR = 4.0  # raise enter_threshold by this factor
+ASYMMETRIC_PRESENCE_ACR_THRESHOLD = 0.6  # require strong autocorr to enter
+
 # HR band: 0.8 Hz preserves fundamental of 48+ BPM; 8.5 Hz per PMC7582983
 HR_BAND = (0.8, 8.5)
 
@@ -158,6 +169,68 @@ def _bandpass(sig: np.ndarray, lo: float, hi: float, fs: float,
 # ---------------------------------------------------------------------------
 # Pump gating — streaming adaptation (Shin et al. IEEE TBME 2009)
 # ---------------------------------------------------------------------------
+
+class FrzHealthPumpState:
+    """Tracks per-side pump RPM from frzHealth records.
+
+    Used by SideProcessor to suppress phantom presence detection when
+    only the same side's pump is running (asymmetric pump-coupling
+    artifact). Trailing guard period mirrors the post-pump-off ringing
+    in the piezo channel.
+    """
+
+    def __init__(self):
+        self._pump_rpm = {"left": 0.0, "right": 0.0}
+        # monotonic seconds when each side's pump last turned off
+        self._pump_off_at = {"left": 0.0, "right": 0.0}
+        self._was_active = {"left": False, "right": False}
+
+    def update(self, record: dict) -> None:
+        if record.get("type") != "frzHealth":
+            return
+        for side in ("left", "right"):
+            data = record.get(side)
+            if not isinstance(data, dict):
+                continue
+            rpm = 0.0
+            for key in ("pumpRpm", "pump_rpm", "pumpRPM", "rpm"):
+                val = data.get(key)
+                if val is not None:
+                    try:
+                        rpm = float(val)
+                    except (TypeError, ValueError):
+                        rpm = 0.0
+                    break
+            if rpm == 0:
+                for key in ("pumpDuty", "pump_duty", "duty"):
+                    val = data.get(key)
+                    if val is not None:
+                        try:
+                            rpm = ASYMMETRIC_PUMP_RPM_MIN + 1.0 if float(val) > 0 else 0.0
+                        except (TypeError, ValueError):
+                            rpm = 0.0
+                        break
+
+            now_active = rpm >= ASYMMETRIC_PUMP_RPM_MIN
+            if self._was_active[side] and not now_active:
+                self._pump_off_at[side] = time.monotonic()
+            self._pump_rpm[side] = rpm
+            self._was_active[side] = now_active
+
+    def is_side_pump_active(self, side: str) -> bool:
+        """Pump active = currently running OR within the trailing guard window."""
+        if self._pump_rpm[side] >= ASYMMETRIC_PUMP_RPM_MIN:
+            return True
+        return time.monotonic() - self._pump_off_at[side] < ASYMMETRIC_PUMP_GUARD_S
+
+    def is_asymmetric_for(self, side: str) -> bool:
+        """Own pump active, opposite pump idle (and outside its own guard).
+        This is the configuration that produces phantom presence: pump
+        vibration on the powered side without competing signal on the
+        other side to balance/reject."""
+        other = "right" if side == "left" else "left"
+        return self.is_side_pump_active(side) and not self.is_side_pump_active(other)
+
 
 class PumpGate:
     """Detects pump activity from dual-channel energy spikes.
@@ -631,7 +704,8 @@ def compute_hrv(samples: np.ndarray,
 # ---------------------------------------------------------------------------
 
 class SideProcessor:
-    def __init__(self, side: str, db_conn: sqlite3.Connection):
+    def __init__(self, side: str, db_conn: sqlite3.Connection,
+                 pump_state: Optional[FrzHealthPumpState] = None):
         self.side = side
         self.db = db_conn
         self._hr_buf: deque = deque(maxlen=HR_WINDOW_S * SAMPLE_RATE)
@@ -643,6 +717,7 @@ class SideProcessor:
         self._other: Optional['SideProcessor'] = None  # set after both sides created
         self._last_med_std: float = 0.0  # cached for cross-channel comparison
         self._last_acr_qual: float = 0.0
+        self._pump_state = pump_state
 
     def ingest(self, samples: np.ndarray) -> None:
         self._hr_buf.extend(samples)
@@ -689,6 +764,29 @@ class SideProcessor:
         # Cache AFTER suppression so the other side sees post-suppression values
         self._last_med_std = med_std
         self._last_acr_qual = acr_qual
+
+        # Asymmetric pump-coupling guard: when own-side pump is active and the
+        # opposite side's pump is idle, motor vibration couples into the same-
+        # side piezo channel and produces broadband energy with periodic-looking
+        # autocorrelation in the cardiac band. The existing PumpGate (broadband-
+        # symmetric spike) does not catch this asymmetric case. While the gate
+        # is active, require BOTH significantly elevated energy AND strong
+        # autocorrelation to enter PRESENT — pure pump coupling rarely produces
+        # both because cardiac periodicity dominates only with a real person.
+        if (self._pump_state is not None
+                and self._pump_state.is_asymmetric_for(self.side)
+                and self._presence.state == PresenceDetector.ABSENT):
+            asymmetric_std_threshold = (
+                self._presence.enter_threshold * ASYMMETRIC_PRESENCE_STD_FACTOR
+            )
+            if not (med_std > asymmetric_std_threshold
+                    and acr_qual > ASYMMETRIC_PRESENCE_ACR_THRESHOLD):
+                log.debug(
+                    "%s: pump-coupling guard suppressed presence "
+                    "(med_std=%.0f, acr=%.2f, own-pump-active, other-idle)",
+                    self.side, med_std, acr_qual,
+                )
+                return
 
         present = self._presence.update(med_std, acr_qual)
 
@@ -742,8 +840,9 @@ def main() -> None:
 
     db_conn = open_biometrics_db()
     pump_gate = PumpGate()
-    left = SideProcessor("left", db_conn)
-    right = SideProcessor("right", db_conn)
+    pump_state = FrzHealthPumpState()
+    left = SideProcessor("left", db_conn, pump_state=pump_state)
+    right = SideProcessor("right", db_conn, pump_state=pump_state)
     left._other = right
     right._other = left
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
@@ -752,7 +851,14 @@ def main() -> None:
 
     try:
         for record in follower.read_records():
-            if record.get("type") != "piezo-dual":
+            rtype = record.get("type")
+
+            # Track per-side pump state for the asymmetric pump-coupling guard
+            if rtype == "frzHealth":
+                pump_state.update(record)
+                continue
+
+            if rtype != "piezo-dual":
                 continue
 
             # Each record contains ~500 int32 samples per channel
