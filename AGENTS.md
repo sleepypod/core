@@ -51,6 +51,15 @@ ygg logs --follow                           # Live event stream
 - Use `ygg task` for cross-session work tracking; `ygg remember` for durable notes.
 - Do NOT use `bd` / beads.
 
+## PRs to `main`
+
+Every PR to `main` is a release promotion. Title MUST start with
+`feat:` / `fix:` / `perf:` / `revert:` (optional `(scope)`, optional `!`
+for breaking) — these are the only types semantic-release acts on. Other
+prefixes (`Release:`, `chore:`, `docs:`, bare `Bump…`) are blocked by
+`.github/workflows/pr-title-gate.yml` and would otherwise leave
+`releases/latest` stale.
+
 ## Session Completion
 
 Work is not complete until `git push` succeeds. Release held locks, run quality gates, rebase, push, verify `git status` shows up-to-date.
