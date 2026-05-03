@@ -1,11 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "group:monorepos"
   ],
   "automerge": true,
   "automergeType": "branch",
   "minimumReleaseAge": "3 days",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "prConcurrentLimit": 5,
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
@@ -14,22 +19,15 @@
   "packageRules": [
     {
       "matchUpdateTypes": [
-        "patch"
+        "patch",
+        "minor"
       ],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch",
       "automerge": true,
       "labels": [
         "dependencies",
-        "patch"
-      ]
-    },
-    {
-      "matchUpdateTypes": [
-        "minor"
-      ],
-      "automerge": true,
-      "labels": [
-        "dependencies",
-        "minor"
+        "non-major"
       ]
     },
     {
