@@ -119,6 +119,14 @@ ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
 ip6tables -P FORWARD ACCEPT 2>/dev/null || true
 rm -f /etc/iptables/iptables.rules /etc/iptables/rules.v4 /etc/iptables/rules.v6
 
+# Remove the sleepypod system user (the group is kept in case dac is
+# still a member — removing it would orphan file ownership on any
+# databases preserved via --keep-data).
+if id sleepypod &>/dev/null; then
+  echo "Removing sleepypod system user..."
+  userdel sleepypod 2>/dev/null || true
+fi
+
 # Re-enable free-sleep if available
 for fs_svc in free-sleep.service free-sleep-stream.service; do
   if systemctl list-unit-files "$fs_svc" 2>/dev/null | grep -q "$fs_svc"; then
