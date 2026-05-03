@@ -196,11 +196,23 @@ describe('piezoStream — backpressure', () => {
     expect(ok).toBe(false)
   })
 
-  it('allows exactly at the threshold (strict greater-than guard)', () => {
+  it('rejects when bufferedAmount + payload size would exceed the threshold', () => {
+    // Payload-size-aware guard: at exactly MAX, any non-empty send would push
+    // past the cap. Reject so the buffer never crosses MAX_BUFFERED_BYTES.
     const ws = fakeWs({ bufferedAmount: MAX_BUFFERED_BYTES })
     const ok = sendWithBackpressure(ws as never, 'payload')
+    expect(ok).toBe(false)
+    expect(ws.sent).toEqual([])
+    expect(clientDroppedFrames.get(ws as never)).toBe(1)
+  })
+
+  it('allows when bufferedAmount + payload size stays at the threshold', () => {
+    const payload = 'payload'
+    const payloadSize = Buffer.byteLength(payload)
+    const ws = fakeWs({ bufferedAmount: MAX_BUFFERED_BYTES - payloadSize })
+    const ok = sendWithBackpressure(ws as never, payload)
     expect(ok).toBe(true)
-    expect(ws.sent).toEqual(['payload'])
+    expect(ws.sent).toEqual([payload])
   })
 })
 

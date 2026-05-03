@@ -340,7 +340,10 @@ function cleanupClient(ws: WebSocket): void {
  */
 function sendWithBackpressure(client: WebSocket, payload: string): boolean {
   if (client.readyState !== WebSocket.OPEN) return false
-  if (client.bufferedAmount > MAX_BUFFERED_BYTES) {
+  // Account for the pending payload — checking bufferedAmount alone lets each
+  // send push the buffer past MAX_BUFFERED_BYTES before the next call notices.
+  const payloadByteSize = Buffer.byteLength(payload)
+  if (client.bufferedAmount + payloadByteSize > MAX_BUFFERED_BYTES) {
     clientDroppedFrames.set(client, (clientDroppedFrames.get(client) ?? 0) + 1)
     return false
   }
@@ -495,6 +498,7 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
     let bufPos = 0
     const maxTs = targetTs + SEEK_MAX_DURATION_S
     let done = false
+    let droppedDuringReplay = 0
 
     while (bufPos < seekBuffer.length && !done) {
       try {
@@ -520,13 +524,24 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
             done = true
             break
           }
-          sendWithBackpressure(ws, JSON.stringify(frame))
+          if (!sendWithBackpressure(ws, JSON.stringify(frame))) {
+            droppedDuringReplay += 1
+          }
         }
       }
       catch (e) {
         if (e instanceof RangeError) break // incomplete record
         bufPos += 1 // skip malformed byte, try to resync
       }
+    }
+
+    if (ws.readyState === WebSocket.OPEN) {
+      // Report partial replays so the client can re-seek if needed instead of
+      // assuming it received the full window.
+      ws.send(JSON.stringify({
+        type: 'seek_complete',
+        ...(droppedDuringReplay > 0 && { incomplete: true, droppedFrames: droppedDuringReplay }),
+      }))
     }
   }
   catch {
@@ -536,10 +551,6 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
       }
       catch { /* ignore */ }
     }
-  }
-
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'seek_complete' }))
   }
 }
 
@@ -792,6 +803,10 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
     wss = null
     return new Promise<void>((resolve) => {
       server.close(() => {
+        // Drop per-client state explicitly — relying on per-socket close
+        // events leaks if any handler failed to fire.
+        clientSubscriptions.clear()
+        clientDroppedFrames.clear()
         console.log('[sensorStream] WebSocket server closed')
         resolve()
       })
