@@ -83,7 +83,7 @@ describe('nowInTimezone', () => {
     const now = new Date('2026-04-01T14:30:00Z')
     // 10:30 EDT
     expect(nowInTimezone('America/New_York', now)).toEqual({ hour: 10, minute: 30 })
-    // 06:30 PDT
+    // 07:30 PDT (April → DST in effect, UTC-7)
     expect(nowInTimezone('America/Los_Angeles', now)).toEqual({ hour: 7, minute: 30 })
     // 14:30 UTC
     expect(nowInTimezone('UTC', now)).toEqual({ hour: 14, minute: 30 })

@@ -44,6 +44,7 @@ vi.mock('@/src/db/schema', () => {
     deviceSettings: make('deviceSettings'),
     sideSettings: make('sideSettings'),
     runOnceSessions: make('runOnceSessions'),
+    deviceState: make('deviceState'),
   }
 })
 
