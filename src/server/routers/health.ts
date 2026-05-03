@@ -110,11 +110,17 @@ export const healthRouter = router({
           })
           .slice(0, 10) // Return next 10 upcoming jobs
 
+        const enabled = scheduler.isEnabled()
         return {
-          enabled: scheduler.isEnabled(),
+          enabled,
           jobCounts,
           upcomingJobs,
-          healthy: jobs.length > 0 || jobCounts.total === 0, // Healthy if has jobs or expected to have none
+          // Healthy when scheduler is disabled (no jobs expected) or enabled
+          // with at least one loaded job. The previous `jobs.length > 0 ||
+          // jobCounts.total === 0` was always true because jobCounts.total is
+          // derived from jobs.length, so an enabled-but-empty scheduler (the
+          // failure mode this signal is meant to catch) was reported healthy.
+          healthy: enabled ? jobCounts.total > 0 : true,
         }
       }
       catch (error) {
