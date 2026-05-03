@@ -590,15 +590,22 @@ if [ -f "$INSTALL_DIR/.env" ]; then
   grep -q "^BIOMETRICS_DATABASE_URL=" "$INSTALL_DIR/.env" && \
     sed -i "s|^BIOMETRICS_DATABASE_URL=.*|BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db|" "$INSTALL_DIR/.env" || \
     echo "BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db" >> "$INSTALL_DIR/.env"
+
+  # Generate EXPORT_TOKEN once if missing — preserved across upgrades.
+  if ! grep -q "^EXPORT_TOKEN=" "$INSTALL_DIR/.env"; then
+    echo "EXPORT_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '+/=' )" >> "$INSTALL_DIR/.env"
+  fi
 else
   echo "Creating environment file..."
   touch "$INSTALL_DIR/.env"
   chmod 640 "$INSTALL_DIR/.env"
+  EXPORT_TOKEN_VAL="$(head -c 24 /dev/urandom | base64 | tr -d '+/=' )"
   cat > "$INSTALL_DIR/.env" << EOF
 DATABASE_URL=file:$DATA_DIR/sleepypod.db
 BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db
 DAC_SOCK_PATH=$DAC_SOCK_PATH
 NODE_ENV=production
+EXPORT_TOKEN=$EXPORT_TOKEN_VAL
 EOF
 fi
 
