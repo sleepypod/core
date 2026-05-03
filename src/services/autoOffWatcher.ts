@@ -14,6 +14,7 @@ import { db, biometricsDb } from '@/src/db'
 import { deviceSettings, sideSettings, deviceState, runOnceSessions } from '@/src/db/schema'
 import { sleepRecords } from '@/src/db/biometrics-schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 
 // ---------------------------------------------------------------------------
@@ -207,6 +208,7 @@ function isUserInBed(side: Side): boolean {
 /** Power off a side via the shared hardware client. */
 async function powerOffSide(side: Side): Promise<void> {
   try {
+    markSideMutated(side)
     const client = getSharedHardwareClient()
     await client.connect()
     await client.setPower(side, false)

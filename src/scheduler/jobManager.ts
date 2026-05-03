@@ -17,6 +17,7 @@ import { encode as cborEncode } from 'cbor-x'
 import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
+import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { timeToDate } from './timeUtils'
 
 const HEARTBEAT_INTERVAL_MS_DEFAULT = 60_000
@@ -103,6 +104,7 @@ export class JobManager {
    * and skip. The DAC monitor's status poll will reconcile shortly after.
    */
   private async markSideOff(side: 'left' | 'right'): Promise<void> {
+    markSideMutated(side)
     try {
       await db
         .update(deviceState)
@@ -339,6 +341,7 @@ export class JobManager {
         console.log(`Skipping temp job temp-${sched.id} — ${sched.side} is not powered`)
         return
       }
+      markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
       await client.setTemperature(sched.side, sched.temperature)
@@ -371,6 +374,7 @@ export class JobManager {
       return
     }
     await this.withSideLock(sched.side, async () => {
+      markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
       await client.setPower(sched.side, true, sched.onTemperature)
@@ -438,6 +442,7 @@ export class JobManager {
         console.log(`Skipping alarm job alarm-${sched.id} — ${sched.side} is not powered`)
         return
       }
+      markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
       await client.setTemperature(sched.side, sched.alarmTemperature)
@@ -806,6 +811,7 @@ export class JobManager {
         fireDate,
         async () => {
           await this.withSideLock(side, async () => {
+            markSideMutated(side)
             const client = getSharedHardwareClient()
             await client.connect()
             await client.setTemperature(side, sp.temperature)

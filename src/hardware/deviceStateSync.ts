@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { waterLevelReadings, flowReadings } from '@/src/db/biometrics-schema'
-import type { DeviceStatus } from './types'
+import type { DeviceStatus, Side } from './types'
 
 /**
  * Consumes status:updated events and writes current device state to the DB.
@@ -12,6 +12,36 @@ import type { DeviceStatus } from './types'
  * uses capacitance sensor data for accurate presence detection rather than
  * power-cycle heuristics.
  */
+
+// ── Mutation freshness ────────────────────────────────────────────────────
+// Manual mutations (setPower, setTemperature, setAlarm, scheduler power_off,
+// autoOffWatcher) write powered-state to device_state synchronously. The
+// firmware then needs ~1–3s to reflect the command in its status report,
+// during which a poll can carry stale data (e.g. setPower(true) writes
+// is_powered=1 but the next 1s-poll still reports targetLevel=0/
+// heatingDuration=0/currentLevel=0 — durationExpired is true → isNowPowered
+// is false → the fresh write gets clobbered). Mutations stamp this map so
+// upsertSide can skip the powered-state portion of the write inside the
+// freshness window. Observation fields (current temperature, water level)
+// still update normally.
+const MUTATION_FRESHNESS_MS = 5_000
+const recentMutations: Record<Side, number> = { left: 0, right: 0 }
+
+/** Mark a side as just-mutated; suppresses powered-state overwrite from
+ *  the next firmware poll(s) within the freshness window. */
+export function markSideMutated(side: Side): void {
+  recentMutations[side] = Date.now()
+}
+
+function isSideRecentlyMutated(side: Side): boolean {
+  return Date.now() - recentMutations[side] < MUTATION_FRESHNESS_MS
+}
+
+/** @internal — for tests only */
+export function _resetMutationStamps(): void {
+  recentMutations.left = 0
+  recentMutations.right = 0
+}
 /** Read alarm vibration state from DB (set by setAlarm/clearAlarm mutations). */
 export function getAlarmState(): { left: boolean, right: boolean } {
   try {
@@ -76,9 +106,15 @@ export class DeviceStateSync {
     const durationExpired = sideStatus.targetLevel === 0 && sideStatus.heatingDuration === 0
     const isNowPowered = durationExpired ? false : sideStatus.currentLevel !== 0
 
+    const skipPoweredFields = isSideRecentlyMutated(side)
+
     db.transaction((tx) => {
       const [prev] = tx
-        .select({ isPowered: deviceState.isPowered, poweredOnAt: deviceState.poweredOnAt })
+        .select({
+          isPowered: deviceState.isPowered,
+          poweredOnAt: deviceState.poweredOnAt,
+          targetTemperature: deviceState.targetTemperature,
+        })
         .from(deviceState)
         .where(eq(deviceState.side, side))
         .limit(1)
@@ -98,25 +134,32 @@ export class DeviceStateSync {
       // doesn't show a stale "warming to X°F" when the pod is actually neutral.
       const targetTemp = durationExpired ? null : sideStatus.targetTemperature
 
+      // If a mutation just landed, the firmware status is likely stale —
+      // preserve the mutation's powered-state fields and only refresh
+      // observation fields (currentTemperature, waterLevel).
+      const writeIsPowered = skipPoweredFields ? wasPowered : isNowPowered
+      const writePoweredOnAt = skipPoweredFields ? prev?.poweredOnAt ?? null : poweredOnAt
+      const writeTargetTemp = skipPoweredFields ? prev?.targetTemperature ?? null : targetTemp
+
       tx
         .insert(deviceState)
         .values({
           side,
           currentTemperature: sideStatus.currentTemperature,
-          targetTemperature: targetTemp,
-          isPowered: isNowPowered,
+          targetTemperature: writeTargetTemp,
+          isPowered: writeIsPowered,
           waterLevel: status.waterLevel,
-          poweredOnAt,
+          poweredOnAt: writePoweredOnAt,
           lastUpdated: now,
         })
         .onConflictDoUpdate({
           target: deviceState.side,
           set: {
             currentTemperature: sideStatus.currentTemperature,
-            targetTemperature: targetTemp,
-            isPowered: isNowPowered,
+            targetTemperature: writeTargetTemp,
+            isPowered: writeIsPowered,
             waterLevel: status.waterLevel,
-            poweredOnAt,
+            poweredOnAt: writePoweredOnAt,
             lastUpdated: now,
           },
         })

@@ -10,6 +10,7 @@ import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snooz
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
 import { sendCommand } from '@/src/hardware/dacTransport'
+import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import {
   sideSchema,
   temperatureSchema,
@@ -214,6 +215,8 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
+      markSideMutated(input.side)
+
       // The DB is updated optimistically on every call for responsive UI.
       try {
         const now = new Date()
@@ -305,6 +308,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 
@@ -387,6 +391,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         cancelSnooze(input.side)
         await client.setAlarm(input.side, {
@@ -436,6 +441,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
         cancelSnooze(input.side)
