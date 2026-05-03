@@ -10,6 +10,7 @@ import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snooz
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
 import { sendCommand } from '@/src/hardware/dacTransport'
+import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import {
   sideSchema,
   temperatureSchema,
@@ -214,6 +215,8 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
+      markSideMutated(input.side)
+
       // The DB is updated optimistically on every call for responsive UI.
       try {
         const now = new Date()
@@ -320,12 +323,23 @@ export const deviceRouter = router({
           const poweredOnAt = input.powered
             ? (prev?.isPowered ? prev.poweredOnAt : now)
             : null
+          // Always write the effective target (default 75°F when powering on
+          // without an explicit temperature; null when powering off). Without
+          // this, markSideMutated's freshness preservation could leave a stale
+          // setpoint visible past the mutation.
+          const targetTemperature = input.powered
+            ? (input.temperature ?? 75)
+            : null
+          // Stamp freshness immediately before the DB write so the 5s guard
+          // covers this mutation. Stamping before the hardware roundtrip
+          // risks the window expiring while connect/setPower run.
+          markSideMutated(input.side)
           await db
             .update(deviceState)
             .set({
               isPowered: input.powered,
               poweredOnAt,
-              ...(input.temperature && { targetTemperature: input.temperature }),
+              targetTemperature,
               lastUpdated: now,
             })
             .where(eq(deviceState.side, input.side))
@@ -387,6 +401,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         cancelSnooze(input.side)
         await client.setAlarm(input.side, {
@@ -436,6 +451,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
         cancelSnooze(input.side)

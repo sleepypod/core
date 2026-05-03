@@ -14,6 +14,7 @@ import { db, biometricsDb } from '@/src/db'
 import { deviceSettings, sideSettings, deviceState, runOnceSessions } from '@/src/db/schema'
 import { sleepRecords } from '@/src/db/biometrics-schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 
 // ---------------------------------------------------------------------------
@@ -215,8 +216,18 @@ async function powerOffSide(side: Side): Promise<void> {
     // see a stale "powered on X hours ago" after the side comes back on later
     // via a path that doesn't stamp through deviceStateSync.
     try {
+      // Stamp freshness immediately before the DB write so the 5s guard
+      // protects this mutation from concurrent DAC polls — placing it before
+      // the slow hardware roundtrip risks the window expiring before the DB
+      // update lands.
+      markSideMutated(side)
       db.update(deviceState)
-        .set({ isPowered: false, poweredOnAt: null, lastUpdated: new Date() })
+        .set({
+          isPowered: false,
+          poweredOnAt: null,
+          targetTemperature: null,
+          lastUpdated: new Date(),
+        })
         .where(eq(deviceState.side, side))
         .run()
     }
