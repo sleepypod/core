@@ -905,6 +905,18 @@ class TestFrzHealthPumpState:
         assert ps.is_side_pump_active("left") is True
         assert ps.is_side_pump_active("right") is True
 
+    def test_pumpRPM_uppercase_variant(self):
+        """Firmware may emit pumpRPM (all-caps RPM); main.py:196 lists it
+        but only the lowercase variants were exercised before."""
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRPM": 2000},
+            "right": {"pumpRPM": 0},
+        })
+        assert ps.is_side_pump_active("left") is True
+        assert ps.is_side_pump_active("right") is False
+
     def test_pumpDuty_fallback(self):
         ps = FrzHealthPumpState()
         ps.update({
