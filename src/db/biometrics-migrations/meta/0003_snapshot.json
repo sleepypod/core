@@ -1,48 +1,9 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8eef0e05-1ae3-42be-8e7e-02fcb2c0313d",
-  "prevId": "7b3c2d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+  "id": "7b3c2d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+  "prevId": "209aa56c-c286-49a6-951e-60e9bdb9f8bb",
   "tables": {
-    "ambient_light": {
-      "name": "ambient_light",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "timestamp": {
-          "name": "timestamp",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "lux": {
-          "name": "lux",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_ambient_light_timestamp": {
-          "name": "idx_ambient_light_timestamp",
-          "columns": [
-            "timestamp"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "bed_temp": {
       "name": "bed_temp",
       "columns": {
@@ -692,97 +653,6 @@
           "name": "idx_vq_side_ts",
           "columns": [
             "side",
-            "timestamp"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "water_level_alerts": {
-      "name": "water_level_alerts",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "type": {
-          "name": "type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "dismissed_at": {
-          "name": "dismissed_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "message": {
-          "name": "message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "water_level_readings": {
-      "name": "water_level_readings",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "timestamp": {
-          "name": "timestamp",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "level": {
-          "name": "level",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_water_level_timestamp": {
-          "name": "idx_water_level_timestamp",
-          "columns": [
             "timestamp"
           ],
           "isUnique": false

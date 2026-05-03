@@ -21,7 +21,6 @@ export const vitals = sqliteTable('vitals', {
   hrv: real('hrv'), // ms RMSSD
   breathingRate: real('breathing_rate'), // breaths/min
 }, t => [
-  index('idx_vitals_side_timestamp').on(t.side, t.timestamp),
   uniqueIndex('uq_vitals_side_timestamp').on(t.side, t.timestamp),
 ])
 
