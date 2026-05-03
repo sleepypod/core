@@ -17,6 +17,11 @@ from common.cbor_raw import read_raw_record
 log = logging.getLogger(__name__)
 
 MAX_CONSECUTIVE_FAILURES = 5
+# When recovering from corruption, scan forward up to this many bytes looking
+# for the next valid CBOR outer map header (0xa2). Bounds the recovery time on
+# large corrupt regions without stalling for minutes (#325).
+CORRUPTION_SCAN_CHUNK = 4096
+RAW_RECORD_MAGIC = 0xa2  # outer map header for {seq, data} CBOR record
 
 
 def _safe_mtime(p: Path) -> float:
@@ -52,6 +57,28 @@ class RawFileFollower:
         candidates.sort(key=_safe_mtime, reverse=True)
         return candidates[0] if candidates else None
 
+    def _scan_for_next_magic(self, start: int) -> int:
+        """Scan forward from *start+1* for the next CBOR outer-map magic byte.
+
+        Returns the offset of the next 0xa2 within the next CORRUPTION_SCAN_CHUNK
+        bytes, or start+CORRUPTION_SCAN_CHUNK if none is found. Bounds recovery
+        time on corrupt regions — scanning 4 KiB takes one poll cycle instead
+        of ~400 seconds of 1-byte-per-100-ms advances (#325).
+        """
+        if self._file is None:
+            return start + 1
+        try:
+            self._file.seek(start + 1)
+            chunk = self._file.read(CORRUPTION_SCAN_CHUNK)
+        except OSError:
+            return start + 1
+        if not chunk:
+            return start + 1
+        idx = chunk.find(bytes([RAW_RECORD_MAGIC]))
+        if idx >= 0:
+            return start + 1 + idx
+        return start + 1 + len(chunk)
+
     def read_records(self):
         """Yield decoded CBOR records as they arrive, sleeping between poll attempts."""
         while not self._shutdown.is_set():
@@ -82,9 +109,10 @@ class RawFileFollower:
             except (ValueError, cbor2.CBORDecodeError, OSError) as e:
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    log.warning("Skipping past corrupt data at offset %d after %d failures: %s",
-                                self._last_pos, self._consecutive_failures, e)
-                    self._last_pos += 1
+                    skip_to = self._scan_for_next_magic(self._last_pos)
+                    log.warning("Skipping past corrupt data at offset %d → %d after %d failures: %s",
+                                self._last_pos, skip_to, self._consecutive_failures, e)
+                    self._last_pos = skip_to
                     self._consecutive_failures = 0
                 else:
                     log.debug("Error reading RAW record (attempt %d): %s",

@@ -1,9 +1,12 @@
 """
 Tests for sleep-detector. Runs on developer Mac without pod-only deps —
 cbor2 / common.raw_follower / common.health are stubbed before importing main.
+Covers ts sanitization (#327) and DB write resilience (#325).
 """
 
+import sqlite3
 import sys
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 # Stub pod-only modules so `import main` works on dev machines.
@@ -21,6 +24,7 @@ _stubs["common.calibration"].is_present_capsense2_calibrated = lambda *a, **kw: 
 _stubs["common.health"].report_health = lambda *a, **kw: None
 sys.modules.update(_stubs)
 
+import main  # noqa: E402
 from main import sanitize_ts, MIN_VALID_WALL_CLOCK_TS  # noqa: E402
 
 
@@ -87,3 +91,142 @@ class TestSanitizeTs:
     def test_substitutes_wall_clock_when_ts_is_negative_inf(self):
         with patch("main.time.time", return_value=1777731963.0):
             assert sanitize_ts(float("-inf")) == 1777731963.0
+
+
+def _make_db():
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """CREATE TABLE sleep_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            side TEXT, entered_bed_at INTEGER, left_bed_at INTEGER,
+            sleep_duration_seconds INTEGER, times_exited_bed INTEGER,
+            present_intervals TEXT, not_present_intervals TEXT,
+            created_at INTEGER
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE movement (
+            side TEXT, timestamp INTEGER, total_movement INTEGER,
+            PRIMARY KEY (side, timestamp)
+        )"""
+    )
+    return conn
+
+
+class _FailingConn:
+    """Connection that always raises OperationalError on execute."""
+
+    def __init__(self):
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, *a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    def close(self):
+        self.closed = True
+
+
+class TestWriteMovementResilience:
+    def test_happy_path_inserts_row(self):
+        holder = main.DBHolder(_make_db())
+        main._db_write_failures = 0
+        wrote = main.write_movement(holder, "left",
+                                    datetime.now(timezone.utc), 42)
+        assert wrote is True
+        rows = holder.conn.execute("SELECT * FROM movement").fetchall()
+        assert len(rows) == 1
+
+    def test_sqlite_error_swallowed(self):
+        main._db_write_failures = 0
+        holder = main.DBHolder(_FailingConn())
+        # Should not raise
+        wrote = main.write_movement(holder, "left",
+                                    datetime.now(timezone.utc), 42)
+        assert wrote is False
+
+    def test_reconnect_after_threshold(self, monkeypatch):
+        replaced = []
+
+        def fake_open():
+            replaced.append(1)
+            return _make_db()
+
+        main._db_write_failures = 0
+        monkeypatch.setattr(main, "open_biometrics_db", fake_open)
+        holder = main.DBHolder(_FailingConn())
+        for _ in range(main._DB_RECONNECT_THRESHOLD):
+            main.write_movement(holder, "left",
+                                datetime.now(timezone.utc), 42)
+        assert len(replaced) == 1
+        assert main._db_write_failures == 0
+        # Both trackers would now see the swapped connection.
+        assert holder.conn is not None
+
+
+class TestWriteSleepRecordResilience:
+    def test_happy_path_inserts_row(self):
+        holder = main.DBHolder(_make_db())
+        main._db_write_failures = 0
+        entered = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
+        left = datetime.fromtimestamp(1_700_028_800, tz=timezone.utc)
+        wrote = main.write_sleep_record(
+            holder, "left", entered, left, 28_800, 2, [[1, 2]], [[3, 4]],
+        )
+        assert wrote is True
+        rows = holder.conn.execute("SELECT * FROM sleep_records").fetchall()
+        assert len(rows) == 1
+
+    def test_sqlite_error_swallowed(self):
+        main._db_write_failures = 0
+        entered = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
+        left = datetime.fromtimestamp(1_700_028_800, tz=timezone.utc)
+        # Should not raise
+        wrote = main.write_sleep_record(
+            main.DBHolder(_FailingConn()), "left", entered, left, 28_800, 0, [], [],
+        )
+        assert wrote is False
+
+    def test_reconnect_after_threshold(self, monkeypatch):
+        replaced = []
+
+        def fake_open():
+            replaced.append(1)
+            return _make_db()
+
+        main._db_write_failures = 0
+        monkeypatch.setattr(main, "open_biometrics_db", fake_open)
+        entered = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
+        left = datetime.fromtimestamp(1_700_028_800, tz=timezone.utc)
+
+        holder = main.DBHolder(_FailingConn())
+        for _ in range(main._DB_RECONNECT_THRESHOLD):
+            main.write_sleep_record(
+                holder, "left", entered, left, 28_800, 0, [], [],
+            )
+        assert len(replaced) == 1
+        assert main._db_write_failures == 0
+
+
+class TestSharedConnectionHolder:
+    """Both SessionTrackers read connections from one DBHolder so reconnect
+    on either side automatically updates the other's view (no orphaned
+    handles after a reconnect)."""
+
+    def test_reconnect_swaps_holder_observed_by_both_trackers(self, monkeypatch):
+        original = _make_db()
+        replacement = _make_db()
+        opens = iter([replacement])
+        monkeypatch.setattr(main, "open_biometrics_db", lambda: next(opens))
+
+        holder = main.DBHolder(original)
+        main._reconnect_db(holder)
+
+        assert holder.conn is replacement
+        # The original closed-handle is no longer referenced by the holder, so
+        # any tracker reading from holder.conn observes the live connection.

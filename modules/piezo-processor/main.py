@@ -115,25 +115,78 @@ def open_biometrics_db() -> sqlite3.Connection:
     return conn
 
 
+# After this many consecutive write failures, discard the connection and
+# reopen on the next write attempt (#325).
+_DB_RECONNECT_THRESHOLD = 5
+_db_write_failures = 0
+_db_conn_ref: Optional[sqlite3.Connection] = None
+
+
+def _replace_db_connection() -> Optional[sqlite3.Connection]:
+    """Close the current biometrics connection and open a fresh one.
+
+    Returns the new connection, or None if reconnection failed. On failure the
+    caller should keep using the old handle so subsequent writes can retry.
+    """
+    global _db_conn_ref
+    old = _db_conn_ref
+    try:
+        if old is not None:
+            try:
+                old.close()
+            except sqlite3.Error:
+                pass
+        _db_conn_ref = open_biometrics_db()
+        log.info("Reopened biometrics DB connection after write failures")
+        return _db_conn_ref
+    except sqlite3.Error as e:
+        log.error("Failed to reopen biometrics DB: %s", e)
+        return None
+
+
 def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
                  heart_rate: Optional[float], hrv: Optional[float],
                  breathing_rate: Optional[float],
                  quality_score: float,
                  flags: Optional[list] = None,
-                 hr_raw: Optional[float] = None) -> None:
+                 hr_raw: Optional[float] = None) -> tuple[sqlite3.Connection, bool]:
+    """Insert one vitals row + paired vitals_quality row. Logs and swallows
+    sqlite3 errors so the main loop survives transient WAL/disk issues (#325).
+    After _DB_RECONNECT_THRESHOLD consecutive failures, the connection is
+    replaced and the new handle is returned.
+
+    Returns (conn, wrote): caller must use the returned connection for
+    subsequent writes; `wrote` is True only when both inserts committed
+    so callers don't advance their downsample cursor on a failed write.
+    """
+    global _db_write_failures, _db_conn_ref
+    _db_conn_ref = conn
     ts_unix = int(ts.timestamp())
     now_unix = int(time.time())
     flags_json = json.dumps(flags) if flags else None
-    with conn:
-        cur = conn.execute(
-            "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate) VALUES (?, ?, ?, ?, ?)",
-            (side, ts_unix, heart_rate, hrv, breathing_rate),
-        )
-        conn.execute(
-            "INSERT INTO vitals_quality (vitals_id, side, timestamp, quality_score, flags, hr_raw, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, now_unix),
-        )
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate) VALUES (?, ?, ?, ?, ?)",
+                (side, ts_unix, heart_rate, hrv, breathing_rate),
+            )
+            conn.execute(
+                "INSERT INTO vitals_quality (vitals_id, side, timestamp, quality_score, flags, hr_raw, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, now_unix),
+            )
+        _db_write_failures = 0
+        return conn, True
+    except sqlite3.Error as e:
+        _db_write_failures += 1
+        log.warning("write_vitals failed (%d consecutive): %s",
+                    _db_write_failures, e)
+        if _db_write_failures >= _DB_RECONNECT_THRESHOLD:
+            new_conn = _replace_db_connection()
+            _db_write_failures = 0
+            if new_conn is not None:
+                return new_conn, False
+        return conn, False
 
 
 def report_health(status: str, message: str) -> None:
@@ -453,7 +506,9 @@ class HRTracker:
     """
 
     def __init__(self, max_delta: float = 15.0, history_len: int = 5):
-        self.history: list = []
+        # Bounded deque: only the last history_len entries are ever consulted,
+        # so retaining the full list would leak ~1440 floats/day (#325).
+        self.history: deque = deque(maxlen=history_len)
         self.max_delta = max_delta
         self.history_len = history_len
 
@@ -466,7 +521,7 @@ class HRTracker:
             self.history.append(hr_candidate)
             return hr_candidate
 
-        recent = float(np.median(self.history[-self.history_len:]))
+        recent = float(np.median(list(self.history)))
         delta = abs(hr_candidate - recent)
 
         # Gaussian consistency weight
@@ -791,6 +846,10 @@ class SideProcessor:
         present = self._presence.update(med_std, acr_qual)
 
         if not present:
+            # Reset the interval cursor so a return from extended absence
+            # doesn't trigger burst processing on every ingest until the
+            # first write completes (#325).
+            self._last_write = now
             return  # No user detected — skip
 
         # --- Heart rate (subharmonic summation + tracking) ---
@@ -819,13 +878,19 @@ class SideProcessor:
                 flags.append("no_br")
             if med_std < self._presence.enter_threshold:
                 flags.append("low_signal")
-            write_vitals(self.db, self.side, ts, hr, hrv, br,
-                         quality_score=quality, flags=flags or None,
-                         hr_raw=hr_raw)
+            self.db, wrote = write_vitals(self.db, self.side, ts, hr, hrv, br,
+                                          quality_score=quality, flags=flags or None,
+                                          hr_raw=hr_raw)
             log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f q=%.2f", self.side,
                      hr or 0, hrv or 0, br or 0, quality)
-
-        self._last_write = now
+            # Only advance the downsample cursor when the write actually
+            # committed — otherwise a transient sqlite error would skip
+            # VITALS_INTERVAL_S of valid samples.
+            if wrote:
+                self._last_write = now
+        else:
+            # No metric to write — advance so we don't recompute on every ingest.
+            self._last_write = now
 
 # ---------------------------------------------------------------------------
 # Main loop
