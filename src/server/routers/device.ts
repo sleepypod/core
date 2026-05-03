@@ -308,7 +308,6 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
-      markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 
@@ -331,6 +330,10 @@ export const deviceRouter = router({
           const targetTemperature = input.powered
             ? (input.temperature ?? 75)
             : null
+          // Stamp freshness immediately before the DB write so the 5s guard
+          // covers this mutation. Stamping before the hardware roundtrip
+          // risks the window expiring while connect/setPower run.
+          markSideMutated(input.side)
           await db
             .update(deviceState)
             .set({

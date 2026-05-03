@@ -208,7 +208,6 @@ function isUserInBed(side: Side): boolean {
 /** Power off a side via the shared hardware client. */
 async function powerOffSide(side: Side): Promise<void> {
   try {
-    markSideMutated(side)
     const client = getSharedHardwareClient()
     await client.connect()
     await client.setPower(side, false)
@@ -217,6 +216,11 @@ async function powerOffSide(side: Side): Promise<void> {
     // see a stale "powered on X hours ago" after the side comes back on later
     // via a path that doesn't stamp through deviceStateSync.
     try {
+      // Stamp freshness immediately before the DB write so the 5s guard
+      // protects this mutation from concurrent DAC polls — placing it before
+      // the slow hardware roundtrip risks the window expiring before the DB
+      // update lands.
+      markSideMutated(side)
       db.update(deviceState)
         .set({
           isPowered: false,
