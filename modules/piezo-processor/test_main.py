@@ -866,11 +866,12 @@ class TestWriteVitalsResilience:
         import main
         conn = self._make_db()
         main._db_write_failures = 0
-        result = main.write_vitals(conn, "left",
-                                   datetime.now(timezone.utc),
-                                   70.0, 40.0, 15.0,
-                                   quality_score=0.9)
-        assert result is conn
+        result_conn, wrote = main.write_vitals(conn, "left",
+                                               datetime.now(timezone.utc),
+                                               70.0, 40.0, 15.0,
+                                               quality_score=0.9)
+        assert result_conn is conn
+        assert wrote is True
         rows = conn.execute("SELECT * FROM vitals").fetchall()
         assert len(rows) == 1
 
@@ -888,12 +889,13 @@ class TestWriteVitalsResilience:
 
         main._db_write_failures = 0
         # Should not raise
-        result = main.write_vitals(BadConn(), "left",
-                                   datetime.now(timezone.utc),
-                                   70.0, 40.0, 15.0,
-                                   quality_score=0.9)
-        # Returns the bad conn unchanged on the first failure.
-        assert result is not None
+        result_conn, wrote = main.write_vitals(BadConn(), "left",
+                                               datetime.now(timezone.utc),
+                                               70.0, 40.0, 15.0,
+                                               quality_score=0.9)
+        # Returns the bad conn unchanged on the first failure, with wrote=False.
+        assert result_conn is not None
+        assert wrote is False
 
     def test_reconnect_after_threshold(self, monkeypatch):
         """After _DB_RECONNECT_THRESHOLD consecutive failures, the connection
@@ -924,8 +926,9 @@ class TestWriteVitalsResilience:
         ts = datetime.now(timezone.utc)
         conn = bad
         for i in range(main._DB_RECONNECT_THRESHOLD):
-            conn = main.write_vitals(conn, "left", ts, 70.0, 40.0, 15.0,
-                                     quality_score=0.9)
+            conn, wrote = main.write_vitals(conn, "left", ts, 70.0, 40.0, 15.0,
+                                            quality_score=0.9)
+            assert wrote is False
 
         # After crossing the threshold the function must have reopened the DB
         assert len(replaced) == 1, \

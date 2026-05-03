@@ -153,12 +153,16 @@ def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> bool:
     return True
 
 
-def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
+def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> bool:
     """Parse frzTemp record and write to freezer_temp table.
 
     frzTemp format: {left, right, amb, hs} — all raw centidegrees (u16).
     Applies sentinel filtering and range validation (#325) so disconnected
     sensors don't pollute the freezer_temp table with 32768 / -327.68 values.
+
+    Returns True iff a row was inserted. Caller should advance the
+    downsample cursor only on True so an all-sentinel frame doesn't block
+    the next 60s of valid samples.
     """
     amb = _safe_freezer_centidegrees(record.get("amb"))
     hs = _safe_freezer_centidegrees(record.get("hs"))
@@ -166,7 +170,7 @@ def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> Non
     rw = _safe_freezer_centidegrees(record.get("right"))
 
     if amb is None and hs is None and lw is None and rw is None:
-        return
+        return False
 
     with conn:
         conn.execute(
@@ -176,6 +180,7 @@ def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> Non
                VALUES (?, ?, ?, ?, ?)""",
             (int(ts), amb, hs, lw, rw),
         )
+    return True
 
 
 def report_health(status: str, message: str) -> None:
@@ -243,8 +248,8 @@ def main() -> None:
 
             elif rtype == "frzTemp":
                 if ts - last_frz_write >= DOWNSAMPLE_INTERVAL_S:
-                    write_freezer_temp(db_conn, ts, record)
-                    last_frz_write = ts
+                    if write_freezer_temp(db_conn, ts, record):
+                        last_frz_write = ts
 
     except Exception as e:
         log.exception("Fatal error in main loop: %s", e)

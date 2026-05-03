@@ -149,12 +149,15 @@ def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
                  breathing_rate: Optional[float],
                  quality_score: float,
                  flags: Optional[list] = None,
-                 hr_raw: Optional[float] = None) -> sqlite3.Connection:
+                 hr_raw: Optional[float] = None) -> tuple[sqlite3.Connection, bool]:
     """Insert one vitals row + paired vitals_quality row. Logs and swallows
     sqlite3 errors so the main loop survives transient WAL/disk issues (#325).
     After _DB_RECONNECT_THRESHOLD consecutive failures, the connection is
-    replaced and the new handle is returned; the caller MUST use the returned
-    connection for subsequent writes.
+    replaced and the new handle is returned.
+
+    Returns (conn, wrote): caller must use the returned connection for
+    subsequent writes; `wrote` is True only when both inserts committed
+    so callers don't advance their downsample cursor on a failed write.
     """
     global _db_write_failures, _db_conn_ref
     _db_conn_ref = conn
@@ -173,7 +176,7 @@ def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
                 (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, now_unix),
             )
         _db_write_failures = 0
-        return conn
+        return conn, True
     except sqlite3.Error as e:
         _db_write_failures += 1
         log.warning("write_vitals failed (%d consecutive): %s",
@@ -182,8 +185,8 @@ def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
             new_conn = _replace_db_connection()
             _db_write_failures = 0
             if new_conn is not None:
-                return new_conn
-        return conn
+                return new_conn, False
+        return conn, False
 
 
 def report_health(status: str, message: str) -> None:
@@ -875,13 +878,19 @@ class SideProcessor:
                 flags.append("no_br")
             if med_std < self._presence.enter_threshold:
                 flags.append("low_signal")
-            self.db = write_vitals(self.db, self.side, ts, hr, hrv, br,
-                                   quality_score=quality, flags=flags or None,
-                                   hr_raw=hr_raw)
+            self.db, wrote = write_vitals(self.db, self.side, ts, hr, hrv, br,
+                                          quality_score=quality, flags=flags or None,
+                                          hr_raw=hr_raw)
             log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f q=%.2f", self.side,
                      hr or 0, hrv or 0, br or 0, quality)
-
-        self._last_write = now
+            # Only advance the downsample cursor when the write actually
+            # committed — otherwise a transient sqlite error would skip
+            # VITALS_INTERVAL_S of valid samples.
+            if wrote:
+                self._last_write = now
+        else:
+            # No metric to write — advance so we don't recompute on every ingest.
+            self._last_write = now
 
 # ---------------------------------------------------------------------------
 # Main loop

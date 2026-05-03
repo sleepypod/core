@@ -134,21 +134,21 @@ class _FailingConn:
 
 class TestWriteMovementResilience:
     def test_happy_path_inserts_row(self):
-        conn = _make_db()
+        holder = main.DBHolder(_make_db())
         main._db_write_failures = 0
-        result = main.write_movement(conn, "left",
-                                     datetime.now(timezone.utc), 42)
-        assert result is conn
-        rows = conn.execute("SELECT * FROM movement").fetchall()
+        wrote = main.write_movement(holder, "left",
+                                    datetime.now(timezone.utc), 42)
+        assert wrote is True
+        rows = holder.conn.execute("SELECT * FROM movement").fetchall()
         assert len(rows) == 1
 
     def test_sqlite_error_swallowed(self):
         main._db_write_failures = 0
-        bad = _FailingConn()
+        holder = main.DBHolder(_FailingConn())
         # Should not raise
-        result = main.write_movement(bad, "left",
-                                     datetime.now(timezone.utc), 42)
-        assert result is not None
+        wrote = main.write_movement(holder, "left",
+                                    datetime.now(timezone.utc), 42)
+        assert wrote is False
 
     def test_reconnect_after_threshold(self, monkeypatch):
         replaced = []
@@ -159,25 +159,27 @@ class TestWriteMovementResilience:
 
         main._db_write_failures = 0
         monkeypatch.setattr(main, "open_biometrics_db", fake_open)
-        conn = _FailingConn()
+        holder = main.DBHolder(_FailingConn())
         for _ in range(main._DB_RECONNECT_THRESHOLD):
-            conn = main.write_movement(conn, "left",
-                                       datetime.now(timezone.utc), 42)
+            main.write_movement(holder, "left",
+                                datetime.now(timezone.utc), 42)
         assert len(replaced) == 1
         assert main._db_write_failures == 0
+        # Both trackers would now see the swapped connection.
+        assert holder.conn is not None
 
 
 class TestWriteSleepRecordResilience:
     def test_happy_path_inserts_row(self):
-        conn = _make_db()
+        holder = main.DBHolder(_make_db())
         main._db_write_failures = 0
         entered = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
         left = datetime.fromtimestamp(1_700_028_800, tz=timezone.utc)
-        result = main.write_sleep_record(
-            conn, "left", entered, left, 28_800, 2, [[1, 2]], [[3, 4]],
+        wrote = main.write_sleep_record(
+            holder, "left", entered, left, 28_800, 2, [[1, 2]], [[3, 4]],
         )
-        assert result is conn
-        rows = conn.execute("SELECT * FROM sleep_records").fetchall()
+        assert wrote is True
+        rows = holder.conn.execute("SELECT * FROM sleep_records").fetchall()
         assert len(rows) == 1
 
     def test_sqlite_error_swallowed(self):
@@ -185,10 +187,10 @@ class TestWriteSleepRecordResilience:
         entered = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
         left = datetime.fromtimestamp(1_700_028_800, tz=timezone.utc)
         # Should not raise
-        result = main.write_sleep_record(
-            _FailingConn(), "left", entered, left, 28_800, 0, [], [],
+        wrote = main.write_sleep_record(
+            main.DBHolder(_FailingConn()), "left", entered, left, 28_800, 0, [], [],
         )
-        assert result is not None
+        assert wrote is False
 
     def test_reconnect_after_threshold(self, monkeypatch):
         replaced = []
@@ -202,10 +204,29 @@ class TestWriteSleepRecordResilience:
         entered = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
         left = datetime.fromtimestamp(1_700_028_800, tz=timezone.utc)
 
-        conn = _FailingConn()
+        holder = main.DBHolder(_FailingConn())
         for _ in range(main._DB_RECONNECT_THRESHOLD):
-            conn = main.write_sleep_record(
-                conn, "left", entered, left, 28_800, 0, [], [],
+            main.write_sleep_record(
+                holder, "left", entered, left, 28_800, 0, [], [],
             )
         assert len(replaced) == 1
         assert main._db_write_failures == 0
+
+
+class TestSharedConnectionHolder:
+    """Both SessionTrackers read connections from one DBHolder so reconnect
+    on either side automatically updates the other's view (no orphaned
+    handles after a reconnect)."""
+
+    def test_reconnect_swaps_holder_observed_by_both_trackers(self, monkeypatch):
+        original = _make_db()
+        replacement = _make_db()
+        opens = iter([replacement])
+        monkeypatch.setattr(main, "open_biometrics_db", lambda: next(opens))
+
+        holder = main.DBHolder(original)
+        main._reconnect_db(holder)
+
+        assert holder.conn is replacement
+        # The original closed-handle is no longer referenced by the holder, so
+        # any tracker reading from holder.conn observes the live connection.
