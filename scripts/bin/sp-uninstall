@@ -51,6 +51,7 @@ SERVICES=(
   sleepypod-sleep-detector.service
   sleepypod-environment-monitor.service
   sleepypod-calibrator.service
+  sleepypod-cover-buttons.service
 )
 for svc in "${SERVICES[@]}"; do
   systemctl stop "$svc" 2>/dev/null || true

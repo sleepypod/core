@@ -2,7 +2,7 @@
 set -euo pipefail
 echo "Switching to free-sleep..."
 systemctl stop sleepypod.service 2>/dev/null || true
-for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
+for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator sleepypod-cover-buttons; do
   systemctl stop "$svc.service" 2>/dev/null || true
   systemctl disable "$svc.service" 2>/dev/null || true
 done
