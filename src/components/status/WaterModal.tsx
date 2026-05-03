@@ -4,9 +4,9 @@ import { useState, useCallback, useMemo } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { X, Droplets, Play, AlertTriangle, TrendingDown, TrendingUp, Minus, Loader2 } from 'lucide-react'
 
-function trendIcon(direction: string) {
-  if (direction === 'falling') return <TrendingDown size={14} className="text-amber-400" />
-  if (direction === 'rising') return <TrendingUp size={14} className="text-emerald-400" />
+function trendIcon(trend: string) {
+  if (trend === 'declining') return <TrendingDown size={14} className="text-amber-400" />
+  if (trend === 'rising') return <TrendingUp size={14} className="text-emerald-400" />
   return <Minus size={14} className="text-zinc-500" />
 }
 
@@ -99,9 +99,7 @@ export function WaterModal({ open, onClose }: { open: boolean, onClose: () => vo
                   <div className="flex items-end gap-3">
                     <div>
                       <p className="text-3xl font-bold tabular-nums text-white">
-                        {typeof latest.levelPercent === 'number'
-                          ? `${Math.round(latest.levelPercent)}%`
-                          : '--'}
+                        {latest.level === 'ok' ? 'OK' : 'Low'}
                       </p>
                       <p className="text-[11px] text-zinc-500">
                         {new Date(latest.timestamp).toLocaleTimeString([], {
@@ -112,11 +110,12 @@ export function WaterModal({ open, onClose }: { open: boolean, onClose: () => vo
                     </div>
                     {trend && (
                       <div className="mb-1.5 flex items-center gap-1.5">
-                        {trendIcon(trend.direction)}
+                        {trendIcon(trend.trend)}
                         <span className="text-xs text-zinc-500">
-                          {trend.direction !== 'stable'
-                            ? `${(trend.changePercent ?? 0) > 0 ? '+' : ''}${(trend.changePercent ?? 0).toFixed(1)}% / 24h`
-                            : 'Stable'}
+                          {trend.trend === 'stable' && 'Stable'}
+                          {trend.trend === 'declining' && `Declining (${trend.lowPercent}% low)`}
+                          {trend.trend === 'rising' && 'Rising'}
+                          {trend.trend === 'unknown' && 'Insufficient data'}
                         </span>
                       </div>
                     )}
@@ -132,7 +131,7 @@ export function WaterModal({ open, onClose }: { open: boolean, onClose: () => vo
           {/* Active alerts */}
           {activeAlerts.length > 0 && (
             <div className="space-y-1.5">
-              {activeAlerts.map((alert: { id: number, alertType: string, message: string }) => (
+              {activeAlerts.map(alert => (
                 <div key={alert.id} className="flex items-center gap-2 rounded-lg bg-amber-900/20 px-3 py-2">
                   <AlertTriangle size={12} className="shrink-0 text-amber-400" />
                   <span className="flex-1 text-[11px] text-amber-300">{alert.message}</span>

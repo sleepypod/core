@@ -28,7 +28,19 @@ export const environmentRouter = router({
   getBedTemp: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/environment/bed-temp', protect: false, tags: ['Environment'] } })
     .input(dateRangeInput)
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      ambientTemp: z.number().nullable(),
+      mcuTemp: z.number().nullable(),
+      humidity: z.number().nullable(),
+      leftOuterTemp: z.number().nullable(),
+      leftCenterTemp: z.number().nullable(),
+      leftInnerTemp: z.number().nullable(),
+      rightOuterTemp: z.number().nullable(),
+      rightCenterTemp: z.number().nullable(),
+      rightInnerTemp: z.number().nullable(),
+    })))
     .query(async ({ input }) => {
       try {
         if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
@@ -72,7 +84,14 @@ export const environmentRouter = router({
   getFreezerTemp: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/environment/freezer-temp', protect: false, tags: ['Environment'] } })
     .input(dateRangeInput)
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      ambientTemp: z.number().nullable(),
+      heatsinkTemp: z.number().nullable(),
+      leftWaterTemp: z.number().nullable(),
+      rightWaterTemp: z.number().nullable(),
+    })))
     .query(async ({ input }) => {
       try {
         if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
@@ -111,7 +130,19 @@ export const environmentRouter = router({
   getLatestBedTemp: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/environment/bed-temp/latest', protect: false, tags: ['Environment'] } })
     .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      ambientTemp: z.number().nullable(),
+      mcuTemp: z.number().nullable(),
+      humidity: z.number().nullable(),
+      leftOuterTemp: z.number().nullable(),
+      leftCenterTemp: z.number().nullable(),
+      leftInnerTemp: z.number().nullable(),
+      rightOuterTemp: z.number().nullable(),
+      rightCenterTemp: z.number().nullable(),
+      rightInnerTemp: z.number().nullable(),
+    }).nullable())
     .query(async ({ input }) => {
       try {
         const [row] = await biometricsDb
@@ -148,7 +179,14 @@ export const environmentRouter = router({
   getLatestFreezerTemp: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/environment/freezer-temp/latest', protect: false, tags: ['Environment'] } })
     .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      ambientTemp: z.number().nullable(),
+      heatsinkTemp: z.number().nullable(),
+      leftWaterTemp: z.number().nullable(),
+      rightWaterTemp: z.number().nullable(),
+    }).nullable())
     .query(async ({ input }) => {
       try {
         const [row] = await biometricsDb
@@ -179,7 +217,24 @@ export const environmentRouter = router({
 
   getSummary: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/environment/summary', protect: false, tags: ['Environment'] } })
-    .output(z.any())
+    .output(z.object({
+      bedTemp: z.object({
+        avgAmbientTemp: z.number().nullable(),
+        minAmbientTemp: z.number().nullable(),
+        maxAmbientTemp: z.number().nullable(),
+        avgHumidity: z.number().nullable(),
+        avgLeftCenterTemp: z.number().nullable(),
+        avgRightCenterTemp: z.number().nullable(),
+        recordCount: z.number(),
+      }).nullable(),
+      freezerTemp: z.object({
+        avgAmbientTemp: z.number().nullable(),
+        avgHeatsinkTemp: z.number().nullable(),
+        avgLeftWaterTemp: z.number().nullable(),
+        avgRightWaterTemp: z.number().nullable(),
+        recordCount: z.number(),
+      }).nullable(),
+    }))
     .input(
       z.object({
         startDate: z.date(),
@@ -272,7 +327,11 @@ export const environmentRouter = router({
       endDate: z.date().optional(),
       limit: z.number().int().min(1).max(1440).default(1440),
     }).strict())
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      lux: z.number().nullable(),
+    })))
     .query(async ({ input }) => {
       try {
         if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
@@ -302,7 +361,11 @@ export const environmentRouter = router({
   getLatestAmbientLight: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/environment/ambient-light/latest', protect: false, tags: ['Environment'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      lux: z.number().nullable(),
+    }).nullable())
     .query(async () => {
       try {
         const [row] = await biometricsDb
@@ -327,7 +390,12 @@ export const environmentRouter = router({
       startDate: z.date(),
       endDate: z.date(),
     }).strict())
-    .output(z.any())
+    .output(z.object({
+      avgLux: z.number().nullable(),
+      minLux: z.number().nullable(),
+      maxLux: z.number().nullable(),
+      recordCount: z.number(),
+    }).nullable())
     .query(async ({ input }) => {
       try {
         if (!validateDateRange(input.startDate, input.endDate)) {

@@ -177,7 +177,22 @@ export const settingsRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      timezone: z.string(),
+      temperatureUnit: temperatureUnitSchema,
+      rebootDaily: z.boolean(),
+      rebootTime: z.string().nullable(),
+      primePodDaily: z.boolean(),
+      primePodTime: z.string().nullable(),
+      ledNightModeEnabled: z.boolean(),
+      ledDayBrightness: z.number(),
+      ledNightBrightness: z.number(),
+      ledNightStartTime: z.string().nullable(),
+      ledNightEndTime: z.string().nullable(),
+      createdAt: z.date(),
+      updatedAt: z.date(),
+    }))
     .mutation(async ({ input }) => {
       try {
         const updated = db.transaction((tx) => {
@@ -284,7 +299,18 @@ export const settingsRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(z.object({
+      side: sideSchema,
+      name: z.string(),
+      awayMode: z.boolean(),
+      alwaysOn: z.boolean(),
+      autoOffEnabled: z.boolean(),
+      autoOffMinutes: z.number(),
+      awayStart: z.string().nullable(),
+      awayReturn: z.string().nullable(),
+      createdAt: z.date(),
+      updatedAt: z.date(),
+    }))
     .mutation(async ({ input }) => {
       try {
         const { side, ...updates } = input
@@ -397,7 +423,18 @@ export const settingsRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(z.object({
+      side: sideSchema,
+      name: z.string(),
+      awayMode: z.boolean(),
+      alwaysOn: z.boolean(),
+      autoOffEnabled: z.boolean(),
+      autoOffMinutes: z.number(),
+      awayStart: z.string().nullable(),
+      awayReturn: z.string().nullable(),
+      createdAt: z.date(),
+      updatedAt: z.date(),
+    }))
     .mutation(async ({ input }) => {
       try {
         const updated = db.transaction((tx) => {

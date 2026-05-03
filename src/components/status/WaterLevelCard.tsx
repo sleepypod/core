@@ -4,9 +4,9 @@ import { useState, useCallback, useMemo } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { Droplets, Play, X, AlertTriangle, TrendingDown, TrendingUp, Minus, Loader2 } from 'lucide-react'
 
-function trendIcon(direction: string) {
-  if (direction === 'falling') return <TrendingDown size={12} className="text-amber-400" />
-  if (direction === 'rising') return <TrendingUp size={12} className="text-emerald-400" />
+function trendIcon(trend: string) {
+  if (trend === 'declining') return <TrendingDown size={12} className="text-amber-400" />
+  if (trend === 'rising') return <TrendingUp size={12} className="text-emerald-400" />
   return <Minus size={12} className="text-zinc-500" />
 }
 
@@ -84,7 +84,7 @@ export function WaterLevelCard() {
           <Droplets size={16} className="text-sky-400" />
           <span className="text-sm font-medium text-white">Water Level</span>
         </div>
-        {trend && trendIcon(trend.direction)}
+        {trend && trendIcon(trend.trend)}
       </div>
 
       {/* Current level */}
@@ -99,9 +99,7 @@ export function WaterLevelCard() {
               <div className="flex items-end gap-3">
                 <div>
                   <p className="text-2xl font-bold tabular-nums text-white">
-                    {typeof latest.levelPercent === 'number'
-                      ? `${Math.round(latest.levelPercent)}%`
-                      : '--'}
+                    {latest.level === 'ok' ? 'OK' : 'Low'}
                   </p>
                   <p className="text-[10px] text-zinc-500">
                     {new Date(latest.timestamp).toLocaleTimeString([], {
@@ -112,14 +110,16 @@ export function WaterLevelCard() {
                 </div>
                 {trend && (
                   <div className="mb-1 text-xs text-zinc-500">
-                    {trend.direction !== 'stable' && (
+                    {trend.trend === 'stable' && <span>Stable</span>}
+                    {trend.trend === 'declining' && (
                       <span>
-                        {(trend.changePercent ?? 0) > 0 ? '+' : ''}
-                        {(trend.changePercent ?? 0).toFixed(1)}
-                        % / 24h
+                        Declining (
+                        {trend.lowPercent}
+                        % low)
                       </span>
                     )}
-                    {trend.direction === 'stable' && <span>Stable</span>}
+                    {trend.trend === 'rising' && <span>Rising</span>}
+                    {trend.trend === 'unknown' && <span>Insufficient data</span>}
                   </div>
                 )}
               </div>
@@ -134,7 +134,7 @@ export function WaterLevelCard() {
       {/* Active alerts */}
       {activeAlerts.length > 0 && (
         <div className="space-y-1.5">
-          {activeAlerts.map((alert: { id: number, alertType: string, message: string }) => (
+          {activeAlerts.map(alert => (
             <div
               key={alert.id}
               className="flex items-center gap-2 rounded-lg bg-amber-900/20 px-3 py-2"

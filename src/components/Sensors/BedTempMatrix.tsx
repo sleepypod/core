@@ -165,7 +165,7 @@ export function BedTempMatrix() {
     // Stored data already converted to user's unit by the tRPC endpoint
     return {
       source: 'stored' as const,
-      timestamp: stored.timestamp ? Math.floor(new Date(stored.timestamp as string).getTime() / 1000) : undefined,
+      timestamp: stored.timestamp ? Math.floor(stored.timestamp.getTime() / 1000) : undefined,
       ambientTemp: formatConverted(stored.ambientTemp),
       mcuTemp: formatConverted(stored.mcuTemp),
       humidity: stored.humidity != null ? `${Math.round(stored.humidity)}%` : undefined,

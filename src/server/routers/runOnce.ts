@@ -125,7 +125,15 @@ export const runOnceRouter = router({
   getActive: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/run-once/active', protect: false, tags: ['RunOnce'] } })
     .input(z.object({ side: sideSchema }).strict())
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      side: z.enum(['left', 'right']),
+      setPoints: z.array(setPointSchema),
+      wakeTime: z.string(),
+      startedAt: z.number(),
+      expiresAt: z.number(),
+      status: z.enum(['active', 'completed', 'cancelled']),
+    }).nullable())
     .query(async ({ input }) => {
       const [session] = await db
         .select()
@@ -139,9 +147,12 @@ export const runOnceRouter = router({
 
       if (!session) return null
 
-      let setPoints: unknown = []
+      // Validate the persisted JSON against the same schema the input uses;
+      // a malformed row mustn't break clients consuming the typed output.
+      let setPoints: z.infer<typeof setPointSchema>[] = []
       try {
-        setPoints = JSON.parse(session.setPoints)
+        const parsed = z.array(setPointSchema).safeParse(JSON.parse(session.setPoints))
+        if (parsed.success) setPoints = parsed.data
       }
       catch {
         // malformed — return empty

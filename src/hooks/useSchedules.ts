@@ -12,8 +12,8 @@ export interface TemperatureSchedule {
   time: string
   temperature: number
   enabled: boolean
-  createdAt: string | Date
-  updatedAt: string | Date
+  createdAt: Date
+  updatedAt: Date
 }
 
 export interface PowerSchedule {
@@ -24,6 +24,8 @@ export interface PowerSchedule {
   offTime: string
   onTemperature: number
   enabled: boolean
+  createdAt: Date
+  updatedAt: Date
 }
 
 export interface AlarmSchedule {
@@ -31,11 +33,13 @@ export interface AlarmSchedule {
   side: 'left' | 'right'
   dayOfWeek: DayOfWeek
   time: string
-  vibrationPattern: string
+  vibrationPattern: 'double' | 'rise'
   vibrationIntensity: number
   duration: number
   alarmTemperature: number
   enabled: boolean
+  createdAt: Date
+  updatedAt: Date
 }
 
 export interface ScheduleData {

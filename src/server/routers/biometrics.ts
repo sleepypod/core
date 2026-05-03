@@ -55,7 +55,18 @@ export const biometricsRouter = router({
    */
   getSleepRecords: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/sleep-records', protect: false, tags: ['Biometrics'] } })
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      enteredBedAt: z.date(),
+      // null while a session is active (occupant in bed) — gets populated on close.
+      leftBedAt: z.date().nullable(),
+      sleepDurationSeconds: z.number(),
+      timesExitedBed: z.number(),
+      presentIntervals: z.unknown(),
+      notPresentIntervals: z.unknown(),
+      createdAt: z.date(),
+    })))
     .input(
       z
         .object({
@@ -133,7 +144,14 @@ export const biometricsRouter = router({
    */
   getVitals: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/vitals', protect: false, tags: ['Biometrics'] } })
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      timestamp: z.date(),
+      heartRate: z.number().nullable(),
+      hrv: z.number().nullable(),
+      breathingRate: z.number().nullable(),
+    })))
     .input(
       z
         .object({
@@ -210,7 +228,12 @@ export const biometricsRouter = router({
    */
   getMovement: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/movement', protect: false, tags: ['Biometrics'] } })
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      timestamp: z.date(),
+      totalMovement: z.number(),
+    })))
     .input(
       z
         .object({
@@ -285,7 +308,17 @@ export const biometricsRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      side: sideSchema,
+      enteredBedAt: z.date(),
+      leftBedAt: z.date().nullable(),
+      sleepDurationSeconds: z.number(),
+      timesExitedBed: z.number(),
+      presentIntervals: z.unknown(),
+      notPresentIntervals: z.unknown(),
+      createdAt: z.date(),
+    }).nullable())
     .query(async ({ input }) => {
       try {
         const [record] = await biometricsDb
@@ -330,7 +363,14 @@ export const biometricsRouter = router({
    */
   getVitalsSummary: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/vitals/summary', protect: false, tags: ['Biometrics'] } })
-    .output(z.any())
+    .output(z.object({
+      avgHeartRate: z.number().nullable(),
+      minHeartRate: z.number().nullable(),
+      maxHeartRate: z.number().nullable(),
+      avgHRV: z.number().nullable(),
+      avgBreathingRate: z.number().nullable(),
+      recordCount: z.number(),
+    }).nullable())
     .input(
       z
         .object({
@@ -530,7 +570,17 @@ export const biometricsRouter = router({
         timesExitedBed: z.number().int().min(0).optional(),
       }).strict()
     )
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      side: sideSchema,
+      enteredBedAt: z.date(),
+      leftBedAt: z.date().nullable(),
+      sleepDurationSeconds: z.number(),
+      timesExitedBed: z.number(),
+      presentIntervals: z.unknown(),
+      notPresentIntervals: z.unknown(),
+      createdAt: z.date(),
+    }))
     .mutation(async ({ input }) => {
       const { id, ...updates } = input
 
