@@ -135,8 +135,16 @@ export function startBiometricsRetention(options?: {
 
   const retentionDays = options?.retentionDays
     ?? Number(process.env.BIOMETRICS_RETENTION_DAYS ?? 90)
-  const intervalHours = options?.intervalHours
+
+  // Coerce/validate so a malformed env var (NaN, 0, negative) doesn't
+  // produce a near-zero setInterval delay that hammers the DB. Fall
+  // back to the documented 24h default in that case.
+  const rawIntervalHours = options?.intervalHours
     ?? Number(process.env.BIOMETRICS_RETENTION_INTERVAL_HOURS ?? 24)
+  const intervalHours = Number.isFinite(rawIntervalHours) && rawIntervalHours > 0
+    ? rawIntervalHours
+    : 24
+
   const initialDelayMs = options?.initialDelayMs ?? 30_000
 
   const runOnce = () => {

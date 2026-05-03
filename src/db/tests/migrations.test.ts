@@ -50,9 +50,10 @@ describe('migrations smoke test', () => {
   it('main DB unique index dedups existing duplicates', () => {
     const raw = new Database(':memory:')
     try {
-      // Apply all migrations EXCEPT the last one (which creates the unique index).
-      // We simulate upgrade-from-old-schema: create tap_gestures manually and
-      // insert duplicate rows before running 0006.
+      // Apply ALL migrations (including 0006 which creates uq_tap_side_type).
+      // Then drop the index, insert duplicate rows, and replay the dedup SQL
+      // — this simulates upgrade-from-old-schema where duplicates predated
+      // the unique index and the migration must clean them up.
       const db = drizzle(raw, { schema })
       migrate(db, {
         migrationsFolder: path.resolve(process.cwd(), 'src/db/migrations'),

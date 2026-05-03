@@ -127,4 +127,32 @@ describe('pruneOldBiometrics', () => {
     expect(db.select().from(schema.sleepRecords).all()).toHaveLength(1)
     expect(db.select().from(schema.calibrationProfiles).all()).toHaveLength(1)
   })
+
+  it('leaves vitals_quality untouched (current explicit exclusion)', () => {
+    // vitals_quality.vitals_id logically references vitals.id but no FK is
+    // enforced. pruneOldBiometrics deletes vitals but excludes vitals_quality,
+    // so quality rows pointing at deleted vitals become permanent orphans.
+    // This test documents the current behavior; follow-up to either include
+    // vitals_quality in the prune set or implement cascade-delete is tracked
+    // in the PR description.
+    const old = new Date('2020-01-01T00:00:00Z')
+    const inserted = db.insert(vitals).values({
+      side: 'left', timestamp: old, heartRate: 60,
+    }).returning({ id: vitals.id }).all()
+    const vitalsId = inserted[0].id
+    db.insert(schema.vitalsQuality).values({
+      vitalsId,
+      side: 'left',
+      timestamp: old,
+      qualityScore: 0.8,
+    }).run()
+
+    const result = pruneOldBiometrics(new Date('2026-01-01T00:00:00Z'), db)
+
+    expect(result.rowsDeleted).toBeGreaterThan(0)
+    expect(db.select().from(vitals).all()).toHaveLength(0)
+    // The orphan survives — call this out so the next iteration of retention
+    // policy explicitly handles it.
+    expect(db.select().from(schema.vitalsQuality).all()).toHaveLength(1)
+  })
 })
