@@ -101,6 +101,66 @@ describe('classifySleepStages', () => {
     expect(result[0].hrv).toBe(35)
     expect(result[0].breathingRate).toBe(16)
   })
+
+  it('retains valid HR when outlier window collapses to a single sample (#327)', () => {
+    // Regression: when the ±2 window has only one valid HR (its own value at i),
+    // window=[68], median=mean=68 and stdDev=0. The pre-fix condition
+    // `Math.abs(heartRate - median) > 2 * 0` evaluated to false here because
+    // heartRate==median, but in any uniform-window scenario it would silently
+    // null an out-of-window value. The post-fix `stdDev > 0 &&` short-circuit
+    // makes the single-sample-window path explicit and safe. Verify the HR at
+    // index 2 is preserved when it's the only valid sample in its window.
+    const vitals = [
+      vitalRow(0, null, null, null),
+      vitalRow(5, null, null, null),
+      vitalRow(10, 68, 40, 14),
+      vitalRow(15, null, null, null),
+      vitalRow(20, null, null, null),
+    ]
+    const result = classifySleepStages(vitals, [], 1.0)
+    expect(result[2].heartRate).toBe(68)
+  })
+
+  it('does not over-classify REM when movement data is missing (#327)', () => {
+    // Regression: both REM branches previously used `movement === null ||
+    // movement < threshold`, so a null movement always satisfied the
+    // low-movement clause and every elevated-HR epoch became REM. Without any
+    // movement evidence the classifier must fall through to 'light'.
+    // hrRatio stays ≥ 0.95 (flat HR=70) and HRV=20<25 so the REM branches would
+    // fire if movement-null still counted as low-movement.
+    const vitals = [
+      vitalRow(0, 70, 20, 14),
+      vitalRow(5, 70, 20, 14),
+      vitalRow(10, 70, 20, 14),
+      vitalRow(15, 70, 20, 14),
+      vitalRow(20, 70, 20, 14),
+    ]
+    const result = classifySleepStages(vitals, [], 1.0)
+    for (const epoch of result) {
+      expect(epoch.stage).not.toBe('rem')
+    }
+  })
+
+  it('still classifies REM when movement is explicitly low (#327)', () => {
+    // Guard: the fix above must not silently break the normal REM path.
+    // Varied baseline so the elevated epoch passes the outlier filter.
+    const vitals = [
+      vitalRow(0, 55, 20, 14),
+      vitalRow(5, 62, 20, 14),
+      vitalRow(10, 65, 20, 14),
+      vitalRow(15, 68, 20, 14),
+      vitalRow(20, 78, 18, 16),
+    ]
+    const movement = [
+      movRow(0, 10),
+      movRow(5, 10),
+      movRow(10, 10),
+      movRow(15, 10),
+      movRow(20, 10),
+    ]
+    const result = classifySleepStages(vitals, movement, 1.0)
+    expect(result[4].stage).toBe('rem')
+  })
 })
 
 describe('mergeIntoBlocks', () => {
