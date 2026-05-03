@@ -13,7 +13,14 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Socket } from 'net'
 import { promises as fs } from 'fs'
-import { connectDac, sendCommand, disconnectDac, isDacConnected } from '../dacTransport'
+import {
+  connectDac,
+  sendCommand,
+  disconnectDac,
+  isDacConnected,
+  MessageResponseTimeoutError,
+  backoffDelayMs,
+} from '../dacTransport'
 
 function createTestSocketPath(): string {
   return `/tmp/test-dac-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`
@@ -190,5 +197,76 @@ describe('dacTransport', () => {
 
     await disconnectDac()
     expect(isDacConnected()).toBe(false)
+  })
+
+  describe('response timeout', () => {
+    const originalTimeout = process.env.DAC_MESSAGE_RESPONSE_TIMEOUT_MS
+
+    beforeEach(() => {
+      process.env.DAC_MESSAGE_RESPONSE_TIMEOUT_MS = '150'
+    })
+
+    afterEach(() => {
+      if (originalTimeout === undefined) {
+        delete process.env.DAC_MESSAGE_RESPONSE_TIMEOUT_MS
+      }
+      else {
+        process.env.DAC_MESSAGE_RESPONSE_TIMEOUT_MS = originalTimeout
+      }
+    })
+
+    test('rejects with MessageResponseTimeoutError when firmware hangs', async () => {
+      const connectPromise = connectDac(socketPath)
+
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      // Intentionally do not wire up handleCommands — firmware is "hung"
+
+      await connectPromise
+
+      await expect(sendCommand('14')).rejects.toBeInstanceOf(MessageResponseTimeoutError)
+    })
+
+    test('queue drains after timeout — next command succeeds (no deadlock)', async () => {
+      const connectPromise = connectDac(socketPath)
+
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+
+      await connectPromise
+
+      // First request: firmware ignores it (no handler attached yet)
+      const firstResult = sendCommand('14')
+      await expect(firstResult).rejects.toBeInstanceOf(MessageResponseTimeoutError)
+
+      // Now firmware becomes responsive. The queue must not be stuck.
+      handleCommands(mockFranken)
+      const response = await sendCommand('0')
+      expect(response).toBe('READY')
+    })
+  })
+
+  describe('reconnect backoff', () => {
+    test('backoffDelayMs grows exponentially and caps at 60s', () => {
+      expect(backoffDelayMs(0)).toBe(1_000)
+      expect(backoffDelayMs(1)).toBe(2_000)
+      expect(backoffDelayMs(2)).toBe(4_000)
+      expect(backoffDelayMs(3)).toBe(8_000)
+      expect(backoffDelayMs(4)).toBe(16_000)
+      expect(backoffDelayMs(5)).toBe(32_000)
+      // Cap: 2^6 * 1000 = 64_000 but max is 60_000
+      expect(backoffDelayMs(6)).toBe(60_000)
+      expect(backoffDelayMs(10)).toBe(60_000)
+      expect(backoffDelayMs(100)).toBe(60_000)
+    })
+
+    test('backoffDelayMs is monotonically non-decreasing', () => {
+      let prev = 0
+      for (let i = 0; i < 15; i++) {
+        const delay = backoffDelayMs(i)
+        expect(delay).toBeGreaterThanOrEqual(prev)
+        prev = delay
+      }
+    })
   })
 })
