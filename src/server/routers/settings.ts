@@ -331,6 +331,19 @@ export const settingsRouter = router({
             })
           }
 
+          // alwaysOn and autoOffEnabled are mutually exclusive — the UI
+          // already enforces this but a direct API call could land both as
+          // true. Reject so the autoOffWatcher's "alwaysOn wins" tiebreak
+          // never has to paper over an inconsistent persisted state.
+          const finalAlwaysOn = updates.alwaysOn !== undefined ? updates.alwaysOn : current.alwaysOn
+          const finalAutoOff = updates.autoOffEnabled !== undefined ? updates.autoOffEnabled : current.autoOffEnabled
+          if (finalAlwaysOn && finalAutoOff) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'alwaysOn and autoOffEnabled are mutually exclusive — set the other to false in the same call',
+            })
+          }
+
           // Validate merged away window — reject reversed ranges
           if ('awayStart' in updates || 'awayReturn' in updates) {
             const finalStart = updates.awayStart !== undefined ? updates.awayStart : current.awayStart
