@@ -377,6 +377,21 @@ if [ "$NODE_MAJOR" -lt "$NODE_WANTED" ]; then
   exit 1
 fi
 
+# Ensure /usr/local/bin/node exists. The systemd unit hardcodes this
+# path (see ExecStart below), but on Pod 3 firmware Node ships
+# preinstalled via Volta at ~/.volta/bin/node — when the version check
+# above passes we skip the tarball install and would otherwise leave
+# /usr/local/bin/node missing. Symlink the resolved node binary so the
+# service can exec it. Matches the pnpm pattern below.
+if [ ! -x /usr/local/bin/node ]; then
+  RESOLVED_NODE="$(command -v node || true)"
+  if [ -n "$RESOLVED_NODE" ] && [ -x "$RESOLVED_NODE" ]; then
+    mkdir -p /usr/local/bin
+    ln -sf "$RESOLVED_NODE" /usr/local/bin/node
+    echo "Symlinked /usr/local/bin/node -> $RESOLVED_NODE"
+  fi
+fi
+
 # Install pnpm if not present at /usr/local/bin/pnpm. We check the
 # absolute path (not `command -v pnpm`) because Pod 3 firmware ships
 # Volta with a pnpm shim in ~/.volta/bin; the shim always reports "found"
