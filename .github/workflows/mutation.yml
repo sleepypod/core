@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload mutation report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-report-${{ matrix.shard.name }}
           path: reports/mutation/
@@ -123,7 +123,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Download all shard reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: shards/
           pattern: mutation-report-*
@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload aggregated hit list
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-hitlist
           path: reports/mutation/hitlist.md
