@@ -218,7 +218,12 @@ async function powerOffSide(side: Side): Promise<void> {
     // via a path that doesn't stamp through deviceStateSync.
     try {
       db.update(deviceState)
-        .set({ isPowered: false, poweredOnAt: null, lastUpdated: new Date() })
+        .set({
+          isPowered: false,
+          poweredOnAt: null,
+          targetTemperature: null,
+          lastUpdated: new Date(),
+        })
         .where(eq(deviceState.side, side))
         .run()
     }

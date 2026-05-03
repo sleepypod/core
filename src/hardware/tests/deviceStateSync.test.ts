@@ -240,4 +240,25 @@ describe('DeviceStateSync — mutation freshness window', () => {
     const row = readSide('right')
     expect(row?.is_powered).toBe(1)
   })
+
+  it('preserves null targetTemperature on a fresh power-off (no stale setpoint)', async () => {
+    // Caller (auto-off / setPower(false)) wrote isPowered=0, target=null.
+    // A stale firmware poll inside the freshness window must not resurrect
+    // the previous targetTemperature.
+    seedSide('right', false, null)
+    markSideMutated('right')
+
+    await sync.sync(status({
+      side: 'right',
+      currentTemperature: 80,
+      targetTemperature: 83, // firmware still reports yesterday's setpoint briefly
+      currentLevel: 0,
+      targetLevel: 0,
+      heatingDuration: 0,
+    }))
+
+    const row = readSide('right')
+    expect(row?.is_powered).toBe(0)
+    expect(row?.target_temperature).toBeNull()
+  })
 })

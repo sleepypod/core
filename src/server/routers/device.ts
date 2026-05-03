@@ -324,12 +324,19 @@ export const deviceRouter = router({
           const poweredOnAt = input.powered
             ? (prev?.isPowered ? prev.poweredOnAt : now)
             : null
+          // Always write the effective target (default 75°F when powering on
+          // without an explicit temperature; null when powering off). Without
+          // this, markSideMutated's freshness preservation could leave a stale
+          // setpoint visible past the mutation.
+          const targetTemperature = input.powered
+            ? (input.temperature ?? 75)
+            : null
           await db
             .update(deviceState)
             .set({
               isPowered: input.powered,
               poweredOnAt,
-              ...(input.temperature && { targetTemperature: input.temperature }),
+              targetTemperature,
               lastUpdated: now,
             })
             .where(eq(deviceState.side, input.side))
