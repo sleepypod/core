@@ -200,7 +200,7 @@ if ! flock -n 200; then
 fi
 
 # Check for required commands
-REQUIRED_CMDS=(curl systemctl ip groupadd usermod)
+REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod)
 if [ "$INSTALL_LOCAL" = true ] && [ -n "$INSTALL_BRANCH" ]; then
   REQUIRED_CMDS+=(git)
 fi
@@ -616,6 +616,15 @@ echo "Creating systemd service..."
 # namespace setup (ProtectSystem=strict makes /etc read-only by default;
 # the runtime's checkAndRepairIptables() writes /etc/iptables/rules.v4).
 mkdir -p /etc/iptables
+
+# Only emit SupplementaryGroups=dac when the dac group exists — otherwise
+# systemd refuses to start the unit with "Failed to determine supplementary
+# group: No such file or directory".
+SUPP_GROUPS_LINE=""
+if getent group dac &>/dev/null; then
+  SUPP_GROUPS_LINE="SupplementaryGroups=dac"
+fi
+
 cat > /etc/systemd/system/sleepypod.service << EOF
 [Unit]
 Description=SleepyPod Core Service
@@ -629,7 +638,7 @@ Type=simple
 # else that needs root runs via ExecStartPre with the \`+\` prefix.
 User=sleepypod
 Group=sleepypod
-SupplementaryGroups=dac
+$SUPP_GROUPS_LINE
 UMask=0002
 WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
@@ -640,7 +649,7 @@ Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 # for /deviceinfo symlink creation (root-owned) and sp-maintenance
 # (journal vacuum, /tmp cleanup, pnpm store prune).
 ExecStartPre=+/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
-ExecStartPre=+$INSTALL_DIR/scripts/bin/sp-maintenance
+ExecStartPre=+/usr/local/bin/sp-maintenance
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; else exec /usr/local/bin/pnpm start; fi'
 Restart=always
@@ -872,13 +881,19 @@ fi
 # files with 0644 between the initial fixup and the service restarts above.
 fix_db_permissions
 
-# Install CLI tools from scripts/bin/
+# Install CLI tools from scripts/bin/. /usr/local/bin is root-owned by
+# default — copies inherit current uid (root, since this script requires
+# sudo) but we chown/chmod explicitly so the file at the target path is
+# guaranteed root:root 0755 even if the source file under $INSTALL_DIR
+# has unusual ownership.
 if [ -d "$INSTALL_DIR/scripts/bin" ]; then
   echo "Installing CLI tools..."
   for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
     [ -f "$tool" ] || continue
-    cp "$tool" /usr/local/bin/
-    chmod +x "/usr/local/bin/$(basename "$tool")"
+    target="/usr/local/bin/$(basename "$tool")"
+    cp "$tool" "$target"
+    chown root:root "$target"
+    chmod 0755 "$target"
   done
 fi
 

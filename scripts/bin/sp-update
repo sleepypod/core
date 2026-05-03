@@ -90,8 +90,31 @@ cleanup() {
     fi
     if [ -n "${DB_BACKUP:-}" ] && [ -f "$DB_BACKUP" ]; then
       cp "$DB_BACKUP" "$DATA_DIR/sleepypod.db"
-      [ -f "$DATA_DIR/sleepypod.db-wal.bak.${BACKUP_TS:-}" ] && cp "$DATA_DIR/sleepypod.db-wal.bak.${BACKUP_TS:-}" "$DATA_DIR/sleepypod.db-wal"
-      [ -f "$DATA_DIR/sleepypod.db-shm.bak.${BACKUP_TS:-}" ] && cp "$DATA_DIR/sleepypod.db-shm.bak.${BACKUP_TS:-}" "$DATA_DIR/sleepypod.db-shm"
+      # Restore the WAL/SHM sidecars to a state consistent with the .db
+      # backup. If a backup sidecar exists, copy it; otherwise REMOVE any
+      # live sidecar — leaving a newer-than-DB sidecar would let SQLite
+      # replay post-rollback transactions on top of the rolled-back DB.
+      WAL_BAK="$DATA_DIR/sleepypod.db-wal.bak.${BACKUP_TS:-}"
+      SHM_BAK="$DATA_DIR/sleepypod.db-shm.bak.${BACKUP_TS:-}"
+      if [ -f "$WAL_BAK" ]; then
+        cp "$WAL_BAK" "$DATA_DIR/sleepypod.db-wal"
+      else
+        rm -f "$DATA_DIR/sleepypod.db-wal"
+      fi
+      if [ -f "$SHM_BAK" ]; then
+        cp "$SHM_BAK" "$DATA_DIR/sleepypod.db-shm"
+      else
+        rm -f "$DATA_DIR/sleepypod.db-shm"
+      fi
+      # The hardened systemd unit runs as User=sleepypod; ensure the
+      # restored files match the install-time ownership/mode (root:sleepypod
+      # 0660) so the service can read+write them.
+      chown root:sleepypod "$DATA_DIR/sleepypod.db" 2>/dev/null || true
+      chmod 0660 "$DATA_DIR/sleepypod.db" 2>/dev/null || true
+      [ -f "$DATA_DIR/sleepypod.db-wal" ] && chown root:sleepypod "$DATA_DIR/sleepypod.db-wal" 2>/dev/null || true
+      [ -f "$DATA_DIR/sleepypod.db-wal" ] && chmod 0660 "$DATA_DIR/sleepypod.db-wal" 2>/dev/null || true
+      [ -f "$DATA_DIR/sleepypod.db-shm" ] && chown root:sleepypod "$DATA_DIR/sleepypod.db-shm" 2>/dev/null || true
+      [ -f "$DATA_DIR/sleepypod.db-shm" ] && chmod 0660 "$DATA_DIR/sleepypod.db-shm" 2>/dev/null || true
       echo "Database restored from $DB_BACKUP."
     fi
     systemctl start sleepypod.service 2>/dev/null || true
