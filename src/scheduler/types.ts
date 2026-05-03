@@ -34,6 +34,12 @@ export interface ScheduledJob {
   schedule: string // Cron expression
   job: Job
   metadata?: Record<string, unknown>
+  /**
+   * True for jobs scheduled at an absolute fireDate (scheduleOneTimeJob).
+   * Preserved across cancelRecurringJobs reloads so in-flight one-shots
+   * (e.g. away-mode transitions) aren't silently dropped.
+   */
+  oneTime?: boolean
 }
 
 /**
