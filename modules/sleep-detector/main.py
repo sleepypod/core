@@ -51,6 +51,7 @@ import os
 import sys
 import time
 import json
+import math
 import signal
 import logging
 import sqlite3
@@ -150,6 +151,7 @@ def sanitize_ts(raw_ts) -> float:
 
     Falls back to time.time() when:
       - the field is missing or not a number
+      - the value is NaN or +/-inf (CBOR-encoded IEEE 754 specials)
       - the value is < 2020-01-01 epoch (firmware emitted a relative
         timestamp before establishing wall-clock — directly persisting
         this leads to entered_bed_at landing in 1970, observed once on
@@ -158,6 +160,8 @@ def sanitize_ts(raw_ts) -> float:
     try:
         ts = float(raw_ts) if raw_ts is not None else time.time()
     except (TypeError, ValueError):
+        return time.time()
+    if not math.isfinite(ts):
         return time.time()
     if ts < MIN_VALID_WALL_CLOCK_TS:
         return time.time()

@@ -75,3 +75,15 @@ class TestSanitizeTs:
     def test_handles_int_input(self):
         valid_int = 1777731963
         assert sanitize_ts(valid_int) == float(valid_int)
+
+    def test_substitutes_wall_clock_when_ts_is_nan(self):
+        with patch("main.time.time", return_value=1777731963.0):
+            assert sanitize_ts(float("nan")) == 1777731963.0
+
+    def test_substitutes_wall_clock_when_ts_is_positive_inf(self):
+        with patch("main.time.time", return_value=1777731963.0):
+            assert sanitize_ts(float("inf")) == 1777731963.0
+
+    def test_substitutes_wall_clock_when_ts_is_negative_inf(self):
+        with patch("main.time.time", return_value=1777731963.0):
+            assert sanitize_ts(float("-inf")) == 1777731963.0
