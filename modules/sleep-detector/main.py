@@ -51,6 +51,7 @@ import os
 import sys
 import time
 import json
+import math
 import signal
 import logging
 import sqlite3
@@ -89,6 +90,12 @@ MOVEMENT_INTERVAL_S = 60
 PRESENCE_THRESHOLD = 1500
 # How often to reload calibration profiles (seconds)
 CALIBRATION_RELOAD_S = 60
+# Earliest ts considered a valid wall-clock timestamp (2020-01-01 UTC).
+# RAW frames very rarely arrive with a tiny relative ts (e.g. 3s after some
+# synthetic origin) before the firmware has a real wall-clock reference.
+# When that happens, we fall back to time.time() rather than persisting a
+# 1970-era entered_bed_at to sleep_records.
+MIN_VALID_WALL_CLOCK_TS = 1577836800.0  # 2020-01-01 00:00:00 UTC
 
 # Pump gating for movement scoring (#230)
 # Guard period after pump-off: 3 seconds = ~6 samples at 2 Hz capSense rate
@@ -137,6 +144,28 @@ def open_biometrics_db() -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+def sanitize_ts(raw_ts) -> float:
+    """Coerce a RAW frame's `ts` field into a sane wall-clock timestamp.
+
+    Falls back to time.time() when:
+      - the field is missing or not a number
+      - the value is NaN or +/-inf (CBOR-encoded IEEE 754 specials)
+      - the value is < 2020-01-01 epoch (firmware emitted a relative
+        timestamp before establishing wall-clock — directly persisting
+        this leads to entered_bed_at landing in 1970, observed once on
+        2026-03-21 in row id=30 of sleep_records).
+    """
+    try:
+        ts = float(raw_ts) if raw_ts is not None else time.time()
+    except (TypeError, ValueError):
+        return time.time()
+    if not math.isfinite(ts):
+        return time.time()
+    if ts < MIN_VALID_WALL_CLOCK_TS:
+        return time.time()
+    return ts
 
 
 def write_sleep_record(conn: sqlite3.Connection, side: str,
@@ -704,7 +733,7 @@ def main() -> None:
             if rtype not in CAPSENSE_TYPES:
                 continue
 
-            ts = float(record.get("ts", time.time()))
+            ts = sanitize_ts(record.get("ts"))
             left.process(ts, record)
             right.process(ts, record)
 
