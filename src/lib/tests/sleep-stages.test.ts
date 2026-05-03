@@ -103,10 +103,13 @@ describe('classifySleepStages', () => {
   })
 
   it('retains valid HR when outlier window collapses to a single sample (#327)', () => {
-    // Regression: single-sample windows produce stdDev=0 which used to null out
-    // any HR that differed from the median by even 1 bpm. The row below has
-    // valid HR=68, and the windowed filter (±2) collapses to [null, null, 68,
-    // null, null] → window=[68], stdDev=0. The filter must preserve the HR.
+    // Regression: when the ±2 window has only one valid HR (its own value at i),
+    // window=[68], median=mean=68 and stdDev=0. The pre-fix condition
+    // `Math.abs(heartRate - median) > 2 * 0` evaluated to false here because
+    // heartRate==median, but in any uniform-window scenario it would silently
+    // null an out-of-window value. The post-fix `stdDev > 0 &&` short-circuit
+    // makes the single-sample-window path explicit and safe. Verify the HR at
+    // index 2 is preserved when it's the only valid sample in its window.
     const vitals = [
       vitalRow(0, null, null, null),
       vitalRow(5, null, null, null),

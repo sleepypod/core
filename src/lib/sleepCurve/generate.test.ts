@@ -148,6 +148,8 @@ describe('generateSleepCurve', () => {
       // 3. All phases still present
       const phases = new Set(points.map(p => p.phase))
       expect(phases.has('warmUp')).toBe(true)
+      expect(phases.has('coolDown')).toBe(true)
+      expect(phases.has('deepSleep')).toBe(true)
       expect(phases.has('maintain')).toBe(true)
       expect(phases.has('preWake')).toBe(true)
       expect(phases.has('wake')).toBe(true)
