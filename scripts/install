@@ -963,6 +963,33 @@ if [ -d "$ARCHIVER_SRC" ]; then
 
   systemctl enable --now sleepypod-biometrics-archiver.timer
   systemctl enable --now sleepypod-biometrics-pruner.timer
+
+  # One-time migration: gzip + relocate any pre-tmpfs RAW files at
+  # /persistent root (firmware now writes to /persistent/biometrics, so
+  # files at the old location are stranded). Idempotent — runs only if
+  # there are .RAW files at root, skips SEQNO.RAW.
+  shopt -s nullglob
+  stranded=( /persistent/*.RAW )
+  shopt -u nullglob
+  archived=0
+  for src in "${stranded[@]}"; do
+    base=$(basename "$src")
+    [ "$base" = "SEQNO.RAW" ] && continue
+    dst="/persistent/biometrics-archive/$base.gz"
+    if [ -f "$dst" ]; then
+      rm -f "$src"
+      archived=$((archived + 1))
+      continue
+    fi
+    if gzip -c "$src" > "$dst.tmp.$$"; then
+      mv -f "$dst.tmp.$$" "$dst"
+      rm -f "$src"
+      archived=$((archived + 1))
+    else
+      rm -f "$dst.tmp.$$"
+    fi
+  done
+  [ "$archived" -gt 0 ] && echo "Archived $archived stranded pre-tmpfs RAW files"
 fi
 
 # Re-fix DB permissions after all services restarted with new UMask.
