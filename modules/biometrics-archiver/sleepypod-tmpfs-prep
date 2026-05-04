@@ -1,0 +1,45 @@
+#!/bin/bash
+# Prepare /persistent/biometrics tmpfs after mount: place symlinks for the
+# state files frankenfirmware accesses by relative path so the firmware
+# can run with cwd=/persistent/biometrics without losing persistence.
+#
+# - SEQNO.RAW: firmware overwrites in place via fopen("w") — symlink writes
+#   pass through to the eMMC target. Verified empirically: same inode for
+#   /persistent/SEQNO.RAW across many days, mtime advancing.
+# - settings/heat/vector/system-connections/free-sleep-data/deviceinfo/
+#   sleepypod-data: state directories the firmware reads (and rarely
+#   writes); symlinks transparently expose the on-disk content.
+# - alarm.cbr/uptime.log: misc small state files.
+#
+# Idempotent: safe to run on every frank.service start. Tmpfs is empty
+# after every mount, so we re-stage every time.
+set -euo pipefail
+
+TMPFS_DIR="/persistent/biometrics"
+SOURCE_DIR="/persistent"
+
+if ! mountpoint -q "$TMPFS_DIR"; then
+  echo "tmpfs-prep: $TMPFS_DIR is not a tmpfs mount — refusing to stage" >&2
+  exit 1
+fi
+
+# Subdirectories: symlink target dirs live on eMMC.
+for name in deviceinfo settings heat vector system-connections free-sleep-data sleepypod-data; do
+  src="$SOURCE_DIR/$name"
+  dst="$TMPFS_DIR/$name"
+  if [ -e "$src" ] && [ ! -L "$dst" ]; then
+    ln -sfn "$src" "$dst"
+  fi
+done
+
+# State files that firmware reads/writes through cwd. Symlinks pass
+# writes through to eMMC.
+for name in SEQNO.RAW alarm.cbr uptime.log; do
+  src="$SOURCE_DIR/$name"
+  dst="$TMPFS_DIR/$name"
+  if [ -f "$src" ] && [ ! -L "$dst" ]; then
+    ln -sfn "$src" "$dst"
+  fi
+done
+
+echo "tmpfs-prep: staged $(ls -1 "$TMPFS_DIR" | wc -l) entries in $TMPFS_DIR"

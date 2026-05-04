@@ -899,6 +899,72 @@ else
   install_module "cover-buttons"
 fi
 
+# ============================================================================
+# Biometrics archiver — tmpfs RAW writes + gzip cold archive on eMMC.
+# ============================================================================
+# Frankenfirmware writes ~1 GB/day of *.RAW frames. Move them to a 500 MB
+# tmpfs at /persistent/biometrics so wear stays off eMMC; archiver gzips
+# files older than 15 min into /persistent/biometrics-archive/, pruner
+# keeps /persistent < 80% full. SEQNO.RAW + persistent state subdirs are
+# symlinked from tmpfs back to /persistent so the firmware sees its
+# state without code changes. See modules/biometrics-archiver/README.
+ARCHIVER_SRC="$INSTALL_DIR/modules/biometrics-archiver"
+if [ -d "$ARCHIVER_SRC" ]; then
+  echo "Installing biometrics-archiver (tmpfs + cold archive)..."
+
+  # Scripts
+  for s in sleepypod-tmpfs-prep sleepypod-biometrics-archiver sleepypod-biometrics-pruner; do
+    install -m 0755 "$ARCHIVER_SRC/$s" "/usr/local/bin/$s"
+  done
+
+  # Systemd units
+  install -m 0644 "$ARCHIVER_SRC/persistent-biometrics.mount"      /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-tmpfs-prep.service"     /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-biometrics-archiver.service" /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-biometrics-archiver.timer"   /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-biometrics-pruner.service"   /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-biometrics-pruner.timer"     /etc/systemd/system/
+
+  # frank.service drop-in: pull in mount + prep before frankenfirmware execs
+  mkdir -p /etc/systemd/system/frank.service.d
+  install -m 0644 "$ARCHIVER_SRC/frank.service.d/sleepypod-biometrics-tmpfs.conf" \
+    /etc/systemd/system/frank.service.d/sleepypod-biometrics-tmpfs.conf
+
+  systemctl daemon-reload
+
+  # Bring up the mount + symlinks BEFORE patching frank.sh so the cd
+  # target exists when frank restarts.
+  systemctl enable --now persistent-biometrics.mount
+  systemctl enable --now sleepypod-tmpfs-prep.service
+
+  # Patch /opt/eight/bin/frank.sh idempotently. The original is a 12-line
+  # firmware shim that does `cd /persistent && exec frankenfirmware`. We
+  # need cwd=/persistent/biometrics so RAW frames land in tmpfs.
+  if [ -f /opt/eight/bin/frank.sh ]; then
+    if ! grep -q 'cd /persistent/biometrics' /opt/eight/bin/frank.sh; then
+      backup="/opt/eight/bin/frank.sh.bak-pre-tmpfs-$(date -u +%Y%m%dT%H%M%SZ)"
+      cp -p /opt/eight/bin/frank.sh "$backup"
+      echo "Backed up frank.sh to $backup"
+      sed -i 's|cd /persistent &&|cd /persistent/biometrics \&\&|' /opt/eight/bin/frank.sh
+      echo "Patched frank.sh: cwd -> /persistent/biometrics"
+      systemctl restart frank.service
+    else
+      echo "frank.sh already patched — skipping"
+    fi
+  else
+    echo "Warning: /opt/eight/bin/frank.sh not found — skipping patch (not a Pod?)"
+  fi
+
+  # Restart sleepypod modules so they pick up RAW_DATA_DIR=/persistent/biometrics
+  for u in sleepypod-piezo-processor sleepypod-sleep-detector \
+           sleepypod-environment-monitor sleepypod-cover-buttons; do
+    systemctl restart "$u.service" 2>/dev/null || true
+  done
+
+  systemctl enable --now sleepypod-biometrics-archiver.timer
+  systemctl enable --now sleepypod-biometrics-pruner.timer
+fi
+
 # Re-fix DB permissions after all services restarted with new UMask.
 # On upgrades, old services (without UMask=0002) may have recreated WAL/SHM
 # files with 0644 between the initial fixup and the service restarts above.

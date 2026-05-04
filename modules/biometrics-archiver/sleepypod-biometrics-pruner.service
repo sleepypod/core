@@ -1,0 +1,10 @@
+[Unit]
+Description=Sleepypod biometrics archive pruner (keep /persistent < 80%)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/biometrics-archiver
+After=sleepypod-biometrics-archiver.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sleepypod-biometrics-pruner
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run sleepypod biometrics RAW archiver every 15 min
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=sleepypod-biometrics-archiver.service
+
+[Install]
+WantedBy=timers.target

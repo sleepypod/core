@@ -15,7 +15,7 @@ RestartSec=10
 
 # Environment — override via /etc/sleepypod/modules/sleep-detector.env
 EnvironmentFile=-/etc/sleepypod/modules/sleep-detector.env
-Environment="RAW_DATA_DIR=/persistent"
+Environment="RAW_DATA_DIR=/persistent/biometrics"
 Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
 
