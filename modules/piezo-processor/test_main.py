@@ -1093,10 +1093,35 @@ class TestFrzHealthPumpState:
             "left": {"pumpRpm": 2000},
             "right": {"pumpRpm": 2000},
         })
-        # Both pumps on → balanced; broadband PumpGate handles this case.
-        # Asymmetric guard should not fire.
+        # Both pumps on → not asymmetric. The symmetric case is caught
+        # by is_symmetric_active() instead — see test below.
         assert ps.is_asymmetric_for("left") is False
         assert ps.is_asymmetric_for("right") is False
+        assert ps.is_symmetric_active() is True
+
+    def test_is_symmetric_active_only_when_both_running(self):
+        ps = FrzHealthPumpState()
+        # Both off
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 0},
+        })
+        assert ps.is_symmetric_active() is False
+        # Asymmetric (right only)
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 2000},
+        })
+        assert ps.is_symmetric_active() is False
+        # Both on (Pod 5 live: 1940 / 2004 → beat 64/min in cardiac band)
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 1940},
+            "right": {"pumpRpm": 2004},
+        })
+        assert ps.is_symmetric_active() is True
 
     def test_is_asymmetric_false_when_both_idle(self):
         ps = FrzHealthPumpState()

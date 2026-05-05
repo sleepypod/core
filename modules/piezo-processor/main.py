@@ -284,6 +284,16 @@ class FrzHealthPumpState:
         other = "right" if side == "left" else "left"
         return self.is_side_pump_active(side) and not self.is_side_pump_active(other)
 
+    def is_symmetric_active(self) -> bool:
+        """Both sides' pumps active. Two pumps at slightly different RPMs
+        (e.g. Pod 5 live: 1940 / 2004) produce a beat frequency that lands
+        in the cardiac band (here 64/min), generating phantom HR/HRV/BR
+        on both sides simultaneously. The broadband PumpGate catches
+        sudden symmetric spikes but NOT steady-state both-on heating —
+        observed live on Pod 5 emitting bilateral vitals with no
+        occupant. Mirror of is_asymmetric_for, for the both-on case."""
+        return self.is_side_pump_active("left") and self.is_side_pump_active("right")
+
 
 class PumpGate:
     """Detects pump activity from dual-channel energy spikes.
@@ -820,26 +830,43 @@ class SideProcessor:
         self._last_med_std = med_std
         self._last_acr_qual = acr_qual
 
-        # Asymmetric pump-coupling guard: when own-side pump is active and the
-        # opposite side's pump is idle, motor vibration couples into the same-
-        # side piezo channel and produces broadband energy with periodic-looking
-        # autocorrelation in the cardiac band. The existing PumpGate (broadband-
-        # symmetric spike) does not catch this asymmetric case. While the gate
-        # is active, require BOTH significantly elevated energy AND strong
-        # autocorrelation to enter PRESENT — pure pump coupling rarely produces
-        # both because cardiac periodicity dominates only with a real person.
-        if (self._pump_state is not None
-                and self._pump_state.is_asymmetric_for(self.side)
-                and self._presence.state == PresenceDetector.ABSENT):
-            asymmetric_std_threshold = (
+        # Pump-coupling guard. Two configurations produce phantom presence:
+        #
+        #  1. Asymmetric (own-pump-on, other-pump-off): motor vibration
+        #     couples into the same-side piezo and produces broadband
+        #     energy with periodic-looking autocorrelation in the cardiac
+        #     band. Cross-channel rejection above can't help because the
+        #     opposite side has no competing signal.
+        #
+        #  2. Symmetric (both-pumps-on): two pumps at slightly different
+        #     RPMs create a beat frequency in the cardiac band (Pod 5
+        #     live: 1940/2004 rpm → 64/min beat), producing bilateral
+        #     phantom HR/HRV/BR. The broadband PumpGate catches sudden
+        #     symmetric spikes (ramps) but not steady-state both-on
+        #     heating, and cross-channel rejection sees both sides as
+        #     "real signal" and stays out of the way.
+        #
+        # In both cases, while the gate is active we require BOTH
+        # significantly elevated energy AND strong autocorrelation to
+        # enter PRESENT — pump coupling rarely produces both because
+        # cardiac periodicity dominates only with a real person.
+        pump_coupling = (
+            self._pump_state is not None
+            and self._presence.state == PresenceDetector.ABSENT
+            and (self._pump_state.is_asymmetric_for(self.side)
+                 or self._pump_state.is_symmetric_active())
+        )
+        if pump_coupling:
+            std_threshold = (
                 self._presence.enter_threshold * ASYMMETRIC_PRESENCE_STD_FACTOR
             )
-            if not (med_std > asymmetric_std_threshold
+            if not (med_std > std_threshold
                     and acr_qual > ASYMMETRIC_PRESENCE_ACR_THRESHOLD):
+                mode = "symmetric" if self._pump_state.is_symmetric_active() else "asymmetric"
                 log.debug(
                     "%s: pump-coupling guard suppressed presence "
-                    "(med_std=%.0f, acr=%.2f, own-pump-active, other-idle)",
-                    self.side, med_std, acr_qual,
+                    "(med_std=%.0f, acr=%.2f, mode=%s)",
+                    self.side, med_std, acr_qual, mode,
                 )
                 return
 
