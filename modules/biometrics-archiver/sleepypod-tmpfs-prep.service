@@ -1,0 +1,16 @@
+[Unit]
+Description=Stage symlinks in /persistent/biometrics tmpfs for frankenfirmware
+Documentation=https://github.com/sleepypod/core/tree/main/modules/biometrics-archiver
+Requires=persistent-biometrics.mount
+After=persistent-biometrics.mount
+Before=frank.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/sleepypod-tmpfs-prep
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

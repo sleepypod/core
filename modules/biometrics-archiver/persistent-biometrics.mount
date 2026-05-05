@@ -1,0 +1,14 @@
+[Unit]
+Description=Sleepypod biometrics tmpfs (/persistent/biometrics)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/biometrics-archiver
+RequiresMountsFor=/persistent
+Before=frank.service sleepypod.service sleepypod-piezo-processor.service sleepypod-sleep-detector.service sleepypod-environment-monitor.service sleepypod-cover-buttons.service
+
+[Mount]
+What=tmpfs
+Where=/persistent/biometrics
+Type=tmpfs
+Options=size=500M,mode=0755,nosuid,nodev
+
+[Install]
+WantedBy=multi-user.target

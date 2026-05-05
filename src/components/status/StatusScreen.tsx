@@ -5,6 +5,7 @@ import { trpc } from '@/src/utils/trpc'
 import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { HealthCircle } from './HealthCircle'
 import { HealthStatusCard } from './HealthStatusCard'
+import { SystemInfoCard } from './SystemInfoCard'
 import { UpdateCard } from './UpdateCard'
 import { WaterModal } from './WaterModal'
 import { CalibrationModal } from './CalibrationModal'
@@ -307,6 +308,9 @@ export function StatusScreen() {
           isPriming={deviceStatus.data?.isPriming ?? false}
           onWaterClick={() => setWaterModalOpen(true)}
         />
+
+        {/* System info — branch/commit/build date + full disk usage */}
+        <SystemInfoCard />
 
         {/* Internet access toggle */}
         <InternetToggleCard />

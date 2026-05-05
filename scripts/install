@@ -377,6 +377,21 @@ if [ "$NODE_MAJOR" -lt "$NODE_WANTED" ]; then
   exit 1
 fi
 
+# Ensure /usr/local/bin/node exists. The systemd unit hardcodes this
+# path (see ExecStart below), but on Pod 3 firmware Node ships
+# preinstalled via Volta at ~/.volta/bin/node — when the version check
+# above passes we skip the tarball install and would otherwise leave
+# /usr/local/bin/node missing. Symlink the resolved node binary so the
+# service can exec it. Matches the pnpm pattern below.
+if [ ! -x /usr/local/bin/node ]; then
+  RESOLVED_NODE="$(command -v node || true)"
+  if [ -n "$RESOLVED_NODE" ] && [ -x "$RESOLVED_NODE" ]; then
+    mkdir -p /usr/local/bin
+    ln -sf "$RESOLVED_NODE" /usr/local/bin/node
+    echo "Symlinked /usr/local/bin/node -> $RESOLVED_NODE"
+  fi
+fi
+
 # Install pnpm if not present at /usr/local/bin/pnpm. We check the
 # absolute path (not `command -v pnpm`) because Pod 3 firmware ships
 # Volta with a pnpm shim in ~/.volta/bin; the shim always reports "found"
@@ -575,15 +590,22 @@ if [ -f "$INSTALL_DIR/.env" ]; then
   grep -q "^BIOMETRICS_DATABASE_URL=" "$INSTALL_DIR/.env" && \
     sed -i "s|^BIOMETRICS_DATABASE_URL=.*|BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db|" "$INSTALL_DIR/.env" || \
     echo "BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db" >> "$INSTALL_DIR/.env"
+
+  # Generate EXPORT_TOKEN once if missing — preserved across upgrades.
+  if ! grep -q "^EXPORT_TOKEN=" "$INSTALL_DIR/.env"; then
+    echo "EXPORT_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '+/=' )" >> "$INSTALL_DIR/.env"
+  fi
 else
   echo "Creating environment file..."
   touch "$INSTALL_DIR/.env"
   chmod 640 "$INSTALL_DIR/.env"
+  EXPORT_TOKEN_VAL="$(head -c 24 /dev/urandom | base64 | tr -d '+/=' )"
   cat > "$INSTALL_DIR/.env" << EOF
 DATABASE_URL=file:$DATA_DIR/sleepypod.db
 BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db
 DAC_SOCK_PATH=$DAC_SOCK_PATH
 NODE_ENV=production
+EXPORT_TOKEN=$EXPORT_TOKEN_VAL
 EOF
 fi
 
@@ -875,6 +897,99 @@ else
   install_module "environment-monitor"
   install_module "calibrator"
   install_module "cover-buttons"
+fi
+
+# ============================================================================
+# Biometrics archiver — tmpfs RAW writes + gzip cold archive on eMMC.
+# ============================================================================
+# Frankenfirmware writes ~1 GB/day of *.RAW frames. Move them to a 500 MB
+# tmpfs at /persistent/biometrics so wear stays off eMMC; archiver gzips
+# files older than 15 min into /persistent/biometrics-archive/, pruner
+# keeps /persistent < 80% full. SEQNO.RAW + persistent state subdirs are
+# symlinked from tmpfs back to /persistent so the firmware sees its
+# state without code changes. See modules/biometrics-archiver/README.
+ARCHIVER_SRC="$INSTALL_DIR/modules/biometrics-archiver"
+if [ -d "$ARCHIVER_SRC" ]; then
+  echo "Installing biometrics-archiver (tmpfs + cold archive)..."
+
+  # Scripts
+  for s in sleepypod-tmpfs-prep sleepypod-biometrics-archiver sleepypod-biometrics-pruner; do
+    install -m 0755 "$ARCHIVER_SRC/$s" "/usr/local/bin/$s"
+  done
+
+  # Systemd units
+  install -m 0644 "$ARCHIVER_SRC/persistent-biometrics.mount"      /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-tmpfs-prep.service"     /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-biometrics-archiver.service" /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-biometrics-archiver.timer"   /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-biometrics-pruner.service"   /etc/systemd/system/
+  install -m 0644 "$ARCHIVER_SRC/sleepypod-biometrics-pruner.timer"     /etc/systemd/system/
+
+  # frank.service drop-in: pull in mount + prep before frankenfirmware execs
+  mkdir -p /etc/systemd/system/frank.service.d
+  install -m 0644 "$ARCHIVER_SRC/frank.service.d/sleepypod-biometrics-tmpfs.conf" \
+    /etc/systemd/system/frank.service.d/sleepypod-biometrics-tmpfs.conf
+
+  systemctl daemon-reload
+
+  # Bring up the mount + symlinks BEFORE patching frank.sh so the cd
+  # target exists when frank restarts.
+  systemctl enable --now persistent-biometrics.mount
+  systemctl enable --now sleepypod-tmpfs-prep.service
+
+  # Patch /opt/eight/bin/frank.sh idempotently. The original is a 12-line
+  # firmware shim that does `cd /persistent && exec frankenfirmware`. We
+  # need cwd=/persistent/biometrics so RAW frames land in tmpfs.
+  if [ -f /opt/eight/bin/frank.sh ]; then
+    if ! grep -q 'cd /persistent/biometrics' /opt/eight/bin/frank.sh; then
+      backup="/opt/eight/bin/frank.sh.bak-pre-tmpfs-$(date -u +%Y%m%dT%H%M%SZ)"
+      cp -p /opt/eight/bin/frank.sh "$backup"
+      echo "Backed up frank.sh to $backup"
+      sed -i 's|cd /persistent &&|cd /persistent/biometrics \&\&|' /opt/eight/bin/frank.sh
+      echo "Patched frank.sh: cwd -> /persistent/biometrics"
+      systemctl restart frank.service
+    else
+      echo "frank.sh already patched — skipping"
+    fi
+  else
+    echo "Warning: /opt/eight/bin/frank.sh not found — skipping patch (not a Pod?)"
+  fi
+
+  # Restart sleepypod modules so they pick up RAW_DATA_DIR=/persistent/biometrics
+  for u in sleepypod-piezo-processor sleepypod-sleep-detector \
+           sleepypod-environment-monitor sleepypod-cover-buttons; do
+    systemctl restart "$u.service" 2>/dev/null || true
+  done
+
+  systemctl enable --now sleepypod-biometrics-archiver.timer
+  systemctl enable --now sleepypod-biometrics-pruner.timer
+
+  # One-time migration: gzip + relocate any pre-tmpfs RAW files at
+  # /persistent root (firmware now writes to /persistent/biometrics, so
+  # files at the old location are stranded). Idempotent — runs only if
+  # there are .RAW files at root, skips SEQNO.RAW.
+  shopt -s nullglob
+  stranded=( /persistent/*.RAW )
+  shopt -u nullglob
+  archived=0
+  for src in "${stranded[@]}"; do
+    base=$(basename "$src")
+    [ "$base" = "SEQNO.RAW" ] && continue
+    dst="/persistent/biometrics-archive/$base.gz"
+    if [ -f "$dst" ]; then
+      rm -f "$src"
+      archived=$((archived + 1))
+      continue
+    fi
+    if gzip -c "$src" > "$dst.tmp.$$"; then
+      mv -f "$dst.tmp.$$" "$dst"
+      rm -f "$src"
+      archived=$((archived + 1))
+    else
+      rm -f "$dst.tmp.$$"
+    fi
+  done
+  [ "$archived" -gt 0 ] && echo "Archived $archived stranded pre-tmpfs RAW files"
 fi
 
 # Re-fix DB permissions after all services restarted with new UMask.

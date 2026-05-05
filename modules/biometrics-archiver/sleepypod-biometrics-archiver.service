@@ -1,0 +1,11 @@
+[Unit]
+Description=Sleepypod biometrics RAW archiver (gzip oldest from tmpfs to eMMC)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/biometrics-archiver
+Requires=persistent-biometrics.mount
+After=persistent-biometrics.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sleepypod-biometrics-archiver
+Nice=10
+IOSchedulingClass=idle

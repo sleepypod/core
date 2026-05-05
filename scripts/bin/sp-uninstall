@@ -51,12 +51,40 @@ SERVICES=(
   sleepypod-sleep-detector.service
   sleepypod-environment-monitor.service
   sleepypod-calibrator.service
+  sleepypod-cover-buttons.service
 )
 for svc in "${SERVICES[@]}"; do
   systemctl stop "$svc" 2>/dev/null || true
   systemctl disable "$svc" 2>/dev/null || true
   rm -f "/etc/systemd/system/$svc"
 done
+
+# Restore frank.sh from the most recent pre-tmpfs backup BEFORE the mount
+# is torn down — otherwise frank's cwd disappears mid-restart.
+if ls /opt/eight/bin/frank.sh.bak-pre-tmpfs-* >/dev/null 2>&1; then
+  newest_backup=$(ls -1t /opt/eight/bin/frank.sh.bak-pre-tmpfs-* | head -1)
+  echo "Restoring frank.sh from $newest_backup"
+  cp -p "$newest_backup" /opt/eight/bin/frank.sh
+  systemctl restart frank.service 2>/dev/null || true
+fi
+
+# Tear down biometrics-archiver: timers, prep service, mount unit.
+for u in sleepypod-biometrics-archiver.timer sleepypod-biometrics-pruner.timer \
+         sleepypod-tmpfs-prep.service persistent-biometrics.mount; do
+  systemctl stop "$u" 2>/dev/null || true
+  systemctl disable "$u" 2>/dev/null || true
+done
+rm -f /etc/systemd/system/sleepypod-biometrics-archiver.service \
+      /etc/systemd/system/sleepypod-biometrics-archiver.timer \
+      /etc/systemd/system/sleepypod-biometrics-pruner.service \
+      /etc/systemd/system/sleepypod-biometrics-pruner.timer \
+      /etc/systemd/system/sleepypod-tmpfs-prep.service \
+      /etc/systemd/system/persistent-biometrics.mount
+rm -rf /etc/systemd/system/frank.service.d
+rm -f /usr/local/bin/sleepypod-tmpfs-prep \
+      /usr/local/bin/sleepypod-biometrics-archiver \
+      /usr/local/bin/sleepypod-biometrics-pruner
+
 systemctl daemon-reload
 
 # Remove CLI tools

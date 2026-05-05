@@ -1,0 +1,32 @@
+#!/bin/bash
+# Prune oldest gzipped RAW archives until /persistent disk usage falls
+# below TARGET_USED_PCT. Runs every 15 min after archiver. Never touches
+# files outside /persistent/biometrics-archive/.
+set -euo pipefail
+
+ARCHIVE_DIR="/persistent/biometrics-archive"
+TARGET_USED_PCT="${TARGET_USED_PCT:-80}"
+
+mkdir -p "$ARCHIVE_DIR"
+
+pruned=0
+while :; do
+  used_pct=$(df --output=pcent /persistent | tail -1 | tr -dc '0-9')
+  used_pct=${used_pct:-0}
+  if [ "$used_pct" -le "$TARGET_USED_PCT" ]; then
+    break
+  fi
+
+  oldest=$(find "$ARCHIVE_DIR" -maxdepth 1 -type f -name '*.RAW.gz' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -n | head -1 | awk '{print $2}')
+  if [ -z "$oldest" ]; then
+    echo "pruner: $used_pct% used but archive is empty — nothing to prune" >&2
+    break
+  fi
+
+  rm -f "$oldest"
+  pruned=$((pruned + 1))
+done
+
+used_pct=$(df --output=pcent /persistent | tail -1 | tr -dc '0-9')
+echo "pruner: pruned=$pruned used_pct=$used_pct%"
