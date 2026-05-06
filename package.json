@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "prebuild": "node scripts/generate-git-info.mjs && lingui compile",
-    "build": "next build && cp -r .next/static .next/standalone/.next/static && [ -d public ] && cp -r public .next/standalone/public || true",
+    "build": "next build && cp -r .next/static .next/standalone/.next/static && { [ ! -d public ] || cp -r public .next/standalone/public || true; }",
     "dev": "next dev",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
