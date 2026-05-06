@@ -33,8 +33,8 @@ from main import (  # noqa: E402
     compute_hrv,
     subharmonic_summation_hr,
     FrzHealthPumpState,
-    ASYMMETRIC_PUMP_GUARD_S,
-    ASYMMETRIC_PUMP_RPM_MIN,
+    PUMP_OFF_GUARD_S,
+    PUMP_ACTIVE_RPM_MIN,
     HRTracker,
     PresenceDetector,
     PumpGate,
@@ -1026,7 +1026,7 @@ class TestFrzHealthPumpState:
         ps.update({
             "type": "frzHealth",
             "left": {"pumpRpm": 0},
-            "right": {"pumpRpm": ASYMMETRIC_PUMP_RPM_MIN + 100},
+            "right": {"pumpRpm": PUMP_ACTIVE_RPM_MIN + 100},
         })
         assert ps.is_side_pump_active("left") is False
         assert ps.is_side_pump_active("right") is True
@@ -1035,8 +1035,8 @@ class TestFrzHealthPumpState:
         ps = FrzHealthPumpState()
         ps.update({
             "type": "frzHealth",
-            "left": {"pumpRpm": ASYMMETRIC_PUMP_RPM_MIN - 1},
-            "right": {"pumpRpm": ASYMMETRIC_PUMP_RPM_MIN - 1},
+            "left": {"pumpRpm": PUMP_ACTIVE_RPM_MIN - 1},
+            "right": {"pumpRpm": PUMP_ACTIVE_RPM_MIN - 1},
         })
         assert ps.is_side_pump_active("left") is False
         assert ps.is_side_pump_active("right") is False
@@ -1167,7 +1167,7 @@ class TestFrzHealthPumpState:
             "right": {"pumpRpm": 0},
         })
         # Force guard expiry
-        ps._pump_off_at["right"] = time.monotonic() - ASYMMETRIC_PUMP_GUARD_S - 1
+        ps._pump_off_at["right"] = time.monotonic() - PUMP_OFF_GUARD_S - 1
         assert ps.is_side_pump_active("right") is False
 
     def test_handles_malformed_record_safely(self):
