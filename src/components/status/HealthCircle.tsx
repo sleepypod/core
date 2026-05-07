@@ -13,8 +13,6 @@ interface HealthCircleProps {
   sensorLabel?: string | null
   branch?: string
   commitHash?: string
-  diskPercent?: number
-  diskLabel?: string
   internetBlocked?: boolean
   wifiSsid?: string
   wifiSignal?: number
@@ -36,8 +34,6 @@ export function HealthCircle({
   sensorLabel,
   branch,
   commitHash,
-  diskPercent,
-  diskLabel,
   internetBlocked,
   wifiSsid,
   wifiSignal,
@@ -200,37 +196,7 @@ export function HealthCircle({
         </div>
       </>
 
-      {/* Row 4: Disk usage */}
-      {diskPercent !== undefined && (
-        <>
-          <div className="my-2.5 border-t border-zinc-800" />
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-[10px]">
-              <span className="text-zinc-500">{diskLabel ?? 'Disk'}</span>
-              <span
-                className={clsx(
-                  'font-medium',
-                  diskPercent > 90 ? 'text-red-400' : diskPercent > 75 ? 'text-amber-400' : 'text-zinc-500',
-                )}
-              >
-                {Math.round(diskPercent)}
-                %
-              </span>
-            </div>
-            <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-800">
-              <div
-                className={clsx(
-                  'h-full rounded-full transition-all duration-500',
-                  diskPercent > 90 ? 'bg-red-400' : diskPercent > 75 ? 'bg-amber-400' : 'bg-sky-400',
-                )}
-                style={{ width: `${Math.min(diskPercent, 100)}%` }}
-              />
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Row 5: Hardware info — hidden by default */}
+      {/* Row 4: Hardware info — hidden by default */}
       {podVersion && (
         <>
           <div className="my-2.5 border-t border-zinc-800" />

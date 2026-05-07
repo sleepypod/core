@@ -27,11 +27,6 @@ function formatMs(ms: number): string {
   return `${Math.round(ms)}ms`
 }
 
-function formatBytes(bytes: number): string {
-  const gb = bytes / (1024 * 1024 * 1024)
-  return `${gb.toFixed(1)} GB`
-}
-
 function dacMonitorStatus(status?: string): 'ok' | 'degraded' | 'error' | 'unknown' {
   if (!status) return 'unknown'
   if (status === 'not_initialized') return 'degraded'
@@ -70,7 +65,6 @@ export function StatusScreen() {
 
   // System info — less frequent
   const version = trpc.system.getVersion.useQuery({}, { refetchInterval: 60_000 })
-  const disk = trpc.system.getDiskUsage.useQuery({}, { refetchInterval: 30_000 })
   const internet = trpc.system.internetStatus.useQuery({}, { refetchInterval: POLL_INTERVAL })
   const wifi = trpc.system.wifiStatus.useQuery({}, { refetchInterval: POLL_INTERVAL })
   const logSources = trpc.system.getLogSources.useQuery({}, { refetchInterval: 30_000 })
@@ -93,7 +87,6 @@ export function StatusScreen() {
       utils.health.scheduler.invalidate(),
       utils.health.dacMonitor.invalidate(),
       utils.system.getVersion.invalidate(),
-      utils.system.getDiskUsage.invalidate(),
       utils.system.internetStatus.invalidate(),
       utils.system.wifiStatus.invalidate(),
       utils.system.getLogSources.invalidate(),
@@ -294,12 +287,6 @@ export function StatusScreen() {
           sensorLabel={deviceStatus.data?.sensorLabel ?? undefined}
           branch={version.data?.branch}
           commitHash={version.data?.commitHash}
-          diskPercent={disk.data?.usedPercent}
-          diskLabel={
-            disk.data && disk.data.totalBytes > 0
-              ? `${formatBytes(disk.data.usedBytes)} / ${formatBytes(disk.data.totalBytes)}`
-              : undefined
-          }
           internetBlocked={internet.data?.blocked}
           wifiSsid={wifi.data?.ssid ?? undefined}
           wifiSignal={wifi.data?.signal ?? undefined}
