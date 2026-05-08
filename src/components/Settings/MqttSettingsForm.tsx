@@ -156,7 +156,9 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
   // shows the resolved value so the user knows the current effective setting.
   const [url, setUrl] = useState(data.sources.url === 'db' ? data.url ?? '' : '')
   const [username, setUsername] = useState(data.sources.username === 'db' ? data.username ?? '' : '')
-  const [topicPrefix, setTopicPrefix] = useState(data.sources.topicPrefix === 'db' ? data.topicPrefix : '')
+  // Topic prefix always has a sensible resolved default ('sleepypod'); prefill
+  // so the user sees what's in effect rather than an empty box with placeholder.
+  const [topicPrefix, setTopicPrefix] = useState(data.topicPrefix)
   const [password, setPassword] = useState('')
 
   // Resync local state when the server snapshot changes (e.g. after save
@@ -170,7 +172,7 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
     setTlsEnabled(data.tlsEnabled)
     setUrl(data.sources.url === 'db' ? data.url ?? '' : '')
     setUsername(data.sources.username === 'db' ? data.username ?? '' : '')
-    setTopicPrefix(data.sources.topicPrefix === 'db' ? data.topicPrefix : '')
+    setTopicPrefix(data.topicPrefix)
   }
 
   const updateMutation = trpc.mqtt.updateSettings.useMutation({
@@ -219,8 +221,8 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
   const canTest = Boolean(url.trim() || data.url)
 
   return (
-    <div className="space-y-4">
-      {/* Enabled toggle */}
+    <div className="space-y-5">
+      {/* Master enable */}
       <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -239,146 +241,128 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
         </div>
       </div>
 
-      {/* Broker URL */}
-      <TextFieldCard
-        icon={<Globe size={16} className="text-zinc-400" />}
-        label="Broker URL"
-        field="url"
-        value={url}
-        placeholder={data.url || 'mqtt://broker.local:1883'}
-        source={data.sources.url}
-        onChange={setUrl}
-        disabled={isPending}
-        autoComplete="off"
-      />
-
-      {/* Username */}
-      <TextFieldCard
-        icon={<User size={16} className="text-zinc-400" />}
-        label="Username"
-        field="username"
-        value={username}
-        placeholder={data.username || ''}
-        source={data.sources.username}
-        onChange={setUsername}
-        disabled={isPending}
-        autoComplete="off"
-      />
-
-      {/* Password */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <KeyRound size={16} className="text-zinc-400" />
-            <span className="text-sm font-medium text-zinc-300">Password</span>
-          </div>
-          <span
-            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-              data.passwordIsSet
-                ? 'bg-emerald-500/15 text-emerald-400'
-                : 'bg-zinc-800 text-zinc-500'
-            }`}
-          >
-            {data.passwordIsSet ? 'set' : 'unset'}
-          </span>
-        </div>
-        <input
-          type="password"
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-          placeholder={data.passwordIsSet ? '••••••••' : ''}
-          autoComplete="new-password"
+      {/* Connection */}
+      <Section label="Connection">
+        <TextFieldCard
+          icon={<Globe size={16} className="text-zinc-400" />}
+          label="Broker URL"
+          field="url"
+          value={url}
+          placeholder={data.url || 'mqtt://broker.local:1883'}
+          source={data.sources.url}
+          onChange={setUrl}
           disabled={isPending}
-          className="h-11 w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+          autoComplete="off"
         />
-        {data.sources.password === 'env' && (
-          <p className="mt-1.5 text-xs text-zinc-500">Currently sourced from .env</p>
-        )}
-      </div>
-
-      {/* Topic Prefix */}
-      <TextFieldCard
-        icon={<Tag size={16} className="text-zinc-400" />}
-        label="Topic Prefix"
-        field="topicPrefix"
-        value={topicPrefix}
-        placeholder={data.topicPrefix || 'sleepypod'}
-        source={data.sources.topicPrefix}
-        onChange={setTopicPrefix}
-        disabled={isPending}
-        autoComplete="off"
-      />
-
-      {/* HA Discovery */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Home size={16} className={haDiscovery ? 'text-sky-400' : 'text-zinc-400'} />
-            <div>
-              <span className="text-sm font-medium text-zinc-300">Home Assistant Discovery</span>
-              <p className="text-xs text-zinc-500">Publishes climate/switch/sensor entities</p>
-            </div>
-          </div>
-          <Toggle
-            enabled={haDiscovery}
-            onToggle={() => setHaDiscovery(v => !v)}
-            disabled={isPending}
-            label="Toggle Home Assistant discovery"
-          />
-        </div>
-      </div>
-
-      {/* TLS */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Lock size={16} className={tlsEnabled ? 'text-sky-400' : 'text-zinc-400'} />
-            <div>
-              <span className="text-sm font-medium text-zinc-300">TLS</span>
-              <p className="text-xs text-zinc-500">Use mqtts:// transport</p>
-            </div>
-          </div>
-          <Toggle
-            enabled={tlsEnabled}
-            onToggle={() => setTlsEnabled(v => !v)}
-            disabled={isPending}
-            label="Toggle TLS"
-          />
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="flex gap-2">
+        <ToggleCard
+          icon={<Lock size={16} className={tlsEnabled ? 'text-sky-400' : 'text-zinc-400'} />}
+          label="TLS"
+          description="Use mqtts:// transport"
+          enabled={tlsEnabled}
+          onToggle={() => setTlsEnabled(v => !v)}
+          disabled={isPending}
+          ariaLabel="Toggle TLS"
+        />
         <button
           onClick={handleTest}
           disabled={!canTest || testMutation.isPending}
-          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-300 transition-colors active:bg-zinc-800 disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-300 transition-colors active:bg-zinc-800 disabled:opacity-50"
         >
           {testMutation.isPending && <Loader2 size={14} className="animate-spin" />}
           Test Connection
         </button>
-        <button
-          onClick={handleSave}
-          disabled={isPending}
-          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-sky-500/20 px-3 py-3 text-sm font-medium text-sky-400 transition-colors active:bg-sky-500/30 disabled:opacity-50"
-        >
-          {isPending && <Loader2 size={14} className="animate-spin" />}
-          {isPending ? 'Saving…' : 'Save'}
-        </button>
-      </div>
+        {testMutation.data && (
+          <p className={`text-xs ${testMutation.data.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+            {testMutation.data.ok
+              ? 'Connection succeeded.'
+              : `Connection failed: ${testMutation.data.error ?? 'unknown error'}`}
+          </p>
+        )}
+        {testMutation.error && (
+          <p className="text-xs text-red-400">{testMutation.error.message}</p>
+        )}
+      </Section>
 
-      {testMutation.data && (
-        <p
-          className={`text-xs ${testMutation.data.ok ? 'text-emerald-400' : 'text-red-400'}`}
-        >
-          {testMutation.data.ok
-            ? 'Connection succeeded.'
-            : `Connection failed: ${testMutation.data.error ?? 'unknown error'}`}
-        </p>
-      )}
-      {testMutation.error && (
-        <p className="text-xs text-red-400">{testMutation.error.message}</p>
-      )}
+      {/* Authentication */}
+      <Section
+        label="Authentication"
+        hint="Leave both blank for anonymous brokers (e.g. local Mosquitto with allow_anonymous true)."
+      >
+        <TextFieldCard
+          icon={<User size={16} className="text-zinc-400" />}
+          label="Username"
+          field="username"
+          value={username}
+          placeholder={data.username || ''}
+          source={data.sources.username}
+          onChange={setUsername}
+          disabled={isPending}
+          autoComplete="off"
+        />
+        <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <KeyRound size={16} className="text-zinc-400" />
+              <span className="text-sm font-medium text-zinc-300">Password</span>
+            </div>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                data.passwordIsSet
+                  ? 'bg-emerald-500/15 text-emerald-400'
+                  : 'bg-zinc-800 text-zinc-500'
+              }`}
+            >
+              {data.passwordIsSet ? 'set' : 'unset'}
+            </span>
+          </div>
+          <input
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder={data.passwordIsSet ? '••••••••' : ''}
+            autoComplete="new-password"
+            disabled={isPending}
+            className="h-11 w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+          />
+          {data.sources.password === 'env' && (
+            <p className="mt-1.5 text-xs text-zinc-500">Currently sourced from .env</p>
+          )}
+        </div>
+      </Section>
+
+      {/* Topics & Discovery */}
+      <Section label="Topics & Discovery">
+        <TextFieldCard
+          icon={<Tag size={16} className="text-zinc-400" />}
+          label="Topic Prefix"
+          field="topicPrefix"
+          value={topicPrefix}
+          placeholder="sleepypod"
+          source={data.sources.topicPrefix}
+          onChange={setTopicPrefix}
+          disabled={isPending}
+          autoComplete="off"
+        />
+        <ToggleCard
+          icon={<Home size={16} className={haDiscovery ? 'text-sky-400' : 'text-zinc-400'} />}
+          label="Home Assistant Discovery"
+          description="Publishes climate/switch/sensor entities"
+          enabled={haDiscovery}
+          onToggle={() => setHaDiscovery(v => !v)}
+          disabled={isPending}
+          ariaLabel="Toggle Home Assistant discovery"
+        />
+      </Section>
+
+      {/* Save */}
+      <button
+        onClick={handleSave}
+        disabled={isPending}
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500/20 px-3 py-3 text-sm font-medium text-sky-400 transition-colors active:bg-sky-500/30 disabled:opacity-50"
+      >
+        {isPending && <Loader2 size={14} className="animate-spin" />}
+        {isPending ? 'Saving…' : 'Save'}
+      </button>
 
       {updateMutation.error && (
         <p className="text-xs text-red-400">{updateMutation.error.message}</p>
@@ -386,6 +370,49 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
       {updateMutation.isSuccess && (
         <p className="text-xs text-emerald-400">Settings saved.</p>
       )}
+    </div>
+  )
+}
+
+interface SectionProps {
+  label: string
+  hint?: string
+  children: React.ReactNode
+}
+
+function Section({ label, hint, children }: SectionProps) {
+  return (
+    <section className="space-y-2">
+      <h3 className="px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">{label}</h3>
+      {children}
+      {hint && <p className="px-1 text-xs text-zinc-500">{hint}</p>}
+    </section>
+  )
+}
+
+interface ToggleCardProps {
+  icon: React.ReactNode
+  label: string
+  description: string
+  enabled: boolean
+  onToggle: () => void
+  disabled?: boolean
+  ariaLabel: string
+}
+
+function ToggleCard({ icon, label, description, enabled, onToggle, disabled, ariaLabel }: ToggleCardProps) {
+  return (
+    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {icon}
+          <div>
+            <span className="text-sm font-medium text-zinc-300">{label}</span>
+            <p className="text-xs text-zinc-500">{description}</p>
+          </div>
+        </div>
+        <Toggle enabled={enabled} onToggle={onToggle} disabled={disabled} label={ariaLabel} />
+      </div>
     </div>
   )
 }

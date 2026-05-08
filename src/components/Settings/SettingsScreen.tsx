@@ -76,23 +76,22 @@ export function SettingsScreen() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
-        <TabsList className="grid h-auto w-full grid-cols-4 gap-1 rounded-xl bg-zinc-900 p-1">
-          <TabsTrigger value="device" className="flex h-10 items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-zinc-400 data-active:bg-zinc-800 data-active:text-white">
-            <Cog size={14} />
-            Device
-          </TabsTrigger>
-          <TabsTrigger value="sides" className="flex h-10 items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-zinc-400 data-active:bg-zinc-800 data-active:text-white">
-            <User size={14} />
-            Sides
-          </TabsTrigger>
-          <TabsTrigger value="gestures" className="flex h-10 items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-zinc-400 data-active:bg-zinc-800 data-active:text-white">
-            <Hand size={14} />
-            Gestures
-          </TabsTrigger>
-          <TabsTrigger value="mqtt" className="flex h-10 items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-zinc-400 data-active:bg-zinc-800 data-active:text-white">
-            <Radio size={14} />
-            MQTT
-          </TabsTrigger>
+        <TabsList className="grid h-10 w-full grid-cols-4 gap-1 rounded-xl bg-zinc-900 p-1">
+          {([
+            { id: 'device', label: 'Device', Icon: Cog },
+            { id: 'sides', label: 'Sides', Icon: User },
+            { id: 'gestures', label: 'Gestures', Icon: Hand },
+            { id: 'mqtt', label: 'MQTT', Icon: Radio },
+          ] as const).map(({ id, label, Icon }) => (
+            <TabsTrigger
+              key={id}
+              value={id}
+              className="flex items-center justify-center gap-1.5 rounded-lg border-0 px-2 text-xs font-medium text-zinc-400 transition-colors data-active:bg-zinc-800 data-active:text-white data-active:shadow-none"
+            >
+              <Icon size={14} />
+              {label}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value="device">
