@@ -21,6 +21,7 @@ import { startBiometricsRetention, stopBiometricsRetention } from '@/src/db/rete
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
 import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
 import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
+import { startMqttBridge, shutdownMqttBridge } from '@/src/streaming/mqttBridge'
 import { initializeKeepalives, shutdownKeepalives } from '@/src/services/temperatureKeepalive'
 import { startAutoOffWatcher, stopAutoOffWatcher } from '@/src/services/autoOffWatcher'
 
@@ -67,6 +68,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
   }
   catch (error) {
     console.error('Error shutting down piezo stream server:', error)
+  }
+
+  // Step 2b: Shutdown MQTT bridge (publish offline + close client cleanly)
+  try {
+    await shutdownMqttBridge()
+  }
+  catch (error) {
+    console.error('Error shutting down MQTT bridge:', error)
   }
 
   // Step 3: Stop Bonjour announcement
@@ -289,6 +298,17 @@ export async function initializeScheduler(): Promise<void> {
     catch (error) {
       console.warn(
         'WARNING: Piezo stream server failed to start:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
+    // Start MQTT bridge (non-blocking; no-op when disabled in settings/env)
+    try {
+      await startMqttBridge()
+    }
+    catch (error) {
+      console.warn(
+        'WARNING: MQTT bridge failed to start:',
         error instanceof Error ? error.message : error
       )
     }

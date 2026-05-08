@@ -778,8 +778,23 @@ export function onServerFrame(cb: ServerFrameListener): () => void {
 /**
  * Broadcast a JSON message to all connected WS clients that are subscribed
  * to the given sensor type. Used by dacMonitor to push device status frames.
+ *
+ * Also fans out to in-process server-side listeners (onServerFrame) for every
+ * frame type. The MQTT bridge subscribes here to mirror deviceStatus frames
+ * to HA without waiting on the 30 s timer; previously this path only fired
+ * inside the file-decoder loop and was gated to frzHealth, so frames produced
+ * by broadcastFrame() (deviceStatus, etc.) never reached server listeners.
  */
 export function broadcastFrame(frame: Record<string, unknown>): void {
+  if (serverFrameListeners.size > 0) {
+    for (const cb of serverFrameListeners) {
+      try {
+        cb(frame)
+      }
+      catch { /* consumer error */ }
+    }
+  }
+
   const server = wss
   if (!server || server.clients.size === 0) return
 
