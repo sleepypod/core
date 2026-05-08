@@ -81,6 +81,83 @@ cleanup() {
 trap 'cleanup $LINENO' EXIT
 
 # --------------------------------------------------------------------------------
+# reclaim_rootfs_caches
+# Sweeps regenerable caches and pre-uv-era orphans from rootfs (mmcblk0p5,
+# 5.8 GB) before install proceeds. /persistent (mmcblk0p8, 15 GB) is not
+# touched. Idempotent — runs on every install so the Pod stays lean as
+# new caches accrete. See sleepypod-core-31.
+
+reclaim_rootfs_caches() {
+  echo ""
+  echo "========================================"
+  echo "  Reclaiming regenerable caches"
+  echo "========================================"
+
+  local rootfs_free_before
+  rootfs_free_before=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
+
+  # Pre-uv venv at /home/dac/venv. Per ADR 0017 biometrics modules moved
+  # to per-module uv .venvs under /opt/sleepypod/modules. Only drop the
+  # legacy venv when at least one uv venv is in place — otherwise an
+  # aborted install could leave the Pod with no working Python at all.
+  if [ -d /home/dac/venv ] && \
+     compgen -G "/opt/sleepypod/modules/*/.venv/bin/python" >/dev/null 2>&1; then
+    echo "  Removing pre-uv /home/dac/venv (uv .venvs detected)..."
+    rm -rf /home/dac/venv
+  fi
+
+  # Prisma engine cache. We use Drizzle, not Prisma. Free-sleep (the
+  # coexistence partner) re-downloads on its own startup if needed.
+  if [ -d /home/dac/.cache/prisma ]; then
+    echo "  Removing /home/dac/.cache/prisma (we use Drizzle)..."
+    rm -rf /home/dac/.cache/prisma
+  fi
+
+  # npm cache. pnpm has its own store; npm cache only fills when we
+  # `npm install -g pnpm` on a fresh install. Regenerable.
+  if [ -d /home/dac/.npm ]; then
+    echo "  Pruning /home/dac/.npm cache..."
+    npm cache clean --force >/dev/null 2>&1 || rm -rf /home/dac/.npm
+  fi
+
+  # Volta keeps node-vXX.tar.gz under tools/inventory after extracting.
+  # The extracted bin/ is what's used; the tarball is dead weight.
+  if [ -d /home/dac/.volta/tools/inventory ]; then
+    echo "  Removing Volta inventory tarballs..."
+    find /home/dac/.volta/tools/inventory -type f \
+      \( -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' \) \
+      -delete 2>/dev/null || true
+  fi
+
+  # Yocto shipped /var/lib/rpm and /var/lib/dnf with the firmware even
+  # though there's no rpm/dnf binary on the device — pure leftover
+  # metadata. Only drop when the tools really aren't installed.
+  if ! command -v rpm &>/dev/null && [ -d /var/lib/rpm ]; then
+    echo "  Removing /var/lib/rpm (no rpm binary on device)..."
+    rm -rf /var/lib/rpm
+  fi
+  if ! command -v dnf &>/dev/null && [ -d /var/lib/dnf ]; then
+    echo "  Removing /var/lib/dnf (no dnf binary on device)..."
+    rm -rf /var/lib/dnf
+  fi
+
+  # Journal vacuum. The journald config below caps SystemMaxUse=50M, but
+  # only enforces it on rotation. A one-shot vacuum brings the on-disk
+  # size in line immediately; the cap keeps growth bounded after that.
+  if command -v journalctl &>/dev/null; then
+    echo "  Vacuuming systemd journal to 20M..."
+    journalctl --vacuum-size=20M >/dev/null 2>&1 || true
+  fi
+
+  local rootfs_free_after
+  rootfs_free_after=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
+  if [ -n "${rootfs_free_before:-}" ] && [ -n "${rootfs_free_after:-}" ]; then
+    local reclaimed=$(( rootfs_free_after - rootfs_free_before ))
+    echo "  Rootfs free: ${rootfs_free_before} MB -> ${rootfs_free_after} MB (+${reclaimed} MB)"
+  fi
+}
+
+# --------------------------------------------------------------------------------
 # iptables helpers
 # Canonical copy: scripts/lib/iptables-helpers (sourced by sp-update at runtime).
 # Kept inline here because install needs them before the source tree is on disk.
@@ -210,6 +287,10 @@ for cmd in "${REQUIRED_CMDS[@]}"; do
     exit 1
   fi
 done
+
+# Sweep regenerable caches before the disk-space gate so a tightly-packed
+# Pod can install. uv cache is cleaned later, after biometrics modules sync.
+reclaim_rootfs_caches
 
 # Handle WAN connectivity — always needed (npm packages, node binary download)
 echo "Checking network connectivity..."
@@ -899,6 +980,16 @@ else
   install_module "environment-monitor"
   install_module "calibrator"
   install_module "cover-buttons"
+
+  # Drop the uv download cache once all .venvs are populated. uv hardlinks
+  # site-packages from the cache into each module's .venv (same FS = rootfs),
+  # so removing cache files here only deletes one of two refcounts on each
+  # inode — the .venv keeps the data alive. Saves ~250 MB of rootfs at the
+  # cost of re-downloading wheels on the next install.
+  if command -v uv &>/dev/null; then
+    echo "Cleaning uv download cache..."
+    uv cache clean >/dev/null 2>&1 || true
+  fi
 fi
 
 # ============================================================================

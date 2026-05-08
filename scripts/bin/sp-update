@@ -189,6 +189,13 @@ if [ -n "$RELEASE_URL" ]; then
   if curl -fSL "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
     HAS_BUILD=true
     echo "CI release downloaded (pre-built)."
+  else
+    # CI download failed mid-stream (e.g. curl truncation). Partial
+    # files would otherwise contaminate WORK_DIR — the source-tarball
+    # fallback below extracts into the same dir, and `ls "$WORK_DIR"
+    # | head -1` would then pick up stale CI-release contents instead
+    # of the freshly-extracted source subdir. Mirrors scripts/install.
+    find "$WORK_DIR" -mindepth 1 -delete 2>/dev/null || true
   fi
 fi
 
