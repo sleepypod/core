@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { SettingsScreen } from '@/src/components/Settings/SettingsScreen'
 import { getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { initLingui } from '@/src/lib/i18n/initLingui'
@@ -13,5 +14,9 @@ export default async function Page({
   initLingui(lang)
   setI18n(i18n)
 
-  return <SettingsScreen />
+  return (
+    <Suspense>
+      <SettingsScreen />
+    </Suspense>
+  )
 }

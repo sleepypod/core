@@ -34,14 +34,11 @@
  */
 
 import os from 'node:os'
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore -- mqtt dep landed by sleepypod-core-28; resolves once frontend PR merges
 import mqtt, { type IClientOptions, type IClientPublishOptions, type MqttClient } from 'mqtt'
 import { eq, desc } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
 import { deviceSettings, deviceState } from '@/src/db/schema'
 import { vitals } from '@/src/db/biometrics-schema'
-import { appRouter } from '@/src/server/routers/app'
 import { onServerFrame } from './piezoStream'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 
@@ -415,7 +412,19 @@ async function publishState(): Promise<void> {
 // protectedProcedure lands (see ADR 0019 follow-ups), this becomes a privilege
 // escalation channel — MQTT commands would bypass auth. Replace with a
 // dedicated bridge context that asserts least-privilege.
-const caller = appRouter.createCaller({})
+//
+// Lazy import breaks a circular module init: appRouter -> mqttRouter ->
+// mqttBridge -> appRouter triggers an ESM TDZ in the production bundle.
+type AppCaller = Awaited<ReturnType<typeof loadCaller>>
+let cachedCaller: AppCaller | null = null
+async function loadCaller() {
+  const { appRouter } = await import('@/src/server/routers/app')
+  return appRouter.createCaller({})
+}
+async function getCaller(): Promise<AppCaller> {
+  if (!cachedCaller) cachedCaller = await loadCaller()
+  return cachedCaller
+}
 
 interface CommandPayload {
   side?: unknown
@@ -441,6 +450,7 @@ function parsePayload(buf: Buffer): CommandPayload {
 async function handleCommand(verb: string, payload: CommandPayload): Promise<void> {
   // Each branch hands the payload straight to the tRPC procedure — its Zod
   // schema rejects malformed input. No client-side validation duplicated here.
+  const caller = await getCaller()
   switch (verb) {
     case 'set-temperature':
       await caller.device.setTemperature(payload as never)

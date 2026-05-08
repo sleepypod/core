@@ -9,8 +9,8 @@ type Source = 'db' | 'env' | 'default'
 
 interface MqttSettings {
   enabled: boolean
-  url: string
-  username: string
+  url: string | null
+  username: string | null
   passwordIsSet: boolean
   topicPrefix: string
   haDiscovery: boolean
@@ -46,8 +46,8 @@ function relativeTime(iso: string | null | undefined): string {
  */
 export function MqttSettingsForm() {
   const utils = trpc.useUtils()
-  const settingsQuery = trpc.mqtt.getSettings.useQuery()
-  const statusQuery = trpc.mqtt.getStatus.useQuery(undefined, {
+  const settingsQuery = trpc.mqtt.getSettings.useQuery({})
+  const statusQuery = trpc.mqtt.getStatus.useQuery({}, {
     refetchInterval: 5000,
   })
 
@@ -154,8 +154,8 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
 
   // Text fields: input is empty when sourced from env/default; placeholder
   // shows the resolved value so the user knows the current effective setting.
-  const [url, setUrl] = useState(data.sources.url === 'db' ? data.url : '')
-  const [username, setUsername] = useState(data.sources.username === 'db' ? data.username : '')
+  const [url, setUrl] = useState(data.sources.url === 'db' ? data.url ?? '' : '')
+  const [username, setUsername] = useState(data.sources.username === 'db' ? data.username ?? '' : '')
   const [topicPrefix, setTopicPrefix] = useState(data.sources.topicPrefix === 'db' ? data.topicPrefix : '')
   const [password, setPassword] = useState('')
 
@@ -168,8 +168,8 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
     setEnabled(data.enabled)
     setHaDiscovery(data.haDiscovery)
     setTlsEnabled(data.tlsEnabled)
-    setUrl(data.sources.url === 'db' ? data.url : '')
-    setUsername(data.sources.username === 'db' ? data.username : '')
+    setUrl(data.sources.url === 'db' ? data.url ?? '' : '')
+    setUsername(data.sources.username === 'db' ? data.username ?? '' : '')
     setTopicPrefix(data.sources.topicPrefix === 'db' ? data.topicPrefix : '')
   }
 
@@ -206,8 +206,8 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
   }
 
   function handleTest() {
-    const effectiveUrl = url.trim() || data.url
-    const effectiveUsername = username.trim() || data.username
+    const effectiveUrl = url.trim() || data.url || ''
+    const effectiveUsername = username.trim() || data.username || ''
     testMutation.mutate({
       url: effectiveUrl,
       username: effectiveUsername,
