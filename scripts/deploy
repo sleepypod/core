@@ -86,6 +86,7 @@ COPYFILE_DISABLE=1 tar cf - --no-mac-metadata \
   --exclude='test-results' \
   --exclude='.serena' \
   --exclude='.claude' \
+  --exclude='docs' \
   -C "$PROJECT_DIR" . \
   | $SSH_CMD "tar xf - -C '$REMOTE_DIR' 2>/dev/null"
 

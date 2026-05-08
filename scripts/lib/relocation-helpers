@@ -1,0 +1,56 @@
+# shellcheck shell=bash
+# Relocation helpers — keep heavy app trees off the constrained rootfs.
+#
+# rootfs   /dev/mmcblk0p5  5.8 GB  (often 80%+ full — OS, /usr, .next, /opt)
+# persist  /dev/mmcblk0p8  15  GB  (~12% used — DBs, biometrics, app data)
+#
+# /home/dac/sleepypod-core/node_modules (~700 MB) lives on rootfs by
+# default. This helper moves it to /persistent and replaces the original
+# path with a symlink. pnpm install writes through the symlink; Node's
+# native module resolver follows it transparently.
+#
+# Sourced by:
+#   - scripts/install     (inline copy not needed — code is on disk before use)
+#   - scripts/bin/sp-update
+#
+# Idempotent: subsequent runs detect the existing symlink and no-op.
+
+PERSISTENT_APP_ROOT="/persistent/sleepypod-core"
+
+ensure_persistent_node_modules() {
+  local install_dir="${1:-${INSTALL_DIR:-/home/dac/sleepypod-core}}"
+  local persistent_nm="$PERSISTENT_APP_ROOT/node_modules"
+  local install_nm="$install_dir/node_modules"
+
+  mkdir -p "$PERSISTENT_APP_ROOT"
+
+  # Symlink already pointing at the persistent target — no-op.
+  if [ -L "$install_nm" ]; then
+    local current_target
+    current_target=$(readlink -f "$install_nm" 2>/dev/null || true)
+    if [ "$current_target" = "$persistent_nm" ]; then
+      return 0
+    fi
+    echo "Replacing stale node_modules symlink (was: $current_target)..."
+    rm -f "$install_nm"
+  fi
+
+  # Real directory on rootfs — migrate. Cross-filesystem mv is cp+rm
+  # and preserves the pnpm hardlink graph; ~2-5 min for 700 MB on eMMC.
+  if [ -d "$install_nm" ]; then
+    if [ -d "$persistent_nm" ]; then
+      # Both exist: trust just-installed rootfs copy, drop stale persistent
+      # to avoid mixing pnpm stores from different installs.
+      echo "Removing stale $persistent_nm before migration..."
+      rm -rf "$persistent_nm"
+    fi
+    echo "Migrating node_modules to $persistent_nm (one-time, may take a few minutes)..."
+    mv "$install_nm" "$persistent_nm"
+  else
+    # Fresh install — create empty dir so the symlink target exists.
+    mkdir -p "$persistent_nm"
+  fi
+
+  ln -sfn "$persistent_nm" "$install_nm"
+  echo "node_modules -> $persistent_nm (symlink)"
+}
