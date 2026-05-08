@@ -42,6 +42,13 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
           const barHeight = Math.max((night.totalSleepHours / MAX_HOURS) * 100, 4)
           const isSelected = selectedDate === night.date
 
+          // When stage classification has no data (vitals scarce or absent
+          // in the night's window) the distribution is all zeros and would
+          // render an invisible bar. Fall back to a neutral grey fill so
+          // the user still sees that there was sleep duration.
+          const distributionTotal = STAGES.reduce((sum, s) => sum + night.distribution[s], 0)
+          const hasStageData = distributionTotal > 0
+
           return (
             <button
               key={night.date}
@@ -62,9 +69,10 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
                   minHeight: 4,
                   outline: isSelected ? '2px solid white' : 'none',
                   outlineOffset: 1,
+                  backgroundColor: hasStageData ? undefined : '#3f3f46',
                 }}
               >
-                {STAGES.map((stage) => {
+                {hasStageData && STAGES.map((stage) => {
                   const pct = night.distribution[stage]
                   if (pct === 0) return null
                   return (

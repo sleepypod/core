@@ -22,6 +22,7 @@ interface BucketRecord {
   side: 'left' | 'right'
   bucketStart: Date
   totalMovement: number
+  eventCount: number
   sampleCount: number
 }
 
@@ -36,6 +37,18 @@ interface ChartDataPoint {
   timestamp: number
   movement: number
   movementOther?: number
+}
+
+/**
+ * Format the header "Restless: X" chip. Single-night ranges get raw
+ * minutes; multi-night ranges average per night and switch to hours so
+ * "Restless: 3.7h/night" reads naturally instead of "Restless: 1559 min".
+ */
+function formatRestlessChip(restlessMinutes: number, nights: number): string {
+  if (nights <= 1) return `Restless: ${restlessMinutes} min`
+  const minPerNight = restlessMinutes / nights
+  if (minPerNight >= 60) return `Restless: ${(minPerNight / 60).toFixed(1)}h/night`
+  return `Restless: ${Math.round(minPerNight)} min/night`
 }
 
 /**
@@ -86,6 +99,10 @@ function toChartData(
     }
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
   }
+  // Movement events / hour, normalised by bucket width so the y-axis
+  // unit is constant across day (5-min) and week (30-min) views. Mirrors
+  // Whoop "Disturbances/hr" and Garmin "Restless Moments" conventions.
+  const eventsPerHour = (count: number) => Math.round(count / (bucketSeconds / 3600))
   const map = new Map<number, ChartDataPoint>()
 
   for (const r of primary) {
@@ -93,7 +110,7 @@ function toChartData(
     map.set(ts, {
       time: formatTime(ts),
       timestamp: ts,
-      movement: r.totalMovement,
+      movement: eventsPerHour(r.eventCount),
       movementOther: secondary ? 0 : undefined,
     })
   }
@@ -103,14 +120,14 @@ function toChartData(
       const ts = new Date(r.bucketStart).getTime()
       const existing = map.get(ts)
       if (existing) {
-        existing.movementOther = r.totalMovement
+        existing.movementOther = eventsPerHour(r.eventCount)
       }
       else {
         map.set(ts, {
           time: formatTime(ts),
           timestamp: ts,
           movement: 0,
-          movementOther: r.totalMovement,
+          movementOther: eventsPerHour(r.eventCount),
         })
       }
     }
@@ -123,18 +140,21 @@ function toChartData(
 function MovementTooltip({ active, payload, dualSide }: { active?: boolean, payload?: any[], dualSide?: boolean }) {
   if (!active || !payload?.[0]) return null
   const data = payload[0].payload as ChartDataPoint
+  const unit = ' /hr'
   return (
     <div className="rounded-lg bg-zinc-800 px-3 py-2 text-xs shadow-lg ring-1 ring-white/10">
       <p className="text-zinc-400">{data.time}</p>
       <p className="font-semibold text-amber-400">
         {dualSide ? 'Left: ' : 'Movement: '}
         {data.movement}
+        {unit}
       </p>
       {dualSide && data.movementOther != null && (
         <p className="font-semibold text-teal-400">
           Right:
           {' '}
           {data.movementOther}
+          {unit}
         </p>
       )}
     </div>
@@ -280,11 +300,7 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
               </CardTitle>
             </div>
             <span className="text-xs text-amber-400">
-              Restless:
-              {' '}
-              {stats.restlessMinutes}
-              {' '}
-              min
+              {formatRestlessChip(stats.restlessMinutes, nights)}
             </span>
           </div>
         </CardHeader>
@@ -368,7 +384,9 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
                             tick={{ fontSize: 10, fill: '#71717a' }}
                             tickLine={false}
                             axisLine={false}
-                            width={44}
+                            width={52}
+                            unit="/hr"
+                            allowDecimals={false}
                           />
                           <Tooltip
                             content={<MovementTooltip dualSide={dualSide} />}

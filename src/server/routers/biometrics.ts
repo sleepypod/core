@@ -17,6 +17,24 @@ import {
 import { POSITION_CHANGE_SCORE_MIN, RESTLESS_SCORE_MIN } from '@/src/lib/movement'
 
 /**
+ * SQL fragment: movement.timestamp falls inside an existing sleep_records
+ * window for the same side. Used to drop empty-bed sensor noise from
+ * movement aggregates and stats.
+ *
+ * Treats sleep_records.left_bed_at IS NULL as "session still active" by
+ * substituting a sentinel far-future timestamp, since the Drizzle output
+ * schema permits null even though the writer always sets a value.
+ */
+function inBedExists(side: 'left' | 'right') {
+  return sql`EXISTS (
+    SELECT 1 FROM ${sleepRecords}
+    WHERE ${sleepRecords.side} = ${side}
+      AND ${movement.timestamp} >= ${sleepRecords.enteredBedAt}
+      AND ${movement.timestamp} <= COALESCE(${sleepRecords.leftBedAt}, 99999999999)
+  )`
+}
+
+/**
  * Biometrics router - query sleep and health data collected by Pod sensors.
  *
  * Data Collection:
@@ -286,16 +304,19 @@ export const biometricsRouter = router({
     }),
 
   /**
-   * Get movement aggregated into fixed-width time buckets via SQL.
+   * Get movement aggregated into fixed-width time buckets via SQL, restricted
+   * to in-bed windows recorded in sleep_records so empty-bed sensor noise
+   * doesn't show up as bars.
    *
    * Why this exists: getMovement returns one row per 60-s epoch and the
    * 1000-row cap chops a week-long view at ~16 hours. This endpoint groups
    * by `floor(timestamp / bucketSeconds) * bucketSeconds` so a 7-day view
    * fits comfortably regardless of bucket size.
    *
-   * Bucket value is the SUM of total_movement scores in the bucket — gross
-   * movement intensity for the bar chart. For per-row stats (position
-   * changes, restless minutes), use getMovementSummary instead.
+   * eventCount per bucket — count of epochs with score >= 200 ("major
+   * postural shift", docs/sleep-detector.md). The chart renders this as
+   * events-per-hour following Whoop / Garmin convention; raw PIM sums are
+   * available via totalMovement for debug / power-user views.
    *
    * @param bucketSeconds - 60..86400; chart bucket width (e.g. 300 for 5-min)
    */
@@ -305,6 +326,7 @@ export const biometricsRouter = router({
       side: sideSchema,
       bucketStart: z.date(),
       totalMovement: z.number(),
+      eventCount: z.number(),
       sampleCount: z.number(),
     })))
     .input(
@@ -327,7 +349,7 @@ export const biometricsRouter = router({
           })
         }
 
-        const conditions = [eq(movement.side, input.side)]
+        const conditions = [eq(movement.side, input.side), inBedExists(input.side)]
         if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
         if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
 
@@ -342,6 +364,7 @@ export const biometricsRouter = router({
           .select({
             bucketStart: bucket,
             totalMovement: sql<number>`SUM(${movement.totalMovement})`,
+            eventCount: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(POSITION_CHANGE_SCORE_MIN))} THEN 1 END)`,
             sampleCount: count(),
           })
           .from(movement)
@@ -354,6 +377,7 @@ export const biometricsRouter = router({
           side: input.side,
           bucketStart: new Date(Number(r.bucketStart) * 1000),
           totalMovement: Number(r.totalMovement ?? 0),
+          eventCount: Number(r.eventCount ?? 0),
           sampleCount: Number(r.sampleCount ?? 0),
         }))
       }
@@ -368,14 +392,14 @@ export const biometricsRouter = router({
     }),
 
   /**
-   * Aggregated movement stats for a side and date range, computed in SQL so
-   * the result is independent of the getMovement row cap.
+   * Aggregated movement stats for a side and date range, computed in SQL and
+   * restricted to in-bed windows from sleep_records.
    *
-   * - positionChanges: epochs with score >= POSITION_CHANGE_SCORE_MIN (200);
-   *   each ≈ one postural shift (docs/sleep-detector.md score table).
-   * - restlessMinutes: epochs with score >= RESTLESS_SCORE_MIN (50); each
-   *   epoch is 60 s, so the count is already in minutes.
-   * - sampleCount: total epochs in range (sanity / coverage check).
+   * - positionChanges: in-bed epochs with score >= POSITION_CHANGE_SCORE_MIN
+   *   (200); each ≈ one postural shift (docs/sleep-detector.md score table).
+   * - restlessMinutes: in-bed epochs with score >= RESTLESS_SCORE_MIN (50);
+   *   each epoch is 60 s, so the count is already in minutes.
+   * - sampleCount: total in-bed epochs in range (sanity / coverage check).
    */
   getMovementSummary: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/movement/summary', protect: false, tags: ['Biometrics'] } })
@@ -402,14 +426,14 @@ export const biometricsRouter = router({
           })
         }
 
-        const conditions = [eq(movement.side, input.side)]
+        const conditions = [eq(movement.side, input.side), inBedExists(input.side)]
         if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
         if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
 
         const [row] = await biometricsDb
           .select({
-            positionChanges: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${POSITION_CHANGE_SCORE_MIN} THEN 1 END)`,
-            restlessMinutes: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${RESTLESS_SCORE_MIN} THEN 1 END)`,
+            positionChanges: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(POSITION_CHANGE_SCORE_MIN))} THEN 1 END)`,
+            restlessMinutes: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(RESTLESS_SCORE_MIN))} THEN 1 END)`,
             sampleCount: count(),
           })
           .from(movement)
