@@ -28,6 +28,7 @@ const deviceSettingsSchema = z.object({
   ledNightStartTime: z.string().nullable(),
   ledNightEndTime: z.string().nullable(),
   globalMaxOnHours: z.number().nullable(),
+  homekitEnabled: z.boolean(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
 })
@@ -131,6 +132,7 @@ export const settingsRouter = router({
             ledNightStartTime: '22:00',
             ledNightEndTime: '07:00',
             globalMaxOnHours: null,
+            homekitEnabled: false,
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -174,6 +176,7 @@ export const settingsRouter = router({
           ledNightEndTime: timeStringSchema.optional(),
           // Global wall-clock auto-off cap. `null` disables; 1–48 hours when set.
           globalMaxOnHours: z.number().int().min(1).max(48).nullable().optional(),
+          homekitEnabled: z.boolean().optional(),
         })
         .strict()
     )
@@ -190,6 +193,7 @@ export const settingsRouter = router({
       ledNightBrightness: z.number(),
       ledNightStartTime: z.string().nullable(),
       ledNightEndTime: z.string().nullable(),
+      homekitEnabled: z.boolean(),
       createdAt: z.date(),
       updatedAt: z.date(),
     }))

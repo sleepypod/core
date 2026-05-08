@@ -50,6 +50,13 @@
       "when": 1777089654456,
       "tag": "0006_yummy_squadron_sinister",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1778226897340,
+      "tag": "0007_quiet_nova",
+      "breakpoints": true
     }
   ]
 }

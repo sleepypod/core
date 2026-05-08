@@ -23,6 +23,7 @@ import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streami
 import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
 import { initializeKeepalives, shutdownKeepalives } from '@/src/services/temperatureKeepalive'
 import { startAutoOffWatcher, stopAutoOffWatcher } from '@/src/services/autoOffWatcher'
+import { shutdownHomeKit, startHomeKitIfEnabled } from '@/src/homekit'
 
 let isInitialized = false
 let isShuttingDown = false
@@ -75,6 +76,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
   }
   catch (error) {
     console.error('Error stopping Bonjour:', error)
+  }
+
+  // Step 3a: Stop HomeKit bridge (unpublish HAP mDNS, close TCP listener)
+  try {
+    await shutdownHomeKit()
+  }
+  catch (error) {
+    console.error('Error shutting down HomeKit:', error)
   }
 
   // Step 4: Stop auto-off watcher (await in-flight power-off calls)
@@ -298,6 +307,14 @@ export async function initializeScheduler(): Promise<void> {
 
     // Start Bonjour/mDNS announcement (non-blocking)
     startBonjourAnnouncement()
+
+    // Start HomeKit bridge if user has opted in (non-blocking)
+    startHomeKitIfEnabled().catch((error) => {
+      console.warn(
+        '[homekit] startup failed:',
+        error instanceof Error ? error.message : error,
+      )
+    })
 
     // Start biometrics time-series retention loop (non-blocking)
     startBiometricsRetention()

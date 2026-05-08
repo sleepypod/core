@@ -9,6 +9,7 @@ import { DeviceSettingsForm } from './DeviceSettingsForm'
 import { SideSettingsForm } from './SideSettingsForm'
 import { TapGestureConfig } from './TapGestureConfig'
 import { HapticsTestCard } from './HapticsTestCard'
+import { HomeKitConfig } from './HomeKitConfig'
 
 /**
  * Settings screen matching iOS ProfileAndSettingsSheet.
@@ -91,6 +92,10 @@ export function SettingsScreen() {
         {/* Vibration patterns — device-level, shared across sides */}
         <div className="mt-4">
           <HapticsTestCard />
+        </div>
+
+        <div className="mt-4">
+          <HomeKitConfig />
         </div>
       </section>
 

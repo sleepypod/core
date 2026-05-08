@@ -30,6 +30,11 @@ export const deviceSettings = sqliteTable('device_settings', {
   // hours with no run-once or always-on override, autoOffWatcher forces it
   // off. NULL = disabled. Independent of per-side bed-exit auto-off.
   globalMaxOnHours: integer('global_max_on_hours'),
+  // HomeKit bridge is opt-in. When true, instrumentation publishes the
+  // hap-nodejs bridge with HeaterCooler/OccupancySensor/Switch accessories.
+  homekitEnabled: integer('homekit_enabled', { mode: 'boolean' })
+    .notNull()
+    .default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
