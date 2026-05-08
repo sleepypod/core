@@ -30,6 +30,17 @@ export const deviceSettings = sqliteTable('device_settings', {
   // hours with no run-once or always-on override, autoOffWatcher forces it
   // off. NULL = disabled. Independent of per-side bed-exit auto-off.
   globalMaxOnHours: integer('global_max_on_hours'),
+  // MQTT bridge configuration. NULL on every field falls back to the
+  // matching MQTT_* env var; a non-null value overrides the env. Plaintext
+  // credentials per ADR 0019 — pod runs LAN-isolated and there is no auth
+  // middleware to gate a hashed-credential round-trip yet.
+  mqttEnabled: integer('mqtt_enabled', { mode: 'boolean' }),
+  mqttUrl: text('mqtt_url'),
+  mqttUsername: text('mqtt_username'),
+  mqttPassword: text('mqtt_password'),
+  mqttTopicPrefix: text('mqtt_topic_prefix'),
+  mqttHaDiscovery: integer('mqtt_ha_discovery', { mode: 'boolean' }),
+  mqttTlsEnabled: integer('mqtt_tls_enabled', { mode: 'boolean' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
