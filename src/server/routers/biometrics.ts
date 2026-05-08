@@ -331,7 +331,12 @@ export const biometricsRouter = router({
         if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
         if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
 
-        const bucket = sql<number>`(${movement.timestamp} / ${input.bucketSeconds}) * ${input.bucketSeconds}`
+        // Inline bucketSeconds as a literal so SQLite gets `... / 1800) * 1800`
+        // rather than parameterized `?`s — the parameterized form did not
+        // GROUP BY correctly when this template was reused in select+groupBy.
+        // Zod has already validated 60..86400, so no injection surface.
+        const bSec = Math.floor(input.bucketSeconds)
+        const bucket = sql<number>`(${movement.timestamp} / ${sql.raw(String(bSec))}) * ${sql.raw(String(bSec))}`
 
         const rows = await biometricsDb
           .select({

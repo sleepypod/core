@@ -348,7 +348,7 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
                       <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                         <BarChart
                           data={chartData}
-                          margin={{ top: 4, right: 4, bottom: 0, left: -20 }}
+                          margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
                           barCategoryGap="15%"
                         >
                           <CartesianGrid
