@@ -222,23 +222,34 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
 
   return (
     <div className="space-y-5">
-      {/* Master enable */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Wifi size={16} className={enabled ? 'text-sky-400' : 'text-zinc-400'} />
-            <div>
-              <span className="text-sm font-medium text-zinc-300">Enable MQTT Bridge</span>
-              <p className="text-xs text-zinc-500">Publishes status + biometrics, accepts commands</p>
+      {/* Master enable + HA discovery (closely related — what does the bridge do) */}
+      <div className="space-y-2">
+        <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Wifi size={16} className={enabled ? 'text-sky-400' : 'text-zinc-400'} />
+              <div>
+                <span className="text-sm font-medium text-zinc-300">Enable MQTT Bridge</span>
+                <p className="text-xs text-zinc-500">Publishes status + biometrics, accepts commands</p>
+              </div>
             </div>
+            <Toggle
+              enabled={enabled}
+              onToggle={() => setEnabled(v => !v)}
+              disabled={isPending}
+              label="Toggle MQTT bridge"
+            />
           </div>
-          <Toggle
-            enabled={enabled}
-            onToggle={() => setEnabled(v => !v)}
-            disabled={isPending}
-            label="Toggle MQTT bridge"
-          />
         </div>
+        <ToggleCard
+          icon={<Home size={16} className={haDiscovery ? 'text-sky-400' : 'text-zinc-400'} />}
+          label="Home Assistant Discovery"
+          description="Publishes climate/switch/sensor entities"
+          enabled={haDiscovery}
+          onToggle={() => setHaDiscovery(v => !v)}
+          disabled={isPending}
+          ariaLabel="Toggle Home Assistant discovery"
+        />
       </div>
 
       {/* Connection */}
@@ -330,8 +341,8 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
         </div>
       </Section>
 
-      {/* Topics & Discovery */}
-      <Section label="Topics & Discovery">
+      {/* Topics */}
+      <Section label="Topics">
         <TextFieldCard
           icon={<Tag size={16} className="text-zinc-400" />}
           label="Topic Prefix"
@@ -342,15 +353,6 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
           onChange={setTopicPrefix}
           disabled={isPending}
           autoComplete="off"
-        />
-        <ToggleCard
-          icon={<Home size={16} className={haDiscovery ? 'text-sky-400' : 'text-zinc-400'} />}
-          label="Home Assistant Discovery"
-          description="Publishes climate/switch/sensor entities"
-          enabled={haDiscovery}
-          onToggle={() => setHaDiscovery(v => !v)}
-          disabled={isPending}
-          ariaLabel="Toggle Home Assistant discovery"
         />
       </Section>
 
