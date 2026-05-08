@@ -70,6 +70,92 @@ Need help? Join the [Discord](https://discord.gg/UMmv5R6MXa) or [open an issue](
 - **Biometrics** — heart rate, HRV, breathing rate, sleep session tracking, and movement from the Pod's own sensors
 - **Daily maintenance** — automated priming and system reboots on a schedule
 - **Local web UI** — accessible on your home network, no cloud required
+- **MQTT bridge (opt-in)** — publish state and accept commands on your home MQTT broker; auto-discoverable in Home Assistant
+
+---
+
+## MQTT bridge (opt-in)
+
+The Pod can connect outbound to an MQTT broker you already run (typically the
+[Mosquitto add-on](https://github.com/home-assistant/addons/tree/master/mosquitto)
+that ships with Home Assistant). Off by default — opt in from
+**Settings → MQTT** in the web UI.
+
+```mermaid
+graph LR
+  Pod[Pod<br/>sleepypod-core] -- mqtt:// --> Broker[(MQTT broker<br/>e.g. Mosquitto)]
+  Broker --> HA[Home Assistant]
+  Broker --> NR[Node-RED]
+  Broker --> Other[anything that<br/>speaks MQTT]
+  HA -. cmd/* .-> Broker
+  NR -. cmd/* .-> Broker
+  Broker -. cmd/* .-> Pod
+```
+
+The Pod is a **client**, not a broker. It does not embed a broker, does not
+listen on 1883, and does not punch holes in the LAN-only iptables policy.
+
+### Quick start
+
+1. Open **Settings → MQTT** in the Pod web UI.
+2. Set **Broker URL** (`mqtt://broker.lan:1883` or `mqtts://...` for TLS).
+3. Optional: username + password. Leave blank for anonymous brokers.
+4. Hit **Test Connection** to verify reachability, then toggle
+   **Enable MQTT Bridge** and **Save**.
+5. (Home Assistant users) flip on **Home Assistant Discovery** — climate,
+   sensor, and switch entities show up automatically under the Pod's device
+   page.
+
+Headless deployments can skip the UI by setting environment variables;
+the bridge resolves config in this order: `device_settings` row > env var > built-in default.
+
+| UI field | Env var | Default |
+|---|---|---|
+| Enable bridge | `MQTT_ENABLED` | `false` |
+| Broker URL | `MQTT_URL` | _(unset — bridge stays dormant)_ |
+| Username | `MQTT_USERNAME` | _(none)_ |
+| Password | `MQTT_PASSWORD` | _(none)_ |
+| Topic prefix | `MQTT_TOPIC_PREFIX` | `sleepypod` |
+| HA discovery | `MQTT_HA_DISCOVERY` | `false` |
+| HA discovery prefix | `MQTT_HA_DISCOVERY_PREFIX` | `homeassistant` |
+| TLS | `MQTT_TLS_ENABLED` | `false` |
+| TLS allow self-signed | `MQTT_TLS_INSECURE` | `false` |
+
+### Topics
+
+`<prefix>` defaults to `sleepypod`. `<device-id>` is the slugified hostname
+(override with `MQTT_DEVICE_ID`). All state topics are retained.
+
+| Topic | Direction | Payload |
+|---|---|---|
+| `<prefix>/<device-id>/availability` | pod → broker | `online` / `offline` (LWT) |
+| `<prefix>/<device-id>/state/device-status` | pod → broker | full deviceStatus JSON |
+| `<prefix>/<device-id>/state/<side>/climate` | pod → broker | per-side temp / mode |
+| `<prefix>/<device-id>/state/water-level` | pod → broker | `low` / `ok` / `unknown` |
+| `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
+| `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
+| `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
+| `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
+| `<prefix>/<device-id>/cmd/clear-alarm` | broker → pod | `{"side"}` |
+| `<prefix>/<device-id>/cmd/start-priming` | broker → pod | `{}` |
+
+Commands route through the same tRPC procedures the iOS app calls, so Zod
+input schemas validate every payload — the bridge cannot accidentally
+diverge from the app's safety envelope.
+
+### Example: turn off the left side from any MQTT client
+
+```bash
+mosquitto_pub -h broker.lan \
+  -t 'sleepypod/eight-pod/cmd/set-power' \
+  -m '{"side":"left","powered":false}'
+```
+
+State mirrors back on `sleepypod/eight-pod/state/left/climate` within ~1 s.
+
+See **[ADR 0019](docs/adr/0019-mqtt-bridge.md)** for the design rationale —
+why client-not-broker, the credential storage decision, the tRPC dispatch
+model, and what's deferred until `protectedProcedure` lands.
 
 ---
 
@@ -405,6 +491,7 @@ Key decisions are documented in [`docs/adr/`](docs/adr/):
 | [0010](docs/adr/0010-drizzle-orm-sqlite.md) | Drizzle ORM + SQLite for embedded constraints |
 | [0012](docs/adr/0012-biometrics-module-system.md) | Plugin/sidecar architecture for biometrics |
 | [0015](docs/adr/0015-event-bus-mutation-broadcast.md) | Event bus: broadcast device state after mutations |
+| [0019](docs/adr/0019-mqtt-bridge.md) | MQTT bridge for Home Assistant integration |
 
 ### Key tradeoffs
 

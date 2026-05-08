@@ -147,6 +147,24 @@ duration, side enum) lives on the procedure and is enforced once.
   (`mqtt_tls_insecure`).
 - Plaintext credential storage is a known compromise; tracked above.
 
+## Implementation notes
+
+Two non-obvious wiring details from the integration that aren't in the
+high-level decision but matter for anyone touching the bridge:
+
+- **Lazy `appRouter` import.** The bridge dispatches commands through
+  `appRouter.createCaller({})`, but importing the router at module top-level
+  creates a cycle (`appRouter → mqttRouter → mqttBridge → appRouter`) that
+  trips an ESM TDZ at production-build time. The caller is loaded via
+  dynamic `import()` inside `handleCommand` and memoized on first use.
+- **Instrumentation gate.** `instrumentation.ts` is invoked once per Next.js
+  server runtime (Node + Edge bundles both fire the hook). The original
+  `typeof window === 'undefined'` fallback was true in every server runtime,
+  so the bridge initialized twice on startup, producing two MQTT client
+  connections from one pod. The gate now strict-checks
+  `process.env.NEXT_RUNTIME === 'nodejs'` (with an unset-allowed branch for
+  tests/scripts); covered by `tests/instrumentation.test.ts`.
+
 ## Refs
 
 - Epic: sleepypod-core-26
