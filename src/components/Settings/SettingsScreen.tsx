@@ -1,25 +1,45 @@
 'use client'
 
-import { useState } from 'react'
-import { Settings, User, RotateCcw, Wifi } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Settings, User, RotateCcw, Wifi, Hand, Radio, Cog } from 'lucide-react'
 import clsx from 'clsx'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/src/ui/tabs'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
 import { SideSettingsForm } from './SideSettingsForm'
 import { TapGestureConfig } from './TapGestureConfig'
 import { HapticsTestCard } from './HapticsTestCard'
+import { MqttSettingsForm } from './MqttSettingsForm'
+
+const TAB_IDS = ['device', 'sides', 'gestures', 'mqtt'] as const
+type TabId = typeof TAB_IDS[number]
+
+function isTabId(v: string | null): v is TabId {
+  return v !== null && (TAB_IDS as readonly string[]).includes(v)
+}
 
 /**
- * Settings screen matching iOS ProfileAndSettingsSheet.
- * Layout: Device section (top) → Per-side tabs (name, gestures, haptics).
+ * Settings screen with URL-synced tabs: Device | Sides | Gestures | MQTT.
+ * Deep-links via ?tab=mqtt; falls back to 'device'.
  */
 export function SettingsScreen() {
-  const [selectedSide, setSelectedSide] = useState<'left' | 'right'>('left')
-  const { data, isLoading, error } = trpc.settings.getAll.useQuery({})
-  const { leftName, rightName } = useSideNames()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  const activeTab: TabId = isTabId(tabParam) ? tabParam : 'device'
 
-  const rebootMutation = trpc.system.triggerUpdate.useMutation()
+  const { data, isLoading, error } = trpc.settings.getAll.useQuery({})
+
+  const setActiveTab = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams.toString())
+      params.set('tab', next)
+      router.replace(`?${params.toString()}`, { scroll: false })
+    },
+    [router, searchParams],
+  )
 
   if (isLoading) {
     return (
@@ -49,90 +69,130 @@ export function SettingsScreen() {
   if (!data) return null
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center gap-2 px-1">
         <Settings size={18} className="text-zinc-400" />
         <h1 className="text-lg font-semibold text-white">Settings</h1>
       </div>
 
-      {/* ─── Device Settings ─── */}
-      <section>
-        <h2 className="mb-3 px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">
-          Device
-        </h2>
-        <DeviceSettingsForm device={data.device} />
-
-        {/* Reconnect / Reboot actions */}
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={() => window.location.reload()}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800"
-          >
-            <Wifi size={14} />
-            Reconnect
-          </button>
-          <button
-            onClick={() => {
-              if (confirm('Restart the sleepypod service? The pod will be briefly unavailable.')) {
-                rebootMutation.mutate({})
-              }
-            }}
-            disabled={rebootMutation.isPending}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800 disabled:opacity-50"
-          >
-            <RotateCcw size={14} />
-            {rebootMutation.isPending ? 'Restarting...' : 'Restart'}
-          </button>
-        </div>
-        {rebootMutation.isSuccess && (
-          <p className="mt-2 text-center text-xs text-emerald-400">Service restarting — reconnecting...</p>
-        )}
-
-        {/* Vibration patterns — device-level, shared across sides */}
-        <div className="mt-4">
-          <HapticsTestCard />
-        </div>
-      </section>
-
-      {/* ─── Side Settings ─── */}
-      <section>
-        <h2 className="mb-3 px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">
-          Side
-        </h2>
-
-        {/* Side tab switcher */}
-        <div className="mb-4 flex rounded-xl bg-zinc-900 p-1">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
+        <TabsList className="grid h-10 w-full grid-cols-4 gap-1 rounded-xl bg-zinc-900 p-1">
           {([
-            { key: 'left' as const, label: leftName },
-            { key: 'right' as const, label: rightName },
-          ]).map(t => (
-            <button
-              key={t.key}
-              onClick={() => setSelectedSide(t.key)}
-              className={clsx(
-                'flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2.5 text-sm font-medium transition-colors',
-                selectedSide === t.key
-                  ? 'bg-zinc-800 text-white'
-                  : 'text-zinc-500',
-              )}
+            { id: 'device', label: 'Device', Icon: Cog },
+            { id: 'sides', label: 'Sides', Icon: User },
+            { id: 'gestures', label: 'Gestures', Icon: Hand },
+            { id: 'mqtt', label: 'MQTT', Icon: Radio },
+          ] as const).map(({ id, label, Icon }) => (
+            <TabsTrigger
+              key={id}
+              value={id}
+              className="flex items-center justify-center gap-1.5 rounded-lg border-0 px-2 text-xs font-medium text-zinc-400 transition-colors data-active:bg-zinc-800 data-active:text-white data-active:shadow-none"
             >
-              <User size={14} />
-              {t.label}
-            </button>
+              <Icon size={14} />
+              {label}
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
 
-        <div className="space-y-4">
-          {/* Name + away mode */}
-          <SideSettingsForm
-            side={selectedSide}
-            sideData={selectedSide === 'left' ? data.sides.left : data.sides.right}
-          />
+        <TabsContent value="device">
+          <DeviceTab device={data.device} />
+        </TabsContent>
 
-          {/* Gestures for this side */}
-          <TapGestureConfig filterSide={selectedSide} />
-        </div>
-      </section>
+        <TabsContent value="sides">
+          <SidesTab data={data} />
+        </TabsContent>
+
+        <TabsContent value="gestures">
+          <TapGestureConfig />
+        </TabsContent>
+
+        <TabsContent value="mqtt">
+          <MqttSettingsForm />
+        </TabsContent>
+      </Tabs>
     </div>
+  )
+}
+
+interface DeviceTabProps {
+  device: Parameters<typeof DeviceSettingsForm>[0]['device']
+}
+
+function DeviceTab({ device }: DeviceTabProps) {
+  const rebootMutation = trpc.system.triggerUpdate.useMutation()
+  return (
+    <section className="space-y-4">
+      <DeviceSettingsForm device={device} />
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => window.location.reload()}
+          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800"
+        >
+          <Wifi size={14} />
+          Reconnect
+        </button>
+        <button
+          onClick={() => {
+            if (confirm('Restart the sleepypod service? The pod will be briefly unavailable.')) {
+              rebootMutation.mutate({})
+            }
+          }}
+          disabled={rebootMutation.isPending}
+          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800 disabled:opacity-50"
+        >
+          <RotateCcw size={14} />
+          {rebootMutation.isPending ? 'Restarting...' : 'Restart'}
+        </button>
+      </div>
+      {rebootMutation.isSuccess && (
+        <p className="text-center text-xs text-emerald-400">Service restarting — reconnecting...</p>
+      )}
+
+      <HapticsTestCard />
+    </section>
+  )
+}
+
+interface SettingsData {
+  device: Parameters<typeof DeviceSettingsForm>[0]['device']
+  sides: {
+    left: Parameters<typeof SideSettingsForm>[0]['sideData']
+    right: Parameters<typeof SideSettingsForm>[0]['sideData']
+  }
+}
+
+function SidesTab({ data }: { data: SettingsData }) {
+  const [selectedSide, setSelectedSide] = useState<'left' | 'right'>('left')
+  const { leftName, rightName } = useSideNames()
+
+  return (
+    <section className="space-y-4">
+      <div className="flex rounded-xl bg-zinc-900 p-1">
+        {([
+          { key: 'left' as const, label: leftName },
+          { key: 'right' as const, label: rightName },
+        ]).map(t => (
+          <button
+            key={t.key}
+            onClick={() => setSelectedSide(t.key)}
+            className={clsx(
+              'flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2.5 text-sm font-medium transition-colors',
+              selectedSide === t.key
+                ? 'bg-zinc-800 text-white'
+                : 'text-zinc-500',
+            )}
+          >
+            <User size={14} />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <SideSettingsForm
+        side={selectedSide}
+        sideData={selectedSide === 'left' ? data.sides.left : data.sides.right}
+      />
+    </section>
   )
 }

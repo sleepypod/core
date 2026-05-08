@@ -1,3 +1,10 @@
+import { fileURLToPath } from 'url'
+import path from 'path'
+
+// Pin Turbopack workspace root so multi-lockfile detection (nested worktrees,
+// monorepos) doesn't pick the wrong root and skip standalone output.
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Keep production browser source maps off — serving .map files on LAN
@@ -10,8 +17,9 @@ const nextConfig = {
   output: 'standalone',
   // Keep native modules external — resolved from node_modules at runtime
   // so the correct platform binary (linux-arm64 on pod) is used
-  serverExternalPackages: ['better-sqlite3'],
+  serverExternalPackages: ['better-sqlite3', 'mqtt'],
   turbopack: {
+    root: __dirname,
     // Lingui .po file loader (used in dev mode where Turbopack is active)
     rules: {
       '*.po': {
