@@ -4,7 +4,7 @@ import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
-import { eq, and, gte, lte, desc, asc, avg, min, max, count } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
 import {
@@ -14,6 +14,25 @@ import {
   calculateQualityScore,
   type SleepStagesResult,
 } from '@/src/lib/sleep-stages'
+import { POSITION_CHANGE_SCORE_MIN, RESTLESS_SCORE_MIN } from '@/src/lib/movement'
+
+/**
+ * SQL fragment: movement.timestamp falls inside an existing sleep_records
+ * window for the same side. Used to drop empty-bed sensor noise from
+ * movement aggregates and stats.
+ *
+ * Treats sleep_records.left_bed_at IS NULL as "session still active" by
+ * substituting a sentinel far-future timestamp, since the Drizzle output
+ * schema permits null even though the writer always sets a value.
+ */
+function inBedExists(side: 'left' | 'right') {
+  return sql`EXISTS (
+    SELECT 1 FROM ${sleepRecords}
+    WHERE ${sleepRecords.side} = ${side}
+      AND ${movement.timestamp} >= ${sleepRecords.enteredBedAt}
+      AND ${movement.timestamp} <= COALESCE(${sleepRecords.leftBedAt}, 99999999999)
+  )`
+}
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -279,6 +298,158 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to fetch movement data: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Get movement aggregated into fixed-width time buckets via SQL, restricted
+   * to in-bed windows recorded in sleep_records so empty-bed sensor noise
+   * doesn't show up as bars.
+   *
+   * Why this exists: getMovement returns one row per 60-s epoch and the
+   * 1000-row cap chops a week-long view at ~16 hours. This endpoint groups
+   * by `floor(timestamp / bucketSeconds) * bucketSeconds` so a 7-day view
+   * fits comfortably regardless of bucket size.
+   *
+   * eventCount per bucket — count of epochs with score >= 200 ("major
+   * postural shift", docs/sleep-detector.md). The chart renders this as
+   * events-per-hour following Whoop / Garmin convention; raw PIM sums are
+   * available via totalMovement for debug / power-user views.
+   *
+   * @param bucketSeconds - 60..86400; chart bucket width (e.g. 300 for 5-min)
+   */
+  getMovementBuckets: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/movement/buckets', protect: false, tags: ['Biometrics'] } })
+    .output(z.array(z.object({
+      side: sideSchema,
+      bucketStart: z.date(),
+      totalMovement: z.number(),
+      eventCount: z.number(),
+      sampleCount: z.number(),
+    })))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          bucketSeconds: z.number().int().min(60).max(86400),
+          limit: z.number().int().min(1).max(10000).default(2000),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
+        const conditions = [eq(movement.side, input.side), inBedExists(input.side)]
+        if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
+        if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
+
+        // Inline bucketSeconds as a literal so SQLite gets `... / 1800) * 1800`
+        // rather than parameterized `?`s — the parameterized form did not
+        // GROUP BY correctly when this template was reused in select+groupBy.
+        // Zod has already validated 60..86400, so no injection surface.
+        const bSec = Math.floor(input.bucketSeconds)
+        const bucket = sql<number>`(${movement.timestamp} / ${sql.raw(String(bSec))}) * ${sql.raw(String(bSec))}`
+
+        const rows = await biometricsDb
+          .select({
+            bucketStart: bucket,
+            totalMovement: sql<number>`SUM(${movement.totalMovement})`,
+            eventCount: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(POSITION_CHANGE_SCORE_MIN))} THEN 1 END)`,
+            sampleCount: count(),
+          })
+          .from(movement)
+          .where(and(...conditions))
+          .groupBy(bucket)
+          .orderBy(desc(bucket))
+          .limit(input.limit)
+
+        return rows.map(r => ({
+          side: input.side,
+          bucketStart: new Date(Number(r.bucketStart) * 1000),
+          totalMovement: Number(r.totalMovement ?? 0),
+          eventCount: Number(r.eventCount ?? 0),
+          sampleCount: Number(r.sampleCount ?? 0),
+        }))
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch movement buckets: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Aggregated movement stats for a side and date range, computed in SQL and
+   * restricted to in-bed windows from sleep_records.
+   *
+   * - positionChanges: in-bed epochs with score >= POSITION_CHANGE_SCORE_MIN
+   *   (200); each ≈ one postural shift (docs/sleep-detector.md score table).
+   * - restlessMinutes: in-bed epochs with score >= RESTLESS_SCORE_MIN (50);
+   *   each epoch is 60 s, so the count is already in minutes.
+   * - sampleCount: total in-bed epochs in range (sanity / coverage check).
+   */
+  getMovementSummary: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/movement/summary', protect: false, tags: ['Biometrics'] } })
+    .output(z.object({
+      positionChanges: z.number(),
+      restlessMinutes: z.number(),
+      sampleCount: z.number(),
+    }))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
+        const conditions = [eq(movement.side, input.side), inBedExists(input.side)]
+        if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
+        if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
+
+        const [row] = await biometricsDb
+          .select({
+            positionChanges: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(POSITION_CHANGE_SCORE_MIN))} THEN 1 END)`,
+            restlessMinutes: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(RESTLESS_SCORE_MIN))} THEN 1 END)`,
+            sampleCount: count(),
+          })
+          .from(movement)
+          .where(and(...conditions))
+
+        return {
+          positionChanges: Number(row?.positionChanges ?? 0),
+          restlessMinutes: Number(row?.restlessMinutes ?? 0),
+          sampleCount: Number(row?.sampleCount ?? 0),
+        }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch movement summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }
