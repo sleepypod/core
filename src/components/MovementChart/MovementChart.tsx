@@ -69,14 +69,29 @@ function deriveStats(
 /**
  * Zip primary + (optional) secondary bucket series into a single chart
  * dataset keyed by bucket start timestamp.
+ *
+ * `bucketSeconds` controls the axis-label format: a multi-day view (>= 30
+ * min buckets) prefixes weekday so 8:00 AM doesn't appear seven times.
  */
-function toChartData(primary: BucketRecord[], secondary?: BucketRecord[]): ChartDataPoint[] {
+function toChartData(
+  primary: BucketRecord[],
+  bucketSeconds: number,
+  secondary?: BucketRecord[],
+): ChartDataPoint[] {
+  const isMultiDay = bucketSeconds >= 30 * 60
+  const formatTime = (ts: number) => {
+    const d = new Date(ts)
+    if (isMultiDay) {
+      return d.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', hour12: true })
+    }
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  }
   const map = new Map<number, ChartDataPoint>()
 
   for (const r of primary) {
     const ts = new Date(r.bucketStart).getTime()
     map.set(ts, {
-      time: new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+      time: formatTime(ts),
       timestamp: ts,
       movement: r.totalMovement,
       movementOther: secondary ? 0 : undefined,
@@ -92,7 +107,7 @@ function toChartData(primary: BucketRecord[], secondary?: BucketRecord[]): Chart
       }
       else {
         map.set(ts, {
-          time: new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+          time: formatTime(ts),
           timestamp: ts,
           movement: 0,
           movementOther: r.totalMovement,
@@ -180,6 +195,10 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
     { side, startDate: weekStart, endDate: weekEnd, limit: 7 },
     { refetchOnWindowFocus: false },
   )
+  const { data: otherSleepData } = trpc.biometrics.getSleepRecords.useQuery(
+    { side: otherSide, startDate: weekStart, endDate: weekEnd, limit: 7 },
+    { refetchOnWindowFocus: false, enabled: dualSide },
+  )
 
   const buckets = useMemo(() => (bucketsQuery.data ?? []) as BucketRecord[], [bucketsQuery.data])
   const otherBuckets = useMemo(
@@ -187,28 +206,34 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
     [otherBucketsQuery.data],
   )
 
-  const totalSleepSeconds = useMemo(() => {
-    if (!sleepData || !Array.isArray(sleepData)) return undefined
-    return sleepData.reduce(
-      (sum: number, r: { sleepDurationSeconds?: number }) => sum + (r.sleepDurationSeconds ?? 0),
-      0
-    )
-  }, [sleepData])
+  const sumDurations = (records: { sleepDurationSeconds?: number }[] | undefined) =>
+    records?.reduce((sum, r) => sum + (r.sleepDurationSeconds ?? 0), 0)
 
-  const nights = sleepData?.length ?? 1
+  const totalSleepSeconds = useMemo(
+    () => Array.isArray(sleepData) ? sumDurations(sleepData) : undefined,
+    [sleepData],
+  )
+  const otherTotalSleepSeconds = useMemo(
+    () => Array.isArray(otherSleepData) ? sumDurations(otherSleepData) : undefined,
+    [otherSleepData],
+  )
+
+  const nights = Math.max(sleepData?.length ?? 1, otherSleepData?.length ?? 1)
 
   const stats = useMemo(
     () => deriveStats(summaryQuery.data ?? undefined, totalSleepSeconds, nights),
     [summaryQuery.data, totalSleepSeconds, nights],
   )
   const otherStats = useMemo(
-    () => dualSide ? deriveStats(otherSummaryQuery.data ?? undefined, undefined, nights) : null,
-    [dualSide, otherSummaryQuery.data, nights],
+    () => dualSide
+      ? deriveStats(otherSummaryQuery.data ?? undefined, otherTotalSleepSeconds, nights)
+      : null,
+    [dualSide, otherSummaryQuery.data, otherTotalSleepSeconds, nights],
   )
 
   const chartData = useMemo(
-    () => toChartData(buckets, dualSide ? otherBuckets : undefined),
-    [buckets, otherBuckets, dualSide],
+    () => toChartData(buckets, bucketSeconds, dualSide ? otherBuckets : undefined),
+    [buckets, otherBuckets, bucketSeconds, dualSide],
   )
 
   const tickInterval = useMemo(() => {
@@ -223,8 +248,15 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
         ? 'text-amber-400'
         : 'text-emerald-400'
 
-  const isLoading = bucketsQuery.isLoading || summaryQuery.isLoading
-  const hasError = bucketsQuery.error || summaryQuery.error
+  const isLoading
+    = bucketsQuery.isLoading
+      || summaryQuery.isLoading
+      || (dualSide && (otherBucketsQuery.isLoading || otherSummaryQuery.isLoading))
+  const hasError = Boolean(
+    bucketsQuery.error
+    || summaryQuery.error
+    || (dualSide && (otherBucketsQuery.error || otherSummaryQuery.error)),
+  )
 
   return (
     <div className="space-y-3 sm:space-y-4">
