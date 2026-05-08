@@ -193,6 +193,10 @@ if [ -n "$RELEASE_URL" ]; then
 fi
 
 if [ "$HAS_BUILD" = false ]; then
+  # A failed CI-release download can leave partial extraction in WORK_DIR;
+  # drop and recreate so the source-tarball structure check is reliable.
+  rm -rf "$WORK_DIR"
+  WORK_DIR=$(mktemp -d)
   # Fall back to source tarball (no .next — would need build on pod)
   # "latest" is not a real branch — use main for the source tarball
   SOURCE_BRANCH="$BRANCH"
