@@ -4,7 +4,7 @@ import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
-import { eq, and, gte, lte, desc, asc, avg, min, max, count } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
 import {
@@ -14,6 +14,7 @@ import {
   calculateQualityScore,
   type SleepStagesResult,
 } from '@/src/lib/sleep-stages'
+import { POSITION_CHANGE_SCORE_MIN, RESTLESS_SCORE_MIN } from '@/src/lib/movement'
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -279,6 +280,147 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to fetch movement data: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Get movement aggregated into fixed-width time buckets via SQL.
+   *
+   * Why this exists: getMovement returns one row per 60-s epoch and the
+   * 1000-row cap chops a week-long view at ~16 hours. This endpoint groups
+   * by `floor(timestamp / bucketSeconds) * bucketSeconds` so a 7-day view
+   * fits comfortably regardless of bucket size.
+   *
+   * Bucket value is the SUM of total_movement scores in the bucket — gross
+   * movement intensity for the bar chart. For per-row stats (position
+   * changes, restless minutes), use getMovementSummary instead.
+   *
+   * @param bucketSeconds - 60..86400; chart bucket width (e.g. 300 for 5-min)
+   */
+  getMovementBuckets: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/movement/buckets', protect: false, tags: ['Biometrics'] } })
+    .output(z.array(z.object({
+      side: sideSchema,
+      bucketStart: z.date(),
+      totalMovement: z.number(),
+      sampleCount: z.number(),
+    })))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          bucketSeconds: z.number().int().min(60).max(86400),
+          limit: z.number().int().min(1).max(10000).default(2000),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
+        const conditions = [eq(movement.side, input.side)]
+        if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
+        if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
+
+        const bucket = sql<number>`(${movement.timestamp} / ${input.bucketSeconds}) * ${input.bucketSeconds}`
+
+        const rows = await biometricsDb
+          .select({
+            bucketStart: bucket,
+            totalMovement: sql<number>`SUM(${movement.totalMovement})`,
+            sampleCount: count(),
+          })
+          .from(movement)
+          .where(and(...conditions))
+          .groupBy(bucket)
+          .orderBy(desc(bucket))
+          .limit(input.limit)
+
+        return rows.map(r => ({
+          side: input.side,
+          bucketStart: new Date(Number(r.bucketStart) * 1000),
+          totalMovement: Number(r.totalMovement ?? 0),
+          sampleCount: Number(r.sampleCount ?? 0),
+        }))
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch movement buckets: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Aggregated movement stats for a side and date range, computed in SQL so
+   * the result is independent of the getMovement row cap.
+   *
+   * - positionChanges: epochs with score >= POSITION_CHANGE_SCORE_MIN (200);
+   *   each ≈ one postural shift (docs/sleep-detector.md score table).
+   * - restlessMinutes: epochs with score >= RESTLESS_SCORE_MIN (50); each
+   *   epoch is 60 s, so the count is already in minutes.
+   * - sampleCount: total epochs in range (sanity / coverage check).
+   */
+  getMovementSummary: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/movement/summary', protect: false, tags: ['Biometrics'] } })
+    .output(z.object({
+      positionChanges: z.number(),
+      restlessMinutes: z.number(),
+      sampleCount: z.number(),
+    }))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
+        const conditions = [eq(movement.side, input.side)]
+        if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
+        if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
+
+        const [row] = await biometricsDb
+          .select({
+            positionChanges: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${POSITION_CHANGE_SCORE_MIN} THEN 1 END)`,
+            restlessMinutes: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${RESTLESS_SCORE_MIN} THEN 1 END)`,
+            sampleCount: count(),
+          })
+          .from(movement)
+          .where(and(...conditions))
+
+        return {
+          positionChanges: Number(row?.positionChanges ?? 0),
+          restlessMinutes: Number(row?.restlessMinutes ?? 0),
+          sampleCount: Number(row?.sampleCount ?? 0),
+        }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch movement summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

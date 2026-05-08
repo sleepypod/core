@@ -16,29 +16,41 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from 'recharts'
+import { pickMovementBucketSeconds } from '@/src/lib/movement'
 
-interface MovementRecord {
-  id: number
-  side: string
+interface BucketRecord {
+  side: 'left' | 'right'
+  bucketStart: Date
   totalMovement: number
-  timestamp: Date
+  sampleCount: number
+}
+
+interface SummaryRecord {
+  positionChanges: number
+  restlessMinutes: number
+  sampleCount: number
 }
 
 interface ChartDataPoint {
   time: string
   timestamp: number
   movement: number
-  /** Secondary side movement (for dual-side comparison) */
   movementOther?: number
 }
 
 /**
- * Compute movement summary stats matching iOS MovementCardView.
+ * Derive display stats from a SQL summary row plus a sleep duration.
+ *
+ * Restlessness thresholds operate on minutes-per-night, not absolute
+ * minutes, so the chip stays meaningful across day and week ranges.
  */
-function computeStats(records: MovementRecord[], sleepDurationSeconds?: number) {
-  const positionChanges = records.length
-  const totalMovement = records.reduce((sum, r) => sum + r.totalMovement, 0)
-  const restlessMinutes = Math.min(totalMovement, 60)
+function deriveStats(
+  summary: SummaryRecord | undefined,
+  sleepDurationSeconds: number | undefined,
+  nights: number,
+) {
+  const positionChanges = summary?.positionChanges ?? 0
+  const restlessMinutes = summary?.restlessMinutes ?? 0
 
   let timeStillPercent = 0
   if (sleepDurationSeconds && sleepDurationSeconds > 0) {
@@ -46,86 +58,52 @@ function computeStats(records: MovementRecord[], sleepDurationSeconds?: number) 
     timeStillPercent = Math.max(0, 100 - Math.round((restlessSeconds * 100) / sleepDurationSeconds))
   }
 
+  const minutesPerNight = restlessMinutes / Math.max(1, nights)
   let restlessnessLevel: 'Low' | 'Medium' | 'High' = 'Low'
-  if (restlessMinutes >= 30) restlessnessLevel = 'High'
-  else if (restlessMinutes >= 15) restlessnessLevel = 'Medium'
+  if (minutesPerNight >= 30) restlessnessLevel = 'High'
+  else if (minutesPerNight >= 15) restlessnessLevel = 'Medium'
 
   return { positionChanges, restlessMinutes, timeStillPercent, restlessnessLevel }
 }
 
 /**
- * Format movement records into chart data points, sorted chronologically.
+ * Zip primary + (optional) secondary bucket series into a single chart
+ * dataset keyed by bucket start timestamp.
  */
-function toChartData(records: MovementRecord[]): ChartDataPoint[] {
-  return [...records]
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-    .map((record) => {
-      const date = new Date(record.timestamp)
-      return {
-        time: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-        timestamp: date.getTime(),
-        movement: record.totalMovement,
-      }
-    })
-}
-
-/**
- * Merge primary and secondary records into a single chart dataset keyed by time bucket.
- * Aligns the two sides by rounding timestamps to 5-minute intervals.
- */
-function mergeDualSideData(
-  primary: MovementRecord[],
-  secondary: MovementRecord[],
-): ChartDataPoint[] {
-  const bucket = (ts: Date) => {
-    const d = new Date(ts)
-    d.setSeconds(0, 0)
-    d.setMinutes(Math.round(d.getMinutes() / 5) * 5)
-    return d.getTime()
-  }
-
+function toChartData(primary: BucketRecord[], secondary?: BucketRecord[]): ChartDataPoint[] {
   const map = new Map<number, ChartDataPoint>()
 
   for (const r of primary) {
-    const key = bucket(new Date(r.timestamp))
-    const existing = map.get(key)
-    if (existing) {
-      existing.movement += r.totalMovement
-    }
-    else {
-      const date = new Date(key)
-      map.set(key, {
-        time: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-        timestamp: key,
-        movement: r.totalMovement,
-        movementOther: 0,
-      })
-    }
+    const ts = new Date(r.bucketStart).getTime()
+    map.set(ts, {
+      time: new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+      timestamp: ts,
+      movement: r.totalMovement,
+      movementOther: secondary ? 0 : undefined,
+    })
   }
 
-  for (const r of secondary) {
-    const key = bucket(new Date(r.timestamp))
-    const existing = map.get(key)
-    if (existing) {
-      existing.movementOther = (existing.movementOther ?? 0) + r.totalMovement
-    }
-    else {
-      const date = new Date(key)
-      map.set(key, {
-        time: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-        timestamp: key,
-        movement: 0,
-        movementOther: r.totalMovement,
-      })
+  if (secondary) {
+    for (const r of secondary) {
+      const ts = new Date(r.bucketStart).getTime()
+      const existing = map.get(ts)
+      if (existing) {
+        existing.movementOther = r.totalMovement
+      }
+      else {
+        map.set(ts, {
+          time: new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+          timestamp: ts,
+          movement: 0,
+          movementOther: r.totalMovement,
+        })
+      }
     }
   }
 
   return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp)
 }
 
-/**
- * Custom tooltip for the movement bar chart.
- */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function MovementTooltip({ active, payload, dualSide }: { active?: boolean, payload?: any[], dualSide?: boolean }) {
   if (!active || !payload?.[0]) return null
@@ -157,9 +135,10 @@ interface MovementChartProps {
 
 /**
  * Movement/activity graph component displaying piezo-derived movement intensity over time.
- * Matches iOS MovementCardView with bar chart, summary stats, and week navigation.
  *
- * Supports dual-side comparison: grouped bars for left (amber) and right (teal).
+ * Stats (Position Changes, Time Still, Restlessness) come from a SQL
+ * aggregation so they're independent of the row-fetch cap. Bars come from
+ * server-side bucketed sums so a week view fits in one query.
  */
 export function MovementChart({ dualSide = false, hideNav = false }: MovementChartProps) {
   const { side } = useSide()
@@ -174,56 +153,40 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
     goToCurrentWeek,
   } = useWeekNavigator()
 
-  // Fetch movement data for the selected week and side
-  const {
-    data: movementData,
-    isLoading: movementLoading,
-    error: movementError,
-  } = trpc.biometrics.getMovement.useQuery(
-    {
-      side,
-      startDate: weekStart,
-      endDate: weekEnd,
-      limit: 1000,
-    },
-    {
-      refetchOnWindowFocus: false,
-    }
+  const bucketSeconds = useMemo(
+    () => pickMovementBucketSeconds(weekEnd.getTime() - weekStart.getTime()),
+    [weekStart, weekEnd],
   )
 
-  // Fetch movement for the OTHER side (only when dual-side)
-  const {
-    data: otherMovementData,
-  } = trpc.biometrics.getMovement.useQuery(
-    {
-      side: otherSide,
-      startDate: weekStart,
-      endDate: weekEnd,
-      limit: 1000,
-    },
-    {
-      refetchOnWindowFocus: false,
-      enabled: dualSide,
-    }
+  const bucketsQuery = trpc.biometrics.getMovementBuckets.useQuery(
+    { side, startDate: weekStart, endDate: weekEnd, bucketSeconds },
+    { refetchOnWindowFocus: false },
+  )
+  const otherBucketsQuery = trpc.biometrics.getMovementBuckets.useQuery(
+    { side: otherSide, startDate: weekStart, endDate: weekEnd, bucketSeconds },
+    { refetchOnWindowFocus: false, enabled: dualSide },
   )
 
-  // Fetch sleep records for the week to compute time-still percentage
+  const summaryQuery = trpc.biometrics.getMovementSummary.useQuery(
+    { side, startDate: weekStart, endDate: weekEnd },
+    { refetchOnWindowFocus: false },
+  )
+  const otherSummaryQuery = trpc.biometrics.getMovementSummary.useQuery(
+    { side: otherSide, startDate: weekStart, endDate: weekEnd },
+    { refetchOnWindowFocus: false, enabled: dualSide },
+  )
+
   const { data: sleepData } = trpc.biometrics.getSleepRecords.useQuery(
-    {
-      side,
-      startDate: weekStart,
-      endDate: weekEnd,
-      limit: 7,
-    },
-    {
-      refetchOnWindowFocus: false,
-    }
+    { side, startDate: weekStart, endDate: weekEnd, limit: 7 },
+    { refetchOnWindowFocus: false },
   )
 
-  const records = useMemo(() => (movementData ?? []) as MovementRecord[], [movementData])
-  const otherRecords = useMemo(() => (otherMovementData ?? []) as MovementRecord[], [otherMovementData])
+  const buckets = useMemo(() => (bucketsQuery.data ?? []) as BucketRecord[], [bucketsQuery.data])
+  const otherBuckets = useMemo(
+    () => (otherBucketsQuery.data ?? []) as BucketRecord[],
+    [otherBucketsQuery.data],
+  )
 
-  // Compute total sleep duration for the week
   const totalSleepSeconds = useMemo(() => {
     if (!sleepData || !Array.isArray(sleepData)) return undefined
     return sleepData.reduce(
@@ -232,16 +195,22 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
     )
   }, [sleepData])
 
-  const stats = useMemo(() => computeStats(records, totalSleepSeconds), [records, totalSleepSeconds])
-  const otherStats = useMemo(() => dualSide ? computeStats(otherRecords) : null, [dualSide, otherRecords])
-  const chartData = useMemo(
-    () => dualSide && otherRecords.length > 0
-      ? mergeDualSideData(records, otherRecords)
-      : toChartData(records),
-    [records, otherRecords, dualSide],
+  const nights = sleepData?.length ?? 1
+
+  const stats = useMemo(
+    () => deriveStats(summaryQuery.data ?? undefined, totalSleepSeconds, nights),
+    [summaryQuery.data, totalSleepSeconds, nights],
+  )
+  const otherStats = useMemo(
+    () => dualSide ? deriveStats(otherSummaryQuery.data ?? undefined, undefined, nights) : null,
+    [dualSide, otherSummaryQuery.data, nights],
   )
 
-  // Compute smart tick interval for X-axis (show ~5-6 labels max)
+  const chartData = useMemo(
+    () => toChartData(buckets, dualSide ? otherBuckets : undefined),
+    [buckets, otherBuckets, dualSide],
+  )
+
   const tickInterval = useMemo(() => {
     if (chartData.length <= 6) return 0
     return Math.floor(chartData.length / 5) - 1
@@ -253,6 +222,9 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
       : stats.restlessnessLevel === 'Medium'
         ? 'text-amber-400'
         : 'text-emerald-400'
+
+  const isLoading = bucketsQuery.isLoading || summaryQuery.isLoading
+  const hasError = bucketsQuery.error || summaryQuery.error
 
   return (
     <div className="space-y-3 sm:space-y-4">
@@ -321,13 +293,13 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
           )}
 
           {/* Bar chart */}
-          {movementLoading
+          {isLoading
             ? (
                 <div className="flex h-[140px] items-center justify-center">
                   <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-600 border-t-amber-400" />
                 </div>
               )
-            : movementError
+            : hasError
               ? (
                   <div className="flex h-[140px] items-center justify-center">
                     <p className="text-sm text-red-400">Failed to load movement data</p>
