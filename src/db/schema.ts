@@ -45,6 +45,11 @@ export const deviceSettings = sqliteTable('device_settings', {
   // Defaults to NULL (env fallback MQTT_TLS_INSECURE, then false). Off-by-default
   // per ADR 0019 — tlsEnabled alone keeps strict cert verification.
   mqttTlsInsecure: integer('mqtt_tls_insecure', { mode: 'boolean' }),
+  // HomeKit bridge is opt-in. When true, instrumentation publishes the
+  // hap-nodejs bridge with HeaterCooler/OccupancySensor/Switch accessories.
+  homekitEnabled: integer('homekit_enabled', { mode: 'boolean' })
+    .notNull()
+    .default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

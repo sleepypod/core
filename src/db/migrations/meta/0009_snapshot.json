@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "675e4c64-8540-4148-aabf-6c739012b34b",
-  "prevId": "6dfe13f3-b76e-4404-9841-773e6129ec00",
+  "id": "23f65be4-df1d-4f6d-8f4b-57560f982325",
+  "prevId": "bfd61d6c-c349-409a-851a-6a9893c16722",
   "tables": {
     "alarm_schedules": {
       "name": "alarm_schedules",
@@ -257,6 +257,21 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "mqtt_tls_insecure": {
+          "name": "mqtt_tls_insecure",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "homekit_enabled": {
+          "name": "homekit_enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
         },
         "created_at": {
           "name": "created_at",
