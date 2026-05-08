@@ -34,12 +34,19 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
     )
   }
 
+  // Bar heights are computed in pixels relative to a fixed track height
+  // so the % cascade isn't relative to a flex parent's auto height
+  // (which collapses to 0 in column-flex without an explicit height).
+  const TRACK_HEIGHT = 96
+  const HOURS_LABEL_HEIGHT = 16
+
   return (
     <div className="w-full">
       {/* Bars */}
-      <div className="flex items-end gap-2" style={{ height: 120 }}>
+      <div className="flex items-end gap-2" style={{ height: TRACK_HEIGHT + HOURS_LABEL_HEIGHT }}>
         {nights.map((night) => {
-          const barHeight = Math.max((night.totalSleepHours / MAX_HOURS) * 100, 4)
+          const cappedHours = Math.min(night.totalSleepHours, MAX_HOURS)
+          const barHeightPx = Math.max(Math.round((cappedHours / MAX_HOURS) * TRACK_HEIGHT), 4)
           const isSelected = selectedDate === night.date
 
           // When stage classification has no data (vitals scarce or absent
@@ -53,10 +60,14 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
             <button
               key={night.date}
               onClick={() => onSelectNight?.(night.date)}
-              className="flex flex-1 flex-col items-center gap-1"
+              className="flex flex-1 flex-col items-center justify-end gap-1"
+              style={{ height: '100%' }}
             >
               {/* Hours label */}
-              <span className="text-[10px] text-zinc-500 tabular-nums">
+              <span
+                className="text-[10px] text-zinc-500 tabular-nums"
+                style={{ height: HOURS_LABEL_HEIGHT, lineHeight: `${HOURS_LABEL_HEIGHT}px` }}
+              >
                 {(night.totalSleepHours ?? 0).toFixed(1)}
                 h
               </span>
@@ -65,8 +76,7 @@ export function WeeklySleepChart({ nights, onSelectNight, selectedDate }: Weekly
               <div
                 className="relative w-full overflow-hidden rounded-t-md transition-all"
                 style={{
-                  height: `${barHeight}%`,
-                  minHeight: 4,
+                  height: barHeightPx,
                   outline: isSelected ? '2px solid white' : 'none',
                   outlineOffset: 1,
                   backgroundColor: hasStageData ? undefined : '#3f3f46',

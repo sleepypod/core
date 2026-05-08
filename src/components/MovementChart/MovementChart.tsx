@@ -91,24 +91,17 @@ function toChartData(
   bucketSeconds: number,
   secondary?: BucketRecord[],
 ): ChartDataPoint[] {
-  const isMultiDay = bucketSeconds >= 30 * 60
-  const formatTime = (ts: number) => {
-    const d = new Date(ts)
-    if (isMultiDay) {
-      return d.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', hour12: true })
-    }
-    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-  }
   // Movement events / hour, normalised by bucket width so the y-axis
   // unit is constant across day (5-min) and week (30-min) views. Mirrors
   // Whoop "Disturbances/hr" and Garmin "Restless Moments" conventions.
   const eventsPerHour = (count: number) => Math.round(count / (bucketSeconds / 3600))
   const map = new Map<number, ChartDataPoint>()
+  const tsKey = (ts: number) => new Date(ts).toISOString()
 
   for (const r of primary) {
     const ts = new Date(r.bucketStart).getTime()
     map.set(ts, {
-      time: formatTime(ts),
+      time: tsKey(ts),
       timestamp: ts,
       movement: eventsPerHour(r.eventCount),
       movementOther: secondary ? 0 : undefined,
@@ -124,7 +117,7 @@ function toChartData(
       }
       else {
         map.set(ts, {
-          time: formatTime(ts),
+          time: tsKey(ts),
           timestamp: ts,
           movement: 0,
           movementOther: eventsPerHour(r.eventCount),
@@ -136,14 +129,60 @@ function toChartData(
   return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp)
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function MovementTooltip({ active, payload, dualSide }: { active?: boolean, payload?: any[], dualSide?: boolean }) {
+/**
+ * For week view, return one tick key per calendar day (the first bucket
+ * of that day) so the axis shows Mon/Tue/Wed/... cleanly. Day view
+ * returns undefined and lets recharts auto-space ticks.
+ */
+function pickTickKeys(chartData: ChartDataPoint[], isMultiDay: boolean): string[] | undefined {
+  if (!isMultiDay) return undefined
+  const seen = new Set<string>()
+  const keys: string[] = []
+  for (const p of chartData) {
+    const day = new Date(p.timestamp).toDateString()
+    if (!seen.has(day)) {
+      seen.add(day)
+      keys.push(p.time)
+    }
+  }
+  return keys
+}
+
+/**
+ * X-axis label for a bucket — weekday in week view, hh:mm in day view.
+ * Tooltip uses the same format so the user sees the same string they
+ * see on the axis.
+ */
+function formatTickLabel(timeIso: string, isMultiDay: boolean): string {
+  const d = new Date(timeIso)
+  return isMultiDay
+    ? d.toLocaleDateString('en-US', { weekday: 'short' })
+    : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+}
+
+interface MovementTooltipProps {
+  active?: boolean
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload?: any[]
+  dualSide?: boolean
+  bucketSeconds: number
+}
+
+function MovementTooltip({ active, payload, dualSide, bucketSeconds }: MovementTooltipProps) {
   if (!active || !payload?.[0]) return null
   const data = payload[0].payload as ChartDataPoint
+  // Tooltip shows the full bucket timestamp regardless of whether the
+  // axis hides labels for non-day-boundary buckets.
+  const tooltipLabel = new Date(data.timestamp).toLocaleString('en-US', {
+    weekday: bucketSeconds >= 30 * 60 ? 'short' : undefined,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
   const unit = ' /hr'
   return (
     <div className="rounded-lg bg-zinc-800 px-3 py-2 text-xs shadow-lg ring-1 ring-white/10">
-      <p className="text-zinc-400">{data.time}</p>
+      <p className="text-zinc-400">{tooltipLabel}</p>
       <p className="font-semibold text-amber-400">
         {dualSide ? 'Left: ' : 'Movement: '}
         {data.movement}
@@ -256,10 +295,12 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
     [buckets, otherBuckets, bucketSeconds, dualSide],
   )
 
+  const isMultiDay = bucketSeconds >= 30 * 60
+  const tickKeys = useMemo(() => pickTickKeys(chartData, isMultiDay), [chartData, isMultiDay])
   const tickInterval = useMemo(() => {
-    if (chartData.length <= 6) return 0
+    if (tickKeys || chartData.length <= 6) return 0
     return Math.floor(chartData.length / 5) - 1
-  }, [chartData.length])
+  }, [chartData.length, tickKeys])
 
   const restlessnessColor
     = stats.restlessnessLevel === 'High'
@@ -378,6 +419,8 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
                             tickLine={false}
                             axisLine={false}
                             interval={tickInterval}
+                            ticks={tickKeys}
+                            tickFormatter={(t: string) => formatTickLabel(t, isMultiDay)}
                             padding={{ left: 12, right: 12 }}
                           />
                           <YAxis
@@ -389,7 +432,7 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
                             allowDecimals={false}
                           />
                           <Tooltip
-                            content={<MovementTooltip dualSide={dualSide} />}
+                            content={<MovementTooltip dualSide={dualSide} bucketSeconds={bucketSeconds} />}
                             cursor={{ fill: 'rgba(255,255,255,0.04)' }}
                           />
                           <Bar
