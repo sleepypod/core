@@ -332,9 +332,25 @@ export async function initializeScheduler(): Promise<void> {
  * Next.js instrumentation hook (if supported)
  * Automatically called by Next.js on server startup
  */
+/**
+ * Gate for `register()`. Returns true only when the instrumentation hook
+ * should execute its body.
+ *
+ * Next.js calls the instrumentation hook **once per server runtime** — both
+ * Node and Edge bundles trigger it. The previous gate (`NEXT_RUNTIME==='nodejs'
+ * || typeof window === 'undefined'`) was too permissive: `typeof window` is
+ * undefined in every server runtime, so Edge slipped through and caused
+ * double-init (most visibly: two MQTT bridge clients connecting from the
+ * same pod). Strict check on `NEXT_RUNTIME` when set; allow when unset
+ * (tests, scripts).
+ */
+export function shouldRunInstrumentation(env: Record<string, string | undefined> = process.env): boolean {
+  if (env.NEXT_RUNTIME && env.NEXT_RUNTIME !== 'nodejs') return false
+  return true
+}
+
 export async function register(): Promise<void> {
-  // Only run on server
-  if (process.env.NEXT_RUNTIME === 'nodejs' || typeof window === 'undefined') {
+  if (shouldRunInstrumentation()) {
     // Register global handlers first (before any initialization that could fail)
     registerGlobalHandlers()
 
