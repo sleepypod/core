@@ -239,6 +239,14 @@ echo "Source updated."
 
 cd "$INSTALL_DIR"
 
+# Move node_modules off rootfs onto /persistent before pnpm runs.
+# Migrates existing rootfs node_modules on the first sp-update after
+# the relocation feature lands; subsequent runs are no-ops.
+if [ -f "$INSTALL_DIR/scripts/lib/relocation-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/relocation-helpers"
+  ensure_persistent_node_modules "$INSTALL_DIR"
+fi
+
 # Install production dependencies
 pnpm install --frozen-lockfile --prod
 

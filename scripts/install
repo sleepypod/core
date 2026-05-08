@@ -615,6 +615,14 @@ if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
   print_pod_capabilities
 fi
 
+# Move node_modules off rootfs onto /persistent before pnpm runs so the
+# install writes directly to the persistent partition. On upgrades from
+# a pre-relocation install this migrates the existing tree once.
+if [ -f "$INSTALL_DIR/scripts/lib/relocation-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/relocation-helpers"
+  ensure_persistent_node_modules "$INSTALL_DIR"
+fi
+
 # Install production dependencies (prebuild-install downloads prebuilt better-sqlite3)
 echo "Installing dependencies..."
 CI=true pnpm install --frozen-lockfile --prod
