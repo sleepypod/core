@@ -348,7 +348,7 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
                       <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                         <BarChart
                           data={chartData}
-                          margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
+                          margin={{ top: 4, right: 8, bottom: 0, left: 4 }}
                           barCategoryGap="15%"
                         >
                           <CartesianGrid
@@ -362,12 +362,13 @@ export function MovementChart({ dualSide = false, hideNav = false }: MovementCha
                             tickLine={false}
                             axisLine={false}
                             interval={tickInterval}
+                            padding={{ left: 12, right: 12 }}
                           />
                           <YAxis
                             tick={{ fontSize: 10, fill: '#71717a' }}
                             tickLine={false}
                             axisLine={false}
-                            width={36}
+                            width={44}
                           />
                           <Tooltip
                             content={<MovementTooltip dualSide={dualSide} />}
