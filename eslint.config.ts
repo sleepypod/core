@@ -29,6 +29,9 @@ export default defineConfig([
   globalIgnores([
     '.claude/**',
     '.next/**',
+    '.venv/**',
+    '.ygg/**',
+    '**/.venv/**',
     'build/**',
     'coverage/**',
     'dist/**',
