@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Wifi, Globe, User, KeyRound, Tag, Home, Lock, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Toggle } from './Toggle'
@@ -79,15 +79,6 @@ export function MqttSettingsForm() {
 
       {data && (
         <SettingsCard
-          key={[
-            data.enabled,
-            data.url,
-            data.username,
-            data.passwordIsSet,
-            data.topicPrefix,
-            data.haDiscovery,
-            data.tlsEnabled,
-          ].join('|')}
           data={data}
           onSaved={() => {
             utils.mqtt.getSettings.invalidate()
@@ -168,6 +159,20 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
   const [topicPrefix, setTopicPrefix] = useState(data.sources.topicPrefix === 'db' ? data.topicPrefix : '')
   const [password, setPassword] = useState('')
 
+  // Resync local state when the server snapshot changes (e.g. after save
+  // invalidation). Uses the "store prev props in state" pattern so we do not
+  // remount via `key=` (which drops input focus mid-edit).
+  const [prevData, setPrevData] = useState(data)
+  if (data !== prevData) {
+    setPrevData(data)
+    setEnabled(data.enabled)
+    setHaDiscovery(data.haDiscovery)
+    setTlsEnabled(data.tlsEnabled)
+    setUrl(data.sources.url === 'db' ? data.url : '')
+    setUsername(data.sources.username === 'db' ? data.username : '')
+    setTopicPrefix(data.sources.topicPrefix === 'db' ? data.topicPrefix : '')
+  }
+
   const updateMutation = trpc.mqtt.updateSettings.useMutation({
     onSuccess: () => {
       setPassword('')
@@ -206,11 +211,12 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
     testMutation.mutate({
       url: effectiveUrl,
       username: effectiveUsername,
+      tlsEnabled,
       ...(password ? { password } : {}),
     })
   }
 
-  const canTest = useMemo(() => Boolean((url.trim() || data.url)), [url, data.url])
+  const canTest = Boolean(url.trim() || data.url)
 
   return (
     <div className="space-y-4">
