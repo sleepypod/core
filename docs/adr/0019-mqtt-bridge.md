@@ -34,10 +34,15 @@ the user's broker. The Pod is a single tenant on someone else's bus.
   envelope. Connection failures are non-fatal — the bridge logs and retries
   without blocking the Pod's primary tRPC startup path.
 - `keepalive` 30 s. Topic prefix configurable; default `sleepypod`.
-- TLS optional. When enabled we set `rejectUnauthorized: false` so users
-  with self-signed broker certs (the common HA case) work out of the box.
-  Stricter cert-pinning is deferred until protectedProcedure-style auth
-  lands.
+- TLS optional. `mqttTlsEnabled` switches the connection to `mqtts://` /
+  TLS sockets but leaves mqtt.js's default `rejectUnauthorized: true` in
+  place — strict cert verification on by default. Self-signed-cert
+  deployments (the common HA case) opt in via a separate
+  `mqttTlsInsecure` column or `MQTT_TLS_INSECURE` env, both off by
+  default. The two-flag split keeps "encrypted but MITM-able" out of
+  the easy path; an operator who wants insecure TLS has to set it
+  explicitly. Stricter cert-pinning is deferred until
+  protectedProcedure-style auth lands.
 
 ### LAN-only default
 
@@ -83,6 +88,12 @@ exposed beyond the SQLite row.
   them outside the bridge entirely).
 - Reconsider whether the row should hold the password at all, vs deriving
   it from a credential service called at bridge start.
+- Replace the bridge's `appRouter.createCaller({})` with a dedicated
+  least-privilege bridge context. With every procedure currently
+  `publicProcedure`, the empty-context caller is correct — but once auth
+  lands, an empty context becomes a privilege-escalation channel where
+  any MQTT subscriber on `cmd/*` can drive admin-only routes. Tracked
+  inline at the call site in `src/streaming/mqttBridge.ts`.
 
 ### Configuration precedence: DB > env > default
 
@@ -131,8 +142,9 @@ duration, side enum) lives on the procedure and is enforced once.
   leave it disabled.
 - Adds the `mqtt` npm package to runtime deps (~200 KB). Bridge module is
   lazy in spirit: it only opens the connection when configured.
-- The `device_settings` row gains seven nullable columns. Migration
-  `0007_round_hardball.sql`.
+- The `device_settings` row gains eight nullable columns. Migrations
+  `0007_round_hardball.sql` (initial seven) and `0008_flashy_wallow.sql`
+  (`mqtt_tls_insecure`).
 - Plaintext credential storage is a known compromise; tracked above.
 
 ## Refs

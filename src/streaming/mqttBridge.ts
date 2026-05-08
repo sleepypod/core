@@ -65,6 +65,7 @@ export interface ResolvedMqttConfig {
   topicPrefix: string
   haDiscovery: boolean
   tlsEnabled: boolean
+  tlsInsecure: boolean
 }
 
 export interface ResolvedMqttSources {
@@ -75,6 +76,7 @@ export interface ResolvedMqttSources {
   topicPrefix: ConfigSource
   haDiscovery: ConfigSource
   tlsEnabled: ConfigSource
+  tlsInsecure: ConfigSource
 }
 
 function envBool(value: string | undefined): boolean | null {
@@ -97,6 +99,7 @@ export async function resolveConfig(): Promise<{
   const envEnabled = envBool(process.env.MQTT_ENABLED)
   const envHaDiscovery = envBool(process.env.MQTT_HA_DISCOVERY)
   const envTls = envBool(process.env.MQTT_TLS)
+  const envTlsInsecure = envBool(process.env.MQTT_TLS_INSECURE)
 
   const pick = <T>(dbVal: T | null | undefined, envVal: T | null, fallback: T): { value: T, source: ConfigSource } => {
     if (dbVal !== null && dbVal !== undefined) return { value: dbVal, source: 'db' }
@@ -111,6 +114,7 @@ export async function resolveConfig(): Promise<{
   const topicPrefix = pick<string>(row?.mqttTopicPrefix ?? null, process.env.MQTT_TOPIC_PREFIX ?? null, DEFAULT_TOPIC_PREFIX)
   const haDiscovery = pick<boolean>(row?.mqttHaDiscovery ?? null, envHaDiscovery, true)
   const tlsEnabled = pick<boolean>(row?.mqttTlsEnabled ?? null, envTls, false)
+  const tlsInsecure = pick<boolean>(row?.mqttTlsInsecure ?? null, envTlsInsecure, false)
 
   return {
     config: {
@@ -121,6 +125,7 @@ export async function resolveConfig(): Promise<{
       topicPrefix: topicPrefix.value,
       haDiscovery: haDiscovery.value,
       tlsEnabled: tlsEnabled.value,
+      tlsInsecure: tlsInsecure.value,
     },
     sources: {
       enabled: enabled.source,
@@ -130,6 +135,7 @@ export async function resolveConfig(): Promise<{
       topicPrefix: topicPrefix.source,
       haDiscovery: haDiscovery.source,
       tlsEnabled: tlsEnabled.source,
+      tlsInsecure: tlsInsecure.source,
     },
   }
 }
@@ -161,6 +167,8 @@ interface BridgeState {
   publishTimer: ReturnType<typeof setInterval> | null
   unsubscribeFrame: (() => void) | null
   resolved: ResolvedMqttConfig | null
+  messagesPublished: number
+  lastPublishAt: Date | null
 }
 
 const state: BridgeState = {
@@ -170,6 +178,8 @@ const state: BridgeState = {
   publishTimer: null,
   unsubscribeFrame: null,
   resolved: null,
+  messagesPublished: 0,
+  lastPublishAt: null,
 }
 
 export interface BridgeStatus {
@@ -178,6 +188,8 @@ export interface BridgeStatus {
   lastError: string | null
   deviceId: string
   topicPrefix: string | null
+  messagesPublished: number
+  lastPublishAt: string | null
 }
 
 export function getBridgeStatus(): BridgeStatus {
@@ -187,6 +199,8 @@ export function getBridgeStatus(): BridgeStatus {
     lastError: state.lastError,
     deviceId: deviceId(),
     topicPrefix: state.resolved?.topicPrefix ?? null,
+    messagesPublished: state.messagesPublished,
+    lastPublishAt: state.lastPublishAt?.toISOString() ?? null,
   }
 }
 
@@ -207,7 +221,12 @@ function safePublish(t: string, payload: string | Buffer, opts: IClientPublishOp
   if (!c || !c.connected) return
   try {
     c.publish(t, payload, opts, (err?: Error | null) => {
-      if (err) console.warn(`[mqtt] publish ${t} failed:`, err.message)
+      if (err) {
+        console.warn(`[mqtt] publish ${t} failed:`, err.message)
+        return
+      }
+      state.messagesPublished += 1
+      state.lastPublishAt = new Date()
     })
   }
   catch (err) {
@@ -392,6 +411,10 @@ async function publishState(): Promise<void> {
 // Command dispatch
 // ---------------------------------------------------------------------------
 
+// TODO: empty context is fine while every procedure is publicProcedure. Once
+// protectedProcedure lands (see ADR 0019 follow-ups), this becomes a privilege
+// escalation channel — MQTT commands would bypass auth. Replace with a
+// dedicated bridge context that asserts least-privilege.
 const caller = appRouter.createCaller({})
 
 interface CommandPayload {
@@ -451,11 +474,15 @@ export interface TestConnectionInput {
 }
 
 export interface TestConnectionResult {
-  success: boolean
+  ok: boolean
   error?: string
 }
 
 export async function testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
+  // Test connection respects MQTT_TLS_INSECURE so a "Test" button surfaces
+  // the same cert-trust outcome the running bridge would see. tlsEnabled on
+  // its own does not relax cert verification — mqtt.js defaults to strict.
+  const tlsInsecure = envBool(process.env.MQTT_TLS_INSECURE) === true
   return new Promise((resolve) => {
     let settled = false
     const finalize = (result: TestConnectionResult) => {
@@ -474,7 +501,7 @@ export async function testConnection(input: TestConnectionInput): Promise<TestCo
       clientId: `sleepypod-test-${Math.random().toString(16).slice(2, 10)}`,
       ...(input.username ? { username: input.username } : {}),
       ...(input.password ? { password: input.password } : {}),
-      ...(input.tlsEnabled ? { rejectUnauthorized: false } : {}),
+      ...(input.tlsEnabled && tlsInsecure ? { rejectUnauthorized: false } : {}),
     }
 
     let c: MqttClient
@@ -482,13 +509,13 @@ export async function testConnection(input: TestConnectionInput): Promise<TestCo
       c = mqtt.connect(input.url, opts)
     }
     catch (err) {
-      resolve({ success: false, error: err instanceof Error ? err.message : String(err) })
+      resolve({ ok: false, error: err instanceof Error ? err.message : String(err) })
       return
     }
 
-    c.once('connect', () => finalize({ success: true }))
-    c.once('error', (err: Error) => finalize({ success: false, error: err.message }))
-    setTimeout(() => finalize({ success: false, error: 'connect timeout' }), TEST_CONNECT_TIMEOUT_MS + 500)
+    c.once('connect', () => finalize({ ok: true }))
+    c.once('error', (err: Error) => finalize({ ok: false, error: err.message }))
+    setTimeout(() => finalize({ ok: false, error: 'connect timeout' }), TEST_CONNECT_TIMEOUT_MS + 500)
   })
 }
 
@@ -532,7 +559,10 @@ export async function startMqttBridge(): Promise<void> {
     },
     ...(config.username ? { username: config.username } : {}),
     ...(config.password ? { password: config.password } : {}),
-    ...(config.tlsEnabled ? { rejectUnauthorized: false } : {}),
+    // tlsEnabled on its own keeps mqtt.js default rejectUnauthorized:true.
+    // Self-signed-cert deployments must opt in via mqttTlsInsecure /
+    // MQTT_TLS_INSECURE — see ADR 0019.
+    ...(config.tlsEnabled && config.tlsInsecure ? { rejectUnauthorized: false } : {}),
   }
 
   const client: MqttClient = mqtt.connect(config.url, opts)

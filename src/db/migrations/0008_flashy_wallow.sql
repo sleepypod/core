@@ -1,0 +1,1 @@
+ALTER TABLE `device_settings` ADD `mqtt_tls_insecure` integer;

@@ -57,6 +57,13 @@
       "when": 1778211700223,
       "tag": "0007_round_hardball",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1778214991769,
+      "tag": "0008_flashy_wallow",
+      "breakpoints": true
     }
   ]
 }

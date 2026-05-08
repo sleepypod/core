@@ -41,6 +41,10 @@ export const deviceSettings = sqliteTable('device_settings', {
   mqttTopicPrefix: text('mqtt_topic_prefix'),
   mqttHaDiscovery: integer('mqtt_ha_discovery', { mode: 'boolean' }),
   mqttTlsEnabled: integer('mqtt_tls_enabled', { mode: 'boolean' }),
+  // When true, accept self-signed broker certs (sets rejectUnauthorized:false).
+  // Defaults to NULL (env fallback MQTT_TLS_INSECURE, then false). Off-by-default
+  // per ADR 0019 — tlsEnabled alone keeps strict cert verification.
+  mqttTlsInsecure: integer('mqtt_tls_insecure', { mode: 'boolean' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

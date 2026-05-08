@@ -15,16 +15,24 @@ import {
 const sourceSchema = z.enum(['db', 'env', 'default'])
 
 const settingsSchema = z.object({
-  enabled: z.object({ value: z.boolean(), source: sourceSchema }),
-  url: z.object({ value: z.string().nullable(), source: sourceSchema }),
-  username: z.object({ value: z.string().nullable(), source: sourceSchema }),
-  // Password is write-only; getSettings reports `passwordSet` instead so the
+  enabled: z.boolean(),
+  url: z.string().nullable(),
+  username: z.string().nullable(),
+  // Password is write-only; getSettings reports `passwordIsSet` instead so the
   // UI can render "•••" without leaking the value.
-  passwordSet: z.boolean(),
-  passwordSource: sourceSchema,
-  topicPrefix: z.object({ value: z.string(), source: sourceSchema }),
-  haDiscovery: z.object({ value: z.boolean(), source: sourceSchema }),
-  tlsEnabled: z.object({ value: z.boolean(), source: sourceSchema }),
+  passwordIsSet: z.boolean(),
+  topicPrefix: z.string(),
+  haDiscovery: z.boolean(),
+  tlsEnabled: z.boolean(),
+  sources: z.object({
+    enabled: sourceSchema,
+    url: sourceSchema,
+    username: sourceSchema,
+    password: sourceSchema,
+    topicPrefix: sourceSchema,
+    haDiscovery: sourceSchema,
+    tlsEnabled: sourceSchema,
+  }),
 })
 
 const updateInputSchema = z
@@ -61,20 +69,28 @@ export const mqttRouter = router({
     .output(settingsSchema)
     .query(async () => {
       const { config, sources } = await resolveConfig()
-      const passwordSet = config.password !== null && config.password.length > 0
+      const passwordIsSet = config.password !== null && config.password.length > 0
       // When no password is set anywhere, sources.password is whichever layer
       // was checked last — surface that as 'default' so the UI doesn't claim
       // a password came from env when none exists at all.
-      const passwordSource = passwordSet ? sources.password : 'default'
+      const passwordSource = passwordIsSet ? sources.password : 'default'
       return {
-        enabled: { value: config.enabled, source: sources.enabled },
-        url: { value: config.url, source: sources.url },
-        username: { value: config.username, source: sources.username },
-        passwordSet,
-        passwordSource,
-        topicPrefix: { value: config.topicPrefix, source: sources.topicPrefix },
-        haDiscovery: { value: config.haDiscovery, source: sources.haDiscovery },
-        tlsEnabled: { value: config.tlsEnabled, source: sources.tlsEnabled },
+        enabled: config.enabled,
+        url: config.url,
+        username: config.username,
+        passwordIsSet,
+        topicPrefix: config.topicPrefix,
+        haDiscovery: config.haDiscovery,
+        tlsEnabled: config.tlsEnabled,
+        sources: {
+          enabled: sources.enabled,
+          url: sources.url,
+          username: sources.username,
+          password: passwordSource,
+          topicPrefix: sources.topicPrefix,
+          haDiscovery: sources.haDiscovery,
+          tlsEnabled: sources.tlsEnabled,
+        },
       }
     }),
 
@@ -107,16 +123,18 @@ export const mqttRouter = router({
         })
       }
 
-      // Restart so the resolved config is picked up. Failures are logged
-      // inside the bridge — surface them via getStatus rather than failing
-      // the mutation, since the row was persisted successfully.
-      try {
-        await shutdownMqttBridge()
-        await startMqttBridge()
-      }
-      catch (err) {
-        console.warn('[mqtt] restart after settings update failed:', err instanceof Error ? err.message : err)
-      }
+      // Restart so the resolved config is picked up. Fire-and-forget — a
+      // misconfigured broker should not stall the mutation while mqtt.js
+      // exhausts its CONNECT_TIMEOUT_MS. Errors surface via getStatus.
+      void (async () => {
+        try {
+          await shutdownMqttBridge()
+          await startMqttBridge()
+        }
+        catch (err) {
+          console.warn('[mqtt] restart after settings update failed:', err instanceof Error ? err.message : err)
+        }
+      })()
 
       return { success: true }
     }),
@@ -133,7 +151,7 @@ export const mqttRouter = router({
       password: z.string().nullable().optional(),
       tlsEnabled: z.boolean().optional(),
     }).strict())
-    .output(z.object({ success: z.boolean(), error: z.string().optional() }))
+    .output(z.object({ ok: z.boolean(), error: z.string().optional() }))
     .mutation(async ({ input }) => {
       return testConnection({
         url: input.url,
@@ -156,6 +174,8 @@ export const mqttRouter = router({
       lastError: z.string().nullable(),
       deviceId: z.string(),
       topicPrefix: z.string().nullable(),
+      messagesPublished: z.number(),
+      lastPublishAt: z.string().nullable(),
     }))
     .query(() => getBridgeStatus()),
 })
