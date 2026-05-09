@@ -66,11 +66,16 @@ block_wan() {
   iptables -I OUTPUT -p udp --dport 123 -j ACCEPT
   iptables -I INPUT  -p udp --sport 123 -j ACCEPT
 
-  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp)
+  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp and _hap._tcp)
   iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT
   iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT
   iptables -I INPUT  -p udp --dport 5353 -j ACCEPT
   iptables -I INPUT  -p udp --sport 5353 -j ACCEPT
+
+  # Allow HomeKit Accessory Protocol (HAP) bridge inbound on tcp/51827.
+  # Redundant with the RFC1918 LAN allow above, but explicit so future LAN
+  # tightening doesn't silently break iOS Home pairing.
+  iptables -I INPUT  -p tcp --dport 51827 -j ACCEPT
 
   # Allow loopback
   iptables -A INPUT  -i lo -j ACCEPT
