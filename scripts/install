@@ -654,16 +654,6 @@ else
   SP_BRANCH="$EFFECTIVE_BRANCH" pnpm build
 fi
 
-# Turbopack hashes serverExternalPackages module names — create symlinks so the
-# hashed references resolve to the real modules at runtime.
-for PKG in better-sqlite3 mqtt; do
-  HASHED_NAME=$(grep -roh "${PKG}-[a-f0-9]\{16\}" "$INSTALL_DIR/.next/server/" 2>/dev/null | head -1)
-  if [ -n "$HASHED_NAME" ] && [ ! -e "$INSTALL_DIR/node_modules/$HASHED_NAME" ]; then
-    echo "Creating symlink for Turbopack module: $HASHED_NAME -> $PKG"
-    ln -sf "$PKG" "$INSTALL_DIR/node_modules/$HASHED_NAME"
-  fi
-done
-
 # Create or preserve environment file
 if [ -f "$INSTALL_DIR/.env" ]; then
   echo "Existing .env found, backing up..."
