@@ -34,7 +34,7 @@ import { buildHeaterCoolerService } from './accessories/heaterCooler'
 import { buildOccupancySensor } from './accessories/occupancySensor'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
 import { buildSnoozeSwitch } from './accessories/snoozeSwitch'
-import { initHapStorage, loadOrCreateIdentity, regenerateIdentity } from './storage'
+import { clearPairings, initHapStorage, loadOrCreateIdentity, regenerateIdentity } from './storage'
 
 const BRIDGE_NAME = 'Sleepypod'
 const BRIDGE_PORT = 51827
@@ -73,8 +73,9 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
   for (const side of ['left', 'right'] as const) {
     const heaterCooler = buildHeaterCoolerService(side, monitor)
     const heaterCoolerAcc = wrapAccessory(`Bed ${side}`, `bed-${side}`, identity.username)
-    heaterCoolerAcc.addService(heaterCooler)
+    heaterCoolerAcc.addService(heaterCooler.service)
     accessory.addBridgedAccessory(heaterCoolerAcc)
+    stoppers.push(heaterCooler.stop)
 
     const occupancy = buildOccupancySensor(side)
     const occupancyAcc = wrapAccessory(`Bed ${side} occupancy`, `occupancy-${side}`, identity.username)
@@ -149,11 +150,13 @@ export function getStatus(): BridgeStatus {
 }
 
 export async function unpairAll(): Promise<void> {
-  if (!bridge) return
-  // Best-effort: remove all known pairings via HAPStorage. node-persist files
-  // live under getStorageDir(); deleting the AccessoryInfo file forces a clean
-  // pairing state on next publish. We do this by destroying and re-publishing.
+  // Stop the bridge, then delete the AccessoryInfo / IdentifierCache files
+  // hap-nodejs persists pairings into. Identity (username/pincode/setupId)
+  // stays put so the next publish re-uses the same accessory and iOS
+  // recognizes it after re-pairing.
+  const username = identityCache?.username ?? loadOrCreateIdentity().username
   await stopBridge()
+  clearPairings(username)
 }
 
 export async function regenerate(): Promise<typeof identityCache> {

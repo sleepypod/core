@@ -13,7 +13,7 @@
  * wiped, not retroactively).
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { hkdfSync, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { HAPStorage } from 'hap-nodejs'
@@ -224,7 +224,17 @@ export function loadOrCreateIdentity(): BridgeIdentity {
       }
     }
     catch (e) {
-      console.warn('[homekit] identity.json unreadable, regenerating:', e instanceof Error ? e.message : e)
+      // Preserve the corrupt file before regenerating so an operator can
+      // diagnose. Otherwise we'd silently overwrite a recoverable identity
+      // (e.g. truncated by a power loss mid-write).
+      const backup = `${file}.corrupt.${Date.now()}`
+      try {
+        renameSync(file, backup)
+        console.warn(`[homekit] identity.json unparseable, backed up to ${backup}, regenerating:`, e instanceof Error ? e.message : e)
+      }
+      catch (renameErr) {
+        console.warn('[homekit] identity.json unparseable; backup also failed, regenerating:', renameErr instanceof Error ? renameErr.message : renameErr)
+      }
     }
   }
 

@@ -126,7 +126,7 @@ needing a new seed.
 
 ### Diagnostics endpoint
 
-Add `system.homekitSeedProbe` to the system tRPC router — a read-only query
+Add `homekit.seedProbe` to the HomeKit tRPC router (HTTP `GET /homekit/seed-probe`) — a read-only query
 that returns the seed source resolution chain (`mmc-cid` → present /
 absent / unreadable / degenerate) for every pod variant. Operators run it
 once per pod fleet to confirm assumptions before relying on the durability
@@ -175,7 +175,7 @@ wiped, not retroactively.
 - Salt constant lives at the top of `storage.ts` as
   `const HKDF_SALT = 'sleepypod-homekit-v1'`. Document at the call site
   that bumping it changes everyone's identity.
-- The `system.homekitSeedProbe` tRPC route reads each path with
+- The `homekit.seedProbe` tRPC route reads each path with
   `fs.access` + `fs.readFile`; no shell-out, no privileged caps. Returns
   `{ source, present, readable, looksDegenerate }` per chain entry plus
   the resolved choice.

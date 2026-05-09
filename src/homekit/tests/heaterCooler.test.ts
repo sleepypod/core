@@ -26,22 +26,24 @@ const fakeMonitor: Pick<DacMonitor, 'on' | 'getLastStatus'> = {
   getLastStatus: () => status,
 }
 
+const f2c = (f: number) => ((f - 32) * 5) / 9
+
 describe('heaterCooler accessory', () => {
-  it('reports current temperature in Celsius', async () => {
-    const svc = buildHeaterCoolerService('left', fakeMonitor as DacMonitor)
-    const value = await svc.getCharacteristic(Characteristic.CurrentTemperature).onGet?.bind(null)
-    const c = svc.getCharacteristic(Characteristic.CurrentTemperature).value
-    // 75°F ≈ 23.88°C — fall back to handler if no cached value
-    const f2c = (f: number) => ((f - 32) * 5) / 9
-    expect(c == null || Math.abs((c as number) - f2c(75)) < 0.01 || value != null).toBe(true)
+  it('reports current temperature in Celsius via onGet', async () => {
+    const { service } = buildHeaterCoolerService('left', fakeMonitor as DacMonitor)
+    const handler = service.getCharacteristic(Characteristic.CurrentTemperature)
+    const value = await handler.handleGetRequest()
+    expect(typeof value).toBe('number')
+    // Tolerance covers hap-nodejs's minStep rounding (0.5°C).
+    expect(Math.abs((value as number) - f2c(75))).toBeLessThan(0.5)
   })
 
   it('clamps target to hardware range and forwards to client', async () => {
     setTemperature.mockClear()
-    const svc = buildHeaterCoolerService('left', fakeMonitor as DacMonitor)
+    const { service } = buildHeaterCoolerService('left', fakeMonitor as DacMonitor)
 
     // Temperature inputs are Celsius. 100°C → way over → clamped to 110°F
-    const handler = svc.getCharacteristic(Characteristic.CoolingThresholdTemperature)
+    const handler = service.getCharacteristic(Characteristic.CoolingThresholdTemperature)
     await handler.setValue(100)
     expect(setTemperature).toHaveBeenCalled()
     const [, f] = setTemperature.mock.calls[0]
@@ -49,9 +51,23 @@ describe('heaterCooler accessory', () => {
     expect(f).toBeGreaterThanOrEqual(55)
   })
 
-  it('reports active=0 when targetLevel is 0 (powered off)', () => {
-    const svc = buildHeaterCoolerService('right', fakeMonitor as DacMonitor)
-    const value = svc.getCharacteristic(Characteristic.Active).value
-    expect(value === 0 || value === null).toBe(true)
+  it('reports active=0 when targetLevel is 0 (powered off)', async () => {
+    const { service } = buildHeaterCoolerService('right', fakeMonitor as DacMonitor)
+    const handler = service.getCharacteristic(Characteristic.Active)
+    const value = await handler.handleGetRequest()
+    expect(value).toBe(0)
+  })
+
+  it('stop() unsubscribes the status listener', () => {
+    const off = vi.fn()
+    const onSpy = vi.fn().mockReturnThis()
+    const monitor = {
+      on: onSpy as never,
+      off: off as never,
+      getLastStatus: () => status,
+    }
+    const { stop } = buildHeaterCoolerService('left', monitor as unknown as DacMonitor)
+    stop()
+    expect(off).toHaveBeenCalledWith('status:updated', expect.any(Function))
   })
 })

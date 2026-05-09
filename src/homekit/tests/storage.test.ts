@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
@@ -12,6 +12,19 @@ import {
 } from '../storage'
 
 describe('homekit storage', () => {
+  // Each case starts with an empty storage dir. getStorageDir() caches on
+  // first call within the process, so wiping the directory contents (rather
+  // than re-pointing the module) is the only knob that survives across
+  // tests without monkey-patching the module exports.
+  beforeEach(() => {
+    const d = getStorageDir()
+    for (const name of readdirSync(d)) rmSync(join(d, name), { force: true })
+  })
+  afterEach(() => {
+    const d = getStorageDir()
+    for (const name of readdirSync(d)) rmSync(join(d, name), { force: true })
+  })
+
   it('creates a stable identity on first read and returns same on second', () => {
     const dir = getStorageDir()
     const file = join(dir, 'identity.json')

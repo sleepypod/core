@@ -19,15 +19,24 @@ export function buildPrimeSwitch(): PrimeSwitchAccessory {
   const service = new Service.Switch('Prime pod', 'prime')
   let baseline = getPrimeCompletedAt()
   let watchdog: ReturnType<typeof setTimeout> | null = null
+  // Tracks the perceived state. hap-nodejs reads onGet on every controller
+  // poll regardless of updateCharacteristic, so the handler must reflect the
+  // same state the polling loop is pushing — otherwise iOS sees the switch
+  // bounce back to off the next read.
+  let on = false
 
-  const setOn = (on: boolean): void => {
-    service.updateCharacteristic(Characteristic.On, on)
+  const setOn = (next: boolean): void => {
+    on = next
+    service.updateCharacteristic(Characteristic.On, next)
   }
 
   service.getCharacteristic(Characteristic.On)
-    .onGet(() => false)
+    .onGet(() => on)
     .onSet(async (value) => {
-      if (Number(value) !== 1) return
+      if (Number(value) !== 1) {
+        setOn(false)
+        return
+      }
       try {
         baseline = getPrimeCompletedAt()
         await getSharedHardwareClient().startPriming()

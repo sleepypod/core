@@ -11,6 +11,18 @@ import { getStatus, regenerate, startBridge, stopBridge, unpairAll } from './bri
 import type { BridgeStatus } from './bridge'
 
 let started = false
+// Serialize lifecycle transitions so concurrent enable()/disable()/unpair()/
+// regenerate() callers (settings mutation racing with status poll, retries,
+// instrumentation hot-reload) cannot double-start the bridge and collide on
+// port 51827. All public lifecycle entries route through `serialize`.
+let inflight: Promise<void> | null = null
+
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = inflight ?? Promise.resolve()
+  const next = prev.then(fn, fn)
+  inflight = next.then(() => undefined, () => undefined)
+  return next
+}
 
 export async function startHomeKitIfEnabled(): Promise<void> {
   const enabled = await readEnabled()
@@ -18,17 +30,21 @@ export async function startHomeKitIfEnabled(): Promise<void> {
   await enable()
 }
 
-export async function enable(): Promise<void> {
-  if (started) return
-  const monitor = await getDacMonitor()
-  await startBridge(monitor)
-  started = true
+export function enable(): Promise<void> {
+  return serialize(async () => {
+    if (started) return
+    const monitor = await getDacMonitor()
+    await startBridge(monitor)
+    started = true
+  })
 }
 
-export async function disable(): Promise<void> {
-  if (!started) return
-  await stopBridge()
-  started = false
+export function disable(): Promise<void> {
+  return serialize(async () => {
+    if (!started) return
+    await stopBridge()
+    started = false
+  })
 }
 
 export async function shutdownHomeKit(): Promise<void> {
@@ -39,22 +55,29 @@ export function status(): BridgeStatus {
   return getStatus()
 }
 
-export async function unpair(): Promise<void> {
-  await unpairAll()
-  started = false
-  // Re-publish if user still wants HomeKit on
-  if (await readEnabled()) {
-    await enable()
-  }
+export function unpair(): Promise<void> {
+  return serialize(async () => {
+    await unpairAll()
+    started = false
+    if (await readEnabled()) {
+      const monitor = await getDacMonitor()
+      await startBridge(monitor)
+      started = true
+    }
+  })
 }
 
-export async function regeneratePairing(): Promise<BridgeStatus> {
-  await regenerate()
-  started = false
-  if (await readEnabled()) {
-    await enable()
-  }
-  return getStatus()
+export function regeneratePairing(): Promise<BridgeStatus> {
+  return serialize(async () => {
+    await regenerate()
+    started = false
+    if (await readEnabled()) {
+      const monitor = await getDacMonitor()
+      await startBridge(monitor)
+      started = true
+    }
+    return getStatus()
+  })
 }
 
 async function readEnabled(): Promise<boolean> {

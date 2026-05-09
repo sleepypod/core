@@ -1,6 +1,7 @@
 'use client'
 
 import { Home } from 'lucide-react'
+import { useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { Toggle } from './Toggle'
 
@@ -11,15 +12,24 @@ import { Toggle } from './Toggle'
  */
 export function HomeKitConfig() {
   const utils = trpc.useUtils()
+  const [error, setError] = useState<string | null>(null)
   const { data, isLoading } = trpc.homekit.getStatus.useQuery({}, {
     refetchInterval: 5_000,
   })
 
   const setEnabled = trpc.homekit.setEnabled.useMutation({
-    onSuccess: () => utils.homekit.getStatus.invalidate(),
+    onSuccess: () => {
+      setError(null)
+      utils.homekit.getStatus.invalidate()
+    },
+    onError: e => setError(e.message),
   })
   const unpair = trpc.homekit.unpair.useMutation({
-    onSuccess: () => utils.homekit.getStatus.invalidate(),
+    onSuccess: () => {
+      setError(null)
+      utils.homekit.getStatus.invalidate()
+    },
+    onError: e => setError(e.message),
   })
 
   if (isLoading || !data) {
@@ -44,6 +54,12 @@ export function HomeKitConfig() {
       <p className="mt-2 text-xs text-zinc-500">
         Control the pod from Apple Home. Local-only — no Apple servers.
       </p>
+
+      {error && (
+        <p className="mt-2 rounded-lg bg-red-950 px-3 py-2 text-xs text-red-300">
+          {error}
+        </p>
+      )}
 
       {data.enabled && data.running && (
         <div className="mt-4 space-y-3">

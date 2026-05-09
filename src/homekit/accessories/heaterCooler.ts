@@ -21,7 +21,12 @@ const MIN_C = f2c(MIN_TEMP)
 const MAX_C = f2c(MAX_TEMP)
 const NEUTRAL_C = f2c(82.5)
 
-export function buildHeaterCoolerService(side: Side, monitor: DacMonitor): Service {
+export interface HeaterCoolerAccessory {
+  service: Service
+  stop: () => void
+}
+
+export function buildHeaterCoolerService(side: Side, monitor: DacMonitor): HeaterCoolerAccessory {
   const service = new Service.HeaterCooler(`Bed ${side}`, side)
 
   service.getCharacteristic(Characteristic.CurrentTemperature)
@@ -62,15 +67,21 @@ export function buildHeaterCoolerService(side: Side, monitor: DacMonitor): Servi
   service.getCharacteristic(Characteristic.TemperatureDisplayUnits)
     .onGet(() => 0) // 0=C, 1=F — HAP requires C semantics regardless
 
-  monitor.on('status:updated', (status) => {
+  const onStatus = (status: DeviceStatus): void => {
     service.updateCharacteristic(Characteristic.CurrentTemperature, sideC(status, side, 'current'))
     service.updateCharacteristic(Characteristic.CoolingThresholdTemperature, sideC(status, side, 'target'))
     service.updateCharacteristic(Characteristic.HeatingThresholdTemperature, sideC(status, side, 'target'))
     service.updateCharacteristic(Characteristic.Active, isPoweredFromStatus(status, side) ? 1 : 0)
     service.updateCharacteristic(Characteristic.CurrentHeaterCoolerState, deriveStateFromStatus(status, side))
-  })
+  }
+  monitor.on('status:updated', onStatus)
 
-  return service
+  return {
+    service,
+    stop: () => {
+      monitor.off('status:updated', onStatus)
+    },
+  }
 }
 
 function clampF(f: number): number {

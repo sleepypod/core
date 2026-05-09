@@ -60,13 +60,17 @@ export const homekitRouter = router({
     .output(statusSchema)
     .mutation(async ({ input }) => {
       try {
+        // Apply the lifecycle change first; only persist the DB flag once
+        // the bridge is in the requested state. A failure here (port 51827
+        // bound, mDNS error, dac monitor not ready) leaves DB and runtime
+        // in agreement so a retry can re-attempt cleanly.
+        if (input.enabled) await enableHomeKit()
+        else await disableHomeKit()
+
         await db
           .update(deviceSettings)
           .set({ homekitEnabled: input.enabled, updatedAt: new Date() })
           .where(eq(deviceSettings.id, 1))
-
-        if (input.enabled) await enableHomeKit()
-        else await disableHomeKit()
 
         return await buildStatus()
       }
