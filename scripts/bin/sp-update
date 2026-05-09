@@ -79,13 +79,16 @@ cleanup() {
         ! -name '.env' \
         -exec rm -rf {} +
       cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
-      # Restore CLI tools from rolled-back code
-      if [ -d "$INSTALL_DIR/scripts/bin" ]; then
-        for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
-          cp "$tool" /usr/local/bin/
-          chmod +x "/usr/local/bin/$(basename "$tool")"
-        done
-      fi
+      # Intentionally NOT restoring sp-* tools to /usr/local/bin/.
+      # They were already swapped in atomically (see install(1) below)
+      # before the failure; restoring the pre-update copies can re-pin a
+      # pod on a broken sp-update and create an infinite loop. Concretely:
+      # pre-#494 sp-update used `cp` for self-replace, which truncated the
+      # running file's inode mid-run and made bash parse garbage from the
+      # new bytes (the "/usr/local/bin/sp-update: line N: ...: command not
+      # found" symptom). #494 fixed that with install(1), but if rollback
+      # then restored the pre-#494 copy, the next run would corrupt itself
+      # the same way. App code rolls back; sp-* tools roll forward.
       echo "Previous code restored."
     fi
     if [ -n "${DB_BACKUP:-}" ] && [ -f "$DB_BACKUP" ]; then
