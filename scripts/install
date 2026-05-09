@@ -362,6 +362,28 @@ if id dac &>/dev/null; then
   usermod -aG dac sleepypod
 fi
 
+# Allow the sleepypod service user to run sp-update as root without a
+# password. The next-server runs as User=sleepypod and exposes a tRPC
+# system.triggerUpdate mutation that spawns sp-update; without this
+# rule the spawn dies on the first iptables / systemctl call inside the
+# script and the API silently does nothing. Branch input is regex-
+# validated at the tRPC layer (^[a-zA-Z0-9._\-/]+$) and sp-update only
+# uses it as a tag/path component, so the privilege scope is narrow.
+SUDOERS_FILE="/etc/sudoers.d/sleepypod-update"
+SUDOERS_CONTENT="sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update"
+SUDOERS_TMP=$(mktemp)
+echo "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
+chmod 0440 "$SUDOERS_TMP"
+if visudo -c -q -f "$SUDOERS_TMP"; then
+  install -m 0440 -o root -g root "$SUDOERS_TMP" "$SUDOERS_FILE"
+  echo "Installed $SUDOERS_FILE"
+else
+  echo "Error: sudoers fragment failed visudo validation — refusing to install" >&2
+  rm -f "$SUDOERS_TMP"
+  exit 1
+fi
+rm -f "$SUDOERS_TMP"
+
 mkdir -p "$DATA_DIR"
 chown root:sleepypod "$DATA_DIR"
 chmod 2770 "$DATA_DIR"

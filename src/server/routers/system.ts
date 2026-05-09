@@ -284,9 +284,22 @@ export const systemRouter = router({
       try {
         const { spawn } = await import('node:child_process')
 
-        const child = spawn('/usr/local/bin/sp-update', [branch], {
+        // sp-update needs root for iptables / systemctl / writes into
+        // /usr/local/bin. The systemd unit drops next-server to
+        // User=sleepypod, so we sudo via a NOPASSWD rule installed by
+        // scripts/install (/etc/sudoers.d/sleepypod-update). `-n` makes
+        // sudo fail loudly rather than prompt when the rule is absent.
+        const child = spawn('sudo', ['-n', '/usr/local/bin/sp-update', branch], {
           detached: true,
           stdio: 'ignore',
+        })
+        // Without an `error` listener Node throws when spawn fails
+        // (e.g., sudo missing) and the unhandled rejection takes down
+        // the worker. We can't surface the failure to the caller — the
+        // mutation has already returned — but we can at least keep the
+        // process alive and log it for journalctl-side debugging.
+        child.on('error', (e) => {
+          console.error('[system.triggerUpdate] sp-update spawn failed:', e)
         })
         child.unref()
 
