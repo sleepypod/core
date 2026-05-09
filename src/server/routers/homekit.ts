@@ -12,6 +12,7 @@ import {
   status as homekitStatus,
   unpair,
 } from '@/src/homekit'
+import { loadOrCreateIdentity, probeSeedSources } from '@/src/homekit/storage'
 
 const statusSchema = z.object({
   enabled: z.boolean(),
@@ -94,5 +95,43 @@ export const homekitRouter = router({
     .mutation(async () => {
       await regeneratePairing()
       return await buildStatus()
+    }),
+
+  // Diagnostic — reports which seed source the identity-derivation chain
+  // (ADR 0020) would pick on this pod, plus the current identity's
+  // recorded source/rotation. No seed values are exposed.
+  seedProbe: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/homekit/seed-probe', protect: false, tags: ['HomeKit'] } })
+    .input(z.object({}))
+    .output(z.object({
+      resolved: z.string(),
+      sources: z.array(z.object({
+        source: z.string(),
+        path: z.string().nullable(),
+        present: z.boolean(),
+        readable: z.boolean(),
+        looksDegenerate: z.boolean(),
+      })),
+      identity: z.object({
+        derivedFrom: z.string().nullable(),
+        rotation: z.number().nullable(),
+        derivedAt: z.number().nullable(),
+        legacy: z.boolean(),
+      }),
+    }))
+    .query(() => {
+      const probe = probeSeedSources()
+      const id = loadOrCreateIdentity()
+      const legacy = id.derivedFrom === undefined
+      return {
+        resolved: probe.resolved,
+        sources: probe.sources,
+        identity: {
+          derivedFrom: id.derivedFrom ?? null,
+          rotation: typeof id.rotation === 'number' ? id.rotation : null,
+          derivedAt: typeof id.derivedAt === 'number' ? id.derivedAt : null,
+          legacy,
+        },
+      }
     }),
 })
