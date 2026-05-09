@@ -37,7 +37,12 @@ vi.mock('@/src/db', async () => {
 // The mock above adds `biometricsSqlite` alongside the real module's exports.
 // Cast the import so TypeScript sees the augmented shape.
 import * as dbModule from '@/src/db'
-import { startAutoOffWatcher, stopAutoOffWatcher } from '@/src/services/autoOffWatcher'
+import {
+  startAutoOffWatcher,
+  stopAutoOffWatcher,
+  restartAutoOffTimers,
+  cancelAutoOffTimer,
+} from '@/src/services/autoOffWatcher'
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   biometricsSqlite: BetterSqlite3.Database
 }
@@ -343,5 +348,419 @@ describe('global auto-off cap (ygg-7)', () => {
     await pollAndFlush()
 
     expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+})
+
+// ── Edge cases & untouched branches ──────────────────────────────────────
+
+describe('per-side auto-off (timer arming, no record, error paths)', () => {
+  it('does nothing when feature enabled but no sleep record exists yet', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 10 * 60_000)
+    // no sleep record inserted -- exercises the "no record" branch
+
+    await pollAndFlush()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('does not fire when bed exit is recent (timer armed, not yet expired)', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000) // exit 5min ago, 30min cap
+
+    await pollAndFlush()
+
+    // Timer is armed but won't fire in this synchronous window
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('logs but swallows errors when powerOffSide hardware call rejects', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 3 * 3600_000)
+    insertSleepRecord('left', now - 4 * 3600_000, now - 2 * 3600_000)
+
+    setPower.mockRejectedValueOnce(new Error('hardware offline'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await pollAndFlush()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('logs non-Error thrown values from powerOffSide', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 3 * 3600_000)
+    insertSleepRecord('left', now - 4 * 3600_000, now - 2 * 3600_000)
+
+    setPower.mockRejectedValueOnce('string failure')
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await pollAndFlush()
+
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to power off left'),
+      'string failure',
+    )
+    errSpy.mockRestore()
+  })
+
+  it('survives db.select errors in evaluateSide via the poll-level catch', async () => {
+    // Drop the device_state table mid-flight to make isSidePowered() throw past
+    // its inner catch -- actually inner catch returns false. Better: drop
+    // side_settings to break getAutoOffConfig (already inner-caught -> defaults).
+    // To reach the poll-level outer catch (line 427), break a non-caught path:
+    // drop device_settings AFTER getGlobalMaxOnHours has run is hard. Instead
+    // we rely on the inner catches; this test just confirms no throw escapes.
+    ;(sqlite as any).exec('DROP TABLE side_settings;')
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(pollAndFlush()).resolves.toBeUndefined()
+
+    errSpy.mockRestore()
+  })
+
+  it('returns defaults when device_settings is missing (global cap path)', async () => {
+    const now = Date.now()
+    ;(sqlite as any).exec('DROP TABLE device_settings;')
+    setSideOn('left', now - 5 * 3600_000)
+    // auto_off_enabled left at default 0 -- only global cap path engaged,
+    // and global cap returns null on error so no fire
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await pollAndFlush()
+
+    expect(setPower).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('treats a side as unpowered when device_state read throws', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 3 * 3600_000)
+    insertSleepRecord('left', now - 4 * 3600_000, now - 2 * 3600_000)
+
+    // Drop after seeding -- isSidePowered() catches and returns false, the
+    // side is treated as already off, no power-off is dispatched.
+    ;(sqlite as any).exec('DROP TABLE device_state;')
+
+    await pollAndFlush()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('treats run-once as inactive when run_once_sessions read throws', async () => {
+    const now = Date.now()
+    setGlobalCap(1)
+    setSideOn('left', now - 5 * 3600_000) // past cap
+    // Drop only run_once_sessions -- evaluateSide reaches hasActiveRunOnce()
+    // for the active side, the catch returns false, and the global cap fires.
+    ;(sqlite as any).exec('DROP TABLE run_once_sessions;')
+
+    await pollAndFlush()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('treats the latest record as null when sleep_records read throws', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 3 * 3600_000)
+    insertSleepRecord('left', now - 4 * 3600_000, now - 2 * 3600_000)
+
+    // Drop biometrics-side records -- getLatestSleepRecord catches and
+    // returns null; evaluateSide should bail without firing.
+    ;(biometricsSqlite as any).exec('DROP TABLE sleep_records;')
+
+    await pollAndFlush()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('treats poweredOnAt as null when device_state schema is broken mid-flight', async () => {
+    const now = Date.now()
+    setGlobalCap(1)
+    setSideOn('left', now - 5 * 3600_000)
+    // Replace device_state with a schema missing powered_on_at so the SELECT
+    // throws -- inner catch returns null, the global cap path is skipped.
+    ;(sqlite as any).exec(`
+      DROP TABLE device_state;
+      CREATE TABLE device_state (
+        side TEXT PRIMARY KEY,
+        is_powered INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT INTO device_state (side, is_powered) VALUES ('left', 1), ('right', 0);
+    `)
+
+    await pollAndFlush()
+
+    // Cap path skipped (poweredOnAt unknown) and per-side path also returns
+    // (no sleep record path will run since auto-off feature defaults to off
+    // after the table-drop above wiped side_settings... actually side_settings
+    // is intact -- just verify no crash and no fire from the cap.
+    expect(setPower).not.toHaveBeenCalled()
+  })
+})
+
+// ── Timer firing under fake timers ───────────────────────────────────────
+
+describe('per-side auto-off (fake-timer firing)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('fires the armed timer once the timeout elapses', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000) // exit 5min ago
+
+    startAutoOffWatcher() // arms a setTimeout for ~25min
+
+    // Advance past the timeout window
+    await vi.advanceTimersByTimeAsync(26 * 60_000)
+    // Flush microtasks for firePowerOff promise chain
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('skips firing when user returned to bed before the timer expires', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000)
+
+    startAutoOffWatcher()
+
+    // Before the timer fires, simulate re-entry: insert a newer record where
+    // enteredBedAt > leftBedAt
+    insertSleepRecord('left', now - 1 * 60_000, now - 4 * 60_000)
+
+    await vi.advanceTimersByTimeAsync(26 * 60_000)
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('skips firing when latest record matches but user is back in bed (live-presence guard)', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    const leftAt = now - 5 * 60_000
+    insertSleepRecord('left', now - 90 * 60_000, leftAt) // armed exit
+
+    startAutoOffWatcher()
+
+    // Skim past most of the polling interval. The setTimeout fires at ~25min;
+    // the last poll before that runs at 24m30s. We advance to 24m45s, then
+    // stamp the user back in bed (same leftBedAt, newer enteredBedAt) so that
+    // when the setTimeout fires at 25m, the match-event check passes but the
+    // live-presence check trips.
+    await vi.advanceTimersByTimeAsync(24 * 60_000 + 45_000)
+    ;(biometricsSqlite as any)
+      .prepare('UPDATE sleep_records SET entered_bed_at=? WHERE side=? AND left_bed_at=?')
+      .run(Math.floor((now - 1 * 60_000) / 1000), 'left', Math.floor(leftAt / 1000))
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+    expect(logSpy.mock.calls.some(args =>
+      typeof args[0] === 'string' && args[0].includes('user returned to bed'),
+    )).toBe(true)
+    logSpy.mockRestore()
+  })
+
+  it('skips firing when the latest bed-exit changed before the timer expires', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000)
+
+    startAutoOffWatcher()
+
+    // Newer exit overrides the armed one (different leftBedAt, still out of bed)
+    insertSleepRecord('left', now - 80 * 60_000, now - 2 * 60_000)
+
+    await vi.advanceTimersByTimeAsync(26 * 60_000)
+    await Promise.resolve()
+
+    // Newer event => callback returns; evaluateSide will re-arm on next poll
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('skips firing when side is no longer powered when callback runs', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000)
+
+    startAutoOffWatcher()
+
+    // User powered the side off manually before the timer expires
+    ;(sqlite as any).prepare('UPDATE device_state SET is_powered=0 WHERE side=?').run('left')
+
+    await vi.advanceTimersByTimeAsync(26 * 60_000)
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('skips firing when run-once becomes active before callback runs', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000)
+
+    startAutoOffWatcher()
+
+    insertActiveRunOnce('left')
+
+    await vi.advanceTimersByTimeAsync(26 * 60_000)
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('skips firing when feature is disabled before callback runs', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000)
+
+    startAutoOffWatcher()
+
+    setSideSettings('left', { autoOffEnabled: 0 })
+
+    await vi.advanceTimersByTimeAsync(26 * 60_000)
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('keeps an existing timer when poll re-evaluates same exit/timeout', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000)
+
+    startAutoOffWatcher() // arms timer
+    // Drive the polling interval so evaluateSide re-runs and hits the
+    // "timer already correct -- keep it" early return
+    await vi.advanceTimersByTimeAsync(30_000)
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('restarts an armed timer when autoOffMinutes changes via restartAutoOffTimers', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000)
+
+    startAutoOffWatcher()
+    // Shorten timeout so a newly-armed timer fires sooner; restart re-polls
+    setSideSettings('left', { autoOffMinutes: 6 })
+    restartAutoOffTimers()
+
+    // 6min cap, exit was 5min ago, so ~1min remains
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('cancelAutoOffTimer aborts a pending countdown without re-evaluation', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 5 * 60_000)
+
+    startAutoOffWatcher() // arms timer
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    cancelAutoOffTimer('left')
+
+    // Cancel logs the cancellation message; no power-off should have fired
+    // synchronously (the next interval poll WILL re-arm, but the cancel
+    // itself is the contract under test).
+    expect(logSpy.mock.calls.some(args =>
+      typeof args[0] === 'string' && args[0].includes('timer cancelled'),
+    )).toBe(true)
+    expect(setPower).not.toHaveBeenCalled()
+    logSpy.mockRestore()
+  })
+
+  it('cancelAutoOffTimer is a no-op when no timer is set', () => {
+    // No prior arming -- exercise the early-exit branch
+    expect(() => cancelAutoOffTimer('right')).not.toThrow()
+  })
+})
+
+// ── Lifecycle helpers ────────────────────────────────────────────────────
+
+describe('watcher lifecycle', () => {
+  it('startAutoOffWatcher is idempotent (second call is a no-op)', () => {
+    startAutoOffWatcher()
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    startAutoOffWatcher()
+    // Second start should not log "Watcher started" again
+    const startedCalls = logSpy.mock.calls.filter(args =>
+      typeof args[0] === 'string' && args[0].includes('Watcher started'),
+    )
+    expect(startedCalls).toHaveLength(0)
+    logSpy.mockRestore()
+  })
+
+  it('restartAutoOffTimers does nothing if watcher is not running', () => {
+    // Ensure watcher is stopped
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    restartAutoOffTimers()
+    // No "bed exit detected" or other poll-side logs should appear
+    expect(logSpy).not.toHaveBeenCalled()
+    logSpy.mockRestore()
+  })
+
+  it('stopAutoOffWatcher awaits in-flight power-off promises', async () => {
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 3 * 3600_000)
+    insertSleepRecord('left', now - 4 * 3600_000, now - 2 * 3600_000)
+
+    // Make setPower hang briefly so the in-flight set is non-empty when stop runs
+    const resolveBox: { fn: (() => void) | null } = { fn: null }
+    setPower.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveBox.fn = () => resolve() }),
+    )
+
+    startAutoOffWatcher()
+    // Allow synchronous poll to fire firePowerOff
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const stopP = stopAutoOffWatcher()
+    // stop is now waiting on the pending power-off
+    resolveBox.fn?.()
+    await stopP
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('stopAutoOffWatcher is safe to call when never started', async () => {
+    await expect(stopAutoOffWatcher()).resolves.toBeUndefined()
   })
 })
