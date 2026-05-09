@@ -12,33 +12,113 @@ import os from 'node:os'
 // Hoisted state shared with the @/src/db mock factory — lets each test stub
 // the device_settings row that resolveConfig will read.
 const dbMock = vi.hoisted(() => {
-  const state: { row: any | undefined, throwOnSelect: boolean } = {
+  const state: { row: any | undefined, throwOnSelect: boolean, biometricsRow: any | null, deviceStateRows: any[] } = {
     row: undefined,
     throwOnSelect: false,
+    biometricsRow: null,
+    deviceStateRows: [],
   }
+  // The bridge calls db.select() three ways:
+  //   1. .from(deviceSettings).limit(1)         — resolveConfig
+  //   2. .from(deviceState)                     — publishState (iterable of rows)
+  //   3. .from(vitals).where(...).orderBy(...).limit(1) — biometrics fetch
+  // The mock returns a thenable from .from() so case 2 (await of the from()
+  // result) iterates state.deviceStateRows; cases 1/3 chain through.
   const select = vi.fn(() => ({
-    from: vi.fn(() => ({
-      limit: vi.fn(async () => {
-        if (state.throwOnSelect) throw new Error('boom')
-        return state.row !== undefined ? [state.row] : []
-      }),
-      where: vi.fn(() => ({
-        orderBy: vi.fn(() => ({
-          limit: vi.fn(async () => []),
+    from: vi.fn(() => {
+      const fromObj: any = {
+        limit: vi.fn(async () => {
+          if (state.throwOnSelect) throw new Error('boom')
+          return state.row !== undefined ? [state.row] : []
+        }),
+        where: vi.fn(() => ({
+          orderBy: vi.fn(() => ({
+            limit: vi.fn(async () => state.biometricsRow ? [state.biometricsRow] : []),
+          })),
         })),
-      })),
-    })),
+        // Make `.from(deviceState)` itself awaitable so `for (const row of
+        // sides)` after `await db.select().from(deviceState)` iterates rows.
+        then: (resolve: (rows: any[]) => any) => resolve(state.deviceStateRows),
+      }
+      return fromObj
+    }),
   }))
   return { state, select }
 })
 
-// The bridge imports `mqtt` at module load. The package is provided by the
-// frontend agent's PR (sleepypod-core-28); on this branch it isn't installed
-// yet. Mocking the import keeps the bridge loadable and guarantees no real
-// connect() ever runs during tests.
+// Fake mqtt client — minimal EventEmitter + spies so lifecycle tests can
+// drive 'connect' / 'message' / 'reconnect' / 'close' / 'error' handlers and
+// inspect publish / subscribe arguments.
+type Listener = (...args: any[]) => void
+interface FakeClient {
+  connected: boolean
+  handlers: Map<string, Listener[]>
+  on: ReturnType<typeof vi.fn>
+  once: ReturnType<typeof vi.fn>
+  publish: ReturnType<typeof vi.fn>
+  subscribe: ReturnType<typeof vi.fn>
+  end: ReturnType<typeof vi.fn>
+  emit: (event: string, ...args: any[]) => void
+}
+
+function createFakeClient(): FakeClient {
+  const handlers = new Map<string, Listener[]>()
+  const register = (event: string, fn: Listener) => {
+    const list = handlers.get(event) ?? []
+    list.push(fn)
+    handlers.set(event, list)
+  }
+  const client: FakeClient = {
+    connected: false,
+    handlers,
+    on: vi.fn((event: string, fn: Listener) => {
+      register(event, fn)
+      return client
+    }),
+    once: vi.fn((event: string, fn: Listener) => {
+      register(event, fn)
+      return client
+    }),
+    publish: vi.fn((_t: string, _payload: any, _opts: any, cb?: (err?: Error | null) => void) => {
+      if (cb) cb(null)
+      return client
+    }),
+    subscribe: vi.fn((_topic: string, _opts: any, cb?: (err: Error | null) => void) => {
+      if (cb) cb(null)
+      return client
+    }),
+    end: vi.fn((_force?: boolean, _opts?: any, cb?: () => void) => {
+      client.connected = false
+      if (typeof cb === 'function') cb()
+      return client
+    }),
+    emit: (event: string, ...args: any[]) => {
+      const list = handlers.get(event)
+      if (!list) return
+      for (const fn of list) fn(...args)
+    },
+  }
+  return client
+}
+
+// Hoisted mqtt mock — tests assign mqttMock.nextClient before triggering a
+// connect() so the bridge sees a controllable fake. throwOnConnect lets tests
+// exercise the synchronous-throw path in connect().
+const mqttMock = vi.hoisted(() => {
+  const state: { nextClient: any | null, throwOnConnect: Error | null } = {
+    nextClient: null,
+    throwOnConnect: null,
+  }
+  const connect = vi.fn(() => {
+    if (state.throwOnConnect) throw state.throwOnConnect
+    return state.nextClient
+  })
+  return { state, connect }
+})
+
 vi.mock('mqtt', () => ({
-  default: { connect: vi.fn() },
-  connect: vi.fn(),
+  default: { connect: mqttMock.connect },
+  connect: mqttMock.connect,
 }))
 
 vi.mock('@/src/db', () => ({
@@ -46,22 +126,51 @@ vi.mock('@/src/db', () => ({
   biometricsDb: { select: dbMock.select },
 }))
 
-// Stub the heavy app-router import — mqttBridge only needs createCaller({}) to
-// resolve at module load. None of these tests exercise command dispatch.
-vi.mock('@/src/server/routers/app', () => ({
-  appRouter: { createCaller: () => ({ device: {} }) },
+// Hoisted device caller mock — lifecycle tests assert that messages route to
+// the right tRPC procedure based on the topic verb.
+const deviceMock = vi.hoisted(() => ({
+  setTemperature: vi.fn(async () => undefined),
+  setPower: vi.fn(async () => undefined),
+  setAlarm: vi.fn(async () => undefined),
+  clearAlarm: vi.fn(async () => undefined),
+  startPriming: vi.fn(async () => undefined),
 }))
 
+// Stub the heavy app-router import — mqttBridge only needs createCaller({}) to
+// resolve at module load. Lifecycle tests below additionally exercise command
+// dispatch and so need real-looking spies.
+vi.mock('@/src/server/routers/app', () => ({
+  appRouter: { createCaller: () => ({ device: deviceMock }) },
+}))
+
+// Hoisted onServerFrame mock — lifecycle tests need to capture the frame
+// listener so they can assert frame-driven publishes.
+const piezoMock = vi.hoisted(() => {
+  const state: { listener: ((frame: any) => void) | null } = { listener: null }
+  const unsubscribe = vi.fn()
+  const onServerFrame = vi.fn((cb: (frame: any) => void) => {
+    state.listener = cb
+    return unsubscribe
+  })
+  return { state, onServerFrame, unsubscribe }
+})
+
 vi.mock('@/src/streaming/piezoStream', () => ({
-  onServerFrame: vi.fn(() => () => { /* unsubscribe */ }),
+  onServerFrame: piezoMock.onServerFrame,
+}))
+
+const dacMock = vi.hoisted(() => ({
+  getLastStatus: vi.fn<() => any>(() => null),
+  getDacMonitorIfRunning: vi.fn<() => any>(() => null),
 }))
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getDacMonitorIfRunning: vi.fn(() => null),
+  getDacMonitorIfRunning: dacMock.getDacMonitorIfRunning,
 }))
 
-const { __test__ } = await import('../mqttBridge')
-const { resolveConfig, slugify, deviceId, parsePayload } = __test__
+const bridgeModule = await import('../mqttBridge')
+const { __test__, getBridgeStatus, startMqttBridge, shutdownMqttBridge, testConnection } = bridgeModule
+const { resolveConfig, slugify, deviceId, parsePayload, state: bridgeState } = __test__
 
 const MQTT_ENV_KEYS = [
   'MQTT_ENABLED',
@@ -83,11 +192,59 @@ beforeEach(() => {
   clearMqttEnv()
   dbMock.state.row = undefined
   dbMock.state.throwOnSelect = false
+  dbMock.state.biometricsRow = null
+  dbMock.state.deviceStateRows = []
+  mqttMock.state.nextClient = null
+  mqttMock.state.throwOnConnect = null
+  mqttMock.connect.mockClear()
+  piezoMock.state.listener = null
+  piezoMock.onServerFrame.mockClear()
+  piezoMock.unsubscribe.mockClear()
+  dacMock.getDacMonitorIfRunning.mockReset().mockReturnValue(null)
+  dacMock.getLastStatus.mockReset().mockReturnValue(null)
+  deviceMock.setTemperature.mockClear()
+  deviceMock.setPower.mockClear()
+  deviceMock.setAlarm.mockClear()
+  deviceMock.clearAlarm.mockClear()
+  deviceMock.startPriming.mockClear()
 })
 
 afterEach(() => {
   clearMqttEnv()
 })
+
+// Drive the bridge through startMqttBridge() with a controllable fake client.
+// Returns the fake so the test can emit() events / inspect spies.
+async function startBridgeWithFake(opts: {
+  config?: Partial<{ enabled: boolean, url: string | null, topicPrefix: string, haDiscovery: boolean, tlsEnabled: boolean, tlsInsecure: boolean, username: string | null, password: string | null }>
+} = {}): Promise<FakeClient> {
+  // Reset bridge module state between tests since startMqttBridge() short-
+  // circuits when runState !== 'stopped'.
+  bridgeState.client = null
+  bridgeState.runState = 'stopped'
+  bridgeState.lastError = null
+  bridgeState.publishTimer = null
+  bridgeState.unsubscribeFrame = null
+  bridgeState.resolved = null
+  bridgeState.messagesPublished = 0
+  bridgeState.lastPublishAt = null
+
+  dbMock.state.row = {
+    mqttEnabled: opts.config?.enabled ?? true,
+    mqttUrl: opts.config?.url ?? 'mqtt://broker.local:1883',
+    mqttUsername: opts.config?.username ?? null,
+    mqttPassword: opts.config?.password ?? null,
+    mqttTopicPrefix: opts.config?.topicPrefix ?? 'sleepypod',
+    mqttHaDiscovery: opts.config?.haDiscovery ?? false,
+    mqttTlsEnabled: opts.config?.tlsEnabled ?? false,
+    mqttTlsInsecure: opts.config?.tlsInsecure ?? false,
+  }
+
+  const fake = createFakeClient()
+  mqttMock.state.nextClient = fake
+  await startMqttBridge()
+  return fake
+}
 
 describe('mqttBridge — resolveConfig source attribution', () => {
   it('returns "default" sources for every field when neither DB nor env is set', async () => {
@@ -379,5 +536,568 @@ describe('mqttBridge — parsePayload', () => {
     expect(parsePayload(Buffer.from('42'))).toEqual({})
     expect(parsePayload(Buffer.from('true'))).toEqual({})
     expect(parsePayload(Buffer.from('null'))).toEqual({})
+  })
+})
+
+describe('mqttBridge — getBridgeStatus', () => {
+  it('reports stopped state and null fields when the bridge has never started', () => {
+    bridgeState.client = null
+    bridgeState.runState = 'stopped'
+    bridgeState.lastError = null
+    bridgeState.resolved = null
+    bridgeState.messagesPublished = 0
+    bridgeState.lastPublishAt = null
+
+    const status = getBridgeStatus()
+
+    expect(status.runState).toBe('stopped')
+    expect(status.connected).toBe(false)
+    expect(status.lastError).toBeNull()
+    expect(status.topicPrefix).toBeNull()
+    expect(status.messagesPublished).toBe(0)
+    expect(status.lastPublishAt).toBeNull()
+    expect(typeof status.deviceId).toBe('string')
+  })
+
+  it('reflects connected client, error, and publish counters', () => {
+    bridgeState.client = { connected: true } as any
+    bridgeState.runState = 'connected'
+    bridgeState.lastError = 'prior error'
+    bridgeState.resolved = {
+      enabled: true,
+      url: 'mqtt://x',
+      username: null,
+      password: null,
+      topicPrefix: 'custom',
+      haDiscovery: true,
+      tlsEnabled: false,
+      tlsInsecure: false,
+    }
+    const ts = new Date('2026-01-02T03:04:05Z')
+    bridgeState.messagesPublished = 7
+    bridgeState.lastPublishAt = ts
+
+    const status = getBridgeStatus()
+
+    expect(status.runState).toBe('connected')
+    expect(status.connected).toBe(true)
+    expect(status.lastError).toBe('prior error')
+    expect(status.topicPrefix).toBe('custom')
+    expect(status.messagesPublished).toBe(7)
+    expect(status.lastPublishAt).toBe(ts.toISOString())
+
+    // Reset so subsequent tests start clean.
+    bridgeState.client = null
+    bridgeState.runState = 'stopped'
+    bridgeState.lastError = null
+    bridgeState.resolved = null
+    bridgeState.messagesPublished = 0
+    bridgeState.lastPublishAt = null
+  })
+})
+
+describe('mqttBridge — startMqttBridge early exits', () => {
+  it('no-ops when the bridge is already past stopped state', async () => {
+    bridgeState.runState = 'connected'
+    await startMqttBridge()
+    expect(mqttMock.connect).not.toHaveBeenCalled()
+    bridgeState.runState = 'stopped'
+  })
+
+  it('logs and stays stopped when config is disabled', async () => {
+    bridgeState.runState = 'stopped'
+    bridgeState.client = null
+    dbMock.state.row = { mqttEnabled: false, mqttUrl: 'mqtt://x' }
+
+    await startMqttBridge()
+
+    expect(mqttMock.connect).not.toHaveBeenCalled()
+    expect(bridgeState.runState).toBe('stopped')
+  })
+
+  it('records an errored state when enabled but URL is missing', async () => {
+    bridgeState.runState = 'stopped'
+    bridgeState.client = null
+    dbMock.state.row = { mqttEnabled: true, mqttUrl: null }
+
+    await startMqttBridge()
+
+    expect(mqttMock.connect).not.toHaveBeenCalled()
+    expect(bridgeState.runState).toBe('errored')
+    expect(bridgeState.lastError).toContain('no broker URL')
+
+    // Reset for downstream tests — startMqttBridge guards on stopped state.
+    bridgeState.runState = 'stopped'
+    bridgeState.lastError = null
+  })
+})
+
+describe('mqttBridge — startMqttBridge connect flow', () => {
+  it('passes username/password and TLS-insecure when configured', async () => {
+    const fake = await startBridgeWithFake({
+      config: {
+        url: 'mqtts://secure:8883',
+        username: 'u',
+        password: 'p',
+        tlsEnabled: true,
+        tlsInsecure: true,
+      },
+    })
+
+    expect(mqttMock.connect).toHaveBeenCalledTimes(1)
+    const [url, opts] = mqttMock.connect.mock.calls[0] as unknown as [string, any]
+    expect(url).toBe('mqtts://secure:8883')
+    expect(opts.username).toBe('u')
+    expect(opts.password).toBe('p')
+    expect(opts.rejectUnauthorized).toBe(false)
+    expect(opts.will?.topic).toContain('availability')
+    // Sanity: handlers wired before any event fires.
+    expect(fake.on).toHaveBeenCalledWith('connect', expect.any(Function))
+    expect(fake.on).toHaveBeenCalledWith('reconnect', expect.any(Function))
+    expect(fake.on).toHaveBeenCalledWith('error', expect.any(Function))
+    expect(fake.on).toHaveBeenCalledWith('close', expect.any(Function))
+    expect(fake.on).toHaveBeenCalledWith('message', expect.any(Function))
+
+    await shutdownMqttBridge()
+  })
+
+  it('omits rejectUnauthorized when tlsEnabled but tlsInsecure is false', async () => {
+    await startBridgeWithFake({ config: { tlsEnabled: true, tlsInsecure: false } })
+
+    const [, opts] = mqttMock.connect.mock.calls[0] as unknown as [string, any]
+    expect(opts.rejectUnauthorized).toBeUndefined()
+
+    await shutdownMqttBridge()
+  })
+
+  it('publishes availability + HA discovery + subscribes on connect', async () => {
+    const fake = await startBridgeWithFake({ config: { haDiscovery: true } })
+    fake.connected = true
+    fake.emit('connect')
+
+    expect(bridgeState.runState).toBe('connected')
+    expect(bridgeState.lastError).toBeNull()
+
+    // First publish is availability=online retained.
+    expect(fake.publish).toHaveBeenCalledWith(
+      expect.stringContaining('/availability'),
+      'online',
+      expect.objectContaining({ retain: true }),
+      expect.any(Function),
+    )
+
+    // Subscription is to <prefix>/<deviceId>/cmd/+
+    expect(fake.subscribe).toHaveBeenCalledWith(
+      expect.stringMatching(/cmd\/\+$/),
+      { qos: 0 },
+      expect.any(Function),
+    )
+
+    // HA discovery publishes left/right climate + water_level + 6 biometric
+    // sensors. Don't pin the exact count, just confirm at least one HA topic
+    // landed.
+    const haPublishes = fake.publish.mock.calls.filter(([t]) => typeof t === 'string' && (t as string).startsWith('homeassistant/'))
+    expect(haPublishes.length).toBeGreaterThan(0)
+
+    await shutdownMqttBridge()
+  })
+
+  it('skips HA discovery when disabled in config', async () => {
+    const fake = await startBridgeWithFake({ config: { haDiscovery: false } })
+    fake.connected = true
+    fake.emit('connect')
+
+    const haPublishes = fake.publish.mock.calls.filter(([t]) => typeof t === 'string' && (t as string).startsWith('homeassistant/'))
+    expect(haPublishes.length).toBe(0)
+
+    await shutdownMqttBridge()
+  })
+
+  it('honours custom topic prefix when subscribing', async () => {
+    const fake = await startBridgeWithFake({ config: { topicPrefix: 'custom-prefix' } })
+    fake.connected = true
+    fake.emit('connect')
+
+    expect(fake.subscribe).toHaveBeenCalledWith(
+      expect.stringMatching(/^custom-prefix\/.+\/cmd\/\+$/),
+      { qos: 0 },
+      expect.any(Function),
+    )
+
+    await shutdownMqttBridge()
+  })
+
+  it('logs but does not throw when subscribe yields an error', async () => {
+    const fake = createFakeClient()
+    fake.subscribe = vi.fn((_t: string, _o: any, cb?: (err: Error | null) => void) => {
+      cb?.(new Error('sub failed'))
+      return fake
+    }) as any
+    mqttMock.state.nextClient = fake
+
+    bridgeState.client = null
+    bridgeState.runState = 'stopped'
+    bridgeState.resolved = null
+    dbMock.state.row = { mqttEnabled: true, mqttUrl: 'mqtt://x' }
+
+    await startMqttBridge()
+    fake.connected = true
+    fake.emit('connect')
+
+    // Bridge should remain connected; subscribe error is logged-and-swallowed.
+    expect(bridgeState.runState).toBe('connected')
+
+    await shutdownMqttBridge()
+  })
+
+  it('records reconnect/close/error transitions', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    expect(bridgeState.runState).toBe('connected')
+
+    fake.emit('reconnect')
+    expect(bridgeState.runState).toBe('reconnecting')
+
+    bridgeState.runState = 'connected'
+    fake.emit('close')
+    expect(bridgeState.runState).toBe('reconnecting')
+
+    fake.emit('error', new Error('socket gone'))
+    expect(bridgeState.lastError).toBe('socket gone')
+
+    await shutdownMqttBridge()
+  })
+})
+
+describe('mqttBridge — message dispatch', () => {
+  it('routes set-temperature payload to caller.device.setTemperature', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    const cmdTopic = `sleepypod/${deviceId()}/cmd/set-temperature`
+    fake.emit('message', cmdTopic, Buffer.from(JSON.stringify({ side: 'left', temperature: 70 })))
+
+    await new Promise(r => setTimeout(r, 0))
+    expect(deviceMock.setTemperature).toHaveBeenCalledWith({ side: 'left', temperature: 70 })
+
+    await shutdownMqttBridge()
+  })
+
+  it('routes set-power, set-alarm, clear-alarm, start-priming verbs', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    const id = deviceId()
+    fake.emit('message', `sleepypod/${id}/cmd/set-power`, Buffer.from(JSON.stringify({ side: 'left', powered: true })))
+    fake.emit('message', `sleepypod/${id}/cmd/set-alarm`, Buffer.from(JSON.stringify({ side: 'left' })))
+    fake.emit('message', `sleepypod/${id}/cmd/clear-alarm`, Buffer.from(JSON.stringify({ side: 'left' })))
+    fake.emit('message', `sleepypod/${id}/cmd/start-priming`, Buffer.from(''))
+
+    await new Promise(r => setTimeout(r, 0))
+    expect(deviceMock.setPower).toHaveBeenCalled()
+    expect(deviceMock.setAlarm).toHaveBeenCalled()
+    expect(deviceMock.clearAlarm).toHaveBeenCalled()
+    expect(deviceMock.startPriming).toHaveBeenCalledWith({})
+
+    await shutdownMqttBridge()
+  })
+
+  it('ignores topics outside the cmd/ prefix', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    fake.emit('message', `sleepypod/${deviceId()}/state/device-status`, Buffer.from('{}'))
+
+    await new Promise(r => setTimeout(r, 0))
+    expect(deviceMock.setTemperature).not.toHaveBeenCalled()
+    expect(deviceMock.setPower).not.toHaveBeenCalled()
+
+    await shutdownMqttBridge()
+  })
+
+  it('logs unknown verbs without throwing', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    fake.emit('message', `sleepypod/${deviceId()}/cmd/unknown-verb`, Buffer.from('{}'))
+
+    await new Promise(r => setTimeout(r, 0))
+    expect(deviceMock.setTemperature).not.toHaveBeenCalled()
+
+    await shutdownMqttBridge()
+  })
+
+  it('catches caller errors and logs without crashing the handler', async () => {
+    deviceMock.setTemperature.mockRejectedValueOnce(new Error('zod rejected'))
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    fake.emit('message', `sleepypod/${deviceId()}/cmd/set-temperature`, Buffer.from('{}'))
+    await new Promise(r => setTimeout(r, 0))
+
+    expect(deviceMock.setTemperature).toHaveBeenCalled()
+
+    await shutdownMqttBridge()
+  })
+})
+
+describe('mqttBridge — frame subscription', () => {
+  it('publishes deviceStatus frames as retained state', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    fake.publish.mockClear()
+
+    expect(piezoMock.state.listener).not.toBeNull()
+    piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { temp: 80 } })
+
+    expect(fake.publish).toHaveBeenCalledWith(
+      expect.stringContaining('/state/device-status'),
+      expect.any(String),
+      expect.objectContaining({ retain: true }),
+      expect.any(Function),
+    )
+
+    await shutdownMqttBridge()
+  })
+
+  it('ignores non-deviceStatus frame types', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    fake.publish.mockClear()
+
+    piezoMock.state.listener?.({ type: 'gesture' })
+
+    expect(fake.publish).not.toHaveBeenCalled()
+
+    await shutdownMqttBridge()
+  })
+
+  it('skips frame publish when client disconnected', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    fake.publish.mockClear()
+
+    fake.connected = false
+    piezoMock.state.listener?.({ type: 'deviceStatus' })
+
+    expect(fake.publish).not.toHaveBeenCalled()
+
+    await shutdownMqttBridge()
+  })
+})
+
+describe('mqttBridge — publishState content', () => {
+  it('publishes device-status, water-level, climate, and biometrics when data is present', async () => {
+    dacMock.getDacMonitorIfRunning.mockReturnValue({
+      getLastStatus: () => ({
+        leftSide: { temp: 80 },
+        rightSide: { temp: 82 },
+        waterLevel: 'ok',
+        isPriming: false,
+        podVersion: '1.2.3',
+      }),
+    })
+    dbMock.state.deviceStateRows = [
+      {
+        side: 'left',
+        currentTemperature: 70,
+        targetTemperature: 72,
+        isPowered: true,
+        isAlarmVibrating: false,
+        waterLevel: 'ok',
+        lastUpdated: new Date('2026-01-01T00:00:00Z'),
+      },
+    ]
+    dbMock.state.biometricsRow = {
+      side: 'left',
+      timestamp: new Date('2026-01-01T00:00:00Z'),
+      heartRate: 60,
+      hrv: 50,
+      breathingRate: 14,
+    }
+
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    // Wait a tick for publishState() promise chain.
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const topics = fake.publish.mock.calls.map(([t]) => t as string)
+    expect(topics.some(t => t.endsWith('/state/device-status'))).toBe(true)
+    expect(topics.some(t => t.endsWith('/state/water-level'))).toBe(true)
+    expect(topics.some(t => t.endsWith('/state/left/climate'))).toBe(true)
+    expect(topics.some(t => t.endsWith('/state/biometrics/left'))).toBe(true)
+
+    await shutdownMqttBridge()
+  })
+})
+
+describe('mqttBridge — safePublish counters', () => {
+  it('increments messagesPublished and updates lastPublishAt on success', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    expect(bridgeState.messagesPublished).toBeGreaterThan(0)
+    expect(bridgeState.lastPublishAt).toBeInstanceOf(Date)
+
+    await shutdownMqttBridge()
+  })
+
+  it('logs and stops counting when publish callback yields an error', async () => {
+    const fake = createFakeClient()
+    fake.publish = vi.fn((_t: string, _p: any, _o: any, cb?: (err?: Error | null) => void) => {
+      cb?.(new Error('broker said no'))
+      return fake
+    }) as any
+    mqttMock.state.nextClient = fake
+    bridgeState.client = null
+    bridgeState.runState = 'stopped'
+    bridgeState.resolved = null
+    bridgeState.messagesPublished = 0
+    dbMock.state.row = { mqttEnabled: true, mqttUrl: 'mqtt://x' }
+
+    await startMqttBridge()
+    fake.connected = true
+    fake.emit('connect')
+
+    // Publishes were attempted but every callback errored — counter stays zero.
+    expect(fake.publish).toHaveBeenCalled()
+    expect(bridgeState.messagesPublished).toBe(0)
+
+    await shutdownMqttBridge()
+  })
+
+  it('swallows synchronous publish throws', async () => {
+    const fake = createFakeClient()
+    fake.publish = vi.fn(() => {
+      throw new Error('publish threw')
+    }) as any
+    mqttMock.state.nextClient = fake
+    bridgeState.client = null
+    bridgeState.runState = 'stopped'
+    bridgeState.resolved = null
+    bridgeState.messagesPublished = 0
+    dbMock.state.row = { mqttEnabled: true, mqttUrl: 'mqtt://x' }
+
+    await startMqttBridge()
+    fake.connected = true
+    expect(() => fake.emit('connect')).not.toThrow()
+
+    await shutdownMqttBridge()
+  })
+})
+
+describe('mqttBridge — shutdownMqttBridge', () => {
+  it('returns immediately when bridge was never started', async () => {
+    bridgeState.client = null
+    bridgeState.runState = 'stopped'
+    await expect(shutdownMqttBridge()).resolves.toBeUndefined()
+  })
+
+  it('clears the publish timer, unsubscribes the frame listener, and ends the client', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    expect(bridgeState.publishTimer).not.toBeNull()
+    expect(bridgeState.unsubscribeFrame).not.toBeNull()
+
+    await shutdownMqttBridge()
+
+    expect(bridgeState.publishTimer).toBeNull()
+    expect(bridgeState.unsubscribeFrame).toBeNull()
+    expect(bridgeState.runState).toBe('stopped')
+    expect(piezoMock.unsubscribe).toHaveBeenCalled()
+    expect(fake.end).toHaveBeenCalled()
+  })
+
+  it('publishes retained offline availability when shutting down a connected client', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    fake.publish.mockClear()
+
+    await shutdownMqttBridge()
+
+    const offlineCall = fake.publish.mock.calls.find(([t, payload]) =>
+      typeof t === 'string' && (t as string).endsWith('/availability') && payload === 'offline',
+    )
+    expect(offlineCall).toBeDefined()
+  })
+
+  it('swallows errors from the unsubscribe callback', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+
+    // Replace stored unsubscribe with one that throws.
+    bridgeState.unsubscribeFrame = () => {
+      throw new Error('boom')
+    }
+
+    await expect(shutdownMqttBridge()).resolves.toBeUndefined()
+  })
+})
+
+describe('mqttBridge — testConnection', () => {
+  it('resolves ok=true when connect emits "connect"', async () => {
+    const fake = createFakeClient()
+    mqttMock.state.nextClient = fake
+
+    const promise = testConnection({ url: 'mqtt://x' })
+    // Drain microtasks so the bridge has wired its once() handlers.
+    await new Promise(r => setTimeout(r, 0))
+    fake.emit('connect')
+
+    await expect(promise).resolves.toEqual({ ok: true })
+    expect(fake.end).toHaveBeenCalled()
+  })
+
+  it('resolves ok=false with the error message when connect errors', async () => {
+    const fake = createFakeClient()
+    mqttMock.state.nextClient = fake
+
+    const promise = testConnection({ url: 'mqtt://x' })
+    await new Promise(r => setTimeout(r, 0))
+    fake.emit('error', new Error('refused'))
+
+    await expect(promise).resolves.toEqual({ ok: false, error: 'refused' })
+  })
+
+  it('resolves ok=false with the thrown error when connect throws synchronously', async () => {
+    mqttMock.state.throwOnConnect = new Error('bad url')
+
+    const result = await testConnection({ url: 'not-a-url' })
+
+    expect(result).toEqual({ ok: false, error: 'bad url' })
+  })
+
+  it('passes username/password/TLS-insecure to mqtt.connect', async () => {
+    process.env.MQTT_TLS_INSECURE = 'true'
+    const fake = createFakeClient()
+    mqttMock.state.nextClient = fake
+
+    const promise = testConnection({ url: 'mqtts://x', username: 'u', password: 'p', tlsEnabled: true })
+    await new Promise(r => setTimeout(r, 0))
+    fake.emit('connect')
+    await promise
+
+    const [, opts] = mqttMock.connect.mock.calls.at(-1) as unknown as [string, any]
+    expect(opts.username).toBe('u')
+    expect(opts.password).toBe('p')
+    expect(opts.rejectUnauthorized).toBe(false)
+    expect(opts.reconnectPeriod).toBe(0)
   })
 })
