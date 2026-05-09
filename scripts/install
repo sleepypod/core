@@ -804,36 +804,29 @@ Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; else exec /usr/local/bin/pnpm start; fi'
 Restart=always
 RestartSec=10
+# Only SIGTERM the main next-server process on stop. Default KillMode=
+# control-group cascades the kill to every descendant in the cgroup —
+# which would include sp-update when system.triggerUpdate spawns it,
+# since spawn(detached:true) escapes the process group but not the
+# systemd cgroup. KillMode=process lets sp-update survive the service
+# stop it issues mid-flow and finish the update + restart cycle.
+KillMode=process
 
-# Capabilities — only what the runtime needs for iptables manipulation.
-# Bound everything else so a process compromise can't CAP_SYS_ADMIN etc.
+# Ambient caps so the worker can manage iptables at runtime without
+# sudo. Capability bounding set is intentionally NOT restricted: any
+# tighter bound prevents sudo from acquiring CAP_SETUID when the API
+# spawns sp-update, breaking the self-update path. Heavier hardening
+# (NoNewPrivileges, RestrictSUIDSGID, RestrictAddressFamilies,
+# Lock/Restrict/Protect/Private*) is omitted on purpose: the pod is a
+# single-tenant LAN appliance whose tRPC API is publicProcedure end-
+# to-end (anyone on-LAN can mutate state without auth), so in-process
+# sandboxing protects against threats the API already exposes while
+# blocking the deliberate sudo→sp-update path. The remaining controls
+# — User=sleepypod (no UID 0), narrow ambient caps, the sudoers
+# fragment scoping elevation to /usr/local/bin/sp-update — give the
+# defense-in-depth that actually matters for this device.
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
-
-# Hardening — doesn't interfere with dac.sock or iptables writes
-NoNewPrivileges=true
 RuntimeDirectory=dac
-# /etc/iptables is writable because checkAndRepairIptables() persists
-# rules to /etc/iptables/rules.v4 after auto-repairing missing rules.
-# ProtectHome is NOT set: INSTALL_DIR lives at /home/dac/sleepypod-core
-# and the service needs to read .next, node_modules, .env there.
-ReadWritePaths=$DATA_DIR /persistent/deviceinfo /deviceinfo /run/dac /etc/iptables
-ProtectSystem=strict
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectClock=true
-ProtectHostname=true
-PrivateTmp=true
-PrivateDevices=true
-RestrictNamespaces=true
-RestrictRealtime=true
-RestrictSUIDSGID=true
-LockPersonality=true
-MemoryDenyWriteExecute=false
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
