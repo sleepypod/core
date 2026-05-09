@@ -398,6 +398,31 @@ fix_db_permissions() {
 }
 fix_db_permissions
 
+# Ensure swap exists for memory-constrained pod builds. Pod 4 ships with
+# 2 GiB RAM and zero swap; Next.js 16 / Turbopack peaks around 750 MiB
+# during `next build`, which trips the firmware's earlyoom (configured to
+# fire at <10% available, ~200 MiB on this hardware) and kills the build
+# mid-flight (SIGTERM, exit 143). A 1 GiB swap file on /persistent keeps
+# the build out of earlyoom range without wearing the rootfs eMMC. Used
+# only during build / heavy memory bursts; not relied on at runtime.
+SWAPFILE="/persistent/swapfile"
+SWAP_SIZE_MB=1024
+if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
+  if [ ! -f "$SWAPFILE" ]; then
+    echo "Creating ${SWAP_SIZE_MB}M swap file at $SWAPFILE..."
+    fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" 2>/dev/null \
+      || dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_SIZE_MB" status=none
+    chmod 0600 "$SWAPFILE"
+    mkswap "$SWAPFILE" >/dev/null
+  fi
+  swapon "$SWAPFILE" || echo "Warning: swapon failed; on-pod builds may OOM" >&2
+fi
+SWAP_FSTAB_LINE="$SWAPFILE none swap sw,nofail 0 0"
+if ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
+  sed -i "\\| $SWAPFILE |d" /etc/fstab 2>/dev/null || true
+  echo "$SWAP_FSTAB_LINE" >> /etc/fstab
+fi
+
 # ============================================================================
 # Install Node.js via binary download (works on any Linux, no apt required)
 # ============================================================================
