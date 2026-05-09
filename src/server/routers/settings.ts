@@ -273,16 +273,13 @@ export const settingsRouter = router({
 
         // homekit.setEnabled is the canonical toggle, but updateDevice also
         // accepts homekitEnabled (REST/OpenAPI clients hit this route). Mirror
-        // the lifecycle call so DB and bridge don't diverge.
+        // the lifecycle call. Errors surface to the outer handler as TRPCError
+        // — silently swallowing here would leave callers with a false success
+        // and the DB ahead of the actual bridge state.
         if ('homekitEnabled' in input) {
-          try {
-            const homekit = await import('@/src/homekit')
-            if (input.homekitEnabled) await homekit.enable()
-            else await homekit.disable()
-          }
-          catch (e) {
-            console.error('homekit lifecycle toggle failed:', e)
-          }
+          const homekit = await import('@/src/homekit')
+          if (input.homekitEnabled) await homekit.enable()
+          else await homekit.disable()
         }
 
         return updated

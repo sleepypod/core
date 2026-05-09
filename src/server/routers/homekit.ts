@@ -12,7 +12,7 @@ import {
   status as homekitStatus,
   unpair,
 } from '@/src/homekit'
-import { loadOrCreateIdentity, probeSeedSources } from '@/src/homekit/storage'
+import { probeSeedSources, readIdentityIfPresent } from '@/src/homekit/storage'
 
 const statusSchema = z.object({
   enabled: z.boolean(),
@@ -125,15 +125,19 @@ export const homekitRouter = router({
     }))
     .query(() => {
       const probe = probeSeedSources()
-      const id = loadOrCreateIdentity()
-      const legacy = id.derivedFrom === undefined
+      // Read-only: do NOT create identity.json on a probe call. Operators may
+      // hit this endpoint before HomeKit is enabled to verify chain resolution
+      // ahead of time; creating identity here would lock in the username
+      // before the bridge ever publishes.
+      const id = readIdentityIfPresent()
+      const legacy = id !== null && id.derivedFrom === undefined
       return {
         resolved: probe.resolved,
         sources: probe.sources,
         identity: {
-          derivedFrom: id.derivedFrom ?? null,
-          rotation: typeof id.rotation === 'number' ? id.rotation : null,
-          derivedAt: typeof id.derivedAt === 'number' ? id.derivedAt : null,
+          derivedFrom: id?.derivedFrom ?? null,
+          rotation: typeof id?.rotation === 'number' ? id.rotation : null,
+          derivedAt: typeof id?.derivedAt === 'number' ? id.derivedAt : null,
           legacy,
         },
       }

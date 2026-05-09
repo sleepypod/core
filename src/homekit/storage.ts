@@ -208,6 +208,24 @@ function writeIdentity(identity: BridgeIdentity): void {
   writeFileSync(file, JSON.stringify(identity, null, 2), { mode: 0o600 })
 }
 
+/**
+ * Read identity.json without creating it. Returns null if the file is absent
+ * or unparseable. Use this for read-only diagnostics that must not have side
+ * effects on a fresh pod.
+ */
+export function readIdentityIfPresent(): BridgeIdentity | null {
+  const file = join(getStorageDir(), IDENTITY_FILE)
+  if (!existsSync(file)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<BridgeIdentity>
+    if (parsed.username && parsed.pincode && parsed.setupId) {
+      return parsed as BridgeIdentity
+    }
+  }
+  catch { /* unreadable — caller treats as absent */ }
+  return null
+}
+
 export function loadOrCreateIdentity(): BridgeIdentity {
   const dir = getStorageDir()
   const file = join(dir, IDENTITY_FILE)

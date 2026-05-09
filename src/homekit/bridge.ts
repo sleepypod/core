@@ -34,7 +34,7 @@ import { buildHeaterCoolerService } from './accessories/heaterCooler'
 import { buildOccupancySensor } from './accessories/occupancySensor'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
 import { buildSnoozeSwitch } from './accessories/snoozeSwitch'
-import { clearPairings, initHapStorage, loadOrCreateIdentity, regenerateIdentity } from './storage'
+import { clearPairings, initHapStorage, loadOrCreateIdentity, readPairedControllers, regenerateIdentity } from './storage'
 
 const BRIDGE_NAME = 'Sleepypod'
 const BRIDGE_PORT = 51827
@@ -70,47 +70,68 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
       .setCharacteristic(Characteristic.FirmwareRevision, process.env.GIT_SHA ?? '0.0.0')
   }
 
+  // Hold stoppers locally until publish() succeeds. Each accessory builder
+  // starts a setInterval / monitor.on subscription; if publish() throws (port
+  // 51827 in use, mDNS error), an `enable()` retry would re-build them and
+  // the previous timers/listeners would leak.
+  const localStoppers: Array<() => void> = []
   for (const side of ['left', 'right'] as const) {
     const heaterCooler = buildHeaterCoolerService(side, monitor)
     const heaterCoolerAcc = wrapAccessory(`Bed ${side}`, `bed-${side}`, identity.username)
     heaterCoolerAcc.addService(heaterCooler.service)
     accessory.addBridgedAccessory(heaterCoolerAcc)
-    stoppers.push(heaterCooler.stop)
+    localStoppers.push(heaterCooler.stop)
 
     const occupancy = buildOccupancySensor(side)
     const occupancyAcc = wrapAccessory(`Bed ${side} occupancy`, `occupancy-${side}`, identity.username)
     occupancyAcc.addService(occupancy.service)
     accessory.addBridgedAccessory(occupancyAcc)
-    stoppers.push(occupancy.stop)
+    localStoppers.push(occupancy.stop)
 
     const snooze = buildSnoozeSwitch(side)
     const snoozeAcc = wrapAccessory(`Snooze ${side}`, `snooze-${side}`, identity.username)
     snoozeAcc.addService(snooze.service)
     accessory.addBridgedAccessory(snoozeAcc)
-    stoppers.push(snooze.stop)
+    localStoppers.push(snooze.stop)
   }
 
   const prime = buildPrimeSwitch()
   const primeAcc = wrapAccessory('Prime pod', 'prime', identity.username)
   primeAcc.addService(prime.service)
   accessory.addBridgedAccessory(primeAcc)
-  stoppers.push(prime.stop)
+  localStoppers.push(prime.stop)
 
-  await accessory.publish({
-    username: identity.username,
-    pincode: identity.pincode,
-    port: BRIDGE_PORT,
-    category: CATEGORY_BRIDGE,
-    setupID: identity.setupId,
-    advertiser: pickAdvertiser() as never,
-  })
+  try {
+    await accessory.publish({
+      username: identity.username,
+      pincode: identity.pincode,
+      port: BRIDGE_PORT,
+      category: CATEGORY_BRIDGE,
+      setupID: identity.setupId,
+      advertiser: pickAdvertiser() as never,
+    })
+  }
+  catch (e) {
+    for (const stop of localStoppers) {
+      try {
+        stop()
+      }
+      catch {
+        // already failing — best-effort teardown only
+      }
+    }
+    throw e
+  }
 
+  stoppers = localStoppers
   setupURI = accessory.setupURI()
   bridge = accessory
 
-  const paired = paired_count(accessory)
+  // Pincode + setupId are sensitive (HAP pairing secret); ADR 0020 mandates
+  // they never appear in logs. UI surfaces them via the QR / setup-code panel.
+  const paired = readPairedControllers(identity.username).length
   console.log(
-    `[homekit] Bridge published: pincode=${identity.pincode}, setupID=${identity.setupId}, paired=${paired}`,
+    `[homekit] Bridge published: username=${identity.username}, derivedFrom=${identity.derivedFrom ?? 'legacy'}, paired=${paired}`,
   )
 }
 
@@ -145,7 +166,10 @@ export function getStatus(): BridgeStatus {
     setupId: identityCache?.setupId ?? null,
     setupURI,
     username: identityCache?.username ?? null,
-    pairedControllers: bridge ? listPairings(bridge) : [],
+    // Read pairings off disk rather than reaching into hap-nodejs's private
+    // `_accessoryInfo` field — survives version bumps and works whether or
+    // not the bridge is currently published.
+    pairedControllers: identityCache ? readPairedControllers(identityCache.username) : [],
   }
 }
 
@@ -178,18 +202,4 @@ function pickAdvertiser(): Advertiser {
 
 function wrapAccessory(name: string, id: string, username: string): Accessory {
   return new Accessory(name, uuid.generate(`sleepypod:${username}:${id}`))
-}
-
-function paired_count(accessory: Bridge): number {
-  return listPairings(accessory).length
-}
-
-function listPairings(accessory: Bridge): string[] {
-  // Bridge.publishInfo + AccessoryInfo expose the pairing map. hap-nodejs
-  // does not expose a stable public API for it, so reach in carefully.
-  const info = (accessory as unknown as {
-    _accessoryInfo?: { listPairings?: () => Array<{ username: Buffer | string }> }
-  })._accessoryInfo
-  const list = info?.listPairings?.() ?? []
-  return list.map(p => typeof p.username === 'string' ? p.username : p.username.toString('hex'))
 }
