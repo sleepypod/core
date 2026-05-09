@@ -72,15 +72,30 @@ describe('thermostat accessory', () => {
     expect(await rightSvc.getCharacteristic(Characteristic.TargetHeatingCoolingState).handleGetRequest()).toBe(0)
   })
 
-  it('TargetHeatingCoolingState onSet routes to setPower', async () => {
+  it('TargetHeatingCoolingState onSet routes to setPower and preserves the last target on power-on', async () => {
     setPower.mockClear()
     const { service } = buildThermostatService('right', fakeMonitor as DacMonitor)
     await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).setValue(3)
-    expect(setPower).toHaveBeenCalledWith('right', true)
+    // Right fixture targetTemperature is 80°F — must pass through so the
+    // hardware client doesn't silently fall back to its 75°F default.
+    expect(setPower).toHaveBeenCalledWith('right', true, 80)
 
     setPower.mockClear()
     await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).setValue(0)
     expect(setPower).toHaveBeenCalledWith('right', false)
+  })
+
+  it('sends setTemperature for an in-range decrease — regression path HeaterCooler failed', async () => {
+    setTemperature.mockClear()
+    const { service } = buildThermostatService('left', fakeMonitor as DacMonitor)
+    // Left fixture targetTemperature is 70°F; simulate dragging the slider
+    // down to 65°F. Old HeaterCooler dual-threshold collapsed on decrease
+    // and iOS rejected it as deadband-violating.
+    await service.getCharacteristic(Characteristic.TargetTemperature).setValue(f2c(65))
+    expect(setTemperature).toHaveBeenCalledTimes(1)
+    const [, f] = setTemperature.mock.calls[0]
+    expect(f).toBeGreaterThan(64)
+    expect(f).toBeLessThan(66)
   })
 
   it('CurrentHeatingCoolingState reflects targetLevel sign', async () => {

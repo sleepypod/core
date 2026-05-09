@@ -11,6 +11,7 @@ import { Service, Characteristic } from 'hap-nodejs'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { isPoweredFromStatus, readLastTargetF } from './thermostat'
 
 export interface PowerSwitchAccessory {
   service: Service
@@ -23,7 +24,15 @@ export function buildPowerSwitch(side: Side, monitor: DacMonitor): PowerSwitchAc
   service.getCharacteristic(Characteristic.On)
     .onGet(() => isPowered(monitor, side))
     .onSet(async (value) => {
-      await getSharedHardwareClient().setPower(side, Boolean(value))
+      const client = getSharedHardwareClient()
+      if (value) {
+        // setPower(side, true) without a temperature falls back to 75°F.
+        // Preserve the user's last setpoint across power cycles instead.
+        await client.setPower(side, true, readLastTargetF(monitor, side))
+      }
+      else {
+        await client.setPower(side, false)
+      }
     })
 
   const onStatus = (status: DeviceStatus): void => {
@@ -42,9 +51,4 @@ export function buildPowerSwitch(side: Side, monitor: DacMonitor): PowerSwitchAc
 function isPowered(monitor: DacMonitor, side: Side): boolean {
   const status = monitor.getLastStatus()
   return status ? isPoweredFromStatus(status, side) : false
-}
-
-function isPoweredFromStatus(status: DeviceStatus, side: Side): boolean {
-  const s = side === 'left' ? status.leftSide : status.rightSide
-  return s.targetLevel !== 0
 }

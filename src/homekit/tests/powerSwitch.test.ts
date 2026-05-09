@@ -34,11 +34,13 @@ describe('powerSwitch accessory', () => {
     expect(await rightSvc.getCharacteristic(Characteristic.On).handleGetRequest()).toBe(false)
   })
 
-  it('On.onSet routes to setPower(side, value)', async () => {
+  it('On.onSet routes to setPower and preserves the last target on power-on', async () => {
     setPower.mockClear()
     const { service } = buildPowerSwitch('left', fakeMonitor as DacMonitor)
     await service.getCharacteristic(Characteristic.On).setValue(true)
-    expect(setPower).toHaveBeenCalledWith('left', true)
+    // Left fixture targetTemperature is 70°F — must pass through so the
+    // hardware client doesn't fall back to its hardcoded 75°F default.
+    expect(setPower).toHaveBeenCalledWith('left', true, 70)
 
     setPower.mockClear()
     await service.getCharacteristic(Characteristic.On).setValue(false)

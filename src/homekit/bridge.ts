@@ -2,7 +2,7 @@
  * HAP Bridge orchestrator.
  *
  * Builds a single Bridge accessory (one HomeKit device) that owns
- * HeaterCooler x2, OccupancySensor x2, prime Switch, snooze Switch x2.
+ * Thermostat x2, PowerSwitch x2, OccupancySensor x2, prime Switch, snooze Switch x2.
  *
  * State updates are driven by the existing DacMonitor event bus.
  * Pairing data is persisted under /persistent/sleepypod-data/homekit/.

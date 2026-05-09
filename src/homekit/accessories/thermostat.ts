@@ -61,14 +61,28 @@ export function buildThermostatService(side: Side, monitor: DacMonitor): Thermos
     .setProps({ validValues: [TARGET_OFF, TARGET_AUTO] })
     .onGet(() => isPowered(monitor, side) ? TARGET_AUTO : TARGET_OFF)
     .onSet(async (value) => {
-      await getSharedHardwareClient().setPower(side, Number(value) !== TARGET_OFF)
+      const client = getSharedHardwareClient()
+      if (Number(value) === TARGET_OFF) {
+        await client.setPower(side, false)
+      }
+      else {
+        // setPower(side, true) without a temperature falls back to 75°F in
+        // the hardware client, which would silently overwrite the user's
+        // last setpoint on every HomeKit power-on. Pass the live target so
+        // power cycles preserve intent.
+        await client.setPower(side, true, readLastTargetF(monitor, side))
+      }
     })
 
   service.getCharacteristic(Characteristic.CurrentHeatingCoolingState)
     .onGet(() => deriveCurrentState(monitor, side))
 
+  // Pod is locked to Celsius natively (HAP requires C semantics; iOS converts
+  // for display per the controller setting). Drop PAIRED_WRITE so iOS doesn't
+  // render a writable C/F toggle that silently bounces back on the next read.
   service.getCharacteristic(Characteristic.TemperatureDisplayUnits)
-    .onGet(() => 0) // 0=C — HAP requires C semantics; iOS converts for display
+    .setProps({ perms: ['pr', 'ev'] as never })
+    .onGet(() => 0)
 
   const onStatus = (status: DeviceStatus): void => {
     service.updateCharacteristic(Characteristic.CurrentTemperature, sideC(status, side, 'current'))
@@ -114,9 +128,21 @@ function isPowered(monitor: DacMonitor, side: Side): boolean {
   return status ? isPoweredFromStatus(status, side) : false
 }
 
-function isPoweredFromStatus(status: DeviceStatus, side: Side): boolean {
+// Exported so powerSwitch.ts can reuse the same definition rather than
+// drift on its own copy.
+export function isPoweredFromStatus(status: DeviceStatus, side: Side): boolean {
   const s = side === 'left' ? status.leftSide : status.rightSide
   return s.targetLevel !== 0
+}
+
+// Last known target setpoint in °F. Falls back to NEUTRAL when no status
+// has been observed yet so a power-on without a prior poll lands on a
+// safe-ish temp instead of the client's hardcoded 75°F default.
+export function readLastTargetF(monitor: DacMonitor, side: Side): number {
+  const status = monitor.getLastStatus()
+  if (!status) return c2f(NEUTRAL_C)
+  const s = side === 'left' ? status.leftSide : status.rightSide
+  return s.targetTemperature
 }
 
 function deriveCurrentState(monitor: DacMonitor, side: Side): number {
