@@ -1,9 +1,16 @@
 /**
- * HomeKit HeaterCooler accessory bound to one Pod side.
+ * HomeKit Thermostat accessory bound to one Pod side.
  *
- * - Active toggle → device.setPower(side, on/off)
- * - HeatingThresholdTemperature / CoolingThresholdTemperature → setTemperature
- * - CurrentTemperature reflects DacMonitor status updates within poll cycle
+ * Why Thermostat instead of HeaterCooler: pod hardware exposes a single
+ * setpoint, not a heat/cool deadband. HeaterCooler in AUTO mode forces iOS
+ * to render two thresholds, and because both onSet handlers wrote the same
+ * unified target, every adjustment collapsed the visible range to a point —
+ * iOS would fight decreases as deadband-violating. Thermostat is HomeKit's
+ * single-setpoint primitive, which matches the pod 1:1.
+ *
+ * - TargetTemperature → setTemperature
+ * - TargetHeatingCoolingState toggles power: 0=off, 3=auto (pod is bidirectional)
+ * - CurrentHeatingCoolingState reflects the live drive direction
  *
  * HomeKit talks Celsius natively; we convert at the boundary.
  */
@@ -21,19 +28,25 @@ const MIN_C = f2c(MIN_TEMP)
 const MAX_C = f2c(MAX_TEMP)
 const NEUTRAL_C = f2c(82.5)
 
-export interface HeaterCoolerAccessory {
+const TARGET_OFF = 0
+const TARGET_AUTO = 3
+const CURRENT_OFF = 0
+const CURRENT_HEAT = 1
+const CURRENT_COOL = 2
+
+export interface ThermostatAccessory {
   service: Service
   stop: () => void
 }
 
-export function buildHeaterCoolerService(side: Side, monitor: DacMonitor): HeaterCoolerAccessory {
-  const service = new Service.HeaterCooler(`Bed ${side}`, side)
+export function buildThermostatService(side: Side, monitor: DacMonitor): ThermostatAccessory {
+  const service = new Service.Thermostat(`Bed ${side}`, side)
 
   service.getCharacteristic(Characteristic.CurrentTemperature)
     .setProps({ minValue: MIN_C, maxValue: MAX_C, minStep: 0.5 })
     .onGet(() => readCurrentC(monitor, side))
 
-  service.getCharacteristic(Characteristic.CoolingThresholdTemperature)
+  service.getCharacteristic(Characteristic.TargetTemperature)
     .setProps({ minValue: MIN_C, maxValue: MAX_C, minStep: 0.5 })
     .onGet(() => readTargetC(monitor, side))
     .onSet(async (value) => {
@@ -41,38 +54,30 @@ export function buildHeaterCoolerService(side: Side, monitor: DacMonitor): Heate
       await getSharedHardwareClient().setTemperature(side, f)
     })
 
-  service.getCharacteristic(Characteristic.HeatingThresholdTemperature)
-    .setProps({ minValue: MIN_C, maxValue: MAX_C, minStep: 0.5 })
-    .onGet(() => readTargetC(monitor, side))
+  // Lock to off / auto. HEAT and COOL are removed because the pod's auto
+  // controller decides direction internally — exposing them would let iOS
+  // pick a mode the firmware doesn't act on.
+  service.getCharacteristic(Characteristic.TargetHeatingCoolingState)
+    .setProps({ validValues: [TARGET_OFF, TARGET_AUTO] })
+    .onGet(() => isPowered(monitor, side) ? TARGET_AUTO : TARGET_OFF)
     .onSet(async (value) => {
-      const f = clampF(c2f(Number(value)))
-      await getSharedHardwareClient().setTemperature(side, f)
+      await getSharedHardwareClient().setPower(side, Number(value) !== TARGET_OFF)
     })
 
-  service.getCharacteristic(Characteristic.Active)
-    .onGet(() => isPowered(monitor, side) ? 1 : 0)
-    .onSet(async (value) => {
-      const on = Number(value) === 1
-      await getSharedHardwareClient().setPower(side, on)
-    })
-
-  // 0=auto, 1=heat, 2=cool — pod is bidirectional; map both to AUTO target.
-  service.getCharacteristic(Characteristic.TargetHeaterCoolerState)
-    .setProps({ validValues: [0] })
-    .onGet(() => 0)
-
-  service.getCharacteristic(Characteristic.CurrentHeaterCoolerState)
+  service.getCharacteristic(Characteristic.CurrentHeatingCoolingState)
     .onGet(() => deriveCurrentState(monitor, side))
 
   service.getCharacteristic(Characteristic.TemperatureDisplayUnits)
-    .onGet(() => 0) // 0=C, 1=F — HAP requires C semantics regardless
+    .onGet(() => 0) // 0=C — HAP requires C semantics; iOS converts for display
 
   const onStatus = (status: DeviceStatus): void => {
     service.updateCharacteristic(Characteristic.CurrentTemperature, sideC(status, side, 'current'))
-    service.updateCharacteristic(Characteristic.CoolingThresholdTemperature, sideC(status, side, 'target'))
-    service.updateCharacteristic(Characteristic.HeatingThresholdTemperature, sideC(status, side, 'target'))
-    service.updateCharacteristic(Characteristic.Active, isPoweredFromStatus(status, side) ? 1 : 0)
-    service.updateCharacteristic(Characteristic.CurrentHeaterCoolerState, deriveStateFromStatus(status, side))
+    service.updateCharacteristic(Characteristic.TargetTemperature, sideC(status, side, 'target'))
+    service.updateCharacteristic(
+      Characteristic.TargetHeatingCoolingState,
+      isPoweredFromStatus(status, side) ? TARGET_AUTO : TARGET_OFF,
+    )
+    service.updateCharacteristic(Characteristic.CurrentHeatingCoolingState, deriveStateFromStatus(status, side))
   }
   monitor.on('status:updated', onStatus)
 
@@ -116,14 +121,13 @@ function isPoweredFromStatus(status: DeviceStatus, side: Side): boolean {
 
 function deriveCurrentState(monitor: DacMonitor, side: Side): number {
   const status = monitor.getLastStatus()
-  return status ? deriveStateFromStatus(status, side) : 0
+  return status ? deriveStateFromStatus(status, side) : CURRENT_OFF
 }
 
 function deriveStateFromStatus(status: DeviceStatus, side: Side): number {
   const s = side === 'left' ? status.leftSide : status.rightSide
-  // 0=inactive, 1=idle, 2=heating, 3=cooling
-  if (s.targetLevel === 0) return 0
-  if (s.targetLevel > s.currentLevel) return 2
-  if (s.targetLevel < s.currentLevel) return 3
-  return 1
+  // targetLevel is signed: positive = driving warmer, negative = driving cooler,
+  // zero = idle/off. Thermostat has no idle state — collapse to OFF.
+  if (s.targetLevel === 0) return CURRENT_OFF
+  return s.targetLevel > 0 ? CURRENT_HEAT : CURRENT_COOL
 }
