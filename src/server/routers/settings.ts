@@ -199,6 +199,21 @@ export const settingsRouter = router({
     }))
     .mutation(async ({ input }) => {
       try {
+        // Capture homekitEnabled before the commit so we can revert the DB
+        // if the lifecycle call after commit fails. The transaction is
+        // synchronous (better-sqlite3) and homekit.enable/disable is async,
+        // so we can't run the lifecycle inside the transaction; rolling back
+        // the flag is the next-best option.
+        let priorHomekitEnabled = false
+        if ('homekitEnabled' in input) {
+          const [prevRow] = await db
+            .select({ homekitEnabled: deviceSettings.homekitEnabled })
+            .from(deviceSettings)
+            .where(eq(deviceSettings.id, 1))
+            .limit(1)
+          priorHomekitEnabled = Boolean(prevRow?.homekitEnabled)
+        }
+
         const updated = db.transaction((tx) => {
           // Fetch current settings to validate final computed state
           const [current] = tx
@@ -273,13 +288,25 @@ export const settingsRouter = router({
 
         // homekit.setEnabled is the canonical toggle, but updateDevice also
         // accepts homekitEnabled (REST/OpenAPI clients hit this route). Mirror
-        // the lifecycle call. Errors surface to the outer handler as TRPCError
-        // — silently swallowing here would leave callers with a false success
-        // and the DB ahead of the actual bridge state.
+        // the lifecycle call. If it fails, revert the DB flag so source-of-
+        // truth matches runtime; otherwise the next boot's
+        // startHomeKitIfEnabled would diverge from the bridge.
         if ('homekitEnabled' in input) {
           const homekit = await import('@/src/homekit')
-          if (input.homekitEnabled) await homekit.enable()
-          else await homekit.disable()
+          try {
+            if (input.homekitEnabled) await homekit.enable()
+            else await homekit.disable()
+          }
+          catch (lifecycleError) {
+            try {
+              await db
+                .update(deviceSettings)
+                .set({ homekitEnabled: priorHomekitEnabled, updatedAt: new Date() })
+                .where(eq(deviceSettings.id, 1))
+            }
+            catch { /* preserve original lifecycle error */ }
+            throw lifecycleError
+          }
         }
 
         return updated

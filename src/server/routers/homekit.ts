@@ -60,6 +60,16 @@ export const homekitRouter = router({
     .output(statusSchema)
     .mutation(async ({ input }) => {
       try {
+        // Capture prior state so we can revert the runtime if the DB write
+        // fails after the lifecycle call has already taken effect — otherwise
+        // the next boot's startHomeKitIfEnabled would diverge from the bridge.
+        const [prev] = await db
+          .select({ homekitEnabled: deviceSettings.homekitEnabled })
+          .from(deviceSettings)
+          .where(eq(deviceSettings.id, 1))
+          .limit(1)
+        const wasEnabled = Boolean(prev?.homekitEnabled)
+
         // Apply the lifecycle change first; only persist the DB flag once
         // the bridge is in the requested state. A failure here (port 51827
         // bound, mDNS error, dac monitor not ready) leaves DB and runtime
@@ -67,10 +77,23 @@ export const homekitRouter = router({
         if (input.enabled) await enableHomeKit()
         else await disableHomeKit()
 
-        await db
-          .update(deviceSettings)
-          .set({ homekitEnabled: input.enabled, updatedAt: new Date() })
-          .where(eq(deviceSettings.id, 1))
+        try {
+          await db
+            .update(deviceSettings)
+            .set({ homekitEnabled: input.enabled, updatedAt: new Date() })
+            .where(eq(deviceSettings.id, 1))
+        }
+        catch (persistError) {
+          // Best-effort: revert the lifecycle so runtime matches the DB's
+          // (still unchanged) source-of-truth. Swallow errors from the
+          // rollback itself so the original persistence error surfaces.
+          try {
+            if (wasEnabled) await enableHomeKit()
+            else await disableHomeKit()
+          }
+          catch { /* preserve original persistence error */ }
+          throw persistError
+        }
 
         return await buildStatus()
       }

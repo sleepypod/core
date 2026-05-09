@@ -67,6 +67,8 @@ block_wan() {
   iptables -I INPUT  -p udp --sport 123 -j ACCEPT
 
   # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp and _hap._tcp)
+  # IPv4 multicast (224.0.0.251); the matching IPv6 multicast (ff02::fb) is
+  # opened below if ip6tables is available.
   iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT
   iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT
   iptables -I INPUT  -p udp --dport 5353 -j ACCEPT
@@ -76,6 +78,15 @@ block_wan() {
   # Redundant with the RFC1918 LAN allow above, but explicit so future LAN
   # tightening doesn't silently break iOS Home pairing.
   iptables -I INPUT  -p tcp --dport 51827 -j ACCEPT
+
+  # IPv6: iOS may discover/pair over IPv6 on dual-stack LANs. Mirror the
+  # HAP and mDNS allows so pairing doesn't fail when the controller picks
+  # an IPv6 path. No-op on hosts without ip6tables.
+  if command -v ip6tables &>/dev/null; then
+    ip6tables -I INPUT  -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+    ip6tables -I OUTPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+    ip6tables -I INPUT  -p tcp --dport 51827 -j ACCEPT 2>/dev/null || true
+  fi
 
   # Allow loopback
   iptables -A INPUT  -i lo -j ACCEPT
