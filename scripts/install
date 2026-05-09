@@ -277,7 +277,7 @@ if ! flock -n 200; then
 fi
 
 # Check for required commands
-REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod)
+REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod visudo install mountpoint)
 if [ "$INSTALL_LOCAL" = true ] && [ -n "$INSTALL_BRANCH" ]; then
   REQUIRED_CMDS+=(git)
 fi

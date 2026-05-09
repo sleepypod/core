@@ -28,13 +28,24 @@
 # Idempotent: subsequent runs detect the existing bind mount and no-op.
 # Migrates legacy installs that have a symlink in place.
 
-PERSISTENT_APP_ROOT="/persistent/sleepypod-core"
+PERSISTENT_ROOT="/persistent"
+PERSISTENT_APP_ROOT="$PERSISTENT_ROOT/sleepypod-core"
 
 ensure_persistent_node_modules() {
   local install_dir="${1:-${INSTALL_DIR:-/home/dac/sleepypod-core}}"
   local persistent_nm="$PERSISTENT_APP_ROOT/node_modules"
   local install_nm="$install_dir/node_modules"
   local fstab_line="$persistent_nm $install_nm none bind,nofail 0 0"
+
+  # Hard-fail if /persistent isn't its own filesystem. Without this guard
+  # we'd silently mkdir into rootfs and bind-mount node_modules onto
+  # itself — defeating the entire relocation and quietly burning the
+  # ~700 MB of rootfs we were trying to reclaim. Recovery boots and
+  # broken mount-units land here.
+  if ! mountpoint -q "$PERSISTENT_ROOT" 2>/dev/null; then
+    echo "Error: $PERSISTENT_ROOT is not a mountpoint — refusing to relocate node_modules onto rootfs" >&2
+    return 1
+  fi
 
   mkdir -p "$PERSISTENT_APP_ROOT" "$persistent_nm"
 
