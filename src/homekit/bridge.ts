@@ -184,16 +184,32 @@ export async function stopBridge(): Promise<void> {
 
   const b = getBridge()
   if (b) {
+    // Split unpublish/destroy: if unpublish throws but destroy still runs to
+    // completion the bridge is safely torn down. Clearing the singleton when
+    // destroy did NOT complete masks a still-live bridge and causes
+    // port-conflict / restart confusion on the next enable().
     try {
       await b.unpublish()
-      await b.destroy()
     }
     catch (e) {
-      console.warn('[homekit] unpublish/destroy failed:', e instanceof Error ? e.message : e)
+      console.warn('[homekit] unpublish failed:', e instanceof Error ? e.message : e)
     }
-    setBridge(null)
+    let destroyed = false
+    try {
+      await b.destroy()
+      destroyed = true
+    }
+    catch (e) {
+      console.warn('[homekit] destroy failed:', e instanceof Error ? e.message : e)
+    }
+    if (destroyed) {
+      setBridge(null)
+      setSetupURI(null)
+    }
   }
-  setSetupURI(null)
+  else {
+    setSetupURI(null)
+  }
 }
 
 export function getStatus(): BridgeStatus {

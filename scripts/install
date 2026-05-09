@@ -232,17 +232,25 @@ block_wan() {
   iptables -I INPUT  -p udp --sport 5353 -j ACCEPT
 
   # Allow HomeKit Accessory Protocol (HAP) bridge inbound on tcp/51827.
-  # Redundant with the RFC1918 LAN allow above, but explicit so future LAN
-  # tightening doesn't silently break iOS Home pairing.
-  iptables -I INPUT  -p tcp --dport 51827 -j ACCEPT
+  # Source-restricted to RFC1918 + link-local so a public IP misconfig can't
+  # expose the HAP listener to the WAN. Redundant with the RFC1918 LAN allow
+  # above, but explicit so future LAN tightening doesn't silently break iOS
+  # Home pairing.
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    iptables -I INPUT -p tcp -s "$cidr" --dport 51827 -j ACCEPT
+  done
 
   # IPv6: iOS may discover/pair over IPv6 on dual-stack LANs. Mirror the
   # HAP and mDNS allows so pairing doesn't fail when the controller picks
-  # an IPv6 path. No-op on hosts without ip6tables.
+  # an IPv6 path. HAP is source-restricted to link-local (fe80::/10) and
+  # ULA (fc00::/7); GUA traffic should never hit pairing. No-op on hosts
+  # without ip6tables.
   if command -v ip6tables &>/dev/null; then
     ip6tables -I INPUT  -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
     ip6tables -I OUTPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
-    ip6tables -I INPUT  -p tcp --dport 51827 -j ACCEPT 2>/dev/null || true
+    for cidr6 in fe80::/10 fc00::/7; do
+      ip6tables -I INPUT -p tcp -s "$cidr6" --dport 51827 -j ACCEPT 2>/dev/null || true
+    done
   fi
 
   # Allow loopback

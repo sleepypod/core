@@ -29,7 +29,7 @@ export function trackPrimingState(isPriming: boolean): void {
 
 export function getPrimeCompletedAt(): number | null {
   const d = G[KEYS.completedAt] as Date | null | undefined
-  return d ? Math.floor(d.getTime() / 1000) : null
+  return d instanceof Date ? Math.floor(d.getTime() / 1000) : null
 }
 
 export function dismissPrimeNotification(): void {
