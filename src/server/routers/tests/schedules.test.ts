@@ -74,18 +74,19 @@ function clearTables() {
   `)
 }
 
-describe('schedules.batchUpdate', () => {
-  beforeAll(() => {
-    createTables()
-  })
+beforeAll(() => {
+  createTables()
+})
 
+afterAll(() => {
+  (sqlite as any).close()
+})
+
+describe('schedules.batchUpdate', () => {
   beforeEach(() => {
     clearTables()
     mocks.reloadSchedules.mockClear()
-  })
-
-  afterAll(() => {
-    (sqlite as any).close()
+    mocks.reloadSchedules.mockResolvedValue(undefined)
   })
 
   it('creates schedules across all types in one call', async () => {
@@ -261,6 +262,499 @@ describe('schedules.batchUpdate', () => {
 
     const fahrenheit = await caller.getByDay({ side: 'left', dayOfWeek: 'wednesday', unit: 'F' })
     expect(fahrenheit.temperature[0].temperature).toBe(86)
+  })
+})
+
+describe('schedules.temperature CRUD', () => {
+  beforeEach(() => {
+    clearTables()
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockResolvedValue(undefined)
+  })
+
+  it('creates with defaults (enabled=true) and returns persisted record', async () => {
+    const row = await caller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+    })
+
+    expect(row.id).toBeGreaterThan(0)
+    expect(row.enabled).toBe(true)
+    expect(row.side).toBe('left')
+    expect(row.temperature).toBe(68)
+    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects invalid time format with Zod error', async () => {
+    await expect(
+      caller.createTemperatureSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '25:99', temperature: 68,
+      } as any)
+    ).rejects.toThrow(/HH:MM/)
+  })
+
+  it('rejects out-of-range temperature', async () => {
+    await expect(
+      caller.createTemperatureSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 200,
+      } as any)
+    ).rejects.toThrow(/110/)
+  })
+
+  it('rejects invalid side enum', async () => {
+    await expect(
+      caller.createTemperatureSchedule({
+        side: 'middle', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+      } as any)
+    ).rejects.toThrow()
+  })
+
+  it('rejects unknown keys due to .strict()', async () => {
+    await expect(
+      caller.createTemperatureSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68, extra: 'x',
+      } as any)
+    ).rejects.toThrow()
+  })
+
+  it('updates and bumps updatedAt; passes when scheduler reload throws', async () => {
+    const row = await caller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+    })
+
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('scheduler down'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const updated = await caller.updateTemperatureSchedule({
+      id: row.id, temperature: 72, enabled: false,
+    })
+
+    expect(updated.temperature).toBe(72)
+    expect(updated.enabled).toBe(false)
+    expect(errSpy).toHaveBeenCalledWith('Scheduler reload failed:', expect.any(Error))
+    errSpy.mockRestore()
+  })
+
+  it('update throws NOT_FOUND for missing id', async () => {
+    await expect(
+      caller.updateTemperatureSchedule({ id: 999999, temperature: 70 })
+    ).rejects.toThrow(/not found/)
+  })
+
+  it('update rejects invalid id (non-positive)', async () => {
+    await expect(
+      caller.updateTemperatureSchedule({ id: 0, temperature: 70 })
+    ).rejects.toThrow()
+  })
+
+  it('deletes successfully and reloads scheduler', async () => {
+    const row = await caller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+    })
+    mocks.reloadSchedules.mockClear()
+
+    const result = await caller.deleteTemperatureSchedule({ id: row.id })
+    expect(result).toEqual({ success: true })
+    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+
+    const all = await caller.getAll({ side: 'left' })
+    expect(all.temperature).toHaveLength(0)
+  })
+
+  it('delete throws NOT_FOUND for missing id', async () => {
+    await expect(
+      caller.deleteTemperatureSchedule({ id: 999999 })
+    ).rejects.toThrow(/not found/)
+  })
+})
+
+describe('schedules.power CRUD', () => {
+  beforeEach(() => {
+    clearTables()
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockResolvedValue(undefined)
+  })
+
+  it('creates and persists row with defaults', async () => {
+    const row = await caller.createPowerSchedule({
+      side: 'right', dayOfWeek: 'friday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    })
+    expect(row.enabled).toBe(true)
+    expect(row.onTime).toBe('22:00')
+    expect(row.offTime).toBe('07:00')
+    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects invalid onTime format', async () => {
+    await expect(
+      caller.createPowerSchedule({
+        side: 'left', dayOfWeek: 'monday', onTime: 'bad', offTime: '07:00', onTemperature: 75,
+      } as any)
+    ).rejects.toThrow(/HH:MM/)
+  })
+
+  it('rejects invalid dayOfWeek', async () => {
+    await expect(
+      caller.createPowerSchedule({
+        side: 'left', dayOfWeek: 'funday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+      } as any)
+    ).rejects.toThrow()
+  })
+
+  it('updates partial fields', async () => {
+    const row = await caller.createPowerSchedule({
+      side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    })
+
+    const updated = await caller.updatePowerSchedule({ id: row.id, onTime: '23:00' })
+    expect(updated.onTime).toBe('23:00')
+    expect(updated.offTime).toBe('07:00')
+  })
+
+  it('update throws NOT_FOUND for missing id', async () => {
+    await expect(
+      caller.updatePowerSchedule({ id: 999999, enabled: false })
+    ).rejects.toThrow(/not found/)
+  })
+
+  it('deletes existing row', async () => {
+    const row = await caller.createPowerSchedule({
+      side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    })
+
+    const out = await caller.deletePowerSchedule({ id: row.id })
+    expect(out).toEqual({ success: true })
+
+    const all = await caller.getAll({ side: 'left' })
+    expect(all.power).toHaveLength(0)
+  })
+
+  it('delete throws NOT_FOUND for missing id', async () => {
+    await expect(
+      caller.deletePowerSchedule({ id: 999999 })
+    ).rejects.toThrow(/not found/)
+  })
+})
+
+describe('schedules.alarm CRUD', () => {
+  beforeEach(() => {
+    clearTables()
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockResolvedValue(undefined)
+  })
+
+  it('creates with vibrationPattern default of "rise"', async () => {
+    const row = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+    expect(row.vibrationPattern).toBe('rise')
+    expect(row.duration).toBe(120)
+    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts explicit "double" vibrationPattern', async () => {
+    const row = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, vibrationPattern: 'double', duration: 60, alarmTemperature: 80,
+    })
+    expect(row.vibrationPattern).toBe('double')
+  })
+
+  it('rejects vibrationIntensity above 100', async () => {
+    await expect(
+      caller.createAlarmSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '07:00',
+        vibrationIntensity: 200, duration: 120, alarmTemperature: 80,
+      } as any)
+    ).rejects.toThrow(/100/)
+  })
+
+  it('rejects vibrationIntensity below 1', async () => {
+    await expect(
+      caller.createAlarmSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '07:00',
+        vibrationIntensity: 0, duration: 120, alarmTemperature: 80,
+      } as any)
+    ).rejects.toThrow(/Intensity/)
+  })
+
+  it('rejects duration above 180', async () => {
+    await expect(
+      caller.createAlarmSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '07:00',
+        vibrationIntensity: 50, duration: 999, alarmTemperature: 80,
+      } as any)
+    ).rejects.toThrow(/180/)
+  })
+
+  it('rejects unknown vibrationPattern', async () => {
+    await expect(
+      caller.createAlarmSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '07:00',
+        vibrationIntensity: 50, vibrationPattern: 'pulse', duration: 120, alarmTemperature: 80,
+      } as any)
+    ).rejects.toThrow()
+  })
+
+  it('updates partial fields and bumps updatedAt', async () => {
+    const row = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+
+    const updated = await caller.updateAlarmSchedule({
+      id: row.id, vibrationIntensity: 80, vibrationPattern: 'double',
+    })
+    expect(updated.vibrationIntensity).toBe(80)
+    expect(updated.vibrationPattern).toBe('double')
+  })
+
+  it('update throws NOT_FOUND for missing id', async () => {
+    await expect(
+      caller.updateAlarmSchedule({ id: 999999, duration: 30 })
+    ).rejects.toThrow(/not found/)
+  })
+
+  it('deletes existing row', async () => {
+    const row = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+
+    const out = await caller.deleteAlarmSchedule({ id: row.id })
+    expect(out).toEqual({ success: true })
+
+    const all = await caller.getAll({ side: 'left' })
+    expect(all.alarm).toHaveLength(0)
+  })
+
+  it('delete throws NOT_FOUND for missing id', async () => {
+    await expect(
+      caller.deleteAlarmSchedule({ id: 999999 })
+    ).rejects.toThrow(/not found/)
+  })
+})
+
+describe('schedules scheduler-failure paths swallow errors', () => {
+  beforeEach(() => {
+    clearTables()
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockResolvedValue(undefined)
+  })
+
+  it('createPowerSchedule logs but does not throw when reload fails', async () => {
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const row = await caller.createPowerSchedule({
+      side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    })
+
+    expect(row.id).toBeGreaterThan(0)
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('createAlarmSchedule logs but does not throw when reload fails', async () => {
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const row = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+
+    expect(row.id).toBeGreaterThan(0)
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('deleteTemperatureSchedule logs but does not throw when reload fails', async () => {
+    const row = await caller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+    })
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const out = await caller.deleteTemperatureSchedule({ id: row.id })
+    expect(out).toEqual({ success: true })
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('deletePowerSchedule logs but does not throw when reload fails', async () => {
+    const row = await caller.createPowerSchedule({
+      side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    })
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const out = await caller.deletePowerSchedule({ id: row.id })
+    expect(out).toEqual({ success: true })
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('deleteAlarmSchedule logs but does not throw when reload fails', async () => {
+    const row = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const out = await caller.deleteAlarmSchedule({ id: row.id })
+    expect(out).toEqual({ success: true })
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('batchUpdate logs but does not throw when reload fails', async () => {
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const result = await caller.batchUpdate({
+      creates: {
+        temperature: [
+          { side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68 },
+        ],
+      },
+    })
+    expect(result).toEqual({ success: true })
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('updatePowerSchedule logs but does not throw when reload fails', async () => {
+    const row = await caller.createPowerSchedule({
+      side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    })
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const out = await caller.updatePowerSchedule({ id: row.id, enabled: false })
+    expect(out.enabled).toBe(false)
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('updateAlarmSchedule logs but does not throw when reload fails', async () => {
+    const row = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const out = await caller.updateAlarmSchedule({ id: row.id, duration: 30 })
+    expect(out.duration).toBe(30)
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+})
+
+describe('schedules.batchUpdate additional paths', () => {
+  beforeEach(() => {
+    clearTables()
+    mocks.reloadSchedules.mockClear()
+    mocks.reloadSchedules.mockResolvedValue(undefined)
+  })
+
+  it('throws NOT_FOUND for missing power delete id', async () => {
+    await expect(
+      caller.batchUpdate({ deletes: { power: [99999] } })
+    ).rejects.toThrow(/Power schedule with ID 99999 not found/)
+  })
+
+  it('throws NOT_FOUND for missing alarm delete id', async () => {
+    await expect(
+      caller.batchUpdate({ deletes: { alarm: [99999] } })
+    ).rejects.toThrow(/Alarm schedule with ID 99999 not found/)
+  })
+
+  it('throws NOT_FOUND for missing temperature update id', async () => {
+    await expect(
+      caller.batchUpdate({
+        updates: { temperature: [{ id: 99999, temperature: 70 }] },
+      })
+    ).rejects.toThrow(/Temperature schedule with ID 99999 not found/)
+  })
+
+  it('throws NOT_FOUND for missing alarm update id', async () => {
+    await expect(
+      caller.batchUpdate({
+        updates: { alarm: [{ id: 99999, duration: 30 }] },
+      })
+    ).rejects.toThrow(/Alarm schedule with ID 99999 not found/)
+  })
+
+  it('rejects oversized creates array (>1000)', async () => {
+    const big = Array.from({ length: 1001 }, () => ({
+      side: 'left' as const, dayOfWeek: 'monday' as const,
+      time: '22:00', temperature: 68, enabled: true,
+    }))
+    await expect(
+      caller.batchUpdate({ creates: { temperature: big } })
+    ).rejects.toThrow()
+  })
+
+  it('updates alarm and power in batch', async () => {
+    const t = await caller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+    })
+    const a = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+
+    await caller.batchUpdate({
+      updates: {
+        temperature: [{ id: t.id, temperature: 70 }],
+        alarm: [{ id: a.id, duration: 30 }],
+      },
+    })
+
+    const all = await caller.getAll({ side: 'left' })
+    expect(all.temperature[0].temperature).toBe(70)
+    expect(all.alarm[0].duration).toBe(30)
+  })
+})
+
+describe('schedules query error paths', () => {
+  it('getAll wraps DB errors as INTERNAL_SERVER_ERROR', async () => {
+    // Re-mock db to throw inside .all()
+    const failing = { db: {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            all: () => { throw new Error('db dead') },
+          }),
+        }),
+      }),
+    } }
+
+    vi.resetModules()
+    vi.doMock('@/src/scheduler', () => ({
+      getJobManager: vi.fn(async () => ({ reloadSchedules: vi.fn() })),
+    }))
+    vi.doMock('@/src/db', () => failing)
+
+    const { schedulesRouter: failingRouter } = await import('@/src/server/routers/schedules')
+    const failingCaller = failingRouter.createCaller({})
+
+    await expect(failingCaller.getAll({ side: 'left' })).rejects.toThrow(/Failed to fetch schedules/)
+    await expect(
+      failingCaller.getByDay({ side: 'left', dayOfWeek: 'monday' })
+    ).rejects.toThrow(/Failed to fetch schedules by day/)
+
+    vi.doUnmock('@/src/db')
+    vi.doUnmock('@/src/scheduler')
+    vi.resetModules()
   })
 })
 
