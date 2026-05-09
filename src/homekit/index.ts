@@ -10,17 +10,29 @@ import { getDacMonitor } from '@/src/hardware/dacMonitor.instance'
 import { getStatus, regenerate, startBridge, stopBridge, unpairAll } from './bridge'
 import type { BridgeStatus } from './bridge'
 
-let started = false
+// Turbopack splits this module across instrumentation + every API route
+// chunk; per-chunk `let started` would let a tRPC call think the bridge is
+// stopped while instrumentation has it running. Mirror the bridge.ts fix
+// and back state with globalThis so all chunk copies see one truth.
+const G = globalThis as Record<string, unknown>
+const KEYS = {
+  started: '__sp_homekit_started__',
+  inflight: '__sp_homekit_inflight__',
+} as const
+
+const isStarted = (): boolean => Boolean(G[KEYS.started])
+const setStarted = (v: boolean): void => {
+  G[KEYS.started] = v
+}
+
 // Serialize lifecycle transitions so concurrent enable()/disable()/unpair()/
 // regenerate() callers (settings mutation racing with status poll, retries,
 // instrumentation hot-reload) cannot double-start the bridge and collide on
 // port 51827. All public lifecycle entries route through `serialize`.
-let inflight: Promise<void> | null = null
-
 function serialize<T>(fn: () => Promise<T>): Promise<T> {
-  const prev = inflight ?? Promise.resolve()
+  const prev = (G[KEYS.inflight] as Promise<unknown> | undefined) ?? Promise.resolve()
   const next = prev.then(fn, fn)
-  inflight = next.then(() => undefined, () => undefined)
+  G[KEYS.inflight] = next.then(() => undefined, () => undefined)
   return next
 }
 
@@ -32,18 +44,18 @@ export async function startHomeKitIfEnabled(): Promise<void> {
 
 export function enable(): Promise<void> {
   return serialize(async () => {
-    if (started) return
+    if (isStarted()) return
     const monitor = await getDacMonitor()
     await startBridge(monitor)
-    started = true
+    setStarted(true)
   })
 }
 
 export function disable(): Promise<void> {
   return serialize(async () => {
-    if (!started) return
+    if (!isStarted()) return
     await stopBridge()
-    started = false
+    setStarted(false)
   })
 }
 
@@ -58,11 +70,11 @@ export function status(): BridgeStatus {
 export function unpair(): Promise<void> {
   return serialize(async () => {
     await unpairAll()
-    started = false
+    setStarted(false)
     if (await readEnabled()) {
       const monitor = await getDacMonitor()
       await startBridge(monitor)
-      started = true
+      setStarted(true)
     }
   })
 }
@@ -70,11 +82,11 @@ export function unpair(): Promise<void> {
 export function regeneratePairing(): Promise<BridgeStatus> {
   return serialize(async () => {
     await regenerate()
-    started = false
+    setStarted(false)
     if (await readEnabled()) {
       const monitor = await getDacMonitor()
       await startBridge(monitor)
-      started = true
+      setStarted(true)
     }
     return getStatus()
   })

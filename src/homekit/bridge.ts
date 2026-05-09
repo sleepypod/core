@@ -39,10 +39,38 @@ import { clearPairings, initHapStorage, loadOrCreateIdentity, readPairedControll
 const BRIDGE_NAME = 'Sleepypod'
 const BRIDGE_PORT = 51827
 
-let bridge: Bridge | null = null
-let stoppers: Array<() => void> = []
-let identityCache: ReturnType<typeof loadOrCreateIdentity> | null = null
-let setupURI: string | null = null
+// Turbopack splits this module across the instrumentation chunk and the API
+// route chunks, so plain `let` locals would be per-chunk. Back the singleton
+// state with globalThis so instrumentation's `startBridge` and the API's
+// `getStatus` see the same bridge regardless of which copy ran the import.
+const G = globalThis as Record<string, unknown>
+const KEYS = {
+  bridge: '__sp_homekit_bridge__',
+  stoppers: '__sp_homekit_stoppers__',
+  identity: '__sp_homekit_identity__',
+  setupURI: '__sp_homekit_setupURI__',
+} as const
+
+const getBridge = (): Bridge | null => (G[KEYS.bridge] as Bridge | null) ?? null
+const setBridge = (b: Bridge | null): void => {
+  G[KEYS.bridge] = b
+}
+
+const getStoppers = (): Array<() => void> => (G[KEYS.stoppers] as Array<() => void> | undefined) ?? []
+const setStoppers = (s: Array<() => void>): void => {
+  G[KEYS.stoppers] = s
+}
+
+const getIdentity = (): ReturnType<typeof loadOrCreateIdentity> | null =>
+  (G[KEYS.identity] as ReturnType<typeof loadOrCreateIdentity> | null) ?? null
+const setIdentity = (i: ReturnType<typeof loadOrCreateIdentity> | null): void => {
+  G[KEYS.identity] = i
+}
+
+const getSetupURI = (): string | null => (G[KEYS.setupURI] as string | null) ?? null
+const setSetupURI = (u: string | null): void => {
+  G[KEYS.setupURI] = u
+}
 
 export interface BridgeStatus {
   running: boolean
@@ -54,11 +82,11 @@ export interface BridgeStatus {
 }
 
 export async function startBridge(monitor: DacMonitor): Promise<void> {
-  if (bridge) return
+  if (getBridge()) return
   initHapStorage()
 
   const identity = loadOrCreateIdentity()
-  identityCache = identity
+  setIdentity(identity)
 
   const accessory = new Bridge(BRIDGE_NAME, uuid.generate(`sleepypod:${identity.username}`))
   const info = accessory.getService(Service.AccessoryInformation)
@@ -123,9 +151,9 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
     throw e
   }
 
-  stoppers = localStoppers
-  setupURI = accessory.setupURI()
-  bridge = accessory
+  setStoppers(localStoppers)
+  setSetupURI(accessory.setupURI())
+  setBridge(accessory)
 
   // Pincode + setupId are sensitive (HAP pairing secret); ADR 0020 mandates
   // they never appear in logs. UI surfaces them via the QR / setup-code panel.
@@ -133,10 +161,18 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
   console.log(
     `[homekit] Bridge published: username=${identity.username}, derivedFrom=${identity.derivedFrom ?? 'legacy'}, paired=${paired}`,
   )
+
+  // Catch (proven) regression where Turbopack splits this module across
+  // entry chunks and per-chunk `let` state diverges. If the bridge we just
+  // published isn't readable through globalThis, every API caller will see
+  // running=false. Loud assertion is preferable to silent UI desync.
+  if (getBridge() !== accessory) {
+    console.error('[homekit] singleton invariant violated: globalThis bridge !== freshly published accessory')
+  }
 }
 
 export async function stopBridge(): Promise<void> {
-  for (const stop of stoppers) {
+  for (const stop of getStoppers()) {
     try {
       stop()
     }
@@ -144,32 +180,34 @@ export async function stopBridge(): Promise<void> {
       console.warn('[homekit] stopper failed:', e instanceof Error ? e.message : e)
     }
   }
-  stoppers = []
+  setStoppers([])
 
-  if (bridge) {
+  const b = getBridge()
+  if (b) {
     try {
-      await bridge.unpublish()
-      await bridge.destroy()
+      await b.unpublish()
+      await b.destroy()
     }
     catch (e) {
       console.warn('[homekit] unpublish/destroy failed:', e instanceof Error ? e.message : e)
     }
-    bridge = null
+    setBridge(null)
   }
-  setupURI = null
+  setSetupURI(null)
 }
 
 export function getStatus(): BridgeStatus {
+  const id = getIdentity()
   return {
-    running: bridge !== null,
-    pincode: identityCache?.pincode ?? null,
-    setupId: identityCache?.setupId ?? null,
-    setupURI,
-    username: identityCache?.username ?? null,
+    running: getBridge() !== null,
+    pincode: id?.pincode ?? null,
+    setupId: id?.setupId ?? null,
+    setupURI: getSetupURI(),
+    username: id?.username ?? null,
     // Read pairings off disk rather than reaching into hap-nodejs's private
     // `_accessoryInfo` field — survives version bumps and works whether or
     // not the bridge is currently published.
-    pairedControllers: identityCache ? readPairedControllers(identityCache.username) : [],
+    pairedControllers: id ? readPairedControllers(id.username) : [],
   }
 }
 
@@ -178,15 +216,16 @@ export async function unpairAll(): Promise<void> {
   // hap-nodejs persists pairings into. Identity (username/pincode/setupId)
   // stays put so the next publish re-uses the same accessory and iOS
   // recognizes it after re-pairing.
-  const username = identityCache?.username ?? loadOrCreateIdentity().username
+  const username = getIdentity()?.username ?? loadOrCreateIdentity().username
   await stopBridge()
   clearPairings(username)
 }
 
-export async function regenerate(): Promise<typeof identityCache> {
+export async function regenerate(): Promise<ReturnType<typeof loadOrCreateIdentity> | null> {
   await stopBridge()
-  identityCache = regenerateIdentity()
-  return identityCache
+  const id = regenerateIdentity()
+  setIdentity(id)
+  return id
 }
 
 function pickAdvertiser(): Advertiser {

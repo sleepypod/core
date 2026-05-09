@@ -59,6 +59,11 @@ vi.mock('@/src/db/schema', () => ({
 describe('homekit lifecycle', () => {
   beforeEach(async () => {
     vi.resetModules()
+    // The module now keeps `started` / `inflight` on globalThis to survive
+    // Turbopack chunk duplication. Reset those keys per test.
+    const g = globalThis as Record<string, unknown>
+    delete g.__sp_homekit_started__
+    delete g.__sp_homekit_inflight__
     m.startBridge.mockClear()
     m.stopBridge.mockClear()
     m.unpairAll.mockClear()

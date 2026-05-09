@@ -78,25 +78,29 @@ export interface SeedProbeResult {
   sources: SeedProbeEntry[]
 }
 
-let cachedDir: string | null = null
+// Bundle-duplication-safe singleton state — see src/homekit/bridge.ts.
+const G = globalThis as Record<string, unknown>
+const KEYS = {
+  cachedDir: '__sp_homekit_cachedDir__',
+  hapInit: '__sp_homekit_hapInit__',
+} as const
 
 export function getStorageDir(): string {
-  if (cachedDir) return cachedDir
+  const cached = G[KEYS.cachedDir] as string | undefined
+  if (cached) return cached
   const target = existsSync('/persistent') ? PERSISTENT_DIR : DEV_DIR
   if (!existsSync(target)) mkdirSync(target, { recursive: true })
-  cachedDir = target
+  G[KEYS.cachedDir] = target
   return target
 }
-
-let hapStorageInitialized = false
 
 export function initHapStorage(): void {
   // hap-nodejs throws on a second setCustomStoragePath call. Idempotent
   // so regenerate / disable→enable cycles inside the same process don't
   // blow up.
-  if (hapStorageInitialized) return
+  if (G[KEYS.hapInit]) return
   HAPStorage.setCustomStoragePath(getStorageDir())
-  hapStorageInitialized = true
+  G[KEYS.hapInit] = true
 }
 
 function isDegenerateSeed(value: string): boolean {
