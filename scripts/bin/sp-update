@@ -253,11 +253,23 @@ pnpm install --frozen-lockfile --prod
 # Build only if no pre-built .next exists
 if [ ! -d "$INSTALL_DIR/.next" ]; then
   echo "No pre-built .next found, building..."
-  pnpm install --frozen-lockfile
+  # CI=true so pnpm doesn't prompt for TTY confirmation when prod-only
+  # node_modules need to be replaced with the full dev set.
+  CI=true pnpm install --frozen-lockfile
   SP_BRANCH="$BRANCH" pnpm build
 else
   # Regenerate .git-info with the correct branch for pre-built releases
   SP_BRANCH="$BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
+fi
+
+# Validate the build actually produced a startable .next bundle. next start
+# refuses to boot without BUILD_ID and silently crashloops via systemd
+# Restart=on-failure, so without this check sp-update would print "Update
+# complete!" while the service is dying every 10 seconds.
+if [ ! -f "$INSTALL_DIR/.next/BUILD_ID" ]; then
+  echo "Error: build did not produce $INSTALL_DIR/.next/BUILD_ID — refusing to start service" >&2
+  echo "Inspect the build output above; common causes: pnpm build script swallowed an error, OOM/SIGTERM during turbopack, or pre-built tarball missing the file." >&2
+  exit 1
 fi
 
 # Sync biometrics modules
