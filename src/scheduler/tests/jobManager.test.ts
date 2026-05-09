@@ -158,3 +158,82 @@ describe('JobManager.reloadSchedules coalescing', () => {
     expect(count()).toBe(2)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Misc public-surface tests that don't need a real DB. The stub mock above
+// returns empty rows from every select, so DB-driven branches can't be hit
+// here — but the in-memory scheduler-side surface (getScheduler, run-once
+// scheduling, cancellation, heartbeat lifecycle) can.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager public surface (stub DB)', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC', {
+      heartbeatIntervalMs: 1_000_000,
+      heartbeatStaleMs: 90_000,
+    })
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('getScheduler exposes the underlying Scheduler', () => {
+    const sched = manager.getScheduler()
+    expect(sched).toBeDefined()
+    expect(typeof sched.scheduleJob).toBe('function')
+    expect(sched.getTimezone()).toBe('UTC')
+  })
+
+  it('scheduleRunOnceSession adds setpoint + cleanup jobs', () => {
+    const now = new Date()
+    const fmt = (d: Date) =>
+      `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+    const setPointTime = fmt(new Date(now.getTime() + 5 * 60_000))
+    const wakeTime = fmt(new Date(now.getTime() + 60 * 60_000))
+
+    manager.scheduleRunOnceSession(123, 'left', [{ time: setPointTime, temperature: 80 }], wakeTime, 'UTC')
+
+    const ids = manager.getScheduler().getJobs().map(j => j.id)
+    expect(ids).toContain('runonce-123-0')
+    expect(ids).toContain('runonce-cleanup-123')
+  })
+
+  it('cancelRunOnceSession removes only run-once jobs scoped to the side', () => {
+    const now = new Date()
+    const fmt = (d: Date) =>
+      `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+    const setPointTime = fmt(new Date(now.getTime() + 5 * 60_000))
+    const wakeTime = fmt(new Date(now.getTime() + 60 * 60_000))
+
+    manager.scheduleRunOnceSession(1, 'left', [{ time: setPointTime, temperature: 80 }], wakeTime, 'UTC')
+    manager.scheduleRunOnceSession(2, 'right', [{ time: setPointTime, temperature: 80 }], wakeTime, 'UTC')
+
+    expect(manager.getScheduler().getJobs()).toHaveLength(4)
+
+    manager.cancelRunOnceSession('right')
+
+    const remaining = manager.getScheduler().getJobs()
+    expect(remaining.every(j => j.metadata?.side !== 'right')).toBe(true)
+    expect(remaining.filter(j => j.metadata?.side === 'left')).toHaveLength(2)
+  })
+
+  it('startHeartbeat / stopHeartbeat are idempotent', () => {
+    manager.startHeartbeat()
+    manager.startHeartbeat() // second call no-ops
+    manager.stopHeartbeat()
+    manager.stopHeartbeat() // double-stop is safe
+  })
+
+  it('checkLiveness returns empty when no jobs are registered', async () => {
+    const stale = await manager.checkLiveness()
+    expect(stale).toEqual([])
+  })
+
+  it('shutdown can be called repeatedly without error', async () => {
+    await manager.shutdown()
+    await manager.shutdown()
+    // afterEach will call once more
+  })
+})
