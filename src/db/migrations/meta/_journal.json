@@ -64,6 +64,13 @@
       "when": 1778214991769,
       "tag": "0008_flashy_wallow",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1778285875940,
+      "tag": "0009_polite_earthquake",
+      "breakpoints": true
     }
   ]
 }

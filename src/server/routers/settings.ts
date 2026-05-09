@@ -28,6 +28,7 @@ const deviceSettingsSchema = z.object({
   ledNightStartTime: z.string().nullable(),
   ledNightEndTime: z.string().nullable(),
   globalMaxOnHours: z.number().nullable(),
+  homekitEnabled: z.boolean(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
 })
@@ -131,6 +132,7 @@ export const settingsRouter = router({
             ledNightStartTime: '22:00',
             ledNightEndTime: '07:00',
             globalMaxOnHours: null,
+            homekitEnabled: false,
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -174,6 +176,7 @@ export const settingsRouter = router({
           ledNightEndTime: timeStringSchema.optional(),
           // Global wall-clock auto-off cap. `null` disables; 1–48 hours when set.
           globalMaxOnHours: z.number().int().min(1).max(48).nullable().optional(),
+          homekitEnabled: z.boolean().optional(),
         })
         .strict()
     )
@@ -190,11 +193,27 @@ export const settingsRouter = router({
       ledNightBrightness: z.number(),
       ledNightStartTime: z.string().nullable(),
       ledNightEndTime: z.string().nullable(),
+      homekitEnabled: z.boolean(),
       createdAt: z.date(),
       updatedAt: z.date(),
     }))
     .mutation(async ({ input }) => {
       try {
+        // Capture homekitEnabled before the commit so we can revert the DB
+        // if the lifecycle call after commit fails. The transaction is
+        // synchronous (better-sqlite3) and homekit.enable/disable is async,
+        // so we can't run the lifecycle inside the transaction; rolling back
+        // the flag is the next-best option.
+        let priorHomekitEnabled = false
+        if ('homekitEnabled' in input) {
+          const [prevRow] = await db
+            .select({ homekitEnabled: deviceSettings.homekitEnabled })
+            .from(deviceSettings)
+            .where(eq(deviceSettings.id, 1))
+            .limit(1)
+          priorHomekitEnabled = Boolean(prevRow?.homekitEnabled)
+        }
+
         const updated = db.transaction((tx) => {
           // Fetch current settings to validate final computed state
           const [current] = tx
@@ -264,6 +283,29 @@ export const settingsRouter = router({
           }
           catch (e) {
             console.error('autoOff restart failed:', e)
+          }
+        }
+
+        // homekit.setEnabled is the canonical toggle, but updateDevice also
+        // accepts homekitEnabled (REST/OpenAPI clients hit this route). Mirror
+        // the lifecycle call. If it fails, revert the DB flag so source-of-
+        // truth matches runtime; otherwise the next boot's
+        // startHomeKitIfEnabled would diverge from the bridge.
+        if ('homekitEnabled' in input) {
+          const homekit = await import('@/src/homekit')
+          try {
+            if (input.homekitEnabled) await homekit.enable()
+            else await homekit.disable()
+          }
+          catch (lifecycleError) {
+            try {
+              await db
+                .update(deviceSettings)
+                .set({ homekitEnabled: priorHomekitEnabled, updatedAt: new Date() })
+                .where(eq(deviceSettings.id, 1))
+            }
+            catch { /* preserve original lifecycle error */ }
+            throw lifecycleError
           }
         }
 

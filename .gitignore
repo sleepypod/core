@@ -46,5 +46,11 @@ sleepypod.local.db-wal
 .claude/reviews
 .reviews
 
+# Yggdrasil
+.ygg/
+
+# HomeKit (dev local pairings)
+.homekit-data/
+
 # SQLite databases (local)
 *.db

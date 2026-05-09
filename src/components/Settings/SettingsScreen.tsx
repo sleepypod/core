@@ -12,6 +12,7 @@ import { SideSettingsForm } from './SideSettingsForm'
 import { TapGestureConfig } from './TapGestureConfig'
 import { HapticsTestCard } from './HapticsTestCard'
 import { MqttSettingsForm } from './MqttSettingsForm'
+import { HomeKitConfig } from './HomeKitConfig'
 
 const TAB_IDS = ['device', 'sides', 'gestures', 'mqtt'] as const
 type TabId = typeof TAB_IDS[number]
@@ -150,6 +151,8 @@ function DeviceTab({ device }: DeviceTabProps) {
       )}
 
       <HapticsTestCard />
+
+      <HomeKitConfig />
     </section>
   )
 }
