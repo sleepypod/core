@@ -5,52 +5,85 @@
 # persist  /dev/mmcblk0p8  15  GB  (~12% used — DBs, biometrics, app data)
 #
 # /home/dac/sleepypod-core/node_modules (~700 MB) lives on rootfs by
-# default. This helper moves it to /persistent and replaces the original
-# path with a symlink. pnpm install writes through the symlink; Node's
-# native module resolver follows it transparently.
+# default. This helper moves it to /persistent and exposes the original
+# path via a bind mount.
+#
+# Bind mount, not symlink: the previous revision used
+#   ln -sfn /persistent/sleepypod-core/node_modules /home/dac/sleepypod-core/node_modules
+# Next.js 16 / Turbopack rejects that with
+#   "Symlink [project]/node_modules is invalid, it points out of the filesystem root"
+# because the symlink crosses from /dev/root onto /dev/mmcblk0p8. A bind
+# mount makes the path appear as a real directory at the project root
+# while the data still lives on /persistent — Turbopack's symlink check
+# does not trip.
+#
+# Persistence: an /etc/fstab entry with `bind,nofail` re-establishes the
+# mount on every boot. `nofail` keeps the system bootable if /persistent
+# is absent (reflash recovery, single-user mode).
 #
 # Sourced by:
 #   - scripts/install     (inline copy not needed — code is on disk before use)
 #   - scripts/bin/sp-update
 #
-# Idempotent: subsequent runs detect the existing symlink and no-op.
+# Idempotent: subsequent runs detect the existing bind mount and no-op.
+# Migrates legacy installs that have a symlink in place.
 
-PERSISTENT_APP_ROOT="/persistent/sleepypod-core"
+PERSISTENT_ROOT="/persistent"
+PERSISTENT_APP_ROOT="$PERSISTENT_ROOT/sleepypod-core"
 
 ensure_persistent_node_modules() {
   local install_dir="${1:-${INSTALL_DIR:-/home/dac/sleepypod-core}}"
   local persistent_nm="$PERSISTENT_APP_ROOT/node_modules"
   local install_nm="$install_dir/node_modules"
+  local fstab_line="$persistent_nm $install_nm none bind,nofail 0 0"
 
-  mkdir -p "$PERSISTENT_APP_ROOT"
+  # Hard-fail if /persistent isn't its own filesystem. Without this guard
+  # we'd silently mkdir into rootfs and bind-mount node_modules onto
+  # itself — defeating the entire relocation and quietly burning the
+  # ~700 MB of rootfs we were trying to reclaim. Recovery boots and
+  # broken mount-units land here.
+  if ! mountpoint -q "$PERSISTENT_ROOT" 2>/dev/null; then
+    echo "Error: $PERSISTENT_ROOT is not a mountpoint — refusing to relocate node_modules onto rootfs" >&2
+    return 1
+  fi
 
-  # Symlink already pointing at the persistent target — no-op.
+  mkdir -p "$PERSISTENT_APP_ROOT" "$persistent_nm"
+
+  # Legacy symlink from the cross-fs era — drop it; the bind mount below
+  # replaces it. Persistent target keeps its data.
   if [ -L "$install_nm" ]; then
-    local current_target
-    current_target=$(readlink -f "$install_nm" 2>/dev/null || true)
-    if [ "$current_target" = "$persistent_nm" ]; then
-      return 0
-    fi
-    echo "Replacing stale node_modules symlink (was: $current_target)..."
+    echo "Replacing legacy node_modules symlink with bind mount..."
     rm -f "$install_nm"
   fi
 
-  # Real directory on rootfs — migrate. Cross-filesystem mv is cp+rm
-  # and preserves the pnpm hardlink graph; ~2-5 min for 700 MB on eMMC.
-  if [ -d "$install_nm" ]; then
-    if [ -d "$persistent_nm" ]; then
-      # Both exist: trust just-installed rootfs copy, drop stale persistent
-      # to avoid mixing pnpm stores from different installs.
-      echo "Removing stale $persistent_nm before migration..."
-      rm -rf "$persistent_nm"
+  # Real directory on rootfs (fresh install or pre-relocation pod).
+  # Skip if already a mountpoint — that's our fast path on subsequent
+  # sp-update runs.
+  if [ -d "$install_nm" ] && ! mountpoint -q "$install_nm" 2>/dev/null; then
+    # Move contents to /persistent only if persistent is empty and rootfs
+    # has them; otherwise trust whichever side already has data and drop
+    # the other to avoid mixing pnpm stores from different installs.
+    if [ -z "$(ls -A "$persistent_nm" 2>/dev/null)" ] && [ -n "$(ls -A "$install_nm" 2>/dev/null)" ]; then
+      echo "Migrating node_modules to $persistent_nm (one-time, may take a few minutes)..."
+      # `mv -T` so the destination doesn't end up as $persistent_nm/node_modules.
+      mv -T "$install_nm" "$persistent_nm"
     fi
-    echo "Migrating node_modules to $persistent_nm (one-time, may take a few minutes)..."
-    mv "$install_nm" "$persistent_nm"
-  else
-    # Fresh install — create empty dir so the symlink target exists.
-    mkdir -p "$persistent_nm"
+    rm -rf "$install_nm"
   fi
 
-  ln -sfn "$persistent_nm" "$install_nm"
-  echo "node_modules -> $persistent_nm (symlink)"
+  # Establish the mount point as an empty directory, then bind-mount.
+  mkdir -p "$install_nm"
+  if ! mountpoint -q "$install_nm" 2>/dev/null; then
+    mount --bind "$persistent_nm" "$install_nm"
+  fi
+
+  # Persist via fstab so the bind mount comes back after reboot. Replace
+  # any stale entry for this mount point first (e.g., a renamed source
+  # path), then append the canonical line.
+  if ! grep -qF "$fstab_line" /etc/fstab 2>/dev/null; then
+    sed -i "\\| $install_nm |d" /etc/fstab 2>/dev/null || true
+    echo "$fstab_line" >> /etc/fstab
+  fi
+
+  echo "node_modules bind-mounted from $persistent_nm"
 }

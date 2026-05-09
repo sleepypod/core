@@ -277,7 +277,7 @@ if ! flock -n 200; then
 fi
 
 # Check for required commands
-REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod)
+REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod visudo install mountpoint mkswap swapon)
 if [ "$INSTALL_LOCAL" = true ] && [ -n "$INSTALL_BRANCH" ]; then
   REQUIRED_CMDS+=(git)
 fi
@@ -362,6 +362,28 @@ if id dac &>/dev/null; then
   usermod -aG dac sleepypod
 fi
 
+# Allow the sleepypod service user to run sp-update as root without a
+# password. The next-server runs as User=sleepypod and exposes a tRPC
+# system.triggerUpdate mutation that spawns sp-update; without this
+# rule the spawn dies on the first iptables / systemctl call inside the
+# script and the API silently does nothing. Branch input is regex-
+# validated at the tRPC layer (^[a-zA-Z0-9._\-/]+$) and sp-update only
+# uses it as a tag/path component, so the privilege scope is narrow.
+SUDOERS_FILE="/etc/sudoers.d/sleepypod-update"
+SUDOERS_CONTENT="sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update"
+SUDOERS_TMP=$(mktemp)
+echo "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
+chmod 0440 "$SUDOERS_TMP"
+if visudo -c -q -f "$SUDOERS_TMP"; then
+  install -m 0440 -o root -g root "$SUDOERS_TMP" "$SUDOERS_FILE"
+  echo "Installed $SUDOERS_FILE"
+else
+  echo "Error: sudoers fragment failed visudo validation — refusing to install" >&2
+  rm -f "$SUDOERS_TMP"
+  exit 1
+fi
+rm -f "$SUDOERS_TMP"
+
 mkdir -p "$DATA_DIR"
 chown root:sleepypod "$DATA_DIR"
 chmod 2770 "$DATA_DIR"
@@ -375,6 +397,33 @@ fix_db_permissions() {
   fi
 }
 fix_db_permissions
+
+# Ensure swap exists for memory-constrained pod builds. Pod 4 ships with
+# 2 GiB RAM and zero swap; Next.js 16 / Turbopack peaks around 750 MiB
+# during `next build`, which trips the firmware's earlyoom (configured to
+# fire at <10% available, ~200 MiB on this hardware) and kills the build
+# mid-flight (SIGTERM, exit 143). A 1 GiB swap file on /persistent keeps
+# the build out of earlyoom range without wearing the rootfs eMMC. Used
+# only during build / heavy memory bursts; not relied on at runtime.
+SWAPFILE="/persistent/swapfile"
+SWAP_SIZE_MB=1024
+if ! mountpoint -q /persistent 2>/dev/null; then
+  echo "Warning: /persistent is not a mountpoint — skipping swap setup to avoid creating $SWAPFILE on rootfs" >&2
+elif ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
+  if [ ! -f "$SWAPFILE" ]; then
+    echo "Creating ${SWAP_SIZE_MB}M swap file at $SWAPFILE..."
+    fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" 2>/dev/null \
+      || dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_SIZE_MB" status=none
+    chmod 0600 "$SWAPFILE"
+    mkswap "$SWAPFILE" >/dev/null
+  fi
+  swapon "$SWAPFILE" || echo "Warning: swapon failed; on-pod builds may OOM" >&2
+fi
+SWAP_FSTAB_LINE="$SWAPFILE none swap sw,nofail 0 0"
+if mountpoint -q /persistent 2>/dev/null && ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
+  sed -i "\\|^$SWAPFILE |d" /etc/fstab 2>/dev/null || true
+  echo "$SWAP_FSTAB_LINE" >> /etc/fstab
+fi
 
 # ============================================================================
 # Install Node.js via binary download (works on any Linux, no apt required)
@@ -757,36 +806,29 @@ Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; else exec /usr/local/bin/pnpm start; fi'
 Restart=always
 RestartSec=10
+# Only SIGTERM the main next-server process on stop. Default KillMode=
+# control-group cascades the kill to every descendant in the cgroup —
+# which would include sp-update when system.triggerUpdate spawns it,
+# since spawn(detached:true) escapes the process group but not the
+# systemd cgroup. KillMode=process lets sp-update survive the service
+# stop it issues mid-flow and finish the update + restart cycle.
+KillMode=process
 
-# Capabilities — only what the runtime needs for iptables manipulation.
-# Bound everything else so a process compromise can't CAP_SYS_ADMIN etc.
+# Ambient caps so the worker can manage iptables at runtime without
+# sudo. Capability bounding set is intentionally NOT restricted: any
+# tighter bound prevents sudo from acquiring CAP_SETUID when the API
+# spawns sp-update, breaking the self-update path. Heavier hardening
+# (NoNewPrivileges, RestrictSUIDSGID, RestrictAddressFamilies,
+# Lock/Restrict/Protect/Private*) is omitted on purpose: the pod is a
+# single-tenant LAN appliance whose tRPC API is publicProcedure end-
+# to-end (anyone on-LAN can mutate state without auth), so in-process
+# sandboxing protects against threats the API already exposes while
+# blocking the deliberate sudo→sp-update path. The remaining controls
+# — User=sleepypod (no UID 0), narrow ambient caps, the sudoers
+# fragment scoping elevation to /usr/local/bin/sp-update — give the
+# defense-in-depth that actually matters for this device.
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
-
-# Hardening — doesn't interfere with dac.sock or iptables writes
-NoNewPrivileges=true
 RuntimeDirectory=dac
-# /etc/iptables is writable because checkAndRepairIptables() persists
-# rules to /etc/iptables/rules.v4 after auto-repairing missing rules.
-# ProtectHome is NOT set: INSTALL_DIR lives at /home/dac/sleepypod-core
-# and the service needs to read .next, node_modules, .env there.
-ReadWritePaths=$DATA_DIR /persistent/deviceinfo /deviceinfo /run/dac /etc/iptables
-ProtectSystem=strict
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectClock=true
-ProtectHostname=true
-PrivateTmp=true
-PrivateDevices=true
-RestrictNamespaces=true
-RestrictRealtime=true
-RestrictSUIDSGID=true
-LockPersonality=true
-MemoryDenyWriteExecute=false
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
