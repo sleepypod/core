@@ -2,7 +2,7 @@
  * HAP Bridge orchestrator.
  *
  * Builds a single Bridge accessory (one HomeKit device) that owns
- * HeaterCooler x2, OccupancySensor x2, prime Switch, snooze Switch x2.
+ * Thermostat x2, PowerSwitch x2, OccupancySensor x2, prime Switch, snooze Switch x2.
  *
  * State updates are driven by the existing DacMonitor event bus.
  * Pairing data is persisted under /persistent/sleepypod-data/homekit/.
@@ -30,13 +30,14 @@ const ADVERTISER = {
 } as const
 type Advertiser = typeof ADVERTISER[keyof typeof ADVERTISER]
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
-import { buildHeaterCoolerService } from './accessories/heaterCooler'
 import { buildOccupancySensor } from './accessories/occupancySensor'
+import { buildPowerSwitch } from './accessories/powerSwitch'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
 import { buildSnoozeSwitch } from './accessories/snoozeSwitch'
+import { buildThermostatService } from './accessories/thermostat'
 import { clearPairings, initHapStorage, loadOrCreateIdentity, readPairedControllers, regenerateIdentity } from './storage'
 
-const BRIDGE_NAME = 'Sleepypod'
+const BRIDGE_NAME = 'sleepypod'
 const BRIDGE_PORT = 51827
 
 // Turbopack splits this module across the instrumentation chunk and the API
@@ -104,11 +105,11 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
   // the previous timers/listeners would leak.
   const localStoppers: Array<() => void> = []
   for (const side of ['left', 'right'] as const) {
-    const heaterCooler = buildHeaterCoolerService(side, monitor)
-    const heaterCoolerAcc = wrapAccessory(`Bed ${side}`, `bed-${side}`, identity.username)
-    heaterCoolerAcc.addService(heaterCooler.service)
-    accessory.addBridgedAccessory(heaterCoolerAcc)
-    localStoppers.push(heaterCooler.stop)
+    const thermostat = buildThermostatService(side, monitor)
+    const thermostatAcc = wrapAccessory(`Bed ${side}`, `bed-${side}`, identity.username)
+    thermostatAcc.addService(thermostat.service)
+    accessory.addBridgedAccessory(thermostatAcc)
+    localStoppers.push(thermostat.stop)
 
     const occupancy = buildOccupancySensor(side)
     const occupancyAcc = wrapAccessory(`Bed ${side} occupancy`, `occupancy-${side}`, identity.username)
@@ -121,6 +122,12 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
     snoozeAcc.addService(snooze.service)
     accessory.addBridgedAccessory(snoozeAcc)
     localStoppers.push(snooze.stop)
+
+    const power = buildPowerSwitch(side, monitor)
+    const powerAcc = wrapAccessory(`Bed ${side} power`, `power-${side}`, identity.username)
+    powerAcc.addService(power.service)
+    accessory.addBridgedAccessory(powerAcc)
+    localStoppers.push(power.stop)
   }
 
   const prime = buildPrimeSwitch()
