@@ -277,7 +277,7 @@ if ! flock -n 200; then
 fi
 
 # Check for required commands
-REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod visudo install mountpoint)
+REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod visudo install mountpoint mkswap swapon)
 if [ "$INSTALL_LOCAL" = true ] && [ -n "$INSTALL_BRANCH" ]; then
   REQUIRED_CMDS+=(git)
 fi
@@ -407,7 +407,9 @@ fix_db_permissions
 # only during build / heavy memory bursts; not relied on at runtime.
 SWAPFILE="/persistent/swapfile"
 SWAP_SIZE_MB=1024
-if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
+if ! mountpoint -q /persistent 2>/dev/null; then
+  echo "Warning: /persistent is not a mountpoint — skipping swap setup to avoid creating $SWAPFILE on rootfs" >&2
+elif ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
   if [ ! -f "$SWAPFILE" ]; then
     echo "Creating ${SWAP_SIZE_MB}M swap file at $SWAPFILE..."
     fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" 2>/dev/null \
@@ -418,8 +420,8 @@ if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
   swapon "$SWAPFILE" || echo "Warning: swapon failed; on-pod builds may OOM" >&2
 fi
 SWAP_FSTAB_LINE="$SWAPFILE none swap sw,nofail 0 0"
-if ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
-  sed -i "\\| $SWAPFILE |d" /etc/fstab 2>/dev/null || true
+if mountpoint -q /persistent 2>/dev/null && ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
+  sed -i "\\|^$SWAPFILE |d" /etc/fstab 2>/dev/null || true
   echo "$SWAP_FSTAB_LINE" >> /etc/fstab
 fi
 
