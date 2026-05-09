@@ -30,6 +30,6 @@ export default defineConfig({
       provider: 'v8',
     },
     name: 'unit',
-    exclude: ['.claude/worktrees/**', '.ygg/worktrees/**', 'node_modules/**'],
+    exclude: ['.claude/worktrees/**', '.ygg/worktrees/**', 'node_modules/**', '.next/**'],
   },
 })
