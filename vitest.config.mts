@@ -28,6 +28,7 @@ export default defineConfig({
     },
     coverage: {
       provider: 'v8',
+      reporter: ['text', 'lcov'],
     },
     name: 'unit',
     exclude: ['.claude/worktrees/**', '.ygg/worktrees/**', 'node_modules/**', '.next/**'],
