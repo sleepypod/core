@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily sleepypod archive push (03:30 local)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=15min
+Unit=sleepypod-archive-push.service
+
+[Install]
+WantedBy=timers.target

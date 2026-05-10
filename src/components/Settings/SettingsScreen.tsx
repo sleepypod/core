@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Settings, User, RotateCcw, Wifi, Hand, Radio, Cog } from 'lucide-react'
+import { Settings, User, RotateCcw, Wifi, Hand, Radio, Cog, HardDriveUpload } from 'lucide-react'
 import clsx from 'clsx'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
@@ -13,8 +13,9 @@ import { TapGestureConfig } from './TapGestureConfig'
 import { HapticsTestCard } from './HapticsTestCard'
 import { MqttSettingsForm } from './MqttSettingsForm'
 import { HomeKitConfig } from './HomeKitConfig'
+import { ArchivePushSettingsForm } from './ArchivePushSettingsForm'
 
-const TAB_IDS = ['device', 'sides', 'gestures', 'mqtt'] as const
+const TAB_IDS = ['device', 'sides', 'gestures', 'mqtt', 'backup'] as const
 type TabId = typeof TAB_IDS[number]
 
 function isTabId(v: string | null): v is TabId {
@@ -77,12 +78,13 @@ export function SettingsScreen() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
-        <TabsList className="grid h-10 w-full grid-cols-4 gap-1 rounded-xl bg-zinc-900 p-1">
+        <TabsList className="grid h-10 w-full grid-cols-5 gap-1 rounded-xl bg-zinc-900 p-1">
           {([
             { id: 'device', label: 'Device', Icon: Cog },
             { id: 'sides', label: 'Sides', Icon: User },
             { id: 'gestures', label: 'Gestures', Icon: Hand },
             { id: 'mqtt', label: 'MQTT', Icon: Radio },
+            { id: 'backup', label: 'Backup', Icon: HardDriveUpload },
           ] as const).map(({ id, label, Icon }) => (
             <TabsTrigger
               key={id}
@@ -109,6 +111,10 @@ export function SettingsScreen() {
 
         <TabsContent value="mqtt">
           <MqttSettingsForm />
+        </TabsContent>
+
+        <TabsContent value="backup">
+          <ArchivePushSettingsForm />
         </TabsContent>
       </Tabs>
     </div>

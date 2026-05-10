@@ -1,0 +1,17 @@
+[Unit]
+Description=Sleepypod biometrics archive push to remote (rsync over ssh)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/archive-push
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sleepypod
+Group=sleepypod
+ExecStart=/usr/local/bin/sleepypod-archive-push
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ReadWritePaths=/etc/sleepypod
+PrivateTmp=true
+NoNewPrivileges=true

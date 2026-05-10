@@ -1,0 +1,77 @@
+#!/bin/bash
+# Push gzipped biometrics archive (and optional db dump) to a user-configured
+# remote via rsync over ssh. Reads /etc/sleepypod/archive-push.conf as plain
+# KEY=VALUE (NOT bash-sourced — the conf is written by an LAN-reachable tRPC
+# handler and sourcing would be a command-injection sink). Disabled by default
+# — config flips ENABLED=true.
+#
+# Designed for nightly timer runs. No-ops cleanly when disabled or
+# misconfigured so a stale config doesn't crash the timer.
+set -euo pipefail
+
+CONFIG="${ARCHIVE_PUSH_CONFIG:-/etc/sleepypod/archive-push.conf}"
+ARCHIVE_DIR="${ARCHIVE_DIR:-/persistent/biometrics-archive}"
+DB_PATH="${BIOMETRICS_DB_PATH:-/persistent/sleepypod-data/biometrics.db}"
+
+if [ ! -f "$CONFIG" ]; then
+  echo "archive-push: no config at $CONFIG — skipping"
+  exit 0
+fi
+
+# Read KEY=VALUE without `source` so attacker-controlled values never hit
+# a shell parser. `declare -g` assigns the literal string; nothing inside
+# value gets word-split, expanded, or evaluated.
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    ''|'#'*) continue ;;
+  esac
+  key="${line%%=*}"
+  value="${line#*=}"
+  case "$key" in
+    ENABLED|HOST|REMOTE_USER|REMOTE_PATH|PORT|IDENTITY|INCLUDE)
+      declare -g "$key"="$value"
+      ;;
+  esac
+done < "$CONFIG"
+
+if [ "${ENABLED:-false}" != "true" ]; then
+  echo "archive-push: ENABLED=false — skipping"
+  exit 0
+fi
+
+: "${HOST:?HOST required in $CONFIG}"
+: "${REMOTE_USER:?REMOTE_USER required in $CONFIG}"
+: "${REMOTE_PATH:?REMOTE_PATH required in $CONFIG}"
+IDENTITY="${IDENTITY:-/etc/sleepypod/archive-push.id_ed25519}"
+PORT="${PORT:-22}"
+INCLUDE="${INCLUDE:-raw,db}"
+
+if [ ! -f "$IDENTITY" ]; then
+  echo "archive-push: identity $IDENTITY missing — generate via Settings → Backup" >&2
+  exit 1
+fi
+
+SSH_CMD="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/sleepypod/known_hosts -o ConnectTimeout=15 -p $PORT -i $IDENTITY"
+
+pushed_raw=0
+pushed_db=0
+
+if [[ ",$INCLUDE," == *",raw,"* ]] && [ -d "$ARCHIVE_DIR" ]; then
+  echo "archive-push: rsync $ARCHIVE_DIR -> $REMOTE_USER@$HOST:$REMOTE_PATH/raw/"
+  rsync -az --partial --timeout=300 -e "$SSH_CMD" \
+    "$ARCHIVE_DIR/" "$REMOTE_USER@$HOST:${REMOTE_PATH%/}/raw/"
+  pushed_raw=1
+fi
+
+if [[ ",$INCLUDE," == *",db,"* ]] && [ -f "$DB_PATH" ]; then
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  tmp=$(mktemp -t sp-bio-XXXXXX.sql.gz)
+  trap 'rm -f "$tmp"' EXIT
+  sqlite3 "$DB_PATH" .dump | gzip > "$tmp"
+  echo "archive-push: rsync biometrics.sql.gz -> $REMOTE_USER@$HOST:$REMOTE_PATH/db/biometrics-$stamp.sql.gz"
+  rsync -az --partial --timeout=300 -e "$SSH_CMD" \
+    "$tmp" "$REMOTE_USER@$HOST:${REMOTE_PATH%/}/db/biometrics-$stamp.sql.gz"
+  pushed_db=1
+fi
+
+echo "archive-push: done raw=$pushed_raw db=$pushed_db"
