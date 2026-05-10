@@ -1,6 +1,11 @@
 /**
  * Manages alarm snooze timeouts per side.
  * Snooze = clear alarm immediately, re-trigger after duration expires.
+ *
+ * Snooze map lives on globalThis: Turbopack bundles this module into both
+ * the instrumentation chunk (homekit snoozeSwitch sets it) and the API
+ * chunks (device router reads it), so per-chunk `const map = new Map()`
+ * would silently keep them in separate Maps.
  */
 import { getSharedHardwareClient } from './dacMonitor.instance'
 import type { Side } from './types'
@@ -11,7 +16,17 @@ interface SnoozeState {
   config: { vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number }
 }
 
-const activeSnoozes = new Map<Side, SnoozeState>()
+const G = globalThis as Record<string, unknown>
+const SNOOZE_KEY = '__sp_snooze_active__'
+
+function getActiveSnoozes(): Map<Side, SnoozeState> {
+  let m = G[SNOOZE_KEY] as Map<Side, SnoozeState> | undefined
+  if (!m) {
+    m = new Map<Side, SnoozeState>()
+    G[SNOOZE_KEY] = m
+  }
+  return m
+}
 
 export function snoozeAlarm(
   side: Side,
@@ -24,7 +39,7 @@ export function snoozeAlarm(
   const snoozeUntil = new Date(Date.now() + durationSeconds * 1000)
 
   const timeoutId = setTimeout(async () => {
-    activeSnoozes.delete(side)
+    getActiveSnoozes().delete(side)
     try {
       const client = getSharedHardwareClient()
       await client.setAlarm(side, config)
@@ -36,20 +51,21 @@ export function snoozeAlarm(
     }
   }, durationSeconds * 1000)
 
-  activeSnoozes.set(side, { timeoutId, snoozeUntil, config })
+  getActiveSnoozes().set(side, { timeoutId, snoozeUntil, config })
   return snoozeUntil
 }
 
 export function cancelSnooze(side: Side): void {
-  const existing = activeSnoozes.get(side)
+  const map = getActiveSnoozes()
+  const existing = map.get(side)
   if (existing) {
     clearTimeout(existing.timeoutId)
-    activeSnoozes.delete(side)
+    map.delete(side)
   }
 }
 
 export function getSnoozeStatus(side: Side): { active: boolean, snoozeUntil: number | null } {
-  const state = activeSnoozes.get(side)
+  const state = getActiveSnoozes().get(side)
   return {
     active: !!state,
     snoozeUntil: state ? Math.floor(state.snoozeUntil.getTime() / 1000) : null,

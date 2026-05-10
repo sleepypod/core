@@ -65,6 +65,17 @@ PUMP_ENERGY_MULTIPLIER = 10.0
 PUMP_CORRELATION_MIN = 0.5
 PUMP_GUARD_S = 5.0
 
+# Per-side pump activity threshold (frzHealth pump RPM). PumpGate catches
+# broadband-symmetric energy spikes but misses two steady-state coupling
+# modes: asymmetric (one pump on, observed 2026-05-02 Pod 3 — pump@2000RPM
+# on right with left idle drove phantom HR/HRV/BR) and symmetric (both
+# pumps on, observed 2026-05-05 Pod 5 — 1940/2004 rpm beat at 64/min lands
+# in the cardiac band). Both are caught by the guard below.
+PUMP_ACTIVE_RPM_MIN = 50          # pump considered "running" above this
+PUMP_OFF_GUARD_S = 5.0            # trailing guard after own-side pump-off
+PUMP_COUPLING_STD_FACTOR = 4.0    # raise enter_threshold by this factor
+PUMP_COUPLING_ACR_THRESHOLD = 0.6 # require strong autocorr to enter
+
 # HR band: 0.8 Hz preserves fundamental of 48+ BPM; 8.5 Hz per PMC7582983
 HR_BAND = (0.8, 8.5)
 
@@ -104,25 +115,78 @@ def open_biometrics_db() -> sqlite3.Connection:
     return conn
 
 
+# After this many consecutive write failures, discard the connection and
+# reopen on the next write attempt (#325).
+_DB_RECONNECT_THRESHOLD = 5
+_db_write_failures = 0
+_db_conn_ref: Optional[sqlite3.Connection] = None
+
+
+def _replace_db_connection() -> Optional[sqlite3.Connection]:
+    """Close the current biometrics connection and open a fresh one.
+
+    Returns the new connection, or None if reconnection failed. On failure the
+    caller should keep using the old handle so subsequent writes can retry.
+    """
+    global _db_conn_ref
+    old = _db_conn_ref
+    try:
+        if old is not None:
+            try:
+                old.close()
+            except sqlite3.Error:
+                pass
+        _db_conn_ref = open_biometrics_db()
+        log.info("Reopened biometrics DB connection after write failures")
+        return _db_conn_ref
+    except sqlite3.Error as e:
+        log.error("Failed to reopen biometrics DB: %s", e)
+        return None
+
+
 def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
                  heart_rate: Optional[float], hrv: Optional[float],
                  breathing_rate: Optional[float],
                  quality_score: float,
                  flags: Optional[list] = None,
-                 hr_raw: Optional[float] = None) -> None:
+                 hr_raw: Optional[float] = None) -> tuple[sqlite3.Connection, bool]:
+    """Insert one vitals row + paired vitals_quality row. Logs and swallows
+    sqlite3 errors so the main loop survives transient WAL/disk issues (#325).
+    After _DB_RECONNECT_THRESHOLD consecutive failures, the connection is
+    replaced and the new handle is returned.
+
+    Returns (conn, wrote): caller must use the returned connection for
+    subsequent writes; `wrote` is True only when both inserts committed
+    so callers don't advance their downsample cursor on a failed write.
+    """
+    global _db_write_failures, _db_conn_ref
+    _db_conn_ref = conn
     ts_unix = int(ts.timestamp())
     now_unix = int(time.time())
     flags_json = json.dumps(flags) if flags else None
-    with conn:
-        cur = conn.execute(
-            "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate) VALUES (?, ?, ?, ?, ?)",
-            (side, ts_unix, heart_rate, hrv, breathing_rate),
-        )
-        conn.execute(
-            "INSERT INTO vitals_quality (vitals_id, side, timestamp, quality_score, flags, hr_raw, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, now_unix),
-        )
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate) VALUES (?, ?, ?, ?, ?)",
+                (side, ts_unix, heart_rate, hrv, breathing_rate),
+            )
+            conn.execute(
+                "INSERT INTO vitals_quality (vitals_id, side, timestamp, quality_score, flags, hr_raw, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, now_unix),
+            )
+        _db_write_failures = 0
+        return conn, True
+    except sqlite3.Error as e:
+        _db_write_failures += 1
+        log.warning("write_vitals failed (%d consecutive): %s",
+                    _db_write_failures, e)
+        if _db_write_failures >= _DB_RECONNECT_THRESHOLD:
+            new_conn = _replace_db_connection()
+            _db_write_failures = 0
+            if new_conn is not None:
+                return new_conn, False
+        return conn, False
 
 
 def report_health(status: str, message: str) -> None:
@@ -158,6 +222,74 @@ def _bandpass(sig: np.ndarray, lo: float, hi: float, fs: float,
 # ---------------------------------------------------------------------------
 # Pump gating — streaming adaptation (Shin et al. IEEE TBME 2009)
 # ---------------------------------------------------------------------------
+
+class FrzHealthPumpState:
+    """Tracks per-side pump RPM from frzHealth records.
+
+    Used by SideProcessor to suppress phantom presence detection when
+    only the same side's pump is running (asymmetric pump-coupling
+    artifact). Trailing guard period mirrors the post-pump-off ringing
+    in the piezo channel.
+    """
+
+    def __init__(self):
+        self._pump_rpm = {"left": 0.0, "right": 0.0}
+        # monotonic seconds when each side's pump last turned off
+        self._pump_off_at = {"left": 0.0, "right": 0.0}
+        self._was_active = {"left": False, "right": False}
+
+    def update(self, record: dict) -> None:
+        if record.get("type") != "frzHealth":
+            return
+        for side in ("left", "right"):
+            data = record.get(side)
+            if not isinstance(data, dict):
+                continue
+            rpm = 0.0
+            for key in ("pumpRpm", "pump_rpm", "pumpRPM", "rpm"):
+                val = data.get(key)
+                if val is not None:
+                    try:
+                        rpm = float(val)
+                    except (TypeError, ValueError):
+                        rpm = 0.0
+                    break
+            if rpm == 0:
+                for key in ("pumpDuty", "pump_duty", "duty"):
+                    val = data.get(key)
+                    if val is not None:
+                        try:
+                            rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(val) > 0 else 0.0
+                        except (TypeError, ValueError):
+                            rpm = 0.0
+                        break
+
+            now_active = rpm >= PUMP_ACTIVE_RPM_MIN
+            if self._was_active[side] and not now_active:
+                self._pump_off_at[side] = time.monotonic()
+            self._pump_rpm[side] = rpm
+            self._was_active[side] = now_active
+
+    def is_side_pump_active(self, side: str) -> bool:
+        """Pump active = currently running OR within the trailing guard window."""
+        if self._pump_rpm[side] >= PUMP_ACTIVE_RPM_MIN:
+            return True
+        return time.monotonic() - self._pump_off_at[side] < PUMP_OFF_GUARD_S
+
+    def is_asymmetric_for(self, side: str) -> bool:
+        """Own pump active, opposite pump idle (and outside its own guard).
+        This is the configuration that produces phantom presence: pump
+        vibration on the powered side without competing signal on the
+        other side to balance/reject."""
+        other = "right" if side == "left" else "left"
+        return self.is_side_pump_active(side) and not self.is_side_pump_active(other)
+
+    def is_symmetric_active(self) -> bool:
+        """Both pumps active. RPM mismatch (Pod 5 live: 1940/2004) produces
+        a beat frequency in the cardiac band, generating bilateral phantom
+        vitals. PumpGate catches symmetric spikes but not steady-state."""
+        return self.is_side_pump_active("left") and self.is_side_pump_active("right")
+
 
 class PumpGate:
     """Detects pump activity from dual-channel energy spikes.
@@ -380,7 +512,9 @@ class HRTracker:
     """
 
     def __init__(self, max_delta: float = 15.0, history_len: int = 5):
-        self.history: list = []
+        # Bounded deque: only the last history_len entries are ever consulted,
+        # so retaining the full list would leak ~1440 floats/day (#325).
+        self.history: deque = deque(maxlen=history_len)
         self.max_delta = max_delta
         self.history_len = history_len
 
@@ -393,7 +527,7 @@ class HRTracker:
             self.history.append(hr_candidate)
             return hr_candidate
 
-        recent = float(np.median(self.history[-self.history_len:]))
+        recent = float(np.median(list(self.history)))
         delta = abs(hr_candidate - recent)
 
         # Gaussian consistency weight
@@ -631,7 +765,8 @@ def compute_hrv(samples: np.ndarray,
 # ---------------------------------------------------------------------------
 
 class SideProcessor:
-    def __init__(self, side: str, db_conn: sqlite3.Connection):
+    def __init__(self, side: str, db_conn: sqlite3.Connection,
+                 pump_state: Optional[FrzHealthPumpState] = None):
         self.side = side
         self.db = db_conn
         self._hr_buf: deque = deque(maxlen=HR_WINDOW_S * SAMPLE_RATE)
@@ -643,6 +778,7 @@ class SideProcessor:
         self._other: Optional['SideProcessor'] = None  # set after both sides created
         self._last_med_std: float = 0.0  # cached for cross-channel comparison
         self._last_acr_qual: float = 0.0
+        self._pump_state = pump_state
 
     def ingest(self, samples: np.ndarray) -> None:
         self._hr_buf.extend(samples)
@@ -690,9 +826,35 @@ class SideProcessor:
         self._last_med_std = med_std
         self._last_acr_qual = acr_qual
 
+        # Pump-coupling guard. PumpGate handles symmetric spikes (ramps)
+        # but misses two steady-state modes: asymmetric (own-pump-on with
+        # opposite idle — vibration couples into same-side piezo, no
+        # competing signal for cross-channel rejection) and symmetric
+        # (both pumps on at mismatched RPMs — beat frequency lands in the
+        # cardiac band, both sides look "real"). In both, require elevated
+        # energy AND strong autocorrelation to enter PRESENT; coupling
+        # rarely produces both, only a real person does.
+        if self._pump_state is not None and self._presence.state == PresenceDetector.ABSENT:
+            symmetric = self._pump_state.is_symmetric_active()
+            asymmetric = self._pump_state.is_asymmetric_for(self.side)
+            if symmetric or asymmetric:
+                std_threshold = self._presence.enter_threshold * PUMP_COUPLING_STD_FACTOR
+                if not (med_std > std_threshold and acr_qual > PUMP_COUPLING_ACR_THRESHOLD):
+                    log.debug(
+                        "%s: pump-coupling guard suppressed presence "
+                        "(med_std=%.0f, acr=%.2f, mode=%s)",
+                        self.side, med_std, acr_qual,
+                        "symmetric" if symmetric else "asymmetric",
+                    )
+                    return
+
         present = self._presence.update(med_std, acr_qual)
 
         if not present:
+            # Reset the interval cursor so a return from extended absence
+            # doesn't trigger burst processing on every ingest until the
+            # first write completes (#325).
+            self._last_write = now
             return  # No user detected — skip
 
         # --- Heart rate (subharmonic summation + tracking) ---
@@ -721,13 +883,19 @@ class SideProcessor:
                 flags.append("no_br")
             if med_std < self._presence.enter_threshold:
                 flags.append("low_signal")
-            write_vitals(self.db, self.side, ts, hr, hrv, br,
-                         quality_score=quality, flags=flags or None,
-                         hr_raw=hr_raw)
+            self.db, wrote = write_vitals(self.db, self.side, ts, hr, hrv, br,
+                                          quality_score=quality, flags=flags or None,
+                                          hr_raw=hr_raw)
             log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f q=%.2f", self.side,
                      hr or 0, hrv or 0, br or 0, quality)
-
-        self._last_write = now
+            # Only advance the downsample cursor when the write actually
+            # committed — otherwise a transient sqlite error would skip
+            # VITALS_INTERVAL_S of valid samples.
+            if wrote:
+                self._last_write = now
+        else:
+            # No metric to write — advance so we don't recompute on every ingest.
+            self._last_write = now
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -742,8 +910,9 @@ def main() -> None:
 
     db_conn = open_biometrics_db()
     pump_gate = PumpGate()
-    left = SideProcessor("left", db_conn)
-    right = SideProcessor("right", db_conn)
+    pump_state = FrzHealthPumpState()
+    left = SideProcessor("left", db_conn, pump_state=pump_state)
+    right = SideProcessor("right", db_conn, pump_state=pump_state)
     left._other = right
     right._other = left
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
@@ -752,7 +921,14 @@ def main() -> None:
 
     try:
         for record in follower.read_records():
-            if record.get("type") != "piezo-dual":
+            rtype = record.get("type")
+
+            # Track per-side pump state for the asymmetric pump-coupling guard
+            if rtype == "frzHealth":
+                pump_state.update(record)
+                continue
+
+            if rtype != "piezo-dual":
                 continue
 
             # Each record contains ~500 int32 samples per channel

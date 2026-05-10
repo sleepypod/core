@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  push:
+    branches: [dev]
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,6 +15,10 @@ jobs:
   ci:
     name: ${{ matrix.task.name }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -22,17 +29,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@v6
         with:
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: '.node-version'
           cache: 'pnpm'
@@ -54,3 +61,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_ENV: test
+
+      - name: Upload coverage reports to Codecov
+        if: matrix.task.name == 'Unit Tests' && !cancelled()
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          slug: sleepypod/core
+
+      - name: Upload test results to Codecov
+        if: matrix.task.name == 'Unit Tests' && !cancelled()
+        uses: codecov/test-results-action@v1
+        with:
+          use_oidc: true
+          slug: sleepypod/core
+          files: test-results/junit.xml

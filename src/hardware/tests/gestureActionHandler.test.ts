@@ -159,24 +159,34 @@ describe('GestureActionHandler', () => {
   })
 
   describe('alarm action — inactive alarm', () => {
-    test('toggles power on when pod is off (alarmInactiveBehavior=power)', async () => {
+    test('toggles power on when pod is off (alarmInactiveBehavior=power) — preserves polled target', async () => {
       const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
-      const state = { isAlarmVibrating: false, isPowered: false }
+      const state = { isAlarmVibrating: false, isPowered: false, targetTemperature: 70 }
       const { deps, client } = makeDeps(gesture, state)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
-      expect(client.setPower).toHaveBeenCalledWith('left', true)
+      expect(client.setPower).toHaveBeenCalledWith('left', true, 70)
+    })
+
+    test('power-on falls back to TEMP_NEUTRAL when no targetTemperature is cached', async () => {
+      const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
+      const state = { isAlarmVibrating: false, isPowered: false, targetTemperature: null }
+      const { deps, client } = makeDeps(gesture, state)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+      expect(client.setPower).toHaveBeenCalledWith('left', true, 82.5)
     })
 
     test('toggles power off when pod is on (alarmInactiveBehavior=power)', async () => {
       const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
-      const state = { isAlarmVibrating: false, isPowered: true }
+      const state = { isAlarmVibrating: false, isPowered: true, targetTemperature: 72 }
       const { deps, client } = makeDeps(gesture, state)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
 
-      expect(client.setPower).toHaveBeenCalledWith('right', false)
+      expect(client.setPower).toHaveBeenCalledWith('right', false, undefined)
     })
 
     test('no-op when alarmInactiveBehavior=none', async () => {

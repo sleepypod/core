@@ -10,6 +10,7 @@ export const sqlite = new Database(DB_PATH)
 
 // Enable SQLite optimizations
 sqlite.pragma('journal_mode = WAL') // Write-Ahead Logging for better concurrency
+sqlite.pragma('busy_timeout = 5000') // Wait up to 5s on lock contention instead of SQLITE_BUSY
 sqlite.pragma('synchronous = NORMAL') // Faster writes, still safe
 sqlite.pragma('cache_size = -64000') // 64MB cache
 sqlite.pragma('temp_store = MEMORY') // In-memory temp tables

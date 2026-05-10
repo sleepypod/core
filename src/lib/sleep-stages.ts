@@ -108,8 +108,9 @@ function filterOutliers(vitals: VitalsRow[]): VitalsRow[] {
         const variance = windowHRs.reduce((s, h) => s + (h - mean) ** 2, 0) / windowHRs.length
         const stdDev = Math.sqrt(variance)
 
-        // Null out HR if it deviates more than 2× std dev from the window median
-        if (Math.abs(heartRate - median) > 2 * stdDev) {
+        // Null out HR if it deviates more than 2× std dev from the window median.
+        // stdDev=0 (uniform or single-sample window) would trip on any deviation — skip.
+        if (stdDev > 0 && Math.abs(heartRate - median) > 2 * stdDev) {
           heartRate = null
         }
       }
@@ -240,11 +241,11 @@ function classifyEpoch(
 
     // REM: elevated HR + low HRV + low movement
     if (hrRatio >= 0.95) {
-      if (hrv !== null && hrv < 25 && (movement === null || movement < 30)) {
+      if (hrv !== null && hrv < 25 && movement !== null && movement < 30) {
         return 'rem'
       }
-      // High HR without movement + some HRV indication
-      if ((movement === null || movement < 50) && hrv !== null && hrv < 40) {
+      // High HR with confirmed low movement + some HRV indication
+      if (movement !== null && movement < 50 && hrv !== null && hrv < 40) {
         return 'rem'
       }
       // High HR with movement = wake

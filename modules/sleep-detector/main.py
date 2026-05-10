@@ -51,6 +51,7 @@ import os
 import sys
 import time
 import json
+import math
 import signal
 import logging
 import sqlite3
@@ -89,6 +90,12 @@ MOVEMENT_INTERVAL_S = 60
 PRESENCE_THRESHOLD = 1500
 # How often to reload calibration profiles (seconds)
 CALIBRATION_RELOAD_S = 60
+# Earliest ts considered a valid wall-clock timestamp (2020-01-01 UTC).
+# RAW frames very rarely arrive with a tiny relative ts (e.g. 3s after some
+# synthetic origin) before the firmware has a real wall-clock reference.
+# When that happens, we fall back to time.time() rather than persisting a
+# 1970-era entered_bed_at to sleep_records.
+MIN_VALID_WALL_CLOCK_TS = 1577836800.0  # 2020-01-01 00:00:00 UTC
 
 # Pump gating for movement scoring (#230)
 # Guard period after pump-off: 3 seconds = ~6 samples at 2 Hz capSense rate
@@ -139,36 +146,133 @@ def open_biometrics_db() -> sqlite3.Connection:
     return conn
 
 
-def write_sleep_record(conn: sqlite3.Connection, side: str,
+def sanitize_ts(raw_ts) -> float:
+    """Coerce a RAW frame's `ts` field into a sane wall-clock timestamp.
+
+    Falls back to time.time() when:
+      - the field is missing or not a number
+      - the value is NaN or +/-inf (CBOR-encoded IEEE 754 specials)
+      - the value is < 2020-01-01 epoch (firmware emitted a relative
+        timestamp before establishing wall-clock — directly persisting
+        this leads to entered_bed_at landing in 1970, observed once on
+        2026-03-21 in row id=30 of sleep_records).
+    """
+    try:
+        ts = float(raw_ts) if raw_ts is not None else time.time()
+    except (TypeError, ValueError):
+        return time.time()
+    if not math.isfinite(ts):
+        return time.time()
+    if ts < MIN_VALID_WALL_CLOCK_TS:
+        return time.time()
+    return ts
+
+
+# After this many consecutive write failures, discard the current biometrics
+# connection and open a fresh one on the next write (#325).
+_DB_RECONNECT_THRESHOLD = 5
+_db_write_failures = 0
+
+
+class DBHolder:
+    """Shared mutable reference to the biometrics connection.
+
+    Both SessionTracker instances point at the same DBHolder so that when
+    one tracker triggers a reconnect, the other automatically observes the
+    new connection on its next write. Holding raw sqlite3.Connection refs
+    on each tracker would orphan one of them after a reconnect (the closed
+    handle would still be in use).
+    """
+    __slots__ = ("conn",)
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+
+def _reconnect_db(holder: "DBHolder") -> None:
+    """Open a fresh connection, swap into *holder*, then close the old one.
+    Open-first-then-swap means an open failure leaves the live handle in
+    place; the close happens after the swap so concurrent writers always
+    see a valid handle. Never raises."""
+    old = holder.conn
+    try:
+        new = open_biometrics_db()
+    except sqlite3.Error as e:
+        log.error("Failed to reopen biometrics DB: %s", e)
+        return
+    holder.conn = new
+    log.info("Reopened biometrics DB connection after write failures")
+    try:
+        old.close()
+    except sqlite3.Error:
+        pass
+
+
+def write_sleep_record(holder: "DBHolder", side: str,
                        entered: datetime, left: datetime,
                        duration_s: int, exits: int,
-                       present_intervals: list, absent_intervals: list) -> None:
-    with conn:
-        conn.execute(
-            """INSERT INTO sleep_records
-               (side, entered_bed_at, left_bed_at, sleep_duration_seconds,
-                times_exited_bed, present_intervals, not_present_intervals, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                side,
-                int(entered.timestamp()),
-                int(left.timestamp()),
-                duration_s,
-                exits,
-                json.dumps(present_intervals),
-                json.dumps(absent_intervals),
-                int(time.time()),
-            ),
-        )
+                       present_intervals: list, absent_intervals: list) -> bool:
+    """Insert one sleep_records row. Logs and swallows sqlite3 errors so the
+    main loop survives transient WAL/disk issues. After _DB_RECONNECT_THRESHOLD
+    consecutive failures, the holder's connection is replaced (#325).
+
+    Returns True iff the row committed; callers should only finalize
+    in-memory session state on True so a transient failure can retry.
+    """
+    global _db_write_failures
+    conn = holder.conn
+    try:
+        with conn:
+            conn.execute(
+                """INSERT INTO sleep_records
+                   (side, entered_bed_at, left_bed_at, sleep_duration_seconds,
+                    times_exited_bed, present_intervals, not_present_intervals, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    side,
+                    int(entered.timestamp()),
+                    int(left.timestamp()),
+                    duration_s,
+                    exits,
+                    json.dumps(present_intervals),
+                    json.dumps(absent_intervals),
+                    int(time.time()),
+                ),
+            )
+        _db_write_failures = 0
+        return True
+    except sqlite3.Error as e:
+        _db_write_failures += 1
+        log.warning("write_sleep_record failed (%d consecutive): %s",
+                    _db_write_failures, e)
+        if _db_write_failures >= _DB_RECONNECT_THRESHOLD:
+            _db_write_failures = 0
+            _reconnect_db(holder)
+        return False
 
 
-def write_movement(conn: sqlite3.Connection, side: str,
-                   ts: datetime, total_movement: int) -> None:
-    with conn:
-        conn.execute(
-            "INSERT INTO movement (side, timestamp, total_movement) VALUES (?, ?, ?)",
-            (side, int(ts.timestamp()), total_movement),
-        )
+def write_movement(holder: "DBHolder", side: str,
+                   ts: datetime, total_movement: int) -> bool:
+    """Insert one movement row. See write_sleep_record for error semantics (#325).
+    Returns True iff the row committed."""
+    global _db_write_failures
+    conn = holder.conn
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO movement (side, timestamp, total_movement) VALUES (?, ?, ?)",
+                (side, int(ts.timestamp()), total_movement),
+            )
+        _db_write_failures = 0
+        return True
+    except sqlite3.Error as e:
+        _db_write_failures += 1
+        log.warning("write_movement failed (%d consecutive): %s",
+                    _db_write_failures, e)
+        if _db_write_failures >= _DB_RECONNECT_THRESHOLD:
+            _db_write_failures = 0
+            _reconnect_db(holder)
+        return False
 
 
 def report_health(status: str, message: str) -> None:
@@ -473,7 +577,7 @@ class PumpGateCapSense:
 @dataclass
 class SessionTracker:
     side: str
-    db: sqlite3.Connection
+    db: "DBHolder"
     calibration: CalibrationCache
     pump_gate: PumpGateCapSense
     _session_start: Optional[datetime] = None
@@ -580,8 +684,10 @@ class SessionTracker:
         left_at = datetime.fromtimestamp(left_ts, tz=timezone.utc)
         duration_s = int(left_ts - self._session_start.timestamp())
 
+        wrote = False
         if duration_s < MIN_SESSION_S:
             log.info("%s: session too short (%ds), discarding", self.side, duration_s)
+            wrote = True  # treat discard as final — nothing to retry
         else:
             # Close any open interval
             if self._interval_start is not None:
@@ -590,16 +696,24 @@ class SessionTracker:
                 elif left_ts > self._interval_start:
                     self._absent_intervals.append([self._interval_start, left_ts])
 
-            write_sleep_record(
+            wrote = write_sleep_record(
                 self.db, self.side,
                 self._session_start, left_at,
                 duration_s, self._exit_count,
                 self._present_intervals, self._absent_intervals,
             )
-            log.info("%s: session recorded — %.1f hr, %d exits",
-                     self.side, duration_s / 3600, self._exit_count)
+            if wrote:
+                log.info("%s: session recorded — %.1f hr, %d exits",
+                         self.side, duration_s / 3600, self._exit_count)
+            else:
+                log.warning("%s: session write deferred (DB error)", self.side)
 
-        # Reset
+        # Only reset session state when the row committed (or was deliberately
+        # discarded). Otherwise leave it in place so a follow-up call can retry
+        # rather than silently losing the entire session.
+        if not wrote:
+            return
+
         self._session_start = None
         self._last_present_ts = None
         self._present_intervals = []
@@ -657,10 +771,14 @@ class SessionTracker:
         # Step 4: Final clamp to [0, 1000]
         total = max(0, min(1000, filtered_score))
 
-        write_movement(self.db, self.side,
-                       datetime.fromtimestamp(ts, tz=timezone.utc), total)
-        self._movement_buf = []
-        self._last_movement_write = ts
+        wrote = write_movement(self.db, self.side,
+                               datetime.fromtimestamp(ts, tz=timezone.utc), total)
+        # Only clear the buffer + advance the cursor on a successful commit so
+        # a transient failure can retry on the next flush rather than dropping
+        # an epoch's worth of movement data.
+        if wrote:
+            self._movement_buf = []
+            self._last_movement_write = ts
 
 
 # ---------------------------------------------------------------------------
@@ -674,13 +792,15 @@ def main() -> None:
         log.error("Biometrics DB directory does not exist: %s", BIOMETRICS_DB.parent)
         sys.exit(1)
 
-    db_conn = open_biometrics_db()
+    db_holder = DBHolder(open_biometrics_db())
     cal_store = CalibrationStore(BIOMETRICS_DB)
     cal_cache = CalibrationCache(cal_store)
     pump_gate = PumpGateCapSense()
 
-    left = SessionTracker(side="left", db=db_conn, calibration=cal_cache, pump_gate=pump_gate)
-    right = SessionTracker(side="right", db=db_conn, calibration=cal_cache, pump_gate=pump_gate)
+    # Both trackers share the same DBHolder so a reconnect triggered on one
+    # side is observed by the other on its next write (no orphaned handles).
+    left = SessionTracker(side="left", db=db_holder, calibration=cal_cache, pump_gate=pump_gate)
+    right = SessionTracker(side="right", db=db_holder, calibration=cal_cache, pump_gate=pump_gate)
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
     report_health("healthy", "sleep-detector started")
@@ -704,7 +824,7 @@ def main() -> None:
             if rtype not in CAPSENSE_TYPES:
                 continue
 
-            ts = float(record.get("ts", time.time()))
+            ts = sanitize_ts(record.get("ts"))
             left.process(ts, record)
             right.process(ts, record)
 
@@ -714,7 +834,7 @@ def main() -> None:
         sys.exit(1)
     finally:
         cal_store.close()
-        db_conn.close()
+        db_holder.conn.close()
         log.info("Shutdown complete")
 
     # Only reached on clean shutdown (not via sys.exit)

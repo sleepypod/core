@@ -1,8 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Snowflake, Scale, Flame, X, Minus, Moon, Sun, Loader2 } from 'lucide-react'
+import { Plus, Snowflake, Scale, Flame, X, Minus, Moon, Sun, Loader2, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
+import { AICurveWizard } from './AICurveWizard'
 import { CurveChart } from './CurveChart'
 import { SetPointCard } from './SetPointCard'
 import { SetPointEditor } from './SetPointEditor'
@@ -128,6 +129,7 @@ export function CurveEditor({
   const [editingId, setEditingId] = useState<number | null>(null)
   const [pendingConflict, setPendingConflict] = useState<DayOfWeek[] | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [aiWizardOpen, setAIWizardOpen] = useState(false)
   const idCounter = useRef(-1000)
 
   // Reset state when opening (avoid stale state from previous open)
@@ -153,6 +155,8 @@ export function CurveEditor({
     setPendingConflict(null)
 
     setSaveError(null)
+
+    setAIWizardOpen(false)
   }, [open, initialDays, initialSetPoints, initialBedtime, initialWake, initialMinTemp, initialMaxTemp])
 
   // Lock body scroll when open
@@ -231,6 +235,26 @@ export function CurveEditor({
   const handleEditorDelete = useCallback((id: number) => {
     handleDeletePoint(id)
   }, [handleDeletePoint])
+
+  const handleApplyAICurve = useCallback((config: {
+    setPoints: Array<{ time: string, temperature: number }>
+    bedtime: string
+    wakeTime: string
+  }) => {
+    const next: LocalSetPoint[] = config.setPoints.map((sp, i) => ({
+      localId: -(i + 1),
+      time: sp.time,
+      temperature: Math.round(Math.max(TEMP_FLOOR, Math.min(TEMP_CEIL, sp.temperature))),
+    }))
+    setPoints(next)
+    setBedtime(config.bedtime)
+    setWakeTime(config.wakeTime)
+    const temps = next.map(p => p.temperature)
+    if (temps.length > 0) {
+      setMinTemp(Math.min(...temps))
+      setMaxTemp(Math.max(...temps))
+    }
+  }, [])
 
   const handleApplyPreset = useCallback((preset: PresetDef) => {
     const bedtimeMinutes = timeStringToMinutes(bedtime)
@@ -404,7 +428,7 @@ export function CurveEditor({
                 <p className="text-center text-xs text-zinc-500">
                   Start from a preset or add set points manually
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-2">
                   {PRESETS.map((preset) => {
                     const Icon = preset.icon
                     return (
@@ -419,6 +443,14 @@ export function CurveEditor({
                       </button>
                     )
                   })}
+                  <button
+                    type="button"
+                    onClick={() => setAIWizardOpen(true)}
+                    className="flex flex-col items-center gap-1 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-2 py-3 text-cyan-400 active:scale-[0.97]"
+                  >
+                    <Sparkles size={16} />
+                    <span className="text-[11px] font-semibold">Custom AI</span>
+                  </button>
                 </div>
               </div>
             )
@@ -459,6 +491,13 @@ export function CurveEditor({
           Add Set Point
         </button>
       </div>
+
+      {/* Custom AI curve wizard */}
+      <AICurveWizard
+        open={aiWizardOpen}
+        onClose={() => setAIWizardOpen(false)}
+        onApply={handleApplyAICurve}
+      />
 
       {/* Per-point editor sheet */}
       <SetPointEditor

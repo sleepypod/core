@@ -2,7 +2,7 @@
   "version": "6",
   "dialect": "sqlite",
   "id": "8eef0e05-1ae3-42be-8e7e-02fcb2c0313d",
-  "prevId": "209aa56c-c286-49a6-951e-60e9bdb9f8bb",
+  "prevId": "7b3c2d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
   "tables": {
     "ambient_light": {
       "name": "ambient_light",

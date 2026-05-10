@@ -17,7 +17,11 @@ export const waterLevelRouter = router({
       endDate: z.date().optional(),
       limit: z.number().int().min(1).max(10000).default(1440),
     }).strict())
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      level: z.enum(['low', 'ok']),
+    })))
     .query(async ({ input }) => {
       try {
         if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
@@ -50,7 +54,11 @@ export const waterLevelRouter = router({
   getLatest: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/water-level/latest', protect: false, tags: ['Water Level'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      level: z.enum(['low', 'ok']),
+    }).nullable())
     .query(async () => {
       try {
         const [row] = await biometricsDb
@@ -78,7 +86,12 @@ export const waterLevelRouter = router({
     .input(z.object({
       hours: z.number().int().min(1).max(168).default(24),
     }).strict())
-    .output(z.any())
+    .output(z.object({
+      totalReadings: z.number(),
+      okPercent: z.number(),
+      lowPercent: z.number(),
+      trend: z.enum(['stable', 'declining', 'rising', 'unknown']),
+    }))
     .query(async ({ input }) => {
       try {
         const now = Date.now()
@@ -166,7 +179,14 @@ export const waterLevelRouter = router({
   getAlerts: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/water-level/alerts', protect: false, tags: ['Water Level'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      type: z.enum(['low_sustained', 'rapid_change', 'leak_suspected']),
+      startedAt: z.date(),
+      dismissedAt: z.date().nullable(),
+      message: z.string().nullable(),
+      createdAt: z.date(),
+    })))
     .query(async () => {
       try {
         return await biometricsDb
@@ -226,7 +246,14 @@ export const waterLevelRouter = router({
     .input(z.object({
       hours: z.number().int().min(1).max(168).default(24),
     }).strict())
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      leftFlowrateCd: z.number().nullable(),
+      rightFlowrateCd: z.number().nullable(),
+      leftPumpRpm: z.number().nullable(),
+      rightPumpRpm: z.number().nullable(),
+    })))
     .query(async ({ input }) => {
       try {
         const since = new Date(Date.now() - input.hours * 60 * 60 * 1000)
@@ -252,7 +279,14 @@ export const waterLevelRouter = router({
   getLatestFlowReading: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/water-level/flow/latest', protect: false, tags: ['Water Level'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      timestamp: z.date(),
+      leftFlowrateCd: z.number().nullable(),
+      rightFlowrateCd: z.number().nullable(),
+      leftPumpRpm: z.number().nullable(),
+      rightPumpRpm: z.number().nullable(),
+    }).nullable())
     .query(async () => {
       try {
         const [row] = await biometricsDb

@@ -37,7 +37,18 @@ else
   }
   unblock_wan() {
     echo "Opening WAN access..."
-    SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+    # Capture state verbatim. `|| true` would mask a failed save and
+    # quietly fall through on restore — silent data loss.
+    if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+      echo "Error: iptables-save failed — refusing to unblock WAN." >&2
+      echo "$SAVED_IPTABLES" >&2
+      SAVED_IPTABLES=""
+      return 1
+    fi
+    if [ -z "$SAVED_IPTABLES" ]; then
+      echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
+      return 1
+    fi
     iptables -F && iptables -X && iptables -t nat -F && iptables -t nat -X
     echo "WAN open."
   }
@@ -68,20 +79,46 @@ cleanup() {
         ! -name '.env' \
         -exec rm -rf {} +
       cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
-      # Restore CLI tools from rolled-back code
-      if [ -d "$INSTALL_DIR/scripts/bin" ]; then
-        for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
-          cp "$tool" /usr/local/bin/
-          chmod +x "/usr/local/bin/$(basename "$tool")"
-        done
-      fi
+      # Intentionally NOT restoring sp-* tools to /usr/local/bin/.
+      # They were already swapped in atomically (see install(1) below)
+      # before the failure; restoring the pre-update copies can re-pin a
+      # pod on a broken sp-update and create an infinite loop. Concretely:
+      # pre-#494 sp-update used `cp` for self-replace, which truncated the
+      # running file's inode mid-run and made bash parse garbage from the
+      # new bytes (the "/usr/local/bin/sp-update: line N: ...: command not
+      # found" symptom). #494 fixed that with install(1), but if rollback
+      # then restored the pre-#494 copy, the next run would corrupt itself
+      # the same way. App code rolls back; sp-* tools roll forward.
       echo "Previous code restored."
     fi
-    if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
-      cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
-      [ -f "$DATA_DIR/sleepypod.db-wal.bak" ] && cp "$DATA_DIR/sleepypod.db-wal.bak" "$DATA_DIR/sleepypod.db-wal"
-      [ -f "$DATA_DIR/sleepypod.db-shm.bak" ] && cp "$DATA_DIR/sleepypod.db-shm.bak" "$DATA_DIR/sleepypod.db-shm"
-      echo "Database restored."
+    if [ -n "${DB_BACKUP:-}" ] && [ -f "$DB_BACKUP" ]; then
+      cp "$DB_BACKUP" "$DATA_DIR/sleepypod.db"
+      # Restore the WAL/SHM sidecars to a state consistent with the .db
+      # backup. If a backup sidecar exists, copy it; otherwise REMOVE any
+      # live sidecar — leaving a newer-than-DB sidecar would let SQLite
+      # replay post-rollback transactions on top of the rolled-back DB.
+      WAL_BAK="$DATA_DIR/sleepypod.db-wal.bak.${BACKUP_TS:-}"
+      SHM_BAK="$DATA_DIR/sleepypod.db-shm.bak.${BACKUP_TS:-}"
+      if [ -f "$WAL_BAK" ]; then
+        cp "$WAL_BAK" "$DATA_DIR/sleepypod.db-wal"
+      else
+        rm -f "$DATA_DIR/sleepypod.db-wal"
+      fi
+      if [ -f "$SHM_BAK" ]; then
+        cp "$SHM_BAK" "$DATA_DIR/sleepypod.db-shm"
+      else
+        rm -f "$DATA_DIR/sleepypod.db-shm"
+      fi
+      # The hardened systemd unit runs as User=sleepypod; ensure the
+      # restored files match the install-time ownership/mode (root:sleepypod
+      # 0660) so the service can read+write them.
+      chown root:sleepypod "$DATA_DIR/sleepypod.db" 2>/dev/null || true
+      chmod 0660 "$DATA_DIR/sleepypod.db" 2>/dev/null || true
+      [ -f "$DATA_DIR/sleepypod.db-wal" ] && chown root:sleepypod "$DATA_DIR/sleepypod.db-wal" 2>/dev/null || true
+      [ -f "$DATA_DIR/sleepypod.db-wal" ] && chmod 0660 "$DATA_DIR/sleepypod.db-wal" 2>/dev/null || true
+      [ -f "$DATA_DIR/sleepypod.db-shm" ] && chown root:sleepypod "$DATA_DIR/sleepypod.db-shm" 2>/dev/null || true
+      [ -f "$DATA_DIR/sleepypod.db-shm" ] && chmod 0660 "$DATA_DIR/sleepypod.db-shm" 2>/dev/null || true
+      echo "Database restored from $DB_BACKUP."
     fi
     systemctl start sleepypod.service 2>/dev/null || true
   elif [ "$exit_code" -ne 0 ]; then
@@ -125,11 +162,15 @@ tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C 
 systemctl stop sleepypod.service
 
 # Backup database (after stop so WAL/SHM are consistent)
+# Timestamped name so two rapid updates don't clobber the previous backup.
+# Matches scripts/install's naming; sp-maintenance prunes to 3 most recent.
+BACKUP_TS=$(date +%s)
+DB_BACKUP="$DATA_DIR/sleepypod.db.bak.$BACKUP_TS"
 if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
-  [ -f "$DATA_DIR/sleepypod.db-wal" ] && cp "$DATA_DIR/sleepypod.db-wal" "$DATA_DIR/sleepypod.db-wal.bak"
-  [ -f "$DATA_DIR/sleepypod.db-shm" ] && cp "$DATA_DIR/sleepypod.db-shm" "$DATA_DIR/sleepypod.db-shm.bak"
-  echo "Database backed up."
+  cp "$DATA_DIR/sleepypod.db" "$DB_BACKUP"
+  [ -f "$DATA_DIR/sleepypod.db-wal" ] && cp "$DATA_DIR/sleepypod.db-wal" "$DATA_DIR/sleepypod.db-wal.bak.$BACKUP_TS"
+  [ -f "$DATA_DIR/sleepypod.db-shm" ] && cp "$DATA_DIR/sleepypod.db-shm" "$DATA_DIR/sleepypod.db-shm.bak.$BACKUP_TS"
+  echo "Database backed up to $DB_BACKUP."
 fi
 
 # Download code — try CI release first (includes pre-built .next), fall back to source tarball
@@ -151,10 +192,21 @@ if [ -n "$RELEASE_URL" ]; then
   if curl -fSL "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
     HAS_BUILD=true
     echo "CI release downloaded (pre-built)."
+  else
+    # CI download failed mid-stream (e.g. curl truncation). Partial
+    # files would otherwise contaminate WORK_DIR — the source-tarball
+    # fallback below extracts into the same dir, and `ls "$WORK_DIR"
+    # | head -1` would then pick up stale CI-release contents instead
+    # of the freshly-extracted source subdir. Mirrors scripts/install.
+    find "$WORK_DIR" -mindepth 1 -delete 2>/dev/null || true
   fi
 fi
 
 if [ "$HAS_BUILD" = false ]; then
+  # A failed CI-release download can leave partial extraction in WORK_DIR;
+  # drop and recreate so the source-tarball structure check is reliable.
+  rm -rf "$WORK_DIR"
+  WORK_DIR=$(mktemp -d)
   # Fall back to source tarball (no .next — would need build on pod)
   # "latest" is not a real branch — use main for the source tarball
   SOURCE_BRANCH="$BRANCH"
@@ -190,31 +242,37 @@ echo "Source updated."
 
 cd "$INSTALL_DIR"
 
+# Move node_modules off rootfs onto /persistent before pnpm runs.
+# Migrates existing rootfs node_modules on the first sp-update after
+# the relocation feature lands; subsequent runs are no-ops.
+if [ -f "$INSTALL_DIR/scripts/lib/relocation-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/relocation-helpers"
+  ensure_persistent_node_modules "$INSTALL_DIR"
+fi
+
 # Install production dependencies
 pnpm install --frozen-lockfile --prod
-
-# Turbopack mangles native module requires with pnpm virtual store hashes
-# that differ between CI (x86_64) and pod (arm64). Create symlinks so the
-# hashed names in .next resolve to the real modules.
-for chunk in "$INSTALL_DIR"/.next/server/chunks/*.js; do
-  [ -f "$chunk" ] || continue
-  for hashed in $(grep -o 'better-sqlite3-[a-f0-9]\{16\}' "$chunk" 2>/dev/null | sort -u); do
-    if [ ! -e "$INSTALL_DIR/node_modules/$hashed" ]; then
-      ln -sf better-sqlite3 "$INSTALL_DIR/node_modules/$hashed"
-      echo "Linked $hashed → better-sqlite3"
-    fi
-  done
-  break  # only need to scan one chunk
-done
 
 # Build only if no pre-built .next exists
 if [ ! -d "$INSTALL_DIR/.next" ]; then
   echo "No pre-built .next found, building..."
-  pnpm install --frozen-lockfile
+  # CI=true so pnpm doesn't prompt for TTY confirmation when prod-only
+  # node_modules need to be replaced with the full dev set.
+  CI=true pnpm install --frozen-lockfile
   SP_BRANCH="$BRANCH" pnpm build
 else
   # Regenerate .git-info with the correct branch for pre-built releases
   SP_BRANCH="$BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
+fi
+
+# Validate the build actually produced a startable .next bundle. next start
+# refuses to boot without BUILD_ID and silently crashloops via systemd
+# Restart=on-failure, so without this check sp-update would print "Update
+# complete!" while the service is dying every 10 seconds.
+if [ ! -f "$INSTALL_DIR/.next/BUILD_ID" ]; then
+  echo "Error: build did not produce $INSTALL_DIR/.next/BUILD_ID — refusing to start service" >&2
+  echo "Inspect the build output above; common causes: pnpm build script swallowed an error, OOM/SIGTERM during turbopack, or pre-built tarball missing the file." >&2
+  exit 1
 fi
 
 # Sync biometrics modules

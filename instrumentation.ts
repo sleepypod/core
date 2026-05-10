@@ -17,11 +17,14 @@
 
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
+import { startBiometricsRetention, stopBiometricsRetention } from '@/src/db/retention'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
 import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
 import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streaming/bonjourAnnounce'
+import { startMqttBridge, shutdownMqttBridge } from '@/src/streaming/mqttBridge'
 import { initializeKeepalives, shutdownKeepalives } from '@/src/services/temperatureKeepalive'
 import { startAutoOffWatcher, stopAutoOffWatcher } from '@/src/services/autoOffWatcher'
+import { shutdownHomeKit, startHomeKitIfEnabled } from '@/src/homekit'
 
 let isInitialized = false
 let isShuttingDown = false
@@ -68,12 +71,28 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down piezo stream server:', error)
   }
 
+  // Step 2b: Shutdown MQTT bridge (publish offline + close client cleanly)
+  try {
+    await shutdownMqttBridge()
+  }
+  catch (error) {
+    console.error('Error shutting down MQTT bridge:', error)
+  }
+
   // Step 3: Stop Bonjour announcement
   try {
     stopBonjourAnnouncement()
   }
   catch (error) {
     console.error('Error stopping Bonjour:', error)
+  }
+
+  // Step 3a: Stop HomeKit bridge (unpublish HAP mDNS, close TCP listener)
+  try {
+    await shutdownHomeKit()
+  }
+  catch (error) {
+    console.error('Error shutting down HomeKit:', error)
   }
 
   // Step 4: Stop auto-off watcher (await in-flight power-off calls)
@@ -92,7 +111,15 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down DacMonitor:', error)
   }
 
-  // Step 6: Close database connections
+  // Step 6: Stop biometrics retention loop before closing DB
+  try {
+    stopBiometricsRetention()
+  }
+  catch (error) {
+    console.error('Error stopping biometrics retention:', error)
+  }
+
+  // Step 7: Close database connections
   try {
     closeDatabase()
     closeBiometricsDatabase()
@@ -284,11 +311,33 @@ export async function initializeScheduler(): Promise<void> {
       )
     }
 
+    // Start MQTT bridge (non-blocking; no-op when disabled in settings/env)
+    try {
+      await startMqttBridge()
+    }
+    catch (error) {
+      console.warn(
+        'WARNING: MQTT bridge failed to start:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
     // Start auto-off watcher (polls biometrics DB for bed-exit events)
     startAutoOffWatcher()
 
     // Start Bonjour/mDNS announcement (non-blocking)
     startBonjourAnnouncement()
+
+    // Start HomeKit bridge if user has opted in (non-blocking)
+    startHomeKitIfEnabled().catch((error) => {
+      console.warn(
+        '[homekit] startup failed:',
+        error instanceof Error ? error.message : error,
+      )
+    })
+
+    // Start biometrics time-series retention loop (non-blocking)
+    startBiometricsRetention()
   }
   catch (error) {
     console.error('Failed to initialize job scheduler:', error)
@@ -300,9 +349,25 @@ export async function initializeScheduler(): Promise<void> {
  * Next.js instrumentation hook (if supported)
  * Automatically called by Next.js on server startup
  */
+/**
+ * Gate for `register()`. Returns true only when the instrumentation hook
+ * should execute its body.
+ *
+ * Next.js calls the instrumentation hook **once per server runtime** — both
+ * Node and Edge bundles trigger it. The previous gate (`NEXT_RUNTIME==='nodejs'
+ * || typeof window === 'undefined'`) was too permissive: `typeof window` is
+ * undefined in every server runtime, so Edge slipped through and caused
+ * double-init (most visibly: two MQTT bridge clients connecting from the
+ * same pod). Strict check on `NEXT_RUNTIME` when set; allow when unset
+ * (tests, scripts).
+ */
+export function shouldRunInstrumentation(env: Record<string, string | undefined> = process.env): boolean {
+  if (env.NEXT_RUNTIME && env.NEXT_RUNTIME !== 'nodejs') return false
+  return true
+}
+
 export async function register(): Promise<void> {
-  // Only run on server
-  if (process.env.NEXT_RUNTIME === 'nodejs' || typeof window === 'undefined') {
+  if (shouldRunInstrumentation()) {
     // Register global handlers first (before any initialization that could fail)
     registerGlobalHandlers()
 

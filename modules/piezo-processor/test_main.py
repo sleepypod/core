@@ -32,11 +32,16 @@ from main import (  # noqa: E402
     compute_breathing_rate,
     compute_hrv,
     subharmonic_summation_hr,
+    FrzHealthPumpState,
+    PUMP_OFF_GUARD_S,
+    PUMP_ACTIVE_RPM_MIN,
     HRTracker,
     PresenceDetector,
     PumpGate,
+    SideProcessor,
     SAMPLE_RATE,
     PUMP_GUARD_S,
+    VITALS_INTERVAL_S,
 )
 
 # ===================================================================
@@ -612,7 +617,7 @@ class TestHRTracker:
         # History should not have 200.0 appended
         assert 200.0 not in tracker.history
         # History should be unchanged
-        assert tracker.history == history_before
+        assert list(tracker.history) == history_before
 
     def test_history_length_limited(self):
         """Only the most recent history_len entries are used for median."""
@@ -633,6 +638,26 @@ class TestHRTracker:
         result = tracker.update(200.0, 0.5)
         # The value is returned even though it's an outlier
         assert result == 200.0
+
+    def test_history_bounded_under_sustained_input(self):
+        """HRTracker history must not grow unbounded — only the last
+        history_len entries are ever consulted, so retaining more leaks
+        memory on multi-day uptime (#325)."""
+        tracker = HRTracker(history_len=5)
+        # Feed ~1440 readings (equivalent to 1 day at 1/min).
+        for i in range(1440):
+            tracker.update(70.0 + (i % 3), 0.5)
+        assert len(tracker.history) <= 5, (
+            f"HRTracker.history leaked: expected ≤5 entries, "
+            f"got {len(tracker.history)}"
+        )
+
+    def test_history_bound_respects_custom_history_len(self):
+        """Custom history_len caps the underlying storage."""
+        tracker = HRTracker(history_len=3)
+        for i in range(100):
+            tracker.update(70.0, 0.5)
+        assert len(tracker.history) <= 3
 
 
 # ===================================================================
@@ -812,6 +837,132 @@ class TestComputeHRV:
 # ===================================================================
 
 
+class TestWriteVitalsResilience:
+    """write_vitals must swallow sqlite3 errors and reconnect after N
+    consecutive failures so transient WAL/disk issues don't kill the process (#325)."""
+
+    def _make_db(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            """CREATE TABLE vitals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                side TEXT, timestamp INTEGER,
+                heart_rate REAL, hrv REAL, breathing_rate REAL
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE vitals_quality (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vitals_id INTEGER, side TEXT, timestamp INTEGER,
+                quality_score REAL, flags TEXT, hr_raw REAL,
+                created_at INTEGER
+            )"""
+        )
+        return conn
+
+    def test_happy_path_inserts(self):
+        from datetime import datetime, timezone
+        import main
+        conn = self._make_db()
+        main._db_write_failures = 0
+        result_conn, wrote = main.write_vitals(conn, "left",
+                                               datetime.now(timezone.utc),
+                                               70.0, 40.0, 15.0,
+                                               quality_score=0.9)
+        assert result_conn is conn
+        assert wrote is True
+        rows = conn.execute("SELECT * FROM vitals").fetchall()
+        assert len(rows) == 1
+
+    def test_sqlite_error_does_not_raise(self, monkeypatch):
+        """A transient OperationalError must be logged, not raised."""
+        from datetime import datetime, timezone
+        import sqlite3
+        import main
+
+        class BadConn:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("disk I/O error")
+
+        main._db_write_failures = 0
+        # Should not raise
+        result_conn, wrote = main.write_vitals(BadConn(), "left",
+                                               datetime.now(timezone.utc),
+                                               70.0, 40.0, 15.0,
+                                               quality_score=0.9)
+        # Returns the bad conn unchanged on the first failure, with wrote=False.
+        assert result_conn is not None
+        assert wrote is False
+
+    def test_reconnect_after_threshold(self, monkeypatch):
+        """After _DB_RECONNECT_THRESHOLD consecutive failures, the connection
+        is replaced via open_biometrics_db()."""
+        from datetime import datetime, timezone
+        import sqlite3
+        import main
+
+        class BadConn:
+            closed = False
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("disk full")
+            def close(self):
+                self.closed = True
+
+        replaced = []
+
+        def fake_open():
+            replaced.append(1)
+            return self._make_db()
+
+        main._db_write_failures = 0
+        monkeypatch.setattr(main, "open_biometrics_db", fake_open)
+
+        bad = BadConn()
+        ts = datetime.now(timezone.utc)
+        conn = bad
+        for i in range(main._DB_RECONNECT_THRESHOLD):
+            conn, wrote = main.write_vitals(conn, "left", ts, 70.0, 40.0, 15.0,
+                                            quality_score=0.9)
+            assert wrote is False
+
+        # After crossing the threshold the function must have reopened the DB
+        assert len(replaced) == 1, \
+            "expected one reconnect after _DB_RECONNECT_THRESHOLD failures"
+        # Failure counter resets after reconnect
+        assert main._db_write_failures == 0
+
+
+class TestSideProcessorAbsenceThrottle:
+    """_maybe_write must update _last_write on 'no user' so return from
+    extended absence doesn't trigger burst processing until the first write
+    succeeds (#325)."""
+
+    def test_last_write_advances_on_absence(self):
+        """When presence is not detected, _last_write should be advanced so
+        the next ingest call does not immediately re-enter the heavy
+        signal-processing path."""
+        np.random.seed(42)
+        proc = SideProcessor("left", db_conn=None)
+        # Simulate extended absence — _last_write far in the past.
+        proc._last_write = time.time() - 3600  # 1 hour ago
+        assert time.time() - proc._last_write > VITALS_INTERVAL_S
+
+        # Feed low-amplitude noise (empty bed).
+        samples = make_noise(duration_s=15, amplitude=100).astype(np.int32)
+        proc.ingest(samples)
+
+        # _last_write must have been moved forward to now-ish so the NEXT
+        # ingest within VITALS_INTERVAL_S will short-circuit at the cadence
+        # check rather than running presence detection + suppression again.
+        assert time.time() - proc._last_write < VITALS_INTERVAL_S, \
+            "absence skip must update _last_write to bound burst processing"
+
+
 class TestIntegration:
     """Verify that pipeline components work together on realistic signals."""
 
@@ -851,3 +1002,181 @@ class TestIntegration:
 
         # At least one of these should indicate "nobody home"
         assert not present or hr is None or score < 0.15
+
+
+# ===================================================================
+# FrzHealthPumpState — asymmetric pump-coupling guard
+# ===================================================================
+
+class TestFrzHealthPumpState:
+    """Tracks per-side pump RPM from frzHealth records and identifies
+    asymmetric pump-on configurations (own pump active, other idle) that
+    cause phantom presence on Pod 3. Bug observed live 2026-05-02:
+    right-side heating with pump@2000RPM produced 23 vitals rows in
+    30 min with no occupant."""
+
+    def test_ignores_non_frzhealth_records(self):
+        ps = FrzHealthPumpState()
+        ps.update({"type": "piezo-dual", "left": {"pumpRpm": 5000}, "right": {"pumpRpm": 5000}})
+        assert ps.is_side_pump_active("left") is False
+        assert ps.is_side_pump_active("right") is False
+
+    def test_marks_pump_active_above_threshold(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": PUMP_ACTIVE_RPM_MIN + 100},
+        })
+        assert ps.is_side_pump_active("left") is False
+        assert ps.is_side_pump_active("right") is True
+
+    def test_below_threshold_is_idle(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": PUMP_ACTIVE_RPM_MIN - 1},
+            "right": {"pumpRpm": PUMP_ACTIVE_RPM_MIN - 1},
+        })
+        assert ps.is_side_pump_active("left") is False
+        assert ps.is_side_pump_active("right") is False
+
+    def test_alternative_field_names(self):
+        """Different firmware versions emit pumpRpm / pump_rpm / rpm /
+        pumpDuty. The state tracker must read all of them."""
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pump_rpm": 2000},
+            "right": {"rpm": 2000},
+        })
+        assert ps.is_side_pump_active("left") is True
+        assert ps.is_side_pump_active("right") is True
+
+    def test_pumpRPM_uppercase_variant(self):
+        """Firmware may emit pumpRPM (all-caps RPM); main.py:196 lists it
+        but only the lowercase variants were exercised before."""
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRPM": 2000},
+            "right": {"pumpRPM": 0},
+        })
+        assert ps.is_side_pump_active("left") is True
+        assert ps.is_side_pump_active("right") is False
+
+    def test_pumpDuty_fallback(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpDuty": 50},
+            "right": {"pumpDuty": 0},
+        })
+        assert ps.is_side_pump_active("left") is True
+        assert ps.is_side_pump_active("right") is False
+
+    def test_is_asymmetric_true_when_only_own_side_running(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 2000},
+        })
+        # The exact live observation: right is heating, left is off.
+        assert ps.is_asymmetric_for("right") is True
+        assert ps.is_asymmetric_for("left") is False
+
+    def test_is_asymmetric_false_when_both_running(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 2000},
+            "right": {"pumpRpm": 2000},
+        })
+        # Both pumps on → not asymmetric. The symmetric case is caught
+        # by is_symmetric_active() instead — see test below.
+        assert ps.is_asymmetric_for("left") is False
+        assert ps.is_asymmetric_for("right") is False
+        assert ps.is_symmetric_active() is True
+
+    def test_is_symmetric_active_only_when_both_running(self):
+        ps = FrzHealthPumpState()
+        # Both off
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 0},
+        })
+        assert ps.is_symmetric_active() is False
+        # Asymmetric (right only)
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 2000},
+        })
+        assert ps.is_symmetric_active() is False
+        # Both on (Pod 5 live: 1940 / 2004 → beat 64/min in cardiac band)
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 1940},
+            "right": {"pumpRpm": 2004},
+        })
+        assert ps.is_symmetric_active() is True
+
+    def test_is_asymmetric_false_when_both_idle(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 0},
+        })
+        assert ps.is_asymmetric_for("left") is False
+        assert ps.is_asymmetric_for("right") is False
+
+    def test_guard_period_after_pump_off(self):
+        """After own-side pump turns off, ringing in piezo continues for
+        a few seconds — keep the gate active during that trailing window."""
+        ps = FrzHealthPumpState()
+        # Pump on
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 2000},
+        })
+        assert ps.is_side_pump_active("right") is True
+
+        # Pump off — should still be "active" within guard
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 0},
+        })
+        assert ps.is_side_pump_active("right") is True
+        assert ps.is_asymmetric_for("right") is True
+
+    def test_guard_period_expires(self):
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 2000},
+        })
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pumpRpm": 0},
+            "right": {"pumpRpm": 0},
+        })
+        # Force guard expiry
+        ps._pump_off_at["right"] = time.monotonic() - PUMP_OFF_GUARD_S - 1
+        assert ps.is_side_pump_active("right") is False
+
+    def test_handles_malformed_record_safely(self):
+        ps = FrzHealthPumpState()
+        # No left/right keys
+        ps.update({"type": "frzHealth"})
+        # Wrong types
+        ps.update({"type": "frzHealth", "left": "not a dict", "right": [1, 2, 3]})
+        # Non-numeric rpm
+        ps.update({"type": "frzHealth", "left": {"pumpRpm": "abc"}, "right": {"pumpRpm": None}})
+        assert ps.is_side_pump_active("left") is False
+        assert ps.is_side_pump_active("right") is False

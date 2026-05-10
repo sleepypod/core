@@ -177,6 +177,116 @@ describe('Scheduler', () => {
       scheduler.updateConfig({ enabled: false })
       expect(scheduler.isEnabled()).toBe(false)
     })
+
+    it('cancels recurring jobs when timezone changes so stale offsets cannot fire', () => {
+      const handler = vi.fn(async () => {})
+      scheduler.scheduleJob('tz-old', JobType.TEMPERATURE, '0 0 * * *', handler)
+      expect(scheduler.getJob('tz-old')).toBeDefined()
+
+      scheduler.updateConfig({ timezone: 'America/New_York' })
+      expect(scheduler.getTimezone()).toBe('America/New_York')
+      // Recurring job must be dropped — caller is responsible for reloading
+      expect(scheduler.getJob('tz-old')).toBeUndefined()
+    })
+
+    it('preserves one-time jobs when timezone changes', () => {
+      const future = new Date(Date.now() + 60_000)
+      const handler = vi.fn(async () => {})
+      scheduler.scheduleOneTimeJob('once-keep', JobType.AWAY_MODE, future, handler)
+
+      scheduler.updateConfig({ timezone: 'America/New_York' })
+
+      expect(scheduler.getJob('once-keep')).toBeDefined()
+    })
+
+    it('is a no-op when timezone is unchanged', () => {
+      const handler = vi.fn(async () => {})
+      scheduler.scheduleJob('tz-keep', JobType.TEMPERATURE, '0 0 * * *', handler)
+      scheduler.updateConfig({ enabled: true, timezone: 'America/Los_Angeles' })
+      expect(scheduler.getJob('tz-keep')).toBeDefined()
+    })
+  })
+
+  describe('cancelRecurringJobs', () => {
+    it('preserves AWAY_MODE one-time jobs', () => {
+      const future = new Date(Date.now() + 60_000)
+      const handler = vi.fn(async () => {})
+
+      scheduler.scheduleJob('cron-temp', JobType.TEMPERATURE, '0 0 * * *', handler)
+      scheduler.scheduleOneTimeJob('away-start-left', JobType.AWAY_MODE, future, handler)
+      scheduler.scheduleOneTimeJob('runonce-1', JobType.RUN_ONCE, future, handler)
+
+      scheduler.cancelRecurringJobs()
+
+      expect(scheduler.getJob('cron-temp')).toBeUndefined()
+      expect(scheduler.getJob('away-start-left')).toBeDefined()
+      expect(scheduler.getJob('runonce-1')).toBeDefined()
+    })
+  })
+
+  describe('job retry for hardware failures', () => {
+    it('retries a failing hardware job up to 3 attempts', async () => {
+      const future = new Date(Date.now() + 30)
+      let calls = 0
+      const handler = vi.fn(async () => {
+        calls++
+        if (calls < 2) throw new Error('transient hw fail')
+      })
+
+      scheduler.scheduleOneTimeJob('retry-succeeds', JobType.TEMPERATURE, future, handler)
+
+      await new Promise((resolve) => {
+        scheduler.on('jobExecuted', (id, result) => {
+          if (id === 'retry-succeeds') {
+            expect(result.success).toBe(true)
+            expect(handler).toHaveBeenCalledTimes(2)
+            resolve(undefined)
+          }
+        })
+      })
+    })
+
+    it('does not retry non-hardware jobs', async () => {
+      const future = new Date(Date.now() + 30)
+      const handler = vi.fn(async () => {
+        throw new Error('fatal')
+      })
+
+      scheduler.scheduleOneTimeJob('no-retry', JobType.REBOOT, future, handler)
+
+      await new Promise((resolve) => {
+        scheduler.on('jobExecuted', (id, result) => {
+          if (id === 'no-retry') {
+            expect(result.success).toBe(false)
+            expect(handler).toHaveBeenCalledTimes(1)
+            resolve(undefined)
+          }
+        })
+      })
+    })
+
+    it('surfaces last error via jobError after exhausting retries', async () => {
+      const future = new Date(Date.now() + 30)
+      const handler = vi.fn(async () => {
+        throw new Error('always fails')
+      })
+      const errorListener = vi.fn()
+      scheduler.on('jobError', errorListener)
+
+      scheduler.scheduleOneTimeJob('retry-fails', JobType.POWER_ON, future, handler)
+
+      await new Promise((resolve) => {
+        scheduler.on('jobExecuted', (id, result) => {
+          if (id === 'retry-fails') {
+            expect(result.success).toBe(false)
+            expect(result.error).toBe('always fails')
+            expect(handler).toHaveBeenCalledTimes(3)
+            expect(errorListener).toHaveBeenCalledTimes(1)
+            resolve(undefined)
+          }
+        })
+      })
+    }, 10000)
   })
 
   describe('getNextInvocation', () => {

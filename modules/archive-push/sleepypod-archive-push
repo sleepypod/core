@@ -1,0 +1,151 @@
+#!/bin/bash
+# Push gzipped biometrics archive (and optional db dump) to a user-configured
+# remote via ssh + scp. Reads /etc/sleepypod/archive-push.conf as plain
+# KEY=VALUE (NOT bash-sourced — the conf is written by an LAN-reachable tRPC
+# handler and sourcing would be a command-injection sink). Disabled by default
+# — config flips ENABLED=true.
+#
+# Uses scp rather than rsync because rsync isn't installed on the pod and
+# there's no package manager to fetch it. The cold archive is append-only
+# (one new *.RAW.gz per day), so a list-remote-then-scp-missing loop has
+# the same steady-state cost as `rsync -az`. ssh ControlMaster multiplexes
+# the per-file scps over a single TCP connection.
+#
+# Designed for nightly timer runs. No-ops cleanly when disabled or
+# misconfigured so a stale config doesn't crash the timer.
+set -euo pipefail
+
+CONFIG="${ARCHIVE_PUSH_CONFIG:-/etc/sleepypod/archive-push.conf}"
+ARCHIVE_DIR="${ARCHIVE_DIR:-/persistent/biometrics-archive}"
+DB_PATH="${BIOMETRICS_DB_PATH:-/persistent/sleepypod-data/biometrics.db}"
+# Stage db backup on /persistent (~10 GB) instead of /tmp (tmpfs, ~1 GB).
+DB_STAGING_DIR="${ARCHIVE_PUSH_STAGING_DIR:-/persistent/sleepypod-data/archive-push-staging}"
+# next-server's app dir — holds the better-sqlite3 install we reuse for the
+# online backup. No separate sqlite3 binary lives on the pod.
+APP_DIR="${SLEEPYPOD_APP_DIR:-/home/dac/sleepypod-core}"
+# Pin to the node that built better-sqlite3 — /usr/bin/node on this pod is
+# v16 (NODE_MODULE_VERSION 93) and won't load the native addon built for the
+# newer runtime that next-server uses.
+NODE_BIN="${SLEEPYPOD_NODE_BIN:-/usr/local/bin/node}"
+
+if [ ! -f "$CONFIG" ]; then
+  echo "archive-push: no config at $CONFIG — skipping"
+  exit 0
+fi
+
+# Read KEY=VALUE without `source` so attacker-controlled values never hit
+# a shell parser. `declare -g` assigns the literal string; nothing inside
+# value gets word-split, expanded, or evaluated.
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    ''|'#'*) continue ;;
+  esac
+  key="${line%%=*}"
+  value="${line#*=}"
+  case "$key" in
+    ENABLED|HOST|REMOTE_USER|REMOTE_PATH|PORT|IDENTITY|INCLUDE)
+      declare -g "$key"="$value"
+      ;;
+  esac
+done < "$CONFIG"
+
+if [ "${ENABLED:-false}" != "true" ]; then
+  echo "archive-push: ENABLED=false — skipping"
+  exit 0
+fi
+
+: "${HOST:?HOST required in $CONFIG}"
+: "${REMOTE_USER:?REMOTE_USER required in $CONFIG}"
+: "${REMOTE_PATH:?REMOTE_PATH required in $CONFIG}"
+IDENTITY="${IDENTITY:-/etc/sleepypod/archive-push.id_ed25519}"
+PORT="${PORT:-22}"
+INCLUDE="${INCLUDE:-raw,db}"
+
+if [ ! -f "$IDENTITY" ]; then
+  echo "archive-push: identity $IDENTITY missing — generate via Settings → Backup" >&2
+  exit 1
+fi
+
+# ControlMaster reuses one TCP connection across every scp/ssh invocation
+# below, so per-file overhead is one round-trip, not a full ssh handshake.
+ctl_socket=$(mktemp -u -p /tmp ssh-archive-push.XXXXXX)
+SSH_OPTS=(
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile=/etc/sleepypod/known_hosts
+  -o ConnectTimeout=15
+  -o ControlMaster=auto
+  -o "ControlPath=$ctl_socket"
+  -o ControlPersist=60
+  -p "$PORT"
+  -i "$IDENTITY"
+)
+SCP_OPTS=(
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile=/etc/sleepypod/known_hosts
+  -o ConnectTimeout=15
+  -o ControlMaster=auto
+  -o "ControlPath=$ctl_socket"
+  -o ControlPersist=60
+  -P "$PORT"
+  -i "$IDENTITY"
+)
+# scp uses -P (capital) for port; ssh uses -p. ControlPath is shared.
+
+ssh_remote() { ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$HOST" "$@"; }
+scp_to_remote() { scp "${SCP_OPTS[@]}" "$@"; }
+
+pushed_raw=0
+pushed_db=0
+skipped_raw=0
+
+if [[ ",$INCLUDE," == *",raw,"* ]] && [ -d "$ARCHIVE_DIR" ]; then
+  echo "archive-push: sync $ARCHIVE_DIR -> $REMOTE_USER@$HOST:$REMOTE_PATH/raw/"
+  ssh_remote "mkdir -p '${REMOTE_PATH%/}/raw'"
+  # Pull remote listing once, then loop locally — one round trip for the
+  # diff instead of one per file.
+  remote_listing=$(ssh_remote "ls -1 '${REMOTE_PATH%/}/raw/' 2>/dev/null || true")
+  for f in "$ARCHIVE_DIR"/*.RAW.gz; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    if printf '%s\n' "$remote_listing" | grep -Fxq "$base"; then
+      skipped_raw=$((skipped_raw + 1))
+      continue
+    fi
+    # Upload with .part suffix and rename atomically so an interrupted scp
+    # never leaves a half-file the next run thinks is complete.
+    scp_to_remote "$f" "$REMOTE_USER@$HOST:${REMOTE_PATH%/}/raw/$base.part"
+    ssh_remote "mv '${REMOTE_PATH%/}/raw/$base.part' '${REMOTE_PATH%/}/raw/$base'"
+    pushed_raw=$((pushed_raw + 1))
+  done
+fi
+
+if [[ ",$INCLUDE," == *",db,"* ]] && [ -f "$DB_PATH" ]; then
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  mkdir -p "$DB_STAGING_DIR"
+  tmp_db=$(mktemp -p "$DB_STAGING_DIR" sp-bio-XXXXXX.db)
+  tmp_gz="$tmp_db.gz"
+  trap 'rm -f "$tmp_db" "$tmp_gz"; ssh -O exit "${SSH_OPTS[@]}" "$REMOTE_USER@$HOST" 2>/dev/null || true' EXIT
+  # SQLite Online Backup via better-sqlite3 — same library next-server uses.
+  # cwd to APP_DIR so node resolves the dependency the standard way.
+  ( cd "$APP_DIR" && "$NODE_BIN" -e '
+    const Database = require("better-sqlite3");
+    const [src, dst] = process.argv.slice(1);
+    const db = new Database(src, { readonly: true, fileMustExist: true });
+    db.backup(dst).then(() => db.close()).catch(e => { console.error(e); process.exit(1) });
+  ' "$DB_PATH" "$tmp_db" )
+  gzip -f "$tmp_db"
+  remote_db_name="biometrics-$stamp.db.gz"
+  echo "archive-push: scp $remote_db_name -> $REMOTE_USER@$HOST:$REMOTE_PATH/db/"
+  ssh_remote "mkdir -p '${REMOTE_PATH%/}/db'"
+  scp_to_remote "$tmp_gz" "$REMOTE_USER@$HOST:${REMOTE_PATH%/}/db/$remote_db_name.part"
+  ssh_remote "mv '${REMOTE_PATH%/}/db/$remote_db_name.part' '${REMOTE_PATH%/}/db/$remote_db_name'"
+  pushed_db=1
+fi
+
+# Close the ControlMaster connection cleanly. The trap above also covers
+# the error path so the socket file doesn't outlive the process.
+ssh -O exit "${SSH_OPTS[@]}" "$REMOTE_USER@$HOST" 2>/dev/null || true
+
+echo "archive-push: done raw=$pushed_raw raw_skipped=$skipped_raw db=$pushed_db"

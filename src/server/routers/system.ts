@@ -3,7 +3,7 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { execFile } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -25,6 +25,50 @@ function resolveExec(name: string, candidates: string[]): string {
 
 const IPTABLES = resolveExec('iptables', ['/sbin/iptables', '/usr/sbin/iptables'])
 const IPTABLES_SAVE = resolveExec('iptables-save', ['/sbin/iptables-save', '/usr/sbin/iptables-save'])
+
+/**
+ * Run `df -B1 <path>` and return the parsed totals, or null if the mount
+ * is missing / df is unavailable (e.g. macOS dev).
+ */
+async function dfBreakdown(path: string): Promise<{
+  totalBytes: number
+  usedBytes: number
+  availableBytes: number
+  usedPercent: number
+} | null> {
+  try {
+    const { stdout } = await execFileAsync('df', ['-B1', path], { timeout: 5000 })
+    const line = stdout.trim().split('\n')[1]
+    const parts = line?.split(/\s+/) ?? []
+    const totalBytes = Number(parts[1]) || 0
+    const usedBytes = Number(parts[2]) || 0
+    const availableBytes = Number(parts[3]) || 0
+    const usedPercent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 10000) / 100 : 0
+    return { totalBytes, usedBytes, availableBytes, usedPercent }
+  }
+  catch {
+    return null
+  }
+}
+
+/**
+ * Sum the byte size + file count of a directory using `du -sb` (bytes).
+ * Returns null if the directory is missing or du is unavailable.
+ */
+async function archiveSize(path: string): Promise<{ usedBytes: number, fileCount: number } | null> {
+  try {
+    const [{ stdout: duOut }, entries] = await Promise.all([
+      execFileAsync('du', ['-sb', path], { timeout: 5000 }),
+      readdir(path, { withFileTypes: true }),
+    ])
+    const usedBytes = Number(duOut.trim().split(/\s+/)[0]) || 0
+    const fileCount = entries.filter(e => e.isFile()).length
+    return { usedBytes, fileCount }
+  }
+  catch {
+    return null
+  }
+}
 
 /**
  * Simple async mutex to serialize iptables mutations.
@@ -240,9 +284,22 @@ export const systemRouter = router({
       try {
         const { spawn } = await import('node:child_process')
 
-        const child = spawn('/usr/local/bin/sp-update', [branch], {
+        // sp-update needs root for iptables / systemctl / writes into
+        // /usr/local/bin. The systemd unit drops next-server to
+        // User=sleepypod, so we sudo via a NOPASSWD rule installed by
+        // scripts/install (/etc/sudoers.d/sleepypod-update). `-n` makes
+        // sudo fail loudly rather than prompt when the rule is absent.
+        const child = spawn('sudo', ['-n', '/usr/local/bin/sp-update', branch], {
           detached: true,
           stdio: 'ignore',
+        })
+        // Without an `error` listener Node throws when spawn fails
+        // (e.g., sudo missing) and the unhandled rejection takes down
+        // the worker. We can't surface the failure to the caller — the
+        // mutation has already returned — but we can at least keep the
+        // process alive and log it for journalctl-side debugging.
+        child.on('error', (e) => {
+          console.error('[system.triggerUpdate] sp-update spawn failed:', e)
         })
         child.unref()
 
@@ -418,6 +475,50 @@ export const systemRouter = router({
       catch {
         // df unavailable (macOS dev environment)
         return { totalBytes: 0, usedBytes: 0, availableBytes: 0, usedPercent: 0 }
+      }
+    }),
+
+  /**
+   * Returns a per-mount storage breakdown for the System Info card:
+   * eMMC (/persistent), the live biometrics tmpfs (/persistent/biometrics),
+   * and the gzipped archive directory (/persistent/biometrics-archive).
+   *
+   * Each section is independent: a missing mount or directory yields zeros
+   * for that section without failing the whole call. macOS/dev returns
+   * zeros across the board.
+   */
+  getStorageBreakdown: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/storage-breakdown', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      emmc: z.object({
+        totalBytes: z.number(),
+        usedBytes: z.number(),
+        availableBytes: z.number(),
+        usedPercent: z.number(),
+      }),
+      biometricsTmpfs: z.object({
+        totalBytes: z.number(),
+        usedBytes: z.number(),
+        availableBytes: z.number(),
+        usedPercent: z.number(),
+      }),
+      biometricsArchive: z.object({
+        usedBytes: z.number(),
+        fileCount: z.number(),
+      }),
+    }))
+    .query(async () => {
+      const empty = { totalBytes: 0, usedBytes: 0, availableBytes: 0, usedPercent: 0 }
+      const [emmc, biometricsTmpfs, biometricsArchive] = await Promise.all([
+        dfBreakdown('/persistent'),
+        dfBreakdown('/persistent/biometrics'),
+        archiveSize('/persistent/biometrics-archive'),
+      ])
+      return {
+        emmc: emmc ?? empty,
+        biometricsTmpfs: biometricsTmpfs ?? empty,
+        biometricsArchive: biometricsArchive ?? { usedBytes: 0, fileCount: 0 },
       }
     }),
 

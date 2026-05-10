@@ -41,7 +41,11 @@ export const rawRouter = router({
   files: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/raw/files', protect: false, tags: ['Raw'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.array(z.object({
+      name: z.string(),
+      sizeBytes: z.number(),
+      modifiedAt: z.string(),
+    })))
     .query(async () => {
       try {
         return await listRawFiles()
@@ -103,7 +107,13 @@ export const rawRouter = router({
   diskUsage: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/raw/disk-usage', protect: false, tags: ['Raw'] } })
     .input(z.object({}))
-    .output(z.any())
+    .output(z.object({
+      totalBytes: z.number(),
+      usedBytes: z.number(),
+      availableBytes: z.number(),
+      rawFileCount: z.number(),
+      rawBytes: z.number(),
+    }))
     .query(async () => {
       try {
         const files = await listRawFiles()

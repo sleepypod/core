@@ -37,6 +37,15 @@ import {
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
 
+/**
+ * Last-resort target when a caller asks to power a side ON without supplying
+ * a temperature. Real callers (HomeKit, gestures, scheduler) all pass an
+ * explicit target sourced from cache/state; this fallback only fires for
+ * legacy paths (e.g. mqttBridge passthrough with no temperature in payload)
+ * so the pod doesn't sit at level 0 after a power-on.
+ */
+const POWER_ON_FALLBACK_F = 75
+
 // ── Singleton storage on globalThis (survives Turbopack module duplication) ──
 
 const KEYS = {
@@ -143,7 +152,7 @@ class DacHardwareClient {
 
   async setPower(side: Side, powered: boolean, temperature?: number): Promise<void> {
     if (powered) {
-      const temp = temperature ?? 75
+      const temp = temperature ?? POWER_ON_FALLBACK_F
       await this.setTemperature(side, temp)
     }
     else {

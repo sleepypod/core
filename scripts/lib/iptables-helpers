@@ -14,7 +14,19 @@ wan_is_blocked() {
 
 unblock_wan() {
   echo "Temporarily unblocking WAN access..."
-  SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+  # Capture state verbatim. `|| true` would mask a failed save and
+  # quietly fall through to a minimal block_wan ruleset on restore —
+  # silent data loss. Fail loudly instead so the caller can bail.
+  if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+    echo "Error: iptables-save failed — refusing to unblock WAN." >&2
+    echo "$SAVED_IPTABLES" >&2
+    SAVED_IPTABLES=""
+    return 1
+  fi
+  if [ -z "$SAVED_IPTABLES" ]; then
+    echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
+    return 1
+  fi
   iptables -F 2>/dev/null || true
   iptables -X 2>/dev/null || true
   iptables -t nat -F 2>/dev/null || true
@@ -54,11 +66,35 @@ block_wan() {
   iptables -I OUTPUT -p udp --dport 123 -j ACCEPT
   iptables -I INPUT  -p udp --sport 123 -j ACCEPT
 
-  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp)
+  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp and _hap._tcp)
+  # IPv4 multicast (224.0.0.251); the matching IPv6 multicast (ff02::fb) is
+  # opened below if ip6tables is available.
   iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT
   iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT
   iptables -I INPUT  -p udp --dport 5353 -j ACCEPT
   iptables -I INPUT  -p udp --sport 5353 -j ACCEPT
+
+  # Allow HomeKit Accessory Protocol (HAP) bridge inbound on tcp/51827.
+  # Source-restricted to RFC1918 + link-local so a public IP misconfig can't
+  # expose the HAP listener to the WAN. Redundant with the RFC1918 LAN allow
+  # above, but explicit so future LAN tightening doesn't silently break iOS
+  # Home pairing.
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    iptables -I INPUT -p tcp -s "$cidr" --dport 51827 -j ACCEPT
+  done
+
+  # IPv6: iOS may discover/pair over IPv6 on dual-stack LANs. Mirror the
+  # HAP and mDNS allows so pairing doesn't fail when the controller picks
+  # an IPv6 path. HAP is source-restricted to link-local (fe80::/10) and
+  # ULA (fc00::/7); GUA traffic should never hit pairing. No-op on hosts
+  # without ip6tables.
+  if command -v ip6tables &>/dev/null; then
+    ip6tables -I INPUT  -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+    ip6tables -I OUTPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+    for cidr6 in fe80::/10 fc00::/7; do
+      ip6tables -I INPUT -p tcp -s "$cidr6" --dport 51827 -j ACCEPT 2>/dev/null || true
+    done
+  fi
 
   # Allow loopback
   iptables -A INPUT  -i lo -j ACCEPT

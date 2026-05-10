@@ -37,20 +37,31 @@ for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*; do
 done
 [ "$TEMP_CLEANED" -gt 0 ] && echo "Cleaned $TEMP_CLEANED stale temp entries."
 
-# 3. Prune old database backups (keep 3 most recent)
+# 3. Prune old database backups (keep 3 most recent of each kind).
+# Each backup set is a triplet — sleepypod.db.bak.<ts>, plus the matching
+# sleepypod.db-wal.bak.<ts> and sleepypod.db-shm.bak.<ts> sidecars created
+# by sp-update. Pruning only the .db files would leak WAL/SHM backups for
+# pruned timestamps.
 if [ -d "$DATA_DIR" ]; then
-  # `ls $DIR/glob | wc -l` dies under set -euo pipefail when the glob
-  # doesn't match (ls exits 1 on "no such file", pipefail propagates,
-  # set -e kills the command substitution). Use `find` instead: clean
-  # exit 0 whether or not matches exist.
-  BAK_COUNT=$(find "$DATA_DIR" -maxdepth 1 -name 'sleepypod.db.bak.*' -type f 2>/dev/null | wc -l)
-  BAK_COUNT=${BAK_COUNT:-0}
-  if [ "$BAK_COUNT" -gt 3 ]; then
-    PRUNE=$((BAK_COUNT - 3))
-    find "$DATA_DIR" -maxdepth 1 -name 'sleepypod.db.bak.*' -type f -printf '%T@ %p\n' 2>/dev/null \
-      | sort -rn | tail -n "$PRUNE" | awk '{print $2}' | xargs -r rm -f
-    echo "Pruned $PRUNE old DB backups (kept 3)."
-  fi
+  prune_bak_pattern() {
+    local pattern="$1"
+    # `ls $DIR/glob | wc -l` dies under set -euo pipefail when the glob
+    # doesn't match (ls exits 1 on "no such file", pipefail propagates,
+    # set -e kills the command substitution). Use `find` instead: clean
+    # exit 0 whether or not matches exist.
+    local count
+    count=$(find "$DATA_DIR" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | wc -l)
+    count=${count:-0}
+    if [ "$count" -gt 3 ]; then
+      local prune=$((count - 3))
+      find "$DATA_DIR" -maxdepth 1 -name "$pattern" -type f -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | tail -n "$prune" | awk '{print $2}' | xargs -r rm -f
+      echo "Pruned $prune old $pattern backups (kept 3)."
+    fi
+  }
+  prune_bak_pattern 'sleepypod.db.bak.*'
+  prune_bak_pattern 'sleepypod.db-wal.bak.*'
+  prune_bak_pattern 'sleepypod.db-shm.bak.*'
 fi
 
 # 4. Prune pnpm content-addressable store

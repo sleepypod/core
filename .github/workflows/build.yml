@@ -8,19 +8,20 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: '.node-version'
           cache: 'pnpm'
@@ -47,7 +48,7 @@ jobs:
           mv /tmp/sleepypod-core.tar.gz .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sleepypod-core
           path: sleepypod-core.tar.gz

@@ -1,6 +1,12 @@
-# sleepypod
+# sleepypod — local-first Pod mattress controller
 
-A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web interface and scheduler.
+[![CI](https://github.com/sleepypod/core/actions/workflows/test.yml/badge.svg?branch=dev)](https://github.com/sleepypod/core/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/sleepypod/core/branch/dev/graph/badge.svg)](https://codecov.io/gh/sleepypod/core)
+[![Release](https://img.shields.io/github/v/release/sleepypod/core?sort=semver)](https://github.com/sleepypod/core/releases/latest)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Discord](https://img.shields.io/discord/1450213183653679205?logo=discord&logoColor=white&label=discord)](https://discord.gg/UMmv5R6MXa)
+
+Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Linux — replaces the cloud-bound controller with a local web UI, scheduler, on-device biometrics, and native integrations for Home Assistant (MQTT) and Apple Home (HomeKit).
 
 <p align="center">
   <img src="docs/images/temperature-control.png" width="280" alt="Temperature control" />
@@ -14,7 +20,7 @@ A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs dir
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/UMmv5R6MXa">Discord</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
+  <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
 </p>
 
 ---
@@ -41,24 +47,15 @@ The script:
 After install, these are available system-wide:
 
 ```bash
-sp-status    # systemctl status sleepypod.service
-sp-restart   # restart the service
-sp-logs      # journalctl -u sleepypod.service -f
-sp-update    # pull latest, rebuild, migrate, restart (with automatic rollback)
+sp-status         # systemctl status sleepypod.service
+sp-restart        # restart the service
+sp-logs           # journalctl -u sleepypod.service -f
+sp-update         # pull latest, rebuild, migrate, restart (with automatic rollback)
+sp-maintenance    # one-shot manual prime / reboot / status
+sp-uninstall      # stop services, remove systemd units, optionally wipe data
+sp-sleepypod      # if free-sleep is also installed: stop it and start sleepypod
+sp-freesleep      # mirror of the above in the other direction
 ```
-
-### Switching between sleepypod and free-sleep
-
-Already running [free-sleep](https://github.com/throwaway31265/free-sleep)? sleepypod installs alongside it — both use port 3000 but only one runs at a time. Switch freely without losing any settings or data:
-
-```bash
-sp-sleepypod    # Stop free-sleep, start sleepypod + biometrics modules
-sp-freesleep    # Stop sleepypod, start free-sleep
-```
-
-This makes it easy to evaluate sleepypod: install it, try it out, and switch back any time if you prefer free-sleep. Your temperature schedules, alarm configs, and sleep data are all preserved across switches.
-
-Need help? Join the [Discord](https://discord.gg/UMmv5R6MXa) or [open an issue](https://github.com/sleepypod/core/issues).
 
 ---
 
@@ -70,6 +67,161 @@ Need help? Join the [Discord](https://discord.gg/UMmv5R6MXa) or [open an issue](
 - **Biometrics** — heart rate, HRV, breathing rate, sleep session tracking, and movement from the Pod's own sensors
 - **Daily maintenance** — automated priming and system reboots on a schedule
 - **Local web UI** — accessible on your home network, no cloud required
+- **MQTT bridge (opt-in)** — publish state and accept commands on your home MQTT broker; auto-discoverable in Home Assistant
+- **HomeKit bridge (opt-in)** — control the pod from the Apple Home app; local-only, no Apple servers
+
+---
+
+## HomeKit bridge (opt-in)
+
+The Pod ships an embedded [hap-nodejs](https://github.com/homebridge/HAP-NodeJS)
+bridge that publishes itself as a native HomeKit accessory over Bonjour. No
+Homebridge install, no Apple cloud round-trip — pairing and control happen
+entirely on your LAN.
+
+```mermaid
+graph LR
+  iOS[iPhone / iPad<br/>Home app] -- HAP / mDNS --> Pod[Pod<br/>sleepypod-core<br/>:51827]
+  Pod -- setPower / setTemperature --> DAC[Pod hardware]
+  Pod -. occupancy / vitals .- BIO[(biometrics.db)]
+```
+
+The bridge is **off by default** and lives behind the same iptables LAN-only
+policy as the rest of the app — toggle it on from **Settings → HomeKit**.
+
+### Quick start
+
+1. Open **Settings → HomeKit** in the Pod web UI and flip **HomeKit bridge** on.
+2. A QR code and 8-digit setup code render in the panel.
+3. In iOS Home: **Add Accessory → More options** (or scan the QR), enter the code.
+4. The Pod shows up as a bridge with one tile per side per accessory.
+5. Use **Unpair all controllers** in the same panel to reset pairing without
+   regenerating the bridge identity (automations stay intact).
+
+### Accessories
+
+Each side (`left`, `right`) gets its own set; switches that act on the whole
+pod ship once.
+
+| Accessory | Type | Reads from | Writes to |
+|---|---|---|---|
+| `Bed <side>` | Thermostat (single setpoint) | `deviceStatus.<side>` | `setTemperature` / `setPower` |
+| `Bed <side> power` | Switch | `deviceStatus.<side>.powered` | `setPower` (preserves last setpoint) |
+| `Bed <side> occupancy` | OccupancySensor | `sleep_records` (latest with `leftBedAt IS NULL`) | — |
+| `Snooze <side>` | Switch | `snoozeManager` | `snoozeAlarm` / `cancelSnooze` |
+| `Prime` | Switch | `primeNotification` (auto-off on completion) | `startPriming` |
+
+Thermostat is HomeKit's single-setpoint primitive (the pod hardware exposes
+one setpoint, not a heat/cool deadband). Mode `off` cuts power; `auto` powers
+on at the last requested temperature. HomeKit Celsius is converted at the
+boundary; the in-app unit preference is unaffected.
+
+### Identity durability
+
+The bridge's HomeKit identity (MAC-style username, pincode, setupId) is
+**deterministically derived** from a hardware-rooted seed (eMMC CID →
+machine-id → random fallback) via HKDF, and cached at
+`/persistent/sleepypod-data/homekit/identity.json`. A `/persistent` wipe or
+firmware reflash regenerates the **same** identity, so iOS still recognizes
+the bridge — you only re-pair, your automations and rooms stay intact. See
+**[ADR 0020](docs/adr/0020-homekit-identity-derivation.md)** for the full
+rationale, seed chain, and what the design intentionally does *not* protect
+against.
+
+### Environment variables
+
+Headless deployments can override the auto-detected mDNS advertiser. All
+other config (enable/disable, pairing) lives in `device_settings` and is
+managed from the UI.
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOMEKIT_ADVERTISER` | auto (`avahi` if `/run/avahi-daemon/socket` exists, else `ciao`) | mDNS advertiser; force `avahi` to coexist with the existing `_sleepypod._tcp` service file, or `ciao` for pods without avahi |
+
+---
+
+## MQTT bridge (opt-in)
+
+The Pod can connect outbound to an MQTT broker you already run (typically the
+[Mosquitto add-on](https://github.com/home-assistant/addons/tree/master/mosquitto)
+that ships with Home Assistant). Off by default — opt in from
+**Settings → MQTT** in the web UI.
+
+```mermaid
+graph LR
+  Pod[Pod<br/>sleepypod-core] -- mqtt:// --> Broker[(MQTT broker<br/>e.g. Mosquitto)]
+  Broker --> HA[Home Assistant]
+  Broker --> NR[Node-RED]
+  Broker --> Other[anything that<br/>speaks MQTT]
+  HA -. cmd/* .-> Broker
+  NR -. cmd/* .-> Broker
+  Broker -. cmd/* .-> Pod
+```
+
+The Pod is a **client**, not a broker. It does not embed a broker, does not
+listen on 1883, and does not punch holes in the LAN-only iptables policy.
+
+### Quick start
+
+1. Open **Settings → MQTT** in the Pod web UI.
+2. Set **Broker URL** (`mqtt://broker.lan:1883` or `mqtts://...` for TLS).
+3. Optional: username + password. Leave blank for anonymous brokers.
+4. Hit **Test Connection** to verify reachability, then toggle
+   **Enable MQTT Bridge** and **Save**.
+5. (Home Assistant users) flip on **Home Assistant Discovery** — climate,
+   sensor, and switch entities show up automatically under the Pod's device
+   page.
+
+Headless deployments can skip the UI by setting environment variables;
+the bridge resolves config in this order: `device_settings` row > env var > built-in default.
+
+| UI field | Env var | Default |
+|---|---|---|
+| Enable bridge | `MQTT_ENABLED` | `false` |
+| Broker URL | `MQTT_URL` | _(unset — bridge stays dormant)_ |
+| Username | `MQTT_USERNAME` | _(none)_ |
+| Password | `MQTT_PASSWORD` | _(none)_ |
+| Topic prefix | `MQTT_TOPIC_PREFIX` | `sleepypod` |
+| HA discovery | `MQTT_HA_DISCOVERY` | `false` |
+| HA discovery prefix | `MQTT_HA_DISCOVERY_PREFIX` | `homeassistant` |
+| TLS | `MQTT_TLS_ENABLED` | `false` |
+| TLS allow self-signed | `MQTT_TLS_INSECURE` | `false` |
+
+### Topics
+
+`<prefix>` defaults to `sleepypod`. `<device-id>` is the slugified hostname
+(override with `MQTT_DEVICE_ID`). All state topics are retained.
+
+| Topic | Direction | Payload |
+|---|---|---|
+| `<prefix>/<device-id>/availability` | pod → broker | `online` / `offline` (LWT) |
+| `<prefix>/<device-id>/state/device-status` | pod → broker | full deviceStatus JSON |
+| `<prefix>/<device-id>/state/<side>/climate` | pod → broker | per-side temp / mode |
+| `<prefix>/<device-id>/state/water-level` | pod → broker | `low` / `ok` / `unknown` |
+| `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
+| `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
+| `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
+| `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
+| `<prefix>/<device-id>/cmd/clear-alarm` | broker → pod | `{"side"}` |
+| `<prefix>/<device-id>/cmd/start-priming` | broker → pod | `{}` |
+
+Commands route through the same tRPC procedures the iOS app calls, so Zod
+input schemas validate every payload — the bridge cannot accidentally
+diverge from the app's safety envelope.
+
+### Example: turn off the left side from any MQTT client
+
+```bash
+mosquitto_pub -h broker.lan \
+  -t 'sleepypod/eight-pod/cmd/set-power' \
+  -m '{"side":"left","powered":false}'
+```
+
+State mirrors back on `sleepypod/eight-pod/state/left/climate` within ~1 s.
+
+See **[ADR 0019](docs/adr/0019-mqtt-bridge.md)** for the design rationale —
+why client-not-broker, the credential storage decision, the tRPC dispatch
+model, and what's deferred until `protectedProcedure` lands.
 
 ---
 
@@ -213,6 +365,8 @@ flowchart LR
 | Package manager | pnpm |
 | Test runner | Vitest |
 | Linter | ESLint flat config + @stylistic |
+| HomeKit bridge | hap-nodejs (embedded in next-server) |
+| MQTT client | mqtt.js (outbound to user's broker) |
 
 ---
 
@@ -252,14 +406,24 @@ graph LR
 | `alarm_schedules` | Vibration alarms with intensity, pattern, and duration |
 | `tap_gestures` | Configurable double/triple-tap actions |
 | `system_health` | Health status per component (core app + modules) |
+| `run_once_sessions` | Ephemeral one-shot temperature / power runs |
 
 ### `biometrics.db` — time-series health data
 
 | Table | Purpose |
 |-------|---------|
 | `vitals` | Heart rate, HRV, breathing rate — one row per ~60s interval |
+| `vitals_quality` | Per-interval signal quality flags for the `vitals` row |
 | `sleep_records` | Session boundaries, duration, exit count, presence intervals |
 | `movement` | Per-interval movement scores |
+| `bed_temp` | Per-side bed-surface temperature samples |
+| `freezer_temp` | Reservoir / freezer-side temperature samples |
+| `ambient_light` | Room ambient-light samples |
+| `flow_readings` | Pump flow-rate samples |
+| `water_level_readings` | Continuous water-level samples |
+| `water_level_alerts` | Threshold crossings (low / refill events) |
+| `calibration_profiles` | Saved sensor calibration coefficients (per ADR 0014) |
+| `calibration_runs` | Audit log of calibration runs |
 
 Biometrics uses WAL mode and a 5-second busy timeout so multiple sidecar processes can write concurrently without contention.
 
@@ -327,6 +491,9 @@ sleepypod-core/
 │   │   ├── client.ts               # dac.sock Unix socket client
 │   │   ├── deviceStateSync.ts      # status:updated → DB + stub sleep records
 │   │   └── types.ts                # DeviceStatus, SideStatus, etc.
+│   ├── homekit/                    # hap-nodejs bridge, accessories, identity
+│   ├── streaming/                  # piezoStream WS, bonjour announce, MQTT bridge
+│   ├── services/                   # autoOffWatcher, temperatureKeepalive, etc.
 │   ├── modules/
 │   │   └── types.ts                # ModuleManifest interface
 │   ├── scheduler/
@@ -354,7 +521,7 @@ sleepypod-core/
 |----------|---------------|-------------|
 | `DATABASE_URL` | `file:./sleepypod.dev.db` | Path to sleepypod.db |
 | `BIOMETRICS_DATABASE_URL` | `file:./biometrics.dev.db` | Path to biometrics.db |
-| `DAC_SOCK_PATH` | `/run/dac.sock` | Unix socket path for hardware control |
+| `DAC_SOCK_PATH` | `/persistent/deviceinfo/dac.sock` | Unix socket path for hardware control |
 | `NODE_ENV` | `development` | Set to `production` in the systemd service |
 
 ---
@@ -404,7 +571,12 @@ Key decisions are documented in [`docs/adr/`](docs/adr/):
 | [0006](docs/adr/0006-developer-tooling.md) | ESLint, Vitest, Conventional Commits, pnpm |
 | [0010](docs/adr/0010-drizzle-orm-sqlite.md) | Drizzle ORM + SQLite for embedded constraints |
 | [0012](docs/adr/0012-biometrics-module-system.md) | Plugin/sidecar architecture for biometrics |
+| [0014](docs/adr/0014-sensor-calibration.md) | Per-sensor calibration profiles |
 | [0015](docs/adr/0015-event-bus-mutation-broadcast.md) | Event bus: broadcast device state after mutations |
+| [0017](docs/adr/0017-uv-python-package-management.md) | uv for Python module package management |
+| [0018](docs/adr/0018-tmpfs-raw-frames.md) | Tmpfs for `/persistent/*.RAW` to spare eMMC writes |
+| [0019](docs/adr/0019-mqtt-bridge.md) | MQTT bridge for Home Assistant integration |
+| [0020](docs/adr/0020-homekit-identity-derivation.md) | Deterministic HomeKit identity from hardware-rooted seed |
 
 ### Key tradeoffs
 
