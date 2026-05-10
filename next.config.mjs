@@ -49,6 +49,19 @@ const nextConfig = {
       test: /\.po$/,
       use: ['@lingui/loader'],
     })
+    if (isBundleStatsBuild) {
+      // @trpc/react-query v11 is bundled by tsdown with __commonJS/__toESM
+      // interop wrappers — webpack's static ESM analysis can't see the named
+      // exports through them and errors out. Runtime is fine; we only need
+      // the build to produce stats. Downgrade exportsPresence to a warning.
+      config.module.parser = {
+        ...config.module.parser,
+        javascript: {
+          ...config.module.parser?.javascript,
+          exportsPresence: 'warn',
+        },
+      }
+    }
     config.plugins.push(
       codecovNextJSWebpackPlugin({
         enableBundleAnalysis: process.env.GITHUB_ACTIONS === 'true',
