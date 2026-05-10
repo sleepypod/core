@@ -17,6 +17,10 @@ DB_STAGING_DIR="${ARCHIVE_PUSH_STAGING_DIR:-/persistent/sleepypod-data/archive-p
 # next-server's app dir — holds the better-sqlite3 install we reuse for the
 # online backup. No separate sqlite3 binary lives on the pod.
 APP_DIR="${SLEEPYPOD_APP_DIR:-/home/dac/sleepypod-core}"
+# Pin to the node that built better-sqlite3 — /usr/bin/node on this pod is
+# v16 (NODE_MODULE_VERSION 93) and won't load the native addon built for the
+# newer runtime that next-server uses.
+NODE_BIN="${SLEEPYPOD_NODE_BIN:-/usr/local/bin/node}"
 
 if [ ! -f "$CONFIG" ]; then
   echo "archive-push: no config at $CONFIG — skipping"
@@ -76,7 +80,7 @@ if [[ ",$INCLUDE," == *",db,"* ]] && [ -f "$DB_PATH" ]; then
   trap 'rm -f "$tmp_db" "$tmp_gz"' EXIT
   # SQLite Online Backup via better-sqlite3 — same library next-server uses.
   # cwd to APP_DIR so node resolves the dependency the standard way.
-  ( cd "$APP_DIR" && node -e '
+  ( cd "$APP_DIR" && "$NODE_BIN" -e '
     const Database = require("better-sqlite3");
     const [src, dst] = process.argv.slice(1);
     const db = new Database(src, { readonly: true, fileMustExist: true });
