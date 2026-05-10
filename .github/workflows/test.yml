@@ -15,6 +15,10 @@ jobs:
   ci:
     name: ${{ matrix.task.name }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -62,13 +66,13 @@ jobs:
         if: matrix.task.name == 'Unit Tests' && !cancelled()
         uses: codecov/codecov-action@v5
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
           slug: sleepypod/core
 
       - name: Upload test results to Codecov
         if: matrix.task.name == 'Unit Tests' && !cancelled()
         uses: codecov/test-results-action@v1
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
           slug: sleepypod/core
           files: test-results/junit.xml
