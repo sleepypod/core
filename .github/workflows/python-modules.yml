@@ -1,0 +1,119 @@
+name: Python Modules
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'modules/**/*.py'
+      - 'modules/**/pyproject.toml'
+      - 'modules/**/uv.lock'
+      - '.github/workflows/python-modules.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'modules/**/*.py'
+      - 'modules/**/pyproject.toml'
+      - 'modules/**/uv.lock'
+      - '.github/workflows/python-modules.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  pytest:
+    name: pytest (${{ matrix.module.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          # `common` has no pyproject.toml; tests live under modules/common/
+          # and import `from common.X`, so they must run with cwd=modules/.
+          - name: common
+            workdir: modules
+            target: common
+            cov_source: common
+          - name: cover-buttons
+            workdir: modules/cover-buttons
+            target: .
+            cov_source: .
+          - name: environment-monitor
+            workdir: modules/environment-monitor
+            target: .
+            cov_source: .
+          - name: piezo-processor
+            workdir: modules/piezo-processor
+            target: .
+            cov_source: .
+          - name: sleep-detector
+            workdir: modules/sleep-detector
+            target: .
+            cov_source: .
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          # Pod runtime is pinned to 3.10 by every module's pyproject
+          # (`requires-python = ">=3.9,<3.11"`). Match it in CI.
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install module + test deps
+        working-directory: ${{ matrix.module.workdir }}
+        run: |
+          uv venv .venv
+          # shellcheck source=/dev/null
+          . .venv/bin/activate
+          # The `common` module has no pyproject — it's a shared package
+          # imported by the others. Skip the editable install in that case
+          # and let test-time sys.modules stubs cover any pod-only imports.
+          if [ -f pyproject.toml ]; then
+            uv pip install -e .
+          fi
+          uv pip install pytest pytest-cov
+
+      - name: Run pytest with coverage
+        working-directory: ${{ matrix.module.workdir }}
+        run: |
+          # shellcheck source=/dev/null
+          . .venv/bin/activate
+          pytest ${{ matrix.module.target }} \
+            --cov=${{ matrix.module.cov_source }} \
+            --cov-report=xml:coverage.xml \
+            --junit-xml=junit.xml \
+            -o junit_family=legacy
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          slug: sleepypod/core
+          flags: python,${{ matrix.module.name }}
+          files: ${{ matrix.module.workdir }}/coverage.xml
+          # Coverage XML uses paths relative to the pytest run dir; tell
+          # Codecov where that was so report paths resolve to repo paths.
+          working-directory: ${{ matrix.module.workdir }}
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          use_oidc: true
+          slug: sleepypod/core
+          flags: python,${{ matrix.module.name }}
+          files: ${{ matrix.module.workdir }}/junit.xml
