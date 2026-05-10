@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Characteristic } from 'hap-nodejs'
 
 const setTemperature = vi.fn().mockResolvedValue(undefined)
@@ -9,6 +9,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 }))
 
 import { buildThermostatService } from '../accessories/thermostat'
+import { __resetSideController } from '../accessories/sideController'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus } from '@/src/hardware/types'
 
@@ -29,6 +30,12 @@ const fakeMonitor: Pick<DacMonitor, 'on' | 'getLastStatus'> = {
 const f2c = (f: number) => ((f - 32) * 5) / 9
 
 describe('thermostat accessory', () => {
+  beforeEach(() => {
+    __resetSideController()
+    setTemperature.mockClear()
+    setPower.mockClear()
+  })
+
   it('reports current temperature in Celsius via onGet', async () => {
     const { service } = buildThermostatService('left', fakeMonitor as DacMonitor)
     const value = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
@@ -73,15 +80,16 @@ describe('thermostat accessory', () => {
   })
 
   it('TargetHeatingCoolingState onSet routes to setPower and preserves the last target on power-on', async () => {
-    setPower.mockClear()
     const { service } = buildThermostatService('right', fakeMonitor as DacMonitor)
-    await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).setValue(3)
+    // handleSetRequest properly awaits onSet's full chain; setValue's await
+    // resolves on `this` and skips microtasks scheduled inside the chain.
+    await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).handleSetRequest(3)
     // Right fixture targetTemperature is 80°F — must pass through so the
     // hardware client doesn't silently fall back to its 75°F default.
     expect(setPower).toHaveBeenCalledWith('right', true, 80)
 
     setPower.mockClear()
-    await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).setValue(0)
+    await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).handleSetRequest(0)
     expect(setPower).toHaveBeenCalledWith('right', false)
   })
 

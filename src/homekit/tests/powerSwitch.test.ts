@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Characteristic } from 'hap-nodejs'
 
 const setPower = vi.fn().mockResolvedValue(undefined)
@@ -8,6 +8,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 }))
 
 import { buildPowerSwitch } from '../accessories/powerSwitch'
+import { __resetSideController } from '../accessories/sideController'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus } from '@/src/hardware/types'
 
@@ -26,6 +27,11 @@ const fakeMonitor: Pick<DacMonitor, 'on' | 'getLastStatus'> = {
 }
 
 describe('powerSwitch accessory', () => {
+  beforeEach(() => {
+    __resetSideController()
+    setPower.mockClear()
+  })
+
   it('On.onGet reflects targetLevel !== 0', async () => {
     const { service: leftSvc } = buildPowerSwitch('left', fakeMonitor as DacMonitor)
     expect(await leftSvc.getCharacteristic(Characteristic.On).handleGetRequest()).toBe(true)
@@ -35,15 +41,16 @@ describe('powerSwitch accessory', () => {
   })
 
   it('On.onSet routes to setPower and preserves the last target on power-on', async () => {
-    setPower.mockClear()
     const { service } = buildPowerSwitch('left', fakeMonitor as DacMonitor)
-    await service.getCharacteristic(Characteristic.On).setValue(true)
+    // handleSetRequest properly awaits onSet's full chain; setValue's await
+    // resolves on `this` and skips microtasks scheduled inside the chain.
+    await service.getCharacteristic(Characteristic.On).handleSetRequest(true)
     // Left fixture targetTemperature is 70°F — must pass through so the
     // hardware client doesn't fall back to its hardcoded 75°F default.
     expect(setPower).toHaveBeenCalledWith('left', true, 70)
 
     setPower.mockClear()
-    await service.getCharacteristic(Characteristic.On).setValue(false)
+    await service.getCharacteristic(Characteristic.On).handleSetRequest(false)
     expect(setPower).toHaveBeenCalledWith('left', false)
   })
 
