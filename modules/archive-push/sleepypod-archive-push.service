@@ -12,6 +12,9 @@ ExecStart=/usr/local/bin/sleepypod-archive-push
 Nice=10
 IOSchedulingClass=idle
 ProtectSystem=strict
-ReadWritePaths=/etc/sleepypod
+# /etc/sleepypod — conf + ssh known_hosts append on first connect.
+# /persistent/sleepypod-data — staging dir for the better-sqlite3 backup
+# (live db lives here; /tmp is a 984 MB tmpfs, too small for a real dump).
+ReadWritePaths=/etc/sleepypod /persistent/sleepypod-data
 PrivateTmp=true
 NoNewPrivileges=true
