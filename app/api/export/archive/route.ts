@@ -1,9 +1,8 @@
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, rm, stat, symlink } from 'node:fs/promises'
-import { createWriteStream } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
+import Database from 'better-sqlite3'
 
 const BIOMETRICS_DB_PATH = process.env.BIOMETRICS_DATABASE_URL?.replace('file:', '') ?? ''
 
@@ -14,6 +13,11 @@ const BIOMETRICS_DB_PATH = process.env.BIOMETRICS_DATABASE_URL?.replace('file:',
 const RAW_TMPFS_DIR = process.env.RAW_TMPFS_DIR ?? '/persistent/biometrics'
 const RAW_ARCHIVE_DIR = process.env.RAW_ARCHIVE_DIR ?? '/persistent/biometrics-archive'
 const RAW_LEGACY_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
+
+// Staging lives on /persistent (~10 GB free) instead of /tmp (tmpfs, ~1 GB
+// shared with RAM-pressured processes). A multi-week export's db backup
+// alone can blow past the tmpfs ceiling.
+const EXPORT_STAGING_DIR = process.env.EXPORT_STAGING_DIR ?? '/persistent/sleepypod-data/export-staging'
 
 // Accepts <seqno>.RAW (live) or <seqno>.RAW.gz (cold archive).
 const SAFE_RAW_NAME = /^[\w.-]+\.RAW(\.gz)?$/i
@@ -65,21 +69,23 @@ export async function gatherRawFiles(
   return out
 }
 
-async function dumpSqlite(dbPath: string, outPath: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const out = createWriteStream(outPath)
-    const child = spawn('sqlite3', [dbPath, '.dump'])
-    child.stdout.pipe(out)
-    let stderr = ''
-    child.stderr.on('data', d => (stderr += d.toString()))
-    child.on('error', reject)
-    child.on('close', (code) => {
-      out.close(() => {
-        if (code === 0) resolve()
-        else reject(new Error(`sqlite3 .dump exited with ${code}: ${stderr}`))
-      })
-    })
-  })
+/**
+ * Online backup of a live SQLite database to a destination file. Uses the
+ * SQLite Online Backup API via better-sqlite3 — same library next-server
+ * already holds the DB open with. Handles WAL correctly, no shell-out, no
+ * dependency on a `sqlite3` CLI binary (the pod has neither).
+ *
+ * Output is a binary .db file rather than a text .sql dump; restore is a
+ * literal file copy instead of `sqlite3 < dump.sql`.
+ */
+async function backupSqlite(dbPath: string, outPath: string): Promise<void> {
+  const src = new Database(dbPath, { readonly: true, fileMustExist: true })
+  try {
+    await src.backup(outPath)
+  }
+  finally {
+    src.close()
+  }
 }
 
 export async function GET(request: Request) {
@@ -102,10 +108,11 @@ export async function GET(request: Request) {
 
   let stagingDir: string | null = null
   try {
-    stagingDir = await mkdtemp(path.join(tmpdir(), 'sp-export-'))
+    await mkdir(EXPORT_STAGING_DIR, { recursive: true })
+    stagingDir = await mkdtemp(path.join(EXPORT_STAGING_DIR, 'sp-export-'))
 
     if (include.includes('db') && BIOMETRICS_DB_PATH) {
-      await dumpSqlite(BIOMETRICS_DB_PATH, path.join(stagingDir, 'biometrics.sql'))
+      await backupSqlite(BIOMETRICS_DB_PATH, path.join(stagingDir, 'biometrics.db'))
     }
 
     if (include.includes('raw')) {

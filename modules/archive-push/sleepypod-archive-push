@@ -12,6 +12,11 @@ set -euo pipefail
 CONFIG="${ARCHIVE_PUSH_CONFIG:-/etc/sleepypod/archive-push.conf}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/persistent/biometrics-archive}"
 DB_PATH="${BIOMETRICS_DB_PATH:-/persistent/sleepypod-data/biometrics.db}"
+# Stage db backup on /persistent (~10 GB) instead of /tmp (tmpfs, ~1 GB).
+DB_STAGING_DIR="${ARCHIVE_PUSH_STAGING_DIR:-/persistent/sleepypod-data/archive-push-staging}"
+# next-server's app dir — holds the better-sqlite3 install we reuse for the
+# online backup. No separate sqlite3 binary lives on the pod.
+APP_DIR="${SLEEPYPOD_APP_DIR:-/home/dac/sleepypod-core}"
 
 if [ ! -f "$CONFIG" ]; then
   echo "archive-push: no config at $CONFIG — skipping"
@@ -65,12 +70,22 @@ fi
 
 if [[ ",$INCLUDE," == *",db,"* ]] && [ -f "$DB_PATH" ]; then
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  tmp=$(mktemp -t sp-bio-XXXXXX.sql.gz)
-  trap 'rm -f "$tmp"' EXIT
-  sqlite3 "$DB_PATH" .dump | gzip > "$tmp"
-  echo "archive-push: rsync biometrics.sql.gz -> $REMOTE_USER@$HOST:$REMOTE_PATH/db/biometrics-$stamp.sql.gz"
+  mkdir -p "$DB_STAGING_DIR"
+  tmp_db=$(mktemp -p "$DB_STAGING_DIR" sp-bio-XXXXXX.db)
+  tmp_gz="$tmp_db.gz"
+  trap 'rm -f "$tmp_db" "$tmp_gz"' EXIT
+  # SQLite Online Backup via better-sqlite3 — same library next-server uses.
+  # cwd to APP_DIR so node resolves the dependency the standard way.
+  ( cd "$APP_DIR" && node -e '
+    const Database = require("better-sqlite3");
+    const [src, dst] = process.argv.slice(1);
+    const db = new Database(src, { readonly: true, fileMustExist: true });
+    db.backup(dst).then(() => db.close()).catch(e => { console.error(e); process.exit(1) });
+  ' "$DB_PATH" "$tmp_db" )
+  gzip -f "$tmp_db"
+  echo "archive-push: rsync biometrics.db.gz -> $REMOTE_USER@$HOST:$REMOTE_PATH/db/biometrics-$stamp.db.gz"
   rsync -az --partial --timeout=300 -e "$SSH_CMD" \
-    "$tmp" "$REMOTE_USER@$HOST:${REMOTE_PATH%/}/db/biometrics-$stamp.sql.gz"
+    "$tmp_gz" "$REMOTE_USER@$HOST:${REMOTE_PATH%/}/db/biometrics-$stamp.db.gz"
   pushed_db=1
 fi
 
