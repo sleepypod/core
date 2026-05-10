@@ -46,10 +46,10 @@ describe('parseConf', () => {
     expect(result).toEqual({ ENABLED: 'true', HOST: 'nas.local', PORT: '2222' })
   })
 
-  it('strips matched surrounding quotes', () => {
+  it('preserves values verbatim — does not strip quotes (we do not source)', () => {
     const result = parseConf('REMOTE_PATH="/volume1/sleepypod"\nINCLUDE=\'raw,db\'')
-    expect(result.REMOTE_PATH).toBe('/volume1/sleepypod')
-    expect(result.INCLUDE).toBe('raw,db')
+    expect(result.REMOTE_PATH).toBe('"/volume1/sleepypod"')
+    expect(result.INCLUDE).toBe('\'raw,db\'')
   })
 
   it('skips lines without =', () => {
@@ -78,6 +78,27 @@ describe('renderConf', () => {
     expect(parsed.PORT).toBe('2222')
     expect(parsed.IDENTITY).toBe('/etc/sleepypod/key')
     expect(parsed.INCLUDE).toBe('raw,db')
+  })
+
+  // Regression: the original renderer interpolated values raw and the bash
+  // script `source`d the result, so a malicious LAN client could land RCE
+  // via `host: "x$(curl … | bash)"`. We now read KEY=VALUE without sourcing,
+  // and the schema rejects CR/LF/NUL — so every other byte must round-trip.
+  it('round-trips values containing shell metacharacters', () => {
+    const cfg = {
+      enabled: false,
+      host: 'host with space and $(cmd)',
+      remoteUser: 'user`tick`',
+      remotePath: '/path with \'quote\' and "dquote"',
+      port: 22,
+      identity: '/etc/sleepypod/key',
+      include: ['raw'] as const,
+    }
+    const parsed = parseConf(renderConf({ ...cfg, include: [...cfg.include] }))
+    expect(parsed.HOST).toBe(cfg.host)
+    expect(parsed.REMOTE_USER).toBe(cfg.remoteUser)
+    expect(parsed.REMOTE_PATH).toBe(cfg.remotePath)
+    expect(parsed.IDENTITY).toBe(cfg.identity)
   })
 })
 

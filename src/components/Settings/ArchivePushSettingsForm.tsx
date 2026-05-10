@@ -146,7 +146,10 @@ function Editor({ initial }: { initial: InitialConfig }) {
             <input
               type="number"
               value={form.port}
-              onChange={e => setForm(f => ({ ...f, port: Number(e.target.value) || 22 }))}
+              onChange={(e) => {
+                const parsed = Number(e.target.value)
+                setForm(f => ({ ...f, port: Number.isFinite(parsed) ? parsed : 22 }))
+              }}
               className="w-32 rounded-lg bg-zinc-800 px-3 py-2 text-sm text-white outline-none focus:ring-1 focus:ring-sky-500"
             />
           </Field>

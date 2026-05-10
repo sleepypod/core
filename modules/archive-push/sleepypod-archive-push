@@ -1,7 +1,9 @@
 #!/bin/bash
 # Push gzipped biometrics archive (and optional db dump) to a user-configured
-# remote via rsync over ssh. Reads /etc/sleepypod/archive-push.conf (sourced
-# as bash). Disabled by default — config flips ENABLED=true.
+# remote via rsync over ssh. Reads /etc/sleepypod/archive-push.conf as plain
+# KEY=VALUE (NOT bash-sourced — the conf is written by an LAN-reachable tRPC
+# handler and sourcing would be a command-injection sink). Disabled by default
+# — config flips ENABLED=true.
 #
 # Designed for nightly timer runs. No-ops cleanly when disabled or
 # misconfigured so a stale config doesn't crash the timer.
@@ -16,8 +18,21 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# shellcheck disable=SC1090
-source "$CONFIG"
+# Read KEY=VALUE without `source` so attacker-controlled values never hit
+# a shell parser. `declare -g` assigns the literal string; nothing inside
+# value gets word-split, expanded, or evaluated.
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    ''|'#'*) continue ;;
+  esac
+  key="${line%%=*}"
+  value="${line#*=}"
+  case "$key" in
+    ENABLED|HOST|REMOTE_USER|REMOTE_PATH|PORT|IDENTITY|INCLUDE)
+      declare -g "$key"="$value"
+      ;;
+  esac
+done < "$CONFIG"
 
 if [ "${ENABLED:-false}" != "true" ]; then
   echo "archive-push: ENABLED=false — skipping"
@@ -36,7 +51,7 @@ if [ ! -f "$IDENTITY" ]; then
   exit 1
 fi
 
-SSH_CMD="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p $PORT -i $IDENTITY"
+SSH_CMD="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/sleepypod/known_hosts -o ConnectTimeout=15 -p $PORT -i $IDENTITY"
 
 pushed_raw=0
 pushed_db=0

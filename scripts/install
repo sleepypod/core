@@ -1161,7 +1161,7 @@ if [ -d "$PUSH_SRC" ]; then
   install -m 0644 "$PUSH_SRC/sleepypod-archive-push.service" /etc/systemd/system/
   install -m 0644 "$PUSH_SRC/sleepypod-archive-push.timer"   /etc/systemd/system/
 
-  # Config dir owned root:sleepypod 0750 so the service user reads + the app
+  # Config dir owned root:sleepypod 0770 so the service user reads + the app
   # user (in group sleepypod) writes via the tRPC handlers.
   mkdir -p /etc/sleepypod
   if id sleepypod &>/dev/null; then

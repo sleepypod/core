@@ -28,18 +28,21 @@ function paths() {
   return { dir, config, identity, pubkey: `${identity}.pub` }
 }
 
-// Whitelisted keys — anything else in the file is preserved silently when
-// rewriting (so a future field added by a newer pod doesn't get dropped on
-// rollback), but not exposed to the API.
+// Whitelisted keys — every other key in the file is dropped on rewrite.
+// (Past comments claimed passthrough; we don't actually do that.)
 const KNOWN_KEYS = ['ENABLED', 'HOST', 'REMOTE_USER', 'REMOTE_PATH', 'PORT', 'IDENTITY', 'INCLUDE'] as const
+
+// String fields land in a bash-sourced conf — reject anything that could
+// terminate the line or sneak past shell-quoting (CR, LF, NUL).
+const SAFE_STRING = z.string().regex(/^[^\r\n\0]*$/, 'no newlines or NUL')
 
 const ConfigSchema = z.object({
   enabled: z.boolean(),
-  host: z.string(),
-  remoteUser: z.string(),
-  remotePath: z.string(),
+  host: SAFE_STRING,
+  remoteUser: SAFE_STRING,
+  remotePath: SAFE_STRING,
   port: z.number().int().min(1).max(65535),
-  identity: z.string(),
+  identity: SAFE_STRING,
   include: z.array(z.enum(['raw', 'db'])).min(0),
 })
 
@@ -57,7 +60,12 @@ function defaultConfig(): ConfigShape {
   }
 }
 
-/** Parse a KEY=VALUE conf file. Trims whitespace; ignores blanks and `#` comments. */
+/**
+ * Parse a KEY=VALUE conf file. Trims surrounding whitespace on both key
+ * and value (manual edits often leave spaces around `=`); preserves
+ * internal whitespace. The companion bash reader does the same, so the
+ * file is *not* `source`d.
+ */
 export function parseConf(text: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const raw of text.split(/\r?\n/)) {
@@ -66,26 +74,24 @@ export function parseConf(text: string): Record<string, string> {
     const eq = line.indexOf('=')
     if (eq < 0) continue
     const key = line.slice(0, eq).trim()
-    let value = line.slice(eq + 1).trim()
-    // Strip surrounding single or double quotes if balanced.
-    const dq = '"'
-    const sq = '\''
-    if (
-      (value.startsWith(dq) && value.endsWith(dq))
-      || (value.startsWith(sq) && value.endsWith(sq))
-    ) {
-      value = value.slice(1, -1)
-    }
-    out[key] = value
+    if (!key) continue
+    out[key] = line.slice(eq + 1).trim()
   }
   return out
 }
 
-/** Render a config back to KEY=VALUE text. Leading comment + stable key order. */
+/**
+ * Render a config to KEY=VALUE text. Values are written verbatim — the
+ * bash reader assigns them via `declare`, never `source`, so quoting is
+ * unnecessary AND attacker-controlled values cannot reach a shell parser.
+ * The schema rejects CR/LF/NUL on string fields; nothing else can split a
+ * line or sneak past the reader.
+ */
 export function renderConf(cfg: ConfigShape): string {
   const lines = [
     '# /etc/sleepypod/archive-push.conf — managed by Settings → Backup.',
-    '# Sourced as bash by sleepypod-archive-push. Edit via the UI when possible.',
+    '# Read by sleepypod-archive-push as plain KEY=VALUE. Do NOT `source` it —',
+    '# values are not shell-quoted on purpose.',
     `ENABLED=${cfg.enabled ? 'true' : 'false'}`,
     `HOST=${cfg.host}`,
     `REMOTE_USER=${cfg.remoteUser}`,
@@ -185,9 +191,15 @@ export const archivePushRouter = router({
       }
       catch {
         try {
+          // Quiet flag suppresses the comment line. Concurrent generateKey
+          // calls will both pass access() and both invoke ssh-keygen — the
+          // second hits the "Overwrite?" prompt and we'll surface the 15s
+          // timeout. Acceptable: the failure mode is "user retries", and
+          // the UI button is debounced by isPending anyway.
           await execFileAsync('ssh-keygen', [
             '-t', 'ed25519',
             '-N', '',
+            '-q',
             '-f', p.identity,
             '-C', 'sleepypod-archive-push',
           ], { timeout: 15000 })
@@ -236,6 +248,9 @@ export const archivePushRouter = router({
         await execFileAsync('ssh', [
           '-o', 'BatchMode=yes',
           '-o', 'StrictHostKeyChecking=accept-new',
+          // sleepypod's home is /nonexistent — point known_hosts at the
+          // service's writable config dir so accept-new can persist.
+          '-o', `UserKnownHostsFile=${path.join(paths().dir, 'known_hosts')}`,
           '-o', 'ConnectTimeout=10',
           '-i', cfg.identity,
           '-p', String(cfg.port),
