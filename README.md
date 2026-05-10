@@ -1,6 +1,10 @@
 # sleepypod
 
+[![CI](https://github.com/sleepypod/core/actions/workflows/test.yml/badge.svg?branch=dev)](https://github.com/sleepypod/core/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/sleepypod/core/branch/dev/graph/badge.svg)](https://codecov.io/gh/sleepypod/core)
+[![Release](https://img.shields.io/github/v/release/sleepypod/core?sort=semver)](https://github.com/sleepypod/core/releases/latest)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Discord](https://img.shields.io/discord/1450213183653679205?logo=discord&logoColor=white&label=discord)](https://discord.gg/UMmv5R6MXa)
 
 A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web interface and scheduler.
 
