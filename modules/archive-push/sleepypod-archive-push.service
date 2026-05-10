@@ -1,5 +1,5 @@
 [Unit]
-Description=Sleepypod biometrics archive push to remote (rsync over ssh)
+Description=Sleepypod biometrics archive push to remote (scp over ssh)
 Documentation=https://github.com/sleepypod/core/tree/main/modules/archive-push
 After=network-online.target
 Wants=network-online.target

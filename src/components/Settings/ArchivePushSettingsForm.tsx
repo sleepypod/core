@@ -22,7 +22,7 @@ interface InitialConfig {
 
 /**
  * Settings form for the archive-push feature (sp-21). Lets the user
- * configure a remote rsync target, generate an ssh keypair on the pod,
+ * configure a remote scp target, generate an ssh keypair on the pod,
  * copy the pubkey into their remote's authorized_keys, and run a
  * non-destructive connection test before flipping ENABLED on.
  *
