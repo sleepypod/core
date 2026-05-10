@@ -334,7 +334,7 @@ export function RawDataButton() {
               Export Archive (.tar.gz)
             </button>
             <p className="mt-2 text-center text-[10px] text-zinc-500">
-              RAW waveforms + biometrics.db SQL dump for this week. Untar then `sqlite3 biometrics.db &lt; biometrics.sql`.
+              RAW waveforms + biometrics.db copy for this week. Untar and open biometrics.db with any SQLite client.
             </p>
 
             {/* Raw sensor files section — wired to raw.files tRPC router */}

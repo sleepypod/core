@@ -1147,7 +1147,7 @@ if [ -d "$ARCHIVER_SRC" ]; then
 fi
 
 # ============================================================================
-# Archive push — nightly rsync of cold archive to user-configured remote.
+# Archive push — nightly scp of cold archive to user-configured remote.
 # ============================================================================
 # Disabled by default; user opts in via Settings → Backup. Config + ssh key
 # live under /etc/sleepypod (writeable by the sleepypod group so the
@@ -1155,7 +1155,7 @@ fi
 # user, not root — same trust boundary as the rest of the app.
 PUSH_SRC="$INSTALL_DIR/modules/archive-push"
 if [ -d "$PUSH_SRC" ]; then
-  echo "Installing archive-push (rsync to remote)..."
+  echo "Installing archive-push (scp to remote)..."
 
   install -m 0755 "$PUSH_SRC/sleepypod-archive-push" /usr/local/bin/sleepypod-archive-push
   install -m 0644 "$PUSH_SRC/sleepypod-archive-push.service" /etc/systemd/system/
