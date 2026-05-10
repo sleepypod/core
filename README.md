@@ -73,6 +73,75 @@ Need help? Join the [Discord](https://discord.gg/UMmv5R6MXa) or [open an issue](
 - **Daily maintenance** — automated priming and system reboots on a schedule
 - **Local web UI** — accessible on your home network, no cloud required
 - **MQTT bridge (opt-in)** — publish state and accept commands on your home MQTT broker; auto-discoverable in Home Assistant
+- **HomeKit bridge (opt-in)** — control the pod from the Apple Home app; local-only, no Apple servers
+
+---
+
+## HomeKit bridge (opt-in)
+
+The Pod ships an embedded [hap-nodejs](https://github.com/homebridge/HAP-NodeJS)
+bridge that publishes itself as a native HomeKit accessory over Bonjour. No
+Homebridge install, no Apple cloud round-trip — pairing and control happen
+entirely on your LAN.
+
+```mermaid
+graph LR
+  iOS[iPhone / iPad<br/>Home app] -- HAP / mDNS --> Pod[Pod<br/>sleepypod-core<br/>:51827]
+  Pod -- setPower / setTemperature --> DAC[Pod hardware]
+  Pod -. occupancy / vitals .- BIO[(biometrics.db)]
+```
+
+The bridge is **off by default** and lives behind the same iptables LAN-only
+policy as the rest of the app — toggle it on from **Settings → HomeKit**.
+
+### Quick start
+
+1. Open **Settings → HomeKit** in the Pod web UI and flip **HomeKit bridge** on.
+2. A QR code and 8-digit setup code render in the panel.
+3. In iOS Home: **Add Accessory → More options** (or scan the QR), enter the code.
+4. The Pod shows up as a bridge with one tile per side per accessory.
+5. Use **Unpair all controllers** in the same panel to reset pairing without
+   regenerating the bridge identity (automations stay intact).
+
+### Accessories
+
+Each side (`left`, `right`) gets its own set; switches that act on the whole
+pod ship once.
+
+| Accessory | Type | Reads from | Writes to |
+|---|---|---|---|
+| `Bed <side>` | Thermostat (single setpoint) | `deviceStatus.<side>` | `setTemperature` / `setPower` |
+| `Bed <side> power` | Switch | `deviceStatus.<side>.powered` | `setPower` (preserves last setpoint) |
+| `Bed <side> occupancy` | OccupancySensor | `sleep_records` (latest with `leftBedAt IS NULL`) | — |
+| `Snooze <side>` | Switch | `snoozeManager` | `snoozeAlarm` / `cancelSnooze` |
+| `Prime` | Switch | `primeNotification` (auto-off on completion) | `startPriming` |
+
+Thermostat is HomeKit's single-setpoint primitive (the pod hardware exposes
+one setpoint, not a heat/cool deadband). Mode `off` cuts power; `auto` powers
+on at the last requested temperature. HomeKit Celsius is converted at the
+boundary; the in-app unit preference is unaffected.
+
+### Identity durability
+
+The bridge's HomeKit identity (MAC-style username, pincode, setupId) is
+**deterministically derived** from a hardware-rooted seed (eMMC CID →
+machine-id → random fallback) via HKDF, and cached at
+`/persistent/sleepypod-data/homekit/identity.json`. A `/persistent` wipe or
+firmware reflash regenerates the **same** identity, so iOS still recognizes
+the bridge — you only re-pair, your automations and rooms stay intact. See
+**[ADR 0020](docs/adr/0020-homekit-identity-derivation.md)** for the full
+rationale, seed chain, and what the design intentionally does *not* protect
+against.
+
+### Environment variables
+
+Headless deployments can override the auto-detected mDNS advertiser. All
+other config (enable/disable, pairing) lives in `device_settings` and is
+managed from the UI.
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOMEKIT_ADVERTISER` | auto (`avahi` if `/run/avahi-daemon/socket` exists, else `ciao`) | mDNS advertiser; force `avahi` to coexist with the existing `_sleepypod._tcp` service file, or `ciao` for pods without avahi |
 
 ---
 
