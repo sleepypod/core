@@ -35,26 +35,38 @@ jobs:
         module:
           # `common` has no pyproject.toml; tests live under modules/common/
           # and import `from common.X`, so they must run with cwd=modules/.
+          #
+          # We don't `pip install -e .` per module: each module is a flat
+          # layout with `main.py` + `test_main.py` at the top, which trips
+          # setuptools auto-discovery ("Multiple top-level modules"). Tests
+          # don't need the module installed anyway — they `from main import`
+          # via cwd. We just install the runtime deps main.py loads at
+          # import time (the rest are stubbed in sys.modules by the tests).
           - name: common
             workdir: modules
             target: common
             cov_source: common
+            deps: ""
           - name: cover-buttons
             workdir: modules/cover-buttons
             target: .
             cov_source: .
+            deps: ""
           - name: environment-monitor
             workdir: modules/environment-monitor
             target: .
             cov_source: .
+            deps: ""
           - name: piezo-processor
             workdir: modules/piezo-processor
             target: .
             cov_source: .
+            deps: "numpy scipy"
           - name: sleep-detector
             workdir: modules/sleep-detector
             target: .
             cov_source: .
+            deps: ""
 
     steps:
       - name: Checkout
@@ -72,19 +84,13 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install module + test deps
+      - name: Install test deps
         working-directory: ${{ matrix.module.workdir }}
         run: |
           uv venv .venv
           # shellcheck source=/dev/null
           . .venv/bin/activate
-          # The `common` module has no pyproject — it's a shared package
-          # imported by the others. Skip the editable install in that case
-          # and let test-time sys.modules stubs cover any pod-only imports.
-          if [ -f pyproject.toml ]; then
-            uv pip install -e .
-          fi
-          uv pip install pytest pytest-cov
+          uv pip install pytest pytest-cov ${{ matrix.module.deps }}
 
       - name: Run pytest with coverage
         working-directory: ${{ matrix.module.workdir }}
