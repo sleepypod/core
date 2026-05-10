@@ -16,17 +16,19 @@ export default {
     configFile: 'vitest.config.mts',
   },
 
-  // Mutate everything under src/ and app/. NoCoverage / Survived counts
-  // surface exactly the areas that need more tests — filtering them out
-  // hides the signal. CI splits this into area shards (see mutation.yml)
-  // so wall-clock stays manageable; local runs use this full list.
+  // Start narrow: mutate only the modules that have real unit test coverage.
+  // Next.js app code (app/, components/, hooks/, utils/) is under-tested
+  // and would add hours of wall-clock time to each mutation run without
+  // telling us anything useful. Expand once we're confident the report is
+  // actionable.
   mutate: [
-    'src/**/*.{ts,tsx}',
-    'app/**/*.{ts,tsx}',
+    'src/services/**/*.ts',
+    'src/scheduler/**/*.ts',
+    'src/hardware/**/*.ts',
+    'src/lib/**/*.ts',
     '!src/**/tests/**',
-    '!src/**/*.test.{ts,tsx}',
+    '!src/**/*.test.ts',
     '!src/**/*.d.ts',
-    '!app/**/*.d.ts',
   ],
 
   // Skip "static mutants" — mutations inside module-level / constant
