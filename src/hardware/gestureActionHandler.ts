@@ -1,5 +1,5 @@
 import type { HardwareClient } from './client'
-import { MAX_TEMP, MIN_TEMP, type Side } from './types'
+import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
 
 // Re-export for callers that need to build deps
@@ -152,10 +152,15 @@ export class GestureActionHandler {
     else {
       if (gesture.alarmInactiveBehavior === 'power') {
         const currentlyPowered = state?.isPowered ?? false
+        const nextPowered = !currentlyPowered
+        // Pass the polled target so a power-on preserves the user's setpoint
+        // across off-cycles instead of landing on the firmware-default
+        // fallback in DacHardwareClient.setPower.
+        const target = state?.targetTemperature ?? TEMP_NEUTRAL
         const client = this.deps.newHardwareClient(this.socketPath)
         try {
           await client.connect()
-          await client.setPower(event.side, !currentlyPowered)
+          await client.setPower(event.side, nextPowered, nextPowered ? target : undefined)
         }
         finally {
           client.disconnect()
