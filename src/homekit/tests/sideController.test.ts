@@ -11,6 +11,7 @@ import {
   __resetSideController,
   getStagedTargetF,
   isCurrentlyPowered,
+  isEffectivelyPowered,
   isPoweredFromStatus,
   setSidePowerOff,
   setSidePowerOn,
@@ -59,6 +60,24 @@ describe('sideController', () => {
 
     it('returns false when monitor has no status yet', () => {
       expect(isCurrentlyPowered(monitor(null), 'left')).toBe(false)
+    })
+  })
+
+  describe('isEffectivelyPowered', () => {
+    it('mirrors firmware status when no write has happened yet', () => {
+      expect(isEffectivelyPowered(monitor(onStatus), 'left')).toBe(true)
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+    })
+
+    it('reports user intent immediately after a power-on, ahead of firmware lag', async () => {
+      // Side's firmware status still says OFF until the next poll runs.
+      await setSidePowerOn(monitor(offStatus), 'left')
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(true)
+    })
+
+    it('reports user intent immediately after a power-off, ahead of firmware lag', async () => {
+      await setSidePowerOff(monitor(onStatus), 'left')
+      expect(isEffectivelyPowered(monitor(onStatus), 'left')).toBe(false)
     })
   })
 

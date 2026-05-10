@@ -66,6 +66,18 @@ export function isCurrentlyPowered(monitor: DacMonitor, side: Side): boolean {
 }
 
 /**
+ * What HomeKit OnGet should report. Prefers the user's most recent intent
+ * (set eagerly by setSidePowerOn / setSidePowerOff) over firmware status,
+ * which lags by a poll interval. Without this, toggling AUTO can briefly
+ * read back as OFF in iOS Home until the next status update arrives.
+ */
+export function isEffectivelyPowered(monitor: DacMonitor, side: Side): boolean {
+  const intended = intendedPower[side]
+  if (intended !== null) return intended
+  return isCurrentlyPowered(monitor, side)
+}
+
+/**
  * Resolve the target setpoint to use when powering a side back on.
  * Cache wins because firmware may not preserve targetTemperature across
  * a level=0 (off) write. Falls back to the last firmware status, then to

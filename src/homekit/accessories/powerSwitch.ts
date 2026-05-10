@@ -12,7 +12,7 @@ import { Service, Characteristic } from 'hap-nodejs'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
 import {
-  isCurrentlyPowered,
+  isEffectivelyPowered,
   isPoweredFromStatus,
   setSidePowerOff,
   setSidePowerOn,
@@ -27,7 +27,7 @@ export function buildPowerSwitch(side: Side, monitor: DacMonitor): PowerSwitchAc
   const service = new Service.Switch(`Bed ${side} power`, `power-${side}`)
 
   service.getCharacteristic(Characteristic.On)
-    .onGet(() => isCurrentlyPowered(monitor, side))
+    .onGet(() => isEffectivelyPowered(monitor, side))
     .onSet(async (value) => {
       if (value) await setSidePowerOn(monitor, side)
       else await setSidePowerOff(monitor, side)

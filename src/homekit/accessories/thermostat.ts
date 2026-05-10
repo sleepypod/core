@@ -24,7 +24,7 @@ import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP } from '@/src/hardware/types'
 import {
-  isCurrentlyPowered,
+  isEffectivelyPowered,
   isPoweredFromStatus,
   setSidePowerOff,
   setSidePowerOn,
@@ -68,7 +68,7 @@ export function buildThermostatService(side: Side, monitor: DacMonitor): Thermos
   // pick a mode the firmware doesn't act on.
   service.getCharacteristic(Characteristic.TargetHeatingCoolingState)
     .setProps({ validValues: [TARGET_OFF, TARGET_AUTO] })
-    .onGet(() => isCurrentlyPowered(monitor, side) ? TARGET_AUTO : TARGET_OFF)
+    .onGet(() => isEffectivelyPowered(monitor, side) ? TARGET_AUTO : TARGET_OFF)
     .onSet(async (value) => {
       if (Number(value) === TARGET_OFF) await setSidePowerOff(monitor, side)
       else await setSidePowerOn(monitor, side)
