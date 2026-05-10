@@ -143,7 +143,7 @@ describe('sideController', () => {
   describe('serialization', () => {
     it('serializes concurrent writes to the same side in submission order', async () => {
       const order: string[] = []
-      let resolveTemp: (() => void) | null = null
+      let resolveTemp: () => void = () => {}
       setTemperature.mockImplementation(async (_s, f) => {
         order.push(`setTemp(${f})`)
         if (f === 78) {
@@ -167,7 +167,7 @@ describe('sideController', () => {
       await Promise.resolve()
       expect(order).toEqual(['setTemp(78)'])
 
-      resolveTemp?.()
+      resolveTemp()
       await Promise.all([p1, p2])
 
       // p2 reads cache populated by p1 (78), so power-on uses the latest target.
@@ -176,7 +176,7 @@ describe('sideController', () => {
 
     it('does not block a different side', async () => {
       const order: string[] = []
-      let resolveLeft: (() => void) | null = null
+      let resolveLeft: () => void = () => {}
       setTemperature.mockImplementation(async (s, f) => {
         order.push(`${s}:${f}`)
         if (s === 'left') {
@@ -193,7 +193,7 @@ describe('sideController', () => {
       await right // right resolves without waiting on left
       expect(order).toEqual(['left:60', 'right:90'])
 
-      resolveLeft?.()
+      resolveLeft()
       await left
     })
 
@@ -247,6 +247,38 @@ describe('sideController', () => {
         expect.stringContaining('[homekit] setPower(right, false) failed:'),
         'comms',
       )
+      warn.mockRestore()
+    })
+  })
+
+  describe('intendedPower rollback', () => {
+    it('reverts intendedPower when setSidePowerOn rejects so a later setTargetTemperature does not push to a still-off side', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // Side starts off (intendedPower=null, firmware=off).
+      const m = monitor(offStatus)
+      setPower.mockRejectedValueOnce(new Error('hardware down'))
+      await expect(setSidePowerOn(m, 'left')).rejects.toThrow('hardware down')
+
+      // intendedPower must have rolled back to null/false. Adjusting target
+      // now should NOT push to firmware (side is genuinely off).
+      await setTargetTemperature(m, 'left', 68)
+      expect(setTemperature).not.toHaveBeenCalled()
+      warn.mockRestore()
+    })
+
+    it('reverts intendedPower when setSidePowerOff rejects', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // Side is on (intendedPower=true after a successful power-on).
+      await setSidePowerOn(monitor(onStatus), 'left')
+      expect(setPower).toHaveBeenCalledWith('left', true, expect.any(Number))
+      setPower.mockClear()
+
+      setPower.mockRejectedValueOnce(new Error('hardware down'))
+      await expect(setSidePowerOff(monitor(onStatus), 'left')).rejects.toThrow('hardware down')
+
+      // intendedPower must remain true so a slider drag still pushes through.
+      await setTargetTemperature(monitor(onStatus), 'left', 72)
+      expect(setTemperature).toHaveBeenCalledWith('left', 72)
       warn.mockRestore()
     })
   })

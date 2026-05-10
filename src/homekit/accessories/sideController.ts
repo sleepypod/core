@@ -114,25 +114,43 @@ export async function setTargetTemperature(
  * Power a side on, preserving the user's last requested target.
  * Shared by the Thermostat's TargetHeatingCoolingState=AUTO path and the
  * Power switch's On=true path so both surfaces stay in lockstep.
+ *
+ * On rejection, intendedPower is rolled back to its prior value so a
+ * subsequent setTargetTemperature doesn't push a write against firmware
+ * that the failed power-on left in an unknown state.
  */
 export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<void> {
+  const prev = intendedPower[side]
   intendedPower[side] = true
-  await serialize(side, async () => {
-    const target = clampF(getStagedTargetF(monitor, side))
-    lastTargetF[side] = target
-    await logged(
-      `setPower(${side}, true, ${target})`,
-      () => getSharedHardwareClient().setPower(side, true, target),
-    )
-  })
+  try {
+    await serialize(side, async () => {
+      const target = clampF(getStagedTargetF(monitor, side))
+      lastTargetF[side] = target
+      await logged(
+        `setPower(${side}, true, ${target})`,
+        () => getSharedHardwareClient().setPower(side, true, target),
+      )
+    })
+  }
+  catch (e) {
+    intendedPower[side] = prev
+    throw e
+  }
 }
 
 export async function setSidePowerOff(monitor: DacMonitor, side: Side): Promise<void> {
+  const prev = intendedPower[side]
   intendedPower[side] = false
-  await serialize(side, () => logged(
-    `setPower(${side}, false)`,
-    () => getSharedHardwareClient().setPower(side, false),
-  ))
+  try {
+    await serialize(side, () => logged(
+      `setPower(${side}, false)`,
+      () => getSharedHardwareClient().setPower(side, false),
+    ))
+  }
+  catch (e) {
+    intendedPower[side] = prev
+    throw e
+  }
 }
 
 /**
