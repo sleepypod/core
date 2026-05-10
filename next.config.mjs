@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'url'
 import path from 'path'
+import { codecovNextJSWebpackPlugin } from '@codecov/nextjs-webpack-plugin'
 
 // Pin Turbopack workspace root so multi-lockfile detection (nested worktrees,
 // monorepos) doesn't pick the wrong root and skip standalone output.
@@ -33,12 +34,21 @@ const nextConfig = {
       'better-sqlite3': 'better-sqlite3',
     },
   },
-  webpack: (config) => {
+  webpack: (config, options) => {
     // Lingui .po file loader for webpack builds
     config.module.rules.push({
       test: /\.po$/,
       use: ['@lingui/loader'],
     })
+    config.plugins.push(
+      codecovNextJSWebpackPlugin({
+        enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
+        bundleName: 'sleepypod-core',
+        uploadToken: process.env.CODECOV_TOKEN,
+        gitService: 'github',
+        webpack: options.webpack,
+      }),
+    )
     return config
   },
   reactCompiler: false,
