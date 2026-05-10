@@ -744,21 +744,19 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     sed -i "s|^BIOMETRICS_DATABASE_URL=.*|BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db|" "$INSTALL_DIR/.env" || \
     echo "BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db" >> "$INSTALL_DIR/.env"
 
-  # Generate EXPORT_TOKEN once if missing — preserved across upgrades.
-  if ! grep -q "^EXPORT_TOKEN=" "$INSTALL_DIR/.env"; then
-    echo "EXPORT_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '+/=' )" >> "$INSTALL_DIR/.env"
+  # EXPORT_TOKEN was retired with the LAN-only export endpoint — strip if present.
+  if grep -q "^EXPORT_TOKEN=" "$INSTALL_DIR/.env"; then
+    sed -i '/^EXPORT_TOKEN=/d' "$INSTALL_DIR/.env"
   fi
 else
   echo "Creating environment file..."
   touch "$INSTALL_DIR/.env"
   chmod 640 "$INSTALL_DIR/.env"
-  EXPORT_TOKEN_VAL="$(head -c 24 /dev/urandom | base64 | tr -d '+/=' )"
   cat > "$INSTALL_DIR/.env" << EOF
 DATABASE_URL=file:$DATA_DIR/sleepypod.db
 BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db
 DAC_SOCK_PATH=$DAC_SOCK_PATH
 NODE_ENV=production
-EXPORT_TOKEN=$EXPORT_TOKEN_VAL
 EOF
 fi
 
@@ -1146,6 +1144,42 @@ if [ -d "$ARCHIVER_SRC" ]; then
     fi
   done
   [ "$archived" -gt 0 ] && echo "Archived $archived stranded pre-tmpfs RAW files"
+fi
+
+# ============================================================================
+# Archive push — nightly rsync of cold archive to user-configured remote.
+# ============================================================================
+# Disabled by default; user opts in via Settings → Backup. Config + ssh key
+# live under /etc/sleepypod (writeable by the sleepypod group so the
+# next-server tRPC handlers can stage them). The unit runs as the sleepypod
+# user, not root — same trust boundary as the rest of the app.
+PUSH_SRC="$INSTALL_DIR/modules/archive-push"
+if [ -d "$PUSH_SRC" ]; then
+  echo "Installing archive-push (rsync to remote)..."
+
+  install -m 0755 "$PUSH_SRC/sleepypod-archive-push" /usr/local/bin/sleepypod-archive-push
+  install -m 0644 "$PUSH_SRC/sleepypod-archive-push.service" /etc/systemd/system/
+  install -m 0644 "$PUSH_SRC/sleepypod-archive-push.timer"   /etc/systemd/system/
+
+  # Config dir owned root:sleepypod 0750 so the service user reads + the app
+  # user (in group sleepypod) writes via the tRPC handlers.
+  mkdir -p /etc/sleepypod
+  if id sleepypod &>/dev/null; then
+    chown root:sleepypod /etc/sleepypod
+    chmod 0770 /etc/sleepypod
+  fi
+
+  # Seed example conf only if no real conf exists.
+  if [ ! -f /etc/sleepypod/archive-push.conf ] && [ ! -f /etc/sleepypod/archive-push.example.conf ]; then
+    install -m 0640 "$PUSH_SRC/archive-push.example.conf" /etc/sleepypod/archive-push.example.conf
+    if id sleepypod &>/dev/null; then
+      chown root:sleepypod /etc/sleepypod/archive-push.example.conf
+    fi
+  fi
+
+  systemctl daemon-reload
+  # Timer always enabled; the script no-ops when ENABLED=false in the conf.
+  systemctl enable --now sleepypod-archive-push.timer
 fi
 
 # Re-fix DB permissions after all services restarted with new UMask.

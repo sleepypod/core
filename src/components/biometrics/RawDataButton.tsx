@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useMemo } from 'react'
-import { Download, X, FileText, HardDrive, Trash2, Database } from 'lucide-react'
+import { Download, X, FileText, HardDrive, Trash2, Database, Package } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
@@ -171,6 +171,14 @@ export function RawDataButton() {
     link.click()
   }, [])
 
+  const exportArchive = useCallback(() => {
+    const startTs = Math.floor(weekStart.getTime() / 1000)
+    const endTs = Math.floor(weekEnd.getTime() / 1000)
+    const link = document.createElement('a')
+    link.href = `/api/export/archive?startTs=${startTs}&endTs=${endTs}&include=raw,db`
+    link.click()
+  }, [weekStart, weekEnd])
+
   return (
     <>
       <button
@@ -315,6 +323,18 @@ export function RawDataButton() {
             {/* Info text — matches iOS */}
             <p className="mt-3 text-center text-[10px] text-zinc-500">
               CSV files can be opened in Excel, Numbers, or imported into Python/R for analysis.
+            </p>
+
+            {/* Full archive — RAW waveforms + biometrics.db dump for the visible week */}
+            <button
+              onClick={exportArchive}
+              className="mt-3 flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-zinc-800/60 p-3 text-sm font-medium text-zinc-200 active:bg-zinc-700"
+            >
+              <Package size={16} className="text-amber-400" />
+              Export Archive (.tar.gz)
+            </button>
+            <p className="mt-2 text-center text-[10px] text-zinc-500">
+              RAW waveforms + biometrics.db SQL dump for this week. Untar then `sqlite3 biometrics.db &lt; biometrics.sql`.
             </p>
 
             {/* Raw sensor files section — wired to raw.files tRPC router */}

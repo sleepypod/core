@@ -13,6 +13,7 @@ import { waterLevelRouter } from './waterLevel'
 import { runOnceRouter } from './runOnce'
 import { mqttRouter } from './mqtt'
 import { homekitRouter } from './homekit'
+import { archivePushRouter } from './archivePush'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -37,6 +38,7 @@ export const appRouter = router({
   runOnce: runOnceRouter,
   mqtt: mqttRouter,
   homekit: homekitRouter,
+  archivePush: archivePushRouter,
 })
 
 export type AppRouter = typeof appRouter

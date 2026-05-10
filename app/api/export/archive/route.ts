@@ -5,13 +5,65 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 
-const EXPORT_TOKEN = process.env.EXPORT_TOKEN
 const BIOMETRICS_DB_PATH = process.env.BIOMETRICS_DATABASE_URL?.replace('file:', '') ?? ''
-const RAW_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
 
-const SAFE_FILENAME = /^[\w.-]+\.RAW$/i
+// Raw waveform sources, in priority order. After the tmpfs migration (#499)
+// firmware writes to RAW_TMPFS_DIR; the archiver gzips into RAW_ARCHIVE_DIR.
+// RAW_DATA_DIR remains so pre-#499 pods (with *.RAW directly on /persistent)
+// still export.
+const RAW_TMPFS_DIR = process.env.RAW_TMPFS_DIR ?? '/persistent/biometrics'
+const RAW_ARCHIVE_DIR = process.env.RAW_ARCHIVE_DIR ?? '/persistent/biometrics-archive'
+const RAW_LEGACY_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
+
+// Accepts <seqno>.RAW (live) or <seqno>.RAW.gz (cold archive).
+const SAFE_RAW_NAME = /^[\w.-]+\.RAW(\.gz)?$/i
 
 let inflight = false
+
+interface SourceFile {
+  abs: string
+  basename: string
+}
+
+/**
+ * Walk one source dir for *.RAW or *.RAW.gz whose mtime falls in
+ * [startTs, endTs]. Missing dir → []. Same basename across dirs is
+ * deduped (tmpfs wins over archive wins over legacy) to avoid two
+ * copies of the same waveform window in the tarball.
+ */
+export async function gatherRawFiles(
+  sources: readonly string[],
+  startTs: number,
+  endTs: number,
+): Promise<SourceFile[]> {
+  const seen = new Set<string>()
+  const out: SourceFile[] = []
+  for (const dir of sources) {
+    let entries: string[]
+    try {
+      entries = await readdir(dir)
+    }
+    catch {
+      continue
+    }
+    for (const name of entries) {
+      if (!SAFE_RAW_NAME.test(name)) continue
+      if (seen.has(name)) continue
+      const full = path.join(dir, name)
+      try {
+        const s = await stat(full)
+        const mtime = Math.floor(s.mtime.getTime() / 1000)
+        if (mtime < startTs || mtime > endTs) continue
+        seen.add(name)
+        out.push({ abs: full, basename: name })
+      }
+      catch {
+        // skip unreadable entry
+      }
+    }
+  }
+  return out
+}
 
 async function dumpSqlite(dbPath: string, outPath: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -32,14 +84,6 @@ async function dumpSqlite(dbPath: string, outPath: string): Promise<void> {
 
 export async function GET(request: Request) {
   const url = new URL(request.url)
-
-  if (!EXPORT_TOKEN) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  const token = url.searchParams.get('token')
-  if (!token || token !== EXPORT_TOKEN) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  }
 
   if (inflight) {
     return Response.json(
@@ -67,21 +111,16 @@ export async function GET(request: Request) {
     if (include.includes('raw')) {
       const rawStaged = path.join(stagingDir, 'raw')
       await mkdir(rawStaged)
-      let entries: string[] = []
-      try {
-        entries = await readdir(RAW_DIR)
-      }
-      catch { /* RAW_DIR missing — ok, archive will have empty raw/ */ }
-      for (const name of entries) {
-        if (!SAFE_FILENAME.test(name)) continue
-        const full = path.join(RAW_DIR, name)
+      const files = await gatherRawFiles(
+        [RAW_TMPFS_DIR, RAW_ARCHIVE_DIR, RAW_LEGACY_DIR],
+        startTs,
+        endTs,
+      )
+      for (const f of files) {
         try {
-          const s = await stat(full)
-          const mtime = Math.floor(s.mtime.getTime() / 1000)
-          if (mtime < startTs || mtime > endTs) continue
-          await symlink(full, path.join(rawStaged, name))
+          await symlink(f.abs, path.join(rawStaged, f.basename))
         }
-        catch { /* skip unreadable entry */ }
+        catch { /* skip duplicates / unreadable */ }
       }
     }
 
