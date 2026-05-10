@@ -1,0 +1,54 @@
+name: Bundle Stats
+
+# Production builds use Turbopack (next.config.mjs), which skips the
+# webpack() hook — so @codecov/nextjs-webpack-plugin never runs in the
+# deploy build. This job runs a webpack-only build solely to upload
+# bundle stats to Codecov. The artifact is discarded.
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+
+jobs:
+  bundle-stats:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+          registry-url: 'https://npm.pkg.github.com'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prebuild (git-info + lingui)
+        run: pnpm run prebuild
+
+      - name: Build (webpack, for Codecov bundle stats)
+        run: pnpm exec next build --webpack
