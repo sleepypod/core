@@ -8,21 +8,30 @@
  * iOS would fight decreases as deadband-violating. Thermostat is HomeKit's
  * single-setpoint primitive, which matches the pod 1:1.
  *
- * - TargetTemperature → setTemperature
+ * - TargetTemperature → setTargetTemperature (cached, gated on power)
  * - TargetHeatingCoolingState toggles power: 0=off, 3=auto (pod is bidirectional)
  * - CurrentHeatingCoolingState reflects the live drive direction
+ *
+ * All hardware writes go through sideController so concurrent characteristic
+ * onSet callbacks don't race each other and stomp the user's setpoint.
  *
  * HomeKit talks Celsius natively; we convert at the boundary.
  */
 
 import { Service, Characteristic } from 'hap-nodejs'
+import type { Perms } from 'hap-nodejs'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP } from '@/src/hardware/types'
-import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import {
+  isEffectivelyPowered,
+  isPoweredFromStatus,
+  setSidePowerOff,
+  setSidePowerOn,
+  setTargetTemperature,
+} from './sideController'
 
 const f2c = (f: number): number => ((f - 32) * 5) / 9
-const c2f = (c: number): number => (c * 9) / 5 + 32
 
 const MIN_C = f2c(MIN_TEMP)
 const MAX_C = f2c(MAX_TEMP)
@@ -50,8 +59,8 @@ export function buildThermostatService(side: Side, monitor: DacMonitor): Thermos
     .setProps({ minValue: MIN_C, maxValue: MAX_C, minStep: 0.5 })
     .onGet(() => readTargetC(monitor, side))
     .onSet(async (value) => {
-      const f = clampF(c2f(Number(value)))
-      await getSharedHardwareClient().setTemperature(side, f)
+      const f = (Number(value) * 9) / 5 + 32
+      await setTargetTemperature(monitor, side, f)
     })
 
   // Lock to off / auto. HEAT and COOL are removed because the pod's auto
@@ -59,19 +68,10 @@ export function buildThermostatService(side: Side, monitor: DacMonitor): Thermos
   // pick a mode the firmware doesn't act on.
   service.getCharacteristic(Characteristic.TargetHeatingCoolingState)
     .setProps({ validValues: [TARGET_OFF, TARGET_AUTO] })
-    .onGet(() => isPowered(monitor, side) ? TARGET_AUTO : TARGET_OFF)
+    .onGet(() => isEffectivelyPowered(monitor, side) ? TARGET_AUTO : TARGET_OFF)
     .onSet(async (value) => {
-      const client = getSharedHardwareClient()
-      if (Number(value) === TARGET_OFF) {
-        await client.setPower(side, false)
-      }
-      else {
-        // setPower(side, true) without a temperature falls back to 75°F in
-        // the hardware client, which would silently overwrite the user's
-        // last setpoint on every HomeKit power-on. Pass the live target so
-        // power cycles preserve intent.
-        await client.setPower(side, true, readLastTargetF(monitor, side))
-      }
+      if (Number(value) === TARGET_OFF) await setSidePowerOff(monitor, side)
+      else await setSidePowerOn(monitor, side)
     })
 
   service.getCharacteristic(Characteristic.CurrentHeatingCoolingState)
@@ -81,7 +81,7 @@ export function buildThermostatService(side: Side, monitor: DacMonitor): Thermos
   // for display per the controller setting). Drop PAIRED_WRITE so iOS doesn't
   // render a writable C/F toggle that silently bounces back on the next read.
   service.getCharacteristic(Characteristic.TemperatureDisplayUnits)
-    .setProps({ perms: ['pr', 'ev'] as never })
+    .setProps({ perms: ['pr', 'ev'] as Perms[] })
     .onGet(() => 0)
 
   const onStatus = (status: DeviceStatus): void => {
@@ -103,10 +103,6 @@ export function buildThermostatService(side: Side, monitor: DacMonitor): Thermos
   }
 }
 
-function clampF(f: number): number {
-  return Math.min(MAX_TEMP, Math.max(MIN_TEMP, f))
-}
-
 function readCurrentC(monitor: DacMonitor, side: Side): number {
   const status = monitor.getLastStatus()
   return status ? sideC(status, side, 'current') : NEUTRAL_C
@@ -121,28 +117,6 @@ function sideC(status: DeviceStatus, side: Side, kind: 'current' | 'target'): nu
   const s = side === 'left' ? status.leftSide : status.rightSide
   const f = kind === 'current' ? s.currentTemperature : s.targetTemperature
   return f2c(f)
-}
-
-function isPowered(monitor: DacMonitor, side: Side): boolean {
-  const status = monitor.getLastStatus()
-  return status ? isPoweredFromStatus(status, side) : false
-}
-
-// Exported so powerSwitch.ts can reuse the same definition rather than
-// drift on its own copy.
-export function isPoweredFromStatus(status: DeviceStatus, side: Side): boolean {
-  const s = side === 'left' ? status.leftSide : status.rightSide
-  return s.targetLevel !== 0
-}
-
-// Last known target setpoint in °F. Falls back to NEUTRAL when no status
-// has been observed yet so a power-on without a prior poll lands on a
-// safe-ish temp instead of the client's hardcoded 75°F default.
-export function readLastTargetF(monitor: DacMonitor, side: Side): number {
-  const status = monitor.getLastStatus()
-  if (!status) return c2f(NEUTRAL_C)
-  const s = side === 'left' ? status.leftSide : status.rightSide
-  return s.targetTemperature
 }
 
 function deriveCurrentState(monitor: DacMonitor, side: Side): number {

@@ -4,14 +4,19 @@
  * Sits alongside the Thermostat for the same side. The Thermostat's mode
  * already toggles power, but a dedicated Switch gives users a tappable tile
  * (and an automation/scene primitive) that doesn't require entering the
- * thermostat card. Both surfaces resolve to the same setPower(side) call.
+ * thermostat card. Both surfaces resolve through sideController so the
+ * writes are serialized and share the in-process target cache.
  */
 
 import { Service, Characteristic } from 'hap-nodejs'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
-import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
-import { isPoweredFromStatus, readLastTargetF } from './thermostat'
+import {
+  isEffectivelyPowered,
+  isPoweredFromStatus,
+  setSidePowerOff,
+  setSidePowerOn,
+} from './sideController'
 
 export interface PowerSwitchAccessory {
   service: Service
@@ -22,17 +27,10 @@ export function buildPowerSwitch(side: Side, monitor: DacMonitor): PowerSwitchAc
   const service = new Service.Switch(`Bed ${side} power`, `power-${side}`)
 
   service.getCharacteristic(Characteristic.On)
-    .onGet(() => isPowered(monitor, side))
+    .onGet(() => isEffectivelyPowered(monitor, side))
     .onSet(async (value) => {
-      const client = getSharedHardwareClient()
-      if (value) {
-        // setPower(side, true) without a temperature falls back to 75°F.
-        // Preserve the user's last setpoint across power cycles instead.
-        await client.setPower(side, true, readLastTargetF(monitor, side))
-      }
-      else {
-        await client.setPower(side, false)
-      }
+      if (value) await setSidePowerOn(monitor, side)
+      else await setSidePowerOff(monitor, side)
     })
 
   const onStatus = (status: DeviceStatus): void => {
@@ -46,9 +44,4 @@ export function buildPowerSwitch(side: Side, monitor: DacMonitor): PowerSwitchAc
       monitor.off('status:updated', onStatus)
     },
   }
-}
-
-function isPowered(monitor: DacMonitor, side: Side): boolean {
-  const status = monitor.getLastStatus()
-  return status ? isPoweredFromStatus(status, side) : false
 }
