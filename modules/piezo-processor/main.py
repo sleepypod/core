@@ -65,16 +65,16 @@ PUMP_ENERGY_MULTIPLIER = 10.0
 PUMP_CORRELATION_MIN = 0.5
 PUMP_GUARD_S = 5.0
 
-# Per-side pump activity threshold (frzHealth pump RPM). When one side's
-# pump is running and the opposite side's is idle, observed live on
-# 2026-05-02: a heating cycle on right with left idle drove pump@2000RPM
-# coupling into the right piezo and produced phantom HR/HRV/BR. The
-# existing PumpGate (broadband-symmetric energy spike) does not catch
-# asymmetric pump activity because min/max ratio is small.
-ASYMMETRIC_PUMP_RPM_MIN = 50          # pump considered "running" above this
-ASYMMETRIC_PUMP_GUARD_S = 5.0         # trailing guard after own-side pump-off
-ASYMMETRIC_PRESENCE_STD_FACTOR = 4.0  # raise enter_threshold by this factor
-ASYMMETRIC_PRESENCE_ACR_THRESHOLD = 0.6  # require strong autocorr to enter
+# Per-side pump activity threshold (frzHealth pump RPM). PumpGate catches
+# broadband-symmetric energy spikes but misses two steady-state coupling
+# modes: asymmetric (one pump on, observed 2026-05-02 Pod 3 — pump@2000RPM
+# on right with left idle drove phantom HR/HRV/BR) and symmetric (both
+# pumps on, observed 2026-05-05 Pod 5 — 1940/2004 rpm beat at 64/min lands
+# in the cardiac band). Both are caught by the guard below.
+PUMP_ACTIVE_RPM_MIN = 50          # pump considered "running" above this
+PUMP_OFF_GUARD_S = 5.0            # trailing guard after own-side pump-off
+PUMP_COUPLING_STD_FACTOR = 4.0    # raise enter_threshold by this factor
+PUMP_COUPLING_ACR_THRESHOLD = 0.6 # require strong autocorr to enter
 
 # HR band: 0.8 Hz preserves fundamental of 48+ BPM; 8.5 Hz per PMC7582983
 HR_BAND = (0.8, 8.5)
@@ -259,12 +259,12 @@ class FrzHealthPumpState:
                     val = data.get(key)
                     if val is not None:
                         try:
-                            rpm = ASYMMETRIC_PUMP_RPM_MIN + 1.0 if float(val) > 0 else 0.0
+                            rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(val) > 0 else 0.0
                         except (TypeError, ValueError):
                             rpm = 0.0
                         break
 
-            now_active = rpm >= ASYMMETRIC_PUMP_RPM_MIN
+            now_active = rpm >= PUMP_ACTIVE_RPM_MIN
             if self._was_active[side] and not now_active:
                 self._pump_off_at[side] = time.monotonic()
             self._pump_rpm[side] = rpm
@@ -272,9 +272,9 @@ class FrzHealthPumpState:
 
     def is_side_pump_active(self, side: str) -> bool:
         """Pump active = currently running OR within the trailing guard window."""
-        if self._pump_rpm[side] >= ASYMMETRIC_PUMP_RPM_MIN:
+        if self._pump_rpm[side] >= PUMP_ACTIVE_RPM_MIN:
             return True
-        return time.monotonic() - self._pump_off_at[side] < ASYMMETRIC_PUMP_GUARD_S
+        return time.monotonic() - self._pump_off_at[side] < PUMP_OFF_GUARD_S
 
     def is_asymmetric_for(self, side: str) -> bool:
         """Own pump active, opposite pump idle (and outside its own guard).
@@ -283,6 +283,12 @@ class FrzHealthPumpState:
         other side to balance/reject."""
         other = "right" if side == "left" else "left"
         return self.is_side_pump_active(side) and not self.is_side_pump_active(other)
+
+    def is_symmetric_active(self) -> bool:
+        """Both pumps active. RPM mismatch (Pod 5 live: 1940/2004) produces
+        a beat frequency in the cardiac band, generating bilateral phantom
+        vitals. PumpGate catches symmetric spikes but not steady-state."""
+        return self.is_side_pump_active("left") and self.is_side_pump_active("right")
 
 
 class PumpGate:
@@ -820,28 +826,27 @@ class SideProcessor:
         self._last_med_std = med_std
         self._last_acr_qual = acr_qual
 
-        # Asymmetric pump-coupling guard: when own-side pump is active and the
-        # opposite side's pump is idle, motor vibration couples into the same-
-        # side piezo channel and produces broadband energy with periodic-looking
-        # autocorrelation in the cardiac band. The existing PumpGate (broadband-
-        # symmetric spike) does not catch this asymmetric case. While the gate
-        # is active, require BOTH significantly elevated energy AND strong
-        # autocorrelation to enter PRESENT — pure pump coupling rarely produces
-        # both because cardiac periodicity dominates only with a real person.
-        if (self._pump_state is not None
-                and self._pump_state.is_asymmetric_for(self.side)
-                and self._presence.state == PresenceDetector.ABSENT):
-            asymmetric_std_threshold = (
-                self._presence.enter_threshold * ASYMMETRIC_PRESENCE_STD_FACTOR
-            )
-            if not (med_std > asymmetric_std_threshold
-                    and acr_qual > ASYMMETRIC_PRESENCE_ACR_THRESHOLD):
-                log.debug(
-                    "%s: pump-coupling guard suppressed presence "
-                    "(med_std=%.0f, acr=%.2f, own-pump-active, other-idle)",
-                    self.side, med_std, acr_qual,
-                )
-                return
+        # Pump-coupling guard. PumpGate handles symmetric spikes (ramps)
+        # but misses two steady-state modes: asymmetric (own-pump-on with
+        # opposite idle — vibration couples into same-side piezo, no
+        # competing signal for cross-channel rejection) and symmetric
+        # (both pumps on at mismatched RPMs — beat frequency lands in the
+        # cardiac band, both sides look "real"). In both, require elevated
+        # energy AND strong autocorrelation to enter PRESENT; coupling
+        # rarely produces both, only a real person does.
+        if self._pump_state is not None and self._presence.state == PresenceDetector.ABSENT:
+            symmetric = self._pump_state.is_symmetric_active()
+            asymmetric = self._pump_state.is_asymmetric_for(self.side)
+            if symmetric or asymmetric:
+                std_threshold = self._presence.enter_threshold * PUMP_COUPLING_STD_FACTOR
+                if not (med_std > std_threshold and acr_qual > PUMP_COUPLING_ACR_THRESHOLD):
+                    log.debug(
+                        "%s: pump-coupling guard suppressed presence "
+                        "(med_std=%.0f, acr=%.2f, mode=%s)",
+                        self.side, med_std, acr_qual,
+                        "symmetric" if symmetric else "asymmetric",
+                    )
+                    return
 
         present = self._presence.update(med_std, acr_qual)
 
