@@ -42,9 +42,9 @@ const nextConfig = {
     })
     config.plugins.push(
       codecovNextJSWebpackPlugin({
-        enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
+        enableBundleAnalysis: process.env.GITHUB_ACTIONS === 'true',
         bundleName: 'sleepypod-core',
-        uploadToken: process.env.CODECOV_TOKEN,
+        oidc: { useGitHubOIDC: true },
         gitService: 'github',
         webpack: options.webpack,
       }),
