@@ -6,7 +6,7 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/discord/1450213183653679205?logo=discord&logoColor=white&label=discord)](https://discord.gg/UMmv5R6MXa)
 
-A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web interface and scheduler.
+A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs directly on the Pod's embedded Linux hardware, replacing the cloud dependency with a local-first web UI, scheduler, and integrations for Home Assistant (MQTT) and Apple Home (HomeKit).
 
 <p align="center">
   <img src="docs/images/temperature-control.png" width="280" alt="Temperature control" />
@@ -20,7 +20,7 @@ A self-hosted control system for Pod mattress covers (Pod 3, 4, and 5). Runs dir
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/UMmv5R6MXa">Discord</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
+  <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
 </p>
 
 ---
