@@ -38,31 +38,13 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # Each shard's --mutate string is the include globs + the
-          # exclude globs (the CLI flag overrides the config's mutate
-          # block entirely, so excludes must be repeated per shard).
-          # Areas roughly grouped by code-cohesion + file count so wall
-          # time stays balanced across the matrix.
-          - name: lib-utils
-            mutate: "src/lib/**/*.{ts,tsx},src/utils/**/*.{ts,tsx},src/modules/**/*.{ts,tsx},!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
+          # The --mutate CLI flag overrides the config's exclude patterns,
+          # so we have to repeat them here per shard. Keep these three
+          # exclusions in sync with stryker.config.mjs's mutate: block.
           - name: services-scheduler
-            mutate: "src/services/**/*.{ts,tsx},src/scheduler/**/*.{ts,tsx},!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
-          - name: hardware
-            mutate: "src/hardware/**/*.{ts,tsx},!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
-          - name: server-db
-            mutate: "src/server/**/*.{ts,tsx},src/db/**/*.{ts,tsx},!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
-          - name: streaming-homekit
-            mutate: "src/streaming/**/*.{ts,tsx},src/homekit/**/*.{ts,tsx},!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
-          - name: react-runtime
-            mutate: "src/hooks/**/*.{ts,tsx},src/providers/**/*.{ts,tsx},src/ui/**/*.{ts,tsx},!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
-          - name: app-routes
-            mutate: "app/**/*.{ts,tsx},!app/**/*.test.{ts,tsx},!app/**/*.d.ts"
-          - name: components-features
-            mutate: "src/components/Sensors/**/*.{ts,tsx},src/components/Schedule/**/*.{ts,tsx},src/components/biometrics/**/*.{ts,tsx},src/components/Settings/**/*.{ts,tsx},!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
-          - name: components-views
-            mutate: "src/components/status/**/*.{ts,tsx},src/components/SleepStages/**/*.{ts,tsx},src/components/Environment/**/*.{ts,tsx},src/components/TempScreen/**/*.{ts,tsx},!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
-          - name: components-misc
-            mutate: "src/components/**/*.{ts,tsx},!src/components/Sensors/**,!src/components/Schedule/**,!src/components/biometrics/**,!src/components/Settings/**,!src/components/status/**,!src/components/SleepStages/**,!src/components/Environment/**,!src/components/TempScreen/**,!src/**/tests/**,!src/**/*.test.{ts,tsx},!src/**/*.d.ts"
+            mutate: "src/services/**/*.ts,src/scheduler/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.d.ts"
+          - name: hardware-lib
+            mutate: "src/hardware/**/*.ts,src/lib/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.d.ts"
     name: mutate (${{ matrix.shard.name }})
     steps:
       - name: Checkout
