@@ -52,3 +52,5 @@ jobs:
 
       - name: Build (webpack, for Codecov bundle stats)
         run: pnpm exec next build --webpack
+        env:
+          CODECOV_BUNDLE_STATS: '1'

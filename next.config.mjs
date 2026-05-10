@@ -6,8 +6,17 @@ import { codecovNextJSWebpackPlugin } from '@codecov/nextjs-webpack-plugin'
 // monorepos) doesn't pick the wrong root and skip standalone output.
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// Set by .github/workflows/bundle-stats.yml. That job runs `next build --webpack`
+// to feed the Codecov bundle plugin (Turbopack skips webpack(), so the deploy
+// build can't upload). Some packages ship ESM that only resolves cleanly under
+// Turbopack — transpile them under this build so webpack can finish compiling.
+const isBundleStatsBuild = process.env.CODECOV_BUNDLE_STATS === '1'
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  ...(isBundleStatsBuild && {
+    transpilePackages: ['@trpc/react-query'],
+  }),
   // Keep production browser source maps off — serving .map files on LAN
   // exposes TypeScript source, API route internals, and file paths.
   // Use server-side-only source maps + a private error monitor for prod debugging.
