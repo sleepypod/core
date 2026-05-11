@@ -19,6 +19,7 @@ import {
   disconnectDac,
   isDacConnected,
   MessageResponseTimeoutError,
+  ConnectionRetriesExhaustedError,
   backoffDelayMs,
 } from '../dacTransport'
 
@@ -267,6 +268,128 @@ describe('dacTransport', () => {
         expect(delay).toBeGreaterThanOrEqual(prev)
         prev = delay
       }
+    })
+  })
+
+  describe('error class instances', () => {
+    test('ConnectionRetriesExhaustedError carries attempt count in message', () => {
+      const err = new ConnectionRetriesExhaustedError(7)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.name).toBe('ConnectionRetriesExhaustedError')
+      expect(err.message).toContain('7')
+    })
+
+    test('MessageResponseTimeoutError carries timeout in message', () => {
+      const err = new MessageResponseTimeoutError(1234)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.name).toBe('MessageResponseTimeoutError')
+      expect(err.message).toContain('1234')
+    })
+  })
+
+  describe('connectDac re-entry', () => {
+    test('returns immediately when already connected', async () => {
+      const connectPromise = connectDac(socketPath)
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      handleCommands(mockFranken)
+      await connectPromise
+
+      expect(isDacConnected()).toBe(true)
+
+      // Second call must short-circuit (the `if (transport) return` branch).
+      const t0 = Date.now()
+      await connectDac(socketPath)
+      expect(Date.now() - t0).toBeLessThan(50)
+      expect(isDacConnected()).toBe(true)
+    })
+
+    test('shares in-flight connect promise across concurrent callers', async () => {
+      // Kick off two connects before any frankenfirmware connection.
+      // The second must await the first's promise (no duplicate server start).
+      const first = connectDac(socketPath)
+      const second = connectDac(socketPath)
+
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      handleCommands(mockFranken)
+
+      await Promise.all([first, second])
+      expect(isDacConnected()).toBe(true)
+    })
+  })
+
+  describe('socket-level errors', () => {
+    test('socket error events are caught and do not crash the transport', async () => {
+      const connectPromise = connectDac(socketPath)
+
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      handleCommands(mockFranken)
+
+      await connectPromise
+
+      // First send works.
+      await expect(sendCommand('0')).resolves.toBe('READY')
+
+      // Emit a synthetic error on the firmware-side socket. The server-side
+      // 'connection error' handler should swallow it without throwing.
+      mockFranken.emit('error', new Error('synthetic socket failure'))
+
+      // Module-level connection state is unaffected by an isolated socket-error
+      // event (the socket itself is still open).
+      expect(isDacConnected()).toBe(true)
+    })
+  })
+
+  describe('connection timeout + reconnect', () => {
+    const originalTimeout = process.env.DAC_CONNECTION_TIMEOUT_MS
+    const originalDelay = process.env.DAC_RECONNECT_DELAY_MS
+    const originalMaxAttempts = process.env.DAC_RECONNECT_MAX_ATTEMPTS
+
+    afterEach(() => {
+      if (originalTimeout === undefined) delete process.env.DAC_CONNECTION_TIMEOUT_MS
+      else process.env.DAC_CONNECTION_TIMEOUT_MS = originalTimeout
+
+      if (originalDelay === undefined) delete process.env.DAC_RECONNECT_DELAY_MS
+      else process.env.DAC_RECONNECT_DELAY_MS = originalDelay
+
+      if (originalMaxAttempts === undefined) delete process.env.DAC_RECONNECT_MAX_ATTEMPTS
+      else process.env.DAC_RECONNECT_MAX_ATTEMPTS = originalMaxAttempts
+    })
+
+    test('reconnects after a connection timeout and succeeds on the next attempt', async () => {
+      // Tight timing so the test runs in well under a second.
+      process.env.DAC_CONNECTION_TIMEOUT_MS = '100'
+      process.env.DAC_RECONNECT_DELAY_MS = '10'
+      process.env.DAC_RECONNECT_MAX_ATTEMPTS = '5'
+
+      const connectPromise = connectDac(socketPath)
+
+      // First attempt: no frankenfirmware shows up before the 100ms timeout,
+      // so the transport tears the server down and schedules a retry.
+      // Connect on the *second* attempt: wait long enough for the first
+      // server to be closed and the retry to listen again.
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      handleCommands(mockFranken)
+
+      await connectPromise
+      expect(isDacConnected()).toBe(true)
+    })
+
+    test('gives up with ConnectionRetriesExhaustedError after max attempts', async () => {
+      process.env.DAC_CONNECTION_TIMEOUT_MS = '40'
+      process.env.DAC_RECONNECT_DELAY_MS = '10'
+      process.env.DAC_RECONNECT_MAX_ATTEMPTS = '3'
+
+      // Never connect. All attempts must time out and the loop must exit
+      // with ConnectionRetriesExhaustedError carrying the attempt count.
+      await expect(connectDac(socketPath))
+        .rejects
+        .toBeInstanceOf(ConnectionRetriesExhaustedError)
+
+      expect(isDacConnected()).toBe(false)
     })
   })
 })
