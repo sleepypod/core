@@ -124,7 +124,7 @@
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.0.18"
   },
-  "packageManager": "pnpm@10.33.2",
+  "packageManager": "pnpm@10.33.4",
   "pnpm": {
     "onlyBuiltDependencies": [
       "cbor-extract",
