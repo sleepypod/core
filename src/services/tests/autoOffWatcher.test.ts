@@ -764,3 +764,154 @@ describe('watcher lifecycle', () => {
     await expect(stopAutoOffWatcher()).resolves.toBeUndefined()
   })
 })
+
+// ── Mutation-killing boundary tests ──────────────────────────────────────
+//
+// These pin equality boundaries that survive coarse "well past the cap" tests:
+// strict `>` vs `>=`, `< 0` vs `<= 0`, `> 0` vs `>= 0`. Each uses fake-timer
+// freezing so msSinceX can hit the cap exactly to one millisecond.
+
+describe('boundary equality (kills `>`/`>=`, `< 0`/`<= 0`, `> 0`/`>= 0` mutants)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    vi.setSystemTime(new Date('2026-05-10T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('isUserInBed returns false when enteredBedAt equals leftBedAt — strict `>` boundary', async () => {
+    // Kills L205 `enteredMs > leftMs` → `>=`. Equal timestamps must NOT count
+    // as "in bed", otherwise auto-off is suppressed forever the moment a
+    // session row is written with simultaneous in/out (sensor noise edge case).
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 3 * 3600_000)
+    insertSleepRecord('left', now - 31 * 60_000, now - 31 * 60_000) // entered == left
+
+    await pollAndFlush()
+    await Promise.resolve()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('global cap of 0 is disabled (kills `> 0` → `>= 0` mutant on L298)', async () => {
+    // With `>= 0`, a cap of 0 would treat any positive msSincePowerOn as
+    // "exceeded" and power off any newly-on side. The strict `> 0` guard
+    // keeps 0 meaning "feature disabled".
+    const now = Date.now()
+    setGlobalCap(0)
+    setSideOn('left', now - 90 * 60_000) // 90min on — would fire if 0 were enabled
+
+    await pollAndFlush()
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('global cap does not fire when msSincePowerOn equals capMs exactly (kills `>` → `>=` on L307)', async () => {
+    // With `>=`, a side powered for exactly the cap would be cut at the tick.
+    // The strict `>` means the cap is a *ceiling* — fires only after exceeding.
+    const now = Date.now()
+    setGlobalCap(1) // 1h = 3_600_000ms
+    setSideOn('left', now - 3_600_000) // exactly 1h ago
+
+    await pollAndFlush()
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('clock-sanity 7-day window is strict `>` — fires at exactly 7 days (kills `> 7d` → `>= 7d` on L306)', async () => {
+    // With `>=`, a side powered exactly 7 days ago would be flagged
+    // "suspicious" and the cap path would skip — a real 1-week heater would
+    // never auto-off. The strict `>` flags only stranger-than-7-day values.
+    const now = Date.now()
+    setGlobalCap(1) // 1h cap, clearly exceeded by 7d
+    setSideOn('left', now - 7 * 86_400_000) // exactly 7 days ago
+
+    await pollAndFlush()
+    await Promise.resolve()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('per-side timeout does not fire-immediate at exact boundary (kills `>` → `>=` on L353)', async () => {
+    // With `>=`, a bed-exit exactly at the timeout would skip the timer-arming
+    // path and fire immediately on the same poll. The strict `>` means at the
+    // boundary we arm a 0ms timer instead (subtle but matters: the firePowerOff
+    // path skips the bed-presence re-check inside the timer callback).
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 60 * 60_000)
+    insertSleepRecord('left', now - 90 * 60_000, now - 30 * 60_000) // exit exactly 30min ago == timeoutMs
+
+    startAutoOffWatcher()
+    // Synchronous poll on start: original arms a 0ms timer (not yet fired);
+    // mutated `>=` would fire firePowerOff synchronously. Without advancing
+    // timers, setPower must not be observed.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+})
+
+// ── More mutation-killing tests (lifecycle + DB writes) ──────────────────
+
+describe('restartAutoOffTimers is gated by pollHandle (kills L471 mutant)', () => {
+  it('does not invoke poll() when watcher is not running, even when conditions would fire', async () => {
+    // Kills `if (!pollHandle) return` → removing the guard. With the guard
+    // gone, restartAutoOffTimers would fall through to poll() and the global
+    // cap path would fire on a side that is past-cap. The contract is that
+    // the watcher must be explicitly started before any power-off can fire.
+    const now = Date.now()
+    setGlobalCap(1)
+    setSideOn('left', now - 5 * 3600_000) // 5h past cap
+
+    // Watcher never started.
+    restartAutoOffTimers()
+    // Flush any fire-and-forget promise.
+    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setImmediate(resolve))
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+})
+
+describe('powerOffSide DB write (kills L226 `isPowered: false` → `true`)', () => {
+  it('clears device_state.isPowered to 0 after firing', async () => {
+    // Pins the value written into device_state. A mutation flipping the
+    // literal to `true` would leave isPowered=1 in the DB and the next status
+    // poll would see "still on" until the DAC reconciles.
+    const now = Date.now()
+    setSideSettings('left', { autoOffEnabled: 1, autoOffMinutes: 30 })
+    setSideOn('left', now - 3 * 3600_000)
+    insertSleepRecord('left', now - 4 * 3600_000, now - 2 * 3600_000)
+
+    await pollAndFlush()
+
+    const row = (sqlite as any)
+      .prepare('SELECT is_powered FROM device_state WHERE side=?')
+      .get('left')
+    expect(row.is_powered).toBe(0)
+  })
+})
+
+describe('getAutoOffConfig defaults (kills L110 boolean mutants)', () => {
+  it('alwaysOn defaults to false when side_settings read throws — cap still fires', async () => {
+    // Kills `alwaysOn: false` → `true` in the catch-path defaults. Without
+    // side_settings the cap path must still treat alwaysOn as false (i.e.,
+    // not exempt the side); with the mutation, alwaysOn=true would silently
+    // suppress every cap-driven power-off after a DB read failure.
+    const now = Date.now()
+    setGlobalCap(1)
+    setSideOn('left', now - 5 * 3600_000) // 5h past cap
+    ;(sqlite as any).exec('DROP TABLE side_settings;')
+
+    await pollAndFlush()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+})
