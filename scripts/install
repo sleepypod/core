@@ -865,6 +865,24 @@ MaxFileSec=1week
 JOURNALD
 systemctl restart systemd-journald 2>/dev/null || true
 
+# Install CLI tools from scripts/bin/ BEFORE the service starts. The systemd
+# unit's ExecStartPre references /usr/local/bin/sp-maintenance — if these
+# binaries aren't in place by the time systemctl restart fires below, the
+# service fails with "status=203/EXEC: No such file or directory".
+# /usr/local/bin is root-owned by default; copies inherit current uid (root,
+# since this script requires sudo) but we chown/chmod explicitly so the
+# installed file is guaranteed root:root 0755.
+if [ -d "$INSTALL_DIR/scripts/bin" ]; then
+  echo "Installing CLI tools..."
+  for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
+    [ -f "$tool" ] || continue
+    target="/usr/local/bin/$(basename "$tool")"
+    cp "$tool" "$target"
+    chown root:root "$target"
+    chmod 0755 "$target"
+  done
+fi
+
 # Reload systemd and enable service
 echo "Enabling service..."
 systemctl daemon-reload
@@ -1186,22 +1204,6 @@ fi
 # On upgrades, old services (without UMask=0002) may have recreated WAL/SHM
 # files with 0644 between the initial fixup and the service restarts above.
 fix_db_permissions
-
-# Install CLI tools from scripts/bin/. /usr/local/bin is root-owned by
-# default — copies inherit current uid (root, since this script requires
-# sudo) but we chown/chmod explicitly so the file at the target path is
-# guaranteed root:root 0755 even if the source file under $INSTALL_DIR
-# has unusual ownership.
-if [ -d "$INSTALL_DIR/scripts/bin" ]; then
-  echo "Installing CLI tools..."
-  for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
-    [ -f "$tool" ] || continue
-    target="/usr/local/bin/$(basename "$tool")"
-    cp "$tool" "$target"
-    chown root:root "$target"
-    chmod 0755 "$target"
-  done
-fi
 
 # Optional SSH configuration
 if [ "$SKIP_SSH" = true ]; then
