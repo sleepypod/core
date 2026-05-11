@@ -179,7 +179,9 @@ describe('health.system', () => {
   })
 
   it('reports degraded when sqlite pragma throws', async () => {
-    dbMock.sqlitePragma.mockImplementation(() => { throw new Error('db locked') })
+    dbMock.sqlitePragma.mockImplementation(() => {
+      throw new Error('db locked')
+    })
     schedulerMock.scheduler.getJobs.mockReturnValue([])
 
     const result = await caller.system({})

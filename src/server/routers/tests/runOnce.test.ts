@@ -77,7 +77,10 @@ const dbMock = vi.hoisted(() => {
 
   return {
     select, insert, update, transaction,
-    setNextInsertId: (id: number | null) => { nextInsertedId = id as number; returning.mockResolvedValue(id === null ? [] : [{ id }]) },
+    setNextInsertId: (id: number | null) => {
+      nextInsertedId = id as number
+      returning.mockResolvedValue(id === null ? [] : [{ id }])
+    },
     settingsRow, txExisting,
     txUpdateRun, transactionFn: transaction,
   }

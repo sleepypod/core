@@ -284,7 +284,8 @@ describe('biometrics.getFileCount', () => {
   it('returns zeros on listRawFiles error', async () => {
     rawMock.listRawFiles.mockRejectedValue(new Error('ENOENT'))
     const out = await caller.getFileCount({})
-    expect(out).toEqual({ rawFiles: { left: 0, right: 0 }, totalSizeMB: 0 }) })
+    expect(out).toEqual({ rawFiles: { left: 0, right: 0 }, totalSizeMB: 0 })
+  })
 })
 
 describe('biometrics.updateSleepRecord', () => {

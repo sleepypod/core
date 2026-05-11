@@ -118,7 +118,7 @@ describe('system.wifiStatus', () => {
 
   it('parses nmcli output and returns SSID + signal', async () => {
     queueExec(
-      (file) => file === 'nmcli',
+      file => file === 'nmcli',
       { stdout: 'no:OtherNet:50\nyes:HomeWiFi:80\n' },
     )
     const result = await caller.wifiStatus({})
@@ -129,7 +129,7 @@ describe('system.wifiStatus', () => {
 
   it('handles escaped colons in SSID', async () => {
     queueExec(
-      (file) => file === 'nmcli',
+      file => file === 'nmcli',
       { stdout: 'yes:My\\:Net:75\n' },
     )
     const result = await caller.wifiStatus({})
@@ -195,7 +195,7 @@ describe('system.getLogs', () => {
 
   it('reverses journalctl output to newest-first and exposes a cursor when more remain', async () => {
     queueExec(
-      (file) => file === 'journalctl',
+      file => file === 'journalctl',
       // 3 lines + cursor when only 2 requested → hasMore=true
       { stdout: 'line1\nline2\nline3\n-- cursor: s=abc\n' },
     )

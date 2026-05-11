@@ -109,10 +109,10 @@ describe('waterLevel.getTrend', () => {
       { level: 'ok', cnt: 50 },
       { level: 'low', cnt: 50 },
     ])
-    dbState.rowsQueue.push([{ cnt: 40 }])  // recentLow
-    dbState.rowsQueue.push([{ cnt: 10 }])  // olderLow
-    dbState.rowsQueue.push([{ cnt: 50 }])  // recentTotal
-    dbState.rowsQueue.push([{ cnt: 50 }])  // olderTotal
+    dbState.rowsQueue.push([{ cnt: 40 }]) // recentLow
+    dbState.rowsQueue.push([{ cnt: 10 }]) // olderLow
+    dbState.rowsQueue.push([{ cnt: 50 }]) // recentTotal
+    dbState.rowsQueue.push([{ cnt: 50 }]) // olderTotal
 
     const result = await caller.getTrend({ hours: 24 })
     expect(result.trend).toBe('declining')
@@ -124,8 +124,8 @@ describe('waterLevel.getTrend', () => {
       { level: 'ok', cnt: 50 },
       { level: 'low', cnt: 50 },
     ])
-    dbState.rowsQueue.push([{ cnt: 10 }])  // recentLow
-    dbState.rowsQueue.push([{ cnt: 40 }])  // olderLow
+    dbState.rowsQueue.push([{ cnt: 10 }]) // recentLow
+    dbState.rowsQueue.push([{ cnt: 40 }]) // olderLow
     dbState.rowsQueue.push([{ cnt: 50 }])
     dbState.rowsQueue.push([{ cnt: 50 }])
 
