@@ -3,10 +3,12 @@ import {
   centiDegreesToC,
   centiDegreesToF,
   centiPercentToPercent,
-  toF,
-  toC,
+  determineTrend,
   ensureF,
+  formatTemp,
   mapToEightSleepScale,
+  toC,
+  toF,
 } from '../tempUtils'
 
 describe('centiDegreesToC', () => {
@@ -82,6 +84,47 @@ describe('ensureF', () => {
 
   test('defaults to Fahrenheit', () => {
     expect(ensureF(72)).toBe(72)
+  })
+})
+
+describe('formatTemp', () => {
+  test('rounds to nearest integer and defaults to Fahrenheit', () => {
+    expect(formatTemp(72.4)).toBe('72°F')
+    expect(formatTemp(72.6)).toBe('73°F')
+  })
+
+  test('rounds .5 upward (Math.round semantics)', () => {
+    expect(formatTemp(72.5)).toBe('73°F')
+  })
+
+  test('honours Celsius unit', () => {
+    expect(formatTemp(22.3, 'C')).toBe('22°C')
+  })
+
+  test('handles negative values', () => {
+    expect(formatTemp(-5.4, 'C')).toBe('-5°C')
+  })
+})
+
+describe('determineTrend', () => {
+  test('"up" when target is more than 0.5° above current', () => {
+    expect(determineTrend(70, 71)).toBe('up')
+  })
+
+  test('"down" when target is more than 0.5° below current', () => {
+    expect(determineTrend(72, 70)).toBe('down')
+  })
+
+  test('"stable" when |diff| <= 0.5°', () => {
+    expect(determineTrend(70, 70)).toBe('stable')
+    expect(determineTrend(70, 70.5)).toBe('stable')
+    expect(determineTrend(70.5, 70)).toBe('stable')
+  })
+
+  test('thresholds are exclusive (exactly 0.5 is stable, not up/down)', () => {
+    expect(determineTrend(70, 70.5)).toBe('stable')
+    expect(determineTrend(70, 70.51)).toBe('up')
+    expect(determineTrend(70.51, 70)).toBe('down')
   })
 })
 
