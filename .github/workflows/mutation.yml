@@ -322,12 +322,14 @@ jobs:
             core.setOutput('killed', String(totals.killed))
             core.setOutput('total', String(totals.total))
 
-      # Push notification so the weekly run isn't invisible. Gated to
-      # `schedule` only — manual reruns and PR-labeled runs would spam
-      # the channel. Uses Discord's `<url>` syntax to suppress preview
-      # embeds so the message stays one line.
-      - name: Notify Discord (scheduled runs only)
-        if: github.event_name == 'schedule' && steps.update-issue.outputs.score != ''
+      # Push notification so the weekly run isn't invisible. Fires on
+      # schedule and workflow_dispatch (manual reruns are rare and the
+      # ping is useful for verifying the webhook). PR-labeled runs are
+      # excluded so per-PR mutation tests don't spam the channel. Uses
+      # Discord's `<url>` syntax to suppress preview embeds so the
+      # message stays one line.
+      - name: Notify Discord
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.update-issue.outputs.score != ''
         env:
           WEBHOOK: ${{ secrets.DISCORD_MUTATION_WEBHOOK }}
           SCORE: ${{ steps.update-issue.outputs.score }}
