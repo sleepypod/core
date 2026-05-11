@@ -71,6 +71,7 @@ vi.mock('@/src/services/autoOffWatcher', () => ({
 }))
 
 import { JobManager } from '../jobManager'
+import { JobType } from '../types'
 
 /**
  * Count reload cycles by spying on Scheduler.cancelRecurringJobs, which is
@@ -235,5 +236,139 @@ describe('JobManager public surface (stub DB)', () => {
     await manager.shutdown()
     await manager.shutdown()
     // afterEach will call once more
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heartbeat liveness — pins the staleness arithmetic, RUN_ONCE skip, null
+// nextInvocation skip, and the reload-cooldown branch so a node-schedule
+// freeze (no fires, no exception) still triggers a recovery reload.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager.checkLiveness', () => {
+  const STALE_MS = 90_000
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC', {
+      heartbeatIntervalMs: 1_000_000,
+      heartbeatStaleMs: STALE_MS,
+    })
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+    vi.restoreAllMocks()
+  })
+
+  // ScheduledJob shape stripped to what checkLiveness reads (id + type).
+  const fakeJob = (id: string, type: JobType): any => ({ id, type, schedule: '', job: {} })
+
+  function stubScheduler(jobs: Array<{ id: string, type: JobType }>, nextAt: (id: string) => Date | null) {
+    const scheduler = manager.getScheduler()
+    vi.spyOn(scheduler, 'getJobs').mockReturnValue(jobs.map(j => fakeJob(j.id, j.type)))
+    vi.spyOn(scheduler, 'getNextInvocation').mockImplementation((id: string) => nextAt(id))
+  }
+
+  it('returns empty list and does not reload when all jobs fire in the future', async () => {
+    const reloadSpy = vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'temp-1', type: JobType.TEMPERATURE }],
+      () => new Date(Date.now() + 60_000),
+    )
+
+    expect(await manager.checkLiveness()).toEqual([])
+    expect(reloadSpy).not.toHaveBeenCalled()
+  })
+
+  it('does NOT mark future jobs stale — arithmetic is `now - staleMs`, not `now + staleMs`', async () => {
+    // Kills `now - staleMs` → `now + staleMs` mutator: under the mutation a job
+    // ~30s in the future would satisfy `nextMs < now + 90_000` and reload-spam.
+    const reloadSpy = vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'temp-1', type: JobType.TEMPERATURE }],
+      () => new Date(Date.now() + 30_000),
+    )
+
+    expect(await manager.checkLiveness()).toEqual([])
+    expect(reloadSpy).not.toHaveBeenCalled()
+  })
+
+  it('does NOT mark a job at exactly the staleness boundary — comparison is strict `<`', async () => {
+    // Kills `<` → `<=`: at nextMs === now - staleMs, strict `<` is false.
+    const fixedNow = 1_700_000_000_000
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow)
+    const reloadSpy = vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'temp-1', type: JobType.TEMPERATURE }],
+      () => new Date(fixedNow - STALE_MS),
+    )
+
+    expect(await manager.checkLiveness()).toEqual([])
+    expect(reloadSpy).not.toHaveBeenCalled()
+  })
+
+  it('marks a recurring job overdue past the stale window and forces a reload', async () => {
+    const reloadSpy = vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'temp-1', type: JobType.TEMPERATURE }],
+      () => new Date(Date.now() - STALE_MS - 5_000),
+    )
+
+    expect(await manager.checkLiveness()).toEqual(['temp-1'])
+    expect(reloadSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips RUN_ONCE jobs even when their next invocation is overdue', async () => {
+    // Kills mutating the RUN_ONCE guard to a no-op or its conditional to true/false:
+    // a one-shot whose Date has passed must NOT be force-reloaded — node-schedule
+    // already retires it after firing.
+    const reloadSpy = vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'runonce-1-0', type: JobType.RUN_ONCE }],
+      () => new Date(Date.now() - STALE_MS - 5_000),
+    )
+
+    expect(await manager.checkLiveness()).toEqual([])
+    expect(reloadSpy).not.toHaveBeenCalled()
+  })
+
+  it('ignores jobs whose getNextInvocation returns null', async () => {
+    const reloadSpy = vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'temp-1', type: JobType.TEMPERATURE }],
+      () => null,
+    )
+
+    expect(await manager.checkLiveness()).toEqual([])
+    expect(reloadSpy).not.toHaveBeenCalled()
+  })
+
+  it('suppresses follow-up reloads while the cooldown window is open', async () => {
+    // Kills `cooldownLeft > 0` → `false` and removing the cooldown branch:
+    // a persistent freeze should NOT spin reload on every tick.
+    const reloadSpy = vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'temp-1', type: JobType.TEMPERATURE }],
+      () => new Date(Date.now() - STALE_MS - 5_000),
+    )
+
+    await manager.checkLiveness() // first detection — reloads
+    await manager.checkLiveness() // still inside 5-min cooldown
+    await manager.checkLiveness()
+
+    expect(reloadSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns the stale id list even when suppressed by cooldown', async () => {
+    // The function returns `stale` from the cooldown branch (line 296), not [].
+    // Mutating that return to `[]` would break health endpoints that read the list.
+    vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'temp-1', type: JobType.TEMPERATURE }],
+      () => new Date(Date.now() - STALE_MS - 5_000),
+    )
+
+    await manager.checkLiveness() // first call sets cooldown
+    expect(await manager.checkLiveness()).toEqual(['temp-1'])
   })
 })
