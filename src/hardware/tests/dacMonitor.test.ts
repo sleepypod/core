@@ -238,6 +238,63 @@ describe('DacMonitor', () => {
     )
   })
 
+  test('setPollInterval is a no-op when given the current interval', async () => {
+    const monitor = createMonitor(POLL_MS)
+    await monitor.start()
+    const updates: unknown[] = []
+    monitor.on('status:updated', s => updates.push(s))
+    await sleep(POLL_MS * 3 + 20)
+    const before = updates.length
+
+    monitor.setPollInterval(POLL_MS) // same value → early return
+    updates.length = 0
+    await sleep(POLL_MS * 3 + 20)
+
+    // Cadence unchanged: roughly the same number of polls in the same window
+    expect(updates.length).toBeGreaterThanOrEqual(before - 1)
+    expect(updates.length).toBeLessThanOrEqual(before + 1)
+  })
+
+  test('setPollInterval restarts the interval timer at the new cadence', async () => {
+    const monitor = createMonitor(200) // start slow
+    await monitor.start()
+    const updates: unknown[] = []
+    monitor.on('status:updated', s => updates.push(s))
+
+    monitor.setPollInterval(POLL_MS) // speed up to 50ms
+    await sleep(POLL_MS * 5 + 50)
+
+    // At 50ms cadence over ~300ms we should see at least 3 polls; at 200ms we'd see 1
+    expect(updates.length).toBeGreaterThanOrEqual(3)
+  })
+
+  test('setActive / setIdle reconfigure pollIntervalMs without crashing', async () => {
+    const monitor = createMonitor()
+    await monitor.start()
+    await waitFor(() => monitor.getLastStatus() !== null, 500)
+
+    monitor.setActive()
+    monitor.setIdle()
+    monitor.setActive()
+
+    expect(monitor.getStatus()).toBe('running')
+  })
+
+  test('start marks status degraded when daemon is unreachable', async () => {
+    const monitor = new DacMonitor({
+      socketPath: '/tmp/sleepypod-test-nonexistent.sock',
+      pollIntervalMs: POLL_MS,
+    })
+    monitors.push(monitor)
+    const errors: unknown[] = []
+    monitor.on('error', e => errors.push(e))
+
+    await monitor.start()
+
+    expect(monitor.getStatus()).toBe('degraded')
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+  })
+
   test('gesture:detected event includes timestamp', async () => {
     const monitor = createMonitor()
     const gestures: Array<{ timestamp: unknown }> = []
