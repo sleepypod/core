@@ -84,21 +84,27 @@ function parseKeyValueResponse(response: string): Record<string, string> {
 
 /**
  * Extract pod version from sensor label.
- * Example: "8SLEEP-SN-12345-H00" -> Pod 3
+ *
+ * Sensor labels come in two observed shapes:
+ *   "8SLEEP-SN-12345-I00"      — revision code in the last segment (test sim)
+ *   "20600-0003-J55-B0708DE3"  — revision code in segment 3, serial in segment 4 (real Pod 5)
+ *
+ * Scan segments from the end and key off the first one shaped like a hardware
+ * revision code ([A-Z][0-9]{2}). Popping the final segment unconditionally
+ * misclassifies real Pod 5 hardware as Pod 3 because the trailing serial
+ * (`B0708DE3`) is alphabetically before `H00`.
  */
 function extractPodVersion(sensorLabel: string): PodVersion {
-  const hwRev = sensorLabel.split('-').pop() || ''
-
-  if (hwRev >= 'J00') {
-    return PodVersion.POD_5
+  const segments = sensorLabel.split('-')
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i]
+    if (/^[A-Z]\d{2}$/.test(seg)) {
+      const letter = seg[0]
+      if (letter >= 'J') return PodVersion.POD_5
+      if (letter === 'I') return PodVersion.POD_4
+      if (letter === 'H') return PodVersion.POD_3
+    }
   }
-  else if (hwRev >= 'I00') {
-    return PodVersion.POD_4
-  }
-  else if (hwRev >= 'H00') {
-    return PodVersion.POD_3
-  }
-
   return PodVersion.POD_3
 }
 

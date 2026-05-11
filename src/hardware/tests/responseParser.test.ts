@@ -125,7 +125,9 @@ priming = false
 
     const status = parseDeviceStatus(withQuotes)
     expect(status.sensorLabel).toBe('20600-0003-J55-B0708DE3')
-    expect(status.podVersion).toBe(PodVersion.POD_3)
+    // Real Pod 5 labels put the rev code (`J55`) in segment 3 and a serial
+    // (`B0708DE3`) in segment 4 — must classify as Pod 5, not Pod 3.
+    expect(status.podVersion).toBe(PodVersion.POD_5)
   })
 
   test('handles invalid gesture JSON', () => {
