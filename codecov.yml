@@ -1,0 +1,73 @@
+codecov:
+  require_ci_to_pass: true
+  notify:
+    wait_for_ci: true
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+      javascript:
+        flags:
+          - javascript
+        target: auto
+        threshold: 1%
+      python:
+        flags:
+          - python
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+
+# Carry forward each flag's last good coverage when its workflow didn't run
+# on this commit (e.g. python-modules.yml is path-filtered to modules/**, so
+# a TS-only PR must not show python coverage as 0%).
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: javascript
+      paths:
+        - src/
+        - app/
+        - lib/
+    - name: python
+      paths:
+        - modules/
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+        threshold: 1%
+  individual_components:
+    - component_id: javascript
+      name: TypeScript / React
+      paths:
+        - src/**
+        - app/**
+        - lib/**
+    - component_id: python
+      name: Pod Python modules
+      paths:
+        - modules/**
+
+comment:
+  layout: "header, diff, flags, components, files"
+  behavior: default
+  require_changes: false
+
+ignore:
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/test_*.py"
+  - "**/tests/**"
+  - ".next/**"
+  - "node_modules/**"
+  - "scripts/**"

@@ -23,12 +23,14 @@ vi.mock('@/src/hardware/dacTransport', () => ({
   sendCommand: vi.fn(async () => {}),
 }))
 
+const broadcastMutationStatus = vi.fn<(side: 'left' | 'right', patch: Record<string, unknown>) => void>()
 vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
-  broadcastMutationStatus: vi.fn(),
+  broadcastMutationStatus: (side: 'left' | 'right', patch: Record<string, unknown>) => broadcastMutationStatus(side, patch),
 }))
 
+const cancelAutoOffTimer = vi.fn<(side: 'left' | 'right') => void>()
 vi.mock('@/src/services/autoOffWatcher', () => ({
-  cancelAutoOffTimer: vi.fn(),
+  cancelAutoOffTimer: (side: 'left' | 'right') => cancelAutoOffTimer(side),
 }))
 
 // Mock child_process.exec so executeReboot tests never spawn systemctl.
@@ -67,6 +69,7 @@ vi.mock('@/src/db', async () => {
 
 import * as dbModule from '@/src/db'
 import { JobManager } from '../jobManager'
+import { fahrenheitToLevel } from '@/src/hardware/types'
 const { sqlite } = dbModule as typeof dbModule & { sqlite: BetterSqlite3.Database }
 
 function resetSchema(): void {
@@ -360,6 +363,11 @@ describe('JobManager — job ordering and gating', () => {
     setPower.mockClear()
     setAlarm.mockClear()
     connect.mockClear()
+    broadcastMutationStatus.mockClear()
+    cancelAutoOffTimer.mockClear()
+    setTemperature.mockImplementation(async () => {})
+    setPower.mockImplementation(async () => {})
+    setAlarm.mockImplementation(async () => {})
     manager = new JobManager('America/Los_Angeles', {
       heartbeatIntervalMs: 60_000,
       heartbeatStaleMs: 90_000,
@@ -1713,5 +1721,196 @@ describe('JobManager handler closures', () => {
 
     // loadSchedules must not throw — initial brightness apply is wrapped in try/catch
     await expect(manager.loadSchedules()).resolves.toBeUndefined()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// broadcastMutationStatus payload shape + downstream side-effects.
+//
+// Mutation testing flagged the broadcastMutationStatus(...) object literals
+// (lines 349, 384, 420, 436 of jobManager.ts) and the `onTemperature ?? 75`
+// fallback (line 383) as surviving — existing tests covered the hardware
+// client calls but did not assert on the streaming payload itself.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager — streaming + downstream side-effects', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    resetSchema()
+    setTemperature.mockClear()
+    setPower.mockClear()
+    setAlarm.mockClear()
+    connect.mockClear()
+    broadcastMutationStatus.mockClear()
+    cancelAutoOffTimer.mockClear()
+    setTemperature.mockImplementation(async () => {})
+    setPower.mockImplementation(async () => {})
+    setAlarm.mockImplementation(async () => {})
+    manager = new JobManager('UTC', {
+      heartbeatIntervalMs: 1_000_000,
+      heartbeatStaleMs: 90_000,
+    })
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('runTemperatureJob broadcasts targetTemperature + targetLevel after setTemperature', async () => {
+    seedSidePowered('left', true)
+
+    await manager.runTemperatureJob({
+      id: 1,
+      side: 'left',
+      dayOfWeek: 'monday' as const,
+      time: '08:00',
+      temperature: 78,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', {
+      targetTemperature: 78,
+      targetLevel: fahrenheitToLevel(78),
+    })
+  })
+
+  it('runTemperatureJob does NOT broadcast when the side is unpowered', async () => {
+    seedSidePowered('left', false)
+
+    await manager.runTemperatureJob({
+      id: 1,
+      side: 'left',
+      dayOfWeek: 'monday' as const,
+      time: '08:00',
+      temperature: 78,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    expect(broadcastMutationStatus).not.toHaveBeenCalled()
+  })
+
+  it('runPowerOnJob broadcasts targetTemperature matching onTemperature when set', async () => {
+    await manager.runPowerOnJob({
+      id: 1,
+      side: 'right',
+      dayOfWeek: 'monday' as const,
+      onTime: '22:00',
+      offTime: '07:00',
+      onTemperature: 84,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('right', {
+      targetTemperature: 84,
+      targetLevel: fahrenheitToLevel(84),
+    })
+    expect(cancelAutoOffTimer).toHaveBeenCalledWith('right')
+  })
+
+  it('runPowerOnJob falls back to 75°F in the BROADCAST when onTemperature is null', async () => {
+    // Kills `??` → `&&` mutator at jobManager.ts:383. Under `&&`, a null
+    // onTemperature would propagate to the broadcast as null/undefined; under
+    // `??`, the fallback 75 must surface in targetTemperature + targetLevel.
+    await manager.runPowerOnJob({
+      id: 1,
+      side: 'left',
+      dayOfWeek: 'monday' as const,
+      onTime: '22:00',
+      offTime: '07:00',
+      onTemperature: null as unknown as number,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', {
+      targetTemperature: 75,
+      targetLevel: fahrenheitToLevel(75),
+    })
+  })
+
+  it('runPowerOffJob broadcasts targetLevel:0 (and no temperature key)', async () => {
+    seedSidePowered('left', true)
+
+    await manager.runPowerOffJob({
+      id: 1,
+      side: 'left',
+      dayOfWeek: 'monday' as const,
+      onTime: '22:00',
+      offTime: '07:00',
+      onTemperature: 80,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+  })
+
+  it('runAlarmJob broadcasts alarm temperature + isAlarmVibrating:true', async () => {
+    seedSidePowered('right', true)
+
+    await manager.runAlarmJob({
+      id: 1,
+      side: 'right',
+      dayOfWeek: 'thursday' as const,
+      time: '06:30',
+      alarmTemperature: 88,
+      vibrationIntensity: 90,
+      vibrationPattern: 'rise' as const,
+      duration: 30,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('right', {
+      targetTemperature: 88,
+      targetLevel: fahrenheitToLevel(88),
+      isAlarmVibrating: true,
+    })
+    // setAlarm forwarded the exact vibration parameters from the schedule
+    expect(setAlarm).toHaveBeenCalledWith('right', {
+      vibrationIntensity: 90,
+      vibrationPattern: 'rise',
+      duration: 30,
+    })
+  })
+
+  it('runPowerOnJob does NOT cancelAutoOffTimer when a run-once session is active', async () => {
+    insertRunOnceSession({
+      side: 'left',
+      setPoints: '[]',
+      wakeTime: '08:00',
+      startedAt: new Date(),
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+      status: 'active',
+    })
+
+    await manager.runPowerOnJob({
+      id: 1,
+      side: 'left',
+      dayOfWeek: 'monday' as const,
+      onTime: '22:00',
+      offTime: '07:00',
+      onTemperature: 80,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    expect(cancelAutoOffTimer).not.toHaveBeenCalled()
+    expect(broadcastMutationStatus).not.toHaveBeenCalled()
   })
 })

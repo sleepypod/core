@@ -18,6 +18,7 @@ on:
 permissions:
   contents: read
   pull-requests: write # for PR comment with the mutation summary
+  issues: write # for the pinned weekly tracking issue
 
 concurrency:
   group: mutation-${{ github.ref }}
@@ -131,9 +132,11 @@ jobs:
       - name: Build aggregated hit list
         run: |
           node scripts/mutation-hitlist.mjs shards/ > /tmp/hitlist.md || true
-          head -c 5000 /tmp/hitlist.md > /tmp/hitlist-trunc.md
+          # 30000 chars leaves headroom under GitHub's 65536-char issue body
+          # limit for the score table + footer that gets prepended.
+          head -c 30000 /tmp/hitlist.md > /tmp/hitlist-trunc.md
           echo "" >> /tmp/hitlist-trunc.md
-          if [ "$(wc -c < /tmp/hitlist.md)" -gt 5000 ]; then
+          if [ "$(wc -c < /tmp/hitlist.md)" -gt 30000 ]; then
             echo "*(truncated — full hit list in the \`mutation-hitlist\` artifact)*" >> /tmp/hitlist-trunc.md
           fi
 
@@ -191,6 +194,7 @@ jobs:
             })
 
       - name: Update pinned tracking issue (scheduled runs only)
+        id: update-issue
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         uses: actions/github-script@v7
         env:
@@ -287,6 +291,7 @@ jobs:
               hitlist,
             ].join('\n')
 
+            let issueNumber
             if (hit) {
               await github.rest.issues.update({
                 owner: context.repo.owner,
@@ -294,7 +299,8 @@ jobs:
                 issue_number: hit.number,
                 body,
               })
-              core.info(`Updated pinned issue #${hit.number}`)
+              issueNumber = hit.number
+              core.info(`Updated pinned issue #${issueNumber}`)
             } else {
               const created = await github.rest.issues.create({
                 owner: context.repo.owner,
@@ -303,5 +309,128 @@ jobs:
                 body,
                 labels: ['mutation-testing', 'tracking'],
               })
-              core.info(`Created pinned issue #${created.data.number}`)
+              issueNumber = created.data.number
+              core.info(`Created pinned issue #${issueNumber}`)
             }
+
+            // Export for downstream notification / baseline-recording steps.
+            core.setOutput('score', score)
+            core.setOutput('delta', deltaStr)
+            core.setOutput('issue_number', String(issueNumber))
+            core.setOutput('survived', String(totals.survived))
+            core.setOutput('no_coverage', String(totals.noCov))
+            core.setOutput('killed', String(totals.killed))
+            core.setOutput('total', String(totals.total))
+
+      # Push notification so the weekly run isn't invisible. Fires on
+      # schedule and workflow_dispatch (manual reruns are rare and the
+      # ping is useful for verifying the webhook). PR-labeled runs are
+      # excluded so per-PR mutation tests don't spam the channel. Uses
+      # Discord's `<url>` syntax to suppress preview embeds so the
+      # message stays one line.
+      - name: Notify Discord
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.update-issue.outputs.score != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_MUTATION_WEBHOOK }}
+          SCORE: ${{ steps.update-issue.outputs.score }}
+          DELTA: ${{ steps.update-issue.outputs.delta }}
+          SURVIVED: ${{ steps.update-issue.outputs.survived }}
+          NO_COV: ${{ steps.update-issue.outputs.no_coverage }}
+          ISSUE_NUMBER: ${{ steps.update-issue.outputs.issue_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WEBHOOK" ]; then
+            echo "DISCORD_MUTATION_WEBHOOK secret is not set; skipping."
+            exit 0
+          fi
+          ISSUE_URL="${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUMBER}"
+          CONTENT="📊 Mutation **${SCORE}%**${DELTA} · ${SURVIVED} surviving · ${NO_COV} no-coverage · [run](<${RUN_URL}>) · [tracking](<${ISSUE_URL}>)"
+          jq -nc --arg content "$CONTENT" '{content: $content}' \
+            | curl -fsS -H "Content-Type: application/json" -X POST "$WEBHOOK" -d @-
+
+  # Permanent score history on a dedicated orphan branch. The 30-day
+  # artifact retention only gives a short trailing window; this branch
+  # carries score-history.jsonl forever for trend analysis, and a small
+  # latest.json for at-a-glance lookups (badges, dashboards, etc).
+  record-baseline:
+    needs: mutate
+    if: github.event_name == 'schedule' && !cancelled() && needs.mutate.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Download shard reports
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/shards/
+          pattern: mutation-report-*
+
+      - name: Compute aggregated row
+        id: compute
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = require('path')
+            const shards = fs.readdirSync('/tmp/shards').map(name => {
+              const p = path.join('/tmp/shards', name, 'mutation.json')
+              if (!fs.existsSync(p)) return null
+              const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+              const mutants = Object.values(data.files ?? {}).flatMap(f => f.mutants ?? [])
+              const count = s => mutants.filter(m => m.status === s).length
+              return {
+                killed: count('Killed'),
+                survived: count('Survived'),
+                noCov: count('NoCoverage'),
+                timeout: count('Timeout'),
+                compileError: count('CompileError'),
+                runtimeError: count('RuntimeError'),
+                total: mutants.length,
+              }
+            }).filter(Boolean)
+            const totals = shards.reduce((a, s) => {
+              for (const k of Object.keys(s)) a[k] = (a[k] || 0) + s[k]
+              return a
+            }, {})
+            const base = totals.killed + totals.survived + totals.timeout + totals.noCov
+            const score = base > 0 ? Number((totals.killed / base * 100).toFixed(2)) : 0
+            const row = {
+              date: new Date().toISOString(),
+              sha: context.sha,
+              run: context.runId,
+              score,
+              ...totals,
+            }
+            core.setOutput('row', JSON.stringify(row))
+
+      - name: Append to mutation-baseline branch
+        env:
+          ROW: ${{ steps.compute.outputs.row }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if git ls-remote --exit-code --heads origin mutation-baseline >/dev/null 2>&1; then
+            git fetch origin mutation-baseline
+            git checkout -B mutation-baseline origin/mutation-baseline
+          else
+            # First run ever: create the orphan branch with an empty tree.
+            git checkout --orphan mutation-baseline
+            git rm -rf . >/dev/null 2>&1 || true
+            echo '# Mutation testing baseline' > README.md
+            echo 'Auto-managed by .github/workflows/mutation.yml. Do not edit by hand.' >> README.md
+            git add README.md
+          fi
+
+          echo "$ROW" >> score-history.jsonl
+          echo "$ROW" > latest.json
+          git add score-history.jsonl latest.json
+          git commit -m "chore(mutation): record $(date -u +%Y-%m-%d) baseline"
+          git push origin mutation-baseline
