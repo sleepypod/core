@@ -63,7 +63,7 @@ sp-freesleep      # mirror of the above in the other direction
 
 - **Temperature scheduling** — set per-side temperature programs by day and time
 - **Power scheduling** — automatic on/off with optional warm-up temperature
-- **Alarm management** — vibration alarms with configurable intensity and pattern
+- **Alarm management** — vibration alarms with configurable duration (intensity/pattern accepted by the API; cover MCU clamps both on Pod 5 J55 — see `docs/hardware/alarms.md`)
 - **Biometrics** — heart rate, HRV, breathing rate, sleep session tracking, and movement from the Pod's own sensors
 - **Daily maintenance** — automated priming and system reboots on a schedule
 - **Local web UI** — accessible on your home network, no cloud required
