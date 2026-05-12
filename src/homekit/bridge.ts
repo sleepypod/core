@@ -245,6 +245,14 @@ export async function unpairAll(): Promise<void> {
   // resetHomebridgeAccessory).
   const oldUsername = getIdentity()?.username ?? loadOrCreateIdentity().username
   await stopBridge()
+  // stopBridge intentionally keeps the singleton live when destroy() fails
+  // (port-safety on next enable). Rotating identity in that state would
+  // desync getStatus (new MAC) from the live HAP server (still old MAC).
+  // Abort instead — operator can retry once the underlying destroy issue
+  // clears.
+  if (getBridge() !== null) {
+    throw new Error('homekit unpair aborted: bridge teardown incomplete (destroy() failed)')
+  }
   clearPairings(oldUsername)
   const id = regenerateIdentity()
   setIdentity(id)
