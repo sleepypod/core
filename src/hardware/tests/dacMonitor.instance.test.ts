@@ -364,18 +364,26 @@ describe('hardware/dacMonitor.instance', () => {
           .rejects.toThrow(/duration/)
       })
 
-      it('setAlarm(left, rise) sends ALARM_LEFT with pattern code 1', async () => {
+      it('setAlarm(left, rise) sends ALARM_LEFT (cmd 5) with hex-CBOR payload', async () => {
         const mod = await freshModule()
         await mod.getSharedHardwareClient()
           .setAlarm('left', { vibrationIntensity: 50, vibrationPattern: 'rise', duration: 60 })
-        expect(sendCommandMock).toHaveBeenCalledWith('5', '50,1,60')
+        const [cmd, arg] = sendCommandMock.mock.calls[0]
+        expect(cmd).toBe('5')
+        expect(arg).toMatch(/^[0-9a-f]+$/)
+        // CBOR text(4) "rise" encodes as 0x64 0x72 0x69 0x73 0x65
+        expect(arg).toContain('6472697365')
       })
 
-      it('setAlarm(right, double) sends ALARM_RIGHT with pattern code 0', async () => {
+      it('setAlarm(right, double) sends ALARM_RIGHT (cmd 6) with hex-CBOR payload', async () => {
         const mod = await freshModule()
         await mod.getSharedHardwareClient()
           .setAlarm('right', { vibrationIntensity: 100, vibrationPattern: 'double', duration: 0 })
-        expect(sendCommandMock).toHaveBeenCalledWith('6', '100,0,0')
+        const [cmd, arg] = sendCommandMock.mock.calls[0]
+        expect(cmd).toBe('6')
+        expect(arg).toMatch(/^[0-9a-f]+$/)
+        // CBOR text(6) "double" encodes as 0x66 0x64 0x6f 0x75 0x62 0x6c 0x65
+        expect(arg).toContain('66646f75626c65')
       })
 
       it('setAlarm throws when parseSimpleResponse reports failure', async () => {

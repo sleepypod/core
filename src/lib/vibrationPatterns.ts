@@ -1,6 +1,6 @@
 /**
  * Shared vibration pattern presets.
- * Used by: AlarmScheduleSection (quick-select), HapticsTestCard (test patterns).
+ * Used by: AlarmEditor (quick-pick), HapticsTestCard (test patterns).
  * Single source of truth — no duplication.
  */
 
