@@ -219,6 +219,21 @@ describe('homekit bridge', () => {
     expect(destroyCall).toBeLessThan(clearCall)
   })
 
+  it('unpairAll without a prior startBridge falls back to loadOrCreateIdentity for the username', async () => {
+    const { unpairAll } = await import('../bridge')
+    // No startBridge → in-memory identity singleton is unset; the `??`
+    // fallback must read identity.json via loadOrCreateIdentity to know
+    // which AccessoryInfo.<MAC>.json to delete.
+    m.regenerateIdentity.mockReturnValueOnce({
+      username: 'NN:NN:NN:NN:NN:NN',
+      pincode: '999-99-999',
+      setupId: 'YYYY',
+    })
+    await unpairAll()
+    expect(m.loadOrCreateIdentity).toHaveBeenCalled()
+    expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
+  })
+
   it('unpairAll aborts rotation when stopBridge fails to clear the singleton', async () => {
     const { startBridge, unpairAll, getStatus } = await import('../bridge')
     await startBridge(fakeMonitor)
