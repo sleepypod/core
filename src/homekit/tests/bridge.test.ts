@@ -197,11 +197,56 @@ describe('homekit bridge', () => {
     expect(getStatus().running).toBe(true)
   })
 
-  it('unpairAll stops the bridge and clears pairings under the current username', async () => {
-    const { startBridge, unpairAll } = await import('../bridge')
+  it('unpairAll stops the bridge, clears pairings, and rotates identity', async () => {
+    const { startBridge, unpairAll, getStatus } = await import('../bridge')
     await startBridge(fakeMonitor)
+    m.regenerateIdentity.mockReturnValueOnce({
+      username: 'NN:NN:NN:NN:NN:NN',
+      pincode: '999-99-999',
+      setupId: 'YYYY',
+    })
     await unpairAll()
     expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
+    expect(m.regenerateIdentity).toHaveBeenCalledTimes(1)
+    expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
+    // The load-bearing order is destroy() → clearPairings. hap-nodejs writes
+    // to AccessoryInfo during shutdown; deleting the file mid-teardown
+    // would race that write. clearPairings/regenerateIdentity order is
+    // file-safe (oldUsername is captured upfront), so we don't pin it.
+    if (!m.bridgeInstance) throw new Error('bridge instance missing')
+    const destroyCall = m.bridgeInstance.destroy.mock.invocationCallOrder[0]
+    const clearCall = m.clearPairings.mock.invocationCallOrder[0]
+    expect(destroyCall).toBeLessThan(clearCall)
+  })
+
+  it('unpairAll without a prior startBridge falls back to loadOrCreateIdentity for the username', async () => {
+    const { unpairAll } = await import('../bridge')
+    // No startBridge → in-memory identity singleton is unset; the `??`
+    // fallback must read identity.json via loadOrCreateIdentity to know
+    // which AccessoryInfo.<MAC>.json to delete.
+    m.regenerateIdentity.mockReturnValueOnce({
+      username: 'NN:NN:NN:NN:NN:NN',
+      pincode: '999-99-999',
+      setupId: 'YYYY',
+    })
+    await unpairAll()
+    expect(m.loadOrCreateIdentity).toHaveBeenCalled()
+    expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
+  })
+
+  it('unpairAll aborts rotation when stopBridge fails to clear the singleton', async () => {
+    const { startBridge, unpairAll, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    if (m.bridgeInstance) {
+      m.bridgeInstance.destroy = vi.fn().mockRejectedValue(new Error('destroy failed'))
+    }
+    // Identity must stay on the old MAC — rotating while a live bridge
+    // still answers on the old MAC would desync getStatus() from the
+    // running HAP server.
+    await expect(unpairAll()).rejects.toThrow(/bridge teardown incomplete/)
+    expect(m.clearPairings).not.toHaveBeenCalled()
+    expect(m.regenerateIdentity).not.toHaveBeenCalled()
+    expect(getStatus().username).toBe('AA:BB:CC:DD:EE:FF')
   })
 
   it('regenerate stops the bridge and replaces identity', async () => {

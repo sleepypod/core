@@ -94,7 +94,7 @@ export function HomeKitConfig() {
           {data.pairedControllers.length > 0 && (
             <button
               onClick={() => {
-                if (confirm('Remove all HomeKit pairings? You will need to re-pair the bridge.')) {
+                if (confirm('Reset HomeKit pairing? This rotates the bridge identity (new pincode + QR). You\'ll need to remove the old bridge from the Home app manually — those tiles stay "No Response" until you do — then pair again with the new code shown here.')) {
                   unpair.mutate({})
                 }
               }}

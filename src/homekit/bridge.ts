@@ -235,13 +235,27 @@ export function getStatus(): BridgeStatus {
 }
 
 export async function unpairAll(): Promise<void> {
-  // Stop the bridge, then delete the AccessoryInfo / IdentifierCache files
-  // hap-nodejs persists pairings into. Identity (username/pincode/setupId)
-  // stays put so the next publish re-uses the same accessory and iOS
-  // recognizes it after re-pairing.
-  const username = getIdentity()?.username ?? loadOrCreateIdentity().username
+  // Stop the bridge, drop the persisted pairings, and rotate identity
+  // (new MAC + pincode + setupId via HKDF rotation). Re-using the prior
+  // AccessoryPairingID strands iOS: the controller retains its pair-verify
+  // keys against the same MAC and every read fails encryption forever, so
+  // accessories stay "No Response" until manually removed from Home. HAP
+  // R2 §5.11 calls for fresh long-term keys on accessory reset and
+  // Homebridge rotates the MAC for the same reason (homebridge-config-ui-x
+  // resetHomebridgeAccessory).
+  const oldUsername = getIdentity()?.username ?? loadOrCreateIdentity().username
   await stopBridge()
-  clearPairings(username)
+  // stopBridge intentionally keeps the singleton live when destroy() fails
+  // (port-safety on next enable). Rotating identity in that state would
+  // desync getStatus (new MAC) from the live HAP server (still old MAC).
+  // Abort instead — operator can retry once the underlying destroy issue
+  // clears.
+  if (getBridge() !== null) {
+    throw new Error('homekit unpair aborted: bridge teardown incomplete (destroy() failed)')
+  }
+  clearPairings(oldUsername)
+  const id = regenerateIdentity()
+  setIdentity(id)
 }
 
 export async function regenerate(): Promise<ReturnType<typeof loadOrCreateIdentity> | null> {
