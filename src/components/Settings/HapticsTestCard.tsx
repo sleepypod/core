@@ -5,24 +5,7 @@ import { Vibrate, Play, Square, ChevronDown } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
 import clsx from 'clsx'
-import { VIBRATION_PRESETS } from '@/src/lib/vibrationPatterns'
-
-// ---------------------------------------------------------------------------
-// Intensity color helpers
-// ---------------------------------------------------------------------------
-
-/** Returns a tailwind-compatible color class based on intensity level. */
-function intensityColor(intensity: number): string {
-  if (intensity <= 30) return 'bg-green-500'
-  if (intensity <= 60) return 'bg-amber-500'
-  return 'bg-red-500'
-}
-
-function intensityTextColor(intensity: number): string {
-  if (intensity <= 30) return 'text-green-400'
-  if (intensity <= 60) return 'text-amber-400'
-  return 'text-red-400'
-}
+import { FIXED_INTENSITY, FIXED_PATTERN, VIBRATION_PRESETS } from '@/src/lib/vibrationPatterns'
 
 // ---------------------------------------------------------------------------
 // Component
@@ -32,8 +15,6 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
   const { side: contextSide } = useSide()
   const side = filterSide ?? contextSide
   const [customExpanded, setCustomExpanded] = useState(false)
-  const [customIntensity, setCustomIntensity] = useState(50)
-  const [customPattern, setCustomPattern] = useState<'rise' | 'double'>('rise')
   const [customDuration, setCustomDuration] = useState(10)
   const [activePattern, setActivePattern] = useState<string | null>(null)
 
@@ -50,11 +31,11 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
 
   const isMutating = setAlarm.isPending || clearAlarm.isPending
 
-  function handleTest(intensity: number, pattern: 'rise' | 'double', duration: number, label?: string) {
+  function handleTest(duration: number, label?: string) {
     setAlarm.mutate({
       side,
-      vibrationIntensity: intensity,
-      vibrationPattern: pattern,
+      vibrationIntensity: FIXED_INTENSITY,
+      vibrationPattern: FIXED_PATTERN,
       duration,
     })
     setActivePattern(label ?? 'custom')
@@ -65,7 +46,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
   }
 
   function handleQuickTest() {
-    handleTest(30, 'rise', 2, 'quick')
+    handleTest(10, 'quick')
   }
 
   return (
@@ -121,31 +102,15 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium text-zinc-200">{p.name}</span>
                 <span className="text-[9px] text-zinc-600">
-                  {p.pattern}
-                  {' '}
-                  &middot;
                   {p.duration}
                   s
                 </span>
               </div>
               <p className="text-[10px] text-zinc-500 truncate">{p.description}</p>
-              {/* Intensity bar */}
-              <div className="mt-1 flex items-center gap-1.5">
-                <div className="h-1 flex-1 rounded-full bg-zinc-700 overflow-hidden">
-                  <div
-                    className={clsx('h-full rounded-full transition-all', intensityColor(p.intensity))}
-                    style={{ width: `${p.intensity}%` }}
-                  />
-                </div>
-                <span className={clsx('text-[9px] font-medium tabular-nums', intensityTextColor(p.intensity))}>
-                  {p.intensity}
-                  %
-                </span>
-              </div>
             </div>
             {/* Play button */}
             <button
-              onClick={() => handleTest(p.intensity, p.pattern, p.duration, p.name)}
+              onClick={() => handleTest(p.duration, p.name)}
               disabled={isMutating}
               className={clsx(
                 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50',
@@ -159,6 +124,9 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
           </div>
         ))}
       </div>
+      <p className="text-[10px] text-zinc-600">
+        Intensity and pattern are firmware-clamped on Pod 5 — only duration affects the buzz.
+      </p>
 
       {/* Custom controls (collapsible) */}
       <div>
@@ -175,59 +143,6 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
 
         {customExpanded && (
           <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900 p-3 mt-1">
-            {/* Intensity slider */}
-            <div>
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-xs font-medium text-zinc-400">Intensity</span>
-                <span className={clsx('text-xs font-medium', intensityTextColor(customIntensity))}>
-                  {customIntensity}
-                  %
-                </span>
-              </div>
-              <div className="relative">
-                <div className="absolute top-1/2 left-0 right-0 h-1.5 -translate-y-1/2 rounded-full bg-zinc-700 overflow-hidden pointer-events-none">
-                  <div
-                    className={clsx('h-full rounded-full transition-all', intensityColor(customIntensity))}
-                    style={{ width: `${customIntensity}%` }}
-                  />
-                </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={100}
-                  step={1}
-                  value={customIntensity}
-                  onChange={e => setCustomIntensity(parseInt(e.target.value, 10))}
-                  className="relative z-10 h-1.5 w-full cursor-pointer appearance-none bg-transparent [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow"
-                />
-              </div>
-              <div className="flex justify-between text-[10px] text-zinc-600">
-                <span>1%</span>
-                <span>100%</span>
-              </div>
-            </div>
-
-            {/* Pattern toggle */}
-            <div>
-              <span className="mb-1.5 block text-xs font-medium text-zinc-400">Pattern</span>
-              <div className="grid grid-cols-2 gap-2">
-                {(['double', 'rise'] as const).map(pat => (
-                  <button
-                    key={pat}
-                    onClick={() => setCustomPattern(pat)}
-                    className={clsx(
-                      'flex min-h-[44px] items-center justify-center rounded-lg border py-2.5 text-xs font-medium capitalize transition-colors',
-                      customPattern === pat
-                        ? 'border-sky-500/50 bg-sky-500/10 text-sky-400'
-                        : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 active:bg-zinc-700'
-                    )}
-                  >
-                    {pat}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* Duration slider */}
             <div>
               <div className="mb-1 flex items-center justify-between">
@@ -254,7 +169,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: 'left' | 'right' 
 
             {/* Test button */}
             <button
-              onClick={() => handleTest(customIntensity, customPattern, customDuration)}
+              onClick={() => handleTest(customDuration)}
               disabled={isMutating}
               className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-lg bg-sky-500/20 py-2.5 text-sm font-medium text-sky-400 transition-colors active:bg-sky-500/30 disabled:opacity-50"
             >

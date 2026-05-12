@@ -1,5 +1,6 @@
 import { connectToSocket, type SocketClient } from './socketClient'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
+import { encodeAlarmPayload } from './alarmPayload'
 import {
   type AlarmConfig,
   type DeviceStatus,
@@ -16,8 +17,9 @@ import {
  * Configuration for the hardware client connection.
  *
  * This is the CLIENT-mode connection (for dev/testing only).
- * In production, use FrankenHardwareClient from dacMonitor.instance.ts instead,
- * which uses the FrankenServer pattern (socket server that frankenfirmware connects to).
+ * In production, use `getSharedHardwareClient()` from `./sharedClient.ts` instead,
+ * which talks through the shared DacTransport connection so every writer in the
+ * app queues into the same FIFO.
  *
  * @property socketPath - Path to Unix socket to connect to
  * @property connectionTimeout - Max milliseconds to wait for connection (default: 30s)
@@ -75,8 +77,8 @@ export class HardwareClient {
   /**
    * Connects TO an existing Unix socket as a client.
    *
-   * This is for dev/testing only. In production, use FrankenHardwareClient
-   * from dacMonitor.instance.ts which uses the FrankenServer pattern.
+   * Dev/testing only. Production code uses `getSharedHardwareClient()` from
+   * `./sharedClient.ts`, which routes through the shared DacTransport.
    */
   async connect(): Promise<void> {
     if (this.client && !this.client.isClosed()) {
@@ -241,14 +243,12 @@ export class HardwareClient {
       throw new HardwareError('Alarm duration must be between 0 and 180 seconds')
     }
 
-    const command = side === 'left' ? HardwareCommand.ALARM_LEFT : HardwareCommand.ALARM_RIGHT
-
-    // Hardware protocol: "intensity,pattern,duration"
-    // Pattern encoding: 0 = double burst, 1 = rising intensity
-    const patternCode = config.vibrationPattern === 'double' ? '0' : '1'
-    const argument = `${config.vibrationIntensity},${patternCode},${config.duration}`
-
-    const response = await client.executeCommand(command, argument)
+    // Route per-side: ALARM_LEFT (5) or ALARM_RIGHT (6) with hex-CBOR.
+    // See sharedClient.ts for the live-verification details on Pod 5 J55
+    // firmware. ALARM_SOLO (cmd 2) is not registered on that firmware and
+    // silently drops.
+    const cmd = side === 'left' ? HardwareCommand.ALARM_LEFT : HardwareCommand.ALARM_RIGHT
+    const response = await client.executeCommand(cmd, encodeAlarmPayload(config))
     const parsed = parseSimpleResponse(response)
 
     if (!parsed.success) {

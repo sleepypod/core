@@ -227,6 +227,20 @@ describe('JobManager public surface (stub DB)', () => {
     manager.stopHeartbeat() // double-stop is safe
   })
 
+  it('startHeartbeat does not create a second interval on re-entry (kills L258 guard mutant)', () => {
+    // Kills `if (this.heartbeatTimer) return` → `if (false) return`. Without
+    // the guard, every call would leak a new setInterval and the cleanup in
+    // stopHeartbeat would only clear the latest, leaving prior intervals to
+    // fire forever.
+    const setIntervalSpy = vi.spyOn(global, 'setInterval')
+    manager.startHeartbeat()
+    const callsAfterFirst = setIntervalSpy.mock.calls.length
+    manager.startHeartbeat()
+    manager.startHeartbeat()
+    expect(setIntervalSpy.mock.calls.length).toBe(callsAfterFirst)
+    setIntervalSpy.mockRestore()
+  })
+
   it('checkLiveness returns empty when no jobs are registered', async () => {
     const stale = await manager.checkLiveness()
     expect(stale).toEqual([])

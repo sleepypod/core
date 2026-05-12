@@ -9,7 +9,7 @@ import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/pr
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
-import { sendCommand } from '@/src/hardware/dacTransport'
+import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import {
   sideSchema,
@@ -25,14 +25,19 @@ import { toC } from '@/src/lib/tempUtils'
 // ---------------------------------------------------------------------------
 
 const COMMAND_MAP: Record<string, HardwareCommand> = {
+  HELLO: HardwareCommand.HELLO,
   SET_TEMP: HardwareCommand.SET_TEMP,
-  SET_ALARM: HardwareCommand.SET_ALARM,
   ALARM_LEFT: HardwareCommand.ALARM_LEFT,
   ALARM_RIGHT: HardwareCommand.ALARM_RIGHT,
   SET_SETTINGS: HardwareCommand.SET_SETTINGS,
+  LEFT_TEMP_DURATION: HardwareCommand.LEFT_TEMP_DURATION,
+  RIGHT_TEMP_DURATION: HardwareCommand.RIGHT_TEMP_DURATION,
+  TEMP_LEVEL_LEFT: HardwareCommand.TEMP_LEVEL_LEFT,
+  TEMP_LEVEL_RIGHT: HardwareCommand.TEMP_LEVEL_RIGHT,
   PRIME: HardwareCommand.PRIME,
   DEVICE_STATUS: HardwareCommand.DEVICE_STATUS,
   ALARM_CLEAR: HardwareCommand.ALARM_CLEAR,
+  ALARM_SOLO: HardwareCommand.ALARM_SOLO,
 }
 
 // ---------------------------------------------------------------------------
@@ -622,23 +627,39 @@ export const deviceRouter = router({
   execute: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/device/execute', protect: false, tags: ['Device'] } })
     .input(z.object({
-      command: z.enum(['SET_TEMP', 'SET_ALARM', 'ALARM_LEFT', 'ALARM_RIGHT', 'SET_SETTINGS', 'PRIME', 'DEVICE_STATUS', 'ALARM_CLEAR']),
+      // Either an allowlisted name (mapped via COMMAND_MAP) or a raw numeric
+      // opcode string passed through verbatim. Raw opcodes let us probe for
+      // commands not yet in HardwareCommand (e.g. cover-only Pod 5 codes).
+      command: z.string().refine(
+        v => Object.hasOwn(COMMAND_MAP, v) || /^\d+$/.test(v),
+        { message: 'command must be an allowlisted name or a numeric opcode string' },
+      ),
       args: z.string().optional(),
     }).strict())
     .output(z.object({
       command: z.string(),
+      opcode: z.string(),
       args: z.string().nullable(),
       response: z.unknown(),
       disclaimer: z.string(),
     }))
     .mutation(async ({ input }) => {
-      const hwCommand = COMMAND_MAP[input.command]
+      const opcode = Object.hasOwn(COMMAND_MAP, input.command)
+        ? COMMAND_MAP[input.command]
+        : input.command
 
       try {
-        const response = await sendCommand(hwCommand, input.args)
+        // Route through the singleton client so the call binds to the same
+        // `dacTransport` module instance that owns the live transport.
+        // Importing sendCommand directly into the route handler can hit a
+        // separate Next.js bundle whose `transport` is undefined — that
+        // path stomps on dac.sock by spinning up a second listener.
+        const client = getSharedHardwareClient() as unknown as { sendRaw(command: string, args?: string): Promise<string> }
+        const response = await client.sendRaw(opcode, input.args)
 
         return {
           command: input.command,
+          opcode,
           args: input.args ?? null,
           response,
           disclaimer: 'WARNING: Raw command execution. No validation, no safety checks. Misuse can damage hardware or cause unexpected behavior. Use at your own risk. This feature is unsupported.',
