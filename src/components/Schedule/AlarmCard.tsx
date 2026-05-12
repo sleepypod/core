@@ -50,12 +50,6 @@ function formatDayRange(days: DayOfWeek[]): string {
   return ordered.map(d => DAY_SHORT[d]).join(', ')
 }
 
-function intensityColor(intensity: number): string {
-  if (intensity <= 30) return 'bg-green-500'
-  if (intensity <= 60) return 'bg-amber-500'
-  return 'bg-red-500'
-}
-
 export function AlarmCard({ group, onEdit, onDelete, onTest, isTesting = false }: AlarmCardProps) {
   const label = formatDayRange(group.days)
 
@@ -84,29 +78,14 @@ export function AlarmCard({ group, onEdit, onDelete, onTest, isTesting = false }
           <p className="mt-0.5 text-[11px] text-zinc-400">{label}</p>
 
           <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
-            <span className="capitalize">{group.vibrationPattern}</span>
-            <span>·</span>
             <span>
               {group.duration}
-              s
+              s buzz
             </span>
             <span>·</span>
             <span>
               {group.alarmTemperature}
               °F
-            </span>
-          </div>
-
-          <div className="mt-2 flex items-center gap-1.5">
-            <div className="h-1 flex-1 rounded-full bg-zinc-800 overflow-hidden">
-              <div
-                className={clsx('h-full rounded-full transition-all', intensityColor(group.vibrationIntensity))}
-                style={{ width: `${group.vibrationIntensity}%` }}
-              />
-            </div>
-            <span className="text-[9px] font-medium tabular-nums text-zinc-400">
-              {group.vibrationIntensity}
-              %
             </span>
           </div>
         </div>

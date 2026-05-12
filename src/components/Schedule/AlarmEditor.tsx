@@ -4,13 +4,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { X, Vibrate, Bell, Loader2, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { trpc } from '@/src/utils/trpc'
-import { VIBRATION_PRESETS } from '@/src/lib/vibrationPatterns'
+import { FIXED_INTENSITY, FIXED_PATTERN, VIBRATION_PRESETS } from '@/src/lib/vibrationPatterns'
 import { DAYS, type DayOfWeek } from './DaySelector'
 import { TimeInput } from './TimeInput'
 import type { AlarmGroup } from './AlarmCard'
 
 type Side = 'left' | 'right'
-type Pattern = 'rise' | 'double'
 
 interface AlarmEditorProps {
   open: boolean
@@ -23,25 +22,11 @@ interface AlarmEditorProps {
 }
 
 const DEFAULT_TIME = '07:00'
-const DEFAULT_INTENSITY = 50
-const DEFAULT_PATTERN: Pattern = 'rise'
 const DEFAULT_DURATION = 30
 const DEFAULT_TEMP = 75
 
 const MIN_TEMP = 55
 const MAX_TEMP = 110
-
-function intensityColor(intensity: number): string {
-  if (intensity <= 30) return 'bg-green-500'
-  if (intensity <= 60) return 'bg-amber-500'
-  return 'bg-red-500'
-}
-
-function intensityTextColor(intensity: number): string {
-  if (intensity <= 30) return 'text-green-400'
-  if (intensity <= 60) return 'text-amber-400'
-  return 'text-red-400'
-}
 
 /**
  * Full-screen editor for creating or editing an alarm.
@@ -60,8 +45,6 @@ export function AlarmEditor({
 
   const [days, setDays] = useState<Set<DayOfWeek>>(new Set())
   const [time, setTime] = useState(DEFAULT_TIME)
-  const [intensity, setIntensity] = useState(DEFAULT_INTENSITY)
-  const [pattern, setPattern] = useState<Pattern>(DEFAULT_PATTERN)
   const [duration, setDuration] = useState(DEFAULT_DURATION)
   const [temperature, setTemperature] = useState(DEFAULT_TEMP)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -73,16 +56,12 @@ export function AlarmEditor({
     if (existingGroup) {
       setDays(new Set(existingGroup.days))
       setTime(existingGroup.time)
-      setIntensity(existingGroup.vibrationIntensity)
-      setPattern(existingGroup.vibrationPattern)
       setDuration(existingGroup.duration)
       setTemperature(Math.round(existingGroup.alarmTemperature))
     }
     else {
       setDays(new Set())
       setTime(DEFAULT_TIME)
-      setIntensity(DEFAULT_INTENSITY)
-      setPattern(DEFAULT_PATTERN)
       setDuration(DEFAULT_DURATION)
       setTemperature(DEFAULT_TEMP)
     }
@@ -117,14 +96,12 @@ export function AlarmEditor({
   }, [])
 
   const applyPreset = useCallback((preset: typeof VIBRATION_PRESETS[number]) => {
-    setIntensity(preset.intensity)
-    setPattern(preset.pattern)
     setDuration(preset.duration)
   }, [])
 
   const handleTest = useCallback(() => {
-    testAlarm.mutate({ side, vibrationIntensity: intensity, vibrationPattern: pattern, duration })
-  }, [testAlarm, side, intensity, pattern, duration])
+    testAlarm.mutate({ side, vibrationIntensity: FIXED_INTENSITY, vibrationPattern: FIXED_PATTERN, duration })
+  }, [testAlarm, side, duration])
 
   const handleStopTest = useCallback(() => {
     clearAlarm.mutate({ side })
@@ -144,8 +121,8 @@ export function AlarmEditor({
       side,
       dayOfWeek,
       time,
-      vibrationIntensity: intensity,
-      vibrationPattern: pattern,
+      vibrationIntensity: FIXED_INTENSITY,
+      vibrationPattern: FIXED_PATTERN,
       duration,
       alarmTemperature: temperature,
       enabled,
@@ -164,7 +141,7 @@ export function AlarmEditor({
     catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save alarm')
     }
-  }, [days, side, time, intensity, pattern, duration, temperature, existingGroup, batchUpdate, utils, onSaved, onClose])
+  }, [days, side, time, duration, temperature, existingGroup, batchUpdate, utils, onSaved, onClose])
 
   const handleDelete = useCallback(async () => {
     if (!existingGroup) return
@@ -254,67 +231,23 @@ export function AlarmEditor({
                 onClick={() => applyPreset(p)}
                 className={clsx(
                   'rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors',
-                  intensity === p.intensity && pattern === p.pattern && duration === p.duration
+                  duration === p.duration
                     ? 'border-sky-500/60 bg-sky-500/15 text-sky-300'
                     : 'border-zinc-700 bg-zinc-900 text-zinc-400 active:bg-zinc-800',
                 )}
               >
                 {p.name}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Intensity */}
-        <div>
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-xs font-medium text-zinc-400">Intensity</span>
-            <span className={clsx('text-xs font-medium', intensityTextColor(intensity))}>
-              {intensity}
-              %
-            </span>
-          </div>
-          <div className="relative">
-            <div className="absolute top-1/2 left-0 right-0 h-1.5 -translate-y-1/2 rounded-full bg-zinc-700 overflow-hidden pointer-events-none">
-              <div
-                className={clsx('h-full rounded-full transition-all', intensityColor(intensity))}
-                style={{ width: `${intensity}%` }}
-              />
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={100}
-              step={1}
-              value={intensity}
-              onChange={e => setIntensity(parseInt(e.target.value, 10))}
-              className="relative z-10 h-1.5 w-full cursor-pointer appearance-none bg-transparent [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow"
-            />
-          </div>
-        </div>
-
-        {/* Pattern */}
-        <div>
-          <span className="mb-1.5 block text-xs font-medium text-zinc-400">Pattern</span>
-          <div className="grid grid-cols-2 gap-2">
-            {(['rise', 'double'] as const).map(pat => (
-              <button
-                key={pat}
-                onClick={() => setPattern(pat)}
-                className={clsx(
-                  'flex min-h-[44px] flex-col items-center justify-center rounded-lg border py-2 text-xs font-medium capitalize transition-colors',
-                  pattern === pat
-                    ? 'border-sky-500/50 bg-sky-500/10 text-sky-400'
-                    : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 active:bg-zinc-700',
-                )}
-              >
-                <span>{pat}</span>
-                <span className="text-[9px] font-normal text-zinc-500">
-                  {pat === 'rise' ? 'Soft → strong ramp' : 'Two strong bursts'}
+                {' '}
+                <span className="text-[9px] opacity-60">
+                  {p.duration}
+                  s
                 </span>
               </button>
             ))}
           </div>
+          <p className="mt-1.5 text-[10px] text-zinc-600">
+            Intensity and pattern are firmware-clamped on Pod 5 — only duration affects the buzz.
+          </p>
         </div>
 
         {/* Duration */}
