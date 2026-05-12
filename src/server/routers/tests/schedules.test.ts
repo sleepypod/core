@@ -756,5 +756,100 @@ describe('schedules query error paths', () => {
     vi.doUnmock('@/src/scheduler')
     vi.resetModules()
   })
+
+  it('create handlers throw INTERNAL_SERVER_ERROR when insert returns no row', async () => {
+    // Build a chain whose tx.insert(...).values(...).returning().all() yields [].
+    const emptyAll = vi.fn(() => [])
+    const txReturning = { returning: vi.fn(() => ({ all: emptyAll })) }
+    const txValues = { values: vi.fn(() => txReturning) }
+    const txInsert = { insert: vi.fn(() => txValues) }
+
+    const failing = { db: {
+      transaction: (cb: (tx: typeof txInsert) => unknown) => cb(txInsert),
+    } }
+
+    vi.resetModules()
+    vi.doMock('@/src/scheduler', () => ({
+      getJobManager: vi.fn(async () => ({ reloadSchedules: vi.fn() })),
+    }))
+    vi.doMock('@/src/db', () => failing)
+
+    const { schedulesRouter: failingRouter } = await import('@/src/server/routers/schedules')
+    const failingCaller = failingRouter.createCaller({})
+
+    await expect(failingCaller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+    })).rejects.toThrow(/no record returned/)
+
+    await expect(failingCaller.createPowerSchedule({
+      side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    })).rejects.toThrow(/no record returned/)
+
+    await expect(failingCaller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)).rejects.toThrow(/no record returned/)
+
+    vi.doUnmock('@/src/db')
+    vi.doUnmock('@/src/scheduler')
+    vi.resetModules()
+  })
+
+  it('mutation handlers wrap non-TRPC DB errors as INTERNAL_SERVER_ERROR', async () => {
+    const failing = { db: {
+      transaction: () => { throw new Error('tx exploded') },
+    } }
+
+    vi.resetModules()
+    vi.doMock('@/src/scheduler', () => ({
+      getJobManager: vi.fn(async () => ({ reloadSchedules: vi.fn() })),
+    }))
+    vi.doMock('@/src/db', () => failing)
+
+    const { schedulesRouter: failingRouter } = await import('@/src/server/routers/schedules')
+    const failingCaller = failingRouter.createCaller({})
+
+    await expect(failingCaller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+    })).rejects.toThrow(/Failed to create temperature schedule/)
+
+    await expect(failingCaller.updateTemperatureSchedule({
+      id: 1, temperature: 70,
+    })).rejects.toThrow(/Failed to update temperature schedule/)
+
+    await expect(failingCaller.deleteTemperatureSchedule({ id: 1 }))
+      .rejects.toThrow(/Failed to delete temperature schedule/)
+
+    await expect(failingCaller.createPowerSchedule({
+      side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    })).rejects.toThrow(/Failed to create power schedule/)
+
+    await expect(failingCaller.updatePowerSchedule({
+      id: 1, enabled: false,
+    })).rejects.toThrow(/Failed to update power schedule/)
+
+    await expect(failingCaller.deletePowerSchedule({ id: 1 }))
+      .rejects.toThrow(/Failed to delete power schedule/)
+
+    await expect(failingCaller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)).rejects.toThrow(/Failed to create alarm schedule/)
+
+    await expect(failingCaller.updateAlarmSchedule({
+      id: 1, duration: 60,
+    })).rejects.toThrow(/Failed to update alarm schedule/)
+
+    await expect(failingCaller.deleteAlarmSchedule({ id: 1 }))
+      .rejects.toThrow(/Failed to delete alarm schedule/)
+
+    await expect(failingCaller.batchUpdate({
+      creates: { temperature: [{ side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68 }] },
+    })).rejects.toThrow(/Failed to batch update schedules/)
+
+    vi.doUnmock('@/src/db')
+    vi.doUnmock('@/src/scheduler')
+    vi.resetModules()
+  })
 })
 
