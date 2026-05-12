@@ -259,10 +259,13 @@ export async function unpairAll(): Promise<void> {
 }
 
 export async function regenerate(): Promise<ReturnType<typeof loadOrCreateIdentity> | null> {
-  await stopBridge()
-  const id = regenerateIdentity()
-  setIdentity(id)
-  return id
+  // Aligned with unpairAll(): both rotate identity AND clear hap-nodejs
+  // pairing state. The split was historical (pre-rotation, regenerate
+  // skipped clearPairings); now that unpair rotates the MAC the orphan
+  // AccessoryInfo.<old-MAC>.json was unreachable anyway, so we sweep it.
+  // tRPC routes remain separate — same effect, different return shape.
+  await unpairAll()
+  return getIdentity()
 }
 
 function pickAdvertiser(): Advertiser {

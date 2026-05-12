@@ -291,7 +291,7 @@ describe('homekit bridge', () => {
     expect(getStatus().running).toBe(false)
   })
 
-  it('regenerate stops the bridge and replaces identity', async () => {
+  it('regenerate stops the bridge, clears pairings, and replaces identity', async () => {
     const { startBridge, regenerate, getStatus } = await import('../bridge')
     await startBridge(fakeMonitor)
     m.regenerateIdentity.mockReturnValueOnce({
@@ -300,8 +300,25 @@ describe('homekit bridge', () => {
       setupId: 'YYYY',
     })
     const id = await regenerate()
+    // regenerate now aligns with unpairAll — orphan AccessoryInfo.<old-MAC>.json
+    // is swept on rotation rather than left on disk.
+    expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
     expect(id?.username).toBe('NN:NN:NN:NN:NN:NN')
     expect(getStatus().running).toBe(false)
     expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
+  })
+
+  it('regenerate aborts when stopBridge fails to clear the singleton', async () => {
+    const { startBridge, regenerate, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    if (m.bridgeInstance) {
+      m.bridgeInstance.destroy = vi.fn().mockRejectedValue(new Error('destroy failed'))
+    }
+    // Same invariant as unpairAll: rotating identity while a live bridge
+    // still answers on the old MAC desyncs getStatus from the HAP server.
+    await expect(regenerate()).rejects.toThrow(/bridge teardown incomplete/)
+    expect(m.clearPairings).not.toHaveBeenCalled()
+    expect(m.regenerateIdentity).not.toHaveBeenCalled()
+    expect(getStatus().username).toBe('AA:BB:CC:DD:EE:FF')
   })
 })
