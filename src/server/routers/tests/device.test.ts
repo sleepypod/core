@@ -271,3 +271,50 @@ describe('device.execute (raw command)', () => {
     await expect(caller.execute({ command: 'DEVICE_STATUS' })).rejects.toThrow(/Failed to execute raw command: socket dead/)
   })
 })
+
+describe('device best-effort DB sync swallows errors', () => {
+  beforeEach(() => {
+    // Make `db.update(...)...` chain reject so the catch path fires.
+    const failingChain = () => {
+      const chain: Record<string, unknown> = {}
+      chain.then = (_resolve: unknown, reject: (reason: unknown) => unknown) =>
+        Promise.reject(new Error('db dead')).catch(reject)
+      chain.where = vi.fn(() => chain)
+      chain.set = vi.fn(() => chain)
+      return chain
+    }
+    dbMock.update.mockImplementation(failingChain)
+  })
+
+  it('setAlarm logs but still broadcasts when the DB sync fails', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await caller.setAlarm({
+      side: 'left', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120,
+    })
+    expect(result).toEqual({ success: true })
+    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { isAlarmVibrating: true })
+    expect(errSpy).toHaveBeenCalledWith('Failed to sync alarm state to DB:', expect.any(Error))
+    errSpy.mockRestore()
+  })
+
+  it('clearAlarm logs but still broadcasts when the DB sync fails', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await caller.clearAlarm({ side: 'right' })
+    expect(result).toEqual({ success: true })
+    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('right', { isAlarmVibrating: false })
+    expect(errSpy).toHaveBeenCalledWith('Failed to sync alarm clear state to DB:', expect.any(Error))
+    errSpy.mockRestore()
+  })
+
+  it('snoozeAlarm logs but still broadcasts when the DB sync fails', async () => {
+    snoozeMock.snoozeAlarm.mockReturnValue(new Date(1700000000000))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await caller.snoozeAlarm({
+      side: 'left', duration: 300, vibrationIntensity: 50, vibrationPattern: 'rise', alarmDuration: 120,
+    })
+    expect(result.success).toBe(true)
+    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { isAlarmVibrating: false })
+    expect(errSpy).toHaveBeenCalledWith('Failed to sync snooze state to DB:', expect.any(Error))
+    errSpy.mockRestore()
+  })
+})

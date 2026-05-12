@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -7,6 +7,7 @@ import {
   getStorageDir,
   loadOrCreateIdentity,
   probeSeedSources,
+  readIdentityIfPresent,
   readPairedControllers,
   regenerateIdentity,
 } from '../storage'
@@ -167,6 +168,76 @@ describe('homekit storage', () => {
       seen.add(r.username)
     }
     expect(seen.size).toBe(10)
+  })
+
+  it('readIdentityIfPresent returns null when identity.json is absent', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    if (existsSync(file)) rmSync(file)
+    expect(readIdentityIfPresent()).toBeNull()
+  })
+
+  it('readIdentityIfPresent returns the parsed identity when present', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    const payload = {
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '321-54-987',
+      setupId: 'ABCD',
+      derivedFrom: 'mmc-cid' as const,
+      rotation: 4,
+    }
+    writeFileSync(file, JSON.stringify(payload))
+    expect(readIdentityIfPresent()).toEqual(payload)
+  })
+
+  it('readIdentityIfPresent returns null when JSON is unparseable', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    writeFileSync(file, '{ broken')
+    expect(readIdentityIfPresent()).toBeNull()
+  })
+
+  it('readIdentityIfPresent returns null when shape is incomplete', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    writeFileSync(file, JSON.stringify({ username: 'AA:BB:CC:DD:EE:FF' }))
+    expect(readIdentityIfPresent()).toBeNull()
+  })
+
+  it('loadOrCreateIdentity backs up the corrupt file before regenerating', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    writeFileSync(file, '{ corrupt')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const id = loadOrCreateIdentity()
+      expect(id.username).toMatch(/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/)
+      const backups = readdirSync(dir).filter(n => n.startsWith('identity.json.corrupt.'))
+      expect(backups.length).toBeGreaterThan(0)
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/backed up to/),
+        expect.anything(),
+      )
+    }
+    finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('initHapStorage is idempotent across repeated calls', async () => {
+    // First call triggers the hap-nodejs setCustomStoragePath; second is a no-op
+    // because the module caches the init flag on globalThis.
+    const { initHapStorage } = await import('../storage')
+    const g = globalThis as Record<string, unknown>
+    const key = '__sp_homekit_hapInit__'
+    g[key] = undefined
+    initHapStorage()
+    expect(g[key]).toBe(true)
+    // Calling again should remain truthy and not throw
+    expect(() => initHapStorage()).not.toThrow()
+    expect(g[key]).toBe(true)
   })
 
   it('probeSeedSources reports each chain entry without throwing', () => {

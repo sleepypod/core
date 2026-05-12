@@ -178,4 +178,27 @@ describe('raw.diskUsage', () => {
     expect(result.totalBytes).toBe(0)
     expect(result.rawFileCount).toBe(0)
   })
+
+  it('wraps unexpected listRawFiles failure as INTERNAL_SERVER_ERROR', async () => {
+    fsMock.readdir.mockRejectedValue(new Error('disk on fire'))
+    await expect(caller.diskUsage({})).rejects.toThrow(/Failed to get disk usage/)
+  })
+})
+
+describe('raw.deleteFile error wrappers', () => {
+  it('wraps non-ENOENT unlink failure as INTERNAL_SERVER_ERROR', async () => {
+    fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false } as never)
+    fsMock.realpath.mockImplementation(async (p: unknown) => {
+      if (String(p).endsWith('b.RAW')) return '/persistent/b.RAW'
+      return '/persistent'
+    })
+    fsMock.readdir.mockResolvedValue(['a.RAW', 'b.RAW'] as never)
+    fsMock.stat.mockImplementation(async (p: unknown) => {
+      const name = String(p).split('/').pop()
+      return { size: 1, mtime: name === 'a.RAW' ? new Date('2025-02-01') : new Date('2025-01-01') } as never
+    })
+    fsMock.unlink.mockRejectedValue(new Error('EBUSY: locked'))
+
+    await expect(caller.deleteFile({ filename: 'b.RAW' })).rejects.toThrow(/Failed to delete file/)
+  })
 })

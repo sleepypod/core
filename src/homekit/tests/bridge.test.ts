@@ -249,6 +249,48 @@ describe('homekit bridge', () => {
     expect(getStatus().username).toBe('AA:BB:CC:DD:EE:FF')
   })
 
+  it('stopBridge swallows stopper exceptions with a warning', async () => {
+    const { startBridge, stopBridge, getStatus } = await import('../bridge')
+    // Make one stopper explode; stopBridge must keep going and still tear down the bridge.
+    m.thermostatStop.mockImplementationOnce((): never => {
+      throw new Error('stopper kaboom')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await startBridge(fakeMonitor)
+    await stopBridge()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[homekit] stopper failed:',
+      expect.stringMatching(/stopper kaboom/),
+    )
+    expect(getStatus().running).toBe(false)
+    warnSpy.mockRestore()
+  })
+
+  it('stopBridge warns when unpublish() throws but destroy() still completes', async () => {
+    const { startBridge, stopBridge, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    if (m.bridgeInstance) {
+      m.bridgeInstance.unpublish = vi.fn().mockRejectedValue(new Error('unpub boom'))
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await stopBridge()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[homekit] unpublish failed:',
+      expect.stringMatching(/unpub boom/),
+    )
+    expect(getStatus().running).toBe(false)
+    warnSpy.mockRestore()
+  })
+
+  it('stopBridge clears setupURI even when no bridge was ever published', async () => {
+    const { stopBridge, getStatus } = await import('../bridge')
+    await stopBridge()
+    expect(getStatus().setupURI).toBeNull()
+    expect(getStatus().running).toBe(false)
+  })
+
   it('regenerate stops the bridge and replaces identity', async () => {
     const { startBridge, regenerate, getStatus } = await import('../bridge')
     await startBridge(fakeMonitor)

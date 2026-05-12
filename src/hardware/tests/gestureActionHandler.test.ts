@@ -201,6 +201,53 @@ describe('GestureActionHandler', () => {
     })
   })
 
+  test('cleanup() cancels pending snooze restart timers so process can exit', async () => {
+    vi.useFakeTimers()
+    const snoozeClient = makeMockClient()
+    const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 300 }
+    const state = { isAlarmVibrating: true }
+    const newHardwareClient = vi.fn()
+      .mockReturnValueOnce(makeMockClient())
+      .mockReturnValueOnce(snoozeClient)
+    const deps: GestureActionDeps = {
+      findGestureConfig: vi.fn().mockResolvedValue(gesture),
+      findDeviceState: vi.fn().mockResolvedValue(state),
+      newHardwareClient,
+    }
+
+    const handler = new GestureActionHandler(SOCKET_PATH, deps)
+    await handler.handle(makeEvent('left', 'tripleTap'))
+
+    handler.cleanup()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(snoozeClient.setAlarm).not.toHaveBeenCalled()
+  })
+
+  test('snooze restart logs without throwing when restart connect fails', async () => {
+    vi.useFakeTimers()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failingClient = makeMockClient({
+      connect: vi.fn().mockRejectedValue(new Error('connect refused')),
+    })
+    const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 1 }
+    const state = { isAlarmVibrating: true }
+    const newHardwareClient = vi.fn()
+      .mockReturnValueOnce(makeMockClient())
+      .mockReturnValueOnce(failingClient)
+    const deps: GestureActionDeps = {
+      findGestureConfig: vi.fn().mockResolvedValue(gesture),
+      findDeviceState: vi.fn().mockResolvedValue(state),
+      newHardwareClient,
+    }
+
+    await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
+    await vi.advanceTimersByTimeAsync(1000)
+    // Allow promise chain to resolve
+    await vi.advanceTimersByTimeAsync(100)
+    expect(errSpy).toHaveBeenCalledWith('GestureActionHandler: snooze restart failed:', expect.any(Error))
+    errSpy.mockRestore()
+  })
+
   test('errors in execution do not throw', async () => {
     const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 5 }
     const client = makeMockClient({

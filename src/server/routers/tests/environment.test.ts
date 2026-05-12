@@ -240,3 +240,45 @@ describe('environment.getAmbientLightSummary', () => {
     })).rejects.toThrow(/startDate/)
   })
 })
+
+describe('environment error wrappers', () => {
+  it('wraps each query DB failure as INTERNAL_SERVER_ERROR', async () => {
+    const boom = (): never => {
+      throw new Error('db dead')
+    }
+
+    dbMock.select.mockImplementationOnce(boom)
+    await expect(caller.getBedTemp({
+      startDate: new Date('2025-01-01'), endDate: new Date('2025-01-02'),
+    })).rejects.toThrow(/Failed to fetch bed temp/)
+
+    dbMock.select.mockImplementationOnce(boom)
+    await expect(caller.getFreezerTemp({
+      startDate: new Date('2025-01-01'), endDate: new Date('2025-01-02'),
+    })).rejects.toThrow(/Failed to fetch freezer temp/)
+
+    dbMock.select.mockImplementationOnce(boom)
+    await expect(caller.getLatestBedTemp({})).rejects.toThrow(/Failed to fetch latest bed temp/)
+
+    dbMock.select.mockImplementationOnce(boom)
+    await expect(caller.getLatestFreezerTemp({})).rejects.toThrow(/Failed to fetch latest freezer temp/)
+
+    dbMock.select.mockImplementationOnce(boom)
+    await expect(caller.getSummary({
+      startDate: new Date('2025-01-01'), endDate: new Date('2025-01-02'),
+    })).rejects.toThrow(/Failed to calculate environment summary/)
+
+    dbMock.select.mockImplementationOnce(boom)
+    await expect(caller.getAmbientLight({
+      startDate: new Date('2025-01-01'), endDate: new Date('2025-01-02'),
+    })).rejects.toThrow(/Failed to fetch ambient light/)
+
+    dbMock.select.mockImplementationOnce(boom)
+    await expect(caller.getLatestAmbientLight({})).rejects.toThrow(/Failed to fetch latest ambient light/)
+
+    dbMock.select.mockImplementationOnce(boom)
+    await expect(caller.getAmbientLightSummary({
+      startDate: new Date('2025-01-01'), endDate: new Date('2025-01-02'),
+    })).rejects.toThrow(/Failed to calculate ambient light summary/)
+  })
+})

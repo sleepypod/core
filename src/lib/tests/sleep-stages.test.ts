@@ -233,6 +233,38 @@ describe('calculateQualityScore', () => {
     const score = calculateQualityScore({ deep: 20, light: 45, rem: 25, wake: 3 }, 0.2)
     expect(score).toBeLessThanOrEqual(50)
   })
+
+  it('penalizes excessive deep sleep (>30%)', () => {
+    const ideal = calculateQualityScore({ deep: 20, light: 45, rem: 25, wake: 3 })
+    const tooMuchDeep = calculateQualityScore({ deep: 50, light: 18, rem: 25, wake: 3 })
+    expect(tooMuchDeep).toBeLessThan(ideal)
+  })
+
+  it('penalizes low REM (<20%)', () => {
+    const ideal = calculateQualityScore({ deep: 20, light: 45, rem: 25, wake: 3 })
+    const lowRem = calculateQualityScore({ deep: 20, light: 65, rem: 5, wake: 3 })
+    expect(lowRem).toBeLessThan(ideal)
+  })
+
+  it('penalizes excessive REM (>35%)', () => {
+    const ideal = calculateQualityScore({ deep: 20, light: 45, rem: 25, wake: 3 })
+    const tooMuchRem = calculateQualityScore({ deep: 20, light: 25, rem: 45, wake: 3 })
+    expect(tooMuchRem).toBeLessThan(ideal)
+  })
+})
+
+describe('calculateDistribution edge cases', () => {
+  it('returns zeros for an empty epoch list', () => {
+    expect(calculateDistribution([])).toEqual({ wake: 0, light: 0, deep: 0, rem: 0 })
+  })
+
+  it('returns zeros when every epoch has zero duration', () => {
+    const zeros = { heartRate: null, hrv: null, breathingRate: null, movement: null }
+    expect(calculateDistribution([
+      { stage: 'wake', duration: 0, start: 0, ...zeros },
+      { stage: 'deep', duration: 0, start: 0, ...zeros },
+    ])).toEqual({ wake: 0, light: 0, deep: 0, rem: 0 })
+  })
 })
 
 describe('formatDurationHM', () => {

@@ -289,6 +289,56 @@ describe('Scheduler', () => {
     }, 10000)
   })
 
+  describe('schedule failure surfaces', () => {
+    it('scheduleJob throws when node-schedule returns null (invalid cron)', () => {
+      const handler = vi.fn(async () => {})
+      expect(() =>
+        scheduler.scheduleJob('bad', JobType.TEMPERATURE, 'this is not a cron', handler),
+      ).toThrow(/Failed to schedule job: bad/)
+    })
+
+    it('scheduleOneTimeJob throws when the fire date is in the past', () => {
+      const handler = vi.fn(async () => {})
+      expect(() =>
+        scheduler.scheduleOneTimeJob(
+          'past-one',
+          JobType.TEMPERATURE,
+          new Date(Date.now() - 60_000),
+          handler,
+        ),
+      ).toThrow(/Failed to schedule one-time job: past-one/)
+    })
+  })
+
+  describe('waitForInFlightJobs', () => {
+    it('returns immediately when no jobs are in flight', async () => {
+      // No in-flight jobs — should resolve without delay
+      const start = Date.now()
+      await scheduler.waitForInFlightJobs(1000)
+      expect(Date.now() - start).toBeLessThan(100)
+    })
+
+    it('warns when in-flight jobs exceed timeout (force-shutdown path)', async () => {
+      let release: () => void = () => {}
+      const stuck = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      // Schedule a one-time job that hangs until we release it
+      const future = new Date(Date.now() + 50)
+      scheduler.scheduleOneTimeJob('hang', JobType.AWAY_MODE, future, async () => stuck)
+
+      // Wait for the job to actually start (in-flight)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await scheduler.waitForInFlightJobs(150)
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/Force shutdown with/))
+      release()
+      warnSpy.mockRestore()
+    })
+  })
+
   describe('getNextInvocation', () => {
     it('returns next invocation time for job', () => {
       const handler = vi.fn(async () => {})
