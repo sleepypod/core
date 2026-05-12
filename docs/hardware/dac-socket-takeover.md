@@ -75,7 +75,7 @@ mutates a privileged socket and should never run automatically.
 
 Every frame is text:
 
-```
+```text
 {command-number}\n{argument}\n\n
 ```
 

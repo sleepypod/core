@@ -631,7 +631,7 @@ export const deviceRouter = router({
       // opcode string passed through verbatim. Raw opcodes let us probe for
       // commands not yet in HardwareCommand (e.g. cover-only Pod 5 codes).
       command: z.string().refine(
-        v => v in COMMAND_MAP || /^\d+$/.test(v),
+        v => Object.hasOwn(COMMAND_MAP, v) || /^\d+$/.test(v),
         { message: 'command must be an allowlisted name or a numeric opcode string' },
       ),
       args: z.string().optional(),
@@ -644,7 +644,9 @@ export const deviceRouter = router({
       disclaimer: z.string(),
     }))
     .mutation(async ({ input }) => {
-      const opcode = COMMAND_MAP[input.command] ?? input.command
+      const opcode = Object.hasOwn(COMMAND_MAP, input.command)
+        ? COMMAND_MAP[input.command]
+        : input.command
 
       try {
         // Route through the singleton client so the call binds to the same

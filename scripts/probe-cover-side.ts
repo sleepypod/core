@@ -11,8 +11,9 @@
  * Usage:
  *   npx tsx scripts/probe-cover-side.ts [POD_URL]
  *
- * After each probe the script pauses so you can listen / observe and
- * type y/n/q before continuing. Defaults to http://192.168.1.88:3000.
+ * Each probe runs for BUZZ_SECONDS, clears, then waits SETTLE_SECONDS before
+ * the next probe — listen / observe while it runs. Defaults to
+ * http://192.168.1.88:3000.
  */
 
 import { Encoder } from 'cbor-x'
@@ -35,7 +36,6 @@ const base = (extra: Record<string, unknown> = {}) => ({
   pl: 40,
   du: BUZZ_SECONDS,
   pi: 'double', // double = two firm bursts; easier to localize than 'rise'
-  tt: Math.floor(Date.now() / 1000),
   ...extra,
 })
 
@@ -70,7 +70,9 @@ function encode(payload: Record<string, unknown>): string {
 }
 
 async function send(probe: Probe): Promise<{ http: number, body: string }> {
-  const args = encode(probe.payload)
+  // tt is the firmware's retry/dismiss correlator — stamp it at send-time so
+  // it reflects when the probe actually fires, not when the list was built.
+  const args = encode({ ...probe.payload, tt: Math.floor(Date.now() / 1000) })
   const body = JSON.stringify({ json: { command: probe.command, args } })
 
   const res = await fetch(`${POD_URL}/api/trpc/device.execute`, {

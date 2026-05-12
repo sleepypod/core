@@ -219,7 +219,7 @@ without a registered spark function, masking a silent drop. The ground
 truth is in `journalctl -u frank` on the pod. The full chain on a
 working cover-motor write looks like:
 
-```
+```text
 dac_loop command: 5 payload: b9...
 [alarm] vib. left: time …, power …, pattern double, dur …
 Sensor.cpp:1221 triggerVibrationAlarm side left
