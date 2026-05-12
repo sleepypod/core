@@ -88,6 +88,7 @@ describe('homekit bridge', () => {
     delete g.__sp_homekit_stoppers__
     delete g.__sp_homekit_identity__
     delete g.__sp_homekit_setupURI__
+    delete g.__sp_homekit_transitioning__
 
     m.bridgeInstance = null
     m.BridgeCtor.mockClear()
@@ -306,6 +307,17 @@ describe('homekit bridge', () => {
     expect(id?.username).toBe('NN:NN:NN:NN:NN:NN')
     expect(getStatus().running).toBe(false)
     expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
+  })
+
+  it('getStatus surfaces the transitioning flag flipped by setTransitioning', async () => {
+    const { startBridge, getStatus, setTransitioning } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    expect(getStatus().transitioning).toBe(false)
+    setTransitioning(true)
+    expect(getStatus().transitioning).toBe(true)
+    expect(getStatus().running).toBe(true)
+    setTransitioning(false)
+    expect(getStatus().transitioning).toBe(false)
   })
 
   it('regenerate aborts when stopBridge fails to clear the singleton', async () => {
