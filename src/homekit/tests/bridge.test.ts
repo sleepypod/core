@@ -197,11 +197,23 @@ describe('homekit bridge', () => {
     expect(getStatus().running).toBe(true)
   })
 
-  it('unpairAll stops the bridge and clears pairings under the current username', async () => {
-    const { startBridge, unpairAll } = await import('../bridge')
+  it('unpairAll stops the bridge, clears pairings, and rotates identity', async () => {
+    const { startBridge, unpairAll, getStatus } = await import('../bridge')
     await startBridge(fakeMonitor)
+    m.regenerateIdentity.mockReturnValueOnce({
+      username: 'NN:NN:NN:NN:NN:NN',
+      pincode: '999-99-999',
+      setupId: 'YYYY',
+    })
     await unpairAll()
     expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
+    expect(m.regenerateIdentity).toHaveBeenCalledTimes(1)
+    expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
+    // clearPairings must run BEFORE the rotation so the stale
+    // AccessoryInfo.<old-MAC>.json is removed; otherwise it lingers as
+    // an orphan whenever the rotation produces a different filename.
+    expect(m.clearPairings.mock.invocationCallOrder[0])
+      .toBeLessThan(m.regenerateIdentity.mock.invocationCallOrder[0])
   })
 
   it('regenerate stops the bridge and replaces identity', async () => {
