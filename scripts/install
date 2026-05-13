@@ -896,6 +896,10 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
   for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
     [ -f "$tool" ] || continue
     target="/usr/local/bin/$(basename "$tool")"
+    # rm before cp: a previous custom install may have symlinked
+    # $target back into $INSTALL_DIR, in which case `cp` refuses with
+    # "are the same file" and the script bails on line 880.
+    rm -f "$target"
     cp "$tool" "$target"
     chown root:root "$target"
     chmod 0755 "$target"
