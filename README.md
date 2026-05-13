@@ -53,8 +53,6 @@ sp-logs           # journalctl -u sleepypod.service -f
 sp-update         # pull latest, rebuild, migrate, restart (with automatic rollback)
 sp-maintenance    # one-shot manual prime / reboot / status
 sp-uninstall      # stop services, remove systemd units, optionally wipe data
-sp-sleepypod      # if free-sleep is also installed: stop it and start sleepypod
-sp-freesleep      # mirror of the above in the other direction
 ```
 
 ---

@@ -276,11 +276,30 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# Force /usr/local/bin to the front of PATH. Pod 3 stock firmware ships
-# Volta at ~/.volta/bin ahead of /usr/local/bin; without this our freshly
-# installed node/npm/pnpm symlinks are shadowed by Volta's shim, which
-# fails with "Volta error: Node is not available".
-export PATH="/usr/local/bin:$PATH"
+# Force /usr/local/bin to the front of PATH and strip Volta entries.
+# Pod 3 stock firmware (and free-sleep installs) ship Volta at
+# ~/.volta/bin; without this our node/npm/pnpm symlinks are shadowed by
+# Volta's shim, which fails with "Volta error: Node is not available".
+PATH="$(echo "/usr/local/bin:$PATH" | tr ':' '\n' | awk '!/\/\.volta\// && !seen[$0]++' | paste -sd:)"
+export PATH
+
+# Detach hostile symlinks left behind by Volta/free-sleep installs.
+# `[ -x /usr/local/bin/pnpm ]` follows symlinks, so a Volta shim with
+# no managed pnpm passes existence checks but dies at exec time
+# ("Volta error: …"). Unlink anything under /usr/local/bin that
+# doesn't resolve back into /usr/local — forces a clean reinstall.
+for bin in node npm npx pnpm; do
+  link="/usr/local/bin/$bin"
+  [ -L "$link" ] || continue
+  target="$(readlink -f "$link" 2>/dev/null || true)"
+  case "$target" in
+    /usr/local/*) ;;  # ours, keep
+    *)
+      echo "Detaching hostile symlink: $link -> ${target:-<broken>}"
+      rm -f "$link"
+      ;;
+  esac
+done
 
 INSTALL_DIR="/home/dac/sleepypod-core"
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
@@ -877,6 +896,10 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
   for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
     [ -f "$tool" ] || continue
     target="/usr/local/bin/$(basename "$tool")"
+    # rm before cp: a previous custom install may have symlinked
+    # $target back into $INSTALL_DIR, in which case `cp` refuses with
+    # "are the same file" and the script bails on line 880.
+    rm -f "$target"
     cp "$tool" "$target"
     chown root:root "$target"
     chmod 0755 "$target"
@@ -888,7 +911,9 @@ echo "Enabling service..."
 systemctl daemon-reload
 systemctl enable sleepypod.service
 
-# Stop and disable free-sleep services (both use port 3000)
+# Stop and disable free-sleep services if present — both use port 3000
+# and would prevent sleepypod.service from binding. Coexistence/toggle
+# support was removed; sleepypod takes over the port permanently.
 for fs_svc in free-sleep.service free-sleep-stream.service; do
   if systemctl list-unit-files "$fs_svc" &>/dev/null; then
     if systemctl is-active --quiet "$fs_svc" 2>/dev/null; then
@@ -1317,8 +1342,6 @@ echo "  sp-status      - View service status"
 echo "  sp-restart     - Restart service"
 echo "  sp-logs        - View live logs"
 echo "  sp-update      - Update to latest version"
-echo "  sp-freesleep   - Switch to free-sleep"
-echo "  sp-sleepypod   - Switch to sleepypod"
 echo "  sp-uninstall   - Remove sleepypod"
 echo ""
 echo "Files:"
