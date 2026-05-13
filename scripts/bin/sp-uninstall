@@ -93,8 +93,6 @@ rm -f /usr/local/bin/sp-status
 rm -f /usr/local/bin/sp-restart
 rm -f /usr/local/bin/sp-logs
 rm -f /usr/local/bin/sp-update
-rm -f /usr/local/bin/sp-freesleep
-rm -f /usr/local/bin/sp-sleepypod
 rm -f /usr/local/bin/sp-uninstall
 
 # Remove Python modules
@@ -154,15 +152,6 @@ if id sleepypod &>/dev/null; then
   echo "Removing sleepypod system user..."
   userdel sleepypod 2>/dev/null || true
 fi
-
-# Re-enable free-sleep if available
-for fs_svc in free-sleep.service free-sleep-stream.service; do
-  if systemctl list-unit-files "$fs_svc" 2>/dev/null | grep -q "$fs_svc"; then
-    echo "Re-enabling $fs_svc..."
-    systemctl enable "$fs_svc" 2>/dev/null || true
-    systemctl start "$fs_svc" 2>/dev/null || true
-  fi
-done
 
 echo ""
 echo "=== SleepyPod uninstalled ==="
