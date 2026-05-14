@@ -10,7 +10,7 @@ sleepypod needs to process raw biometric sensor data from the Pod hardware and d
 The key constraints are:
 
 - **Signal processing is compute-heavy**: Heart rate extraction from 500 Hz piezoelectric data requires FFT, bandpass filtering, and peak detection. Node.js is not suited for this; Python (scipy/numpy) or Rust handle it naturally.
-- **Raw data is filesystem-based**: The hardware daemon writes binary CBOR files to `/persistent/*.RAW` continuously. There is no streaming API through `dac.sock` — that socket is command/response only.
+- **Raw data is filesystem-based**: The hardware daemon writes binary CBOR files to `/persistent/biometrics/*.RAW` continuously (tmpfs since ADR 0018; previously `/persistent/*.RAW` on eMMC). There is no streaming API through `dac.sock` — that socket is command/response only.
 - **Embedded hardware**: The Pod runs constrained Linux (ARM). Heavy dependencies (InfluxDB, message queues, etc.) are ruled out.
 - **Community extensibility**: We want people to be able to swap in better algorithms (e.g., a Rust implementation, an ML-based sleep scorer) without touching the core app.
 - **Time-series vs config data have different access patterns**: Config/state data is small and randomly accessed. Biometrics data is append-only, queried by time range, and may grow to tens of thousands of rows.
@@ -22,14 +22,17 @@ We will use a **plugin/sidecar module system** with a **separate `biometrics.db`
 The architecture:
 
 ```text
-/persistent/*.RAW   ←  hardware daemon writes CBOR sensor data continuously
-       ↓
-[module process]    reads + tails RAW files, processes signals (any language)
-       ↓
-[biometrics.db]     module writes to agreed schema tables
-       ↑
-[sleepypod-core]    reads biometrics.db via tRPC API → UI
+/persistent/biometrics/*.RAW   ←  hardware daemon writes CBOR sensor data
+                                  continuously into tmpfs (ADR 0018)
+                ↓
+        [module process]       reads + tails RAW files, processes signals (any language)
+                ↓
+        [biometrics.db]        module writes to agreed schema tables (eMMC, durable)
+                ↑
+        [sleepypod-core]       reads biometrics.db via tRPC API → UI
 ```
+
+The path above is the **hot** RAW dir on tmpfs. Files older than 15 minutes are gzipped into `/persistent/biometrics-archive/` on eMMC by a separate archiver/pruner pair — modules read from the hot path only and need not be aware of the cold archive.
 
 The **database schema is the public contract**. Modules do not call into the core app. The core app does not call into modules. They share only a file.
 
@@ -151,7 +154,7 @@ modules/
 ```
 
 Each module:
-1. Tails `/persistent/*.RAW` for new CBOR sensor data
+1. Tails `/persistent/biometrics/*.RAW` for new CBOR sensor data
 2. Processes its relevant signal type
 3. Writes results to `biometrics.db` using transactions
 4. Writes its health status to `system_health` table in `sleepypod.db`

@@ -17,7 +17,7 @@ The piezo-processor module extracts heart rate (HR), HR variability index, and b
 
 ```mermaid
 flowchart TD
-    RAW["RAW file (CBOR-encoded)<br/>RawFileFollower tails /persistent/*.RAW"]
+    RAW["RAW file (CBOR-encoded)<br/>RawFileFollower tails /persistent/biometrics/*.RAW (tmpfs · ADR 0018)"]
     DECODE["Decode piezo-dual record<br/>left1 + right1 channels (int32, 500 Hz)"]
     PUMP{"PumpGate<br/>Dual-channel energy<br/>spike detection"}
     DROP["Drop record<br/>(pump or guard active)"]
