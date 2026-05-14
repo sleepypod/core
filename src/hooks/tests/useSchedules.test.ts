@@ -230,4 +230,66 @@ describe('useSchedules', () => {
       expect.objectContaining({ id: 2 }),
     ])
   })
+
+  it('labels evening phases between 17:00 and 21:00 as Evening/sun', () => {
+    trpcMock.queryState.data = {
+      temperature: [{ id: 1, time: '18:00', temperature: 65, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedules('monday'))
+    expect(result.current.phases[0]).toMatchObject({ name: 'Evening', icon: 'sun' })
+  })
+
+  it('labels overnight phases between 01:00 and 05:00 as Overnight/moon', () => {
+    trpcMock.queryState.data = {
+      temperature: [{ id: 1, time: '03:00', temperature: 62, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedules('monday'))
+    expect(result.current.phases[0]).toMatchObject({ name: 'Overnight', icon: 'moon' })
+  })
+
+  it('update onError restores previous cache snapshot', async () => {
+    const prev = {
+      temperature: [{ id: 1, time: '07:00', temperature: 70, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.cache.set('byDay', prev)
+    renderHook(() => useSchedules('monday'))
+    const update = trpcMock.captured.update
+    const ctx = await update.onMutate({ id: 1, time: '08:00', temperature: 75 })
+    update.onError(new Error('boom'), {}, ctx)
+    expect(trpcMock.cache.get('byDay')).toBe(prev)
+  })
+
+  it('update onSettled invalidates both queries', () => {
+    renderHook(() => useSchedules('monday'))
+    trpcMock.captured.update.onSettled()
+    expect(trpcMock.utils.schedules.getByDay.invalidate).toHaveBeenCalled()
+    expect(trpcMock.utils.schedules.getAll.invalidate).toHaveBeenCalled()
+  })
+
+  it('delete onError restores previous cache snapshot', async () => {
+    const prev = {
+      temperature: [{ id: 1, time: '07:00', temperature: 70, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.cache.set('byDay', prev)
+    renderHook(() => useSchedules('monday'))
+    const del = trpcMock.captured.delete
+    const ctx = await del.onMutate({ id: 1 })
+    del.onError(new Error('boom'), {}, ctx)
+    expect(trpcMock.cache.get('byDay')).toBe(prev)
+  })
+
+  it('delete onSettled invalidates both queries', () => {
+    renderHook(() => useSchedules('monday'))
+    trpcMock.captured.delete.onSettled()
+    expect(trpcMock.utils.schedules.getByDay.invalidate).toHaveBeenCalled()
+    expect(trpcMock.utils.schedules.getAll.invalidate).toHaveBeenCalled()
+  })
 })

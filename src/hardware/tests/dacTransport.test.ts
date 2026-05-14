@@ -342,6 +342,95 @@ describe('dacTransport', () => {
     })
   })
 
+  describe('callFunction argument handling', () => {
+    test('strips newlines from arg before transmission', async () => {
+      const connectPromise = connectDac(socketPath)
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+
+      let receivedArgLines: string[] = []
+      let buffer = ''
+      mockFranken.on('data', (chunk) => {
+        buffer += chunk.toString('utf-8')
+        while (buffer.includes('\n\n')) {
+          const idx = buffer.indexOf('\n\n')
+          const message = buffer.substring(0, idx)
+          buffer = buffer.substring(idx + 2)
+          const lines = message.split('\n')
+          receivedArgLines = lines.slice(1)
+          mockFranken?.write('OK\n\n')
+        }
+      })
+
+      await connectPromise
+      await sendCommand('11', 'has\nnewlines\nhere')
+      // All newlines stripped — arg arrives on a single line.
+      expect(receivedArgLines).toEqual(['hasnewlineshere'])
+    })
+  })
+
+  describe('stream lifecycle', () => {
+    test('subsequent sendCommand fails after firmware half-closes', async () => {
+      const connectPromise = connectDac(socketPath)
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      handleCommands(mockFranken)
+      await connectPromise
+
+      await expect(sendCommand('0')).resolves.toBe('READY')
+
+      // Half-close franken→server. Server-side socket auto-ends (default
+      // allowHalfOpen=false) and the splitter receives `end`, exercising
+      // the MessageStream end handler.
+      mockFranken.end()
+      await new Promise(r => setTimeout(r, 100))
+
+      await expect(sendCommand('0')).rejects.toBeInstanceOf(Error)
+    })
+
+    test('surfaces socket-stream error to the next sendCommand', async () => {
+      const connectPromise = connectDac(socketPath)
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      handleCommands(mockFranken)
+      await connectPromise
+
+      await expect(sendCommand('0')).resolves.toBe('READY')
+
+      // Force a reset on the server-side socket. The MessageStream's
+      // readable.on('error') destroys the splitter, surfacing the error
+      // on the next read attempt.
+      mockFranken.destroy(new Error('firmware reset'))
+      await new Promise(r => setTimeout(r, 100))
+
+      await expect(sendCommand('0')).rejects.toBeInstanceOf(Error)
+    })
+  })
+
+  describe('listener pending-connection buffering', () => {
+    test('extra firmware connections after transport is established are buffered and replaced', async () => {
+      const connectPromise = connectDac(socketPath)
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      handleCommands(mockFranken)
+      await connectPromise
+
+      // No waiter exists; second connection lands in pendingConnections.
+      const extra1 = await connectAsFrankenfirmware(socketPath)
+      await new Promise(r => setTimeout(r, 50))
+      // Third connection drains the stale `extra1` from pendingConnections,
+      // then queues itself.
+      const extra2 = await connectAsFrankenfirmware(socketPath)
+      await new Promise(r => setTimeout(r, 50))
+
+      // The original transport is unaffected by the extra connections.
+      await expect(sendCommand('0')).resolves.toBe('READY')
+
+      extra1.destroy()
+      extra2.destroy()
+    })
+  })
+
   describe('connection timeout + reconnect', () => {
     const originalTimeout = process.env.DAC_CONNECTION_TIMEOUT_MS
     const originalDelay = process.env.DAC_RECONNECT_DELAY_MS
@@ -391,5 +480,21 @@ describe('dacTransport', () => {
 
       expect(isDacConnected()).toBe(false)
     })
+
+    test('falls back to backoff delay when DAC_RECONNECT_DELAY_MS is malformed', async () => {
+      // Hits the `Number.isFinite && parsed >= 0` false branch in
+      // reconnectDelayMs, falling through to backoffDelayMs(0) = 1000ms.
+      process.env.DAC_CONNECTION_TIMEOUT_MS = '20'
+      process.env.DAC_RECONNECT_DELAY_MS = 'not-a-number'
+      process.env.DAC_RECONNECT_MAX_ATTEMPTS = '2'
+
+      const t0 = Date.now()
+      await expect(connectDac(socketPath))
+        .rejects
+        .toBeInstanceOf(ConnectionRetriesExhaustedError)
+      // backoffDelayMs(0) is 1000ms — the loop must wait at least that long
+      // between the two timed-out attempts.
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(900)
+    }, 5000)
   })
 })

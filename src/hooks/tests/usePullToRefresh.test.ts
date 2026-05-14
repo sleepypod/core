@@ -134,6 +134,34 @@ describe('usePullToRefresh', () => {
     expect(result.current.pullDistance).toBe(0)
   })
 
+  it('clears pull state if the finger drags back up after a pull began', () => {
+    const { result } = renderHook(() => usePullToRefresh({ onRefresh: vi.fn(async () => {}) }))
+    act(() => {
+      result.current.pullHandlers.onTouchStart(touchEvent([{ clientY: 0 }]))
+      result.current.pullHandlers.onTouchMove(touchEvent([{ clientY: 100 }]))
+    })
+    expect(result.current.pullDistance).toBeGreaterThan(0)
+    act(() => {
+      // Finger now goes back above the start point — deltaY < 0 path.
+      result.current.pullHandlers.onTouchMove(touchEvent([{ clientY: -10 }]))
+    })
+    expect(result.current.pullDistance).toBe(0)
+    expect(result.current.isPastThreshold).toBe(false)
+  })
+
+  it('touchEnd is a no-op when no pull was registered', async () => {
+    const onRefresh = vi.fn(async () => {})
+    const { result } = renderHook(() => usePullToRefresh({ onRefresh }))
+    act(() => {
+      result.current.pullHandlers.onTouchStart(touchEvent([{ clientY: 0 }]))
+    })
+    await act(async () => {
+      await result.current.pullHandlers.onTouchEnd()
+    })
+    expect(onRefresh).not.toHaveBeenCalled()
+    expect(result.current.isRefreshing).toBe(false)
+  })
+
   it('still resets onRefresh even if it rejects', async () => {
     const onRefresh = vi.fn(() => Promise.reject(new Error('boom')))
     const { result } = renderHook(() => usePullToRefresh({ onRefresh }))
