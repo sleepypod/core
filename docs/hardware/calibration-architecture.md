@@ -22,7 +22,7 @@ graph TB
     end
 
     G[/tmp/sleepypod-calibrate<br/>trigger file/]
-    H[/persistent/*.RAW<br/>sensor data/]
+    H[/persistent/biometrics/*.RAW<br/>sensor data · tmpfs · ADR 0018/]
 
     A -->|"calibration.trigger()"| B
     B -->|"write trigger file"| G
@@ -43,9 +43,9 @@ graph TB
 | Component | Reads | Writes |
 |---|---|---|
 | tRPC calibration router | `calibration_profiles`, `calibration_runs`, `vitals_quality` | trigger file only |
-| Calibrator module | `/persistent/*.RAW`, trigger file | `calibration_profiles`, `calibration_runs` |
-| Piezo processor | `calibration_profiles`, `/persistent/*.RAW` | `vitals`, `vitals_quality` |
-| Sleep detector | `calibration_profiles`, `/persistent/*.RAW` | `sleep_records`, `movement` |
+| Calibrator module | `/persistent/biometrics/*.RAW`, trigger file | `calibration_profiles`, `calibration_runs` |
+| Piezo processor | `calibration_profiles`, `/persistent/biometrics/*.RAW` | `vitals`, `vitals_quality` |
+| Sleep detector | `calibration_profiles`, `/persistent/biometrics/*.RAW` | `sleep_records`, `movement` |
 
 ## Database Schema
 
@@ -130,7 +130,7 @@ sequenceDiagram
 
     Cal->>FS: detect trigger file, read + delete
     Cal->>DB: INSERT calibration_runs (trigger='on_demand', status='running')
-    Cal->>FS: read latest /persistent/*.RAW (last 5 minutes of data)
+    Cal->>FS: read latest /persistent/biometrics/*.RAW (last 5 minutes of data)
 
     Note over Cal: For each side + sensor_type:<br/>1. Extract relevant signal band<br/>2. Compute RMS, P95, mean, std<br/>3. Derive adaptive thresholds
 
@@ -156,7 +156,7 @@ sequenceDiagram
 sequenceDiagram
     participant Timer as systemd timer (03:00)
     participant Cal as Calibrator Module
-    participant FS as /persistent/*.RAW
+    participant FS as /persistent/biometrics/*.RAW
     participant DB as biometrics.db
     participant Piezo as Piezo Processor
     participant Sleep as Sleep Detector
