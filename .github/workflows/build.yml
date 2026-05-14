@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  pull-requests: write
 
 jobs:
   build:
@@ -48,9 +49,83 @@ jobs:
           mv /tmp/sleepypod-core.tar.gz .
 
       - name: Upload artifact
+        id: upload
         uses: actions/upload-artifact@v7
         with:
           name: sleepypod-core
           path: sleepypod-core.tar.gz
           retention-days: 30
+
+      - name: Inject install commands into PR description
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${HEAD_SHA:0:7}"
+
+          cat > /tmp/section.md <<EOF
+          <!-- sleepypod:install-start -->
+          <!-- 🛑 AUTO-GENERATED — sleepypod-bot owns this block.
+               Hello fellow agent / curious human! Anything between the
+               sleepypod:install-start and sleepypod:install-end markers
+               gets overwritten on the next CI run. Want to change what's
+               here? Edit .github/workflows/build.yml instead. 💤 -->
+          <details open>
+          <summary>🛏️ <strong>Beam this PR onto a Pod</strong> ✨</summary>
+
+          🚀 **Latest build of \`$HEAD_REF\`** — rebuilds every push, zero auth:
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/$REPO/$HEAD_REF/scripts/install \\
+            | sudo bash -s -- --branch $HEAD_REF
+          \`\`\`
+
+          🎯 **Pin to this exact build** ([run $RUN_ID]($SERVER/$REPO/actions/runs/$RUN_ID) · \`$SHORT_SHA\`):
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/$REPO/$HEAD_SHA/scripts/install \\
+            | sudo bash -s -- \\
+                --branch $HEAD_REF \\
+                --artifact-url 'https://nightly.link/$REPO/actions/runs/$RUN_ID/sleepypod-core.zip'
+          \`\`\`
+
+          🧊 Artifact: [\`sleepypod-core\`]($ARTIFACT_URL) · self-destructs in 30 days 💥
+          </details>
+
+          <!-- sleepypod:install-end -->
+          EOF
+
+          # Fetch current body (jq's // "" handles null bodies).
+          gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > /tmp/body.md
+
+          # Replace the marked section if it exists; otherwise append.
+          python3 - <<'PY'
+          import pathlib, re
+          body = pathlib.Path('/tmp/body.md').read_text()
+          section = pathlib.Path('/tmp/section.md').read_text().rstrip() + '\n'
+          pattern = re.compile(
+              r'<!-- sleepypod:install-start -->.*?<!-- sleepypod:install-end -->\n?',
+              re.DOTALL,
+          )
+          if pattern.search(body):
+              new_body = pattern.sub(section, body)
+          else:
+              sep = '\n\n' if body.strip() else ''
+              new_body = body.rstrip() + sep + section
+          pathlib.Path('/tmp/new-body.md').write_text(new_body)
+          PY
+
+          # Only push an edit when the body actually changed.
+          if ! cmp -s /tmp/body.md /tmp/new-body.md; then
+            gh pr edit "$PR_NUMBER" --body-file /tmp/new-body.md
+            echo "PR description updated."
+          else
+            echo "PR description already current — no edit needed."
+          fi
 
