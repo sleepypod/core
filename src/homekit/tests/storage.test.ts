@@ -275,6 +275,32 @@ describe('homekit storage', () => {
     expect(existsSync(file)).toBe(false)
   })
 
+  it('markIdentityPaired no-ops when identity.json is incomplete (missing required fields)', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    writeFileSync(file, JSON.stringify({ username: 'AA:BB:CC:DD:EE:FF' }))
+    expect(() => markIdentityPaired()).not.toThrow()
+    const after = JSON.parse(readFileSync(file, 'utf8'))
+    expect(after.wasPaired).toBeUndefined()
+  })
+
+  it('markIdentityPaired warns but does not throw when identity.json is unparseable', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    writeFileSync(file, '{ not json')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => markIdentityPaired()).not.toThrow()
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[homekit] markIdentityPaired failed:',
+        expect.anything(),
+      )
+    }
+    finally {
+      warnSpy.mockRestore()
+    }
+  })
+
   it('probeSeedSources reports each chain entry without throwing', () => {
     const probe = probeSeedSources()
     expect(probe.resolved).toMatch(/^(mmc-cid|mmc-serial|machine-id|random-dev)$/)

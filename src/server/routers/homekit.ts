@@ -17,6 +17,7 @@ import { probeSeedSources, readIdentityIfPresent } from '@/src/homekit/storage'
 const statusSchema = z.object({
   enabled: z.boolean(),
   running: z.boolean(),
+  transitioning: z.boolean(),
   pincode: z.string().nullable(),
   setupId: z.string().nullable(),
   setupURI: z.string().nullable(),
@@ -39,6 +40,7 @@ async function buildStatus(): Promise<z.infer<typeof statusSchema>> {
   return {
     enabled: Boolean(row?.homekitEnabled),
     running: s.running,
+    transitioning: s.transitioning,
     pincode: s.pincode,
     setupId: s.setupId,
     setupURI: s.setupURI,

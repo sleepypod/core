@@ -61,6 +61,7 @@ beforeEach(() => {
   homekitMock.unpair.mockReset().mockResolvedValue(undefined)
   homekitMock.status.mockReset().mockReturnValue({
     running: false,
+    transitioning: false,
     pincode: null,
     setupId: null,
     setupURI: null,
@@ -80,6 +81,7 @@ describe('homekit.getStatus', () => {
     dbMock.selectRow.homekitEnabled = false
     homekitMock.status.mockReturnValue({
       running: false,
+      transitioning: false,
       pincode: null,
       setupId: null,
       setupURI: null,
@@ -91,6 +93,7 @@ describe('homekit.getStatus', () => {
     expect(result).toEqual({
       enabled: false,
       running: false,
+      transitioning: false,
       pincode: null,
       setupId: null,
       setupURI: null,
@@ -104,6 +107,7 @@ describe('homekit.getStatus', () => {
     dbMock.selectRow.homekitEnabled = true
     homekitMock.status.mockReturnValue({
       running: true,
+      transitioning: false,
       pincode: '111-22-333',
       setupId: 'XYZ1',
       setupURI: 'X-HM://0024K0R3F',
@@ -114,6 +118,7 @@ describe('homekit.getStatus', () => {
 
     expect(result.enabled).toBe(true)
     expect(result.running).toBe(true)
+    expect(result.transitioning).toBe(false)
     expect(result.pincode).toBe('111-22-333')
     expect(result.qrDataUrl).toBe('data:image/png;base64,FAKE')
     expect(qrcodeMock.toDataURL).toHaveBeenCalledWith(
@@ -121,6 +126,23 @@ describe('homekit.getStatus', () => {
       { errorCorrectionLevel: 'Q', margin: 1 },
     )
     expect(result.pairedControllers).toEqual(['controllerA'])
+  })
+
+  it('surfaces transitioning=true when a lifecycle op is in flight', async () => {
+    dbMock.selectRow.homekitEnabled = true
+    homekitMock.status.mockReturnValue({
+      running: false,
+      transitioning: true,
+      pincode: null,
+      setupId: null,
+      setupURI: null,
+      pairedControllers: [],
+    })
+
+    const result = await caller.getStatus({})
+
+    expect(result.transitioning).toBe(true)
+    expect(result.running).toBe(false)
   })
 })
 

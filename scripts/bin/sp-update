@@ -320,6 +320,16 @@ if [ -d "$INSTALL_DIR/modules" ]; then
   done
 fi
 
+# Biometrics archiver — tmpfs RAW writes + frank.sh cd patch. Module
+# unit files set RAW_DATA_DIR=/persistent/biometrics, so without this the
+# modules tail a directory that doesn't exist and biometrics silently
+# stop populating. Pre-#576, this only ran from scripts/install, so any
+# pod that upgraded via sp-update past v2.0.0 hit the regression.
+if [ -f "$INSTALL_DIR/scripts/lib/biometrics-archiver-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/biometrics-archiver-helpers"
+  install_biometrics_archiver
+fi
+
 # Install CLI tools from new source.
 #
 # Use `install` (atomic mkstemp + rename) instead of `cp` — sp-update is

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => {
   const status = {
     running: false,
+    transitioning: false,
     pincode: null as string | null,
     setupId: null,
     setupURI: null,
@@ -18,6 +19,7 @@ const m = vi.hoisted(() => {
     unpairAll: vi.fn(async () => { /* no-op */ }),
     regenerate: vi.fn(async () => ({ username: 'aa', pincode: 'bb', setupId: 'cc' })),
     getStatus: vi.fn(() => status),
+    setTransitioning: vi.fn((v: boolean) => { status.transitioning = v }),
     getDacMonitor: vi.fn(async () => ({ id: 'monitor' })),
     enabled: { value: true },
     dbThrows: { value: false },
@@ -31,6 +33,7 @@ vi.mock('../bridge', () => ({
   unpairAll: m.unpairAll,
   regenerate: m.regenerate,
   getStatus: m.getStatus,
+  setTransitioning: m.setTransitioning,
 }))
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
@@ -68,10 +71,12 @@ describe('homekit lifecycle', () => {
     m.stopBridge.mockClear()
     m.unpairAll.mockClear()
     m.regenerate.mockClear()
+    m.setTransitioning.mockClear()
     m.getDacMonitor.mockClear()
     m.enabled.value = true
     m.dbThrows.value = false
     m.status.running = false
+    m.status.transitioning = false
   })
   afterEach(() => {
     // Drain serializer between cases by re-importing fresh module.
@@ -176,5 +181,49 @@ describe('homekit lifecycle', () => {
     await Promise.all([mod.disable(), mod.enable()])
     expect(m.stopBridge).toHaveBeenCalledTimes(1)
     expect(m.startBridge).toHaveBeenCalledTimes(2)
+  })
+
+  it('exposes transitioning=true to concurrent getStatus during unpair, then clears it', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+
+    // Hold unpairAll on a deferred so a status poll can land mid-flight.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    m.unpairAll.mockImplementationOnce(() => gate)
+
+    const inflight = mod.unpair()
+    // Microtask flush: serializer schedules the body, setTransitioning(true)
+    // runs, then unpairAll awaits the gate.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(m.setTransitioning).toHaveBeenCalledWith(true)
+    expect(m.status.transitioning).toBe(true)
+
+    release()
+    await inflight
+    expect(m.setTransitioning).toHaveBeenLastCalledWith(false)
+    expect(m.status.transitioning).toBe(false)
+  })
+
+  it('clears transitioning even when unpair throws', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.unpairAll.mockRejectedValueOnce(new Error('teardown failed'))
+    await expect(mod.unpair()).rejects.toThrow('teardown failed')
+    expect(m.setTransitioning).toHaveBeenLastCalledWith(false)
+    expect(m.status.transitioning).toBe(false)
+  })
+
+  it('regeneratePairing flips transitioning around the rotation and returns settled status', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    const out = await mod.regeneratePairing()
+    // First flip true, last flip false — settled state in the returned status.
+    expect(m.setTransitioning).toHaveBeenNthCalledWith(1, true)
+    expect(m.setTransitioning).toHaveBeenLastCalledWith(false)
+    expect(out.transitioning).toBe(false)
   })
 })

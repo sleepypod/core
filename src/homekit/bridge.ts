@@ -57,6 +57,7 @@ const KEYS = {
   stoppers: '__sp_homekit_stoppers__',
   identity: '__sp_homekit_identity__',
   setupURI: '__sp_homekit_setupURI__',
+  transitioning: '__sp_homekit_transitioning__',
 } as const
 
 const getBridge = (): Bridge | null => (G[KEYS.bridge] as Bridge | null) ?? null
@@ -80,8 +81,19 @@ const setSetupURI = (u: string | null): void => {
   G[KEYS.setupURI] = u
 }
 
+// Lifecycle ops (enable/disable/unpair/regenerate) flip this while in flight.
+// getStatus surfaces it so a 5s poll racing a sub-second teardown can render
+// "rotating…" instead of treating the transient running=false as a final
+// state. Lives here (not in index.ts) so bridge.getStatus stays a single
+// globalThis read; index.ts owns the flip via setTransitioning.
+const isTransitioning = (): boolean => Boolean(G[KEYS.transitioning])
+export const setTransitioning = (v: boolean): void => {
+  G[KEYS.transitioning] = v
+}
+
 export interface BridgeStatus {
   running: boolean
+  transitioning: boolean
   pincode: string | null
   setupId: string | null
   setupURI: string | null
@@ -295,6 +307,7 @@ export function getStatus(): BridgeStatus {
   const id = getIdentity()
   return {
     running: getBridge() !== null,
+    transitioning: isTransitioning(),
     pincode: id?.pincode ?? null,
     setupId: id?.setupId ?? null,
     setupURI: getSetupURI(),
@@ -331,10 +344,13 @@ export async function unpairAll(): Promise<void> {
 }
 
 export async function regenerate(): Promise<ReturnType<typeof loadOrCreateIdentity> | null> {
-  await stopBridge()
-  const id = regenerateIdentity()
-  setIdentity(id)
-  return id
+  // Aligned with unpairAll(): both rotate identity AND clear hap-nodejs
+  // pairing state. The split was historical (pre-rotation, regenerate
+  // skipped clearPairings); now that unpair rotates the MAC the orphan
+  // AccessoryInfo.<old-MAC>.json was unreachable anyway, so we sweep it.
+  // tRPC routes remain separate — same effect, different return shape.
+  await unpairAll()
+  return getIdentity()
 }
 
 function pickBind(): string | undefined {

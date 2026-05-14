@@ -92,6 +92,7 @@ describe('homekit bridge', () => {
     delete g.__sp_homekit_stoppers__
     delete g.__sp_homekit_identity__
     delete g.__sp_homekit_setupURI__
+    delete g.__sp_homekit_transitioning__
 
     m.bridgeInstance = null
     m.BridgeCtor.mockClear()
@@ -296,7 +297,7 @@ describe('homekit bridge', () => {
     expect(getStatus().running).toBe(false)
   })
 
-  it('regenerate stops the bridge and replaces identity', async () => {
+  it('regenerate stops the bridge, clears pairings, and replaces identity', async () => {
     const { startBridge, regenerate, getStatus } = await import('../bridge')
     await startBridge(fakeMonitor)
     m.regenerateIdentity.mockReturnValueOnce({
@@ -305,6 +306,9 @@ describe('homekit bridge', () => {
       setupId: 'YYYY',
     })
     const id = await regenerate()
+    // regenerate now aligns with unpairAll — orphan AccessoryInfo.<old-MAC>.json
+    // is swept on rotation rather than left on disk.
+    expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
     expect(id?.username).toBe('NN:NN:NN:NN:NN:NN')
     expect(getStatus().running).toBe(false)
     expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
@@ -402,5 +406,83 @@ describe('homekit bridge', () => {
     await startBridge(fakeMonitor)
     expect(m.markIdentityPaired).toHaveBeenCalledTimes(1)
     expect(m.regenerateIdentity).not.toHaveBeenCalled()
+  })
+
+  it('getStatus surfaces the transitioning flag flipped by setTransitioning', async () => {
+    const { startBridge, getStatus, setTransitioning } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    expect(getStatus().transitioning).toBe(false)
+    setTransitioning(true)
+    expect(getStatus().transitioning).toBe(true)
+    expect(getStatus().running).toBe(true)
+    setTransitioning(false)
+    expect(getStatus().transitioning).toBe(false)
+  })
+
+  it('regenerate aborts when stopBridge fails to clear the singleton', async () => {
+    const { startBridge, regenerate, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    if (m.bridgeInstance) {
+      m.bridgeInstance.destroy = vi.fn().mockRejectedValue(new Error('destroy failed'))
+    }
+    // Same invariant as unpairAll: rotating identity while a live bridge
+    // still answers on the old MAC desyncs getStatus from the HAP server.
+    await expect(regenerate()).rejects.toThrow(/bridge teardown incomplete/)
+    expect(m.clearPairings).not.toHaveBeenCalled()
+    expect(m.regenerateIdentity).not.toHaveBeenCalled()
+    expect(getStatus().username).toBe('AA:BB:CC:DD:EE:FF')
+  })
+
+  it('pair-observe interval flips wasPaired and self-cancels once pairings appear', async () => {
+    vi.useFakeTimers()
+    try {
+      const { startBridge } = await import('../bridge')
+      // Boot into unpaired state — the interval should be armed.
+      m.readPairedControllers.mockReturnValue([])
+      await startBridge(fakeMonitor)
+      expect(m.markIdentityPaired).not.toHaveBeenCalled()
+
+      // First tick: still unpaired — no-op, interval stays armed.
+      vi.advanceTimersByTime(30_000)
+      expect(m.markIdentityPaired).not.toHaveBeenCalled()
+
+      // Second tick: pairing observed — marker flips, interval clears.
+      m.readPairedControllers.mockReturnValue(['controller-1'])
+      vi.advanceTimersByTime(30_000)
+      expect(m.markIdentityPaired).toHaveBeenCalledTimes(1)
+
+      // Third tick: interval has self-cancelled — no further calls.
+      m.markIdentityPaired.mockClear()
+      vi.advanceTimersByTime(60_000)
+      expect(m.markIdentityPaired).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pair-observe interval self-cancels on first tick when identity is already wasPaired', async () => {
+    vi.useFakeTimers()
+    try {
+      const { startBridge } = await import('../bridge')
+      // Boot already paired so eager-mark runs and stamps wasPaired
+      // on the in-memory identity before the interval ever fires.
+      m.readPairedControllers.mockReturnValue(['controller-1'])
+      await startBridge(fakeMonitor)
+      expect(m.markIdentityPaired).toHaveBeenCalledTimes(1)
+      m.markIdentityPaired.mockClear()
+
+      // Tick: interval sees wasPaired=true on the current identity,
+      // takes the early-return self-cancel branch.
+      vi.advanceTimersByTime(30_000)
+      expect(m.markIdentityPaired).not.toHaveBeenCalled()
+
+      // And stays cancelled.
+      vi.advanceTimersByTime(60_000)
+      expect(m.markIdentityPaired).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })

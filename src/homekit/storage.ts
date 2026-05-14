@@ -365,6 +365,8 @@ export function regenerateIdentity(): BridgeIdentity {
     catch { /* treat as no prior rotation */ }
   }
 
+  // Legacy (no rotation field): prevRotation=-1 → newIdentity(0), same as
+  // post-wipe derivation — wipe-stable per ADR-0020.
   const identity = newIdentity(prevRotation + 1)
   writeIdentity(identity)
   return identity
