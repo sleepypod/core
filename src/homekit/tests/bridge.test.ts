@@ -485,4 +485,39 @@ describe('homekit bridge', () => {
       vi.useRealTimers()
     }
   })
+
+  it('pair-observe interval is a no-op when identity was cleared from under it', async () => {
+    vi.useFakeTimers()
+    try {
+      const { startBridge } = await import('../bridge')
+      m.readPairedControllers.mockReturnValue([])
+      await startBridge(fakeMonitor)
+      // Simulate the singleton state going away mid-publish (e.g. a
+      // stopBridge raced with the next interval tick). The poll body
+      // must early-return rather than NPE on a null identity.
+      const g = globalThis as Record<string, unknown>
+      delete g.__sp_homekit_identity__
+      vi.advanceTimersByTime(30_000)
+      expect(m.markIdentityPaired).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('publish receives HOMEKIT_BIND env override when set', async () => {
+    const prev = process.env.HOMEKIT_BIND
+    process.env.HOMEKIT_BIND = 'lo0'
+    try {
+      const { startBridge } = await import('../bridge')
+      await startBridge(fakeMonitor)
+      expect(m.bridgeInstance?.publish).toHaveBeenCalledWith(
+        expect.objectContaining({ bind: 'lo0' }),
+      )
+    }
+    finally {
+      if (prev === undefined) delete process.env.HOMEKIT_BIND
+      else process.env.HOMEKIT_BIND = prev
+    }
+  })
 })

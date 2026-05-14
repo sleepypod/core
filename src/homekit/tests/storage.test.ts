@@ -301,6 +301,30 @@ describe('homekit storage', () => {
     }
   })
 
+  it('markIdentityPaired warn ternary falls back to the raw thrown value for non-Error rejections', () => {
+    // Covers the `e instanceof Error ? e.message : e` else-branch by
+    // throwing a string from inside the try block.
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    loadOrCreateIdentity() // populate file so existsSync passes
+    const parseSpy = vi.spyOn(JSON, 'parse').mockImplementationOnce(() => {
+      // eslint-disable-next-line no-throw-literal
+      throw 'string-shaped failure'
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => markIdentityPaired()).not.toThrow()
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[homekit] markIdentityPaired failed:',
+        'string-shaped failure',
+      )
+    }
+    finally {
+      warnSpy.mockRestore()
+      parseSpy.mockRestore()
+    }
+  })
+
   it('probeSeedSources reports each chain entry without throwing', () => {
     const probe = probeSeedSources()
     expect(probe.resolved).toMatch(/^(mmc-cid|mmc-serial|machine-id|random-dev)$/)
