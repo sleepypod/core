@@ -41,6 +41,7 @@ const m = vi.hoisted(() => {
     regenerateIdentity: vi.fn(),
     clearPairings: vi.fn(),
     markIdentityPaired: vi.fn(),
+    hasAccessoryInfo: vi.fn(),
   }
 })
 
@@ -75,6 +76,7 @@ vi.mock('../storage', () => ({
   regenerateIdentity: m.regenerateIdentity,
   clearPairings: m.clearPairings,
   markIdentityPaired: m.markIdentityPaired,
+  hasAccessoryInfo: m.hasAccessoryInfo,
 }))
 
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
@@ -113,6 +115,7 @@ describe('homekit bridge', () => {
       derivedFrom: 'test',
     })
     m.readPairedControllers.mockReturnValue([])
+    m.hasAccessoryInfo.mockReturnValue(false)
   })
 
   afterEach(() => {
@@ -349,6 +352,42 @@ describe('homekit bridge', () => {
       wasPaired: true,
     })
     m.readPairedControllers.mockReturnValue(['controller-1'])
+    await startBridge(fakeMonitor)
+    expect(m.clearPairings).not.toHaveBeenCalled()
+    expect(m.regenerateIdentity).not.toHaveBeenCalled()
+    expect(getStatus().username).toBe('AA:BB:CC:DD:EE:FF')
+  })
+
+  it('startBridge rotates legacy identity when AccessoryInfo exists and pairedClients is empty', async () => {
+    const { startBridge, getStatus } = await import('../bridge')
+    // Legacy = no rotation, no derivedFrom (pre-ADR-0020 randomBytes-derived).
+    m.loadOrCreateIdentity.mockReturnValueOnce({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'XXXX',
+    })
+    m.hasAccessoryInfo.mockReturnValue(true)
+    m.regenerateIdentity.mockReturnValueOnce({
+      username: 'NN:NN:NN:NN:NN:NN',
+      pincode: '999-99-999',
+      setupId: 'YYYY',
+      rotation: 0,
+      derivedFrom: 'test',
+    })
+    await startBridge(fakeMonitor)
+    expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
+    expect(m.regenerateIdentity).toHaveBeenCalledTimes(1)
+    expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
+  })
+
+  it('startBridge does NOT rotate legacy identity when no AccessoryInfo exists (fresh enable)', async () => {
+    const { startBridge, getStatus } = await import('../bridge')
+    m.loadOrCreateIdentity.mockReturnValueOnce({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'XXXX',
+    })
+    m.hasAccessoryInfo.mockReturnValue(false)
     await startBridge(fakeMonitor)
     expect(m.clearPairings).not.toHaveBeenCalled()
     expect(m.regenerateIdentity).not.toHaveBeenCalled()

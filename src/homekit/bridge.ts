@@ -35,7 +35,7 @@ import { buildPowerSwitch } from './accessories/powerSwitch'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
 import { buildSnoozeSwitch } from './accessories/snoozeSwitch'
 import { buildThermostatService } from './accessories/thermostat'
-import { clearPairings, initHapStorage, loadOrCreateIdentity, markIdentityPaired, readPairedControllers, regenerateIdentity } from './storage'
+import { clearPairings, hasAccessoryInfo, initHapStorage, loadOrCreateIdentity, markIdentityPaired, readPairedControllers, regenerateIdentity } from './storage'
 
 const BRIDGE_NAME = 'sleepypod'
 const BRIDGE_PORT = 51827
@@ -95,23 +95,37 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
 
   let identity = loadOrCreateIdentity()
 
-  // Stranded-bridge detection: identity was previously paired (sticky
-  // marker from a past run that observed pairedClients > 0) but the
-  // current AccessoryInfo has zero pairings. iOS removed the bridge via
-  // Home app — that path goes through HAP pair-remove directly and
-  // bypasses unpairAll() entirely, so the rotate-on-reset behavior from
-  // PR #566 never fired. Republishing on the same AccessoryPairingID
-  // strands iOS (stale pair-verify keys) just like the UI-unpair case
-  // the prior fix addressed.
-  if (identity.wasPaired && readPairedControllers(identity.username).length === 0) {
-    console.log(`[homekit] stranded bridge detected (wasPaired, paired=0) — rotating identity from ${identity.username}`)
+  // Stranded-bridge detection: bridge was previously paired but
+  // pairedClients is now empty. iOS removed the bridge via Home app
+  // (HAP pair-remove goes direct to the running server and bypasses
+  // unpairAll()) so the rotate-on-reset from PR #566 never fired.
+  // Republishing on the same AccessoryPairingID strands iOS (stale
+  // pair-verify keys) — same failure mode the prior fix addressed.
+  //
+  // Two arms:
+  //  1. wasPaired marker (new identities) — set by the pair-observe poll
+  //     once we see pairedControllers > 0.
+  //  2. Legacy identity (pre-ADR-0020, no rotation field) with
+  //     AccessoryInfo on disk — wasPaired was never persisted, but the
+  //     existence of AccessoryInfo + empty pairings is functionally the
+  //     same stranded state. Safe one-shot migration: after rotation the
+  //     new identity carries rotation/derivedFrom and won't match again.
+  const pairedCount = readPairedControllers(identity.username).length
+  const isLegacy = identity.rotation === undefined && identity.derivedFrom === undefined
+  const stranded = pairedCount === 0 && (
+    identity.wasPaired === true
+    || (isLegacy && hasAccessoryInfo(identity.username))
+  )
+  if (stranded) {
+    const reason = identity.wasPaired ? 'wasPaired' : 'legacy-published'
+    console.log(`[homekit] stranded bridge detected (${reason}, paired=0) — rotating identity from ${identity.username}`)
     clearPairings(identity.username)
     identity = regenerateIdentity()
   }
   // Eagerly mark the identity as paired if we boot into a populated
   // pairing list. Closes the gap where the bridge process crashed/restarted
   // between pairing and the next 30s poll tick.
-  else if (readPairedControllers(identity.username).length > 0 && !identity.wasPaired) {
+  else if (pairedCount > 0 && !identity.wasPaired) {
     markIdentityPaired()
     identity = { ...identity, wasPaired: true }
   }

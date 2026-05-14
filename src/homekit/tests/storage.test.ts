@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   clearPairings,
   getStorageDir,
+  hasAccessoryInfo,
   loadOrCreateIdentity,
   markIdentityPaired,
   probeSeedSources,
@@ -255,6 +256,15 @@ describe('homekit storage', () => {
     markIdentityPaired()
     const again = JSON.parse(readFileSync(file, 'utf8'))
     expect(again).toEqual(after)
+  })
+
+  it('hasAccessoryInfo reflects AccessoryInfo file presence for the username', () => {
+    const dir = getStorageDir()
+    const username = 'AA:BB:CC:DD:EE:FF'
+    const file = join(dir, 'AccessoryInfo.AABBCCDDEEFF.json')
+    expect(hasAccessoryInfo(username)).toBe(false)
+    writeFileSync(file, '{}')
+    expect(hasAccessoryInfo(username)).toBe(true)
   })
 
   it('markIdentityPaired silently no-ops when identity.json is absent', () => {

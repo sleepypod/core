@@ -279,6 +279,16 @@ function pairedFilePath(username: string): string {
 }
 
 /**
+ * True iff `AccessoryInfo.<username>.json` exists. Independent of whether
+ * the file contains any pairings — the file's presence alone proves the
+ * bridge has published with this identity at least once. Drives the
+ * legacy-identity migration arm of the stranded-bridge detector.
+ */
+export function hasAccessoryInfo(username: string): boolean {
+  return existsSync(pairedFilePath(username))
+}
+
+/**
  * Read the controller pairings hap-nodejs persisted under
  * AccessoryInfo.<username>.json. Avoids reaching into the running
  * Bridge's private `_accessoryInfo` field.
