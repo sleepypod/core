@@ -186,6 +186,14 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
       category: CATEGORY_BRIDGE,
       setupID: identity.setupId,
       advertiser: pickAdvertiser() as never,
+      // Without an explicit bind, ciao on Eight Layer 4.0.2 (Yocto kirkstone,
+      // Node 24) bound 5353 successfully but its multicast packets never
+      // escaped the pod — observed: avahi sees the service over D-Bus, no
+      // host on the LAN gets responses. Binding to the interface name (not
+      // an IP) lets ciao track address changes on dhcp and covers both
+      // IPv4/IPv6 records. HOMEKIT_BIND env override stays available for
+      // dev / non-pod hosts (default falls back to wlan0 only when present).
+      bind: pickBind() as never,
     })
   }
   catch (e) {
@@ -327,6 +335,15 @@ export async function regenerate(): Promise<ReturnType<typeof loadOrCreateIdenti
   const id = regenerateIdentity()
   setIdentity(id)
   return id
+}
+
+function pickBind(): string | undefined {
+  const env = process.env.HOMEKIT_BIND
+  if (env) return env
+  // Pod's wifi interface — only set when actually present so dev hosts
+  // (macOS / linux laptops) fall back to ciao's default unspecified bind.
+  if (existsSync('/sys/class/net/wlan0')) return 'wlan0'
+  return undefined
 }
 
 function pickAdvertiser(): Advertiser {
