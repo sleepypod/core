@@ -174,8 +174,12 @@ if [ -d "$HOMEKIT_DIR" ]; then
 fi
 
 # --- pack -----------------------------------------------------------------
-tar -czf "$OUT" -C "$STAGE" . 2>/dev/null
-SIZE=$(du -h "$OUT" | awk '{print $1}')
+if ! tar -czf "$OUT" -C "$STAGE" .; then
+  echo "Error: failed to create diagnostic bundle at $OUT" >&2
+  rm -f "$OUT"
+  exit 1
+fi
+SIZE=$(du -h "$OUT" 2>/dev/null | awk '{print $1}')
 
 echo ""
 echo "Bundle written: $OUT ($SIZE)"
