@@ -1,5 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as HapNodeJs from 'hap-nodejs'
+import type * as NodeFs from 'node:fs'
+
+const fsState = vi.hoisted(() => ({
+  // Only the wlan0 probe in pickBind is intercepted; every other fs call
+  // (hap-nodejs internals, identity.json reads) falls through to the real
+  // implementation. Default null → fall through; tests set true/false to
+  // simulate pod vs dev-host.
+  wlan0Exists: null as boolean | null,
+}))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeFs>()
+  const wrapped = {
+    ...actual,
+    existsSync: (p: NodeFs.PathLike) => {
+      if (p === '/sys/class/net/wlan0' && fsState.wlan0Exists !== null) {
+        return fsState.wlan0Exists
+      }
+      return actual.existsSync(p)
+    },
+  }
+  return { ...wrapped, default: wrapped }
+})
 
 const m = vi.hoisted(() => {
   const fakeAccessory = (name: string) => ({
@@ -518,6 +541,23 @@ describe('homekit bridge', () => {
     finally {
       if (prev === undefined) delete process.env.HOMEKIT_BIND
       else process.env.HOMEKIT_BIND = prev
+    }
+  })
+
+  it('publish binds to wlan0 on a pod (no env override, /sys/class/net/wlan0 present)', async () => {
+    const prev = process.env.HOMEKIT_BIND
+    delete process.env.HOMEKIT_BIND
+    fsState.wlan0Exists = true
+    try {
+      const { startBridge } = await import('../bridge')
+      await startBridge(fakeMonitor)
+      expect(m.bridgeInstance?.publish).toHaveBeenCalledWith(
+        expect.objectContaining({ bind: 'wlan0' }),
+      )
+    }
+    finally {
+      fsState.wlan0Exists = null
+      if (prev !== undefined) process.env.HOMEKIT_BIND = prev
     }
   })
 })

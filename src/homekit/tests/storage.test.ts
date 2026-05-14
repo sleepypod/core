@@ -304,11 +304,8 @@ describe('homekit storage', () => {
   it('markIdentityPaired warn ternary falls back to the raw thrown value for non-Error rejections', () => {
     // Covers the `e instanceof Error ? e.message : e` else-branch by
     // throwing a string from inside the try block.
-    const dir = getStorageDir()
-    const file = join(dir, 'identity.json')
-    loadOrCreateIdentity() // populate file so existsSync passes
+    loadOrCreateIdentity() // populate identity.json so existsSync passes
     const parseSpy = vi.spyOn(JSON, 'parse').mockImplementationOnce(() => {
-      // eslint-disable-next-line no-throw-literal
       throw 'string-shaped failure'
     })
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
