@@ -295,10 +295,36 @@ class DacServer {
 
 // ─── Connection timeout ──────────────────────────────────────────────────────
 
-const CONNECTION_TIMEOUT_MS = 25_000
+const DEFAULT_CONNECTION_TIMEOUT_MS = 25_000
 const RECONNECT_INITIAL_DELAY_MS = 1_000
 const RECONNECT_MAX_DELAY_MS = 60_000
-const RECONNECT_MAX_ATTEMPTS = 10
+const DEFAULT_RECONNECT_MAX_ATTEMPTS = 10
+
+function envPositiveInt(key: string, fallback: number): number {
+  const raw = process.env[key]
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  return fallback
+}
+
+function connectionTimeoutMs(): number {
+  return envPositiveInt('DAC_CONNECTION_TIMEOUT_MS', DEFAULT_CONNECTION_TIMEOUT_MS)
+}
+
+function reconnectMaxAttempts(): number {
+  return envPositiveInt('DAC_RECONNECT_MAX_ATTEMPTS', DEFAULT_RECONNECT_MAX_ATTEMPTS)
+}
+
+function reconnectDelayMs(attempt: number): number {
+  const override = process.env.DAC_RECONNECT_DELAY_MS
+  if (override) {
+    const parsed = Number.parseInt(override, 10)
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+  return backoffDelayMs(attempt)
+}
 
 class ConnectionTimeoutError extends Error {
   public constructor() {
@@ -324,7 +350,7 @@ function withTimeout<T>(promise: Promise<T>, onTimeout: () => Error): Promise<T>
   return new Promise<T>((resolve, reject) => {
     timeout = setTimeout(() => {
       reject(onTimeout())
-    }, CONNECTION_TIMEOUT_MS)
+    }, connectionTimeoutMs())
 
     promise
       .then((value) => {
@@ -346,7 +372,7 @@ let connectPromise: Promise<DacTransport> | undefined
 
 function waitWithTimeout(server: DacServer) {
   return withTimeout(server.waitForConnection(), () => {
-    console.warn(`[DAC] restarting after ${CONNECTION_TIMEOUT_MS / 1_000}s timeout`)
+    console.warn(`[DAC] restarting after ${connectionTimeoutMs() / 1_000}s timeout`)
     return new ConnectionTimeoutError()
   })
 }
@@ -389,11 +415,11 @@ export async function connectDac(socketPath: string): Promise<void> {
         if (error instanceof ConnectionTimeoutError) {
           await shutdown()
           timeoutAttempts += 1
-          if (timeoutAttempts >= RECONNECT_MAX_ATTEMPTS) {
+          if (timeoutAttempts >= reconnectMaxAttempts()) {
             console.error(`[DAC] giving up after ${timeoutAttempts} connection timeouts`)
             throw new ConnectionRetriesExhaustedError(timeoutAttempts)
           }
-          const delay = backoffDelayMs(timeoutAttempts - 1)
+          const delay = reconnectDelayMs(timeoutAttempts - 1)
           console.warn(`[DAC] reconnect attempt ${timeoutAttempts} in ${delay}ms`)
           await wait(delay)
           continue

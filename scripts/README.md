@@ -83,9 +83,8 @@ After installation (installed from `scripts/bin/`):
 - `sp-status` - View service status
 - `sp-restart` - Restart sleepypod + reconnect frankenfirmware
 - `sp-logs` - View live logs
+- `sp-bundle-logs` - One-shot diagnostic capture (`/tmp/sleepypod-bundle-<ts>.tar.gz`); redacts secrets by default, pass `--no-redact` for raw
 - `sp-update` - Update to latest version from GitHub
-- `sp-freesleep` - Switch to free-sleep (persists across reboots)
-- `sp-sleepypod` - Switch to sleepypod (persists across reboots)
 - `sp-uninstall` - Remove sleepypod and all related services
 
 ## Internet Control
@@ -166,9 +165,8 @@ scripts/
 │   ├── sp-status
 │   ├── sp-restart
 │   ├── sp-logs
+│   ├── sp-bundle-logs
 │   ├── sp-update
-│   ├── sp-freesleep
-│   ├── sp-sleepypod
 │   └── sp-uninstall
 ├── deploy                   # Dev deploy (build local, push to pod)
 ├── push                     # Fast push (pre-built .next only)

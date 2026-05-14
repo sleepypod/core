@@ -7,7 +7,7 @@ import { db } from '@/src/db'
 import { deviceSettings } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
 import { getDacMonitor } from '@/src/hardware/dacMonitor.instance'
-import { getStatus, regenerate, startBridge, stopBridge, unpairAll } from './bridge'
+import { getStatus, regenerate, setTransitioning, startBridge, stopBridge, unpairAll } from './bridge'
 import type { BridgeStatus } from './bridge'
 
 // Turbopack splits this module across instrumentation + every API route
@@ -36,6 +36,19 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
   return next
 }
 
+// Flag transitioning=true around the body so a getStatus() poll that lands
+// mid-rotation sees the transient running=false as in-flight, not a final
+// state. Always pairs the set with a finally to release even on throw.
+async function withTransition<T>(fn: () => Promise<T>): Promise<T> {
+  setTransitioning(true)
+  try {
+    return await fn()
+  }
+  finally {
+    setTransitioning(false)
+  }
+}
+
 export async function startHomeKitIfEnabled(): Promise<void> {
   const enabled = await readEnabled()
   if (!enabled) return
@@ -43,20 +56,20 @@ export async function startHomeKitIfEnabled(): Promise<void> {
 }
 
 export function enable(): Promise<void> {
-  return serialize(async () => {
+  return serialize(() => withTransition(async () => {
     if (isStarted()) return
     const monitor = await getDacMonitor()
     await startBridge(monitor)
     setStarted(true)
-  })
+  }))
 }
 
 export function disable(): Promise<void> {
-  return serialize(async () => {
+  return serialize(() => withTransition(async () => {
     if (!isStarted()) return
     await stopBridge()
     setStarted(false)
-  })
+  }))
 }
 
 export async function shutdownHomeKit(): Promise<void> {
@@ -68,7 +81,7 @@ export function status(): BridgeStatus {
 }
 
 export function unpair(): Promise<void> {
-  return serialize(async () => {
+  return serialize(() => withTransition(async () => {
     await unpairAll()
     setStarted(false)
     if (await readEnabled()) {
@@ -76,18 +89,23 @@ export function unpair(): Promise<void> {
       await startBridge(monitor)
       setStarted(true)
     }
-  })
+  }))
 }
 
 export function regeneratePairing(): Promise<BridgeStatus> {
   return serialize(async () => {
-    await regenerate()
-    setStarted(false)
-    if (await readEnabled()) {
-      const monitor = await getDacMonitor()
-      await startBridge(monitor)
-      setStarted(true)
-    }
+    // Run rotation/republish under withTransition so concurrent pollers see
+    // transitioning=true, then snapshot status AFTER the flag flips back so
+    // the mutation response reflects the settled state.
+    await withTransition(async () => {
+      await regenerate()
+      setStarted(false)
+      if (await readEnabled()) {
+        const monitor = await getDacMonitor()
+        await startBridge(monitor)
+        setStarted(true)
+      }
+    })
     return getStatus()
   })
 }

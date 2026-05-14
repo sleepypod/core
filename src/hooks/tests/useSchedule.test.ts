@@ -371,4 +371,255 @@ describe('useSchedule — applyToOtherDays', () => {
     })
     expect(trpcMock.batchMutate).not.toHaveBeenCalled()
   })
+
+  it('returns early when no allSchedules data is loaded (but daySchedule is)', async () => {
+    trpcMock.overrides.allLeft = undefined
+    trpcMock.overrides.day = {
+      temperature: [{ id: 1, side: 'left', dayOfWeek: 'monday', time: '07:00', temperature: 68, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.applyToOtherDays(['tuesday'])
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+    expect(result.current.isApplying).toBe(false)
+  })
+
+  it('carries power and alarm rows from the source day onto target days', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [],
+      power: [{ id: 100, dayOfWeek: 'tuesday', enabled: true }],
+      alarm: [{ id: 200, dayOfWeek: 'tuesday', enabled: true }],
+    }
+    trpcMock.overrides.day = {
+      temperature: [],
+      power: [{ id: 1, side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 68, enabled: true }],
+      alarm: [{ id: 2, side: 'left', dayOfWeek: 'monday', time: '06:30', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 30, alarmTemperature: 72, enabled: true }],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.applyToOtherDays(['tuesday'])
+      vi.runAllTimers()
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.deletes.power).toEqual([100])
+    expect(arg.deletes.alarm).toEqual([200])
+    expect(arg.creates.power).toEqual([
+      expect.objectContaining({ side: 'left', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 68, enabled: true }),
+    ])
+    expect(arg.creates.alarm).toEqual([
+      expect.objectContaining({ side: 'left', dayOfWeek: 'tuesday', time: '06:30', vibrationPattern: 'rise', alarmTemperature: 72, enabled: true }),
+    ])
+  })
+
+  it('skips the batch call when source day has no rows and target day has no rows to delete', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.applyToOtherDays(['tuesday'])
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+    // Even though nothing changed, the flow still flips the confirm message
+    expect(result.current.confirmMessage).toMatch(/applied/i)
+  })
+})
+
+describe('useSchedule — onSuccess invalidation', () => {
+  it('mutation onSuccess callbacks invalidate getAll + getByDay', () => {
+    renderHook(() => useSchedule())
+    // Find the registered batchUpdate onSuccess and fire it
+    const batchCall = trpcMock.trpc.schedules.batchUpdate.useMutation.mock.calls[0]
+    const opts = batchCall[0]
+    opts.onSuccess()
+    expect(trpcMock.utils.schedules.getAll.invalidate).toHaveBeenCalled()
+    expect(trpcMock.utils.schedules.getByDay.invalidate).toHaveBeenCalled()
+  })
+})
+
+describe('useSchedule — early returns + global toggle guards', () => {
+  it('toggleAllSchedules returns early without allSchedules data', async () => {
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.toggleAllSchedules()
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+
+  it('toggleAllSchedules creates a default power row for days that have none', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 10, dayOfWeek: 'monday', enabled: false }],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.toggleAllSchedules()
+      vi.runAllTimers()
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.creates.power).toEqual([
+      expect.objectContaining({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', enabled: true }),
+    ])
+  })
+
+  it('toggleGlobalSchedules returns early without allSchedules data', async () => {
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.toggleGlobalSchedules()
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+
+  it('toggleGlobalSchedules no-ops when allSchedules data is empty', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.toggleGlobalSchedules()
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+    expect(result.current.confirmMessage).toMatch(/All schedules/i)
+  })
+
+  it('detectCurveConflicts returns empty without allSchedules data', () => {
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.detectCurveConflicts(['monday'], [])).toEqual([])
+  })
+})
+
+describe('useSchedule — saveCurve / deleteCurve edge cases', () => {
+  it('saveCurve returns early when allSchedules data is missing', async () => {
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [{ time: '07:00', temperature: 68 }],
+      })
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+
+  it('saveCurve no-ops when there are no rows to delete and no set points to write', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      // targetDays is non-empty (so we pass the first guard) but setPoints is empty
+      // and the day has no existing rows → nothing to delete or create.
+      await result.current.saveCurve({ targetDays: ['monday'], setPoints: [] })
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+
+  it('saveCurve in both-mode clears the other side rows too', async () => {
+    sideMock.state.activeSides = ['left', 'right']
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, dayOfWeek: 'monday', time: '07:00', temperature: 70, enabled: true }],
+      power: [{ id: 11, dayOfWeek: 'monday' }],
+      alarm: [],
+    }
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 2, dayOfWeek: 'monday', time: '07:00', temperature: 70, enabled: true }],
+      power: [{ id: 22, dayOfWeek: 'monday' }],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [
+          { time: '07:00', temperature: 68 },
+          { time: '22:00', temperature: 60 },
+        ],
+        originalDays: ['monday'],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.deletes.temperature).toEqual(expect.arrayContaining([1, 2]))
+    expect(arg.deletes.power).toEqual(expect.arrayContaining([11, 22]))
+    // Should write to both sides
+    const sides = new Set(arg.creates.temperature.map((c: any) => c.side))
+    expect(sides.has('left')).toBe(true)
+    expect(sides.has('right')).toBe(true)
+  })
+
+  it('saveCurve clamps onTemperature into the 55–110 range', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [
+          { time: '07:00', temperature: 999 },
+          { time: '22:00', temperature: 999 },
+        ],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.creates.power[0].onTemperature).toBe(110)
+  })
+
+  it('deleteCurve in both-mode clears the other side rows too', async () => {
+    sideMock.state.activeSides = ['left', 'right']
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, dayOfWeek: 'monday', enabled: true }],
+      power: [{ id: 11, dayOfWeek: 'monday' }],
+      alarm: [],
+    }
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 2, dayOfWeek: 'monday', enabled: true }],
+      power: [{ id: 22, dayOfWeek: 'monday' }],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.deleteCurve(['monday'])
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.deletes.temperature).toEqual(expect.arrayContaining([1, 2]))
+    expect(arg.deletes.power).toEqual(expect.arrayContaining([11, 22]))
+  })
+
+  it('deleteCurve no-ops when allSchedules data is missing', async () => {
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.deleteCurve(['monday'])
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+
+  it('deleteCurve no-ops when the days have no rows to delete', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.deleteCurve(['monday'])
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+})
+
+describe('useSchedule — refetch passes through to both queries', () => {
+  it('invokes refetch on getAll and getByDay query handles', () => {
+    const allRefetch = vi.fn()
+    const byDayRefetch = vi.fn()
+    trpcMock.trpc.schedules.getAll.useQuery.mockImplementationOnce(() => ({
+      data: undefined,
+      isLoading: false,
+      refetch: allRefetch,
+    }))
+    // Second call is otherSchedulesQuery (disabled with activeSides=['left']) — use defaults
+    trpcMock.trpc.schedules.getByDay.useQuery.mockImplementationOnce(() => ({
+      data: undefined,
+      isLoading: false,
+      refetch: byDayRefetch,
+    }))
+    const { result } = renderHook(() => useSchedule())
+    act(() => {
+      result.current.refetch()
+    })
+    expect(allRefetch).toHaveBeenCalled()
+    expect(byDayRefetch).toHaveBeenCalled()
+  })
 })

@@ -7,6 +7,8 @@ export enum HardwareCommand {
   HELLO = '0',
   SET_TEMP = '1',
   SET_ALARM = '2',
+  // Per-side alarms — `sparkAlarmL` / `sparkAlarmR`. Gated on the Pillow
+  // subsystem reporting a valid label; rejects with err:-1 on cover-only pods.
   ALARM_LEFT = '5',
   ALARM_RIGHT = '6',
   SET_SETTINGS = '8',
@@ -17,6 +19,13 @@ export enum HardwareCommand {
   PRIME = '13',
   DEVICE_STATUS = '14',
   ALARM_CLEAR = '16',
+  // Solo alarm — `sparkAlarmS` in frankenfirmware. Drives both LP5009 motor
+  // controllers on the cover directly via setHighCurrentVibration, bypassing
+  // the per-side `Pillow.cpp::triggerVibrationAlarm` label gate. Should be
+  // the path that buzzes on a cover-only Pod 5. Identified from free-sleep
+  // (throwaway31265/free-sleep) deviceApi.ts where `ALARM_SOLO: "17"` was
+  // commented out.
+  ALARM_SOLO = '17',
 }
 
 /**

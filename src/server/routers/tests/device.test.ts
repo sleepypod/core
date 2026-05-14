@@ -38,7 +38,17 @@ const broadcastMock = vi.hoisted(() => ({
 
 const transportMock = vi.hoisted(() => ({
   sendCommand: vi.fn(),
+  isDacConnected: vi.fn(() => true),
+  connectDac: vi.fn(),
 }))
+
+const sharedClientMock = vi.hoisted(() => {
+  const sendRaw = vi.fn()
+  return {
+    sendRaw,
+    getSharedHardwareClient: vi.fn(() => ({ sendRaw })),
+  }
+})
 
 const stateSyncMock = vi.hoisted(() => ({
   markSideMutated: vi.fn(),
@@ -74,6 +84,7 @@ vi.mock('@/src/hardware/primeNotification', () => primeMock)
 vi.mock('@/src/hardware/snoozeManager', () => snoozeMock)
 vi.mock('@/src/streaming/broadcastMutationStatus', () => broadcastMock)
 vi.mock('@/src/hardware/dacTransport', () => transportMock)
+vi.mock('@/src/hardware/sharedClient', () => ({ getSharedHardwareClient: sharedClientMock.getSharedHardwareClient }))
 vi.mock('@/src/hardware/deviceStateSync', () => stateSyncMock)
 vi.mock('@/src/db', () => ({
   db: dbMock,
@@ -107,6 +118,7 @@ beforeEach(() => {
   snoozeMock.getSnoozeStatus.mockReset().mockReturnValue({ active: false, snoozeUntil: null })
   broadcastMock.broadcastMutationStatus.mockReset()
   transportMock.sendCommand.mockReset()
+  sharedClientMock.sendRaw.mockReset()
   stateSyncMock.markSideMutated.mockReset()
   dbState.rowsQueue.length = 0
   dbMock.select.mockClear()
@@ -252,22 +264,81 @@ describe('device.startPriming / dismissPrimeNotification', () => {
 })
 
 describe('device.execute (raw command)', () => {
-  it('passes the command name through and returns disclaimer', async () => {
-    transportMock.sendCommand.mockResolvedValue('{ "ok": true }')
+  it('maps an allowlisted name to its opcode and returns disclaimer', async () => {
+    sharedClientMock.sendRaw.mockResolvedValue('{ "ok": true }')
 
     const result = await caller.execute({ command: 'DEVICE_STATUS' })
+    expect(sharedClientMock.sendRaw).toHaveBeenCalledWith('14', undefined)
     expect(result.command).toBe('DEVICE_STATUS')
+    expect(result.opcode).toBe('14')
     expect(result.args).toBeNull()
     expect(result.response).toBe('{ "ok": true }')
     expect(result.disclaimer).toContain('Raw command execution')
   })
 
-  it('rejects unknown command via Zod enum', async () => {
-    await expect(caller.execute({ command: 'BOGUS' as never })).rejects.toThrow()
+  it('passes a raw numeric opcode through verbatim', async () => {
+    sharedClientMock.sendRaw.mockResolvedValue('ok')
+
+    const result = await caller.execute({ command: '99', args: 'foo' })
+    expect(sharedClientMock.sendRaw).toHaveBeenCalledWith('99', 'foo')
+    expect(result.command).toBe('99')
+    expect(result.opcode).toBe('99')
+    expect(result.args).toBe('foo')
+  })
+
+  it('rejects non-numeric, non-allowlisted commands', async () => {
+    await expect(caller.execute({ command: 'BOGUS' })).rejects.toThrow()
   })
 
   it('wraps transport errors as INTERNAL_SERVER_ERROR', async () => {
-    transportMock.sendCommand.mockRejectedValue(new Error('socket dead'))
+    sharedClientMock.sendRaw.mockRejectedValue(new Error('socket dead'))
     await expect(caller.execute({ command: 'DEVICE_STATUS' })).rejects.toThrow(/Failed to execute raw command: socket dead/)
+  })
+})
+
+describe('device best-effort DB sync swallows errors', () => {
+  beforeEach(() => {
+    // Make `db.update(...)...` chain reject so the catch path fires.
+    const failingChain = () => {
+      const chain: Record<string, unknown> = {}
+      chain.then = (_resolve: unknown, reject: (reason: unknown) => unknown) =>
+        Promise.reject(new Error('db dead')).catch(reject)
+      chain.where = vi.fn(() => chain)
+      chain.set = vi.fn(() => chain)
+      return chain
+    }
+    dbMock.update.mockImplementation(failingChain)
+  })
+
+  it('setAlarm logs but still broadcasts when the DB sync fails', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await caller.setAlarm({
+      side: 'left', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120,
+    })
+    expect(result).toEqual({ success: true })
+    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { isAlarmVibrating: true })
+    expect(errSpy).toHaveBeenCalledWith('Failed to sync alarm state to DB:', expect.any(Error))
+    errSpy.mockRestore()
+  })
+
+  it('clearAlarm logs but still broadcasts when the DB sync fails', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await caller.clearAlarm({ side: 'right' })
+    expect(result).toEqual({ success: true })
+    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('right', { isAlarmVibrating: false })
+    expect(errSpy).toHaveBeenCalledWith('Failed to sync alarm clear state to DB:', expect.any(Error))
+    errSpy.mockRestore()
+  })
+
+  it('snoozeAlarm logs but still broadcasts when the DB sync fails', async () => {
+    snoozeMock.snoozeAlarm.mockReturnValue(new Date(1700000000000))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await caller.snoozeAlarm({
+      side: 'left', duration: 300, vibrationIntensity: 50, vibrationPattern: 'rise', alarmDuration: 120,
+    })
+    expect(result.success).toBe(true)
+    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { isAlarmVibrating: false })
+    expect(errSpy).toHaveBeenCalledWith('Failed to sync snooze state to DB:', expect.any(Error))
+    errSpy.mockRestore()
   })
 })

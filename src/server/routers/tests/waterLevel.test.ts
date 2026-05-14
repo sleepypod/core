@@ -185,3 +185,62 @@ describe('waterLevel.getFlowReadings / getLatestFlowReading', () => {
     expect(result?.id).toBe(9)
   })
 })
+
+describe('waterLevel error wrappers', () => {
+  it('wraps every read query DB failure as INTERNAL_SERVER_ERROR', async () => {
+    const boom = new Error('db dead')
+    const throwBoom = (): never => {
+      throw boom
+    }
+    dbMock.select.mockImplementationOnce(throwBoom)
+    await expect(caller.getHistory({ limit: 1 })).rejects.toThrow(/Failed to fetch water level history/)
+
+    dbMock.select.mockImplementationOnce(throwBoom)
+    await expect(caller.getLatest({})).rejects.toThrow(/Failed to fetch latest water level/)
+
+    dbMock.select.mockImplementationOnce(throwBoom)
+    await expect(caller.getTrend({ hours: 24 })).rejects.toThrow(/Failed to calculate water level trend/)
+
+    dbMock.select.mockImplementationOnce(throwBoom)
+    await expect(caller.getAlerts({})).rejects.toThrow(/Failed to fetch water level alerts/)
+
+    dbMock.select.mockImplementationOnce(throwBoom)
+    await expect(caller.getFlowReadings({ hours: 24 })).rejects.toThrow(/Failed to fetch flow readings/)
+
+    dbMock.select.mockImplementationOnce(throwBoom)
+    await expect(caller.getLatestFlowReading({})).rejects.toThrow(/Failed to fetch latest flow reading/)
+  })
+
+  it('wraps dismissAlert DB failure as INTERNAL_SERVER_ERROR', async () => {
+    dbMock.update.mockImplementationOnce((): never => {
+      throw new Error('update failed')
+    })
+    await expect(caller.dismissAlert({ id: 1 })).rejects.toThrow(/Failed to dismiss alert/)
+  })
+
+  it('getTrend returns stable trend when totals are between thresholds', async () => {
+    dbState.rowsQueue.push([
+      { level: 'ok', cnt: 60 },
+      { level: 'low', cnt: 40 },
+    ])
+    dbState.rowsQueue.push([{ cnt: 20 }]) // recentLow
+    dbState.rowsQueue.push([{ cnt: 20 }]) // olderLow
+    dbState.rowsQueue.push([{ cnt: 50 }]) // recentTotal
+    dbState.rowsQueue.push([{ cnt: 50 }]) // olderTotal
+    const result = await caller.getTrend({ hours: 24 })
+    expect(result.trend).toBe('stable')
+  })
+
+  it('getTrend keeps stable when one half has zero readings', async () => {
+    dbState.rowsQueue.push([
+      { level: 'ok', cnt: 5 },
+      { level: 'low', cnt: 5 },
+    ])
+    dbState.rowsQueue.push([{ cnt: 0 }])
+    dbState.rowsQueue.push([{ cnt: 0 }])
+    dbState.rowsQueue.push([{ cnt: 0 }]) // recentTotal=0 — branch
+    dbState.rowsQueue.push([{ cnt: 10 }])
+    const result = await caller.getTrend({ hours: 24 })
+    expect(result.trend).toBe('stable')
+  })
+})

@@ -161,10 +161,71 @@ pick on this pod."
 
 Pods that already have a `randomBytes`-generated `identity.json` keep it.
 The deterministic chain only fires on **first run** or **after
-`identity.json` is missing**. Existing identities are not rotated under us;
-that would force a Home app re-add for every user on upgrade, which is
-unacceptable. The durability win lands the next time `/persistent` is
-wiped, not retroactively.
+`identity.json` is missing**. Healthy pre-ADR identities are not rotated
+under us; that would force a Home app re-add for every user on upgrade,
+which is unacceptable. The durability win lands the next time
+`/persistent` is wiped, not retroactively.
+
+The one carve-out is the stranded-bridge case below (PR #578): a legacy
+identity with `AccessoryInfo.<MAC>.json` on disk but zero entries in
+`pairedClients` is already broken from iOS's perspective and gets a
+one-shot rotation. Healthy paired legacy identities are untouched.
+
+## Addendum: stranded-bridge auto-rotation (PR #578)
+
+The ADR above keeps `regenerateIdentity()` as the user-facing path for
+"fresh pairing." It does not cover the case where iOS unpairs the bridge
+*without* the user ever touching our Settings UI — Home app's accessory
+removal hits HAP pair-remove directly on the running server, never
+reaches `unpairAll()`, and identity is not rotated. On the next bridge
+restart we republish on the same `AccessoryPairingID` against which iOS
+still holds stale pair-verify keys; every accessory tile sits at "No
+Response" and re-pair attempts are refused. Same failure mode as a
+`/persistent` wipe but in the opposite direction (iOS state out of sync,
+pod state intact).
+
+**Detection at `startBridge`** — two arms, both run before publish:
+
+1. **`wasPaired` sticky marker** (new identities). `markIdentityPaired()`
+   writes `wasPaired: true` onto `identity.json` the first time the
+   bridge observes `pairedControllers.length > 0`. Set eagerly on
+   `startBridge` if booting into a populated pairing list, and via a 30s
+   `setInterval` poll that self-cancels once the marker lands (covers the
+   "fast-follow restart before any controller observation" race). On
+   subsequent starts, if `wasPaired === true && pairedControllers.length
+   === 0`, the bridge is stranded → clear pairing files, call
+   `regenerateIdentity()`, then publish.
+2. **Legacy-identity migration** (one-shot, pre-ADR-0020 identities).
+   Pre-rotation identities have no `rotation` / `derivedFrom` and so will
+   never gain the `wasPaired` marker retroactively. If the identity is
+   legacy **and** `AccessoryInfo.<MAC>.json` exists on disk **and**
+   `pairedClients` is empty, rotate. Post-rotation identity carries
+   `rotation` / `derivedFrom`, so the arm is naturally idempotent — it
+   does not re-fire on the next boot.
+
+The narrow predicates (`wasPaired` flag, or legacy-AND-stranded) are
+load-bearing: rotation must not fire on a fresh bridge that has simply
+never been paired, and must not fire on a healthy paired bridge where
+the controllers list happens to be momentarily empty during HAP startup.
+Tests in `src/homekit/tests/bridge.test.ts` pin both no-fire cases.
+
+## Addendum: mDNS advertiser default (PR #578)
+
+`hap-nodejs` defaults to its avahi-via-DBus advertiser when DBus is
+present. On Eight Layer 4.0.2 (Yocto kirkstone, avahi 0.8 with
+chroot/introspection errors in the daemon journal) that advertiser
+registers an EntryGroup but never publishes the `_hap._tcp` record;
+bridge starts cleanly, iOS never discovers it. Ciao binds 5353 with
+`SO_REUSEPORT` and coexists with the running `avahi-daemon` (which we
+keep for `_sleepypod._tcp` and other static service files), so the
+default is now ciao. `HOMEKIT_ADVERTISER=avahi|bonjour|ciao` env
+override is retained for diagnostics on pods where the avahi path is
+known-good.
+
+Caveat: ciao's outbound multicast did not escape `wlan0` on the test
+pod under default binding; PR #578 also pins ciao to `wlan0`. Durable
+mDNS publishing remains a followup — see PR #578 body for the three
+candidate fixes.
 
 ## Implementation notes
 

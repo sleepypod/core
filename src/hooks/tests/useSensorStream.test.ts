@@ -283,3 +283,185 @@ describe('useOnSensorFrame', () => {
     stream.unmount()
   })
 })
+
+describe('useSensorStream — reconnect + error paths', () => {
+  it('schedules a reconnect after an unexpected close and reports reconnecting status', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result, unmount } = renderHook(() => useSensorStream())
+      // mount effect needs to run
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wsMock.sockets.length).toBe(1)
+      const ws = wsMock.sockets[0] as FakeWS
+      act(() => ws.triggerOpen())
+      expect(result.current.status).toBe('connected')
+
+      // Server-side close (not intentional) → should mark reconnecting and queue a retry
+      act(() => ws.triggerClose())
+      expect(result.current.status).toBe('reconnecting')
+
+      // Advance past the base reconnect delay (1s) so the timer fires and a fresh socket is created
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_500)
+      })
+      expect(wsMock.sockets.length).toBe(2)
+      unmount()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sets lastError when onerror fires', async () => {
+    const { result, unmount } = renderHook(() => useSensorStream())
+    await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))
+    const ws = wsMock.sockets[0] as any
+    act(() => ws.triggerOpen())
+    act(() => ws.onerror?.())
+    expect(result.current.lastError).toBe('WebSocket connection error')
+    unmount()
+  })
+
+  it('records lastError and schedules reconnect if WebSocket constructor throws', async () => {
+    const originalWs = (globalThis as any).WebSocket
+    function ThrowingWebSocket() {
+      throw new Error('boom')
+    }
+    ThrowingWebSocket.OPEN = 1
+    ThrowingWebSocket.CONNECTING = 0
+    ThrowingWebSocket.CLOSED = 3
+    ;(globalThis as any).WebSocket = ThrowingWebSocket
+
+    vi.useFakeTimers()
+    try {
+      const { result, unmount } = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      expect(result.current.lastError).toBe('Failed to create WebSocket')
+      // scheduleReconnect runs after the throw → status becomes reconnecting
+      expect(result.current.status).toBe('reconnecting')
+      unmount()
+    }
+    finally {
+      vi.useRealTimers()
+      ;(globalThis as any).WebSocket = originalWs
+    }
+  })
+
+  it('getTimeRange resolves to null when the server never answers within 5s', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result, unmount } = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      const ws = wsMock.sockets[0] as FakeWS
+      act(() => ws.triggerOpen())
+      let resolved: any = 'pending'
+      const promise = result.current.getTimeRange().then((r) => {
+        resolved = r
+      })
+      // Advance past the 5s timeout
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000)
+      })
+      await promise
+      expect(resolved).toBeNull()
+      unmount()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('computes fps once enough frames have been received within the rolling window', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 0, 1, 0, 0, 0))
+      const { result, unmount } = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      const ws = wsMock.sockets[0] as FakeWS
+      act(() => ws.triggerOpen())
+
+      // Three frames spaced 500ms apart → ~2 fps over 1s
+      act(() => ws.triggerMessage({ type: 'capSense', ts: 1, left: 1, right: 2 }))
+      vi.setSystemTime(new Date(2026, 0, 1, 0, 0, 0, 500))
+      act(() => ws.triggerMessage({ type: 'capSense', ts: 2, left: 1, right: 2 }))
+      vi.setSystemTime(new Date(2026, 0, 1, 0, 0, 1, 0))
+      act(() => ws.triggerMessage({ type: 'capSense', ts: 3, left: 1, right: 2 }))
+
+      // Advance the fps timer (interval=500ms) so it picks up the new value
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600)
+      })
+      expect(result.current.fps).toBeGreaterThan(0)
+      unmount()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('merges multiple hook subscriptions and sends the union', async () => {
+    const a = renderHook(() => useSensorStream({ sensors: ['capSense'] }))
+    await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    // After open, the merged subscription is sent (only the first hook so far)
+    const b = renderHook(() => useSensorStream({ sensors: ['bedTemp'] }))
+    // Allow the second hook's subscription effect to flush
+    await waitFor(() => {
+      const merged = ws.sent.map(s => JSON.parse(s)).filter(m => m.type === 'subscribe')
+      const lastMerged = merged[merged.length - 1]
+      expect(lastMerged.sensors).toEqual(expect.arrayContaining(['capSense', 'bedTemp']))
+    })
+    a.unmount()
+    b.unmount()
+  })
+
+  it('when a hook subscribes to all sensors, the merged subscription is the wildcard (empty)', async () => {
+    const a = renderHook(() => useSensorStream({ sensors: ['capSense'] }))
+    await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    const b = renderHook(() => useSensorStream({ sensors: null }))
+    await waitFor(() => {
+      const merged = ws.sent.map(s => JSON.parse(s)).filter(m => m.type === 'subscribe')
+      const lastMerged = merged[merged.length - 1]
+      // null = subscribe to all → server payload is empty array
+      expect(lastMerged.sensors).toEqual([])
+    })
+    a.unmount()
+    b.unmount()
+  })
+
+  it('clears the pending reconnect timer if all consumers unmount before it fires', async () => {
+    vi.useFakeTimers()
+    try {
+      const { unmount } = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      const ws = wsMock.sockets[0] as FakeWS
+      act(() => ws.triggerOpen())
+      act(() => ws.triggerClose()) // unexpected close → schedules reconnect
+      const beforeCount = wsMock.sockets.length
+      unmount()
+      // Even after advancing past the backoff, no new socket should appear
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(wsMock.sockets.length).toBe(beforeCount)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('useSensorFrame returns undefined initially (server snapshot)', () => {
+    const { result, unmount } = renderHook(() => useSensorFrame('capSense'))
+    expect(result.current).toBeUndefined()
+    unmount()
+  })
+
+  it('useSensorStreamStatus reports disconnected without any active stream consumer', () => {
+    const { result, unmount } = renderHook(() => useSensorStreamStatus())
+    expect(result.current).toBe('disconnected')
+    unmount()
+  })
+})

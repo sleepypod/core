@@ -189,6 +189,60 @@ describe('health.system', () => {
     expect(result.database.error).toBe('db locked')
     expect(result.status).toBe('degraded')
   })
+
+  it('excludes PRIME / REBOOT system jobs from drift comparison', async () => {
+    dbMock.allSchedules.temp.push({ id: 1 })
+    schedulerMock.scheduler.getJobs.mockReturnValue([
+      { id: 't-1', type: 'temperature' },
+      { id: 'prime', type: 'prime' },
+      { id: 'reboot', type: 'reboot' },
+    ])
+    const result = await caller.system({})
+    expect(result.scheduler.drift?.drifted).toBe(false)
+    expect(result.scheduler.drift?.schedulerJobCount).toBe(1)
+  })
+
+  it('auto-reloads scheduler when drift detected and clears drifted flag on success', async () => {
+    dbMock.allSchedules.temp.push({ id: 1 })
+    schedulerMock.scheduler.getJobs.mockReturnValue([])
+
+    const result = await caller.system({})
+    expect(schedulerMock.jobManager.reloadSchedules).toHaveBeenCalled()
+    expect(result.scheduler.drift?.drifted).toBe(false)
+    expect(result.status).toBe('ok')
+  })
+
+  it('marks system degraded when drift auto-reload throws', async () => {
+    dbMock.allSchedules.temp.push({ id: 1 })
+    schedulerMock.scheduler.getJobs.mockReturnValue([])
+    schedulerMock.jobManager.reloadSchedules.mockRejectedValueOnce(new Error('reload failed'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const result = await caller.system({})
+    expect(result.status).toBe('degraded')
+    errSpy.mockRestore()
+  })
+
+  it('marks system degraded when iptables critical rules are missing', async () => {
+    iptablesMock.checkIptables.mockReturnValueOnce({
+      ok: false,
+      rules: [
+        { name: 'critical-rule', present: false, critical: true },
+        { name: 'optional-rule', present: false, critical: false },
+        { name: 'present-rule', present: true, critical: true },
+      ],
+    } as unknown as ReturnType<typeof iptablesMock.checkIptables>)
+    const result = await caller.system({})
+    expect(result.iptables.ok).toBe(false)
+    expect(result.iptables.missing).toEqual(['critical-rule'])
+    expect(result.status).toBe('degraded')
+  })
+
+  it('marks system degraded when scheduler getJobManager rejects', async () => {
+    schedulerMock.getJobManager.mockRejectedValueOnce(new Error('scheduler down'))
+    const result = await caller.system({})
+    expect(result.status).toBe('degraded')
+  })
 })
 
 describe('health.dacMonitor', () => {

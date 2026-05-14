@@ -54,6 +54,7 @@ export class MockHardwareServer {
     this.commandResponses.set(HardwareCommand.TEMP_LEVEL_RIGHT, OK_RESPONSE)
     this.commandResponses.set(HardwareCommand.LEFT_TEMP_DURATION, OK_RESPONSE)
     this.commandResponses.set(HardwareCommand.RIGHT_TEMP_DURATION, OK_RESPONSE)
+    this.commandResponses.set(HardwareCommand.ALARM_SOLO, OK_RESPONSE)
     this.commandResponses.set(HardwareCommand.ALARM_LEFT, OK_RESPONSE)
     this.commandResponses.set(HardwareCommand.ALARM_RIGHT, OK_RESPONSE)
     this.commandResponses.set(HardwareCommand.ALARM_CLEAR, OK_RESPONSE)

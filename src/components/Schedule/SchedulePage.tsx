@@ -18,6 +18,7 @@ import { CurveEditor } from './CurveEditor'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ScheduleToggle } from './ScheduleToggle'
 import { SchedulerConfirmation } from './SchedulerConfirmation'
+import { AlarmSection } from './AlarmSection'
 
 /**
  * Read-only schedule view: lists curves (groups of days sharing a temperature
@@ -184,6 +185,9 @@ export function SchedulePage() {
           </button>
         </>
       )}
+
+      {/* Alarms — wake the user with a cover vibration at a scheduled time */}
+      <AlarmSection side={side} />
 
       {/* Edit / Create editor */}
       <CurveEditor

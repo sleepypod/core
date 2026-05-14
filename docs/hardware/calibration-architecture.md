@@ -6,36 +6,49 @@ Technical architecture for the sleepypod-core sensor calibration system. Covers 
 
 ```mermaid
 graph TB
-    subgraph iOS["iOS App"]
-        A[Calibration UI]
+    subgraph Triggers["Triggers"]
+        A[Calibration UI<br/>iOS App]
+        T[systemd timer<br/>OnCalendar=*-*-* 03:00:00]
     end
 
     subgraph Core["sleepypod-core (Node.js)"]
         B[tRPC calibration router]
-        C[biometrics.db]
+        C[(biometrics.db)]
+    end
+
+    subgraph FS["Filesystem (Pod)"]
+        G[/tmp/sleepypod-calibrate<br/>trigger file/]
+        H[/persistent/biometrics/*.RAW<br/>sensor data · tmpfs · ADR 0018/]
     end
 
     subgraph Modules["Python Modules"]
-        D[calibrator]
+        D[calibrator<br/>single writer]
         E[piezo-processor]
         F[sleep-detector]
     end
 
-    G[/tmp/sleepypod-calibrate<br/>trigger file/]
-    H[/persistent/*.RAW<br/>sensor data/]
-
+    %% On-demand path
     A -->|"calibration.trigger()"| B
     B -->|"write trigger file"| G
-    B -->|"read profiles"| C
-    D -->|"poll trigger file<br/>every 10s"| G
-    D -->|"read raw sensor data"| H
-    D -->|"write profiles<br/>(single writer)"| C
+    B -->|"read profiles + vitals_quality"| C
+
+    %% Daily path
+    T -.->|"start"| D
+
+    %% Calibrator inputs/outputs
+    D -->|"poll every 10s<br/>read + delete"| G
+    D -->|"read latest ~5 min"| H
+    D -->|"write profiles<br/>+ calibration_runs"| C
+
+    %% Consumer modules: profiles refresh + raw signal
     E -->|"read profiles<br/>(60s poll)"| C
     F -->|"read profiles<br/>(60s poll)"| C
     E -->|"read raw sensor data"| H
     F -->|"read raw sensor data"| H
-    E -->|"write vitals"| C
-    F -->|"write sleep_records"| C
+
+    %% Consumer module outputs
+    E -->|"write vitals<br/>+ vitals_quality"| C
+    F -->|"write sleep_records<br/>+ movement"| C
 ```
 
 ### Data Ownership
@@ -43,9 +56,9 @@ graph TB
 | Component | Reads | Writes |
 |---|---|---|
 | tRPC calibration router | `calibration_profiles`, `calibration_runs`, `vitals_quality` | trigger file only |
-| Calibrator module | `/persistent/*.RAW`, trigger file | `calibration_profiles`, `calibration_runs` |
-| Piezo processor | `calibration_profiles`, `/persistent/*.RAW` | `vitals`, `vitals_quality` |
-| Sleep detector | `calibration_profiles`, `/persistent/*.RAW` | `sleep_records`, `movement` |
+| Calibrator module | `/persistent/biometrics/*.RAW`, trigger file | `calibration_profiles`, `calibration_runs` |
+| Piezo processor | `calibration_profiles`, `/persistent/biometrics/*.RAW` | `vitals`, `vitals_quality` |
+| Sleep detector | `calibration_profiles`, `/persistent/biometrics/*.RAW` | `sleep_records`, `movement` |
 
 ## Database Schema
 
@@ -130,7 +143,7 @@ sequenceDiagram
 
     Cal->>FS: detect trigger file, read + delete
     Cal->>DB: INSERT calibration_runs (trigger='on_demand', status='running')
-    Cal->>FS: read latest /persistent/*.RAW (last 5 minutes of data)
+    Cal->>FS: read latest /persistent/biometrics/*.RAW (last 5 minutes of data)
 
     Note over Cal: For each side + sensor_type:<br/>1. Extract relevant signal band<br/>2. Compute RMS, P95, mean, std<br/>3. Derive adaptive thresholds
 
@@ -156,7 +169,7 @@ sequenceDiagram
 sequenceDiagram
     participant Timer as systemd timer (03:00)
     participant Cal as Calibrator Module
-    participant FS as /persistent/*.RAW
+    participant FS as /persistent/biometrics/*.RAW
     participant DB as biometrics.db
     participant Piezo as Piezo Processor
     participant Sleep as Sleep Detector

@@ -1,0 +1,132 @@
+# shellcheck shell=bash
+# Biometrics-archiver install — tmpfs RAW writes + gzip cold archive.
+#
+# Frankenfirmware writes ~1 GB/day of *.RAW frames. We move them to a
+# 500 MB tmpfs at /persistent/biometrics so wear stays off eMMC; an
+# archiver gzips files older than 15 min into /persistent/biometrics-archive/,
+# a pruner keeps /persistent < 80% full. SEQNO.RAW + persistent state
+# subdirs are symlinked from tmpfs back to /persistent so the firmware
+# sees its state without code changes. See modules/biometrics-archiver/README.
+#
+# Sourced by:
+#   - scripts/install     (fresh install path)
+#   - scripts/bin/sp-update (in-place upgrade path — issue #576)
+#
+# Idempotent: subsequent runs detect existing mount + patched frank.sh
+# and no-op. Safe to call on every install/upgrade.
+#
+# Requires INSTALL_DIR to be set by the caller.
+
+install_biometrics_archiver() {
+  local archiver_src="${INSTALL_DIR:-/home/dac/sleepypod-core}/modules/biometrics-archiver"
+
+  if [ ! -d "$archiver_src" ]; then
+    return 0
+  fi
+
+  echo "Installing biometrics-archiver (tmpfs + cold archive)..."
+
+  # Remember whether the tmpfs was already up. If it was, every caller
+  # (install + sp-update) already restarted the RAW modules against a
+  # correct cwd in their own module-sync loop — skipping the helper's
+  # restart below avoids a redundant ~1s biometrics gap on every upgrade.
+  local was_mounted=false
+  mountpoint -q /persistent/biometrics && was_mounted=true
+
+  # Scripts
+  local s
+  for s in sleepypod-tmpfs-prep sleepypod-biometrics-archiver sleepypod-biometrics-pruner; do
+    install -m 0755 "$archiver_src/$s" "/usr/local/bin/$s"
+  done
+
+  # Systemd units
+  install -m 0644 "$archiver_src/persistent-biometrics.mount"      /etc/systemd/system/
+  install -m 0644 "$archiver_src/sleepypod-tmpfs-prep.service"     /etc/systemd/system/
+  install -m 0644 "$archiver_src/sleepypod-biometrics-archiver.service" /etc/systemd/system/
+  install -m 0644 "$archiver_src/sleepypod-biometrics-archiver.timer"   /etc/systemd/system/
+  install -m 0644 "$archiver_src/sleepypod-biometrics-pruner.service"   /etc/systemd/system/
+  install -m 0644 "$archiver_src/sleepypod-biometrics-pruner.timer"     /etc/systemd/system/
+
+  # frank.service drop-in: pull in mount + prep before frankenfirmware execs
+  mkdir -p /etc/systemd/system/frank.service.d
+  install -m 0644 "$archiver_src/frank.service.d/sleepypod-biometrics-tmpfs.conf" \
+    /etc/systemd/system/frank.service.d/sleepypod-biometrics-tmpfs.conf
+
+  systemctl daemon-reload
+
+  # Bring up the mount + symlinks BEFORE patching frank.sh so the cd
+  # target exists when frank restarts.
+  systemctl enable --now persistent-biometrics.mount
+  systemctl enable --now sleepypod-tmpfs-prep.service
+
+  # Patch /opt/eight/bin/frank.sh idempotently. The original is a 12-line
+  # firmware shim that does `cd /persistent && exec frankenfirmware`. We
+  # need cwd=/persistent/biometrics so RAW frames land in tmpfs.
+  if [ -f /opt/eight/bin/frank.sh ]; then
+    if ! grep -q 'cd /persistent/biometrics' /opt/eight/bin/frank.sh; then
+      local backup
+      backup="/opt/eight/bin/frank.sh.bak-pre-tmpfs-$(date -u +%Y%m%dT%H%M%SZ)"
+      cp -p /opt/eight/bin/frank.sh "$backup"
+      echo "Backed up frank.sh to $backup"
+      sed -i 's|cd /persistent &&|cd /persistent/biometrics \&\&|' /opt/eight/bin/frank.sh
+      echo "Patched frank.sh: cwd -> /persistent/biometrics"
+      # Guarded — sp-update's rollback trap fires on uncaught failures here
+      # and would leave orphaned systemd units behind while rolling back
+      # only the codebase. Module restarts below use the same guard.
+      systemctl restart frank.service 2>/dev/null || true
+    else
+      echo "frank.sh already patched — skipping"
+    fi
+  else
+    echo "Warning: /opt/eight/bin/frank.sh not found — skipping patch (not a Pod?)"
+  fi
+
+  # Restart sleepypod modules so they pick up RAW_DATA_DIR=/persistent/biometrics.
+  # Skip if the mount was already established at entry — the caller's own
+  # module-sync loop has already restarted them against a correct cwd.
+  if [ "$was_mounted" = false ]; then
+    local u
+    for u in sleepypod-piezo-processor sleepypod-sleep-detector \
+             sleepypod-environment-monitor sleepypod-cover-buttons; do
+      systemctl restart "$u.service" 2>/dev/null || true
+    done
+  fi
+
+  systemctl enable --now sleepypod-biometrics-archiver.timer
+  systemctl enable --now sleepypod-biometrics-pruner.timer
+
+  # One-time migration: gzip + relocate any pre-tmpfs RAW files at
+  # /persistent root (firmware now writes to /persistent/biometrics, so
+  # files at the old location are stranded). Idempotent — runs only if
+  # there are .RAW files at root, skips SEQNO.RAW.
+  #
+  # The archiver service mkdirs the archive dir on its first timer fire
+  # (~15 min after enable below), but the migration loop runs first and
+  # needs the dir up front — otherwise gzip's redirect into a missing
+  # dir fails inside the `if`-cond, the else branch runs, and stranded
+  # files are silently left behind on eMMC.
+  mkdir -p /persistent/biometrics-archive
+  shopt -s nullglob
+  local stranded=( /persistent/*.RAW )
+  shopt -u nullglob
+  local archived=0
+  local src base dst
+  for src in "${stranded[@]}"; do
+    base=$(basename "$src")
+    [ "$base" = "SEQNO.RAW" ] && continue
+    dst="/persistent/biometrics-archive/$base.gz"
+    if [ -f "$dst" ]; then
+      rm -f "$src"
+      archived=$((archived + 1))
+      continue
+    fi
+    if gzip -c "$src" > "$dst.tmp.$$"; then
+      mv -f "$dst.tmp.$$" "$dst"
+      rm -f "$src"
+      archived=$((archived + 1))
+    else
+      rm -f "$dst.tmp.$$"
+    fi
+  done
+  [ "$archived" -gt 0 ] && echo "Archived $archived stranded pre-tmpfs RAW files"
+}

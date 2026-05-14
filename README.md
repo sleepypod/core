@@ -53,8 +53,6 @@ sp-logs           # journalctl -u sleepypod.service -f
 sp-update         # pull latest, rebuild, migrate, restart (with automatic rollback)
 sp-maintenance    # one-shot manual prime / reboot / status
 sp-uninstall      # stop services, remove systemd units, optionally wipe data
-sp-sleepypod      # if free-sleep is also installed: stop it and start sleepypod
-sp-freesleep      # mirror of the above in the other direction
 ```
 
 ---
@@ -63,7 +61,7 @@ sp-freesleep      # mirror of the above in the other direction
 
 - **Temperature scheduling** — set per-side temperature programs by day and time
 - **Power scheduling** — automatic on/off with optional warm-up temperature
-- **Alarm management** — vibration alarms with configurable intensity and pattern
+- **Alarm management** — vibration alarms with configurable duration (intensity/pattern accepted by the API; cover MCU clamps both on Pod 5 J55 — see `docs/hardware/alarms.md`)
 - **Biometrics** — heart rate, HRV, breathing rate, sleep session tracking, and movement from the Pod's own sensors
 - **Daily maintenance** — automated priming and system reboots on a schedule
 - **Local web UI** — accessible on your home network, no cloud required
@@ -231,7 +229,13 @@ model, and what's deferred until `protectedProcedure` lands.
 graph LR
     subgraph HW ["Pod Hardware"]
         DAC["dac.sock"]
-        RAW["/persistent/*.RAW"]
+        FRANK["frankenfirmware<br/>(cwd: /persistent/biometrics)"]
+    end
+
+    subgraph RAWFS ["RAW frames — ADR 0018"]
+        TMPFS["/persistent/biometrics/*.RAW<br/>tmpfs · 500 MB · hot"]
+        ARCH["/persistent/biometrics-archive/<br/>eMMC · gzip cold"]
+        TMPFS -. "archiver timer 15m" .-> ARCH
     end
 
     subgraph TRANSPORT ["Hardware Transport"]
@@ -281,13 +285,16 @@ graph LR
     SCHED -->|on success| BMS
     BMS --> BF
 
+    %% RAW pipeline — firmware writes hot tmpfs, archiver rolls cold to eMMC
+    FRANK -->|writes CBOR| TMPFS
+
     %% WebSocket delivery
     BF --> WS
-    RAW -->|tail CBOR| WS
+    TMPFS -->|tail CBOR| WS
     WS -->|push frames| UI
 
     %% Biometrics pipeline
-    RAW --> PP & SD
+    TMPFS --> PP & SD
     PP & SD --> BIODB
     BIODB -->|query| API
 
@@ -298,27 +305,33 @@ graph LR
 
 ### Biometrics data flow
 
-The Pod hardware daemon continuously writes raw sensor data to `/persistent/*.RAW` as CBOR-encoded binary records. Independent Python sidecar processes tail these files, extract signals, and write results to `biometrics.db`. The core app never touches raw data — it reads clean rows via tRPC.
+The Pod hardware daemon (frankenfirmware) writes raw sensor data continuously as CBOR-encoded binary records into `/persistent/biometrics/*.RAW`, which is a **500 MB tmpfs** to keep ~1 GB/day of writes off the eMMC. An archiver timer gzips files older than 15 minutes into `/persistent/biometrics-archive/` on eMMC (cold storage with a pruner cap of 80% disk usage). See **[ADR 0018](docs/adr/0018-tmpfs-raw-frames.md)** for the firmware-integration rationale, including how `SEQNO.RAW` and state directories are symlinked through so the firmware sees its persistent state unchanged.
+
+Independent Python sidecar processes tail the hot tmpfs files, extract signals, and write results to `biometrics.db` (durable on eMMC). The core app never touches raw data — it reads clean rows via tRPC.
 
 ```mermaid
 sequenceDiagram
-    participant HW as Pod Hardware
-    participant RAW as RAW Files
+    participant HW as Pod Hardware<br/>(frankenfirmware)
+    participant TMPFS as /persistent/biometrics<br/>(tmpfs, 500 MB)
+    participant ARCH as /persistent/biometrics-archive<br/>(eMMC, gzip cold)
     participant PP as piezo-processor
     participant SD as sleep-detector
     participant BDB as biometrics.db
     participant UI as Web UI
 
-    HW->>RAW: writes CBOR records (500Hz piezo, capSense)
+    HW->>TMPFS: writes CBOR records (500Hz piezo, capSense)
     loop every ~60s
-        PP->>RAW: tail + decode piezo-dual records
+        PP->>TMPFS: tail + decode piezo-dual records
         PP->>PP: bandpass filter, HR/HRV/breathing rate
         PP->>BDB: INSERT vitals row
     end
     loop continuously
-        SD->>RAW: tail + decode capSense records
+        SD->>TMPFS: tail + decode capSense records
         SD->>SD: capacitance threshold, presence/absence
         SD->>BDB: INSERT sleep_record on session end
+    end
+    loop every 15 min
+        TMPFS->>ARCH: gzip files older than 15 min
     end
     UI->>BDB: tRPC getVitals / getSleepRecords
 ```
@@ -574,7 +587,7 @@ Key decisions are documented in [`docs/adr/`](docs/adr/):
 | [0014](docs/adr/0014-sensor-calibration.md) | Per-sensor calibration profiles |
 | [0015](docs/adr/0015-event-bus-mutation-broadcast.md) | Event bus: broadcast device state after mutations |
 | [0017](docs/adr/0017-uv-python-package-management.md) | uv for Python module package management |
-| [0018](docs/adr/0018-tmpfs-raw-frames.md) | Tmpfs for `/persistent/*.RAW` to spare eMMC writes |
+| [0018](docs/adr/0018-tmpfs-raw-frames.md) | Tmpfs at `/persistent/biometrics/` for live RAW frames + gzip cold archive on eMMC |
 | [0019](docs/adr/0019-mqtt-bridge.md) | MQTT bridge for Home Assistant integration |
 | [0020](docs/adr/0020-homekit-identity-derivation.md) | Deterministic HomeKit identity from hardware-rooted seed |
 
@@ -590,7 +603,7 @@ Config/state and time-series biometrics have fundamentally different access patt
 Heart rate extraction from 500 Hz piezoelectric data requires FFT, bandpass filtering, and peak detection. Python's scipy/numpy ecosystem handles this naturally. A crash in a Python module has zero impact on the core app.
 
 **How does real-time data reach clients?**
-A WebSocket server on port 3001 (`piezoStream`) acts as a read-only pub/sub channel. It streams raw sensor data (piezo, bed temp, capacitance) by tailing `/persistent/*.RAW`, and pushes `deviceStatus` frames via two buses:
+A WebSocket server on port 3001 (`piezoStream`) acts as a read-only pub/sub channel. It streams raw sensor data (piezo, bed temp, capacitance) by tailing `/persistent/biometrics/*.RAW` (tmpfs, per ADR 0018), and pushes `deviceStatus` frames via two buses:
 - **Read bus** — DacMonitor polls hardware every 2s and broadcasts the authoritative `deviceStatus` frame. This is the consistency backstop.
 - **Write bus** — After any hardware mutation succeeds (user-initiated via tRPC or automated via Scheduler), `broadcastMutationStatus()` overlays the changed fields onto the last polled status and broadcasts immediately. All connected clients see the change within ~200ms.
 
