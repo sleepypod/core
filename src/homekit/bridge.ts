@@ -35,10 +35,17 @@ import { buildPowerSwitch } from './accessories/powerSwitch'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
 import { buildSnoozeSwitch } from './accessories/snoozeSwitch'
 import { buildThermostatService } from './accessories/thermostat'
-import { clearPairings, initHapStorage, loadOrCreateIdentity, readPairedControllers, regenerateIdentity } from './storage'
+import { clearPairings, initHapStorage, loadOrCreateIdentity, markIdentityPaired, readPairedControllers, regenerateIdentity } from './storage'
 
 const BRIDGE_NAME = 'sleepypod'
 const BRIDGE_PORT = 51827
+
+// Poll cadence for "have we been paired yet?" — drives the sticky
+// wasPaired marker on identity.json that the stranded-bridge detector
+// reads on next startBridge. 30s keeps the window between a pair event
+// and persistence small enough that a fast-follow iOS unpair → restart
+// still gets rotated, without busy-polling the filesystem.
+const PAIR_OBSERVE_INTERVAL_MS = 30_000
 
 // Turbopack splits this module across the instrumentation chunk and the API
 // route chunks, so plain `let` locals would be per-chunk. Back the singleton
@@ -86,7 +93,28 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
   if (getBridge()) return
   initHapStorage()
 
-  const identity = loadOrCreateIdentity()
+  let identity = loadOrCreateIdentity()
+
+  // Stranded-bridge detection: identity was previously paired (sticky
+  // marker from a past run that observed pairedClients > 0) but the
+  // current AccessoryInfo has zero pairings. iOS removed the bridge via
+  // Home app — that path goes through HAP pair-remove directly and
+  // bypasses unpairAll() entirely, so the rotate-on-reset behavior from
+  // PR #566 never fired. Republishing on the same AccessoryPairingID
+  // strands iOS (stale pair-verify keys) just like the UI-unpair case
+  // the prior fix addressed.
+  if (identity.wasPaired && readPairedControllers(identity.username).length === 0) {
+    console.log(`[homekit] stranded bridge detected (wasPaired, paired=0) — rotating identity from ${identity.username}`)
+    clearPairings(identity.username)
+    identity = regenerateIdentity()
+  }
+  // Eagerly mark the identity as paired if we boot into a populated
+  // pairing list. Closes the gap where the bridge process crashed/restarted
+  // between pairing and the next 30s poll tick.
+  else if (readPairedControllers(identity.username).length > 0 && !identity.wasPaired) {
+    markIdentityPaired()
+    identity = { ...identity, wasPaired: true }
+  }
   setIdentity(identity)
 
   const accessory = new Bridge(BRIDGE_NAME, uuid.generate(`sleepypod:${identity.username}`))
@@ -157,6 +185,28 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
     }
     throw e
   }
+
+  // Pair-observe poll: hap-nodejs doesn't expose a pairing-completed
+  // event we can hook from outside the server, so we sample the on-disk
+  // pairing list and flip the sticky wasPaired marker on the first
+  // observation. Once set, the interval self-cancels — no idle work for
+  // the long-lived (paired) steady state.
+  const pairObserve = setInterval(() => {
+    const cur = getIdentity()
+    if (!cur) return
+    if (cur.wasPaired) {
+      clearInterval(pairObserve)
+      return
+    }
+    if (readPairedControllers(cur.username).length > 0) {
+      markIdentityPaired()
+      setIdentity({ ...cur, wasPaired: true })
+      clearInterval(pairObserve)
+    }
+  }, PAIR_OBSERVE_INTERVAL_MS)
+  // Allow the process to exit if this interval is the only thing left.
+  pairObserve.unref?.()
+  localStoppers.push(() => clearInterval(pairObserve))
 
   setStoppers(localStoppers)
   setSetupURI(accessory.setupURI())

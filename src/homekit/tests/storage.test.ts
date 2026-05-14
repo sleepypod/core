@@ -6,6 +6,7 @@ import {
   clearPairings,
   getStorageDir,
   loadOrCreateIdentity,
+  markIdentityPaired,
   probeSeedSources,
   readIdentityIfPresent,
   readPairedControllers,
@@ -238,6 +239,30 @@ describe('homekit storage', () => {
     // Calling again should remain truthy and not throw
     expect(() => initHapStorage()).not.toThrow()
     expect(g[key]).toBe(true)
+  })
+
+  it('markIdentityPaired sets wasPaired=true and is idempotent on second call', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    const before = loadOrCreateIdentity()
+    expect(before.wasPaired).toBeUndefined()
+
+    markIdentityPaired()
+    const after = JSON.parse(readFileSync(file, 'utf8'))
+    expect(after.wasPaired).toBe(true)
+
+    // Re-mark must not corrupt the file or rotate the identity fields.
+    markIdentityPaired()
+    const again = JSON.parse(readFileSync(file, 'utf8'))
+    expect(again).toEqual(after)
+  })
+
+  it('markIdentityPaired silently no-ops when identity.json is absent', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    if (existsSync(file)) rmSync(file)
+    expect(() => markIdentityPaired()).not.toThrow()
+    expect(existsSync(file)).toBe(false)
   })
 
   it('probeSeedSources reports each chain entry without throwing', () => {

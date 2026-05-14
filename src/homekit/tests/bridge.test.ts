@@ -40,6 +40,7 @@ const m = vi.hoisted(() => {
     readPairedControllers: vi.fn(),
     regenerateIdentity: vi.fn(),
     clearPairings: vi.fn(),
+    markIdentityPaired: vi.fn(),
   }
 })
 
@@ -73,6 +74,7 @@ vi.mock('../storage', () => ({
   readPairedControllers: m.readPairedControllers,
   regenerateIdentity: m.regenerateIdentity,
   clearPairings: m.clearPairings,
+  markIdentityPaired: m.markIdentityPaired,
 }))
 
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
@@ -303,5 +305,63 @@ describe('homekit bridge', () => {
     expect(id?.username).toBe('NN:NN:NN:NN:NN:NN')
     expect(getStatus().running).toBe(false)
     expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
+  })
+
+  it('startBridge rotates identity when prior identity was paired but pairedClients is now empty', async () => {
+    const { startBridge, getStatus } = await import('../bridge')
+    m.loadOrCreateIdentity.mockReturnValueOnce({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'XXXX',
+      derivedFrom: 'test',
+      wasPaired: true,
+    })
+    m.readPairedControllers.mockReturnValue([])
+    m.regenerateIdentity.mockReturnValueOnce({
+      username: 'NN:NN:NN:NN:NN:NN',
+      pincode: '999-99-999',
+      setupId: 'YYYY',
+      rotation: 1,
+    })
+    await startBridge(fakeMonitor)
+    expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
+    expect(m.regenerateIdentity).toHaveBeenCalledTimes(1)
+    expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
+    expect(getStatus().pincode).toBe('999-99-999')
+  })
+
+  it('startBridge does NOT rotate when identity was never paired (fresh install)', async () => {
+    const { startBridge, getStatus } = await import('../bridge')
+    // loadOrCreateIdentity default returns no wasPaired; pairedClients empty.
+    await startBridge(fakeMonitor)
+    expect(m.clearPairings).not.toHaveBeenCalled()
+    expect(m.regenerateIdentity).not.toHaveBeenCalled()
+    expect(getStatus().username).toBe('AA:BB:CC:DD:EE:FF')
+  })
+
+  it('startBridge does NOT rotate when pairedClients is non-empty', async () => {
+    const { startBridge, getStatus } = await import('../bridge')
+    m.loadOrCreateIdentity.mockReturnValueOnce({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'XXXX',
+      derivedFrom: 'test',
+      wasPaired: true,
+    })
+    m.readPairedControllers.mockReturnValue(['controller-1'])
+    await startBridge(fakeMonitor)
+    expect(m.clearPairings).not.toHaveBeenCalled()
+    expect(m.regenerateIdentity).not.toHaveBeenCalled()
+    expect(getStatus().username).toBe('AA:BB:CC:DD:EE:FF')
+  })
+
+  it('startBridge eagerly marks wasPaired when booting into an already-paired state', async () => {
+    const { startBridge } = await import('../bridge')
+    // wasPaired absent (e.g. a paired bridge restarted before the 30s
+    // poll ever fired); pairedClients non-empty.
+    m.readPairedControllers.mockReturnValue(['controller-1'])
+    await startBridge(fakeMonitor)
+    expect(m.markIdentityPaired).toHaveBeenCalledTimes(1)
+    expect(m.regenerateIdentity).not.toHaveBeenCalled()
   })
 })
