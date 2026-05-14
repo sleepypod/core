@@ -35,10 +35,17 @@ import { buildPowerSwitch } from './accessories/powerSwitch'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
 import { buildSnoozeSwitch } from './accessories/snoozeSwitch'
 import { buildThermostatService } from './accessories/thermostat'
-import { clearPairings, initHapStorage, loadOrCreateIdentity, readPairedControllers, regenerateIdentity } from './storage'
+import { clearPairings, hasAccessoryInfo, initHapStorage, loadOrCreateIdentity, markIdentityPaired, readPairedControllers, regenerateIdentity } from './storage'
 
 const BRIDGE_NAME = 'sleepypod'
 const BRIDGE_PORT = 51827
+
+// Poll cadence for "have we been paired yet?" — drives the sticky
+// wasPaired marker on identity.json that the stranded-bridge detector
+// reads on next startBridge. 30s keeps the window between a pair event
+// and persistence small enough that a fast-follow iOS unpair → restart
+// still gets rotated, without busy-polling the filesystem.
+const PAIR_OBSERVE_INTERVAL_MS = 30_000
 
 // Turbopack splits this module across the instrumentation chunk and the API
 // route chunks, so plain `let` locals would be per-chunk. Back the singleton
@@ -98,7 +105,42 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
   if (getBridge()) return
   initHapStorage()
 
-  const identity = loadOrCreateIdentity()
+  let identity = loadOrCreateIdentity()
+
+  // Stranded-bridge detection: bridge was previously paired but
+  // pairedClients is now empty. iOS removed the bridge via Home app
+  // (HAP pair-remove goes direct to the running server and bypasses
+  // unpairAll()) so the rotate-on-reset from PR #566 never fired.
+  // Republishing on the same AccessoryPairingID strands iOS (stale
+  // pair-verify keys) — same failure mode the prior fix addressed.
+  //
+  // Two arms:
+  //  1. wasPaired marker (new identities) — set by the pair-observe poll
+  //     once we see pairedControllers > 0.
+  //  2. Legacy identity (pre-ADR-0020, no rotation field) with
+  //     AccessoryInfo on disk — wasPaired was never persisted, but the
+  //     existence of AccessoryInfo + empty pairings is functionally the
+  //     same stranded state. Safe one-shot migration: after rotation the
+  //     new identity carries rotation/derivedFrom and won't match again.
+  const pairedCount = readPairedControllers(identity.username).length
+  const isLegacy = identity.rotation === undefined && identity.derivedFrom === undefined
+  const stranded = pairedCount === 0 && (
+    identity.wasPaired === true
+    || (isLegacy && hasAccessoryInfo(identity.username))
+  )
+  if (stranded) {
+    const reason = identity.wasPaired ? 'wasPaired' : 'legacy-published'
+    console.log(`[homekit] stranded bridge detected (${reason}, paired=0) — rotating identity from ${identity.username}`)
+    clearPairings(identity.username)
+    identity = regenerateIdentity()
+  }
+  // Eagerly mark the identity as paired if we boot into a populated
+  // pairing list. Closes the gap where the bridge process crashed/restarted
+  // between pairing and the next 30s poll tick.
+  else if (pairedCount > 0 && !identity.wasPaired) {
+    markIdentityPaired()
+    identity = { ...identity, wasPaired: true }
+  }
   setIdentity(identity)
 
   const accessory = new Bridge(BRIDGE_NAME, uuid.generate(`sleepypod:${identity.username}`))
@@ -156,6 +198,14 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
       category: CATEGORY_BRIDGE,
       setupID: identity.setupId,
       advertiser: pickAdvertiser() as never,
+      // Without an explicit bind, ciao on Eight Layer 4.0.2 (Yocto kirkstone,
+      // Node 24) bound 5353 successfully but its multicast packets never
+      // escaped the pod — observed: avahi sees the service over D-Bus, no
+      // host on the LAN gets responses. Binding to the interface name (not
+      // an IP) lets ciao track address changes on dhcp and covers both
+      // IPv4/IPv6 records. HOMEKIT_BIND env override stays available for
+      // dev / non-pod hosts (default falls back to wlan0 only when present).
+      bind: pickBind() as never,
     })
   }
   catch (e) {
@@ -169,6 +219,28 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
     }
     throw e
   }
+
+  // Pair-observe poll: hap-nodejs doesn't expose a pairing-completed
+  // event we can hook from outside the server, so we sample the on-disk
+  // pairing list and flip the sticky wasPaired marker on the first
+  // observation. Once set, the interval self-cancels — no idle work for
+  // the long-lived (paired) steady state.
+  const pairObserve = setInterval(() => {
+    const cur = getIdentity()
+    if (!cur) return
+    if (cur.wasPaired) {
+      clearInterval(pairObserve)
+      return
+    }
+    if (readPairedControllers(cur.username).length > 0) {
+      markIdentityPaired()
+      setIdentity({ ...cur, wasPaired: true })
+      clearInterval(pairObserve)
+    }
+  }, PAIR_OBSERVE_INTERVAL_MS)
+  // Allow the process to exit if this interval is the only thing left.
+  pairObserve.unref?.()
+  localStoppers.push(() => clearInterval(pairObserve))
 
   setStoppers(localStoppers)
   setSetupURI(accessory.setupURI())
@@ -281,14 +353,25 @@ export async function regenerate(): Promise<ReturnType<typeof loadOrCreateIdenti
   return getIdentity()
 }
 
+function pickBind(): string | undefined {
+  const env = process.env.HOMEKIT_BIND
+  if (env) return env
+  // Pod's wifi interface — only set when actually present so dev hosts
+  // (macOS / linux laptops) fall back to ciao's default unspecified bind.
+  if (existsSync('/sys/class/net/wlan0')) return 'wlan0'
+  return undefined
+}
+
 function pickAdvertiser(): Advertiser {
   const env = process.env.HOMEKIT_ADVERTISER
   if (env === 'avahi' || env === 'ciao') return env
-  // Avahi running locally → use its D-Bus advertiser so we coexist with
-  // the existing _sleepypod._tcp service file rather than binding 5353 twice.
-  if (existsSync('/var/run/avahi-daemon/socket') || existsSync('/run/avahi-daemon/socket')) {
-    return ADVERTISER.AVAHI
-  }
+  // Ciao by default — even when avahi-daemon is running locally. On this
+  // pod's avahi build (Eight Layer 4.0.2, Yocto kirkstone, avahi 0.8 with
+  // a broken chroot/introspection setup) hap-nodejs's avahi advertiser
+  // registers an EntryGroup over D-Bus but never publishes the _hap._tcp
+  // service on the wire — bridge boots fine, iOS never discovers it.
+  // Ciao binds 5353 with SO_REUSEPORT and coexists with avahi-daemon's
+  // static services, so we don't lose the existing _sleepypod._tcp record.
   return ADVERTISER.CIAO
 }
 

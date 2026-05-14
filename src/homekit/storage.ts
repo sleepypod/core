@@ -63,6 +63,13 @@ interface BridgeIdentity {
   derivedFrom?: SeedSourceName
   derivedAt?: number
   rotation?: number
+  // Sticky marker. Set once we observe pairedControllers > 0 for this
+  // identity. Drives the stranded-bridge detection in startBridge: if
+  // pairings later drop to 0 (iOS-initiated removal that bypasses our
+  // unpairAll), the next startBridge rotates identity so the republished
+  // bridge isn't shadowed by iOS's cached pair-verify keys against the
+  // same AccessoryPairingID.
+  wasPaired?: boolean
 }
 
 export interface SeedProbeEntry {
@@ -272,6 +279,16 @@ function pairedFilePath(username: string): string {
 }
 
 /**
+ * True iff `AccessoryInfo.<username>.json` exists. Independent of whether
+ * the file contains any pairings — the file's presence alone proves the
+ * bridge has published with this identity at least once. Drives the
+ * legacy-identity migration arm of the stranded-bridge detector.
+ */
+export function hasAccessoryInfo(username: string): boolean {
+  return existsSync(pairedFilePath(username))
+}
+
+/**
  * Read the controller pairings hap-nodejs persisted under
  * AccessoryInfo.<username>.json. Avoids reaching into the running
  * Bridge's private `_accessoryInfo` field.
@@ -301,6 +318,27 @@ export function clearPairings(username: string): void {
   const key = username.replace(/:/g, '').toUpperCase()
   for (const name of [`AccessoryInfo.${key}.json`, `IdentifierCache.${key}.json`]) {
     rmSync(join(dir, name), { force: true })
+  }
+}
+
+/**
+ * Sticky write of `wasPaired: true` on identity.json. Idempotent — skips
+ * the write if the marker is already set, the file is missing, or the
+ * file is unparseable. Called from startBridge / the pairing poll the
+ * first time we observe pairedControllers > 0 for the current identity.
+ */
+export function markIdentityPaired(): void {
+  const file = join(getStorageDir(), IDENTITY_FILE)
+  if (!existsSync(file)) return
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<BridgeIdentity>
+    if (parsed.wasPaired === true) return
+    if (!parsed.username || !parsed.pincode || !parsed.setupId) return
+    parsed.wasPaired = true
+    writeFileSync(file, JSON.stringify(parsed, null, 2), { mode: 0o600 })
+  }
+  catch (e) {
+    console.warn('[homekit] markIdentityPaired failed:', e instanceof Error ? e.message : e)
   }
 }
 

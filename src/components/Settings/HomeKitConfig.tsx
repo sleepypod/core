@@ -8,7 +8,7 @@ import { Toggle } from './Toggle'
 /**
  * Settings → HomeKit panel.
  * Toggle bridge on/off, show pairing QR + 8-digit setup code,
- * list paired controllers, expose unpair action.
+ * show paired-controller count, expose reset action.
  */
 export function HomeKitConfig() {
   const utils = trpc.useUtils()
@@ -83,11 +83,11 @@ export function HomeKitConfig() {
             {data.pairedControllers.length === 0
               ? <p className="text-xs text-zinc-600">None yet — open the Home app and add accessory.</p>
               : (
-                  <ul className="space-y-1 text-xs text-zinc-400">
-                    {data.pairedControllers.map(id => (
-                      <li key={id} className="font-mono">{id}</li>
-                    ))}
-                  </ul>
+                  <p className="text-xs text-zinc-400">
+                    {data.pairedControllers.length === 1
+                      ? '1 controller paired'
+                      : `${data.pairedControllers.length} controllers paired`}
+                  </p>
                 )}
           </div>
 
@@ -101,7 +101,7 @@ export function HomeKitConfig() {
               disabled={unpair.isPending}
               className="w-full rounded-xl bg-red-950 px-3 py-2 text-xs font-medium text-red-300 active:bg-red-900 disabled:opacity-50"
             >
-              {unpair.isPending ? 'Unpairing…' : 'Unpair all controllers'}
+              {unpair.isPending ? 'Resetting…' : 'Reset HomeKit pairing'}
             </button>
           )}
         </div>

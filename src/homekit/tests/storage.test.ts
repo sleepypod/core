@@ -5,7 +5,9 @@ import { join } from 'node:path'
 import {
   clearPairings,
   getStorageDir,
+  hasAccessoryInfo,
   loadOrCreateIdentity,
+  markIdentityPaired,
   probeSeedSources,
   readIdentityIfPresent,
   readPairedControllers,
@@ -238,6 +240,86 @@ describe('homekit storage', () => {
     // Calling again should remain truthy and not throw
     expect(() => initHapStorage()).not.toThrow()
     expect(g[key]).toBe(true)
+  })
+
+  it('markIdentityPaired sets wasPaired=true and is idempotent on second call', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    const before = loadOrCreateIdentity()
+    expect(before.wasPaired).toBeUndefined()
+
+    markIdentityPaired()
+    const after = JSON.parse(readFileSync(file, 'utf8'))
+    expect(after.wasPaired).toBe(true)
+
+    // Re-mark must not corrupt the file or rotate the identity fields.
+    markIdentityPaired()
+    const again = JSON.parse(readFileSync(file, 'utf8'))
+    expect(again).toEqual(after)
+  })
+
+  it('hasAccessoryInfo reflects AccessoryInfo file presence for the username', () => {
+    const dir = getStorageDir()
+    const username = 'AA:BB:CC:DD:EE:FF'
+    const file = join(dir, 'AccessoryInfo.AABBCCDDEEFF.json')
+    expect(hasAccessoryInfo(username)).toBe(false)
+    writeFileSync(file, '{}')
+    expect(hasAccessoryInfo(username)).toBe(true)
+  })
+
+  it('markIdentityPaired silently no-ops when identity.json is absent', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    if (existsSync(file)) rmSync(file)
+    expect(() => markIdentityPaired()).not.toThrow()
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('markIdentityPaired no-ops when identity.json is incomplete (missing required fields)', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    writeFileSync(file, JSON.stringify({ username: 'AA:BB:CC:DD:EE:FF' }))
+    expect(() => markIdentityPaired()).not.toThrow()
+    const after = JSON.parse(readFileSync(file, 'utf8'))
+    expect(after.wasPaired).toBeUndefined()
+  })
+
+  it('markIdentityPaired warns but does not throw when identity.json is unparseable', () => {
+    const dir = getStorageDir()
+    const file = join(dir, 'identity.json')
+    writeFileSync(file, '{ not json')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => markIdentityPaired()).not.toThrow()
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[homekit] markIdentityPaired failed:',
+        expect.anything(),
+      )
+    }
+    finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('markIdentityPaired warn ternary falls back to the raw thrown value for non-Error rejections', () => {
+    // Covers the `e instanceof Error ? e.message : e` else-branch by
+    // throwing a string from inside the try block.
+    loadOrCreateIdentity() // populate identity.json so existsSync passes
+    const parseSpy = vi.spyOn(JSON, 'parse').mockImplementationOnce(() => {
+      throw 'string-shaped failure'
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => markIdentityPaired()).not.toThrow()
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[homekit] markIdentityPaired failed:',
+        'string-shaped failure',
+      )
+    }
+    finally {
+      warnSpy.mockRestore()
+      parseSpy.mockRestore()
+    }
   })
 
   it('probeSeedSources reports each chain entry without throwing', () => {
