@@ -22,17 +22,24 @@ echo ""
 
 # --------------------------------------------------------------------------------
 # Mode flags
-#   --local    Skip download (code already on disk, e.g. via scp/deploy)
-#   --no-ssh   Skip interactive SSH setup prompt
-#   --branch X Install a specific branch (default: main)
+#   --local            Skip download (code already on disk, e.g. via scp/deploy)
+#   --no-ssh           Skip interactive SSH setup prompt
+#   --branch X         Install a specific branch (default: main). For branches
+#                      outside main/dev/latest, the latest successful build
+#                      artifact is fetched via nightly.link.
+#   --artifact-url URL Pin to an exact CI build artifact (zip from GH Actions).
+#                      Posted on every PR comment so reviewers can install the
+#                      exact SHA the run built, not whatever's latest.
 INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
+ARTIFACT_URL_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --local)  INSTALL_LOCAL=true ;;
-    --no-ssh) SKIP_SSH=true ;;
-    --branch) shift; INSTALL_BRANCH="${1:-}" ;;
+    --local)        INSTALL_LOCAL=true ;;
+    --no-ssh)       SKIP_SSH=true ;;
+    --branch)       shift; INSTALL_BRANCH="${1:-}" ;;
+    --artifact-url) shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
   esac
   shift
 done
@@ -645,6 +652,52 @@ else
       else
         # Clean partial download before fallback
         find "$DOWNLOAD_DIR" -mindepth 1 -delete 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  # Try a CI workflow artifact via nightly.link. Two paths in:
+  #   1. --artifact-url <url>  — pinned to an exact run (PR comments use this).
+  #   2. --branch <name>       — resolved to the latest successful build on
+  #                              that branch, for any branch outside main/dev.
+  # nightly.link proxies private GH artifact downloads as anonymous zips so
+  # the installer needs no auth. Artifact retention (build.yml) gates how
+  # long these stay reachable.
+  if [ "$HAS_BUILD" = false ]; then
+    ARTIFACT_URL="$ARTIFACT_URL_OVERRIDE"
+    if [ -z "$ARTIFACT_URL" ] && [ -n "$INSTALL_BRANCH" ] \
+        && [ "$INSTALL_BRANCH" != "main" ] \
+        && [ "$INSTALL_BRANCH" != "dev" ] \
+        && [ "$INSTALL_BRANCH" != "latest" ]; then
+      ARTIFACT_URL="https://nightly.link/${GITHUB_REPO}/workflows/build/${INSTALL_BRANCH}/sleepypod-core.zip"
+    fi
+
+    if [ -n "$ARTIFACT_URL" ]; then
+      echo "Downloading CI artifact from $ARTIFACT_URL..."
+      if curl -fSL "$ARTIFACT_URL" -o "$DOWNLOAD_DIR/artifact.zip"; then
+        # GH wraps every uploaded artifact in a zip; the tar.gz we want
+        # lives inside. Try unzip first; fall back to python3's zipfile
+        # since Pods reliably ship Python but not always unzip.
+        UNZIPPED=false
+        if command -v unzip &>/dev/null; then
+          unzip -q "$DOWNLOAD_DIR/artifact.zip" -d "$DOWNLOAD_DIR" && UNZIPPED=true
+        elif command -v python3 &>/dev/null; then
+          python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+            "$DOWNLOAD_DIR/artifact.zip" "$DOWNLOAD_DIR" && UNZIPPED=true
+        fi
+        rm -f "$DOWNLOAD_DIR/artifact.zip"
+
+        if [ "$UNZIPPED" = true ] && [ -f "$DOWNLOAD_DIR/sleepypod-core.tar.gz" ]; then
+          tar xzf "$DOWNLOAD_DIR/sleepypod-core.tar.gz" -C "$DOWNLOAD_DIR"
+          rm -f "$DOWNLOAD_DIR/sleepypod-core.tar.gz"
+          HAS_BUILD=true
+          echo "CI artifact downloaded (pre-built)."
+        else
+          echo "  Artifact extraction failed — falling back to source tarball"
+          find "$DOWNLOAD_DIR" -mindepth 1 -delete 2>/dev/null || true
+        fi
+      else
+        echo "  No artifact at $ARTIFACT_URL — falling back to source tarball"
       fi
     fi
   fi
