@@ -79,7 +79,7 @@ jobs:
                gets overwritten on the next CI run. Want to change what's
                here? Edit .github/workflows/build.yml instead. 💤 -->
           <details open>
-          <summary>🛏️ <strong>Beam this PR onto a Pod</strong> ✨</summary>
+          <summary>🛏️ <strong>Beam this PR onto a sleepypod</strong> ✨</summary>
 
           🚀 **Latest build of \`$HEAD_REF\`** — rebuilds every push, zero auth:
           \`\`\`bash
@@ -105,13 +105,16 @@ jobs:
           gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > /tmp/body.md
 
           # Replace the marked section if it exists; otherwise append.
+          # Markers must sit at column 0 — anchoring with ^ stops the regex
+          # from matching when someone references the marker tokens inside
+          # backticks or prose in their PR description.
           python3 - <<'PY'
           import pathlib, re
           body = pathlib.Path('/tmp/body.md').read_text()
           section = pathlib.Path('/tmp/section.md').read_text().rstrip() + '\n'
           pattern = re.compile(
-              r'<!-- sleepypod:install-start -->.*?<!-- sleepypod:install-end -->\n?',
-              re.DOTALL,
+              r'^<!-- sleepypod:install-start -->.*?^<!-- sleepypod:install-end -->\n?',
+              re.DOTALL | re.MULTILINE,
           )
           if pattern.search(body):
               new_body = pattern.sub(section, body)
