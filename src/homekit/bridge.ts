@@ -332,11 +332,13 @@ export async function regenerate(): Promise<ReturnType<typeof loadOrCreateIdenti
 function pickAdvertiser(): Advertiser {
   const env = process.env.HOMEKIT_ADVERTISER
   if (env === 'avahi' || env === 'ciao') return env
-  // Avahi running locally → use its D-Bus advertiser so we coexist with
-  // the existing _sleepypod._tcp service file rather than binding 5353 twice.
-  if (existsSync('/var/run/avahi-daemon/socket') || existsSync('/run/avahi-daemon/socket')) {
-    return ADVERTISER.AVAHI
-  }
+  // Ciao by default — even when avahi-daemon is running locally. On this
+  // pod's avahi build (Eight Layer 4.0.2, Yocto kirkstone, avahi 0.8 with
+  // a broken chroot/introspection setup) hap-nodejs's avahi advertiser
+  // registers an EntryGroup over D-Bus but never publishes the _hap._tcp
+  // service on the wire — bridge boots fine, iOS never discovers it.
+  // Ciao binds 5353 with SO_REUSEPORT and coexists with avahi-daemon's
+  // static services, so we don't lose the existing _sleepypod._tcp record.
   return ADVERTISER.CIAO
 }
 
