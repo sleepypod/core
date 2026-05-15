@@ -218,6 +218,16 @@ block_wan() {
   iptables -t nat -F 2>/dev/null || true
   iptables -t nat -X 2>/dev/null || true
 
+  # Flush conntrack so stale entries from the prior ruleset don't
+  # confuse the new chain (mid-rebuild SYN/ACKs would otherwise hit
+  # the DROP at the bottom on the first packet under the new rules).
+  # Safe: LAN ACCEPT is stateless, so existing LAN connections
+  # recover on their next packet without needing the old conntrack
+  # entry. WAN connections die, which is the intended block_wan effect.
+  if command -v conntrack &>/dev/null; then
+    conntrack -F &>/dev/null || true
+  fi
+
   # Allow established connections
   iptables -I INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   iptables -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
