@@ -849,6 +849,14 @@ else
   # Clean old files if updating (preserve node_modules, .env, data)
   if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
+    # Stop the running service first — it has WorkingDirectory=$INSTALL_DIR
+    # and writes into .next/standalone, racing the rm -rf below and
+    # producing ENOTEMPTY when the writer re-creates a file mid-recurse.
+    # Re-enable+restart happens later in the install flow.
+    if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+      echo "Stopping sleepypod.service before purge..."
+      systemctl stop sleepypod.service
+    fi
     find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
       ! -name 'node_modules' \
       ! -name '.env' \
