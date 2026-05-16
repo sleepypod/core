@@ -19,6 +19,7 @@ import {
   RESTLESS_SCORE_MIN,
   pickMinBucketNonStillEpochs,
 } from '@/src/lib/movement'
+import { getOccupancy } from '@/src/lib/occupancy'
 
 /**
  * SQL fragment: movement.timestamp falls inside an existing sleep_records
@@ -520,6 +521,44 @@ export const biometricsRouter = router({
           message: `Failed to fetch latest sleep record: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
+      }
+    }),
+
+  /**
+   * Current bed occupancy for both sides. Single source of truth used by
+   * the HomeKit OccupancySensor accessory and the web-app PresenceCard.
+   * Combines the movement-table 15-min window with the live capSense2
+   * level signal vs the calibration baseline. See `src/lib/occupancy.ts`.
+   */
+  getOccupancy: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/occupancy', protect: false, tags: ['Biometrics'] } })
+    .input(z.void().optional())
+    .output(z.object({
+      left: z.object({
+        occupied: z.boolean(),
+        movement: z.object({ active: z.boolean(), peakScore: z.number() }),
+        level: z.object({
+          active: z.boolean(),
+          deviation: z.number().nullable(),
+          threshold: z.number().nullable(),
+          ageMs: z.number().nullable(),
+        }),
+      }),
+      right: z.object({
+        occupied: z.boolean(),
+        movement: z.object({ active: z.boolean(), peakScore: z.number() }),
+        level: z.object({
+          active: z.boolean(),
+          deviation: z.number().nullable(),
+          threshold: z.number().nullable(),
+          ageMs: z.number().nullable(),
+        }),
+      }),
+    }))
+    .query(async () => {
+      return {
+        left: getOccupancy('left'),
+        right: getOccupancy('right'),
       }
     }),
 

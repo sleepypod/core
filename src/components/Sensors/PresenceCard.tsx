@@ -3,26 +3,28 @@
 import { useCallback, useState } from 'react'
 import { useSensorFrame, useOnSensorFrame } from '@/src/hooks/useSensorStream'
 import type { CapSenseFrame, CapSense2Frame, SensorFrame } from '@/src/hooks/useSensorStream'
+import { trpc } from '@/src/utils/trpc'
 import { Brain, PersonStanding, Footprints } from 'lucide-react'
 
 /**
- * Variance-based presence detection.
- * Maintains a sliding window of capSense readings per side and computes
- * per-channel standard deviation. Max variance > threshold = occupied.
- * Matches iOS SensorStreamService.isOccupied() logic.
+ * Bed presence card.
+ *
+ * The Occupied/Empty label is driven by the shared virtual sensor on the
+ * server (`trpc.biometrics.getOccupancy`) so HomeKit and the web app always
+ * agree on bed state. The zone activity bars below it are a live
+ * visualization of capSense channel variance — useful for seeing what the
+ * sensor is doing right now, but NOT the source of truth for occupancy.
  */
 
 const VARIANCE_WINDOW = 20
-const PRESENCE_THRESHOLD = 0.05 // variance threshold matching iOS
 const ACTIVITY_NORMALIZE = 0.5 // max variance for 100% bar fill
+const OCCUPANCY_POLL_MS = 3_000
 
 interface VarianceState {
-  leftHistory: number[][] // [frame][channel]
+  leftHistory: number[][]
   rightHistory: number[][]
   leftVariance: number[]
   rightVariance: number[]
-  leftOccupied: boolean
-  rightOccupied: boolean
 }
 
 function computeVariance(values: number[]): number {
@@ -100,27 +102,28 @@ function ZoneActivityRow({ zone, label, icon, leftVariance, rightVariance }: Zon
   )
 }
 
-/**
- * Shows real-time bed presence from capacitive sensors with zone activity bars.
- * Displays left/right side occupied status with head/torso/legs activity breakdown.
- * Matches iOS BedSensorScreen presenceCard layout.
- */
 export function PresenceCard() {
   const capSense = useSensorFrame('capSense')
   const capSense2 = useSensorFrame('capSense2')
   const frame: CapSenseFrame | CapSense2Frame | undefined = capSense2 ?? capSense
 
-  // Variance tracking state
+  const occupancyQuery = trpc.biometrics.getOccupancy.useQuery(undefined, {
+    refetchInterval: OCCUPANCY_POLL_MS,
+    refetchOnWindowFocus: false,
+  })
+  const leftOccupied = occupancyQuery.data?.left.occupied ?? false
+  const rightOccupied = occupancyQuery.data?.right.occupied ?? false
+
+  // Zone activity bars: track per-channel variance over a sliding window of
+  // live frames. This is purely a visualization — NOT used for the
+  // Occupied/Empty judgement.
   const [variance, setVariance] = useState<VarianceState>({
     leftHistory: [],
     rightHistory: [],
     leftVariance: [],
     rightVariance: [],
-    leftOccupied: false,
-    rightOccupied: false,
   })
 
-  // Track variance from incoming capSense frames
   useOnSensorFrame(useCallback((f: SensorFrame) => {
     if (f.type !== 'capSense' && f.type !== 'capSense2') return
 
@@ -131,11 +134,9 @@ export function PresenceCard() {
       const newLeftHistory = [...prev.leftHistory, leftChannels].slice(-VARIANCE_WINDOW)
       const newRightHistory = [...prev.rightHistory, rightChannels].slice(-VARIANCE_WINDOW)
 
-      // Compute per-channel variance (excluding REF channels 6,7)
       const numChannels = Math.max(leftChannels.length, 6)
       const leftVar: number[] = []
       const rightVar: number[] = []
-
       for (let ch = 0; ch < numChannels; ch++) {
         const leftVals = newLeftHistory.map(h => h[ch] ?? 0)
         const rightVals = newRightHistory.map(h => h[ch] ?? 0)
@@ -143,17 +144,11 @@ export function PresenceCard() {
         rightVar.push(computeVariance(rightVals))
       }
 
-      // Occupied = max variance > threshold
-      const maxLeft = Math.max(...leftVar.slice(0, 6))
-      const maxRight = Math.max(...rightVar.slice(0, 6))
-
       return {
         leftHistory: newLeftHistory,
         rightHistory: newRightHistory,
         leftVariance: leftVar,
         rightVariance: rightVar,
-        leftOccupied: maxLeft > PRESENCE_THRESHOLD,
-        rightOccupied: maxRight > PRESENCE_THRESHOLD,
       }
     })
   }, []))
@@ -174,11 +169,11 @@ export function PresenceCard() {
         )}
       </div>
 
-      {/* Status row — left and right occupied indicators */}
+      {/* Status row — left and right occupied indicators (server-derived) */}
       <div className="flex items-center">
         <PresenceStatus
           label="Left"
-          occupied={variance.leftOccupied}
+          occupied={leftOccupied}
           color="#4a9eff"
         />
         <div className="w-9" />
@@ -186,12 +181,12 @@ export function PresenceCard() {
         {/* spacer matching zone labels */}
         <PresenceStatus
           label="Right"
-          occupied={variance.rightOccupied}
+          occupied={rightOccupied}
           color="#40e0d0"
         />
       </div>
 
-      {/* Zone activity bars */}
+      {/* Zone activity bars (raw channel variance — visualization only) */}
       {variance.leftVariance.length > 0 && (
         <div className="space-y-1">
           <ZoneActivityRow
