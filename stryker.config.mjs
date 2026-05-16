@@ -16,18 +16,24 @@ export default {
     configFile: 'vitest.config.mts',
   },
 
-  // Start narrow: mutate only the modules that have real unit test coverage.
-  // Next.js app code (app/, components/, hooks/, utils/) is under-tested
-  // and would add hours of wall-clock time to each mutation run without
-  // telling us anything useful. Expand once we're confident the report is
-  // actionable.
+  // Mutate every module that has unit test coverage. Next.js app code
+  // (app/, components/, ui/, providers/, modules/) is under-tested and
+  // would add hours of wall-clock time without telling us anything
+  // useful — leave those out until they grow real tests.
   mutate: [
     'src/services/**/*.ts',
     'src/scheduler/**/*.ts',
     'src/hardware/**/*.ts',
     'src/lib/**/*.ts',
+    'src/homekit/**/*.ts',
+    'src/server/**/*.ts',
+    'src/streaming/**/*.ts',
+    'src/hooks/**/*.ts',
+    'src/hooks/**/*.tsx',
+    'src/db/**/*.ts',
     '!src/**/tests/**',
     '!src/**/*.test.ts',
+    '!src/**/*.test.tsx',
     '!src/**/*.d.ts',
   ],
 
