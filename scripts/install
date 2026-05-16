@@ -631,12 +631,19 @@ else
   DOWNLOAD_DIR=$(mktemp -d)
   HAS_BUILD=false
 
-  # Try CI release first (includes pre-built .next)
+  # Try CI release first (includes pre-built .next). Mirrors sp-update:
+  #   main / latest  → releases/latest          (semantic-release vX.Y.Z)
+  #   dev            → releases/tags/dev-latest (rolling, dev-release.yml)
+  #   <other>        → releases/tags/<slug>-latest (branch-release.yml)
+  # `feat/foo` slugs to `feat-foo-latest` to match branch-release.yml.
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
   elif [ "$DOWNLOAD_BRANCH" = "dev" ]; then
     # Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
+  else
+    RELEASE_TAG="${DOWNLOAD_BRANCH//\//-}-latest"
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
   fi
 
   if [ -n "${RELEASE_API:-}" ]; then
