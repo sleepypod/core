@@ -14,7 +14,11 @@ import {
   calculateQualityScore,
   type SleepStagesResult,
 } from '@/src/lib/sleep-stages'
-import { POSITION_CHANGE_SCORE_MIN, RESTLESS_SCORE_MIN } from '@/src/lib/movement'
+import {
+  POSITION_CHANGE_SCORE_MIN,
+  RESTLESS_SCORE_MIN,
+  pickMinBucketNonStillEpochs,
+} from '@/src/lib/movement'
 
 /**
  * SQL fragment: movement.timestamp falls inside an existing sleep_records
@@ -318,6 +322,12 @@ export const biometricsRouter = router({
    * events-per-hour following Whoop / Garmin convention; raw PIM sums are
    * available via totalMovement for debug / power-user views.
    *
+   * Density gate: buckets with fewer than pickMinBucketNonStillEpochs(...)
+   * epochs above RESTLESS_SCORE_MIN are dropped. Filters phantom-session
+   * flicker that leaks past inBedExists (a noisy session of record can still
+   * contain many empty-bed sub-windows). See docs/sleep-detector.md "Chart
+   * aggregation" for the rationale.
+   *
    * @param bucketSeconds - 60..86400; chart bucket width (e.g. 300 for 5-min)
    */
   getMovementBuckets: publicProcedure
@@ -359,6 +369,8 @@ export const biometricsRouter = router({
         // Zod has already validated 60..86400, so no injection surface.
         const bSec = Math.floor(input.bucketSeconds)
         const bucket = sql<number>`(${movement.timestamp} / ${sql.raw(String(bSec))}) * ${sql.raw(String(bSec))}`
+        const minNonStill = pickMinBucketNonStillEpochs(bSec)
+        const nonStillEpochs = sql<number>`SUM(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(RESTLESS_SCORE_MIN))} THEN 1 ELSE 0 END)`
 
         const rows = await biometricsDb
           .select({
@@ -370,6 +382,7 @@ export const biometricsRouter = router({
           .from(movement)
           .where(and(...conditions))
           .groupBy(bucket)
+          .having(sql`${nonStillEpochs} >= ${sql.raw(String(minNonStill))}`)
           .orderBy(desc(bucket))
           .limit(input.limit)
 

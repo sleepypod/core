@@ -29,6 +29,7 @@ const dbMock = vi.hoisted(() => {
     chain.onConflictDoNothing = vi.fn(() => chain)
     chain.returning = vi.fn(() => chain)
     chain.groupBy = vi.fn(() => chain)
+    chain.having = vi.fn(() => chain)
     return chain
   }
 
@@ -685,6 +686,7 @@ describe('biometrics error wrapping (INTERNAL_SERVER_ERROR catches)', () => {
       onConflictDoNothing: vi.fn(() => failingChain),
       returning: vi.fn(() => failingChain),
       groupBy: vi.fn(() => failingChain),
+      having: vi.fn(() => failingChain),
     }
     dbMock[method].mockImplementationOnce(() => failingChain)
   }
