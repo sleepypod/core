@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Characteristic } from 'hap-nodejs'
 
-let rows: Array<{ leftBedAt: number | null }> = []
+let rows: Array<{ peak: number | null }> = []
 const all = vi.fn(() => rows)
 
 vi.mock('@/src/db/biometrics', () => ({
@@ -9,9 +9,7 @@ vi.mock('@/src/db/biometrics', () => ({
     select: () => ({
       from: () => ({
         where: () => ({
-          orderBy: () => ({
-            limit: () => ({ all }),
-          }),
+          limit: () => ({ all }),
         }),
       }),
     }),
@@ -19,7 +17,7 @@ vi.mock('@/src/db/biometrics', () => ({
 }))
 
 vi.mock('@/src/db/biometrics-schema', () => ({
-  sleepRecords: { side: {}, leftBedAt: {}, enteredBedAt: {} },
+  movement: { side: {}, timestamp: {}, totalMovement: {} },
 }))
 
 import { buildOccupancySensor } from '../accessories/occupancySensor'
@@ -34,27 +32,35 @@ describe('occupancySensor accessory', () => {
     vi.useRealTimers()
   })
 
-  it('reports OCCUPANCY_NOT_DETECTED when no sleep records exist', async () => {
-    rows = []
+  it('reports OCCUPANCY_NOT_DETECTED when no movement rows exist', async () => {
+    rows = [{ peak: null }]
     const { service, stop } = buildOccupancySensor('left')
     const value = await service.getCharacteristic(Characteristic.OccupancyDetected).handleGetRequest()
     expect(value).toBe(Characteristic.OccupancyDetected.OCCUPANCY_NOT_DETECTED)
     stop()
   })
 
-  it('reports OCCUPANCY_DETECTED when latest record has null leftBedAt', async () => {
-    rows = [{ leftBedAt: null }]
+  it('reports OCCUPANCY_NOT_DETECTED for empty-bed baseline noise', async () => {
+    rows = [{ peak: 30 }]
+    const { service, stop } = buildOccupancySensor('right')
+    const value = await service.getCharacteristic(Characteristic.OccupancyDetected).handleGetRequest()
+    expect(value).toBe(Characteristic.OccupancyDetected.OCCUPANCY_NOT_DETECTED)
+    stop()
+  })
+
+  it('reports OCCUPANCY_DETECTED when peak movement crosses the threshold', async () => {
+    rows = [{ peak: 50 }]
     const { service, stop } = buildOccupancySensor('right')
     const value = await service.getCharacteristic(Characteristic.OccupancyDetected).handleGetRequest()
     expect(value).toBe(Characteristic.OccupancyDetected.OCCUPANCY_DETECTED)
     stop()
   })
 
-  it('reports OCCUPANCY_NOT_DETECTED when latest record has leftBedAt set', async () => {
-    rows = [{ leftBedAt: 1000 }]
+  it('reports OCCUPANCY_DETECTED for a clear movement spike', async () => {
+    rows = [{ peak: 662 }]
     const { service, stop } = buildOccupancySensor('left')
     const value = await service.getCharacteristic(Characteristic.OccupancyDetected).handleGetRequest()
-    expect(value).toBe(Characteristic.OccupancyDetected.OCCUPANCY_NOT_DETECTED)
+    expect(value).toBe(Characteristic.OccupancyDetected.OCCUPANCY_DETECTED)
     stop()
   })
 
@@ -69,7 +75,7 @@ describe('occupancySensor accessory', () => {
   })
 
   it('polls presence on interval', async () => {
-    rows = []
+    rows = [{ peak: 0 }]
     const { stop } = buildOccupancySensor('left')
     const before = all.mock.calls.length
     vi.advanceTimersByTime(15_000)
