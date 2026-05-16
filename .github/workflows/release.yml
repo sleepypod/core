@@ -39,6 +39,19 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Pin commit metadata into .git-info
+        # prebuild writes .git-info via `git rev-parse` from the CI checkout.
+        # Overwrite with explicit github-context values so the file is correct
+        # even if a future prebuild change starts skipping the write.
+        run: |
+          jq -n \
+            --arg branch "${{ github.ref_name }}" \
+            --arg hash "${GITHUB_SHA:0:7}" \
+            --arg title "$(git log -1 --format=%s)" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{branch:$branch, commitHash:$hash, commitTitle:$title, buildDate:$date}' \
+            > .git-info
+
       - name: Set install script default branch
         run: sed -i 's/__BRANCH__/${{ github.ref_name }}/' scripts/install
 
