@@ -128,5 +128,12 @@ install_biometrics_archiver() {
       rm -f "$dst.tmp.$$"
     fi
   done
-  [ "$archived" -gt 0 ] && echo "Archived $archived stranded pre-tmpfs RAW files"
+  # NOTE: must be an `if` block, not `[ ] && echo`. Under set -euo pipefail
+  # at the caller (sp-update / scripts/install), a function whose last
+  # statement is `test && cmd` returns the test's exit code — 1 when
+  # archived=0 (the common steady state on a migrated pod). That bubbled up
+  # as a silent OTA rollback on every upgrade. See sp-update test 2026-05-16.
+  if [ "$archived" -gt 0 ]; then
+    echo "Archived $archived stranded pre-tmpfs RAW files"
+  fi
 }
