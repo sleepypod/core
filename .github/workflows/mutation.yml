@@ -51,8 +51,16 @@ jobs:
             mutate: "src/homekit/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
           - name: server
             mutate: "src/server/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-          - name: streaming-hooks-db
-            mutate: "src/streaming/**/*.ts,src/hooks/**/*.ts,src/hooks/**/*.tsx,src/db/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          # hooks/streaming/db split into three shards: a combined shard
+          # ran a 1049-test baseline (React jsdom overhead) and tripped
+          # the 90-min timeout on PR #590. Each split shard now has a
+          # smaller per-mutant test set under perTest coverage analysis.
+          - name: streaming
+            mutate: "src/streaming/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: hooks
+            mutate: "src/hooks/**/*.ts,src/hooks/**/*.tsx,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: db
+            mutate: "src/db/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
     name: mutate (${{ matrix.shard.name }})
     steps:
       - name: Checkout
