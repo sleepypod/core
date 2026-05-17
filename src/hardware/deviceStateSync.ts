@@ -188,16 +188,18 @@ export class DeviceStateSync {
   /** Write flow/pump data to biometrics DB, rate-limited to once per 60s. */
   recordFlowData(frame: Record<string, unknown>): void {
     // Guard: only process frzHealth frames (could be piezo, capSense, bedTemp, etc.)
+    // `temps` is optional per WireFrzHealth — many pods emit frzHealth without it,
+    // so gate on `pump` only and treat flowrate as missing when absent.
     const left = frame.left
     const right = frame.right
     if (
-      !left || typeof left !== 'object' || !('pump' in left) || !('temps' in left)
-      || !right || typeof right !== 'object' || !('pump' in right) || !('temps' in right)
+      !left || typeof left !== 'object' || !('pump' in left)
+      || !right || typeof right !== 'object' || !('pump' in right)
     ) return
 
     const frzHealth = frame as {
-      left: { pump: { rpm: number }, temps: { flowrate?: number } }
-      right: { pump: { rpm: number }, temps: { flowrate?: number } }
+      left: { pump: { rpm: number }, temps?: { flowrate?: number } }
+      right: { pump: { rpm: number }, temps?: { flowrate?: number } }
     }
 
     const now = Date.now()
@@ -235,8 +237,8 @@ export class DeviceStateSync {
 
   /** Check for flow/pump anomalies on each frzHealth frame. */
   private checkFlowAnomalies(frzHealth: {
-    left: { pump: { rpm: number }, temps: { flowrate?: number } }
-    right: { pump: { rpm: number }, temps: { flowrate?: number } }
+    left: { pump: { rpm: number }, temps?: { flowrate?: number } }
+    right: { pump: { rpm: number }, temps?: { flowrate?: number } }
   }, now: number): void {
     const leftRpm = frzHealth.left.pump.rpm
     const rightRpm = frzHealth.right.pump.rpm
