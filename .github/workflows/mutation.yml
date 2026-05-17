@@ -248,13 +248,17 @@ jobs:
             const scoreBase = totals.killed + totals.survived + totals.timeout + totals.noCov
             const score = scoreBase > 0 ? ((totals.killed / scoreBase) * 100).toFixed(1) : '—'
 
-            // Find-or-create the pinned issue by title. No label-based
-            // lookup because labels don't enforce uniqueness.
+            // Find-or-create the pinned issue by title. Search ALL
+            // states (open + closed) because a PR description saying
+            // "Closes #543" auto-closes the tracker — and on the next
+            // run an open-only lookup misses it, creating a duplicate
+            // (see #591 vs #543 from run 25976792103). We reopen below
+            // if the match is closed.
             const title = process.env.ISSUE_TITLE
             const { data: existing } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              state: 'open',
+              state: 'all',
               labels: 'mutation-testing',
               per_page: 50,
             })
@@ -309,14 +313,18 @@ jobs:
 
             let issueNumber
             if (hit) {
+              // Reopen if a "Closes #NNN" reference in a merged PR
+              // auto-closed the tracker — this issue is meant to live
+              // forever, not get retired by PR descriptions.
               await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: hit.number,
+                state: 'open',
                 body,
               })
               issueNumber = hit.number
-              core.info(`Updated pinned issue #${issueNumber}`)
+              core.info(`Updated pinned issue #${issueNumber}${hit.state === 'closed' ? ' (reopened)' : ''}`)
             } else {
               const created = await github.rest.issues.create({
                 owner: context.repo.owner,
