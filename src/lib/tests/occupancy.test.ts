@@ -180,4 +180,81 @@ describe('getOccupancy', () => {
     expect(r.movement.peakScore).toBe(0)
     expect(r.occupied).toBe(false)
   })
+
+  it('skips level signal when capSense2 frame has fewer than 6 channel values', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [25, 25, 23])
+    calRows = [{ parameters: BASELINE_CAL }]
+    const r = getOccupancy('left')
+    expect(r.level.active).toBe(false)
+    expect(r.level.deviation).toBeNull()
+    expect(r.level.threshold).toBe(BASELINE_CAL.threshold)
+  })
+
+  it('skips level signal when capSense2 frame omits the reference pair', () => {
+    // 6 values, no ref pair — refDelta=0, raw deviation used directly.
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [25, 25, 23, 23, 30, 30])
+    calRows = [{ parameters: BASELINE_CAL }]
+    const r = getOccupancy('left')
+    expect(r.level.active).toBe(true)
+    expect(r.level.deviation as number).toBeGreaterThan(BASELINE_CAL.threshold)
+  })
+
+  it('falls back to nominal reference baseline when calibration omits ref.mean', () => {
+    const calNoRef = { ...BASELINE_CAL }
+    delete (calNoRef as { ref?: unknown }).ref
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [25, 25, 23, 23, 30, 30, 1.16, 1.16])
+    calRows = [{ parameters: calNoRef }]
+    const r = getOccupancy('left')
+    expect(r.level.active).toBe(true)
+  })
+
+  it('skips level signal when calibration channels are malformed', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [25, 25, 23, 23, 30, 30, 1.157, 1.157])
+    calRows = [{ parameters: { ...BASELINE_CAL, channels: { A: { mean: 'bad' }, B: { mean: 13.65 }, C: { mean: 19.3 } } } }]
+    const r = getOccupancy('left')
+    expect(r.level.active).toBe(false)
+    expect(r.level.threshold).toBeNull()
+  })
+
+  it('skips level signal when calibration threshold is missing', () => {
+    const noThreshold = { ...BASELINE_CAL } as Partial<typeof BASELINE_CAL>
+    delete noThreshold.threshold
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [25, 25, 23, 23, 30, 30, 1.157, 1.157])
+    calRows = [{ parameters: noThreshold }]
+    const r = getOccupancy('left')
+    expect(r.level.active).toBe(false)
+    expect(r.level.threshold).toBeNull()
+  })
+
+  it('handles empty movement row (peak=null) without throwing', () => {
+    movementRows = [{ peak: null }]
+    snapshot = null
+    const r = getOccupancy('right')
+    expect(r.movement.peakScore).toBe(0)
+    expect(r.movement.active).toBe(false)
+  })
+
+  it('reads the right-side channel array on a right-side request', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('right', [25, 25, 23, 23, 30, 30, 1.157, 1.157])
+    calRows = [{ parameters: BASELINE_CAL }]
+    const r = getOccupancy('right')
+    expect(r.level.active).toBe(true)
+  })
+
+  it('tolerates db errors during calibration lookup', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [25, 25, 23, 23, 30, 30, 1.157, 1.157])
+    calAll.mockImplementationOnce(() => {
+      throw new Error('cal db gone')
+    })
+    const r = getOccupancy('left')
+    expect(r.level.active).toBe(false)
+    expect(r.level.threshold).toBeNull()
+  })
 })
