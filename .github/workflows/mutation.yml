@@ -39,12 +39,28 @@ jobs:
       matrix:
         shard:
           # The --mutate CLI flag overrides the config's exclude patterns,
-          # so we have to repeat them here per shard. Keep these three
-          # exclusions in sync with stryker.config.mjs's mutate: block.
+          # so we repeat the exclusions here per shard. Keep these in sync
+          # with stryker.config.mjs's mutate: block. Each shard runs on
+          # its own runner in parallel; partition by module group so any
+          # single shard stays under the 90-min job timeout.
           - name: services-scheduler
-            mutate: "src/services/**/*.ts,src/scheduler/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.d.ts"
+            mutate: "src/services/**/*.ts,src/scheduler/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
           - name: hardware-lib
-            mutate: "src/hardware/**/*.ts,src/lib/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.d.ts"
+            mutate: "src/hardware/**/*.ts,src/lib/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: homekit
+            mutate: "src/homekit/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: server
+            mutate: "src/server/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          # hooks/streaming/db split into three shards: a combined shard
+          # ran a 1049-test baseline (React jsdom overhead) and tripped
+          # the 90-min timeout on PR #590. Each split shard now has a
+          # smaller per-mutant test set under perTest coverage analysis.
+          - name: streaming
+            mutate: "src/streaming/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: hooks
+            mutate: "src/hooks/**/*.ts,src/hooks/**/*.tsx,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: db
+            mutate: "src/db/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
     name: mutate (${{ matrix.shard.name }})
     steps:
       - name: Checkout
