@@ -34,12 +34,14 @@ INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
+PURGE_FREE_SLEEP=false
 while [ $# -gt 0 ]; do
   case "$1" in
-    --local)        INSTALL_LOCAL=true ;;
-    --no-ssh)       SKIP_SSH=true ;;
-    --branch)       shift; INSTALL_BRANCH="${1:-}" ;;
-    --artifact-url) shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
+    --local)              INSTALL_LOCAL=true ;;
+    --no-ssh)             SKIP_SSH=true ;;
+    --branch)             shift; INSTALL_BRANCH="${1:-}" ;;
+    --artifact-url)       shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
+    --purge-free-sleep)   PURGE_FREE_SLEEP=true ;;
   esac
   shift
 done
@@ -216,6 +218,18 @@ block_wan() {
   iptables -t nat -F 2>/dev/null || true
   iptables -t nat -X 2>/dev/null || true
 
+  # Flush conntrack so stale entries from the prior ruleset don't
+  # confuse the new chain (mid-rebuild SYN/ACKs would otherwise hit
+  # the DROP at the bottom on the first packet under the new rules).
+  # Safe: the RFC1918 LAN ACCEPTs below are stateless (no -m conntrack),
+  # so existing LAN connections recover on their next packet by matching
+  # the CIDR allow. The ESTABLISHED,RELATED rule loses its entries but
+  # that's fine — LAN traffic falls through to the stateless allow.
+  # WAN connections die, which is the intended block_wan effect.
+  if command -v conntrack &>/dev/null; then
+    conntrack -F &>/dev/null || true
+  fi
+
   # Allow established connections
   iptables -I INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   iptables -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -277,11 +291,127 @@ block_wan() {
   echo "WAN blocked."
 }
 
+# --------------------------------------------------------------------------------
+# free-sleep conflict preflight
+# free-sleep (github.com/throwaway31265/free-sleep) ships three auto-start
+# services, persisted drop-all iptables rules, source/data dirs, and a
+# sudoers fragment. Its iptables rules auto-reload on boot and fight
+# sleepypod's own iptables permanently — even free-sleep's own
+# unblock_internet_access.sh only flushes runtime rules, not the persisted
+# files. Refuse to install on top by default; --purge-free-sleep opts into
+# the documented cleanup so support sessions don't need a separate manual
+# step.
+
+FREE_SLEEP_FINDINGS=()
+
+detect_free_sleep_conflict() {
+  FREE_SLEEP_FINDINGS=()
+  local svc
+  for svc in free-sleep free-sleep-stream free-sleep-update; do
+    if systemctl list-unit-files 2>/dev/null | grep -qE "^${svc}\.service"; then
+      FREE_SLEEP_FINDINGS+=("systemd unit: ${svc}.service")
+    fi
+  done
+  [ -d /home/dac/free-sleep ]                && FREE_SLEEP_FINDINGS+=("directory:    /home/dac/free-sleep")
+  [ -d /persistent/free-sleep-data ]         && FREE_SLEEP_FINDINGS+=("directory:    /persistent/free-sleep-data")
+  # Only the v6 rules file is a unique free-sleep indicator — sleepypod's
+  # own block_wan persists /etc/iptables/iptables.rules but never the v6
+  # file, so flagging the v4 file would false-positive on every reinstall.
+  [ -f /etc/iptables/ip6tables.rules ]       && FREE_SLEEP_FINDINGS+=("persisted:    /etc/iptables/ip6tables.rules")
+}
+
+purge_free_sleep() {
+  echo ""
+  echo "========================================"
+  echo "  Purging free-sleep (--purge-free-sleep)"
+  echo "========================================"
+
+  systemctl stop free-sleep free-sleep-stream free-sleep-update 2>/dev/null || true
+  systemctl disable free-sleep free-sleep-stream free-sleep-update 2>/dev/null || true
+  rm -f /etc/systemd/system/free-sleep.service \
+        /etc/systemd/system/free-sleep-stream.service \
+        /etc/systemd/system/free-sleep-update.service
+  systemctl daemon-reload
+
+  iptables -F 2>/dev/null || true
+  iptables -X 2>/dev/null || true
+  iptables -t nat -F 2>/dev/null || true
+  iptables -t nat -X 2>/dev/null || true
+  if command -v ip6tables &>/dev/null; then
+    ip6tables -F 2>/dev/null || true
+    ip6tables -X 2>/dev/null || true
+  fi
+
+  rm -f /etc/iptables/iptables.rules /etc/iptables/ip6tables.rules
+  rm -rf /home/dac/free-sleep /persistent/free-sleep-data
+  rm -f /etc/sudoers.d/dac
+
+  echo "free-sleep services stopped+disabled, iptables flushed, persisted rules and dirs removed."
+  echo "Skipping reboot — install will continue and reconfigure iptables itself."
+}
+
+preflight_free_sleep_conflict() {
+  detect_free_sleep_conflict
+  if [ ${#FREE_SLEEP_FINDINGS[@]} -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "$PURGE_FREE_SLEEP" = true ]; then
+    echo "Detected free-sleep artifacts:"
+    local item
+    for item in "${FREE_SLEEP_FINDINGS[@]}"; do
+      echo "  - $item"
+    done
+    purge_free_sleep
+    return 0
+  fi
+
+  echo "" >&2
+  echo "========================================" >&2
+  echo "  free-sleep detected — refusing to install" >&2
+  echo "========================================" >&2
+  echo "" >&2
+  echo "Found the following free-sleep artifacts on this Pod:" >&2
+  local item
+  for item in "${FREE_SLEEP_FINDINGS[@]}"; do
+    echo "  - $item" >&2
+  done
+  echo "" >&2
+  echo "free-sleep installs persistent drop-all iptables rules that auto-reload" >&2
+  echo "on boot and fight sleepypod's own iptables — cloud connectivity will" >&2
+  echo "fail until they are removed. Running free-sleep's unblock script only" >&2
+  echo "flushes the running rules, not the files on disk." >&2
+  echo "" >&2
+  echo "Run this on the Pod to clean up, then re-run the installer:" >&2
+  echo "" >&2
+  echo "----------------------------------------" >&2
+  echo "sudo systemctl stop free-sleep free-sleep-stream free-sleep-update 2>/dev/null" >&2
+  echo "sudo systemctl disable free-sleep free-sleep-stream free-sleep-update 2>/dev/null" >&2
+  echo "sudo rm -f /etc/systemd/system/free-sleep.service \\" >&2
+  echo "           /etc/systemd/system/free-sleep-stream.service \\" >&2
+  echo "           /etc/systemd/system/free-sleep-update.service" >&2
+  echo "sudo systemctl daemon-reload" >&2
+  echo "sudo iptables -F && sudo iptables -X && sudo iptables -t nat -F && sudo iptables -t nat -X" >&2
+  echo "sudo ip6tables -F && sudo ip6tables -X" >&2
+  echo "sudo rm -f /etc/iptables/iptables.rules /etc/iptables/ip6tables.rules" >&2
+  echo "sudo rm -rf /home/dac/free-sleep /persistent/free-sleep-data" >&2
+  echo "sudo rm -f /etc/sudoers.d/dac" >&2
+  echo "sudo reboot" >&2
+  echo "----------------------------------------" >&2
+  echo "" >&2
+  echo "Or re-run the installer with --purge-free-sleep to let it do the cleanup" >&2
+  echo "for you (skips the reboot step; install continues immediately)." >&2
+  echo "" >&2
+  exit 1
+}
+
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
   echo "Error: This script must be run as root (use sudo)" >&2
   exit 1
 fi
+
+preflight_free_sleep_conflict
 
 # Force /usr/local/bin to the front of PATH and strip Volta entries.
 # Pod 3 stock firmware (and free-sleep installs) ship Volta at
@@ -733,6 +863,14 @@ else
   # Clean old files if updating (preserve node_modules, .env, data)
   if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
+    # Stop the running service first — it has WorkingDirectory=$INSTALL_DIR
+    # and writes into .next/standalone, racing the rm -rf below and
+    # producing ENOTEMPTY when the writer re-creates a file mid-recurse.
+    # Re-enable+restart happens later in the install flow.
+    if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+      echo "Stopping sleepypod.service before purge..."
+      systemctl stop sleepypod.service
+    fi
     find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
       ! -name 'node_modules' \
       ! -name '.env' \
