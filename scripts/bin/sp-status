@@ -70,12 +70,12 @@ NATS_STATE=$(active_or nats-server.service)
 JETSTREAM_DIR_STATE="missing"
 [ -d /persistent/jetstream ] && JETSTREAM_DIR_STATE="present"
 
-if [ ! -f /opt/eight/bin/frank.sh ] && [ "$NATS_STATE" = "active" ] && [ "$JETSTREAM_DIR_STATE" = "present" ]; then
+if [ "$NATS_STATE" = "active" ] && [ "$JETSTREAM_DIR_STATE" = "present" ]; then
   printf "pipeline:    NATS JetStream (new firmware, April 2026+)\n"
 elif [ -f /opt/eight/bin/frank.sh ]; then
-  printf "pipeline:    tmpfs *.RAW (old firmware)\n"
+  printf "pipeline:    tmpfs *.RAW via frank.sh shim (old firmware)\n"
 else
-  printf "pipeline:    UNKNOWN — frank.sh absent and NATS not fully up; see below\n"
+  printf "pipeline:    direct *.RAW (mid-era firmware; frank.sh removed ~year ago, no NATS)\n"
 fi
 
 printf "nats-server: %s" "$NATS_STATE"
