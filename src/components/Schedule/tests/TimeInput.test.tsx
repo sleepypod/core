@@ -85,6 +85,22 @@ describe('TimeInput component', () => {
     )
     expect(container.querySelector('label span')).toBeNull()
   })
+
+  it('allows shrinking below intrinsic width so it does not overlap siblings in a grid cell', () => {
+    // Native time inputs have a large intrinsic min-width that overflows
+    // narrow grid columns on mobile unless every nested box opts into
+    // min-width: 0. Regression guard for the overlapping Bedtime / Wake up
+    // controls in the CurveEditor sleep-window section.
+    const { container } = render(
+      <TimeInput label="On time" value="22:00" onChange={() => {}} />,
+    )
+    const root = container.firstElementChild as HTMLElement | null
+    const inputWrapper = container.querySelector('div > div.relative') as HTMLElement | null
+    const input = getTimeInput(container)
+    expect(root?.className).toContain('min-w-0')
+    expect(inputWrapper?.className).toContain('min-w-0')
+    expect(input.className).toContain('min-w-0')
+  })
 })
 
 describe('formatTime12h', () => {
