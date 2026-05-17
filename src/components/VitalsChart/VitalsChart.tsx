@@ -130,29 +130,66 @@ export function VitalsChart({
     return PADDING.top + chartHeight - ((val - minVal) / valRange) * chartHeight
   }, [minVal, maxVal, chartHeight])
 
-  // Build SVG path with Catmull-Rom-like smoothing via quadratic beziers
+  // Adaptive gap threshold: break the line when inter-sample delta exceeds
+  // 3× the median across the combined primary+secondary series. Same threshold
+  // for both lines keeps dual-side breaks visually aligned.
+  const gapThresholdMs = useMemo(() => {
+    const times: number[] = []
+    for (const d of sorted) times.push(d.timestamp.getTime())
+    for (const d of sortedSecondary) times.push(d.timestamp.getTime())
+    times.sort((a, b) => a - b)
+    const deltas: number[] = []
+    for (let i = 1; i < times.length; i++) deltas.push(times[i] - times[i - 1])
+    if (deltas.length === 0) return Number.POSITIVE_INFINITY
+    deltas.sort((a, b) => a - b)
+    const median = deltas[Math.floor(deltas.length / 2)] || 0
+    return median * 3
+  }, [sorted, sortedSecondary])
+
+  // Build SVG path with Catmull-Rom-like smoothing via quadratic beziers.
+  // Breaks the path at any gap exceeding gapThresholdMs so off-bed / dropout
+  // periods don't render as straight lines across the void.
   const { linePath, areaPath } = useMemo(() => {
     if (sorted.length < 2) return { linePath: '', areaPath: '' }
 
     const points = sorted.map(d => ({
       x: scaleX(d.timestamp.getTime()),
       y: scaleY(d.value),
+      t: d.timestamp.getTime(),
     }))
 
-    // Simple line path
-    let line = `M ${points[0].x},${points[0].y}`
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1]
+    const baseline = PADDING.top + chartHeight
+    let line = ''
+    let area = ''
+    let segmentStart = 0
+
+    for (let i = 0; i < points.length; i++) {
       const curr = points[i]
-      const cpx = (prev.x + curr.x) / 2
-      line += ` Q ${cpx},${prev.y} ${curr.x},${curr.y}`
+      const isGap = i > 0 && (curr.t - points[i - 1].t) > gapThresholdMs
+
+      if (i === 0 || isGap) {
+        if (isGap) {
+          const prev = points[i - 1]
+          area += ` L ${prev.x},${baseline} L ${points[segmentStart].x},${baseline} Z`
+          segmentStart = i
+        }
+        line += `${line ? ' ' : ''}M ${curr.x},${curr.y}`
+        area += `${area ? ' ' : ''}M ${curr.x},${curr.y}`
+      }
+      else {
+        const prev = points[i - 1]
+        const cpx = (prev.x + curr.x) / 2
+        const seg = ` Q ${cpx},${prev.y} ${curr.x},${curr.y}`
+        line += seg
+        area += seg
+      }
     }
 
-    const baseline = PADDING.top + chartHeight
-    const area = line + ` L ${points[points.length - 1].x},${baseline} L ${points[0].x},${baseline} Z`
+    const last = points[points.length - 1]
+    area += ` L ${last.x},${baseline} L ${points[segmentStart].x},${baseline} Z`
 
     return { linePath: line, areaPath: area }
-  }, [sorted, scaleX, scaleY, chartHeight])
+  }, [sorted, scaleX, scaleY, chartHeight, gapThresholdMs])
 
   // Build secondary line path (no area fill — just a line overlay)
   const secondaryLinePath = useMemo(() => {
@@ -160,16 +197,23 @@ export function VitalsChart({
     const points = sortedSecondary.map(d => ({
       x: scaleX(d.timestamp.getTime()),
       y: scaleY(d.value),
+      t: d.timestamp.getTime(),
     }))
-    let line = `M ${points[0].x},${points[0].y}`
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1]
+    let line = ''
+    for (let i = 0; i < points.length; i++) {
       const curr = points[i]
-      const cpx = (prev.x + curr.x) / 2
-      line += ` Q ${cpx},${prev.y} ${curr.x},${curr.y}`
+      const isGap = i > 0 && (curr.t - points[i - 1].t) > gapThresholdMs
+      if (i === 0 || isGap) {
+        line += `${line ? ' ' : ''}M ${curr.x},${curr.y}`
+      }
+      else {
+        const prev = points[i - 1]
+        const cpx = (prev.x + curr.x) / 2
+        line += ` Q ${cpx},${prev.y} ${curr.x},${curr.y}`
+      }
     }
     return line
-  }, [sortedSecondary, scaleX, scaleY])
+  }, [sortedSecondary, scaleX, scaleY, gapThresholdMs])
 
   // X-axis tick labels (4 ticks)
   const xTicks = useMemo(() => {
