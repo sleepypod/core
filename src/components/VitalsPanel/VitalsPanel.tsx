@@ -97,6 +97,35 @@ function smoothData<T extends Record<string, unknown>>(
   })
 }
 
+// Group points into nights. A point's "night" is the local calendar date it
+// belongs to with everything before 6am rolled into the previous day, so a
+// session spanning midnight ends up under a single key.
+function nightKey(ts: Date): string {
+  const local = new Date(ts.getTime())
+  if (local.getHours() < 6) local.setDate(local.getDate() - 1)
+  return `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`
+}
+
+function groupByNight<T extends { timestamp: Date }>(points: T[]): Map<string, T[]> {
+  const map = new Map<string, T[]>()
+  for (const p of points) {
+    const key = nightKey(p.timestamp)
+    let bucket = map.get(key)
+    if (!bucket) {
+      bucket = []
+      map.set(key, bucket)
+    }
+    bucket.push(p)
+  }
+  return map
+}
+
+function formatNightLabel(key: string): string {
+  const [y, m, d] = key.split('-').map(n => parseInt(n, 10))
+  const dt = new Date(y, m - 1, d)
+  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' })
+}
+
 // Side colors for dual-side comparison
 const SIDE_COLORS = {
   left: { primary: '#5cb8e0', label: 'Left' }, // cool blue
@@ -577,15 +606,13 @@ function VitalsChartCard({
         </div>
       </div>
 
-      {/* Chart — dual-line overlay when secondary data is provided */}
-      <VitalsChart
+      {/* Small-multiples: one mini chart per sleep night, shared y-scale. */}
+      <FacetedNightCharts
         data={data}
         color={color}
         gradientId={gradientId}
         zones={zones}
-        average={average}
         unit={unit}
-        height={180}
         label={label}
         secondary={secondary && secondary.data.length > 0
           ? {
@@ -593,7 +620,6 @@ function VitalsChartCard({
               color: secondary.color,
               gradientId: secondary.gradientId,
               label: secondary.label,
-              average: secondary.average,
             }
           : undefined}
       />
@@ -640,6 +666,93 @@ function VitalsChartCard({
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function FacetedNightCharts({
+  data,
+  color,
+  gradientId,
+  zones,
+  unit,
+  label,
+  secondary,
+}: {
+  data: { timestamp: Date, value: number }[]
+  color: string
+  gradientId: string
+  zones: { label: string, min: number, max: number, color: string }[]
+  unit: string
+  label?: string
+  secondary?: { data: { timestamp: Date, value: number }[], color: string, gradientId: string, label: string }
+}) {
+  const primaryByNight = useMemo(() => groupByNight(data), [data])
+  const secondaryByNight = useMemo(
+    () => (secondary ? groupByNight(secondary.data) : new Map<string, { timestamp: Date, value: number }[]>()),
+    [secondary],
+  )
+
+  const nightKeys = useMemo(() => {
+    const set = new Set<string>()
+    for (const k of primaryByNight.keys()) set.add(k)
+    for (const k of secondaryByNight.keys()) set.add(k)
+    return [...set].sort()
+  }, [primaryByNight, secondaryByNight])
+
+  // Shared y-range across all nights so cells are honestly comparable.
+  const [yMin, yMax] = useMemo(() => {
+    const all: number[] = []
+    for (const p of data) all.push(p.value)
+    if (secondary) for (const p of secondary.data) all.push(p.value)
+    if (all.length === 0) return [undefined, undefined] as const
+    const lo = Math.min(...all)
+    const hi = Math.max(...all)
+    const range = hi - lo || 1
+    return [lo - range * 0.05, hi + range * 0.05] as const
+  }, [data, secondary])
+
+  if (nightKeys.length === 0) {
+    return (
+      <div className="flex items-center justify-center text-zinc-500 text-sm" style={{ height: 160 }}>
+        No data available
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-1">
+      {nightKeys.map((key) => {
+        const primary = primaryByNight.get(key) ?? []
+        const secondaryPoints = secondaryByNight.get(key) ?? []
+        return (
+          <div key={key} className="flex shrink-0 grow basis-0 min-w-[110px] flex-col gap-1">
+            <span className="text-[9px] text-zinc-500 text-center tabular-nums">
+              {formatNightLabel(key)}
+            </span>
+            <VitalsChart
+              data={primary}
+              color={color}
+              gradientId={`${gradientId}-${key}`}
+              zones={zones}
+              unit={unit}
+              height={140}
+              label={label}
+              yMin={yMin}
+              yMax={yMax}
+              compact
+              secondary={secondaryPoints.length > 0 && secondary
+                ? {
+                    data: secondaryPoints,
+                    color: secondary.color,
+                    gradientId: `${secondary.gradientId}-${key}`,
+                    label: secondary.label,
+                  }
+                : undefined}
+            />
+          </div>
+        )
+      })}
     </div>
   )
 }

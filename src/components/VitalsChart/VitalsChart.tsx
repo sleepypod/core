@@ -37,9 +37,16 @@ interface VitalsChartProps {
   secondary?: SecondaryDataSet
   /** Format function for x-axis time labels */
   formatTime?: (date: Date) => string
+  /** Force y-axis lower bound. When set, auto-fit padding is skipped. */
+  yMin?: number
+  /** Force y-axis upper bound. When set, auto-fit padding is skipped. */
+  yMax?: number
+  /** Tightens left padding and tick counts for small-multiple cells. */
+  compact?: boolean
 }
 
 const PADDING = { top: 8, right: 8, bottom: 24, left: 36 }
+const COMPACT_PADDING = { top: 6, right: 4, bottom: 20, left: 22 }
 
 function defaultFormatTime(date: Date): string {
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
@@ -61,10 +68,14 @@ export function VitalsChart({
   label,
   secondary,
   formatTime = defaultFormatTime,
+  yMin,
+  yMax,
+  compact = false,
 }: VitalsChartProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [svgWidth, setSvgWidth] = useState(320)
+  const padding = compact ? COMPACT_PADDING : PADDING
 
   const measureRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) return
@@ -78,8 +89,8 @@ export function VitalsChart({
     return () => observer.disconnect()
   }, [])
 
-  const chartWidth = svgWidth - PADDING.left - PADDING.right
-  const chartHeight = height - PADDING.top - PADDING.bottom
+  const chartWidth = svgWidth - padding.left - padding.right
+  const chartHeight = height - padding.top - padding.bottom
 
   const sorted = useMemo(() =>
     [...data].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime()),
@@ -94,22 +105,31 @@ export function VitalsChart({
   const { minVal, maxVal, minTime, maxTime } = useMemo(() => {
     const allPoints = [...sorted, ...sortedSecondary]
     if (allPoints.length === 0) {
-      return { minVal: 0, maxVal: 100, minTime: 0, maxTime: 1 }
-    }
-    const values = allPoints.map(d => d.value)
-    let lo = Math.min(...values)
-    let hi = Math.max(...values)
-
-    // Include zone ranges in scale
-    for (const zone of zones) {
-      lo = Math.min(lo, zone.min)
-      hi = Math.max(hi, zone.max)
+      return { minVal: yMin ?? 0, maxVal: yMax ?? 100, minTime: 0, maxTime: 1 }
     }
 
-    // Add 5% padding
-    const range = hi - lo || 1
-    lo = lo - range * 0.05
-    hi = hi + range * 0.05
+    let lo: number
+    let hi: number
+    if (yMin != null && yMax != null) {
+      lo = yMin
+      hi = yMax
+    }
+    else {
+      const values = allPoints.map(d => d.value)
+      lo = yMin ?? Math.min(...values)
+      hi = yMax ?? Math.max(...values)
+
+      // Include zone ranges in scale
+      for (const zone of zones) {
+        if (yMin == null) lo = Math.min(lo, zone.min)
+        if (yMax == null) hi = Math.max(hi, zone.max)
+      }
+
+      // Add 5% padding only to auto-fit bounds
+      const range = hi - lo || 1
+      if (yMin == null) lo = lo - range * 0.05
+      if (yMax == null) hi = hi + range * 0.05
+    }
 
     const times = allPoints.map(d => d.timestamp.getTime())
     return {
@@ -118,17 +138,17 @@ export function VitalsChart({
       minTime: Math.min(...times),
       maxTime: Math.max(...times),
     }
-  }, [sorted, sortedSecondary, zones])
+  }, [sorted, sortedSecondary, zones, yMin, yMax])
 
   const scaleX = useCallback((time: number) => {
     const timeRange = maxTime - minTime || 1
-    return PADDING.left + ((time - minTime) / timeRange) * chartWidth
-  }, [minTime, maxTime, chartWidth])
+    return padding.left + ((time - minTime) / timeRange) * chartWidth
+  }, [minTime, maxTime, chartWidth, padding.left])
 
   const scaleY = useCallback((val: number) => {
     const valRange = maxVal - minVal || 1
-    return PADDING.top + chartHeight - ((val - minVal) / valRange) * chartHeight
-  }, [minVal, maxVal, chartHeight])
+    return padding.top + chartHeight - ((val - minVal) / valRange) * chartHeight
+  }, [minVal, maxVal, chartHeight, padding.top])
 
   // Adaptive gap threshold: break the line when inter-sample delta exceeds
   // 3× the median across the combined primary+secondary series. Same threshold
@@ -158,7 +178,7 @@ export function VitalsChart({
       t: d.timestamp.getTime(),
     }))
 
-    const baseline = PADDING.top + chartHeight
+    const baseline = padding.top + chartHeight
     let line = ''
     let area = ''
     let segmentStart = 0
@@ -189,7 +209,7 @@ export function VitalsChart({
     area += ` L ${last.x},${baseline} L ${points[segmentStart].x},${baseline} Z`
 
     return { linePath: line, areaPath: area }
-  }, [sorted, scaleX, scaleY, chartHeight, gapThresholdMs])
+  }, [sorted, scaleX, scaleY, chartHeight, gapThresholdMs, padding.top])
 
   // Build secondary line path (no area fill — just a line overlay)
   const secondaryLinePath = useMemo(() => {
@@ -215,28 +235,28 @@ export function VitalsChart({
     return line
   }, [sortedSecondary, scaleX, scaleY, gapThresholdMs])
 
-  // X-axis tick labels (4 ticks)
+  // X-axis tick labels (4 ticks, or 2 in compact mode)
   const xTicks = useMemo(() => {
     if (sorted.length < 2) return []
-    const count = 4
+    const count = compact ? 2 : 4
     const ticks: { x: number, label: string }[] = []
     for (let i = 0; i < count; i++) {
       const t = minTime + (i / (count - 1)) * (maxTime - minTime)
       ticks.push({ x: scaleX(t), label: formatTime(new Date(t)) })
     }
     return ticks
-  }, [sorted.length, minTime, maxTime, scaleX, formatTime])
+  }, [sorted.length, minTime, maxTime, scaleX, formatTime, compact])
 
-  // Y-axis tick labels (3 ticks)
+  // Y-axis tick labels (3 ticks, or 2 in compact mode)
   const yTicks = useMemo(() => {
-    const count = 3
+    const count = compact ? 2 : 3
     const ticks: { y: number, label: string }[] = []
     for (let i = 0; i < count; i++) {
       const v = minVal + (i / (count - 1)) * (maxVal - minVal)
       ticks.push({ y: scaleY(v), label: Math.round(v).toString() })
     }
     return ticks
-  }, [minVal, maxVal, scaleY])
+  }, [minVal, maxVal, scaleY, compact])
 
   const handleClick = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     if (sorted.length === 0) return
@@ -370,7 +390,7 @@ export function VitalsChart({
           return (
             <rect
               key={zone.label}
-              x={PADDING.left}
+              x={padding.left}
               y={y1}
               width={chartWidth}
               height={Math.max(0, y2 - y1)}
@@ -383,15 +403,15 @@ export function VitalsChart({
         {yTicks.map(tick => (
           <g key={tick.label}>
             <line
-              x1={PADDING.left}
+              x1={padding.left}
               y1={tick.y}
-              x2={PADDING.left + chartWidth}
+              x2={padding.left + chartWidth}
               y2={tick.y}
               stroke="rgb(63 63 70)" /* zinc-700 */
               strokeWidth="0.5"
             />
             <text
-              x={PADDING.left - 6}
+              x={padding.left - 6}
               y={tick.y + 3}
               textAnchor="end"
               fill="rgb(113 113 122)" /* zinc-500 */
@@ -406,9 +426,9 @@ export function VitalsChart({
         {average != null && (
           <g>
             <line
-              x1={PADDING.left}
+              x1={padding.left}
               y1={scaleY(average)}
-              x2={PADDING.left + chartWidth}
+              x2={padding.left + chartWidth}
               y2={scaleY(average)}
               stroke={color}
               strokeWidth="1"
@@ -416,7 +436,7 @@ export function VitalsChart({
               opacity="0.3"
             />
             <text
-              x={PADDING.left + 2}
+              x={padding.left + 2}
               y={scaleY(average) - 4}
               fill={color}
               fontSize="8"
@@ -462,9 +482,9 @@ export function VitalsChart({
         {secondary?.average != null && (
           <g>
             <line
-              x1={PADDING.left}
+              x1={padding.left}
               y1={scaleY(secondary.average)}
-              x2={PADDING.left + chartWidth}
+              x2={padding.left + chartWidth}
               y2={scaleY(secondary.average)}
               stroke={secondary.color}
               strokeWidth="1"
@@ -479,9 +499,9 @@ export function VitalsChart({
           <g>
             <line
               x1={scaleX(selectedPoint.timestamp.getTime())}
-              y1={PADDING.top}
+              y1={padding.top}
               x2={scaleX(selectedPoint.timestamp.getTime())}
-              y2={PADDING.top + chartHeight}
+              y2={padding.top + chartHeight}
               stroke="white"
               strokeWidth="1"
               opacity="0.3"
