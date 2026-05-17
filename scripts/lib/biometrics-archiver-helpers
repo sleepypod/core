@@ -24,32 +24,23 @@ install_biometrics_archiver() {
     return 0
   fi
 
-  # New firmware (April 2026+, e.g. rat_version ca35aafa) refactored away
-  # from /opt/eight/bin/frank.sh and writes biometric frames to NATS
-  # JetStream at /persistent/jetstream/ instead of /persistent/*.RAW. The
-  # whole tmpfs + cd-patch workflow is inapplicable there; installing the
-  # mount + timers anyway risks tripping sp-update's set -euo pipefail (a
-  # subsequent `systemctl enable --now <timer>` failure rolled back OTA
-  # updates on Pod 5 with the new firmware). Skip cleanly when the canary
-  # shim isn't present.
+  # New firmware (April 2026+, e.g. rat_version ca35aafa) writes biometric
+  # frames to NATS JetStream stream `raw` (subject raw.>) at
+  # /persistent/jetstream/ instead of /persistent/*.RAW. The whole
+  # tmpfs + cd-patch workflow is inapplicable there; installing the mount
+  # + timers anyway tripped sp-update's set -euo pipefail (a subsequent
+  # `systemctl enable --now <timer>` failure rolled back OTA updates on
+  # Pod 5 with the new firmware). Skip cleanly when NATS is the data path.
   #
-  # frank.sh absence is the gating signal (the patch literally cannot
-  # apply without it). nats-server + /persistent/jetstream are reported
-  # alongside so the log line tells the operator whether this is the
-  # expected new-firmware path or an unexpected broken-old-firmware case.
-  if [ ! -f /opt/eight/bin/frank.sh ]; then
-    local nats_state="missing"
-    if systemctl is-active --quiet nats-server.service 2>/dev/null; then
-      nats_state="active"
-    fi
-    local jetstream_state="missing"
-    [ -d /persistent/jetstream ] && jetstream_state="present"
-
-    if [ "$nats_state" = active ] && [ "$jetstream_state" = present ]; then
-      echo "biometrics-archiver: new firmware detected (frank.sh absent; nats-server active; /persistent/jetstream present) — skipping tmpfs setup"
-    else
-      echo "biometrics-archiver: frank.sh absent (nats-server=$nats_state, jetstream=$jetstream_state) — skipping tmpfs setup"
-    fi
+  # NOTE: `frank.sh` absence is NOT a reliable canary on its own —
+  # frankenfirmware shipped without the shim ~1 year ago, so a large mid-
+  # era population also has no /opt/eight/bin/frank.sh but is still on
+  # the .RAW write path (firmware direct → /persistent/*.RAW). Those pods
+  # depend on the archive/migration loop below to keep eMMC from filling.
+  # Gate strictly on the new-firmware NATS signals.
+  if systemctl is-active --quiet nats-server.service 2>/dev/null \
+     && [ -d /persistent/jetstream ]; then
+    echo "biometrics-archiver: new firmware detected (nats-server active; /persistent/jetstream present) — skipping tmpfs setup"
     return 0
   fi
 
