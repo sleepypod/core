@@ -38,7 +38,10 @@ describe('pickMovementBucketSeconds', () => {
 describe('pickMinBucketNonStillEpochs', () => {
   test('uses the floor for small day-view buckets', () => {
     expect(pickMinBucketNonStillEpochs(MOVEMENT_BUCKET_DAY_SECONDS)).toBe(MIN_BUCKET_NONSTILL_FLOOR)
-    expect(pickMinBucketNonStillEpochs(60)).toBe(MIN_BUCKET_NONSTILL_FLOOR)
+  })
+
+  test('caps at available epochs for sub-floor buckets', () => {
+    expect(pickMinBucketNonStillEpochs(60)).toBe(1)
   })
 
   test('scales linearly above 10 min, requiring three hits in a 30-min bucket', () => {

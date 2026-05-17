@@ -31,5 +31,7 @@ export function pickMovementBucketSeconds(rangeMs: number): number {
 export const MIN_BUCKET_NONSTILL_FLOOR = 2
 
 export function pickMinBucketNonStillEpochs(bucketSeconds: number): number {
-  return Math.max(MIN_BUCKET_NONSTILL_FLOOR, Math.floor(bucketSeconds / 600))
+  const availableEpochs = Math.floor(bucketSeconds / 60)
+  const desired = Math.max(MIN_BUCKET_NONSTILL_FLOOR, Math.floor(bucketSeconds / 600))
+  return Math.min(availableEpochs, desired)
 }
