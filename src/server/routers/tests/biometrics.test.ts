@@ -29,6 +29,7 @@ const dbMock = vi.hoisted(() => {
     chain.onConflictDoNothing = vi.fn(() => chain)
     chain.returning = vi.fn(() => chain)
     chain.groupBy = vi.fn(() => chain)
+    chain.having = vi.fn(() => chain)
     return chain
   }
 
@@ -87,6 +88,19 @@ vi.mock('@/src/db', () => ({
 vi.mock('@/src/server/routers/raw', () => rawMock)
 vi.mock('@/src/lib/sleep-stages', () => sleepStagesMock)
 
+const occupancyMock = vi.hoisted(() => ({
+  getOccupancy: vi.fn<(side: 'left' | 'right') => {
+    occupied: boolean
+    movement: { active: boolean, peakScore: number }
+    level: { active: boolean, deviation: number | null, threshold: number | null, ageMs: number | null }
+  }>(() => ({
+    occupied: false,
+    movement: { active: false, peakScore: 0 },
+    level: { active: false, deviation: null, threshold: null, ageMs: null },
+  })),
+}))
+vi.mock('@/src/lib/occupancy', () => occupancyMock)
+
 const { biometricsRouter } = await import('@/src/server/routers/biometrics')
 const caller = biometricsRouter.createCaller({})
 
@@ -104,6 +118,7 @@ beforeEach(() => {
   sleepStagesMock.mergeIntoBlocks.mockReset().mockReturnValue([])
   sleepStagesMock.calculateDistribution.mockReset().mockReturnValue({ wake: 0, light: 0, deep: 0, rem: 0 })
   sleepStagesMock.calculateQualityScore.mockReset().mockReturnValue(0)
+  occupancyMock.getOccupancy.mockReset()
 })
 
 describe('biometrics.getSleepRecords', () => {
@@ -207,6 +222,35 @@ describe('biometrics.getLatestSleep', () => {
     ])
     const out = await caller.getLatestSleep({ side: 'left' })
     expect(out?.id).toBe(5)
+  })
+})
+
+describe('biometrics.getOccupancy', () => {
+  it('returns occupancy for both sides from the shared virtual sensor', async () => {
+    occupancyMock.getOccupancy.mockImplementation((side: 'left' | 'right') => ({
+      occupied: side === 'left',
+      movement: { active: side === 'left', peakScore: side === 'left' ? 300 : 10 },
+      level: { active: false, deviation: null, threshold: null, ageMs: null },
+    }))
+    const out = await caller.getOccupancy()
+    expect(out.left.occupied).toBe(true)
+    expect(out.left.movement.peakScore).toBe(300)
+    expect(out.right.occupied).toBe(false)
+    expect(occupancyMock.getOccupancy).toHaveBeenCalledWith('left')
+    expect(occupancyMock.getOccupancy).toHaveBeenCalledWith('right')
+  })
+
+  it('passes level signal through to the response', async () => {
+    occupancyMock.getOccupancy.mockReturnValue({
+      occupied: true,
+      movement: { active: false, peakScore: 5 },
+      level: { active: true, deviation: 12.3, threshold: 6, ageMs: 500 },
+    })
+    const out = await caller.getOccupancy()
+    expect(out.left.level.deviation).toBe(12.3)
+    expect(out.left.level.threshold).toBe(6)
+    expect(out.left.level.ageMs).toBe(500)
+    expect(out.left.level.active).toBe(true)
   })
 })
 
@@ -685,6 +729,7 @@ describe('biometrics error wrapping (INTERNAL_SERVER_ERROR catches)', () => {
       onConflictDoNothing: vi.fn(() => failingChain),
       returning: vi.fn(() => failingChain),
       groupBy: vi.fn(() => failingChain),
+      having: vi.fn(() => failingChain),
     }
     dbMock[method].mockImplementationOnce(() => failingChain)
   }

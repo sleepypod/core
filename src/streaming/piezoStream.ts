@@ -73,6 +73,40 @@ const frameIndex: FrameIndexEntry[] = []
 let indexedFilePath: string | null = null
 
 /**
+ * Last seen capSense / capSense2 frame, kept as a cheap snapshot so
+ * server-side consumers (e.g. the virtual occupancy sensor in
+ * `src/lib/occupancy.ts`) can read the live channel readings without
+ * subscribing to the WebSocket stream from within the same process.
+ *
+ * Mutated in the live broadcast loop. Cleared on RAW file switch.
+ */
+export interface LatestCapSenseSnapshot {
+  /** Frame type as emitted by firmware. */
+  type: 'capSense' | 'capSense2'
+  /** Frame timestamp (unix seconds from firmware). */
+  ts: number
+  /** Wall-clock epoch ms when the snapshot was written. Used for staleness. */
+  receivedAtMs: number
+  /** Per-side channels — capSense (Pod 3) carries a scalar; capSense2 carries the
+   *  raw `[A1,A2,B1,B2,C1,C2,ref1,ref2]` array. */
+  left: number | number[]
+  right: number | number[]
+}
+
+let latestCapSenseSnapshot: LatestCapSenseSnapshot | null = null
+
+/**
+ * Read the most recent capSense / capSense2 frame seen on the live RAW stream.
+ * Returns null until the first frame arrives or after the RAW file switches.
+ *
+ * Consumers should treat a `receivedAtMs` older than ~30s as stale — capSense2
+ * frames arrive at ~2 Hz; long gaps mean the sensor or the streamer is down.
+ */
+export function getLatestCapSenseSnapshot(): LatestCapSenseSnapshot | null {
+  return latestCapSenseSnapshot
+}
+
+/**
  * Append an entry and evict anything older than the seek-retention window.
  * Seek is capped at `SEEK_MAX_DURATION_S` so older entries are unreachable.
  * Called on every decoded frame — keep the hot path cheap (amortized O(1)).
@@ -643,6 +677,9 @@ export function startPiezoStreamServer(): WebSocketServer {
       // Reset the sidecar frame index for the new file
       frameIndex.length = 0
       indexedFilePath = latest
+      // Drop the cached capSense snapshot — old file's last frame doesn't
+      // describe the current sensor state.
+      latestCapSenseSnapshot = null
     }
 
     // Read any new bytes appended since last read
@@ -717,6 +754,25 @@ export function startPiezoStreamServer(): WebSocketServer {
                   cb(frame as Record<string, unknown>)
                 }
                 catch { /* consumer error */ }
+              }
+            }
+
+            // Update the live capSense snapshot for in-process readers (virtual
+            // occupancy sensor). Cheap O(1) copy of the small per-frame shape.
+            if (frameType === 'capSense' || frameType === 'capSense2') {
+              const left = (frame as { left: unknown }).left
+              const right = (frame as { right: unknown }).right
+              const ts = (frame as { ts: unknown }).ts
+              if (typeof ts === 'number'
+                && (typeof left === 'number' || Array.isArray(left))
+                && (typeof right === 'number' || Array.isArray(right))) {
+                latestCapSenseSnapshot = {
+                  type: frameType,
+                  ts,
+                  receivedAtMs: Date.now(),
+                  left: left as number | number[],
+                  right: right as number | number[],
+                }
               }
             }
           }

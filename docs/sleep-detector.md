@@ -139,6 +139,42 @@ Session records include:
 - Number of bed exits (mid-session absences)
 - Present/absent interval arrays
 
+## Chart Aggregation
+
+The Movement chart in the app (`src/components/MovementChart/MovementChart.tsx`) does **not** read individual 60-s epochs directly. It calls `biometrics.getMovementBuckets` (`src/server/routers/biometrics.ts`) which groups epochs into fixed-width buckets in SQL:
+
+| View | `bucketSeconds` (`src/lib/movement.ts`) | Bars per bucket |
+|------|-----------------------------------------|-----------------|
+| Day  | `MOVEMENT_BUCKET_DAY_SECONDS = 300` (5 min) | up to 5 epochs |
+| Week | `MOVEMENT_BUCKET_WEEK_SECONDS = 1800` (30 min) | up to 30 epochs |
+
+Per bucket the SQL returns:
+- `totalMovement` — `SUM(total_movement)` (raw PIM intensity).
+- `eventCount` — `COUNT(... >= POSITION_CHANGE_SCORE_MIN)`, rendered as **events/hour** on the y-axis.
+- `sampleCount` — total epochs in the bucket.
+
+### In-bed gate
+
+`inBedExists(side)` filters epochs to those whose timestamp falls inside a recorded `sleep_records` row for the same side. This drops empty-bed sensor noise that doesn't belong to a persisted session.
+
+### Density gate
+
+`inBedExists` is necessary but not sufficient — a noisy session of record (high `times_exited_bed`) can span hours yet contain many empty-bed sub-windows. A second filter, `pickMinBucketNonStillEpochs(bucketSeconds)`, requires each rendered bucket to contain at least that many epochs above `RESTLESS_SCORE_MIN`:
+
+```text
+minNonStillEpochs = max(MIN_BUCKET_NONSTILL_FLOOR, floor(bucketSeconds / 600))
+                  = max(2, floor(bucketSeconds / 600))
+```
+
+For the standard bucket widths:
+
+| Bucket | Epoch budget | Required non-still | Sleep-time expectation (per doc score table) |
+|--------|--------------|--------------------|----------------------------------------------|
+| 5 min  | 5  | 2 | ~1-2 non-still epochs even mid-sleep |
+| 30 min | 30 | 3 | ~6-10 non-still epochs in real sleep |
+
+This filters phantom-session flicker (1-3 scattered non-still epochs per bucket) without affecting real sessions. Tune `MIN_BUCKET_NONSTILL_FLOOR` if a quieter sleeper drops out of the chart.
+
 ## Configuration
 
 | Constant | Value | Rationale |
@@ -159,6 +195,7 @@ Session records include:
 | `BASELINE_COLD_START_EPOCHS` | 10 | 10-minute minimum before baseline subtraction activates |
 | `BASELINE_PERCENTILE` | 5 | 5th percentile; represents quietest epoch in trailing window |
 | `MEDIAN_FILTER_WINDOW` | 3 | 3-epoch median filter; suppresses isolated spikes |
+| `MIN_BUCKET_NONSTILL_FLOOR` | 2 | Chart density gate; minimum non-still epochs per rendered bucket |
 
 ## Literature References
 
@@ -186,3 +223,5 @@ Session records include:
 7. **Baseline subtraction cold start.** Movement scores during the first 10 minutes of a session are not baseline-subtracted, which may produce slightly elevated readings compared to later in the night. This is acceptable because the baseline requires sufficient history to be meaningful.
 
 8. **Median filter smoothing behavior.** The 3-epoch median filter is causal (trailing window), so it does not depend on future epochs. It may still soften abrupt transitions, which is acceptable since movement data is not used for real-time alerting.
+
+9. **Calibrator RAW path coupling (Pod 5).** The calibrator reads RAW files from `RAW_DATA_DIR`, which must match the tmpfs path created by `sleepypod-tmpfs-prep` (`/persistent/biometrics`, per ADR-0018). A mismatch causes every daily run to fail with "No capSense records available" and the detector silently falls back to `PRESENCE_THRESHOLD = 60.0`, producing severe presence chatter (`times_exited_bed` > 100 per session). The calibrator unit file declares `RequiresMountsFor=/persistent/biometrics` to surface this as a startup failure rather than a silent runtime degradation.

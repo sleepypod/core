@@ -14,7 +14,12 @@ import {
   calculateQualityScore,
   type SleepStagesResult,
 } from '@/src/lib/sleep-stages'
-import { POSITION_CHANGE_SCORE_MIN, RESTLESS_SCORE_MIN } from '@/src/lib/movement'
+import {
+  POSITION_CHANGE_SCORE_MIN,
+  RESTLESS_SCORE_MIN,
+  pickMinBucketNonStillEpochs,
+} from '@/src/lib/movement'
+import { getOccupancy } from '@/src/lib/occupancy'
 
 /**
  * SQL fragment: movement.timestamp falls inside an existing sleep_records
@@ -318,6 +323,12 @@ export const biometricsRouter = router({
    * events-per-hour following Whoop / Garmin convention; raw PIM sums are
    * available via totalMovement for debug / power-user views.
    *
+   * Density gate: buckets with fewer than pickMinBucketNonStillEpochs(...)
+   * epochs above RESTLESS_SCORE_MIN are dropped. Filters phantom-session
+   * flicker that leaks past inBedExists (a noisy session of record can still
+   * contain many empty-bed sub-windows). See docs/sleep-detector.md "Chart
+   * aggregation" for the rationale.
+   *
    * @param bucketSeconds - 60..86400; chart bucket width (e.g. 300 for 5-min)
    */
   getMovementBuckets: publicProcedure
@@ -359,6 +370,8 @@ export const biometricsRouter = router({
         // Zod has already validated 60..86400, so no injection surface.
         const bSec = Math.floor(input.bucketSeconds)
         const bucket = sql<number>`(${movement.timestamp} / ${sql.raw(String(bSec))}) * ${sql.raw(String(bSec))}`
+        const minNonStill = pickMinBucketNonStillEpochs(bSec)
+        const nonStillEpochs = sql<number>`SUM(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(RESTLESS_SCORE_MIN))} THEN 1 ELSE 0 END)`
 
         const rows = await biometricsDb
           .select({
@@ -370,6 +383,7 @@ export const biometricsRouter = router({
           .from(movement)
           .where(and(...conditions))
           .groupBy(bucket)
+          .having(sql`${nonStillEpochs} >= ${sql.raw(String(minNonStill))}`)
           .orderBy(desc(bucket))
           .limit(input.limit)
 
@@ -507,6 +521,44 @@ export const biometricsRouter = router({
           message: `Failed to fetch latest sleep record: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
+      }
+    }),
+
+  /**
+   * Current bed occupancy for both sides. Single source of truth used by
+   * the HomeKit OccupancySensor accessory and the web-app PresenceCard.
+   * Combines the movement-table 15-min window with the live capSense2
+   * level signal vs the calibration baseline. See `src/lib/occupancy.ts`.
+   */
+  getOccupancy: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/occupancy', protect: false, tags: ['Biometrics'] } })
+    .input(z.void().optional())
+    .output(z.object({
+      left: z.object({
+        occupied: z.boolean(),
+        movement: z.object({ active: z.boolean(), peakScore: z.number() }),
+        level: z.object({
+          active: z.boolean(),
+          deviation: z.number().nullable(),
+          threshold: z.number().nullable(),
+          ageMs: z.number().nullable(),
+        }),
+      }),
+      right: z.object({
+        occupied: z.boolean(),
+        movement: z.object({ active: z.boolean(), peakScore: z.number() }),
+        level: z.object({
+          active: z.boolean(),
+          deviation: z.number().nullable(),
+          threshold: z.number().nullable(),
+          ageMs: z.number().nullable(),
+        }),
+      }),
+    }))
+    .query(async () => {
+      return {
+        left: getOccupancy('left'),
+        right: getOccupancy('right'),
       }
     }),
 

@@ -3,6 +3,7 @@ Description=SleepyPod Calibrator (Sensor Baselines and Thresholds)
 Documentation=https://github.com/sleepypod/core/tree/main/modules/calibrator
 After=network.target sleepypod.service
 Wants=sleepypod.service
+RequiresMountsFor=/persistent/biometrics
 
 [Service]
 Type=simple
@@ -15,7 +16,7 @@ RestartSec=30
 
 # Environment — override via /etc/sleepypod/modules/calibrator.env
 EnvironmentFile=-/etc/sleepypod/modules/calibrator.env
-Environment="RAW_DATA_DIR=/persistent"
+Environment="RAW_DATA_DIR=/persistent/biometrics"
 Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
 Environment="CALIBRATION_HOUR=6"
