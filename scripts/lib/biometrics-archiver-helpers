@@ -32,8 +32,24 @@ install_biometrics_archiver() {
   # subsequent `systemctl enable --now <timer>` failure rolled back OTA
   # updates on Pod 5 with the new firmware). Skip cleanly when the canary
   # shim isn't present.
+  #
+  # frank.sh absence is the gating signal (the patch literally cannot
+  # apply without it). nats-server + /persistent/jetstream are reported
+  # alongside so the log line tells the operator whether this is the
+  # expected new-firmware path or an unexpected broken-old-firmware case.
   if [ ! -f /opt/eight/bin/frank.sh ]; then
-    echo "biometrics-archiver: /opt/eight/bin/frank.sh absent (new firmware) — skipping tmpfs setup"
+    local nats_state="missing"
+    if systemctl is-active --quiet nats-server.service 2>/dev/null; then
+      nats_state="active"
+    fi
+    local jetstream_state="missing"
+    [ -d /persistent/jetstream ] && jetstream_state="present"
+
+    if [ "$nats_state" = active ] && [ "$jetstream_state" = present ]; then
+      echo "biometrics-archiver: new firmware detected (frank.sh absent; nats-server active; /persistent/jetstream present) — skipping tmpfs setup"
+    else
+      echo "biometrics-archiver: frank.sh absent (nats-server=$nats_state, jetstream=$jetstream_state) — skipping tmpfs setup"
+    fi
     return 0
   fi
 
