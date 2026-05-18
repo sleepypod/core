@@ -205,6 +205,11 @@ const SIDE_COLORS = {
   right: { primary: '#40e0d0', label: 'Right' },
 } as const
 
+// Minimum session duration that counts as "sleep". The sleep-detector accepts
+// anything ≥ 5 min, but sub-30-min entries are usually presence blips, not
+// nights — and they'd default the night view to an empty chart.
+const MIN_SESSION_MS = 30 * 60 * 1000
+
 interface VitalsPanelProps {
   /** When true, fetch and overlay both sides on each chart */
   dualSide?: boolean
@@ -296,11 +301,17 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
 
   const sessions = useMemo<SleepSession[]>(
     () =>
-      (sessionsQuery.data ?? []).map(s => ({
-        id: s.id,
-        enteredBedAt: new Date(s.enteredBedAt),
-        leftBedAt: s.leftBedAt ? new Date(s.leftBedAt) : null,
-      })).sort((a, b) => a.enteredBedAt.getTime() - b.enteredBedAt.getTime()),
+      (sessionsQuery.data ?? [])
+        .map(s => ({
+          id: s.id,
+          enteredBedAt: new Date(s.enteredBedAt),
+          leftBedAt: s.leftBedAt ? new Date(s.leftBedAt) : null,
+        }))
+        .filter((s) => {
+          const end = s.leftBedAt ?? new Date()
+          return end.getTime() - s.enteredBedAt.getTime() >= MIN_SESSION_MS
+        })
+        .sort((a, b) => a.enteredBedAt.getTime() - b.enteredBedAt.getTime()),
     [sessionsQuery.data],
   )
 
