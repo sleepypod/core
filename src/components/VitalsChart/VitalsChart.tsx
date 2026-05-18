@@ -20,7 +20,6 @@ interface SecondaryDataSet {
   color: string
   gradientId: string
   label: string
-  average?: number | null
 }
 
 interface VitalsChartProps {
@@ -28,7 +27,6 @@ interface VitalsChartProps {
   color: string
   gradientId: string
   zones?: Zone[]
-  average?: number | null
   height?: number
   unit: string
   /** Optional label for the primary data line (e.g. "Left") */
@@ -55,6 +53,10 @@ interface VitalsChartProps {
 
 const PADDING = { top: 8, right: 8, bottom: 24, left: 36 }
 const COMPACT_PADDING = { top: 6, right: 4, bottom: 20, left: 22 }
+// Break the line on absolute gap > 5 min. Relative thresholds (e.g. 3× median)
+// fragment sparse-but-legitimate early-night periods into disconnected stubs;
+// 5 min is the natural off-bed / dropout boundary at the pod's sampling cadence.
+const GAP_THRESHOLD_MS = 5 * 60 * 1000
 
 function defaultFormatTime(date: Date): string {
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
@@ -62,7 +64,7 @@ function defaultFormatTime(date: Date): string {
 
 /**
  * Lightweight SVG line chart for vitals data.
- * Supports zone backgrounds, average line, tap-to-select, and gradient fill.
+ * Supports zone backgrounds, tap-to-select, and gradient fill.
  * Matches iOS VitalsChartCard visual style.
  */
 export function VitalsChart({
@@ -70,7 +72,6 @@ export function VitalsChart({
   color,
   gradientId,
   zones = [],
-  average,
   height = 180,
   unit,
   label,
@@ -169,25 +170,9 @@ export function VitalsChart({
     return padding.top + chartHeight - ((val - minVal) / valRange) * chartHeight
   }, [minVal, maxVal, chartHeight, padding.top])
 
-  // Adaptive gap threshold: break the line when inter-sample delta exceeds
-  // 3× the median across the combined primary+secondary series. Same threshold
-  // for both lines keeps dual-side breaks visually aligned.
-  const gapThresholdMs = useMemo(() => {
-    const times: number[] = []
-    for (const d of sorted) times.push(d.timestamp.getTime())
-    for (const d of sortedSecondary) times.push(d.timestamp.getTime())
-    times.sort((a, b) => a - b)
-    const deltas: number[] = []
-    for (let i = 1; i < times.length; i++) deltas.push(times[i] - times[i - 1])
-    if (deltas.length === 0) return Number.POSITIVE_INFINITY
-    deltas.sort((a, b) => a - b)
-    const median = deltas[Math.floor(deltas.length / 2)] || 0
-    return median * 3
-  }, [sorted, sortedSecondary])
-
-  // Build SVG path with Catmull-Rom-like smoothing via quadratic beziers.
-  // Breaks the path at any gap exceeding gapThresholdMs so off-bed / dropout
-  // periods don't render as straight lines across the void.
+  // Piecewise-linear path between MA points. Bezier smoothing implied
+  // inter-sample continuity the data doesn't have and produced impossible curves
+  // at sleep-onset / wake transitions.
   const { linePath, areaPath } = useMemo(() => {
     if (sorted.length < 2) return { linePath: '', areaPath: '' }
 
@@ -204,7 +189,7 @@ export function VitalsChart({
 
     for (let i = 0; i < points.length; i++) {
       const curr = points[i]
-      const isGap = i > 0 && (curr.t - points[i - 1].t) > gapThresholdMs
+      const isGap = i > 0 && (curr.t - points[i - 1].t) > GAP_THRESHOLD_MS
 
       if (i === 0 || isGap) {
         if (isGap) {
@@ -216,11 +201,8 @@ export function VitalsChart({
         area += `${area ? ' ' : ''}M ${curr.x},${curr.y}`
       }
       else {
-        const prev = points[i - 1]
-        const cpx = (prev.x + curr.x) / 2
-        const seg = ` Q ${cpx},${prev.y} ${curr.x},${curr.y}`
-        line += seg
-        area += seg
+        line += ` L ${curr.x},${curr.y}`
+        area += ` L ${curr.x},${curr.y}`
       }
     }
 
@@ -228,9 +210,8 @@ export function VitalsChart({
     area += ` L ${last.x},${baseline} L ${points[segmentStart].x},${baseline} Z`
 
     return { linePath: line, areaPath: area }
-  }, [sorted, scaleX, scaleY, chartHeight, gapThresholdMs, padding.top])
+  }, [sorted, scaleX, scaleY, chartHeight, padding.top])
 
-  // Build secondary line path (no area fill — just a line overlay)
   const secondaryLinePath = useMemo(() => {
     if (sortedSecondary.length < 2) return ''
     const points = sortedSecondary.map(d => ({
@@ -241,18 +222,16 @@ export function VitalsChart({
     let line = ''
     for (let i = 0; i < points.length; i++) {
       const curr = points[i]
-      const isGap = i > 0 && (curr.t - points[i - 1].t) > gapThresholdMs
+      const isGap = i > 0 && (curr.t - points[i - 1].t) > GAP_THRESHOLD_MS
       if (i === 0 || isGap) {
         line += `${line ? ' ' : ''}M ${curr.x},${curr.y}`
       }
       else {
-        const prev = points[i - 1]
-        const cpx = (prev.x + curr.x) / 2
-        line += ` Q ${cpx},${prev.y} ${curr.x},${curr.y}`
+        line += ` L ${curr.x},${curr.y}`
       }
     }
     return line
-  }, [sortedSecondary, scaleX, scaleY, gapThresholdMs])
+  }, [sortedSecondary, scaleX, scaleY])
 
   // X-axis tick labels (4 ticks, or 2 in compact mode)
   const xTicks = useMemo(() => {
@@ -391,27 +370,50 @@ export function VitalsChart({
       >
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.2" />
-            <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+            <stop offset="0%" stopColor={color} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.04" />
           </linearGradient>
           {secondary && (
             <linearGradient id={secondary.gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={secondary.color} stopOpacity="0.12" />
-              <stop offset="100%" stopColor={secondary.color} stopOpacity="0.02" />
+              <stop offset="0%" stopColor={secondary.color} stopOpacity="0.18" />
+              <stop offset="100%" stopColor={secondary.color} stopOpacity="0.04" />
             </linearGradient>
           )}
         </defs>
 
-        {/* Personal baseline band (mean ± 1 SD) — sits behind zones */}
+        {/* Personal baseline band (mean ± 1 SD). Sole reference behind the line —
+            population zones have been retired for sleep view. */}
         {baselineMin != null && baselineMax != null && baselineMax > baselineMin && (
-          <rect
-            x={padding.left}
-            y={scaleY(baselineMax)}
-            width={chartWidth}
-            height={Math.max(0, scaleY(baselineMin) - scaleY(baselineMax))}
-            fill={color}
-            opacity="0.08"
-          />
+          <>
+            <rect
+              x={padding.left}
+              y={scaleY(baselineMax)}
+              width={chartWidth}
+              height={Math.max(0, scaleY(baselineMin) - scaleY(baselineMax))}
+              fill={color}
+              opacity="0.15"
+            />
+            <line
+              x1={padding.left}
+              y1={scaleY(baselineMax)}
+              x2={padding.left + chartWidth}
+              y2={scaleY(baselineMax)}
+              stroke={color}
+              strokeWidth="0.5"
+              strokeDasharray="3,3"
+              opacity="0.4"
+            />
+            <line
+              x1={padding.left}
+              y1={scaleY(baselineMin)}
+              x2={padding.left + chartWidth}
+              y2={scaleY(baselineMin)}
+              stroke={color}
+              strokeWidth="0.5"
+              strokeDasharray="3,3"
+              opacity="0.4"
+            />
+          </>
         )}
 
         {/* Zone backgrounds */}
@@ -446,37 +448,12 @@ export function VitalsChart({
               y={tick.y + 3}
               textAnchor="end"
               fill="rgb(113 113 122)" /* zinc-500 */
-              fontSize="10"
+              fontSize="11"
             >
               {tick.label}
             </text>
           </g>
         ))}
-
-        {/* Average dashed line */}
-        {average != null && (
-          <g>
-            <line
-              x1={padding.left}
-              y1={scaleY(average)}
-              x2={padding.left + chartWidth}
-              y2={scaleY(average)}
-              stroke={color}
-              strokeWidth="1"
-              strokeDasharray="5,5"
-              opacity="0.3"
-            />
-            <text
-              x={padding.left + 2}
-              y={scaleY(average) - 4}
-              fill={color}
-              fontSize="8"
-              opacity="0.5"
-            >
-              avg
-            </text>
-          </g>
-        )}
 
         {/* Area fill */}
         {areaPath && (
@@ -507,22 +484,6 @@ export function VitalsChart({
             strokeDasharray="6,3"
             opacity="0.7"
           />
-        )}
-
-        {/* Secondary average dashed line */}
-        {secondary?.average != null && (
-          <g>
-            <line
-              x1={padding.left}
-              y1={scaleY(secondary.average)}
-              x2={padding.left + chartWidth}
-              y2={scaleY(secondary.average)}
-              stroke={secondary.color}
-              strokeWidth="1"
-              strokeDasharray="3,3"
-              opacity="0.2"
-            />
-          </g>
         )}
 
         {/* Selected point indicator */}
@@ -569,7 +530,7 @@ export function VitalsChart({
             y={height - 4}
             textAnchor="middle"
             fill="rgb(113 113 122)" /* zinc-500 */
-            fontSize="10"
+            fontSize="11"
           >
             {tick.label}
           </text>

@@ -15,22 +15,18 @@ import {
 import { useMemo, useState } from 'react'
 import { VitalsChart } from '../VitalsChart/VitalsChart'
 
-// Zone definitions matching iOS HealthScreen.swift
-const HR_ZONES = [
-  { label: 'Resting', min: 40, max: 60, color: 'rgba(56, 189, 248, 0.08)' },
-  { label: 'Normal', min: 60, max: 100, color: 'rgba(34, 197, 94, 0.05)' },
-  { label: 'Elevated', min: 100, max: 140, color: 'rgba(245, 158, 11, 0.05)' },
-]
-
-const HRV_ZONES = [
-  { label: 'Low', min: 0, max: 30, color: 'rgba(245, 158, 11, 0.08)' },
-  { label: 'Normal', min: 30, max: 100, color: 'rgba(34, 197, 94, 0.05)' },
-  { label: 'High', min: 100, max: 200, color: 'rgba(56, 189, 248, 0.05)' },
-]
-
-const BR_ZONES = [
-  { label: 'Normal', min: 12, max: 20, color: 'rgba(34, 197, 94, 0.08)' },
-]
+// Population zones (40/60/100/140 etc.) intentionally retired for sleep view —
+// they're awake-fitness conventions that mislabel medical signals (sustained
+// HR > 100 asleep is tachycardia, not "Elevated, keep going"). The personal
+// baseline band carries the in-range / out-of-range signal instead. See
+// industry convention (Oura/Whoop/Garmin/Apple/Fitbit) for sleep vitals.
+interface Zone {
+  label: string
+  min: number
+  max: number
+  color: string
+}
+const NO_ZONES: Zone[] = []
 
 interface VitalsRecord {
   id: number
@@ -63,35 +59,31 @@ interface MetricSpec {
   icon: React.ReactNode
   color: string
   unit: string
-  zones: typeof HR_ZONES
+  zones: Zone[]
   gradientId: string
-  // Outlier bounds (matches filterOutliers); used to keep zones in sync.
-  hardMin: number
-  hardMax: number
 }
 
+// Colors: HR is neutral zinc — reserving red for actual alerts rather than the
+// always-present HR line. HRV stays sky (matches existing branding). BR stays
+// green at low chroma so it doesn't compete with HR for attention.
 const METRICS: MetricSpec[] = [
   {
     key: 'hr',
     title: 'Heart Rate',
-    icon: <Heart size={12} className="text-red-400" />,
-    color: '#f87171',
+    icon: <Heart size={12} className="text-zinc-300" />,
+    color: '#e4e4e7',
     unit: 'BPM',
-    zones: HR_ZONES,
+    zones: NO_ZONES,
     gradientId: 'hr-gradient',
-    hardMin: 40,
-    hardMax: 140,
   },
   {
     key: 'hrv',
-    title: 'Heart Rate Variability',
+    title: 'HRV',
     icon: <Activity size={12} className="text-sky-400" />,
     color: '#38bdf8',
     unit: 'ms',
-    zones: HRV_ZONES,
+    zones: NO_ZONES,
     gradientId: 'hrv-gradient',
-    hardMin: 0,
-    hardMax: 200,
   },
   {
     key: 'br',
@@ -99,46 +91,63 @@ const METRICS: MetricSpec[] = [
     icon: <Wind size={12} className="text-green-400" />,
     color: '#22c55e',
     unit: 'BPM',
-    zones: BR_ZONES,
+    zones: NO_ZONES,
     gradientId: 'br-gradient',
-    hardMin: 8,
-    hardMax: 25,
   },
 ]
 
-/** Filter physiologically impossible values matching iOS smoothedVitals logic. */
+/**
+ * Drop physiologically impossible values. Bounds are deliberately permissive:
+ * the previous HR floor of 45 silently flatlined endurance athletes whose
+ * sleeping HR sits in the high 30s, and HRV > 300 ms is unusual but not
+ * impossible. Filter at the edges of plausibility, not at "looks weird."
+ */
 function filterOutliers(records: VitalsRecord[]): VitalsRecord[] {
   return records.filter((r) => {
-    if (r.heartRate != null && (r.heartRate < 45 || r.heartRate > 130)) return false
-    if (r.hrv != null && r.hrv > 300) return false
-    if (r.breathingRate != null && (r.breathingRate < 8 || r.breathingRate > 25)) return false
+    if (r.heartRate != null && (r.heartRate < 30 || r.heartRate > 180)) return false
+    if (r.hrv != null && (r.hrv <= 0 || r.hrv > 400)) return false
+    if (r.breathingRate != null && (r.breathingRate < 6 || r.breathingRate > 30)) return false
     return true
   })
 }
 
-function computeTrend(records: VitalsRecord[]): { text: string, direction: 'up' | 'down' | 'stable' } | null {
-  const values = records.map(r => r.hrv).filter((v): v is number => v != null)
-  if (values.length < 10) return null
+/**
+ * HRV trend from per-night medians vs personal baseline. The previous
+ * implementation split within-session HRV samples in half and reported ±10 %
+ * deltas — given how much HRV swings with sleep stages, that was random walk
+ * noise dressed up as a trend chip. We now require:
+ *   - at least 4 nights of per-night medians in the visible week
+ *   - a baseline mean to score against
+ *   - |z| > 1.0 (recent median sits more than one personal SD from baseline)
+ * Anything weaker returns null and we hide the chip.
+ */
+function computeTrend(
+  nightlyHrvMedians: number[],
+  baselineMean: number | null,
+  baselineSD: number | null,
+): { text: string, direction: 'up' | 'down' | 'stable' } | null {
+  if (nightlyHrvMedians.length < 4) return null
+  if (baselineMean == null || baselineSD == null || baselineSD <= 0) return null
 
-  const mid = Math.floor(values.length / 2)
-  const recent = values.slice(mid)
-  const older = values.slice(0, mid)
-  if (recent.length === 0 || older.length === 0) return null
+  const recentMedian
+    = [...nightlyHrvMedians].sort((a, b) => a - b)[Math.floor(nightlyHrvMedians.length / 2)]
+  const z = (recentMedian - baselineMean) / baselineSD
+  const deltaPct = Math.round(((recentMedian - baselineMean) / baselineMean) * 100)
 
-  const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length
-  const olderAvg = older.reduce((a, b) => a + b, 0) / older.length
-  if (olderAvg === 0) return null
-
-  const delta = ((recentAvg - olderAvg) / olderAvg) * 100
-
-  if (delta > 10) return { text: `HRV improving +${Math.round(delta)}%`, direction: 'up' }
-  if (delta < -10) return { text: `HRV declining ${Math.round(delta)}%`, direction: 'down' }
-  return { text: 'HRV stable', direction: 'stable' }
+  if (z > 1.0) return { text: `HRV above baseline (+${deltaPct}%)`, direction: 'up' }
+  if (z < -1.0) return { text: `HRV below baseline (${deltaPct}%)`, direction: 'down' }
+  return null
 }
 
-function avg(values: number[]): string {
-  if (values.length === 0) return '--'
-  return Math.round(values.reduce((a, b) => a + b, 0) / values.length).toString()
+function median(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)]
+}
+
+function medianStr(values: number[]): string {
+  const m = median(values)
+  return m == null ? '--' : Math.round(m).toString()
 }
 
 /** 5-point centered moving average for visual smoothing. */
@@ -245,12 +254,6 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     limit: 10000,
   })
 
-  const summaryQuery = trpc.biometrics.getVitalsSummary.useQuery({
-    side: primarySide,
-    startDate: week.weekStart,
-    endDate: week.weekEnd,
-  })
-
   const sessionsQuery = trpc.biometrics.getSleepRecords.useQuery({
     side: primarySide,
     startDate: week.weekStart,
@@ -269,15 +272,6 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
       startDate: week.weekStart,
       endDate: week.weekEnd,
       limit: 10000,
-    },
-    { enabled: dualSide },
-  )
-
-  const otherSummaryQuery = trpc.biometrics.getVitalsSummary.useQuery(
-    {
-      side: otherSide,
-      startDate: week.weekStart,
-      endDate: week.weekEnd,
     },
     { enabled: dualSide },
   )
@@ -332,22 +326,60 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     setPickedSessionId(sessions[clamped]?.id ?? null)
   }
 
-  const summary = summaryQuery.data
-  const otherSummary = otherSummaryQuery.data
   const baseline = baselineQuery.data
 
   // Per-metric smoothed point arrays for primary side (full week).
   const metricSeries = useMemo(() => extractMetricSeries(sortedRecords), [sortedRecords])
   const otherMetricSeries = useMemo(() => extractMetricSeries(otherSortedRecords), [otherSortedRecords])
 
-  const hrValues = sortedRecords.map(r => r.heartRate).filter((v): v is number => v != null)
-  const hrvValues = sortedRecords.map(r => r.hrv).filter((v): v is number => v != null)
-  const brValues = sortedRecords.map(r => r.breathingRate).filter((v): v is number => v != null)
-  const otherHrValues = otherSortedRecords.map(r => r.heartRate).filter((v): v is number => v != null)
-  const otherHrvValues = otherSortedRecords.map(r => r.hrv).filter((v): v is number => v != null)
-  const otherBrValues = otherSortedRecords.map(r => r.breathingRate).filter((v): v is number => v != null)
+  // Summary numbers are view-aware: in Night view we restrict to the selected
+  // session window so the hero number describes *this night*. In Week view we
+  // use the whole visible week. The previous behavior showed the same
+  // week-aggregate number in both modes, which contradicted the chart below it
+  // when the user was looking at a single night.
+  const selectedSession = selectedSessionIndex != null ? sessions[selectedSessionIndex] : null
+  const summaryWindow = useMemo(() => {
+    if (view === 'night' && selectedSession) {
+      const start = selectedSession.enteredBedAt.getTime()
+      const end = (selectedSession.leftBedAt ?? new Date()).getTime()
+      return sortedRecords.filter((r) => {
+        const t = new Date(r.timestamp).getTime()
+        return t >= start && t <= end
+      })
+    }
+    return sortedRecords
+  }, [view, selectedSession, sortedRecords])
 
-  const trend = useMemo(() => computeTrend(sortedRecords), [sortedRecords])
+  const otherSummaryWindow = useMemo(() => {
+    if (view === 'night' && selectedSession) {
+      const start = selectedSession.enteredBedAt.getTime()
+      const end = (selectedSession.leftBedAt ?? new Date()).getTime()
+      return otherSortedRecords.filter((r) => {
+        const t = new Date(r.timestamp).getTime()
+        return t >= start && t <= end
+      })
+    }
+    return otherSortedRecords
+  }, [view, selectedSession, otherSortedRecords])
+
+  const hrValues = summaryWindow.map(r => r.heartRate).filter((v): v is number => v != null)
+  const hrvValues = summaryWindow.map(r => r.hrv).filter((v): v is number => v != null)
+  const brValues = summaryWindow.map(r => r.breathingRate).filter((v): v is number => v != null)
+  const otherHrValues = otherSummaryWindow.map(r => r.heartRate).filter((v): v is number => v != null)
+  const otherHrvValues = otherSummaryWindow.map(r => r.hrv).filter((v): v is number => v != null)
+  const otherBrValues = otherSummaryWindow.map(r => r.breathingRate).filter((v): v is number => v != null)
+
+  // Per-night HRV medians for the visible window — fed to the trend chip
+  // (z-score vs personal baseline) and rendered as bars in the HRV night block.
+  const nightlyHrvMedians = useMemo(() => {
+    const stats = computeNightStats(sortedRecords, sessions, 'hrv')
+    return stats.map(s => s.median)
+  }, [sortedRecords, sessions])
+
+  const trend = useMemo(
+    () => computeTrend(nightlyHrvMedians, baseline?.hrvMean ?? null, baseline?.hrvSD ?? null),
+    [nightlyHrvMedians, baseline],
+  )
 
   const isLoading = vitalsQuery.isLoading && rawRecords.length === 0
 
@@ -432,24 +464,30 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
                 </div>
               )}
 
+              <div className="mb-1 text-center text-[10px] uppercase tracking-wider text-zinc-500">
+                {view === 'night' ? 'This night (median)' : 'This week (median)'}
+              </div>
               <div className="flex items-center justify-around">
                 <SummaryItem
-                  icon={<Heart size={14} className="text-red-400" />}
-                  value={avg(hrValues)}
+                  icon={<Heart size={14} className="text-zinc-300" />}
+                  label="Sleeping HR"
+                  value={medianStr(hrValues)}
                   unit="BPM"
-                  secondaryValue={dualSide ? avg(otherHrValues) : undefined}
+                  secondaryValue={dualSide ? medianStr(otherHrValues) : undefined}
                 />
                 <SummaryItem
                   icon={<Activity size={14} className="text-sky-400" />}
-                  value={avg(hrvValues)}
+                  label="HRV"
+                  value={medianStr(hrvValues)}
                   unit="ms"
-                  secondaryValue={dualSide ? avg(otherHrvValues) : undefined}
+                  secondaryValue={dualSide ? medianStr(otherHrvValues) : undefined}
                 />
                 <SummaryItem
                   icon={<Wind size={14} className="text-green-400" />}
-                  value={avg(brValues)}
-                  unit="BR"
-                  secondaryValue={dualSide ? avg(otherBrValues) : undefined}
+                  label="Breathing"
+                  value={medianStr(brValues)}
+                  unit="br/min"
+                  secondaryValue={dualSide ? medianStr(otherBrValues) : undefined}
                 />
               </div>
 
@@ -457,12 +495,9 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
                 <div className="mt-2.5 flex items-center justify-center gap-1.5">
                   {trend.direction === 'up' && <span className="text-green-400 text-[10px]">&#x2197;</span>}
                   {trend.direction === 'down' && <span className="text-amber-400 text-[10px]">&#x2198;</span>}
-                  {trend.direction === 'stable' && <span className="text-zinc-500 text-[10px]">=</span>}
                   <span
                     className={`text-[11px] ${
-                      trend.direction === 'up'
-                        ? 'text-green-400'
-                        : trend.direction === 'down' ? 'text-amber-400' : 'text-zinc-500'
+                      trend.direction === 'up' ? 'text-green-400' : 'text-amber-400'
                     }`}
                   >
                     {trend.text}
@@ -484,8 +519,6 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
                   primaryLabel={dualSide ? SIDE_COLORS[primarySide].label : undefined}
                   secondaryLabel={dualSide ? SIDE_COLORS[otherSide].label : undefined}
                   secondaryColor={SIDE_COLORS[otherSide].primary}
-                  summary={summary ?? null}
-                  otherSummary={dualSide ? otherSummary ?? null : null}
                 />
               )
             : (
@@ -553,17 +586,19 @@ function ViewToggle({
 
 function SummaryItem({
   icon,
+  label,
   value,
   unit,
   secondaryValue,
 }: {
   icon: React.ReactNode
+  label?: string
   value: string
   unit: string
   secondaryValue?: string
 }) {
   return (
-    <div className="flex flex-col items-center gap-1">
+    <div className="flex flex-col items-center gap-0.5">
       {icon}
       <div className="flex items-baseline gap-1">
         <span className="text-lg font-semibold tabular-nums text-white sm:text-xl">{value}</span>
@@ -575,6 +610,7 @@ function SummaryItem({
         )}
       </div>
       <span className="text-[10px] text-zinc-500">{unit}</span>
+      {label && <span className="text-[10px] text-zinc-600">{label}</span>}
     </div>
   )
 }
@@ -589,10 +625,13 @@ function extractMetricSeries(records: VitalsRecord[]): MetricSeries {
     records.filter(r => r.heartRate != null).map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate ?? 0 })),
     'value',
   )
-  series.hrv = smoothData(
-    records.filter(r => r.hrv != null).map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv ?? 0 })),
-    'value',
-  )
+  // HRV is intentionally not smoothed — variability *is* the signal. A 5-pt
+  // moving average over RMSSD-like values deletes that signal and leaves only
+  // the noise floor. Within-night HRV is consumed as 30-min binned bars +
+  // overnight median (see HrvNightBlock), not as a continuous line.
+  series.hrv = records
+    .filter(r => r.hrv != null)
+    .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv ?? 0 }))
   series.br = smoothData(
     records.filter(r => r.breathingRate != null).map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate ?? 0 })),
     'value',
@@ -624,8 +663,6 @@ function NightView({
   primaryLabel,
   secondaryLabel,
   secondaryColor,
-  summary,
-  otherSummary,
 }: {
   sessions: SleepSession[]
   selectedIndex: number | null
@@ -636,13 +673,12 @@ function NightView({
   primaryLabel?: string
   secondaryLabel?: string
   secondaryColor: string
-  summary: { avgHeartRate: number | null, avgHRV: number | null, avgBreathingRate: number | null } | null
-  otherSummary: { avgHeartRate: number | null, avgHRV: number | null, avgBreathingRate: number | null } | null
 }) {
   if (sessions.length === 0 || selectedIndex == null) {
     return (
-      <div className="rounded-2xl bg-zinc-900 p-6 text-center">
-        <p className="text-zinc-500 text-sm">No sleep sessions this week</p>
+      <div className="rounded-2xl bg-zinc-900 p-6 text-center space-y-1.5">
+        <p className="text-zinc-300 text-sm">Nothing to show yet.</p>
+        <p className="text-zinc-500 text-xs">Get some rest — check back tomorrow.</p>
       </div>
     )
   }
@@ -684,23 +720,32 @@ function NightView({
       {/* Stacked HR / HRV / BR panels sharing the session's clock-time axis */}
       <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4 space-y-2">
         {METRICS.map((metric) => {
+          if (metric.key === 'hrv') {
+            const primary = filterToWindow(metricSeries.hrv, start, end)
+            const secondary = otherMetricSeries ? filterToWindow(otherMetricSeries.hrv, start, end) : []
+            const { mean, sd } = metricBaseline('hrv', baseline)
+            return (
+              <HrvNightBlock
+                key="hrv"
+                metric={metric}
+                primary={primary}
+                secondary={secondary}
+                baselineMean={mean}
+                baselineSD={sd}
+                sessionStart={start}
+                sessionEnd={end}
+                primaryLabel={primaryLabel}
+                secondaryLabel={secondaryLabel}
+                secondaryColor={secondaryColor}
+              />
+            )
+          }
+
           const primary = filterToWindow(metricSeries[metric.key], start, end)
           const secondary = otherMetricSeries ? filterToWindow(otherMetricSeries[metric.key], start, end) : []
           const { mean, sd } = metricBaseline(metric.key, baseline)
           const baselineMin = mean != null && sd != null ? mean - sd : undefined
           const baselineMax = mean != null && sd != null ? mean + sd : undefined
-          const primarySummaryAvg
-            = metric.key === 'hr'
-              ? summary?.avgHeartRate
-              : metric.key === 'hrv'
-                ? summary?.avgHRV
-                : summary?.avgBreathingRate
-          const secondarySummaryAvg
-            = metric.key === 'hr'
-              ? otherSummary?.avgHeartRate
-              : metric.key === 'hrv'
-                ? otherSummary?.avgHRV
-                : otherSummary?.avgBreathingRate
 
           return (
             <div key={metric.key}>
@@ -714,7 +759,7 @@ function NightView({
                 <div className="flex items-center gap-2 text-[11px] tabular-nums">
                   {mean != null && (
                     <span className="text-zinc-500">
-                      baseline
+                      typical
                       {' '}
                       <span style={{ color: metric.color }}>{Math.round(mean)}</span>
                       {sd != null && (
@@ -728,7 +773,7 @@ function NightView({
                   )}
                   {primary.length > 0 && (
                     <span style={{ color: metric.color }} className="font-medium">
-                      {Math.round(primary[primary.length - 1].value)}
+                      {Math.round(median(primary.map(p => p.value)) ?? 0)}
                       {' '}
                       {metric.unit}
                     </span>
@@ -740,7 +785,6 @@ function NightView({
                 color={metric.color}
                 gradientId={`${metric.gradientId}-night`}
                 zones={metric.zones}
-                average={primarySummaryAvg ?? null}
                 unit={metric.unit}
                 height={120}
                 label={primaryLabel}
@@ -755,7 +799,6 @@ function NightView({
                       color: secondaryColor,
                       gradientId: `${metric.gradientId}-night-other`,
                       label: secondaryLabel ?? '',
-                      average: secondarySummaryAvg ?? null,
                     }
                   : undefined}
               />
@@ -764,6 +807,151 @@ function NightView({
         })}
       </div>
     </>
+  )
+}
+
+/**
+ * HRV night block. Replaces the misleading high-frequency HRV line: shows one
+ * overnight median (the number every consumer sleep product hero's), a
+ * vs-baseline delta chip, and 30-min binned bars so within-night variation is
+ * legible without inviting moment-to-moment interpretation.
+ */
+function HrvNightBlock({
+  metric,
+  primary,
+  secondary,
+  baselineMean,
+  baselineSD,
+  sessionStart,
+  sessionEnd,
+  primaryLabel,
+  secondaryLabel,
+  secondaryColor,
+}: {
+  metric: MetricSpec
+  primary: DataPoint[]
+  secondary: DataPoint[]
+  baselineMean: number | null
+  baselineSD: number | null
+  sessionStart: number
+  sessionEnd: number
+  primaryLabel?: string
+  secondaryLabel?: string
+  secondaryColor: string
+}) {
+  const overnightMedian = median(primary.map(p => p.value))
+  const secondaryMedian = median(secondary.map(p => p.value))
+
+  const z
+    = overnightMedian != null && baselineMean != null && baselineSD != null && baselineSD > 0
+      ? (overnightMedian - baselineMean) / baselineSD
+      : null
+  const deltaPct
+    = overnightMedian != null && baselineMean != null && baselineMean > 0
+      ? Math.round(((overnightMedian - baselineMean) / baselineMean) * 100)
+      : null
+
+  const deltaTone
+    = z == null
+      ? 'text-zinc-500'
+      : z > 1
+        ? 'text-green-400'
+        : z < -1
+          ? 'text-amber-400'
+          : 'text-zinc-400'
+
+  const binMs = 30 * 60 * 1000
+  const bins: { t: number, value: number }[] = []
+  for (let t = sessionStart; t < sessionEnd; t += binMs) {
+    const slice = primary.filter(p => p.timestamp.getTime() >= t && p.timestamp.getTime() < t + binMs)
+    const m = median(slice.map(p => p.value))
+    if (m != null) bins.push({ t, value: m })
+  }
+  const bandLo = baselineMean != null && baselineSD != null ? baselineMean - baselineSD : null
+  const bandHi = baselineMean != null && baselineSD != null ? baselineMean + baselineSD : null
+  const inBand = (v: number) => bandLo == null || bandHi == null || (v >= bandLo && v <= bandHi)
+
+  const maxBinValue = Math.max(
+    1,
+    ...bins.map(b => b.value),
+    baselineMean != null && baselineSD != null ? baselineMean + baselineSD : 0,
+  )
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-1.5">
+          {metric.icon}
+          <span className="text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
+            {metric.title}
+          </span>
+        </div>
+        {baselineMean != null && (
+          <span className="text-[11px] text-zinc-500 tabular-nums">
+            typical
+            {' '}
+            <span style={{ color: metric.color }}>{Math.round(baselineMean)}</span>
+            {baselineSD != null && (
+              <span className="text-zinc-600">
+                {' '}
+                ±
+                {Math.round(baselineSD)}
+              </span>
+            )}
+            <span className="text-zinc-600 ml-1">ms</span>
+          </span>
+        )}
+      </div>
+
+      <div className="flex items-baseline gap-3 mb-2">
+        <div>
+          {primaryLabel && (
+            <span className="text-[10px] text-zinc-500 mr-1.5">{primaryLabel}</span>
+          )}
+          <span style={{ color: metric.color }} className="text-2xl font-semibold tabular-nums">
+            {overnightMedian != null ? Math.round(overnightMedian) : '--'}
+          </span>
+          <span className="text-zinc-500 text-xs ml-1">ms</span>
+          {deltaPct != null && (
+            <span className={`text-[11px] ml-2 tabular-nums ${deltaTone}`}>
+              {deltaPct >= 0 ? '+' : ''}
+              {deltaPct}
+              % vs baseline
+            </span>
+          )}
+        </div>
+        {secondaryMedian != null && (
+          <div className="text-[11px] text-zinc-500">
+            <span className="mr-1">{secondaryLabel ?? 'Other'}</span>
+            <span style={{ color: secondaryColor }} className="font-medium tabular-nums">
+              {Math.round(secondaryMedian)}
+            </span>
+            <span className="ml-0.5">ms</span>
+          </div>
+        )}
+      </div>
+
+      {bins.length > 0 && (
+        <div className="flex items-end gap-0.5 h-8" aria-label="30-minute HRV bins">
+          {bins.map((b) => {
+            const h = Math.max(2, (b.value / maxBinValue) * 32)
+            const ok = inBand(b.value)
+            return (
+              <div
+                key={b.t}
+                className="flex-1 rounded-sm"
+                style={{
+                  height: `${h}px`,
+                  backgroundColor: metric.color,
+                  opacity: ok ? 0.45 : 0.9,
+                }}
+                title={`${new Date(b.t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} — ${Math.round(b.value)} ms`}
+              />
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -822,8 +1010,9 @@ function WeekView({
 }) {
   if (sessions.length === 0) {
     return (
-      <div className="rounded-2xl bg-zinc-900 p-6 text-center">
-        <p className="text-zinc-500 text-sm">No sleep sessions this week</p>
+      <div className="rounded-2xl bg-zinc-900 p-6 text-center space-y-1.5">
+        <p className="text-zinc-300 text-sm">Nothing to show yet.</p>
+        <p className="text-zinc-500 text-xs">Get some rest — check back tomorrow.</p>
       </div>
     )
   }
