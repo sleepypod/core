@@ -74,5 +74,22 @@ if command -v pnpm &>/dev/null; then
   fi
 fi
 
+# 5. Self-heal /persistent/deviceinfo perms so next-server can unlink
+# stale dac.sock on startup. Older installs created the dir with mkdir's
+# default umask (root:root 0755), which denies write to the sleepypod user
+# (even with SupplementaryGroups=dac) — getStatus then fails with
+# "EACCES: permission denied, unlink '/persistent/deviceinfo/dac.sock'".
+# Newer installs set this correctly; this block reconciles existing pods.
+DEVICEINFO_DIR=/persistent/deviceinfo
+if [ -d "$DEVICEINFO_DIR" ] && getent group dac &>/dev/null; then
+  OWNER_GROUP=$(stat -c '%U:%G' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
+  MODE=$(stat -c '%a' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
+  if [ "$OWNER_GROUP" != "root:dac" ] || [ "$MODE" != "2775" ]; then
+    echo "Repairing $DEVICEINFO_DIR perms ($OWNER_GROUP $MODE → root:dac 2775)..."
+    chown root:dac "$DEVICEINFO_DIR"
+    chmod 2775 "$DEVICEINFO_DIR"
+  fi
+fi
+
 DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
 echo "Maintenance complete. ${DISK_AVAIL}MB free."
