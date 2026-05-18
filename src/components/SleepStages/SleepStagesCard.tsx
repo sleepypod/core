@@ -142,7 +142,7 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
       side,
       startDate,
       endDate,
-      limit: 1000,
+      limit: 10000,
     },
     { enabled: timeRange !== 'night' && !!startDate },
   )

@@ -182,7 +182,10 @@ export const biometricsRouter = router({
           side: sideSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
-          limit: z.number().int().min(1).max(1000).default(288), // Default: 24 hours of 5-min intervals
+          // Cap covers a full week of ~30 s-cadence vitals (60×60×24×7 / 30 ≈ 20 160).
+          // Older 1000 cap silently truncated week views to the most recent ~1–2 days
+          // on busy datasets, leaving earlier sessions with "No data" charts.
+          limit: z.number().int().min(1).max(20000).default(288), // Default: 24 hours of 5-min intervals
         })
         .strict()
     )

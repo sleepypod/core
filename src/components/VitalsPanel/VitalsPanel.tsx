@@ -242,7 +242,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     side: primarySide,
     startDate: week.weekStart,
     endDate: week.weekEnd,
-    limit: 1000,
+    limit: 10000,
   })
 
   const summaryQuery = trpc.biometrics.getVitalsSummary.useQuery({
@@ -268,7 +268,7 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
       side: otherSide,
       startDate: week.weekStart,
       endDate: week.weekEnd,
-      limit: 1000,
+      limit: 10000,
     },
     { enabled: dualSide },
   )
