@@ -523,9 +523,12 @@ mkdir -p /persistent/deviceinfo
 # socket file's — so the dir must be group-writable by `dac`, not just owned
 # `root:root 0755` (the mkdir default). Setgid (2xxx) keeps any new entries
 # in the dac group, matching the chownSync(path, dac, dac) in dacTransport.ts.
+# Mode 2770 (no world bits) mirrors the socket's own 0770 — every real
+# consumer is either root or in the `dac` group, so world r-x adds nothing
+# but surface area.
 if getent group dac &>/dev/null; then
   chown root:dac /persistent/deviceinfo
-  chmod 2775 /persistent/deviceinfo
+  chmod 2770 /persistent/deviceinfo
 fi
 mkdir -p /deviceinfo
 groupadd --force sleepypod
