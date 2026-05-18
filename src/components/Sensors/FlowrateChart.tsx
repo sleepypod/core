@@ -66,11 +66,14 @@ export function FlowrateChart() {
 
     if (!raw || raw.length === 0) return []
 
-    // Data is already in chronological order from the API
+    // Data is already in chronological order from the API.
+    // leftFlowrateCd/rightFlowrateCd are stored as raw×100 to keep the table
+    // integer-typed; divide back to degrees so the chart and the live readout
+    // share a unit.
     const points: FlowChartDataPoint[] = raw.map(d => ({
       time: new Date(d.timestamp).getTime(),
-      leftFlow: d.leftFlowrateCd,
-      rightFlow: d.rightFlowrateCd,
+      leftFlow: d.leftFlowrateCd != null ? d.leftFlowrateCd / 100 : null,
+      rightFlow: d.rightFlowrateCd != null ? d.rightFlowrateCd / 100 : null,
       leftRpm: d.leftPumpRpm,
       rightRpm: d.rightPumpRpm,
     }))
@@ -85,7 +88,7 @@ export function FlowrateChart() {
 
   const leftKey = viewMode === 'flowrate' ? 'leftFlow' as const : 'leftRpm' as const
   const rightKey = viewMode === 'flowrate' ? 'rightFlow' as const : 'rightRpm' as const
-  const unitLabel = viewMode === 'flowrate' ? 'cd' : 'RPM'
+  const unitLabel = viewMode === 'flowrate' ? '' : 'RPM'
 
   // Compute Y-axis domain
   const allValues = chartData.flatMap(d => [d[leftKey], d[rightKey]].filter((v): v is number => v !== null))
