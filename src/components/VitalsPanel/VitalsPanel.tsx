@@ -9,9 +9,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Heart,
+  Moon,
   Wind,
 } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { VitalsChart } from '../VitalsChart/VitalsChart'
 
 // Zone definitions matching iOS HealthScreen.swift
@@ -40,9 +41,72 @@ interface VitalsRecord {
   breathingRate: number | null
 }
 
-/**
- * Filter physiologically impossible values matching iOS smoothedVitals logic.
- */
+interface DataPoint {
+  timestamp: Date
+  value: number
+}
+
+interface SleepSession {
+  id: number
+  enteredBedAt: Date
+  leftBedAt: Date | null
+}
+
+interface Baseline {
+  mean: number | null
+  sd: number | null
+}
+
+interface MetricSpec {
+  key: 'hr' | 'hrv' | 'br'
+  title: string
+  icon: React.ReactNode
+  color: string
+  unit: string
+  zones: typeof HR_ZONES
+  gradientId: string
+  // Outlier bounds (matches filterOutliers); used to keep zones in sync.
+  hardMin: number
+  hardMax: number
+}
+
+const METRICS: MetricSpec[] = [
+  {
+    key: 'hr',
+    title: 'Heart Rate',
+    icon: <Heart size={12} className="text-red-400" />,
+    color: '#f87171',
+    unit: 'BPM',
+    zones: HR_ZONES,
+    gradientId: 'hr-gradient',
+    hardMin: 40,
+    hardMax: 140,
+  },
+  {
+    key: 'hrv',
+    title: 'Heart Rate Variability',
+    icon: <Activity size={12} className="text-sky-400" />,
+    color: '#38bdf8',
+    unit: 'ms',
+    zones: HRV_ZONES,
+    gradientId: 'hrv-gradient',
+    hardMin: 0,
+    hardMax: 200,
+  },
+  {
+    key: 'br',
+    title: 'Breathing Rate',
+    icon: <Wind size={12} className="text-green-400" />,
+    color: '#22c55e',
+    unit: 'BPM',
+    zones: BR_ZONES,
+    gradientId: 'br-gradient',
+    hardMin: 8,
+    hardMax: 25,
+  },
+]
+
+/** Filter physiologically impossible values matching iOS smoothedVitals logic. */
 function filterOutliers(records: VitalsRecord[]): VitalsRecord[] {
   return records.filter((r) => {
     if (r.heartRate != null && (r.heartRate < 45 || r.heartRate > 130)) return false
@@ -77,10 +141,7 @@ function avg(values: number[]): string {
   return Math.round(values.reduce((a, b) => a + b, 0) / values.length).toString()
 }
 
-/**
- * Apply a centered moving average to a numeric field on an array of objects.
- * Window size of 5 smooths noise while preserving trends.
- */
+/** 5-point centered moving average for visual smoothing. */
 function smoothData<T extends Record<string, unknown>>(
   data: T[],
   key: keyof T,
@@ -97,39 +158,51 @@ function smoothData<T extends Record<string, unknown>>(
   })
 }
 
-// Group points into nights. A point's "night" is the local calendar date it
-// belongs to with everything before 6am rolled into the previous day, so a
-// session spanning midnight ends up under a single key.
-function nightKey(ts: Date): string {
-  const local = new Date(ts.getTime())
-  if (local.getHours() < 6) local.setDate(local.getDate() - 1)
-  return `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`
-}
-
-function groupByNight<T extends { timestamp: Date }>(points: T[]): Map<string, T[]> {
-  const map = new Map<string, T[]>()
-  for (const p of points) {
-    const key = nightKey(p.timestamp)
-    let bucket = map.get(key)
-    if (!bucket) {
-      bucket = []
-      map.set(key, bucket)
-    }
-    bucket.push(p)
+/** Median + interquartile range for a list of numbers. */
+function summarise(values: number[]): { median: number, q1: number, q3: number, min: number, max: number } | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const q = (p: number): number => {
+    const idx = p * (sorted.length - 1)
+    const lo = Math.floor(idx)
+    const hi = Math.ceil(idx)
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)
   }
-  return map
+  return {
+    median: q(0.5),
+    q1: q(0.25),
+    q3: q(0.75),
+    min: sorted[0],
+    max: sorted[sorted.length - 1],
+  }
 }
 
-function formatNightLabel(key: string): string {
-  const [y, m, d] = key.split('-').map(n => parseInt(n, 10))
-  const dt = new Date(y, m - 1, d)
-  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' })
+function formatSessionLabel(session: SleepSession): string {
+  const date = session.enteredBedAt.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  })
+  const end = session.leftBedAt ?? new Date()
+  const durMs = end.getTime() - session.enteredBedAt.getTime()
+  const hours = Math.floor(durMs / 3_600_000)
+  const minutes = Math.floor((durMs % 3_600_000) / 60_000)
+  const duration = `${hours}h ${String(minutes).padStart(2, '0')}m`
+  return `${date} · ${duration}`
+}
+
+function formatClock(date: Date): string {
+  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+}
+
+function formatNightLabel(date: Date): string {
+  return date.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' })
 }
 
 // Side colors for dual-side comparison
 const SIDE_COLORS = {
-  left: { primary: '#5cb8e0', label: 'Left' }, // cool blue
-  right: { primary: '#40e0d0', label: 'Right' }, // turquoise
+  left: { primary: '#5cb8e0', label: 'Left' },
+  right: { primary: '#40e0d0', label: 'Right' },
 } as const
 
 interface VitalsPanelProps {
@@ -142,21 +215,24 @@ interface VitalsPanelProps {
 }
 
 /**
- * Pod-derived vitals panel displaying heart rate, HRV, and breathing rate charts.
- * Wired to biometrics.getVitals and biometrics.getVitalsSummary tRPC endpoints.
- * Week-based time range selection matching iOS WeekNavigatorView.
- *
- * Supports dual-side comparison mode: overlays left and right side data on each chart.
+ * Pod-derived vitals panel. Two views:
+ *  - Night: stacked HR/HRV/BR panels for one selected sleep session, sharing
+ *    a clock-time x-axis so events line up vertically (PSG convention).
+ *  - Week: one summary row per night per metric with median dot + IQR bar
+ *    and a personal-baseline band behind the rows (Whoop/Oura convention).
  */
 export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = false }: VitalsPanelProps) {
   const { side, toggleSide } = useSide()
   const week = useWeekNavigator()
+  const [view, setView] = useState<'night' | 'week'>('night')
+  // Track the user's explicit pick by session ID so the selection survives
+  // week navigation when possible; defaults to the most recent session.
+  const [pickedSessionId, setPickedSessionId] = useState<number | null>(null)
 
-  // Determine which side to use as the primary line
   const primarySide = side
   const otherSide: 'left' | 'right' = side === 'left' ? 'right' : 'left'
 
-  // Fetch vitals for the selected week and side (primary)
+  // ── Queries ───────────────────────────────────────────────
   const vitalsQuery = trpc.biometrics.getVitals.useQuery({
     side: primarySide,
     startDate: week.weekStart,
@@ -164,14 +240,24 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     limit: 1000,
   })
 
-  // Fetch summary stats (primary)
   const summaryQuery = trpc.biometrics.getVitalsSummary.useQuery({
     side: primarySide,
     startDate: week.weekStart,
     endDate: week.weekEnd,
   })
 
-  // Fetch vitals for the OTHER side (only when dual-side is active)
+  const sessionsQuery = trpc.biometrics.getSleepRecords.useQuery({
+    side: primarySide,
+    startDate: week.weekStart,
+    endDate: week.weekEnd,
+    limit: 100,
+  })
+
+  const baselineQuery = trpc.biometrics.getVitalsBaseline.useQuery({
+    side: primarySide,
+    days: 30,
+  })
+
   const otherVitalsQuery = trpc.biometrics.getVitals.useQuery(
     {
       side: otherSide,
@@ -182,7 +268,6 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     { enabled: dualSide },
   )
 
-  // Fetch summary for the other side (only when dual-side)
   const otherSummaryQuery = trpc.biometrics.getVitalsSummary.useQuery(
     {
       side: otherSide,
@@ -192,85 +277,61 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
     { enabled: dualSide },
   )
 
+  // ── Derived state ─────────────────────────────────────────
   const rawRecords = useMemo<VitalsRecord[]>(() => vitalsQuery.data ?? [], [vitalsQuery.data])
-  const smoothed = useMemo(() => filterOutliers(rawRecords), [rawRecords])
   const sortedRecords = useMemo(
-    () => [...smoothed].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-    [smoothed],
+    () => filterOutliers(rawRecords).sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+    ),
+    [rawRecords],
   )
 
-  // Other side records
   const otherRawRecords = useMemo<VitalsRecord[]>(() => otherVitalsQuery.data ?? [], [otherVitalsQuery.data])
-  const otherSmoothed = useMemo(() => filterOutliers(otherRawRecords), [otherRawRecords])
   const otherSortedRecords = useMemo(
-    () => [...otherSmoothed].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-    [otherSmoothed],
+    () => filterOutliers(otherRawRecords).sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+    ),
+    [otherRawRecords],
   )
+
+  const sessions = useMemo<SleepSession[]>(
+    () =>
+      (sessionsQuery.data ?? []).map(s => ({
+        id: s.id,
+        enteredBedAt: new Date(s.enteredBedAt),
+        leftBedAt: s.leftBedAt ? new Date(s.leftBedAt) : null,
+      })).sort((a, b) => a.enteredBedAt.getTime() - b.enteredBedAt.getTime()),
+    [sessionsQuery.data],
+  )
+
+  // Resolve the effective session index without state-in-effect: prefer the
+  // user's pick when it's still in this week's list, otherwise default to the
+  // most recent session.
+  const selectedSessionIndex = useMemo<number | null>(() => {
+    if (sessions.length === 0) return null
+    if (pickedSessionId != null) {
+      const idx = sessions.findIndex(s => s.id === pickedSessionId)
+      if (idx >= 0) return idx
+    }
+    return sessions.length - 1
+  }, [sessions, pickedSessionId])
+
+  const handleSelectIndex = (next: number): void => {
+    const clamped = Math.max(0, Math.min(sessions.length - 1, next))
+    setPickedSessionId(sessions[clamped]?.id ?? null)
+  }
 
   const summary = summaryQuery.data
   const otherSummary = otherSummaryQuery.data
+  const baseline = baselineQuery.data
 
-  // Extract chart data — primary (smoothed with window=5 moving average)
-  const hrData = useMemo(() =>
-    smoothData(
-      sortedRecords
-        .filter(r => r.heartRate != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate ?? 0 })),
-      'value',
-    ),
-  [sortedRecords])
+  // Per-metric smoothed point arrays for primary side (full week).
+  const metricSeries = useMemo(() => extractMetricSeries(sortedRecords), [sortedRecords])
+  const otherMetricSeries = useMemo(() => extractMetricSeries(otherSortedRecords), [otherSortedRecords])
 
-  const hrvData = useMemo(() =>
-    smoothData(
-      sortedRecords
-        .filter(r => r.hrv != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv ?? 0 })),
-      'value',
-    ),
-  [sortedRecords])
-
-  const brData = useMemo(() =>
-    smoothData(
-      sortedRecords
-        .filter(r => r.breathingRate != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate ?? 0 })),
-      'value',
-    ),
-  [sortedRecords])
-
-  // Extract chart data — other side (for dual-side overlay, also smoothed)
-  const otherHrData = useMemo(() =>
-    smoothData(
-      otherSortedRecords
-        .filter(r => r.heartRate != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate ?? 0 })),
-      'value',
-    ),
-  [otherSortedRecords])
-
-  const otherHrvData = useMemo(() =>
-    smoothData(
-      otherSortedRecords
-        .filter(r => r.hrv != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv ?? 0 })),
-      'value',
-    ),
-  [otherSortedRecords])
-
-  const otherBrData = useMemo(() =>
-    smoothData(
-      otherSortedRecords
-        .filter(r => r.breathingRate != null)
-        .map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate ?? 0 })),
-      'value',
-    ),
-  [otherSortedRecords])
-
-  // Summary values from smoothed data
   const hrValues = sortedRecords.map(r => r.heartRate).filter((v): v is number => v != null)
   const hrvValues = sortedRecords.map(r => r.hrv).filter((v): v is number => v != null)
   const brValues = sortedRecords.map(r => r.breathingRate).filter((v): v is number => v != null)
-
   const otherHrValues = otherSortedRecords.map(r => r.heartRate).filter((v): v is number => v != null)
   const otherHrvValues = otherSortedRecords.map(r => r.hrv).filter((v): v is number => v != null)
   const otherBrValues = otherSortedRecords.map(r => r.breathingRate).filter((v): v is number => v != null)
@@ -281,9 +342,9 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
 
   return (
     <div className="space-y-3">
-      {/* Week Navigator + Side Toggle */}
+      {/* Week Navigator + View Toggle + Side Toggle */}
       {!hideNav && (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1">
             <button
               onClick={week.goToPreviousWeek}
@@ -311,18 +372,19 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
             </button>
           </div>
 
-          {/* Side toggle pill matching iOS sideTogglePill */}
-          <button
-            onClick={toggleSide}
-            className="flex items-center gap-1.5 rounded-full bg-sky-400/10 px-3 py-1.5"
-          >
-            <span className="text-xs font-semibold text-sky-400 capitalize">
-              {side}
-            </span>
-            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-400/50 text-[9px] font-bold text-white">
-              {side === 'left' ? 'L' : 'R'}
-            </span>
-          </button>
+          <div className="flex items-center gap-2">
+            <ViewToggle view={view} onChange={setView} />
+
+            <button
+              onClick={toggleSide}
+              className="flex items-center gap-1.5 rounded-full bg-sky-400/10 px-3 py-1.5"
+            >
+              <span className="text-xs font-semibold text-sky-400 capitalize">{side}</span>
+              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-400/50 text-[9px] font-bold text-white">
+                {side === 'left' ? 'L' : 'R'}
+              </span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -335,10 +397,9 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
 
       {!isLoading && (
         <>
-          {/* Vitals Summary Card — hidden when parent provides its own */}
+          {/* Vitals Summary Card */}
           {!hideSummary && (
             <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-              {/* Dual-side comparison header */}
               {dualSide && (
                 <div className="mb-3 flex items-center justify-center gap-4 text-[10px]">
                   <div className="flex items-center gap-1.5">
@@ -383,22 +444,14 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
 
               {trend && (
                 <div className="mt-2.5 flex items-center justify-center gap-1.5">
-                  {trend.direction === 'up' && (
-                    <span className="text-green-400 text-[10px]">&#x2197;</span>
-                  )}
-                  {trend.direction === 'down' && (
-                    <span className="text-amber-400 text-[10px]">&#x2198;</span>
-                  )}
-                  {trend.direction === 'stable' && (
-                    <span className="text-zinc-500 text-[10px]">=</span>
-                  )}
+                  {trend.direction === 'up' && <span className="text-green-400 text-[10px]">&#x2197;</span>}
+                  {trend.direction === 'down' && <span className="text-amber-400 text-[10px]">&#x2198;</span>}
+                  {trend.direction === 'stable' && <span className="text-zinc-500 text-[10px]">=</span>}
                   <span
                     className={`text-[11px] ${
                       trend.direction === 'up'
                         ? 'text-green-400'
-                        : trend.direction === 'down'
-                          ? 'text-amber-400'
-                          : 'text-zinc-500'
+                        : trend.direction === 'down' ? 'text-amber-400' : 'text-zinc-500'
                     }`}
                   >
                     {trend.text}
@@ -408,81 +461,35 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
             </div>
           )}
 
-          {/* Heart Rate Chart Card */}
-          <VitalsChartCard
-            title="Heart Rate"
-            icon={<Heart size={12} className="text-red-400" />}
-            color="#f87171"
-            gradientId="hr-gradient"
-            unit="BPM"
-            data={hrData}
-            zones={HR_ZONES}
-            average={summary?.avgHeartRate ?? null}
-            values={hrValues}
-            label={dualSide ? SIDE_COLORS[primarySide].label : undefined}
-            secondary={dualSide
-              ? {
-                  data: otherHrData,
-                  color: SIDE_COLORS[otherSide].primary,
-                  gradientId: 'hr-gradient-other',
-                  label: SIDE_COLORS[otherSide].label,
-                  average: otherSummary?.avgHeartRate ?? null,
-                  values: otherHrValues,
-                }
-              : undefined}
-          />
-
-          {/* HRV Chart Card */}
-          <VitalsChartCard
-            title="Heart Rate Variability"
-            icon={<Activity size={12} className="text-sky-400" />}
-            color="#38bdf8"
-            gradientId="hrv-gradient"
-            unit="ms"
-            data={hrvData}
-            zones={HRV_ZONES}
-            average={summary?.avgHRV ?? null}
-            values={hrvValues}
-            label={dualSide ? SIDE_COLORS[primarySide].label : undefined}
-            secondary={dualSide
-              ? {
-                  data: otherHrvData,
-                  color: SIDE_COLORS[otherSide].primary,
-                  gradientId: 'hrv-gradient-other',
-                  label: SIDE_COLORS[otherSide].label,
-                  average: otherSummary?.avgHRV ?? null,
-                  values: otherHrvValues,
-                }
-              : undefined}
-          />
-
-          {/* Breathing Rate Chart Card */}
-          <VitalsChartCard
-            title="Breathing Rate"
-            icon={<Wind size={12} className="text-green-400" />}
-            color="#22c55e"
-            gradientId="br-gradient"
-            unit="BPM"
-            data={brData}
-            zones={BR_ZONES}
-            average={summary?.avgBreathingRate ?? null}
-            values={brValues}
-            label={dualSide ? SIDE_COLORS[primarySide].label : undefined}
-            secondary={dualSide
-              ? {
-                  data: otherBrData,
-                  color: SIDE_COLORS[otherSide].primary,
-                  gradientId: 'br-gradient-other',
-                  label: SIDE_COLORS[otherSide].label,
-                  average: otherSummary?.avgBreathingRate ?? null,
-                  values: otherBrValues,
-                }
-              : undefined}
-          />
+          {view === 'night'
+            ? (
+                <NightView
+                  sessions={sessions}
+                  selectedIndex={selectedSessionIndex}
+                  onSelectIndex={handleSelectIndex}
+                  metricSeries={metricSeries}
+                  otherMetricSeries={dualSide ? otherMetricSeries : null}
+                  baseline={baseline ?? null}
+                  primaryLabel={dualSide ? SIDE_COLORS[primarySide].label : undefined}
+                  secondaryLabel={dualSide ? SIDE_COLORS[otherSide].label : undefined}
+                  secondaryColor={SIDE_COLORS[otherSide].primary}
+                  summary={summary ?? null}
+                  otherSummary={dualSide ? otherSummary ?? null : null}
+                />
+              )
+            : (
+                <WeekView
+                  sortedRecords={sortedRecords}
+                  otherSortedRecords={dualSide ? otherSortedRecords : null}
+                  sessions={sessions}
+                  baseline={baseline ?? null}
+                  primaryLabel={dualSide ? SIDE_COLORS[primarySide].label : undefined}
+                  secondaryLabel={dualSide ? SIDE_COLORS[otherSide].label : undefined}
+                />
+              )}
         </>
       )}
 
-      {/* Error state */}
       {vitalsQuery.isError && (
         <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4 text-center">
           <p className="text-red-400 text-[13px] sm:text-sm">Failed to load vitals data</p>
@@ -498,7 +505,40 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
   )
 }
 
-// ── Sub-components ──
+// ── Sub-components ──────────────────────────────────────────────────
+
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: 'night' | 'week'
+  onChange: (next: 'night' | 'week') => void
+}) {
+  return (
+    <div className="flex items-center rounded-full bg-zinc-900 p-0.5 text-xs">
+      <button
+        onClick={() => onChange('night')}
+        className={`flex items-center gap-1 rounded-full px-2.5 py-1 transition-colors ${
+          view === 'night' ? 'bg-sky-400/20 text-sky-300' : 'text-zinc-500'
+        }`}
+        aria-pressed={view === 'night'}
+      >
+        <Moon size={11} />
+        <span className="font-medium">Night</span>
+      </button>
+      <button
+        onClick={() => onChange('week')}
+        className={`flex items-center gap-1 rounded-full px-2.5 py-1 transition-colors ${
+          view === 'week' ? 'bg-sky-400/20 text-sky-300' : 'text-zinc-500'
+        }`}
+        aria-pressed={view === 'week'}
+      >
+        <Calendar size={11} />
+        <span className="font-medium">Week</span>
+      </button>
+    </div>
+  )
+}
 
 function SummaryItem({
   icon,
@@ -528,255 +568,467 @@ function SummaryItem({
   )
 }
 
-interface SecondarySeriesData {
-  data: { timestamp: Date, value: number }[]
-  color: string
-  gradientId: string
-  label: string
-  average: number | null
-  values: number[]
+// ── Night view ──────────────────────────────────────────────────────
+
+type MetricSeries = Record<'hr' | 'hrv' | 'br', DataPoint[]>
+
+function extractMetricSeries(records: VitalsRecord[]): MetricSeries {
+  const series: MetricSeries = { hr: [], hrv: [], br: [] }
+  series.hr = smoothData(
+    records.filter(r => r.heartRate != null).map(r => ({ timestamp: new Date(r.timestamp), value: r.heartRate ?? 0 })),
+    'value',
+  )
+  series.hrv = smoothData(
+    records.filter(r => r.hrv != null).map(r => ({ timestamp: new Date(r.timestamp), value: r.hrv ?? 0 })),
+    'value',
+  )
+  series.br = smoothData(
+    records.filter(r => r.breathingRate != null).map(r => ({ timestamp: new Date(r.timestamp), value: r.breathingRate ?? 0 })),
+    'value',
+  )
+  return series
 }
 
-function VitalsChartCard({
-  title,
-  icon,
-  color,
-  gradientId,
-  unit,
-  data,
-  zones,
-  average,
-  values,
-  label,
-  secondary,
-}: {
-  title: string
-  icon: React.ReactNode
-  color: string
-  gradientId: string
-  unit: string
-  data: { timestamp: Date, value: number }[]
-  zones: { label: string, min: number, max: number, color: string }[]
-  average: number | null
-  values: number[]
-  /** Side label shown in dual-side mode (e.g. "Left") */
-  label?: string
-  /** Secondary series data for dual-side overlay */
-  secondary?: SecondarySeriesData
-}) {
-  const minVal = values.length > 0 ? Math.round(Math.min(...values)) : null
-  const maxVal = values.length > 0 ? Math.round(Math.max(...values)) : null
-  const avgVal = average != null ? Math.round(average) : (values.length > 0 ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : null)
+function metricBaseline(metric: MetricSpec['key'], baseline: { hrMean: number | null, hrSD: number | null, hrvMean: number | null, hrvSD: number | null, brMean: number | null, brSD: number | null } | null): Baseline {
+  if (!baseline) return { mean: null, sd: null }
+  if (metric === 'hr') return { mean: baseline.hrMean, sd: baseline.hrSD }
+  if (metric === 'hrv') return { mean: baseline.hrvMean, sd: baseline.hrvSD }
+  return { mean: baseline.brMean, sd: baseline.brSD }
+}
 
-  const secMinVal = secondary && secondary.values.length > 0 ? Math.round(Math.min(...secondary.values)) : null
-  const secMaxVal = secondary && secondary.values.length > 0 ? Math.round(Math.max(...secondary.values)) : null
-  const secAvgVal = secondary?.average != null
-    ? Math.round(secondary.average)
-    : (secondary && secondary.values.length > 0
-        ? Math.round(secondary.values.reduce((a, b) => a + b, 0) / secondary.values.length)
-        : null)
+function filterToWindow(points: DataPoint[], start: number, end: number): DataPoint[] {
+  return points.filter((p) => {
+    const t = p.timestamp.getTime()
+    return t >= start && t <= end
+  })
+}
+
+function NightView({
+  sessions,
+  selectedIndex,
+  onSelectIndex,
+  metricSeries,
+  otherMetricSeries,
+  baseline,
+  primaryLabel,
+  secondaryLabel,
+  secondaryColor,
+  summary,
+  otherSummary,
+}: {
+  sessions: SleepSession[]
+  selectedIndex: number | null
+  onSelectIndex: (next: number) => void
+  metricSeries: MetricSeries
+  otherMetricSeries: MetricSeries | null
+  baseline: { hrMean: number | null, hrSD: number | null, hrvMean: number | null, hrvSD: number | null, brMean: number | null, brSD: number | null } | null
+  primaryLabel?: string
+  secondaryLabel?: string
+  secondaryColor: string
+  summary: { avgHeartRate: number | null, avgHRV: number | null, avgBreathingRate: number | null } | null
+  otherSummary: { avgHeartRate: number | null, avgHRV: number | null, avgBreathingRate: number | null } | null
+}) {
+  if (sessions.length === 0 || selectedIndex == null) {
+    return (
+      <div className="rounded-2xl bg-zinc-900 p-6 text-center">
+        <p className="text-zinc-500 text-sm">No sleep sessions this week</p>
+      </div>
+    )
+  }
+
+  const session = sessions[Math.min(selectedIndex, sessions.length - 1)]
+  const start = session.enteredBedAt.getTime()
+  const end = (session.leftBedAt ?? new Date()).getTime()
 
   return (
-    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-2 sm:mb-3">
-        <div className="flex items-center gap-1.5">
-          {icon}
-          <span className="text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
-            {title}
+    <>
+      {/* Session navigator */}
+      <div className="flex items-center justify-between rounded-2xl bg-zinc-900 px-2 py-1.5">
+        <button
+          onClick={() => onSelectIndex(Math.max(0, selectedIndex - 1))}
+          disabled={selectedIndex === 0}
+          className="p-1.5 text-zinc-500 active:text-white transition-colors disabled:opacity-30"
+          aria-label="Previous session"
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <div className="flex flex-col items-center">
+          <span className="text-[13px] font-medium text-white">{formatSessionLabel(session)}</span>
+          <span className="text-[10px] text-zinc-500 tabular-nums">
+            {formatClock(session.enteredBedAt)}
+            {' → '}
+            {session.leftBedAt ? formatClock(session.leftBedAt) : 'now'}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          {data.length > 0 && (
-            <span className="text-xs font-medium" style={{ color }}>
-              {label && <span className="text-zinc-500 mr-1">{label}</span>}
-              {Math.round(data[data.length - 1]?.value ?? 0)}
-              {' '}
-              {unit}
-            </span>
-          )}
-          {secondary && secondary.data.length > 0 && (
-            <span className="text-xs font-medium" style={{ color: secondary.color }}>
-              <span className="text-zinc-500 mr-1">{secondary.label}</span>
-              {Math.round(secondary.data[secondary.data.length - 1]?.value ?? 0)}
-              {' '}
-              {unit}
-            </span>
-          )}
-        </div>
+        <button
+          onClick={() => onSelectIndex(Math.min(sessions.length - 1, selectedIndex + 1))}
+          disabled={selectedIndex >= sessions.length - 1}
+          className="p-1.5 text-zinc-500 active:text-white transition-colors disabled:opacity-30"
+          aria-label="Next session"
+        >
+          <ChevronRight size={16} />
+        </button>
       </div>
 
-      {/* Small-multiples: one mini chart per sleep night, shared y-scale. */}
-      <FacetedNightCharts
-        data={data}
-        color={color}
-        gradientId={gradientId}
-        zones={zones}
-        unit={unit}
-        label={label}
-        secondary={secondary && secondary.data.length > 0
-          ? {
-              data: secondary.data,
-              color: secondary.color,
-              gradientId: secondary.gradientId,
-              label: secondary.label,
-            }
-          : undefined}
-      />
+      {/* Stacked HR / HRV / BR panels sharing the session's clock-time axis */}
+      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4 space-y-2">
+        {METRICS.map((metric) => {
+          const primary = filterToWindow(metricSeries[metric.key], start, end)
+          const secondary = otherMetricSeries ? filterToWindow(otherMetricSeries[metric.key], start, end) : []
+          const { mean, sd } = metricBaseline(metric.key, baseline)
+          const baselineMin = mean != null && sd != null ? mean - sd : undefined
+          const baselineMax = mean != null && sd != null ? mean + sd : undefined
+          const primarySummaryAvg
+            = metric.key === 'hr'
+              ? summary?.avgHeartRate
+              : metric.key === 'hrv'
+                ? summary?.avgHRV
+                : summary?.avgBreathingRate
+          const secondarySummaryAvg
+            = metric.key === 'hr'
+              ? otherSummary?.avgHeartRate
+              : metric.key === 'hrv'
+                ? otherSummary?.avgHRV
+                : otherSummary?.avgBreathingRate
 
-      {/* Legend: min / avg / max + zone labels */}
-      {data.length > 0 && (
-        <div className="flex flex-wrap items-center mt-2 gap-x-4 gap-y-1">
-          {label && (
-            <span className="text-[9px] font-semibold text-zinc-500">
-              {label}
-              :
-            </span>
-          )}
-          <LegendValue label="Min" value={minVal} className="text-zinc-500" />
-          <LegendValue label="Avg" value={avgVal} color={color} />
-          <LegendValue label="Max" value={maxVal} className="text-zinc-500" />
-
-          {/* Secondary legend */}
-          {secondary && secondary.values.length > 0 && (
-            <>
-              <span className="text-[9px] font-semibold text-zinc-500">
-                {secondary.label}
-                :
-              </span>
-              <LegendValue label="Min" value={secMinVal} className="text-zinc-500" />
-              <LegendValue label="Avg" value={secAvgVal} color={secondary.color} />
-              <LegendValue label="Max" value={secMaxVal} className="text-zinc-500" />
-            </>
-          )}
-
-          <div className="flex-1" />
-
-          {/* Zone labels */}
-          <div className="flex items-center gap-2">
-            {zones.map(zone => (
-              <div key={zone.label} className="flex items-center gap-1">
-                <span
-                  className="inline-block w-2 h-2 rounded-sm"
-                  style={{ backgroundColor: zone.color.replace(/[\d.]+\)$/, '0.6)') }}
-                />
-                <span className="text-[9px] text-zinc-500">{zone.label}</span>
+          return (
+            <div key={metric.key}>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1.5">
+                  {metric.icon}
+                  <span className="text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
+                    {metric.title}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] tabular-nums">
+                  {mean != null && (
+                    <span className="text-zinc-500">
+                      baseline
+                      {' '}
+                      <span style={{ color: metric.color }}>{Math.round(mean)}</span>
+                      {sd != null && (
+                        <span className="text-zinc-600">
+                          {' '}
+                          ±
+                          {Math.round(sd)}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                  {primary.length > 0 && (
+                    <span style={{ color: metric.color }} className="font-medium">
+                      {Math.round(primary[primary.length - 1].value)}
+                      {' '}
+                      {metric.unit}
+                    </span>
+                  )}
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+              <VitalsChart
+                data={primary}
+                color={metric.color}
+                gradientId={`${metric.gradientId}-night`}
+                zones={metric.zones}
+                average={primarySummaryAvg ?? null}
+                unit={metric.unit}
+                height={120}
+                label={primaryLabel}
+                xMin={start}
+                xMax={end}
+                baselineMin={baselineMin}
+                baselineMax={baselineMax}
+                compact
+                secondary={secondary.length > 0
+                  ? {
+                      data: secondary,
+                      color: secondaryColor,
+                      gradientId: `${metric.gradientId}-night-other`,
+                      label: secondaryLabel ?? '',
+                      average: secondarySummaryAvg ?? null,
+                    }
+                  : undefined}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </>
   )
 }
 
-function FacetedNightCharts({
-  data,
-  color,
-  gradientId,
-  zones,
-  unit,
-  label,
-  secondary,
+// ── Week view ───────────────────────────────────────────────────────
+
+interface NightStat {
+  date: Date
+  median: number
+  q1: number
+  q3: number
+}
+
+function computeNightStats(
+  records: VitalsRecord[],
+  sessions: SleepSession[],
+  metric: 'hr' | 'hrv' | 'br',
+): NightStat[] {
+  if (sessions.length === 0) return []
+  const stats: NightStat[] = []
+  const field
+    = metric === 'hr'
+      ? 'heartRate'
+      : metric === 'hrv' ? 'hrv' : 'breathingRate'
+  for (const session of sessions) {
+    const start = session.enteredBedAt.getTime()
+    const end = (session.leftBedAt ?? new Date()).getTime()
+    const vals: number[] = []
+    for (const r of records) {
+      const t = new Date(r.timestamp).getTime()
+      if (t < start || t > end) continue
+      const v = r[field]
+      if (v != null) vals.push(v)
+    }
+    const s = summarise(vals)
+    if (s) {
+      stats.push({ date: session.enteredBedAt, median: s.median, q1: s.q1, q3: s.q3 })
+    }
+  }
+  return stats
+}
+
+function WeekView({
+  sortedRecords,
+  otherSortedRecords,
+  sessions,
+  baseline,
+  primaryLabel,
+  secondaryLabel,
 }: {
-  data: { timestamp: Date, value: number }[]
-  color: string
-  gradientId: string
-  zones: { label: string, min: number, max: number, color: string }[]
-  unit: string
-  label?: string
-  secondary?: { data: { timestamp: Date, value: number }[], color: string, gradientId: string, label: string }
+  sortedRecords: VitalsRecord[]
+  otherSortedRecords: VitalsRecord[] | null
+  sessions: SleepSession[]
+  baseline: { hrMean: number | null, hrSD: number | null, hrvMean: number | null, hrvSD: number | null, brMean: number | null, brSD: number | null } | null
+  primaryLabel?: string
+  secondaryLabel?: string
 }) {
-  const primaryByNight = useMemo(() => groupByNight(data), [data])
-  const secondaryByNight = useMemo(
-    () => (secondary ? groupByNight(secondary.data) : new Map<string, { timestamp: Date, value: number }[]>()),
-    [secondary],
-  )
-
-  const nightKeys = useMemo(() => {
-    const set = new Set<string>()
-    for (const k of primaryByNight.keys()) set.add(k)
-    for (const k of secondaryByNight.keys()) set.add(k)
-    return [...set].sort()
-  }, [primaryByNight, secondaryByNight])
-
-  // Shared y-range across all nights so cells are honestly comparable.
-  const [yMin, yMax] = useMemo(() => {
-    const all: number[] = []
-    for (const p of data) all.push(p.value)
-    if (secondary) for (const p of secondary.data) all.push(p.value)
-    if (all.length === 0) return [undefined, undefined] as const
-    const lo = Math.min(...all)
-    const hi = Math.max(...all)
-    const range = hi - lo || 1
-    return [lo - range * 0.05, hi + range * 0.05] as const
-  }, [data, secondary])
-
-  if (nightKeys.length === 0) {
+  if (sessions.length === 0) {
     return (
-      <div className="flex items-center justify-center text-zinc-500 text-sm" style={{ height: 160 }}>
-        No data available
+      <div className="rounded-2xl bg-zinc-900 p-6 text-center">
+        <p className="text-zinc-500 text-sm">No sleep sessions this week</p>
       </div>
     )
   }
 
   return (
-    <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-1">
-      {nightKeys.map((key) => {
-        const primary = primaryByNight.get(key) ?? []
-        const secondaryPoints = secondaryByNight.get(key) ?? []
+    <>
+      {METRICS.map((metric) => {
+        const primaryStats = computeNightStats(sortedRecords, sessions, metric.key)
+        const secondaryStats = otherSortedRecords ? computeNightStats(otherSortedRecords, sessions, metric.key) : []
+        const { mean, sd } = metricBaseline(metric.key, baseline)
         return (
-          <div key={key} className="flex shrink-0 grow basis-0 min-w-[110px] flex-col gap-1">
-            <span className="text-[9px] text-zinc-500 text-center tabular-nums">
-              {formatNightLabel(key)}
-            </span>
-            <VitalsChart
-              data={primary}
-              color={color}
-              gradientId={`${gradientId}-${key}`}
-              zones={zones}
-              unit={unit}
-              height={140}
-              label={label}
-              yMin={yMin}
-              yMax={yMax}
-              compact
-              secondary={secondaryPoints.length > 0 && secondary
-                ? {
-                    data: secondaryPoints,
-                    color: secondary.color,
-                    gradientId: `${secondary.gradientId}-${key}`,
-                    label: secondary.label,
-                  }
-                : undefined}
-            />
-          </div>
+          <WeekMetricCard
+            key={metric.key}
+            metric={metric}
+            primaryStats={primaryStats}
+            secondaryStats={secondaryStats}
+            baselineMean={mean}
+            baselineSD={sd}
+            primaryLabel={primaryLabel}
+            secondaryLabel={secondaryLabel}
+          />
+        )
+      })}
+    </>
+  )
+}
+
+function WeekMetricCard({
+  metric,
+  primaryStats,
+  secondaryStats,
+  baselineMean,
+  baselineSD,
+  primaryLabel,
+  secondaryLabel,
+}: {
+  metric: MetricSpec
+  primaryStats: NightStat[]
+  secondaryStats: NightStat[]
+  baselineMean: number | null
+  baselineSD: number | null
+  primaryLabel?: string
+  secondaryLabel?: string
+}) {
+  const allStats = [...primaryStats, ...secondaryStats]
+  if (allStats.length === 0) {
+    return (
+      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+        <div className="flex items-center gap-1.5 mb-2">
+          {metric.icon}
+          <span className="text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
+            {metric.title}
+          </span>
+        </div>
+        <p className="text-center text-zinc-500 text-xs py-6">No data this week</p>
+      </div>
+    )
+  }
+
+  // Shared scale: extend domain to include the baseline band (if any) so the
+  // band frames the dots rather than the dots framing the band.
+  let domainLo = Math.min(...allStats.map(s => s.q1))
+  let domainHi = Math.max(...allStats.map(s => s.q3))
+  if (baselineMean != null && baselineSD != null) {
+    domainLo = Math.min(domainLo, baselineMean - baselineSD)
+    domainHi = Math.max(domainHi, baselineMean + baselineSD)
+  }
+  const range = domainHi - domainLo || 1
+  domainLo -= range * 0.08
+  domainHi += range * 0.08
+
+  const scale = (v: number) => ((v - domainLo) / (domainHi - domainLo)) * 100 // %
+
+  return (
+    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5">
+          {metric.icon}
+          <span className="text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
+            {metric.title}
+          </span>
+        </div>
+        {baselineMean != null && (
+          <span className="text-[10px] text-zinc-500 tabular-nums">
+            baseline
+            {' '}
+            <span style={{ color: metric.color }}>{Math.round(baselineMean)}</span>
+            {baselineSD != null && (
+              <span className="text-zinc-600">
+                {' '}
+                ±
+                {Math.round(baselineSD)}
+              </span>
+            )}
+            <span className="text-zinc-600 ml-1">{metric.unit}</span>
+          </span>
+        )}
+      </div>
+
+      {primaryStats.map((stat, idx) => {
+        const otherStat = secondaryStats.find(s => s.date.getTime() === stat.date.getTime())
+        return (
+          <NightSummaryRow
+            key={idx}
+            stat={stat}
+            otherStat={otherStat ?? null}
+            color={metric.color}
+            secondaryColor="#a78bfa"
+            primaryLabel={primaryLabel}
+            secondaryLabel={secondaryLabel}
+            baselineMean={baselineMean}
+            baselineSD={baselineSD}
+            scale={scale}
+            domainLo={domainLo}
+            domainHi={domainHi}
+            unit={metric.unit}
+          />
         )
       })}
     </div>
   )
 }
 
-function LegendValue({
-  label,
-  value,
+function NightSummaryRow({
+  stat,
+  otherStat,
   color,
-  className = '',
+  secondaryColor,
+  primaryLabel,
+  secondaryLabel,
+  baselineMean,
+  baselineSD,
+  scale,
+  domainLo,
+  domainHi,
+  unit,
 }: {
-  label: string
-  value: number | null
-  color?: string
-  className?: string
+  stat: NightStat
+  otherStat: NightStat | null
+  color: string
+  secondaryColor: string
+  primaryLabel?: string
+  secondaryLabel?: string
+  baselineMean: number | null
+  baselineSD: number | null
+  scale: (v: number) => number
+  domainLo: number
+  domainHi: number
+  unit: string
 }) {
+  const outsideBand
+    = baselineMean != null && baselineSD != null
+      ? Math.abs(stat.median - baselineMean) > baselineSD
+      : false
+
+  const bandStart = baselineMean != null && baselineSD != null ? scale(baselineMean - baselineSD) : null
+  const bandEnd = baselineMean != null && baselineSD != null ? scale(baselineMean + baselineSD) : null
+
   return (
-    <div className="flex flex-col items-center">
-      <span
-        className={`text-[11px] font-medium tabular-nums ${className}`}
-        style={color ? { color } : undefined}
-      >
-        {value ?? '--'}
+    <div className="grid grid-cols-[64px_1fr_56px] items-center gap-2 py-1.5 border-t border-zinc-800 first:border-t-0">
+      <span className="text-[11px] text-zinc-400 tabular-nums">
+        {formatNightLabel(stat.date)}
       </span>
-      <span className="text-[8px] text-zinc-600">{label}</span>
+      <div className="relative h-5">
+        {/* Baseline band */}
+        {bandStart != null && bandEnd != null && (
+          <div
+            className="absolute top-1 bottom-1 rounded-sm"
+            style={{
+              left: `${bandStart}%`,
+              width: `${Math.max(0, bandEnd - bandStart)}%`,
+              backgroundColor: color,
+              opacity: 0.1,
+            }}
+          />
+        )}
+        {/* IQR bar */}
+        <div
+          className="absolute top-2 bottom-2 rounded-full"
+          style={{
+            left: `${scale(stat.q1)}%`,
+            width: `${Math.max(2, scale(stat.q3) - scale(stat.q1))}%`,
+            backgroundColor: color,
+            opacity: 0.35,
+          }}
+          title={`${primaryLabel ?? 'IQR'}: ${Math.round(stat.q1)}–${Math.round(stat.q3)} ${unit}`}
+        />
+        {/* Primary median dot */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-2.5 w-2.5 rounded-full ring-2 ring-zinc-900"
+          style={{
+            left: `${scale(stat.median)}%`,
+            backgroundColor: outsideBand ? color : '#a1a1aa',
+          }}
+          title={`${primaryLabel ?? 'Median'}: ${Math.round(stat.median)} ${unit}`}
+        />
+        {/* Secondary (other-side) median */}
+        {otherStat && (
+          <div
+            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-2 w-2 rounded-full ring-1 ring-zinc-900"
+            style={{
+              left: `${scale(otherStat.median)}%`,
+              backgroundColor: secondaryColor,
+            }}
+            title={`${secondaryLabel ?? 'Other'}: ${Math.round(otherStat.median)} ${unit}`}
+          />
+        )}
+      </div>
+      <span className="text-[11px] tabular-nums text-right" style={{ color: outsideBand ? color : '#a1a1aa' }}>
+        {Math.round(stat.median)}
+      </span>
+      {/* Silence unused lint warnings for derived bounds the row consumes via scale */}
+      <span className="hidden">
+        {domainLo}
+        {domainHi}
+      </span>
     </div>
   )
 }

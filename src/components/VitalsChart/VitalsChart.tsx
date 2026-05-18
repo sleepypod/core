@@ -41,6 +41,14 @@ interface VitalsChartProps {
   yMin?: number
   /** Force y-axis upper bound. When set, auto-fit padding is skipped. */
   yMax?: number
+  /** Force x-axis lower bound (ms). Stacked panels share this so events align vertically. */
+  xMin?: number
+  /** Force x-axis upper bound (ms). */
+  xMax?: number
+  /** Personal-baseline band lower bound (mean - 1 SD). Draws a faint horizontal band behind the line. */
+  baselineMin?: number
+  /** Personal-baseline band upper bound (mean + 1 SD). */
+  baselineMax?: number
   /** Tightens left padding and tick counts for small-multiple cells. */
   compact?: boolean
 }
@@ -70,6 +78,10 @@ export function VitalsChart({
   formatTime = defaultFormatTime,
   yMin,
   yMax,
+  xMin,
+  xMax,
+  baselineMin,
+  baselineMax,
   compact = false,
 }: VitalsChartProps) {
   const svgRef = useRef<SVGSVGElement>(null)
@@ -105,7 +117,12 @@ export function VitalsChart({
   const { minVal, maxVal, minTime, maxTime } = useMemo(() => {
     const allPoints = [...sorted, ...sortedSecondary]
     if (allPoints.length === 0) {
-      return { minVal: yMin ?? 0, maxVal: yMax ?? 100, minTime: 0, maxTime: 1 }
+      return {
+        minVal: yMin ?? 0,
+        maxVal: yMax ?? 100,
+        minTime: xMin ?? 0,
+        maxTime: xMax ?? 1,
+      }
     }
 
     let lo: number
@@ -119,11 +136,13 @@ export function VitalsChart({
       lo = yMin ?? Math.min(...values)
       hi = yMax ?? Math.max(...values)
 
-      // Include zone ranges in scale
+      // Include zone ranges in scale (and baseline band so it never clips)
       for (const zone of zones) {
         if (yMin == null) lo = Math.min(lo, zone.min)
         if (yMax == null) hi = Math.max(hi, zone.max)
       }
+      if (baselineMin != null && yMin == null) lo = Math.min(lo, baselineMin)
+      if (baselineMax != null && yMax == null) hi = Math.max(hi, baselineMax)
 
       // Add 5% padding only to auto-fit bounds
       const range = hi - lo || 1
@@ -135,10 +154,10 @@ export function VitalsChart({
     return {
       minVal: lo,
       maxVal: hi,
-      minTime: Math.min(...times),
-      maxTime: Math.max(...times),
+      minTime: xMin ?? Math.min(...times),
+      maxTime: xMax ?? Math.max(...times),
     }
-  }, [sorted, sortedSecondary, zones, yMin, yMax])
+  }, [sorted, sortedSecondary, zones, yMin, yMax, xMin, xMax, baselineMin, baselineMax])
 
   const scaleX = useCallback((time: number) => {
     const timeRange = maxTime - minTime || 1
@@ -382,6 +401,18 @@ export function VitalsChart({
             </linearGradient>
           )}
         </defs>
+
+        {/* Personal baseline band (mean ± 1 SD) — sits behind zones */}
+        {baselineMin != null && baselineMax != null && baselineMax > baselineMin && (
+          <rect
+            x={padding.left}
+            y={scaleY(baselineMax)}
+            width={chartWidth}
+            height={Math.max(0, scaleY(baselineMin) - scaleY(baselineMax))}
+            fill={color}
+            opacity="0.08"
+          />
+        )}
 
         {/* Zone backgrounds */}
         {zones.map((zone) => {
