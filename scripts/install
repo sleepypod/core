@@ -1045,6 +1045,11 @@ Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
+# RAW frames live in the tmpfs at /persistent/biometrics (ADR 0018).
+# Without this override piezoStream defaults to /persistent and tries to
+# decode the 16-byte SEQNO.RAW bookkeeping file as CBOR — sensor streaming
+# and flow_readings stay empty.
+Environment="RAW_DATA_DIR=/persistent/biometrics"
 # The \`+\` prefix runs ExecStartPre as root regardless of User=. Needed
 # for /deviceinfo symlink creation (root-owned) and sp-maintenance
 # (journal vacuum, /tmp cleanup, pnpm store prune).

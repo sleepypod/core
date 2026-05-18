@@ -21,27 +21,31 @@ export function VitalsGrid() {
 
   const summary = summaryQuery.data
 
+  // HR icon is neutral zinc — red is reserved for actual alerts (the alarming
+  // resting-HR color was always-on regardless of whether the value was
+  // concerning, which trained users to ignore it). Labels clarify these are
+  // sleeping vitals so a "58" reads as "sleeping HR" not "current HR".
   const metrics = [
     {
       icon: Heart,
-      label: 'Avg HR',
+      label: 'Sleeping HR',
       value: summary?.avgHeartRate != null ? Math.round(summary.avgHeartRate) : '–',
       unit: 'bpm',
-      color: 'text-red-400',
+      color: 'text-zinc-300',
     },
     {
       icon: Activity,
       label: 'HRV',
       value: summary?.avgHRV != null ? Math.round(summary.avgHRV) : '–',
       unit: 'ms',
-      color: 'text-purple-400',
+      color: 'text-sky-400',
     },
     {
       icon: Wind,
       label: 'Breathing',
       value: summary?.avgBreathingRate != null ? Math.round(summary.avgBreathingRate) : '–',
       unit: 'br/min',
-      color: 'text-cyan-400',
+      color: 'text-green-400',
     },
   ]
 
