@@ -8,6 +8,7 @@ import { QualityScore } from './QualityScore'
 import { TimeRangeSelector, type TimeRange } from './TimeRangeSelector'
 import { WeeklySleepChart } from './WeeklySleepChart'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import {
   type StageDistribution,
   classifySleepStages,
@@ -68,6 +69,12 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
   const [monthOffset, setMonthOffset] = useState(0)
   const [selectedWeekNight, setSelectedWeekNight] = useState<string | null>(null)
 
+  // When the card is locked (parent supplies the navigator), follow the
+  // shared week from context so header arrows actually move the chart;
+  // otherwise the card's own offset state drives navigation.
+  const sharedWeek = useWeekNavigator()
+  const useSharedWeek = hideTimeRangeSelector
+
   // Calculate date ranges
   const { startDate, endDate } = useMemo(() => {
     const now = new Date()
@@ -78,6 +85,9 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
     }
 
     if (timeRange === 'week') {
+      if (useSharedWeek) {
+        return { startDate: sharedWeek.weekStart, endDate: sharedWeek.weekEnd }
+      }
       const weekStart = getWeekStart(now)
       weekStart.setDate(weekStart.getDate() + weekOffset * 7)
       const weekEnd = new Date(weekStart)
@@ -91,7 +101,7 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
     const monthEnd = new Date(monthStart)
     monthEnd.setMonth(monthEnd.getMonth() + 1)
     return { startDate: monthStart, endDate: monthEnd }
-  }, [timeRange, weekOffset, monthOffset])
+  }, [timeRange, weekOffset, monthOffset, useSharedWeek, sharedWeek.weekStart, sharedWeek.weekEnd])
 
   // Night view: get sleep stages for the latest/selected night
   const nightStages = trpc.biometrics.getSleepStages.useQuery(
@@ -313,8 +323,8 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
         )}
       </div>
 
-      {/* Navigation for week/month */}
-      {timeRange !== 'night' && startDate && endDate && (
+      {/* Navigation for week/month — suppressed when a parent owns the week navigator */}
+      {timeRange !== 'night' && startDate && endDate && !useSharedWeek && (
         <div className="flex items-center justify-between">
           <button
             onClick={handlePrev}
