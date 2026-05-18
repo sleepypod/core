@@ -291,6 +291,90 @@ describe('biometrics.getVitalsSummary', () => {
   })
 })
 
+describe('biometrics.getVitalsBaseline', () => {
+  it('returns null when sampleCount=0', async () => {
+    dbState.rowsQueue.push([{
+      hrMean: null, hrSqMean: null,
+      hrvMean: null, hrvSqMean: null,
+      brMean: null, brSqMean: null,
+      sampleCount: 0,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    expect(out).toBeNull()
+  })
+
+  it('computes mean and SD via E[X²] − E[X]² when variance > 0', async () => {
+    // hr: mean=60, sqMean=3604 → variance=4 → SD=2
+    // hrv: mean=50, sqMean=2509 → variance=9 → SD=3
+    // br: mean=14, sqMean=200 → variance=4 → SD=2
+    dbState.rowsQueue.push([{
+      hrMean: '60', hrSqMean: '3604',
+      hrvMean: '50', hrvSqMean: '2509',
+      brMean: '14', brSqMean: '200',
+      sampleCount: 100,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    expect(out).toEqual({
+      hrMean: 60, hrSD: 2,
+      hrvMean: 50, hrvSD: 3,
+      brMean: 14, brSD: 2,
+      sampleCount: 100,
+      windowDays: 30,
+    })
+  })
+
+  it('returns SD=0 when variance is non-positive (single sample / no spread)', async () => {
+    // mean=60, sqMean=3600 → variance=0 → SD=0
+    dbState.rowsQueue.push([{
+      hrMean: '60', hrSqMean: '3600',
+      hrvMean: '50', hrvSqMean: '2500',
+      brMean: '14', brSqMean: '196',
+      sampleCount: 1,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    expect(out?.hrSD).toBe(0)
+    expect(out?.hrvSD).toBe(0)
+    expect(out?.brSD).toBe(0)
+  })
+
+  it('returns null SD for metrics whose mean or sqMean is null', async () => {
+    // hr present, hrv mean null, br sqMean null
+    dbState.rowsQueue.push([{
+      hrMean: '60', hrSqMean: '3604',
+      hrvMean: null, hrvSqMean: '2509',
+      brMean: '14', brSqMean: null,
+      sampleCount: 50,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    expect(out?.hrMean).toBe(60)
+    expect(out?.hrSD).toBe(2)
+    expect(out?.hrvMean).toBeNull()
+    expect(out?.hrvSD).toBeNull()
+    expect(out?.brMean).toBe(14)
+    expect(out?.brSD).toBeNull()
+  })
+
+  it('echoes the requested days as windowDays (custom window)', async () => {
+    dbState.rowsQueue.push([{
+      hrMean: '60', hrSqMean: '3604',
+      hrvMean: null, hrvSqMean: null,
+      brMean: null, brSqMean: null,
+      sampleCount: 5,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'right', days: 7 })
+    expect(out?.windowDays).toBe(7)
+    expect(out?.sampleCount).toBe(5)
+  })
+
+  it('wraps DB errors as INTERNAL_SERVER_ERROR', async () => {
+    dbMock.select.mockImplementationOnce(() => {
+      throw new Error('db blew up')
+    })
+    await expect(caller.getVitalsBaseline({ side: 'left', days: 30 }))
+      .rejects.toThrow(/Failed to calculate vitals baseline: db blew up/)
+  })
+})
+
 describe('biometrics.reportVitals / reportVitalsBatch', () => {
   it('reportVitals returns written:1', async () => {
     const out = await caller.reportVitals({
