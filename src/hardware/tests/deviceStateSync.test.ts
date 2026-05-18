@@ -518,6 +518,15 @@ describe('DeviceStateSync — recordFlowData', () => {
     expect(row?.right_flowrate_cd).toBeNull()
   })
 
+  it('ignores frames where pump is null or rpm is not a finite number', () => {
+    sync.recordFlowData({ left: { pump: null }, right: { pump: { rpm: 100 } } })
+    sync.recordFlowData({ left: { pump: { rpm: 100 } }, right: { pump: null } })
+    sync.recordFlowData({ left: { pump: { rpm: 'fast' } }, right: { pump: { rpm: 100 } } })
+    sync.recordFlowData({ left: { pump: { rpm: Number.NaN } }, right: { pump: { rpm: 100 } } })
+    sync.recordFlowData({ left: { pump: {} }, right: { pump: { rpm: 100 } } })
+    expect(readFlowReadings().length).toBe(0)
+  })
+
   it('logs and swallows when biometricsDb flow write fails', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     ;(biometricsSqlite as any).exec(`DROP TABLE flow_readings`)

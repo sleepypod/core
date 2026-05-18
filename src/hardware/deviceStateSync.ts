@@ -59,6 +59,20 @@ export function getAlarmState(): { left: boolean, right: boolean } {
   }
 }
 
+/**
+ * Extract a well-formed pump object from a frzHealth side. Returns the pump
+ * only when `side.pump.rpm` is a finite number — otherwise frzHealth-shaped
+ * frames with a null/garbled pump would crash the downstream insert.
+ */
+function pumpOf(side: unknown): { rpm: number } | null {
+  if (!side || typeof side !== 'object') return null
+  const pump = (side as { pump?: unknown }).pump
+  if (!pump || typeof pump !== 'object') return null
+  const rpm = (pump as { rpm?: unknown }).rpm
+  if (typeof rpm !== 'number' || !Number.isFinite(rpm)) return null
+  return { rpm }
+}
+
 // ── Flow anomaly detection thresholds ──
 const PUMP_FAILURE_RPM_MIN = 50 // pump "running" but below this = suspicious
 const FLOWRATE_NEAR_ZERO_CD = 5 // centidegrees — effectively zero flow
@@ -189,13 +203,10 @@ export class DeviceStateSync {
   recordFlowData(frame: Record<string, unknown>): void {
     // Guard: only process frzHealth frames (could be piezo, capSense, bedTemp, etc.)
     // `temps` is optional per WireFrzHealth — many pods emit frzHealth without it,
-    // so gate on `pump` only and treat flowrate as missing when absent.
-    const left = frame.left
-    const right = frame.right
-    if (
-      !left || typeof left !== 'object' || !('pump' in left)
-      || !right || typeof right !== 'object' || !('pump' in right)
-    ) return
+    // so gate on a well-formed `pump` only and treat flowrate as missing when absent.
+    const leftPump = pumpOf(frame.left)
+    const rightPump = pumpOf(frame.right)
+    if (!leftPump || !rightPump) return
 
     const frzHealth = frame as {
       left: { pump: { rpm: number }, temps?: { flowrate?: number } }
