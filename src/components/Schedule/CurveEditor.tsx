@@ -17,6 +17,7 @@ import {
   curveToScheduleTemperatures,
   timeStringToMinutes,
 } from '@/src/lib/sleepCurve/generate'
+import { rebaseSetPoints } from '@/src/lib/sleepCurve/rebase'
 import { sortChronological } from '@/src/lib/scheduleGrouping'
 
 interface CurveEditorProps {
@@ -256,6 +257,21 @@ export function CurveEditor({
     }
   }, [])
 
+  // Bedtime/wake are the canonical sleep-window controls — changing them
+  // rebases the existing set points so the curve shape stays intact within
+  // the new window. Without this rewire the inputs only drove preset
+  // generation, so users who edited the window without clicking a preset
+  // saw their change silently dropped on save.
+  const handleBedtimeChange = useCallback((next: string) => {
+    setPoints(prev => rebaseSetPoints(prev, bedtime, wakeTime, next, wakeTime))
+    setBedtime(next)
+  }, [bedtime, wakeTime])
+
+  const handleWakeTimeChange = useCallback((next: string) => {
+    setPoints(prev => rebaseSetPoints(prev, bedtime, wakeTime, bedtime, next))
+    setWakeTime(next)
+  }, [bedtime, wakeTime])
+
   const handleApplyPreset = useCallback((preset: PresetDef) => {
     const bedtimeMinutes = timeStringToMinutes(bedtime)
     const wakeMinutes = timeStringToMinutes(wakeTime)
@@ -370,14 +386,14 @@ export function CurveEditor({
           <TimeInput
             label="Bedtime"
             value={bedtime}
-            onChange={setBedtime}
+            onChange={handleBedtimeChange}
             icon={<Moon size={12} />}
             accentClass="text-purple-400"
           />
           <TimeInput
             label="Wake up"
             value={wakeTime}
-            onChange={setWakeTime}
+            onChange={handleWakeTimeChange}
             icon={<Sun size={12} />}
             accentClass="text-amber-400"
           />

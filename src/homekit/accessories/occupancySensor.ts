@@ -1,12 +1,14 @@
 /**
  * HomeKit OccupancySensor accessory bound to one Pod side.
- * Sourced from biometrics: latest sleep_records row with leftBedAt IS NULL.
+ *
+ * Reads from the shared virtual sensor (`src/lib/occupancy.ts`) so this
+ * accessory, the web-app PresenceCard, and any future consumer
+ * (MQTT/HA/iOS) all reflect the same state. See that module for the
+ * movement + level signal combination.
  */
 
 import { Service, Characteristic } from 'hap-nodejs'
-import { desc, eq } from 'drizzle-orm'
-import { biometricsDb } from '@/src/db/biometrics'
-import { sleepRecords } from '@/src/db/biometrics-schema'
+import { getOccupancy } from '@/src/lib/occupancy'
 import type { Side } from '@/src/hardware/types'
 
 const POLL_MS = 5_000
@@ -19,19 +21,17 @@ export interface OccupancyAccessory {
 export function buildOccupancySensor(side: Side): OccupancyAccessory {
   const service = new Service.OccupancySensor(`Bed ${side} occupancy`, side)
 
-  const update = (): void => {
-    const present = readPresence(side)
-    const value = present
+  const characteristicValue = (): number => (
+    getOccupancy(side).occupied
       ? Characteristic.OccupancyDetected.OCCUPANCY_DETECTED
       : Characteristic.OccupancyDetected.OCCUPANCY_NOT_DETECTED
-    service.updateCharacteristic(Characteristic.OccupancyDetected, value)
+  )
+
+  const update = (): void => {
+    service.updateCharacteristic(Characteristic.OccupancyDetected, characteristicValue())
   }
 
-  service.getCharacteristic(Characteristic.OccupancyDetected)
-    .onGet(() => readPresence(side)
-      ? Characteristic.OccupancyDetected.OCCUPANCY_DETECTED
-      : Characteristic.OccupancyDetected.OCCUPANCY_NOT_DETECTED,
-    )
+  service.getCharacteristic(Characteristic.OccupancyDetected).onGet(characteristicValue)
 
   update()
   const handle = setInterval(update, POLL_MS)
@@ -40,22 +40,5 @@ export function buildOccupancySensor(side: Side): OccupancyAccessory {
   return {
     service,
     stop: () => clearInterval(handle),
-  }
-}
-
-function readPresence(side: Side): boolean {
-  try {
-    const [latest] = biometricsDb
-      .select({ leftBedAt: sleepRecords.leftBedAt })
-      .from(sleepRecords)
-      .where(eq(sleepRecords.side, side))
-      .orderBy(desc(sleepRecords.enteredBedAt))
-      .limit(1)
-      .all()
-    if (!latest) return false
-    return latest.leftBedAt == null
-  }
-  catch {
-    return false
   }
 }

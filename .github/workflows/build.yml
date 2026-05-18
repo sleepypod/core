@@ -81,13 +81,20 @@ jobs:
           <details open>
           <summary>🛏️ <strong>Beam this PR onto a sleepypod</strong> ✨</summary>
 
-          🚀 **Latest build of \`$HEAD_REF\`** — rebuilds every push, zero auth:
+          Pick the snippet that matches your pod. **Already-installed pods can't use the curl bootstraps below** — sleepypod's egress firewall DROPs github.com, and the script that knows how to unblock WAN is the very file curl is trying to fetch. Use \`sp-update\` instead; it's on disk and opens WAN as its first step.
+
+          🔄 **Already on a sleepypod** (most common — review a PR on a running pod):
+          \`\`\`bash
+          sudo sp-update $HEAD_REF
+          \`\`\`
+
+          🚀 **Fresh pod / first install** — bootstraps from GitHub, rebuilds every push:
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/$REPO/$HEAD_REF/scripts/install \\
             | sudo bash -s -- --branch $HEAD_REF
           \`\`\`
 
-          🎯 **Pin to this exact build** ([run $RUN_ID]($SERVER/$REPO/actions/runs/$RUN_ID) · \`$SHORT_SHA\`):
+          🎯 **Pin to this exact build** ([run $RUN_ID]($SERVER/$REPO/actions/runs/$RUN_ID) · \`$SHORT_SHA\`) — fresh-pod path, locked to one CI artifact for reproducible review:
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/$REPO/$HEAD_SHA/scripts/install \\
             | sudo bash -s -- \\

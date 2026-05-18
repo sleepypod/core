@@ -6,6 +6,7 @@ import { allMessages, getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { LinguiClientProvider } from '@/src/providers/LinguiClientProvider'
 import { SideProvider } from '@/src/providers/SideProvider'
 import { TRPCProvider } from '@/src/providers/TRPCProvider'
+import { WeekNavigatorProvider } from '@/src/providers/WeekNavigatorProvider'
 import { setI18n } from '@lingui/react/server'
 // Locales inlined to avoid importing lingui.config.ts at SSG time.
 // Turbopack's module resolution fails for this import on cross-platform deploys.
@@ -40,17 +41,19 @@ export default async function LangLayout({
         <TRPCProvider>
           <LinguiClientProvider initialLocale={lang} initialMessages={allMessages[lang]}>
             <SideProvider>
-              <div className="flex min-h-dvh flex-col items-center bg-black pb-20 text-white sm:pb-24">
-                <Header />
+              <WeekNavigatorProvider>
+                <div className="flex min-h-dvh flex-col items-center bg-black pb-20 text-white sm:pb-24">
+                  <Header />
 
-                <div className="w-full max-w-md space-y-4 px-3 pt-3 sm:space-y-6 sm:px-4 sm:pt-4">
-                  <SwipeContainer>
-                    {children}
-                  </SwipeContainer>
+                  <div className="w-full max-w-md space-y-4 px-3 pt-3 sm:space-y-6 sm:px-4 sm:pt-4">
+                    <SwipeContainer>
+                      {children}
+                    </SwipeContainer>
 
-                  <BottomNav />
+                    <BottomNav />
+                  </div>
                 </div>
-              </div>
+              </WeekNavigatorProvider>
             </SideProvider>
           </LinguiClientProvider>
         </TRPCProvider>

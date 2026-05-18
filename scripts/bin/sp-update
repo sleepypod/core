@@ -177,14 +177,25 @@ fi
 WORK_DIR=$(mktemp -d)
 HAS_BUILD=false
 
-# Try CI release by tag — works for any branch with a GitHub Release (main, dev, etc.)
-RELEASE_TAG="$BRANCH"
-[ "$RELEASE_TAG" = "latest" ] && RELEASE_TAG="main"
-# Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
-[ "$RELEASE_TAG" = "dev" ] && RELEASE_TAG="dev-latest"
-echo "Checking for CI release (tag: $RELEASE_TAG)..."
-RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
-  | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
+# Resolve the release endpoint. Mirrors scripts/install so OTA updates use
+# the same CI-built tarballs as fresh installs:
+#   main / latest      → releases/latest (semantic-release vX.Y.Z asset)
+#   dev                → releases/tags/dev-latest      (built by dev-release.yml)
+#   <other branch>     → releases/tags/<slug>-latest   (built by branch-release.yml)
+# Slugging matches branch-release.yml: `feat/foo` → `feat-foo-latest`.
+if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "latest" ]; then
+  RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+  echo "Checking for CI release (latest stable)..."
+elif [ "$BRANCH" = "dev" ]; then
+  RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
+  echo "Checking for CI release (tag: dev-latest)..."
+else
+  RELEASE_TAG="${BRANCH//\//-}-latest"
+  RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
+  echo "Checking for CI release (tag: $RELEASE_TAG)..."
+fi
+RELEASE_URL=$(curl -sf "$RELEASE_API" \
+  | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
   | grep -o 'https://[^"]*' || true)
 
 if [ -n "$RELEASE_URL" ]; then

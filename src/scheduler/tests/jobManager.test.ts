@@ -386,3 +386,166 @@ describe('JobManager.checkLiveness', () => {
     expect(await manager.checkLiveness()).toEqual(['temp-1'])
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LED night-mode window — pins the initial-brightness decision when
+// scheduleLedNightMode runs at load time. The window math is delicate:
+// arithmetic on nowHour/startHour/endHour with non-zero minutes, strict <=
+// vs < boundary on start/end, and the same-day vs midnight-crossing branch.
+// Each test below was picked to kill a specific mutator class — see the
+// inline comments. Drives the private method directly via cast because
+// loadSchedules requires DB rows the stub doesn't provide.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager.scheduleLedNightMode initial brightness', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    manager = new JobManager('UTC')
+  })
+
+  afterEach(async () => {
+    vi.useRealTimers()
+    await manager.shutdown()
+    vi.restoreAllMocks()
+  })
+
+  function run(nowIso: string): {
+    sendLed: ReturnType<typeof vi.fn>
+    scheduleJob: ReturnType<typeof vi.fn>
+  } {
+    vi.setSystemTime(new Date(nowIso))
+    const sendLed = vi.fn(async () => {})
+    ;(manager as any).sendLedBrightness = sendLed
+    const scheduleJob = vi.fn(() => ({} as any))
+    vi.spyOn(manager.getScheduler(), 'scheduleJob').mockImplementation(scheduleJob as any)
+    return { sendLed, scheduleJob }
+  }
+
+  // Same-day window: current time inside, with non-zero minutes on now —
+  // kills nowHour * 60 + nowMinute → nowHour * 60 - nowMinute (gives a
+  // smaller in-window number that still tests TRUE here) only when end is
+  // close to now. So we tighten the window: 22:05-23:05, now=22:30. With
+  // the mutation nowMinutes=22*60-30=1290 < startMinutes=1325 → DAY.
+  it('night brightness applied when current minute pushes us inside a tight same-day window (kills + → - on nowMinutes)', async () => {
+    const { sendLed } = run('2026-01-15T22:30:00Z')
+    await (manager as any).scheduleLedNightMode('22:05', '23:05', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(10)
+  })
+
+  // Same-day window: current is JUST before start, so a smaller mutated
+  // start (22*60-10=1310) would flip it to inside the window → kills the
+  // + → - mutation on startMinutes (and / 60).
+  it('day brightness when current is just before start — kills + → - on startMinutes', async () => {
+    const { sendLed } = run('2026-01-15T22:05:00Z')
+    await (manager as any).scheduleLedNightMode('22:10', '23:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(80)
+  })
+
+  // Same-day window: current is inside but past a mutated end. A smaller
+  // mutated end (22*60-30=1290) would flip it to outside → kills + → - on
+  // endMinutes (and / 60).
+  it('night brightness when current is just inside the end of a tight window — kills + → - on endMinutes', async () => {
+    const { sendLed } = run('2026-01-15T22:15:00Z')
+    await (manager as any).scheduleLedNightMode('22:00', '22:30', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(10)
+  })
+
+  // start === end: with the real `<=` we take the same-day branch which
+  // can never be true (start..start is empty) → DAY. Mutating `<=` to `<`
+  // takes the midnight branch (>= start || < end), which is always true →
+  // would flip to NIGHT. Kills `startMinutes <= endMinutes` mutators.
+  it('day brightness when start === end (degenerate window) — kills <= → < on the branch selector', async () => {
+    const { sendLed } = run('2026-01-15T03:00:00Z')
+    await (manager as any).scheduleLedNightMode('01:00', '01:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(80)
+  })
+
+  // Midnight-crossing window. Current in the "after midnight" portion
+  // (03:00 within 22:00-06:00). Mutating `||` → `&&` in the cross-midnight
+  // branch flips it to DAY because the >= startMinutes leg is false.
+  it('night when current is in the post-midnight portion of a cross-midnight window — kills || → &&', async () => {
+    const { sendLed } = run('2026-01-15T03:00:00Z')
+    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(10)
+  })
+
+  // Midnight-crossing window. Current in the "before midnight" portion
+  // (23:00 within 22:00-06:00). Mutating `||` → `&&` flips to DAY because
+  // the < endMinutes leg is false.
+  it('night when current is in the pre-midnight portion of a cross-midnight window — kills || → &&', async () => {
+    const { sendLed } = run('2026-01-15T23:00:00Z')
+    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(10)
+  })
+
+  // Same-day window with current well outside. Mutating `&&` → `||` would
+  // flip this to NIGHT because >= startMinutes alone is true.
+  it('day when current is past the same-day window — kills && → ||', async () => {
+    const { sendLed } = run('2026-01-15T08:00:00Z')
+    await (manager as any).scheduleLedNightMode('01:00', '06:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(80)
+  })
+
+  // Start boundary inclusive: current === start → NIGHT. Mutating
+  // `nowMinutes >= startMinutes` to `> startMinutes` (or `< startMinutes`)
+  // would flip to DAY.
+  it('night at the exact start minute — kills >= → > on the start boundary', async () => {
+    const { sendLed } = run('2026-01-15T01:00:00Z')
+    await (manager as any).scheduleLedNightMode('01:00', '06:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(10)
+  })
+
+  // End boundary exclusive: current === end → DAY. Mutating
+  // `nowMinutes < endMinutes` to `<= endMinutes` (or `>= endMinutes`)
+  // would flip to NIGHT.
+  it('day at the exact end minute — kills < → <= on the end boundary', async () => {
+    const { sendLed } = run('2026-01-15T06:00:00Z')
+    await (manager as any).scheduleLedNightMode('01:00', '06:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(80)
+  })
+
+  // Cron strings registered for the two recurring jobs. Kills the
+  // `${minute} ${hour} * * *` template StringLiteral mutators on lines 517
+  // and 525, plus the scheduleJob BlockStatement mutators.
+  it('registers led-night-start and led-night-end with correct cron expressions', async () => {
+    const { scheduleJob } = run('2026-01-15T12:00:00Z')
+    await (manager as any).scheduleLedNightMode('22:05', '06:45', 80, 10)
+
+    expect(scheduleJob).toHaveBeenCalledWith(
+      'led-night-start',
+      JobType.LED_BRIGHTNESS,
+      '5 22 * * *',
+      expect.any(Function),
+    )
+    expect(scheduleJob).toHaveBeenCalledWith(
+      'led-night-end',
+      JobType.LED_BRIGHTNESS,
+      '45 6 * * *',
+      expect.any(Function),
+    )
+  })
+
+  // Pin that the registered callbacks actually call sendLedBrightness
+  // with the correct per-job brightness. Kills BlockStatement mutators on
+  // the two scheduleJob arrow bodies (lines 519-522, 527-530).
+  it('scheduled callbacks send the correct brightness for night vs day', async () => {
+    const { sendLed, scheduleJob } = run('2026-01-15T12:00:00Z')
+    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+
+    // Clear the initial-apply call; we want to inspect what the cron
+    // handlers do when fired manually.
+    sendLed.mockClear()
+
+    const calls = scheduleJob.mock.calls as Array<[string, JobType, string, () => Promise<void>]>
+    const startCb = calls.find(c => c[0] === 'led-night-start')?.[3]
+    const endCb = calls.find(c => c[0] === 'led-night-end')?.[3]
+    if (!startCb || !endCb) throw new Error('expected both led-night-* callbacks registered')
+
+    await startCb()
+    expect(sendLed).toHaveBeenLastCalledWith(10) // night → night brightness
+
+    await endCb()
+    expect(sendLed).toHaveBeenLastCalledWith(80) // morning → day brightness
+  })
+})

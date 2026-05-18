@@ -1,12 +1,13 @@
-name: Dev Release
+name: Branch Release
 
 on:
   push:
-    branches:
+    branches-ignore:
+      - main
       - dev
 
 concurrency:
-  group: dev-release
+  group: branch-release-${{ github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -28,16 +29,24 @@ jobs:
           node-version-file: '.node-version'
           cache: 'pnpm'
 
+      - name: Compute branch slug
+        id: slug
+        run: |
+          SLUG="${GITHUB_REF_NAME//\//-}"
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+          echo "tag=${SLUG}-latest" >> "$GITHUB_OUTPUT"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm build
+        run: SP_BRANCH="${{ github.ref_name }}" pnpm build
 
       - name: Pin commit metadata into .git-info
-        # prebuild writes .git-info via `git rev-parse` from the CI checkout.
-        # Overwrite with explicit github-context values so the file is correct
-        # even if a future prebuild change starts skipping the write.
+        # prebuild writes .git-info from `git rev-parse` in the CI checkout,
+        # but on-device fallback paths (no .git in tarball) regress to
+        # commitHash="unknown". Overwrite with explicit values from the
+        # GitHub event so the version endpoint always shows the real SHA.
         run: |
           jq -n \
             --arg branch "${{ github.ref_name }}" \
@@ -48,7 +57,7 @@ jobs:
             > .git-info
 
       - name: Set install script default branch
-        run: sed -i 's/__BRANCH__/${{ github.ref_name }}/' scripts/install
+        run: sed -i "s|__BRANCH__|${{ github.ref_name }}|" scripts/install
 
       - name: Create deploy tarball
         run: |
@@ -64,18 +73,18 @@ jobs:
             .
           mv /tmp/sleepypod-core.tar.gz .
 
-      - name: Update dev release
+      - name: Publish rolling branch release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete dev-latest --yes 2>/dev/null || true
-          git push -d --no-verify origin refs/tags/dev-latest 2>/dev/null || true
-          git tag -f dev-latest
-          git push -f --no-verify origin refs/tags/dev-latest
-          gh release create dev-latest sleepypod-core.tar.gz \
+          TAG="${{ steps.slug.outputs.tag }}"
+          # --cleanup-tag drops the prior release + tag atomically. 404 (first
+          # push of a new branch) is expected; the `|| true` swallows it.
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" sleepypod-core.tar.gz \
             --target "${{ github.sha }}" \
-            --title "Dev (latest)" \
-            --notes "Rolling pre-built release from the \`dev\` branch.
+            --title "Branch: ${{ github.ref_name }} (latest)" \
+            --notes "Rolling pre-built release from branch \`${{ github.ref_name }}\`.
 
           **Commit:** ${{ github.sha }}
           **Updated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" \

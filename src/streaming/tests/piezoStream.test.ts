@@ -41,6 +41,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => {
 import {
   __test__,
   broadcastFrame,
+  getLatestCapSenseSnapshot,
   onServerFrame,
   startPiezoStreamServer,
   shutdownPiezoStreamServer,
@@ -649,6 +650,48 @@ describe('piezoStream — server lifecycle and protocol', () => {
 
     await client.waitFor(m => m.type === 'capSense' && m.ts === 400)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 401)
+    await client.close()
+  })
+
+  it('exposes the live capSense2 frame via getLatestCapSenseSnapshot and resets it on file switch', async () => {
+    const filePath = path.join(tmpRawDir, 'snapshot-a.RAW')
+    const channels = [14.5, 14.4, 13.7, 13.6, 19.4, 19.2, 1.157, 1.157]
+    const rec = buildOuterRecord(1, [{ type: 'capSense2', ts: 999, left: channels, right: channels }])
+    fs.writeFileSync(filePath, rec)
+    const past = Date.now() / 1000 - 60
+    fs.utimesSync(filePath, past, past)
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    await client.waitFor(m => m.type === 'capSense2' && m.ts === 999, 3000)
+
+    const snap = getLatestCapSenseSnapshot()
+    expect(snap).not.toBeNull()
+    expect(snap?.type).toBe('capSense2')
+    expect(snap?.ts).toBe(999)
+    expect(Array.isArray(snap?.left)).toBe(true)
+    expect((snap?.left as number[])[0]).toBeCloseTo(14.5)
+
+    // File switch must drop the cached snapshot.
+    const newPath = path.join(tmpRawDir, 'snapshot-b.RAW')
+    fs.writeFileSync(newPath, buildOuterRecord(1, [{ type: 'log', ts: 1000, level: 1, msg: 'x' }]))
+    fs.utimesSync(newPath, Date.now() / 1000, Date.now() / 1000)
+    await client.waitFor(m => m.type === 'log' && m.ts === 1000, 3000)
+
+    expect(getLatestCapSenseSnapshot()).toBeNull()
+    await client.close()
+  })
+
+  it('skips snapshot update when a capSense frame has a malformed payload', async () => {
+    const filePath = path.join(tmpRawDir, 'snapshot-bad.RAW')
+    // Missing ts → snapshot block's type guard rejects the frame.
+    const rec = buildOuterRecord(1, [{ type: 'capSense', left: 1, right: 2 }])
+    fs.writeFileSync(filePath, rec)
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    await client.waitFor(m => m.type === 'capSense', 3000)
+    expect(getLatestCapSenseSnapshot()).toBeNull()
     await client.close()
   })
 

@@ -29,6 +29,7 @@ const dbMock = vi.hoisted(() => {
     chain.onConflictDoNothing = vi.fn(() => chain)
     chain.returning = vi.fn(() => chain)
     chain.groupBy = vi.fn(() => chain)
+    chain.having = vi.fn(() => chain)
     return chain
   }
 
@@ -87,6 +88,19 @@ vi.mock('@/src/db', () => ({
 vi.mock('@/src/server/routers/raw', () => rawMock)
 vi.mock('@/src/lib/sleep-stages', () => sleepStagesMock)
 
+const occupancyMock = vi.hoisted(() => ({
+  getOccupancy: vi.fn<(side: 'left' | 'right') => {
+    occupied: boolean
+    movement: { active: boolean, peakScore: number }
+    level: { active: boolean, deviation: number | null, threshold: number | null, ageMs: number | null }
+  }>(() => ({
+    occupied: false,
+    movement: { active: false, peakScore: 0 },
+    level: { active: false, deviation: null, threshold: null, ageMs: null },
+  })),
+}))
+vi.mock('@/src/lib/occupancy', () => occupancyMock)
+
 const { biometricsRouter } = await import('@/src/server/routers/biometrics')
 const caller = biometricsRouter.createCaller({})
 
@@ -104,6 +118,7 @@ beforeEach(() => {
   sleepStagesMock.mergeIntoBlocks.mockReset().mockReturnValue([])
   sleepStagesMock.calculateDistribution.mockReset().mockReturnValue({ wake: 0, light: 0, deep: 0, rem: 0 })
   sleepStagesMock.calculateQualityScore.mockReset().mockReturnValue(0)
+  occupancyMock.getOccupancy.mockReset()
 })
 
 describe('biometrics.getSleepRecords', () => {
@@ -210,6 +225,35 @@ describe('biometrics.getLatestSleep', () => {
   })
 })
 
+describe('biometrics.getOccupancy', () => {
+  it('returns occupancy for both sides from the shared virtual sensor', async () => {
+    occupancyMock.getOccupancy.mockImplementation((side: 'left' | 'right') => ({
+      occupied: side === 'left',
+      movement: { active: side === 'left', peakScore: side === 'left' ? 300 : 10 },
+      level: { active: false, deviation: null, threshold: null, ageMs: null },
+    }))
+    const out = await caller.getOccupancy()
+    expect(out.left.occupied).toBe(true)
+    expect(out.left.movement.peakScore).toBe(300)
+    expect(out.right.occupied).toBe(false)
+    expect(occupancyMock.getOccupancy).toHaveBeenCalledWith('left')
+    expect(occupancyMock.getOccupancy).toHaveBeenCalledWith('right')
+  })
+
+  it('passes level signal through to the response', async () => {
+    occupancyMock.getOccupancy.mockReturnValue({
+      occupied: true,
+      movement: { active: false, peakScore: 5 },
+      level: { active: true, deviation: 12.3, threshold: 6, ageMs: 500 },
+    })
+    const out = await caller.getOccupancy()
+    expect(out.left.level.deviation).toBe(12.3)
+    expect(out.left.level.threshold).toBe(6)
+    expect(out.left.level.ageMs).toBe(500)
+    expect(out.left.level.active).toBe(true)
+  })
+})
+
 describe('biometrics.getVitalsSummary', () => {
   it('returns null when recordCount=0', async () => {
     dbState.rowsQueue.push([{
@@ -244,6 +288,90 @@ describe('biometrics.getVitalsSummary', () => {
       startDate: new Date('2025-02-01'),
       endDate: new Date('2025-01-01'),
     })).rejects.toThrow(/startDate/)
+  })
+})
+
+describe('biometrics.getVitalsBaseline', () => {
+  it('returns null when sampleCount=0', async () => {
+    dbState.rowsQueue.push([{
+      hrMean: null, hrSqMean: null,
+      hrvMean: null, hrvSqMean: null,
+      brMean: null, brSqMean: null,
+      sampleCount: 0,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    expect(out).toBeNull()
+  })
+
+  it('computes mean and SD via E[X²] − E[X]² when variance > 0', async () => {
+    // hr: mean=60, sqMean=3604 → variance=4 → SD=2
+    // hrv: mean=50, sqMean=2509 → variance=9 → SD=3
+    // br: mean=14, sqMean=200 → variance=4 → SD=2
+    dbState.rowsQueue.push([{
+      hrMean: '60', hrSqMean: '3604',
+      hrvMean: '50', hrvSqMean: '2509',
+      brMean: '14', brSqMean: '200',
+      sampleCount: 100,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    expect(out).toEqual({
+      hrMean: 60, hrSD: 2,
+      hrvMean: 50, hrvSD: 3,
+      brMean: 14, brSD: 2,
+      sampleCount: 100,
+      windowDays: 30,
+    })
+  })
+
+  it('returns SD=0 when variance is non-positive (single sample / no spread)', async () => {
+    // mean=60, sqMean=3600 → variance=0 → SD=0
+    dbState.rowsQueue.push([{
+      hrMean: '60', hrSqMean: '3600',
+      hrvMean: '50', hrvSqMean: '2500',
+      brMean: '14', brSqMean: '196',
+      sampleCount: 1,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    expect(out?.hrSD).toBe(0)
+    expect(out?.hrvSD).toBe(0)
+    expect(out?.brSD).toBe(0)
+  })
+
+  it('returns null SD for metrics whose mean or sqMean is null', async () => {
+    // hr present, hrv mean null, br sqMean null
+    dbState.rowsQueue.push([{
+      hrMean: '60', hrSqMean: '3604',
+      hrvMean: null, hrvSqMean: '2509',
+      brMean: '14', brSqMean: null,
+      sampleCount: 50,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    expect(out?.hrMean).toBe(60)
+    expect(out?.hrSD).toBe(2)
+    expect(out?.hrvMean).toBeNull()
+    expect(out?.hrvSD).toBeNull()
+    expect(out?.brMean).toBe(14)
+    expect(out?.brSD).toBeNull()
+  })
+
+  it('echoes the requested days as windowDays (custom window)', async () => {
+    dbState.rowsQueue.push([{
+      hrMean: '60', hrSqMean: '3604',
+      hrvMean: null, hrvSqMean: null,
+      brMean: null, brSqMean: null,
+      sampleCount: 5,
+    }])
+    const out = await caller.getVitalsBaseline({ side: 'right', days: 7 })
+    expect(out?.windowDays).toBe(7)
+    expect(out?.sampleCount).toBe(5)
+  })
+
+  it('wraps DB errors as INTERNAL_SERVER_ERROR', async () => {
+    dbMock.select.mockImplementationOnce(() => {
+      throw new Error('db blew up')
+    })
+    await expect(caller.getVitalsBaseline({ side: 'left', days: 30 }))
+      .rejects.toThrow(/Failed to calculate vitals baseline: db blew up/)
   })
 })
 
@@ -685,6 +813,7 @@ describe('biometrics error wrapping (INTERNAL_SERVER_ERROR catches)', () => {
       onConflictDoNothing: vi.fn(() => failingChain),
       returning: vi.fn(() => failingChain),
       groupBy: vi.fn(() => failingChain),
+      having: vi.fn(() => failingChain),
     }
     dbMock[method].mockImplementationOnce(() => failingChain)
   }

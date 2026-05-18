@@ -80,7 +80,7 @@ export function RawDataButton() {
 
   // Only fetch when sheet is open to avoid unnecessary queries
   const vitalsQuery = trpc.biometrics.getVitals.useQuery(
-    { side, startDate: weekStart, endDate: weekEnd, limit: 1000 },
+    { side, startDate: weekStart, endDate: weekEnd, limit: 10000 },
     { enabled: isOpen }
   )
   const sleepQuery = trpc.biometrics.getSleepRecords.useQuery(
