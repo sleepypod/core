@@ -182,7 +182,10 @@ export const biometricsRouter = router({
           side: sideSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
-          limit: z.number().int().min(1).max(1000).default(288), // Default: 24 hours of 5-min intervals
+          // Cap covers a full week of ~30 s-cadence vitals (60×60×24×7 / 30 ≈ 20 160).
+          // Older 1000 cap silently truncated week views to the most recent ~1–2 days
+          // on busy datasets, leaving earlier sessions with "No data" charts.
+          limit: z.number().int().min(1).max(20000).default(288), // Default: 24 hours of 5-min intervals
         })
         .strict()
     )
@@ -659,6 +662,83 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to calculate vitals summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Rolling personal baseline (mean + standard deviation) for each metric.
+   * Drawn as a faint band behind night/week vitals charts so a raw value
+   * reads as "normal for me" or "outside normal." Population SD via
+   * E[X²] − E[X]² — SQLite has no STDDEV, but AVG ignores nulls so the
+   * single-pass form is well-defined per metric independently.
+   */
+  getVitalsBaseline: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/vitals/baseline', protect: false, tags: ['Biometrics'] } })
+    .output(z.object({
+      hrMean: z.number().nullable(),
+      hrSD: z.number().nullable(),
+      hrvMean: z.number().nullable(),
+      hrvSD: z.number().nullable(),
+      brMean: z.number().nullable(),
+      brSD: z.number().nullable(),
+      sampleCount: z.number(),
+      windowDays: z.number(),
+    }).nullable())
+    .input(
+      z.object({
+        side: sideSchema,
+        days: z.number().int().min(1).max(90).default(30),
+      }).strict(),
+    )
+    .query(async ({ input }) => {
+      try {
+        const now = new Date()
+        const start = new Date(now.getTime() - input.days * 24 * 60 * 60 * 1000)
+
+        const [row] = await biometricsDb
+          .select({
+            hrMean: avg(vitals.heartRate),
+            hrSqMean: sql<number | null>`AVG(${vitals.heartRate} * ${vitals.heartRate})`,
+            hrvMean: avg(vitals.hrv),
+            hrvSqMean: sql<number | null>`AVG(${vitals.hrv} * ${vitals.hrv})`,
+            brMean: avg(vitals.breathingRate),
+            brSqMean: sql<number | null>`AVG(${vitals.breathingRate} * ${vitals.breathingRate})`,
+            sampleCount: count(),
+          })
+          .from(vitals)
+          .where(
+            and(
+              eq(vitals.side, input.side),
+              gte(vitals.timestamp, start),
+              lte(vitals.timestamp, now),
+            ),
+          )
+
+        if (row.sampleCount === 0) return null
+
+        const sd = (mean: number | null, sqMean: number | null): number | null => {
+          if (mean == null || sqMean == null) return null
+          const variance = Number(sqMean) - Number(mean) * Number(mean)
+          return variance > 0 ? Math.sqrt(variance) : 0
+        }
+
+        return {
+          hrMean: row.hrMean !== null ? Number(row.hrMean) : null,
+          hrSD: sd(row.hrMean as number | null, row.hrSqMean),
+          hrvMean: row.hrvMean !== null ? Number(row.hrvMean) : null,
+          hrvSD: sd(row.hrvMean as number | null, row.hrvSqMean),
+          brMean: row.brMean !== null ? Number(row.brMean) : null,
+          brSD: sd(row.brMean as number | null, row.brSqMean),
+          sampleCount: row.sampleCount,
+          windowDays: input.days,
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to calculate vitals baseline: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }
