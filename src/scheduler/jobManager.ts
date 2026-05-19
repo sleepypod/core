@@ -439,22 +439,32 @@ export class JobManager {
 
   async runAlarmJob(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
     await this.withSideLock(sched.side, async () => {
-      if (!(await this.isSidePowered(sched.side))) {
-        console.log(`Skipping alarm job alarm-${sched.id} — ${sched.side} is not powered`)
-        return
-      }
+      // Vibration must fire regardless of power state — the alarm's purpose is
+      // to wake the user, who often sleeps with the bed off or on a power
+      // schedule that hasn't kicked in yet at wake time. Temperature, however,
+      // is gated on isPowered: heating an off bed contradicts the user's
+      // explicit power-off and would re-arm the same race the temperature
+      // path's gate was added to prevent (see withSideLock comment).
+      const powered = await this.isSidePowered(sched.side)
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
-      await client.setTemperature(sched.side, sched.alarmTemperature)
+      if (powered) {
+        await client.setTemperature(sched.side, sched.alarmTemperature)
+      }
+      else {
+        console.log(`Alarm job alarm-${sched.id} — ${sched.side} not powered; skipping temperature, firing vibration only`)
+      }
       await client.setAlarm(sched.side, {
         vibrationIntensity: sched.vibrationIntensity,
         vibrationPattern: sched.vibrationPattern,
         duration: sched.duration,
       })
       broadcastMutationStatus(sched.side, {
-        targetTemperature: sched.alarmTemperature,
-        targetLevel: fahrenheitToLevel(sched.alarmTemperature),
+        ...(powered && {
+          targetTemperature: sched.alarmTemperature,
+          targetLevel: fahrenheitToLevel(sched.alarmTemperature),
+        }),
         isAlarmVibrating: true,
       })
     })

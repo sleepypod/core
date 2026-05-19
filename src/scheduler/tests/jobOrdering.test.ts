@@ -414,13 +414,40 @@ describe('JobManager — job ordering and gating', () => {
       expect(setAlarm).toHaveBeenCalledOnce()
     })
 
-    it('skips alarm + temperature when side is not powered', async () => {
+    it('fires alarm but skips temperature when side is not powered', async () => {
+      // Vibration must wake the user even when the bed is off — that's the
+      // whole point of an alarm. Temperature stays gated to avoid re-heating
+      // a deliberately-off side.
       seedSidePowered('right', false)
 
       await manager.runAlarmJob(alarmSched('right'))
 
       expect(setTemperature).not.toHaveBeenCalled()
-      expect(setAlarm).not.toHaveBeenCalled()
+      expect(setAlarm).toHaveBeenCalledOnce()
+      expect(setAlarm).toHaveBeenCalledWith('right', {
+        vibrationIntensity: 100,
+        vibrationPattern: 'rise',
+        duration: 10,
+      })
+    })
+
+    it('fires alarm when side has no device_state row (treated as off)', async () => {
+      // No row inserted at all
+      await manager.runAlarmJob(alarmSched('left'))
+
+      expect(setTemperature).not.toHaveBeenCalled()
+      expect(setAlarm).toHaveBeenCalledOnce()
+    })
+
+    it('broadcast omits temperature fields but keeps isAlarmVibrating when not powered', async () => {
+      seedSidePowered('right', false)
+
+      await manager.runAlarmJob(alarmSched('right'))
+
+      expect(broadcastMutationStatus).toHaveBeenCalledOnce()
+      expect(broadcastMutationStatus).toHaveBeenCalledWith('right', {
+        isAlarmVibrating: true,
+      })
     })
   })
 
