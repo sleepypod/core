@@ -318,6 +318,10 @@ detect_free_sleep_conflict() {
   # own block_wan persists /etc/iptables/iptables.rules but never the v6
   # file, so flagging the v4 file would false-positive on every reinstall.
   [ -f /etc/iptables/ip6tables.rules ]       && FREE_SLEEP_FINDINGS+=("persisted:    /etc/iptables/ip6tables.rules")
+  # Last `[ test ] && side_effect` returns 1 when the test is false. Under
+  # set -e, that propagates out and kills install at the preflight call on
+  # any clean pod. Explicit return 0 keeps the function's exit status sane.
+  return 0
 }
 
 purge_free_sleep() {
