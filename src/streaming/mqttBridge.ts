@@ -19,6 +19,7 @@
  *   <prefix>/<device-id>/state/<side>/climate        — per-side temperature/mode
  *   <prefix>/<device-id>/state/water-level           — low | ok | unknown
  *   <prefix>/<device-id>/state/biometrics/<side>     — latest HR/HRV/BR summary
+ *   <prefix>/<device-id>/state/environment/ambient   — ambient temp (°C) + humidity (%)
  *   <prefix>/<device-id>/cmd/set-temperature         — JSON {side, temperature, duration?}
  *   <prefix>/<device-id>/cmd/set-power               — JSON {side, powered, temperature?}
  *   <prefix>/<device-id>/cmd/set-alarm               — JSON {side, vibrationIntensity, vibrationPattern, duration}
@@ -38,7 +39,8 @@ import mqtt, { type IClientOptions, type IClientPublishOptions, type MqttClient 
 import { eq, desc } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
 import { deviceSettings, deviceState } from '@/src/db/schema'
-import { vitals } from '@/src/db/biometrics-schema'
+import { bedTemp, vitals } from '@/src/db/biometrics-schema'
+import { centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { onServerFrame } from './piezoStream'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 
@@ -314,6 +316,38 @@ function publishHaDiscovery(): void {
     JSON.stringify(sensor('water_level', 'Water level', topic('state', 'water-level'), '{{ value_json.level }}')),
     RETAINED_QOS_0,
   )
+
+  // Ambient temperature + humidity from bed_temp. Two HA sensor entities
+  // sharing one state topic so a single retained payload feeds both.
+  const ambientTopic = topic('state', 'environment', 'ambient')
+  const ambientTemp = sensor(
+    'ambient_temperature',
+    'Ambient temperature',
+    ambientTopic,
+    '{{ value_json.temperature }}',
+    '°C',
+  )
+  ;(ambientTemp as Record<string, unknown>).device_class = 'temperature'
+  ;(ambientTemp as Record<string, unknown>).state_class = 'measurement'
+  safePublish(
+    `${haPrefix}/sensor/${id}/ambient_temperature/config`,
+    JSON.stringify(ambientTemp),
+    RETAINED_QOS_0,
+  )
+  const ambientHumidity = sensor(
+    'ambient_humidity',
+    'Ambient humidity',
+    ambientTopic,
+    '{{ value_json.humidity }}',
+    '%',
+  )
+  ;(ambientHumidity as Record<string, unknown>).device_class = 'humidity'
+  ;(ambientHumidity as Record<string, unknown>).state_class = 'measurement'
+  safePublish(
+    `${haPrefix}/sensor/${id}/ambient_humidity/config`,
+    JSON.stringify(ambientHumidity),
+    RETAINED_QOS_0,
+  )
   for (const side of ['left', 'right'] as const) {
     safePublish(
       `${haPrefix}/sensor/${id}/${side}_heart_rate/config`,
@@ -401,6 +435,28 @@ async function publishState(): Promise<void> {
     catch (err) {
       console.warn(`[mqtt] biometrics publish (${side}) failed:`, err instanceof Error ? err.message : err)
     }
+  }
+
+  try {
+    const [latestEnv] = await biometricsDb
+      .select({
+        timestamp: bedTemp.timestamp,
+        ambientTemp: bedTemp.ambientTemp,
+        humidity: bedTemp.humidity,
+      })
+      .from(bedTemp)
+      .orderBy(desc(bedTemp.timestamp))
+      .limit(1)
+    if (latestEnv) {
+      safePublish(topic('state', 'environment', 'ambient'), JSON.stringify({
+        ts: latestEnv.timestamp.getTime(),
+        temperature: latestEnv.ambientTemp != null ? centiDegreesToC(latestEnv.ambientTemp) : null,
+        humidity: latestEnv.humidity != null ? centiPercentToPercent(latestEnv.humidity) : null,
+      }), RETAINED_QOS_0)
+    }
+  }
+  catch (err) {
+    console.warn('[mqtt] ambient environment publish failed:', err instanceof Error ? err.message : err)
   }
 }
 
