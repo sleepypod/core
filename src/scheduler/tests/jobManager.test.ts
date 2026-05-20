@@ -70,6 +70,9 @@ vi.mock('@/src/services/autoOffWatcher', () => ({
   cancelAutoOffTimer: vi.fn(),
 }))
 
+import { decode as cborDecode } from 'cbor-x'
+import { sendCommand } from '@/src/hardware/dacTransport'
+import { HardwareCommand } from '@/src/hardware/types'
 import { JobManager } from '../jobManager'
 import { JobType } from '../types'
 
@@ -547,5 +550,56 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
 
     await endCb()
     expect(sendLed).toHaveBeenLastCalledWith(80) // morning → day brightness
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sendLedBrightness CBOR wire format. Frank's SetSettings (cmd 8) silently
+// ignores unknown keys — so the test pins the exact key ("lb") and value the
+// firmware actually consumes. Decode-round-trip rather than hex-string equality
+// keeps the test resilient to cbor-x picking a different map-header encoding.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager.sendLedBrightness CBOR payload', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+    ;(sendCommand as ReturnType<typeof vi.fn>).mockClear()
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('encodes {lb: N} under SET_SETTINGS — not the legacy ledBrightness key', async () => {
+    await (manager as any).sendLedBrightness(42)
+
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    const [cmd, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    expect(cmd).toBe(HardwareCommand.SET_SETTINGS)
+
+    // Wire format check: the key bytes for "lb" (text2 → 62 6c 62) and the
+    // 42 value byte must be present in the emitted hex.
+    expect(hex).toMatch(/626c62/)
+    expect(hex).toMatch(/2a$/)
+
+    // Decode round-trip — authoritative source of truth.
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 42 })
+    expect(decoded).not.toHaveProperty('ledBrightness')
+  })
+
+  it('encodes 0 (full-dim) without ambiguity', async () => {
+    await (manager as any).sendLedBrightness(0)
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 0 })
+  })
+
+  it('encodes 100 (full-bright) as a single-byte uint', async () => {
+    await (manager as any).sendLedBrightness(100)
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 100 })
   })
 })

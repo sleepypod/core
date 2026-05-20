@@ -275,6 +275,20 @@ export const settingsRouter = router({
           console.error('Scheduler reload failed:', e)
         }
 
+        // Immediate LED apply when brightness fields change. Pushes the new
+        // value to the pod within ~1s rather than waiting on the next cron
+        // boundary. Required for the day-brightness slider when night mode
+        // is off (loadSchedules' scheduleLedNightMode only runs when enabled).
+        if ('ledDayBrightness' in input || 'ledNightBrightness' in input) {
+          try {
+            const jobManager = await getJobManager()
+            await jobManager.applyCurrentLedBrightness()
+          }
+          catch (e) {
+            console.error('LED brightness immediate apply failed:', e)
+          }
+        }
+
         // Re-evaluate autoOffWatcher immediately so a tightened cap fires
         // without waiting for the 30s poll. Idempotent; no-op if watcher isn't running.
         if ('globalMaxOnHours' in input) {

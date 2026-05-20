@@ -504,12 +504,63 @@ export class JobManager {
 
   /**
    * Send a LED brightness command via the shared hardware client.
+   *
+   * Frank's SetSettings (cmd 8) CBOR map uses 2-char keys. The full schema as
+   * emitted by firmware: {v:<schema-ver>, gl:<temp-left>, gr:<temp-right>, lb:<0..100>}.
+   * Sending unknown keys (e.g. {ledBrightness}) is silently ignored — the
+   * write succeeds but the LED never changes. See docs/hardware/DAC-PROTOCOL.md.
    */
   private async sendLedBrightness(brightness: number): Promise<void> {
     const client = getSharedHardwareClient()
     await client.connect()
-    const hexCbor = Buffer.from(cborEncode({ ledBrightness: brightness })).toString('hex')
+    const hexCbor = Buffer.from(cborEncode({ lb: brightness })).toString('hex')
     await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
+  }
+
+  /**
+   * Apply the correct LED brightness right now based on persisted device
+   * settings and the scheduler's configured timezone. Called from
+   * settings.updateDevice so a brightness slider change reflects on the pod
+   * within ~1s, regardless of whether night mode is enabled (in which case
+   * the next cron-fired update will overwrite this when the window flips).
+   */
+  async applyCurrentLedBrightness(): Promise<void> {
+    const [settings] = await db.select().from(deviceSettings).limit(1)
+    if (!settings) return
+
+    const target = this.computeCurrentLedBrightness(
+      settings.ledNightModeEnabled,
+      settings.ledNightStartTime,
+      settings.ledNightEndTime,
+      settings.ledDayBrightness,
+      settings.ledNightBrightness,
+    )
+    await this.sendLedBrightness(target)
+  }
+
+  private computeCurrentLedBrightness(
+    nightModeEnabled: boolean,
+    nightStartTime: string | null,
+    nightEndTime: string | null,
+    dayBrightness: number,
+    nightBrightness: number,
+  ): number {
+    if (!nightModeEnabled || !nightStartTime || !nightEndTime) {
+      return dayBrightness
+    }
+
+    const [startHour, startMinute] = this.parseTime(nightStartTime)
+    const [endHour, endMinute] = this.parseTime(nightEndTime)
+    const { hour: nowHour, minute: nowMinute } = nowInTimezone(this.scheduler.getTimezone())
+    const nowMinutes = nowHour * 60 + nowMinute
+    const startMinutes = startHour * 60 + startMinute
+    const endMinutes = endHour * 60 + endMinute
+
+    const isNight = startMinutes <= endMinutes
+      ? nowMinutes >= startMinutes && nowMinutes < endMinutes
+      : nowMinutes >= startMinutes || nowMinutes < endMinutes
+
+    return isNight ? nightBrightness : dayBrightness
   }
 
   /**
