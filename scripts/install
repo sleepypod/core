@@ -37,6 +37,7 @@ INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
 PURGE_FREE_SLEEP=false
 RESTORE_MODE=false
+NODE_MODULES_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --local)              INSTALL_LOCAL=true ;;
@@ -45,9 +46,11 @@ while [ $# -gt 0 ]; do
     --artifact-url)       shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
     --purge-free-sleep)   PURGE_FREE_SLEEP=true ;;
     --restore)            RESTORE_MODE=true ;;
+    --node-modules-dir)   shift; NODE_MODULES_DIR="${1:-}" ;;
   esac
   shift
 done
+export NODE_MODULES_DIR
 
 # --------------------------------------------------------------------------------
 # Restore mode — list and restore a DB backup, then exit
@@ -1012,9 +1015,9 @@ if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
   print_pod_capabilities
 fi
 
-# Move node_modules off rootfs onto /persistent before pnpm runs so the
-# install writes directly to the persistent partition. On upgrades from
-# a pre-relocation install this migrates the existing tree once.
+# Decide where node_modules lives before pnpm runs. Auto-picks rootfs
+# vs /persistent by free space (Pod 3 + SD has tiny /persistent; Pod 4
+# stock has tight rootfs). Override via --node-modules-dir <path>.
 if [ -f "$INSTALL_DIR/scripts/lib/relocation-helpers" ]; then
   source "$INSTALL_DIR/scripts/lib/relocation-helpers"
   ensure_persistent_node_modules "$INSTALL_DIR"
