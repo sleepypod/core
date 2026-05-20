@@ -275,11 +275,22 @@ export const settingsRouter = router({
           console.error('Scheduler reload failed:', e)
         }
 
-        // Immediate LED apply when brightness fields change. Pushes the new
-        // value to the pod within ~1s rather than waiting on the next cron
-        // boundary. Required for the day-brightness slider when night mode
-        // is off (loadSchedules' scheduleLedNightMode only runs when enabled).
-        if ('ledDayBrightness' in input || 'ledNightBrightness' in input) {
+        // Immediate LED apply when brightness fields or the night-mode toggle
+        // change. Without this the pod LED only updates on the next cron
+        // boundary, which makes the slider feel broken and — when night mode
+        // is disabled while currently in the night window — leaves the LED
+        // dim until the user manually nudges the day slider.
+        //
+        // Note: when night mode stays enabled and the user only drags the day
+        // slider, reloadSchedulerIfNeeded above also fires scheduleLedNightMode
+        // which emits its own initial-apply send. The pod gets two consecutive
+        // SET_SETTINGS frames with the same value — idempotent at firmware,
+        // not worth gating around.
+        if (
+          'ledDayBrightness' in input
+          || 'ledNightBrightness' in input
+          || 'ledNightModeEnabled' in input
+        ) {
           try {
             const jobManager = await getJobManager()
             await jobManager.applyCurrentLedBrightness()

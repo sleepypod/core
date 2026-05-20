@@ -591,21 +591,16 @@ export class JobManager {
     })
 
     // Apply correct brightness immediately based on whether we're in the night window.
-    // Use the configured scheduler timezone (which matches the cron jobs above) rather
-    // than the OS clock, which on embedded targets is often UTC and would flip the
-    // window for any user not on UTC.
-    const { hour: nowHour, minute: nowMinute } = nowInTimezone(this.scheduler.getTimezone())
-    const nowMinutes = nowHour * 60 + nowMinute
-    const startMinutes = startHour * 60 + startMinute
-    const endMinutes = endHour * 60 + endMinute
-
-    const isNight = startMinutes <= endMinutes
-      ? nowMinutes >= startMinutes && nowMinutes < endMinutes // same-day window (e.g. 01:00-06:00)
-      : nowMinutes >= startMinutes || nowMinutes < endMinutes // midnight-crossing window (e.g. 22:00-06:00)
-
-    const targetBrightness = isNight ? nightBrightness : dayBrightness
+    // Delegates to computeCurrentLedBrightness so the window math has one source of
+    // truth (it also serves applyCurrentLedBrightness for slider-driven writes).
+    const targetBrightness = this.computeCurrentLedBrightness(
+      true,
+      nightStartTime,
+      nightEndTime,
+      dayBrightness,
+      nightBrightness,
+    )
     try {
-      console.log(`LED night mode: applying initial brightness ${targetBrightness} (${isNight ? 'night' : 'day'} window)`)
       await this.sendLedBrightness(targetBrightness)
     }
     catch (e) {

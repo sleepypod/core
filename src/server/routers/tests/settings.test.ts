@@ -241,17 +241,26 @@ describe('settings.updateDevice', () => {
     expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
   })
 
-  it('does NOT fire immediate LED apply for unrelated scheduling fields', async () => {
+  it('fires immediate LED apply when ledNightModeEnabled toggles', async () => {
     const current = { ...baseDevice }
     const updated = { ...current, ledNightModeEnabled: true }
     dbState.txRowsQueue.push([current], [updated])
 
-    // Toggling the night-mode enable flag changes scheduling — reload covers
-    // the initial-brightness apply via scheduleLedNightMode. The dedicated
-    // immediate-send path is only for brightness slider edits.
+    // Toggling night mode must also push an immediate apply — disabling it
+    // while in the night window otherwise leaves the LED dim until the user
+    // manually nudges the day slider.
     await caller.updateDevice({ ledNightModeEnabled: true })
-    expect(schedulerMock.jm.applyCurrentLedBrightness).not.toHaveBeenCalled()
+    expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
     expect(schedulerMock.jm.reloadSchedules).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT fire immediate LED apply for non-LED scheduling fields', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, primePodDaily: true, primePodTime: '14:00' }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ primePodDaily: true, primePodTime: '14:00' })
+    expect(schedulerMock.jm.applyCurrentLedBrightness).not.toHaveBeenCalled()
   })
 
   it('logs but does not fail when applyCurrentLedBrightness rejects', async () => {

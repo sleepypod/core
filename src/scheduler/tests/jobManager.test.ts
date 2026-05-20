@@ -556,8 +556,9 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // sendLedBrightness CBOR wire format. Frank's SetSettings (cmd 8) silently
 // ignores unknown keys — so the test pins the exact key ("lb") and value the
-// firmware actually consumes. Decode-round-trip rather than hex-string equality
-// keeps the test resilient to cbor-x picking a different map-header encoding.
+// firmware actually consumes. Belt-and-suspenders: the key-bytes regex (`626c62`)
+// pins the wire key name independent of cbor-x's map-header encoding; the
+// decode round-trip is the authoritative structural check.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('JobManager.sendLedBrightness CBOR payload', () => {
   let manager: JobManager
@@ -578,10 +579,11 @@ describe('JobManager.sendLedBrightness CBOR payload', () => {
     const [cmd, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
     expect(cmd).toBe(HardwareCommand.SET_SETTINGS)
 
-    // Wire format check: the key bytes for "lb" (text2 → 62 6c 62) and the
-    // 42 value byte must be present in the emitted hex.
+    // Wire format check: the key bytes for "lb" (text2 → 62 6c 62) must be
+    // present. The value byte is verified by the decode round-trip below;
+    // pinning it with an anchored regex would falsely fail if cbor-x ever
+    // emitted an indefinite-length map terminator (`ff`).
     expect(hex).toMatch(/626c62/)
-    expect(hex).toMatch(/2a$/)
 
     // Decode round-trip — authoritative source of truth.
     const decoded = cborDecode(Buffer.from(hex, 'hex'))
@@ -601,5 +603,57 @@ describe('JobManager.sendLedBrightness CBOR payload', () => {
     const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
     const decoded = cborDecode(Buffer.from(hex, 'hex'))
     expect(decoded).toEqual({ lb: 100 })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeCurrentLedBrightness — the in-window math is exercised exhaustively
+// via scheduleLedNightMode tests above. These cover the branches that path
+// doesn't reach: night mode disabled, null start/end (corrupted DB row).
+// applyCurrentLedBrightness has its own short check that exits cleanly when
+// the device_settings row is missing.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager.computeCurrentLedBrightness — out-of-window branches', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('returns day brightness when night mode is disabled', () => {
+    const result = (manager as any).computeCurrentLedBrightness(false, '22:00', '06:00', 80, 10)
+    expect(result).toBe(80)
+  })
+
+  it('returns day brightness when night start time is null (mis-seeded row)', () => {
+    const result = (manager as any).computeCurrentLedBrightness(true, null, '06:00', 80, 10)
+    expect(result).toBe(80)
+  })
+
+  it('returns day brightness when night end time is null', () => {
+    const result = (manager as any).computeCurrentLedBrightness(true, '22:00', null, 80, 10)
+    expect(result).toBe(80)
+  })
+})
+
+describe('JobManager.applyCurrentLedBrightness', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+    ;(sendCommand as ReturnType<typeof vi.fn>).mockClear()
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('is a no-op when device_settings is empty (fresh install)', async () => {
+    await manager.applyCurrentLedBrightness()
+    expect(sendCommand).not.toHaveBeenCalled()
   })
 })
