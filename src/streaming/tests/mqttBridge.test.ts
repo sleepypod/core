@@ -12,18 +12,28 @@ import os from 'node:os'
 // Hoisted state shared with the @/src/db mock factory — lets each test stub
 // the device_settings row that resolveConfig will read.
 const dbMock = vi.hoisted(() => {
-  const state: { row: any | undefined, throwOnSelect: boolean, biometricsRow: any | null, deviceStateRows: any[] } = {
+  const state: {
+    row: any | undefined
+    throwOnSelect: boolean
+    biometricsRow: any | null
+    deviceStateRows: any[]
+    bedTempRow: any | null
+    throwOnBedTemp: false | true | string
+  } = {
     row: undefined,
     throwOnSelect: false,
     biometricsRow: null,
     deviceStateRows: [],
+    bedTempRow: null,
+    throwOnBedTemp: false,
   }
-  // The bridge calls db.select() three ways:
+  // The bridge calls db.select() four ways:
   //   1. .from(deviceSettings).limit(1)         — resolveConfig
   //   2. .from(deviceState)                     — publishState (iterable of rows)
   //   3. .from(vitals).where(...).orderBy(...).limit(1) — biometrics fetch
+  //   4. .from(bedTemp).orderBy(...).limit(1)   — ambient environment fetch
   // The mock returns a thenable from .from() so case 2 (await of the from()
-  // result) iterates state.deviceStateRows; cases 1/3 chain through.
+  // result) iterates state.deviceStateRows; cases 1/3/4 chain through.
   const select = vi.fn(() => ({
     from: vi.fn(() => {
       const fromObj: any = {
@@ -35,6 +45,17 @@ const dbMock = vi.hoisted(() => {
           orderBy: vi.fn(() => ({
             limit: vi.fn(async () => state.biometricsRow ? [state.biometricsRow] : []),
           })),
+        })),
+        orderBy: vi.fn(() => ({
+          limit: vi.fn(async () => {
+            if (state.throwOnBedTemp !== false) {
+              // eslint-disable-next-line @typescript-eslint/only-throw-error
+              throw typeof state.throwOnBedTemp === 'string'
+                ? state.throwOnBedTemp
+                : new Error('bed_temp boom')
+            }
+            return state.bedTempRow ? [state.bedTempRow] : []
+          }),
         })),
         // Make `.from(deviceState)` itself awaitable so `for (const row of
         // sides)` after `await db.select().from(deviceState)` iterates rows.
@@ -194,6 +215,8 @@ beforeEach(() => {
   dbMock.state.throwOnSelect = false
   dbMock.state.biometricsRow = null
   dbMock.state.deviceStateRows = []
+  dbMock.state.bedTempRow = null
+  dbMock.state.throwOnBedTemp = false
   mqttMock.state.nextClient = null
   mqttMock.state.throwOnConnect = null
   mqttMock.connect.mockClear()
@@ -890,6 +913,134 @@ describe('mqttBridge — frame subscription', () => {
     piezoMock.state.listener?.({ type: 'deviceStatus' })
 
     expect(fake.publish).not.toHaveBeenCalled()
+
+    await shutdownMqttBridge()
+  })
+})
+
+describe('mqttBridge — ambient environment', () => {
+  it('publishes HA discovery for ambient temperature and humidity sensors', async () => {
+    const fake = await startBridgeWithFake({ config: { haDiscovery: true } })
+    fake.connected = true
+    fake.emit('connect')
+
+    const topics = fake.publish.mock.calls.map(([t]) => t as string)
+    const tempCfg = topics.find(t => t.endsWith('/ambient_temperature/config'))
+    const humCfg = topics.find(t => t.endsWith('/ambient_humidity/config'))
+    expect(tempCfg).toBeDefined()
+    expect(humCfg).toBeDefined()
+
+    // Confirm device_class + state_class fields are wired so HA renders the
+    // right icons and enables long-term statistics.
+    const tempPayloadCall = fake.publish.mock.calls.find(([t]) => typeof t === 'string' && (t as string).endsWith('/ambient_temperature/config'))
+    const tempPayload = JSON.parse(tempPayloadCall?.[1] as string)
+    expect(tempPayload.device_class).toBe('temperature')
+    expect(tempPayload.state_class).toBe('measurement')
+    expect(tempPayload.unit_of_measurement).toBe('°C')
+    expect(tempPayload.state_topic).toMatch(/state\/environment\/ambient$/)
+
+    const humPayloadCall = fake.publish.mock.calls.find(([t]) => typeof t === 'string' && (t as string).endsWith('/ambient_humidity/config'))
+    const humPayload = JSON.parse(humPayloadCall?.[1] as string)
+    expect(humPayload.device_class).toBe('humidity')
+    expect(humPayload.state_class).toBe('measurement')
+    expect(humPayload.unit_of_measurement).toBe('%')
+
+    await shutdownMqttBridge()
+  })
+
+  it('converts centidegrees + centipercent into the published state payload', async () => {
+    dbMock.state.bedTempRow = {
+      timestamp: new Date('2026-05-01T12:00:00Z'),
+      ambientTemp: 2150, // 21.5°C
+      humidity: 4530, // 45.30%
+    }
+    const fake = await startBridgeWithFake({ config: { haDiscovery: false } })
+    fake.connected = true
+    fake.emit('connect')
+
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const ambientCall = fake.publish.mock.calls.find(([t]) => typeof t === 'string' && (t as string).endsWith('/state/environment/ambient'))
+    expect(ambientCall).toBeDefined()
+    const payload = JSON.parse(ambientCall?.[1] as string)
+    expect(payload.temperature).toBeCloseTo(21.5, 2)
+    expect(payload.humidity).toBeCloseTo(45.3, 2)
+    expect(payload.ts).toBe(new Date('2026-05-01T12:00:00Z').getTime())
+
+    await shutdownMqttBridge()
+  })
+
+  it('publishes nulls when bed_temp columns are NULL', async () => {
+    dbMock.state.bedTempRow = {
+      timestamp: new Date('2026-05-01T12:00:00Z'),
+      ambientTemp: null,
+      humidity: null,
+    }
+    const fake = await startBridgeWithFake({ config: { haDiscovery: false } })
+    fake.connected = true
+    fake.emit('connect')
+
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const ambientCall = fake.publish.mock.calls.find(([t]) => typeof t === 'string' && (t as string).endsWith('/state/environment/ambient'))
+    const payload = JSON.parse(ambientCall?.[1] as string)
+    expect(payload.temperature).toBeNull()
+    expect(payload.humidity).toBeNull()
+
+    await shutdownMqttBridge()
+  })
+
+  it('skips ambient publish when no bed_temp row exists yet', async () => {
+    dbMock.state.bedTempRow = null
+    const fake = await startBridgeWithFake({ config: { haDiscovery: false } })
+    fake.connected = true
+    fake.emit('connect')
+
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const ambientCall = fake.publish.mock.calls.find(([t]) => typeof t === 'string' && (t as string).endsWith('/state/environment/ambient'))
+    expect(ambientCall).toBeUndefined()
+
+    await shutdownMqttBridge()
+  })
+
+  it('logs but does not throw when the bed_temp query fails', async () => {
+    dbMock.state.throwOnBedTemp = true
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fake = await startBridgeWithFake({ config: { haDiscovery: false } })
+    fake.connected = true
+    fake.emit('connect')
+
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[mqtt] ambient environment publish failed:',
+      expect.stringContaining('bed_temp boom'),
+    )
+    warnSpy.mockRestore()
+
+    await shutdownMqttBridge()
+  })
+
+  it('logs the raw value when a non-Error is thrown from the bed_temp query', async () => {
+    dbMock.state.throwOnBedTemp = 'plain string boom'
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fake = await startBridgeWithFake({ config: { haDiscovery: false } })
+    fake.connected = true
+    fake.emit('connect')
+
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[mqtt] ambient environment publish failed:',
+      'plain string boom',
+    )
+    warnSpy.mockRestore()
 
     await shutdownMqttBridge()
   })

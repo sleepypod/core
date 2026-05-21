@@ -108,6 +108,7 @@ pod ship once.
 | `Bed <side> occupancy` | OccupancySensor | `sleep_records` (latest with `leftBedAt IS NULL`) | — |
 | `Snooze <side>` | Switch | `snoozeManager` | `snoozeAlarm` / `cancelSnooze` |
 | `Prime` | Switch | `primeNotification` (auto-off on completion) | `startPriming` |
+| `Pod ambient` | TemperatureSensor | `bed_temp.ambient_temp` (centidegrees → °C) | — |
 
 Thermostat is HomeKit's single-setpoint primitive (the pod hardware exposes
 one setpoint, not a heat/cool deadband). Mode `off` cuts power; `auto` powers
@@ -197,6 +198,7 @@ the bridge resolves config in this order: `device_settings` row > env var > buil
 | `<prefix>/<device-id>/state/<side>/climate` | pod → broker | per-side temp / mode |
 | `<prefix>/<device-id>/state/water-level` | pod → broker | `low` / `ok` / `unknown` |
 | `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
+| `<prefix>/<device-id>/state/environment/ambient` | pod → broker | `{"ts": <epoch_ms>, "temperature": <number\|null>, "humidity": <number\|null>}` (°C, %) |
 | `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
 | `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
 | `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
