@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Globe, Thermometer, RotateCcw, Droplets, Timer, Lightbulb } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { CheckCircle2, Globe, Thermometer, RotateCcw, Droplets, Timer, Lightbulb, Loader2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Toggle } from './Toggle'
 import { TimeInput } from '../Schedule/TimeInput'
@@ -85,9 +85,19 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [device])
 
+  const [savedFlash, setSavedFlash] = useState(false)
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mutation = trpc.settings.updateDevice.useMutation({
-    onSuccess: () => utils.settings.getAll.invalidate(),
+    onSuccess: () => {
+      utils.settings.getAll.invalidate()
+      setSavedFlash(true)
+      if (savedTimer.current) clearTimeout(savedTimer.current)
+      savedTimer.current = setTimeout(() => setSavedFlash(false), 1500)
+    },
   })
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+  }, [])
 
   const isPending = mutation.isPending
 
@@ -213,6 +223,21 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex h-5 items-center justify-end text-xs" aria-live="polite">
+        {isPending && (
+          <span className="flex items-center gap-1 text-zinc-400">
+            <Loader2 size={12} className="animate-spin" />
+            Saving…
+          </span>
+        )}
+        {!isPending && savedFlash && (
+          <span className="flex items-center gap-1 text-emerald-400">
+            <CheckCircle2 size={12} />
+            Saved
+          </span>
+        )}
+      </div>
+
       {/* Timezone */}
       <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
         <div className="mb-3 flex items-center gap-2">
