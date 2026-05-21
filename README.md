@@ -198,7 +198,7 @@ the bridge resolves config in this order: `device_settings` row > env var > buil
 | `<prefix>/<device-id>/state/<side>/climate` | pod → broker | per-side temp / mode |
 | `<prefix>/<device-id>/state/water-level` | pod → broker | `low` / `ok` / `unknown` |
 | `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
-| `<prefix>/<device-id>/state/environment/ambient` | pod → broker | `{"ts","temperature","humidity"}` (°C, %) |
+| `<prefix>/<device-id>/state/environment/ambient` | pod → broker | `{"ts": <epoch_ms>, "temperature": <number\|null>, "humidity": <number\|null>}` (°C, %) |
 | `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
 | `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
 | `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
