@@ -61,7 +61,7 @@ export function buildAmbientSensor(): AmbientSensorAccessory {
   }
   void refresh()
   const handle = setInterval(() => void refresh(), POLL_MS)
-  handle.unref?.()
+  handle.unref()
 
   return {
     service,

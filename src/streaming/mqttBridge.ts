@@ -295,6 +295,7 @@ function publishHaDiscovery(): void {
       payload_not_available: 'offline',
       state_topic: stateTopic,
       value_template: template,
+      state_class: 'measurement',
       device: dev,
     }
     if (unit) cfg.unit_of_measurement = unit
@@ -327,8 +328,7 @@ function publishHaDiscovery(): void {
     '{{ value_json.temperature }}',
     '°C',
   )
-  ;(ambientTemp as Record<string, unknown>).device_class = 'temperature'
-  ;(ambientTemp as Record<string, unknown>).state_class = 'measurement'
+  ambientTemp.device_class = 'temperature'
   safePublish(
     `${haPrefix}/sensor/${id}/ambient_temperature/config`,
     JSON.stringify(ambientTemp),
@@ -341,8 +341,7 @@ function publishHaDiscovery(): void {
     '{{ value_json.humidity }}',
     '%',
   )
-  ;(ambientHumidity as Record<string, unknown>).device_class = 'humidity'
-  ;(ambientHumidity as Record<string, unknown>).state_class = 'measurement'
+  ambientHumidity.device_class = 'humidity'
   safePublish(
     `${haPrefix}/sensor/${id}/ambient_humidity/config`,
     JSON.stringify(ambientHumidity),

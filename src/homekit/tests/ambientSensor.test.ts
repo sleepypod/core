@@ -59,15 +59,16 @@ describe('ambientSensor accessory', () => {
   })
 
   it('keeps last known value when the latest row has a null ambient_temp', async () => {
-    dbMock.state.row = { ambientTemp: 2000 } // 20°C — happens to match sentinel
+    dbMock.state.row = { ambientTemp: 2500 } // 25°C — distinct from the 20°C sentinel
     const { service, stop } = buildAmbientSensor()
+    await vi.runOnlyPendingTimersAsync()
     await Promise.resolve()
     await Promise.resolve()
 
     dbMock.state.row = { ambientTemp: null }
     await vi.advanceTimersByTimeAsync(60_000)
     const value = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
-    expect(value).toBe(20)
+    expect(value).toBeCloseTo(25, 2)
     stop()
   })
 

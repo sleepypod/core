@@ -925,16 +925,19 @@ describe('mqttBridge — ambient environment', () => {
     expect(tempCfg).toBeDefined()
     expect(humCfg).toBeDefined()
 
-    // Confirm device_class fields are wired so HA renders the right icons.
+    // Confirm device_class + state_class fields are wired so HA renders the
+    // right icons and enables long-term statistics.
     const tempPayloadCall = fake.publish.mock.calls.find(([t]) => typeof t === 'string' && (t as string).endsWith('/ambient_temperature/config'))
     const tempPayload = JSON.parse(tempPayloadCall?.[1] as string)
     expect(tempPayload.device_class).toBe('temperature')
+    expect(tempPayload.state_class).toBe('measurement')
     expect(tempPayload.unit_of_measurement).toBe('°C')
     expect(tempPayload.state_topic).toMatch(/state\/environment\/ambient$/)
 
     const humPayloadCall = fake.publish.mock.calls.find(([t]) => typeof t === 'string' && (t as string).endsWith('/ambient_humidity/config'))
     const humPayload = JSON.parse(humPayloadCall?.[1] as string)
     expect(humPayload.device_class).toBe('humidity')
+    expect(humPayload.state_class).toBe('measurement')
     expect(humPayload.unit_of_measurement).toBe('%')
 
     await shutdownMqttBridge()
