@@ -4,7 +4,7 @@ import { Characteristic } from 'hap-nodejs'
 // Hoisted DB mock — drives readAmbientC by stubbing the chained
 // biometricsDb.select().from().orderBy().limit() call.
 const dbMock = vi.hoisted(() => {
-  const state: { row: { ambientTemp: number | null } | null, throws: boolean } = {
+  const state: { row: { ambientTemp: number | null } | null, throws: false | true | string } = {
     row: null,
     throws: false,
   }
@@ -12,7 +12,10 @@ const dbMock = vi.hoisted(() => {
     from: vi.fn(() => ({
       orderBy: vi.fn(() => ({
         limit: vi.fn(async () => {
-          if (state.throws) throw new Error('biometrics db down')
+          if (state.throws !== false) {
+            // eslint-disable-next-line @typescript-eslint/only-throw-error
+            throw typeof state.throws === 'string' ? state.throws : new Error('biometrics db down')
+          }
           return state.row ? [state.row] : []
         }),
       })),
@@ -82,9 +85,27 @@ describe('ambientSensor accessory', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     dbMock.state.throws = true
     await vi.advanceTimersByTimeAsync(60_000)
-    expect(warnSpy).toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[homekit] ambient sensor read failed:',
+      'biometrics db down',
+    )
     // 25°C still cached.
     expect(await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()).toBeCloseTo(25, 2)
+    warnSpy.mockRestore()
+    stop()
+  })
+
+  it('logs the raw value when a non-Error is thrown from the DB', async () => {
+    dbMock.state.throws = 'plain string boom'
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { stop } = buildAmbientSensor()
+    await vi.runOnlyPendingTimersAsync()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[homekit] ambient sensor read failed:',
+      'plain string boom',
+    )
     warnSpy.mockRestore()
     stop()
   })

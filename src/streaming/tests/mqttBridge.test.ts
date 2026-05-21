@@ -18,7 +18,7 @@ const dbMock = vi.hoisted(() => {
     biometricsRow: any | null
     deviceStateRows: any[]
     bedTempRow: any | null
-    throwOnBedTemp: boolean
+    throwOnBedTemp: false | true | string
   } = {
     row: undefined,
     throwOnSelect: false,
@@ -48,7 +48,12 @@ const dbMock = vi.hoisted(() => {
         })),
         orderBy: vi.fn(() => ({
           limit: vi.fn(async () => {
-            if (state.throwOnBedTemp) throw new Error('bed_temp boom')
+            if (state.throwOnBedTemp !== false) {
+              // eslint-disable-next-line @typescript-eslint/only-throw-error
+              throw typeof state.throwOnBedTemp === 'string'
+                ? state.throwOnBedTemp
+                : new Error('bed_temp boom')
+            }
             return state.bedTempRow ? [state.bedTempRow] : []
           }),
         })),
@@ -1015,6 +1020,25 @@ describe('mqttBridge — ambient environment', () => {
     expect(warnSpy).toHaveBeenCalledWith(
       '[mqtt] ambient environment publish failed:',
       expect.stringContaining('bed_temp boom'),
+    )
+    warnSpy.mockRestore()
+
+    await shutdownMqttBridge()
+  })
+
+  it('logs the raw value when a non-Error is thrown from the bed_temp query', async () => {
+    dbMock.state.throwOnBedTemp = 'plain string boom'
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fake = await startBridgeWithFake({ config: { haDiscovery: false } })
+    fake.connected = true
+    fake.emit('connect')
+
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[mqtt] ambient environment publish failed:',
+      'plain string boom',
     )
     warnSpy.mockRestore()
 
