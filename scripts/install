@@ -30,12 +30,17 @@ echo ""
 #   --artifact-url URL Pin to an exact CI build artifact (zip from GH Actions).
 #                      Posted on every PR comment so reviewers can install the
 #                      exact SHA the run built, not whatever's latest.
+#   --node-modules-dir Where node_modules lives. Default: auto-pick rootfs vs
+#                      /persistent by free space (see scripts/lib/relocation-helpers).
+#   --swap-dir         Where the build-time swap file lives. Default: auto-pick
+#                      rootfs vs /persistent by free space, gated by headroom.
 INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
 PURGE_FREE_SLEEP=false
 NODE_MODULES_DIR=""
+SWAP_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --local)              INSTALL_LOCAL=true ;;
@@ -44,6 +49,7 @@ while [ $# -gt 0 ]; do
     --artifact-url)       shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
     --purge-free-sleep)   PURGE_FREE_SLEEP=true ;;
     --node-modules-dir)   shift; NODE_MODULES_DIR="${1:-}" ;;
+    --swap-dir)           shift; SWAP_DIR="${1:-}" ;;
   esac
   shift
 done
@@ -588,27 +594,82 @@ fix_db_permissions
 # 2 GiB RAM and zero swap; Next.js 16 / Turbopack peaks around 750 MiB
 # during `next build`, which trips the firmware's earlyoom (configured to
 # fire at <10% available, ~200 MiB on this hardware) and kills the build
-# mid-flight (SIGTERM, exit 143). A 1 GiB swap file on /persistent keeps
-# the build out of earlyoom range without wearing the rootfs eMMC. Used
-# only during build / heavy memory bursts; not relied on at runtime.
-SWAPFILE="/persistent/swapfile"
+# mid-flight (SIGTERM, exit 143). A 1 GiB swap file keeps the build out
+# of earlyoom range. Used only during build / heavy memory bursts; not
+# relied on at runtime.
+#
+# Where it lives: same auto-picker as node_modules — pick the partition
+# with the most free space, gated by SWAP_HEADROOM_MB so a near-full
+# /persistent doesn't win by a tiny margin. Override with --swap-dir.
+#
+#   Pod 4 stock      / ≈ 1 GB free, /persistent ≈ 13 GB free → /persistent
+#   Pod 5            / ≈ 5 GB free, /persistent ≈ 15 GB free → /persistent
+#   Pod 3 + SD card  / ≈ 5 GB free, /persistent ≈ 250 MB free → rootfs
+#
+# Relocation-helpers isn't sourced yet (repo not on disk), so the picker
+# is inlined here, matching the iptables-helpers pattern above.
 SWAP_SIZE_MB=1024
-if ! mountpoint -q /persistent 2>/dev/null; then
-  echo "Warning: /persistent is not a mountpoint — skipping swap setup to avoid creating $SWAPFILE on rootfs" >&2
-elif ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
-  if [ ! -f "$SWAPFILE" ]; then
-    echo "Creating ${SWAP_SIZE_MB}M swap file at $SWAPFILE..."
-    fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" 2>/dev/null \
-      || dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_SIZE_MB" status=none
-    chmod 0600 "$SWAPFILE"
-    mkswap "$SWAPFILE" >/dev/null
+SWAP_HEADROOM_MB="${SWAP_HEADROOM_MB:-1200}"  # SWAP_SIZE_MB + ~200 MB headroom
+swap_target_dir=""
+swap_reason=""
+if [ -n "$SWAP_DIR" ]; then
+  swap_target_dir="$SWAP_DIR"
+  swap_reason="user override (--swap-dir)"
+else
+  rootfs_free_mb=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
+  rootfs_free_mb=${rootfs_free_mb:-0}
+  if mountpoint -q /persistent 2>/dev/null; then
+    persistent_free_mb=$(df -m /persistent 2>/dev/null | awk 'NR==2{print $4}')
+    persistent_free_mb=${persistent_free_mb:-0}
+  else
+    persistent_free_mb=0
   fi
-  swapon "$SWAPFILE" || echo "Warning: swapon failed; on-pod builds may OOM" >&2
+  if [ "$persistent_free_mb" -gt "$rootfs_free_mb" ] \
+     && [ "$persistent_free_mb" -ge "$SWAP_HEADROOM_MB" ]; then
+    swap_target_dir="/persistent"
+    swap_reason="/persistent has more free space than rootfs"
+  elif [ "$rootfs_free_mb" -ge "$SWAP_HEADROOM_MB" ]; then
+    swap_target_dir="/"
+    swap_reason="rootfs has more free space than /persistent"
+  fi
 fi
-SWAP_FSTAB_LINE="$SWAPFILE none swap sw,nofail 0 0"
-if mountpoint -q /persistent 2>/dev/null && ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
-  sed -i "\\|^$SWAPFILE |d" /etc/fstab 2>/dev/null || true
-  echo "$SWAP_FSTAB_LINE" >> /etc/fstab
+
+if [ -z "$swap_target_dir" ]; then
+  echo "Warning: neither rootfs nor /persistent has ${SWAP_HEADROOM_MB} MB free — skipping swap setup; on-pod builds may OOM" >&2
+else
+  # Strip trailing slash so the joined path stays canonical (/swapfile, not //swapfile).
+  SWAPFILE="${swap_target_dir%/}/swapfile"
+  [ "$swap_target_dir" = "/" ] && SWAPFILE="/swapfile"
+  echo "Swap → $SWAPFILE  (${swap_reason})"
+
+  # Remove a stale swapfile on the partition we didn't pick this time
+  # (e.g., prior install chose /persistent, this install picks rootfs).
+  # Without this we'd leak the file and leave a dangling fstab entry.
+  for stale in /swapfile /persistent/swapfile; do
+    if [ "$stale" != "$SWAPFILE" ] && [ -e "$stale" ]; then
+      echo "Removing stale swap file at $stale..."
+      swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$stale" \
+        && swapoff "$stale" 2>/dev/null || true
+      rm -f "$stale"
+      sed -i "\\|^$stale |d" /etc/fstab 2>/dev/null || true
+    fi
+  done
+
+  if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
+    if [ ! -f "$SWAPFILE" ]; then
+      echo "Creating ${SWAP_SIZE_MB}M swap file at $SWAPFILE..."
+      fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" 2>/dev/null \
+        || dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_SIZE_MB" status=none
+      chmod 0600 "$SWAPFILE"
+      mkswap "$SWAPFILE" >/dev/null
+    fi
+    swapon "$SWAPFILE" || echo "Warning: swapon failed; on-pod builds may OOM" >&2
+  fi
+  SWAP_FSTAB_LINE="$SWAPFILE none swap sw,nofail 0 0"
+  if ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
+    sed -i "\\|^$SWAPFILE |d" /etc/fstab 2>/dev/null || true
+    echo "$SWAP_FSTAB_LINE" >> /etc/fstab
+  fi
 fi
 
 # ============================================================================
