@@ -221,21 +221,33 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     save({ ledNightEndTime: time })
   }
 
+  const showToast = isPending || savedFlash
+
   return (
     <div className="space-y-4">
-      <div className="flex h-5 items-center justify-end text-xs" aria-live="polite">
-        {isPending && (
-          <span className="flex items-center gap-1 text-zinc-400">
-            <Loader2 size={12} className="animate-spin" />
-            Saving…
-          </span>
-        )}
-        {!isPending && savedFlash && (
-          <span className="flex items-center gap-1 text-emerald-400">
-            <CheckCircle2 size={12} />
-            Saved
-          </span>
-        )}
+      <div
+        aria-live="polite"
+        className={`pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-4 transition-opacity duration-200 sm:bottom-28 ${
+          showToast ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        <div className="flex items-center gap-2 rounded-full bg-zinc-800/95 px-3 py-1.5 text-xs font-medium text-zinc-200 shadow-lg ring-1 ring-zinc-700/60 backdrop-blur">
+          {isPending
+            ? (
+                <>
+                  <Loader2 size={12} className="animate-spin text-sky-400" />
+                  Saving…
+                </>
+              )
+            : savedFlash
+              ? (
+                  <>
+                    <CheckCircle2 size={12} className="text-emerald-400" />
+                    Saved
+                  </>
+                )
+              : null}
+        </div>
       </div>
 
       {/* Timezone */}
