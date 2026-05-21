@@ -230,6 +230,10 @@ describe('settings.updateDevice', () => {
 
     await caller.updateDevice({ ledDayBrightness: 42 })
     expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
+    // Brightness changes must NOT rebuild the scheduler — reloadSchedules
+    // re-creates every temperature cron job and makes the slider feel slow.
+    // Night-mode crons read brightness from the DB at fire time instead.
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
   })
 
   it('fires immediate LED apply when ledNightBrightness changes', async () => {
@@ -239,6 +243,7 @@ describe('settings.updateDevice', () => {
 
     await caller.updateDevice({ ledNightBrightness: 5 })
     expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
   })
 
   it('fires immediate LED apply when ledNightModeEnabled toggles', async () => {

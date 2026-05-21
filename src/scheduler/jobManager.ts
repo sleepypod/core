@@ -577,17 +577,25 @@ export class JobManager {
     const [startHour, startMinute] = this.parseTime(nightStartTime)
     const startCron = `${startMinute} ${startHour} * * *`
 
+    // Closures read brightness from the DB at fire time. This lets brightness
+    // sliders skip reloadSchedules() (which rebuilds thousands of temperature
+    // cron jobs) — a captured value would otherwise go stale until the next
+    // unrelated scheduler reload.
     this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
-      console.log(`LED night mode: setting brightness to ${nightBrightness}`)
-      await this.sendLedBrightness(nightBrightness)
+      const [s] = await db.select().from(deviceSettings).limit(1)
+      const target = s?.ledNightBrightness ?? nightBrightness
+      console.log(`LED night mode: setting brightness to ${target}`)
+      await this.sendLedBrightness(target)
     })
 
     const [endHour, endMinute] = this.parseTime(nightEndTime)
     const endCron = `${endMinute} ${endHour} * * *`
 
     this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
-      console.log(`LED night mode: setting brightness to ${dayBrightness}`)
-      await this.sendLedBrightness(dayBrightness)
+      const [s] = await db.select().from(deviceSettings).limit(1)
+      const target = s?.ledDayBrightness ?? dayBrightness
+      console.log(`LED night mode: setting brightness to ${target}`)
+      await this.sendLedBrightness(target)
     })
 
     // Apply correct brightness immediately based on whether we're in the night window.

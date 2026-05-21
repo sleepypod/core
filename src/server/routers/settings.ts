@@ -80,10 +80,14 @@ import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
  * that affect scheduling (timezone, priming, reboot)
  */
 async function reloadSchedulerIfNeeded(input: Record<string, unknown>): Promise<void> {
+  // Brightness values do NOT belong here — they don't affect cron timing,
+  // they're read from the DB by the LED night-mode cron closures at fire
+  // time. Including them would force reloadSchedules() (which rebuilds every
+  // temperature cron) on every slider release. See applyCurrentLedBrightness
+  // for the immediate hardware push that handles slider changes.
   const schedulingKeys = [
     'timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime',
-    'ledNightModeEnabled', 'ledDayBrightness', 'ledNightBrightness',
-    'ledNightStartTime', 'ledNightEndTime',
+    'ledNightModeEnabled', 'ledNightStartTime', 'ledNightEndTime',
   ]
   const hasSchedulingChanges = schedulingKeys.some(key => key in input)
 
