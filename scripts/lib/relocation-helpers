@@ -74,7 +74,10 @@ _print_storage_banner() {
 _auto_pick_node_modules_target() {
   local install_nm="$1"
   local rootfs_free persistent_free
-  rootfs_free=$(_partition_free_mb "$install_nm")
+  # Probe the parent — $install_nm itself doesn't exist yet on a first
+  # install (pnpm creates it). df on a non-existent path emits nothing
+  # and the picker would wrongly see 0 MB free on rootfs.
+  rootfs_free=$(_partition_free_mb "$(dirname "$install_nm")")
   rootfs_free=${rootfs_free:-0}
 
   if mountpoint -q "$PERSISTENT_ROOT" 2>/dev/null; then

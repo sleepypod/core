@@ -41,8 +41,10 @@ INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
 PURGE_FREE_SLEEP=false
 RESTORE_MODE=false
-NODE_MODULES_DIR=""
-SWAP_DIR=""
+# Preserve env-supplied overrides; --node-modules-dir / --swap-dir can still
+# clobber them below. Lets `NODE_MODULES_DIR=/foo bash scripts/install` work.
+NODE_MODULES_DIR="${NODE_MODULES_DIR:-}"
+SWAP_DIR="${SWAP_DIR:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --local)              INSTALL_LOCAL=true ;;
