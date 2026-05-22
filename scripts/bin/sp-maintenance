@@ -81,7 +81,8 @@ fi
 # "EACCES: permission denied, unlink '/persistent/deviceinfo/dac.sock'".
 # Newer installs set this correctly; this block reconciles existing pods.
 DEVICEINFO_DIR=/persistent/deviceinfo
-if [ -d "$DEVICEINFO_DIR" ] && getent group dac &>/dev/null; then
+if getent group dac &>/dev/null; then
+  mkdir -p "$DEVICEINFO_DIR"
   OWNER_GROUP=$(stat -c '%U:%G' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
   MODE=$(stat -c '%a' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
   if [ "$OWNER_GROUP" != "root:dac" ] || [ "$MODE" != "2770" ]; then
