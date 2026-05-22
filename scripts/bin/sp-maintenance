@@ -87,7 +87,8 @@ if [ -d "$DEVICEINFO_DIR" ] && getent group dac &>/dev/null; then
   if [ "$OWNER_GROUP" != "root:dac" ] || [ "$MODE" != "2770" ]; then
     echo "Repairing $DEVICEINFO_DIR perms ($OWNER_GROUP $MODE → root:dac 2770)..."
     chown root:dac "$DEVICEINFO_DIR"
-    chmod 2770 "$DEVICEINFO_DIR"
+    chown root:dac "$DEVICEINFO_DIR" || { echo "ERROR: chown $DEVICEINFO_DIR failed — next-server will fail to unlink dac.sock" >&2; exit 1; }
+    chmod 2770 "$DEVICEINFO_DIR" || { echo "ERROR: chmod $DEVICEINFO_DIR failed" >&2; exit 1; }
   fi
 fi
 
