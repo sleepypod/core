@@ -86,7 +86,11 @@ if getent group dac &>/dev/null; then
   OWNER_GROUP=$(stat -c '%U:%G' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
   MODE=$(stat -c '%a' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
   if [ "$OWNER_GROUP" != "root:dac" ] || [ "$MODE" != "2770" ]; then
-    echo "Repairing $DEVICEINFO_DIR perms ($OWNER_GROUP $MODE → root:dac 2770)..."
+    if [ -z "$OWNER_GROUP" ] || [ -z "$MODE" ]; then
+      echo "Repairing $DEVICEINFO_DIR perms (stat failed → forcing root:dac 2770)..."
+    else
+      echo "Repairing $DEVICEINFO_DIR perms ($OWNER_GROUP $MODE → root:dac 2770)..."
+    fi
     chown root:dac "$DEVICEINFO_DIR"
     chown root:dac "$DEVICEINFO_DIR" || { echo "ERROR: chown $DEVICEINFO_DIR failed — next-server will fail to unlink dac.sock" >&2; exit 1; }
     chmod 2770 "$DEVICEINFO_DIR" || { echo "ERROR: chmod $DEVICEINFO_DIR failed" >&2; exit 1; }
