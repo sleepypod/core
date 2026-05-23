@@ -42,7 +42,7 @@ import { Decoder } from 'cbor-x'
 // ---------------------------------------------------------------------------
 
 const WS_PORT = Number(process.env.PIEZO_WS_PORT ?? 3001)
-const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
+const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent/biometrics'
 const FILE_POLL_INTERVAL_MS = 10 // match Python's 10 ms poll for new data
 const SEEK_MAX_DURATION_S = 30 // max seconds of data to replay on seek
 // Keep frame-index entries within the seek window plus a small margin so the
@@ -264,27 +264,15 @@ function findNextRecordMarker(buf: Buffer, from: number): number {
 
 function findLatestRaw(dir: string): string | null {
   try {
-    const collectLatest = (root: string): string | null => {
-      if (!fs.existsSync(root)) return null
-
-      const rawFiles = fs.readdirSync(root)
-        .filter(e => e.endsWith('.RAW') && e !== 'SEQNO.RAW')
-        .map(e => ({
-          name: path.join(root, e),
-          mtime: fs.statSync(path.join(root, e)).mtimeMs,
-        }))
-        .sort((a, b) => b.mtime - a.mtime)
-
-      return rawFiles.length > 0 ? rawFiles[0].name : null
-    }
-
-    const latest = collectLatest(dir)
-    if (latest) return latest
-
-    const fallbackDir = path.basename(dir) === 'biometrics'
-      ? path.dirname(dir)
-      : path.join(dir, 'biometrics')
-    return fallbackDir === dir ? null : collectLatest(fallbackDir)
+    const entries = fs.readdirSync(dir)
+    const rawFiles = entries
+      .filter(e => e.endsWith('.RAW') && e !== 'SEQNO.RAW')
+      .map(e => ({
+        name: e,
+        mtime: fs.statSync(path.join(dir, e)).mtimeMs,
+      }))
+      .sort((a, b) => b.mtime - a.mtime)
+    return rawFiles.length > 0 ? path.join(dir, rawFiles[0].name) : null
   }
   catch {
     return null
