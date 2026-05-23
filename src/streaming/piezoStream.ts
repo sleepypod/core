@@ -264,15 +264,27 @@ function findNextRecordMarker(buf: Buffer, from: number): number {
 
 function findLatestRaw(dir: string): string | null {
   try {
-    const entries = fs.readdirSync(dir)
-    const rawFiles = entries
-      .filter(e => e.endsWith('.RAW'))
-      .map(e => ({
-        name: e,
-        mtime: fs.statSync(path.join(dir, e)).mtimeMs,
-      }))
-      .sort((a, b) => b.mtime - a.mtime)
-    return rawFiles.length > 0 ? path.join(dir, rawFiles[0].name) : null
+    const collectLatest = (root: string): string | null => {
+      if (!fs.existsSync(root)) return null
+
+      const rawFiles = fs.readdirSync(root)
+        .filter(e => e.endsWith('.RAW') && e !== 'SEQNO.RAW')
+        .map(e => ({
+          name: path.join(root, e),
+          mtime: fs.statSync(path.join(root, e)).mtimeMs,
+        }))
+        .sort((a, b) => b.mtime - a.mtime)
+
+      return rawFiles.length > 0 ? rawFiles[0].name : null
+    }
+
+    const latest = collectLatest(dir)
+    if (latest) return latest
+
+    const fallbackDir = path.basename(dir) === 'biometrics'
+      ? path.dirname(dir)
+      : path.join(dir, 'biometrics')
+    return fallbackDir === dir ? null : collectLatest(fallbackDir)
   }
   catch {
     return null

@@ -719,6 +719,31 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await client.close()
   })
 
+  it('skips SEQNO.RAW and falls back to biometrics/', async () => {
+    const captureDir = path.join(tmpRawDir, 'biometrics')
+    fs.mkdirSync(captureDir)
+    const capturePath = path.join(captureDir, 'capture.RAW')
+    fs.writeFileSync(capturePath, buildOuterRecord(1, [{
+      type: 'capSense',
+      ts: 700,
+      left: 1,
+      right: 2,
+    }]))
+    fs.writeFileSync(path.join(tmpRawDir, 'SEQNO.RAW'), Buffer.from('not-cbor'))
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 700, 3000)
+
+    client.ws.send(JSON.stringify({ type: 'get_time_range' }))
+    const range = await client.waitFor(m => m.type === 'time_range')
+    expect(range.file).toBe('capture.RAW')
+    expect(range.min).toBe(700)
+    expect(range.max).toBe(700)
+
+    await client.close()
+  })
+
   it('broadcastFrame fans out to subscribed live clients only', async () => {
     const port = startAndPort()
     const a = await connectClient(port)
