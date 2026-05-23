@@ -43,6 +43,10 @@ import { Decoder } from 'cbor-x'
 
 const WS_PORT = Number(process.env.PIEZO_WS_PORT ?? 3001)
 const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
+// Fallback subdirectory probed when RAW_DATA_DIR holds no usable .RAW files.
+// New firmware writes captures under /persistent/biometrics; older firmware
+// (and the SEQNO.RAW tmpfs symlink) sits at the /persistent root.
+const RAW_DATA_FALLBACK_SUBDIR = 'biometrics'
 const FILE_POLL_INTERVAL_MS = 10 // match Python's 10 ms poll for new data
 const SEEK_MAX_DURATION_S = 30 // max seconds of data to replay on seek
 // Keep frame-index entries within the seek window plus a small margin so the
@@ -262,11 +266,11 @@ function findNextRecordMarker(buf: Buffer, from: number): number {
 // RAW file follower
 // ---------------------------------------------------------------------------
 
-function findLatestRaw(dir: string): string | null {
+function findLatestRawIn(dir: string): string | null {
   try {
     const entries = fs.readdirSync(dir)
     const rawFiles = entries
-      .filter(e => e.endsWith('.RAW'))
+      .filter(e => e.endsWith('.RAW') && e !== 'SEQNO.RAW')
       .map(e => ({
         name: e,
         mtime: fs.statSync(path.join(dir, e)).mtimeMs,
@@ -277,6 +281,16 @@ function findLatestRaw(dir: string): string | null {
   catch {
     return null
   }
+}
+
+// Probes `dir` first, then `<dir>/<RAW_DATA_FALLBACK_SUBDIR>`. The split exists
+// because new firmware moved real captures to /persistent/biometrics while
+// /persistent still holds the SEQNO.RAW symlink — without the fallback, the
+// streamer would attach to SEQNO and emit CBOR resync errors.
+export function findLatestRaw(dir: string): string | null {
+  const direct = findLatestRawIn(dir)
+  if (direct) return direct
+  return findLatestRawIn(path.join(dir, RAW_DATA_FALLBACK_SUBDIR))
 }
 
 // ---------------------------------------------------------------------------
