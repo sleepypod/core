@@ -899,22 +899,25 @@ describe('useSchedule — togglePowerSchedule scoping and side effects', () => {
 
 describe('useSchedule — toggleAllSchedules branches', () => {
   it('skips batch call when day has no matching rows and no new power creates', async () => {
-    // ConditionalExpression at L262 — if guard is mutated to `true`, an empty
-    // batch would be sent. Provide rows on a non-selected day so all the
-    // per-day filters return empty.
+    // ConditionalExpression at L262 — a `true`-mutated guard would still call
+    // batchMutate with all-empty arrays. Force the no-op path: rows live on a
+    // non-selected day (so per-day filters return empty), and isPowerEnabled
+    // is true on the selected day (so newEnabled=false → no powerCreates).
     trpcMock.overrides.allLeft = {
       temperature: [{ id: 1, dayOfWeek: 'friday', enabled: true }],
       power: [{ id: 2, dayOfWeek: 'friday', enabled: true }],
       alarm: [{ id: 3, dayOfWeek: 'friday', enabled: true }],
     }
+    trpcMock.overrides.day = {
+      temperature: [], power: [{ id: 99, enabled: true }], alarm: [],
+    }
     const { result } = renderHook(() => useSchedule())
-    // Selected day defaults to monday — no rows there.
+    // Selected day defaults to monday — no allLeft rows there.
     await act(async () => {
       await result.current.toggleAllSchedules()
+      vi.runAllTimers()
     })
-    // Power create is added because newEnabled=true → still a create.
-    // But mutation runs because creates.power.length > 0.
-    // To force the no-op path we disable newEnabled by pre-enabling power on monday:
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
   })
 
   it('only acts on the selected day (MethodExpression .filter survivor at L234)', async () => {
