@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Globe, Thermometer, RotateCcw, Droplets, Timer, Lightbulb, Loader2 } from 'lucide-react'
+import { CheckCircle2, Globe, Thermometer, RotateCcw, Droplets, Timer, Lightbulb, Loader2, ShieldAlert } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Toggle } from './Toggle'
 import { TimeInput } from '../Schedule/TimeInput'
@@ -19,6 +19,12 @@ interface DeviceSettings {
   ledNightStartTime: string | null
   ledNightEndTime: string | null
   globalMaxOnHours: number | null
+  pumpStallProtectionEnabled: boolean
+  pumpStallRpmThreshold: number
+  pumpStallDwellSamples: number
+  pumpStallAutoRecoveryEnabled: boolean
+  pumpStallRecoveryRpm: number
+  pumpStallRecoverySamples: number
 }
 
 const DEFAULT_MAX_ON_HOURS = 12
@@ -65,6 +71,12 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   const [ledNightBrightness, setLedNightBrightness] = useState(device.ledNightBrightness)
   const [ledNightStart, setLedNightStart] = useState(device.ledNightStartTime ?? '22:00')
   const [ledNightEnd, setLedNightEnd] = useState(device.ledNightEndTime ?? '07:00')
+  const [pumpStallEnabled, setPumpStallEnabled] = useState(device.pumpStallProtectionEnabled)
+  const [pumpStallThreshold, setPumpStallThreshold] = useState(device.pumpStallRpmThreshold)
+  const [pumpStallDwell, setPumpStallDwell] = useState(device.pumpStallDwellSamples)
+  const [pumpAutoRecover, setPumpAutoRecover] = useState(device.pumpStallAutoRecoveryEnabled)
+  const [pumpRecoveryRpm, setPumpRecoveryRpm] = useState(device.pumpStallRecoveryRpm)
+  const [pumpRecoverySamples, setPumpRecoverySamples] = useState(device.pumpStallRecoverySamples)
 
   // Sync from server data when it changes
   useEffect(() => {
@@ -82,6 +94,12 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     setLedNightBrightness(device.ledNightBrightness)
     setLedNightStart(device.ledNightStartTime ?? '22:00')
     setLedNightEnd(device.ledNightEndTime ?? '07:00')
+    setPumpStallEnabled(device.pumpStallProtectionEnabled)
+    setPumpStallThreshold(device.pumpStallRpmThreshold)
+    setPumpStallDwell(device.pumpStallDwellSamples)
+    setPumpAutoRecover(device.pumpStallAutoRecoveryEnabled)
+    setPumpRecoveryRpm(device.pumpStallRecoveryRpm)
+    setPumpRecoverySamples(device.pumpStallRecoverySamples)
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [device])
 
@@ -114,6 +132,12 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     ledNightBrightness: number
     ledNightStartTime: string
     ledNightEndTime: string
+    pumpStallProtectionEnabled: boolean
+    pumpStallRpmThreshold: number
+    pumpStallDwellSamples: number
+    pumpStallAutoRecoveryEnabled: boolean
+    pumpStallRecoveryRpm: number
+    pumpStallRecoverySamples: number
   }>) {
     mutation.mutate(updates)
   }
@@ -221,7 +245,44 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     save({ ledNightEndTime: time })
   }
 
+  function handlePumpStallToggle() {
+    const next = !pumpStallEnabled
+    setPumpStallEnabled(next)
+    save({ pumpStallProtectionEnabled: next })
+  }
+
+  function handlePumpStallThreshold(rpm: number) {
+    const clamped = Math.max(100, Math.min(1500, Math.round(rpm)))
+    setPumpStallThreshold(clamped)
+    save({ pumpStallRpmThreshold: clamped })
+  }
+
+  function handlePumpStallDwell(samples: number) {
+    const clamped = Math.max(1, Math.min(10, Math.round(samples)))
+    setPumpStallDwell(clamped)
+    save({ pumpStallDwellSamples: clamped })
+  }
+
+  function handlePumpAutoRecoverToggle() {
+    const next = !pumpAutoRecover
+    setPumpAutoRecover(next)
+    save({ pumpStallAutoRecoveryEnabled: next })
+  }
+
+  function handlePumpRecoveryRpm(rpm: number) {
+    const clamped = Math.max(500, Math.min(3000, Math.round(rpm)))
+    setPumpRecoveryRpm(clamped)
+    save({ pumpStallRecoveryRpm: clamped })
+  }
+
+  function handlePumpRecoverySamples(samples: number) {
+    const clamped = Math.max(1, Math.min(10, Math.round(samples)))
+    setPumpRecoverySamples(clamped)
+    save({ pumpStallRecoverySamples: clamped })
+  }
+
   const showToast = isPending || savedFlash
+
 
   return (
     <div className="space-y-4">
@@ -480,6 +541,109 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
                 <span>100%</span>
               </div>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Pump safety */}
+      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ShieldAlert size={16} className={pumpStallEnabled ? 'text-red-400' : 'text-zinc-400'} />
+            <span className="text-sm font-medium text-zinc-300">Pump safety</span>
+          </div>
+          <Toggle
+            enabled={pumpStallEnabled}
+            onToggle={handlePumpStallToggle}
+            disabled={isPending}
+            label="Toggle pump stall protection"
+          />
+        </div>
+        <p className="mb-3 text-xs text-zinc-500">
+          When the pump RPM stays under the threshold for the dwell window, the side powers off until you re-enable it.
+        </p>
+        {pumpStallEnabled && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="pumpThresholdRpm" className="text-sm text-zinc-300">
+                Trip threshold (RPM)
+              </label>
+              <input
+                id="pumpThresholdRpm"
+                type="number"
+                min={100}
+                max={1500}
+                step={50}
+                value={pumpStallThreshold}
+                onChange={e => handlePumpStallThreshold(Number(e.target.value))}
+                disabled={isPending}
+                className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="pumpStallDwell" className="text-sm text-zinc-300">
+                Dwell samples
+              </label>
+              <input
+                id="pumpStallDwell"
+                type="number"
+                min={1}
+                max={10}
+                step={1}
+                value={pumpStallDwell}
+                onChange={e => handlePumpStallDwell(Number(e.target.value))}
+                disabled={isPending}
+                className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+              />
+            </div>
+            <p className="text-xs text-zinc-500">
+              Consecutive sub-threshold frames before tripping. Frames arrive every ~60 seconds.
+            </p>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-zinc-300">Auto-recover when pump returns</span>
+              <Toggle
+                enabled={pumpAutoRecover}
+                onToggle={handlePumpAutoRecoverToggle}
+                disabled={isPending}
+                label="Toggle pump auto-recovery"
+              />
+            </div>
+            {pumpAutoRecover && (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <label htmlFor="pumpRecoveryRpm" className="text-sm text-zinc-300">
+                    Recovery RPM
+                  </label>
+                  <input
+                    id="pumpRecoveryRpm"
+                    type="number"
+                    min={500}
+                    max={3000}
+                    step={50}
+                    value={pumpRecoveryRpm}
+                    onChange={e => handlePumpRecoveryRpm(Number(e.target.value))}
+                    disabled={isPending}
+                    className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <label htmlFor="pumpRecoverySamples" className="text-sm text-zinc-300">
+                    Recovery samples
+                  </label>
+                  <input
+                    id="pumpRecoverySamples"
+                    type="number"
+                    min={1}
+                    max={10}
+                    step={1}
+                    value={pumpRecoverySamples}
+                    onChange={e => handlePumpRecoverySamples(Number(e.target.value))}
+                    disabled={isPending}
+                    className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+                  />
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

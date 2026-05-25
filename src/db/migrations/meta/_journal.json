@@ -71,6 +71,13 @@
       "when": 1778285875940,
       "tag": "0009_polite_earthquake",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1779732358053,
+      "tag": "0010_greedy_hercules",
+      "breakpoints": true
     }
   ]
 }

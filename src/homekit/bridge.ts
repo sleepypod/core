@@ -31,6 +31,7 @@ const ADVERTISER = {
 type Advertiser = typeof ADVERTISER[keyof typeof ADVERTISER]
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import { buildAmbientSensor } from './accessories/ambientSensor'
+import { buildPumpHealthSensor } from './accessories/pumpHealthSensor'
 import { buildOccupancySensor } from './accessories/occupancySensor'
 import { buildPowerSwitch } from './accessories/powerSwitch'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
@@ -196,6 +197,18 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
   ambientAcc.addService(ambient.service)
   accessory.addBridgedAccessory(ambientAcc)
   localStoppers.push(ambient.stop)
+
+  for (const side of ['left', 'right'] as const) {
+    const pump = buildPumpHealthSensor(side)
+    const pumpAcc = wrapAccessory(
+      `Pod pump ${side}`,
+      `pump-${side}`,
+      identity.username,
+    )
+    pumpAcc.addService(pump.service)
+    accessory.addBridgedAccessory(pumpAcc)
+    localStoppers.push(pump.stop)
+  }
 
   try {
     await accessory.publish({

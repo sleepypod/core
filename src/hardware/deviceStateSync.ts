@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { waterLevelReadings, flowReadings } from '@/src/db/biometrics-schema'
+import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
 import type { DeviceStatus, Side } from './types'
 
 /**
@@ -238,6 +239,32 @@ export class DeviceStateSync {
     }
   }
 
+  /** Look up the side's commanded state and feed the pump stall guard. */
+  private async runStallGuard(side: Side, rpm: number): Promise<void> {
+    try {
+      const [row] = db
+        .select({
+          isPowered: deviceState.isPowered,
+          targetTemperature: deviceState.targetTemperature,
+        })
+        .from(deviceState)
+        .where(eq(deviceState.side, side))
+        .limit(1)
+        .all()
+      const expectedActive = Boolean(row?.isPowered && row.targetTemperature != null)
+      await pumpStallOnFrame({
+        side,
+        rpm,
+        expectedActive,
+        preStallTarget: row?.targetTemperature ?? null,
+        preStallDurationSeconds: expectedActive ? 28800 : null,
+      })
+    }
+    catch (err) {
+      console.warn('[deviceStateSync] pump stall guard call failed:', err instanceof Error ? err.message : err)
+    }
+  }
+
   /** Log an anomaly warning, rate-limited per anomaly type. */
   private logAnomaly(type: string, message: string, now: number): void {
     const lastLog = this.lastAnomalyLog[type] ?? 0
@@ -255,6 +282,12 @@ export class DeviceStateSync {
     const rightRpm = frzHealth.right.pump.rpm
     const leftFlowCd = frzHealth.left.temps?.flowrate != null ? Math.round(frzHealth.left.temps.flowrate * 100) : NaN
     const rightFlowCd = frzHealth.right.temps?.flowrate != null ? Math.round(frzHealth.right.temps.flowrate * 100) : NaN
+
+    // Feed the per-side stall guard. Reads current device_state to derive
+    // expectedActive — a side that's commanded off should not trip on
+    // RPM = 0 since that is the correct value.
+    void this.runStallGuard('left', leftRpm)
+    void this.runStallGuard('right', rightRpm)
 
     // Pump running but flowrate missing — possible sensor fault
     if (leftRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(leftFlowCd)) {

@@ -124,6 +124,9 @@ describe('settings.getAll', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const sides = [
@@ -195,6 +198,9 @@ describe('settings.updateDevice', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const updated = { ...current, timezone: 'America/New_York', updatedAt: new Date(1) }
@@ -214,6 +220,9 @@ describe('settings.updateDevice', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const updated = { ...current, primePodDaily: true, primePodTime: '15:00' }
@@ -288,6 +297,9 @@ describe('settings.updateDevice', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     dbState.txRowsQueue.push([current])
@@ -307,6 +319,9 @@ describe('settings.updateDevice', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const updated = { ...current, homekitEnabled: true }
@@ -461,6 +476,9 @@ const baseDevice = {
   ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
   ledNightStartTime: '22:00', ledNightEndTime: '07:00',
   globalMaxOnHours: null, homekitEnabled: false,
+  pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+  pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+  pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
   createdAt: new Date(0), updatedAt: new Date(0),
 }
 

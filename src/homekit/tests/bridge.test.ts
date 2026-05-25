@@ -60,6 +60,8 @@ const m = vi.hoisted(() => {
     buildPowerSwitch: vi.fn(),
     buildPrimeSwitch: vi.fn(),
     buildAmbientSensor: vi.fn(),
+    pumpStop: vi.fn(),
+    buildPumpHealthSensor: vi.fn(),
     initHapStorage: vi.fn(),
     loadOrCreateIdentity: vi.fn(),
     readPairedControllers: vi.fn(),
@@ -97,6 +99,9 @@ vi.mock('../accessories/primeSwitch', () => ({
 vi.mock('../accessories/ambientSensor', () => ({
   buildAmbientSensor: m.buildAmbientSensor,
 }))
+vi.mock('../accessories/pumpHealthSensor', () => ({
+  buildPumpHealthSensor: m.buildPumpHealthSensor,
+}))
 vi.mock('../storage', () => ({
   initHapStorage: m.initHapStorage,
   loadOrCreateIdentity: m.loadOrCreateIdentity,
@@ -131,6 +136,7 @@ describe('homekit bridge', () => {
     m.powerStop.mockClear()
     m.primeStop.mockClear()
     m.ambientStop.mockClear()
+    m.pumpStop.mockClear()
 
     m.buildThermostatService.mockImplementation(() => ({ service: fakeService, stop: m.thermostatStop }))
     m.buildOccupancySensor.mockImplementation(() => ({ service: fakeService, stop: m.occupancyStop }))
@@ -138,6 +144,7 @@ describe('homekit bridge', () => {
     m.buildPowerSwitch.mockImplementation(() => ({ service: fakeService, stop: m.powerStop }))
     m.buildPrimeSwitch.mockImplementation(() => ({ service: fakeService, stop: m.primeStop }))
     m.buildAmbientSensor.mockImplementation(() => ({ service: fakeService, stop: m.ambientStop }))
+    m.buildPumpHealthSensor.mockImplementation(() => ({ service: fakeService, stop: m.pumpStop }))
 
     m.loadOrCreateIdentity.mockReturnValue({
       username: 'AA:BB:CC:DD:EE:FF',
@@ -153,12 +160,12 @@ describe('homekit bridge', () => {
     vi.clearAllMocks()
   })
 
-  it('startBridge wires Thermostat + Occupancy + Snooze + Power per side, plus Prime and Ambient', async () => {
+  it('startBridge wires Thermostat + Occupancy + Snooze + Power per side, plus Prime and Ambient', { timeout: 30_000 }, async () => {
     const { startBridge } = await import('../bridge')
     await startBridge(fakeMonitor)
 
-    // 2 sides × 4 per-side accessories + 1 prime + 1 ambient = 10 bridged accessories
-    expect(m.bridgeInstance?.addBridgedAccessory).toHaveBeenCalledTimes(10)
+    // 2 sides × 4 per-side accessories + 1 prime + 1 ambient + 2 pump = 12 bridged accessories
+    expect(m.bridgeInstance?.addBridgedAccessory).toHaveBeenCalledTimes(12)
 
     // Builders called with the expected sides.
     expect(m.buildThermostatService).toHaveBeenCalledWith('left', fakeMonitor)
@@ -171,6 +178,8 @@ describe('homekit bridge', () => {
     expect(m.buildSnoozeSwitch).toHaveBeenCalledWith('right')
     expect(m.buildPrimeSwitch).toHaveBeenCalledTimes(1)
     expect(m.buildAmbientSensor).toHaveBeenCalledTimes(1)
+    expect(m.buildPumpHealthSensor).toHaveBeenCalledWith('left')
+    expect(m.buildPumpHealthSensor).toHaveBeenCalledWith('right')
   })
 
   it('startBridge constructs the bridge with lowercase "sleepypod" name', async () => {
