@@ -251,16 +251,27 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     save({ pumpStallProtectionEnabled: next })
   }
 
+  // Pump-safety number inputs: update state on every keystroke but only clamp
+  // + save on blur so partial values like "5" → "500" aren't clamped to the
+  // min mid-type and don't fire a mutation per character.
   function handlePumpStallThreshold(rpm: number) {
-    const clamped = Math.max(100, Math.min(1500, Math.round(rpm)))
+    setPumpStallThreshold(rpm)
+  }
+
+  function commitPumpStallThreshold() {
+    const clamped = Math.max(100, Math.min(1500, Math.round(pumpStallThreshold)))
     setPumpStallThreshold(clamped)
-    save({ pumpStallRpmThreshold: clamped })
+    if (clamped !== device.pumpStallRpmThreshold) save({ pumpStallRpmThreshold: clamped })
   }
 
   function handlePumpStallDwell(samples: number) {
-    const clamped = Math.max(1, Math.min(10, Math.round(samples)))
+    setPumpStallDwell(samples)
+  }
+
+  function commitPumpStallDwell() {
+    const clamped = Math.max(1, Math.min(10, Math.round(pumpStallDwell)))
     setPumpStallDwell(clamped)
-    save({ pumpStallDwellSamples: clamped })
+    if (clamped !== device.pumpStallDwellSamples) save({ pumpStallDwellSamples: clamped })
   }
 
   function handlePumpAutoRecoverToggle() {
@@ -270,15 +281,23 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   }
 
   function handlePumpRecoveryRpm(rpm: number) {
-    const clamped = Math.max(500, Math.min(3000, Math.round(rpm)))
+    setPumpRecoveryRpm(rpm)
+  }
+
+  function commitPumpRecoveryRpm() {
+    const clamped = Math.max(500, Math.min(3000, Math.round(pumpRecoveryRpm)))
     setPumpRecoveryRpm(clamped)
-    save({ pumpStallRecoveryRpm: clamped })
+    if (clamped !== device.pumpStallRecoveryRpm) save({ pumpStallRecoveryRpm: clamped })
   }
 
   function handlePumpRecoverySamples(samples: number) {
-    const clamped = Math.max(1, Math.min(10, Math.round(samples)))
+    setPumpRecoverySamples(samples)
+  }
+
+  function commitPumpRecoverySamples() {
+    const clamped = Math.max(1, Math.min(10, Math.round(pumpRecoverySamples)))
     setPumpRecoverySamples(clamped)
-    save({ pumpStallRecoverySamples: clamped })
+    if (clamped !== device.pumpStallRecoverySamples) save({ pumpStallRecoverySamples: clamped })
   }
 
   const showToast = isPending || savedFlash
@@ -575,6 +594,7 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
                 step={50}
                 value={pumpStallThreshold}
                 onChange={e => handlePumpStallThreshold(Number(e.target.value))}
+                onBlur={commitPumpStallThreshold}
                 disabled={isPending}
                 className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
               />
@@ -591,6 +611,7 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
                 step={1}
                 value={pumpStallDwell}
                 onChange={e => handlePumpStallDwell(Number(e.target.value))}
+                onBlur={commitPumpStallDwell}
                 disabled={isPending}
                 className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
               />
@@ -621,6 +642,7 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
                     step={50}
                     value={pumpRecoveryRpm}
                     onChange={e => handlePumpRecoveryRpm(Number(e.target.value))}
+                    onBlur={commitPumpRecoveryRpm}
                     disabled={isPending}
                     className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
                   />
@@ -637,6 +659,7 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
                     step={1}
                     value={pumpRecoverySamples}
                     onChange={e => handlePumpRecoverySamples(Number(e.target.value))}
+                    onBlur={commitPumpRecoverySamples}
                     disabled={isPending}
                     className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
                   />
