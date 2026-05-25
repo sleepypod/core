@@ -175,29 +175,41 @@ export class JobManager {
   async loadSchedules(): Promise<void> {
     console.log('Loading schedules from database...')
 
+    // node-schedule's scheduleJob is synchronous and CPU-bound; registering
+    // hundreds of cron jobs in a tight loop blocks the event loop for seconds
+    // and starves the HTTP layer of the chance to flush API responses.
+    // Yielding every YIELD_EVERY iterations lets the response flush while the
+    // remainder of the rebuild continues. Incremental scheduling (issue #612)
+    // is the proper fix.
+    const YIELD_EVERY = 25
+    const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve))
+
     // Load temperature schedules
     const tempSchedules = await db.select().from(temperatureSchedules)
-    for (const sched of tempSchedules) {
-      if (sched.enabled) {
-        this.scheduleTemperature(sched)
+    for (let i = 0; i < tempSchedules.length; i++) {
+      if (tempSchedules[i].enabled) {
+        this.scheduleTemperature(tempSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load power schedules
     const powSchedules = await db.select().from(powerSchedules)
-    for (const sched of powSchedules) {
-      if (sched.enabled) {
-        this.schedulePowerOn(sched)
-        this.schedulePowerOff(sched)
+    for (let i = 0; i < powSchedules.length; i++) {
+      if (powSchedules[i].enabled) {
+        this.schedulePowerOn(powSchedules[i])
+        this.schedulePowerOff(powSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load alarm schedules
     const almSchedules = await db.select().from(alarmSchedules)
-    for (const sched of almSchedules) {
-      if (sched.enabled) {
-        this.scheduleAlarm(sched)
+    for (let i = 0; i < almSchedules.length; i++) {
+      if (almSchedules[i].enabled) {
+        this.scheduleAlarm(almSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load system schedules (priming, reboot)
