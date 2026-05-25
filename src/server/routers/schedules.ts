@@ -65,11 +65,30 @@ import { getJobManager } from '@/src/scheduler'
 import { toC } from '@/src/lib/tempUtils'
 
 /**
- * Reload schedules in the job manager after database changes
+ * Reload schedules in the job manager after database changes.
+ *
+ * Fire-and-forget: the API returns as soon as the DB row is committed, and the
+ * cron rebuild runs in the background. A reload touches every cron (357+ jobs
+ * on a typical pod), which takes 5–10s on-device — awaiting it makes every
+ * alarm/schedule save feel broken in the UI. The reload's dirty-flag mutex
+ * already coalesces concurrent kicks, and cron jobs fire at minute boundaries
+ * far enough in the future that the brief un-registered window doesn't matter.
+ *
+ * If reload throws, log it — there is no caller left to surface the error.
+ *
+ * yggdrasil-TBD tracks a follow-up to replace this with incremental cron
+ * add/cancel so we don't rebuild the world for a single edit.
  */
-async function reloadScheduler(): Promise<void> {
-  const jobManager = await getJobManager()
-  await jobManager.reloadSchedules()
+function reloadScheduler(): void {
+  void (async () => {
+    try {
+      const jobManager = await getJobManager()
+      await jobManager.reloadSchedules()
+    }
+    catch (e) {
+      console.error('Scheduler reload failed:', e)
+    }
+  })()
 }
 
 const unitSchema = z.enum(['F', 'C']).default('F')
@@ -169,12 +188,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return created
       }
@@ -226,12 +240,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return updated
       }
@@ -275,12 +284,7 @@ export const schedulesRouter = router({
           }
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return { success: true }
       }
@@ -327,12 +331,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return created
       }
@@ -385,12 +384,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return updated
       }
@@ -434,12 +428,7 @@ export const schedulesRouter = router({
           }
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return { success: true }
       }
@@ -488,12 +477,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return created
       }
@@ -548,12 +532,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return updated
       }
@@ -597,12 +576,7 @@ export const schedulesRouter = router({
           }
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return { success: true }
       }
@@ -727,12 +701,7 @@ export const schedulesRouter = router({
           }
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        reloadScheduler()
 
         return { success: true }
       }

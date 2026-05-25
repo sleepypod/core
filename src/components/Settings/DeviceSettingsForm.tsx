@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Globe, Thermometer, RotateCcw, Droplets, Timer } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { CheckCircle2, Globe, Thermometer, RotateCcw, Droplets, Timer, Lightbulb, Loader2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Toggle } from './Toggle'
 import { TimeInput } from '../Schedule/TimeInput'
@@ -13,6 +13,11 @@ interface DeviceSettings {
   rebootTime: string | null
   primePodDaily: boolean
   primePodTime: string | null
+  ledNightModeEnabled: boolean
+  ledDayBrightness: number
+  ledNightBrightness: number
+  ledNightStartTime: string | null
+  ledNightEndTime: string | null
   globalMaxOnHours: number | null
 }
 
@@ -55,6 +60,11 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   const [primePodTime, setPrimePodTime] = useState(device.primePodTime ?? '14:00')
   const [maxOnEnabled, setMaxOnEnabled] = useState(device.globalMaxOnHours != null)
   const [maxOnHours, setMaxOnHours] = useState(device.globalMaxOnHours ?? DEFAULT_MAX_ON_HOURS)
+  const [ledDayBrightness, setLedDayBrightness] = useState(device.ledDayBrightness)
+  const [ledNightEnabled, setLedNightEnabled] = useState(device.ledNightModeEnabled)
+  const [ledNightBrightness, setLedNightBrightness] = useState(device.ledNightBrightness)
+  const [ledNightStart, setLedNightStart] = useState(device.ledNightStartTime ?? '22:00')
+  const [ledNightEnd, setLedNightEnd] = useState(device.ledNightEndTime ?? '07:00')
 
   // Sync from server data when it changes
   useEffect(() => {
@@ -67,12 +77,27 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     setPrimePodTime(device.primePodTime ?? '14:00')
     setMaxOnEnabled(device.globalMaxOnHours != null)
     setMaxOnHours(device.globalMaxOnHours ?? DEFAULT_MAX_ON_HOURS)
+    setLedDayBrightness(device.ledDayBrightness)
+    setLedNightEnabled(device.ledNightModeEnabled)
+    setLedNightBrightness(device.ledNightBrightness)
+    setLedNightStart(device.ledNightStartTime ?? '22:00')
+    setLedNightEnd(device.ledNightEndTime ?? '07:00')
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [device])
 
+  const [savedFlash, setSavedFlash] = useState(false)
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mutation = trpc.settings.updateDevice.useMutation({
-    onSuccess: () => utils.settings.getAll.invalidate(),
+    onSuccess: () => {
+      utils.settings.getAll.invalidate()
+      setSavedFlash(true)
+      if (savedTimer.current) clearTimeout(savedTimer.current)
+      savedTimer.current = setTimeout(() => setSavedFlash(false), 1500)
+    },
   })
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+  }, [])
 
   const isPending = mutation.isPending
 
@@ -84,6 +109,11 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     primePodDaily: boolean
     primePodTime: string
     globalMaxOnHours: number | null
+    ledNightModeEnabled: boolean
+    ledDayBrightness: number
+    ledNightBrightness: number
+    ledNightStartTime: string
+    ledNightEndTime: string
   }>) {
     mutation.mutate(updates)
   }
@@ -143,8 +173,83 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     if (maxOnEnabled) save({ globalMaxOnHours: clamped })
   }
 
+  // LED brightness handlers — sliders update local state continuously, but the
+  // mutation only fires on pointer/touch release so dragging doesn't flood the
+  // hardware with SET_SETTINGS commands.
+  function handleLedDayChange(brightness: number) {
+    setLedDayBrightness(brightness)
+  }
+
+  function commitLedDay() {
+    if (ledDayBrightness !== device.ledDayBrightness) {
+      save({ ledDayBrightness })
+    }
+  }
+
+  function handleLedNightToggle() {
+    const newVal = !ledNightEnabled
+    setLedNightEnabled(newVal)
+    if (newVal) {
+      save({
+        ledNightModeEnabled: true,
+        ledNightStartTime: ledNightStart,
+        ledNightEndTime: ledNightEnd,
+      })
+    }
+    else {
+      save({ ledNightModeEnabled: false })
+    }
+  }
+
+  function handleLedNightBrightnessChange(brightness: number) {
+    setLedNightBrightness(brightness)
+  }
+
+  function commitLedNightBrightness() {
+    if (ledNightBrightness !== device.ledNightBrightness) {
+      save({ ledNightBrightness })
+    }
+  }
+
+  function handleLedNightStartChange(time: string) {
+    setLedNightStart(time)
+    save({ ledNightStartTime: time })
+  }
+
+  function handleLedNightEndChange(time: string) {
+    setLedNightEnd(time)
+    save({ ledNightEndTime: time })
+  }
+
+  const showToast = isPending || savedFlash
+
   return (
     <div className="space-y-4">
+      <div
+        aria-live="polite"
+        className={`pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-4 transition-opacity duration-200 sm:bottom-28 ${
+          showToast ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        <div className="flex items-center gap-2 rounded-full bg-zinc-800/95 px-3 py-1.5 text-xs font-medium text-zinc-200 shadow-lg ring-1 ring-zinc-700/60 backdrop-blur">
+          {isPending
+            ? (
+                <>
+                  <Loader2 size={12} className="animate-spin text-sky-400" />
+                  Saving…
+                </>
+              )
+            : savedFlash
+              ? (
+                  <>
+                    <CheckCircle2 size={12} className="text-emerald-400" />
+                    Saved
+                  </>
+                )
+              : null}
+        </div>
+      </div>
+
       {/* Timezone */}
       <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
         <div className="mb-3 flex items-center gap-2">
@@ -286,6 +391,95 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
               disabled={isPending}
               className="h-11 w-24 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
             />
+          </div>
+        )}
+      </div>
+
+      {/* LED brightness + night mode */}
+      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <Lightbulb size={16} className="text-zinc-400" />
+          <span className="text-sm font-medium text-zinc-300">Pod LED</span>
+        </div>
+
+        <div className="mb-4">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs font-medium text-zinc-400">Brightness</span>
+            <span className="text-xs font-medium text-white">
+              {ledDayBrightness}
+              %
+            </span>
+          </div>
+          <input
+            aria-label="LED brightness"
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={ledDayBrightness}
+            onChange={e => handleLedDayChange(parseInt(e.target.value, 10))}
+            onPointerUp={commitLedDay}
+            onKeyUp={commitLedDay}
+            disabled={isPending}
+            className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-40 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
+          />
+          <div className="flex justify-between text-[10px] text-zinc-600">
+            <span>0%</span>
+            <span>100%</span>
+          </div>
+        </div>
+
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-sm font-medium text-zinc-300">Night Mode</span>
+          <Toggle
+            enabled={ledNightEnabled}
+            onToggle={handleLedNightToggle}
+            disabled={isPending}
+            label="Toggle LED night mode"
+          />
+        </div>
+        {ledNightEnabled && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <TimeInput
+                label="Start"
+                value={ledNightStart}
+                onChange={handleLedNightStartChange}
+                disabled={isPending}
+              />
+              <TimeInput
+                label="End"
+                value={ledNightEnd}
+                onChange={handleLedNightEndChange}
+                disabled={isPending}
+              />
+            </div>
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-400">Night brightness</span>
+                <span className="text-xs font-medium text-white">
+                  {ledNightBrightness}
+                  %
+                </span>
+              </div>
+              <input
+                aria-label="LED night brightness"
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={ledNightBrightness}
+                onChange={e => handleLedNightBrightnessChange(parseInt(e.target.value, 10))}
+                onPointerUp={commitLedNightBrightness}
+                onKeyUp={commitLedNightBrightness}
+                disabled={isPending}
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-40 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
+              />
+              <div className="flex justify-between text-[10px] text-zinc-600">
+                <span>0%</span>
+                <span>100%</span>
+              </div>
+            </div>
           </div>
         )}
       </div>

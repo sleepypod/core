@@ -49,12 +49,28 @@ Response: {data}\n\n
 |------|---------|----------|-------------|
 | `0` | HELLO | — | Ping/connectivity check |
 | `5`/`6` | ALARM_LEFT/RIGHT | hex CBOR | Configure alarm |
-| `8` | SET_SETTINGS | hex CBOR | LED brightness, etc. |
+| `8` | SET_SETTINGS | hex CBOR | Settings map — `{v, gl, gr, lb}` |
 | `9`/`10` | TEMP_DURATION_L/R | seconds | Auto-off duration |
 | `11`/`12` | TEMP_LEVEL_L/R | -100 to 100 | Set temperature level |
 | `13` | PRIME | — | Start water priming |
 | `14` | DEVICE_STATUS | — | Get all device status |
 | `16` | ALARM_CLEAR | 0 or 1 | Clear alarm (0=left, 1=right) |
+
+### SET_SETTINGS CBOR schema
+
+Frank's `SetSettings` handler reads a CBOR map with **2-character keys** and
+**merge semantics** — send only what you want to change. Unknown keys are
+silently dropped; the write succeeds but the setting never changes.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `v`  | uint   | Schema version (frank emits `1`) |
+| `gl` | uint   | Goal temperature left (frank-internal scale) |
+| `gr` | uint   | Goal temperature right |
+| `lb` | uint 0–100 | LED brightness percentage |
+
+Pitfall: writing `{ledBrightness: 10}` is a silent no-op. Always use the
+2-char key. See `src/scheduler/jobManager.ts::sendLedBrightness`.
 
 ### Temperature Scale
 
