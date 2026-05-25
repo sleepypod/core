@@ -80,7 +80,7 @@ async function applyScheduler(fn: (jm: Awaited<ReturnType<typeof getJobManager>>
     await fn(jobManager)
   }
   catch (e) {
-    console.error('Scheduler reload failed:', e)
+    console.error('Scheduler update failed:', e)
   }
 }
 

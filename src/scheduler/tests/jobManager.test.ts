@@ -740,6 +740,23 @@ describe('JobManager incremental upsert/cancel', () => {
     expect(sendLed).toHaveBeenCalledWith(80)
     expect(elapsed).toBeLessThan(200)
   })
+
+  it('upsertAwayMode schedules away-start and away-return when values are non-null', () => {
+    const future = new Date(Date.now() + 7 * 86_400_000).toISOString()
+    const later = new Date(Date.now() + 8 * 86_400_000).toISOString()
+    manager.upsertAwayMode('left', future, later)
+    expect(manager.getScheduler().getJob('away-start-left')).toBeDefined()
+    expect(manager.getScheduler().getJob('away-return-left')).toBeDefined()
+  })
+
+  it('upsertAwayMode cancels existing jobs when both inputs are null', () => {
+    const future = new Date(Date.now() + 7 * 86_400_000).toISOString()
+    const later = new Date(Date.now() + 8 * 86_400_000).toISOString()
+    manager.upsertAwayMode('left', future, later)
+    manager.upsertAwayMode('left', null, null)
+    expect(manager.getScheduler().getJob('away-start-left')).toBeUndefined()
+    expect(manager.getScheduler().getJob('away-return-left')).toBeUndefined()
+  })
 })
 // ─────────────────────────────────────────────────────────────────────────────
 // sendLedBrightness CBOR wire format. Frank's SetSettings (cmd 8) silently

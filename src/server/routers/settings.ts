@@ -327,7 +327,7 @@ export const settingsRouter = router({
           await applySettingsSchedulerChanges(input)
         }
         catch (e) {
-          console.error('Scheduler reload failed:', e)
+          console.error('Scheduler update failed:', e)
         }
 
         // Immediate LED apply when brightness fields or the night-mode toggle
@@ -519,7 +519,7 @@ export const settingsRouter = router({
             jobManager.upsertAwayMode(updated.side, updated.awayStart, updated.awayReturn)
           }
           catch (e) {
-            console.error('Scheduler reload failed:', e)
+            console.error('Scheduler update failed:', e)
           }
         }
 

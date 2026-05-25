@@ -201,12 +201,17 @@ describe('schedules.batchUpdate', () => {
           { side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75 },
           { side: 'left', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 75 },
         ],
+        alarm: [
+          { side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80 },
+          { side: 'left', dayOfWeek: 'tuesday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80 },
+        ],
       },
     })
 
     // One upsert per row inserted — no global wipe via reloadSchedules.
     expect(mocks.upsertTemperatureJob).toHaveBeenCalledTimes(3)
     expect(mocks.upsertPowerJob).toHaveBeenCalledTimes(2)
+    expect(mocks.upsertAlarmJob).toHaveBeenCalledTimes(2)
     expect(mocks.reloadSchedules).not.toHaveBeenCalled()
   })
 
@@ -356,7 +361,7 @@ describe('schedules.temperature CRUD', () => {
 
     expect(updated.temperature).toBe(72)
     expect(updated.enabled).toBe(false)
-    expect(errSpy).toHaveBeenCalledWith('Scheduler reload failed:', expect.any(Error))
+    expect(errSpy).toHaveBeenCalledWith('Scheduler update failed:', expect.any(Error))
     errSpy.mockRestore()
   })
 
