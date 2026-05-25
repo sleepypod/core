@@ -410,8 +410,37 @@ preflight_free_sleep_conflict() {
 }
 
 # Check if running as root
+#
+# Getting a root shell on a fresh Pod 5 is a one-time JTAG bootstrap, not
+# something this installer can do for you. The canonical procedure is:
+# TC2070-IDC + FTDI FT232RL on the JTAG header, interrupt U-Boot, boot
+# single-user with `init=/bin/bash`, mount rw, then `passwd root` and
+# `passwd rewt`. See scripts/README.md for details.
+#
+# `rewt` is a USER ACCOUNT on the pod (Eight's stock service user, has a
+# shell), not a tool — you set its password during the JTAG step and use it
+# later for ssh when `PermitRootLogin no` blocks direct root login.
+#
+# `dac` is also a system account but ships as nologin — sshd refuses
+# interactive logins for it, which is the "dac not allowed" message you'll
+# see if you try `ssh dac@<pod>`. That's expected; don't try to "fix" it.
+#
+# Typical Pod 5 install flow (after JTAG bootstrap):
+#   ssh -p 8822 rewt@<pod>          # PasswordAuthentication=yes temporarily
+#   su -                            # switch to root with the passwd you set
+#   bash scripts/install            # run this script
+# The optional SSH-setup block at the end of this script writes your key to
+# /root/.ssh/authorized_keys and re-hardens sshd (port 8822, key-only, no
+# password auth, no root password login). After that you can ssh directly as
+# root with your key.
 if [ "$EUID" -ne 0 ]; then
-  echo "Error: This script must be run as root (use sudo)" >&2
+  echo "Error: This script must be run as root (use sudo or su -)" >&2
+  echo "" >&2
+  echo "On a freshly jailbroken Pod 5 the stock image disables direct root" >&2
+  echo "ssh and refuses login as the \`dac\` service account. SSH in as the" >&2
+  echo "\`rewt\` user (password set during the JTAG bootstrap), then \`su -\`" >&2
+  echo "to root before running this script." >&2
+  echo "See scripts/README.md (\"Getting root on Pod 5\") for the full flow." >&2
   exit 1
 fi
 
