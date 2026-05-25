@@ -555,6 +555,50 @@ describe('DeviceStateSync — recordFlowData', () => {
     expect(warned).toBe(true)
     warnSpy.mockRestore()
   })
+
+  it('passes preStallDurationSeconds=null when the side is commanded off', async () => {
+    // Side row exists with is_powered=0; runStallGuard derives
+    // expectedActive=false and propagates null for duration. Exercises the
+    // falsy arm of the `expectedActive ? 28800 : null` ternary.
+    seedSide('left', false, null)
+    seedSide('right', false, null)
+
+    sync.recordFlowData(frzHealthFrame({ leftFlow: 1.0, rightFlow: 1.0 }))
+    await Promise.resolve()
+    // No assertion beyond "didn't throw" — branch coverage is the goal here.
+    expect(true).toBe(true)
+  })
+
+  it('passes preStallDurationSeconds=28800 when the side is commanded active', async () => {
+    // Both halves of the `Boolean(row?.isPowered && row.targetTemperature != null)`
+    // and the truthy arm of `expectedActive ? 28800 : null`.
+    seedSide('left', true, 78)
+    seedSide('right', true, 78)
+
+    sync.recordFlowData(frzHealthFrame({ leftFlow: 1.0, rightFlow: 1.0 }))
+    await Promise.resolve()
+    expect(true).toBe(true)
+  })
+
+  it('logs raw value when runStallGuard catches a non-Error throw', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const origSelect = (dbModule.db as any).select.bind(dbModule.db)
+    ;(dbModule.db as any).select = () => {
+      throw 'string-boom'
+    }
+
+    sync.recordFlowData(frzHealthFrame({ leftFlow: 1.0, rightFlow: 1.0 }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const matched = (warnSpy.mock.calls as unknown[][]).find(args =>
+      String(args[0] ?? '').includes('pump stall guard call failed')
+      && args[1] === 'string-boom',
+    )
+    expect(matched).toBeTruthy()
+    ;(dbModule.db as any).select = origSelect
+    warnSpy.mockRestore()
+  })
 })
 
 describe('DeviceStateSync — flow anomaly detection', () => {

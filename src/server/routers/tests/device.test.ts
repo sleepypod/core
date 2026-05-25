@@ -58,6 +58,10 @@ const pumpStallMock = vi.hoisted(() => ({
   shouldBlock: vi.fn<(side: 'left' | 'right') => boolean>(() => false),
 }))
 
+const pumpStallNotificationMock = vi.hoisted(() => ({
+  getAllPumpStallNotices: vi.fn<() => { left: unknown, right: unknown }>(() => ({ left: null, right: null })),
+}))
+
 const dbState = vi.hoisted(() => ({
   rowsQueue: [] as unknown[][],
   pop(): unknown[] { return dbState.rowsQueue.shift() ?? [] },
@@ -91,6 +95,7 @@ vi.mock('@/src/hardware/dacTransport', () => transportMock)
 vi.mock('@/src/hardware/sharedClient', () => ({ getSharedHardwareClient: sharedClientMock.getSharedHardwareClient }))
 vi.mock('@/src/hardware/deviceStateSync', () => stateSyncMock)
 vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
+vi.mock('@/src/hardware/pumpStallNotification', () => pumpStallNotificationMock)
 vi.mock('@/src/db', () => ({
   db: dbMock,
   biometricsDb: {},
@@ -126,6 +131,7 @@ beforeEach(() => {
   sharedClientMock.sendRaw.mockReset()
   stateSyncMock.markSideMutated.mockReset()
   pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
+  pumpStallNotificationMock.getAllPumpStallNotices.mockReset().mockReturnValue({ left: null, right: null })
   dbState.rowsQueue.length = 0
   dbMock.select.mockClear()
   dbMock.update.mockClear()
@@ -148,6 +154,22 @@ describe('device.getStatus', () => {
     const result = await caller.getStatus({ unit: 'C' })
     // 80°F → 26.7°C (rounded to one decimal by router)
     expect(result.leftSide.currentTemperature).toBeCloseTo(26.7, 1)
+  })
+
+  it('exposes pumpStallNotifications when one side has an active notice', async () => {
+    pumpStallNotificationMock.getAllPumpStallNotices.mockReturnValueOnce({
+      left: null,
+      right: { alertId: 42, trippedAt: 1700000000, rpm: 50, restore: null },
+    })
+    const result = await caller.getStatus({})
+    expect(result.pumpStallNotifications?.right?.alertId).toBe(42)
+    expect(result.pumpStallNotifications?.left).toBeNull()
+  })
+
+  it('omits pumpStallNotifications when both sides are null', async () => {
+    pumpStallNotificationMock.getAllPumpStallNotices.mockReturnValueOnce({ left: null, right: null })
+    const result = await caller.getStatus({})
+    expect(result.pumpStallNotifications).toBeUndefined()
   })
 })
 

@@ -1185,6 +1185,95 @@ describe('mqttBridge — publishState DB failures', () => {
     warn.mockRestore()
     await shutdownMqttBridge()
   })
+
+  it('logs the raw value when device_state query throws a non-Error', async () => {
+    // Covers the `err instanceof Error ? err.message : err` non-Error arm.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    dbMock.state.throwOnDeviceState = 'ds-string-err'
+
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const matched = (warn.mock.calls as unknown[][]).some(args =>
+      String(args[0] ?? '').includes('[mqtt] device_state publish failed')
+      && args[1] === 'ds-string-err',
+    )
+    expect(matched).toBe(true)
+    warn.mockRestore()
+    await shutdownMqttBridge()
+  })
+
+  it('logs Error.message when the biometrics query throws an Error instance', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    dbMock.state.throwOnBiometrics = true // throws new Error('biometrics boom')
+
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const matched = (warn.mock.calls as unknown[][]).some(args =>
+      String(args[0] ?? '').includes('biometrics publish')
+      && args[1] === 'biometrics boom',
+    )
+    expect(matched).toBe(true)
+    warn.mockRestore()
+    await shutdownMqttBridge()
+  })
+
+  it('publishes null loop_temp_c when flow row has null flowrate', async () => {
+    // Mock returns the same row for bedTemp & flowReadings (both use the
+    // .orderBy().limit() chain). Carry both shapes so each publish picks
+    // what it needs.
+    dbMock.state.bedTempRow = {
+      timestamp: new Date('2026-01-01T00:00:00Z'),
+      ambientTemp: 2000,
+      humidity: 5000,
+      leftPumpRpm: 1900,
+      rightPumpRpm: 1900,
+      leftFlowrateCd: null,
+      rightFlowrateCd: null,
+    }
+
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const loopTempLeft = fake.publish.mock.calls.find(([t]) =>
+      String(t).endsWith('/pump/left/loop_temp_c'),
+    )
+    expect(loopTempLeft).toBeDefined()
+    const payload = JSON.parse(String(loopTempLeft?.[1]))
+    expect(payload.temperature).toBeNull()
+
+    await shutdownMqttBridge()
+  })
+
+  it('publishes pump stall as "on" when a notice is active', async () => {
+    const { setPumpStallNotice, resetPumpStallNotifications } = await import('@/src/hardware/pumpStallNotification')
+    resetPumpStallNotifications()
+    setPumpStallNotice('left', { alertId: 1, trippedAt: 100, rpm: 50, restore: null })
+
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const stallLeft = fake.publish.mock.calls.find(([t]) =>
+      String(t).endsWith('/pump/left/stall'),
+    )
+    expect(stallLeft?.[1]).toBe('on')
+
+    resetPumpStallNotifications()
+    await shutdownMqttBridge()
+  })
 })
 
 describe('mqttBridge — safePublish counters', () => {

@@ -414,4 +414,203 @@ describe('pumpStallGuard', () => {
     expect(shouldBlock('left')).toBe(false) // recovery still completes
     warn.mockRestore()
   })
+
+  it('logs the raw value when a non-Error escapes a catch handler', async () => {
+    // Covers the `err instanceof Error ? err.message : err` ternary on every
+    // catch site in trip() and autoRecover() by throwing plain strings.
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const origSelect = (dbModule.db as any).select.bind(dbModule.db)
+    // String throw from settings read.
+    ;(dbModule.db as any).select = () => {
+      throw 'settings-string-err'
+    }
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to read settings'),
+      'settings-string-err',
+    )
+    ;(dbModule.db as any).select = origSelect
+    invalidateGuardSettingsCache()
+    reset()
+    warn.mockClear()
+
+    // Warm the settings cache so readSettings doesn't trigger the next throw.
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    reset()
+
+    // String throw from device_state snapshot read on a no-preStall trip.
+    let throws = 1
+    ;(dbModule.db as any).select = (...args: unknown[]) => {
+      if (throws-- > 0) throw 'snapshot-string-err'
+      return origSelect(...args)
+    }
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('device_state snapshot read failed'),
+      'snapshot-string-err',
+    )
+    ;(dbModule.db as any).select = origSelect
+
+    // setPower throws a non-Error during trip.
+    reset()
+    setPower.mockClear()
+    setPower.mockImplementationOnce(() => {
+      throw 'setpower-string-err'
+    })
+    err.mockClear()
+    await onFrame({ side: 'right', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'right', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('hardware power-off failed'),
+      'setpower-string-err',
+    )
+
+    // device_state update throws a non-Error after trip.
+    reset()
+    const origUpdate = (dbModule.db as any).update.bind(dbModule.db)
+    ;(dbModule.db as any).update = () => {
+      throw 'dsupdate-string-err'
+    }
+    warn.mockClear()
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('device_state update failed'),
+      'dsupdate-string-err',
+    )
+    ;(dbModule.db as any).update = origUpdate
+
+    // pump_alerts insert throws a non-Error.
+    reset()
+    const origBioInsert = (dbModule.biometricsDb as any).insert.bind(dbModule.biometricsDb)
+    ;(dbModule.biometricsDb as any).insert = () => {
+      throw 'bio-string-err'
+    }
+    err.mockClear()
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('pump_alerts insert failed'),
+      'bio-string-err',
+    )
+    ;(dbModule.biometricsDb as any).insert = origBioInsert
+
+    warn.mockRestore()
+    err.mockRestore()
+  })
+
+  it('logs raw value when auto-recover paths throw non-Error values', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // Trip first.
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+    // setPower throws a non-Error during auto-recover.
+    setPower.mockImplementationOnce(() => {
+      throw 'recover-string-err'
+    })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('auto-recover hardware call failed'),
+      'recover-string-err',
+    )
+
+    // device_state restore throws a non-Error.
+    reset()
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    const origUpdate = (dbModule.db as any).update.bind(dbModule.db)
+    let throws = 1
+    ;(dbModule.db as any).update = (...args: unknown[]) => {
+      if (throws-- > 0) throw 'recover-update-err'
+      return origUpdate(...args)
+    }
+    warn.mockClear()
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('device_state restore failed'),
+      'recover-update-err',
+    )
+    ;(dbModule.db as any).update = origUpdate
+
+    // Alert update throws a non-Error.
+    reset()
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    const origBioUpdate = (dbModule.biometricsDb as any).update.bind(dbModule.biometricsDb)
+    ;(dbModule.biometricsDb as any).update = () => {
+      throw 'alert-update-err'
+    }
+    warn.mockClear()
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('alert update failed'),
+      'alert-update-err',
+    )
+    ;(dbModule.biometricsDb as any).update = origBioUpdate
+
+    warn.mockRestore()
+    err.mockRestore()
+  })
+
+  it('falls back alertId to 0 when pump_alerts insert returns no row', async () => {
+    const origBioInsert = (dbModule.biometricsDb as any).insert.bind(dbModule.biometricsDb)
+    ;(dbModule.biometricsDb as any).insert = () => ({
+      values: () => ({
+        returning: () => ({
+          all: () => [], // empty — exercises the `?? 0` fallback at L286
+        }),
+      }),
+    })
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+    expect(shouldBlock('left')).toBe(true)
+    const { alertId } = acknowledge('left')
+    expect(alertId).toBeNull()
+    ;(dbModule.biometricsDb as any).insert = origBioInsert
+  })
+
+  it('skips the alert update during auto-recover when activeAlertId is null', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // Force insert to fail so activeAlertId remains null.
+    const origBioInsert = (dbModule.biometricsDb as any).insert.bind(dbModule.biometricsDb)
+    ;(dbModule.biometricsDb as any).insert = () => {
+      throw new Error('insert fail')
+    }
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+    ;(dbModule.biometricsDb as any).insert = origBioInsert
+
+    // Spy on biometricsDb.update so we can prove it is NOT called during recover.
+    const updateSpy = vi.spyOn(dbModule.biometricsDb, 'update')
+
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+    expect(shouldBlock('left')).toBe(false)
+    expect(updateSpy).not.toHaveBeenCalled()
+    updateSpy.mockRestore()
+    warn.mockRestore()
+    err.mockRestore()
+  })
 })
