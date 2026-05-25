@@ -12,7 +12,6 @@ import {
 } from '@/src/db/schema'
 import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
-import { sendCommand } from '@/src/hardware/dacTransport'
 import { encode as cborEncode } from 'cbor-x'
 import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
@@ -511,10 +510,16 @@ export class JobManager {
    * write succeeds but the LED never changes. See docs/hardware/DAC-PROTOCOL.md.
    */
   private async sendLedBrightness(brightness: number): Promise<void> {
-    const client = getSharedHardwareClient()
-    await client.connect()
+    // Route through the client's sendRaw so the connect() check and the actual
+    // write share the same dacTransport module instance. Importing sendCommand
+    // directly from another module can land in a separate Turbopack chunk
+    // whose `transport` singleton is undefined, which makes every LED write
+    // throw "[DAC] not connected" and stalls 9–15s on a retried server start.
+    // Cast mirrors device.ts's debug-execute path — sendRaw lives on the
+    // shared client but isn't on the dev HardwareClient interface.
+    const client = getSharedHardwareClient() as unknown as { sendRaw(command: string, args?: string): Promise<string> }
     const hexCbor = Buffer.from(cborEncode({ lb: brightness })).toString('hex')
-    await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
+    await client.sendRaw(HardwareCommand.SET_SETTINGS, hexCbor)
   }
 
   /**

@@ -9,14 +9,22 @@ const setPower = vi.fn<AnyAsync>()
 const setAlarm = vi.fn<AnyAsync>()
 const startPriming = vi.fn<AnyAsync>()
 const connect = vi.fn<() => Promise<void>>()
+const sendRaw = vi.fn<(command: string, args?: string) => Promise<string>>()
 setTemperature.mockResolvedValue(undefined)
 setPower.mockResolvedValue(undefined)
 setAlarm.mockResolvedValue(undefined)
 startPriming.mockResolvedValue(undefined)
 connect.mockResolvedValue(undefined)
+// Production sendRaw guards every write with a connect check (it lives in the
+// same module as dacTransport), so the mock mirrors that — keeps the LED
+// brightness coverage that asserts on connect calls intact.
+sendRaw.mockImplementation(async () => {
+  await connect()
+  return ''
+})
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getSharedHardwareClient: () => ({ connect, setTemperature, setPower, setAlarm, startPriming }),
+  getSharedHardwareClient: () => ({ connect, setTemperature, setPower, setAlarm, startPriming, sendRaw }),
 }))
 
 vi.mock('@/src/hardware/dacTransport', () => ({

@@ -48,19 +48,29 @@ vi.mock('@/src/db/schema', () => {
   }
 })
 
-vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getSharedHardwareClient: () => ({
-    connect: vi.fn(async () => {}),
-    setTemperature: vi.fn(async () => {}),
-    setPower: vi.fn(async () => {}),
-    setAlarm: vi.fn(async () => {}),
-    startPriming: vi.fn(async () => {}),
-  }),
+vi.mock('@/src/hardware/dacTransport', () => ({
+  sendCommand: vi.fn(async () => ''),
+  connectDac: vi.fn(async () => {}),
+  isDacConnected: vi.fn(() => true),
 }))
 
-vi.mock('@/src/hardware/dacTransport', () => ({
-  sendCommand: vi.fn(async () => {}),
-}))
+vi.mock('@/src/hardware/dacMonitor.instance', async () => {
+  const { sendCommand } = await import('@/src/hardware/dacTransport')
+  return {
+    getSharedHardwareClient: () => ({
+      connect: vi.fn(async () => {}),
+      setTemperature: vi.fn(async () => {}),
+      setPower: vi.fn(async () => {}),
+      setAlarm: vi.fn(async () => {}),
+      startPriming: vi.fn(async () => {}),
+      // sendRaw is the canonical path for hardware writes that bypass the
+      // typed helpers (LED brightness, debug execute). The shared client
+      // routes through the same dacTransport instance as connect(), which
+      // is why production code must not import sendCommand directly.
+      sendRaw: vi.fn(async (command: string, arg?: string) => sendCommand(command, arg)),
+    }),
+  }
+})
 
 vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
   broadcastMutationStatus: vi.fn(),
