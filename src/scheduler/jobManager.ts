@@ -132,9 +132,12 @@ export class JobManager {
     return [hour, minute]
   }
 
-  private onJobScheduled = (job: { id: string, type: string }) => {
-    console.log(`Job scheduled: ${job.id} [${job.type}]`)
-  }
+  // No-op listener. The per-job log line synchronously hits journald which
+  // dominates reloadSchedules() cost at our job count (357+) — measured ~7s
+  // on-device for the rebuild was almost entirely journald writes.
+  // loadSchedules logs the totals at the end. Re-enable behind an env flag
+  // if you need to trace individual job registration.
+  private onJobScheduled = () => {}
 
   private onJobExecuted = (jobId: string, result: { success: boolean, error?: string }) => {
     if (result.success) {
