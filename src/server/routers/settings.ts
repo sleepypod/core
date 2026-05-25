@@ -294,6 +294,8 @@ export const settingsRouter = router({
           'ledDayBrightness' in input
           || 'ledNightBrightness' in input
           || 'ledNightModeEnabled' in input
+          || 'ledNightStartTime' in input
+          || 'ledNightEndTime' in input
         ) {
           try {
             const jobManager = await getJobManager()
