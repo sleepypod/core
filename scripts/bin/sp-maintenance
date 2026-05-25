@@ -93,7 +93,6 @@ if getent group dac &>/dev/null; then
     fi
     chown root:dac "$DEVICEINFO_DIR"
     chown root:dac "$DEVICEINFO_DIR" || { echo "ERROR: chown $DEVICEINFO_DIR failed — next-server will fail to unlink dac.sock" >&2; exit 1; }
-    chmod 2770 "$DEVICEINFO_DIR" || { echo "ERROR: chmod $DEVICEINFO_DIR failed" >&2; exit 1; }
   fi
 fi
 
