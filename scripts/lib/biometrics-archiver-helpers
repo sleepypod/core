@@ -78,7 +78,11 @@ install_biometrics_archiver() {
       echo "frank.sh already patched — skipping"
     fi
   else
-    echo "Warning: /opt/eight/bin/frank.sh not found — skipping patch (not a Pod?)"
+    # Newer Pod 5 firmware variants don't ship the frank.sh shell shim —
+    # frankenfirmware is started directly by frank.service. The drop-in
+    # we installed above sets WorkingDirectory=/persistent/biometrics, so
+    # the redirect still applies via systemd instead of a shell cd.
+    echo "frank.sh absent (newer firmware variant) — relying on systemd WorkingDirectory= to redirect RAW writes"
   fi
 
   # Restart sleepypod modules so they pick up RAW_DATA_DIR=/persistent/biometrics.

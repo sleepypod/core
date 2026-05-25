@@ -1073,6 +1073,11 @@ Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 # decode the 16-byte SEQNO.RAW bookkeeping file as CBOR — sensor streaming
 # and flow_readings stay empty.
 Environment="RAW_DATA_DIR=/persistent/biometrics"
+# Use a writable xtables lock under RuntimeDirectory=dac. The default
+# /run/xtables.lock is root:root 0600 — CAP_NET_ADMIN doesn't bypass the
+# file mode, so setInternetAccess fails with "can't open lock file ...
+# Permission denied" the first time a user toggles WAN from the UI.
+Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
 # The \`+\` prefix runs ExecStartPre as root regardless of User=. Needed
 # for /deviceinfo symlink creation (root-owned) and sp-maintenance
 # (journal vacuum, /tmp cleanup, pnpm store prune).
