@@ -283,7 +283,6 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
 
   const showToast = isPending || savedFlash
 
-
   return (
     <div className="space-y-4">
       <div
