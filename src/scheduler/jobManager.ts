@@ -814,6 +814,155 @@ export class JobManager {
     return `${minute} ${hour} * * ${dayNum}`
   }
 
+  // ---------------------------------------------------------------------------
+  // Per-schedule incremental upsert / cancel
+  //
+  // The full `reloadSchedules()` cancels every recurring job and rebuilds from
+  // the DB. That is correct for heartbeat liveness and drift recovery but
+  // catastrophic when only one row changed: a reload that lands inside a
+  // job's fire window (e.g. HH:MM:04 for a job whose cron fires at HH:MM)
+  // cancels the just-fired job and recreates it computing the next invocation
+  // from the cron — which skips to next week for a weekly recurring job
+  // (yggdrasil-49). It also magnifies the wall-clock cost of every CRUD into
+  // a full DB re-scan + N rescheduleJob calls.
+  //
+  // These helpers touch only the affected job(s):
+  // - upsert*Job(sched) — schedules or replaces a single row's job(s).
+  //   Idempotent: calling twice with the same input leaves exactly one job
+  //   in the scheduler (scheduleJob cancels the prior id before scheduling).
+  //   When `enabled === false`, the upsert acts as cancel.
+  // - cancel*Job(id) — removes the job(s) for that row id. No-op if absent.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Upsert the cron job for a single temperature schedule.
+   * Cancels the existing `temp-${id}` job if disabled; otherwise (re)schedules.
+   */
+  upsertTemperatureJob(sched: typeof temperatureSchedules.$inferSelect): void {
+    if (!sched.enabled) {
+      this.cancelTemperatureJob(sched.id)
+      return
+    }
+    this.scheduleTemperature(sched)
+  }
+
+  cancelTemperatureJob(id: number): void {
+    this.scheduler.cancelJob(`temp-${id}`)
+  }
+
+  /**
+   * Upsert both on/off cron jobs for a single power schedule.
+   */
+  upsertPowerJob(sched: typeof powerSchedules.$inferSelect): void {
+    if (!sched.enabled) {
+      this.cancelPowerJob(sched.id)
+      return
+    }
+    this.schedulePowerOn(sched)
+    this.schedulePowerOff(sched)
+  }
+
+  cancelPowerJob(id: number): void {
+    this.scheduler.cancelJob(`power-on-${id}`)
+    this.scheduler.cancelJob(`power-off-${id}`)
+  }
+
+  /**
+   * Upsert the cron job for a single alarm schedule.
+   */
+  upsertAlarmJob(sched: typeof alarmSchedules.$inferSelect): void {
+    if (!sched.enabled) {
+      this.cancelAlarmJob(sched.id)
+      return
+    }
+    this.scheduleAlarm(sched)
+  }
+
+  cancelAlarmJob(id: number): void {
+    this.scheduler.cancelJob(`alarm-${id}`)
+  }
+
+  /**
+   * Upsert the LED night-mode jobs from the latest device-settings values.
+   * Pass `enabled=false` (or omit start/end) to cancel; pass enabled+times
+   * to (re)schedule. scheduleLedNightMode also applies the correct brightness
+   * immediately based on the configured timezone window, so a settings change
+   * is reflected on the hardware without waiting for the next cron fire.
+   */
+  async upsertLedNightMode(
+    enabled: boolean,
+    nightStartTime: string | null,
+    nightEndTime: string | null,
+    dayBrightness: number,
+    nightBrightness: number,
+  ): Promise<void> {
+    this.cancelLedNightMode()
+    if (!enabled || !nightStartTime || !nightEndTime) {
+      // Night mode just turned off — restore day brightness so the hardware
+      // doesn't sit at the dimmed value until something else writes to LEDs.
+      if (!enabled) {
+        try {
+          await this.sendLedBrightness(dayBrightness)
+        }
+        catch (e) {
+          console.warn('LED night mode: failed to restore day brightness on disable:', e)
+        }
+      }
+      return
+    }
+    await this.scheduleLedNightMode(nightStartTime, nightEndTime, dayBrightness, nightBrightness)
+  }
+
+  cancelLedNightMode(): void {
+    this.scheduler.cancelJob('led-night-start')
+    this.scheduler.cancelJob('led-night-end')
+  }
+
+  /**
+   * Upsert the daily-reboot cron job. Pass `null` (or rebootDaily=false) to cancel.
+   */
+  upsertRebootJob(rebootDaily: boolean, time: string | null): void {
+    this.cancelRebootJob()
+    if (rebootDaily && time) {
+      this.scheduleDailyReboot(time)
+    }
+  }
+
+  cancelRebootJob(): void {
+    this.scheduler.cancelJob('daily-reboot')
+  }
+
+  /**
+   * Upsert the daily-prime cron group: priming, pre-prime reboot, calibration.
+   * All three are tied to the same primePodTime; cancel/reschedule together.
+   */
+  upsertPrimeJob(primePodDaily: boolean, time: string | null): void {
+    this.cancelPrimeJob()
+    if (primePodDaily && time) {
+      this.scheduleDailyPriming(time)
+      this.schedulePrimePreReboot(time)
+      this.schedulePrePrimeCalibration(time)
+    }
+  }
+
+  cancelPrimeJob(): void {
+    this.scheduler.cancelJob('daily-prime')
+    this.scheduler.cancelJob('prime-prereboot')
+    this.scheduler.cancelJob('pre-prime-calibration')
+  }
+
+  /**
+   * Upsert away-mode one-time jobs for a side. Cancels both existing jobs
+   * regardless of incoming values; reschedules only the ones present.
+   */
+  upsertAwayMode(side: 'left' | 'right', awayStart: string | null, awayReturn: string | null): void {
+    this.scheduler.cancelJob(`away-start-${side}`)
+    this.scheduler.cancelJob(`away-return-${side}`)
+    if (awayStart || awayReturn) {
+      this.scheduleAwayMode(side, awayStart, awayReturn)
+    }
+  }
+
   /**
    * Reload all schedules (useful after database changes).
    *
@@ -824,6 +973,12 @@ export class JobManager {
    * is requested while one is in flight, we set a pending flag and the
    * in-flight cycle loops to perform one more pass. All overlapping callers
    * await the same final promise, so they all observe the latest DB state.
+   *
+   * Routes that mutate a single schedule should use the incremental
+   * `upsert*Job` / `cancel*Job` helpers above instead — a full reload that
+   * lands inside a job's fire window drops the just-fired occurrence.
+   * Only the heartbeat liveness recovery and drift detection in
+   * health.ts still call this.
    */
   async reloadSchedules(): Promise<void> {
     if (this.reloadInProgress) {

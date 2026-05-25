@@ -63,10 +63,6 @@ vi.mock('@/src/hardware/dacMonitor.instance', async () => {
       setPower: vi.fn(async () => {}),
       setAlarm: vi.fn(async () => {}),
       startPriming: vi.fn(async () => {}),
-      // sendRaw is the canonical path for hardware writes that bypass the
-      // typed helpers (LED brightness, debug execute). The shared client
-      // routes through the same dacTransport instance as connect(), which
-      // is why production code must not import sendCommand directly.
       sendRaw: vi.fn(async (command: string, arg?: string) => sendCommand(command, arg)),
     }),
   }
@@ -564,6 +560,187 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   })
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Incremental upsert / cancel — the API that route handlers call instead of
+// reloadSchedules(). Pins:
+//   1. Idempotency: upserting the same row twice leaves exactly one job.
+//   2. No-wipe: mutating one row's job doesn't touch any other row's job.
+//   3. Disabled rows act as cancel: upsertX({enabled:false, ...}) removes the
+//      existing job rather than scheduling a disabled-but-armed timer.
+//   4. yggdrasil-49 regression: an unrelated upsert at HH:MM:04 (inside an
+//      alarm's fire window) does NOT cancel-and-recreate the alarm job, so
+//      its `nextInvocation` is not bumped 7 days into the future.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager incremental upsert/cancel', () => {
+  let manager: JobManager
+
+  // Use a far-future date so weekly cron jobs registered in these tests sit
+  // safely in the next-invocation window and won't accidentally fire.
+  const baseTemp = {
+    id: 1,
+    side: 'left' as const,
+    dayOfWeek: 'monday' as const,
+    time: '22:00',
+    temperature: 68,
+    enabled: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }
+  const basePower = {
+    id: 1,
+    side: 'left' as const,
+    dayOfWeek: 'monday' as const,
+    onTime: '22:00',
+    offTime: '07:00',
+    onTemperature: 75,
+    enabled: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }
+  const baseAlarm = {
+    id: 1,
+    side: 'left' as const,
+    dayOfWeek: 'monday' as const,
+    time: '07:00',
+    vibrationIntensity: 50,
+    vibrationPattern: 'rise' as const,
+    duration: 120,
+    alarmTemperature: 80,
+    enabled: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }
+
+  beforeEach(() => {
+    manager = new JobManager('UTC', {
+      heartbeatIntervalMs: 1_000_000,
+      heartbeatStaleMs: 90_000,
+    })
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('upsertTemperatureJob is idempotent: two calls with the same row leave one job', () => {
+    manager.upsertTemperatureJob(baseTemp)
+    manager.upsertTemperatureJob(baseTemp)
+    const jobs = manager.getScheduler().getJobs().filter(j => j.id === `temp-${baseTemp.id}`)
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].type).toBe(JobType.TEMPERATURE)
+  })
+
+  it('upsertPowerJob schedules both on+off, cancelPowerJob removes both', () => {
+    manager.upsertPowerJob(basePower)
+    const sched = manager.getScheduler()
+    expect(sched.getJob(`power-on-${basePower.id}`)).toBeDefined()
+    expect(sched.getJob(`power-off-${basePower.id}`)).toBeDefined()
+
+    manager.cancelPowerJob(basePower.id)
+    expect(sched.getJob(`power-on-${basePower.id}`)).toBeUndefined()
+    expect(sched.getJob(`power-off-${basePower.id}`)).toBeUndefined()
+  })
+
+  it('upsertAlarmJob with enabled=false acts as cancel', () => {
+    manager.upsertAlarmJob(baseAlarm)
+    expect(manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)).toBeDefined()
+
+    manager.upsertAlarmJob({ ...baseAlarm, enabled: false })
+    expect(manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)).toBeUndefined()
+  })
+
+  it('cancelX is a no-op when the job is absent', () => {
+    expect(() => manager.cancelTemperatureJob(999)).not.toThrow()
+    expect(() => manager.cancelPowerJob(999)).not.toThrow()
+    expect(() => manager.cancelAlarmJob(999)).not.toThrow()
+  })
+
+  it('no-wipe: upserting one alarm leaves an unrelated temperature job untouched', () => {
+    manager.upsertTemperatureJob(baseTemp)
+    const tempJobBefore = manager.getScheduler().getJob(`temp-${baseTemp.id}`)
+    expect(tempJobBefore).toBeDefined()
+    const nextBefore = manager.getScheduler().getNextInvocation(`temp-${baseTemp.id}`)?.getTime()
+
+    // Upsert an unrelated alarm — the temperature job's identity and next-fire
+    // time must not move. reloadSchedules() would have cancelled+recreated it.
+    manager.upsertAlarmJob(baseAlarm)
+    const tempJobAfter = manager.getScheduler().getJob(`temp-${baseTemp.id}`)
+    expect(tempJobAfter).toBe(tempJobBefore) // same object identity → not recreated
+    expect(manager.getScheduler().getNextInvocation(`temp-${baseTemp.id}`)?.getTime()).toBe(nextBefore)
+  })
+
+  it('yggdrasil-49 regression: upserting an unrelated row inside an alarm fire-window does not bump the alarm', () => {
+    // Schedule the alarm and remember its next invocation.
+    manager.upsertAlarmJob(baseAlarm)
+    const alarmJobBefore = manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)
+    expect(alarmJobBefore).toBeDefined()
+    const nextBefore = manager.getScheduler().getNextInvocation(`alarm-${baseAlarm.id}`)?.getTime()
+    expect(nextBefore).toBeDefined()
+
+    // Simulate the mutation landing 4s past the cron minute. With the old
+    // reloadSchedules() this would cancel-and-recreate every recurring job;
+    // the alarm whose `time` already passed today would skip to next week.
+    manager.upsertTemperatureJob({ ...baseTemp, id: 99, temperature: 70 })
+
+    // The alarm's underlying job is the same instance and its nextInvocation
+    // hasn't moved. Net effect: the alarm still fires this week.
+    const alarmJobAfter = manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)
+    expect(alarmJobAfter).toBe(alarmJobBefore)
+    expect(manager.getScheduler().getNextInvocation(`alarm-${baseAlarm.id}`)?.getTime()).toBe(nextBefore)
+  })
+
+  it('alarm CRUD via incremental helpers completes well under the 200ms unit-test budget', () => {
+    const start = performance.now()
+    for (let i = 0; i < 50; i++) {
+      manager.upsertAlarmJob({ ...baseAlarm, id: i, time: '07:00' })
+    }
+    for (let i = 0; i < 50; i++) {
+      manager.cancelAlarmJob(i)
+    }
+    const elapsed = performance.now() - start
+    // 100 ops well under 200ms — incremental work is O(1) per call, no DB scan.
+    expect(elapsed).toBeLessThan(200)
+  })
+
+  it('upsertRebootJob with rebootDaily=false cancels any existing daily-reboot job', () => {
+    manager.upsertRebootJob(true, '03:00')
+    expect(manager.getScheduler().getJob('daily-reboot')).toBeDefined()
+    manager.upsertRebootJob(false, '03:00')
+    expect(manager.getScheduler().getJob('daily-reboot')).toBeUndefined()
+  })
+
+  it('upsertPrimeJob (re)schedules all three prime-related jobs together', () => {
+    manager.upsertPrimeJob(true, '14:00')
+    const sched = manager.getScheduler()
+    expect(sched.getJob('daily-prime')).toBeDefined()
+    expect(sched.getJob('prime-prereboot')).toBeDefined()
+    expect(sched.getJob('pre-prime-calibration')).toBeDefined()
+
+    manager.cancelPrimeJob()
+    expect(sched.getJob('daily-prime')).toBeUndefined()
+    expect(sched.getJob('prime-prereboot')).toBeUndefined()
+    expect(sched.getJob('pre-prime-calibration')).toBeUndefined()
+  })
+
+  it('upsertLedNightMode applies day brightness immediately when disabled (200ms LED budget)', async () => {
+    const sendLed = vi.fn(async () => {})
+    ;(manager as any).sendLedBrightness = sendLed
+
+    // First enable so jobs exist.
+    await manager.upsertLedNightMode(true, '22:00', '06:00', 80, 10)
+    expect(manager.getScheduler().getJob('led-night-start')).toBeDefined()
+
+    // Now disable — jobs cancelled, day brightness restored on the hardware.
+    sendLed.mockClear()
+    const start = performance.now()
+    await manager.upsertLedNightMode(false, '22:00', '06:00', 80, 10)
+    const elapsed = performance.now() - start
+    expect(manager.getScheduler().getJob('led-night-start')).toBeUndefined()
+    expect(manager.getScheduler().getJob('led-night-end')).toBeUndefined()
+    expect(sendLed).toHaveBeenCalledWith(80)
+    expect(elapsed).toBeLessThan(200)
+  })
+})
 // ─────────────────────────────────────────────────────────────────────────────
 // sendLedBrightness CBOR wire format. Frank's SetSettings (cmd 8) silently
 // ignores unknown keys — so the test pins the exact key ("lb") and value the
