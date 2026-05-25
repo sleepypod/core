@@ -537,6 +537,24 @@ describe('DeviceStateSync — recordFlowData', () => {
     expect(msg).toContain('failed to write flow readings')
     errSpy.mockRestore()
   })
+
+  it('warns and swallows when the pump stall guard lookup fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // device_state is the source for runStallGuard's lookup. Dropping it
+    // forces the inner db.select().all() to throw.
+    ;(sqlite as any).exec(`DROP TABLE device_state`)
+
+    sync.recordFlowData(frzHealthFrame({ leftFlow: 1.0, rightFlow: 1.0 }))
+    // runStallGuard is fire-and-forget; let its microtask settle.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const warned = (warnSpy.mock.calls as unknown[][])
+      .map(args => String(args[0] ?? ''))
+      .some(m => m.includes('pump stall guard call failed'))
+    expect(warned).toBe(true)
+    warnSpy.mockRestore()
+  })
 })
 
 describe('DeviceStateSync — flow anomaly detection', () => {

@@ -86,6 +86,11 @@ const dbMock = vi.hoisted(() => {
   return { select, update, transaction }
 })
 
+const pumpStallMock = vi.hoisted(() => ({
+  invalidateGuardSettingsCache: vi.fn(),
+}))
+
+vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/scheduler', () => ({ getJobManager: schedulerMock.getJobManager }))
 vi.mock('@/src/services/temperatureKeepalive', () => keepaliveMock)
 vi.mock('@/src/services/autoOffWatcher', () => autoOffMock)
@@ -106,6 +111,7 @@ beforeEach(() => {
   keepaliveMock.startKeepalive.mockReset()
   keepaliveMock.stopKeepalive.mockReset()
   autoOffMock.restartAutoOffTimers.mockReset()
+  pumpStallMock.invalidateGuardSettingsCache.mockReset()
   homekitMock.enable.mockReset().mockResolvedValue(undefined)
   homekitMock.disable.mockReset().mockResolvedValue(undefined)
   dbState.topRowsQueue.length = 0
@@ -275,6 +281,24 @@ describe('settings.updateDevice', () => {
 
     await caller.updateDevice({ primePodDaily: true, primePodTime: '14:00' })
     expect(schedulerMock.jm.applyCurrentLedBrightness).not.toHaveBeenCalled()
+  })
+
+  it('invalidates the pump stall guard cache when a pump_stall_* field changes', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, pumpStallRpmThreshold: 700 }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ pumpStallRpmThreshold: 700 })
+    expect(pumpStallMock.invalidateGuardSettingsCache).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT invalidate the pump stall cache for unrelated fields', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, primePodDaily: true, primePodTime: '14:00' }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ primePodDaily: true, primePodTime: '14:00' })
+    expect(pumpStallMock.invalidateGuardSettingsCache).not.toHaveBeenCalled()
   })
 
   it('logs but does not fail when applyCurrentLedBrightness rejects', async () => {

@@ -54,6 +54,10 @@ const stateSyncMock = vi.hoisted(() => ({
   markSideMutated: vi.fn(),
 }))
 
+const pumpStallMock = vi.hoisted(() => ({
+  shouldBlock: vi.fn<(side: 'left' | 'right') => boolean>(() => false),
+}))
+
 const dbState = vi.hoisted(() => ({
   rowsQueue: [] as unknown[][],
   pop(): unknown[] { return dbState.rowsQueue.shift() ?? [] },
@@ -86,6 +90,7 @@ vi.mock('@/src/streaming/broadcastMutationStatus', () => broadcastMock)
 vi.mock('@/src/hardware/dacTransport', () => transportMock)
 vi.mock('@/src/hardware/sharedClient', () => ({ getSharedHardwareClient: sharedClientMock.getSharedHardwareClient }))
 vi.mock('@/src/hardware/deviceStateSync', () => stateSyncMock)
+vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/db', () => ({
   db: dbMock,
   biometricsDb: {},
@@ -120,6 +125,7 @@ beforeEach(() => {
   transportMock.sendCommand.mockReset()
   sharedClientMock.sendRaw.mockReset()
   stateSyncMock.markSideMutated.mockReset()
+  pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
   dbState.rowsQueue.length = 0
   dbMock.select.mockClear()
   dbMock.update.mockClear()
@@ -160,6 +166,56 @@ describe('device.setTemperature', () => {
       expect(helpersMock.client.setTemperature).toHaveBeenCalledTimes(1)
       expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalled()
       expect(stateSyncMock.markSideMutated).toHaveBeenCalledWith('left')
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('throws PRECONDITION_FAILED when pump stall guard blocks the side', async () => {
+    pumpStallMock.shouldBlock.mockReturnValueOnce(true)
+    await expect(caller.setTemperature({ side: 'left', temperature: 70 })).rejects.toThrow(/Pump stall protection active/)
+    expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+  })
+
+  it('swallows DB sync errors so the timer still fires', async () => {
+    vi.useFakeTimers()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      dbMock.select.mockImplementationOnce(() => {
+        throw new Error('db down')
+      })
+
+      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
+      await vi.advanceTimersByTimeAsync(250)
+      const result = await promise
+
+      expect(result).toEqual({ success: true })
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to sync temperature state to DB'),
+        expect.any(Error),
+      )
+    }
+    finally {
+      vi.useRealTimers()
+      errSpy.mockRestore()
+    }
+  })
+
+  it('rejects the debounced promise when the deferred hardware call fails', async () => {
+    vi.useFakeTimers()
+    try {
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      helpersMock.withHardwareClient.mockRejectedValueOnce(new Error('hw down'))
+
+      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
+      // Swallow synchronously so vitest does not flag an unhandled rejection
+      // when the timer fires before the assertion below awaits the promise.
+      const caught = promise.catch((e: unknown) => e)
+      await vi.advanceTimersByTimeAsync(250)
+      const err = await caught
+      expect(err).toBeInstanceOf(Error)
+      expect((err as Error).message).toMatch(/hw down/)
     }
     finally {
       vi.useRealTimers()
@@ -210,6 +266,36 @@ describe('device.setPower', () => {
     await caller.setPower({ side: 'left', powered: false })
     expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', false, undefined)
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+  })
+
+  it('throws PRECONDITION_FAILED when powering on while pump stall guard is active', async () => {
+    pumpStallMock.shouldBlock.mockReturnValueOnce(true)
+    await expect(caller.setPower({ side: 'left', powered: true, temperature: 72 })).rejects.toThrow(/Pump stall protection active/)
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+  })
+
+  it('allows powering off even when pump stall guard is active', async () => {
+    pumpStallMock.shouldBlock.mockReturnValueOnce(true)
+    dbState.rowsQueue.push([{ isPowered: true, poweredOnAt: new Date() }])
+    await caller.setPower({ side: 'left', powered: false })
+    expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', false, undefined)
+  })
+
+  it('swallows DB sync errors but still completes the hardware call', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // First select() throws — DB sync block fails, but withHardwareClient already
+    // ran setPower before that point so the result still succeeds.
+    dbMock.select.mockImplementationOnce(() => {
+      throw new Error('db down')
+    })
+    const result = await caller.setPower({ side: 'left', powered: true, temperature: 72 })
+    expect(result).toEqual({ success: true })
+    expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 72)
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to sync power state to DB'),
+      expect.any(Error),
+    )
+    errSpy.mockRestore()
   })
 })
 

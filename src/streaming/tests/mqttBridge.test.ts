@@ -19,6 +19,8 @@ const dbMock = vi.hoisted(() => {
     deviceStateRows: any[]
     bedTempRow: any | null
     throwOnBedTemp: false | true | string
+    throwOnDeviceState: false | true | string
+    throwOnBiometrics: false | true | string
   } = {
     row: undefined,
     throwOnSelect: false,
@@ -26,6 +28,8 @@ const dbMock = vi.hoisted(() => {
     deviceStateRows: [],
     bedTempRow: null,
     throwOnBedTemp: false,
+    throwOnDeviceState: false,
+    throwOnBiometrics: false,
   }
   // The bridge calls db.select() four ways:
   //   1. .from(deviceSettings).limit(1)         — resolveConfig
@@ -43,13 +47,19 @@ const dbMock = vi.hoisted(() => {
         }),
         where: vi.fn(() => ({
           orderBy: vi.fn(() => ({
-            limit: vi.fn(async () => state.biometricsRow ? [state.biometricsRow] : []),
+            limit: vi.fn(async () => {
+              if (state.throwOnBiometrics !== false) {
+                throw typeof state.throwOnBiometrics === 'string'
+                  ? state.throwOnBiometrics
+                  : new Error('biometrics boom')
+              }
+              return state.biometricsRow ? [state.biometricsRow] : []
+            }),
           })),
         })),
         orderBy: vi.fn(() => ({
           limit: vi.fn(async () => {
             if (state.throwOnBedTemp !== false) {
-              // eslint-disable-next-line @typescript-eslint/only-throw-error
               throw typeof state.throwOnBedTemp === 'string'
                 ? state.throwOnBedTemp
                 : new Error('bed_temp boom')
@@ -59,7 +69,16 @@ const dbMock = vi.hoisted(() => {
         })),
         // Make `.from(deviceState)` itself awaitable so `for (const row of
         // sides)` after `await db.select().from(deviceState)` iterates rows.
-        then: (resolve: (rows: any[]) => any) => resolve(state.deviceStateRows),
+        then: (resolve: (rows: any[]) => any, reject?: (err: unknown) => any) => {
+          if (state.throwOnDeviceState !== false) {
+            const err = typeof state.throwOnDeviceState === 'string'
+              ? state.throwOnDeviceState
+              : new Error('device_state boom')
+            if (reject) return reject(err)
+            throw err as Error
+          }
+          return resolve(state.deviceStateRows)
+        },
       }
       return fromObj
     }),
@@ -217,6 +236,8 @@ beforeEach(() => {
   dbMock.state.deviceStateRows = []
   dbMock.state.bedTempRow = null
   dbMock.state.throwOnBedTemp = false
+  dbMock.state.throwOnDeviceState = false
+  dbMock.state.throwOnBiometrics = false
   mqttMock.state.nextClient = null
   mqttMock.state.throwOnConnect = null
   mqttMock.connect.mockClear()
@@ -1090,6 +1111,78 @@ describe('mqttBridge — publishState content', () => {
     expect(topics.some(t => t.endsWith('/state/left/climate'))).toBe(true)
     expect(topics.some(t => t.endsWith('/state/biometrics/left'))).toBe(true)
 
+    await shutdownMqttBridge()
+  })
+})
+
+describe('mqttBridge — periodic publish + shutdown edges', () => {
+  it('re-runs publishState on the 30s interval after start', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    try {
+      const fake = await startBridgeWithFake()
+      fake.connected = true
+      fake.emit('connect')
+      await vi.advanceTimersByTimeAsync(0)
+      const baseline = fake.publish.mock.calls.length
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(fake.publish.mock.calls.length).toBeGreaterThan(baseline)
+      await shutdownMqttBridge()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resolves shutdown even when c.end() throws synchronously', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    // Replace end() with a throwing impl — shutdownMqttBridge must still resolve.
+    fake.end = vi.fn(() => {
+      throw new Error('end blew up')
+    }) as any
+
+    await expect(shutdownMqttBridge()).resolves.toBeUndefined()
+  })
+})
+
+describe('mqttBridge — publishState DB failures', () => {
+  it('warns and continues when the device_state query throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    dbMock.state.throwOnDeviceState = true
+
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[mqtt] device_state publish failed'),
+      expect.anything(),
+    )
+    warn.mockRestore()
+    await shutdownMqttBridge()
+  })
+
+  it('warns per-side when the biometrics query throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    dbMock.state.throwOnBiometrics = 'bio crash'
+
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const warned = (warn.mock.calls as unknown[][]).filter(args =>
+      String(args[0] ?? '').includes('biometrics publish'),
+    )
+    expect(warned.length).toBeGreaterThanOrEqual(1)
+    warn.mockRestore()
     await shutdownMqttBridge()
   })
 })
