@@ -251,6 +251,18 @@ describe('settings.updateDevice', () => {
     expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
   })
 
+  it('upserts the reboot job incrementally when rebootDaily/rebootTime change', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, rebootDaily: true, rebootTime: '04:00' }
+    dbState.txRowsQueue.push([current], [updated])
+    dbState.topRowsQueue.push([updated])
+
+    await caller.updateDevice({ rebootDaily: true, rebootTime: '04:00' })
+    expect(schedulerMock.jm.upsertRebootJob).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.upsertRebootJob).toHaveBeenCalledWith(true, '04:00')
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
+  })
+
   it('fires immediate LED apply when ledDayBrightness changes', async () => {
     const current = { ...baseDevice }
     const updated = { ...current, ledDayBrightness: 42 }
