@@ -686,3 +686,38 @@ describe('JobManager.applyCurrentLedBrightness', () => {
     expect(cborDecode(Buffer.from(hex, 'hex'))).toEqual({ lb: 75 })
   })
 })
+
+describe('JobManager.loadSchedules YIELD_EVERY yielding', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+    vi.restoreAllMocks()
+  })
+
+  it('awaits setImmediate every 25 entries so the event loop can service I/O', async () => {
+    // 30 rows per kind exceeds YIELD_EVERY=25, so each of the three loops
+    // (temperature, power, alarm) must take the yield branch at least once.
+    const rows = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, enabled: false }))
+    vi.spyOn(db, 'select').mockImplementation((() => ({
+      from: () => {
+        const q: any = {
+          where: () => q,
+          limit: () => Promise.resolve([]),
+          then: (resolve: (v: any) => void) => resolve(rows),
+        }
+        return q
+      },
+    })) as any)
+
+    const setImmediateSpy = vi.spyOn(global, 'setImmediate') as unknown as ReturnType<typeof vi.fn>
+    await manager.loadSchedules()
+    // Three loops, each yielding at i=24 (1-indexed 25). The system schedules
+    // call also runs but uses .limit, not the looped path.
+    expect(setImmediateSpy.mock.calls.length).toBeGreaterThanOrEqual(3)
+  })
+})
