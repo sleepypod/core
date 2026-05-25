@@ -29,6 +29,12 @@ const deviceSettingsSchema = z.object({
   ledNightEndTime: z.string().nullable(),
   globalMaxOnHours: z.number().nullable(),
   homekitEnabled: z.boolean(),
+  pumpStallProtectionEnabled: z.boolean(),
+  pumpStallRpmThreshold: z.number(),
+  pumpStallDwellSamples: z.number(),
+  pumpStallAutoRecoveryEnabled: z.boolean(),
+  pumpStallRecoveryRpm: z.number(),
+  pumpStallRecoverySamples: z.number(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
 })
@@ -74,6 +80,7 @@ const getAllSettingsResponse = z.object({
 import { getJobManager } from '@/src/scheduler'
 import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
 import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
+import { invalidateGuardSettingsCache } from '@/src/hardware/pumpStallGuard'
 
 /**
  * Reload schedules in the job manager after settings changes
@@ -137,6 +144,12 @@ export const settingsRouter = router({
             ledNightEndTime: '07:00',
             globalMaxOnHours: null,
             homekitEnabled: false,
+            pumpStallProtectionEnabled: true,
+            pumpStallRpmThreshold: 500,
+            pumpStallDwellSamples: 2,
+            pumpStallAutoRecoveryEnabled: false,
+            pumpStallRecoveryRpm: 1500,
+            pumpStallRecoverySamples: 3,
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -181,6 +194,12 @@ export const settingsRouter = router({
           // Global wall-clock auto-off cap. `null` disables; 1–48 hours when set.
           globalMaxOnHours: z.number().int().min(1).max(48).nullable().optional(),
           homekitEnabled: z.boolean().optional(),
+          pumpStallProtectionEnabled: z.boolean().optional(),
+          pumpStallRpmThreshold: z.number().int().min(100).max(1500).optional(),
+          pumpStallDwellSamples: z.number().int().min(1).max(10).optional(),
+          pumpStallAutoRecoveryEnabled: z.boolean().optional(),
+          pumpStallRecoveryRpm: z.number().int().min(500).max(3000).optional(),
+          pumpStallRecoverySamples: z.number().int().min(1).max(10).optional(),
         })
         .strict()
     )
@@ -198,6 +217,12 @@ export const settingsRouter = router({
       ledNightStartTime: z.string().nullable(),
       ledNightEndTime: z.string().nullable(),
       homekitEnabled: z.boolean(),
+      pumpStallProtectionEnabled: z.boolean(),
+      pumpStallRpmThreshold: z.number(),
+      pumpStallDwellSamples: z.number(),
+      pumpStallAutoRecoveryEnabled: z.boolean(),
+      pumpStallRecoveryRpm: z.number(),
+      pumpStallRecoverySamples: z.number(),
       createdAt: z.date(),
       updatedAt: z.date(),
     }))
@@ -304,6 +329,17 @@ export const settingsRouter = router({
           catch (e) {
             console.error('LED brightness immediate apply failed:', e)
           }
+        }
+
+        if (
+          'pumpStallProtectionEnabled' in input
+          || 'pumpStallRpmThreshold' in input
+          || 'pumpStallDwellSamples' in input
+          || 'pumpStallAutoRecoveryEnabled' in input
+          || 'pumpStallRecoveryRpm' in input
+          || 'pumpStallRecoverySamples' in input
+        ) {
+          invalidateGuardSettingsCache()
         }
 
         // Re-evaluate autoOffWatcher immediately so a tightened cap fires

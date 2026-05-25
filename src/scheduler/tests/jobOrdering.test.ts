@@ -167,6 +167,12 @@ function resetSchema(): void {
       mqtt_tls_enabled INTEGER,
       mqtt_tls_insecure INTEGER,
       homekit_enabled INTEGER NOT NULL DEFAULT 0,
+      pump_stall_protection_enabled INTEGER NOT NULL DEFAULT 1,
+      pump_stall_rpm_threshold INTEGER NOT NULL DEFAULT 500,
+      pump_stall_dwell_samples INTEGER NOT NULL DEFAULT 2,
+      pump_stall_auto_recovery_enabled INTEGER NOT NULL DEFAULT 0,
+      pump_stall_recovery_rpm INTEGER NOT NULL DEFAULT 1500,
+      pump_stall_recovery_samples INTEGER NOT NULL DEFAULT 3,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );

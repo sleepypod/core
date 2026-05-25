@@ -13,6 +13,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/src/db'
 import { deviceState, sideSettings } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import type { Side } from '@/src/hardware/types'
 
 const KEEPALIVE_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6 hours in milliseconds
@@ -41,6 +42,12 @@ export function startKeepalive(side: Side): void {
 
       if (!state || !state.isPowered || state.targetTemperature == null) {
         // Side is off or has no target — nothing to keepalive
+        return
+      }
+
+      // Skip silently while the pump stall guard is holding the side off.
+      // Re-issuing the user's last setpoint here would defeat the cutoff.
+      if (pumpStallShouldBlock(side)) {
         return
       }
 
