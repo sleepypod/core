@@ -29,6 +29,12 @@ const deviceSettingsSchema = z.object({
   ledNightEndTime: z.string().nullable(),
   globalMaxOnHours: z.number().nullable(),
   homekitEnabled: z.boolean(),
+  pumpStallProtectionEnabled: z.boolean(),
+  pumpStallRpmThreshold: z.number(),
+  pumpStallDwellSamples: z.number(),
+  pumpStallAutoRecoveryEnabled: z.boolean(),
+  pumpStallRecoveryRpm: z.number(),
+  pumpStallRecoverySamples: z.number(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
 })
@@ -74,16 +80,21 @@ const getAllSettingsResponse = z.object({
 import { getJobManager } from '@/src/scheduler'
 import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
 import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
+import { invalidateGuardSettingsCache } from '@/src/hardware/pumpStallGuard'
 
 /**
  * Reload schedules in the job manager after settings changes
  * that affect scheduling (timezone, priming, reboot)
  */
 async function reloadSchedulerIfNeeded(input: Record<string, unknown>): Promise<void> {
+  // Brightness values do NOT belong here — they don't affect cron timing,
+  // they're read from the DB by the LED night-mode cron closures at fire
+  // time. Including them would force reloadSchedules() (which rebuilds every
+  // temperature cron) on every slider release. See applyCurrentLedBrightness
+  // for the immediate hardware push that handles slider changes.
   const schedulingKeys = [
     'timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime',
-    'ledNightModeEnabled', 'ledDayBrightness', 'ledNightBrightness',
-    'ledNightStartTime', 'ledNightEndTime',
+    'ledNightModeEnabled', 'ledNightStartTime', 'ledNightEndTime',
   ]
   const hasSchedulingChanges = schedulingKeys.some(key => key in input)
 
@@ -133,6 +144,12 @@ export const settingsRouter = router({
             ledNightEndTime: '07:00',
             globalMaxOnHours: null,
             homekitEnabled: false,
+            pumpStallProtectionEnabled: true,
+            pumpStallRpmThreshold: 500,
+            pumpStallDwellSamples: 2,
+            pumpStallAutoRecoveryEnabled: false,
+            pumpStallRecoveryRpm: 1500,
+            pumpStallRecoverySamples: 3,
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -177,6 +194,12 @@ export const settingsRouter = router({
           // Global wall-clock auto-off cap. `null` disables; 1–48 hours when set.
           globalMaxOnHours: z.number().int().min(1).max(48).nullable().optional(),
           homekitEnabled: z.boolean().optional(),
+          pumpStallProtectionEnabled: z.boolean().optional(),
+          pumpStallRpmThreshold: z.number().int().min(100).max(1500).optional(),
+          pumpStallDwellSamples: z.number().int().min(1).max(10).optional(),
+          pumpStallAutoRecoveryEnabled: z.boolean().optional(),
+          pumpStallRecoveryRpm: z.number().int().min(500).max(3000).optional(),
+          pumpStallRecoverySamples: z.number().int().min(1).max(10).optional(),
         })
         .strict()
     )
@@ -194,6 +217,12 @@ export const settingsRouter = router({
       ledNightStartTime: z.string().nullable(),
       ledNightEndTime: z.string().nullable(),
       homekitEnabled: z.boolean(),
+      pumpStallProtectionEnabled: z.boolean(),
+      pumpStallRpmThreshold: z.number(),
+      pumpStallDwellSamples: z.number(),
+      pumpStallAutoRecoveryEnabled: z.boolean(),
+      pumpStallRecoveryRpm: z.number(),
+      pumpStallRecoverySamples: z.number(),
       createdAt: z.date(),
       updatedAt: z.date(),
     }))
@@ -273,6 +302,44 @@ export const settingsRouter = router({
         }
         catch (e) {
           console.error('Scheduler reload failed:', e)
+        }
+
+        // Immediate LED apply when brightness fields or the night-mode toggle
+        // change. Without this the pod LED only updates on the next cron
+        // boundary, which makes the slider feel broken and — when night mode
+        // is disabled while currently in the night window — leaves the LED
+        // dim until the user manually nudges the day slider.
+        //
+        // Note: when night mode stays enabled and the user only drags the day
+        // slider, reloadSchedulerIfNeeded above also fires scheduleLedNightMode
+        // which emits its own initial-apply send. The pod gets two consecutive
+        // SET_SETTINGS frames with the same value — idempotent at firmware,
+        // not worth gating around.
+        if (
+          'ledDayBrightness' in input
+          || 'ledNightBrightness' in input
+          || 'ledNightModeEnabled' in input
+          || 'ledNightStartTime' in input
+          || 'ledNightEndTime' in input
+        ) {
+          try {
+            const jobManager = await getJobManager()
+            await jobManager.applyCurrentLedBrightness()
+          }
+          catch (e) {
+            console.error('LED brightness immediate apply failed:', e)
+          }
+        }
+
+        if (
+          'pumpStallProtectionEnabled' in input
+          || 'pumpStallRpmThreshold' in input
+          || 'pumpStallDwellSamples' in input
+          || 'pumpStallAutoRecoveryEnabled' in input
+          || 'pumpStallRecoveryRpm' in input
+          || 'pumpStallRecoverySamples' in input
+        ) {
+          invalidateGuardSettingsCache()
         }
 
         // Re-evaluate autoOffWatcher immediately so a tightened cap fires

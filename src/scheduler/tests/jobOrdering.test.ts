@@ -9,14 +9,22 @@ const setPower = vi.fn<AnyAsync>()
 const setAlarm = vi.fn<AnyAsync>()
 const startPriming = vi.fn<AnyAsync>()
 const connect = vi.fn<() => Promise<void>>()
+const sendRaw = vi.fn<(command: string, args?: string) => Promise<string>>()
 setTemperature.mockResolvedValue(undefined)
 setPower.mockResolvedValue(undefined)
 setAlarm.mockResolvedValue(undefined)
 startPriming.mockResolvedValue(undefined)
 connect.mockResolvedValue(undefined)
+// Production sendRaw guards every write with a connect check (it lives in the
+// same module as dacTransport), so the mock mirrors that — keeps the LED
+// brightness coverage that asserts on connect calls intact.
+sendRaw.mockImplementation(async () => {
+  await connect()
+  return ''
+})
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getSharedHardwareClient: () => ({ connect, setTemperature, setPower, setAlarm, startPriming }),
+  getSharedHardwareClient: () => ({ connect, setTemperature, setPower, setAlarm, startPriming, sendRaw }),
 }))
 
 vi.mock('@/src/hardware/dacTransport', () => ({
@@ -159,6 +167,12 @@ function resetSchema(): void {
       mqtt_tls_enabled INTEGER,
       mqtt_tls_insecure INTEGER,
       homekit_enabled INTEGER NOT NULL DEFAULT 0,
+      pump_stall_protection_enabled INTEGER NOT NULL DEFAULT 1,
+      pump_stall_rpm_threshold INTEGER NOT NULL DEFAULT 500,
+      pump_stall_dwell_samples INTEGER NOT NULL DEFAULT 2,
+      pump_stall_auto_recovery_enabled INTEGER NOT NULL DEFAULT 0,
+      pump_stall_recovery_rpm INTEGER NOT NULL DEFAULT 1500,
+      pump_stall_recovery_samples INTEGER NOT NULL DEFAULT 3,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
@@ -414,13 +428,40 @@ describe('JobManager — job ordering and gating', () => {
       expect(setAlarm).toHaveBeenCalledOnce()
     })
 
-    it('skips alarm + temperature when side is not powered', async () => {
+    it('fires alarm but skips temperature when side is not powered', async () => {
+      // Vibration must wake the user even when the bed is off — that's the
+      // whole point of an alarm. Temperature stays gated to avoid re-heating
+      // a deliberately-off side.
       seedSidePowered('right', false)
 
       await manager.runAlarmJob(alarmSched('right'))
 
       expect(setTemperature).not.toHaveBeenCalled()
-      expect(setAlarm).not.toHaveBeenCalled()
+      expect(setAlarm).toHaveBeenCalledOnce()
+      expect(setAlarm).toHaveBeenCalledWith('right', {
+        vibrationIntensity: 100,
+        vibrationPattern: 'rise',
+        duration: 10,
+      })
+    })
+
+    it('fires alarm when side has no device_state row (treated as off)', async () => {
+      // No row inserted at all
+      await manager.runAlarmJob(alarmSched('left'))
+
+      expect(setTemperature).not.toHaveBeenCalled()
+      expect(setAlarm).toHaveBeenCalledOnce()
+    })
+
+    it('broadcast omits temperature fields but keeps isAlarmVibrating when not powered', async () => {
+      seedSidePowered('right', false)
+
+      await manager.runAlarmJob(alarmSched('right'))
+
+      expect(broadcastMutationStatus).toHaveBeenCalledOnce()
+      expect(broadcastMutationStatus).toHaveBeenCalledWith('right', {
+        isAlarmVibrating: true,
+      })
     })
   })
 

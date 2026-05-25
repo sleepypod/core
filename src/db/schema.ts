@@ -50,6 +50,20 @@ export const deviceSettings = sqliteTable('device_settings', {
   homekitEnabled: integer('homekit_enabled', { mode: 'boolean' })
     .notNull()
     .default(false),
+  // Pump-stall safety guard. Default-on with conservative thresholds per
+  // ADR 0022: a side whose pump RPM stays under the trip threshold for
+  // dwellSamples consecutive frames is powered off until the user
+  // re-enables it. Auto-recovery is opt-in.
+  pumpStallProtectionEnabled: integer('pump_stall_protection_enabled', { mode: 'boolean' })
+    .notNull()
+    .default(true),
+  pumpStallRpmThreshold: integer('pump_stall_rpm_threshold').notNull().default(500),
+  pumpStallDwellSamples: integer('pump_stall_dwell_samples').notNull().default(2),
+  pumpStallAutoRecoveryEnabled: integer('pump_stall_auto_recovery_enabled', { mode: 'boolean' })
+    .notNull()
+    .default(false),
+  pumpStallRecoveryRpm: integer('pump_stall_recovery_rpm').notNull().default(1500),
+  pumpStallRecoverySamples: integer('pump_stall_recovery_samples').notNull().default(3),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

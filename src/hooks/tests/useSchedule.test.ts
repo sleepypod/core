@@ -623,3 +623,675 @@ describe('useSchedule — refetch passes through to both queries', () => {
     expect(byDayRefetch).toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// The blocks below target surviving Stryker mutants in useSchedule.ts. Each
+// assertion is the minimal observable consequence of a mutated branch — the
+// goal is failure under mutation, not behavior coverage for its own sake.
+// ---------------------------------------------------------------------------
+
+describe('useSchedule — initial flag defaults', () => {
+  it('isApplying is false on mount (kills BooleanLiteral mutation of useState default)', () => {
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isApplying).toBe(false)
+  })
+
+  it('confirmMessage starts as null', () => {
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.confirmMessage).toBeNull()
+  })
+})
+
+describe('useSchedule — unmount cleanup of confirm timer', () => {
+  it('clearTimeout fires on unmount when a confirm timer is in-flight', async () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout')
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result, unmount } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.togglePowerSchedule()
+    })
+    clearSpy.mockClear()
+    unmount()
+    expect(clearSpy).toHaveBeenCalled()
+    clearSpy.mockRestore()
+  })
+
+  it('unmount with no in-flight timer does not throw (BlockStatement {} kill)', () => {
+    const { unmount } = renderHook(() => useSchedule())
+    expect(() => unmount()).not.toThrow()
+  })
+})
+
+describe('useSchedule — otherSide query wiring (kills ConditionalExpression and EqualityOperator mutants)', () => {
+  beforeEach(() => {
+    trpcMock.trpc.schedules.getAll.useQuery.mockClear()
+  })
+
+  it('queries the opposite side when primary is left', () => {
+    sideMock.state.primarySide = 'left'
+    sideMock.state.activeSides = ['left', 'right']
+    renderHook(() => useSchedule())
+    const calls = trpcMock.trpc.schedules.getAll.useQuery.mock.calls as any[][]
+    // Two getAll calls: primary side then otherSide.
+    expect(calls[0][0]).toEqual({ side: 'left' })
+    expect(calls[1][0]).toEqual({ side: 'right' })
+    // otherSide query must be enabled iff activeSides.length > 1
+    expect(calls[1][1]).toEqual({ enabled: true })
+  })
+
+  it('queries the opposite side when primary is right', () => {
+    sideMock.state.primarySide = 'right'
+    sideMock.state.activeSides = ['left', 'right']
+    renderHook(() => useSchedule())
+    const calls = trpcMock.trpc.schedules.getAll.useQuery.mock.calls as any[][]
+    expect(calls[0][0]).toEqual({ side: 'right' })
+    expect(calls[1][0]).toEqual({ side: 'left' })
+  })
+
+  it('disables otherSide query when only one side is active', () => {
+    sideMock.state.primarySide = 'left'
+    sideMock.state.activeSides = ['left']
+    renderHook(() => useSchedule())
+    const calls = trpcMock.trpc.schedules.getAll.useQuery.mock.calls as any[][]
+    expect(calls[1][1]).toEqual({ enabled: false })
+  })
+})
+
+describe('useSchedule — per-row mutation hooks register invalidating onSuccess', () => {
+  it('every per-row useMutation call passes an onSuccess that invalidates both query keys', () => {
+    // Per-row mutations all alias the same shared `noopMutation.useMutation` vi.fn,
+    // so call counts accumulate across tests. Snapshot length, then read only the
+    // calls produced by this renderHook invocation.
+    const before = trpcMock.trpc.schedules.createTemperatureSchedule.useMutation.mock.calls.length
+    renderHook(() => useSchedule())
+    const allCalls = trpcMock.trpc.schedules.createTemperatureSchedule.useMutation.mock.calls as any[][]
+    const calls = allCalls.slice(before)
+    // 9 per-row mutations: create/update/delete × {temp, power, alarm}.
+    expect(calls.length).toBe(9)
+
+    trpcMock.utils.schedules.getAll.invalidate.mockClear()
+    trpcMock.utils.schedules.getByDay.invalidate.mockClear()
+
+    for (const call of calls) {
+      const opts = call[0] as { onSuccess: () => void } | undefined
+      // Kills ObjectLiteral -> {} (would leave onSuccess undefined)
+      expect(opts).toBeDefined()
+      expect(typeof opts?.onSuccess).toBe('function')
+      opts?.onSuccess()
+    }
+    // Kills ArrowFunction -> () => undefined (would skip both invalidations)
+    expect(trpcMock.utils.schedules.getAll.invalidate).toHaveBeenCalledTimes(9)
+    expect(trpcMock.utils.schedules.getByDay.invalidate).toHaveBeenCalledTimes(9)
+  })
+})
+
+describe('useSchedule — derived state branches', () => {
+  it('isPowerEnabled requires some (not every) row enabled', () => {
+    // MethodExpression mutant flips .some → .every. Two rows where only one is
+    // enabled → some=true, every=false. Asserting true forces .some semantics.
+    trpcMock.overrides.day = {
+      temperature: [],
+      power: [{ id: 1, enabled: true }, { id: 2, enabled: false }],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isPowerEnabled).toBe(true)
+  })
+
+  it('isPowerEnabled is false when daySchedule has no power array', () => {
+    // OptionalChaining mutant removes the ?. — without power, accessing length
+    // would throw. The hook must safely return false.
+    trpcMock.overrides.day = { temperature: [], alarm: [] } as any
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isPowerEnabled).toBe(false)
+  })
+
+  it('isGlobalEnabled true via temperature alone (kills MethodExpression on temperature.some)', () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, enabled: true }, { id: 2, enabled: false }],
+      power: [{ id: 3, enabled: false }],
+      alarm: [{ id: 4, enabled: false }],
+    }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isGlobalEnabled).toBe(true)
+  })
+
+  it('isGlobalEnabled true via power alone (kills MethodExpression on power.some)', () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, enabled: false }],
+      power: [{ id: 2, enabled: true }, { id: 3, enabled: false }],
+      alarm: [{ id: 4, enabled: false }],
+    }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isGlobalEnabled).toBe(true)
+  })
+
+  it('isGlobalEnabled true via alarm alone (kills MethodExpression on alarm.some)', () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, enabled: false }],
+      power: [{ id: 2, enabled: false }],
+      alarm: [{ id: 3, enabled: true }, { id: 4, enabled: false }],
+    }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isGlobalEnabled).toBe(true)
+  })
+
+  it('isGlobalEnabled false when every row is disabled', () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, enabled: false }],
+      power: [{ id: 2, enabled: false }],
+      alarm: [{ id: 3, enabled: false }],
+    }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isGlobalEnabled).toBe(false)
+  })
+
+  it('isGlobalEnabled false when daySchedule allLeft is undefined', () => {
+    // BooleanLiteral L142 mutant flips the early-return default. Without
+    // schedule data the hook must return false, not true.
+    trpcMock.overrides.allLeft = undefined
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isGlobalEnabled).toBe(false)
+  })
+
+  it('hasScheduleData true with only temperature rows (kills L154 ConditionalExpression)', () => {
+    trpcMock.overrides.day = { temperature: [{ id: 1 }], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.hasScheduleData).toBe(true)
+  })
+
+  it('hasScheduleData true with only power rows (kills L155 ConditionalExpression)', () => {
+    trpcMock.overrides.day = { temperature: [], power: [{ id: 1 }], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.hasScheduleData).toBe(true)
+  })
+
+  it('hasScheduleData true with only alarm rows (kills L156 ConditionalExpression)', () => {
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [{ id: 1 }] }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.hasScheduleData).toBe(true)
+  })
+
+  it('hasScheduleData false when day has only empty arrays', () => {
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.hasScheduleData).toBe(false)
+  })
+})
+
+describe('useSchedule — togglePowerSchedule scoping and side effects', () => {
+  it('only updates power rows for selectedDays (kills MethodExpression mutant on .filter)', async () => {
+    // Two days have power rows; selectedDays contains only one. A `.filter`-
+    // dropping mutant would update both.
+    trpcMock.overrides.allLeft = {
+      temperature: [],
+      power: [
+        { id: 1, dayOfWeek: 'monday', enabled: false },
+        { id: 2, dayOfWeek: 'tuesday', enabled: false },
+      ],
+      alarm: [],
+    }
+    trpcMock.overrides.day = { temperature: [], power: [{ id: 1, enabled: false }], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.togglePowerSchedule()
+      vi.runAllTimers()
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.updates.power).toEqual([{ id: 1, enabled: true }])
+  })
+
+  it('writes confirm message with plural day count formatting', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    // Add a second selected day so plural "days" branch fires.
+    act(() => {
+      result.current.setSelectedDays(new Set(['monday', 'tuesday'] as any))
+    })
+    await act(async () => {
+      await result.current.togglePowerSchedule()
+    })
+    expect(result.current.confirmMessage).toBe('Schedule enabled for 2 days')
+  })
+
+  it('writes singular "day" when exactly one selected', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.togglePowerSchedule()
+    })
+    expect(result.current.confirmMessage).toBe('Schedule enabled for 1 day')
+  })
+
+  it('confirm message clears after 3 seconds (kills ArrowFunction L210 mutant)', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.togglePowerSchedule()
+    })
+    expect(result.current.confirmMessage).not.toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+    expect(result.current.confirmMessage).toBeNull()
+  })
+
+  it('writes "disabled" wording when newEnabled flips off', async () => {
+    // Pre-load isPowerEnabled = true so toggling moves to disabled state.
+    trpcMock.overrides.allLeft = {
+      temperature: [],
+      power: [{ id: 1, dayOfWeek: 'monday', enabled: true }],
+      alarm: [],
+    }
+    trpcMock.overrides.day = {
+      temperature: [], power: [{ id: 1, enabled: true }], alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.togglePowerSchedule()
+    })
+    expect(result.current.confirmMessage).toMatch(/Schedule disabled/)
+  })
+})
+
+describe('useSchedule — toggleAllSchedules branches', () => {
+  it('skips batch call when day has no matching rows and no new power creates', async () => {
+    // ConditionalExpression at L262 — a `true`-mutated guard would still call
+    // batchMutate with all-empty arrays. Force the no-op path: rows live on a
+    // non-selected day (so per-day filters return empty), and isPowerEnabled
+    // is true on the selected day (so newEnabled=false → no powerCreates).
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, dayOfWeek: 'friday', enabled: true }],
+      power: [{ id: 2, dayOfWeek: 'friday', enabled: true }],
+      alarm: [{ id: 3, dayOfWeek: 'friday', enabled: true }],
+    }
+    trpcMock.overrides.day = {
+      temperature: [], power: [{ id: 99, enabled: true }], alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    // Selected day defaults to monday — no allLeft rows there.
+    await act(async () => {
+      await result.current.toggleAllSchedules()
+      vi.runAllTimers()
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+
+  it('only acts on the selected day (MethodExpression .filter survivor at L234)', async () => {
+    // Two days enabled; only one selected. A dropped filter mutant would
+    // flip rows on both days, surfacing the wrong-day id in the batch call.
+    trpcMock.overrides.allLeft = {
+      temperature: [
+        { id: 10, dayOfWeek: 'monday', enabled: false },
+        { id: 11, dayOfWeek: 'friday', enabled: false },
+      ],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.toggleAllSchedules()
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.updates.temperature).toEqual([{ id: 10, enabled: true }])
+  })
+})
+
+describe('useSchedule — toggleGlobalSchedules sends every row regardless of day', () => {
+  it('flips temperature, power, and alarm rows across all 7 days', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [
+        { id: 1, dayOfWeek: 'monday', enabled: false },
+        { id: 2, dayOfWeek: 'sunday', enabled: false },
+      ],
+      power: [
+        { id: 3, dayOfWeek: 'wednesday', enabled: false },
+      ],
+      alarm: [
+        { id: 4, dayOfWeek: 'saturday', enabled: false },
+      ],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.toggleGlobalSchedules()
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    // Kills MethodExpression mutants and confirms order preserved.
+    expect(arg.updates.temperature).toEqual([
+      { id: 1, enabled: true },
+      { id: 2, enabled: true },
+    ])
+    expect(arg.updates.power).toEqual([{ id: 3, enabled: true }])
+    expect(arg.updates.alarm).toEqual([{ id: 4, enabled: true }])
+  })
+
+  it('writes the "All schedules enabled" string without a day suffix', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, enabled: false }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.toggleGlobalSchedules()
+    })
+    // Kills StringLiteral L310 mutant.
+    expect(result.current.confirmMessage).toBe('All schedules enabled')
+  })
+
+  it('writes "All schedules disabled" when starting from globally enabled', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.toggleGlobalSchedules()
+    })
+    expect(result.current.confirmMessage).toBe('All schedules disabled')
+  })
+})
+
+describe('useSchedule — applyToOtherDays guards and side effects', () => {
+  it('sets isApplying true during the in-flight mutation', async () => {
+    // Pause batchMutate so we can observe the intermediate isApplying state.
+    let release: () => void = () => {}
+    trpcMock.batchMutate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => {
+        release = () => resolve(undefined)
+      }),
+    )
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = {
+      temperature: [{ id: 1, side: 'left', dayOfWeek: 'monday', time: '07:00', temperature: 68, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    let applyPromise: Promise<void> = Promise.resolve()
+    act(() => {
+      applyPromise = result.current.applyToOtherDays(['tuesday'])
+    })
+    // Mid-flight: isApplying should be true (BooleanLiteral L327 mutant).
+    expect(result.current.isApplying).toBe(true)
+    await act(async () => {
+      release()
+      await applyPromise
+    })
+    expect(result.current.isApplying).toBe(false)
+  })
+
+  it('returns early when daySchedule is null without setting isApplying', async () => {
+    trpcMock.overrides.day = undefined
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.applyToOtherDays(['tuesday'])
+    })
+    expect(result.current.isApplying).toBe(false)
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+
+  it('writes plural confirm message when targetDays has more than one day', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = {
+      temperature: [{ id: 1, side: 'left', dayOfWeek: 'monday', time: '07:00', temperature: 68, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.applyToOtherDays(['tuesday', 'wednesday'])
+    })
+    expect(result.current.confirmMessage).toBe('Schedule applied to 2 days. Scheduler reloaded.')
+  })
+
+  it('writes singular confirm message when targetDays has exactly one day', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = {
+      temperature: [{ id: 1, side: 'left', dayOfWeek: 'monday', time: '07:00', temperature: 68, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.applyToOtherDays(['tuesday'])
+    })
+    expect(result.current.confirmMessage).toBe('Schedule applied to 1 day. Scheduler reloaded.')
+  })
+})
+
+describe('useSchedule — saveCurve clamping, scheduler create, and side handling', () => {
+  it('clamps onTemperature below the 55F floor', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [
+          { time: '07:00', temperature: 10 },
+          { time: '22:00', temperature: 10 },
+        ],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.creates.power[0].onTemperature).toBe(55)
+  })
+
+  it('does not create a power row when on == off times', async () => {
+    // canCreatePower's `onTime !== offTime` clause — same-time set points
+    // should skip the power create entirely.
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [
+          { time: '07:00', temperature: 68 },
+          { time: '07:00', temperature: 70 },
+        ],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.creates.power).toEqual([])
+  })
+
+  it('marks created temperature rows enabled (kills BooleanLiteral L540 mutant)', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [{ time: '07:00', temperature: 68 }],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    for (const c of arg.creates.temperature) {
+      expect(c.enabled).toBe(true)
+    }
+  })
+
+  it('marks created power rows enabled (kills BooleanLiteral L550 mutant)', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [
+          { time: '07:00', temperature: 68 },
+          { time: '22:00', temperature: 60 },
+        ],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.creates.power[0].enabled).toBe(true)
+  })
+
+  it('saveCurve no-ops when targetDays is empty but originalDays is non-empty AND allData is empty', async () => {
+    // ConditionalExpression L498: with target empty and original non-empty,
+    // the function must still try (originalDays alone is sufficient to enter
+    // the body). With allData also empty there is nothing to delete or
+    // create, so batchMutate must not fire.
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: [],
+        setPoints: [],
+        originalDays: ['monday'],
+      })
+    })
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+
+  it('saveCurve early-returns when BOTH targetDays and originalDays are empty', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 99, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: [],
+        setPoints: [],
+        originalDays: [],
+      })
+    })
+    // No mutation even though there are rows that could match.
+    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
+  })
+})
+
+describe('useSchedule — getCurveForDay fingerprint correctness', () => {
+  it('returns days that share the enabled set-point fingerprint and excludes disabled rows', () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [
+        // Same fingerprint when only enabled rows count.
+        { id: 1, dayOfWeek: 'monday', time: '07:00', temperature: 68, enabled: true },
+        { id: 2, dayOfWeek: 'monday', time: '08:00', temperature: 70, enabled: false },
+        { id: 3, dayOfWeek: 'tuesday', time: '07:00', temperature: 68, enabled: true },
+        // wednesday has the same time/temp but is disabled → different fingerprint.
+        { id: 4, dayOfWeek: 'wednesday', time: '07:00', temperature: 68, enabled: false },
+      ],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    const curve = result.current.getCurveForDay('monday')
+    expect(curve.days).toEqual(expect.arrayContaining(['monday', 'tuesday']))
+    expect(curve.days).not.toContain('wednesday')
+    expect(curve.setPoints).toEqual([{ time: '07:00', temperature: 68 }])
+  })
+
+  it('returns days array preserving the canonical Sunday→Saturday order', () => {
+    // MethodExpression L442 replaces `allDays.filter` with `allDays` → order
+    // and content both shift; asserting both kills the survivor.
+    trpcMock.overrides.allLeft = {
+      temperature: [
+        { id: 1, dayOfWeek: 'sunday', time: '07:00', temperature: 68, enabled: true },
+        { id: 2, dayOfWeek: 'wednesday', time: '07:00', temperature: 68, enabled: true },
+      ],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    const curve = result.current.getCurveForDay('sunday')
+    expect(curve.days).toEqual(['sunday', 'wednesday'])
+  })
+})
+
+describe('useSchedule — saveCurve / deleteCurve other-side gating', () => {
+  it('saveCurve does not touch otherSide when only one active side', async () => {
+    sideMock.state.activeSides = ['left']
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 99, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [{ time: '07:00', temperature: 68 }],
+        originalDays: ['monday'],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    // L506 ConditionalExpression `true` mutant would always read otherData →
+    // would include id 99 in deletes. Single-side must omit it.
+    expect(arg.deletes.temperature).not.toContain(99)
+    expect(arg.deletes.temperature).toEqual([1])
+  })
+
+  it('deleteCurve does not touch otherSide when only one active side', async () => {
+    sideMock.state.activeSides = ['left']
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 99, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.deleteCurve(['monday'])
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.deletes.temperature).not.toContain(99)
+    expect(arg.deletes.temperature).toEqual([1])
+  })
+})
+
+describe('useSchedule — isLoading and isMutating composition', () => {
+  it('isLoading is the OR of getAll and getByDay loading states', () => {
+    trpcMock.trpc.schedules.getAll.useQuery.mockImplementationOnce(() => ({
+      data: undefined,
+      isLoading: false,
+    }))
+    trpcMock.trpc.schedules.getByDay.useQuery.mockImplementationOnce(() => ({
+      data: undefined,
+      isLoading: true,
+    }))
+    const { result } = renderHook(() => useSchedule())
+    // LogicalOperator L626 mutant flips || → &&; isLoading must be true
+    // when either side is loading.
+    expect(result.current.isLoading).toBe(true)
+  })
+
+  it('isMutating is false when no mutation is pending', () => {
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isMutating).toBe(false)
+  })
+
+  it('isMutating is true when batchUpdate is pending', () => {
+    trpcMock.trpc.schedules.batchUpdate.useMutation.mockImplementationOnce((opts: any) => ({
+      mutateAsync: vi.fn(),
+      isPending: true,
+      onSuccess: opts.onSuccess,
+    }))
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isMutating).toBe(true)
+  })
+
+  it('isMutating is true when any per-row mutation is pending', () => {
+    // First per-row useMutation in source order is createTemperatureSchedule.
+    trpcMock.trpc.schedules.createTemperatureSchedule.useMutation.mockImplementationOnce(
+      () => ({ mutate: vi.fn(), isPending: true }),
+    )
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.isMutating).toBe(true)
+  })
+})

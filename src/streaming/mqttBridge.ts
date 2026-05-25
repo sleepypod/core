@@ -19,6 +19,7 @@
  *   <prefix>/<device-id>/state/<side>/climate        — per-side temperature/mode
  *   <prefix>/<device-id>/state/water-level           — low | ok | unknown
  *   <prefix>/<device-id>/state/biometrics/<side>     — latest HR/HRV/BR summary
+ *   <prefix>/<device-id>/state/environment/ambient   — ambient temp (°C) + humidity (%)
  *   <prefix>/<device-id>/cmd/set-temperature         — JSON {side, temperature, duration?}
  *   <prefix>/<device-id>/cmd/set-power               — JSON {side, powered, temperature?}
  *   <prefix>/<device-id>/cmd/set-alarm               — JSON {side, vibrationIntensity, vibrationPattern, duration}
@@ -38,7 +39,9 @@ import mqtt, { type IClientOptions, type IClientPublishOptions, type MqttClient 
 import { eq, desc } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
 import { deviceSettings, deviceState } from '@/src/db/schema'
-import { vitals } from '@/src/db/biometrics-schema'
+import { bedTemp, flowReadings, vitals } from '@/src/db/biometrics-schema'
+import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
+import { centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { onServerFrame } from './piezoStream'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 
@@ -293,6 +296,7 @@ function publishHaDiscovery(): void {
       payload_not_available: 'offline',
       state_topic: stateTopic,
       value_template: template,
+      state_class: 'measurement',
       device: dev,
     }
     if (unit) cfg.unit_of_measurement = unit
@@ -314,6 +318,104 @@ function publishHaDiscovery(): void {
     JSON.stringify(sensor('water_level', 'Water level', topic('state', 'water-level'), '{{ value_json.level }}')),
     RETAINED_QOS_0,
   )
+
+  // Ambient temperature + humidity from bed_temp. Two HA sensor entities
+  // sharing one state topic so a single retained payload feeds both.
+  const ambientTopic = topic('state', 'environment', 'ambient')
+  const ambientTemp = sensor(
+    'ambient_temperature',
+    'Ambient temperature',
+    ambientTopic,
+    '{{ value_json.temperature }}',
+    '°C',
+  )
+  ambientTemp.device_class = 'temperature'
+  safePublish(
+    `${haPrefix}/sensor/${id}/ambient_temperature/config`,
+    JSON.stringify(ambientTemp),
+    RETAINED_QOS_0,
+  )
+  const ambientHumidity = sensor(
+    'ambient_humidity',
+    'Ambient humidity',
+    ambientTopic,
+    '{{ value_json.humidity }}',
+    '%',
+  )
+  ambientHumidity.device_class = 'humidity'
+  safePublish(
+    `${haPrefix}/sensor/${id}/ambient_humidity/config`,
+    JSON.stringify(ambientHumidity),
+    RETAINED_QOS_0,
+  )
+  // Pump topics — one set per side. RPM + loop temp as measurement sensors;
+  // stall / clog as binary sensors with the `problem` device_class so HA
+  // renders them as red alert tiles.
+  for (const side of ['left', 'right'] as const) {
+    const rpmTopic = topic('pump', side, 'rpm')
+    const loopTopic = topic('pump', side, 'loop_temp_c')
+    const stallTopic = topic('pump', side, 'stall')
+    const clogTopic = topic('pump', side, 'clog_detected')
+
+    const pumpRpm = sensor(
+      `pump_${side}_rpm`,
+      `${side === 'left' ? 'Left' : 'Right'} pump RPM`,
+      rpmTopic,
+      '{{ value_json.rpm }}',
+      'rpm',
+    )
+    safePublish(
+      `${haPrefix}/sensor/${id}/pump_${side}_rpm/config`,
+      JSON.stringify(pumpRpm),
+      RETAINED_QOS_0,
+    )
+    const pumpLoop = sensor(
+      `pump_${side}_loop_temp`,
+      `${side === 'left' ? 'Left' : 'Right'} pump loop temp`,
+      loopTopic,
+      '{{ value_json.temperature }}',
+      '°C',
+    )
+    pumpLoop.device_class = 'temperature'
+    safePublish(
+      `${haPrefix}/sensor/${id}/pump_${side}_loop_temp/config`,
+      JSON.stringify(pumpLoop),
+      RETAINED_QOS_0,
+    )
+    safePublish(
+      `${haPrefix}/binary_sensor/${id}/pump_${side}_stall/config`,
+      JSON.stringify({
+        name: `${side === 'left' ? 'Left' : 'Right'} pump stall`,
+        unique_id: `${id}_pump_${side}_stall`,
+        availability_topic: availability,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: stallTopic,
+        payload_on: 'on',
+        payload_off: 'off',
+        device_class: 'problem',
+        device: dev,
+      }),
+      RETAINED_QOS_0,
+    )
+    safePublish(
+      `${haPrefix}/binary_sensor/${id}/pump_${side}_clog/config`,
+      JSON.stringify({
+        name: `${side === 'left' ? 'Left' : 'Right'} pump clog detected`,
+        unique_id: `${id}_pump_${side}_clog`,
+        availability_topic: availability,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: clogTopic,
+        payload_on: 'on',
+        payload_off: 'off',
+        device_class: 'problem',
+        device: dev,
+      }),
+      RETAINED_QOS_0,
+    )
+  }
+
   for (const side of ['left', 'right'] as const) {
     safePublish(
       `${haPrefix}/sensor/${id}/${side}_heart_rate/config`,
@@ -401,6 +503,69 @@ async function publishState(): Promise<void> {
     catch (err) {
       console.warn(`[mqtt] biometrics publish (${side}) failed:`, err instanceof Error ? err.message : err)
     }
+  }
+
+  try {
+    const [latestEnv] = await biometricsDb
+      .select({
+        timestamp: bedTemp.timestamp,
+        ambientTemp: bedTemp.ambientTemp,
+        humidity: bedTemp.humidity,
+      })
+      .from(bedTemp)
+      .orderBy(desc(bedTemp.timestamp))
+      .limit(1)
+    if (latestEnv) {
+      safePublish(topic('state', 'environment', 'ambient'), JSON.stringify({
+        ts: latestEnv.timestamp.getTime(),
+        temperature: latestEnv.ambientTemp != null ? centiDegreesToC(latestEnv.ambientTemp) : null,
+        humidity: latestEnv.humidity != null ? centiPercentToPercent(latestEnv.humidity) : null,
+      }), RETAINED_QOS_0)
+    }
+  }
+  catch (err) {
+    console.warn('[mqtt] ambient environment publish failed:', err instanceof Error ? err.message : err)
+  }
+
+  try {
+    const [latestFlow] = await biometricsDb
+      .select()
+      .from(flowReadings)
+      .orderBy(desc(flowReadings.timestamp))
+      .limit(1)
+    if (latestFlow) {
+      const ts = latestFlow.timestamp.getTime()
+      safePublish(topic('pump', 'left', 'rpm'), JSON.stringify({
+        ts,
+        rpm: latestFlow.leftPumpRpm,
+      }), RETAINED_QOS_0)
+      safePublish(topic('pump', 'right', 'rpm'), JSON.stringify({
+        ts,
+        rpm: latestFlow.rightPumpRpm,
+      }), RETAINED_QOS_0)
+      safePublish(topic('pump', 'left', 'loop_temp_c'), JSON.stringify({
+        ts,
+        temperature: latestFlow.leftFlowrateCd != null ? latestFlow.leftFlowrateCd / 100 : null,
+      }), RETAINED_QOS_0)
+      safePublish(topic('pump', 'right', 'loop_temp_c'), JSON.stringify({
+        ts,
+        temperature: latestFlow.rightFlowrateCd != null ? latestFlow.rightFlowrateCd / 100 : null,
+      }), RETAINED_QOS_0)
+    }
+  }
+  catch (err) {
+    console.warn('[mqtt] pump rpm publish failed:', err instanceof Error ? err.message : err)
+  }
+
+  // Stall + clog state per side. Clog stays 'off' until the nightly job
+  // lands — that work is out of scope for this PR.
+  for (const side of ['left', 'right'] as const) {
+    safePublish(
+      topic('pump', side, 'stall'),
+      getPumpStallNotice(side) ? 'on' : 'off',
+      RETAINED_QOS_0,
+    )
+    safePublish(topic('pump', side, 'clog_detected'), 'off', RETAINED_QOS_0)
   }
 }
 

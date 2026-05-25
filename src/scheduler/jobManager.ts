@@ -12,7 +12,6 @@ import {
 } from '@/src/db/schema'
 import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
-import { sendCommand } from '@/src/hardware/dacTransport'
 import { encode as cborEncode } from 'cbor-x'
 import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
@@ -133,9 +132,12 @@ export class JobManager {
     return [hour, minute]
   }
 
-  private onJobScheduled = (job: { id: string, type: string }) => {
-    console.log(`Job scheduled: ${job.id} [${job.type}]`)
-  }
+  // No-op listener. The per-job log line synchronously hits journald which
+  // dominates reloadSchedules() cost at our job count (357+) — measured ~7s
+  // on-device for the rebuild was almost entirely journald writes.
+  // loadSchedules logs the totals at the end. Re-enable behind an env flag
+  // if you need to trace individual job registration.
+  private onJobScheduled = () => {}
 
   private onJobExecuted = (jobId: string, result: { success: boolean, error?: string }) => {
     if (result.success) {
@@ -176,29 +178,41 @@ export class JobManager {
   async loadSchedules(): Promise<void> {
     console.log('Loading schedules from database...')
 
+    // node-schedule's scheduleJob is synchronous and CPU-bound; registering
+    // hundreds of cron jobs in a tight loop blocks the event loop for seconds
+    // and starves the HTTP layer of the chance to flush API responses.
+    // Yielding every YIELD_EVERY iterations lets the response flush while the
+    // remainder of the rebuild continues. Incremental scheduling (issue #612)
+    // is the proper fix.
+    const YIELD_EVERY = 25
+    const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve))
+
     // Load temperature schedules
     const tempSchedules = await db.select().from(temperatureSchedules)
-    for (const sched of tempSchedules) {
-      if (sched.enabled) {
-        this.scheduleTemperature(sched)
+    for (let i = 0; i < tempSchedules.length; i++) {
+      if (tempSchedules[i].enabled) {
+        this.scheduleTemperature(tempSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load power schedules
     const powSchedules = await db.select().from(powerSchedules)
-    for (const sched of powSchedules) {
-      if (sched.enabled) {
-        this.schedulePowerOn(sched)
-        this.schedulePowerOff(sched)
+    for (let i = 0; i < powSchedules.length; i++) {
+      if (powSchedules[i].enabled) {
+        this.schedulePowerOn(powSchedules[i])
+        this.schedulePowerOff(powSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load alarm schedules
     const almSchedules = await db.select().from(alarmSchedules)
-    for (const sched of almSchedules) {
-      if (sched.enabled) {
-        this.scheduleAlarm(sched)
+    for (let i = 0; i < almSchedules.length; i++) {
+      if (almSchedules[i].enabled) {
+        this.scheduleAlarm(almSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load system schedules (priming, reboot)
@@ -439,22 +453,32 @@ export class JobManager {
 
   async runAlarmJob(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
     await this.withSideLock(sched.side, async () => {
-      if (!(await this.isSidePowered(sched.side))) {
-        console.log(`Skipping alarm job alarm-${sched.id} — ${sched.side} is not powered`)
-        return
-      }
+      // Vibration must fire regardless of power state — the alarm's purpose is
+      // to wake the user, who often sleeps with the bed off or on a power
+      // schedule that hasn't kicked in yet at wake time. Temperature, however,
+      // is gated on isPowered: heating an off bed contradicts the user's
+      // explicit power-off and would re-arm the same race the temperature
+      // path's gate was added to prevent (see withSideLock comment).
+      const powered = await this.isSidePowered(sched.side)
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
-      await client.setTemperature(sched.side, sched.alarmTemperature)
+      if (powered) {
+        await client.setTemperature(sched.side, sched.alarmTemperature)
+      }
+      else {
+        console.log(`Alarm job alarm-${sched.id} — ${sched.side} not powered; skipping temperature, firing vibration only`)
+      }
       await client.setAlarm(sched.side, {
         vibrationIntensity: sched.vibrationIntensity,
         vibrationPattern: sched.vibrationPattern,
         duration: sched.duration,
       })
       broadcastMutationStatus(sched.side, {
-        targetTemperature: sched.alarmTemperature,
-        targetLevel: fahrenheitToLevel(sched.alarmTemperature),
+        ...(powered && {
+          targetTemperature: sched.alarmTemperature,
+          targetLevel: fahrenheitToLevel(sched.alarmTemperature),
+        }),
         isAlarmVibrating: true,
       })
     })
@@ -494,12 +518,69 @@ export class JobManager {
 
   /**
    * Send a LED brightness command via the shared hardware client.
+   *
+   * Frank's SetSettings (cmd 8) CBOR map uses 2-char keys. The full schema as
+   * emitted by firmware: {v:<schema-ver>, gl:<temp-left>, gr:<temp-right>, lb:<0..100>}.
+   * Sending unknown keys (e.g. {ledBrightness}) is silently ignored — the
+   * write succeeds but the LED never changes. See docs/hardware/DAC-PROTOCOL.md.
    */
   private async sendLedBrightness(brightness: number): Promise<void> {
-    const client = getSharedHardwareClient()
-    await client.connect()
-    const hexCbor = Buffer.from(cborEncode({ ledBrightness: brightness })).toString('hex')
-    await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
+    // Route through the client's sendRaw so the connect() check and the actual
+    // write share the same dacTransport module instance. Importing sendCommand
+    // directly from another module can land in a separate Turbopack chunk
+    // whose `transport` singleton is undefined, which makes every LED write
+    // throw "[DAC] not connected" and stalls 9–15s on a retried server start.
+    // Cast mirrors device.ts's debug-execute path — sendRaw lives on the
+    // shared client but isn't on the dev HardwareClient interface.
+    const client = getSharedHardwareClient() as unknown as { sendRaw(command: string, args?: string): Promise<string> }
+    const hexCbor = Buffer.from(cborEncode({ lb: brightness })).toString('hex')
+    await client.sendRaw(HardwareCommand.SET_SETTINGS, hexCbor)
+  }
+
+  /**
+   * Apply the correct LED brightness right now based on persisted device
+   * settings and the scheduler's configured timezone. Called from
+   * settings.updateDevice so a brightness slider change reflects on the pod
+   * within ~1s, regardless of whether night mode is enabled (in which case
+   * the next cron-fired update will overwrite this when the window flips).
+   */
+  async applyCurrentLedBrightness(): Promise<void> {
+    const [settings] = await db.select().from(deviceSettings).limit(1)
+    if (!settings) return
+
+    const target = this.computeCurrentLedBrightness(
+      settings.ledNightModeEnabled,
+      settings.ledNightStartTime,
+      settings.ledNightEndTime,
+      settings.ledDayBrightness,
+      settings.ledNightBrightness,
+    )
+    await this.sendLedBrightness(target)
+  }
+
+  private computeCurrentLedBrightness(
+    nightModeEnabled: boolean,
+    nightStartTime: string | null,
+    nightEndTime: string | null,
+    dayBrightness: number,
+    nightBrightness: number,
+  ): number {
+    if (!nightModeEnabled || !nightStartTime || !nightEndTime) {
+      return dayBrightness
+    }
+
+    const [startHour, startMinute] = this.parseTime(nightStartTime)
+    const [endHour, endMinute] = this.parseTime(nightEndTime)
+    const { hour: nowHour, minute: nowMinute } = nowInTimezone(this.scheduler.getTimezone())
+    const nowMinutes = nowHour * 60 + nowMinute
+    const startMinutes = startHour * 60 + startMinute
+    const endMinutes = endHour * 60 + endMinute
+
+    const isNight = startMinutes <= endMinutes
+      ? nowMinutes >= startMinutes && nowMinutes < endMinutes
+      : nowMinutes >= startMinutes || nowMinutes < endMinutes
+
+    return isNight ? nightBrightness : dayBrightness
   }
 
   /**
@@ -516,35 +597,38 @@ export class JobManager {
     const [startHour, startMinute] = this.parseTime(nightStartTime)
     const startCron = `${startMinute} ${startHour} * * *`
 
+    // Closures read brightness from the DB at fire time. This lets brightness
+    // sliders skip reloadSchedules() (which rebuilds thousands of temperature
+    // cron jobs) — a captured value would otherwise go stale until the next
+    // unrelated scheduler reload.
     this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
-      console.log(`LED night mode: setting brightness to ${nightBrightness}`)
-      await this.sendLedBrightness(nightBrightness)
+      const [s] = await db.select().from(deviceSettings).limit(1)
+      const target = s?.ledNightBrightness ?? nightBrightness
+      console.log(`LED night mode: setting brightness to ${target}`)
+      await this.sendLedBrightness(target)
     })
 
     const [endHour, endMinute] = this.parseTime(nightEndTime)
     const endCron = `${endMinute} ${endHour} * * *`
 
     this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
-      console.log(`LED night mode: setting brightness to ${dayBrightness}`)
-      await this.sendLedBrightness(dayBrightness)
+      const [s] = await db.select().from(deviceSettings).limit(1)
+      const target = s?.ledDayBrightness ?? dayBrightness
+      console.log(`LED night mode: setting brightness to ${target}`)
+      await this.sendLedBrightness(target)
     })
 
     // Apply correct brightness immediately based on whether we're in the night window.
-    // Use the configured scheduler timezone (which matches the cron jobs above) rather
-    // than the OS clock, which on embedded targets is often UTC and would flip the
-    // window for any user not on UTC.
-    const { hour: nowHour, minute: nowMinute } = nowInTimezone(this.scheduler.getTimezone())
-    const nowMinutes = nowHour * 60 + nowMinute
-    const startMinutes = startHour * 60 + startMinute
-    const endMinutes = endHour * 60 + endMinute
-
-    const isNight = startMinutes <= endMinutes
-      ? nowMinutes >= startMinutes && nowMinutes < endMinutes // same-day window (e.g. 01:00-06:00)
-      : nowMinutes >= startMinutes || nowMinutes < endMinutes // midnight-crossing window (e.g. 22:00-06:00)
-
-    const targetBrightness = isNight ? nightBrightness : dayBrightness
+    // Delegates to computeCurrentLedBrightness so the window math has one source of
+    // truth (it also serves applyCurrentLedBrightness for slider-driven writes).
+    const targetBrightness = this.computeCurrentLedBrightness(
+      true,
+      nightStartTime,
+      nightEndTime,
+      dayBrightness,
+      nightBrightness,
+    )
     try {
-      console.log(`LED night mode: applying initial brightness ${targetBrightness} (${isNight ? 'night' : 'day'} window)`)
       await this.sendLedBrightness(targetBrightness)
     }
     catch (e) {

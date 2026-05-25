@@ -10,6 +10,11 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ connect, setTemperature }),
 }))
 
+const pumpStallShouldBlock = vi.fn<(side: 'left' | 'right') => boolean>(() => false)
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  shouldBlock: (side: 'left' | 'right') => pumpStallShouldBlock(side),
+}))
+
 // In-memory primary DB (the keepalive service does not touch biometrics, but
 // the @/src/db module exports both — keep parity with autoOffWatcher.test.ts).
 vi.mock('@/src/db', async () => {
@@ -121,6 +126,7 @@ async function flushAsync(): Promise<void> {
 beforeEach(() => {
   setTemperature.mockClear()
   connect.mockClear()
+  pumpStallShouldBlock.mockReset().mockReturnValue(false)
   resetSchema()
 })
 
@@ -145,6 +151,18 @@ describe('startKeepalive', () => {
   it('skips setTemperature when the side is not powered', async () => {
     setSideState('left', { isPowered: 0, targetTemperature: 95 })
     setSideSettings('left', { alwaysOn: 1 })
+
+    startKeepalive('left')
+    await flushAsync()
+
+    expect(setTemperature).not.toHaveBeenCalled()
+    expect(connect).not.toHaveBeenCalled()
+  })
+
+  it('skips silently when the pump stall guard is holding the side off', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 95 })
+    setSideSettings('left', { alwaysOn: 1 })
+    pumpStallShouldBlock.mockReturnValue(true)
 
     startKeepalive('left')
     await flushAsync()

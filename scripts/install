@@ -314,10 +314,12 @@ detect_free_sleep_conflict() {
   done
   [ -d /home/dac/free-sleep ]                && FREE_SLEEP_FINDINGS+=("directory:    /home/dac/free-sleep")
   [ -d /persistent/free-sleep-data ]         && FREE_SLEEP_FINDINGS+=("directory:    /persistent/free-sleep-data")
-  # Only the v6 rules file is a unique free-sleep indicator — sleepypod's
-  # own block_wan persists /etc/iptables/iptables.rules but never the v6
-  # file, so flagging the v4 file would false-positive on every reinstall.
-  [ -f /etc/iptables/ip6tables.rules ]       && FREE_SLEEP_FINDINGS+=("persisted:    /etc/iptables/ip6tables.rules")
+  # Do NOT check /etc/iptables/{iptables,ip6tables}.rules — both paths are
+  # stock Pod 5 firmware: /lib/systemd/system/{iptables,ip6tables}.service
+  # ship enabled and ExecStart=iptables-restore on those files. Presence
+  # alone says nothing about free-sleep. The systemd units and home/data
+  # dirs are unambiguous; free-sleep installs all of them.
+  return 0
 }
 
 purge_free_sleep() {
@@ -406,8 +408,37 @@ preflight_free_sleep_conflict() {
 }
 
 # Check if running as root
+#
+# Getting a root shell on a fresh Pod 5 is a one-time JTAG bootstrap, not
+# something this installer can do for you. The canonical procedure is:
+# TC2070-IDC + FTDI FT232RL on the JTAG header, interrupt U-Boot, boot
+# single-user with `init=/bin/bash`, mount rw, then `passwd root` and
+# `passwd rewt`. See scripts/README.md for details.
+#
+# `rewt` is a USER ACCOUNT on the pod (Eight's stock service user, has a
+# shell), not a tool — you set its password during the JTAG step and use it
+# later for ssh when `PermitRootLogin no` blocks direct root login.
+#
+# `dac` is also a system account but ships as nologin — sshd refuses
+# interactive logins for it, which is the "dac not allowed" message you'll
+# see if you try `ssh dac@<pod>`. That's expected; don't try to "fix" it.
+#
+# Typical Pod 5 install flow (after JTAG bootstrap):
+#   ssh -p 8822 rewt@<pod>          # PasswordAuthentication=yes temporarily
+#   su -                            # switch to root with the passwd you set
+#   bash scripts/install            # run this script
+# The optional SSH-setup block at the end of this script writes your key to
+# /root/.ssh/authorized_keys and re-hardens sshd (port 8822, key-only, no
+# password auth, no root password login). After that you can ssh directly as
+# root with your key.
 if [ "$EUID" -ne 0 ]; then
-  echo "Error: This script must be run as root (use sudo)" >&2
+  echo "Error: This script must be run as root (use sudo or su -)" >&2
+  echo "" >&2
+  echo "On a freshly jailbroken Pod 5 the stock image disables direct root" >&2
+  echo "ssh and refuses login as the \`dac\` service account. SSH in as the" >&2
+  echo "\`rewt\` user (password set during the JTAG bootstrap), then \`su -\`" >&2
+  echo "to root before running this script." >&2
+  echo "See scripts/README.md (\"Getting root on Pod 5\") for the full flow." >&2
   exit 1
 fi
 
@@ -1053,6 +1084,11 @@ Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 # decode the 16-byte SEQNO.RAW bookkeeping file as CBOR — sensor streaming
 # and flow_readings stay empty.
 Environment="RAW_DATA_DIR=/persistent/biometrics"
+# Use a writable xtables lock under RuntimeDirectory=dac. The default
+# /run/xtables.lock is root:root 0600 — CAP_NET_ADMIN doesn't bypass the
+# file mode, so setInternetAccess fails with "can't open lock file ...
+# Permission denied" the first time a user toggles WAN from the UI.
+Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
 # The \`+\` prefix runs ExecStartPre as root regardless of User=. Needed
 # for /deviceinfo symlink creation (root-owned) and sp-maintenance
 # (journal vacuum, /tmp cleanup, pnpm store prune).

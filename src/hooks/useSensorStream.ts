@@ -137,6 +137,20 @@ export interface DeviceStatusFrame {
   waterLevel: 'low' | 'ok'
   isPriming: boolean
   primeCompletedNotification?: { timestamp: number }
+  pumpStallNotifications?: {
+    left: {
+      alertId: number
+      trippedAt: number
+      rpm: number
+      restore: { targetTemperature: number, durationSeconds: number } | null
+    } | null
+    right: {
+      alertId: number
+      trippedAt: number
+      rpm: number
+      restore: { targetTemperature: number, durationSeconds: number } | null
+    } | null
+  }
   snooze: {
     left: { active: boolean, snoozeUntil: number | null } | null
     right: { active: boolean, snoozeUntil: number | null } | null

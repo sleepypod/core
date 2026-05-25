@@ -11,6 +11,7 @@ import {
   flowReadings,
   freezerTemp,
   movement,
+  pumpAlerts,
   vitals,
   waterLevelReadings,
 } from '../biometrics-schema'
@@ -64,6 +65,7 @@ function seedAllTables(db: BiometricsDb, ts: Date): void {
   db.insert(flowReadings).values({ timestamp: ts }).run()
   db.insert(ambientLight).values({ timestamp: ts, lux: 1 }).run()
   db.insert(waterLevelReadings).values({ timestamp: ts, level: 'ok' }).run()
+  db.insert(pumpAlerts).values({ timestamp: ts, type: 'stall_left' }).run()
 }
 
 describe('pruneOldBiometrics', () => {
@@ -111,10 +113,14 @@ describe('pruneOldBiometrics', () => {
       { timestamp: old, level: 'ok' },
       { timestamp: fresh, level: 'low' },
     ]).run()
+    db.insert(pumpAlerts).values([
+      { timestamp: old, type: 'stall_left' },
+      { timestamp: fresh, type: 'stall_right' },
+    ]).run()
 
     const result = pruneOldBiometrics(cutoff, db)
 
-    expect(result.rowsDeleted).toBe(7)
+    expect(result.rowsDeleted).toBe(8)
     expect(result.perTable).toEqual({
       vitals: 1,
       movement: 1,
@@ -123,6 +129,7 @@ describe('pruneOldBiometrics', () => {
       flow_readings: 1,
       ambient_light: 1,
       water_level_readings: 1,
+      pump_alerts: 1,
     })
 
     // Verify fresh rows remain
@@ -133,6 +140,7 @@ describe('pruneOldBiometrics', () => {
     expect(db.select().from(flowReadings).all()).toHaveLength(1)
     expect(db.select().from(ambientLight).all()).toHaveLength(1)
     expect(db.select().from(waterLevelReadings).all()).toHaveLength(1)
+    expect(db.select().from(pumpAlerts).all()).toHaveLength(1)
   })
 
   it('leaves everything alone when cutoff precedes all rows', () => {
@@ -228,6 +236,7 @@ describe('pruneOldBiometrics', () => {
       flow_readings: 0,
       ambient_light: 0,
       water_level_readings: 0,
+      pump_alerts: 0,
     })
   })
 
@@ -242,10 +251,10 @@ describe('pruneOldBiometrics', () => {
     const cutoff = new Date(base + 3 * day)
     const result = pruneOldBiometrics(cutoff, db)
 
-    // Seven tables × 3 deleted days = 21 rows.
-    expect(result.rowsDeleted).toBe(21)
+    // Eight tables × 3 deleted days = 24 rows.
+    expect(result.rowsDeleted).toBe(24)
     for (const tableName of ['vitals', 'movement', 'bed_temp', 'freezer_temp',
-      'flow_readings', 'ambient_light', 'water_level_readings'] as const) {
+      'flow_readings', 'ambient_light', 'water_level_readings', 'pump_alerts'] as const) {
       expect(result.perTable[tableName]).toBe(3)
     }
     expect(db.select().from(vitals).all()).toHaveLength(2)
@@ -287,7 +296,7 @@ describe('runRetentionPass', () => {
 
     const result = runRetentionPass(7)
 
-    expect(result.rowsDeleted).toBe(7)
+    expect(result.rowsDeleted).toBe(8)
     expect(getDb().select().from(vitals).all()).toHaveLength(1)
   })
 

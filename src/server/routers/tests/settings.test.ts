@@ -15,6 +15,7 @@ const schedulerMock = vi.hoisted(() => {
   const jm = {
     updateTimezone: vi.fn(async () => undefined),
     reloadSchedules: vi.fn(async () => undefined),
+    applyCurrentLedBrightness: vi.fn(async () => undefined),
   }
   return { getJobManager: vi.fn(async () => jm), jm }
 })
@@ -85,6 +86,11 @@ const dbMock = vi.hoisted(() => {
   return { select, update, transaction }
 })
 
+const pumpStallMock = vi.hoisted(() => ({
+  invalidateGuardSettingsCache: vi.fn(),
+}))
+
+vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/scheduler', () => ({ getJobManager: schedulerMock.getJobManager }))
 vi.mock('@/src/services/temperatureKeepalive', () => keepaliveMock)
 vi.mock('@/src/services/autoOffWatcher', () => autoOffMock)
@@ -101,9 +107,11 @@ beforeEach(() => {
   schedulerMock.getJobManager.mockClear()
   schedulerMock.jm.updateTimezone.mockReset().mockResolvedValue(undefined)
   schedulerMock.jm.reloadSchedules.mockReset().mockResolvedValue(undefined)
+  schedulerMock.jm.applyCurrentLedBrightness.mockReset().mockResolvedValue(undefined)
   keepaliveMock.startKeepalive.mockReset()
   keepaliveMock.stopKeepalive.mockReset()
   autoOffMock.restartAutoOffTimers.mockReset()
+  pumpStallMock.invalidateGuardSettingsCache.mockReset()
   homekitMock.enable.mockReset().mockResolvedValue(undefined)
   homekitMock.disable.mockReset().mockResolvedValue(undefined)
   dbState.topRowsQueue.length = 0
@@ -122,6 +130,9 @@ describe('settings.getAll', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const sides = [
@@ -193,6 +204,9 @@ describe('settings.updateDevice', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const updated = { ...current, timezone: 'America/New_York', updatedAt: new Date(1) }
@@ -212,6 +226,9 @@ describe('settings.updateDevice', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const updated = { ...current, primePodDaily: true, primePodTime: '15:00' }
@@ -219,6 +236,81 @@ describe('settings.updateDevice', () => {
 
     await caller.updateDevice({ primePodDaily: true, primePodTime: '15:00' })
     expect(schedulerMock.jm.reloadSchedules).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires immediate LED apply when ledDayBrightness changes', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, ledDayBrightness: 42 }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ ledDayBrightness: 42 })
+    expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
+    // Brightness changes must NOT rebuild the scheduler — reloadSchedules
+    // re-creates every temperature cron job and makes the slider feel slow.
+    // Night-mode crons read brightness from the DB at fire time instead.
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
+  })
+
+  it('fires immediate LED apply when ledNightBrightness changes', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, ledNightBrightness: 5 }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ ledNightBrightness: 5 })
+    expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
+  })
+
+  it('fires immediate LED apply when ledNightModeEnabled toggles', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, ledNightModeEnabled: true }
+    dbState.txRowsQueue.push([current], [updated])
+
+    // Toggling night mode must also push an immediate apply — disabling it
+    // while in the night window otherwise leaves the LED dim until the user
+    // manually nudges the day slider.
+    await caller.updateDevice({ ledNightModeEnabled: true })
+    expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.reloadSchedules).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT fire immediate LED apply for non-LED scheduling fields', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, primePodDaily: true, primePodTime: '14:00' }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ primePodDaily: true, primePodTime: '14:00' })
+    expect(schedulerMock.jm.applyCurrentLedBrightness).not.toHaveBeenCalled()
+  })
+
+  it('invalidates the pump stall guard cache when a pump_stall_* field changes', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, pumpStallRpmThreshold: 700 }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ pumpStallRpmThreshold: 700 })
+    expect(pumpStallMock.invalidateGuardSettingsCache).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT invalidate the pump stall cache for unrelated fields', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, primePodDaily: true, primePodTime: '14:00' }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ primePodDaily: true, primePodTime: '14:00' })
+    expect(pumpStallMock.invalidateGuardSettingsCache).not.toHaveBeenCalled()
+  })
+
+  it('logs but does not fail when applyCurrentLedBrightness rejects', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, ledDayBrightness: 80 }
+    dbState.txRowsQueue.push([current], [updated])
+    schedulerMock.jm.applyCurrentLedBrightness.mockRejectedValueOnce(new Error('hw down'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await caller.updateDevice({ ledDayBrightness: 80 })
+    expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
   })
 
   it('rejects rebootDaily=true without a rebootTime', async () => {
@@ -229,6 +321,9 @@ describe('settings.updateDevice', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     dbState.txRowsQueue.push([current])
@@ -248,6 +343,9 @@ describe('settings.updateDevice', () => {
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
       ledNightStartTime: '22:00', ledNightEndTime: '07:00',
       globalMaxOnHours: null, homekitEnabled: false,
+      pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const updated = { ...current, homekitEnabled: true }
@@ -402,6 +500,9 @@ const baseDevice = {
   ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
   ledNightStartTime: '22:00', ledNightEndTime: '07:00',
   globalMaxOnHours: null, homekitEnabled: false,
+  pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 500,
+  pumpStallDwellSamples: 2, pumpStallAutoRecoveryEnabled: false,
+  pumpStallRecoveryRpm: 1500, pumpStallRecoverySamples: 3,
   createdAt: new Date(0), updatedAt: new Date(0),
 }
 

@@ -48,19 +48,29 @@ vi.mock('@/src/db/schema', () => {
   }
 })
 
-vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getSharedHardwareClient: () => ({
-    connect: vi.fn(async () => {}),
-    setTemperature: vi.fn(async () => {}),
-    setPower: vi.fn(async () => {}),
-    setAlarm: vi.fn(async () => {}),
-    startPriming: vi.fn(async () => {}),
-  }),
+vi.mock('@/src/hardware/dacTransport', () => ({
+  sendCommand: vi.fn(async () => ''),
+  connectDac: vi.fn(async () => {}),
+  isDacConnected: vi.fn(() => true),
 }))
 
-vi.mock('@/src/hardware/dacTransport', () => ({
-  sendCommand: vi.fn(async () => {}),
-}))
+vi.mock('@/src/hardware/dacMonitor.instance', async () => {
+  const { sendCommand } = await import('@/src/hardware/dacTransport')
+  return {
+    getSharedHardwareClient: () => ({
+      connect: vi.fn(async () => {}),
+      setTemperature: vi.fn(async () => {}),
+      setPower: vi.fn(async () => {}),
+      setAlarm: vi.fn(async () => {}),
+      startPriming: vi.fn(async () => {}),
+      // sendRaw is the canonical path for hardware writes that bypass the
+      // typed helpers (LED brightness, debug execute). The shared client
+      // routes through the same dacTransport instance as connect(), which
+      // is why production code must not import sendCommand directly.
+      sendRaw: vi.fn(async (command: string, arg?: string) => sendCommand(command, arg)),
+    }),
+  }
+})
 
 vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
   broadcastMutationStatus: vi.fn(),
@@ -70,6 +80,10 @@ vi.mock('@/src/services/autoOffWatcher', () => ({
   cancelAutoOffTimer: vi.fn(),
 }))
 
+import { decode as cborDecode } from 'cbor-x'
+import { db } from '@/src/db'
+import { sendCommand } from '@/src/hardware/dacTransport'
+import { HardwareCommand } from '@/src/hardware/types'
 import { JobManager } from '../jobManager'
 import { JobType } from '../types'
 
@@ -547,5 +561,163 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
 
     await endCb()
     expect(sendLed).toHaveBeenLastCalledWith(80) // morning → day brightness
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sendLedBrightness CBOR wire format. Frank's SetSettings (cmd 8) silently
+// ignores unknown keys — so the test pins the exact key ("lb") and value the
+// firmware actually consumes. Belt-and-suspenders: the key-bytes regex (`626c62`)
+// pins the wire key name independent of cbor-x's map-header encoding; the
+// decode round-trip is the authoritative structural check.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager.sendLedBrightness CBOR payload', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+    ;(sendCommand as ReturnType<typeof vi.fn>).mockClear()
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('encodes {lb: N} under SET_SETTINGS — not the legacy ledBrightness key', async () => {
+    await (manager as any).sendLedBrightness(42)
+
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    const [cmd, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    expect(cmd).toBe(HardwareCommand.SET_SETTINGS)
+
+    // Wire format check: the key bytes for "lb" (text2 → 62 6c 62) must be
+    // present. The value byte is verified by the decode round-trip below;
+    // pinning it with an anchored regex would falsely fail if cbor-x ever
+    // emitted an indefinite-length map terminator (`ff`).
+    expect(hex).toMatch(/626c62/)
+
+    // Decode round-trip — authoritative source of truth.
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 42 })
+    expect(decoded).not.toHaveProperty('ledBrightness')
+  })
+
+  it('encodes 0 (full-dim) without ambiguity', async () => {
+    await (manager as any).sendLedBrightness(0)
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 0 })
+  })
+
+  it('encodes 100 (full-bright) as a single-byte uint', async () => {
+    await (manager as any).sendLedBrightness(100)
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 100 })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeCurrentLedBrightness — the in-window math is exercised exhaustively
+// via scheduleLedNightMode tests above. These cover the branches that path
+// doesn't reach: night mode disabled, null start/end (corrupted DB row).
+// applyCurrentLedBrightness has its own short check that exits cleanly when
+// the device_settings row is missing.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager.computeCurrentLedBrightness — out-of-window branches', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('returns day brightness when night mode is disabled', () => {
+    const result = (manager as any).computeCurrentLedBrightness(false, '22:00', '06:00', 80, 10)
+    expect(result).toBe(80)
+  })
+
+  it('returns day brightness when night start time is null (mis-seeded row)', () => {
+    const result = (manager as any).computeCurrentLedBrightness(true, null, '06:00', 80, 10)
+    expect(result).toBe(80)
+  })
+
+  it('returns day brightness when night end time is null', () => {
+    const result = (manager as any).computeCurrentLedBrightness(true, '22:00', null, 80, 10)
+    expect(result).toBe(80)
+  })
+})
+
+describe('JobManager.applyCurrentLedBrightness', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+    ;(sendCommand as ReturnType<typeof vi.fn>).mockClear()
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('is a no-op when device_settings is empty (fresh install)', async () => {
+    await manager.applyCurrentLedBrightness()
+    expect(sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('sends day brightness CBOR when night mode is disabled', async () => {
+    vi.spyOn(db, 'select').mockReturnValueOnce({
+      from: () => ({
+        limit: async () => [{
+          ledNightModeEnabled: false,
+          ledNightStartTime: '22:00',
+          ledNightEndTime: '06:00',
+          ledDayBrightness: 75,
+          ledNightBrightness: 10,
+        }],
+      }),
+    } as any)
+    await manager.applyCurrentLedBrightness()
+    expect(sendCommand).toHaveBeenCalledWith(HardwareCommand.SET_SETTINGS, expect.any(String))
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(cborDecode(Buffer.from(hex, 'hex'))).toEqual({ lb: 75 })
+  })
+})
+
+describe('JobManager.loadSchedules YIELD_EVERY yielding', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+    vi.restoreAllMocks()
+  })
+
+  it('awaits setImmediate every 25 entries so the event loop can service I/O', async () => {
+    // 30 rows per kind exceeds YIELD_EVERY=25, so each of the three loops
+    // (temperature, power, alarm) must take the yield branch at least once.
+    const rows = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, enabled: false }))
+    vi.spyOn(db, 'select').mockImplementation((() => ({
+      from: () => {
+        const q: any = {
+          where: () => q,
+          limit: () => Promise.resolve([]),
+          then: (resolve: (v: any) => void) => resolve(rows),
+        }
+        return q
+      },
+    })) as any)
+
+    const setImmediateSpy = vi.spyOn(global, 'setImmediate') as unknown as ReturnType<typeof vi.fn>
+    await manager.loadSchedules()
+    // Three loops, each yielding at i=24 (1-indexed 25). The system schedules
+    // call also runs but uses .limit, not the looped path.
+    expect(setImmediateSpy.mock.calls.length).toBeGreaterThanOrEqual(3)
   })
 })

@@ -341,6 +341,21 @@ if [ -f "$INSTALL_DIR/scripts/lib/biometrics-archiver-helpers" ]; then
   install_biometrics_archiver
 fi
 
+# Self-heal the xtables lockfile env for pods installed before this fix.
+# Without it, setInternetAccess crashes the first time a user toggles WAN
+# ("can't open lock file /run/xtables.lock: Permission denied"). The main
+# unit gets this Environment= line in fresh installs; for OTA upgrades we
+# drop it in so we don't have to rewrite the entire service unit.
+XTABLES_DROPIN=/etc/systemd/system/sleepypod.service.d/iptables-lockfile.conf
+if [ ! -f "$XTABLES_DROPIN" ]; then
+  mkdir -p "$(dirname "$XTABLES_DROPIN")"
+  cat > "$XTABLES_DROPIN" << 'EOF'
+[Service]
+Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
+EOF
+  systemctl daemon-reload
+fi
+
 # Install CLI tools from new source.
 #
 # Use `install` (atomic mkstemp + rename) instead of `cp` — sp-update is

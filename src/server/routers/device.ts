@@ -6,6 +6,8 @@ import { deviceState } from '@/src/db/schema'
 import { eq } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
+import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
@@ -120,6 +122,26 @@ export const deviceRouter = router({
         quadTap: z.object({ l: z.number(), r: z.number() }).optional(),
       }).optional(),
       primeCompletedNotification: z.object({ timestamp: z.number() }).optional(),
+      pumpStallNotifications: z.object({
+        left: z.object({
+          alertId: z.number(),
+          trippedAt: z.number(),
+          rpm: z.number(),
+          restore: z.object({
+            targetTemperature: z.number(),
+            durationSeconds: z.number(),
+          }).nullable(),
+        }).nullable(),
+        right: z.object({
+          alertId: z.number(),
+          trippedAt: z.number(),
+          rpm: z.number(),
+          restore: z.object({
+            targetTemperature: z.number(),
+            durationSeconds: z.number(),
+          }).nullable(),
+        }).nullable(),
+      }).optional(),
       snooze: z.object({
         left: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
         right: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
@@ -174,6 +196,7 @@ export const deviceRouter = router({
         }
 
         const primeCompletedAt = getPrimeCompletedAt()
+        const stallNotices = getAllPumpStallNotices()
         const leftSnooze = getSnoozeStatus('left')
         const rightSnooze = getSnoozeStatus('right')
 
@@ -192,6 +215,7 @@ export const deviceRouter = router({
             targetTemperature: convertTemp(status.rightSide.targetTemperature),
           },
           ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+          ...((stallNotices.left || stallNotices.right) && { pumpStallNotifications: stallNotices }),
           snooze: { left: leftSnooze, right: rightSnooze },
         }
       }, 'Failed to get device status')
@@ -242,6 +266,13 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      if (pumpStallShouldBlock(input.side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+
       // Server-side debounce: collapse rapid dial-drag calls into one hardware command.
       // Cancel any pending hardware call for this side BEFORE the first await
       // so ordering is consistent with other side commands (setPower, setAlarm, etc.)
@@ -344,6 +375,15 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      // Only block when raising power. Powering off is always allowed —
+      // it's the safe direction, and the guard's own trip uses this path.
+      if (input.powered && pumpStallShouldBlock(input.side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+
       return withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 

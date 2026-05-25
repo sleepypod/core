@@ -10,6 +10,7 @@ import { TemperatureDial } from '@/src/components/TemperatureDial/TemperatureDia
 import { AlarmBanner } from '@/src/components/TempScreen/AlarmBanner'
 import { PrimingIndicator } from '@/src/components/TempScreen/PrimingIndicator'
 import { PrimeCompleteNotification } from '@/src/components/TempScreen/PrimeCompleteNotification'
+import { PumpStallNotification } from '@/src/components/TempScreen/PumpStallNotification'
 import { AmbientLightChip } from '@/src/components/TempScreen/AmbientLightChip'
 import { type TempUnit } from '@/src/lib/tempUtils'
 import { TEMP } from '@/src/lib/tempColors'
@@ -75,6 +76,7 @@ export const TempScreen = () => {
   const rightAlarmActive = status?.rightSide?.isAlarmVibrating ?? false
   const isPriming = status?.isPriming ?? false
   const hasPrimeNotification = status?.primeCompletedNotification != null
+  const stallNotices = status?.pumpStallNotifications
   const snoozeStatus = status?.snooze
 
   /** Handle continuous drag updates — visual only, no hardware calls. */
@@ -129,6 +131,24 @@ export const TempScreen = () => {
     <div className="flex flex-col gap-3 sm:gap-4">
       {/* Side selector — only on the Temp screen */}
       <SideSelector />
+
+      {/* Pump stall — highest priority, dismissible per-side */}
+      {stallNotices?.left && (
+        <PumpStallNotification
+          side="left"
+          rpm={stallNotices.left.rpm}
+          trippedAt={stallNotices.left.trippedAt}
+          onAction={() => refetch()}
+        />
+      )}
+      {stallNotices?.right && (
+        <PumpStallNotification
+          side="right"
+          rpm={stallNotices.right.rpm}
+          trippedAt={stallNotices.right.trippedAt}
+          onAction={() => refetch()}
+        />
+      )}
 
       {/* Priming indicator — shown when pod water system is actively priming */}
       {isPriming && (
