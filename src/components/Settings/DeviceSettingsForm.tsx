@@ -419,8 +419,6 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
             value={ledDayBrightness}
             onChange={e => handleLedDayChange(parseInt(e.target.value, 10))}
             onPointerUp={commitLedDay}
-            onTouchEnd={commitLedDay}
-            onMouseUp={commitLedDay}
             onKeyUp={commitLedDay}
             disabled={isPending}
             className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-40 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
@@ -473,8 +471,6 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
                 value={ledNightBrightness}
                 onChange={e => handleLedNightBrightnessChange(parseInt(e.target.value, 10))}
                 onPointerUp={commitLedNightBrightness}
-                onTouchEnd={commitLedNightBrightness}
-                onMouseUp={commitLedNightBrightness}
                 onKeyUp={commitLedNightBrightness}
                 disabled={isPending}
                 className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-40 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
