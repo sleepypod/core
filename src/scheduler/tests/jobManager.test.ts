@@ -81,6 +81,7 @@ vi.mock('@/src/services/autoOffWatcher', () => ({
 }))
 
 import { decode as cborDecode } from 'cbor-x'
+import { db } from '@/src/db'
 import { sendCommand } from '@/src/hardware/dacTransport'
 import { HardwareCommand } from '@/src/hardware/types'
 import { JobManager } from '../jobManager'
@@ -665,5 +666,23 @@ describe('JobManager.applyCurrentLedBrightness', () => {
   it('is a no-op when device_settings is empty (fresh install)', async () => {
     await manager.applyCurrentLedBrightness()
     expect(sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('sends day brightness CBOR when night mode is disabled', async () => {
+    vi.spyOn(db, 'select').mockReturnValueOnce({
+      from: () => ({
+        limit: async () => [{
+          ledNightModeEnabled: false,
+          ledNightStartTime: '22:00',
+          ledNightEndTime: '06:00',
+          ledDayBrightness: 75,
+          ledNightBrightness: 10,
+        }],
+      }),
+    } as any)
+    await manager.applyCurrentLedBrightness()
+    expect(sendCommand).toHaveBeenCalledWith(HardwareCommand.SET_SETTINGS, expect.any(String))
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(cborDecode(Buffer.from(hex, 'hex'))).toEqual({ lb: 75 })
   })
 })
