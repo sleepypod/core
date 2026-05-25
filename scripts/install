@@ -314,13 +314,11 @@ detect_free_sleep_conflict() {
   done
   [ -d /home/dac/free-sleep ]                && FREE_SLEEP_FINDINGS+=("directory:    /home/dac/free-sleep")
   [ -d /persistent/free-sleep-data ]         && FREE_SLEEP_FINDINGS+=("directory:    /persistent/free-sleep-data")
-  # Only the v6 rules file is a unique free-sleep indicator — sleepypod's
-  # own block_wan persists /etc/iptables/iptables.rules but never the v6
-  # file, so flagging the v4 file would false-positive on every reinstall.
-  [ -f /etc/iptables/ip6tables.rules ]       && FREE_SLEEP_FINDINGS+=("persisted:    /etc/iptables/ip6tables.rules")
-  # Last `[ test ] && side_effect` returns 1 when the test is false. Under
-  # set -e, that propagates out and kills install at the preflight call on
-  # any clean pod. Explicit return 0 keeps the function's exit status sane.
+  # Do NOT check /etc/iptables/{iptables,ip6tables}.rules — both paths are
+  # stock Pod 5 firmware: /lib/systemd/system/{iptables,ip6tables}.service
+  # ship enabled and ExecStart=iptables-restore on those files. Presence
+  # alone says nothing about free-sleep. The systemd units and home/data
+  # dirs are unambiguous; free-sleep installs all of them.
   return 0
 }
 
