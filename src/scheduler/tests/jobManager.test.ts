@@ -649,6 +649,24 @@ describe('JobManager incremental upsert/cancel', () => {
     expect(manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)).toBeUndefined()
   })
 
+  it('upsertTemperatureJob with enabled=false acts as cancel', () => {
+    manager.upsertTemperatureJob(baseTemp)
+    expect(manager.getScheduler().getJob(`temp-${baseTemp.id}`)).toBeDefined()
+
+    manager.upsertTemperatureJob({ ...baseTemp, enabled: false })
+    expect(manager.getScheduler().getJob(`temp-${baseTemp.id}`)).toBeUndefined()
+  })
+
+  it('upsertPowerJob with enabled=false acts as cancel of both on+off', () => {
+    manager.upsertPowerJob(basePower)
+    expect(manager.getScheduler().getJob(`power-on-${basePower.id}`)).toBeDefined()
+    expect(manager.getScheduler().getJob(`power-off-${basePower.id}`)).toBeDefined()
+
+    manager.upsertPowerJob({ ...basePower, enabled: false })
+    expect(manager.getScheduler().getJob(`power-on-${basePower.id}`)).toBeUndefined()
+    expect(manager.getScheduler().getJob(`power-off-${basePower.id}`)).toBeUndefined()
+  })
+
   it('cancelX is a no-op when the job is absent', () => {
     expect(() => manager.cancelTemperatureJob(999)).not.toThrow()
     expect(() => manager.cancelPowerJob(999)).not.toThrow()
@@ -722,6 +740,15 @@ describe('JobManager incremental upsert/cancel', () => {
     expect(sched.getJob('pre-prime-calibration')).toBeUndefined()
   })
 
+  it('upsertPrimeJob with primePodDaily=false cancels any existing prime jobs', () => {
+    manager.upsertPrimeJob(true, '14:00')
+    manager.upsertPrimeJob(false, '14:00')
+    const sched = manager.getScheduler()
+    expect(sched.getJob('daily-prime')).toBeUndefined()
+    expect(sched.getJob('prime-prereboot')).toBeUndefined()
+    expect(sched.getJob('pre-prime-calibration')).toBeUndefined()
+  })
+
   it('upsertLedNightMode applies day brightness immediately when disabled (200ms LED budget)', async () => {
     const sendLed = vi.fn(async () => {})
     ;(manager as any).sendLedBrightness = sendLed
@@ -739,6 +766,38 @@ describe('JobManager incremental upsert/cancel', () => {
     expect(manager.getScheduler().getJob('led-night-end')).toBeUndefined()
     expect(sendLed).toHaveBeenCalledWith(80)
     expect(elapsed).toBeLessThan(200)
+  })
+
+  it('upsertLedNightMode swallows sendLedBrightness failure on disable so the route still succeeds', async () => {
+    const sendLed = vi.fn(async () => {
+      throw new Error('DAC not connected')
+    })
+    ;(manager as any).sendLedBrightness = sendLed
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(
+      manager.upsertLedNightMode(false, '22:00', '06:00', 80, 10)
+    ).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('LED night mode'),
+      expect.any(Error),
+    )
+    warn.mockRestore()
+  })
+
+  it('upsertLedNightMode with enabled=true but null times is a no-op (cancel without day-brightness restore)', async () => {
+    const sendLed = vi.fn(async () => {})
+    ;(manager as any).sendLedBrightness = sendLed
+
+    await manager.upsertLedNightMode(true, '22:00', '06:00', 80, 10)
+    sendLed.mockClear()
+
+    // enabled=true so the `if (!enabled)` restore branch must NOT fire — but the
+    // outer guard still cancels the cron jobs because times are null.
+    await manager.upsertLedNightMode(true, null, '06:00', 80, 10)
+    expect(manager.getScheduler().getJob('led-night-start')).toBeUndefined()
+    expect(manager.getScheduler().getJob('led-night-end')).toBeUndefined()
+    expect(sendLed).not.toHaveBeenCalled()
   })
 
   it('upsertAwayMode schedules away-start and away-return when values are non-null', () => {

@@ -148,6 +148,20 @@ describe('schedules.batchUpdate', () => {
     expect(after.temperature[0].id).not.toBe(t1.id)
   })
 
+  it('deletes power and alarm schedules call their cancel helpers (covers the per-kind delete loops)', async () => {
+    const p = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true })
+    const a = await caller.createAlarmSchedule({ side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80, enabled: true })
+    resetSchedulerMocks()
+
+    await caller.batchUpdate({
+      deletes: { power: [p.id], alarm: [a.id] },
+    })
+
+    expect(mocks.cancelPowerJob).toHaveBeenCalledWith(p.id)
+    expect(mocks.cancelAlarmJob).toHaveBeenCalledWith(a.id)
+    expect(mocks.reloadSchedules).not.toHaveBeenCalled()
+  })
+
   it('updates schedules in batch', async () => {
     const p1 = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true })
     const p2 = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true })
