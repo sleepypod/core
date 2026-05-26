@@ -656,10 +656,20 @@ fi
 # script and the API silently does nothing. Branch input is regex-
 # validated at the tRPC layer (^[a-zA-Z0-9._\-/]+$) and sp-update only
 # uses it as a tag/path component, so the privilege scope is narrow.
+#
+# The Defaults secure_path line re-adds /usr/local/bin to sudo's PATH.
+# The pod ships with the system-wide secure_path commented out in
+# /etc/sudoers, so sudo falls back to a minimal /usr/bin:/bin:/usr/sbin:/sbin
+# and `sudo sp-update dev` (the install snippet on every PR) fails with
+# "sp-update: command not found". Restoring the standard path here keeps
+# the sleepypod tools usable from any sudo shell without re-enabling the
+# system fragment, which might be commented out for a reason on the
+# vendor image.
 SUDOERS_FILE="/etc/sudoers.d/sleepypod-update"
-SUDOERS_CONTENT="sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update"
+SUDOERS_CONTENT='Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update'
 SUDOERS_TMP=$(mktemp)
-echo "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
+printf '%s\n' "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
 chmod 0440 "$SUDOERS_TMP"
 if visudo -c -q -f "$SUDOERS_TMP"; then
   install -m 0440 -o root -g root "$SUDOERS_TMP" "$SUDOERS_FILE"
