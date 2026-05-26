@@ -16,6 +16,10 @@ const schedulerMock = vi.hoisted(() => {
     updateTimezone: vi.fn(async () => undefined),
     reloadSchedules: vi.fn(async () => undefined),
     applyCurrentLedBrightness: vi.fn(async () => undefined),
+    upsertRebootJob: vi.fn(),
+    upsertPrimeJob: vi.fn(),
+    upsertLedNightMode: vi.fn(async () => undefined),
+    upsertAwayMode: vi.fn(),
   }
   return { getJobManager: vi.fn(async () => jm), jm }
 })
@@ -108,6 +112,10 @@ beforeEach(() => {
   schedulerMock.jm.updateTimezone.mockReset().mockResolvedValue(undefined)
   schedulerMock.jm.reloadSchedules.mockReset().mockResolvedValue(undefined)
   schedulerMock.jm.applyCurrentLedBrightness.mockReset().mockResolvedValue(undefined)
+  schedulerMock.jm.upsertRebootJob.mockReset()
+  schedulerMock.jm.upsertPrimeJob.mockReset()
+  schedulerMock.jm.upsertLedNightMode.mockReset().mockResolvedValue(undefined)
+  schedulerMock.jm.upsertAwayMode.mockReset()
   keepaliveMock.startKeepalive.mockReset()
   keepaliveMock.stopKeepalive.mockReset()
   autoOffMock.restartAutoOffTimers.mockReset()
@@ -218,7 +226,7 @@ describe('settings.updateDevice', () => {
     expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
   })
 
-  it('triggers reloadSchedules for non-timezone scheduling fields', async () => {
+  it('upserts the prime job incrementally for non-timezone scheduling fields', async () => {
     const current = {
       id: 1, timezone: 'UTC', temperatureUnit: 'F',
       rebootDaily: false, rebootTime: '03:00',
@@ -233,9 +241,26 @@ describe('settings.updateDevice', () => {
     }
     const updated = { ...current, primePodDaily: true, primePodTime: '15:00' }
     dbState.txRowsQueue.push([current], [updated])
+    // applySettingsSchedulerChanges re-reads the row post-commit so the upsert
+    // sees merged state instead of just the diff.
+    dbState.topRowsQueue.push([updated])
 
     await caller.updateDevice({ primePodDaily: true, primePodTime: '15:00' })
-    expect(schedulerMock.jm.reloadSchedules).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.upsertPrimeJob).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.upsertPrimeJob).toHaveBeenCalledWith(true, '15:00')
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
+  })
+
+  it('upserts the reboot job incrementally when rebootDaily/rebootTime change', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, rebootDaily: true, rebootTime: '04:00' }
+    dbState.txRowsQueue.push([current], [updated])
+    dbState.topRowsQueue.push([updated])
+
+    await caller.updateDevice({ rebootDaily: true, rebootTime: '04:00' })
+    expect(schedulerMock.jm.upsertRebootJob).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.upsertRebootJob).toHaveBeenCalledWith(true, '04:00')
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
   })
 
   it('fires immediate LED apply when ledDayBrightness changes', async () => {
@@ -249,6 +274,10 @@ describe('settings.updateDevice', () => {
     // re-creates every temperature cron job and makes the slider feel slow.
     // Night-mode crons read brightness from the DB at fire time instead.
     expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
+    // Brightness-only changes must also NOT cancel-and-recreate the LED cron
+    // jobs (timing didn't change). upsertLedNightMode would do exactly that,
+    // plus emit a redundant SET_SETTINGS write on top of applyCurrentLedBrightness.
+    expect(schedulerMock.jm.upsertLedNightMode).not.toHaveBeenCalled()
   })
 
   it('fires immediate LED apply when ledNightBrightness changes', async () => {
@@ -259,19 +288,22 @@ describe('settings.updateDevice', () => {
     await caller.updateDevice({ ledNightBrightness: 5 })
     expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
     expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
+    expect(schedulerMock.jm.upsertLedNightMode).not.toHaveBeenCalled()
   })
 
   it('fires immediate LED apply when ledNightModeEnabled toggles', async () => {
     const current = { ...baseDevice }
     const updated = { ...current, ledNightModeEnabled: true }
     dbState.txRowsQueue.push([current], [updated])
+    dbState.topRowsQueue.push([updated])
 
     // Toggling night mode must also push an immediate apply — disabling it
     // while in the night window otherwise leaves the LED dim until the user
     // manually nudges the day slider.
     await caller.updateDevice({ ledNightModeEnabled: true })
     expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
-    expect(schedulerMock.jm.reloadSchedules).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.upsertLedNightMode).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
   })
 
   it('does NOT fire immediate LED apply for non-LED scheduling fields', async () => {
@@ -590,19 +622,22 @@ describe('settings.updateSide — extra branches', () => {
     await expect(caller.updateSide({ side: 'left', name: 'Renamed' })).rejects.toThrow(/Side settings for left not found/)
   })
 
-  it('reloads scheduler when away window changes', async () => {
+  it('upserts away-mode incrementally when the window changes', async () => {
     const current = { ...baseSide }
     const updated = { ...current, awayStart: '2025-01-01T00:00:00Z' }
     dbState.txRowsQueue.push([current], [updated])
     await caller.updateSide({ side: 'left', awayStart: '2025-01-01T00:00:00Z' })
-    expect(schedulerMock.jm.reloadSchedules).toHaveBeenCalledTimes(1)
+    expect(schedulerMock.jm.upsertAwayMode).toHaveBeenCalledWith('left', '2025-01-01T00:00:00Z', null)
+    expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
   })
 
-  it('logs but does not fail when away-window scheduler reload throws', async () => {
+  it('logs but does not fail when away-window scheduler upsert throws', async () => {
     const current = { ...baseSide }
     const updated = { ...current, awayReturn: '2025-01-02T00:00:00Z' }
     dbState.txRowsQueue.push([current], [updated])
-    schedulerMock.jm.reloadSchedules.mockRejectedValueOnce(new Error('reload boom'))
+    schedulerMock.jm.upsertAwayMode.mockImplementationOnce(() => {
+      throw new Error('reload boom')
+    })
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await caller.updateSide({ side: 'left', awayReturn: '2025-01-02T00:00:00Z' })
     expect(errorSpy).toHaveBeenCalled()

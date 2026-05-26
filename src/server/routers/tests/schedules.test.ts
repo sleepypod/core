@@ -4,11 +4,23 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vites
 // Hoist mocks so they're available to vi.mock factories
 const mocks = vi.hoisted(() => ({
   reloadSchedules: vi.fn(),
+  upsertTemperatureJob: vi.fn(),
+  cancelTemperatureJob: vi.fn(),
+  upsertPowerJob: vi.fn(),
+  cancelPowerJob: vi.fn(),
+  upsertAlarmJob: vi.fn(),
+  cancelAlarmJob: vi.fn(),
 }))
 
 vi.mock('@/src/scheduler', () => ({
   getJobManager: vi.fn(async () => ({
     reloadSchedules: mocks.reloadSchedules,
+    upsertTemperatureJob: mocks.upsertTemperatureJob,
+    cancelTemperatureJob: mocks.cancelTemperatureJob,
+    upsertPowerJob: mocks.upsertPowerJob,
+    cancelPowerJob: mocks.cancelPowerJob,
+    upsertAlarmJob: mocks.upsertAlarmJob,
+    cancelAlarmJob: mocks.cancelAlarmJob,
   })),
 }))
 
@@ -82,11 +94,20 @@ afterAll(() => {
   (sqlite as any).close()
 })
 
+function resetSchedulerMocks() {
+  mocks.reloadSchedules.mockReset().mockResolvedValue(undefined)
+  mocks.upsertTemperatureJob.mockReset()
+  mocks.cancelTemperatureJob.mockReset()
+  mocks.upsertPowerJob.mockReset()
+  mocks.cancelPowerJob.mockReset()
+  mocks.upsertAlarmJob.mockReset()
+  mocks.cancelAlarmJob.mockReset()
+}
+
 describe('schedules.batchUpdate', () => {
   beforeEach(() => {
     clearTables()
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockResolvedValue(undefined)
+    resetSchedulerMocks()
   })
 
   it('creates schedules across all types in one call', async () => {
@@ -125,6 +146,20 @@ describe('schedules.batchUpdate', () => {
     const after = await caller.getAll({ side: 'left' })
     expect(after.temperature).toHaveLength(1)
     expect(after.temperature[0].id).not.toBe(t1.id)
+  })
+
+  it('deletes power and alarm schedules call their cancel helpers (covers the per-kind delete loops)', async () => {
+    const p = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true })
+    const a = await caller.createAlarmSchedule({ side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80, enabled: true })
+    resetSchedulerMocks()
+
+    await caller.batchUpdate({
+      deletes: { power: [p.id], alarm: [a.id] },
+    })
+
+    expect(mocks.cancelPowerJob).toHaveBeenCalledWith(p.id)
+    expect(mocks.cancelAlarmJob).toHaveBeenCalledWith(a.id)
+    expect(mocks.reloadSchedules).not.toHaveBeenCalled()
   })
 
   it('updates schedules in batch', async () => {
@@ -168,7 +203,7 @@ describe('schedules.batchUpdate', () => {
     expect(tuesday.temperature).toBe(68)
   })
 
-  it('calls reloadScheduler exactly once regardless of operation count', async () => {
+  it('upserts one job per created row regardless of operation count', async () => {
     await caller.batchUpdate({
       creates: {
         temperature: [
@@ -180,10 +215,18 @@ describe('schedules.batchUpdate', () => {
           { side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75 },
           { side: 'left', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 75 },
         ],
+        alarm: [
+          { side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80 },
+          { side: 'left', dayOfWeek: 'tuesday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80 },
+        ],
       },
     })
 
-    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+    // One upsert per row inserted — no global wipe via reloadSchedules.
+    expect(mocks.upsertTemperatureJob).toHaveBeenCalledTimes(3)
+    expect(mocks.upsertPowerJob).toHaveBeenCalledTimes(2)
+    expect(mocks.upsertAlarmJob).toHaveBeenCalledTimes(2)
+    expect(mocks.reloadSchedules).not.toHaveBeenCalled()
   })
 
   it('accepts empty input without errors', async () => {
@@ -268,8 +311,7 @@ describe('schedules.batchUpdate', () => {
 describe('schedules.temperature CRUD', () => {
   beforeEach(() => {
     clearTables()
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockResolvedValue(undefined)
+    resetSchedulerMocks()
   })
 
   it('creates with defaults (enabled=true) and returns persisted record', async () => {
@@ -281,7 +323,8 @@ describe('schedules.temperature CRUD', () => {
     expect(row.enabled).toBe(true)
     expect(row.side).toBe('left')
     expect(row.temperature).toBe(68)
-    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+    expect(mocks.upsertTemperatureJob).toHaveBeenCalledTimes(1)
+    expect(mocks.upsertTemperatureJob).toHaveBeenCalledWith(row)
   })
 
   it('rejects invalid time format with Zod error', async () => {
@@ -316,12 +359,14 @@ describe('schedules.temperature CRUD', () => {
     ).rejects.toThrow()
   })
 
-  it('updates and bumps updatedAt; passes when scheduler reload throws', async () => {
+  it('updates and bumps updatedAt; passes when scheduler upsert throws', async () => {
     const row = await caller.createTemperatureSchedule({
       side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
     })
 
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('scheduler down'))
+    mocks.upsertTemperatureJob.mockImplementationOnce(() => {
+      throw new Error('scheduler down')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const updated = await caller.updateTemperatureSchedule({
@@ -330,7 +375,7 @@ describe('schedules.temperature CRUD', () => {
 
     expect(updated.temperature).toBe(72)
     expect(updated.enabled).toBe(false)
-    expect(errSpy).toHaveBeenCalledWith('Scheduler reload failed:', expect.any(Error))
+    expect(errSpy).toHaveBeenCalledWith('Scheduler update failed:', expect.any(Error))
     errSpy.mockRestore()
   })
 
@@ -346,15 +391,16 @@ describe('schedules.temperature CRUD', () => {
     ).rejects.toThrow()
   })
 
-  it('deletes successfully and reloads scheduler', async () => {
+  it('deletes successfully and cancels the matching scheduler job', async () => {
     const row = await caller.createTemperatureSchedule({
       side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
     })
-    mocks.reloadSchedules.mockClear()
+    resetSchedulerMocks()
 
     const result = await caller.deleteTemperatureSchedule({ id: row.id })
     expect(result).toEqual({ success: true })
-    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+    expect(mocks.cancelTemperatureJob).toHaveBeenCalledTimes(1)
+    expect(mocks.cancelTemperatureJob).toHaveBeenCalledWith(row.id)
 
     const all = await caller.getAll({ side: 'left' })
     expect(all.temperature).toHaveLength(0)
@@ -370,8 +416,7 @@ describe('schedules.temperature CRUD', () => {
 describe('schedules.power CRUD', () => {
   beforeEach(() => {
     clearTables()
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockResolvedValue(undefined)
+    resetSchedulerMocks()
   })
 
   it('creates and persists row with defaults', async () => {
@@ -381,7 +426,8 @@ describe('schedules.power CRUD', () => {
     expect(row.enabled).toBe(true)
     expect(row.onTime).toBe('22:00')
     expect(row.offTime).toBe('07:00')
-    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+    expect(mocks.upsertPowerJob).toHaveBeenCalledTimes(1)
+    expect(mocks.upsertPowerJob).toHaveBeenCalledWith(row)
   })
 
   it('rejects invalid onTime format', async () => {
@@ -438,8 +484,7 @@ describe('schedules.power CRUD', () => {
 describe('schedules.alarm CRUD', () => {
   beforeEach(() => {
     clearTables()
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockResolvedValue(undefined)
+    resetSchedulerMocks()
   })
 
   it('creates with vibrationPattern default of "rise"', async () => {
@@ -449,7 +494,8 @@ describe('schedules.alarm CRUD', () => {
     } as any)
     expect(row.vibrationPattern).toBe('rise')
     expect(row.duration).toBe(120)
-    expect(mocks.reloadSchedules).toHaveBeenCalledTimes(1)
+    expect(mocks.upsertAlarmJob).toHaveBeenCalledTimes(1)
+    expect(mocks.upsertAlarmJob).toHaveBeenCalledWith(row)
   })
 
   it('accepts explicit "double" vibrationPattern', async () => {
@@ -538,12 +584,13 @@ describe('schedules.alarm CRUD', () => {
 describe('schedules scheduler-failure paths swallow errors', () => {
   beforeEach(() => {
     clearTables()
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockResolvedValue(undefined)
+    resetSchedulerMocks()
   })
 
-  it('createPowerSchedule logs but does not throw when reload fails', async () => {
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+  it('createPowerSchedule logs but does not throw when upsert fails', async () => {
+    mocks.upsertPowerJob.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const row = await caller.createPowerSchedule({
@@ -555,8 +602,10 @@ describe('schedules scheduler-failure paths swallow errors', () => {
     errSpy.mockRestore()
   })
 
-  it('createAlarmSchedule logs but does not throw when reload fails', async () => {
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+  it('createAlarmSchedule logs but does not throw when upsert fails', async () => {
+    mocks.upsertAlarmJob.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const row = await caller.createAlarmSchedule({
@@ -569,12 +618,14 @@ describe('schedules scheduler-failure paths swallow errors', () => {
     errSpy.mockRestore()
   })
 
-  it('deleteTemperatureSchedule logs but does not throw when reload fails', async () => {
+  it('deleteTemperatureSchedule logs but does not throw when cancel fails', async () => {
     const row = await caller.createTemperatureSchedule({
       side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
     })
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    resetSchedulerMocks()
+    mocks.cancelTemperatureJob.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const out = await caller.deleteTemperatureSchedule({ id: row.id })
@@ -583,12 +634,14 @@ describe('schedules scheduler-failure paths swallow errors', () => {
     errSpy.mockRestore()
   })
 
-  it('deletePowerSchedule logs but does not throw when reload fails', async () => {
+  it('deletePowerSchedule logs but does not throw when cancel fails', async () => {
     const row = await caller.createPowerSchedule({
       side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
     })
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    resetSchedulerMocks()
+    mocks.cancelPowerJob.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const out = await caller.deletePowerSchedule({ id: row.id })
@@ -597,13 +650,15 @@ describe('schedules scheduler-failure paths swallow errors', () => {
     errSpy.mockRestore()
   })
 
-  it('deleteAlarmSchedule logs but does not throw when reload fails', async () => {
+  it('deleteAlarmSchedule logs but does not throw when cancel fails', async () => {
     const row = await caller.createAlarmSchedule({
       side: 'left', dayOfWeek: 'monday', time: '07:00',
       vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
     } as any)
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    resetSchedulerMocks()
+    mocks.cancelAlarmJob.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const out = await caller.deleteAlarmSchedule({ id: row.id })
@@ -612,8 +667,10 @@ describe('schedules scheduler-failure paths swallow errors', () => {
     errSpy.mockRestore()
   })
 
-  it('batchUpdate logs but does not throw when reload fails', async () => {
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+  it('batchUpdate logs but does not throw when upsert fails', async () => {
+    mocks.upsertTemperatureJob.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const result = await caller.batchUpdate({
@@ -628,12 +685,14 @@ describe('schedules scheduler-failure paths swallow errors', () => {
     errSpy.mockRestore()
   })
 
-  it('updatePowerSchedule logs but does not throw when reload fails', async () => {
+  it('updatePowerSchedule logs but does not throw when upsert fails', async () => {
     const row = await caller.createPowerSchedule({
       side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
     })
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    resetSchedulerMocks()
+    mocks.upsertPowerJob.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const out = await caller.updatePowerSchedule({ id: row.id, enabled: false })
@@ -642,13 +701,15 @@ describe('schedules scheduler-failure paths swallow errors', () => {
     errSpy.mockRestore()
   })
 
-  it('updateAlarmSchedule logs but does not throw when reload fails', async () => {
+  it('updateAlarmSchedule logs but does not throw when upsert fails', async () => {
     const row = await caller.createAlarmSchedule({
       side: 'left', dayOfWeek: 'monday', time: '07:00',
       vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
     } as any)
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockRejectedValueOnce(new Error('boom'))
+    resetSchedulerMocks()
+    mocks.upsertAlarmJob.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const out = await caller.updateAlarmSchedule({ id: row.id, duration: 30 })
@@ -661,8 +722,7 @@ describe('schedules scheduler-failure paths swallow errors', () => {
 describe('schedules.batchUpdate additional paths', () => {
   beforeEach(() => {
     clearTables()
-    mocks.reloadSchedules.mockClear()
-    mocks.reloadSchedules.mockResolvedValue(undefined)
+    resetSchedulerMocks()
   })
 
   it('throws NOT_FOUND for missing power delete id', async () => {
@@ -725,6 +785,70 @@ describe('schedules.batchUpdate additional paths', () => {
   })
 })
 
+describe('schedules incremental scheduler API', () => {
+  beforeEach(() => {
+    clearTables()
+    resetSchedulerMocks()
+  })
+
+  it('upsertAlarmJob receives a row matching the persisted record', async () => {
+    const created = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+
+    expect(mocks.upsertAlarmJob).toHaveBeenCalledTimes(1)
+    const arg = mocks.upsertAlarmJob.mock.calls[0][0] as any
+    expect(arg.id).toBe(created.id)
+    expect(arg.time).toBe('07:00')
+    expect(arg.enabled).toBe(true)
+  })
+
+  it('yggdrasil-49 regression: an unrelated mutation does NOT cancel a recently-created alarm', async () => {
+    // Caller-A creates an alarm for 07:00 on Monday.
+    await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+    resetSchedulerMocks()
+
+    // Caller-B mutates a completely unrelated temperature schedule a few
+    // seconds later — what previously was 07:00:04 inside the alarm's fire
+    // window. With the old fire-and-forget reloadScheduler() this would have
+    // cancelled+recreated every recurring job; with the incremental API the
+    // alarm is never touched.
+    await caller.createTemperatureSchedule({
+      side: 'right', dayOfWeek: 'tuesday', time: '21:00', temperature: 70,
+    })
+
+    expect(mocks.cancelAlarmJob).not.toHaveBeenCalled()
+    expect(mocks.reloadSchedules).not.toHaveBeenCalled()
+    // The temperature route only touches the temperature helper.
+    expect(mocks.upsertTemperatureJob).toHaveBeenCalledTimes(1)
+    expect(mocks.upsertAlarmJob).not.toHaveBeenCalled()
+  })
+
+  it('batchUpdate fans out into per-row upserts/cancels rather than a global reload', async () => {
+    const seed = await caller.createTemperatureSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68,
+    })
+    resetSchedulerMocks()
+
+    await caller.batchUpdate({
+      deletes: { temperature: [seed.id] },
+      creates: {
+        alarm: [
+          { side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, duration: 120, alarmTemperature: 80 },
+        ],
+      },
+    })
+
+    expect(mocks.cancelTemperatureJob).toHaveBeenCalledWith(seed.id)
+    expect(mocks.upsertAlarmJob).toHaveBeenCalledTimes(1)
+    expect(mocks.reloadSchedules).not.toHaveBeenCalled()
+  })
+})
+
 describe('schedules query error paths', () => {
   it('getAll wraps DB errors as INTERNAL_SERVER_ERROR', async () => {
     // Re-mock db to throw inside .all()
@@ -740,7 +864,15 @@ describe('schedules query error paths', () => {
 
     vi.resetModules()
     vi.doMock('@/src/scheduler', () => ({
-      getJobManager: vi.fn(async () => ({ reloadSchedules: vi.fn() })),
+      getJobManager: vi.fn(async () => ({
+        reloadSchedules: vi.fn(),
+        upsertTemperatureJob: vi.fn(),
+        cancelTemperatureJob: vi.fn(),
+        upsertPowerJob: vi.fn(),
+        cancelPowerJob: vi.fn(),
+        upsertAlarmJob: vi.fn(),
+        cancelAlarmJob: vi.fn(),
+      })),
     }))
     vi.doMock('@/src/db', () => failing)
 
@@ -770,7 +902,15 @@ describe('schedules query error paths', () => {
 
     vi.resetModules()
     vi.doMock('@/src/scheduler', () => ({
-      getJobManager: vi.fn(async () => ({ reloadSchedules: vi.fn() })),
+      getJobManager: vi.fn(async () => ({
+        reloadSchedules: vi.fn(),
+        upsertTemperatureJob: vi.fn(),
+        cancelTemperatureJob: vi.fn(),
+        upsertPowerJob: vi.fn(),
+        cancelPowerJob: vi.fn(),
+        upsertAlarmJob: vi.fn(),
+        cancelAlarmJob: vi.fn(),
+      })),
     }))
     vi.doMock('@/src/db', () => failing)
 
@@ -795,6 +935,51 @@ describe('schedules query error paths', () => {
     vi.resetModules()
   })
 
+  it('batchUpdate.creates throws INTERNAL_SERVER_ERROR per kind when insert returns no row', async () => {
+    // tx.insert(table).values(entry).returning().all() → [] drives the new
+    // throw branches at schedules.ts:679 / 684 / 689 (one per row kind).
+    const makeFailingDb = () => {
+      const emptyAll = vi.fn(() => [])
+      const returning = { all: emptyAll }
+      const values = { returning: vi.fn(() => returning) }
+      const insert = vi.fn(() => ({ values: vi.fn(() => values) }))
+      return { db: { transaction: (cb: (tx: { insert: typeof insert }) => unknown) => cb({ insert }) } }
+    }
+    const scheduler = {
+      getJobManager: vi.fn(async () => ({
+        reloadSchedules: vi.fn(),
+        upsertTemperatureJob: vi.fn(),
+        cancelTemperatureJob: vi.fn(),
+        upsertPowerJob: vi.fn(),
+        cancelPowerJob: vi.fn(),
+        upsertAlarmJob: vi.fn(),
+        cancelAlarmJob: vi.fn(),
+      })),
+    }
+
+    for (const [kind, payload, label] of [
+      ['temperature', { side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68, enabled: true }, 'temperature schedule'],
+      ['power', { side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true }, 'power schedule'],
+      ['alarm', { side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80, enabled: true }, 'alarm schedule'],
+    ] as const) {
+      vi.resetModules()
+      vi.doMock('@/src/db', () => makeFailingDb())
+      vi.doMock('@/src/scheduler', () => scheduler)
+      const { schedulesRouter } = await import('@/src/server/routers/schedules')
+      const c = schedulesRouter.createCaller({})
+
+      await expect(
+        c.batchUpdate({
+          creates: { temperature: [], power: [], alarm: [], [kind]: [payload] } as any,
+        }),
+      ).rejects.toThrow(new RegExp(`Failed to create ${label} - no record returned`))
+
+      vi.doUnmock('@/src/db')
+      vi.doUnmock('@/src/scheduler')
+    }
+    vi.resetModules()
+  })
+
   it('mutation handlers wrap non-TRPC DB errors as INTERNAL_SERVER_ERROR', async () => {
     const failing = { db: {
       transaction: () => { throw new Error('tx exploded') },
@@ -802,7 +987,15 @@ describe('schedules query error paths', () => {
 
     vi.resetModules()
     vi.doMock('@/src/scheduler', () => ({
-      getJobManager: vi.fn(async () => ({ reloadSchedules: vi.fn() })),
+      getJobManager: vi.fn(async () => ({
+        reloadSchedules: vi.fn(),
+        upsertTemperatureJob: vi.fn(),
+        cancelTemperatureJob: vi.fn(),
+        upsertPowerJob: vi.fn(),
+        cancelPowerJob: vi.fn(),
+        upsertAlarmJob: vi.fn(),
+        cancelAlarmJob: vi.fn(),
+      })),
     }))
     vi.doMock('@/src/db', () => failing)
 

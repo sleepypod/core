@@ -82,32 +82,62 @@ import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepali
 import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
 import { invalidateGuardSettingsCache } from '@/src/hardware/pumpStallGuard'
 
+const REBOOT_KEYS = ['rebootDaily', 'rebootTime'] as const
+const PRIME_KEYS = ['primePodDaily', 'primePodTime'] as const
+// Brightness values are deliberately excluded — they don't affect cron timing,
+// and the led-night-{start,end} closures re-read brightness from device_settings
+// at fire time. Including them here would cancel-and-recreate both cron jobs on
+// every slider release (wasted work) and emit a redundant SET_SETTINGS write on
+// top of applyCurrentLedBrightness below.
+const LED_KEYS = [
+  'ledNightModeEnabled', 'ledNightStartTime', 'ledNightEndTime',
+] as const
+
 /**
- * Reload schedules in the job manager after settings changes
- * that affect scheduling (timezone, priming, reboot)
+ * Apply scheduler mutations triggered by a device-settings update. Re-reads
+ * the persisted settings row so the helpers see the merged state instead of
+ * just the incoming patch (`enabled=false` updates can omit the time fields,
+ * and the upserts need both to decide schedule vs. cancel).
+ *
+ * Timezone changes still force a full reload — every cron job is bound to its
+ * tz at creation time inside node-schedule and cannot be rebound in place.
+ * Per-kind keys go through the incremental upserts so an unrelated alarm
+ * fire-window isn't disturbed by a reboot-time toggle.
  */
-async function reloadSchedulerIfNeeded(input: Record<string, unknown>): Promise<void> {
-  // Brightness values do NOT belong here — they don't affect cron timing,
-  // they're read from the DB by the LED night-mode cron closures at fire
-  // time. Including them would force reloadSchedules() (which rebuilds every
-  // temperature cron) on every slider release. See applyCurrentLedBrightness
-  // for the immediate hardware push that handles slider changes.
-  const schedulingKeys = [
-    'timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime',
-    'ledNightModeEnabled', 'ledNightStartTime', 'ledNightEndTime',
-  ]
-  const hasSchedulingChanges = schedulingKeys.some(key => key in input)
+async function applySettingsSchedulerChanges(input: Record<string, unknown>): Promise<void> {
+  const tzChanged = 'timezone' in input && typeof input.timezone === 'string'
+  const rebootChanged = REBOOT_KEYS.some(k => k in input)
+  const primeChanged = PRIME_KEYS.some(k => k in input)
+  const ledChanged = LED_KEYS.some(k => k in input)
 
-  if (hasSchedulingChanges) {
-    const jobManager = await getJobManager()
+  if (!tzChanged && !rebootChanged && !primeChanged && !ledChanged) return
 
-    // If timezone changed, use updateTimezone which reloads automatically
-    if ('timezone' in input && typeof input.timezone === 'string') {
-      await jobManager.updateTimezone(input.timezone)
-    }
-    else {
-      await jobManager.reloadSchedules()
-    }
+  const jobManager = await getJobManager()
+
+  if (tzChanged) {
+    // Full reload — every cron job rebinds against the new tz.
+    await jobManager.updateTimezone(input.timezone as string)
+    return
+  }
+
+  // Re-read the row so the upserts see post-commit values, not the diff.
+  const [settings] = await db.select().from(deviceSettings).limit(1)
+  if (!settings) return
+
+  if (rebootChanged) {
+    jobManager.upsertRebootJob(settings.rebootDaily, settings.rebootTime)
+  }
+  if (primeChanged) {
+    jobManager.upsertPrimeJob(settings.primePodDaily, settings.primePodTime)
+  }
+  if (ledChanged) {
+    await jobManager.upsertLedNightMode(
+      settings.ledNightModeEnabled,
+      settings.ledNightStartTime,
+      settings.ledNightEndTime,
+      settings.ledDayBrightness,
+      settings.ledNightBrightness,
+    )
   }
 }
 
@@ -298,10 +328,10 @@ export const settingsRouter = router({
         })
 
         try {
-          await reloadSchedulerIfNeeded(input)
+          await applySettingsSchedulerChanges(input)
         }
         catch (e) {
-          console.error('Scheduler reload failed:', e)
+          console.error('Scheduler update failed:', e)
         }
 
         // Immediate LED apply when brightness fields or the night-mode toggle
@@ -309,12 +339,6 @@ export const settingsRouter = router({
         // boundary, which makes the slider feel broken and — when night mode
         // is disabled while currently in the night window — leaves the LED
         // dim until the user manually nudges the day slider.
-        //
-        // Note: when night mode stays enabled and the user only drags the day
-        // slider, reloadSchedulerIfNeeded above also fires scheduleLedNightMode
-        // which emits its own initial-apply send. The pod gets two consecutive
-        // SET_SETTINGS frames with the same value — idempotent at firmware,
-        // not worth gating around.
         if (
           'ledDayBrightness' in input
           || 'ledNightBrightness' in input
@@ -486,14 +510,14 @@ export const settingsRouter = router({
           return result
         })
 
-        // Reload scheduler if away mode scheduling changed
+        // Apply away-mode scheduling incrementally if it changed
         if ('awayStart' in input || 'awayReturn' in input) {
           try {
             const jobManager = await getJobManager()
-            await jobManager.reloadSchedules()
+            jobManager.upsertAwayMode(updated.side, updated.awayStart, updated.awayReturn)
           }
           catch (e) {
-            console.error('Scheduler reload failed:', e)
+            console.error('Scheduler update failed:', e)
           }
         }
 
