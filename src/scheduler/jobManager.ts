@@ -832,6 +832,21 @@ export class JobManager {
   //   in the scheduler (scheduleJob cancels the prior id before scheduling).
   //   When `enabled === false`, the upsert acts as cancel.
   // - cancel*Job(id) — removes the job(s) for that row id. No-op if absent.
+  //
+  // Two styles exist below:
+  // - Single-id helpers (temp/alarm/power) rely on scheduleJob's
+  //   cancel-existing-by-id semantics: schedule*() is called with the same
+  //   id and the prior job is replaced atomically.
+  // - Multi-id helpers (reboot/prime/awayMode) explicitly cancel every
+  //   sub-job up front, because the new schedule may leave a strict subset
+  //   armed (e.g. awayStart set but awayReturn null) and the old sub-jobs
+  //   would otherwise persist.
+  //
+  // Residual self-edit caveat: editing a row inside its own fire window still
+  // recreates that row's job and recomputes nextInvocation from "now". The
+  // currently-firing handler runs to completion (node-schedule does not
+  // interrupt in-flight invocations), and the next fire reflects the new row
+  // state — which is the desired behavior for a user-driven edit.
   // ---------------------------------------------------------------------------
 
   /**
@@ -952,8 +967,12 @@ export class JobManager {
   }
 
   /**
-   * Upsert away-mode one-time jobs for a side. Cancels both existing jobs
-   * regardless of incoming values; reschedules only the ones present.
+   * Upsert away-mode one-time jobs for a side. Cancels both `away-start-${side}`
+   * and `away-return-${side}` first, then reschedules only the ones with a
+   * non-null incoming time. The explicit pre-cancel is required because the
+   * new schedule may set just one side of the pair, and `scheduleAwayMode`
+   * only registers the ones that are present — without the pre-cancel, the
+   * stale half would survive.
    */
   upsertAwayMode(side: 'left' | 'right', awayStart: string | null, awayReturn: string | null): void {
     this.scheduler.cancelJob(`away-start-${side}`)
