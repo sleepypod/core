@@ -148,6 +148,19 @@ export const deviceRouter = router({
         left: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
         right: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
       }),
+      wifiStrength: z.number(),
+      wifiSSID: z.string(),
+      roomClimate: z.object({
+        temperatureC: z.number().nullable(),
+        humidity: z.number().nullable(),
+        timestamp: z.number().nullable(),
+      }),
+      waterLevelRaw: z.object({
+        raw: z.number().nullable(),
+        calibratedEmpty: z.number().nullable(),
+        calibratedFull: z.number().nullable(),
+        timestamp: z.number().nullable(),
+      }),
     }))
     .query(async ({ input }) => {
       return withHardwareClient(async (client) => {
