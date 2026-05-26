@@ -84,9 +84,13 @@ import { invalidateGuardSettingsCache } from '@/src/hardware/pumpStallGuard'
 
 const REBOOT_KEYS = ['rebootDaily', 'rebootTime'] as const
 const PRIME_KEYS = ['primePodDaily', 'primePodTime'] as const
+// Brightness values are deliberately excluded — they don't affect cron timing,
+// and the led-night-{start,end} closures re-read brightness from device_settings
+// at fire time. Including them here would cancel-and-recreate both cron jobs on
+// every slider release (wasted work) and emit a redundant SET_SETTINGS write on
+// top of applyCurrentLedBrightness below.
 const LED_KEYS = [
-  'ledNightModeEnabled', 'ledDayBrightness', 'ledNightBrightness',
-  'ledNightStartTime', 'ledNightEndTime',
+  'ledNightModeEnabled', 'ledNightStartTime', 'ledNightEndTime',
 ] as const
 
 /**
@@ -335,12 +339,6 @@ export const settingsRouter = router({
         // boundary, which makes the slider feel broken and — when night mode
         // is disabled while currently in the night window — leaves the LED
         // dim until the user manually nudges the day slider.
-        //
-        // Note: when night mode stays enabled and the user only drags the day
-        // slider, applySettingsSchedulerChanges above also fires scheduleLedNightMode
-        // which emits its own initial-apply send. The pod gets two consecutive
-        // SET_SETTINGS frames with the same value — idempotent at firmware,
-        // not worth gating around.
         if (
           'ledDayBrightness' in input
           || 'ledNightBrightness' in input
