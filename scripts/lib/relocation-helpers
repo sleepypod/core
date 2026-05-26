@@ -4,20 +4,24 @@
 #
 # Pods in the field have wildly different storage layouts:
 #
-#   Pod 4 stock      /  ≈ 5.8 GB (~1 GB free)   /persistent ≈ 15 GB  (~13 GB free)
-#   Pod 5            /  ≈ 5.8 GB                 /persistent ≈ 15 GB
-#   Pod 3 + SD card  /  ≈ 6.6 GB (~5 GB free)    /persistent ≈ 966 MB (~250 MB free)
+#   Pod 4 stock      /  ≈ 5.8 GB total   /persistent ≈ 15 GB total
+#   Pod 5            /  ≈ 5.8 GB total   /persistent ≈ 15 GB total
+#   Pod 3 + SD card  /  ≈ 6.6 GB total   /persistent ≈ 966 MB total
 #
 # The previous revision unconditionally bind-mounted node_modules onto
 # /persistent — correct for Pod 4 (frees ~700 MB of tight rootfs), wrong
-# for Pod 3 SD (would shove 700 MB into ~250 MB free). Now we pick the
-# partition with the most free space, with an explicit override.
+# for Pod 3 SD (would shove 700 MB into a 966 MB partition that the
+# firmware actively writes to). Now we pick the partition with the
+# larger total size, with an explicit override.
+#
+# Why total, not free: free space fluctuates with firmware RAW writes,
+# pruner thresholds, swap, etc. Total size reflects which partition was
+# actually sized for storage. On Pod 4/5, /persistent is the design
+# storage volume; on Pod 3 + SD, the SD card is rootfs.
 #
 # Decision precedence (highest first):
 #   1. NODE_MODULES_DIR env (set via install's --node-modules-dir flag)
-#   2. Auto: whichever of rootfs / /persistent has more free space. Soft
-#      floor NODE_MODULES_HEADROOM_MB so a near-full partition doesn't win
-#      by a tiny margin.
+#   2. Auto: whichever of rootfs / /persistent has the larger total size.
 #
 # Bind mount, not symlink: the previous revision used
 #   ln -sfn /persistent/sleepypod-core/node_modules /home/dac/sleepypod-core/node_modules
@@ -41,10 +45,9 @@
 
 PERSISTENT_ROOT="/persistent"
 PERSISTENT_APP_ROOT="$PERSISTENT_ROOT/sleepypod-core"
-NODE_MODULES_HEADROOM_MB="${NODE_MODULES_HEADROOM_MB:-1500}"
 
-_partition_free_mb() {
-  df -m "$1" 2>/dev/null | awk 'NR==2 {print $4}'
+_partition_total_mb() {
+  df -m "$1" 2>/dev/null | awk 'NR==2 {print $2}'
 }
 
 _print_storage_banner() {
@@ -73,24 +76,20 @@ _print_storage_banner() {
 # falls back to install_nm (rootfs) when /persistent is missing or smaller.
 _auto_pick_node_modules_target() {
   local install_nm="$1"
-  local rootfs_free persistent_free
+  local rootfs_total persistent_total
   # Probe the parent — $install_nm itself doesn't exist yet on a first
-  # install (pnpm creates it). df on a non-existent path emits nothing
-  # and the picker would wrongly see 0 MB free on rootfs.
-  rootfs_free=$(_partition_free_mb "$(dirname "$install_nm")")
-  rootfs_free=${rootfs_free:-0}
+  # install (pnpm creates it). df on a non-existent path emits nothing.
+  rootfs_total=$(_partition_total_mb "$(dirname "$install_nm")")
+  rootfs_total=${rootfs_total:-0}
 
   if mountpoint -q "$PERSISTENT_ROOT" 2>/dev/null; then
-    persistent_free=$(_partition_free_mb "$PERSISTENT_ROOT")
-    persistent_free=${persistent_free:-0}
+    persistent_total=$(_partition_total_mb "$PERSISTENT_ROOT")
+    persistent_total=${persistent_total:-0}
   else
-    persistent_free=0
+    persistent_total=0
   fi
 
-  # Pick /persistent only if it has both more free space and clears the
-  # soft floor. Otherwise leave node_modules on rootfs (no bind mount).
-  if [ "$persistent_free" -gt "$rootfs_free" ] \
-     && [ "$persistent_free" -ge "$NODE_MODULES_HEADROOM_MB" ]; then
+  if [ "$persistent_total" -gt "$rootfs_total" ]; then
     echo "$PERSISTENT_APP_ROOT/node_modules"
   else
     echo "$install_nm"
@@ -108,9 +107,9 @@ ensure_persistent_node_modules() {
   else
     target=$(_auto_pick_node_modules_target "$install_nm")
     if [ "$target" = "$install_nm" ]; then
-      reason="rootfs has more free space than $PERSISTENT_ROOT (no bind mount needed)"
+      reason="rootfs is the larger partition (no bind mount needed)"
     else
-      reason="$PERSISTENT_ROOT has more free space than rootfs"
+      reason="$PERSISTENT_ROOT is the larger partition"
     fi
   fi
 

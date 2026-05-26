@@ -32,9 +32,9 @@ echo ""
 #                      exact SHA the run built, not whatever's latest.
 #   --restore          List available DB backups and restore a selected one
 #   --node-modules-dir Where node_modules lives. Default: auto-pick rootfs vs
-#                      /persistent by free space (see scripts/lib/relocation-helpers).
+#                      /persistent by total partition size (see scripts/lib/relocation-helpers).
 #   --swap-dir         Where the build-time swap file lives. Default: auto-pick
-#                      rootfs vs /persistent by free space, gated by headroom.
+#                      rootfs vs /persistent by total partition size.
 INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
@@ -705,43 +705,40 @@ fix_db_permissions
 # relied on at runtime.
 #
 # Where it lives: same auto-picker as node_modules — pick the partition
-# with the most free space, gated by SWAP_HEADROOM_MB so a near-full
-# /persistent doesn't win by a tiny margin. Override with --swap-dir.
+# with the larger total size. Override with --swap-dir.
 #
-#   Pod 4 stock      / ≈ 1 GB free, /persistent ≈ 13 GB free → /persistent
-#   Pod 5            / ≈ 5 GB free, /persistent ≈ 15 GB free → /persistent
-#   Pod 3 + SD card  / ≈ 5 GB free, /persistent ≈ 250 MB free → rootfs
+#   Pod 4 stock      / ≈ 5.8 GB total, /persistent ≈ 15 GB total → /persistent
+#   Pod 5            / ≈ 5.8 GB total, /persistent ≈ 15 GB total → /persistent
+#   Pod 3 + SD card  / ≈ 6.6 GB total, /persistent ≈ 966 MB total → rootfs
 #
 # Relocation-helpers isn't sourced yet (repo not on disk), so the picker
 # is inlined here, matching the iptables-helpers pattern above.
 SWAP_SIZE_MB=1024
-SWAP_HEADROOM_MB="${SWAP_HEADROOM_MB:-1200}"  # SWAP_SIZE_MB + ~200 MB headroom
 swap_target_dir=""
 swap_reason=""
 if [ -n "$SWAP_DIR" ]; then
   swap_target_dir="$SWAP_DIR"
   swap_reason="user override (--swap-dir)"
 else
-  rootfs_free_mb=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
-  rootfs_free_mb=${rootfs_free_mb:-0}
+  rootfs_total_mb=$(df -m / 2>/dev/null | awk 'NR==2{print $2}')
+  rootfs_total_mb=${rootfs_total_mb:-0}
   if mountpoint -q /persistent 2>/dev/null; then
-    persistent_free_mb=$(df -m /persistent 2>/dev/null | awk 'NR==2{print $4}')
-    persistent_free_mb=${persistent_free_mb:-0}
+    persistent_total_mb=$(df -m /persistent 2>/dev/null | awk 'NR==2{print $2}')
+    persistent_total_mb=${persistent_total_mb:-0}
   else
-    persistent_free_mb=0
+    persistent_total_mb=0
   fi
-  if [ "$persistent_free_mb" -gt "$rootfs_free_mb" ] \
-     && [ "$persistent_free_mb" -ge "$SWAP_HEADROOM_MB" ]; then
+  if [ "$persistent_total_mb" -gt "$rootfs_total_mb" ]; then
     swap_target_dir="/persistent"
-    swap_reason="/persistent has more free space than rootfs"
-  elif [ "$rootfs_free_mb" -ge "$SWAP_HEADROOM_MB" ]; then
+    swap_reason="/persistent is the larger partition"
+  else
     swap_target_dir="/"
-    swap_reason="rootfs has more free space than /persistent"
+    swap_reason="rootfs is the larger partition"
   fi
 fi
 
 if [ -z "$swap_target_dir" ]; then
-  echo "Warning: neither rootfs nor /persistent has ${SWAP_HEADROOM_MB} MB free — skipping swap setup; on-pod builds may OOM" >&2
+  echo "Warning: no swap target chosen — skipping swap setup; on-pod builds may OOM" >&2
 else
   # Strip trailing slash so the joined path stays canonical (/swapfile, not //swapfile).
   SWAPFILE="${swap_target_dir%/}/swapfile"
@@ -1079,8 +1076,8 @@ if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
 fi
 
 # Decide where node_modules lives before pnpm runs. Auto-picks rootfs
-# vs /persistent by free space (Pod 3 + SD has tiny /persistent; Pod 4
-# stock has tight rootfs). Override via --node-modules-dir <path>.
+# vs /persistent by total partition size (Pod 3 + SD has tiny /persistent;
+# Pod 4/5 stock has large /persistent). Override via --node-modules-dir <path>.
 if [ -f "$INSTALL_DIR/scripts/lib/relocation-helpers" ]; then
   source "$INSTALL_DIR/scripts/lib/relocation-helpers"
   ensure_persistent_node_modules "$INSTALL_DIR"
