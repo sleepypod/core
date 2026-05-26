@@ -152,12 +152,12 @@ describe('getWifiInfo — SSID fallback branches', () => {
   })
 
   it('returns unknown when iwgetid stdout is empty', () => {
-    mockSpawn((cmd) => (cmd === 'iwgetid' ? { stdout: '' } : {}))
+    mockSpawn(cmd => (cmd === 'iwgetid' ? { stdout: '' } : {}))
     expect(getWifiInfo().wifiSSID).toBe('unknown')
   })
 
   it('returns unknown when iwgetid stdout is missing', () => {
-    mockSpawn((cmd) => (cmd === 'iwgetid' ? {} : {}))
+    mockSpawn(cmd => (cmd === 'iwgetid' ? {} : {}))
     expect(getWifiInfo().wifiSSID).toBe('unknown')
   })
 
@@ -172,7 +172,7 @@ describe('getWifiInfo — SSID fallback branches', () => {
 
 describe('getWifiInfo — robustness', () => {
   it('falls through to /proc + iwgetid when `iw dev` itself throws', () => {
-    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+    spawnSyncMock.mockImplementation((cmd: string) => {
       if (cmd === 'iw') throw new Error('iw missing')
       if (cmd === 'iwgetid') return { stdout: 'legacy' } as any
       return {} as any
