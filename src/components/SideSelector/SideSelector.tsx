@@ -2,7 +2,7 @@
 
 import clsx from 'clsx'
 import { Link, LinkIcon, Power, TrendingDown, TrendingUp } from 'lucide-react'
-import { useSide, type Side } from '@/src/providers/SideProvider'
+import { useSide } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { determineTrend, ensureF, formatTemp } from '@/src/lib/tempUtils'
@@ -34,7 +34,6 @@ export const SideSelector = () => {
         )}
       >
         <SideButton
-          side="left"
           label={leftName}
           isSelected={selectedSide === 'left' || selectedSide === 'both'}
           isLinked={isLinked}
@@ -42,7 +41,6 @@ export const SideSelector = () => {
           onSelect={() => selectSide('left')}
         />
         <SideButton
-          side="right"
           label={rightName}
           isSelected={selectedSide === 'right' || selectedSide === 'both'}
           isLinked={isLinked}
@@ -73,7 +71,6 @@ export const SideSelector = () => {
 }
 
 interface SideButtonProps {
-  side: Side
   label: string
   isSelected: boolean
   isLinked: boolean
@@ -88,7 +85,6 @@ interface SideButtonProps {
 }
 
 const SideButton = ({
-  side,
   label,
   isSelected,
   isLinked,
@@ -116,7 +112,6 @@ const SideButton = ({
       className={clsx(
         'flex-1 flex flex-col items-center py-3 px-2 rounded-[12px] sm:py-[14px] sm:px-4',
         'bg-transparent text-zinc-500 cursor-pointer transition-all duration-200 ease-in-out',
-        side === 'left' ? 'mr-3 sm:mr-4' : 'ml-3 sm:ml-4',
         showIndividualHighlight && 'bg-[rgb(30,42,58)] border border-sky-500/30',
       )}
     >
