@@ -6,6 +6,12 @@ export interface WifiInfo {
   wifiSSID: string
 }
 
+// systemd unit pins PATH to /usr/local/bin:/usr/bin:/bin, but `iw` lives in
+// /usr/sbin on Pod 5. Broaden lookup paths for any spawned wifi binary so
+// the process resolves regardless of how the unit's PATH is configured.
+const SPAWN_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+const SPAWN_OPTS = { encoding: 'utf-8' as const, timeout: 2000, env: { ...process.env, PATH: SPAWN_PATH } }
+
 export function getWifiInfo(): WifiInfo {
   // Pod 5 (J55) ships `iw` but not `iwgetid`, and its /proc/net/wireless
   // header has no data row — so try `iw dev … link` first; it provides
@@ -22,7 +28,7 @@ function parseIwLink(): { wifiStrength: number | null, wifiSSID: string | null }
   try {
     const iface = detectWirelessIface()
     if (!iface) return { wifiStrength: null, wifiSSID: null }
-    const result = spawnSync('iw', ['dev', iface, 'link'], { encoding: 'utf-8', timeout: 2000 })
+    const result = spawnSync('iw', ['dev', iface, 'link'], SPAWN_OPTS)
     const out = result.stdout?.trim()
     if (!out || out.startsWith('Not connected')) return { wifiStrength: null, wifiSSID: null }
 
@@ -44,7 +50,7 @@ function parseIwLink(): { wifiStrength: number | null, wifiSSID: string | null }
 
 function detectWirelessIface(): string | null {
   try {
-    const result = spawnSync('iw', ['dev'], { encoding: 'utf-8', timeout: 2000 })
+    const result = spawnSync('iw', ['dev'], SPAWN_OPTS)
     const match = result.stdout?.match(/Interface\s+(\S+)/)
     return match ? match[1] : null
   }
@@ -76,7 +82,7 @@ function parseProcWirelessLink(): number {
 
 function parseIwgetidSSID(): string {
   try {
-    const result = spawnSync('iwgetid', ['-r'], { encoding: 'utf-8', timeout: 2000 })
+    const result = spawnSync('iwgetid', ['-r'], SPAWN_OPTS)
     return result.stdout?.trim() || 'unknown'
   }
   catch {
