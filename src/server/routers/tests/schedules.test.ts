@@ -935,6 +935,51 @@ describe('schedules query error paths', () => {
     vi.resetModules()
   })
 
+  it('batchUpdate.creates throws INTERNAL_SERVER_ERROR per kind when insert returns no row', async () => {
+    // tx.insert(table).values(entry).returning().all() → [] drives the new
+    // throw branches at schedules.ts:679 / 684 / 689 (one per row kind).
+    const makeFailingDb = () => {
+      const emptyAll = vi.fn(() => [])
+      const returning = { all: emptyAll }
+      const values = { returning: vi.fn(() => returning) }
+      const insert = vi.fn(() => ({ values: vi.fn(() => values) }))
+      return { db: { transaction: (cb: (tx: { insert: typeof insert }) => unknown) => cb({ insert }) } }
+    }
+    const scheduler = {
+      getJobManager: vi.fn(async () => ({
+        reloadSchedules: vi.fn(),
+        upsertTemperatureJob: vi.fn(),
+        cancelTemperatureJob: vi.fn(),
+        upsertPowerJob: vi.fn(),
+        cancelPowerJob: vi.fn(),
+        upsertAlarmJob: vi.fn(),
+        cancelAlarmJob: vi.fn(),
+      })),
+    }
+
+    for (const [kind, payload, label] of [
+      ['temperature', { side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68, enabled: true }, 'temperature schedule'],
+      ['power', { side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true }, 'power schedule'],
+      ['alarm', { side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80, enabled: true }, 'alarm schedule'],
+    ] as const) {
+      vi.resetModules()
+      vi.doMock('@/src/db', () => makeFailingDb())
+      vi.doMock('@/src/scheduler', () => scheduler)
+      const { schedulesRouter } = await import('@/src/server/routers/schedules')
+      const c = schedulesRouter.createCaller({})
+
+      await expect(
+        c.batchUpdate({
+          creates: { temperature: [], power: [], alarm: [], [kind]: [payload] } as any,
+        }),
+      ).rejects.toThrow(new RegExp(`Failed to create ${label} - no record returned`))
+
+      vi.doUnmock('@/src/db')
+      vi.doUnmock('@/src/scheduler')
+    }
+    vi.resetModules()
+  })
+
   it('mutation handlers wrap non-TRPC DB errors as INTERNAL_SERVER_ERROR', async () => {
     const failing = { db: {
       transaction: () => { throw new Error('tx exploded') },
