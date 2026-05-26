@@ -1,9 +1,10 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { db } from '@/src/db'
+import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
-import { eq } from 'drizzle-orm'
+import { bedTemp, waterLevelReadings } from '@/src/db/biometrics-schema'
+import { eq, desc } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
@@ -20,7 +21,8 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
-import { toC } from '@/src/lib/tempUtils'
+import { toC, centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
+import { getWifiInfo } from '@/src/hardware/wifi'
 
 // ---------------------------------------------------------------------------
 // Command name → HardwareCommand mapping for the raw execute endpoint
@@ -146,6 +148,19 @@ export const deviceRouter = router({
         left: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
         right: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
       }),
+      wifiStrength: z.number(),
+      wifiSSID: z.string(),
+      roomClimate: z.object({
+        temperatureC: z.number().nullable(),
+        humidity: z.number().nullable(),
+        timestamp: z.number().nullable(),
+      }),
+      waterLevelRaw: z.object({
+        raw: z.number().nullable(),
+        calibratedEmpty: z.number().nullable(),
+        calibratedFull: z.number().nullable(),
+        timestamp: z.number().nullable(),
+      }),
     }))
     .query(async ({ input }) => {
       return withHardwareClient(async (client) => {
@@ -202,6 +217,36 @@ export const deviceRouter = router({
 
         const convertTemp = (f: number) => input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f
 
+        // Best-effort enrichment — nulls on failure
+        let wifiStrength: number = -1
+        let wifiSSID: string = 'unknown'
+        let roomClimate: { temperatureC: number | null, humidity: number | null, timestamp: number | null } = { temperatureC: null, humidity: null, timestamp: null }
+        let waterLevelRaw: { raw: number | null, calibratedEmpty: number | null, calibratedFull: number | null, timestamp: number | null } = { raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null }
+        try {
+          const wifi = getWifiInfo()
+          wifiStrength = wifi.wifiStrength
+          wifiSSID = wifi.wifiSSID
+
+          const [latestBed] = await biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1)
+          if (latestBed) {
+            roomClimate = {
+              temperatureC: latestBed.ambientTemp !== null ? centiDegreesToC(latestBed.ambientTemp) : null,
+              humidity: latestBed.humidity !== null ? centiPercentToPercent(latestBed.humidity) : null,
+              timestamp: latestBed.timestamp ? latestBed.timestamp.getTime() : null,
+            }
+          }
+          const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
+          if (latestWater) {
+            waterLevelRaw = {
+              raw: latestWater.raw ?? null,
+              calibratedEmpty: latestWater.calibratedEmpty ?? null,
+              calibratedFull: latestWater.calibratedFull ?? null,
+              timestamp: latestWater.timestamp ? latestWater.timestamp.getTime() : null,
+            }
+          }
+        }
+        catch { /* enrichment is best-effort */ }
+
         return {
           ...status,
           leftSide: {
@@ -217,6 +262,10 @@ export const deviceRouter = router({
           ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
           ...((stallNotices.left || stallNotices.right) && { pumpStallNotifications: stallNotices }),
           snooze: { left: leftSnooze, right: rightSnooze },
+          wifiStrength,
+          wifiSSID,
+          roomClimate,
+          waterLevelRaw,
         }
       }, 'Failed to get device status')
     }),
