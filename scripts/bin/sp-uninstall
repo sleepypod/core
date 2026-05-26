@@ -59,6 +59,9 @@ for svc in "${SERVICES[@]}"; do
   rm -f "/etc/systemd/system/$svc"
 done
 
+# Drop-ins installed by sp-update (e.g. iptables-lockfile.conf for older pods).
+rm -rf /etc/systemd/system/sleepypod.service.d
+
 # Restore frank.sh from the most recent pre-tmpfs backup BEFORE the mount
 # is torn down — otherwise frank's cwd disappears mid-restart.
 if ls /opt/eight/bin/frank.sh.bak-pre-tmpfs-* >/dev/null 2>&1; then

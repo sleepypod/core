@@ -55,6 +55,7 @@ export function useDeviceStatus() {
         primeCompletedNotification: wsFrame.primeCompletedNotification
           ? { timestamp: normalizePrimeTimestamp(wsFrame.primeCompletedNotification.timestamp) }
           : undefined,
+        pumpStallNotifications: wsFrame.pumpStallNotifications,
         snooze: wsFrame.snooze,
       }
     : httpStatus

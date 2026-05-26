@@ -35,6 +35,16 @@ export function UpdateCard() {
   const didUnblockRef = useRef(false)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancelledRef = useRef(false)
+  /**
+   * Version snapshot captured right before sp-update runs. Polling uses
+   * this to distinguish "service is still the old build" from "service
+   * restarted on the new build" — without it, the first poll racily
+   * succeeds against the still-running old service and the UI re-blocks
+   * WAN mid-download, killing the in-progress update.
+   */
+  const baselineVersionRef = useRef<{ commitHash: string, buildDate: string } | null>(null)
+  /** Set to true once a poll fails — proves the service actually went down. */
+  const sawDownRef = useRef(false)
 
   // Clean up poll timer on unmount and re-block internet if needed
   useEffect(() => {
@@ -130,6 +140,14 @@ export function UpdateCard() {
     const branch = selectedBranch
       ?? (versionData?.branch !== 'unknown' ? versionData?.branch : undefined)
 
+    // Snapshot the current build so polling can tell when sp-update has
+    // actually restarted the service on the new code (vs. the old service
+    // still serving the API mid-download).
+    baselineVersionRef.current = versionData
+      ? { commitHash: versionData.commitHash, buildDate: versionData.buildDate }
+      : null
+    sawDownRef.current = false
+
     try {
       await triggerUpdate.mutateAsync({ branch })
       setUpdateState('reconnecting')
@@ -145,18 +163,47 @@ export function UpdateCard() {
 
   const pollForReconnection = () => {
     let attempts = 0
-    const maxAttempts = 60 // ~2 minutes at 2s intervals
+    const maxAttempts = 90 // ~3 minutes at 2s intervals — sp-update can stay up for a while before stopping the service
 
     const check = async () => {
       if (cancelledRef.current) return
       attempts++
       try {
-        await version.refetch()
-        // Success — service is back
-        await reblockIfNeeded()
-        setUpdateState('idle')
+        // Use the direct fetch path so a network/server error throws
+        // cleanly — useQuery.refetch() resolves on error and would make
+        // the down-detection below silently false.
+        const next = await utils.system.getVersion.fetch({})
+
+        const baseline = baselineVersionRef.current
+        const versionChanged = baseline !== null
+          && (next.commitHash !== baseline.commitHash || next.buildDate !== baseline.buildDate)
+
+        // Only call this "done" once we've proven the service actually
+        // bounced. Otherwise we're talking to the old next-server still
+        // serving the pre-update build — re-blocking WAN here kills
+        // sp-update's still-pending tarball download.
+        if (versionChanged || sawDownRef.current) {
+          // Keep the React-Query cache in sync with what we just fetched
+          // so other consumers re-render with the new version.
+          utils.system.getVersion.setData({}, next)
+          await reblockIfNeeded()
+          setUpdateState('idle')
+          return
+        }
+
+        // Old service is still up; sp-update hasn't reached `systemctl
+        // stop` yet. Keep polling without unblocking guarantees.
+        if (attempts < maxAttempts && !cancelledRef.current) {
+          pollTimerRef.current = setTimeout(check, 2000)
+        }
+        else if (!cancelledRef.current) {
+          await reblockIfNeeded()
+          setUpdateState('error')
+          setErrorMessage('Service did not restart on a new build. Check pod manually.')
+        }
       }
       catch {
+        sawDownRef.current = true
         if (attempts < maxAttempts && !cancelledRef.current) {
           pollTimerRef.current = setTimeout(check, 2000)
         }

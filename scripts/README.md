@@ -11,6 +11,63 @@
 
 See main [installation guide](../docs/INSTALLATION.md) for hardware setup.
 
+## Getting root on Pod 5
+
+Initial root access on a Pod 5 is a JTAG bootstrap — there is no
+software-only escalation. At a high level: tear down to the circuit board,
+connect a TC2070-IDC + FTDI FT232RL to the JTAG header, open a 921600-baud
+serial console, interrupt U-Boot at the `Hit any key to stop autoboot`
+prompt, then:
+
+```text
+setenv bootargs "root=PARTLABEL=rootfs_a rootwait init=/bin/bash"
+run bootcmd
+# in the resulting single-user shell, mount /proc /sys /dev /run,
+# then `mount -o remount,rw /` and set passwords:
+passwd root
+passwd rewt
+sync
+reboot -f
+```
+
+After reboot, login at the serial console as `root` with the password you
+just set, disable software-update services (`swupdate`, `defibrillator`,
+`eight-kernel`, `telegraf`, `vector`, `frankenfirmware`, `dac`,
+`swupdate.socket`) via `systemctl disable --now` + `systemctl mask`, then
+join wifi with `nmcli connection add type wifi …` so the pod is reachable
+over LAN.
+
+A few names that trip people up on first contact:
+
+- **`rewt`** is a user account on the pod (Eight Sleep's stock service user
+  — has a shell), not a tool you run. You set its password during the JTAG
+  step and use it later for ssh when `PermitRootLogin no` blocks direct
+  root login.
+- **`dac`** is also a system account but ships as `nologin`. sshd will
+  refuse interactive logins for it; you'll see `dac not allowed` if you
+  try `ssh dac@<pod>`. Don't try to "fix" this — `dac` is only meant to
+  own the hardware-control daemon, not log in.
+- Stock Pod 5 sshd is locked down: `PermitRootLogin no`,
+  `PasswordAuthentication no`, no preinstalled `authorized_keys` for root.
+
+So the practical Pod 5 install flow after JTAG bootstrap is:
+
+```bash
+# From your laptop, with PasswordAuthentication=yes temporarily enabled
+# on the pod (default if you haven't touched sshd_config yet — it will be
+# `no` once the JTAG image is fully booted, in which case flip it back to
+# `yes` via the serial console and `systemctl restart sshd`).
+ssh -p 8822 rewt@<pod-ip>
+su -                              # password: whatever you set in JTAG step 7
+curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install | bash
+```
+
+The optional SSH-setup step at the end of the installer writes your public
+key to `/root/.ssh/authorized_keys` and re-hardens sshd (port 8822,
+key-only, no root password login, no empty passwords). After that first
+install Pod 5 behaves like Pod 4 — key-based root ssh on port 8822, no
+`rewt` user needed for updates.
+
 ## Installation
 
 Run on the pod:

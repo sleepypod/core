@@ -7,6 +7,7 @@ import {
   flowReadings,
   freezerTemp,
   movement,
+  pumpAlerts,
   vitals,
   waterLevelReadings,
 } from './biometrics-schema'
@@ -21,7 +22,7 @@ import {
  *
  * Tables covered (all write at ≥1/minute and have no referential joins):
  *   vitals, movement, bed_temp, freezer_temp, flow_readings,
- *   ambient_light, water_level_readings
+ *   ambient_light, water_level_readings, pump_alerts
  *
  * NOT covered (deliberately):
  *   sleep_records     — derived summaries, low volume, keep indefinitely
@@ -39,6 +40,7 @@ const RETENTION_TABLES = [
   { table: flowReadings, column: flowReadings.timestamp, name: 'flow_readings' },
   { table: ambientLight, column: ambientLight.timestamp, name: 'ambient_light' },
   { table: waterLevelReadings, column: waterLevelReadings.timestamp, name: 'water_level_readings' },
+  { table: pumpAlerts, column: pumpAlerts.timestamp, name: 'pump_alerts' },
 ] as const
 
 export interface RetentionResult {

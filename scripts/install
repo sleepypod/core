@@ -30,11 +30,13 @@ echo ""
 #   --artifact-url URL Pin to an exact CI build artifact (zip from GH Actions).
 #                      Posted on every PR comment so reviewers can install the
 #                      exact SHA the run built, not whatever's latest.
+#   --restore          List available DB backups and restore a selected one
 INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
 PURGE_FREE_SLEEP=false
+RESTORE_MODE=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --local)              INSTALL_LOCAL=true ;;
@@ -42,9 +44,71 @@ while [ $# -gt 0 ]; do
     --branch)             shift; INSTALL_BRANCH="${1:-}" ;;
     --artifact-url)       shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
     --purge-free-sleep)   PURGE_FREE_SLEEP=true ;;
+    --restore)            RESTORE_MODE=true ;;
   esac
   shift
 done
+
+# --------------------------------------------------------------------------------
+# Restore mode — list and restore a DB backup, then exit
+if [ "$RESTORE_MODE" = true ]; then
+  DATA_DIR="/persistent/sleepypod-data"
+
+  # Collect all backup files for both databases
+  mapfile -t BACKUPS < <(ls -1t "$DATA_DIR"/*.db.bak.* 2>/dev/null)
+
+  if [ ${#BACKUPS[@]} -eq 0 ]; then
+    echo "No backups found in $DATA_DIR"
+    exit 0
+  fi
+
+  echo ""
+  echo "Available backups:"
+  echo ""
+  for i in "${!BACKUPS[@]}"; do
+    bak="${BACKUPS[$i]}"
+    fname="$(basename "$bak")"
+    # Extract epoch from filename (last dot-separated field)
+    epoch="${fname##*.bak.}"
+    ts="$(date -d "@$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r "$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$epoch")"
+    size="$(du -h "$bak" | cut -f1)"
+    printf "  [%d] %s  (%s, %s)\n" "$((i + 1))" "$fname" "$ts" "$size"
+  done
+
+  echo ""
+  read -rp "Enter number to restore (or q to quit): " choice
+
+  if [ "$choice" = "q" ] || [ -z "$choice" ]; then
+    echo "Aborted."
+    exit 0
+  fi
+
+  idx=$((choice - 1))
+  if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#BACKUPS[@]} ]; then
+    echo "Invalid selection." >&2
+    exit 1
+  fi
+
+  selected="${BACKUPS[$idx]}"
+  fname="$(basename "$selected")"
+
+  # Determine which database this backup belongs to
+  if [[ "$fname" == sleepypod.db.bak.* ]]; then
+    target="$DATA_DIR/sleepypod.db"
+  elif [[ "$fname" == biometrics.db.bak.* ]]; then
+    target="$DATA_DIR/biometrics.db"
+  else
+    echo "Unrecognized backup format: $fname" >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "Restoring $fname -> $(basename "$target")"
+  cp "$selected" "$target"
+  echo "Done. Restart the service to pick up the restored database:"
+  echo "  systemctl restart sleepypod"
+  exit 0
+fi
 
 # Cleanup handler — re-blocks WAN if we unblocked it
 WAN_WAS_BLOCKED=false
@@ -314,10 +378,12 @@ detect_free_sleep_conflict() {
   done
   [ -d /home/dac/free-sleep ]                && FREE_SLEEP_FINDINGS+=("directory:    /home/dac/free-sleep")
   [ -d /persistent/free-sleep-data ]         && FREE_SLEEP_FINDINGS+=("directory:    /persistent/free-sleep-data")
-  # Only the v6 rules file is a unique free-sleep indicator — sleepypod's
-  # own block_wan persists /etc/iptables/iptables.rules but never the v6
-  # file, so flagging the v4 file would false-positive on every reinstall.
-  [ -f /etc/iptables/ip6tables.rules ]       && FREE_SLEEP_FINDINGS+=("persisted:    /etc/iptables/ip6tables.rules")
+  # Do NOT check /etc/iptables/{iptables,ip6tables}.rules — both paths are
+  # stock Pod 5 firmware: /lib/systemd/system/{iptables,ip6tables}.service
+  # ship enabled and ExecStart=iptables-restore on those files. Presence
+  # alone says nothing about free-sleep. The systemd units and home/data
+  # dirs are unambiguous; free-sleep installs all of them.
+  return 0
 }
 
 purge_free_sleep() {
@@ -406,8 +472,37 @@ preflight_free_sleep_conflict() {
 }
 
 # Check if running as root
+#
+# Getting a root shell on a fresh Pod 5 is a one-time JTAG bootstrap, not
+# something this installer can do for you. The canonical procedure is:
+# TC2070-IDC + FTDI FT232RL on the JTAG header, interrupt U-Boot, boot
+# single-user with `init=/bin/bash`, mount rw, then `passwd root` and
+# `passwd rewt`. See scripts/README.md for details.
+#
+# `rewt` is a USER ACCOUNT on the pod (Eight's stock service user, has a
+# shell), not a tool — you set its password during the JTAG step and use it
+# later for ssh when `PermitRootLogin no` blocks direct root login.
+#
+# `dac` is also a system account but ships as nologin — sshd refuses
+# interactive logins for it, which is the "dac not allowed" message you'll
+# see if you try `ssh dac@<pod>`. That's expected; don't try to "fix" it.
+#
+# Typical Pod 5 install flow (after JTAG bootstrap):
+#   ssh -p 8822 rewt@<pod>          # PasswordAuthentication=yes temporarily
+#   su -                            # switch to root with the passwd you set
+#   bash scripts/install            # run this script
+# The optional SSH-setup block at the end of this script writes your key to
+# /root/.ssh/authorized_keys and re-hardens sshd (port 8822, key-only, no
+# password auth, no root password login). After that you can ssh directly as
+# root with your key.
 if [ "$EUID" -ne 0 ]; then
-  echo "Error: This script must be run as root (use sudo)" >&2
+  echo "Error: This script must be run as root (use sudo or su -)" >&2
+  echo "" >&2
+  echo "On a freshly jailbroken Pod 5 the stock image disables direct root" >&2
+  echo "ssh and refuses login as the \`dac\` service account. SSH in as the" >&2
+  echo "\`rewt\` user (password set during the JTAG bootstrap), then \`su -\`" >&2
+  echo "to root before running this script." >&2
+  echo "See scripts/README.md (\"Getting root on Pod 5\") for the full flow." >&2
   exit 1
 fi
 
@@ -517,6 +612,19 @@ echo "Creating data directory at $DATA_DIR..."
 # requires all listed paths to exist or the namespace setup fails.
 # /run/dac is handled by RuntimeDirectory=dac in the service unit.
 mkdir -p /persistent/deviceinfo
+# dac.sock lives in /persistent/deviceinfo. next-server (User=sleepypod,
+# SupplementaryGroups=dac) recreates the socket on startup via unlink+listen.
+# On Linux, unlink is gated by the *parent directory's* permissions, not the
+# socket file's — so the dir must be group-writable by `dac`, not just owned
+# `root:root 0755` (the mkdir default). Setgid (2xxx) keeps any new entries
+# in the dac group, matching the chownSync(path, dac, dac) in dacTransport.ts.
+# Mode 2770 (no world bits) mirrors the socket's own 0770 — every real
+# consumer is either root or in the `dac` group, so world r-x adds nothing
+# but surface area.
+if getent group dac &>/dev/null; then
+  chown root:dac /persistent/deviceinfo
+  chmod 2770 /persistent/deviceinfo
+fi
 mkdir -p /deviceinfo
 groupadd --force sleepypod
 if id dac &>/dev/null; then
@@ -983,11 +1091,24 @@ if [ -f "$INSTALL_DIR/.env" ] && id sleepypod &>/dev/null; then
   chmod 640 "$INSTALL_DIR/.env"
 fi
 
-# Initialize database with migrations (not destructive push)
+# Back up existing databases before migrations
+BACKUP_TS="$(date +%s)"
 if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  echo "Existing database found, backing up..."
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak.$(date +%s)"
+  echo "Existing config database found, backing up..."
+  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak.$BACKUP_TS"
 fi
+if [ -f "$DATA_DIR/biometrics.db" ]; then
+  echo "Existing biometrics database found, backing up..."
+  cp "$DATA_DIR/biometrics.db" "$DATA_DIR/biometrics.db.bak.$BACKUP_TS"
+fi
+
+# Prune old backups (keep last 5 per database)
+for db in sleepypod.db biometrics.db; do
+  mapfile -t old < <(ls -1t "$DATA_DIR/$db.bak."* 2>/dev/null | tail -n +6)
+  for f in "${old[@]}"; do
+    rm -f "$f"
+  done
+done
 
 # Database migrations run automatically on app startup (instrumentation.ts)
 echo "Database migrations will run on first startup."
@@ -1040,6 +1161,11 @@ Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
 # decode the 16-byte SEQNO.RAW bookkeeping file as CBOR — sensor streaming
 # and flow_readings stay empty.
 Environment="RAW_DATA_DIR=/persistent/biometrics"
+# Use a writable xtables lock under RuntimeDirectory=dac. The default
+# /run/xtables.lock is root:root 0600 — CAP_NET_ADMIN doesn't bypass the
+# file mode, so setInternetAccess fails with "can't open lock file ...
+# Permission denied" the first time a user toggles WAN from the UI.
+Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
 # The \`+\` prefix runs ExecStartPre as root regardless of User=. Needed
 # for /deviceinfo symlink creation (root-owned) and sp-maintenance
 # (journal vacuum, /tmp cleanup, pnpm store prune).

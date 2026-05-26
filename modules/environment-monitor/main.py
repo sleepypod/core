@@ -23,6 +23,7 @@ import sqlite3
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -59,7 +60,7 @@ _FRZ_MIN_CENTIDEGREES = -5000
 _FRZ_MAX_CENTIDEGREES = 12500
 
 
-def _safe_freezer_centidegrees(val) -> int | None:
+def _safe_freezer_centidegrees(val) -> Optional[int]:
     """Validate a raw firmware centidegrees value for freezer_temp insertion.
 
     Rejects sentinel values (disconnected sensor) and out-of-range values

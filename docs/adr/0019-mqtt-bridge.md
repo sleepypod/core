@@ -119,6 +119,11 @@ On `connect` we publish retained discovery payloads under
   command topics that round-trip through `cmd/set-temperature` and
   `cmd/set-power`.
 - `sensor` for water level, per-side heart rate, breathing rate, HRV.
+- `sensor` for ambient temperature (°C, `device_class: temperature`) and
+  ambient humidity (%, `device_class: humidity`), both reading the latest
+  `bed_temp` row from biometrics.db. One state topic
+  (`state/environment/ambient`) feeds both entities so HA's two cards
+  stay coherent on each retained refresh.
 
 Discovery prefix is overridable via `MQTT_HA_DISCOVERY_PREFIX` for users
 who run a non-default HA install.
