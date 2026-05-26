@@ -74,6 +74,7 @@ const dbMock = vi.hoisted(() => {
     chain.where = vi.fn(() => chain)
     chain.limit = vi.fn(() => chain)
     chain.from = vi.fn(() => chain)
+    chain.orderBy = vi.fn(() => chain)
     chain.values = vi.fn(() => chain)
     chain.set = vi.fn(() => chain)
     chain.onConflictDoUpdate = vi.fn(() => chain)
@@ -87,6 +88,35 @@ const dbMock = vi.hoisted(() => {
   }
 })
 
+// biometricsDb is read inside the enrichment block of getStatus; tests
+// drive it through `biometricsRowsQueue`.
+const biometricsState = vi.hoisted(() => ({
+  rowsQueue: [] as unknown[][],
+  pop(): unknown[] { return biometricsState.rowsQueue.shift() ?? [] },
+  throwOnSelect: false,
+}))
+const biometricsDbMock = vi.hoisted(() => {
+  const makeChain = () => {
+    const chain: Record<string, unknown> = {}
+    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(biometricsState.pop()).then(resolve)
+    chain.from = vi.fn(() => chain)
+    chain.where = vi.fn(() => chain)
+    chain.orderBy = vi.fn(() => chain)
+    chain.limit = vi.fn(() => chain)
+    return chain
+  }
+  return {
+    select: vi.fn(() => {
+      if (biometricsState.throwOnSelect) throw new Error('biometrics down')
+      return makeChain()
+    }),
+  }
+})
+
+const wifiMock = vi.hoisted(() => ({
+  getWifiInfo: vi.fn<() => { wifiStrength: number, wifiSSID: string }>(() => ({ wifiStrength: -1, wifiSSID: 'unknown' })),
+}))
+
 vi.mock('@/src/server/helpers', () => ({ withHardwareClient: helpersMock.withHardwareClient }))
 vi.mock('@/src/hardware/primeNotification', () => primeMock)
 vi.mock('@/src/hardware/snoozeManager', () => snoozeMock)
@@ -98,8 +128,9 @@ vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/hardware/pumpStallNotification', () => pumpStallNotificationMock)
 vi.mock('@/src/db', () => ({
   db: dbMock,
-  biometricsDb: {},
+  biometricsDb: biometricsDbMock,
 }))
+vi.mock('@/src/hardware/wifi', () => wifiMock)
 
 const { deviceRouter } = await import('@/src/server/routers/device')
 const caller = deviceRouter.createCaller({})
@@ -136,6 +167,10 @@ beforeEach(() => {
   dbMock.select.mockClear()
   dbMock.update.mockClear()
   dbMock.insert.mockClear()
+  biometricsState.rowsQueue.length = 0
+  biometricsState.throwOnSelect = false
+  biometricsDbMock.select.mockClear()
+  wifiMock.getWifiInfo.mockReset().mockReturnValue({ wifiStrength: -1, wifiSSID: 'unknown' })
 })
 
 describe('device.getStatus', () => {
@@ -170,6 +205,67 @@ describe('device.getStatus', () => {
     pumpStallNotificationMock.getAllPumpStallNotices.mockReturnValueOnce({ left: null, right: null })
     const result = await caller.getStatus({})
     expect(result.pumpStallNotifications).toBeUndefined()
+  })
+
+  // ─── enrichment (#157/#192): wifi, room climate, water level ──────────
+  it('enriches with wifi info, roomClimate, and waterLevelRaw when data is present', async () => {
+    wifiMock.getWifiInfo.mockReturnValueOnce({ wifiStrength: 72, wifiSSID: 'home-net' })
+    const ts = new Date(1700000000000)
+    biometricsState.rowsQueue.push([{ ambientTemp: 2150, humidity: 4500, timestamp: ts }])
+    biometricsState.rowsQueue.push([{ raw: 1234, calibratedEmpty: 500, calibratedFull: 2000, timestamp: ts }])
+
+    const result = await caller.getStatus({})
+    expect(result.wifiStrength).toBe(72)
+    expect(result.wifiSSID).toBe('home-net')
+    // 2150 centi°C → 21.5°C; 4500 centi-% → 45%
+    expect(result.roomClimate.temperatureC).toBeCloseTo(21.5, 1)
+    expect(result.roomClimate.humidity).toBeCloseTo(45, 1)
+    expect(result.roomClimate.timestamp).toBe(ts.getTime())
+    expect(result.waterLevelRaw).toEqual({
+      raw: 1234, calibratedEmpty: 500, calibratedFull: 2000, timestamp: ts.getTime(),
+    })
+  })
+
+  it('emits null roomClimate/waterLevelRaw fields when bedTemp/water rows are absent', async () => {
+    wifiMock.getWifiInfo.mockReturnValueOnce({ wifiStrength: 50, wifiSSID: 'x' })
+    // Both queries return [] (no rows). Wifi still populates.
+    const result = await caller.getStatus({})
+    expect(result.wifiStrength).toBe(50)
+    expect(result.roomClimate).toEqual({ temperatureC: null, humidity: null, timestamp: null })
+    expect(result.waterLevelRaw).toEqual({ raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null })
+  })
+
+  it('handles bedTemp rows with null ambientTemp/humidity/timestamp fields', async () => {
+    wifiMock.getWifiInfo.mockReturnValueOnce({ wifiStrength: 10, wifiSSID: 'y' })
+    biometricsState.rowsQueue.push([{ ambientTemp: null, humidity: null, timestamp: null }])
+    biometricsState.rowsQueue.push([])
+
+    const result = await caller.getStatus({})
+    expect(result.roomClimate).toEqual({ temperatureC: null, humidity: null, timestamp: null })
+  })
+
+  it('handles water rows with undefined raw/calibrated/timestamp fields', async () => {
+    wifiMock.getWifiInfo.mockReturnValueOnce({ wifiStrength: 0, wifiSSID: 'z' })
+    biometricsState.rowsQueue.push([])
+    biometricsState.rowsQueue.push([{ raw: undefined, calibratedEmpty: undefined, calibratedFull: undefined, timestamp: null }])
+
+    const result = await caller.getStatus({})
+    expect(result.waterLevelRaw).toEqual({
+      raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null,
+    })
+  })
+
+  it('falls back to defaults when the enrichment block throws (best-effort)', async () => {
+    biometricsState.throwOnSelect = true
+    wifiMock.getWifiInfo.mockImplementationOnce(() => {
+      throw new Error('proc unreadable')
+    })
+
+    const result = await caller.getStatus({})
+    expect(result.wifiStrength).toBe(-1)
+    expect(result.wifiSSID).toBe('unknown')
+    expect(result.roomClimate.temperatureC).toBeNull()
+    expect(result.waterLevelRaw.raw).toBeNull()
   })
 })
 
