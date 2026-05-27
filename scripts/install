@@ -1511,9 +1511,22 @@ else
     # can read the venv dir + traverse the managed-Python symlink target.
     chmod -R o+rX "$dest/.venv" 2>/dev/null || true
 
-    # Install systemd service
+    # Install systemd service. Substitute the chosen $DATA_DIR for the
+    # baked-in /persistent/sleepypod-data — ReadWritePaths= and the
+    # DATABASE_URL= envs in the unit reference that path, and on installs
+    # where the picker chose /sleepypod-data (rootfs larger than
+    # /persistent — e.g. Pod 3 + SD card) the hardcoded path doesn't
+    # exist, so systemd fails the namespace bind-mount with "Failed to
+    # set up mount namespacing: .../persistent/sleepypod-data: No such
+    # file or directory". ReadWritePaths= is a unit directive so an
+    # EnvironmentFile drop-in can't fix it — substitution at install
+    # time is the only path.
     if [ -f "$dest/$service" ]; then
-      cp "$dest/$service" "/etc/systemd/system/$service"
+      _data_dir_sed=${DATA_DIR//|/\\|}
+      sed "s|/persistent/sleepypod-data|${_data_dir_sed}|g" "$dest/$service" \
+        > "/etc/systemd/system/$service"
+      chmod 0644 "/etc/systemd/system/$service"
+      unset _data_dir_sed
       systemctl daemon-reload
       systemctl enable "$service"
       systemctl restart "$service"
@@ -1570,7 +1583,16 @@ if [ -d "$PUSH_SRC" ]; then
   echo "Installing archive-push (scp to remote)..."
 
   install -m 0755 "$PUSH_SRC/sleepypod-archive-push" /usr/local/bin/sleepypod-archive-push
-  install -m 0644 "$PUSH_SRC/sleepypod-archive-push.service" /etc/systemd/system/
+  # Substitute $DATA_DIR for the baked-in /persistent/sleepypod-data —
+  # ReadWritePaths= in the unit references that path and the namespace
+  # bind-mount fails when the picker chose /sleepypod-data. Same fix as
+  # install_module() above.
+  _data_dir_sed=${DATA_DIR//|/\\|}
+  sed "s|/persistent/sleepypod-data|${_data_dir_sed}|g" \
+    "$PUSH_SRC/sleepypod-archive-push.service" \
+    > /etc/systemd/system/sleepypod-archive-push.service
+  chmod 0644 /etc/systemd/system/sleepypod-archive-push.service
+  unset _data_dir_sed
   install -m 0644 "$PUSH_SRC/sleepypod-archive-push.timer"   /etc/systemd/system/
 
   # Config dir owned root:sleepypod 0770 so the service user reads + the app
