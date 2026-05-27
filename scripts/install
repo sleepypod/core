@@ -41,10 +41,11 @@ INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
 PURGE_FREE_SLEEP=false
 RESTORE_MODE=false
-# Preserve env-supplied overrides; --node-modules-dir / --swap-dir can still
-# clobber them below. Lets `NODE_MODULES_DIR=/foo bash scripts/install` work.
+# Preserve env-supplied overrides; --node-modules-dir / --swap-dir / --data-dir
+# can still clobber them below. Lets `NODE_MODULES_DIR=/foo bash scripts/install` work.
 NODE_MODULES_DIR="${NODE_MODULES_DIR:-}"
 SWAP_DIR="${SWAP_DIR:-}"
+DATA_DIR_OVERRIDE="${DATA_DIR:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --local)              INSTALL_LOCAL=true ;;
@@ -55,15 +56,51 @@ while [ $# -gt 0 ]; do
     --restore)            RESTORE_MODE=true ;;
     --node-modules-dir)   shift; NODE_MODULES_DIR="${1:-}" ;;
     --swap-dir)           shift; SWAP_DIR="${1:-}" ;;
+    --data-dir)           shift; DATA_DIR_OVERRIDE="${1:-}" ;;
   esac
   shift
 done
 export NODE_MODULES_DIR
 
+# Resolve DATA_DIR (SQLite home) before anything that touches it. Precedence:
+#   1. --data-dir / DATA_DIR env override
+#   2. /etc/sleepypod/data-dir written by a prior install run
+#   3. Auto: larger of rootfs vs /persistent (total size — same picker as
+#      swap below and node_modules in scripts/lib/relocation-helpers).
+#
+# Restore mode (below) uses $DATA_DIR too, so this MUST run before that block.
+# Relocation-helpers isn't sourced yet (repo not on disk), so the picker is
+# inlined here, matching the swap-picker / iptables-helpers pattern.
+DATA_DIR_REASON=""
+if [ -n "$DATA_DIR_OVERRIDE" ]; then
+  DATA_DIR="$DATA_DIR_OVERRIDE"
+  DATA_DIR_REASON="user override (--data-dir / DATA_DIR)"
+elif [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
+  DATA_DIR="$(cat /etc/sleepypod/data-dir)"
+  DATA_DIR_REASON="cached from prior install (/etc/sleepypod/data-dir)"
+else
+  _rootfs_total_mb=$(df -m / 2>/dev/null | awk 'NR==2{print $2}')
+  _rootfs_total_mb=${_rootfs_total_mb:-0}
+  if mountpoint -q /persistent 2>/dev/null; then
+    _persistent_total_mb=$(df -m /persistent 2>/dev/null | awk 'NR==2{print $2}')
+    _persistent_total_mb=${_persistent_total_mb:-0}
+  else
+    _persistent_total_mb=0
+  fi
+  if [ "$_persistent_total_mb" -gt "$_rootfs_total_mb" ]; then
+    DATA_DIR="/persistent/sleepypod-data"
+    DATA_DIR_REASON="/persistent is the larger partition"
+  else
+    DATA_DIR="/sleepypod-data"
+    DATA_DIR_REASON="rootfs is the larger partition"
+  fi
+  unset _rootfs_total_mb _persistent_total_mb
+fi
+
 # --------------------------------------------------------------------------------
 # Restore mode — list and restore a DB backup, then exit
 if [ "$RESTORE_MODE" = true ]; then
-  DATA_DIR="/persistent/sleepypod-data"
+  # $DATA_DIR was resolved above (override > cached > auto-picker).
 
   # Collect all backup files for both databases
   mapfile -t BACKUPS < <(ls -1t "$DATA_DIR"/*.db.bak.* 2>/dev/null)
@@ -617,8 +654,29 @@ fi
 # environment-monitor run as User=dac. Setgid ensures all files created
 # inside inherit the sleepypod group; UMask=0002 on services ensures
 # group-write bits are preserved (including SQLite WAL/SHM files).
-DATA_DIR="/persistent/sleepypod-data"
-echo "Creating data directory at $DATA_DIR..."
+#
+# $DATA_DIR was resolved at the top of this script. Same auto-picker as
+# node_modules / swap — pick the larger of rootfs vs /persistent.
+echo "Creating data directory at $DATA_DIR  (${DATA_DIR_REASON})..."
+
+# Migrate from a legacy /persistent/sleepypod-data layout if the picker
+# now wants a different partition. Same empty-target guard as the
+# node_modules migration in ensure_persistent_node_modules() — avoids
+# mixing DBs from two different installs.
+LEGACY_DATA_DIR="/persistent/sleepypod-data"
+if [ "$DATA_DIR" != "$LEGACY_DATA_DIR" ] && [ -d "$LEGACY_DATA_DIR" ] \
+   && [ -z "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
+  echo "Migrating data dir from $LEGACY_DATA_DIR to $DATA_DIR..."
+  mkdir -p "$(dirname "$DATA_DIR")"
+  mv "$LEGACY_DATA_DIR" "$DATA_DIR"
+fi
+
+# Persist the chosen path so sp-update / sp-maintenance / sp-bundle-logs /
+# sp-uninstall / pod/detect find the DBs in the same place. sp-uninstall
+# already rm -rf's /etc/sleepypod so no cleanup hook needed there.
+mkdir -p /etc/sleepypod
+printf '%s\n' "$DATA_DIR" > /etc/sleepypod/data-dir
+chmod 0644 /etc/sleepypod/data-dir
 # Ensure ReadWritePaths directories exist — systemd's ProtectSystem=strict
 # requires all listed paths to exist or the namespace setup fails.
 # /run/dac is handled by RuntimeDirectory=dac in the service unit.

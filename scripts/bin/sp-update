@@ -16,7 +16,13 @@ export PATH="/usr/local/bin:$PATH"
 # No git required — uses GitHub's tarball API.
 
 INSTALL_DIR="/home/dac/sleepypod-core"
-DATA_DIR="/persistent/sleepypod-data"
+# DATA_DIR pointer is written by scripts/install (storage-aware picker).
+# Legacy fallback keeps installs without the pointer file working.
+if [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
+  DATA_DIR="$(cat /etc/sleepypod/data-dir)"
+else
+  DATA_DIR="/persistent/sleepypod-data"
+fi
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
 BRANCH="${1:-main}"
 
