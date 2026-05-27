@@ -310,6 +310,16 @@ if [ -d "$INSTALL_DIR/modules" ]; then
   if ! command -v uv &>/dev/null; then
     echo "Warning: uv not found — biometrics modules not synced. Re-run the full installer."
   fi
+  # Probe the firmware's /usr/bin/python3 for stdlib integrity. Pod 5
+  # firmware (debian variant) ships 3.9.9 with unittest, dataclasses,
+  # and pyexpat stripped — version check passes, uv would happily bind
+  # the venv to it, modules crash at startup. Mirror install_module()'s
+  # behavior here so OTAs don't silently revert to the broken interpreter.
+  # If capabilities is missing (transitional install), default to "true"
+  # to keep the previous behavior (no managed-Python forcing).
+  if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
+    source "$INSTALL_DIR/scripts/pod/capabilities"
+  fi
   for mod in piezo-processor sleep-detector environment-monitor calibrator cover-buttons; do
     if [ -d "$INSTALL_DIR/modules/$mod" ]; then
       mkdir -p "$MODULES_DEST/$mod"
@@ -322,13 +332,29 @@ if [ -d "$INSTALL_DIR/modules" ]; then
       # re-link, not a full re-download.
       rm -rf "$MODULES_DEST/$mod/.venv"
       if command -v uv &>/dev/null; then
-        (cd "$MODULES_DEST/$mod" && uv sync --frozen) \
+        _uv_sync_args=(--frozen)
+        if [ "${SYSTEM_PYTHON_STDLIB_INTACT:-true}" = "false" ]; then
+          _uv_sync_args+=(--python-preference only-managed)
+        fi
+        (cd "$MODULES_DEST/$mod" && uv sync "${_uv_sync_args[@]}") \
           || echo "Warning: uv sync failed for module $mod"
+        unset _uv_sync_args
         chmod -R o+rX "$MODULES_DEST/$mod/.venv" 2>/dev/null || true
       fi
       svc="sleepypod-$mod.service"
       if [ -f "$MODULES_DEST/$mod/$svc" ]; then
-        cp "$MODULES_DEST/$mod/$svc" "/etc/systemd/system/$svc"
+        # Substitute the chosen $DATA_DIR for the baked-in
+        # /persistent/sleepypod-data — the unit's ReadWritePaths= and
+        # DATABASE_URL=/CALIBRATION_TRIGGER_PATH= reference it, and on
+        # installs where the picker chose /sleepypod-data the hardcoded
+        # path doesn't exist → systemd "Failed to set up mount
+        # namespacing". Mirrors install_module() in scripts/install so
+        # OTAs don't stomp the substituted unit with a vanilla copy.
+        _data_dir_sed=${DATA_DIR//|/\\|}
+        sed "s|/persistent/sleepypod-data|${_data_dir_sed}|g" \
+          "$MODULES_DEST/$mod/$svc" > "/etc/systemd/system/$svc"
+        chmod 0644 "/etc/systemd/system/$svc"
+        unset _data_dir_sed
         systemctl daemon-reload
         systemctl enable "$svc" 2>/dev/null || true
         systemctl restart "$svc" 2>/dev/null || true
