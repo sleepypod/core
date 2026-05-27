@@ -84,7 +84,7 @@ uv (~30MB) is downloaded during install. Each biometrics module gets a `.venv/` 
 | Node.js | Binary tarball install |
 | DAC socket | Auto-detected from frank.sh |
 
-Key file locations: app at `/home/dac/sleepypod-core`, config DB at `/persistent/sleepypod-data/sleepypod.db`, biometrics DB at `/persistent/sleepypod-data/biometrics.db`.
+Key file locations: app at `/home/dac/sleepypod-core`, config DB at `$DATA_DIR/sleepypod.db`, biometrics DB at `$DATA_DIR/biometrics.db`. `$DATA_DIR` is chosen at install time (larger of `/` vs `/persistent` by total partition size; defaults: `/persistent/sleepypod-data` on Pod 4/5, `/sleepypod-data` on Pod 3 + SD card) and recorded in `/etc/sleepypod/data-dir` — `cat` that file on the Pod to see the live value.
 
 ## Coexistence with free-sleep
 

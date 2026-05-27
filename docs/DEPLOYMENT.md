@@ -148,10 +148,12 @@ Downloaded from `nodejs.org/dist/` for `linux-arm64`. No package manager require
 | Path | Contents |
 |---|---|
 | `/home/dac/sleepypod-core` | App source + `node_modules` + `.next` build |
-| `/persistent/sleepypod-data/sleepypod.db` | Config database |
-| `/persistent/sleepypod-data/biometrics.db` | Biometrics database |
+| `$DATA_DIR/sleepypod.db` | Config database — `$DATA_DIR` is chosen at install time (larger of `/` vs `/persistent` by total partition size) and persisted to `/etc/sleepypod/data-dir`. Default on Pod 4/5: `/persistent/sleepypod-data/sleepypod.db`; on Pod 3 + SD card: `/sleepypod-data/sleepypod.db`. |
+| `$DATA_DIR/biometrics.db` | Biometrics database — same path resolution as above. |
+| `/etc/sleepypod/data-dir` | Pointer file with the chosen `$DATA_DIR`. Read by `sp-update` / `sp-maintenance` / `sp-bundle-logs` / `sp-uninstall` / `scripts/pod/detect`. |
 | `/home/dac/sleepypod-core/.env` | Environment config |
 | `/opt/sleepypod/modules/` | Python biometrics modules |
+| `/opt/sleepypod/python/` | `uv`-managed CPython (used when the firmware's `/usr/bin/python3` stdlib is incomplete — see `scripts/pod/capabilities`). |
 | `/usr/local/bin/sp-*` | CLI shortcuts |
 
 ## CLI Shortcuts (on the pod)

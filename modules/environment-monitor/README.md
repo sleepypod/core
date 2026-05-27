@@ -29,14 +29,16 @@ The freezer table only populates on hardware that actually emits `frzTemp` frame
 # Live logs (decisions, dropped sentinels, fatal errors)
 journalctl -u sleepypod-environment-monitor.service -f
 
-# Most recent rows
-sqlite3 /persistent/sleepypod-data/biometrics.db \
+# Most recent rows ($DATA_DIR is read from /etc/sleepypod/data-dir;
+# typically /persistent/sleepypod-data on Pod 4/5, /sleepypod-data on Pod 3 + SD)
+DATA_DIR="$(cat /etc/sleepypod/data-dir 2>/dev/null || echo /persistent/sleepypod-data)"
+sqlite3 "$DATA_DIR/biometrics.db" \
   'SELECT * FROM bed_temp ORDER BY timestamp DESC LIMIT 3;'
-sqlite3 /persistent/sleepypod-data/biometrics.db \
+sqlite3 "$DATA_DIR/biometrics.db" \
   'SELECT * FROM freezer_temp ORDER BY timestamp DESC LIMIT 3;'
 
 # Health row (component='environment-monitor' is updated on start/exit)
-sqlite3 /persistent/sleepypod-data/sleepypod.db \
+sqlite3 "$DATA_DIR/sleepypod.db" \
   "SELECT * FROM system_health WHERE component='environment-monitor';"
 ```
 
@@ -45,8 +47,8 @@ sqlite3 /persistent/sleepypod-data/sleepypod.db \
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `RAW_DATA_DIR` | `/persistent` | Directory the RAW follower tails. The systemd unit overrides to `/persistent/biometrics` (tmpfs) — see ADR-0018. |
-| `BIOMETRICS_DATABASE_URL` | `file:/persistent/sleepypod-data/biometrics.db` | Sink for `bed_temp` / `freezer_temp` rows. |
-| `DATABASE_URL` | `file:/persistent/sleepypod-data/sleepypod.db` | Used only to write `system_health` heartbeats. |
+| `BIOMETRICS_DATABASE_URL` | `file:/persistent/sleepypod-data/biometrics.db` | Sink for `bed_temp` / `freezer_temp` rows. The systemd unit overrides to `file:$DATA_DIR/biometrics.db` (install-time `sed` substitution against the picker-chosen `$DATA_DIR` — see `scripts/install` `install_module()`). |
+| `DATABASE_URL` | `file:/persistent/sleepypod-data/sleepypod.db` | Used only to write `system_health` heartbeats. Same `$DATA_DIR` override as above. |
 
 ## Python version
 
