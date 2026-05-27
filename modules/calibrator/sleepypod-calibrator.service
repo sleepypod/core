@@ -19,6 +19,10 @@ EnvironmentFile=-/etc/sleepypod/modules/calibrator.env
 Environment="RAW_DATA_DIR=/persistent/biometrics"
 Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
+# Path is rewritten at install time by install_module() — /persistent/sleepypod-data
+# becomes the picker-chosen $DATA_DIR so the calibrator (reader) and the
+# tRPC trigger writer (next-server) agree on a path that exists.
+Environment="CALIBRATION_TRIGGER_PATH=/persistent/sleepypod-data/.calibrate-trigger"
 Environment="CALIBRATION_HOUR=6"
 
 # Resource limits (calibration loads up to 6h of sensor data into numpy

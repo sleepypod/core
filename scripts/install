@@ -1277,6 +1277,17 @@ Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
+# Route every runtime path that used to be hardcoded under
+# /persistent/sleepypod-data through the picker-chosen \$DATA_DIR.
+# HomeKit pairing + identity (src/homekit/storage.ts), calibration
+# trigger written by tRPC + scheduler and read by sleepypod-calibrator
+# (src/server/routers/calibration.ts, src/scheduler/jobManager.ts,
+# modules/common/calibration.py), and the archive-export staging dir
+# (app/api/export/archive/route.ts) all read these envs with the legacy
+# hardcoded path as fallback for installs that pre-date this wiring.
+Environment="HOMEKIT_DIR=$DATA_DIR/homekit"
+Environment="CALIBRATION_TRIGGER_PATH=$DATA_DIR/.calibrate-trigger"
+Environment="EXPORT_STAGING_DIR=$DATA_DIR/export-staging"
 # RAW frames live in the tmpfs at /persistent/biometrics (ADR 0018).
 # Without this override piezoStream defaults to /persistent and tries to
 # decode the 16-byte SEQNO.RAW bookkeeping file as CBOR — sensor streaming
