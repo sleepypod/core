@@ -1502,10 +1502,24 @@ else
     # If system python3 is in range it's used; otherwise uv downloads a
     # compatible managed interpreter into UV_PYTHON_INSTALL_DIR (set above
     # to /opt/sleepypod/python so User=dac modules can execute it).
-    (cd "$dest" && uv sync --frozen) || {
+    #
+    # Exception: Pod 3 firmware (debian variant) ships /usr/bin/python3
+    # = 3.9.9 with `unittest`, `dataclasses`, and `pyexpat` stripped from
+    # the stdlib. The version range check passes so uv would happily
+    # bind to it, then the module crashes at startup with
+    # `ModuleNotFoundError: No module named 'unittest'` once numpy lazy-
+    # imports numpy.testing. Force uv onto a managed interpreter when
+    # the stdlib probe (scripts/pod/capabilities) says it's not intact.
+    _uv_sync_args=(--frozen)
+    if [ "${SYSTEM_PYTHON_STDLIB_INTACT:-true}" = "false" ]; then
+      _uv_sync_args+=(--python-preference only-managed)
+    fi
+    (cd "$dest" && uv sync "${_uv_sync_args[@]}") || {
       echo "Warning: uv sync failed for module $name"
+      unset _uv_sync_args
       return
     }
+    unset _uv_sync_args
 
     # Ensure non-root service users (User=dac on calibrator + env-monitor)
     # can read the venv dir + traverse the managed-Python symlink target.

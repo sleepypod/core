@@ -19,6 +19,15 @@
 #   PACKAGE_MANAGER                 "apt" or "" (none)
 #   SYSTEM_PYTHON_VERSION           e.g. "3.10.4", "" if python3 missing
 #   SYSTEM_PYTHON_IN_BIOMETRICS_RANGE  "true" if in [3.9, 3.11), else "false"
+#   SYSTEM_PYTHON_STDLIB_INTACT     "true" / "false" — probes a handful of
+#                                   stdlib modules the biometrics modules
+#                                   import (directly or transitively). Pod 3
+#                                   firmware ships a Yocto-stripped Python
+#                                   3.9.9 with unittest + dataclasses removed,
+#                                   so the version check passes but
+#                                   `numpy.testing → from unittest import …`
+#                                   crashes at module import. Install uses
+#                                   this to force uv onto a managed Python.
 #   HAS_ENSUREPIP                   "true" / "false"
 #   HAS_NFTABLES                    "true" / "false"
 #   HAS_VOLTA                       "true" if Volta is present in PATH or ~/.volta
@@ -58,6 +67,22 @@ _python_in_biometrics_range() {
 _probe_has_ensurepip() {
   command -v python3 >/dev/null 2>&1 || { echo "false"; return; }
   if python3 -c 'import ensurepip' 2>/dev/null; then echo "true"; else echo "false"; fi
+}
+
+_probe_python_stdlib_intact() {
+  # Pod 3 firmware (debian variant) ships /usr/bin/python3 = 3.9.9 with
+  # parts of the stdlib stripped: `unittest`, `dataclasses`, and
+  # `pyexpat` are all missing. numpy 2.x lazy-imports `numpy.testing`
+  # → `from unittest import TestCase` on first attribute access, so any
+  # module that uses numpy crashes at startup. The biometrics modules
+  # also `from dataclasses import dataclass`. Probe the modules we
+  # actually hit so install can route around the broken interpreter.
+  command -v python3 >/dev/null 2>&1 || { echo "false"; return; }
+  if python3 -c 'import unittest, dataclasses, pyexpat' 2>/dev/null; then
+    echo "true"
+  else
+    echo "false"
+  fi
 }
 
 _probe_has_volta() {
@@ -103,12 +128,14 @@ fi
 IPTABLES_PATH="$(_probe_iptables_path)"
 SYSTEM_PYTHON_VERSION="$(_probe_python_version)"
 SYSTEM_PYTHON_IN_BIOMETRICS_RANGE="$(_python_in_biometrics_range)"
+SYSTEM_PYTHON_STDLIB_INTACT="$(_probe_python_stdlib_intact)"
 HAS_ENSUREPIP="$(_probe_has_ensurepip)"
 HAS_VOLTA="$(_probe_has_volta)"
 HAS_IPTABLES_PERSISTENT="$(_probe_has_iptables_persistent)"
 
 export MODEL_NAME POD_OS IPTABLES_PATH HAS_PACKAGE_MANAGER PACKAGE_MANAGER
-export SYSTEM_PYTHON_VERSION SYSTEM_PYTHON_IN_BIOMETRICS_RANGE HAS_ENSUREPIP
+export SYSTEM_PYTHON_VERSION SYSTEM_PYTHON_IN_BIOMETRICS_RANGE
+export SYSTEM_PYTHON_STDLIB_INTACT HAS_ENSUREPIP
 export HAS_NFTABLES HAS_VOLTA HAS_IPTABLES_PERSISTENT
 
 print_pod_capabilities() {
@@ -117,7 +144,7 @@ print_pod_capabilities() {
   echo "  OS:                   $POD_OS"
   echo "  iptables:             ${IPTABLES_PATH:-<missing>}"
   echo "  Package manager:      ${PACKAGE_MANAGER:-none}"
-  echo "  System python3:       ${SYSTEM_PYTHON_VERSION:-<missing>} (in biometrics range: $SYSTEM_PYTHON_IN_BIOMETRICS_RANGE)"
+  echo "  System python3:       ${SYSTEM_PYTHON_VERSION:-<missing>} (in biometrics range: $SYSTEM_PYTHON_IN_BIOMETRICS_RANGE, stdlib intact: $SYSTEM_PYTHON_STDLIB_INTACT)"
   echo "  ensurepip:            $HAS_ENSUREPIP"
   echo "  nftables:             $HAS_NFTABLES"
   echo "  Volta:                $HAS_VOLTA"
