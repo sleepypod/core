@@ -1546,10 +1546,22 @@ else
     # file or directory". ReadWritePaths= is a unit directive so an
     # EnvironmentFile drop-in can't fix it — substitution at install
     # time is the only path.
+    #
+    # The match requires /persistent/sleepypod-data to be followed by
+    # one of [/" \t] (path separator, env-value quote closer, or
+    # whitespace) OR end-of-line, so any future hardcoded path that
+    # legitimately starts with the same stem (e.g.
+    # /persistent/sleepypod-data-old/foo) is NOT partially rewritten.
+    # The replacement is sed-escaped for `\` and `&` so an exotic
+    # --data-dir override can't trigger sed's whole-match (&) or
+    # escape (\) substitution syntax. sp-update has the same block —
+    # keep them in sync.
     if [ -f "$dest/$service" ]; then
-      _data_dir_sed=${DATA_DIR//|/\\|}
-      sed "s|/persistent/sleepypod-data|${_data_dir_sed}|g" "$dest/$service" \
-        > "/etc/systemd/system/$service"
+      _data_dir_sed=${DATA_DIR//\\/\\\\}
+      _data_dir_sed=${_data_dir_sed//&/\\&}
+      _data_dir_sed=${_data_dir_sed//|/\\|}
+      sed -E "s|/persistent/sleepypod-data([/\"[:space:]])|${_data_dir_sed}\\1|g; s|/persistent/sleepypod-data\$|${_data_dir_sed}|g" \
+        "$dest/$service" > "/etc/systemd/system/$service"
       chmod 0644 "/etc/systemd/system/$service"
       unset _data_dir_sed
       systemctl daemon-reload
@@ -1609,11 +1621,15 @@ if [ -d "$PUSH_SRC" ]; then
 
   install -m 0755 "$PUSH_SRC/sleepypod-archive-push" /usr/local/bin/sleepypod-archive-push
   # Substitute $DATA_DIR for the baked-in /persistent/sleepypod-data —
-  # ReadWritePaths= in the unit references that path and the namespace
-  # bind-mount fails when the picker chose /sleepypod-data. Same fix as
-  # install_module() above.
-  _data_dir_sed=${DATA_DIR//|/\\|}
-  sed "s|/persistent/sleepypod-data|${_data_dir_sed}|g" \
+  # ReadWritePaths= + BIOMETRICS_DB_PATH= + ARCHIVE_PUSH_STAGING_DIR= in
+  # the unit reference that path and the namespace bind-mount fails
+  # when the picker chose /sleepypod-data. Defensive boundary match +
+  # replacement escapes — same regex as install_module() above, see
+  # the comment there for the boundary-match rationale.
+  _data_dir_sed=${DATA_DIR//\\/\\\\}
+  _data_dir_sed=${_data_dir_sed//&/\\&}
+  _data_dir_sed=${_data_dir_sed//|/\\|}
+  sed -E "s|/persistent/sleepypod-data([/\"[:space:]])|${_data_dir_sed}\\1|g; s|/persistent/sleepypod-data\$|${_data_dir_sed}|g" \
     "$PUSH_SRC/sleepypod-archive-push.service" \
     > /etc/systemd/system/sleepypod-archive-push.service
   chmod 0644 /etc/systemd/system/sleepypod-archive-push.service

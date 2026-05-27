@@ -348,10 +348,14 @@ if [ -d "$INSTALL_DIR/modules" ]; then
         # DATABASE_URL=/CALIBRATION_TRIGGER_PATH= reference it, and on
         # installs where the picker chose /sleepypod-data the hardcoded
         # path doesn't exist → systemd "Failed to set up mount
-        # namespacing". Mirrors install_module() in scripts/install so
-        # OTAs don't stomp the substituted unit with a vanilla copy.
-        _data_dir_sed=${DATA_DIR//|/\\|}
-        sed "s|/persistent/sleepypod-data|${_data_dir_sed}|g" \
+        # namespacing". Mirrors install_module() in scripts/install
+        # (boundary match + replacement escapes) so OTAs don't stomp
+        # the substituted unit with a vanilla copy. Keep the two
+        # sed expressions in sync.
+        _data_dir_sed=${DATA_DIR//\\/\\\\}
+        _data_dir_sed=${_data_dir_sed//&/\\&}
+        _data_dir_sed=${_data_dir_sed//|/\\|}
+        sed -E "s|/persistent/sleepypod-data([/\"[:space:]])|${_data_dir_sed}\\1|g; s|/persistent/sleepypod-data\$|${_data_dir_sed}|g" \
           "$MODULES_DEST/$mod/$svc" > "/etc/systemd/system/$svc"
         chmod 0644 "/etc/systemd/system/$svc"
         unset _data_dir_sed
