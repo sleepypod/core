@@ -539,6 +539,10 @@ export const biometricsRouter = router({
     .output(z.object({
       left: z.object({
         occupied: z.boolean(),
+        // True when presence can be sensed reliably enough to act on absence
+        // (fresh capSense2 frame + completed calibration). The Settings UI
+        // gates the auto-off toggle on this.
+        available: z.boolean(),
         movement: z.object({ active: z.boolean(), peakScore: z.number() }),
         level: z.object({
           active: z.boolean(),
@@ -549,6 +553,10 @@ export const biometricsRouter = router({
       }),
       right: z.object({
         occupied: z.boolean(),
+        // True when presence can be sensed reliably enough to act on absence
+        // (fresh capSense2 frame + completed calibration). The Settings UI
+        // gates the auto-off toggle on this.
+        available: z.boolean(),
         movement: z.object({ active: z.boolean(), peakScore: z.number() }),
         level: z.object({
           active: z.boolean(),

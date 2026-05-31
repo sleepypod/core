@@ -17,6 +17,13 @@ interface SideData {
 interface SideSettingsFormProps {
   side: 'left' | 'right'
   sideData: SideData
+  /**
+   * Whether presence can be sensed for this side (calibrated capSense2 + fresh
+   * frame). `null` while the occupancy query is loading. When `false`, auto-off
+   * can't reliably tell the bed is empty, so the toggle is gated off — enabling
+   * it would do nothing (the watcher stands down on unsensable presence).
+   */
+  presenceAvailable: boolean | null
 }
 
 const AUTO_OFF_DURATION_OPTIONS = [5, 10, 15, 30, 45, 60, 90, 120] as const
@@ -24,7 +31,7 @@ const AUTO_OFF_DURATION_OPTIONS = [5, 10, 15, 30, 45, 60, 90, 120] as const
 /**
  * Per-side settings: name, away mode, always on, and auto-off for a single side.
  */
-export function SideSettingsForm({ side, sideData }: SideSettingsFormProps) {
+export function SideSettingsForm({ side, sideData, presenceAvailable }: SideSettingsFormProps) {
   const d = sideData ?? {
     side,
     name: side === 'left' ? 'Left' : 'Right',
@@ -39,11 +46,12 @@ export function SideSettingsForm({ side, sideData }: SideSettingsFormProps) {
     <SideCard
       key={`${d.name}-${d.awayMode}-${d.alwaysOn}-${d.autoOffEnabled}-${d.autoOffMinutes}`}
       data={d}
+      presenceAvailable={presenceAvailable}
     />
   )
 }
 
-function SideCard({ data }: { data: SideData }) {
+function SideCard({ data, presenceAvailable }: { data: SideData, presenceAvailable: boolean | null }) {
   const utils = trpc.useUtils()
   const [name, setName] = useState(data.name)
   const [awayMode, setAwayMode] = useState(data.awayMode)
@@ -57,6 +65,11 @@ function SideCard({ data }: { data: SideData }) {
 
   const isPending = mutation.isPending
   const sideLabel = data.side === 'left' ? 'Left' : 'Right'
+  // Block enabling auto-off when presence can't be sensed; always allow turning
+  // it off. `null` (loading) is treated as available to avoid a flicker that
+  // would block the toggle before the occupancy query resolves.
+  const presenceUnavailable = presenceAvailable === false
+  const autoOffToggleDisabled = isPending || (presenceUnavailable && !autoOffEnabled)
 
   function handleNameBlur() {
     const trimmed = name.trim()
@@ -181,10 +194,19 @@ function SideCard({ data }: { data: SideData }) {
         <Toggle
           enabled={autoOffEnabled}
           onToggle={handleAutoOffToggle}
-          disabled={isPending}
+          disabled={autoOffToggleDisabled}
           label={`Toggle auto-off for ${sideLabel} side`}
         />
       </div>
+
+      {/* Presence-sensing gate: explain why auto-off is unavailable / inactive */}
+      {presenceUnavailable && (
+        <p className="mt-2 text-xs text-amber-400/80">
+          {autoOffEnabled
+            ? 'Presence sensing is unavailable, so auto-off is currently inactive. Calibrate the capacitance sensor for this side to restore it.'
+            : 'Requires presence sensing. Calibrate the capacitance sensor for this side to enable auto-off.'}
+        </p>
+      )}
 
       {/* Auto-off duration picker (shown when enabled) */}
       {autoOffEnabled && (
