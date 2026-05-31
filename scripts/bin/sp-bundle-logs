@@ -4,7 +4,8 @@ set -uo pipefail
 # sp-bundle-logs — one-shot diagnostic capture for support handoffs.
 #
 # Produces /tmp/sleepypod-bundle-<ts>.tar.gz with journals, systemctl status,
-# pod capabilities, network state, and version info. Designed to be shared
+# pod capabilities, raw frame routing, network state, and version info.
+# Designed to be shared
 # verbatim on Discord/GitHub, so secrets in .env and HomeKit pairing state
 # are redacted by default. Pass --no-redact for self-debugging when you
 # actually want the raw bytes.
@@ -120,6 +121,38 @@ fi
 capture "data/ls-sleepypod-data.txt" ls -la "$DATA_DIR"
 capture "data/ls-homekit.txt"        ls -la "$HOMEKIT_DIR"
 capture "data/ls-modules.txt"        ls -la /opt/sleepypod/modules
+
+# --- raw frame routing ----------------------------------------------------
+# The most common "biometrics are empty" cause is readers tailing a
+# different directory than the firmware writes .RAW frames to. Pod 3
+# firmware and the Pod 5 tmpfs redirect both land in /persistent/biometrics;
+# a stale unit defaults to /persistent and only sees the 16-byte SEQNO.RAW
+# bookkeeping file. Capture where frames actually land, where each reader
+# looks, and the tmpfs mount state so this is diagnosable from the bundle
+# alone instead of asking the user to hand-run probes.
+mkdir -p "$STAGE/raw"
+capture "raw/ls-persistent-RAW.txt" bash -c 'ls -la /persistent/*.RAW 2>&1'
+capture "raw/ls-biometrics.txt"     bash -c 'ls -la /persistent/biometrics/ 2>&1'
+capture "raw/mounts.txt"            bash -c 'mount | grep -iE "persistent|biometrics|tmpfs" || true'
+
+# Where is the firmware actually writing? Resolve its open .RAW fds.
+{
+  echo "$ readlink /proc/<frankenfirmware>/fd/*"
+  fw_pid="$(pgrep frankenfirmware 2>/dev/null | head -1)"
+  echo "frankenfirmware pid: ${fw_pid:-not running}"
+  if [ -n "${fw_pid:-}" ]; then
+    for fd in /proc/"$fw_pid"/fd/*; do
+      tgt="$(readlink "$fd" 2>/dev/null || true)"
+      case "$tgt" in *.RAW) echo "writing: $tgt" ;; esac
+    done
+  fi
+} > "$STAGE/raw/firmware-open-files.txt" 2>&1
+
+# Effective RAW_DATA_DIR each reader resolves (inline Environment + drop-ins).
+for svc in sleepypod sleepypod-piezo-processor sleepypod-sleep-detector \
+           sleepypod-environment-monitor sleepypod-calibrator; do
+  capture "raw/env-$svc.txt" systemctl show -p Environment "$svc.service"
+done
 
 # --- install log ---------------------------------------------------------
 if [ -f "$INSTALL_LOG" ]; then
