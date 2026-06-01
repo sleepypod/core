@@ -174,6 +174,14 @@ interface SettingsData {
 function SidesTab({ data }: { data: SettingsData }) {
   const [selectedSide, setSelectedSide] = useState<'left' | 'right'>('left')
   const { leftName, rightName } = useSideNames()
+  // Drives the auto-off toggle gate: the feature is only safe where presence
+  // can be sensed. Polls so a side that comes online (calibration completes,
+  // sensor stream resumes) re-enables the toggle without a manual refresh.
+  const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, {
+    refetchInterval: 10000,
+    refetchOnWindowFocus: false,
+  })
+  const presenceAvailable = occupancy?.[selectedSide].available ?? null
 
   return (
     <section className="space-y-4">
@@ -201,6 +209,7 @@ function SidesTab({ data }: { data: SettingsData }) {
       <SideSettingsForm
         side={selectedSide}
         sideData={selectedSide === 'left' ? data.sides.left : data.sides.right}
+        presenceAvailable={presenceAvailable}
       />
     </section>
   )

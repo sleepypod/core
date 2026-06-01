@@ -50,13 +50,14 @@ export const deviceSettings = sqliteTable('device_settings', {
   homekitEnabled: integer('homekit_enabled', { mode: 'boolean' })
     .notNull()
     .default(false),
-  // Pump-stall safety guard. Default-on with conservative thresholds per
-  // ADR 0022: a side whose pump RPM stays under the trip threshold for
-  // dwellSamples consecutive frames is powered off until the user
-  // re-enables it. Auto-recovery is opt-in.
+  // Pump-stall safety guard (ADR 0022): a side whose pump RPM stays under the
+  // trip threshold for dwellSamples consecutive frames is powered off until the
+  // user re-enables it. Opt-in (default off) — it acts on flow/RPM data that
+  // not all pods report consistently, and a power-cutting feature must not fire
+  // on missing data. Auto-recovery is separately opt-in.
   pumpStallProtectionEnabled: integer('pump_stall_protection_enabled', { mode: 'boolean' })
     .notNull()
-    .default(true),
+    .default(false),
   pumpStallRpmThreshold: integer('pump_stall_rpm_threshold').notNull().default(500),
   pumpStallDwellSamples: integer('pump_stall_dwell_samples').notNull().default(2),
   pumpStallAutoRecoveryEnabled: integer('pump_stall_auto_recovery_enabled', { mode: 'boolean' })

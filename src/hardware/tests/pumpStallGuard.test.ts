@@ -224,15 +224,17 @@ describe('pumpStallGuard', () => {
     expect(getPumpStallNotice('left')).toBeNull()
   })
 
-  it('falls back to defaults and warns when settings read throws', async () => {
+  it('fails safe-off and warns when settings read throws', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     ;(sqlite as any).exec(`DROP TABLE device_settings`)
     invalidateGuardSettingsCache()
 
-    // Default threshold is 500, dwell 2 — so two sub-500 frames still trip.
+    // Enabled defaults false on a degraded read — a power-cutting feature must
+    // not arm on missing data, even though threshold/dwell defaults still apply.
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
-    expect(shouldBlock('left')).toBe(true)
+    expect(shouldBlock('left')).toBe(false)
+    expect(setPower).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('failed to read settings'),
       expect.anything(),

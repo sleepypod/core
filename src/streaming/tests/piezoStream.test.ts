@@ -954,15 +954,24 @@ describe('piezoStream — server lifecycle and protocol', () => {
 
   it('respects subscription filter during live streaming fan-out', async () => {
     const filePath = path.join(tmpRawDir, 'sub-filter.RAW')
-    const recs = [
-      buildOuterRecord(1, [{ type: 'capSense', ts: 1500, left: 0, right: 0 }]),
-      buildOuterRecord(2, [{ type: 'log', ts: 1501, level: 1, msg: 'hi' }]),
-    ]
-    fs.writeFileSync(filePath, Buffer.concat(recs))
+    // Create the file empty so the follower latches onto it, but withhold the
+    // frames until the subscription filter is confirmed. Writing the records up
+    // front races the tailing loop against the subscribe message: a tick that
+    // fires before the filter is installed fans out capSense under the default
+    // (all-types) subscription and the assertion flakes.
+    fs.writeFileSync(filePath, Buffer.alloc(0))
     const port = startAndPort()
     const client = await connectClient(port)
     client.ws.send(JSON.stringify({ type: 'subscribe', sensors: ['log'] }))
     await client.waitFor(m => m.type === 'subscribed')
+
+    // Filter is in place — now append both frames. capSense (seq 1) is parsed
+    // before log (seq 2) in the same tick, so once log arrives capSense has
+    // already been processed and filtered. No wall-clock ordering assumption.
+    fs.appendFileSync(filePath, Buffer.concat([
+      buildOuterRecord(1, [{ type: 'capSense', ts: 1500, left: 0, right: 0 }]),
+      buildOuterRecord(2, [{ type: 'log', ts: 1501, level: 1, msg: 'hi' }]),
+    ]))
 
     await client.waitFor(m => m.type === 'log' && m.ts === 1501, 3000)
     // capSense must NOT have reached the client because it filtered to ['log'].

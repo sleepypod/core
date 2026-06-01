@@ -91,10 +91,12 @@ vi.mock('@/src/lib/sleep-stages', () => sleepStagesMock)
 const occupancyMock = vi.hoisted(() => ({
   getOccupancy: vi.fn<(side: 'left' | 'right') => {
     occupied: boolean
+    available: boolean
     movement: { active: boolean, peakScore: number }
     level: { active: boolean, deviation: number | null, threshold: number | null, ageMs: number | null }
   }>(() => ({
     occupied: false,
+    available: false,
     movement: { active: false, peakScore: 0 },
     level: { active: false, deviation: null, threshold: null, ageMs: null },
   })),
@@ -229,6 +231,7 @@ describe('biometrics.getOccupancy', () => {
   it('returns occupancy for both sides from the shared virtual sensor', async () => {
     occupancyMock.getOccupancy.mockImplementation((side: 'left' | 'right') => ({
       occupied: side === 'left',
+      available: false,
       movement: { active: side === 'left', peakScore: side === 'left' ? 300 : 10 },
       level: { active: false, deviation: null, threshold: null, ageMs: null },
     }))
@@ -243,10 +246,12 @@ describe('biometrics.getOccupancy', () => {
   it('passes level signal through to the response', async () => {
     occupancyMock.getOccupancy.mockReturnValue({
       occupied: true,
+      available: true,
       movement: { active: false, peakScore: 5 },
       level: { active: true, deviation: 12.3, threshold: 6, ageMs: 500 },
     })
     const out = await caller.getOccupancy()
+    expect(out.left.available).toBe(true)
     expect(out.left.level.deviation).toBe(12.3)
     expect(out.left.level.threshold).toBe(6)
     expect(out.left.level.ageMs).toBe(500)

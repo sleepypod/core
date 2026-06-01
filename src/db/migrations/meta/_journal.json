@@ -78,6 +78,20 @@
       "when": 1779732358053,
       "tag": "0010_greedy_hercules",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1780252685801,
+      "tag": "0011_opt_in_pump_stall",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1780280050942,
+      "tag": "0012_backfill_pump_stall_optin",
+      "breakpoints": true
     }
   ]
 }

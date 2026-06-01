@@ -1255,6 +1255,37 @@ describe('mqttBridge — publishState DB failures', () => {
     await shutdownMqttBridge()
   })
 
+  it('publishes scaled loop_temp_c when flow row has numeric flowrate', async () => {
+    dbMock.state.bedTempRow = {
+      timestamp: new Date('2026-01-01T00:00:00Z'),
+      ambientTemp: 2000,
+      humidity: 5000,
+      leftPumpRpm: 1900,
+      rightPumpRpm: 1900,
+      leftFlowrateCd: 2050, // 20.5°C
+      rightFlowrateCd: 2150, // 21.5°C
+    }
+
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const loopTempLeft = fake.publish.mock.calls.find(([t]) =>
+      String(t).endsWith('/pump/left/loop_temp_c'),
+    )
+    const loopTempRight = fake.publish.mock.calls.find(([t]) =>
+      String(t).endsWith('/pump/right/loop_temp_c'),
+    )
+    expect(loopTempLeft).toBeDefined()
+    expect(loopTempRight).toBeDefined()
+    expect(JSON.parse(String(loopTempLeft?.[1])).temperature).toBeCloseTo(20.5, 2)
+    expect(JSON.parse(String(loopTempRight?.[1])).temperature).toBeCloseTo(21.5, 2)
+
+    await shutdownMqttBridge()
+  })
+
   it('publishes pump stall as "on" when a notice is active', async () => {
     const { setPumpStallNotice, resetPumpStallNotifications } = await import('@/src/hardware/pumpStallNotification')
     resetPumpStallNotifications()

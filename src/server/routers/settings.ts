@@ -174,7 +174,7 @@ export const settingsRouter = router({
             ledNightEndTime: '07:00',
             globalMaxOnHours: null,
             homekitEnabled: false,
-            pumpStallProtectionEnabled: true,
+            pumpStallProtectionEnabled: false,
             pumpStallRpmThreshold: 500,
             pumpStallDwellSamples: 2,
             pumpStallAutoRecoveryEnabled: false,

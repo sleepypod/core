@@ -20,6 +20,12 @@ _Add a brief overview of your project architecture_
 
 _Add your project-specific conventions here_
 
+## Debugging a pod
+
+Field debugging runbook — SSH access, data paths, "biometrics not writing" and
+"stalled pump" symptom flows: **`docs/DEBUGGING.md`**. The desktop diagnostics
+console (`/debug`) surfaces most of these signals live.
+
 <!-- BEGIN YGG INTEGRATION v:1 hash:a463a568 -->
 ## Yggdrasil Agent Coordination
 

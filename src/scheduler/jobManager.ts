@@ -337,7 +337,7 @@ export class JobManager {
       JobType.TEMPERATURE,
       cron,
       () => this.runTemperatureJob(sched),
-      { scheduleId: sched.id, side: sched.side }
+      { scheduleId: sched.id, side: sched.side, targetTemperature: sched.temperature }
     )
   }
 
@@ -379,7 +379,7 @@ export class JobManager {
       JobType.POWER_ON,
       cron,
       () => this.runPowerOnJob(sched),
-      { scheduleId: sched.id, side: sched.side }
+      { scheduleId: sched.id, side: sched.side, targetTemperature: sched.onTemperature }
     )
   }
 
@@ -447,7 +447,7 @@ export class JobManager {
       JobType.ALARM,
       cron,
       () => this.runAlarmJob(sched),
-      { scheduleId: sched.id, side: sched.side }
+      { scheduleId: sched.id, side: sched.side, targetTemperature: sched.alarmTemperature }
     )
   }
 
@@ -606,7 +606,7 @@ export class JobManager {
       const target = s?.ledNightBrightness ?? nightBrightness
       console.log(`LED night mode: setting brightness to ${target}`)
       await this.sendLedBrightness(target)
-    })
+    }, { brightness: nightBrightness })
 
     const [endHour, endMinute] = this.parseTime(nightEndTime)
     const endCron = `${endMinute} ${endHour} * * *`
@@ -616,7 +616,7 @@ export class JobManager {
       const target = s?.ledDayBrightness ?? dayBrightness
       console.log(`LED night mode: setting brightness to ${target}`)
       await this.sendLedBrightness(target)
-    })
+    }, { brightness: dayBrightness })
 
     // Apply correct brightness immediately based on whether we're in the night window.
     // Delegates to computeCurrentLedBrightness so the window math has one source of
@@ -1092,7 +1092,7 @@ export class JobManager {
             })
           })
         },
-        { sessionId, side, index: i },
+        { sessionId, side, index: i, targetTemperature: sp.temperature },
       )
     }
 

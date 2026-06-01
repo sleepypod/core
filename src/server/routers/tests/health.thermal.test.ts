@@ -1,0 +1,167 @@
+/**
+ * Tests for health.thermal — the per-side verdict that reconciles commanded
+ * state (device_state) against delivered flow (latest pump RPM). The whole
+ * point of the endpoint is catching the "powered + target set but pump at 0
+ * rpm → TEC locked → bed drifts cold" divergence, so the stalled cases are
+ * the ones that matter.
+ *
+ * db + biometricsDb are mocked with a chain keyed by table reference. The
+ * device_state query runs once per side in left→right order, so its mock
+ * returns rows from a queue in that order.
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { deviceSettings, deviceState } from '@/src/db/schema'
+import { bedTemp, flowReadings, freezerTemp } from '@/src/db/biometrics-schema'
+
+const guardMock = vi.hoisted(() => ({ shouldBlock: vi.fn<(side: string) => boolean>(() => false) }))
+
+// Rows returned per table. device_state is a left→right queue (one query/side).
+const rows = vi.hoisted(() => ({
+  settings: [] as unknown[],
+  deviceStateQueue: [] as unknown[][],
+  deviceStateCursor: { i: 0 },
+  flow: [] as unknown[],
+  freezer: [] as unknown[],
+  bed: [] as unknown[],
+}))
+
+const dbMock = vi.hoisted(() => {
+  const makeChain = (resolve: () => unknown[]) => {
+    const chain: Record<string, unknown> = {}
+    const passthrough = () => chain
+    chain.where = passthrough
+    chain.orderBy = passthrough
+    chain.limit = passthrough
+    chain.all = () => resolve()
+    return chain
+  }
+  return { makeChain }
+})
+
+vi.mock('@/src/scheduler', () => ({ getJobManager: vi.fn() }))
+vi.mock('@/src/scheduler/instance', () => ({ getJobManager: vi.fn() }))
+vi.mock('@/src/hardware/dacMonitor.instance', () => ({
+  getSharedHardwareClient: vi.fn(),
+  getDacMonitorIfRunning: vi.fn(),
+}))
+vi.mock('@/src/hardware/iptablesCheck', () => ({ checkIptables: vi.fn(() => ({ ok: true, rules: [] })) }))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({ shouldBlock: guardMock.shouldBlock }))
+
+function resolveFor(table: unknown): unknown[] {
+  if (table === deviceSettings) return rows.settings
+  if (table === deviceState) {
+    const out = rows.deviceStateQueue[rows.deviceStateCursor.i] ?? []
+    rows.deviceStateCursor.i += 1
+    return out
+  }
+  if (table === flowReadings) return rows.flow
+  if (table === freezerTemp) return rows.freezer
+  if (table === bedTemp) return rows.bed
+  return []
+}
+
+vi.mock('@/src/db', () => {
+  const select = vi.fn(() => ({
+    from: (table: unknown) => dbMock.makeChain(() => resolveFor(table)),
+  }))
+  return {
+    db: { select },
+    biometricsDb: { select },
+    sqlite: { pragma: vi.fn() },
+  }
+})
+
+const { healthRouter } = await import('@/src/server/routers/health')
+const caller = healthRouter.createCaller({})
+
+const FRESH = new Date(Date.now() - 30_000) // 30s old → not stale
+
+beforeEach(() => {
+  guardMock.shouldBlock.mockReset().mockReturnValue(false)
+  rows.settings = [{ enabled: false }]
+  rows.deviceStateQueue = []
+  rows.deviceStateCursor.i = 0
+  rows.flow = []
+  rows.freezer = []
+  rows.bed = []
+})
+
+describe('health.thermal verdicts', () => {
+  it('off when the side is not powered', async () => {
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    const res = await caller.thermal({})
+    expect(res.sides.map(s => s.verdict)).toEqual(['off', 'off'])
+  })
+
+  it('stalled when powered with a target but pump rpm is below the flow threshold', async () => {
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{ timestamp: FRESH, leftPumpRpm: 0, rightPumpRpm: 2000, leftFlowrateCd: 0, rightFlowrateCd: 2600 }]
+    const res = await caller.thermal({})
+    const left = res.sides[0]
+    expect(left.verdict).toBe('stalled')
+    expect(left.note).toContain('TEC')
+  })
+
+  it('stalled when powered but the latest flow reading is stale (no fresh frames)', async () => {
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 72, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    // Healthy rpm but the reading is 10 minutes old → pump not actually reporting.
+    rows.flow = [{ timestamp: new Date(Date.now() - 600_000), leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
+    const res = await caller.thermal({})
+    const left = res.sides[0]
+    expect(left.verdict).toBe('stalled')
+    expect(left.note).toContain('no fresh pump reading')
+  })
+
+  it('delivering when powered, flowing, and target diverges from current', async () => {
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 85, currentTemperature: 72, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
+    const res = await caller.thermal({})
+    expect(res.sides[0].verdict).toBe('delivering')
+  })
+
+  it('idle when powered and flowing but already at target', async () => {
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 80, currentTemperature: 80.5, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
+    const res = await caller.thermal({})
+    expect(res.sides[0].verdict).toBe('idle')
+  })
+
+  it('converts centi-°C water/bed/ambient sensors to °F and surfaces guard + settings flags', async () => {
+    guardMock.shouldBlock.mockImplementation((side: string) => side === 'left')
+    rows.settings = [{ enabled: true }]
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 70, isAlarmVibrating: true, poweredOnAt: new Date() }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{ timestamp: FRESH, leftPumpRpm: 0, rightPumpRpm: 0, leftFlowrateCd: 0, rightFlowrateCd: 0 }]
+    // 2500 cd = 25.00°C = 77.0°F
+    rows.freezer = [{ timestamp: FRESH, leftWaterTemp: 2500, rightWaterTemp: 2500, heatsinkTemp: 3000, ambientTemp: 2200 }]
+    rows.bed = [{ timestamp: FRESH, leftCenterTemp: 2400, rightCenterTemp: 2400 }]
+
+    const res = await caller.thermal({})
+    expect(res.pumpStallProtectionEnabled).toBe(true)
+    expect(res.heatsinkTempF).toBe(86) // 30.00°C
+    expect(res.ambientTempF).toBeCloseTo(71.6, 1) // 22.00°C
+    const left = res.sides[0]
+    expect(left.waterTempF).toBe(77)
+    expect(left.bedSurfaceTempF).toBeCloseTo(75.2, 1) // 24.00°C
+    expect(left.guardBlocked).toBe(true)
+    expect(left.isAlarmVibrating).toBe(true)
+  })
+})
