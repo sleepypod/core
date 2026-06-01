@@ -1,25 +1,33 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import {
   Activity,
   CalendarClock,
+  Clipboard,
+  ClipboardCheck,
   Cog,
   Cpu,
   Gauge,
   HeartPulse,
+  Loader2,
   Radio,
   ScrollText,
   Server,
   ServerCog,
+  Settings,
   SlidersHorizontal,
 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
+import { useSide } from '@/src/hooks/useSide'
+import { useSideNames } from '@/src/hooks/useSideNames'
+import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
+import { DataTable, type Column } from '@/src/ui/data-table'
 import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
-import { CalibrationModal } from '@/src/components/status/CalibrationModal'
 import { SystemLogViewer } from '@/src/components/status/SystemLogViewer'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
-import { SensorsScreen } from '@/src/components/Sensors/SensorsScreen'
 
 // ── Shared formatting ────────────────────────────────────────────────────────
 
@@ -37,6 +45,10 @@ function fmtMs(ms: number | undefined): string {
   if (ms == null) return '—'
   if (ms < 1) return '<1ms'
   return `${Math.round(ms)}ms`
+}
+
+function fmtNum(v: number | null | undefined, digits = 0): string {
+  return v == null ? '—' : v.toFixed(digits)
 }
 
 function fmtRel(iso: string | null): string {
@@ -66,8 +78,8 @@ const SECTIONS = [
   { id: 'overview', label: 'Overview', icon: Activity },
   { id: 'thermal', label: 'Thermal', icon: Gauge },
   { id: 'scheduler', label: 'Scheduler', icon: CalendarClock },
+  { id: 'biometrics', label: 'Biometrics', icon: HeartPulse },
   { id: 'health', label: 'Health', icon: ServerCog },
-  { id: 'sensors', label: 'Sensors', icon: HeartPulse },
   { id: 'calibration', label: 'Calibration', icon: SlidersHorizontal },
   { id: 'logs', label: 'Logs', icon: ScrollText },
 ] as const
@@ -77,20 +89,24 @@ type SectionId = (typeof SECTIONS)[number]['id']
 /**
  * Desktop diagnostics console — a maximum-density, full-bleed dashboard that
  * consolidates the pod's diagnostic surfaces (thermal delivery, scheduler,
- * service health, live sensors, calibration, and logs) behind a side-nav.
+ * service health, biometrics, calibration, and logs) behind a side-nav.
  *
  * Breaks out of the app's mobile `max-w-md` shell via a full-bleed wrapper so
- * the panels can use the entire viewport. Reached from the desktop-only
- * Diagnostics tab in the bottom nav and from the Status page card.
+ * the panels can use the full viewport. Desktop-first: the side-nav also hosts
+ * the active side and Settings, which the header drops on wide viewports.
  */
 export function DiagnosticsConsole() {
   const [section, setSection] = useState<SectionId>('overview')
+  const { side } = useSide()
+  const { sideName } = useSideNames()
+  const pathname = usePathname()
+  const lang = pathname?.split('/')[1] ?? 'en'
 
   return (
-    <div className="mx-[calc(50%-50vw)] w-screen px-3 sm:px-4">
-      <div className="mx-auto flex max-w-[1600px] flex-col gap-3 md:flex-row md:gap-4">
-        {/* Side-nav — vertical on desktop, horizontal scroller on mobile */}
-        <nav className="flex shrink-0 gap-1 overflow-x-auto pb-1 md:w-44 md:flex-col md:overflow-visible md:pb-0">
+    <div className="mx-[calc(50%-50vw)] w-screen px-4">
+      <div className="mx-auto flex max-w-[1700px] gap-4">
+        {/* Side-nav */}
+        <nav className="flex w-44 shrink-0 flex-col gap-1">
           {SECTIONS.map((s) => {
             const active = s.id === section
             return (
@@ -98,7 +114,7 @@ export function DiagnosticsConsole() {
                 key={s.id}
                 type="button"
                 onClick={() => setSection(s.id)}
-                className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors md:py-1.5 ${
+                className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
                   active
                     ? 'bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30'
                     : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
@@ -109,15 +125,28 @@ export function DiagnosticsConsole() {
               </button>
             )
           })}
+
+          <div className="mt-auto space-y-1 border-t border-zinc-800/60 pt-2">
+            <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-zinc-600">
+              {`Active side · ${sideName(side)}`}
+            </div>
+            <Link
+              href={`/${lang}/settings`}
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-800/60 hover:text-zinc-200"
+            >
+              <Settings size={14} className="shrink-0" />
+              Settings
+            </Link>
+          </div>
         </nav>
 
         {/* Content pane */}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pb-6">
           {section === 'overview' && <OverviewPanel onJump={setSection} />}
           {section === 'thermal' && <ThermalPanel />}
           {section === 'scheduler' && <SchedulerPanel />}
+          {section === 'biometrics' && <BiometricsPanel />}
           {section === 'health' && <HealthPanel />}
-          {section === 'sensors' && <PanelFrame><SensorsScreen /></PanelFrame>}
           {section === 'calibration' && <CalibrationPanel />}
           {section === 'logs' && <LogsPanel />}
         </div>
@@ -139,7 +168,7 @@ function OverviewPanel({ onJump }: { onJump: (s: SectionId) => void }) {
     <div className="space-y-3">
       <SectionHeader title="Overview" hint={thermal.isFetching ? 'refreshing…' : 'live · 5s'} />
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-3 gap-2 xl:grid-cols-6">
         <Metric label="DB" value={system.data?.database?.status === 'ok' ? fmtMs(system.data.database.latencyMs) : (system.data?.database?.status ?? '—')} good={system.data?.database?.status === 'ok'} />
         <Metric label="DAC socket" value={hardware.data?.status === 'ok' ? fmtMs(hardware.data.latencyMs) : (hardware.data?.status ?? '—')} good={hardware.data?.status === 'ok'} />
         <Metric label="Scheduler" value={scheduler.data?.enabled ? `${scheduler.data.jobCounts?.total ?? 0} jobs` : 'off'} good={scheduler.data?.healthy ?? true} />
@@ -148,8 +177,7 @@ function OverviewPanel({ onJump }: { onJump: (s: SectionId) => void }) {
         <Metric label="Ambient" value={fmtF(t?.ambientTempF)} />
       </div>
 
-      {/* Per-side thermal at a glance */}
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 lg:grid-cols-2">
         {t?.sides.map((s) => {
           const v = VERDICT_STYLES[s.verdict]
           return (
@@ -172,7 +200,6 @@ function OverviewPanel({ onJump }: { onJump: (s: SectionId) => void }) {
         })}
       </div>
 
-      {/* Next jobs */}
       <div className="rounded-xl bg-zinc-900/80 p-3">
         <div className="mb-2 flex items-baseline justify-between">
           <h3 className="text-xs font-medium text-white">Next scheduled jobs</h3>
@@ -181,6 +208,24 @@ function OverviewPanel({ onJump }: { onJump: (s: SectionId) => void }) {
         <JobList jobs={scheduler.data?.upcomingJobs} limit={6} />
       </div>
     </div>
+  )
+}
+
+function JobList({ jobs, limit }: { jobs?: Array<{ id: string, type: string, side?: string, nextRun: string | null }>, limit: number }) {
+  if (!jobs) return <p className="text-[11px] text-zinc-500">Loading…</p>
+  if (jobs.length === 0) return <p className="text-[11px] text-zinc-500">No upcoming jobs</p>
+  return (
+    <ul className="space-y-1 text-[11px]">
+      {jobs.slice(0, limit).map(j => (
+        <li key={j.id} className="flex items-center justify-between gap-2 border-b border-zinc-800/50 pb-1 last:border-0">
+          <span className="min-w-0 truncate text-zinc-300">
+            {j.type}
+            {j.side ? <span className="text-zinc-500">{` · ${j.side}`}</span> : ''}
+          </span>
+          <span className="shrink-0 text-zinc-500">{fmtRel(j.nextRun)}</span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -198,13 +243,13 @@ function ThermalPanel() {
 
       {data && (
         <>
-          <div className="grid grid-cols-3 gap-2 rounded-xl bg-zinc-900/80 p-3 text-sm">
+          <div className="grid grid-cols-3 gap-2 rounded-xl bg-zinc-900/80 p-3 text-sm xl:max-w-2xl">
             <Stat label="Pump-stall protection" value={data.pumpStallProtectionEnabled ? 'ENABLED' : 'disabled'} />
             <Stat label="Heatsink" value={fmtF(data.heatsinkTempF)} />
             <Stat label="Ambient" value={fmtF(data.ambientTempF)} />
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-2">
+          <div className="grid gap-2 lg:grid-cols-2">
             {data.sides.map((s) => {
               const v = VERDICT_STYLES[s.verdict]
               const diverged = s.verdict === 'stalled'
@@ -218,7 +263,7 @@ function ThermalPanel() {
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${v?.className ?? ''}`}>{v?.label ?? s.verdict}</span>
                   </div>
                   {s.note && <p className="text-[11px] text-red-300">{s.note}</p>}
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs sm:grid-cols-3">
+                  <div className="grid grid-cols-3 gap-x-3 gap-y-1.5 text-xs">
                     <Stat label="Target" value={s.isPowered ? fmtF(s.targetTempF) : 'off'} />
                     <Stat label="Bed" value={fmtF(s.currentTempF)} />
                     <Stat label="Pump" value={s.pumpRpm == null ? '—' : `${s.pumpRpm} rpm`} />
@@ -243,11 +288,14 @@ function ThermalPanel() {
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
+interface SchedJob { id: string, type: string, side?: string, nextRun: string | null }
+
 function SchedulerPanel() {
   const scheduler = trpc.health.scheduler.useQuery({}, { refetchInterval: 15000 })
   const system = trpc.health.system.useQuery({}, { refetchInterval: 15000 })
   const counts = scheduler.data?.jobCounts
   const drift = system.data?.scheduler?.drift
+  const jobs = (scheduler.data?.upcomingJobs ?? []) as SchedJob[]
 
   const countEntries: Array<[string, number | undefined]> = [
     ['Total', counts?.total],
@@ -259,11 +307,19 @@ function SchedulerPanel() {
     ['Reboot', counts?.reboot],
   ]
 
+  const columns: Array<Column<SchedJob>> = [
+    { key: 'type', header: 'Type', render: r => <span className="font-medium text-zinc-200">{r.type}</span>, sortValue: r => r.type },
+    { key: 'side', header: 'Side', render: r => <span className="capitalize text-zinc-400">{r.side ?? '—'}</span>, sortValue: r => r.side ?? '' },
+    { key: 'nextRun', header: 'Next run', render: r => <span className="text-zinc-300">{r.nextRun ? new Date(r.nextRun).toLocaleString() : '—'}</span>, sortValue: r => r.nextRun ?? '' },
+    { key: 'in', header: 'In', align: 'right', render: r => <span className="text-zinc-400">{fmtRel(r.nextRun)}</span>, sortValue: r => (r.nextRun ? new Date(r.nextRun).getTime() : Number.MAX_SAFE_INTEGER) },
+    { key: 'id', header: 'Job ID', render: r => <span className="font-mono text-[10px] text-zinc-600">{r.id}</span>, sortValue: r => r.id },
+  ]
+
   return (
     <div className="space-y-3">
       <SectionHeader title="Scheduler" hint={scheduler.data?.enabled ? 'enabled' : 'disabled'} />
 
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+      <div className="grid grid-cols-4 gap-2 xl:grid-cols-7">
         {countEntries.map(([label, value]) => (
           <Metric key={label} label={label} value={value == null ? '—' : String(value)} />
         ))}
@@ -277,31 +333,82 @@ function SchedulerPanel() {
         </div>
       )}
 
-      <div className="rounded-xl bg-zinc-900/80 p-3">
-        <h3 className="mb-2 text-xs font-medium text-white">Upcoming jobs</h3>
-        <JobList jobs={scheduler.data?.upcomingJobs} limit={40} showId />
+      <DataTable
+        columns={columns}
+        rows={jobs}
+        getRowKey={r => r.id}
+        empty={scheduler.isLoading ? 'Loading…' : 'No upcoming jobs'}
+      />
+    </div>
+  )
+}
+
+// ── Biometrics ───────────────────────────────────────────────────────────────
+
+interface VitalRow { side: string, timestamp: Date, heartRate: number | null, hrv: number | null, breathingRate: number | null }
+
+function BiometricsPanel() {
+  const { side } = useSide()
+  const { weekStart, weekEnd } = useWeekNavigator()
+
+  const summary = trpc.biometrics.getVitalsSummary.useQuery({ side, startDate: weekStart, endDate: weekEnd }, { refetchInterval: 30000 })
+  const occupancy = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 10000 })
+  const fileCount = trpc.biometrics.getFileCount.useQuery({}, { refetchInterval: 30000 })
+  const vitals = trpc.biometrics.getVitals.useQuery({ side, startDate: weekStart, endDate: weekEnd, limit: 200 }, { refetchInterval: 30000 })
+
+  const rows = (vitals.data ?? []) as VitalRow[]
+  const s = summary.data
+
+  const columns: Array<Column<VitalRow>> = [
+    { key: 'timestamp', header: 'Time', render: r => <span className="font-mono text-[11px] text-zinc-400">{new Date(r.timestamp).toLocaleString()}</span>, sortValue: r => new Date(r.timestamp).getTime() },
+    { key: 'heartRate', header: 'HR', align: 'right', render: r => <span>{fmtNum(r.heartRate)}</span>, sortValue: r => r.heartRate ?? -1 },
+    { key: 'hrv', header: 'HRV', align: 'right', render: r => <span>{fmtNum(r.hrv)}</span>, sortValue: r => r.hrv ?? -1 },
+    { key: 'breathingRate', header: 'BR', align: 'right', render: r => <span>{fmtNum(r.breathingRate, 1)}</span>, sortValue: r => r.breathingRate ?? -1 },
+    { key: 'side', header: 'Side', render: r => <span className="capitalize text-zinc-400">{r.side}</span>, sortValue: r => r.side },
+  ]
+
+  return (
+    <div className="space-y-3">
+      <SectionHeader title="Biometrics" hint={`${sideLabel(side)} · this week`} />
+
+      <div className="grid grid-cols-3 gap-2 xl:grid-cols-6">
+        <Metric label="Avg HR" value={s ? fmtNum(s.avgHeartRate) : '—'} />
+        <Metric label="HR min/max" value={s ? `${fmtNum(s.minHeartRate)}/${fmtNum(s.maxHeartRate)}` : '—'} />
+        <Metric label="Avg HRV" value={s ? fmtNum(s.avgHRV) : '—'} />
+        <Metric label="Avg BR" value={s ? fmtNum(s.avgBreathingRate, 1) : '—'} />
+        <Metric label="Records" value={s ? String(s.recordCount) : '—'} />
+        <Metric label="RAW files" value={fileCount.data ? `${fileCount.data.rawFiles.left}+${fileCount.data.rawFiles.right} · ${fileCount.data.totalSizeMB}MB` : '—'} />
+      </div>
+
+      {occupancy.data && (
+        <div className="grid grid-cols-2 gap-2">
+          {(['left', 'right'] as const).map((sd) => {
+            const o = occupancy.data[sd]
+            return (
+              <div key={sd} className="rounded-xl bg-zinc-900/80 p-3 text-xs">
+                <p className="mb-1 font-medium capitalize text-white">{`${sd} side`}</p>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                  <Stat label="Occupied" value={o.occupied ? 'yes' : 'no'} />
+                  <Stat label="Available" value={o.available ? 'yes' : 'no'} />
+                  <Stat label="Movement" value={o.movement.active ? `active (${fmtNum(o.movement.peakScore)})` : 'idle'} />
+                  <Stat label="Level dev" value={fmtNum(o.level.deviation, 1)} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div>
+        <h3 className="mb-1.5 text-xs font-medium text-white">{`Recent vitals (${rows.length})`}</h3>
+        <DataTable columns={columns} rows={rows} getRowKey={(r, i) => `${new Date(r.timestamp).getTime()}-${i}`} empty={vitals.isLoading ? 'Loading…' : 'No vitals this week'} />
       </div>
     </div>
   )
 }
 
-function JobList({ jobs, limit, showId }: { jobs?: Array<{ id: string, type: string, side?: string, nextRun: string | null }>, limit: number, showId?: boolean }) {
-  if (!jobs) return <p className="text-[11px] text-zinc-500">Loading…</p>
-  if (jobs.length === 0) return <p className="text-[11px] text-zinc-500">No upcoming jobs</p>
-  return (
-    <ul className="space-y-1 text-[11px]">
-      {jobs.slice(0, limit).map(j => (
-        <li key={j.id} className="flex items-center justify-between gap-2 border-b border-zinc-800/50 pb-1 last:border-0">
-          <span className="min-w-0 truncate text-zinc-300">
-            {j.type}
-            {j.side ? <span className="text-zinc-500">{` · ${j.side}`}</span> : ''}
-            {showId ? <span className="ml-1 text-zinc-600">{j.id}</span> : ''}
-          </span>
-          <span className="shrink-0 text-zinc-500">{fmtRel(j.nextRun)}</span>
-        </li>
-      ))}
-    </ul>
-  )
+function sideLabel(side: string): string {
+  return side.charAt(0).toUpperCase() + side.slice(1)
 }
 
 // ── Health ───────────────────────────────────────────────────────────────────
@@ -387,56 +494,164 @@ function HealthPanel() {
   )
 }
 
-// ── Calibration ──────────────────────────────────────────────────────────────
+// ── Calibration (inline, no modal) ───────────────────────────────────────────
+
+const CAL_SENSORS = ['piezo', 'capacitance', 'temperature'] as const
+type CalSensor = (typeof CAL_SENSORS)[number]
 
 function CalibrationPanel() {
-  const [modalOpen, setModalOpen] = useState(false)
-  const cal = trpc.calibration.getStatus.useQuery({ side: 'left' }, { refetchInterval: 10000 })
-  const sensors = ['piezo', 'capacitance', 'temperature'] as const
-  const data = cal.data
+  const { side } = useSide()
+  const utils = trpc.useUtils()
+  const [triggering, setTriggering] = useState<CalSensor | null>(null)
+
+  const status = trpc.calibration.getStatus.useQuery({ side }, { refetchInterval: 5000 })
+  const triggerSingle = trpc.calibration.triggerCalibration.useMutation({
+    onSuccess: () => {
+      utils.calibration.getStatus.invalidate({ side })
+      setTriggering(null)
+    },
+    onError: () => setTriggering(null),
+  })
+  const triggerFull = trpc.calibration.triggerFullCalibration.useMutation({
+    onSuccess: () => utils.calibration.getStatus.invalidate({ side }),
+  })
+
+  const data = status.data
+  const anyActive = data && CAL_SENSORS.some(t => data[t]?.status === 'running' || data[t]?.status === 'pending')
 
   return (
     <div className="space-y-3">
-      <SectionHeader title="Calibration" hint="left side" />
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        {sensors.map((type) => {
-          const s = data?.[type]
-          const status = s?.status ?? 'unknown'
-          const quality = s?.qualityScore != null ? `${Math.round((s.qualityScore as number) * 100)}%` : '—'
+      <SectionHeader title="Calibration" hint={sideLabel(side)} />
+
+      {(triggerSingle.error || triggerFull.error) && (
+        <div className="rounded-lg bg-red-900/20 px-3 py-2 text-[11px] text-red-400">
+          {triggerSingle.error?.message || triggerFull.error?.message}
+        </div>
+      )}
+
+      <div className="grid gap-2 sm:grid-cols-3">
+        {CAL_SENSORS.map((type) => {
+          const p = data?.[type]
+          const st = p?.status ?? 'unknown'
+          const active = st === 'running' || st === 'pending'
+          const q = p?.qualityScore
           return (
-            <div key={type} className="rounded-xl bg-zinc-900/80 p-3">
-              <p className="text-xs font-medium capitalize text-white">{type}</p>
-              <p className="mt-1 text-[11px] text-zinc-400">
-                Status:
-                {' '}
-                <span className={status === 'completed' ? 'text-emerald-300' : status === 'running' || status === 'pending' ? 'text-amber-300' : 'text-zinc-500'}>{status}</span>
-              </p>
-              <p className="text-[11px] text-zinc-400">{`Quality: ${quality}`}</p>
+            <div key={type} className="space-y-2 rounded-xl bg-zinc-900/80 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium capitalize text-white">{type}</span>
+                <CalStatusBadge status={st} />
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <Stat label="Quality" value={q != null ? `${Math.round(q * 100)}%` : '—'} />
+                <Stat label="Samples" value={p?.samplesUsed != null ? String(p.samplesUsed) : '—'} />
+                <Stat label="Calibrated" value={p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—'} />
+                <Stat label="Expires" value={p?.expiresAt ? new Date(p.expiresAt).toLocaleDateString() : '—'} />
+              </div>
+              {p?.errorMessage && <p className="text-[10px] text-red-400/80">{p.errorMessage}</p>}
+              <button
+                type="button"
+                onClick={() => {
+                  setTriggering(type)
+                  triggerSingle.mutate({ side, sensorType: type })
+                }}
+                disabled={triggering === type || active}
+                className="w-full rounded-lg bg-zinc-800 px-3 py-1.5 text-[11px] font-semibold text-zinc-300 transition-colors hover:bg-zinc-700 disabled:text-zinc-600"
+              >
+                {triggering === type
+                  ? <Loader2 size={12} className="mx-auto animate-spin" />
+                  : active ? (st === 'running' ? 'Running…' : 'Pending') : 'Calibrate'}
+              </button>
             </div>
           )
         })}
       </div>
+
       <button
         type="button"
-        onClick={() => setModalOpen(true)}
-        className="rounded-lg bg-zinc-800/80 px-3 py-2 text-xs font-medium text-zinc-200 hover:bg-zinc-700"
+        onClick={() => triggerFull.mutate({})}
+        disabled={triggerFull.isPending || !!anyActive}
+        className="flex items-center gap-2 rounded-lg border border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
       >
-        Open calibration controls
+        {triggerFull.isPending ? <Loader2 size={13} className="animate-spin" /> : <SlidersHorizontal size={13} />}
+        Calibrate all sensors
       </button>
-      <CalibrationModal open={modalOpen} onClose={() => setModalOpen(false)} />
     </div>
   )
+}
+
+function CalStatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    completed: 'bg-emerald-500/15 text-emerald-300',
+    running: 'bg-amber-500/15 text-amber-300',
+    pending: 'bg-zinc-600/20 text-zinc-300',
+    failed: 'bg-red-500/15 text-red-300',
+    unknown: 'bg-zinc-600/20 text-zinc-500',
+  }
+  return <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${map[status] ?? map.unknown}`}>{status}</span>
 }
 
 // ── Logs ─────────────────────────────────────────────────────────────────────
 
 function LogsPanel() {
   return (
-    <div className="grid gap-3 xl:grid-cols-2">
-      <PanelFrame><SystemLogViewer /></PanelFrame>
-      <section className="rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3">
-        <FirmwareLogConsole />
-      </section>
+    <div className="space-y-4">
+      <RawLogDump />
+      <div className="grid gap-3 xl:grid-cols-2">
+        <SystemLogViewer />
+        <section className="rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3">
+          <FirmwareLogConsole />
+        </section>
+      </div>
+    </div>
+  )
+}
+
+/** Copy-paste-friendly raw journalctl dump for a chosen unit. */
+function RawLogDump() {
+  const sources = trpc.system.getLogSources.useQuery({})
+  const [unit, setUnit] = useState('sleepypod.service')
+  const [copied, setCopied] = useState(false)
+  const logs = trpc.system.getLogs.useQuery({ unit, lines: 200 }, { refetchInterval: 15000 })
+
+  const text = useMemo(() => (logs.data?.lines ?? []).join('\n'), [logs.data])
+
+  const copy = () => {
+    if (!navigator.clipboard) return
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  return (
+    <div className="rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="text-xs font-medium text-white">Raw logs</h3>
+        <select
+          value={unit}
+          onChange={e => setUnit(e.target.value)}
+          className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-300"
+        >
+          {(sources.data?.sources ?? [{ unit: 'sleepypod.service', name: 'Core', active: true }]).map(s => (
+            <option key={s.unit} value={s.unit}>{s.name}</option>
+          ))}
+        </select>
+        <span className="text-[10px] text-zinc-500">{`${logs.data?.lines?.length ?? 0} lines · journalctl`}</span>
+        <button
+          type="button"
+          onClick={copy}
+          disabled={!text}
+          className="ml-auto flex items-center gap-1.5 rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 disabled:opacity-40"
+        >
+          {copied ? <ClipboardCheck size={12} className="text-emerald-400" /> : <Clipboard size={12} />}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <textarea
+        readOnly
+        value={logs.isLoading ? 'Loading…' : text || 'No log output'}
+        className="h-72 w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed text-zinc-300"
+      />
     </div>
   )
 }
@@ -472,9 +687,4 @@ function Metric({ label, value, good }: { label: string, value: string, good?: b
 
 function Tag({ children, className }: { children: React.ReactNode, className: string }) {
   return <span className={`rounded px-1.5 py-0.5 ${className}`}>{children}</span>
-}
-
-/** Caps an embedded mobile-width screen so it doesn't stretch awkwardly wide. */
-function PanelFrame({ children }: { children: React.ReactNode }) {
-  return <div className="mx-auto max-w-2xl xl:mx-0">{children}</div>
 }

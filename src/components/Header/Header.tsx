@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { Moon, Plane, Settings } from 'lucide-react'
 import { useSide } from '@/src/providers/SideProvider'
@@ -43,6 +44,11 @@ export const Header = () => {
   const sideSettings = primarySide === 'left' ? settings?.sides?.left : settings?.sides?.right
   const isAway = sideSettings?.awayMode ?? false
 
+  // On the desktop diagnostics console the side indicator and Settings live in
+  // the console's left menu, so the global toolbar drops them there at md+.
+  const pathname = usePathname()
+  const onDebug = (pathname?.split('/')[2] ?? '') === 'debug'
+
   const device = settings?.device
   const [nightTick, setNightTick] = useState(0)
   useEffect(() => {
@@ -60,7 +66,7 @@ export const Header = () => {
   return (
     <header className={styles.header}>
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-zinc-400">{sideName(primarySide)}</span>
+        <span className={`text-sm font-medium text-zinc-400 ${onDebug ? 'md:hidden' : ''}`}>{sideName(primarySide)}</span>
         {isAway && (
           <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-400">
             <Plane size={10} />
@@ -77,7 +83,7 @@ export const Header = () => {
       <div className="flex items-center gap-2">
         <Link
           href="/en/settings"
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition-colors active:bg-zinc-800"
+          className={`flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition-colors active:bg-zinc-800 ${onDebug ? 'md:hidden' : ''}`}
           aria-label="Settings"
         >
           <Settings size={18} />
