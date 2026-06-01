@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { deviceSettings, deviceState } from '@/src/db/schema'
 import { bedTemp, flowReadings, freezerTemp } from '@/src/db/biometrics-schema'
 
-const guardMock = vi.hoisted(() => ({ shouldBlock: vi.fn((_side: string) => false) }))
+const guardMock = vi.hoisted(() => ({ shouldBlock: vi.fn<(side: string) => boolean>(() => false) }))
 
 // Rows returned per table. device_state is a left→right queue (one query/side).
 const rows = vi.hoisted(() => ({
