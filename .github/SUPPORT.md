@@ -42,5 +42,5 @@ believe you removed it.
 ---
 
 Found a bug? After sharing the above, please also open a
-[GitHub issue](../../issues/new) with reproduction steps so it doesn't get lost
+[GitHub issue](https://github.com/sleepypod/core/issues/new) with reproduction steps so it doesn't get lost
 in chat history.
