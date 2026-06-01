@@ -43,8 +43,16 @@ function downloadCSV(content: string, filename: string) {
   const link = document.createElement('a')
   link.href = url
   link.download = filename
+  // The anchor must be in the document and the object URL must outlive the
+  // click: iOS Safari starts the download asynchronously, so revoking the URL
+  // synchronously (or clicking a detached node) aborts it and leaves a blank
+  // blob page instead of saving the file.
+  document.body.appendChild(link)
   link.click()
-  URL.revokeObjectURL(url)
+  setTimeout(() => {
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }, 1000)
 }
 
 function formatBytes(bytes: number): string {
