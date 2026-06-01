@@ -11,12 +11,9 @@ import {
   Legend,
 } from 'recharts'
 
-export interface ThermalTrendPoint {
-  t: number
-  target: number | null
-  bed: number | null
-  water: number | null
-}
+import type { ThermalTrendPoint } from './diagnosticsLogic'
+
+export type { ThermalTrendPoint }
 
 const SIDE_COLOR = { left: '#5cb8e0', right: '#40e0d0' } as const
 
