@@ -64,7 +64,21 @@ export const VERDICT_STYLES: Record<string, { label: string, className: string }
 
 // ── Scheduler lanes ────────────────────────────────────────────────────────────
 
-export interface SchedJob { id: string, type: string, side?: string, nextRun: string | null }
+export interface SchedJob {
+  id: string
+  type: string
+  side?: string
+  nextRun: string | null
+  targetTempF?: number | null
+  brightness?: number | null
+}
+
+/** The job's payload value as a short display string ('82°F', '40%', or '—'). */
+export function fmtJobValue(job: Pick<SchedJob, 'targetTempF' | 'brightness'>): string {
+  if (job.targetTempF != null) return `${Math.round(job.targetTempF)}°F`
+  if (job.brightness != null) return `${job.brightness}%`
+  return '—'
+}
 
 export interface DayLane { date: number, isToday: boolean, jobs: SchedJob[] }
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fmtF, fmtAge, fmtMs, fmtNum, minutesSince, fmtRel, fmtClock, fmtDayLabel,
-  VERDICT_STYLES, buildWeekLanes, jobTone, biometricsFlowStatus, thermalTrendPoints,
+  VERDICT_STYLES, buildWeekLanes, jobTone, fmtJobValue, biometricsFlowStatus, thermalTrendPoints,
   type SchedJob, type ThermalSideSnapshot,
 } from '../diagnosticsLogic'
 
@@ -75,6 +75,16 @@ describe('jobTone', () => {
     expect(jobTone('prime')).toContain('sky')
     expect(jobTone('reboot')).toContain('purple')
     expect(jobTone('mystery')).toContain('zinc-700')
+  })
+})
+
+describe('fmtJobValue', () => {
+  it('prefers temperature, then brightness, else dash', () => {
+    expect(fmtJobValue({ targetTempF: 82.4 })).toBe('82°F')
+    expect(fmtJobValue({ brightness: 40 })).toBe('40%')
+    expect(fmtJobValue({ targetTempF: 80, brightness: 40 })).toBe('80°F')
+    expect(fmtJobValue({})).toBe('—')
+    expect(fmtJobValue({ targetTempF: null, brightness: null })).toBe('—')
   })
 })
 

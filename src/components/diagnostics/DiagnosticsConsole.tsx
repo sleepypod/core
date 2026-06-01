@@ -30,7 +30,7 @@ import { ThermalTrendChart } from '@/src/components/diagnostics/ThermalTrendChar
 import { BiometricsTrendChart } from '@/src/components/diagnostics/BiometricsTrendChart'
 import {
   fmtF, fmtAge, fmtMs, fmtNum, fmtRel, fmtClock, fmtDayLabel,
-  VERDICT_STYLES, buildWeekLanes, jobTone, biometricsFlowStatus, thermalTrendPoints,
+  VERDICT_STYLES, buildWeekLanes, jobTone, fmtJobValue, biometricsFlowStatus, thermalTrendPoints,
   type SchedJob,
 } from '@/src/components/diagnostics/diagnosticsLogic'
 import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
@@ -283,8 +283,8 @@ function SchedulerWeek({ jobs }: { jobs: SchedJob[] }) {
               {lane.jobs.length === 0
                 ? <span className="text-[11px] text-zinc-600">—</span>
                 : lane.jobs.map(j => (
-                    <span key={j.id} className={`rounded px-1.5 py-0.5 text-[10px] ${jobTone(j.type)}`} title={`${j.type}${j.side ? ` · ${j.side}` : ''}`}>
-                      {`${fmtClock(j.nextRun)} ${j.type}${j.side ? ` · ${j.side[0].toUpperCase()}` : ''}`}
+                    <span key={j.id} className={`rounded px-1.5 py-0.5 text-[10px] ${jobTone(j.type)}`} title={`${j.type}${j.side ? ` · ${j.side}` : ''}${fmtJobValue(j) === '—' ? '' : ` · ${fmtJobValue(j)}`}`}>
+                      {`${fmtClock(j.nextRun)} ${j.type}${j.side ? ` · ${j.side[0].toUpperCase()}` : ''}${fmtJobValue(j) === '—' ? '' : ` ${fmtJobValue(j)}`}`}
                     </span>
                   ))}
             </div>
@@ -315,6 +315,7 @@ function SchedulerPanel() {
   const columns: Array<Column<SchedJob>> = [
     { key: 'type', header: 'Type', render: r => <span className="font-medium text-zinc-200">{r.type}</span>, sortValue: r => r.type },
     { key: 'side', header: 'Side', render: r => <span className="capitalize text-zinc-400">{r.side ?? '—'}</span>, sortValue: r => r.side ?? '' },
+    { key: 'value', header: 'Value', align: 'right', render: r => <span className="text-zinc-300">{fmtJobValue(r)}</span>, sortValue: r => r.targetTempF ?? r.brightness ?? -1 },
     { key: 'nextRun', header: 'Next run', render: r => <span className="text-zinc-300">{r.nextRun ? new Date(r.nextRun).toLocaleString() : '—'}</span>, sortValue: r => r.nextRun ?? '' },
     { key: 'in', header: 'In', align: 'right', render: r => <span className="text-zinc-400">{fmtRel(r.nextRun)}</span>, sortValue: r => (r.nextRun ? new Date(r.nextRun).getTime() : Number.MAX_SAFE_INTEGER) },
     { key: 'id', header: 'Job ID', render: r => <span className="font-mono text-[10px] text-zinc-600">{r.id}</span>, sortValue: r => r.id },

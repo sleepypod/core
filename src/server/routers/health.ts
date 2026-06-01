@@ -54,6 +54,8 @@ export const healthRouter = router({
         type: z.string(),
         side: z.string().optional(),
         nextRun: z.string().nullable(),
+        targetTempF: z.number().nullable(),
+        brightness: z.number().nullable(),
       })),
       healthy: z.boolean(),
     }))
@@ -101,11 +103,14 @@ export const healthRouter = router({
         const upcomingJobs = jobs
           .map((job) => {
             const nextInvocation = scheduler.getNextInvocation(job.id)
+            const md = job.metadata ?? {}
             return {
               id: job.id,
               type: job.type,
-              side: job.metadata?.side as string | undefined,
+              side: md.side as string | undefined,
               nextRun: nextInvocation?.toISOString() || null,
+              targetTempF: typeof md.targetTemperature === 'number' ? md.targetTemperature : null,
+              brightness: typeof md.brightness === 'number' ? md.brightness : null,
             }
           })
           .filter(job => job.nextRun !== null)
