@@ -26,8 +26,12 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { DataTable, type Column } from '@/src/ui/data-table'
 import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
+import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
+import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
+import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemLogViewer } from '@/src/components/status/SystemLogViewer'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
+import { SensorsScreen } from '@/src/components/Sensors/SensorsScreen'
 
 // ── Shared formatting ────────────────────────────────────────────────────────
 
@@ -79,6 +83,7 @@ const SECTIONS = [
   { id: 'thermal', label: 'Thermal', icon: Gauge },
   { id: 'scheduler', label: 'Scheduler', icon: CalendarClock },
   { id: 'biometrics', label: 'Biometrics', icon: HeartPulse },
+  { id: 'sensors', label: 'Sensors', icon: Radio },
   { id: 'health', label: 'Health', icon: ServerCog },
   { id: 'calibration', label: 'Calibration', icon: SlidersHorizontal },
   { id: 'logs', label: 'Logs', icon: ScrollText },
@@ -146,6 +151,7 @@ export function DiagnosticsConsole() {
           {section === 'thermal' && <ThermalPanel />}
           {section === 'scheduler' && <SchedulerPanel />}
           {section === 'biometrics' && <BiometricsPanel />}
+          {section === 'sensors' && <SensorsPanel />}
           {section === 'health' && <HealthPanel />}
           {section === 'calibration' && <CalibrationPanel />}
           {section === 'logs' && <LogsPanel />}
@@ -483,12 +489,33 @@ function HealthPanel() {
 
   return (
     <div className="space-y-3">
-      <SectionHeader title="Service health" hint="" />
-      <div className="grid gap-2 lg:grid-cols-2 xl:grid-cols-3">
-        <HealthStatusCard title="Core" description="Server, database, scheduler" icon={Server} iconColor="text-sky-400" iconBg="bg-sky-400/20" services={coreServices} isLoading={system.isLoading} />
-        <HealthStatusCard title="Hardware" description="DAC socket and monitoring" icon={Cpu} iconColor="text-purple-400" iconBg="bg-purple-400/20" services={hardwareServices} isLoading={hardware.isLoading || dacMonitor.isLoading} />
-        <HealthStatusCard title="Network" description="WiFi and internet" icon={Radio} iconColor="text-teal-400" iconBg="bg-teal-400/20" services={networkServices} isLoading={wifi.isLoading} />
-        <HealthStatusCard title="Services" description="Systemd service units" icon={Cog} iconColor="text-cyan-400" iconBg="bg-cyan-400/20" services={systemdServices} isLoading={logSources.isLoading} />
+      <SectionHeader title="Health" hint="" />
+      {/* Cards start expanded on desktop — there's room to show every check. */}
+      <div className="grid items-start gap-2 lg:grid-cols-2 xl:grid-cols-3">
+        <HealthStatusCard title="Core" description="Server, database, scheduler" icon={Server} iconColor="text-sky-400" iconBg="bg-sky-400/20" services={coreServices} isLoading={system.isLoading} defaultExpanded />
+        <HealthStatusCard title="Hardware" description="DAC socket and monitoring" icon={Cpu} iconColor="text-purple-400" iconBg="bg-purple-400/20" services={hardwareServices} isLoading={hardware.isLoading || dacMonitor.isLoading} defaultExpanded />
+        <HealthStatusCard title="Network" description="WiFi and internet" icon={Radio} iconColor="text-teal-400" iconBg="bg-teal-400/20" services={networkServices} isLoading={wifi.isLoading} defaultExpanded />
+        <HealthStatusCard title="Services" description="Systemd service units" icon={Cog} iconColor="text-cyan-400" iconBg="bg-cyan-400/20" services={systemdServices} isLoading={logSources.isLoading} defaultExpanded />
+      </div>
+
+      {/* Status-page detail duplicated in: build/disk, internet access, updates. */}
+      <div className="grid items-start gap-2 lg:grid-cols-2 xl:grid-cols-3">
+        <SystemInfoCard />
+        <InternetToggleCard />
+        <UpdateCard />
+      </div>
+    </div>
+  )
+}
+
+// ── Sensors (live data duplicated from the Sensors screen) ───────────────────
+
+function SensorsPanel() {
+  return (
+    <div className="space-y-3">
+      <SectionHeader title="Sensors" hint="live" />
+      <div className="mx-auto max-w-xl xl:mx-0">
+        <SensorsScreen />
       </div>
     </div>
   )
