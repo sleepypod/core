@@ -370,7 +370,7 @@ export function StatusScreen() {
         {/* Software update */}
         <UpdateCard />
 
-        {/* Thermal diagnostics — deep per-side pump/TEC/flow drill-down */}
+        {/* Diagnostics console — thermal, scheduler, health, sensors, logs */}
         <Link
           href={`/${lang}/debug`}
           className="flex items-center gap-3 rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3 transition-colors hover:bg-zinc-800/60 sm:p-4"
@@ -379,8 +379,8 @@ export function StatusScreen() {
             <Gauge size={18} className="text-orange-400" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium text-white">Thermal diagnostics</span>
-            <span className="block text-xs text-zinc-400">Per-side pump, flow, and TEC state — catches a stalled side</span>
+            <span className="block text-sm font-medium text-white">Diagnostics</span>
+            <span className="block text-xs text-zinc-400">Thermal delivery, scheduler, health, sensors, and logs</span>
           </span>
           <ChevronRight size={18} className="shrink-0 text-zinc-500" />
         </Link>
