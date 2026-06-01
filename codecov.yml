@@ -22,7 +22,10 @@ coverage:
     patch:
       default:
         target: auto
-        threshold: 1%
+        # Patch allows ~5% headroom: view-heavy PRs leave a few lines of
+        # framework rendering internals (e.g. recharts tick/tooltip formatters)
+        # that don't execute under jsdom. Project gate stays strict at 1%.
+        threshold: 5%
 
 # Carry forward each flag's last good coverage when its workflow didn't run
 # on this commit (e.g. python-modules.yml is path-filtered to modules/**, so
