@@ -79,6 +79,9 @@ elif [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
   DATA_DIR="$(cat /etc/sleepypod/data-dir)"
   DATA_DIR_REASON="cached from prior install (/etc/sleepypod/data-dir)"
 else
+  # Pick by TOTAL partition size, not free space + headroom like the
+  # node_modules / swap pickers — the DBs grow unbounded over the Pod's
+  # life, so the partition with the most ultimate capacity wins.
   _rootfs_total_mb=$(df -m / 2>/dev/null | awk 'NR==2{print $2}')
   _rootfs_total_mb=${_rootfs_total_mb:-0}
   if mountpoint -q /persistent 2>/dev/null; then
@@ -668,6 +671,10 @@ if [ "$DATA_DIR" != "$LEGACY_DATA_DIR" ] && [ -d "$LEGACY_DATA_DIR" ] \
    && [ -z "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
   echo "Migrating data dir from $LEGACY_DATA_DIR to $DATA_DIR..."
   mkdir -p "$(dirname "$DATA_DIR")"
+  # An aborted prior run can leave $DATA_DIR as an empty dir (the guard
+  # above allows that). Drop it so mv renames LEGACY into place rather
+  # than nesting it as $DATA_DIR/sleepypod-data. No-op when absent.
+  rmdir "$DATA_DIR" 2>/dev/null || true
   mv "$LEGACY_DATA_DIR" "$DATA_DIR"
 fi
 

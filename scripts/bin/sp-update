@@ -310,7 +310,7 @@ if [ -d "$INSTALL_DIR/modules" ]; then
   if ! command -v uv &>/dev/null; then
     echo "Warning: uv not found — biometrics modules not synced. Re-run the full installer."
   fi
-  # Probe the firmware's /usr/bin/python3 for stdlib integrity. Pod 5
+  # Probe the firmware's /usr/bin/python3 for stdlib integrity. Pod 3
   # firmware (debian variant) ships 3.9.9 with unittest, dataclasses,
   # and pyexpat stripped — version check passes, uv would happily bind
   # the venv to it, modules crash at startup. Mirror install_module()'s
