@@ -54,6 +54,16 @@ export interface OccupancyResult {
   occupied: boolean
   movement: MovementSignal
   level: LevelSignal
+  /**
+   * True when presence can be sensed reliably enough to act on its ABSENCE —
+   * i.e. the level signal is evaluable (fresh capSense2 frame + completed
+   * calibration). Only the level signal detects a perfectly still occupant;
+   * movement alone reads a motionless sleeper as empty. Consumers that power
+   * hardware off on "empty" (autoOffWatcher) must check this first and stand
+   * down when false, so missing/uncalibrated biometrics never trigger an
+   * action.
+   */
+  available: boolean
 }
 
 interface CapSenseCalibration {
@@ -70,6 +80,7 @@ export function getOccupancy(side: Side): OccupancyResult {
     occupied: movementSignal.active || levelSignal.active,
     movement: movementSignal,
     level: levelSignal,
+    available: levelSignal.deviation !== null,
   }
 }
 
