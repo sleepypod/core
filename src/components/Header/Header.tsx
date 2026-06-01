@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { Moon, Plane, Settings } from 'lucide-react'
+import { Gauge, Moon, Plane, Settings } from 'lucide-react'
 import { useSide } from '@/src/providers/SideProvider'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { trpc } from '@/src/utils/trpc'
@@ -74,13 +74,23 @@ export const Header = () => {
           </span>
         )}
       </div>
-      <Link
-        href="/en/settings"
-        className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition-colors active:bg-zinc-800"
-        aria-label="Settings"
-      >
-        <Settings size={18} />
-      </Link>
+      <div className="flex items-center gap-2">
+        {/* Thermal diagnostics — desktop/tablet only; phones use the Status page card. */}
+        <Link
+          href="/en/debug"
+          className="hidden h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition-colors active:bg-zinc-800 md:flex"
+          aria-label="Thermal diagnostics"
+        >
+          <Gauge size={18} />
+        </Link>
+        <Link
+          href="/en/settings"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition-colors active:bg-zinc-800"
+          aria-label="Settings"
+        >
+          <Settings size={18} />
+        </Link>
+      </div>
     </header>
   )
 }
