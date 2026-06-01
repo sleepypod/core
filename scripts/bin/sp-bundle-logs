@@ -149,9 +149,14 @@ capture "raw/mounts.txt"            bash -c 'mount | grep -iE "persistent|biomet
 } > "$STAGE/raw/firmware-open-files.txt" 2>&1
 
 # Effective RAW_DATA_DIR each reader resolves (inline Environment + drop-ins).
+# Filter to RAW_DATA_DIR only — the full Environment property can carry
+# secrets and would break the bundle's safe-to-share default. Strip the
+# `Environment=` property prefix first so the match works regardless of
+# which position RAW_DATA_DIR holds in the unit.
 for svc in sleepypod sleepypod-piezo-processor sleepypod-sleep-detector \
            sleepypod-environment-monitor sleepypod-calibrator; do
-  capture "raw/env-$svc.txt" systemctl show -p Environment "$svc.service"
+  capture "raw/env-$svc.txt" bash -c \
+    'systemctl show -p Environment "$1.service" | sed "s/^Environment=//" | tr " " "\n" | grep -E "^RAW_DATA_DIR=" || true' _ "$svc"
 done
 
 # --- install log ---------------------------------------------------------
