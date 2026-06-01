@@ -1,6 +1,8 @@
 'use client'
 
 import { useCallback, useState } from 'react'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { trpc } from '@/src/utils/trpc'
 import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { HealthCircle } from './HealthCircle'
@@ -18,6 +20,8 @@ import {
   RefreshCw,
   Radio,
   Cog,
+  Gauge,
+  ChevronRight,
 } from 'lucide-react'
 
 const POLL_INTERVAL = 10_000
@@ -56,6 +60,10 @@ function formatRelativeTime(isoString: string): string {
 export function StatusScreen() {
   const [waterModalOpen, setWaterModalOpen] = useState(false)
   const [calibrationModalOpen, setCalibrationModalOpen] = useState(false)
+
+  // Language prefix for in-app links (e.g. /en/debug), mirroring BottomNav.
+  const pathname = usePathname()
+  const lang = pathname?.split('/')[1] ?? 'en'
 
   // Health endpoints — poll every 10s
   const system = trpc.health.system.useQuery({}, { refetchInterval: POLL_INTERVAL })
@@ -361,6 +369,21 @@ export function StatusScreen() {
 
         {/* Software update */}
         <UpdateCard />
+
+        {/* Thermal diagnostics — deep per-side pump/TEC/flow drill-down */}
+        <Link
+          href={`/${lang}/debug`}
+          className="flex items-center gap-3 rounded-2xl border border-zinc-800/50 bg-zinc-900/80 p-3 transition-colors hover:bg-zinc-800/60 sm:p-4"
+        >
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-orange-400/20">
+            <Gauge size={18} className="text-orange-400" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium text-white">Thermal diagnostics</span>
+            <span className="block text-xs text-zinc-400">Per-side pump, flow, and TEC state — catches a stalled side</span>
+          </span>
+          <ChevronRight size={18} className="shrink-0 text-zinc-500" />
+        </Link>
 
         {/* System log viewer — journalctl browser */}
         <SystemLogViewer />
