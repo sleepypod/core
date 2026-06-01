@@ -25,6 +25,9 @@ import { useSide } from '@/src/hooks/useSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { DataTable, type Column } from '@/src/ui/data-table'
+import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
+import { ThermalTrendChart, type ThermalTrendPoint } from '@/src/components/diagnostics/ThermalTrendChart'
+import { BiometricsTrendChart } from '@/src/components/diagnostics/BiometricsTrendChart'
 import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
@@ -53,6 +56,10 @@ function fmtMs(ms: number | undefined): string {
 
 function fmtNum(v: number | null | undefined, digits = 0): string {
   return v == null ? '—' : v.toFixed(digits)
+}
+
+function minutesSince(ms: number): number {
+  return Math.max(0, Math.floor((Date.now() - ms) / 60000))
 }
 
 function fmtRel(iso: string | null): string {
@@ -240,6 +247,7 @@ function JobList({ jobs, limit }: { jobs?: Array<{ id: string, type: string, sid
 function ThermalPanel() {
   const thermal = trpc.health.thermal.useQuery({}, { refetchInterval: 5000 })
   const data = thermal.data
+  const history = useTrendBuffer(data, thermal.dataUpdatedAt)
 
   return (
     <div className="space-y-3">
@@ -282,6 +290,18 @@ function ThermalPanel() {
                     {s.isAlarmVibrating && <Tag className="bg-amber-500/20 text-amber-300">alarm vibrating</Tag>}
                     {s.poweredOnAt && <span>{`on since ${new Date(s.poweredOnAt).toLocaleTimeString()}`}</span>}
                   </div>
+                  <ThermalTrendChart
+                    side={s.side as 'left' | 'right'}
+                    points={history.map((h): ThermalTrendPoint => {
+                      const hs = h.sides.find(x => x.side === s.side)
+                      return {
+                        t: h.t,
+                        target: hs?.isPowered ? hs.targetTempF ?? null : null,
+                        bed: hs?.currentTempF ?? null,
+                        water: hs?.waterTempF ?? null,
+                      }
+                    })}
+                  />
                 </div>
               )
             })}
@@ -295,6 +315,74 @@ function ThermalPanel() {
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
 interface SchedJob { id: string, type: string, side?: string, nextRun: string | null }
+
+const DAY_MS = 86_400_000
+
+interface DayLane { date: number, isToday: boolean, jobs: SchedJob[] }
+
+/** Bucket upcoming jobs into the next 7 day-lanes, starting at local midnight today. */
+function buildWeekLanes(jobs: SchedJob[]): DayLane[] {
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  const startMs = start.getTime()
+  const lanes: DayLane[] = Array.from({ length: 7 }, (_, i) => ({ date: startMs + i * DAY_MS, isToday: i === 0, jobs: [] }))
+  for (const j of jobs) {
+    if (!j.nextRun) continue
+    const idx = Math.floor((new Date(j.nextRun).getTime() - startMs) / DAY_MS)
+    if (idx >= 0 && idx < 7) lanes[idx].jobs.push(j)
+  }
+  for (const lane of lanes) lane.jobs.sort((a, b) => new Date(a.nextRun ?? 0).getTime() - new Date(b.nextRun ?? 0).getTime())
+  return lanes
+}
+
+function jobTone(type: string): string {
+  const t = type.toLowerCase()
+  if (t.includes('temp')) return 'bg-orange-500/15 text-orange-300'
+  if (t.includes('off')) return 'bg-zinc-600/30 text-zinc-300'
+  if (t.includes('on')) return 'bg-emerald-500/15 text-emerald-300'
+  if (t.includes('alarm')) return 'bg-amber-500/15 text-amber-300'
+  if (t.includes('prime')) return 'bg-sky-500/15 text-sky-300'
+  if (t.includes('reboot')) return 'bg-purple-500/15 text-purple-300'
+  return 'bg-zinc-700/40 text-zinc-300'
+}
+
+function fmtClock(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'
+}
+
+function fmtDayLabel(ms: number): { weekday: string, day: string } {
+  const d = new Date(ms)
+  return { weekday: d.toLocaleDateString([], { weekday: 'short' }), day: d.toLocaleDateString([], { day: 'numeric', month: 'short' }) }
+}
+
+/** 7-day lane view: one row per day, jobs as time-ordered chips. Detail lives in the table below. */
+function SchedulerWeek({ jobs }: { jobs: SchedJob[] }) {
+  const lanes = useMemo(() => buildWeekLanes(jobs), [jobs])
+  return (
+    <div className="overflow-hidden rounded-xl border border-zinc-800/60">
+      {lanes.map((lane) => {
+        const { weekday, day } = fmtDayLabel(lane.date)
+        return (
+          <div key={lane.date} className={`flex items-stretch gap-3 border-b border-zinc-800/40 px-3 py-2 last:border-b-0 ${lane.isToday ? 'bg-zinc-800/30' : ''}`}>
+            <div className="w-16 shrink-0 pt-0.5">
+              <p className={`text-xs font-medium ${lane.isToday ? 'text-white' : 'text-zinc-300'}`}>{lane.isToday ? 'Today' : weekday}</p>
+              <p className="text-[10px] text-zinc-500">{day}</p>
+            </div>
+            <div className="flex min-h-[1.5rem] flex-1 flex-wrap items-center gap-1.5">
+              {lane.jobs.length === 0
+                ? <span className="text-[11px] text-zinc-600">—</span>
+                : lane.jobs.map(j => (
+                    <span key={j.id} className={`rounded px-1.5 py-0.5 text-[10px] ${jobTone(j.type)}`} title={`${j.type}${j.side ? ` · ${j.side}` : ''}`}>
+                      {`${fmtClock(j.nextRun)} ${j.type}${j.side ? ` · ${j.side[0].toUpperCase()}` : ''}`}
+                    </span>
+                  ))}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 function SchedulerPanel() {
   const scheduler = trpc.health.scheduler.useQuery({}, { refetchInterval: 15000 })
@@ -339,6 +427,8 @@ function SchedulerPanel() {
         </div>
       )}
 
+      <SchedulerWeek jobs={jobs} />
+
       <DataTable
         columns={columns}
         rows={jobs}
@@ -373,9 +463,27 @@ function BiometricsPanel() {
     { key: 'side', header: 'Side', render: r => <span className="capitalize text-zinc-400">{r.side}</span>, sortValue: r => r.side },
   ]
 
+  // Live "is data actually being written" check — the pitfall is a bed that
+  // reads as occupied while the ingest pipeline has quietly stalled.
+  const lastMs = rows.length ? Math.max(...rows.map(r => new Date(r.timestamp).getTime())) : null
+  const ageMin = lastMs != null ? minutesSince(lastMs) : null
+  const rawTotal = fileCount.data ? fileCount.data.rawFiles.left + fileCount.data.rawFiles.right : null
+  const occupied = occupancy.data ? occupancy.data.left.occupied || occupancy.data.right.occupied : false
+  const fresh = ageMin != null && ageMin <= 10
+  const flow: { tone: 'ok' | 'warn' | 'error' | 'idle', label: string }
+    = lastMs == null && !rawTotal
+      ? { tone: 'error', label: 'No biometric data — nothing is being written' }
+      : occupied && !fresh
+        ? { tone: 'warn', label: ageMin == null ? 'Bed occupied but no vitals recorded — pipeline may be stalled' : `Bed occupied but last vital was ${ageMin}m ago — pipeline may be stalled` }
+        : fresh
+          ? { tone: 'ok', label: `Data flowing · last record ${ageMin}m ago${rawTotal != null ? ` · ${rawTotal} RAW files` : ''}` }
+          : { tone: 'idle', label: ageMin == null ? 'No recent vitals (bed empty)' : `No recent vitals · last ${ageMin}m ago (bed empty)` }
+
   return (
     <div className="space-y-3">
       <SectionHeader title="Biometrics" hint={`${sideLabel(side)} · this week`} />
+
+      <DataFlowBanner tone={flow.tone} label={flow.label} />
 
       <div className="grid grid-cols-3 gap-2 xl:grid-cols-6">
         <Metric label="Avg HR" value={s ? fmtNum(s.avgHeartRate) : '—'} />
@@ -384,6 +492,11 @@ function BiometricsPanel() {
         <Metric label="Avg BR" value={s ? fmtNum(s.avgBreathingRate, 1) : '—'} />
         <Metric label="Records" value={s ? String(s.recordCount) : '—'} />
         <Metric label="RAW files" value={fileCount.data ? `${fileCount.data.rawFiles.left}+${fileCount.data.rawFiles.right} · ${fileCount.data.totalSizeMB}MB` : '—'} />
+      </div>
+
+      <div className="rounded-xl bg-zinc-900/80 p-3">
+        <h3 className="mb-1 text-xs font-medium text-white">{`Vitals trend · ${sideLabel(side)}`}</h3>
+        <BiometricsTrendChart rows={rows} />
       </div>
 
       {occupancy.data && (
@@ -488,21 +601,33 @@ function HealthPanel() {
   }))
 
   return (
-    <div className="space-y-3">
-      <SectionHeader title="Health" hint="" />
-      {/* Cards start expanded on desktop — there's room to show every check. */}
-      <div className="grid items-start gap-2 lg:grid-cols-2 xl:grid-cols-3">
-        <HealthStatusCard title="Core" description="Server, database, scheduler" icon={Server} iconColor="text-sky-400" iconBg="bg-sky-400/20" services={coreServices} isLoading={system.isLoading} defaultExpanded />
-        <HealthStatusCard title="Hardware" description="DAC socket and monitoring" icon={Cpu} iconColor="text-purple-400" iconBg="bg-purple-400/20" services={hardwareServices} isLoading={hardware.isLoading || dacMonitor.isLoading} defaultExpanded />
-        <HealthStatusCard title="Network" description="WiFi and internet" icon={Radio} iconColor="text-teal-400" iconBg="bg-teal-400/20" services={networkServices} isLoading={wifi.isLoading} defaultExpanded />
-        <HealthStatusCard title="Services" description="Systemd service units" icon={Cog} iconColor="text-cyan-400" iconBg="bg-cyan-400/20" services={systemdServices} isLoading={logSources.isLoading} defaultExpanded />
-      </div>
+    <div className="space-y-4">
+      <SectionHeader title="System Health" hint="" />
+      {/*
+        Two columns with a deliberate information architecture:
+          · Operational — live subsystem status, ordered by what you check
+            first when debugging: brain (Core) → thermal link (Hardware) →
+            connectivity (Network) → granular systemd units (Services).
+          · Device — identity/capacity facts and the two control surfaces
+            (internet access, updates), which are actions rather than health.
+        Cards start expanded on desktop — there's room to show every check.
+      */}
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        <div className="space-y-2">
+          <ColumnLabel>Operational</ColumnLabel>
+          <HealthStatusCard title="Core" description="Server, database, scheduler" icon={Server} iconColor="text-sky-400" iconBg="bg-sky-400/20" services={coreServices} isLoading={system.isLoading} defaultExpanded />
+          <HealthStatusCard title="Hardware" description="DAC socket and monitoring" icon={Cpu} iconColor="text-purple-400" iconBg="bg-purple-400/20" services={hardwareServices} isLoading={hardware.isLoading || dacMonitor.isLoading} defaultExpanded />
+          <HealthStatusCard title="Network" description="WiFi and internet" icon={Radio} iconColor="text-teal-400" iconBg="bg-teal-400/20" services={networkServices} isLoading={wifi.isLoading} defaultExpanded />
+          <HealthStatusCard title="Services" description="Systemd service units" icon={Cog} iconColor="text-cyan-400" iconBg="bg-cyan-400/20" services={systemdServices} isLoading={logSources.isLoading} defaultExpanded />
+        </div>
 
-      {/* Status-page detail duplicated in: build/disk, internet access, updates. */}
-      <div className="grid items-start gap-2 lg:grid-cols-2 xl:grid-cols-3">
-        <SystemInfoCard />
-        <InternetToggleCard />
-        <UpdateCard />
+        <div className="space-y-2">
+          <ColumnLabel>Device &amp; maintenance</ColumnLabel>
+          {/* Status-page detail duplicated in: build/disk, internet access, updates. */}
+          <SystemInfoCard />
+          <InternetToggleCard />
+          <UpdateCard />
+        </div>
       </div>
     </div>
   )
@@ -692,6 +817,25 @@ function SectionHeader({ title, hint }: { title: string, hint: string }) {
       {hint && <span className="text-[11px] text-zinc-500">{hint}</span>}
     </div>
   )
+}
+
+function DataFlowBanner({ tone, label }: { tone: 'ok' | 'warn' | 'error' | 'idle', label: string }) {
+  const styles = {
+    ok: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20',
+    warn: 'bg-amber-500/10 text-amber-300 ring-amber-500/20',
+    error: 'bg-red-500/15 text-red-300 ring-red-500/30',
+    idle: 'bg-zinc-800/60 text-zinc-400 ring-zinc-700/40',
+  }[tone]
+  return (
+    <div className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs ring-1 ${styles}`}>
+      <HeartPulse size={13} className="shrink-0" />
+      <span>{label}</span>
+    </div>
+  )
+}
+
+function ColumnLabel({ children }: { children: React.ReactNode }) {
+  return <h2 className="px-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">{children}</h2>
 }
 
 function Stat({ label, value }: { label: string, value: string }) {
