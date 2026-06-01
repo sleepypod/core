@@ -297,38 +297,53 @@ if [ -d "$INSTALL_DIR/modules" ]; then
   export UV_CACHE_DIR="/opt/sleepypod/uv-cache"
   mkdir -p "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
   chmod 0755 /opt/sleepypod "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR" 2>/dev/null || true
-  if [ -d "$INSTALL_DIR/modules/common" ]; then
-    mkdir -p "$MODULES_DEST/common"
-    cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
-  fi
+  # uv is required to (re)build each module's .venv. The per-module sync
+  # below wipes the existing .venv before rebuilding, so running it without
+  # uv would leave previously-working biometrics modules dead (203/EXEC) on
+  # a venv that can't be recreated. Install uv first (same source as the
+  # full installer); if it still isn't available, skip the module sync
+  # entirely and leave the running modules untouched rather than
+  # half-upgrading into a broken state.
   if ! command -v uv &>/dev/null; then
-    echo "Warning: uv not found — biometrics modules not synced. Re-run the full installer."
+    echo "uv not found — installing (required to rebuild biometrics module venvs)..."
+    curl -LsSf https://astral.sh/uv/install.sh \
+      | UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh || true
   fi
-  for mod in piezo-processor sleep-detector environment-monitor calibrator cover-buttons; do
-    if [ -d "$INSTALL_DIR/modules/$mod" ]; then
-      mkdir -p "$MODULES_DEST/$mod"
-      cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
-      rm -rf "$MODULES_DEST/$mod/venv"
-      # Also wipe .venv so OTAs pick up the shared UV_PYTHON_INSTALL_DIR
-      # set above — otherwise a pre-v1.7.3 venv's bin/python symlink keeps
-      # pointing at /home/root/.local/share/uv/… and User=dac modules fail
-      # to exec. uv's content-addressable cache means this is a cheap
-      # re-link, not a full re-download.
-      rm -rf "$MODULES_DEST/$mod/.venv"
-      if command -v uv &>/dev/null; then
+
+  if ! command -v uv &>/dev/null; then
+    echo "ERROR: uv unavailable — skipping biometrics module sync." >&2
+    echo "       Existing modules keep their current venvs and units (left running)," >&2
+    echo "       but RAW/biometrics fixes in this update are NOT deployed." >&2
+    echo "       Re-run the full installer once uv can be installed." >&2
+  else
+    if [ -d "$INSTALL_DIR/modules/common" ]; then
+      mkdir -p "$MODULES_DEST/common"
+      cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
+    fi
+    for mod in piezo-processor sleep-detector environment-monitor calibrator cover-buttons; do
+      if [ -d "$INSTALL_DIR/modules/$mod" ]; then
+        mkdir -p "$MODULES_DEST/$mod"
+        cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
+        rm -rf "$MODULES_DEST/$mod/venv"
+        # Also wipe .venv so OTAs pick up the shared UV_PYTHON_INSTALL_DIR
+        # set above — otherwise a pre-v1.7.3 venv's bin/python symlink keeps
+        # pointing at /home/root/.local/share/uv/… and User=dac modules fail
+        # to exec. uv's content-addressable cache means this is a cheap
+        # re-link, not a full re-download.
+        rm -rf "$MODULES_DEST/$mod/.venv"
         (cd "$MODULES_DEST/$mod" && uv sync --frozen) \
           || echo "Warning: uv sync failed for module $mod"
         chmod -R o+rX "$MODULES_DEST/$mod/.venv" 2>/dev/null || true
+        svc="sleepypod-$mod.service"
+        if [ -f "$MODULES_DEST/$mod/$svc" ]; then
+          cp "$MODULES_DEST/$mod/$svc" "/etc/systemd/system/$svc"
+          systemctl daemon-reload
+          systemctl enable "$svc" 2>/dev/null || true
+          systemctl restart "$svc" 2>/dev/null || true
+        fi
       fi
-      svc="sleepypod-$mod.service"
-      if [ -f "$MODULES_DEST/$mod/$svc" ]; then
-        cp "$MODULES_DEST/$mod/$svc" "/etc/systemd/system/$svc"
-        systemctl daemon-reload
-        systemctl enable "$svc" 2>/dev/null || true
-        systemctl restart "$svc" 2>/dev/null || true
-      fi
-    fi
-  done
+    done
+  fi
 fi
 
 # Biometrics archiver — tmpfs RAW writes + frank.sh cd patch. Module
