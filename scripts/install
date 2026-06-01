@@ -1,27 +1,114 @@
 #!/bin/bash
 set -euo pipefail
 
+LOG_FILE="/tmp/sleepypod-install.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# Capture the failing command + line for post-mortem. `set -E` propagates
+# the ERR trap into subshells and functions. When set -e fires, the ERR
+# trap runs first — this is the only place we learn *which line* died.
+set -E
+FAILED_LINE=""
+FAILED_CMD=""
+FAILED_CODE=0
+trap 'FAILED_CODE=$?; FAILED_LINE=$LINENO; FAILED_CMD=$BASH_COMMAND' ERR
+
 echo "========================================"
 echo "  SleepyPod Core Installation Script"
 echo "========================================"
 echo ""
+echo "Logging to $LOG_FILE"
+echo ""
 
 # --------------------------------------------------------------------------------
 # Mode flags
-#   --local    Skip download (code already on disk, e.g. via scp/deploy)
-#   --no-ssh   Skip interactive SSH setup prompt
-#   --branch X Install a specific branch (default: main)
+#   --local            Skip download (code already on disk, e.g. via scp/deploy)
+#   --no-ssh           Skip interactive SSH setup prompt
+#   --branch X         Install a specific branch (default: main). For branches
+#                      outside main/dev/latest, the latest successful build
+#                      artifact is fetched via nightly.link.
+#   --artifact-url URL Pin to an exact CI build artifact (zip from GH Actions).
+#                      Posted on every PR comment so reviewers can install the
+#                      exact SHA the run built, not whatever's latest.
+#   --restore          List available DB backups and restore a selected one
 INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
+ARTIFACT_URL_OVERRIDE=""
+PURGE_FREE_SLEEP=false
+RESTORE_MODE=false
 while [ $# -gt 0 ]; do
   case "$1" in
-    --local)  INSTALL_LOCAL=true ;;
-    --no-ssh) SKIP_SSH=true ;;
-    --branch) shift; INSTALL_BRANCH="${1:-}" ;;
+    --local)              INSTALL_LOCAL=true ;;
+    --no-ssh)             SKIP_SSH=true ;;
+    --branch)             shift; INSTALL_BRANCH="${1:-}" ;;
+    --artifact-url)       shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
+    --purge-free-sleep)   PURGE_FREE_SLEEP=true ;;
+    --restore)            RESTORE_MODE=true ;;
   esac
   shift
 done
+
+# --------------------------------------------------------------------------------
+# Restore mode — list and restore a DB backup, then exit
+if [ "$RESTORE_MODE" = true ]; then
+  DATA_DIR="/persistent/sleepypod-data"
+
+  # Collect all backup files for both databases
+  mapfile -t BACKUPS < <(ls -1t "$DATA_DIR"/*.db.bak.* 2>/dev/null)
+
+  if [ ${#BACKUPS[@]} -eq 0 ]; then
+    echo "No backups found in $DATA_DIR"
+    exit 0
+  fi
+
+  echo ""
+  echo "Available backups:"
+  echo ""
+  for i in "${!BACKUPS[@]}"; do
+    bak="${BACKUPS[$i]}"
+    fname="$(basename "$bak")"
+    # Extract epoch from filename (last dot-separated field)
+    epoch="${fname##*.bak.}"
+    ts="$(date -d "@$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r "$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$epoch")"
+    size="$(du -h "$bak" | cut -f1)"
+    printf "  [%d] %s  (%s, %s)\n" "$((i + 1))" "$fname" "$ts" "$size"
+  done
+
+  echo ""
+  read -rp "Enter number to restore (or q to quit): " choice
+
+  if [ "$choice" = "q" ] || [ -z "$choice" ]; then
+    echo "Aborted."
+    exit 0
+  fi
+
+  idx=$((choice - 1))
+  if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#BACKUPS[@]} ]; then
+    echo "Invalid selection." >&2
+    exit 1
+  fi
+
+  selected="${BACKUPS[$idx]}"
+  fname="$(basename "$selected")"
+
+  # Determine which database this backup belongs to
+  if [[ "$fname" == sleepypod.db.bak.* ]]; then
+    target="$DATA_DIR/sleepypod.db"
+  elif [[ "$fname" == biometrics.db.bak.* ]]; then
+    target="$DATA_DIR/biometrics.db"
+  else
+    echo "Unrecognized backup format: $fname" >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "Restoring $fname -> $(basename "$target")"
+  cp "$selected" "$target"
+  echo "Done. Restart the service to pick up the restored database:"
+  echo "  systemctl restart sleepypod"
+  exit 0
+fi
 
 # Cleanup handler — re-blocks WAN if we unblocked it
 WAN_WAS_BLOCKED=false
@@ -40,15 +127,113 @@ cleanup() {
   fi
 
   if [ $exit_code -ne 0 ]; then
-    echo "ERROR: Installation failed at line $1 (exit code: $exit_code)" >&2
-    echo "The system may be in a partially installed state." >&2
-    echo "Check logs and try running the script again." >&2
+    echo "" >&2
+    echo "========================================" >&2
+    echo "  Installation failed" >&2
+    echo "========================================" >&2
+    echo "  Exit code: $exit_code" >&2
+    if [ -n "$FAILED_LINE" ]; then
+      echo "  Failed line:    $FAILED_LINE" >&2
+      echo "  Failed command: $FAILED_CMD" >&2
+      echo "  Command exit:   $FAILED_CODE"
+      case "$FAILED_CODE" in
+        141) echo "  Hint: exit 141 = SIGPIPE (pipeline reader closed early, e.g. awk/head with 'exit' on multi-line input)" >&2 ;;
+        130) echo "  Hint: exit 130 = SIGINT (Ctrl-C)" >&2 ;;
+        137) echo "  Hint: exit 137 = SIGKILL (likely OOM — check dmesg)" >&2 ;;
+        143) echo "  Hint: exit 143 = SIGTERM (something killed the process)" >&2 ;;
+      esac
+    fi
+    echo "  Full log:  $LOG_FILE" >&2
+    echo "" >&2
+    echo "  For help, share the log file above:" >&2
+    echo "  Discord: https://discord.gg/UMmv5R6MXa" >&2
+    echo "  GitHub:  https://github.com/sleepypod/core/issues" >&2
+    echo "========================================" >&2
   fi
 }
 trap 'cleanup $LINENO' EXIT
 
 # --------------------------------------------------------------------------------
+# reclaim_rootfs_caches
+# Sweeps regenerable caches and pre-uv-era orphans from rootfs (mmcblk0p5,
+# 5.8 GB) before install proceeds. /persistent (mmcblk0p8, 15 GB) is not
+# touched. Idempotent — runs on every install so the Pod stays lean as
+# new caches accrete. See sleepypod-core-31.
+
+reclaim_rootfs_caches() {
+  echo ""
+  echo "========================================"
+  echo "  Reclaiming regenerable caches"
+  echo "========================================"
+
+  local rootfs_free_before
+  rootfs_free_before=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
+
+  # Pre-uv venv at /home/dac/venv. Per ADR 0017 biometrics modules moved
+  # to per-module uv .venvs under /opt/sleepypod/modules. Only drop the
+  # legacy venv when at least one uv venv is in place — otherwise an
+  # aborted install could leave the Pod with no working Python at all.
+  if [ -d /home/dac/venv ] && \
+     compgen -G "/opt/sleepypod/modules/*/.venv/bin/python" >/dev/null 2>&1; then
+    echo "  Removing pre-uv /home/dac/venv (uv .venvs detected)..."
+    rm -rf /home/dac/venv
+  fi
+
+  # Prisma engine cache. We use Drizzle, not Prisma. Free-sleep (the
+  # coexistence partner) re-downloads on its own startup if needed.
+  if [ -d /home/dac/.cache/prisma ]; then
+    echo "  Removing /home/dac/.cache/prisma (we use Drizzle)..."
+    rm -rf /home/dac/.cache/prisma
+  fi
+
+  # npm cache. pnpm has its own store; npm cache only fills when we
+  # `npm install -g pnpm` on a fresh install. Regenerable.
+  if [ -d /home/dac/.npm ]; then
+    echo "  Pruning /home/dac/.npm cache..."
+    npm cache clean --force >/dev/null 2>&1 || rm -rf /home/dac/.npm
+  fi
+
+  # Volta keeps node-vXX.tar.gz under tools/inventory after extracting.
+  # The extracted bin/ is what's used; the tarball is dead weight.
+  if [ -d /home/dac/.volta/tools/inventory ]; then
+    echo "  Removing Volta inventory tarballs..."
+    find /home/dac/.volta/tools/inventory -type f \
+      \( -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' \) \
+      -delete 2>/dev/null || true
+  fi
+
+  # Yocto shipped /var/lib/rpm and /var/lib/dnf with the firmware even
+  # though there's no rpm/dnf binary on the device — pure leftover
+  # metadata. Only drop when the tools really aren't installed.
+  if ! command -v rpm &>/dev/null && [ -d /var/lib/rpm ]; then
+    echo "  Removing /var/lib/rpm (no rpm binary on device)..."
+    rm -rf /var/lib/rpm
+  fi
+  if ! command -v dnf &>/dev/null && [ -d /var/lib/dnf ]; then
+    echo "  Removing /var/lib/dnf (no dnf binary on device)..."
+    rm -rf /var/lib/dnf
+  fi
+
+  # Journal vacuum. The journald config below caps SystemMaxUse=50M, but
+  # only enforces it on rotation. A one-shot vacuum brings the on-disk
+  # size in line immediately; the cap keeps growth bounded after that.
+  if command -v journalctl &>/dev/null; then
+    echo "  Vacuuming systemd journal to 20M..."
+    journalctl --vacuum-size=20M >/dev/null 2>&1 || true
+  fi
+
+  local rootfs_free_after
+  rootfs_free_after=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
+  if [ -n "${rootfs_free_before:-}" ] && [ -n "${rootfs_free_after:-}" ]; then
+    local reclaimed=$(( rootfs_free_after - rootfs_free_before ))
+    echo "  Rootfs free: ${rootfs_free_before} MB -> ${rootfs_free_after} MB (+${reclaimed} MB)"
+  fi
+}
+
+# --------------------------------------------------------------------------------
 # iptables helpers
+# Canonical copy: scripts/lib/iptables-helpers (sourced by sp-update at runtime).
+# Kept inline here because install needs them before the source tree is on disk.
 
 wan_is_blocked() {
   # Check if the OUTPUT chain has a DROP rule (WAN is blocked)
@@ -59,7 +244,19 @@ SAVED_IPTABLES=""
 
 unblock_wan() {
   echo "Temporarily unblocking WAN access..."
-  SAVED_IPTABLES="$(iptables-save 2>/dev/null || true)"
+  # Capture state verbatim. `|| true` would mask a failed save and
+  # quietly fall through to a minimal block_wan ruleset on restore —
+  # silent data loss. Fail loudly instead so the caller can bail.
+  if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+    echo "Error: iptables-save failed — refusing to unblock WAN." >&2
+    echo "$SAVED_IPTABLES" >&2
+    SAVED_IPTABLES=""
+    exit 1
+  fi
+  if [ -z "$SAVED_IPTABLES" ]; then
+    echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
+    exit 1
+  fi
   iptables -F
   iptables -X
   iptables -t nat -F
@@ -85,6 +282,18 @@ block_wan() {
   iptables -t nat -F 2>/dev/null || true
   iptables -t nat -X 2>/dev/null || true
 
+  # Flush conntrack so stale entries from the prior ruleset don't
+  # confuse the new chain (mid-rebuild SYN/ACKs would otherwise hit
+  # the DROP at the bottom on the first packet under the new rules).
+  # Safe: the RFC1918 LAN ACCEPTs below are stateless (no -m conntrack),
+  # so existing LAN connections recover on their next packet by matching
+  # the CIDR allow. The ESTABLISHED,RELATED rule loses its entries but
+  # that's fine — LAN traffic falls through to the stateless allow.
+  # WAN connections die, which is the intended block_wan effect.
+  if command -v conntrack &>/dev/null; then
+    conntrack -F &>/dev/null || true
+  fi
+
   # Allow established connections
   iptables -I INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   iptables -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -99,12 +308,35 @@ block_wan() {
   iptables -I OUTPUT -p udp --dport 123 -j ACCEPT
   iptables -I INPUT  -p udp --sport 123 -j ACCEPT
 
-  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp)
-  # Port 5353 UDP covers IPv4 (224.0.0.251) and IPv6 (ff02::fb)
+  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp and _hap._tcp)
+  # IPv4 multicast (224.0.0.251); the matching IPv6 multicast (ff02::fb) is
+  # opened below if ip6tables is available.
   iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT
   iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT
   iptables -I INPUT  -p udp --dport 5353 -j ACCEPT
   iptables -I INPUT  -p udp --sport 5353 -j ACCEPT
+
+  # Allow HomeKit Accessory Protocol (HAP) bridge inbound on tcp/51827.
+  # Source-restricted to RFC1918 + link-local so a public IP misconfig can't
+  # expose the HAP listener to the WAN. Redundant with the RFC1918 LAN allow
+  # above, but explicit so future LAN tightening doesn't silently break iOS
+  # Home pairing.
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    iptables -I INPUT -p tcp -s "$cidr" --dport 51827 -j ACCEPT
+  done
+
+  # IPv6: iOS may discover/pair over IPv6 on dual-stack LANs. Mirror the
+  # HAP and mDNS allows so pairing doesn't fail when the controller picks
+  # an IPv6 path. HAP is source-restricted to link-local (fe80::/10) and
+  # ULA (fc00::/7); GUA traffic should never hit pairing. No-op on hosts
+  # without ip6tables.
+  if command -v ip6tables &>/dev/null; then
+    ip6tables -I INPUT  -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+    ip6tables -I OUTPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+    for cidr6 in fe80::/10 fc00::/7; do
+      ip6tables -I INPUT -p tcp -s "$cidr6" --dport 51827 -j ACCEPT 2>/dev/null || true
+    done
+  fi
 
   # Allow loopback
   iptables -A INPUT  -i lo -j ACCEPT
@@ -123,20 +355,192 @@ block_wan() {
   echo "WAN blocked."
 }
 
+# --------------------------------------------------------------------------------
+# free-sleep conflict preflight
+# free-sleep (github.com/throwaway31265/free-sleep) ships three auto-start
+# services, persisted drop-all iptables rules, source/data dirs, and a
+# sudoers fragment. Its iptables rules auto-reload on boot and fight
+# sleepypod's own iptables permanently — even free-sleep's own
+# unblock_internet_access.sh only flushes runtime rules, not the persisted
+# files. Refuse to install on top by default; --purge-free-sleep opts into
+# the documented cleanup so support sessions don't need a separate manual
+# step.
+
+FREE_SLEEP_FINDINGS=()
+
+detect_free_sleep_conflict() {
+  FREE_SLEEP_FINDINGS=()
+  local svc
+  for svc in free-sleep free-sleep-stream free-sleep-update; do
+    if systemctl list-unit-files 2>/dev/null | grep -qE "^${svc}\.service"; then
+      FREE_SLEEP_FINDINGS+=("systemd unit: ${svc}.service")
+    fi
+  done
+  [ -d /home/dac/free-sleep ]                && FREE_SLEEP_FINDINGS+=("directory:    /home/dac/free-sleep")
+  [ -d /persistent/free-sleep-data ]         && FREE_SLEEP_FINDINGS+=("directory:    /persistent/free-sleep-data")
+  # Do NOT check /etc/iptables/{iptables,ip6tables}.rules — both paths are
+  # stock Pod 5 firmware: /lib/systemd/system/{iptables,ip6tables}.service
+  # ship enabled and ExecStart=iptables-restore on those files. Presence
+  # alone says nothing about free-sleep. The systemd units and home/data
+  # dirs are unambiguous; free-sleep installs all of them.
+  return 0
+}
+
+purge_free_sleep() {
+  echo ""
+  echo "========================================"
+  echo "  Purging free-sleep (--purge-free-sleep)"
+  echo "========================================"
+
+  systemctl stop free-sleep free-sleep-stream free-sleep-update 2>/dev/null || true
+  systemctl disable free-sleep free-sleep-stream free-sleep-update 2>/dev/null || true
+  rm -f /etc/systemd/system/free-sleep.service \
+        /etc/systemd/system/free-sleep-stream.service \
+        /etc/systemd/system/free-sleep-update.service
+  systemctl daemon-reload
+
+  iptables -F 2>/dev/null || true
+  iptables -X 2>/dev/null || true
+  iptables -t nat -F 2>/dev/null || true
+  iptables -t nat -X 2>/dev/null || true
+  if command -v ip6tables &>/dev/null; then
+    ip6tables -F 2>/dev/null || true
+    ip6tables -X 2>/dev/null || true
+  fi
+
+  rm -f /etc/iptables/iptables.rules /etc/iptables/ip6tables.rules
+  rm -rf /home/dac/free-sleep /persistent/free-sleep-data
+  rm -f /etc/sudoers.d/dac
+
+  echo "free-sleep services stopped+disabled, iptables flushed, persisted rules and dirs removed."
+  echo "Skipping reboot — install will continue and reconfigure iptables itself."
+}
+
+preflight_free_sleep_conflict() {
+  detect_free_sleep_conflict
+  if [ ${#FREE_SLEEP_FINDINGS[@]} -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "$PURGE_FREE_SLEEP" = true ]; then
+    echo "Detected free-sleep artifacts:"
+    local item
+    for item in "${FREE_SLEEP_FINDINGS[@]}"; do
+      echo "  - $item"
+    done
+    purge_free_sleep
+    return 0
+  fi
+
+  echo "" >&2
+  echo "========================================" >&2
+  echo "  free-sleep detected — refusing to install" >&2
+  echo "========================================" >&2
+  echo "" >&2
+  echo "Found the following free-sleep artifacts on this Pod:" >&2
+  local item
+  for item in "${FREE_SLEEP_FINDINGS[@]}"; do
+    echo "  - $item" >&2
+  done
+  echo "" >&2
+  echo "free-sleep installs persistent drop-all iptables rules that auto-reload" >&2
+  echo "on boot and fight sleepypod's own iptables — cloud connectivity will" >&2
+  echo "fail until they are removed. Running free-sleep's unblock script only" >&2
+  echo "flushes the running rules, not the files on disk." >&2
+  echo "" >&2
+  echo "Run this on the Pod to clean up, then re-run the installer:" >&2
+  echo "" >&2
+  echo "----------------------------------------" >&2
+  echo "sudo systemctl stop free-sleep free-sleep-stream free-sleep-update 2>/dev/null" >&2
+  echo "sudo systemctl disable free-sleep free-sleep-stream free-sleep-update 2>/dev/null" >&2
+  echo "sudo rm -f /etc/systemd/system/free-sleep.service \\" >&2
+  echo "           /etc/systemd/system/free-sleep-stream.service \\" >&2
+  echo "           /etc/systemd/system/free-sleep-update.service" >&2
+  echo "sudo systemctl daemon-reload" >&2
+  echo "sudo iptables -F && sudo iptables -X && sudo iptables -t nat -F && sudo iptables -t nat -X" >&2
+  echo "sudo ip6tables -F && sudo ip6tables -X" >&2
+  echo "sudo rm -f /etc/iptables/iptables.rules /etc/iptables/ip6tables.rules" >&2
+  echo "sudo rm -rf /home/dac/free-sleep /persistent/free-sleep-data" >&2
+  echo "sudo rm -f /etc/sudoers.d/dac" >&2
+  echo "sudo reboot" >&2
+  echo "----------------------------------------" >&2
+  echo "" >&2
+  echo "Or re-run the installer with --purge-free-sleep to let it do the cleanup" >&2
+  echo "for you (skips the reboot step; install continues immediately)." >&2
+  echo "" >&2
+  exit 1
+}
+
 # Check if running as root
+#
+# Getting a root shell on a fresh Pod 5 is a one-time JTAG bootstrap, not
+# something this installer can do for you. The canonical procedure is:
+# TC2070-IDC + FTDI FT232RL on the JTAG header, interrupt U-Boot, boot
+# single-user with `init=/bin/bash`, mount rw, then `passwd root` and
+# `passwd rewt`. See scripts/README.md for details.
+#
+# `rewt` is a USER ACCOUNT on the pod (Eight's stock service user, has a
+# shell), not a tool — you set its password during the JTAG step and use it
+# later for ssh when `PermitRootLogin no` blocks direct root login.
+#
+# `dac` is also a system account but ships as nologin — sshd refuses
+# interactive logins for it, which is the "dac not allowed" message you'll
+# see if you try `ssh dac@<pod>`. That's expected; don't try to "fix" it.
+#
+# Typical Pod 5 install flow (after JTAG bootstrap):
+#   ssh -p 8822 rewt@<pod>          # PasswordAuthentication=yes temporarily
+#   su -                            # switch to root with the passwd you set
+#   bash scripts/install            # run this script
+# The optional SSH-setup block at the end of this script writes your key to
+# /root/.ssh/authorized_keys and re-hardens sshd (port 8822, key-only, no
+# password auth, no root password login). After that you can ssh directly as
+# root with your key.
 if [ "$EUID" -ne 0 ]; then
-  echo "Error: This script must be run as root (use sudo)" >&2
+  echo "Error: This script must be run as root (use sudo or su -)" >&2
+  echo "" >&2
+  echo "On a freshly jailbroken Pod 5 the stock image disables direct root" >&2
+  echo "ssh and refuses login as the \`dac\` service account. SSH in as the" >&2
+  echo "\`rewt\` user (password set during the JTAG bootstrap), then \`su -\`" >&2
+  echo "to root before running this script." >&2
+  echo "See scripts/README.md (\"Getting root on Pod 5\") for the full flow." >&2
   exit 1
 fi
 
-# Ensure /usr/local/bin is in PATH (Yocto's root PATH is minimal)
-case ":$PATH:" in
-  *:/usr/local/bin:*) ;;
-  *) export PATH="/usr/local/bin:$PATH" ;;
-esac
+preflight_free_sleep_conflict
+
+# Force /usr/local/bin to the front of PATH and strip Volta entries.
+# Pod 3 stock firmware (and free-sleep installs) ship Volta at
+# ~/.volta/bin; without this our node/npm/pnpm symlinks are shadowed by
+# Volta's shim, which fails with "Volta error: Node is not available".
+PATH="$(echo "/usr/local/bin:$PATH" | tr ':' '\n' | awk '!/\/\.volta\// && !seen[$0]++' | paste -sd:)"
+export PATH
+
+# Detach hostile symlinks left behind by Volta/free-sleep installs.
+# `[ -x /usr/local/bin/pnpm ]` follows symlinks, so a Volta shim with
+# no managed pnpm passes existence checks but dies at exec time
+# ("Volta error: …"). Unlink anything under /usr/local/bin that
+# doesn't resolve back into /usr/local — forces a clean reinstall.
+for bin in node npm npx pnpm; do
+  link="/usr/local/bin/$bin"
+  [ -L "$link" ] || continue
+  target="$(readlink -f "$link" 2>/dev/null || true)"
+  case "$target" in
+    /usr/local/*) ;;  # ours, keep
+    *)
+      echo "Detaching hostile symlink: $link -> ${target:-<broken>}"
+      rm -f "$link"
+      ;;
+  esac
+done
 
 INSTALL_DIR="/home/dac/sleepypod-core"
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+SCRIPT_DEFAULT_BRANCH="__BRANCH__"  # substituted at release time by .github/workflows/{release,dev-release}.yml
+# Guard for users curling the raw source from main: the substitution only
+# happens inside the release tarball, so the file at raw.githubusercontent
+# still has the literal placeholder. Fall back to main so the install
+# doesn't try to download a branch literally named "__BRANCH__".
+[ "$SCRIPT_DEFAULT_BRANCH" = "__BRANCH__" ] && SCRIPT_DEFAULT_BRANCH="main"
 
 # Lock file to prevent concurrent installs
 LOCKFILE="/var/run/sleepypod-install.lock"
@@ -147,7 +551,7 @@ if ! flock -n 200; then
 fi
 
 # Check for required commands
-REQUIRED_CMDS=(curl systemctl ip groupadd usermod)
+REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod visudo install mountpoint mkswap swapon)
 if [ "$INSTALL_LOCAL" = true ] && [ -n "$INSTALL_BRANCH" ]; then
   REQUIRED_CMDS+=(git)
 fi
@@ -157,6 +561,10 @@ for cmd in "${REQUIRED_CMDS[@]}"; do
     exit 1
   fi
 done
+
+# Sweep regenerable caches before the disk-space gate so a tightly-packed
+# Pod can install. uv cache is cleaned later, after biometrics modules sync.
+reclaim_rootfs_caches
 
 # Handle WAN connectivity — always needed (npm packages, node binary download)
 echo "Checking network connectivity..."
@@ -190,38 +598,8 @@ if [ "$DISK_AVAIL" -lt 500 ]; then
   exit 1
 fi
 
-# Detect dac.sock path (skip if .env already has it)
-DAC_SOCK_PATH=""
-
-if [ -f "$INSTALL_DIR/.env" ]; then
-  DAC_SOCK_PATH=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
-fi
-
-if [ -z "$DAC_SOCK_PATH" ]; then
-  echo "Detecting dac.sock path..."
-  for sock_path in \
-    /run/dac.sock \
-    /var/run/dac.sock \
-    /persistent/deviceinfo/dac.sock \
-  ; do
-    if [ -S "$sock_path" ]; then
-      DAC_SOCK_PATH="$sock_path"
-      break
-    fi
-  done
-fi
-
-if [ -z "$DAC_SOCK_PATH" ]; then
-  DAC_SOCK_PATH=$(find / -name 'dac.sock' -type s 2>/dev/null | head -1)
-fi
-
-if [ -z "$DAC_SOCK_PATH" ]; then
-  # Default to known path even if socket isn't present yet (daemon may not be running)
-  DAC_SOCK_PATH="/persistent/deviceinfo/dac.sock"
-  echo "Warning: dac.sock not found as active socket, using default: $DAC_SOCK_PATH"
-else
-  echo "Using dac.sock at: $DAC_SOCK_PATH"
-fi
+# DAC_SOCK_PATH detection is in scripts/pod/detect — sourced after code is on disk.
+# Pre-create both possible parent directories so mkdir works before detection runs.
 
 # Create data directory with shared group for multi-user SQLite access.
 # The Node.js app (root) creates biometrics.db, but calibrator and
@@ -230,12 +608,79 @@ fi
 # group-write bits are preserved (including SQLite WAL/SHM files).
 DATA_DIR="/persistent/sleepypod-data"
 echo "Creating data directory at $DATA_DIR..."
-getent group sleepypod >/dev/null 2>&1 || groupadd sleepypod
+# Ensure ReadWritePaths directories exist — systemd's ProtectSystem=strict
+# requires all listed paths to exist or the namespace setup fails.
+# /run/dac is handled by RuntimeDirectory=dac in the service unit.
+mkdir -p /persistent/deviceinfo
+# dac.sock lives in /persistent/deviceinfo. next-server (User=sleepypod,
+# SupplementaryGroups=dac) recreates the socket on startup via unlink+listen.
+# On Linux, unlink is gated by the *parent directory's* permissions, not the
+# socket file's — so the dir must be group-writable by `dac`, not just owned
+# `root:root 0755` (the mkdir default). Setgid (2xxx) keeps any new entries
+# in the dac group, matching the chownSync(path, dac, dac) in dacTransport.ts.
+# Mode 2770 (no world bits) mirrors the socket's own 0770 — every real
+# consumer is either root or in the `dac` group, so world r-x adds nothing
+# but surface area.
+if getent group dac &>/dev/null; then
+  chown root:dac /persistent/deviceinfo
+  chmod 2770 /persistent/deviceinfo
+fi
+mkdir -p /deviceinfo
+groupadd --force sleepypod
 if id dac &>/dev/null; then
   usermod -aG sleepypod dac
 else
   echo "Warning: user 'dac' not found — skipping group membership (not a Pod?)"
 fi
+
+# Create a dedicated system user for the Node.js service so it doesn't
+# run as UID 0. Membership:
+#   - sleepypod:  write access to $DATA_DIR (SQLite files)
+#   - dac:        read/write access to dac.sock (hardware control)
+# Runtime capabilities (CAP_NET_ADMIN, CAP_NET_RAW) are granted via the
+# service unit — they're only needed for iptables check/repair.
+if ! id sleepypod &>/dev/null; then
+  echo "Creating sleepypod system user..."
+  useradd --system --no-create-home --shell /usr/sbin/nologin \
+    --home-dir /nonexistent --gid sleepypod sleepypod
+fi
+# Add sleepypod to dac group (if dac exists) so it can reach dac.sock
+if id dac &>/dev/null; then
+  usermod -aG dac sleepypod
+fi
+
+# Allow the sleepypod service user to run sp-update as root without a
+# password. The next-server runs as User=sleepypod and exposes a tRPC
+# system.triggerUpdate mutation that spawns sp-update; without this
+# rule the spawn dies on the first iptables / systemctl call inside the
+# script and the API silently does nothing. Branch input is regex-
+# validated at the tRPC layer (^[a-zA-Z0-9._\-/]+$) and sp-update only
+# uses it as a tag/path component, so the privilege scope is narrow.
+#
+# The Defaults secure_path line re-adds /usr/local/bin to sudo's PATH.
+# The pod ships with the system-wide secure_path commented out in
+# /etc/sudoers, so sudo falls back to a minimal /usr/bin:/bin:/usr/sbin:/sbin
+# and `sudo sp-update dev` (the install snippet on every PR) fails with
+# "sp-update: command not found". Restoring the standard path here keeps
+# the sleepypod tools usable from any sudo shell without re-enabling the
+# system fragment, which might be commented out for a reason on the
+# vendor image.
+SUDOERS_FILE="/etc/sudoers.d/sleepypod-update"
+SUDOERS_CONTENT='Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update'
+SUDOERS_TMP=$(mktemp)
+printf '%s\n' "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
+chmod 0440 "$SUDOERS_TMP"
+if visudo -c -q -f "$SUDOERS_TMP"; then
+  install -m 0440 -o root -g root "$SUDOERS_TMP" "$SUDOERS_FILE"
+  echo "Installed $SUDOERS_FILE"
+else
+  echo "Error: sudoers fragment failed visudo validation — refusing to install" >&2
+  rm -f "$SUDOERS_TMP"
+  exit 1
+fi
+rm -f "$SUDOERS_TMP"
+
 mkdir -p "$DATA_DIR"
 chown root:sleepypod "$DATA_DIR"
 chmod 2770 "$DATA_DIR"
@@ -249,6 +694,33 @@ fix_db_permissions() {
   fi
 }
 fix_db_permissions
+
+# Ensure swap exists for memory-constrained pod builds. Pod 4 ships with
+# 2 GiB RAM and zero swap; Next.js 16 / Turbopack peaks around 750 MiB
+# during `next build`, which trips the firmware's earlyoom (configured to
+# fire at <10% available, ~200 MiB on this hardware) and kills the build
+# mid-flight (SIGTERM, exit 143). A 1 GiB swap file on /persistent keeps
+# the build out of earlyoom range without wearing the rootfs eMMC. Used
+# only during build / heavy memory bursts; not relied on at runtime.
+SWAPFILE="/persistent/swapfile"
+SWAP_SIZE_MB=1024
+if ! mountpoint -q /persistent 2>/dev/null; then
+  echo "Warning: /persistent is not a mountpoint — skipping swap setup to avoid creating $SWAPFILE on rootfs" >&2
+elif ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
+  if [ ! -f "$SWAPFILE" ]; then
+    echo "Creating ${SWAP_SIZE_MB}M swap file at $SWAPFILE..."
+    fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" 2>/dev/null \
+      || dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_SIZE_MB" status=none
+    chmod 0600 "$SWAPFILE"
+    mkswap "$SWAPFILE" >/dev/null
+  fi
+  swapon "$SWAPFILE" || echo "Warning: swapon failed; on-pod builds may OOM" >&2
+fi
+SWAP_FSTAB_LINE="$SWAPFILE none swap sw,nofail 0 0"
+if mountpoint -q /persistent 2>/dev/null && ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
+  sed -i "\\|^$SWAPFILE |d" /etc/fstab 2>/dev/null || true
+  echo "$SWAP_FSTAB_LINE" >> /etc/fstab
+fi
 
 # ============================================================================
 # Install Node.js via binary download (works on any Linux, no apt required)
@@ -271,10 +743,47 @@ CURRENT_NODE_MAJOR=$(node -v 2>/dev/null | cut -d. -f1 | tr -d v || echo "0")
 if [ "$CURRENT_NODE_MAJOR" -lt "$NODE_WANTED" ]; then
   echo "Installing Node.js $NODE_FULL ($NODE_ARCH)..."
   NODE_TARBALL="node-v${NODE_FULL}-linux-${NODE_ARCH}.tar.gz"
-  NODE_URL="https://nodejs.org/dist/v${NODE_FULL}/${NODE_TARBALL}"
+  NODE_BASE_URL="https://nodejs.org/dist/v${NODE_FULL}"
+  NODE_URL="${NODE_BASE_URL}/${NODE_TARBALL}"
+
+  # Download tarball + SHASUMS256.txt to a scratch dir so we can verify
+  # integrity before extracting. A compromised CDN or MITM would otherwise
+  # install a backdoored binary silently (curl … | tar -xz has no checks).
+  NODE_TMP=$(mktemp -d)
+  if ! curl -fSL -o "$NODE_TMP/$NODE_TARBALL" "$NODE_URL"; then
+    echo "Error: Failed to download Node.js tarball from $NODE_URL" >&2
+    rm -rf "$NODE_TMP"
+    exit 1
+  fi
+  if ! curl -fSL -o "$NODE_TMP/SHASUMS256.txt" "$NODE_BASE_URL/SHASUMS256.txt"; then
+    echo "Error: Failed to download Node.js SHASUMS256.txt from $NODE_BASE_URL" >&2
+    rm -rf "$NODE_TMP"
+    exit 1
+  fi
+
+  # Verify with sha256sum (coreutils); fall back to shasum -a 256 (busybox/mac)
+  if command -v sha256sum &>/dev/null; then
+    NODE_HASH_CMD=(sha256sum --check --ignore-missing)
+  elif command -v shasum &>/dev/null; then
+    NODE_HASH_CMD=(shasum -a 256 --check --ignore-missing)
+  else
+    echo "Error: Neither sha256sum nor shasum available; cannot verify Node.js integrity." >&2
+    rm -rf "$NODE_TMP"
+    exit 1
+  fi
+
+  if ! (cd "$NODE_TMP" && "${NODE_HASH_CMD[@]}" SHASUMS256.txt) >/dev/null 2>&1; then
+    echo "Error: Node.js tarball SHA-256 verification failed." >&2
+    echo "  Expected hash from: $NODE_BASE_URL/SHASUMS256.txt" >&2
+    echo "  Tarball:            $NODE_URL" >&2
+    rm -rf "$NODE_TMP"
+    exit 1
+  fi
+  echo "Node.js tarball verified (SHA-256)."
 
   mkdir -p "$NODE_DIR"
-  curl -fSL "$NODE_URL" | tar -xz -C "$NODE_DIR"
+  tar -xz -C "$NODE_DIR" -f "$NODE_TMP/$NODE_TARBALL"
+  rm -rf "$NODE_TMP"
 
   # Symlink binaries into /usr/local/bin
   mkdir -p /usr/local/bin
@@ -295,15 +804,51 @@ if [ "$NODE_MAJOR" -lt "$NODE_WANTED" ]; then
   exit 1
 fi
 
-# Install pnpm if not present
-if ! command -v pnpm &>/dev/null; then
+# Ensure /usr/local/bin/node exists. The systemd unit hardcodes this
+# path (see ExecStart below), but on Pod 3 firmware Node ships
+# preinstalled via Volta at ~/.volta/bin/node — when the version check
+# above passes we skip the tarball install and would otherwise leave
+# /usr/local/bin/node missing. Symlink the resolved node binary so the
+# service can exec it. Matches the pnpm pattern below.
+if [ ! -x /usr/local/bin/node ]; then
+  RESOLVED_NODE="$(command -v node || true)"
+  if [ -n "$RESOLVED_NODE" ] && [ -x "$RESOLVED_NODE" ]; then
+    mkdir -p /usr/local/bin
+    ln -sf "$RESOLVED_NODE" /usr/local/bin/node
+    echo "Symlinked /usr/local/bin/node -> $RESOLVED_NODE"
+  fi
+fi
+
+# Install pnpm if not present at /usr/local/bin/pnpm. We check the
+# absolute path (not `command -v pnpm`) because Pod 3 firmware ships
+# Volta with a pnpm shim in ~/.volta/bin; the shim always reports "found"
+# via command -v but fails at exec time when Volta has no managed pnpm
+# installed. Checking for our concrete binary ensures we install it
+# regardless of any upstream shim — and since /usr/local/bin is forced
+# to the front of PATH (above), our pnpm wins at runtime.
+if [ ! -x /usr/local/bin/pnpm ]; then
   echo "Installing pnpm..."
   npm install -g pnpm
-  # Ensure pnpm is in PATH (npm global bin may differ from /usr/local/bin)
+  # Ensure pnpm ends up at /usr/local/bin/pnpm (npm global bin may be
+  # elsewhere, e.g. under /home/root/.npm-global).
   NPM_BIN="$(npm config get prefix)/bin"
-  if [ ! -f "/usr/local/bin/pnpm" ] && [ -f "$NPM_BIN/pnpm" ]; then
+  if [ ! -x "/usr/local/bin/pnpm" ] && [ -x "$NPM_BIN/pnpm" ]; then
     ln -sf "$NPM_BIN/pnpm" /usr/local/bin/pnpm
   fi
+fi
+
+# Verify pnpm is now runnable at the concrete path. `[ -x ]` only checks
+# the file's execute bit — a broken pnpm (arch mismatch, corrupt install,
+# dangling symlink target) can still pass that test and then die at
+# `pnpm install` ~120 lines down. Exercising it via `pnpm --version`
+# catches all of those at the right spot. Matches the Node verification
+# pattern above (which runs `node -v`).
+if ! /usr/local/bin/pnpm --version >/dev/null 2>&1; then
+  echo "Error: /usr/local/bin/pnpm is not runnable after install." >&2
+  echo "  npm prefix:       $(npm config get prefix 2>/dev/null || echo unknown)" >&2
+  echo "  /usr/local/bin/pnpm: $(ls -la /usr/local/bin/pnpm 2>&1 || echo missing)" >&2
+  echo "  Try: npm install -g pnpm, then re-run this installer." >&2
+  exit 1
 fi
 
 # Get the code in place
@@ -328,15 +873,29 @@ if [ "$INSTALL_LOCAL" = true ]; then
   fi
 else
   # Download code via tarball (no git required on device)
-  DOWNLOAD_BRANCH="${INSTALL_BRANCH:-main}"
+  DOWNLOAD_BRANCH="${INSTALL_BRANCH:-$SCRIPT_DEFAULT_BRANCH}"
   echo "Downloading $DOWNLOAD_BRANCH from GitHub..."
 
   DOWNLOAD_DIR=$(mktemp -d)
   HAS_BUILD=false
 
-  # Try CI release first (includes pre-built .next) for main/latest
+  # Try CI release first (includes pre-built .next). Mirrors sp-update:
+  #   main / latest  → releases/latest          (semantic-release vX.Y.Z)
+  #   dev            → releases/tags/dev-latest (rolling, dev-release.yml)
+  #   <other>        → releases/tags/<slug>-latest (branch-release.yml)
+  # `feat/foo` slugs to `feat-foo-latest` to match branch-release.yml.
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
-    RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+  elif [ "$DOWNLOAD_BRANCH" = "dev" ]; then
+    # Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
+  else
+    RELEASE_TAG="${DOWNLOAD_BRANCH//\//-}-latest"
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
+  fi
+
+  if [ -n "${RELEASE_API:-}" ]; then
+    RELEASE_URL=$(curl -sf "$RELEASE_API" \
       | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
       | grep -o 'https://[^"]*' || true)
 
@@ -348,6 +907,52 @@ else
       else
         # Clean partial download before fallback
         find "$DOWNLOAD_DIR" -mindepth 1 -delete 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  # Try a CI workflow artifact via nightly.link. Two paths in:
+  #   1. --artifact-url <url>  — pinned to an exact run (PR comments use this).
+  #   2. --branch <name>       — resolved to the latest successful build on
+  #                              that branch, for any branch outside main/dev.
+  # nightly.link proxies private GH artifact downloads as anonymous zips so
+  # the installer needs no auth. Artifact retention (build.yml) gates how
+  # long these stay reachable.
+  if [ "$HAS_BUILD" = false ]; then
+    ARTIFACT_URL="$ARTIFACT_URL_OVERRIDE"
+    if [ -z "$ARTIFACT_URL" ] && [ -n "$INSTALL_BRANCH" ] \
+        && [ "$INSTALL_BRANCH" != "main" ] \
+        && [ "$INSTALL_BRANCH" != "dev" ] \
+        && [ "$INSTALL_BRANCH" != "latest" ]; then
+      ARTIFACT_URL="https://nightly.link/${GITHUB_REPO}/workflows/build/${INSTALL_BRANCH}/sleepypod-core.zip"
+    fi
+
+    if [ -n "$ARTIFACT_URL" ]; then
+      echo "Downloading CI artifact from $ARTIFACT_URL..."
+      if curl -fSL "$ARTIFACT_URL" -o "$DOWNLOAD_DIR/artifact.zip"; then
+        # GH wraps every uploaded artifact in a zip; the tar.gz we want
+        # lives inside. Try unzip first; fall back to python3's zipfile
+        # since Pods reliably ship Python but not always unzip.
+        UNZIPPED=false
+        if command -v unzip &>/dev/null; then
+          unzip -q "$DOWNLOAD_DIR/artifact.zip" -d "$DOWNLOAD_DIR" && UNZIPPED=true
+        elif command -v python3 &>/dev/null; then
+          python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+            "$DOWNLOAD_DIR/artifact.zip" "$DOWNLOAD_DIR" && UNZIPPED=true
+        fi
+        rm -f "$DOWNLOAD_DIR/artifact.zip"
+
+        if [ "$UNZIPPED" = true ] && [ -f "$DOWNLOAD_DIR/sleepypod-core.tar.gz" ]; then
+          tar xzf "$DOWNLOAD_DIR/sleepypod-core.tar.gz" -C "$DOWNLOAD_DIR"
+          rm -f "$DOWNLOAD_DIR/sleepypod-core.tar.gz"
+          HAS_BUILD=true
+          echo "CI artifact downloaded (pre-built)."
+        else
+          echo "  Artifact extraction failed — falling back to source tarball"
+          find "$DOWNLOAD_DIR" -mindepth 1 -delete 2>/dev/null || true
+        fi
+      else
+        echo "  No artifact at $ARTIFACT_URL — falling back to source tarball"
       fi
     fi
   fi
@@ -376,6 +981,14 @@ else
   # Clean old files if updating (preserve node_modules, .env, data)
   if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
+    # Stop the running service first — it has WorkingDirectory=$INSTALL_DIR
+    # and writes into .next/standalone, racing the rm -rf below and
+    # producing ENOTEMPTY when the writer re-creates a file mid-recurse.
+    # Re-enable+restart happens later in the install flow.
+    if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+      echo "Stopping sleepypod.service before purge..."
+      systemctl stop sleepypod.service
+    fi
     find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
       ! -name 'node_modules' \
       ! -name '.env' \
@@ -390,9 +1003,36 @@ else
   echo "Source downloaded."
 fi
 
+# Detect pod generation and DAC socket path (code is now on disk)
+if [ -f "$INSTALL_DIR/scripts/pod/detect" ]; then
+  source "$INSTALL_DIR/scripts/pod/detect"
+else
+  echo "Error: $INSTALL_DIR/scripts/pod/detect not found." >&2
+  echo "  The downloaded code does not match this install script." >&2
+  echo "  Try: curl -fsSL <url> | sudo bash -s -- --branch $SCRIPT_DEFAULT_BRANCH" >&2
+  exit 1
+fi
+echo "Pod generation: $POD_GEN (DAC: $DAC_SOCK_PATH)"
+
+# Probe environment capabilities (Volta, system Python, ensurepip, ...).
+# Future Pod-specific install paths should branch on these vars rather
+# than re-probing inline. See scripts/pod/capabilities.
+if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
+  source "$INSTALL_DIR/scripts/pod/capabilities"
+  print_pod_capabilities
+fi
+
+# Move node_modules off rootfs onto /persistent before pnpm runs so the
+# install writes directly to the persistent partition. On upgrades from
+# a pre-relocation install this migrates the existing tree once.
+if [ -f "$INSTALL_DIR/scripts/lib/relocation-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/relocation-helpers"
+  ensure_persistent_node_modules "$INSTALL_DIR"
+fi
+
 # Install production dependencies (prebuild-install downloads prebuilt better-sqlite3)
 echo "Installing dependencies..."
-pnpm install --frozen-lockfile --prod
+CI=true pnpm install --frozen-lockfile --prod
 
 # Verify better-sqlite3 native module is ready
 if [ ! -f "$INSTALL_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" ] && \
@@ -408,19 +1048,17 @@ if [ ! -f "$INSTALL_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3
 fi
 
 # Build application (skip if .next already exists — pre-built by deploy script or CI)
+# Effective branch: --branch flag, download branch, or script default
+EFFECTIVE_BRANCH="${INSTALL_BRANCH:-${DOWNLOAD_BRANCH:-$SCRIPT_DEFAULT_BRANCH}}"
 if [ -d "$INSTALL_DIR/.next" ]; then
   echo "Pre-built .next found, skipping build."
+  # Regenerate .git-info with the correct branch (CI builds may have a different branch baked in)
+  SP_BRANCH="$EFFECTIVE_BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
 else
-  echo "Building application (this may take a while on low-memory devices)..."
-  pnpm build
-fi
-
-# Turbopack hashes the better-sqlite3 module name — create a symlink so the
-# hashed reference resolves to the real module with the correct native binary
-HASHED_NAME=$(grep -roh 'better-sqlite3-[a-f0-9]\{16\}' "$INSTALL_DIR/.next/server/" 2>/dev/null | head -1)
-if [ -n "$HASHED_NAME" ] && [ ! -e "$INSTALL_DIR/node_modules/$HASHED_NAME" ]; then
-  echo "Creating symlink for Turbopack module: $HASHED_NAME -> better-sqlite3"
-  ln -sf better-sqlite3 "$INSTALL_DIR/node_modules/$HASHED_NAME"
+  echo "No pre-built .next found, building from source..."
+  echo "Installing all dependencies (including devDependencies for build)..."
+  CI=true pnpm install --frozen-lockfile
+  SP_BRANCH="$EFFECTIVE_BRANCH" pnpm build
 fi
 
 # Create or preserve environment file
@@ -440,10 +1078,15 @@ if [ -f "$INSTALL_DIR/.env" ]; then
   grep -q "^BIOMETRICS_DATABASE_URL=" "$INSTALL_DIR/.env" && \
     sed -i "s|^BIOMETRICS_DATABASE_URL=.*|BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db|" "$INSTALL_DIR/.env" || \
     echo "BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db" >> "$INSTALL_DIR/.env"
+
+  # EXPORT_TOKEN was retired with the LAN-only export endpoint — strip if present.
+  if grep -q "^EXPORT_TOKEN=" "$INSTALL_DIR/.env"; then
+    sed -i '/^EXPORT_TOKEN=/d' "$INSTALL_DIR/.env"
+  fi
 else
   echo "Creating environment file..."
   touch "$INSTALL_DIR/.env"
-  chmod 600 "$INSTALL_DIR/.env"
+  chmod 640 "$INSTALL_DIR/.env"
   cat > "$INSTALL_DIR/.env" << EOF
 DATABASE_URL=file:$DATA_DIR/sleepypod.db
 BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db
@@ -452,17 +1095,57 @@ NODE_ENV=production
 EOF
 fi
 
-# Initialize database with migrations (not destructive push)
-if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  echo "Existing database found, backing up..."
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak.$(date +%s)"
+# Ensure the unprivileged service user can read .env (mode 640 + group owner).
+if [ -f "$INSTALL_DIR/.env" ] && id sleepypod &>/dev/null; then
+  chown root:sleepypod "$INSTALL_DIR/.env"
+  chmod 640 "$INSTALL_DIR/.env"
 fi
+
+# Back up existing databases before migrations
+BACKUP_TS="$(date +%s)"
+if [ -f "$DATA_DIR/sleepypod.db" ]; then
+  echo "Existing config database found, backing up..."
+  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak.$BACKUP_TS"
+fi
+if [ -f "$DATA_DIR/biometrics.db" ]; then
+  echo "Existing biometrics database found, backing up..."
+  cp "$DATA_DIR/biometrics.db" "$DATA_DIR/biometrics.db.bak.$BACKUP_TS"
+fi
+
+# Prune old backups (keep last 5 per database)
+for db in sleepypod.db biometrics.db; do
+  mapfile -t old < <(ls -1t "$DATA_DIR/$db.bak."* 2>/dev/null | tail -n +6)
+  for f in "${old[@]}"; do
+    rm -f "$f"
+  done
+done
 
 # Database migrations run automatically on app startup (instrumentation.ts)
 echo "Database migrations will run on first startup."
 
+# Ensure the unprivileged service user can traverse /home/dac to reach
+# $INSTALL_DIR. Default /home/dac perms on some Pods are 0700 which
+# would block a service running as sleepypod. Chmod o+x grants
+# traverse-only (no read/list) so dac's privacy is preserved.
+if id dac &>/dev/null && [ -d /home/dac ]; then
+  chmod o+x /home/dac
+fi
+
 # Create systemd service
 echo "Creating systemd service..."
+# Ensure /etc/iptables exists so ReadWritePaths= below doesn't fail the
+# namespace setup (ProtectSystem=strict makes /etc read-only by default;
+# the runtime's checkAndRepairIptables() writes /etc/iptables/rules.v4).
+mkdir -p /etc/iptables
+
+# Only emit SupplementaryGroups=dac when the dac group exists — otherwise
+# systemd refuses to start the unit with "Failed to determine supplementary
+# group: No such file or directory".
+SUPP_GROUPS_LINE=""
+if getent group dac &>/dev/null; then
+  SUPP_GROUPS_LINE="SupplementaryGroups=dac"
+fi
+
 cat > /etc/systemd/system/sleepypod.service << EOF
 [Unit]
 Description=SleepyPod Core Service
@@ -470,33 +1153,106 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+# Drop privileges: the Node.js app no longer runs as UID 0. It needs
+# group membership for dac.sock (dac) + data dir (sleepypod), and
+# CAP_NET_ADMIN/CAP_NET_RAW for runtime iptables check+repair. Anything
+# else that needs root runs via ExecStartPre with the \`+\` prefix.
+User=sleepypod
+Group=sleepypod
+$SUPP_GROUPS_LINE
 UMask=0002
 WorkingDirectory=$INSTALL_DIR
 Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
+Environment="BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
-ExecStart=/usr/local/bin/pnpm start
+# RAW frames live in the tmpfs at /persistent/biometrics (ADR 0018).
+# Without this override piezoStream defaults to /persistent and tries to
+# decode the 16-byte SEQNO.RAW bookkeeping file as CBOR — sensor streaming
+# and flow_readings stay empty.
+Environment="RAW_DATA_DIR=/persistent/biometrics"
+# Use a writable xtables lock under RuntimeDirectory=dac. The default
+# /run/xtables.lock is root:root 0600 — CAP_NET_ADMIN doesn't bypass the
+# file mode, so setInternetAccess fails with "can't open lock file ...
+# Permission denied" the first time a user toggles WAN from the UI.
+Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
+# The \`+\` prefix runs ExecStartPre as root regardless of User=. Needed
+# for /deviceinfo symlink creation (root-owned) and sp-maintenance
+# (journal vacuum, /tmp cleanup, pnpm store prune).
+ExecStartPre=+/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
+ExecStartPre=+/usr/local/bin/sp-maintenance
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; else exec /usr/local/bin/pnpm start; fi'
 Restart=always
 RestartSec=10
+# Only SIGTERM the main next-server process on stop. Default KillMode=
+# control-group cascades the kill to every descendant in the cgroup —
+# which would include sp-update when system.triggerUpdate spawns it,
+# since spawn(detached:true) escapes the process group but not the
+# systemd cgroup. KillMode=process lets sp-update survive the service
+# stop it issues mid-flow and finish the update + restart cycle.
+KillMode=process
 
-# Hardening (optional, doesn't interfere with dac.sock)
-NoNewPrivileges=true
-ReadWritePaths=$DATA_DIR /persistent/deviceinfo /run/dac
-ProtectSystem=strict
-ProtectKernelTunables=true
-ProtectKernelModules=true
+# Ambient caps so the worker can manage iptables at runtime without
+# sudo. Capability bounding set is intentionally NOT restricted: any
+# tighter bound prevents sudo from acquiring CAP_SETUID when the API
+# spawns sp-update, breaking the self-update path. Heavier hardening
+# (NoNewPrivileges, RestrictSUIDSGID, RestrictAddressFamilies,
+# Lock/Restrict/Protect/Private*) is omitted on purpose: the pod is a
+# single-tenant LAN appliance whose tRPC API is publicProcedure end-
+# to-end (anyone on-LAN can mutate state without auth), so in-process
+# sandboxing protects against threats the API already exposes while
+# blocking the deliberate sudo→sp-update path. The remaining controls
+# — User=sleepypod (no UID 0), narrow ambient caps, the sudoers
+# fragment scoping elevation to /usr/local/bin/sp-update — give the
+# defense-in-depth that actually matters for this device.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+RuntimeDirectory=dac
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Cap journal size to prevent unbounded log growth on limited disk
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/sleepypod.conf << 'JOURNALD'
+[Journal]
+SystemMaxUse=50M
+SystemKeepFree=200M
+MaxFileSec=1week
+JOURNALD
+systemctl restart systemd-journald 2>/dev/null || true
+
+# Install CLI tools from scripts/bin/ BEFORE the service starts. The systemd
+# unit's ExecStartPre references /usr/local/bin/sp-maintenance — if these
+# binaries aren't in place by the time systemctl restart fires below, the
+# service fails with "status=203/EXEC: No such file or directory".
+# /usr/local/bin is root-owned by default; copies inherit current uid (root,
+# since this script requires sudo) but we chown/chmod explicitly so the
+# installed file is guaranteed root:root 0755.
+if [ -d "$INSTALL_DIR/scripts/bin" ]; then
+  echo "Installing CLI tools..."
+  for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
+    [ -f "$tool" ] || continue
+    target="/usr/local/bin/$(basename "$tool")"
+    # rm before cp: a previous custom install may have symlinked
+    # $target back into $INSTALL_DIR, in which case `cp` refuses with
+    # "are the same file" and the script bails on line 880.
+    rm -f "$target"
+    cp "$tool" "$target"
+    chown root:root "$target"
+    chmod 0755 "$target"
+  done
+fi
 
 # Reload systemd and enable service
 echo "Enabling service..."
 systemctl daemon-reload
 systemctl enable sleepypod.service
 
-# Stop and disable free-sleep services (both use port 3000)
+# Stop and disable free-sleep services if present — both use port 3000
+# and would prevent sleepypod.service from binding. Coexistence/toggle
+# support was removed; sleepypod takes over the port permanently.
 for fs_svc in free-sleep.service free-sleep-stream.service; do
   if systemctl list-unit-files "$fs_svc" &>/dev/null; then
     if systemctl is-active --quiet "$fs_svc" 2>/dev/null; then
@@ -520,15 +1276,50 @@ if command -v fuser &>/dev/null; then
   fi
 fi
 
+# Install Avahi mDNS service file (must happen here, not at runtime,
+# because ProtectSystem=strict makes /etc read-only for the service process).
+# Port values are baked in at install time; sp-update re-runs this to refresh.
+if [ -d /etc/avahi ]; then
+  mkdir -p /etc/avahi/services
+  TRPC_PORT=${PORT:-3000}
+  WS_PORT=${PIEZO_WS_PORT:-3001}
+  cat > /etc/avahi/services/sleepypod.service << AVAHI_EOF
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name>sleepypod</name>
+  <service>
+    <type>_sleepypod._tcp</type>
+    <port>$TRPC_PORT</port>
+    <txt-record>wsPort=$WS_PORT</txt-record>
+    <txt-record>version=1.0.0</txt-record>
+  </service>
+</service-group>
+AVAHI_EOF
+  # Reload avahi to pick up the new service file
+  kill -HUP "$(pidof avahi-daemon 2>/dev/null)" 2>/dev/null || true
+  echo "Avahi mDNS service installed (_sleepypod._tcp on port $TRPC_PORT)"
+fi
+
 systemctl restart sleepypod.service
 
-# Restart frankenfirmware so it discovers our dac.sock server.
-# frankenfirmware connects to dac.sock on startup — it won't retry if the
-# socket didn't exist when it started.
-FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
-if [ -n "$FRANKEN_PID" ]; then
-  echo "Restarting frankenfirmware (PID $FRANKEN_PID) to discover dac.sock..."
-  kill "$FRANKEN_PID" 2>/dev/null || true
+# Wait for sleepypod to create dac.sock before killing frankenfirmware.
+# frankenfirmware connects on startup and won't retry — if it restarts
+# before the socket exists, it silently fails to connect.
+echo "Waiting for dac.sock..."
+for i in $(seq 1 10); do
+  [ -S "$DAC_SOCK_PATH" ] && break
+  sleep 1
+done
+if [ -S "$DAC_SOCK_PATH" ]; then
+  # Kill frankenfirmware so its supervisor restarts it against the new dac.sock
+  FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
+  if [ -n "$FRANKEN_PID" ]; then
+    echo "Killing frankenfirmware (PID $FRANKEN_PID) so supervisor reconnects to dac.sock..."
+    kill "$FRANKEN_PID" 2>/dev/null || true
+  fi
+else
+  echo "Warning: dac.sock not found after 10s — skipping frankenfirmware restart" >&2
 fi
 
 # ============================================================================
@@ -545,10 +1336,26 @@ MODULES_DEST="/opt/sleepypod/modules"
 mkdir -p "$MODULES_DEST"
 mkdir -p /etc/sleepypod/modules
 
-# Check Python 3 is available
-if ! command -v python3 &>/dev/null; then
-  echo "Warning: python3 not found — skipping biometrics module installation"
-  echo "Install Python 3 and re-run the installer to enable health monitoring"
+# Shared world-readable cache for uv-managed Python interpreters. Without
+# this, uv defaults to ~/.local/share/uv which (running as root via sudo)
+# is /root/.local/share/uv — mode 0700, unreadable by `dac` user. Modules
+# whose unit has User=dac (calibrator, environment-monitor) then fail to
+# even execve the .venv/bin/python symlink → systemd status 203/EXEC.
+# Reported on a Pod 4 install where uv downloaded cpython-3.10.20.
+UV_PYTHON_INSTALL_DIR="/opt/sleepypod/python"
+UV_CACHE_DIR="/opt/sleepypod/uv-cache"
+mkdir -p "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+chmod 0755 /opt/sleepypod "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+export UV_PYTHON_INSTALL_DIR UV_CACHE_DIR
+
+# Install uv (Rust-based Python package manager — bypasses broken ensurepip/pyexpat on Yocto)
+if ! command -v uv &>/dev/null; then
+  echo "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
+fi
+
+if ! command -v uv &>/dev/null; then
+  echo "Warning: uv installation failed — skipping biometrics module installation"
 else
   install_module() {
     local name="$1"
@@ -567,19 +1374,31 @@ else
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
 
-    # Check if python3 venv is available (built-in on most distros, separate package on Debian)
-    if ! python3 -m venv --help >/dev/null 2>&1; then
-      echo "Warning: python3-venv not available, skipping module $name"
-      echo "On Debian/Ubuntu: apt-get install -y python3-venv"
-      return
-    fi
+    # Remove orphaned venv/ from pre-uv installs
+    rm -rf "$dest/venv"
 
-    # Create Python virtualenv and install deps
-    if [ ! -d "$dest/venv" ]; then
-      python3 -m venv "$dest/venv"
-    fi
-    "$dest/venv/bin/pip" install --quiet --upgrade pip
-    "$dest/venv/bin/pip" install --quiet -r "$dest/requirements.txt"
+    # Also wipe any existing .venv. An upgraded install from pre-v1.7.3
+    # would otherwise retain a .venv whose bin/python symlink points at
+    # /home/root/.local/share/uv/… (root-only, mode 0700) and User=dac
+    # services (calibrator, environment-monitor) would still fail 203/EXEC
+    # even though we've since set UV_PYTHON_INSTALL_DIR. Fresh recreation
+    # is cheap: uv's content-addressable cache reuses the managed Python
+    # and wheels, only the venv metadata is re-linked.
+    rm -rf "$dest/.venv"
+
+    # Create Python environment with uv (no ensurepip/pyexpat needed).
+    # No --python flag: let uv pick from requires-python in pyproject.toml.
+    # If system python3 is in range it's used; otherwise uv downloads a
+    # compatible managed interpreter into UV_PYTHON_INSTALL_DIR (set above
+    # to /opt/sleepypod/python so User=dac modules can execute it).
+    (cd "$dest" && uv sync --frozen) || {
+      echo "Warning: uv sync failed for module $name"
+      return
+    }
+
+    # Ensure non-root service users (User=dac on calibrator + env-monitor)
+    # can read the venv dir + traverse the managed-Python symlink target.
+    chmod -R o+rX "$dest/.venv" 2>/dev/null || true
 
     # Install systemd service
     if [ -f "$dest/$service" ]; then
@@ -603,304 +1422,71 @@ else
   install_module "sleep-detector"
   install_module "environment-monitor"
   install_module "calibrator"
+  install_module "cover-buttons"
+
+  # Drop the uv download cache once all .venvs are populated. uv hardlinks
+  # site-packages from the cache into each module's .venv (same FS = rootfs),
+  # so removing cache files here only deletes one of two refcounts on each
+  # inode — the .venv keeps the data alive. Saves ~250 MB of rootfs at the
+  # cost of re-downloading wheels on the next install.
+  if command -v uv &>/dev/null; then
+    echo "Cleaning uv download cache..."
+    uv cache clean >/dev/null 2>&1 || true
+  fi
+fi
+
+# ============================================================================
+# Biometrics archiver — tmpfs RAW writes + gzip cold archive on eMMC.
+# ============================================================================
+# Shared helper, also called from sp-update so OTA upgrades land in the
+# same state as fresh installs (issue #576). Guarded with -f to match the
+# pattern used for every other lib source above — without the guard,
+# --local mode against a pre-#576 working tree would abort under set -e.
+if [ -f "$INSTALL_DIR/scripts/lib/biometrics-archiver-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/biometrics-archiver-helpers"
+  install_biometrics_archiver
+fi
+
+# ============================================================================
+# Archive push — nightly scp of cold archive to user-configured remote.
+# ============================================================================
+# Disabled by default; user opts in via Settings → Backup. Config + ssh key
+# live under /etc/sleepypod (writeable by the sleepypod group so the
+# next-server tRPC handlers can stage them). The unit runs as the sleepypod
+# user, not root — same trust boundary as the rest of the app.
+PUSH_SRC="$INSTALL_DIR/modules/archive-push"
+if [ -d "$PUSH_SRC" ]; then
+  echo "Installing archive-push (scp to remote)..."
+
+  install -m 0755 "$PUSH_SRC/sleepypod-archive-push" /usr/local/bin/sleepypod-archive-push
+  install -m 0644 "$PUSH_SRC/sleepypod-archive-push.service" /etc/systemd/system/
+  install -m 0644 "$PUSH_SRC/sleepypod-archive-push.timer"   /etc/systemd/system/
+
+  # Config dir owned root:sleepypod 0770 so the service user reads + the app
+  # user (in group sleepypod) writes via the tRPC handlers.
+  mkdir -p /etc/sleepypod
+  if id sleepypod &>/dev/null; then
+    chown root:sleepypod /etc/sleepypod
+    chmod 0770 /etc/sleepypod
+  fi
+
+  # Seed example conf only if no real conf exists.
+  if [ ! -f /etc/sleepypod/archive-push.conf ] && [ ! -f /etc/sleepypod/archive-push.example.conf ]; then
+    install -m 0640 "$PUSH_SRC/archive-push.example.conf" /etc/sleepypod/archive-push.example.conf
+    if id sleepypod &>/dev/null; then
+      chown root:sleepypod /etc/sleepypod/archive-push.example.conf
+    fi
+  fi
+
+  systemctl daemon-reload
+  # Timer always enabled; the script no-ops when ENABLED=false in the conf.
+  systemctl enable --now sleepypod-archive-push.timer
 fi
 
 # Re-fix DB permissions after all services restarted with new UMask.
 # On upgrades, old services (without UMask=0002) may have recreated WAL/SHM
 # files with 0644 between the initial fixup and the service restarts above.
 fix_db_permissions
-
-# Create CLI shortcuts
-echo "Creating CLI shortcuts..."
-cat > /usr/local/bin/sp-status << 'EOF'
-#!/bin/bash
-systemctl status sleepypod.service
-EOF
-
-cat > /usr/local/bin/sp-restart << 'EOF'
-#!/bin/bash
-systemctl restart sleepypod.service
-EOF
-
-cat > /usr/local/bin/sp-logs << 'EOF'
-#!/bin/bash
-journalctl -u sleepypod.service -f
-EOF
-
-cat > /usr/local/bin/sp-update << 'UPDATEEOF'
-#!/bin/bash
-set -euo pipefail
-
-# Ensure /usr/local/bin is in PATH (Yocto's root SSH PATH is minimal)
-case ":$PATH:" in
-  *:/usr/local/bin:*) ;;
-  *) export PATH="/usr/local/bin:$PATH" ;;
-esac
-
-# sp-update — self-update sleepypod-core from GitHub via curl+tarball
-#
-# Usage:
-#   sp-update              # update to latest main
-#   sp-update feat/alarms  # update to a specific branch
-#
-# Handles iptables toggle automatically (opens WAN, downloads, closes WAN).
-# No git required — uses GitHub's tarball API.
-
-INSTALL_DIR="/home/dac/sleepypod-core"
-DATA_DIR="/persistent/sleepypod-data"
-GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
-BRANCH="${1:-main}"
-IPTABLES="/usr/sbin/iptables"
-
-echo "=== SleepyPod Update ==="
-echo "Branch: $BRANCH"
-echo "Repo:   $GITHUB_REPO"
-echo ""
-
-# iptables helpers
-wan_is_blocked() {
-  $IPTABLES -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
-}
-
-SAVED_IPTABLES=""
-WAN_WAS_BLOCKED=false
-
-unblock_wan() {
-  echo "Opening WAN access..."
-  SAVED_IPTABLES="$(/usr/sbin/iptables-save 2>/dev/null || true)"
-  $IPTABLES -F && $IPTABLES -X && $IPTABLES -t nat -F && $IPTABLES -t nat -X
-  echo "WAN open."
-}
-
-restore_wan() {
-  if [ -n "$SAVED_IPTABLES" ]; then
-    echo "Restoring iptables rules..."
-    echo "$SAVED_IPTABLES" | /usr/sbin/iptables-restore 2>/dev/null || true
-  fi
-  echo "WAN blocked."
-}
-
-# Cleanup — always re-block WAN and restart service on failure
-cleanup() {
-  local exit_code=$?
-  if [ "$WAN_WAS_BLOCKED" = true ]; then
-    restore_wan
-  fi
-  if [ $exit_code -ne 0 ]; then
-    echo "Update failed, starting service with existing code..." >&2
-    systemctl start sleepypod.service 2>/dev/null || true
-  fi
-}
-trap cleanup EXIT
-
-# Pre-flight: disk space
-DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
-if [ "$DISK_AVAIL" -lt 300 ]; then
-  echo "Error: Need 300MB free, only ${DISK_AVAIL}MB available" >&2
-  exit 1
-fi
-
-# Open WAN if blocked
-if wan_is_blocked; then
-  # Ensure /etc/hosts telemetry block is in place before opening WAN
-  if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
-    echo "Installing /etc/hosts telemetry block before opening WAN..."
-    "$INSTALL_DIR/scripts/internet-control" hosts-block 2>/dev/null || true
-  fi
-  WAN_WAS_BLOCKED=true
-  unblock_wan
-fi
-
-# Check connectivity
-if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
-  echo "Error: Cannot reach GitHub. Check network." >&2
-  exit 1
-fi
-
-# Backup database
-if [ -f "$DATA_DIR/sleepypod.db" ]; then
-  cp "$DATA_DIR/sleepypod.db" "$DATA_DIR/sleepypod.db.bak"
-  echo "Database backed up."
-fi
-
-# Backup current code for rollback (everything except node_modules)
-BACKUP_DIR="/tmp/sleepypod-rollback"
-rm -rf "$BACKUP_DIR"
-mkdir -p "$BACKUP_DIR"
-tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C "$BACKUP_DIR" || true
-
-# Stop service
-systemctl stop sleepypod.service
-
-# Download code — try CI release first (includes pre-built .next), fall back to source tarball
-TMPDIR=$(mktemp -d)
-HAS_BUILD=false
-
-if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "latest" ]; then
-  # Try latest GitHub Release (CI-built, includes .next)
-  echo "Checking for CI release..."
-  RELEASE_URL=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
-    | grep -o '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
-    | grep -o 'https://[^"]*' || true)
-
-  if [ -n "$RELEASE_URL" ]; then
-    echo "Downloading CI release..."
-    if curl -fSL "$RELEASE_URL" | tar xz -C "$TMPDIR"; then
-      HAS_BUILD=true
-      echo "CI release downloaded (pre-built)."
-    fi
-  fi
-fi
-
-if [ "$HAS_BUILD" = false ]; then
-  # Fall back to source tarball (no .next — would need build on pod)
-  echo "Downloading $BRANCH from GitHub..."
-  TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${BRANCH}.tar.gz"
-  if ! curl -fSL "$TARBALL_URL" | tar xz -C "$TMPDIR"; then
-    echo "Error: Failed to download branch '$BRANCH'" >&2
-    exit 1
-  fi
-  # Source tarball extracts to a subdirectory (e.g., core-main/)
-  SUBDIR=$(ls "$TMPDIR" | head -1)
-  if [ -z "$SUBDIR" ] || [ ! -d "$TMPDIR/$SUBDIR" ]; then
-    echo "Error: Unexpected tarball structure in $TMPDIR" >&2
-    exit 1
-  fi
-  # Move contents up so TMPDIR is the root
-  mv "$TMPDIR/$SUBDIR"/* "$TMPDIR/$SUBDIR"/.[!.]* "$TMPDIR/" 2>/dev/null || true
-  rmdir "$TMPDIR/$SUBDIR" 2>/dev/null || true
-fi
-
-# Clean old files (preserve node_modules, .env)
-find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-  ! -name 'node_modules' \
-  ! -name '.env' \
-  -exec rm -rf {} +
-
-# Move new code into place
-cp -r "$TMPDIR/." "$INSTALL_DIR/"
-rm -rf "$TMPDIR"
-echo "Source updated."
-
-cd "$INSTALL_DIR"
-
-# Install prod deps (migrations run automatically on app startup via instrumentation.ts)
-if pnpm install --frozen-lockfile --prod; then
-
-  # Build only if no pre-built .next exists
-  if [ ! -d "$INSTALL_DIR/.next" ]; then
-    echo "No pre-built .next found, building..."
-    pnpm install --frozen-lockfile
-    pnpm build
-  fi
-
-  # Sync biometrics modules
-  if [ -d "$INSTALL_DIR/modules" ]; then
-    MODULES_DEST="/opt/sleepypod/modules"
-    mkdir -p "$MODULES_DEST"
-    if [ -d "$INSTALL_DIR/modules/common" ]; then
-      mkdir -p "$MODULES_DEST/common"
-      cp -r "$INSTALL_DIR/modules/common/." "$MODULES_DEST/common/"
-    fi
-    for mod in piezo-processor sleep-detector environment-monitor calibrator; do
-      if [ -d "$INSTALL_DIR/modules/$mod" ]; then
-        mkdir -p "$MODULES_DEST/$mod"
-        cp -r "$INSTALL_DIR/modules/$mod/." "$MODULES_DEST/$mod/"
-        if [ ! -d "$MODULES_DEST/$mod/venv" ] && command -v python3 &>/dev/null; then
-          python3 -m venv "$MODULES_DEST/$mod/venv" 2>/dev/null || true
-        fi
-        if [ -d "$MODULES_DEST/$mod/venv" ] && [ -f "$MODULES_DEST/$mod/requirements.txt" ]; then
-          "$MODULES_DEST/$mod/venv/bin/pip" install --quiet -r "$MODULES_DEST/$mod/requirements.txt" 2>/dev/null || true
-        fi
-        svc="sleepypod-$mod.service"
-        if [ -f "$MODULES_DEST/$mod/$svc" ]; then
-          cp "$MODULES_DEST/$mod/$svc" "/etc/systemd/system/$svc"
-          systemctl daemon-reload
-          systemctl enable "$svc" 2>/dev/null || true
-          systemctl restart "$svc" 2>/dev/null || true
-        fi
-      fi
-    done
-  fi
-
-  # Re-block WAN before starting service
-  if [ "$WAN_WAS_BLOCKED" = true ]; then
-    restore_wan
-    WAN_WAS_BLOCKED=false
-  fi
-
-  echo "Starting service..."
-  systemctl start sleepypod.service
-
-  sleep 5
-  if systemctl is-active --quiet sleepypod.service; then
-    echo "Update complete! Service is running."
-    exit 0
-  fi
-fi
-
-# Rollback on failure — restore full previous code and database
-echo "Update failed, restoring previous code..." >&2
-if [ -d "$BACKUP_DIR" ]; then
-  find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-    ! -name 'node_modules' \
-    ! -name '.env' \
-    -exec rm -rf {} +
-  cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
-  echo "Previous code restored."
-fi
-if [ -f "$DATA_DIR/sleepypod.db.bak" ]; then
-  cp "$DATA_DIR/sleepypod.db.bak" "$DATA_DIR/sleepypod.db"
-  echo "Database restored."
-fi
-systemctl start sleepypod.service 2>/dev/null || true
-
-exit 1
-UPDATEEOF
-
-cat > /usr/local/bin/sp-freesleep << 'EOF'
-#!/bin/bash
-echo "Switching to free-sleep..."
-systemctl stop sleepypod.service 2>/dev/null || true
-for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
-  systemctl stop "$svc.service" 2>/dev/null || true
-done
-systemctl start free-sleep.service free-sleep-stream.service 2>/dev/null || true
-sleep 2
-if systemctl is-active --quiet free-sleep.service; then
-  echo "✓ free-sleep is running on port 3000"
-else
-  echo "✗ free-sleep failed to start — check: journalctl -u free-sleep.service"
-fi
-EOF
-
-cat > /usr/local/bin/sp-sleepypod << 'EOF'
-#!/bin/bash
-echo "Switching to sleepypod..."
-systemctl stop free-sleep.service free-sleep-stream.service 2>/dev/null || true
-# Kill anything on port 3000
-if command -v fuser &>/dev/null; then
-  fuser -k 3000/tcp 2>/dev/null || true
-  sleep 1
-fi
-systemctl restart sleepypod.service
-for svc in sleepypod-piezo-processor sleepypod-sleep-detector sleepypod-environment-monitor sleepypod-calibrator; do
-  systemctl restart "$svc.service" 2>/dev/null || true
-done
-sleep 3
-if systemctl is-active --quiet sleepypod.service; then
-  echo "✓ sleepypod is running on port 3000"
-else
-  echo "✗ sleepypod failed to start — check: sp-logs"
-fi
-EOF
-
-chmod +x /usr/local/bin/sp-status
-chmod +x /usr/local/bin/sp-restart
-chmod +x /usr/local/bin/sp-logs
-chmod +x /usr/local/bin/sp-update
-chmod +x /usr/local/bin/sp-freesleep
-chmod +x /usr/local/bin/sp-sleepypod
 
 # Optional SSH configuration
 if [ "$SKIP_SSH" = true ]; then
@@ -967,8 +1553,16 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
 fi
 
 # Auto-detect network interface and get IP
-DEFAULT_IFACE=$(ip route | awk '/default/ {print $5; exit}')
+# `ip route | awk '…; exit'` closes the pipe before `ip route` finishes
+# writing when there are multiple routes, causing SIGPIPE (exit 141)
+# which set -e then kills the whole install script one line before the
+# completion banner. Reported on Pod 4. Limit the stream at the source
+# (`ip route show default`) so awk's `exit` can't orphan unread input,
+# and guard with `|| true` + default for extra safety.
+DEFAULT_IFACE=$(ip route show default 2>/dev/null | awk '{print $5; exit}' || true)
+DEFAULT_IFACE=${DEFAULT_IFACE:-}
 POD_IP=$(ip -4 addr show "$DEFAULT_IFACE" 2>/dev/null | grep -o 'inet [0-9.]*' | awk '{print $2}') || POD_IP="<unknown>"
+[ -z "$POD_IP" ] && POD_IP="<unknown>"
 
 # Wait for service to start with polling
 echo "Waiting for service to start..."
@@ -1002,10 +1596,12 @@ echo "  - Sleep session detection and movement tracking (sleep-detector)"
 echo "  - Ambient, bed zone, and freezer temperature monitoring (environment-monitor)"
 echo ""
 echo "CLI Commands:"
-echo "  sp-status   - View service status"
-echo "  sp-restart  - Restart service"
-echo "  sp-logs     - View live logs"
-echo "  sp-update   - Update to latest version"
+echo "  sp-status        - View service status"
+echo "  sp-restart       - Restart service"
+echo "  sp-logs          - View live logs"
+echo "  sp-bundle-logs   - Capture redacted diagnostic bundle for support"
+echo "  sp-update        - Update to latest version"
+echo "  sp-uninstall     - Remove sleepypod"
 echo ""
 echo "Files:"
 echo "  Config DB:      $DATA_DIR/sleepypod.db"
@@ -1014,5 +1610,6 @@ echo "  Config:         $INSTALL_DIR/.env"
 echo "  Module logs:    journalctl -u sleepypod-piezo-processor.service"
 echo "                  journalctl -u sleepypod-sleep-detector.service"
 echo "                  journalctl -u sleepypod-environment-monitor.service"
+echo "                  journalctl -u sleepypod-cover-buttons.service"
 echo "  App logs:       journalctl -u sleepypod.service"
 echo ""

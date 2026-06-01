@@ -9,13 +9,13 @@ Type=simple
 User=root
 UMask=0002
 WorkingDirectory=/opt/sleepypod/modules/piezo-processor
-ExecStart=/opt/sleepypod/modules/piezo-processor/venv/bin/python main.py
+ExecStart=/opt/sleepypod/modules/piezo-processor/.venv/bin/python main.py
 Restart=always
 RestartSec=10
 
 # Environment — override via /etc/sleepypod/modules/piezo-processor.env
 EnvironmentFile=-/etc/sleepypod/modules/piezo-processor.env
-Environment="RAW_DATA_DIR=/persistent"
+Environment="RAW_DATA_DIR=/persistent/biometrics"
 Environment="DATABASE_URL=file:/persistent/sleepypod-data/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:/persistent/sleepypod-data/biometrics.db"
 
@@ -29,6 +29,13 @@ ReadOnlyPaths=/persistent
 ReadWritePaths=/persistent/sleepypod-data
 ProtectSystem=strict
 ProtectKernelTunables=true
+# Give the service its own isolated /tmp + /var/tmp namespace. Without
+# this, ProtectSystem=strict + the narrow ReadWritePaths hide the host
+# /tmp from the service → Python's tempfile.mkstemp() fails with
+# "No usable temporary directory found" → scipy/heartpy intermediate
+# computations crash → no vitals rows ever get written. Reported on
+# Pod 3 (Xcessive Overlord).
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

@@ -80,7 +80,21 @@ export const calibrationRouter = router({
       sensorType: sensorTypeSchema.optional(),
       limit: z.number().int().min(1).max(50).default(10),
     }).strict())
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      side: z.enum(['left', 'right']),
+      sensorType: z.enum(['piezo', 'capacitance', 'temperature']),
+      status: z.enum(['completed', 'failed']),
+      parameters: z.unknown(),
+      qualityScore: z.number().nullable(),
+      sourceWindowStart: z.number().nullable(),
+      sourceWindowEnd: z.number().nullable(),
+      samplesUsed: z.number().nullable(),
+      errorMessage: z.string().nullable(),
+      durationMs: z.number().nullable(),
+      triggeredBy: z.enum(['daily', 'manual', 'startup']),
+      createdAt: z.date(),
+    })))
     .query(async ({ input }) => {
       const conditions = [eq(calibrationRuns.side, input.side)]
       if (input.sensorType) {
@@ -194,7 +208,16 @@ export const calibrationRouter = router({
       endDate: z.date().optional(),
       limit: z.number().int().min(1).max(500).default(100),
     }).strict())
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      vitalsId: z.number(),
+      side: z.enum(['left', 'right']),
+      timestamp: z.date(),
+      qualityScore: z.number(),
+      flags: z.unknown(),
+      hrRaw: z.number().nullable(),
+      createdAt: z.date(),
+    })))
     .query(async ({ input }) => {
       const conditions = [eq(vitalsQuality.side, input.side)]
       if (input.startDate) {

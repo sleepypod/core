@@ -1,0 +1,39 @@
+{
+  "last_compiled": "2026-04-05T00:00:00Z",
+  "source_hashes": {
+    "docs/PRIVACY.md": "compiled",
+    "docs/DEPLOYMENT.md": "compiled",
+    "docs/piezo-processor.md": "compiled",
+    "docs/sleep-detector.md": "compiled",
+    "docs/trpc-api-architecture.md": "compiled",
+    "docs/adr/0001-new-repository.md": "compiled",
+    "docs/adr/0003-core-stack.md": "compiled",
+    "docs/adr/0003-typescript-react.md": "compiled",
+    "docs/adr/0004-nextjs-unified.md": "compiled",
+    "docs/adr/0005-trpc.md": "compiled",
+    "docs/adr/0006-developer-tooling.md": "compiled",
+    "docs/adr/0006-eslint.md": "compiled",
+    "docs/adr/0010-drizzle-orm-sqlite.md": "compiled",
+    "docs/adr/0012-biometrics-module-system.md": "compiled",
+    "docs/adr/0013-yocto-deployment-toolchain.md": "compiled",
+    "docs/adr/0014-sensor-calibration.md": "compiled",
+    "docs/adr/0015-event-bus-mutation-broadcast.md": "compiled",
+    "docs/adr/0016-raw-command-execution.md": "compiled",
+    "docs/hardware/DAC-PROTOCOL.md": "compiled",
+    "docs/hardware/calibration-architecture.md": "compiled",
+    "docs/hardware/sensor-profiles.md": "compiled"
+  },
+  "topics": [
+    "architecture-and-stack",
+    "deployment",
+    "hardware-protocol",
+    "biometrics-system",
+    "piezo-processing",
+    "sleep-detection",
+    "sensor-calibration",
+    "sensor-hardware",
+    "api-architecture",
+    "privacy"
+  ],
+  "version": 1
+}

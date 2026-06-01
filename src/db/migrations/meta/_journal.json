@@ -15,6 +15,76 @@
       "when": 1774228685390,
       "tag": "0001_groovy_human_robot",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1774803433256,
+      "tag": "0002_ambitious_sir_ram",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1774835533223,
+      "tag": "0003_previous_phil_sheldon",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1774935266497,
+      "tag": "0004_shallow_tomorrow_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1776548142374,
+      "tag": "0005_short_venom",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1777089654456,
+      "tag": "0006_yummy_squadron_sinister",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1778211700223,
+      "tag": "0007_round_hardball",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1778214991769,
+      "tag": "0008_flashy_wallow",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1778285875940,
+      "tag": "0009_polite_earthquake",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1779732358053,
+      "tag": "0010_greedy_hercules",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1780252685801,
+      "tag": "0011_opt_in_pump_stall",
+      "breakpoints": true
     }
   ]
 }

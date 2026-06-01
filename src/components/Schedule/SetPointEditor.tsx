@@ -48,6 +48,7 @@ export function SetPointEditor({
 
   // Sync form state when editingPhase changes
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (editingPhase) {
       setTime(editingPhase.time)
       setTemperature(editingPhase.temperature)
@@ -59,6 +60,7 @@ export function SetPointEditor({
       setEnabled(true)
     }
     setShowDeleteConfirm(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [editingPhase, open])
 
   const handleSave = useCallback(() => {

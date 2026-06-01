@@ -4,7 +4,7 @@ import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
-import { eq, and, gte, lte, desc, asc, avg, min, max, count } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
 import {
@@ -14,6 +14,30 @@ import {
   calculateQualityScore,
   type SleepStagesResult,
 } from '@/src/lib/sleep-stages'
+import {
+  POSITION_CHANGE_SCORE_MIN,
+  RESTLESS_SCORE_MIN,
+  pickMinBucketNonStillEpochs,
+} from '@/src/lib/movement'
+import { getOccupancy } from '@/src/lib/occupancy'
+
+/**
+ * SQL fragment: movement.timestamp falls inside an existing sleep_records
+ * window for the same side. Used to drop empty-bed sensor noise from
+ * movement aggregates and stats.
+ *
+ * Treats sleep_records.left_bed_at IS NULL as "session still active" by
+ * substituting a sentinel far-future timestamp, since the Drizzle output
+ * schema permits null even though the writer always sets a value.
+ */
+function inBedExists(side: 'left' | 'right') {
+  return sql`EXISTS (
+    SELECT 1 FROM ${sleepRecords}
+    WHERE ${sleepRecords.side} = ${side}
+      AND ${movement.timestamp} >= ${sleepRecords.enteredBedAt}
+      AND ${movement.timestamp} <= COALESCE(${sleepRecords.leftBedAt}, 99999999999)
+  )`
+}
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -55,7 +79,18 @@ export const biometricsRouter = router({
    */
   getSleepRecords: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/sleep-records', protect: false, tags: ['Biometrics'] } })
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      enteredBedAt: z.date(),
+      // null while a session is active (occupant in bed) — gets populated on close.
+      leftBedAt: z.date().nullable(),
+      sleepDurationSeconds: z.number(),
+      timesExitedBed: z.number(),
+      presentIntervals: z.unknown(),
+      notPresentIntervals: z.unknown(),
+      createdAt: z.date(),
+    })))
     .input(
       z
         .object({
@@ -133,14 +168,24 @@ export const biometricsRouter = router({
    */
   getVitals: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/vitals', protect: false, tags: ['Biometrics'] } })
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      timestamp: z.date(),
+      heartRate: z.number().nullable(),
+      hrv: z.number().nullable(),
+      breathingRate: z.number().nullable(),
+    })))
     .input(
       z
         .object({
           side: sideSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
-          limit: z.number().int().min(1).max(1000).default(288), // Default: 24 hours of 5-min intervals
+          // Cap covers a full week of ~30 s-cadence vitals (60×60×24×7 / 30 ≈ 20 160).
+          // Older 1000 cap silently truncated week views to the most recent ~1–2 days
+          // on busy datasets, leaving earlier sessions with "No data" charts.
+          limit: z.number().int().min(1).max(20000).default(288), // Default: 24 hours of 5-min intervals
         })
         .strict()
     )
@@ -210,7 +255,12 @@ export const biometricsRouter = router({
    */
   getMovement: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/movement', protect: false, tags: ['Biometrics'] } })
-    .output(z.any())
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      timestamp: z.date(),
+      totalMovement: z.number(),
+    })))
     .input(
       z
         .object({
@@ -262,6 +312,167 @@ export const biometricsRouter = router({
     }),
 
   /**
+   * Get movement aggregated into fixed-width time buckets via SQL, restricted
+   * to in-bed windows recorded in sleep_records so empty-bed sensor noise
+   * doesn't show up as bars.
+   *
+   * Why this exists: getMovement returns one row per 60-s epoch and the
+   * 1000-row cap chops a week-long view at ~16 hours. This endpoint groups
+   * by `floor(timestamp / bucketSeconds) * bucketSeconds` so a 7-day view
+   * fits comfortably regardless of bucket size.
+   *
+   * eventCount per bucket — count of epochs with score >= 200 ("major
+   * postural shift", docs/sleep-detector.md). The chart renders this as
+   * events-per-hour following Whoop / Garmin convention; raw PIM sums are
+   * available via totalMovement for debug / power-user views.
+   *
+   * Density gate: buckets with fewer than pickMinBucketNonStillEpochs(...)
+   * epochs above RESTLESS_SCORE_MIN are dropped. Filters phantom-session
+   * flicker that leaks past inBedExists (a noisy session of record can still
+   * contain many empty-bed sub-windows). See docs/sleep-detector.md "Chart
+   * aggregation" for the rationale.
+   *
+   * @param bucketSeconds - 60..86400; chart bucket width (e.g. 300 for 5-min)
+   */
+  getMovementBuckets: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/movement/buckets', protect: false, tags: ['Biometrics'] } })
+    .output(z.array(z.object({
+      side: sideSchema,
+      bucketStart: z.date(),
+      totalMovement: z.number(),
+      eventCount: z.number(),
+      sampleCount: z.number(),
+    })))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          bucketSeconds: z.number().int().min(60).max(86400),
+          limit: z.number().int().min(1).max(10000).default(2000),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
+        const conditions = [eq(movement.side, input.side), inBedExists(input.side)]
+        if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
+        if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
+
+        // Inline bucketSeconds as a literal so SQLite gets `... / 1800) * 1800`
+        // rather than parameterized `?`s — the parameterized form did not
+        // GROUP BY correctly when this template was reused in select+groupBy.
+        // Zod has already validated 60..86400, so no injection surface.
+        const bSec = Math.floor(input.bucketSeconds)
+        const bucket = sql<number>`(${movement.timestamp} / ${sql.raw(String(bSec))}) * ${sql.raw(String(bSec))}`
+        const minNonStill = pickMinBucketNonStillEpochs(bSec)
+        const nonStillEpochs = sql<number>`SUM(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(RESTLESS_SCORE_MIN))} THEN 1 ELSE 0 END)`
+
+        const rows = await biometricsDb
+          .select({
+            bucketStart: bucket,
+            totalMovement: sql<number>`SUM(${movement.totalMovement})`,
+            eventCount: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(POSITION_CHANGE_SCORE_MIN))} THEN 1 END)`,
+            sampleCount: count(),
+          })
+          .from(movement)
+          .where(and(...conditions))
+          .groupBy(bucket)
+          .having(sql`${nonStillEpochs} >= ${sql.raw(String(minNonStill))}`)
+          .orderBy(desc(bucket))
+          .limit(input.limit)
+
+        return rows.map(r => ({
+          side: input.side,
+          bucketStart: new Date(Number(r.bucketStart) * 1000),
+          totalMovement: Number(r.totalMovement ?? 0),
+          eventCount: Number(r.eventCount ?? 0),
+          sampleCount: Number(r.sampleCount ?? 0),
+        }))
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch movement buckets: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Aggregated movement stats for a side and date range, computed in SQL and
+   * restricted to in-bed windows from sleep_records.
+   *
+   * - positionChanges: in-bed epochs with score >= POSITION_CHANGE_SCORE_MIN
+   *   (200); each ≈ one postural shift (docs/sleep-detector.md score table).
+   * - restlessMinutes: in-bed epochs with score >= RESTLESS_SCORE_MIN (50);
+   *   each epoch is 60 s, so the count is already in minutes.
+   * - sampleCount: total in-bed epochs in range (sanity / coverage check).
+   */
+  getMovementSummary: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/movement/summary', protect: false, tags: ['Biometrics'] } })
+    .output(z.object({
+      positionChanges: z.number(),
+      restlessMinutes: z.number(),
+      sampleCount: z.number(),
+    }))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      try {
+        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'startDate must be before or equal to endDate',
+          })
+        }
+
+        const conditions = [eq(movement.side, input.side), inBedExists(input.side)]
+        if (input.startDate) conditions.push(gte(movement.timestamp, input.startDate))
+        if (input.endDate) conditions.push(lte(movement.timestamp, input.endDate))
+
+        const [row] = await biometricsDb
+          .select({
+            positionChanges: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(POSITION_CHANGE_SCORE_MIN))} THEN 1 END)`,
+            restlessMinutes: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(RESTLESS_SCORE_MIN))} THEN 1 END)`,
+            sampleCount: count(),
+          })
+          .from(movement)
+          .where(and(...conditions))
+
+        return {
+          positionChanges: Number(row?.positionChanges ?? 0),
+          restlessMinutes: Number(row?.restlessMinutes ?? 0),
+          sampleCount: Number(row?.sampleCount ?? 0),
+        }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch movement summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
    * Get the most recent sleep record for a side.
    *
    * Use Cases:
@@ -285,7 +496,17 @@ export const biometricsRouter = router({
         })
         .strict()
     )
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      side: sideSchema,
+      enteredBedAt: z.date(),
+      leftBedAt: z.date().nullable(),
+      sleepDurationSeconds: z.number(),
+      timesExitedBed: z.number(),
+      presentIntervals: z.unknown(),
+      notPresentIntervals: z.unknown(),
+      createdAt: z.date(),
+    }).nullable())
     .query(async ({ input }) => {
       try {
         const [record] = await biometricsDb
@@ -303,6 +524,52 @@ export const biometricsRouter = router({
           message: `Failed to fetch latest sleep record: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
+      }
+    }),
+
+  /**
+   * Current bed occupancy for both sides. Single source of truth used by
+   * the HomeKit OccupancySensor accessory and the web-app PresenceCard.
+   * Combines the movement-table 15-min window with the live capSense2
+   * level signal vs the calibration baseline. See `src/lib/occupancy.ts`.
+   */
+  getOccupancy: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/occupancy', protect: false, tags: ['Biometrics'] } })
+    .input(z.void().optional())
+    .output(z.object({
+      left: z.object({
+        occupied: z.boolean(),
+        // True when presence can be sensed reliably enough to act on absence
+        // (fresh capSense2 frame + completed calibration). The Settings UI
+        // gates the auto-off toggle on this.
+        available: z.boolean(),
+        movement: z.object({ active: z.boolean(), peakScore: z.number() }),
+        level: z.object({
+          active: z.boolean(),
+          deviation: z.number().nullable(),
+          threshold: z.number().nullable(),
+          ageMs: z.number().nullable(),
+        }),
+      }),
+      right: z.object({
+        occupied: z.boolean(),
+        // True when presence can be sensed reliably enough to act on absence
+        // (fresh capSense2 frame + completed calibration). The Settings UI
+        // gates the auto-off toggle on this.
+        available: z.boolean(),
+        movement: z.object({ active: z.boolean(), peakScore: z.number() }),
+        level: z.object({
+          active: z.boolean(),
+          deviation: z.number().nullable(),
+          threshold: z.number().nullable(),
+          ageMs: z.number().nullable(),
+        }),
+      }),
+    }))
+    .query(async () => {
+      return {
+        left: getOccupancy('left'),
+        right: getOccupancy('right'),
       }
     }),
 
@@ -330,7 +597,14 @@ export const biometricsRouter = router({
    */
   getVitalsSummary: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/vitals/summary', protect: false, tags: ['Biometrics'] } })
-    .output(z.any())
+    .output(z.object({
+      avgHeartRate: z.number().nullable(),
+      minHeartRate: z.number().nullable(),
+      maxHeartRate: z.number().nullable(),
+      avgHRV: z.number().nullable(),
+      avgBreathingRate: z.number().nullable(),
+      recordCount: z.number(),
+    }).nullable())
     .input(
       z
         .object({
@@ -396,6 +670,83 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to calculate vitals summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Rolling personal baseline (mean + standard deviation) for each metric.
+   * Drawn as a faint band behind night/week vitals charts so a raw value
+   * reads as "normal for me" or "outside normal." Population SD via
+   * E[X²] − E[X]² — SQLite has no STDDEV, but AVG ignores nulls so the
+   * single-pass form is well-defined per metric independently.
+   */
+  getVitalsBaseline: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/vitals/baseline', protect: false, tags: ['Biometrics'] } })
+    .output(z.object({
+      hrMean: z.number().nullable(),
+      hrSD: z.number().nullable(),
+      hrvMean: z.number().nullable(),
+      hrvSD: z.number().nullable(),
+      brMean: z.number().nullable(),
+      brSD: z.number().nullable(),
+      sampleCount: z.number(),
+      windowDays: z.number(),
+    }).nullable())
+    .input(
+      z.object({
+        side: sideSchema,
+        days: z.number().int().min(1).max(90).default(30),
+      }).strict(),
+    )
+    .query(async ({ input }) => {
+      try {
+        const now = new Date()
+        const start = new Date(now.getTime() - input.days * 24 * 60 * 60 * 1000)
+
+        const [row] = await biometricsDb
+          .select({
+            hrMean: avg(vitals.heartRate),
+            hrSqMean: sql<number | null>`AVG(${vitals.heartRate} * ${vitals.heartRate})`,
+            hrvMean: avg(vitals.hrv),
+            hrvSqMean: sql<number | null>`AVG(${vitals.hrv} * ${vitals.hrv})`,
+            brMean: avg(vitals.breathingRate),
+            brSqMean: sql<number | null>`AVG(${vitals.breathingRate} * ${vitals.breathingRate})`,
+            sampleCount: count(),
+          })
+          .from(vitals)
+          .where(
+            and(
+              eq(vitals.side, input.side),
+              gte(vitals.timestamp, start),
+              lte(vitals.timestamp, now),
+            ),
+          )
+
+        if (row.sampleCount === 0) return null
+
+        const sd = (mean: number | null, sqMean: number | null): number | null => {
+          if (mean == null || sqMean == null) return null
+          const variance = Number(sqMean) - Number(mean) * Number(mean)
+          return variance > 0 ? Math.sqrt(variance) : 0
+        }
+
+        return {
+          hrMean: row.hrMean !== null ? Number(row.hrMean) : null,
+          hrSD: sd(row.hrMean as number | null, row.hrSqMean),
+          hrvMean: row.hrvMean !== null ? Number(row.hrvMean) : null,
+          hrvSD: sd(row.hrvMean as number | null, row.hrvSqMean),
+          brMean: row.brMean !== null ? Number(row.brMean) : null,
+          brSD: sd(row.brMean as number | null, row.brSqMean),
+          sampleCount: row.sampleCount,
+          windowDays: input.days,
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to calculate vitals baseline: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }
@@ -530,7 +881,17 @@ export const biometricsRouter = router({
         timesExitedBed: z.number().int().min(0).optional(),
       }).strict()
     )
-    .output(z.any())
+    .output(z.object({
+      id: z.number(),
+      side: sideSchema,
+      enteredBedAt: z.date(),
+      leftBedAt: z.date().nullable(),
+      sleepDurationSeconds: z.number(),
+      timesExitedBed: z.number(),
+      presentIntervals: z.unknown(),
+      notPresentIntervals: z.unknown(),
+      createdAt: z.date(),
+    }))
     .mutation(async ({ input }) => {
       const { id, ...updates } = input
 

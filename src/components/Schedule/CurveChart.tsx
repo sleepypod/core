@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useCallback } from 'react'
 import {
   AreaChart,
   Area,
@@ -23,6 +23,12 @@ interface CurveChartProps {
   bedtimeMinutes: number
   minTempF: number
   maxTempF: number
+  /** Index of the currently selected set point (highlights dot) */
+  selectedIndex?: number | null
+  /** Called when user taps a dot on the chart */
+  onSelectIndex?: (index: number) => void
+  /** Compact mode for drawer (shorter height, no phase legend space) */
+  compact?: boolean
 }
 
 interface ChartDataPoint {
@@ -31,6 +37,7 @@ interface ChartDataPoint {
   tempOffset: number
   phase: string
   displayTime: string
+  index: number
 }
 
 /** Custom tooltip for the temperature curve chart */
@@ -56,14 +63,57 @@ function CurveTooltip({ active, payload }: { active?: boolean, payload?: Array<{
   )
 }
 
-export function CurveChart({ points, bedtimeMinutes, minTempF, maxTempF }: CurveChartProps) {
+/** Custom dot renderer that highlights selected point */
+interface InteractiveDotProps {
+  cx?: number
+  cy?: number
+  payload?: { index: number, tempOffset: number }
+  selectedIndex?: number | null
+  onSelectIndex?: (index: number) => void
+}
+
+function InteractiveDot({ cx, cy, payload, selectedIndex, onSelectIndex }: InteractiveDotProps) {
+  if (cx == null || cy == null || !payload) return null
+
+  const isSelected = payload.index === selectedIndex
+  const color = colorForTempOffset(payload.tempOffset)
+
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={isSelected ? 6 : 3.5}
+      fill={isSelected ? '#fff' : color}
+      stroke={isSelected ? color : 'none'}
+      strokeWidth={isSelected ? 2.5 : 0}
+      style={{ cursor: onSelectIndex ? 'pointer' : undefined }}
+      onClick={(e) => {
+        e.stopPropagation()
+        onSelectIndex?.(payload.index)
+      }}
+    />
+  )
+}
+
+export function CurveChart({
+  points,
+  bedtimeMinutes,
+  minTempF,
+  maxTempF,
+  selectedIndex,
+  onSelectIndex,
+  compact = false,
+}: CurveChartProps) {
+  const showDots = onSelectIndex != null
+
   const chartData = useMemo<ChartDataPoint[]>(() => {
-    return points.map(p => ({
+    return points.map((p, i) => ({
       minutesFromBedtime: p.minutesFromBedtime,
       tempF: BASE_TEMP_F + p.tempOffset,
       tempOffset: p.tempOffset,
       phase: phaseLabels[p.phase],
       displayTime: curvePointToDisplayTime(p.minutesFromBedtime, bedtimeMinutes),
+      index: i,
     }))
   }, [points, bedtimeMinutes])
 
@@ -95,7 +145,6 @@ export function CurveChart({ points, bedtimeMinutes, minTempF, maxTempF }: Curve
     const first = chartData[0].minutesFromBedtime
     const last = chartData[chartData.length - 1].minutesFromBedtime
     const ticks: number[] = []
-    // Start at bedtime (0) and step by 120 min
     const start = Math.ceil(first / 120) * 120
     for (let t = start; t <= last; t += 120) {
       ticks.push(t)
@@ -103,12 +152,20 @@ export function CurveChart({ points, bedtimeMinutes, minTempF, maxTempF }: Curve
     return ticks
   }, [chartData])
 
+  const renderDot = useCallback((props: InteractiveDotProps) => (
+    <InteractiveDot
+      {...props}
+      selectedIndex={selectedIndex}
+      onSelectIndex={onSelectIndex}
+    />
+  ), [selectedIndex, onSelectIndex])
+
   return (
-    <div className="w-full" style={{ height: 220 }}>
+    <div className="w-full" style={{ height: compact ? 180 : 220 }}>
       <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
         <AreaChart
           data={chartData}
-          margin={{ top: 8, right: 8, bottom: 0, left: -16 }}
+          margin={{ top: 8, right: 32, bottom: 0, left: -8 }}
         >
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
@@ -152,9 +209,21 @@ export function CurveChart({ points, bedtimeMinutes, minTempF, maxTempF }: Curve
             label={{ value: '80°F', position: 'right', fill: '#71717a', fontSize: 9 }}
           />
           {/* Min temp reference */}
-          <ReferenceLine y={minTempF} stroke="#3b82f6" strokeDasharray="2 2" strokeOpacity={0.4} />
+          <ReferenceLine
+            y={minTempF}
+            stroke="#3b82f6"
+            strokeDasharray="2 2"
+            strokeOpacity={0.4}
+            label={{ value: `${minTempF}°`, position: 'left', fill: '#3b82f6', fontSize: 9 }}
+          />
           {/* Max temp reference */}
-          <ReferenceLine y={maxTempF} stroke="#f97316" strokeDasharray="2 2" strokeOpacity={0.4} />
+          <ReferenceLine
+            y={maxTempF}
+            stroke="#f97316"
+            strokeDasharray="2 2"
+            strokeOpacity={0.4}
+            label={{ value: `${maxTempF}°`, position: 'left', fill: '#f97316', fontSize: 9 }}
+          />
           {/* Bedtime marker */}
           <ReferenceLine
             x={0}
@@ -169,8 +238,9 @@ export function CurveChart({ points, bedtimeMinutes, minTempF, maxTempF }: Curve
             strokeWidth={2.5}
             fill={`url(#${gradientId})`}
             fillOpacity={0.15}
-            dot={false}
-            activeDot={{ r: 4, fill: '#fff', strokeWidth: 2, stroke: '#3b82f6' }}
+            dot={showDots ? renderDot : false}
+            activeDot={showDots ? false : { r: 4, fill: '#fff', strokeWidth: 2, stroke: '#3b82f6' }}
+            isAnimationActive={false}
           />
         </AreaChart>
       </ResponsiveContainer>

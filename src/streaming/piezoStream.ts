@@ -45,6 +45,15 @@ const WS_PORT = Number(process.env.PIEZO_WS_PORT ?? 3001)
 const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
 const FILE_POLL_INTERVAL_MS = 10 // match Python's 10 ms poll for new data
 const SEEK_MAX_DURATION_S = 30 // max seconds of data to replay on seek
+// Keep frame-index entries within the seek window plus a small margin so the
+// index stays bounded on long-running streams (24h at 50fps was ~70MB).
+const FRAME_INDEX_RETENTION_S = SEEK_MAX_DURATION_S + 10
+// Drop outbound frames for a client whose send buffer exceeds this many bytes.
+// Prevents a slow/stalled client from pinning unbounded server memory.
+const MAX_BUFFERED_BYTES = 1024 * 1024 // 1 MB
+// Cap inbound client messages. All client→server messages are tiny JSON
+// (subscribe / get_time_range / seek) — 1 KiB is well above the largest.
+const WS_MAX_PAYLOAD_BYTES = 1024
 
 // ---------------------------------------------------------------------------
 // In-memory sidecar index: maps timestamps to byte offsets in the current RAW
@@ -62,6 +71,58 @@ interface FrameIndexEntry {
 const frameIndex: FrameIndexEntry[] = []
 /** Path of the RAW file that `frameIndex` corresponds to. */
 let indexedFilePath: string | null = null
+
+/**
+ * Last seen capSense / capSense2 frame, kept as a cheap snapshot so
+ * server-side consumers (e.g. the virtual occupancy sensor in
+ * `src/lib/occupancy.ts`) can read the live channel readings without
+ * subscribing to the WebSocket stream from within the same process.
+ *
+ * Mutated in the live broadcast loop. Cleared on RAW file switch.
+ */
+export interface LatestCapSenseSnapshot {
+  /** Frame type as emitted by firmware. */
+  type: 'capSense' | 'capSense2'
+  /** Frame timestamp (unix seconds from firmware). */
+  ts: number
+  /** Wall-clock epoch ms when the snapshot was written. Used for staleness. */
+  receivedAtMs: number
+  /** Per-side channels — capSense (Pod 3) carries a scalar; capSense2 carries the
+   *  raw `[A1,A2,B1,B2,C1,C2,ref1,ref2]` array. */
+  left: number | number[]
+  right: number | number[]
+}
+
+let latestCapSenseSnapshot: LatestCapSenseSnapshot | null = null
+
+/**
+ * Read the most recent capSense / capSense2 frame seen on the live RAW stream.
+ * Returns null until the first frame arrives or after the RAW file switches.
+ *
+ * Consumers should treat a `receivedAtMs` older than ~30s as stale — capSense2
+ * frames arrive at ~2 Hz; long gaps mean the sensor or the streamer is down.
+ */
+export function getLatestCapSenseSnapshot(): LatestCapSenseSnapshot | null {
+  return latestCapSenseSnapshot
+}
+
+/**
+ * Append an entry and evict anything older than the seek-retention window.
+ * Seek is capped at `SEEK_MAX_DURATION_S` so older entries are unreachable.
+ * Called on every decoded frame — keep the hot path cheap (amortized O(1)).
+ */
+function appendFrameIndex(entry: FrameIndexEntry): void {
+  frameIndex.push(entry)
+  const cutoff = entry.ts - FRAME_INDEX_RETENTION_S
+  // Drop the prefix of entries older than the cutoff. Entries are monotonic
+  // in `ts` because frames are parsed in file order, so a single leading
+  // slice is correct. Batch the splice to avoid O(n) shift per push.
+  if (frameIndex.length > 0 && frameIndex[0].ts < cutoff) {
+    let drop = 0
+    while (drop < frameIndex.length && frameIndex[drop].ts < cutoff) drop += 1
+    if (drop > 0) frameIndex.splice(0, drop)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // CBOR record reader (TypeScript port of Python _read_raw_record)
@@ -185,6 +246,18 @@ function readRawRecord(
   return { data, nextOffset: pos }
 }
 
+/**
+ * Find the next outer-record marker (0xa2) at or after `from`. Returns the
+ * absolute buffer offset, or -1 if no marker exists in the remaining bytes.
+ *
+ * Used for resync after a malformed record — fast-forwarding to the next
+ * 0xa2 instead of advancing one byte at a time avoids log-spamming every
+ * null byte inside a partial piezo payload.
+ */
+function findNextRecordMarker(buf: Buffer, from: number): number {
+  return buf.indexOf(0xa2, from)
+}
+
 // ---------------------------------------------------------------------------
 // RAW file follower
 // ---------------------------------------------------------------------------
@@ -292,7 +365,42 @@ let wss: WebSocketServer | null = null
 let streamingInterval: ReturnType<typeof setInterval> | null = null
 
 /** Per-client sensor subscriptions. undefined = all types (default). */
-const clientSubscriptions = new WeakMap<WebSocket, Set<SensorType> | undefined>()
+const clientSubscriptions = new Map<WebSocket, Set<SensorType> | undefined>()
+/** Per-client count of frames dropped due to send-buffer backpressure. */
+const clientDroppedFrames = new Map<WebSocket, number>()
+
+/**
+ * Forget all per-client state. Must be called from the `close` handler so
+ * disconnected clients do not pin memory until the next GC cycle.
+ */
+function cleanupClient(ws: WebSocket): void {
+  clientSubscriptions.delete(ws)
+  clientDroppedFrames.delete(ws)
+}
+
+/**
+ * Send `payload` to `client` unless its send buffer already exceeds
+ * `MAX_BUFFERED_BYTES`. Returns true if sent, false if skipped. Skipping
+ * preserves the live stream for healthy clients when a single slow client
+ * would otherwise cause unbounded server memory growth.
+ */
+function sendWithBackpressure(client: WebSocket, payload: string): boolean {
+  if (client.readyState !== WebSocket.OPEN) return false
+  // Account for the pending payload — checking bufferedAmount alone lets each
+  // send push the buffer past MAX_BUFFERED_BYTES before the next call notices.
+  const payloadByteSize = Buffer.byteLength(payload)
+  if (client.bufferedAmount + payloadByteSize > MAX_BUFFERED_BYTES) {
+    clientDroppedFrames.set(client, (clientDroppedFrames.get(client) ?? 0) + 1)
+    return false
+  }
+  try {
+    client.send(payload)
+    return true
+  }
+  catch {
+    return false
+  }
+}
 
 function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
   try {
@@ -436,6 +544,7 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
     let bufPos = 0
     const maxTs = targetTs + SEEK_MAX_DURATION_S
     let done = false
+    let droppedDuringReplay = 0
 
     while (bufPos < seekBuffer.length && !done) {
       try {
@@ -457,19 +566,30 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
           const frameType = frame.type as string
           if (subs && !subs.has(frameType as SensorType)) continue
 
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(frame))
-          }
-          else {
+          if (ws.readyState !== WebSocket.OPEN) {
             done = true
             break
+          }
+          if (!sendWithBackpressure(ws, JSON.stringify(frame))) {
+            droppedDuringReplay += 1
           }
         }
       }
       catch (e) {
         if (e instanceof RangeError) break // incomplete record
-        bufPos += 1 // skip malformed byte, try to resync
+        const next = findNextRecordMarker(seekBuffer, bufPos + 1)
+        if (next < 0) break // no marker in remaining bytes
+        bufPos = next
       }
+    }
+
+    if (ws.readyState === WebSocket.OPEN) {
+      // Report partial replays so the client can re-seek if needed instead of
+      // assuming it received the full window.
+      ws.send(JSON.stringify({
+        type: 'seek_complete',
+        ...(droppedDuringReplay > 0 && { incomplete: true, droppedFrames: droppedDuringReplay }),
+      }))
     }
   }
   catch {
@@ -479,10 +599,6 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
       }
       catch { /* ignore */ }
     }
-  }
-
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'seek_complete' }))
   }
 }
 
@@ -513,7 +629,7 @@ function updatePollRate(): void {
 export function startPiezoStreamServer(): WebSocketServer {
   if (wss) return wss
 
-  wss = new WebSocketServer({ port: WS_PORT })
+  wss = new WebSocketServer({ port: WS_PORT, maxPayload: WS_MAX_PAYLOAD_BYTES })
   console.log(`[sensorStream] WebSocket server listening on port ${WS_PORT}`)
 
   // State for file tailing
@@ -528,7 +644,14 @@ export function startPiezoStreamServer(): WebSocketServer {
     ws.on('message', data => handleClientMessage(ws, data as Buffer | string))
 
     ws.on('close', () => {
-      console.log('[sensorStream] Client disconnected')
+      const dropped = clientDroppedFrames.get(ws) ?? 0
+      cleanupClient(ws)
+      if (dropped > 0) {
+        console.log(`[sensorStream] Client disconnected (dropped ${dropped} frames due to backpressure)`)
+      }
+      else {
+        console.log('[sensorStream] Client disconnected')
+      }
       updatePollRate()
     })
 
@@ -554,6 +677,9 @@ export function startPiezoStreamServer(): WebSocketServer {
       // Reset the sidecar frame index for the new file
       frameIndex.length = 0
       indexedFilePath = latest
+      // Drop the cached capSense snapshot — old file's last frame doesn't
+      // describe the current sensor state.
+      latestCapSenseSnapshot = null
     }
 
     // Read any new bytes appended since last read
@@ -599,7 +725,7 @@ export function startPiezoStreamServer(): WebSocketServer {
             // Record timestamp→offset mapping in the sidecar index
             const ts = frame.ts as number | undefined
             if (ts !== undefined) {
-              frameIndex.push({ ts, offset: recordFileOffset })
+              appendFrameIndex({ ts, offset: recordFileOffset })
             }
 
             // Broadcast to subscribed clients only
@@ -617,10 +743,36 @@ export function startPiezoStreamServer(): WebSocketServer {
 
                 // Lazy serialize — only if at least one client needs it
                 if (payload === null) payload = JSON.stringify(frame)
+                sendWithBackpressure(client, payload)
+              }
+            }
+
+            // Notify server-side listeners (only frzHealth currently has consumers)
+            if (frameType === 'frzHealth' && serverFrameListeners.size > 0) {
+              for (const cb of serverFrameListeners) {
                 try {
-                  client.send(payload)
+                  cb(frame as Record<string, unknown>)
                 }
-                catch { /* client gone between readyState check and send */ }
+                catch { /* consumer error */ }
+              }
+            }
+
+            // Update the live capSense snapshot for in-process readers (virtual
+            // occupancy sensor). Cheap O(1) copy of the small per-frame shape.
+            if (frameType === 'capSense' || frameType === 'capSense2') {
+              const left = (frame as { left: unknown }).left
+              const right = (frame as { right: unknown }).right
+              const ts = (frame as { ts: unknown }).ts
+              if (typeof ts === 'number'
+                && (typeof left === 'number' || Array.isArray(left))
+                && (typeof right === 'number' || Array.isArray(right))) {
+                latestCapSenseSnapshot = {
+                  type: frameType,
+                  ts,
+                  receivedAtMs: Date.now(),
+                  left: left as number | number[],
+                  right: right as number | number[],
+                }
               }
             }
           }
@@ -629,9 +781,21 @@ export function startPiezoStreamServer(): WebSocketServer {
           if (e instanceof RangeError) {
             break // incomplete record — wait for more data
           }
-          // Malformed record — skip forward one byte and try to resync
-          console.warn('[sensorStream] Skipping malformed record:', (e as Error).message)
-          bufferPos += 1
+          // Malformed record — fast-forward to the next 0xa2 marker. Avoids
+          // log-spamming every byte inside a partial piezo payload (the v1
+          // 0x00 nulls that motivated this) and recovers in O(remaining bytes).
+          const next = findNextRecordMarker(fileBuffer, bufferPos + 1)
+          if (next < 0) {
+            // No marker in remaining bytes — drop what we have and wait for
+            // more data on the next poll.
+            console.warn('[sensorStream] Resync: no 0xa2 marker in remaining %d bytes (%s)',
+              fileBuffer.length - bufferPos, (e as Error).message)
+            bufferPos = fileBuffer.length
+            break
+          }
+          console.warn('[sensorStream] Resync: skipped %d bytes to next record (%s)',
+            next - bufferPos, (e as Error).message)
+          bufferPos = next
         }
       }
 
@@ -654,11 +818,39 @@ export function startPiezoStreamServer(): WebSocketServer {
   return wss
 }
 
+// Server-side frame listeners — called for every decoded sensor frame.
+// Used by DeviceStateSync to record flow data without circular imports.
+type ServerFrameListener = (frame: Record<string, unknown>) => void
+const serverFrameListeners = new Set<ServerFrameListener>()
+
+/** Register a callback invoked for every decoded sensor frame. Returns unsubscribe fn. */
+export function onServerFrame(cb: ServerFrameListener): () => void {
+  serverFrameListeners.add(cb)
+  return () => {
+    serverFrameListeners.delete(cb)
+  }
+}
+
 /**
  * Broadcast a JSON message to all connected WS clients that are subscribed
  * to the given sensor type. Used by dacMonitor to push device status frames.
+ *
+ * Also fans out to in-process server-side listeners (onServerFrame) for every
+ * frame type. The MQTT bridge subscribes here to mirror deviceStatus frames
+ * to HA without waiting on the 30 s timer; previously this path only fired
+ * inside the file-decoder loop and was gated to frzHealth, so frames produced
+ * by broadcastFrame() (deviceStatus, etc.) never reached server listeners.
  */
 export function broadcastFrame(frame: Record<string, unknown>): void {
+  if (serverFrameListeners.size > 0) {
+    for (const cb of serverFrameListeners) {
+      try {
+        cb(frame)
+      }
+      catch { /* consumer error */ }
+    }
+  }
+
   const server = wss
   if (!server || server.clients.size === 0) return
 
@@ -672,11 +864,25 @@ export function broadcastFrame(frame: Record<string, unknown>): void {
     if (subs && !subs.has(frameType as SensorType)) continue
 
     if (payload === null) payload = JSON.stringify(frame)
-    try {
-      client.send(payload)
-    }
-    catch { /* client gone between readyState check and send */ }
+    sendWithBackpressure(client, payload)
   }
+}
+
+/**
+ * Internal hooks exposed for unit tests. Not part of the public API — the
+ * `__test__` prefix keeps them out of autocomplete for production callers.
+ */
+export const __test__ = {
+  appendFrameIndex,
+  cleanupClient,
+  sendWithBackpressure,
+  get frameIndex(): readonly FrameIndexEntry[] { return frameIndex },
+  clientSubscriptions,
+  clientDroppedFrames,
+  FRAME_INDEX_RETENTION_S,
+  MAX_BUFFERED_BYTES,
+  WS_MAX_PAYLOAD_BYTES,
+  resetFrameIndex(): void { frameIndex.length = 0 },
 }
 
 /**
@@ -694,6 +900,10 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
     wss = null
     return new Promise<void>((resolve) => {
       server.close(() => {
+        // Drop per-client state explicitly — relying on per-socket close
+        // events leaks if any handler failed to fire.
+        clientSubscriptions.clear()
+        clientDroppedFrames.clear()
         console.log('[sensorStream] WebSocket server closed')
         resolve()
       })

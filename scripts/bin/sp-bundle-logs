@@ -1,0 +1,232 @@
+#!/bin/bash
+set -uo pipefail
+
+# sp-bundle-logs — one-shot diagnostic capture for support handoffs.
+#
+# Produces /tmp/sleepypod-bundle-<ts>.tar.gz with journals, systemctl status,
+# pod capabilities, raw frame routing, network state, and version info.
+# Designed to be shared
+# verbatim on Discord/GitHub, so secrets in .env and HomeKit pairing state
+# are redacted by default. Pass --no-redact for self-debugging when you
+# actually want the raw bytes.
+#
+# Usage:
+#   sp-bundle-logs              # redacted bundle
+#   sp-bundle-logs --no-redact  # include raw .env / homekit identity
+
+REDACT=true
+for arg in "$@"; do
+  case "$arg" in
+    --no-redact) REDACT=false ;;
+    -h|--help)
+      sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      echo "Usage: sp-bundle-logs [--no-redact]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+INSTALL_DIR="/home/dac/sleepypod-core"
+DATA_DIR="/persistent/sleepypod-data"
+HOMEKIT_DIR="$DATA_DIR/homekit"
+INSTALL_LOG="/tmp/sleepypod-install.log"
+
+TS="$(date +%Y%m%d-%H%M%S)"
+STAGE="$(mktemp -d -t sleepypod-bundle.XXXXXX)"
+OUT="/tmp/sleepypod-bundle-${TS}.tar.gz"
+trap 'rm -rf "$STAGE"' EXIT
+
+# Each capture wraps a command and tolerates non-zero exits — the goal is
+# best-effort collection across pods with varying tool availability (e.g.
+# Pod 3 has no `pnpm` until install completes), not a clean run.
+capture() {
+  local out="$STAGE/$1"; shift
+  mkdir -p "$(dirname "$out")"
+  {
+    echo "$ $*"
+    "$@" 2>&1
+    echo "(exit: $?)"
+  } > "$out"
+}
+
+# --- service journals (boot-scoped) ---------------------------------------
+SERVICES=(
+  sleepypod.service
+  sleepypod-piezo-processor.service
+  sleepypod-sleep-detector.service
+  sleepypod-environment-monitor.service
+  sleepypod-cover-buttons.service
+  sleepypod-calibrator.service
+  sleepypod-biometrics-archiver.service
+  sleepypod-biometrics-pruner.service
+  sleepypod-tmpfs-prep.service
+  sleepypod-archive-push.service
+)
+
+for svc in "${SERVICES[@]}"; do
+  capture "journals/$svc.log" journalctl -u "$svc" -b --no-pager
+  capture "status/$svc.txt"   systemctl status "$svc" --no-pager
+done
+
+# --- pod capabilities -----------------------------------------------------
+# Source detect first so POD_GEN is set, then capabilities script populates
+# the rest. Both live under scripts/pod/ on the installed tree.
+if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
+  {
+    set +u
+    # shellcheck disable=SC1091
+    [ -f "$INSTALL_DIR/scripts/pod/detect" ] && source "$INSTALL_DIR/scripts/pod/detect"
+    # shellcheck disable=SC1091
+    source "$INSTALL_DIR/scripts/pod/capabilities"
+    print_pod_capabilities
+    set -u
+  } > "$STAGE/capabilities.txt" 2>&1
+fi
+
+# --- network state --------------------------------------------------------
+capture "network/iptables-save.txt"    iptables-save
+capture "network/ip-route.txt"         ip route
+capture "network/ip-addr.txt"          ip -4 addr
+capture "network/resolv.conf"          cat /etc/resolv.conf
+capture "network/nsswitch.conf"        cat /etc/nsswitch.conf
+capture "network/hosts.txt"            cat /etc/hosts
+
+# --- host state -----------------------------------------------------------
+capture "host/uptime.txt"              uptime
+capture "host/free.txt"                free -m
+capture "host/df-persistent.txt"       df -h /persistent
+capture "host/df-root.txt"             df -h /
+capture "host/uname.txt"               uname -a
+
+# --- versions -------------------------------------------------------------
+capture "versions/node.txt"  bash -c 'node -v || true; which node'
+capture "versions/pnpm.txt"  bash -c 'pnpm -v || true; which pnpm'
+capture "versions/uv.txt"    bash -c 'uv --version || true; which uv'
+
+# git HEAD / status from the installed source tree.
+if [ -d "$INSTALL_DIR/.git" ]; then
+  capture "versions/git-head.txt"   git -C "$INSTALL_DIR" rev-parse HEAD
+  capture "versions/git-branch.txt" git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD
+  capture "versions/git-status.txt" git -C "$INSTALL_DIR" status --porcelain=v1
+else
+  # CI/release installs ship without .git; use the generated marker file.
+  capture "versions/git-info.txt" cat "$INSTALL_DIR/.git-info"
+fi
+
+# --- data directory listing ----------------------------------------------
+capture "data/ls-sleepypod-data.txt" ls -la "$DATA_DIR"
+capture "data/ls-homekit.txt"        ls -la "$HOMEKIT_DIR"
+capture "data/ls-modules.txt"        ls -la /opt/sleepypod/modules
+
+# --- raw frame routing ----------------------------------------------------
+# The most common "biometrics are empty" cause is readers tailing a
+# different directory than the firmware writes .RAW frames to. Pod 3
+# firmware and the Pod 5 tmpfs redirect both land in /persistent/biometrics;
+# a stale unit defaults to /persistent and only sees the 16-byte SEQNO.RAW
+# bookkeeping file. Capture where frames actually land, where each reader
+# looks, and the tmpfs mount state so this is diagnosable from the bundle
+# alone instead of asking the user to hand-run probes.
+mkdir -p "$STAGE/raw"
+capture "raw/ls-persistent-RAW.txt" bash -c 'ls -la /persistent/*.RAW 2>&1'
+capture "raw/ls-biometrics.txt"     bash -c 'ls -la /persistent/biometrics/ 2>&1'
+capture "raw/mounts.txt"            bash -c 'mount | grep -iE "persistent|biometrics|tmpfs" || true'
+
+# Where is the firmware actually writing? Resolve its open .RAW fds.
+{
+  echo "$ readlink /proc/<frankenfirmware>/fd/*"
+  fw_pid="$(pgrep frankenfirmware 2>/dev/null | head -1)"
+  echo "frankenfirmware pid: ${fw_pid:-not running}"
+  if [ -n "${fw_pid:-}" ]; then
+    for fd in /proc/"$fw_pid"/fd/*; do
+      tgt="$(readlink "$fd" 2>/dev/null || true)"
+      case "$tgt" in *.RAW) echo "writing: $tgt" ;; esac
+    done
+  fi
+} > "$STAGE/raw/firmware-open-files.txt" 2>&1
+
+# Effective RAW_DATA_DIR each reader resolves (inline Environment + drop-ins).
+# Filter to RAW_DATA_DIR only — the full Environment property can carry
+# secrets and would break the bundle's safe-to-share default. Strip the
+# `Environment=` property prefix first so the match works regardless of
+# which position RAW_DATA_DIR holds in the unit.
+for svc in sleepypod sleepypod-piezo-processor sleepypod-sleep-detector \
+           sleepypod-environment-monitor sleepypod-calibrator; do
+  capture "raw/env-$svc.txt" bash -c \
+    'systemctl show -p Environment "$1.service" | sed "s/^Environment=//" | tr " " "\n" | grep -E "^RAW_DATA_DIR=" || true' _ "$svc"
+done
+
+# --- install log ---------------------------------------------------------
+if [ -f "$INSTALL_LOG" ]; then
+  cp "$INSTALL_LOG" "$STAGE/sleepypod-install.log"
+fi
+
+# --- env + homekit identity (redactable) ---------------------------------
+mkdir -p "$STAGE/config"
+if [ -f "$INSTALL_DIR/.env" ]; then
+  if [ "$REDACT" = true ]; then
+    # Replace values for any key whose name suggests it's a credential.
+    # Allowlist of always-safe keys would be more reliable than this
+    # blocklist, but new envvars get added often; redacting on suffix
+    # match errs on the side of leaking nothing.
+    awk -F= '
+      /^[[:space:]]*#/ || NF < 2 { print; next }
+      {
+        key = $1
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+        upper = toupper(key)
+        if (upper ~ /(TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL|API)/) {
+          print key "=<redacted>"
+        } else {
+          print
+        }
+      }
+    ' "$INSTALL_DIR/.env" > "$STAGE/config/.env"
+  else
+    cp "$INSTALL_DIR/.env" "$STAGE/config/.env"
+  fi
+fi
+
+if [ -d "$HOMEKIT_DIR" ]; then
+  if [ "$REDACT" = true ]; then
+    # identity.json contains pincode + setupId. Capture only structural
+    # facts (presence, paired-controller count) so we can still diagnose
+    # bridge problems without leaking pairing material.
+    {
+      echo "homekit directory contents:"
+      ls -la "$HOMEKIT_DIR" 2>&1
+      echo ""
+      [ -f "$HOMEKIT_DIR/identity.json" ] \
+        && echo "identity.json: present (redacted)" \
+        || echo "identity.json: missing"
+      paired=$(find "$HOMEKIT_DIR" -maxdepth 1 -name 'AccessoryInfo.*.json' 2>/dev/null | wc -l)
+      echo "AccessoryInfo files: $paired"
+    } > "$STAGE/config/homekit-summary.txt"
+  else
+    mkdir -p "$STAGE/config/homekit"
+    cp -r "$HOMEKIT_DIR/." "$STAGE/config/homekit/" 2>/dev/null || true
+  fi
+fi
+
+# --- pack -----------------------------------------------------------------
+if ! tar -czf "$OUT" -C "$STAGE" .; then
+  echo "Error: failed to create diagnostic bundle at $OUT" >&2
+  rm -f "$OUT"
+  exit 1
+fi
+SIZE=$(du -h "$OUT" 2>/dev/null | awk '{print $1}')
+
+echo ""
+echo "Bundle written: $OUT ($SIZE)"
+if [ "$REDACT" = true ]; then
+  echo "Redaction: ON (.env credentials masked, homekit pairing material excluded)"
+  echo "  Re-run with --no-redact for raw bytes."
+else
+  echo "Redaction: OFF — do NOT share publicly."
+fi
+echo ""
+echo "Off-pod copy:"
+echo "  scp -P 8822 root@<pod>:$OUT ."

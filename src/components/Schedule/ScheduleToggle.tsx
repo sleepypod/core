@@ -7,34 +7,29 @@ interface ScheduleToggleProps {
   enabled: boolean
   /** Called when user toggles the switch */
   onToggle: () => void
-  /** Number of days affected by this toggle */
-  affectedDayCount: number
   /** Whether a mutation is in-flight */
   isLoading?: boolean
 }
 
-/**
- * Schedule enable/disable toggle card.
- * Shows "Schedule Active" with a toggle switch.
- * When multiple days are selected, shows how many days will be affected.
- */
 export function ScheduleToggle({
   enabled,
   onToggle,
-  affectedDayCount,
   isLoading = false,
 }: ScheduleToggleProps) {
   return (
     <div className="rounded-xl bg-zinc-900 px-4 py-3">
       <div className="flex items-center justify-between">
         <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium text-white">
-            Schedule Active
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-white">Schedule</span>
+            <span className={cn(
+              'inline-block h-2 w-2 rounded-full',
+              enabled ? 'bg-emerald-400' : 'bg-zinc-600',
+            )}
+            />
+          </div>
           <span className="text-xs text-zinc-400">
-            {affectedDayCount > 1
-              ? `Applies to ${affectedDayCount} selected days`
-              : 'Automatically adjust temperature'}
+            Automatically control power and temperature
           </span>
         </div>
 

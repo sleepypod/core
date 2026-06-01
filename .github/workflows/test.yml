@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  push:
+    branches: [dev]
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,11 +15,15 @@ jobs:
   ci:
     name: ${{ matrix.task.name }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
         task:
-          - { name: "Lint", cmd: "CHANGED=$(git diff --name-only --diff-filter=d origin/${{ github.event.pull_request.base.ref }}...HEAD -- '*.ts' '*.tsx' | head -200); if [ -n \"$CHANGED\" ]; then echo \"$CHANGED\" | xargs pnpm eslint; else echo 'No TS/TSX files changed'; fi" }
+          - { name: "Lint", cmd: "CHANGED=$(git diff --name-only --diff-filter=d origin/${{ github.event.pull_request.base.ref }}...HEAD -- '*.ts' '*.tsx' | head -200); if [ -n \"$CHANGED\" ]; then echo \"$CHANGED\" | xargs -d '\\n' pnpm eslint --; else echo 'No TS/TSX files changed'; fi" }
           - { name: "Typecheck", cmd: "pnpm tsc" }
           - { name: "Unit Tests", cmd: "pnpm test run --coverage --passWithNoTests" }
 
@@ -27,14 +34,14 @@ jobs:
           fetch-depth: 0
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           run_install: false
 
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: "lts/*"
+          node-version-file: '.node-version'
           cache: 'pnpm'
           registry-url: 'https://npm.pkg.github.com'
 
@@ -54,3 +61,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_ENV: test
+
+      - name: Upload coverage reports to Codecov
+        if: matrix.task.name == 'Unit Tests' && !cancelled()
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          slug: sleepypod/core
+          flags: javascript
+
+      - name: Upload test results to Codecov
+        if: matrix.task.name == 'Unit Tests' && !cancelled()
+        uses: codecov/test-results-action@v1
+        with:
+          use_oidc: true
+          slug: sleepypod/core
+          files: test-results/junit.xml
+          flags: javascript

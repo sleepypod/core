@@ -9,6 +9,24 @@ import type {
 } from './types'
 
 /**
+ * Job types for which transient hardware failures should be retried.
+ * A failed set-point otherwise silently loses the user's target until the
+ * next scheduled point, potentially hours later.
+ */
+const HARDWARE_JOB_TYPES: ReadonlySet<JobType> = new Set([
+  JobType.TEMPERATURE,
+  JobType.POWER_ON,
+  JobType.POWER_OFF,
+  JobType.ALARM,
+  JobType.LED_BRIGHTNESS,
+  JobType.RUN_ONCE,
+  JobType.AWAY_MODE,
+])
+
+const HARDWARE_RETRY_ATTEMPTS = 3
+const HARDWARE_RETRY_BASE_DELAY_MS = 500
+
+/**
  * Job scheduler service for automated pod control
  */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
@@ -20,6 +38,14 @@ export class Scheduler extends EventEmitter {
   constructor(config: SchedulerConfig) {
     super()
     this.config = config
+  }
+
+  /**
+   * Read the currently configured timezone. Exposed so callers (e.g. JobManager)
+   * can convert wall-clock times to the user's zone without reaching into config.
+   */
+  getTimezone(): string {
+    return this.config.timezone
   }
 
   /**
@@ -42,7 +68,7 @@ export class Scheduler extends EventEmitter {
         rule: cronExpression,
       },
       async () => {
-        const result = await this.executeJob(id, handler)
+        const result = await this.executeJob(id, type, handler)
         this.emit('jobExecuted', id, result)
       }
     )
@@ -79,7 +105,7 @@ export class Scheduler extends EventEmitter {
     this.cancelJob(id)
 
     const job = schedule.scheduleJob(fireDate, async () => {
-      const result = await this.executeJob(id, handler)
+      const result = await this.executeJob(id, type, handler)
       this.emit('jobExecuted', id, result)
       this.jobs.delete(id)
     })
@@ -94,6 +120,7 @@ export class Scheduler extends EventEmitter {
       schedule: fireDate.toISOString(),
       job,
       metadata,
+      oneTime: true,
     }
 
     this.jobs.set(id, scheduledJob)
@@ -102,22 +129,42 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
-   * Execute a job and handle errors
+   * Execute a job and handle errors. Hardware-category jobs get bounded retries
+   * with exponential backoff so a single transient failure doesn't strand the
+   * user's bed at the wrong temperature until the next scheduled point.
    */
   private async executeJob(
     id: string,
+    type: JobType,
     handler: () => Promise<void>
   ): Promise<JobExecutionResult> {
     const timestamp = new Date()
     this.inFlightJobs.add(id)
 
+    const maxAttempts = HARDWARE_JOB_TYPES.has(type) ? HARDWARE_RETRY_ATTEMPTS : 1
+    let lastError: unknown
+
     try {
-      await handler()
-      return { success: true, timestamp }
-    }
-    catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      this.emit('jobError', id, error as Error)
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          await handler()
+          return { success: true, timestamp }
+        }
+        catch (error) {
+          lastError = error
+          if (attempt < maxAttempts) {
+            const delay = HARDWARE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1)
+            console.warn(
+              `Job ${id} attempt ${attempt}/${maxAttempts} failed, retrying in ${delay}ms:`,
+              error instanceof Error ? error.message : String(error),
+            )
+            await new Promise(resolve => setTimeout(resolve, delay))
+          }
+        }
+      }
+
+      const errorMessage = lastError instanceof Error ? lastError.message : String(lastError)
+      this.emit('jobError', id, lastError as Error)
       return { success: false, error: errorMessage, timestamp }
     }
     finally {
@@ -174,12 +221,13 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
-   * Cancel all recurring (cron) jobs, preserving one-time run-once jobs.
-   * Used by reloadSchedules to avoid dropping active run-once sessions.
+   * Cancel all recurring (cron) jobs, preserving one-time fire-date jobs.
+   * Used by reloadSchedules to avoid dropping active one-shots (run-once
+   * sessions, away-mode start/return transitions) whose Date has not yet passed.
    */
   cancelRecurringJobs(): void {
     for (const [id, scheduledJob] of this.jobs.entries()) {
-      if (scheduledJob.type === JobType.RUN_ONCE) continue
+      if (scheduledJob.oneTime) continue
       scheduledJob.job.cancel()
       this.emit('jobCancelled', id)
       this.jobs.delete(id)
@@ -215,33 +263,24 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
-   * Update scheduler configuration
+   * Update scheduler configuration.
+   *
+   * NOTE: Timezone changes require the caller to invoke a full reload
+   * (e.g. JobManager.reloadSchedules) because existing cron jobs are bound
+   * to their original tz at creation time and cannot be rebound in place
+   * without re-scheduling. Callers that change the timezone without
+   * following up with a reload will see stale jobs firing on the old zone.
+   * Use JobManager.updateTimezone for the safe path.
    */
   updateConfig(config: Partial<SchedulerConfig>): void {
-    // Store old timezone before updating config
     const oldTimezone = this.config.timezone
-
-    // Update config
     this.config = { ...this.config, ...config }
 
-    // Reschedule all jobs with new config if timezone changed
     if (config.timezone != null && config.timezone !== oldTimezone) {
-      this.rescheduleAllJobs()
-    }
-  }
-
-  /**
-   * Reschedule all jobs (useful after timezone change)
-   */
-  private rescheduleAllJobs(): void {
-    const jobs = Array.from(this.jobs.values())
-
-    for (const scheduledJob of jobs) {
-      // This would require storing the original handler
-      // For now, jobs need to be manually rescheduled
-      console.warn(
-        `Job ${scheduledJob.id} needs to be manually rescheduled after timezone change`
-      )
+      // Existing cron jobs still carry the old tz — cancel them now so
+      // they cannot fire on stale offsets before the caller reloads.
+      // One-time jobs (scheduled at absolute Date) are fine as-is.
+      this.cancelRecurringJobs()
     }
   }
 

@@ -1,0 +1,126 @@
+#!/bin/bash
+# Shared iptables helpers for WAN access control.
+# Sourced by scripts/bin/sp-update at runtime.
+# NOTE: scripts/install has an inline copy of these functions because it needs
+# them before the source tree exists on disk (curl-pipe install case).
+
+SAVED_IPTABLES=""
+WAN_WAS_BLOCKED=false
+
+wan_is_blocked() {
+  # Check if the OUTPUT chain has a DROP rule (WAN is blocked)
+  iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
+}
+
+unblock_wan() {
+  echo "Temporarily unblocking WAN access..."
+  # Capture state verbatim. `|| true` would mask a failed save and
+  # quietly fall through to a minimal block_wan ruleset on restore —
+  # silent data loss. Fail loudly instead so the caller can bail.
+  if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+    echo "Error: iptables-save failed — refusing to unblock WAN." >&2
+    echo "$SAVED_IPTABLES" >&2
+    SAVED_IPTABLES=""
+    return 1
+  fi
+  if [ -z "$SAVED_IPTABLES" ]; then
+    echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
+    return 1
+  fi
+  iptables -F 2>/dev/null || true
+  iptables -X 2>/dev/null || true
+  iptables -t nat -F 2>/dev/null || true
+  iptables -t nat -X 2>/dev/null || true
+  echo "WAN unblocked."
+}
+
+restore_wan() {
+  if [ -n "$SAVED_IPTABLES" ]; then
+    echo "Restoring saved iptables rules..."
+    echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || block_wan
+  else
+    block_wan
+  fi
+}
+
+block_wan() {
+  echo "Re-blocking WAN access..."
+
+  # Flush first to avoid duplicate rules
+  iptables -F 2>/dev/null || true
+  iptables -X 2>/dev/null || true
+  iptables -t nat -F 2>/dev/null || true
+  iptables -t nat -X 2>/dev/null || true
+
+  # Flush conntrack so stale entries from the prior ruleset don't
+  # confuse the new chain (mid-rebuild SYN/ACKs would otherwise hit
+  # the DROP at the bottom on the first packet under the new rules).
+  # Safe: the RFC1918 LAN ACCEPTs below are stateless (no -m conntrack),
+  # so existing LAN connections recover on their next packet by matching
+  # the CIDR allow. The ESTABLISHED,RELATED rule loses its entries but
+  # that's fine — LAN traffic falls through to the stateless allow.
+  # WAN connections die, which is the intended block_wan effect.
+  if command -v conntrack &>/dev/null; then
+    conntrack -F &>/dev/null || true
+  fi
+
+  # Allow established connections
+  iptables -I INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+  # Allow LAN traffic (RFC 1918)
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+    iptables -A INPUT  -s "$cidr" -j ACCEPT
+    iptables -A OUTPUT -d "$cidr" -j ACCEPT
+  done
+
+  # Allow NTP
+  iptables -I OUTPUT -p udp --dport 123 -j ACCEPT
+  iptables -I INPUT  -p udp --sport 123 -j ACCEPT
+
+  # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp and _hap._tcp)
+  # IPv4 multicast (224.0.0.251); the matching IPv6 multicast (ff02::fb) is
+  # opened below if ip6tables is available.
+  iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT
+  iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT
+  iptables -I INPUT  -p udp --dport 5353 -j ACCEPT
+  iptables -I INPUT  -p udp --sport 5353 -j ACCEPT
+
+  # Allow HomeKit Accessory Protocol (HAP) bridge inbound on tcp/51827.
+  # Source-restricted to RFC1918 + link-local so a public IP misconfig can't
+  # expose the HAP listener to the WAN. Redundant with the RFC1918 LAN allow
+  # above, but explicit so future LAN tightening doesn't silently break iOS
+  # Home pairing.
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    iptables -I INPUT -p tcp -s "$cidr" --dport 51827 -j ACCEPT
+  done
+
+  # IPv6: iOS may discover/pair over IPv6 on dual-stack LANs. Mirror the
+  # HAP and mDNS allows so pairing doesn't fail when the controller picks
+  # an IPv6 path. HAP is source-restricted to link-local (fe80::/10) and
+  # ULA (fc00::/7); GUA traffic should never hit pairing. No-op on hosts
+  # without ip6tables.
+  if command -v ip6tables &>/dev/null; then
+    ip6tables -I INPUT  -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+    ip6tables -I OUTPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+    for cidr6 in fe80::/10 fc00::/7; do
+      ip6tables -I INPUT -p tcp -s "$cidr6" --dport 51827 -j ACCEPT 2>/dev/null || true
+    done
+  fi
+
+  # Allow loopback
+  iptables -A INPUT  -i lo -j ACCEPT
+  iptables -A OUTPUT -o lo -j ACCEPT
+
+  # Block everything else
+  iptables -A INPUT  -j DROP
+  iptables -A OUTPUT -j DROP
+
+  # Persist
+  if command -v iptables-save &>/dev/null; then
+    mkdir -p /etc/iptables
+    iptables-save > /etc/iptables/iptables.rules
+  fi
+
+  echo "WAN blocked."
+}

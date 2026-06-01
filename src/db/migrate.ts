@@ -1,10 +1,7 @@
-import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { db, sqlite } from './index'
 import { biometricsDb, closeBiometricsDatabase } from './biometrics'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /**
  * Run pending database migrations for all databases.
@@ -15,11 +12,11 @@ export async function runMigrations() {
     console.log('Running database migrations...')
 
     migrate(db, {
-      migrationsFolder: path.resolve(__dirname, 'migrations'),
+      migrationsFolder: path.resolve(process.cwd(), 'src/db/migrations'),
     })
 
     migrate(biometricsDb, {
-      migrationsFolder: path.resolve(__dirname, 'biometrics-migrations'),
+      migrationsFolder: path.resolve(process.cwd(), 'src/db/biometrics-migrations'),
     })
 
     console.log('✓ Database migrations completed successfully')
@@ -46,13 +43,16 @@ export async function seedDefaultData() {
       // Wrap all inserts in a transaction for atomicity
       // Note: better-sqlite3 transactions are synchronous — cannot use async/await
       db.transaction((tx) => {
-        // Insert default device settings
+        // Insert default device settings. pumpStallProtectionEnabled is set
+        // explicitly to false (opt-in): it acts on flow/RPM data not all pods
+        // report consistently, and a power-cutting feature must not default on.
         tx.insert(deviceSettings).values({
           id: 1,
           timezone: 'America/Los_Angeles',
           temperatureUnit: 'F',
           rebootDaily: false,
           primePodDaily: false,
+          pumpStallProtectionEnabled: false,
         }).run()
 
         // Insert default side settings

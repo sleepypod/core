@@ -1,0 +1,10 @@
+{
+  "name": "cover-buttons",
+  "version": "1.0.0",
+  "description": "TTC cover button press observability — logs top/middle/bottom presses to syslog",
+  "provides": [],
+  "writes": [],
+  "service": "sleepypod-cover-buttons.service",
+  "language": "python",
+  "minVersion": "1.0.0"
+}

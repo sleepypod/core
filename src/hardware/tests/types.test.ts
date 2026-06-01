@@ -117,6 +117,7 @@ describe('Enums', () => {
       expect(HardwareCommand.PRIME).toBe('13')
       expect(HardwareCommand.DEVICE_STATUS).toBe('14')
       expect(HardwareCommand.ALARM_CLEAR).toBe('16')
+      expect(HardwareCommand.ALARM_SOLO).toBe('17')
     })
   })
 

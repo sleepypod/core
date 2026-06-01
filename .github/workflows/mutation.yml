@@ -1,0 +1,460 @@
+name: Mutation Testing
+
+on:
+  # Manual trigger from Actions tab
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Override glob of files to mutate (blank = use shard default)'
+        required: false
+        default: ''
+  # Weekly full run, Saturday 06:00 UTC — off-peak and gives a fresh baseline
+  schedule:
+    - cron: '0 6 * * 6'
+  # Opt-in per PR via the `mutation-test` label
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: write # for PR comment with the mutation summary
+  issues: write # for the pinned weekly tracking issue
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutate:
+    # Only run on PR if the `mutation-test` label was just applied
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.label.name == 'mutation-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      # Don't cancel the whole matrix when one shard fails — the report
+      # from the healthy shard is still useful.
+      fail-fast: false
+      matrix:
+        shard:
+          # The --mutate CLI flag overrides the config's exclude patterns,
+          # so we repeat the exclusions here per shard. Keep these in sync
+          # with stryker.config.mjs's mutate: block. Each shard runs on
+          # its own runner in parallel; partition by module group so any
+          # single shard stays under the 90-min job timeout.
+          - name: services-scheduler
+            mutate: "src/services/**/*.ts,src/scheduler/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: hardware-lib
+            mutate: "src/hardware/**/*.ts,src/lib/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: homekit
+            mutate: "src/homekit/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: server
+            mutate: "src/server/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          # hooks/streaming/db split into three shards: a combined shard
+          # ran a 1049-test baseline (React jsdom overhead) and tripped
+          # the 90-min timeout on PR #590. Each split shard now has a
+          # smaller per-mutant test set under perTest coverage analysis.
+          - name: streaming
+            mutate: "src/streaming/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: hooks
+            mutate: "src/hooks/**/*.ts,src/hooks/**/*.tsx,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+          - name: db
+            mutate: "src/db/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
+    name: mutate (${{ matrix.shard.name }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Incremental cache, keyed per-shard so the two shards don't stomp
+      # on each other. `restore-keys` lets us fall back to older branch
+      # baselines or the trunk baseline when the current commit is new.
+      - name: Restore mutation-incremental cache
+        uses: actions/cache@v5
+        with:
+          path: reports/mutation/incremental.json
+          key: stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-
+            stryker-incremental-${{ matrix.shard.name }}-
+
+      - name: Run mutation tests
+        run: |
+          SCOPE="${{ inputs.scope }}"
+          SCOPE="${SCOPE:-${{ matrix.shard.mutate }}}"
+          pnpm stryker run --mutate "$SCOPE" --incremental
+
+      - name: Save mutation-incremental cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: reports/mutation/incremental.json
+          key: stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-${{ github.sha }}
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-report-${{ matrix.shard.name }}
+          path: reports/mutation/
+          retention-days: 30
+
+  summarize:
+    # Aggregate both shards' reports: PR comment on labeled PRs, pinned
+    # tracking issue on scheduled (weekly) runs. Runs when the mutate
+    # job completed (success or failure) so a partially-failed matrix
+    # still gets a report attached — but skips when mutate was skipped
+    # (e.g., a PR without the mutation-test label).
+    needs: mutate
+    if: ${{ !cancelled() && needs.mutate.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Download all shard reports
+        uses: actions/download-artifact@v8
+        with:
+          path: shards/
+          pattern: mutation-report-*
+
+      - name: Build aggregated hit list
+        run: |
+          node scripts/mutation-hitlist.mjs shards/ > /tmp/hitlist.md || true
+          # 30000 chars leaves headroom under GitHub's 65536-char issue body
+          # limit for the score table + footer that gets prepended.
+          head -c 30000 /tmp/hitlist.md > /tmp/hitlist-trunc.md
+          echo "" >> /tmp/hitlist-trunc.md
+          if [ "$(wc -c < /tmp/hitlist.md)" -gt 30000 ]; then
+            echo "*(truncated — full hit list in the \`mutation-hitlist\` artifact)*" >> /tmp/hitlist-trunc.md
+          fi
+
+      - name: Upload aggregated hit list
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-hitlist
+          path: reports/mutation/hitlist.md
+          retention-days: 30
+
+      - name: Comment on PR (labeled PR runs only)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = require('path')
+            const shards = fs.readdirSync('shards').map(name => {
+              const p = path.join('shards', name, 'mutation.json')
+              if (!fs.existsSync(p)) return { name, missing: true }
+              const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+              const mutants = Object.values(data.files ?? {}).flatMap(f => f.mutants ?? [])
+              const count = s => mutants.filter(m => m.status === s).length
+              return {
+                name: name.replace(/^mutation-report-/, ''),
+                total: mutants.length,
+                killed: count('Killed'),
+                survived: count('Survived'),
+                noCov: count('NoCoverage'),
+                timeout: count('Timeout'),
+                err: count('CompileError') + count('RuntimeError'),
+              }
+            })
+            const rows = shards.map(s => {
+              if (s.missing) return `| ${s.name} | — | — | — | — | — | — | (report missing) |`
+              const scoreBase = s.killed + s.survived + s.timeout + s.noCov
+              const score = scoreBase > 0 ? ((s.killed / scoreBase) * 100).toFixed(1) : '—'
+              return `| ${s.name} | ${score}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.err} | ${s.total} |`
+            }).join('\n')
+            const body = [
+              '## Mutation test report',
+              '',
+              '| Shard | Score | Killed | Survived | No cov | Timeout | Errors | Total |',
+              '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+              rows,
+              '',
+              'Full HTML reports: `mutation-report-<shard>` artifacts. Actionable hit list: `mutation-hitlist` artifact.',
+            ].join('\n')
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            })
+
+      - name: Update pinned tracking issue (scheduled runs only)
+        id: update-issue
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v7
+        env:
+          ISSUE_TITLE: '📊 Mutation testing — weekly baseline'
+        with:
+          script: |
+            const fs = require('fs')
+            const path = require('path')
+
+            // Aggregate per-shard tallies from the downloaded artifacts.
+            const shards = fs.readdirSync('shards').map(name => {
+              const p = path.join('shards', name, 'mutation.json')
+              if (!fs.existsSync(p)) return { name, missing: true }
+              const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+              const mutants = Object.values(data.files ?? {}).flatMap(f => f.mutants ?? [])
+              const count = s => mutants.filter(m => m.status === s).length
+              return {
+                name: name.replace(/^mutation-report-/, ''),
+                total: mutants.length,
+                killed: count('Killed'),
+                survived: count('Survived'),
+                noCov: count('NoCoverage'),
+                timeout: count('Timeout'),
+                err: count('CompileError') + count('RuntimeError'),
+              }
+            })
+
+            const totals = shards.reduce((acc, s) => {
+              if (s.missing) return acc
+              for (const k of ['total', 'killed', 'survived', 'noCov', 'timeout', 'err']) {
+                acc[k] += s[k] ?? 0
+              }
+              return acc
+            }, { total: 0, killed: 0, survived: 0, noCov: 0, timeout: 0, err: 0 })
+            const scoreBase = totals.killed + totals.survived + totals.timeout + totals.noCov
+            const score = scoreBase > 0 ? ((totals.killed / scoreBase) * 100).toFixed(1) : '—'
+
+            // Find-or-create the pinned issue by title. Search ALL
+            // states (open + closed) because a PR description saying
+            // "Closes #543" auto-closes the tracker — and on the next
+            // run an open-only lookup misses it, creating a duplicate
+            // (see #591 vs #543 from run 25976792103). We reopen below
+            // if the match is closed.
+            const title = process.env.ISSUE_TITLE
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              labels: 'mutation-testing',
+              per_page: 50,
+            })
+            const hit = existing.find(i => i.title === title)
+
+            // Parse previous score out of the prior body for delta display.
+            let deltaStr = ''
+            if (hit && hit.body) {
+              const m = hit.body.match(/\*\*Score:\*\* ([\d.]+|—)%/)
+              if (m && m[1] !== '—') {
+                const prev = Number(m[1])
+                const curr = Number(score)
+                if (!Number.isNaN(prev) && !Number.isNaN(curr)) {
+                  const diff = curr - prev
+                  const arrow = diff > 0.1 ? '↑' : diff < -0.1 ? '↓' : '→'
+                  deltaStr = ` (${arrow} ${diff >= 0 ? '+' : ''}${diff.toFixed(1)} vs prior)`
+                }
+              }
+            }
+
+            const shardRows = shards.map(s => {
+              if (s.missing) return `| ${s.name} | — | — | — | — | — | — | (missing) |`
+              const base = s.killed + s.survived + s.timeout + s.noCov
+              const sc = base > 0 ? ((s.killed / base) * 100).toFixed(1) : '—'
+              return `| ${s.name} | ${sc}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.err} | ${s.total} |`
+            }).join('\n')
+
+            // Embed the hit-list summary (truncated to fit GitHub issue limits).
+            let hitlist = ''
+            if (fs.existsSync('/tmp/hitlist-trunc.md')) {
+              hitlist = '\n\n---\n\n' + fs.readFileSync('/tmp/hitlist-trunc.md', 'utf8')
+            }
+
+            const ts = new Date().toISOString()
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const body = [
+              `**Score:** ${score}%${deltaStr}`,
+              '',
+              '### Per-shard breakdown',
+              '',
+              '| Shard | Score | Killed | Survived | No cov | Timeout | Errors | Total |',
+              '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+              shardRows,
+              '',
+              `- HTML reports: attached as \`mutation-report-<shard>\` artifacts on [run ${context.runId}](${runUrl}).`,
+              `- Hit list artifact: \`mutation-hitlist\` on the same run.`,
+              `- Last updated: ${ts} (commit \`${context.sha.slice(0, 7)}\`, trigger: \`${context.eventName}\`).`,
+              '',
+              '> This issue is updated automatically by `.github/workflows/mutation.yml` on each scheduled / manual mutation run. Do not edit the body — it will be overwritten. Comment freely to track work on surviving mutants.',
+              hitlist,
+            ].join('\n')
+
+            let issueNumber
+            if (hit) {
+              // Reopen if a "Closes #NNN" reference in a merged PR
+              // auto-closed the tracker — this issue is meant to live
+              // forever, not get retired by PR descriptions.
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: hit.number,
+                state: 'open',
+                body,
+              })
+              issueNumber = hit.number
+              core.info(`Updated pinned issue #${issueNumber}${hit.state === 'closed' ? ' (reopened)' : ''}`)
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['mutation-testing', 'tracking'],
+              })
+              issueNumber = created.data.number
+              core.info(`Created pinned issue #${issueNumber}`)
+            }
+
+            // Export for downstream notification / baseline-recording steps.
+            core.setOutput('score', score)
+            core.setOutput('delta', deltaStr)
+            core.setOutput('issue_number', String(issueNumber))
+            core.setOutput('survived', String(totals.survived))
+            core.setOutput('no_coverage', String(totals.noCov))
+            core.setOutput('killed', String(totals.killed))
+            core.setOutput('total', String(totals.total))
+
+      # Push notification so the weekly run isn't invisible. Fires on
+      # schedule and workflow_dispatch (manual reruns are rare and the
+      # ping is useful for verifying the webhook). PR-labeled runs are
+      # excluded so per-PR mutation tests don't spam the channel. Uses
+      # Discord's `<url>` syntax to suppress preview embeds so the
+      # message stays one line.
+      - name: Notify Discord
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.update-issue.outputs.score != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_MUTATION_WEBHOOK }}
+          SCORE: ${{ steps.update-issue.outputs.score }}
+          DELTA: ${{ steps.update-issue.outputs.delta }}
+          SURVIVED: ${{ steps.update-issue.outputs.survived }}
+          NO_COV: ${{ steps.update-issue.outputs.no_coverage }}
+          ISSUE_NUMBER: ${{ steps.update-issue.outputs.issue_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WEBHOOK" ]; then
+            echo "DISCORD_MUTATION_WEBHOOK secret is not set; skipping."
+            exit 0
+          fi
+          ISSUE_URL="${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUMBER}"
+          CONTENT="📊 Mutation **${SCORE}%**${DELTA} · ${SURVIVED} surviving · ${NO_COV} no-coverage · [run](<${RUN_URL}>) · [tracking](<${ISSUE_URL}>)"
+          jq -nc --arg content "$CONTENT" '{content: $content}' \
+            | curl -fsS -H "Content-Type: application/json" -X POST "$WEBHOOK" -d @-
+
+  # Permanent score history on a dedicated orphan branch. The 30-day
+  # artifact retention only gives a short trailing window; this branch
+  # carries score-history.jsonl forever for trend analysis, and a small
+  # latest.json for at-a-glance lookups (badges, dashboards, etc).
+  record-baseline:
+    needs: mutate
+    if: github.event_name == 'schedule' && !cancelled() && needs.mutate.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Download shard reports
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/shards/
+          pattern: mutation-report-*
+
+      - name: Compute aggregated row
+        id: compute
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = require('path')
+            const shards = fs.readdirSync('/tmp/shards').map(name => {
+              const p = path.join('/tmp/shards', name, 'mutation.json')
+              if (!fs.existsSync(p)) return null
+              const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+              const mutants = Object.values(data.files ?? {}).flatMap(f => f.mutants ?? [])
+              const count = s => mutants.filter(m => m.status === s).length
+              return {
+                killed: count('Killed'),
+                survived: count('Survived'),
+                noCov: count('NoCoverage'),
+                timeout: count('Timeout'),
+                compileError: count('CompileError'),
+                runtimeError: count('RuntimeError'),
+                total: mutants.length,
+              }
+            }).filter(Boolean)
+            const totals = shards.reduce((a, s) => {
+              for (const k of Object.keys(s)) a[k] = (a[k] || 0) + s[k]
+              return a
+            }, {})
+            const base = totals.killed + totals.survived + totals.timeout + totals.noCov
+            const score = base > 0 ? Number((totals.killed / base * 100).toFixed(2)) : 0
+            const row = {
+              date: new Date().toISOString(),
+              sha: context.sha,
+              run: context.runId,
+              score,
+              ...totals,
+            }
+            core.setOutput('row', JSON.stringify(row))
+
+      - name: Append to mutation-baseline branch
+        env:
+          ROW: ${{ steps.compute.outputs.row }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if git ls-remote --exit-code --heads origin mutation-baseline >/dev/null 2>&1; then
+            git fetch origin mutation-baseline
+            git checkout -B mutation-baseline origin/mutation-baseline
+          else
+            # First run ever: create the orphan branch with an empty tree.
+            git checkout --orphan mutation-baseline
+            git rm -rf . >/dev/null 2>&1 || true
+            echo '# Mutation testing baseline' > README.md
+            echo 'Auto-managed by .github/workflows/mutation.yml. Do not edit by hand.' >> README.md
+            git add README.md
+          fi
+
+          echo "$ROW" >> score-history.jsonl
+          echo "$ROW" > latest.json
+          git add score-history.jsonl latest.json
+          git commit -m "chore(mutation): record $(date -u +%Y-%m-%d) baseline"
+          git push origin mutation-baseline

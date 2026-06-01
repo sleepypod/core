@@ -1,0 +1,91 @@
+name: Branch Release
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - dev
+
+concurrency:
+  group: branch-release-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Compute branch slug
+        id: slug
+        run: |
+          SLUG="${GITHUB_REF_NAME//\//-}"
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+          echo "tag=${SLUG}-latest" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: SP_BRANCH="${{ github.ref_name }}" pnpm build
+
+      - name: Pin commit metadata into .git-info
+        # prebuild writes .git-info from `git rev-parse` in the CI checkout,
+        # but on-device fallback paths (no .git in tarball) regress to
+        # commitHash="unknown". Overwrite with explicit values from the
+        # GitHub event so the version endpoint always shows the real SHA.
+        run: |
+          jq -n \
+            --arg branch "${{ github.ref_name }}" \
+            --arg hash "${GITHUB_SHA:0:7}" \
+            --arg title "$(git log -1 --format=%s)" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{branch:$branch, commitHash:$hash, commitTitle:$title, buildDate:$date}' \
+            > .git-info
+
+      - name: Set install script default branch
+        run: sed -i "s|__BRANCH__|${{ github.ref_name }}|" scripts/install
+
+      - name: Create deploy tarball
+        run: |
+          tar czf /tmp/sleepypod-core.tar.gz \
+            --exclude='node_modules' \
+            --exclude='.git' \
+            --exclude='.env*' \
+            --exclude='*.db' \
+            --exclude='*.db-*' \
+            --exclude='test-results' \
+            --exclude='.serena' \
+            --exclude='.claude' \
+            .
+          mv /tmp/sleepypod-core.tar.gz .
+
+      - name: Publish rolling branch release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.slug.outputs.tag }}"
+          # --cleanup-tag drops the prior release + tag atomically. 404 (first
+          # push of a new branch) is expected; the `|| true` swallows it.
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" sleepypod-core.tar.gz \
+            --target "${{ github.sha }}" \
+            --title "Branch: ${{ github.ref_name }} (latest)" \
+            --notes "Rolling pre-built release from branch \`${{ github.ref_name }}\`.
+
+          **Commit:** ${{ github.sha }}
+          **Updated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --prerelease

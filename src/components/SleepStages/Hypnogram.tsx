@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef } from 'react'
 import type { SleepStage } from '@/src/lib/sleep-stages'
-import { STAGE_COLORS, STAGE_ORDER } from '@/src/lib/sleep-stages'
+import { STAGE_COLORS } from '@/src/lib/sleep-stages'
 
 interface HypnogramBlock {
   start: number

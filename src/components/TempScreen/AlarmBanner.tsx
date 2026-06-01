@@ -83,6 +83,7 @@ export const AlarmBanner = ({
   }
 
   const formatSnoozeRemaining = (snoozeUntilSec: number): string => {
+    // eslint-disable-next-line react-hooks/purity
     const remaining = Math.max(0, snoozeUntilSec - Math.floor(Date.now() / 1000))
     const mins = Math.ceil(remaining / 60)
     return `${mins}m`

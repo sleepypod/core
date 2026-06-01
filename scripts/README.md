@@ -11,6 +11,63 @@
 
 See main [installation guide](../docs/INSTALLATION.md) for hardware setup.
 
+## Getting root on Pod 5
+
+Initial root access on a Pod 5 is a JTAG bootstrap — there is no
+software-only escalation. At a high level: tear down to the circuit board,
+connect a TC2070-IDC + FTDI FT232RL to the JTAG header, open a 921600-baud
+serial console, interrupt U-Boot at the `Hit any key to stop autoboot`
+prompt, then:
+
+```text
+setenv bootargs "root=PARTLABEL=rootfs_a rootwait init=/bin/bash"
+run bootcmd
+# in the resulting single-user shell, mount /proc /sys /dev /run,
+# then `mount -o remount,rw /` and set passwords:
+passwd root
+passwd rewt
+sync
+reboot -f
+```
+
+After reboot, login at the serial console as `root` with the password you
+just set, disable software-update services (`swupdate`, `defibrillator`,
+`eight-kernel`, `telegraf`, `vector`, `frankenfirmware`, `dac`,
+`swupdate.socket`) via `systemctl disable --now` + `systemctl mask`, then
+join wifi with `nmcli connection add type wifi …` so the pod is reachable
+over LAN.
+
+A few names that trip people up on first contact:
+
+- **`rewt`** is a user account on the pod (Eight Sleep's stock service user
+  — has a shell), not a tool you run. You set its password during the JTAG
+  step and use it later for ssh when `PermitRootLogin no` blocks direct
+  root login.
+- **`dac`** is also a system account but ships as `nologin`. sshd will
+  refuse interactive logins for it; you'll see `dac not allowed` if you
+  try `ssh dac@<pod>`. Don't try to "fix" this — `dac` is only meant to
+  own the hardware-control daemon, not log in.
+- Stock Pod 5 sshd is locked down: `PermitRootLogin no`,
+  `PasswordAuthentication no`, no preinstalled `authorized_keys` for root.
+
+So the practical Pod 5 install flow after JTAG bootstrap is:
+
+```bash
+# From your laptop, with PasswordAuthentication=yes temporarily enabled
+# on the pod (default if you haven't touched sshd_config yet — it will be
+# `no` once the JTAG image is fully booted, in which case flip it back to
+# `yes` via the serial console and `systemctl restart sshd`).
+ssh -p 8822 rewt@<pod-ip>
+su -                              # password: whatever you set in JTAG step 7
+curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install | bash
+```
+
+The optional SSH-setup step at the end of the installer writes your public
+key to `/root/.ssh/authorized_keys` and re-hardens sshd (port 8822,
+key-only, no root password login, no empty passwords). After that first
+install Pod 5 behaves like Pod 4 — key-based root ssh on port 8822, no
+`rewt` user needed for updates.
+
 ## Installation
 
 Run on the pod:
@@ -21,25 +78,71 @@ curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install
 
 This will:
 1. **Pre-flight checks** - Verify disk space, network, dependencies
-2. **Detect dac.sock** - Auto-detect hardware socket location
-3. **Install Node.js 20** - Via nodesource repository
-4. **Clone repository** - From GitHub main branch
-5. **Install dependencies** - With `--frozen-lockfile` and `--ignore-scripts` for security
-6. **Build application** - Next.js production build
-7. **Database migrations** - Safe schema updates (not destructive push)
+2. **Download code** - From GitHub tarball (or use `--local`)
+3. **Detect pod generation** - Auto-detect dac.sock path and pod hardware (`scripts/pod/detect`)
+4. **Install Node.js 22** - Binary download (no apt required)
+5. **Install dependencies** - With `--frozen-lockfile`
+6. **Build application** - Next.js production build (skipped if pre-built)
+7. **Database migrations** - Run automatically on startup
 8. **Create systemd service** - With auto-restart and hardening
-9. **CLI shortcuts** - sp-status, sp-restart, sp-logs, sp-update
-10. **Start scheduler** - Automated temperature/power/alarm jobs
-11. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
+9. **Install CLI tools** - From `scripts/bin/` to `/usr/local/bin/`
+10. **Install uv** - Rust-based Python package manager (bypasses broken Yocto stdlib)
+11. **Install biometrics modules** - `uv sync` for each module + systemd services
+12. **Optional SSH setup** - Interactive prompt for SSH on port 8822 (keys only)
+
+### Install Flow
+
+```mermaid
+flowchart TD
+    Start([curl install | bash]) --> Preflight[Pre-flight checks\ndisk, network, deps]
+    Preflight --> Download{Code source?}
+
+    Download -->|--local| Local[Use code on disk]
+    Download -->|default| Release{CI release\navailable?}
+    Release -->|yes| Tarball[Download pre-built tarball]
+    Release -->|no| Source[Download source tarball\nfallback build on pod]
+
+    Local --> Detect
+    Tarball --> Detect
+    Source --> Detect
+
+    Detect[Detect pod generation\nscripts/pod/detect] --> Node[Install Node.js 22 + pnpm]
+    Node --> Deps[pnpm install --frozen-lockfile --prod]
+    Deps --> Build{.next exists?}
+    Build -->|yes| Skip[Skip build]
+    Build -->|no| BuildApp[pnpm build\n⚠️ needs ~1GB RAM]
+    Skip --> Env
+    BuildApp --> Env
+
+    Env[Write .env\nDAC_SOCK_PATH, DATABASE_URL] --> DB[Backup existing DB\nMigrations run on startup]
+    DB --> Service[Create systemd service\nstart sleepypod]
+    Service --> CLI[Install CLI tools\nscripts/bin/ → /usr/local/bin/]
+
+    CLI --> UV{uv\navailable?}
+    UV -->|no| InstallUV[Install uv\ncurl astral.sh]
+    UV -->|yes| Modules
+    InstallUV --> Modules
+
+    Modules[Install biometrics modules] --> UVSync[uv sync per module\ncreates .venv + installs deps]
+    UVSync --> ModService[Create module systemd services]
+
+    ModService --> SSH{Interactive\nterminal?}
+    SkipBio --> SSH
+    SSH -->|yes| SSHSetup[Optional SSH setup\nport 8822, keys only]
+    SSH -->|no| Done
+    SSHSetup --> Done([Installation complete])
+```
 
 ## CLI Commands
 
-After installation:
+After installation (installed from `scripts/bin/`):
 
 - `sp-status` - View service status
-- `sp-restart` - Restart sleepypod service
+- `sp-restart` - Restart sleepypod + reconnect frankenfirmware
 - `sp-logs` - View live logs
-- `sp-update` - Update to latest version
+- `sp-bundle-logs` - One-shot diagnostic capture (`/tmp/sleepypod-bundle-<ts>.tar.gz`); redacts secrets by default, pass `--no-redact` for raw
+- `sp-update` - Update to latest version from GitHub
+- `sp-uninstall` - Remove sleepypod and all related services
 
 ## Internet Control
 
@@ -106,6 +209,33 @@ After installation, sleepypod provides:
 - **Health Monitoring** - Scheduler status and hardware connectivity checks
 - **Timezone Support** - Full timezone awareness for all schedules
 
+## Script Structure
+
+```
+scripts/
+├── install                  # Core orchestrator
+├── lib/
+│   └── iptables-helpers     # Shared WAN/iptables functions (sourced by sp-update)
+├── pod/
+│   └── detect               # Pod detection: DAC_SOCK_PATH, POD_GEN
+├── bin/                     # CLI tools — copied to /usr/local/bin/ during install
+│   ├── sp-status
+│   ├── sp-restart
+│   ├── sp-logs
+│   ├── sp-bundle-logs
+│   ├── sp-update
+│   └── sp-uninstall
+├── deploy                   # Dev deploy (build local, push to pod)
+├── push                     # Fast push (pre-built .next only)
+└── internet-control         # WAN block/unblock utility
+```
+
+## Python Environment (uv)
+
+Biometrics modules use [uv](https://docs.astral.sh/uv/) for Python environment management. uv is a Rust-based tool that creates virtualenvs and installs packages without relying on Python's stdlib (`ensurepip`, `pyexpat`, etc.) — which are broken on Pod 3/4 Yocto images.
+
+Each module has a `pyproject.toml` and `uv.lock`. The install script runs `uv sync` per module, which creates a `.venv` and installs locked dependencies.
+
 ## File Locations
 
 - **Installation**: `/home/dac/sleepypod-core/`
@@ -123,7 +253,7 @@ sp-logs
 ```
 
 Common issues:
-- dac.sock path incorrect (check `/run/dac.sock` or `/var/run/dac.sock`)
+- dac.sock path incorrect (auto-detected from `frank.sh`: Pod 3/4 uses `/deviceinfo/dac.sock`, Pod 5 uses `/persistent/deviceinfo/dac.sock`)
 - Port 3000 already in use
 - Database initialization failed
 - Scheduler failing to start (check timezone in database)

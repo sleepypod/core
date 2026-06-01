@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   X,
   Sparkles,
@@ -11,14 +11,12 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  Loader2,
   Trash2,
   Plus,
   Minus,
   Save,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { trpc } from '@/src/utils/trpc'
 import {
   generatePrompt,
   parseAIResponse,
@@ -32,17 +30,18 @@ import { timeStringToMinutes } from '@/src/lib/sleepCurve/generate'
 import type { CurvePoint } from '@/src/lib/sleepCurve/types'
 import { CurveChart } from './CurveChart'
 import { PhaseLegend } from './PhaseLegend'
-import type { DayOfWeek } from './DaySelector'
-
-type Side = 'left' | 'right'
 
 interface AICurveWizardProps {
   open: boolean
   onClose: () => void
-  side: Side
-  selectedDays: Set<DayOfWeek>
-  onApplied?: (config: {
-    setPoints: Array<{ time: string, tempF: number }>
+  /**
+   * Called when the user accepts a generated curve. The parent loads the
+   * set points + bedtime/wake into local editor state — the wizard does not
+   * write the schedule directly. The user reviews and presses Save in the
+   * parent editor to persist.
+   */
+  onApply: (config: {
+    setPoints: Array<{ time: string, temperature: number }>
     bedtime: string
     wakeTime: string
   }) => void
@@ -52,9 +51,7 @@ type Step = 0 | 1 | 2 | 3
 
 const STEP_LABELS = ['Describe', 'Review', 'Import', 'Preview']
 
-// ─── Main Component ──────────────────────────────────────────────────
-
-export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: AICurveWizardProps) {
+export function AICurveWizard({ open, onClose, onApply }: AICurveWizardProps) {
   const [step, setStep] = useState<Step>(0)
   const [highestStep, setHighestStep] = useState<Step>(0)
 
@@ -72,25 +69,15 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
   // Step 4: Preview
   const [curve, setCurve] = useState<GeneratedCurve | null>(null)
   const [editablePoints, setEditablePoints] = useState<Array<{ time: string, tempF: number }>>([])
-  const [applying, setApplying] = useState(false)
-  const [applied, setApplied] = useState(false)
   const [savedTemplates, setSavedTemplates] = useState<CurveTemplate[]>([])
 
-  // tRPC
-  const utils = trpc.useUtils()
-  const createTempSchedule = trpc.schedules.createTemperatureSchedule.useMutation()
-  const deleteTempSchedule = trpc.schedules.deleteTemperatureSchedule.useMutation()
-  const createPowerSchedule = trpc.schedules.createPowerSchedule.useMutation()
-  const deletePowerSchedule = trpc.schedules.deletePowerSchedule.useMutation()
-
-  // Load templates on mount
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (open) {
       setSavedTemplates(loadTemplates())
     }
   }, [open])
 
-  // Reset on close
   useEffect(() => {
     if (!open) {
       setStep(0)
@@ -102,12 +89,9 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
       setParseResult(null)
       setCurve(null)
       setEditablePoints([])
-      setApplying(false)
-      setApplied(false)
     }
   }, [open])
 
-  // Auto-parse JSON input (debounced)
   useEffect(() => {
     if (!jsonInput.trim()) {
       setParseResult(null)
@@ -127,12 +111,10 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     }, 500)
     return () => clearTimeout(timer)
   }, [jsonInput])
-
-  // ── Step Navigation ──
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const goNext = useCallback(() => {
     if (step === 0) {
-      // Generate prompt
       const p = generatePrompt(preferences)
       setPrompt(p)
       const next: Step = 1
@@ -159,16 +141,12 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     if (target <= highestStep) setStep(target)
   }, [highestStep])
 
-  // Skip directly to Import (step 2) — user already has JSON
   const handleSkipToImport = useCallback(() => {
     setStep(2)
     setHighestStep(prev => Math.max(prev, 2) as Step)
   }, [])
 
-  // ── Actions ──
-
   const handleCopy = useCallback(async () => {
-    // Try clipboard API first (works on HTTPS / localhost)
     if (navigator.clipboard?.writeText) {
       try {
         await navigator.clipboard.writeText(prompt)
@@ -178,7 +156,6 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
       }
       catch { /* fall through */ }
     }
-    // Fallback: select the text in the prompt display so user can Cmd+C / long-press copy
     const el = document.getElementById('ai-prompt-text')
     if (el) {
       const range = document.createRange()
@@ -207,11 +184,9 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
       try {
         const text = await navigator.clipboard.readText()
         setJsonInput(text)
-        return
       }
       catch { /* fall through */ }
     }
-    // Can't read clipboard over HTTP — focus the textarea so user can paste manually
   }, [])
 
   const handleLoadTemplate = useCallback((template: CurveTemplate) => {
@@ -239,7 +214,6 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     setSavedTemplates(loadTemplates())
   }, [curve, editablePoints])
 
-  // Set point editing
   const updatePoint = useCallback((idx: number, field: 'time' | 'tempF', value: string | number) => {
     setEditablePoints((prev) => {
       const next = [...prev]
@@ -264,80 +238,29 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
     })
   }, [])
 
-  // Apply curve to schedule
-  const handleApply = useCallback(async () => {
+  const handleApply = useCallback(() => {
     if (!curve || editablePoints.length < 3) return
-    setApplying(true)
+    onApply({
+      setPoints: editablePoints.map(p => ({ time: p.time, temperature: p.tempF })),
+      bedtime: curve.bedtime,
+      wakeTime: curve.wake,
+    })
+    onClose()
+  }, [curve, editablePoints, onApply, onClose])
 
-    try {
-      const daysArray = Array.from(selectedDays)
-
-      for (const day of daysArray) {
-        const existing = await utils.schedules.getByDay.fetch({ side, dayOfWeek: day })
-
-        await Promise.all([
-          ...existing.temperature.map((s: { id: number }) =>
-            deleteTempSchedule.mutateAsync({ id: s.id }),
-          ),
-          ...existing.power.map((s: { id: number }) =>
-            deletePowerSchedule.mutateAsync({ id: s.id }),
-          ),
-        ])
-
-        await Promise.all([
-          ...editablePoints.map(p =>
-            createTempSchedule.mutateAsync({
-              side,
-              dayOfWeek: day,
-              time: p.time,
-              temperature: p.tempF,
-              enabled: true,
-            }),
-          ),
-          createPowerSchedule.mutateAsync({
-            side,
-            dayOfWeek: day,
-            onTime: curve.bedtime,
-            offTime: curve.wake,
-            onTemperature: editablePoints[0]?.tempF ?? 78,
-            enabled: true,
-          }) as Promise<unknown>,
-        ])
-      }
-
-      await utils.schedules.invalidate()
-      setApplied(true)
-      onApplied?.({
-        setPoints: editablePoints,
-        bedtime: curve.bedtime,
-        wakeTime: curve.wake,
-      })
-      setTimeout(() => onClose(), 1500)
-    }
-    catch (err) {
-      console.error('Failed to apply AI curve:', err)
-    }
-    finally {
-      setApplying(false)
-    }
-  }, [curve, editablePoints, selectedDays, side, utils, createTempSchedule, deleteTempSchedule, createPowerSchedule, deletePowerSchedule, onApplied, onClose])
-
-  // Temp range for display
   const tempRange = useMemo(() => {
     if (editablePoints.length === 0) return { min: 55, max: 110 }
     const temps = editablePoints.map(p => p.tempF)
     return { min: Math.min(...temps), max: Math.max(...temps) }
   }, [editablePoints])
 
-  // Convert editable set points → CurvePoint[] for chart
   const chartData = useMemo(() => {
     if (!curve || editablePoints.length < 2) return null
     const btMin = timeStringToMinutes(curve.bedtime)
 
-    // Compute minutesFromBedtime for each point, then sort by that (not by time string)
     const withRelative = editablePoints.map((p) => {
       let tMin = timeStringToMinutes(p.time) - btMin
-      if (tMin < -120) tMin += 24 * 60 // overnight wrap
+      if (tMin < -120) tMin += 24 * 60
       return { ...p, minutesFromBedtime: tMin }
     }).sort((a, b) => a.minutesFromBedtime - b.minutesFromBedtime)
 
@@ -355,7 +278,6 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
               : frac < 0.9
                 ? 'preWake' as const
                 : 'wake' as const
-
       return { minutesFromBedtime: p.minutesFromBedtime, tempOffset: p.tempF - 80, phase }
     })
 
@@ -366,12 +288,9 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
 
   return (
     <>
-      {/* Backdrop */}
-      <div className="fixed inset-0 z-40 bg-black/60" onClick={onClose} />
+      <div className="fixed inset-0 z-[60] bg-black/60" onClick={onClose} />
 
-      {/* Modal */}
-      <div className="fixed inset-x-0 bottom-0 z-50 flex max-h-[90dvh] flex-col rounded-t-2xl bg-zinc-900 shadow-xl sm:inset-x-auto sm:inset-y-4 sm:left-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:rounded-2xl">
-        {/* Header */}
+      <div className="fixed inset-x-0 bottom-0 z-[70] flex max-h-[90dvh] flex-col rounded-t-2xl bg-zinc-900 shadow-xl sm:inset-x-auto sm:inset-y-4 sm:left-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:rounded-2xl">
         <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
           <div className="flex items-center gap-2">
             <Sparkles size={16} className="text-cyan-400" />
@@ -382,7 +301,6 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
           </button>
         </div>
 
-        {/* Step indicator */}
         <div className="flex border-b border-zinc-800 px-4 py-2">
           {STEP_LABELS.map((label, i) => (
             <button
@@ -401,7 +319,6 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
           ))}
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-y-auto px-4 py-4">
           {step === 0 && (
             <StepDescribe
@@ -439,15 +356,11 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
               onAddPoint={addPoint}
               onRemovePoint={removePoint}
               onSaveTemplate={handleSaveTemplate}
-              applying={applying}
-              applied={applied}
-              dayCount={selectedDays.size}
               onApply={handleApply}
             />
           )}
         </div>
 
-        {/* Footer nav */}
         <div className="flex items-center justify-between border-t border-zinc-800 px-4 py-3">
           <button
             onClick={goBack}
@@ -498,8 +411,6 @@ export function AICurveWizard({ open, onClose, side, selectedDays, onApplied }: 
   )
 }
 
-// ─── Step 1: Describe ────────────────────────────────────────────────
-
 function StepDescribe({
   preferences,
   onPreferencesChange,
@@ -528,7 +439,6 @@ function StepDescribe({
         />
       </div>
 
-      {/* Example suggestions */}
       <div className="space-y-1.5">
         <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Try an example</p>
         {EXAMPLE_SUGGESTIONS.map(suggestion => (
@@ -542,7 +452,6 @@ function StepDescribe({
         ))}
       </div>
 
-      {/* Saved templates */}
       {templates.length > 0 && (
         <div className="space-y-1.5">
           <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Saved Curves</p>
@@ -574,8 +483,6 @@ function StepDescribe({
     </div>
   )
 }
-
-// ─── Step 2: Review ──────────────────────────────────────────────────
 
 function StepReview({
   prompt,
@@ -647,8 +554,6 @@ function StepReview({
   )
 }
 
-// ─── Step 3: Import ──────────────────────────────────────────────────
-
 function StepImport({
   jsonInput,
   onJsonInputChange,
@@ -683,7 +588,6 @@ function StepImport({
         Paste from Clipboard
       </button>
 
-      {/* Parse result */}
       {parseResult && (
         parseResult.success
           ? (
@@ -718,8 +622,6 @@ function StepImport({
   )
 }
 
-// ─── Step 4: Preview ─────────────────────────────────────────────────
-
 function StepPreview({
   curve,
   editablePoints,
@@ -729,9 +631,6 @@ function StepPreview({
   onAddPoint,
   onRemovePoint,
   onSaveTemplate,
-  applying,
-  applied,
-  dayCount,
   onApply,
 }: {
   curve: GeneratedCurve
@@ -742,14 +641,10 @@ function StepPreview({
   onAddPoint: () => void
   onRemovePoint: (idx: number) => void
   onSaveTemplate: () => void
-  applying: boolean
-  applied: boolean
-  dayCount: number
   onApply: () => void
 }) {
   return (
     <div className="space-y-4">
-      {/* Curve name + time badge */}
       <div className="flex items-center justify-between">
         <span className="text-sm font-semibold text-white">{curve.name}</span>
         <span className="rounded-full bg-zinc-800 px-2.5 py-1 text-[10px] font-medium text-zinc-400">
@@ -760,7 +655,6 @@ function StepPreview({
         </span>
       </div>
 
-      {/* Temperature curve chart */}
       {chartData && (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
           <CurveChart
@@ -775,14 +669,12 @@ function StepPreview({
         </div>
       )}
 
-      {/* Reasoning callout */}
       {curve.reasoning && (
         <div className="rounded-xl border border-zinc-800 bg-zinc-800/30 px-3 py-2.5">
           <p className="text-[11px] leading-relaxed text-zinc-400">{curve.reasoning}</p>
         </div>
       )}
 
-      {/* Set point list */}
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
@@ -809,7 +701,6 @@ function StepPreview({
                 idx > 0 && 'border-t border-zinc-800/50',
               )}
             >
-              {/* Time */}
               <input
                 type="time"
                 value={point.time}
@@ -817,7 +708,6 @@ function StepPreview({
                 className="w-20 rounded bg-zinc-800 px-2 py-1 text-xs text-white [color-scheme:dark]"
               />
 
-              {/* Temp bar visual */}
               <div className="flex flex-1 items-center gap-2">
                 <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-zinc-800">
                   <div
@@ -830,7 +720,6 @@ function StepPreview({
                 </div>
               </div>
 
-              {/* Temp stepper */}
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => onUpdatePoint(idx, 'tempF', point.tempF - 1)}
@@ -854,7 +743,6 @@ function StepPreview({
                 </button>
               </div>
 
-              {/* Delete */}
               <button
                 onClick={() => onRemovePoint(idx)}
                 disabled={editablePoints.length <= 3}
@@ -867,7 +755,6 @@ function StepPreview({
         </div>
       </div>
 
-      {/* Save template + Apply */}
       <div className="flex gap-2">
         <button
           onClick={onSaveTemplate}
@@ -880,41 +767,15 @@ function StepPreview({
 
         <button
           onClick={onApply}
-          disabled={applying || applied}
-          className={cn(
-            'flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition-all',
-            applied
-              ? 'bg-emerald-500/20 text-emerald-400'
-              : 'bg-cyan-500 text-white hover:bg-cyan-600 active:scale-[0.98]',
-            'disabled:opacity-60',
-          )}
+          disabled={editablePoints.length < 3}
+          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-white transition-all hover:bg-cyan-600 active:scale-[0.98] disabled:opacity-60"
         >
-          {applying
-            ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  {' '}
-                  Applying...
-                </>
-              )
-            : applied
-              ? (
-                  <>
-                    <Check size={16} />
-                    {' '}
-                    Applied!
-                  </>
-                )
-              : (
-                  `Apply to ${dayCount} ${dayCount === 1 ? 'day' : 'days'}`
-                )}
+          Use Curve
         </button>
       </div>
     </div>
   )
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────
 
 function incrementTime(time: string, minutes: number): string {
   const [h, m] = time.split(':').map(Number)

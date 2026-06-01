@@ -1,0 +1,125 @@
+#!/bin/bash
+# Pod capabilities — install-time mirror of src/hardware/pods.ts POD_CAPS.
+#
+# Sourced by scripts/install (after scripts/pod/detect runs) and by
+# scripts/bin/sp-update. Provides bash variables that install paths can
+# branch on, so we can keep a single install script that adapts to each
+# Pod gen instead of duplicating logic per gen.
+#
+# Detection strategy: prefer environment probes (command -v, version
+# checks) over POD_GEN lookups. Probes survive firmware drift; lookups
+# don't. POD_GEN is only the fallback when probing isn't possible.
+#
+# Sets in caller's scope (all are exported):
+#
+#   MODEL_NAME                      "Pod 3", "Pod 4", "Pod 5", or "Pod (unknown)"
+#   POD_OS                          "yocto" or "debian"
+#   IPTABLES_PATH                   absolute path to iptables binary, "" if missing
+#   HAS_PACKAGE_MANAGER             "true" / "false"
+#   PACKAGE_MANAGER                 "apt" or "" (none)
+#   SYSTEM_PYTHON_VERSION           e.g. "3.10.4", "" if python3 missing
+#   SYSTEM_PYTHON_IN_BIOMETRICS_RANGE  "true" if in [3.9, 3.11), else "false"
+#   HAS_ENSUREPIP                   "true" / "false"
+#   HAS_NFTABLES                    "true" / "false"
+#   HAS_VOLTA                       "true" if Volta is present in PATH or ~/.volta
+#   HAS_IPTABLES_PERSISTENT         "true" / "false"
+#
+# Requires POD_GEN ("3_4" or "5") to be set by scripts/pod/detect first.
+
+# --- Probes ---------------------------------------------------------------
+
+_probe_iptables_path() {
+  local p
+  p="$(command -v iptables 2>/dev/null || true)"
+  if [ -n "$p" ]; then echo "$p"; return; fi
+  # Fallback to known canonical paths if the PATH lookup missed it
+  for p in /usr/sbin/iptables /sbin/iptables; do
+    [ -x "$p" ] && { echo "$p"; return; }
+  done
+  echo ""
+}
+
+_probe_python_version() {
+  command -v python3 >/dev/null 2>&1 || { echo ""; return; }
+  python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null \
+    || echo ""
+}
+
+_python_in_biometrics_range() {
+  # Modules pin requires-python = ">=3.9,<3.11"
+  command -v python3 >/dev/null 2>&1 || { echo "false"; return; }
+  if python3 -c 'import sys; sys.exit(0 if (3,9) <= sys.version_info[:2] < (3,11) else 1)' 2>/dev/null; then
+    echo "true"
+  else
+    echo "false"
+  fi
+}
+
+_probe_has_ensurepip() {
+  command -v python3 >/dev/null 2>&1 || { echo "false"; return; }
+  if python3 -c 'import ensurepip' 2>/dev/null; then echo "true"; else echo "false"; fi
+}
+
+_probe_has_volta() {
+  if command -v volta >/dev/null 2>&1; then echo "true"; return; fi
+  for d in "$HOME/.volta" /home/root/.volta /root/.volta; do
+    [ -d "$d" ] && { echo "true"; return; }
+  done
+  echo "false"
+}
+
+_probe_has_iptables_persistent() {
+  if command -v iptables-save >/dev/null 2>&1; then echo "true"; return; fi
+  [ -d /etc/iptables ] && { echo "true"; return; }
+  echo "false"
+}
+
+# --- Defaults ---------------------------------------------------------------
+# Model name + OS class come from POD_GEN since they can't be probed cheaply.
+# Everything else is probed below — firmware variants (seen in the wild:
+# Pod 5 with no apt-get, mediatek kirkstone with python 3.14) break any
+# hardcoded-by-gen assumption.
+
+case "${POD_GEN:-}" in
+  3_4) MODEL_NAME="Pod 3 / Pod 4"; POD_OS="yocto" ;;
+  5)   MODEL_NAME="Pod 5";         POD_OS="debian" ;;
+  *)   MODEL_NAME="Pod (unknown)"; POD_OS="unknown" ;;
+esac
+
+if command -v apt-get >/dev/null 2>&1; then
+  HAS_PACKAGE_MANAGER="true"
+  PACKAGE_MANAGER="apt"
+else
+  HAS_PACKAGE_MANAGER="false"
+  PACKAGE_MANAGER=""
+fi
+
+if command -v nft >/dev/null 2>&1; then
+  HAS_NFTABLES="true"
+else
+  HAS_NFTABLES="false"
+fi
+
+IPTABLES_PATH="$(_probe_iptables_path)"
+SYSTEM_PYTHON_VERSION="$(_probe_python_version)"
+SYSTEM_PYTHON_IN_BIOMETRICS_RANGE="$(_python_in_biometrics_range)"
+HAS_ENSUREPIP="$(_probe_has_ensurepip)"
+HAS_VOLTA="$(_probe_has_volta)"
+HAS_IPTABLES_PERSISTENT="$(_probe_has_iptables_persistent)"
+
+export MODEL_NAME POD_OS IPTABLES_PATH HAS_PACKAGE_MANAGER PACKAGE_MANAGER
+export SYSTEM_PYTHON_VERSION SYSTEM_PYTHON_IN_BIOMETRICS_RANGE HAS_ENSUREPIP
+export HAS_NFTABLES HAS_VOLTA HAS_IPTABLES_PERSISTENT
+
+print_pod_capabilities() {
+  echo "Pod capabilities:"
+  echo "  Model:                $MODEL_NAME (POD_GEN=${POD_GEN:-?})"
+  echo "  OS:                   $POD_OS"
+  echo "  iptables:             ${IPTABLES_PATH:-<missing>}"
+  echo "  Package manager:      ${PACKAGE_MANAGER:-none}"
+  echo "  System python3:       ${SYSTEM_PYTHON_VERSION:-<missing>} (in biometrics range: $SYSTEM_PYTHON_IN_BIOMETRICS_RANGE)"
+  echo "  ensurepip:            $HAS_ENSUREPIP"
+  echo "  nftables:             $HAS_NFTABLES"
+  echo "  Volta:                $HAS_VOLTA"
+  echo "  iptables-persistent:  $HAS_IPTABLES_PERSISTENT"
+}

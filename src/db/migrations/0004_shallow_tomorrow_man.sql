@@ -1,0 +1,1 @@
+ALTER TABLE `side_settings` ADD `always_on` integer DEFAULT false NOT NULL;

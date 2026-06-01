@@ -1,13 +1,19 @@
 import { z } from 'zod'
+import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { db } from '@/src/db'
+import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
-import { eq } from 'drizzle-orm'
+import { bedTemp, waterLevelReadings } from '@/src/db/biometrics-schema'
+import { eq, desc } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
+import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
-import { fahrenheitToLevel } from '@/src/hardware/types'
+import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
+import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
+import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import {
   sideSchema,
   temperatureSchema,
@@ -15,6 +21,28 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
+import { toC, centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
+import { getWifiInfo } from '@/src/hardware/wifi'
+
+// ---------------------------------------------------------------------------
+// Command name → HardwareCommand mapping for the raw execute endpoint
+// ---------------------------------------------------------------------------
+
+const COMMAND_MAP: Record<string, HardwareCommand> = {
+  HELLO: HardwareCommand.HELLO,
+  SET_TEMP: HardwareCommand.SET_TEMP,
+  ALARM_LEFT: HardwareCommand.ALARM_LEFT,
+  ALARM_RIGHT: HardwareCommand.ALARM_RIGHT,
+  SET_SETTINGS: HardwareCommand.SET_SETTINGS,
+  LEFT_TEMP_DURATION: HardwareCommand.LEFT_TEMP_DURATION,
+  RIGHT_TEMP_DURATION: HardwareCommand.RIGHT_TEMP_DURATION,
+  TEMP_LEVEL_LEFT: HardwareCommand.TEMP_LEVEL_LEFT,
+  TEMP_LEVEL_RIGHT: HardwareCommand.TEMP_LEVEL_RIGHT,
+  PRIME: HardwareCommand.PRIME,
+  DEVICE_STATUS: HardwareCommand.DEVICE_STATUS,
+  ALARM_CLEAR: HardwareCommand.ALARM_CLEAR,
+  ALARM_SOLO: HardwareCommand.ALARM_SOLO,
+}
 
 // ---------------------------------------------------------------------------
 // Server-side temperature debounce
@@ -68,9 +96,73 @@ export const deviceRouter = router({
    */
   getStatus: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/device/status', protect: false, tags: ['Device'] } })
-    .input(z.object({}))
-    .output(z.any())
-    .query(async () => {
+    .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
+    .output(z.object({
+      leftSide: z.object({
+        currentTemperature: z.number(),
+        targetTemperature: z.number(),
+        currentLevel: z.number(),
+        targetLevel: z.number(),
+        heatingDuration: z.number(),
+        isAlarmVibrating: z.boolean().optional(),
+      }),
+      rightSide: z.object({
+        currentTemperature: z.number(),
+        targetTemperature: z.number(),
+        currentLevel: z.number(),
+        targetLevel: z.number(),
+        heatingDuration: z.number(),
+        isAlarmVibrating: z.boolean().optional(),
+      }),
+      waterLevel: z.enum(['low', 'ok']),
+      isPriming: z.boolean(),
+      podVersion: z.enum(['H00', 'I00', 'J00']),
+      sensorLabel: z.string(),
+      gestures: z.object({
+        doubleTap: z.object({ l: z.number(), r: z.number() }).optional(),
+        tripleTap: z.object({ l: z.number(), r: z.number() }).optional(),
+        quadTap: z.object({ l: z.number(), r: z.number() }).optional(),
+      }).optional(),
+      primeCompletedNotification: z.object({ timestamp: z.number() }).optional(),
+      pumpStallNotifications: z.object({
+        left: z.object({
+          alertId: z.number(),
+          trippedAt: z.number(),
+          rpm: z.number(),
+          restore: z.object({
+            targetTemperature: z.number(),
+            durationSeconds: z.number(),
+          }).nullable(),
+        }).nullable(),
+        right: z.object({
+          alertId: z.number(),
+          trippedAt: z.number(),
+          rpm: z.number(),
+          restore: z.object({
+            targetTemperature: z.number(),
+            durationSeconds: z.number(),
+          }).nullable(),
+        }).nullable(),
+      }).optional(),
+      snooze: z.object({
+        left: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
+        right: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
+      }),
+      wifiStrength: z.number(),
+      wifiSSID: z.string(),
+      roomClimate: z.object({
+        temperatureC: z.number().nullable(),
+        humidity: z.number().nullable(),
+        timestamp: z.number().nullable(),
+      }),
+      waterLevelRaw: z.object({
+        raw: z.number().nullable(),
+        calibratedEmpty: z.number().nullable(),
+        calibratedFull: z.number().nullable(),
+        timestamp: z.number().nullable(),
+      }),
+    }))
+    .query(async ({ input }) => {
       return withHardwareClient(async (client) => {
         const status = await client.getDeviceStatus()
 
@@ -119,12 +211,61 @@ export const deviceRouter = router({
         }
 
         const primeCompletedAt = getPrimeCompletedAt()
+        const stallNotices = getAllPumpStallNotices()
         const leftSnooze = getSnoozeStatus('left')
         const rightSnooze = getSnoozeStatus('right')
+
+        const convertTemp = (f: number) => input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f
+
+        // Best-effort enrichment — nulls on failure
+        let wifiStrength: number = -1
+        let wifiSSID: string = 'unknown'
+        let roomClimate: { temperatureC: number | null, humidity: number | null, timestamp: number | null } = { temperatureC: null, humidity: null, timestamp: null }
+        let waterLevelRaw: { raw: number | null, calibratedEmpty: number | null, calibratedFull: number | null, timestamp: number | null } = { raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null }
+        try {
+          const wifi = getWifiInfo()
+          wifiStrength = wifi.wifiStrength
+          wifiSSID = wifi.wifiSSID
+
+          const [latestBed] = await biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1)
+          if (latestBed) {
+            roomClimate = {
+              temperatureC: latestBed.ambientTemp !== null ? centiDegreesToC(latestBed.ambientTemp) : null,
+              humidity: latestBed.humidity !== null ? centiPercentToPercent(latestBed.humidity) : null,
+              timestamp: latestBed.timestamp ? latestBed.timestamp.getTime() : null,
+            }
+          }
+          const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
+          if (latestWater) {
+            waterLevelRaw = {
+              raw: latestWater.raw ?? null,
+              calibratedEmpty: latestWater.calibratedEmpty ?? null,
+              calibratedFull: latestWater.calibratedFull ?? null,
+              timestamp: latestWater.timestamp ? latestWater.timestamp.getTime() : null,
+            }
+          }
+        }
+        catch { /* enrichment is best-effort */ }
+
         return {
           ...status,
+          leftSide: {
+            ...status.leftSide,
+            currentTemperature: convertTemp(status.leftSide.currentTemperature),
+            targetTemperature: convertTemp(status.leftSide.targetTemperature),
+          },
+          rightSide: {
+            ...status.rightSide,
+            currentTemperature: convertTemp(status.rightSide.currentTemperature),
+            targetTemperature: convertTemp(status.rightSide.targetTemperature),
+          },
           ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+          ...((stallNotices.left || stallNotices.right) && { pumpStallNotifications: stallNotices }),
           snooze: { left: leftSnooze, right: rightSnooze },
+          wifiStrength,
+          wifiSSID,
+          roomClimate,
+          waterLevelRaw,
         }
       }, 'Failed to get device status')
     }),
@@ -174,6 +315,13 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      if (pumpStallShouldBlock(input.side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+
       // Server-side debounce: collapse rapid dial-drag calls into one hardware command.
       // Cancel any pending hardware call for this side BEFORE the first await
       // so ordering is consistent with other side commands (setPower, setAlarm, etc.)
@@ -183,14 +331,26 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
+      markSideMutated(input.side)
+
       // The DB is updated optimistically on every call for responsive UI.
       try {
+        const now = new Date()
+        // Only stamp poweredOnAt on OFF→ON transitions (preserve the existing
+        // timestamp if this is a temperature change while already on).
+        const [prev] = await db
+          .select({ isPowered: deviceState.isPowered, poweredOnAt: deviceState.poweredOnAt })
+          .from(deviceState)
+          .where(eq(deviceState.side, input.side))
+          .limit(1)
+        const poweredOnAt = prev?.isPowered ? prev.poweredOnAt : now
         await db
           .update(deviceState)
           .set({
             targetTemperature: input.temperature,
             isPowered: true,
-            lastUpdated: new Date(),
+            poweredOnAt,
+            lastUpdated: now,
           })
           .where(eq(deviceState.side, input.side))
       }
@@ -264,17 +424,48 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      // Only block when raising power. Powering off is always allowed —
+      // it's the safe direction, and the guard's own trip uses this path.
+      if (input.powered && pumpStallShouldBlock(input.side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+
       return withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
         try {
+          const now = new Date()
+          const [prev] = await db
+            .select({ isPowered: deviceState.isPowered, poweredOnAt: deviceState.poweredOnAt })
+            .from(deviceState)
+            .where(eq(deviceState.side, input.side))
+            .limit(1)
+          // OFF→ON stamps poweredOnAt; ON→OFF clears it; same-state preserves.
+          const poweredOnAt = input.powered
+            ? (prev?.isPowered ? prev.poweredOnAt : now)
+            : null
+          // Always write the effective target (default 75°F when powering on
+          // without an explicit temperature; null when powering off). Without
+          // this, markSideMutated's freshness preservation could leave a stale
+          // setpoint visible past the mutation.
+          const targetTemperature = input.powered
+            ? (input.temperature ?? 75)
+            : null
+          // Stamp freshness immediately before the DB write so the 5s guard
+          // covers this mutation. Stamping before the hardware roundtrip
+          // risks the window expiring while connect/setPower run.
+          markSideMutated(input.side)
           await db
             .update(deviceState)
             .set({
               isPowered: input.powered,
-              ...(input.temperature && { targetTemperature: input.temperature }),
-              lastUpdated: new Date(),
+              poweredOnAt,
+              targetTemperature,
+              lastUpdated: now,
             })
             .where(eq(deviceState.side, input.side))
         }
@@ -335,6 +526,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         cancelSnooze(input.side)
         await client.setAlarm(input.side, {
@@ -384,6 +576,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
         cancelSnooze(input.side)
@@ -501,5 +694,72 @@ export const deviceRouter = router({
     .mutation(() => {
       dismissPrimeNotification()
       return { success: true }
+    }),
+
+  // ---------------------------------------------------------------------------
+  // POWER USER / DEBUG FEATURE — Raw Hardware Command Execution
+  //
+  // This endpoint is a passthrough to the hardware command protocol. It does
+  // NOT validate arguments, does NOT apply safety/debounce mechanisms, and
+  // does NOT sync state to the database. Misuse can damage hardware or cause
+  // unexpected behavior. Use at your own risk.
+  //
+  // See ADR 0016 for rationale and consequences.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Execute a raw hardware command by name.
+   *
+   * Bypasses all high-level validation, debounce, and DB sync. The command
+   * name is allowlisted but the args string is passed through verbatim.
+   */
+  execute: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/execute', protect: false, tags: ['Device'] } })
+    .input(z.object({
+      // Either an allowlisted name (mapped via COMMAND_MAP) or a raw numeric
+      // opcode string passed through verbatim. Raw opcodes let us probe for
+      // commands not yet in HardwareCommand (e.g. cover-only Pod 5 codes).
+      command: z.string().refine(
+        v => Object.hasOwn(COMMAND_MAP, v) || /^\d+$/.test(v),
+        { message: 'command must be an allowlisted name or a numeric opcode string' },
+      ),
+      args: z.string().optional(),
+    }).strict())
+    .output(z.object({
+      command: z.string(),
+      opcode: z.string(),
+      args: z.string().nullable(),
+      response: z.unknown(),
+      disclaimer: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      const opcode = Object.hasOwn(COMMAND_MAP, input.command)
+        ? COMMAND_MAP[input.command]
+        : input.command
+
+      try {
+        // Route through the singleton client so the call binds to the same
+        // `dacTransport` module instance that owns the live transport.
+        // Importing sendCommand directly into the route handler can hit a
+        // separate Next.js bundle whose `transport` is undefined — that
+        // path stomps on dac.sock by spinning up a second listener.
+        const client = getSharedHardwareClient() as unknown as { sendRaw(command: string, args?: string): Promise<string> }
+        const response = await client.sendRaw(opcode, input.args)
+
+        return {
+          command: input.command,
+          opcode,
+          args: input.args ?? null,
+          response,
+          disclaimer: 'WARNING: Raw command execution. No validation, no safety checks. Misuse can damage hardware or cause unexpected behavior. Use at your own risk. This feature is unsupported.',
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to execute raw command: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 })

@@ -1,0 +1,93 @@
+#!/bin/bash
+# Pod detection — determines DAC socket path and pod generation.
+# Sourced by scripts/install (after code is on disk) and usable by CLI tools.
+#
+# Sets in caller's scope: INSTALL_DIR, DATA_DIR, DAC_SOCK_PATH, POD_GEN
+#
+# POD_GEN is "3_4" or "5" — enough for install-time branching.
+# Precise pod version (H00/I00/J00) is only available at runtime
+# via the hardware sensor label (see src/hardware/responseParser.ts).
+
+INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
+DATA_DIR="${DATA_DIR:-/persistent/sleepypod-data}"
+
+# Only accept known firmware-supported socket locations
+is_supported_dac_path() {
+  case "$1" in
+    /deviceinfo/dac.sock|/persistent/deviceinfo/dac.sock) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_dac_sock() {
+  local path=""
+
+  # Priority 1: Read from existing .env, but cross-check the value against
+  # hardware. A previous mis-detected install can cache a path that's on the
+  # allowlist but wrong for the current pod (e.g. Pod 5 path on Pod 4), and
+  # the cache stays sticky until .env is deleted. Only honor the cache if
+  # the socket is live OR frank.sh confirms it.
+  if [ -f "$INSTALL_DIR/.env" ]; then
+    path=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    if [ -n "$path" ] && is_supported_dac_path "$path"; then
+      local verified=false
+      # (a) Socket is a live socket → authoritative
+      [ -S "$path" ] && verified=true
+      # (b) frank.sh agrees with .env → authoritative
+      if [ "$verified" = false ] && [ -f /opt/eight/bin/frank.sh ]; then
+        local frank_path
+        frank_path=$(grep -oE 'DAC_SOCKET=[^ ]*dac\.sock' /opt/eight/bin/frank.sh 2>/dev/null \
+          | head -1 | cut -d= -f2- || true)
+        [ -n "$frank_path" ] && [ "$frank_path" = "$path" ] && verified=true
+      fi
+      if [ "$verified" = true ]; then
+        echo "$path"
+        return
+      fi
+      echo "Warning: Ignoring stale DAC_SOCK_PATH from .env ($path); re-detecting from hardware" >&2
+    elif [ -n "$path" ]; then
+      echo "Warning: Ignoring unsupported DAC_SOCK_PATH from .env: $path" >&2
+    fi
+  fi
+
+  # Priority 2: Extract from frank.sh (what frankenfirmware actually uses)
+  if [ -f /opt/eight/bin/frank.sh ]; then
+    # grep -o '[^ ]*dac\.sock' is greedy against the left; on a line like
+    # `DAC_SOCKET=/deviceinfo/dac.sock` (no spaces), it matches the whole
+    # string including `DAC_SOCKET=`. Anchor the capture to the prefix and
+    # strip it so we get just the path — on Pod 4 this is `/deviceinfo/dac.sock`.
+    path=$(grep -oE 'DAC_SOCKET=[^ ]*dac\.sock' /opt/eight/bin/frank.sh 2>/dev/null \
+      | head -1 | cut -d= -f2- || true)
+    if [ -n "$path" ] && is_supported_dac_path "$path"; then
+      echo "Detected dac.sock path from frank.sh: $path" >&2
+      echo "$path"
+      return
+    elif [ -n "$path" ]; then
+      echo "Warning: Ignoring unsupported DAC_SOCK_PATH from frank.sh: $path" >&2
+    fi
+  fi
+
+  # Priority 3: Check known socket locations
+  for sock in /persistent/deviceinfo/dac.sock /deviceinfo/dac.sock; do
+    if [ -S "$sock" ]; then
+      echo "Found active dac.sock at: $sock" >&2
+      echo "$sock"
+      return
+    fi
+  done
+
+  # Priority 4: Default to Pod 5 path. Common at fresh-install time —
+  # frankenfirmware hasn't restarted yet, so the socket file doesn't
+  # exist and frank.sh may be absent on newer Pod 5 firmware variants.
+  echo "dac.sock not yet present — assuming Pod 5 default (/persistent/deviceinfo/dac.sock)" >&2
+  echo "/persistent/deviceinfo/dac.sock"
+}
+
+DAC_SOCK_PATH="$(detect_dac_sock)"
+
+# Derive pod generation from socket path
+case "$DAC_SOCK_PATH" in
+  /persistent/deviceinfo/dac.sock) POD_GEN="5" ;;
+  /deviceinfo/dac.sock)            POD_GEN="3_4" ;;
+  *)                               POD_GEN="5" ;;
+esac

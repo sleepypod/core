@@ -141,7 +141,7 @@ Downloaded from `nodejs.org/dist/` for `linux-arm64`. No package manager require
 | curl / tar | Available |
 | systemd | 250 |
 | iptables | 1.8.7 |
-| DAC socket | `/persistent/deviceinfo/dac.sock` |
+| DAC socket | `/persistent/deviceinfo/dac.sock` (Pod 5) or `/deviceinfo/dac.sock` (Pod 3/4) — auto-detected from `frank.sh` |
 
 ## File Locations
 
@@ -206,30 +206,6 @@ sudo scripts/internet-control status
 
 `frank` (frankenfirmware) also handles the sensor/frozen hardware communication — capSense, bed temperatures, pump control, piezo. Stopping it would break all biometrics. `Capybara` is only the cloud API client and could be disabled, but null-routing is safer and doesn't risk breaking undiscovered local dependencies.
 
-## Coexistence with free-sleep
+## Replacing free-sleep
 
-Both `free-sleep.service` and `sleepypod.service` bind to port 3000. Only one can run at a time. The installer creates CLI commands for easy switching:
-
-```bash
-sp-sleepypod    # Switch to sleepypod (stops free-sleep, starts sleepypod + biometrics modules)
-sp-freesleep    # Switch to free-sleep (stops sleepypod + biometrics modules, starts free-sleep)
-```
-
-Both commands verify the switch and print a status line. Your settings and data are preserved — switching only changes which server handles requests.
-
-### Why switch?
-
-- **Evaluating sleepypod**: Install sleepypod alongside free-sleep, try it out, switch back any time with `sp-freesleep` if you prefer the original
-- **Debugging**: If something isn't working, switch to free-sleep to confirm it's a sleepypod issue vs a hardware issue
-- **Gradual migration**: Run free-sleep during the day, switch to sleepypod at night for sleep tracking, or vice versa
-
-### What each manages
-
-| | sleepypod | free-sleep |
-|---|---|---|
-| Web UI | `http://pod:3000` | `http://pod:3000` |
-| Temperature control | Yes | Yes |
-| Schedules | Yes (database-backed) | Yes (JSON files) |
-| Sleep tracking | Yes (piezo-processor, sleep-detector) | No |
-| Sensor streaming | Yes (WebSocket on :3001) | No |
-| Biometrics modules | Started with `sp-sleepypod` | Stopped with `sp-freesleep` |
+`free-sleep.service` and `sleepypod.service` both bind to port 3000 — only one can run. The installer stops and disables `free-sleep.service` / `free-sleep-stream.service` at install time so sleepypod can take over the port permanently. Run `sp-uninstall` if you want to revert (the script flushes iptables and removes sleepypod's units; you'll then need to re-enable free-sleep manually with `systemctl enable --now free-sleep.service`).

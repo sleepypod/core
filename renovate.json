@@ -1,10 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "group:monorepos"
   ],
   "automerge": true,
   "automergeType": "branch",
+  "minimumReleaseAge": "3 days",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "prConcurrentLimit": 5,
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
@@ -13,27 +19,19 @@
   "packageRules": [
     {
       "matchUpdateTypes": [
-        "patch"
+        "patch",
+        "minor"
       ],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch",
       "automerge": true,
       "labels": [
         "dependencies",
-        "patch"
+        "non-major"
       ]
     },
     {
       "matchUpdateTypes": [
-        "minor"
-      ],
-      "automerge": true,
-      "labels": [
-        "dependencies",
-        "minor"
-      ]
-    },
-    {
-      "matchUpdateTypes": [
-        "minor",
         "major"
       ],
       "automerge": false,
@@ -131,6 +129,16 @@
       ],
       "commitMessagePrefix": "chore(deps):",
       "commitMessageAction": "Update {{packageName}}"
+    },
+    {
+      "description": "Pin requires-python to pod range — Pod 3 is 3.9, Pod 4/5 is 3.10",
+      "matchPackageNames": [
+        "python"
+      ],
+      "matchManagers": [
+        "pep621"
+      ],
+      "allowedVersions": "<3.11"
     },
     {
       "description": "Pin scipy <1.16 — pod runs Python 3.10, scipy 1.16+ requires 3.11",

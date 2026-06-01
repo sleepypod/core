@@ -1,0 +1,26 @@
+#!/bin/bash
+set -euo pipefail
+
+INSTALL_DIR="/home/dac/sleepypod-core"
+
+systemctl restart sleepypod.service
+
+# Wait for sleepypod to create dac.sock before killing frankenfirmware
+DAC_SOCK=$(grep '^DAC_SOCK_PATH=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)
+if [ -z "$DAC_SOCK" ]; then
+  # Fall back to pod detection if .env doesn't have it
+  source "$INSTALL_DIR/scripts/pod/detect" 2>/dev/null || true
+  DAC_SOCK="${DAC_SOCK_PATH:-/persistent/deviceinfo/dac.sock}"
+fi
+
+for i in $(seq 1 10); do
+  [ -S "$DAC_SOCK" ] && break
+  sleep 1
+done
+
+if [ -S "$DAC_SOCK" ]; then
+  # Kill frankenfirmware so its supervisor restarts it against the new dac.sock
+  pkill frankenfirmware 2>/dev/null || true
+else
+  echo "Warning: dac.sock not found after 10s — skipping frankenfirmware restart" >&2
+fi

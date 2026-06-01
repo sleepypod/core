@@ -16,12 +16,17 @@ node_modules
 !.yarn/sdks
 !.yarn/versions
 
+# Python (uv)
+.venv
+
 # Build artifacts
 .git-info
 
 # Testing
 test-results
 coverage
+.stryker-tmp
+reports/mutation
 
 # SQLite Database (development)
 sleepypod.dev.db
@@ -35,3 +40,18 @@ sleepypod.test.db-shm
 sleepypod.test.db-wal
 sleepypod.local.db-shm
 sleepypod.local.db-wal
+
+# Claude Code
+.claude/worktrees
+.claude/reviews
+.reviews
+
+# Yggdrasil
+.ygg/
+
+# HomeKit (dev local pairings)
+.homekit-data/
+
+# SQLite databases (local)
+*.db
+.reviews/

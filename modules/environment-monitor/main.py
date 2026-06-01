@@ -23,11 +23,13 @@ import sqlite3
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
 from common.raw_follower import RawFileFollower
+from common.dialect import normalize_bed_temp
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -48,6 +50,34 @@ DOWNSAMPLE_INTERVAL_S = 60
 
 # Hardware sentinel for "no sensor connected"
 NO_SENSOR = -327.68
+# u16-domain sentinels emitted by freezer firmware on disconnected sensors.
+# -327.68 * 100 = -32768 (two's-complement) = 0x8000 / 32768 unsigned.
+# 0xffff (65535) is also observed on some builds as "read error".
+# Range gate: freezer water/heatsink/ambient should never be below -50 °C
+# (-5000 centi°C) or above 125 °C (12500 centi°C).
+_FRZ_SENTINELS = {32768, 65535, -32768, -1}
+_FRZ_MIN_CENTIDEGREES = -5000
+_FRZ_MAX_CENTIDEGREES = 12500
+
+
+def _safe_freezer_centidegrees(val) -> Optional[int]:
+    """Validate a raw firmware centidegrees value for freezer_temp insertion.
+
+    Rejects sentinel values (disconnected sensor) and out-of-range values
+    (implausible readings). Returns the int on success, None to omit (#325).
+    """
+    if val is None:
+        return None
+    try:
+        iv = int(val)
+    except (TypeError, ValueError):
+        return None
+    if iv in _FRZ_SENTINELS:
+        return None
+    if iv < _FRZ_MIN_CENTIDEGREES or iv > _FRZ_MAX_CENTIDEGREES:
+        return None
+    return iv
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -88,50 +118,18 @@ def open_biometrics_db() -> sqlite3.Connection:
     return conn
 
 
-def _to_centidegrees(val) -> int | None:
-    """Convert a degrees-C float to centidegrees integer, or None if sentinel."""
-    if val is None or val == NO_SENSOR or abs(val - NO_SENSOR) < 0.01:
-        return None
-    return round(val * 100)
+def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> bool:
+    """Normalize a bedTemp/bedTemp2 record and write to bed_temp table.
 
+    Dialect handling lives in common.dialect.normalize_bed_temp — this
+    function consumes the canonical row-shape and writes it.
 
-def _to_centipercent(val) -> int | None:
-    """Convert a percent float to centipercent integer, or None if sentinel."""
-    if val is None or val == NO_SENSOR or abs(val - NO_SENSOR) < 0.01:
-        return None
-    return round(val * 100)
-
-
-def _safe_temp(temps: list, idx: int) -> int | None:
-    """Extract a thermistor value from a temps array by index."""
-    if not isinstance(temps, list) or idx >= len(temps):
-        return None
-    return _to_centidegrees(temps[idx])
-
-
-def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
-    """Parse bedTemp2 record and write to bed_temp table.
-
-    bedTemp2 format:
-      mcu: float (MCU temp °C)
-      left:  {amb, hu, board, temps: [outer, center, inner, ?]}
-      right: {amb, hu, board, temps: [outer, center, inner, ?]}
+    Returns True on a successful insert, False if the record didn't match
+    a known dialect (caller should not advance the downsample cursor).
     """
-    left = record.get("left", {})
-    right = record.get("right", {})
-    left_temps = left.get("temps", [])
-    right_temps = right.get("temps", [])
-
-    # Use left ambient as the primary ambient reading (both sides share the room)
-    ambient = left.get("amb") if left.get("amb") != NO_SENSOR else right.get("amb")
-    # Average humidity from both sides (if available)
-    lhu = left.get("hu")
-    rhu = right.get("hu")
-    humidity = None
-    if lhu is not None and lhu != NO_SENSOR:
-        humidity = lhu
-    elif rhu is not None and rhu != NO_SENSOR:
-        humidity = rhu
+    canonical = normalize_bed_temp(record)
+    if canonical is None:
+        return False
 
     with conn:
         conn.execute(
@@ -142,38 +140,48 @@ def write_bed_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 int(ts),
-                _to_centidegrees(ambient),
-                _to_centidegrees(record.get("mcu")),
-                _to_centipercent(humidity),
-                _safe_temp(left_temps, 0),
-                _safe_temp(left_temps, 1),
-                _safe_temp(left_temps, 2),
-                _safe_temp(right_temps, 0),
-                _safe_temp(right_temps, 1),
-                _safe_temp(right_temps, 2),
+                canonical["ambient_temp"],
+                canonical["mcu_temp"],
+                canonical["humidity"],
+                canonical["left_outer_temp"],
+                canonical["left_center_temp"],
+                canonical["left_inner_temp"],
+                canonical["right_outer_temp"],
+                canonical["right_center_temp"],
+                canonical["right_inner_temp"],
             ),
         )
+    return True
 
 
-def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> None:
+def write_freezer_temp(conn: sqlite3.Connection, ts: float, record: dict) -> bool:
     """Parse frzTemp record and write to freezer_temp table.
 
     frzTemp format: {left, right, amb, hs} — all raw centidegrees (u16).
+    Applies sentinel filtering and range validation (#325) so disconnected
+    sensors don't pollute the freezer_temp table with 32768 / -327.68 values.
+
+    Returns True iff a row was inserted. Caller should advance the
+    downsample cursor only on True so an all-sentinel frame doesn't block
+    the next 60s of valid samples.
     """
+    amb = _safe_freezer_centidegrees(record.get("amb"))
+    hs = _safe_freezer_centidegrees(record.get("hs"))
+    lw = _safe_freezer_centidegrees(record.get("left"))
+    rw = _safe_freezer_centidegrees(record.get("right"))
+
+    if amb is None and hs is None and lw is None and rw is None:
+        return False
+
     with conn:
         conn.execute(
             """INSERT OR IGNORE INTO freezer_temp
                (timestamp, ambient_temp, heatsink_temp,
                 left_water_temp, right_water_temp)
                VALUES (?, ?, ?, ?, ?)""",
-            (
-                int(ts),
-                record.get("amb"),
-                record.get("hs"),
-                record.get("left"),
-                record.get("right"),
-            ),
+            (int(ts), amb, hs, lw, rw),
         )
+    return True
 
 
 def report_health(status: str, message: str) -> None:
@@ -236,13 +244,13 @@ def main() -> None:
 
             if rtype in ("bedTemp", "bedTemp2"):
                 if ts - last_bed_write >= DOWNSAMPLE_INTERVAL_S:
-                    write_bed_temp(db_conn, ts, record)
-                    last_bed_write = ts
+                    if write_bed_temp(db_conn, ts, record):
+                        last_bed_write = ts
 
             elif rtype == "frzTemp":
                 if ts - last_frz_write >= DOWNSAMPLE_INTERVAL_S:
-                    write_freezer_temp(db_conn, ts, record)
-                    last_frz_write = ts
+                    if write_freezer_temp(db_conn, ts, record):
+                        last_frz_write = ts
 
     except Exception as e:
         log.exception("Fatal error in main loop: %s", e)

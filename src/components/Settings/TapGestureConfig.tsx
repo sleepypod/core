@@ -142,7 +142,7 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
       <div className="space-y-2">
         <h4 className="text-xs font-semibold text-sky-400">{sideName(side)}</h4>
 
-        {TAP_TYPES.map(({ key, label, taps }) => {
+        {TAP_TYPES.map(({ key, label }) => {
           const gesture = findGesture(side, key)
           const isEditing
             = editing?.side === side && editing?.tapType === key

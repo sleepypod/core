@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react'
 import { normalizeFrame } from '@/src/streaming/normalizeFrame'
 
 // ---------------------------------------------------------------------------
@@ -137,6 +137,20 @@ export interface DeviceStatusFrame {
   waterLevel: 'low' | 'ok'
   isPriming: boolean
   primeCompletedNotification?: { timestamp: number }
+  pumpStallNotifications?: {
+    left: {
+      alertId: number
+      trippedAt: number
+      rpm: number
+      restore: { targetTemperature: number, durationSeconds: number } | null
+    } | null
+    right: {
+      alertId: number
+      trippedAt: number
+      rpm: number
+      restore: { targetTemperature: number, durationSeconds: number } | null
+    } | null
+  }
   snooze: {
     left: { active: boolean, snoozeUntil: number | null } | null
     right: { active: boolean, snoozeUntil: number | null } | null
@@ -222,10 +236,8 @@ interface SensorStreamSingleton {
   intentionalClose: boolean
   activeRefCount: number
   pendingSubscription: SensorType[] | null
-  /** Per-hook active sensor requests. Keyed by a unique hook ID. */
-  activeSubscriptions: Map<number, SensorType[] | null>
-  /** Counter for generating unique hook subscription IDs. */
-  nextSubscriptionId: number
+  /** Per-hook active sensor requests. Keyed by a unique per-instance Symbol. */
+  activeSubscriptions: Map<symbol, SensorType[] | null>
   /** Pending resolvers for getTimeRange() promises. */
   timeRangeResolvers: Array<(range: TimeRange | null) => void>
 }
@@ -257,8 +269,7 @@ if (!g[SINGLETON_KEY]) {
     intentionalClose: false,
     activeRefCount: 0,
     pendingSubscription: null,
-    activeSubscriptions: new Map<number, SensorType[] | null>(),
-    nextSubscriptionId: 0,
+    activeSubscriptions: new Map<symbol, SensorType[] | null>(),
     timeRangeResolvers: [],
   } satisfies SensorStreamSingleton
 }
@@ -589,12 +600,11 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   const { sensors = null, enabled = true } = options
   const sensorsKey = sensors ? sensors.slice().sort().join(',') : 'all'
 
-  // Stable subscription ID for this hook instance
-  const subIdRef = useRef<number | null>(null)
-  if (subIdRef.current === null) {
-    // eslint-disable-next-line react-hooks/immutability -- one-time init of external counter is intentional
-    subIdRef.current = singleton.nextSubscriptionId++
-  }
+  // Stable subscription token for this hook instance. Symbol() is pure —
+  // unlike a counter increment it's safe to call twice (StrictMode dev
+  // double-render of useState lazy initializers) without burning IDs or
+  // mutating shared state.
+  const [subId] = useState(() => Symbol('sensor-stream-subscription'))
 
   // Ref-counted connection management
   useEffect(() => {
@@ -617,15 +627,15 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
   // Subscription management — merge with other active hooks
   useEffect(() => {
     if (!enabled) return
-    const id = subIdRef.current ?? 0
-    singleton.activeSubscriptions.set(id, sensors ?? null)
+    singleton.activeSubscriptions.set(subId, sensors ?? null)
     recomputeAndSendSubscription()
 
     return () => {
-      singleton.activeSubscriptions.delete(id)
+      singleton.activeSubscriptions.delete(subId)
       recomputeAndSendSubscription()
     }
-  }, [sensorsKey, enabled])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sensorsKey, enabled, subId])
 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
 
@@ -680,6 +690,7 @@ export function useSensorFrame<T extends SensorType>(
 
   const getServerSnap = useCallback(
     () => undefined as Extract<SensorFrame, { type: T }> | undefined,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [sensorType]
   )
 

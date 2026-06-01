@@ -201,6 +201,23 @@ class SocketListener {
 
 const SEPARATOR = Buffer.from('\n\n')
 const RESPONSE_DELAY_MS = 10
+const DEFAULT_MESSAGE_RESPONSE_TIMEOUT_MS = 30_000
+
+function messageResponseTimeoutMs(): number {
+  const raw = process.env.DAC_MESSAGE_RESPONSE_TIMEOUT_MS
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  return DEFAULT_MESSAGE_RESPONSE_TIMEOUT_MS
+}
+
+export class MessageResponseTimeoutError extends Error {
+  public constructor(timeoutMs: number) {
+    super(`Timed out after ${timeoutMs}ms waiting for firmware response`)
+    this.name = 'MessageResponseTimeoutError'
+  }
+}
 
 class DacTransport {
   public constructor(
@@ -213,12 +230,26 @@ class DacTransport {
     return this.sequentialQueue.exec(async () => {
       const requestBytes = Buffer.concat([Buffer.from(message), SEPARATOR])
       await this.write(requestBytes)
-      const resp = await this.messageStream.readMessage()
 
-      if (RESPONSE_DELAY_MS > 0) {
-        await wait(RESPONSE_DELAY_MS)
+      const timeoutMs = messageResponseTimeoutMs()
+      let timeout: NodeJS.Timeout | undefined
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new MessageResponseTimeoutError(timeoutMs)),
+          timeoutMs,
+        )
+      })
+
+      try {
+        const resp = await Promise.race([this.messageStream.readMessage(), timeoutPromise])
+        if (RESPONSE_DELAY_MS > 0) {
+          await wait(RESPONSE_DELAY_MS)
+        }
+        return resp.toString()
       }
-      return resp.toString()
+      finally {
+        if (timeout) clearTimeout(timeout)
+      }
     })
   }
 
@@ -264,7 +295,36 @@ class DacServer {
 
 // ─── Connection timeout ──────────────────────────────────────────────────────
 
-const CONNECTION_TIMEOUT_MS = 25_000
+const DEFAULT_CONNECTION_TIMEOUT_MS = 25_000
+const RECONNECT_INITIAL_DELAY_MS = 1_000
+const RECONNECT_MAX_DELAY_MS = 60_000
+const DEFAULT_RECONNECT_MAX_ATTEMPTS = 10
+
+function envPositiveInt(key: string, fallback: number): number {
+  const raw = process.env[key]
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  return fallback
+}
+
+function connectionTimeoutMs(): number {
+  return envPositiveInt('DAC_CONNECTION_TIMEOUT_MS', DEFAULT_CONNECTION_TIMEOUT_MS)
+}
+
+function reconnectMaxAttempts(): number {
+  return envPositiveInt('DAC_RECONNECT_MAX_ATTEMPTS', DEFAULT_RECONNECT_MAX_ATTEMPTS)
+}
+
+function reconnectDelayMs(attempt: number): number {
+  const override = process.env.DAC_RECONNECT_DELAY_MS
+  if (override) {
+    const parsed = Number.parseInt(override, 10)
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+  return backoffDelayMs(attempt)
+}
 
 class ConnectionTimeoutError extends Error {
   public constructor() {
@@ -273,12 +333,24 @@ class ConnectionTimeoutError extends Error {
   }
 }
 
+export class ConnectionRetriesExhaustedError extends Error {
+  public constructor(attempts: number) {
+    super(`Gave up connecting to frankenfirmware after ${attempts} attempts`)
+    this.name = 'ConnectionRetriesExhaustedError'
+  }
+}
+
+export function backoffDelayMs(attempt: number): number {
+  const exponential = RECONNECT_INITIAL_DELAY_MS * 2 ** attempt
+  return Math.min(exponential, RECONNECT_MAX_DELAY_MS)
+}
+
 function withTimeout<T>(promise: Promise<T>, onTimeout: () => Error): Promise<T> {
   let timeout: NodeJS.Timeout | undefined
   return new Promise<T>((resolve, reject) => {
     timeout = setTimeout(() => {
       reject(onTimeout())
-    }, CONNECTION_TIMEOUT_MS)
+    }, connectionTimeoutMs())
 
     promise
       .then((value) => {
@@ -300,7 +372,7 @@ let connectPromise: Promise<DacTransport> | undefined
 
 function waitWithTimeout(server: DacServer) {
   return withTimeout(server.waitForConnection(), () => {
-    console.warn(`[DAC] restarting after ${CONNECTION_TIMEOUT_MS / 1_000}s timeout`)
+    console.warn(`[DAC] restarting after ${connectionTimeoutMs() / 1_000}s timeout`)
     return new ConnectionTimeoutError()
   })
 }
@@ -328,6 +400,7 @@ export async function connectDac(socketPath: string): Promise<void> {
   }
 
   connectPromise = (async () => {
+    let timeoutAttempts = 0
     while (true) {
       if (!dacServer) {
         dacServer = await DacServer.start(socketPath)
@@ -341,6 +414,14 @@ export async function connectDac(socketPath: string): Promise<void> {
       catch (error) {
         if (error instanceof ConnectionTimeoutError) {
           await shutdown()
+          timeoutAttempts += 1
+          if (timeoutAttempts >= reconnectMaxAttempts()) {
+            console.error(`[DAC] giving up after ${timeoutAttempts} connection timeouts`)
+            throw new ConnectionRetriesExhaustedError(timeoutAttempts)
+          }
+          const delay = reconnectDelayMs(timeoutAttempts - 1)
+          console.warn(`[DAC] reconnect attempt ${timeoutAttempts} in ${delay}ms`)
+          await wait(delay)
           continue
         }
         await shutdown()

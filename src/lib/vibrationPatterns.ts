@@ -1,23 +1,29 @@
 /**
- * Shared vibration pattern presets.
- * Used by: AlarmScheduleSection (quick-select), HapticsTestCard (test patterns).
- * Single source of truth — no duplication.
+ * Shared vibration presets — duration-only.
+ *
+ * On Pod 5 J55 firmware the cover MCU clamps `pl` (intensity) and `pi`
+ * (pattern) — both are cosmetic. Only `du` (duration) has a user-perceptible
+ * effect. The API still accepts intensity/pattern for forward compatibility,
+ * but the UI no longer exposes them.
+ *
+ * See docs/hardware/alarms.md#empirical-behavior-pl-and-pi.
  */
 
-export interface VibrationPattern {
+export interface VibrationPreset {
   name: string
-  intensity: number // 1-100
-  pattern: 'rise' | 'double'
   duration: number // seconds
   description: string
 }
 
-export const VIBRATION_PRESETS: VibrationPattern[] = [
-  { name: 'Gentle Wake', intensity: 30, pattern: 'rise', duration: 10, description: 'Soft rising vibration' },
-  { name: 'Standard Alarm', intensity: 50, pattern: 'rise', duration: 30, description: 'Default alarm pattern' },
-  { name: 'Urgent Wake', intensity: 80, pattern: 'double', duration: 15, description: 'Strong double-burst' },
-  { name: 'Nudge', intensity: 20, pattern: 'double', duration: 3, description: 'Quick gentle tap' },
-  { name: 'Pulse Train', intensity: 60, pattern: 'double', duration: 20, description: 'Repeated double bursts' },
-  { name: 'Deep Sleeper', intensity: 100, pattern: 'rise', duration: 60, description: 'Maximum intensity ramp' },
-  { name: 'Meditation End', intensity: 15, pattern: 'rise', duration: 5, description: 'Barely noticeable fade-in' },
+export const VIBRATION_PRESETS: VibrationPreset[] = [
+  { name: 'Quick', duration: 10, description: 'Brief buzz' },
+  { name: 'Standard', duration: 30, description: 'Default alarm' },
+  { name: 'Long', duration: 60, description: 'Extended ramp' },
 ]
+
+/**
+ * Hardcoded values sent for the cosmetic fields. Kept in one place so the API
+ * surface stays unchanged.
+ */
+export const FIXED_INTENSITY = 100
+export const FIXED_PATTERN = 'rise' as const

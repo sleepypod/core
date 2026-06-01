@@ -20,7 +20,6 @@ interface SecondaryDataSet {
   color: string
   gradientId: string
   label: string
-  average?: number | null
 }
 
 interface VitalsChartProps {
@@ -28,7 +27,6 @@ interface VitalsChartProps {
   color: string
   gradientId: string
   zones?: Zone[]
-  average?: number | null
   height?: number
   unit: string
   /** Optional label for the primary data line (e.g. "Left") */
@@ -37,9 +35,28 @@ interface VitalsChartProps {
   secondary?: SecondaryDataSet
   /** Format function for x-axis time labels */
   formatTime?: (date: Date) => string
+  /** Force y-axis lower bound. When set, auto-fit padding is skipped. */
+  yMin?: number
+  /** Force y-axis upper bound. When set, auto-fit padding is skipped. */
+  yMax?: number
+  /** Force x-axis lower bound (ms). Stacked panels share this so events align vertically. */
+  xMin?: number
+  /** Force x-axis upper bound (ms). */
+  xMax?: number
+  /** Personal-baseline band lower bound (mean - 1 SD). Draws a faint horizontal band behind the line. */
+  baselineMin?: number
+  /** Personal-baseline band upper bound (mean + 1 SD). */
+  baselineMax?: number
+  /** Tightens left padding and tick counts for small-multiple cells. */
+  compact?: boolean
 }
 
 const PADDING = { top: 8, right: 8, bottom: 24, left: 36 }
+const COMPACT_PADDING = { top: 6, right: 4, bottom: 20, left: 22 }
+// Break the line on absolute gap > 5 min. Relative thresholds (e.g. 3× median)
+// fragment sparse-but-legitimate early-night periods into disconnected stubs;
+// 5 min is the natural off-bed / dropout boundary at the pod's sampling cadence.
+const GAP_THRESHOLD_MS = 5 * 60 * 1000
 
 function defaultFormatTime(date: Date): string {
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
@@ -47,7 +64,7 @@ function defaultFormatTime(date: Date): string {
 
 /**
  * Lightweight SVG line chart for vitals data.
- * Supports zone backgrounds, average line, tap-to-select, and gradient fill.
+ * Supports zone backgrounds, tap-to-select, and gradient fill.
  * Matches iOS VitalsChartCard visual style.
  */
 export function VitalsChart({
@@ -55,16 +72,23 @@ export function VitalsChart({
   color,
   gradientId,
   zones = [],
-  average,
   height = 180,
   unit,
   label,
   secondary,
   formatTime = defaultFormatTime,
+  yMin,
+  yMax,
+  xMin,
+  xMax,
+  baselineMin,
+  baselineMax,
+  compact = false,
 }: VitalsChartProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [svgWidth, setSvgWidth] = useState(320)
+  const padding = compact ? COMPACT_PADDING : PADDING
 
   const measureRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) return
@@ -78,8 +102,8 @@ export function VitalsChart({
     return () => observer.disconnect()
   }, [])
 
-  const chartWidth = svgWidth - PADDING.left - PADDING.right
-  const chartHeight = height - PADDING.top - PADDING.bottom
+  const chartWidth = svgWidth - padding.left - padding.right
+  const chartHeight = height - padding.top - padding.bottom
 
   const sorted = useMemo(() =>
     [...data].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime()),
@@ -89,110 +113,148 @@ export function VitalsChart({
     secondary?.data
       ? [...secondary.data].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       : [],
-  [secondary?.data])
+  [secondary])
 
   const { minVal, maxVal, minTime, maxTime } = useMemo(() => {
     const allPoints = [...sorted, ...sortedSecondary]
     if (allPoints.length === 0) {
-      return { minVal: 0, maxVal: 100, minTime: 0, maxTime: 1 }
-    }
-    const values = allPoints.map(d => d.value)
-    let lo = Math.min(...values)
-    let hi = Math.max(...values)
-
-    // Include zone ranges in scale
-    for (const zone of zones) {
-      lo = Math.min(lo, zone.min)
-      hi = Math.max(hi, zone.max)
+      return {
+        minVal: yMin ?? 0,
+        maxVal: yMax ?? 100,
+        minTime: xMin ?? 0,
+        maxTime: xMax ?? 1,
+      }
     }
 
-    // Add 5% padding
-    const range = hi - lo || 1
-    lo = lo - range * 0.05
-    hi = hi + range * 0.05
+    let lo: number
+    let hi: number
+    if (yMin != null && yMax != null) {
+      lo = yMin
+      hi = yMax
+    }
+    else {
+      const values = allPoints.map(d => d.value)
+      lo = yMin ?? Math.min(...values)
+      hi = yMax ?? Math.max(...values)
+
+      // Include zone ranges in scale (and baseline band so it never clips)
+      for (const zone of zones) {
+        if (yMin == null) lo = Math.min(lo, zone.min)
+        if (yMax == null) hi = Math.max(hi, zone.max)
+      }
+      if (baselineMin != null && yMin == null) lo = Math.min(lo, baselineMin)
+      if (baselineMax != null && yMax == null) hi = Math.max(hi, baselineMax)
+
+      // Add 5% padding only to auto-fit bounds
+      const range = hi - lo || 1
+      if (yMin == null) lo = lo - range * 0.05
+      if (yMax == null) hi = hi + range * 0.05
+    }
 
     const times = allPoints.map(d => d.timestamp.getTime())
     return {
       minVal: lo,
       maxVal: hi,
-      minTime: Math.min(...times),
-      maxTime: Math.max(...times),
+      minTime: xMin ?? Math.min(...times),
+      maxTime: xMax ?? Math.max(...times),
     }
-  }, [sorted, sortedSecondary, zones])
+  }, [sorted, sortedSecondary, zones, yMin, yMax, xMin, xMax, baselineMin, baselineMax])
 
   const scaleX = useCallback((time: number) => {
     const timeRange = maxTime - minTime || 1
-    return PADDING.left + ((time - minTime) / timeRange) * chartWidth
-  }, [minTime, maxTime, chartWidth])
+    return padding.left + ((time - minTime) / timeRange) * chartWidth
+  }, [minTime, maxTime, chartWidth, padding.left])
 
   const scaleY = useCallback((val: number) => {
     const valRange = maxVal - minVal || 1
-    return PADDING.top + chartHeight - ((val - minVal) / valRange) * chartHeight
-  }, [minVal, maxVal, chartHeight])
+    return padding.top + chartHeight - ((val - minVal) / valRange) * chartHeight
+  }, [minVal, maxVal, chartHeight, padding.top])
 
-  // Build SVG path with Catmull-Rom-like smoothing via quadratic beziers
+  // Piecewise-linear path between MA points. Bezier smoothing implied
+  // inter-sample continuity the data doesn't have and produced impossible curves
+  // at sleep-onset / wake transitions.
   const { linePath, areaPath } = useMemo(() => {
     if (sorted.length < 2) return { linePath: '', areaPath: '' }
 
     const points = sorted.map(d => ({
       x: scaleX(d.timestamp.getTime()),
       y: scaleY(d.value),
+      t: d.timestamp.getTime(),
     }))
 
-    // Simple line path
-    let line = `M ${points[0].x},${points[0].y}`
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1]
+    const baseline = padding.top + chartHeight
+    let line = ''
+    let area = ''
+    let segmentStart = 0
+
+    for (let i = 0; i < points.length; i++) {
       const curr = points[i]
-      const cpx = (prev.x + curr.x) / 2
-      line += ` Q ${cpx},${prev.y} ${curr.x},${curr.y}`
+      const isGap = i > 0 && (curr.t - points[i - 1].t) > GAP_THRESHOLD_MS
+
+      if (i === 0 || isGap) {
+        if (isGap) {
+          const prev = points[i - 1]
+          area += ` L ${prev.x},${baseline} L ${points[segmentStart].x},${baseline} Z`
+          segmentStart = i
+        }
+        line += `${line ? ' ' : ''}M ${curr.x},${curr.y}`
+        area += `${area ? ' ' : ''}M ${curr.x},${curr.y}`
+      }
+      else {
+        line += ` L ${curr.x},${curr.y}`
+        area += ` L ${curr.x},${curr.y}`
+      }
     }
 
-    const baseline = PADDING.top + chartHeight
-    const area = line + ` L ${points[points.length - 1].x},${baseline} L ${points[0].x},${baseline} Z`
+    const last = points[points.length - 1]
+    area += ` L ${last.x},${baseline} L ${points[segmentStart].x},${baseline} Z`
 
     return { linePath: line, areaPath: area }
-  }, [sorted, scaleX, scaleY, chartHeight])
+  }, [sorted, scaleX, scaleY, chartHeight, padding.top])
 
-  // Build secondary line path (no area fill — just a line overlay)
   const secondaryLinePath = useMemo(() => {
     if (sortedSecondary.length < 2) return ''
     const points = sortedSecondary.map(d => ({
       x: scaleX(d.timestamp.getTime()),
       y: scaleY(d.value),
+      t: d.timestamp.getTime(),
     }))
-    let line = `M ${points[0].x},${points[0].y}`
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1]
+    let line = ''
+    for (let i = 0; i < points.length; i++) {
       const curr = points[i]
-      const cpx = (prev.x + curr.x) / 2
-      line += ` Q ${cpx},${prev.y} ${curr.x},${curr.y}`
+      const isGap = i > 0 && (curr.t - points[i - 1].t) > GAP_THRESHOLD_MS
+      if (i === 0 || isGap) {
+        line += `${line ? ' ' : ''}M ${curr.x},${curr.y}`
+      }
+      else {
+        line += ` L ${curr.x},${curr.y}`
+      }
     }
     return line
   }, [sortedSecondary, scaleX, scaleY])
 
-  // X-axis tick labels (4 ticks)
+  // X-axis tick labels (4 ticks, or 2 in compact mode)
   const xTicks = useMemo(() => {
     if (sorted.length < 2) return []
-    const count = 4
+    const count = compact ? 2 : 4
     const ticks: { x: number, label: string }[] = []
     for (let i = 0; i < count; i++) {
       const t = minTime + (i / (count - 1)) * (maxTime - minTime)
       ticks.push({ x: scaleX(t), label: formatTime(new Date(t)) })
     }
     return ticks
-  }, [sorted.length, minTime, maxTime, scaleX, formatTime])
+  }, [sorted.length, minTime, maxTime, scaleX, formatTime, compact])
 
-  // Y-axis tick labels (3 ticks)
+  // Y-axis tick labels (3 ticks, or 2 in compact mode)
   const yTicks = useMemo(() => {
-    const count = 3
+    const count = compact ? 2 : 3
     const ticks: { y: number, label: string }[] = []
     for (let i = 0; i < count; i++) {
       const v = minVal + (i / (count - 1)) * (maxVal - minVal)
       ticks.push({ y: scaleY(v), label: Math.round(v).toString() })
     }
     return ticks
-  }, [minVal, maxVal, scaleY])
+  }, [minVal, maxVal, scaleY, compact])
 
   const handleClick = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     if (sorted.length === 0) return
@@ -308,16 +370,51 @@ export function VitalsChart({
       >
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.2" />
-            <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+            <stop offset="0%" stopColor={color} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.04" />
           </linearGradient>
           {secondary && (
             <linearGradient id={secondary.gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={secondary.color} stopOpacity="0.12" />
-              <stop offset="100%" stopColor={secondary.color} stopOpacity="0.02" />
+              <stop offset="0%" stopColor={secondary.color} stopOpacity="0.18" />
+              <stop offset="100%" stopColor={secondary.color} stopOpacity="0.04" />
             </linearGradient>
           )}
         </defs>
+
+        {/* Personal baseline band (mean ± 1 SD). Sole reference behind the line —
+            population zones have been retired for sleep view. */}
+        {baselineMin != null && baselineMax != null && baselineMax > baselineMin && (
+          <>
+            <rect
+              x={padding.left}
+              y={scaleY(baselineMax)}
+              width={chartWidth}
+              height={Math.max(0, scaleY(baselineMin) - scaleY(baselineMax))}
+              fill={color}
+              opacity="0.15"
+            />
+            <line
+              x1={padding.left}
+              y1={scaleY(baselineMax)}
+              x2={padding.left + chartWidth}
+              y2={scaleY(baselineMax)}
+              stroke={color}
+              strokeWidth="0.5"
+              strokeDasharray="3,3"
+              opacity="0.4"
+            />
+            <line
+              x1={padding.left}
+              y1={scaleY(baselineMin)}
+              x2={padding.left + chartWidth}
+              y2={scaleY(baselineMin)}
+              stroke={color}
+              strokeWidth="0.5"
+              strokeDasharray="3,3"
+              opacity="0.4"
+            />
+          </>
+        )}
 
         {/* Zone backgrounds */}
         {zones.map((zone) => {
@@ -326,7 +423,7 @@ export function VitalsChart({
           return (
             <rect
               key={zone.label}
-              x={PADDING.left}
+              x={padding.left}
               y={y1}
               width={chartWidth}
               height={Math.max(0, y2 - y1)}
@@ -339,49 +436,24 @@ export function VitalsChart({
         {yTicks.map(tick => (
           <g key={tick.label}>
             <line
-              x1={PADDING.left}
+              x1={padding.left}
               y1={tick.y}
-              x2={PADDING.left + chartWidth}
+              x2={padding.left + chartWidth}
               y2={tick.y}
               stroke="rgb(63 63 70)" /* zinc-700 */
               strokeWidth="0.5"
             />
             <text
-              x={PADDING.left - 6}
+              x={padding.left - 6}
               y={tick.y + 3}
               textAnchor="end"
               fill="rgb(113 113 122)" /* zinc-500 */
-              fontSize="10"
+              fontSize="11"
             >
               {tick.label}
             </text>
           </g>
         ))}
-
-        {/* Average dashed line */}
-        {average != null && (
-          <g>
-            <line
-              x1={PADDING.left}
-              y1={scaleY(average)}
-              x2={PADDING.left + chartWidth}
-              y2={scaleY(average)}
-              stroke={color}
-              strokeWidth="1"
-              strokeDasharray="5,5"
-              opacity="0.3"
-            />
-            <text
-              x={PADDING.left + 2}
-              y={scaleY(average) - 4}
-              fill={color}
-              fontSize="8"
-              opacity="0.5"
-            >
-              avg
-            </text>
-          </g>
-        )}
 
         {/* Area fill */}
         {areaPath && (
@@ -414,30 +486,14 @@ export function VitalsChart({
           />
         )}
 
-        {/* Secondary average dashed line */}
-        {secondary?.average != null && (
-          <g>
-            <line
-              x1={PADDING.left}
-              y1={scaleY(secondary.average)}
-              x2={PADDING.left + chartWidth}
-              y2={scaleY(secondary.average)}
-              stroke={secondary.color}
-              strokeWidth="1"
-              strokeDasharray="3,3"
-              opacity="0.2"
-            />
-          </g>
-        )}
-
         {/* Selected point indicator */}
         {selectedPoint && (
           <g>
             <line
               x1={scaleX(selectedPoint.timestamp.getTime())}
-              y1={PADDING.top}
+              y1={padding.top}
               x2={scaleX(selectedPoint.timestamp.getTime())}
-              y2={PADDING.top + chartHeight}
+              y2={padding.top + chartHeight}
               stroke="white"
               strokeWidth="1"
               opacity="0.3"
@@ -474,7 +530,7 @@ export function VitalsChart({
             y={height - 4}
             textAnchor="middle"
             fill="rgb(113 113 122)" /* zinc-500 */
-            fontSize="10"
+            fontSize="11"
           >
             {tick.label}
           </text>

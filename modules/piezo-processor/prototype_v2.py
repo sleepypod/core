@@ -5,7 +5,7 @@ Prototype v2 piezo processor — literature-informed signal processing.
 Run on-pod against live RAW data. Prints results to stdout.
 
 Usage (on pod):
-    /opt/sleepypod/modules/piezo-processor/venv/bin/python prototype_v2.py
+    /opt/sleepypod/modules/piezo-processor/.venv/bin/python prototype_v2.py
 
 Pipeline (per literature):
   - Pump gating: dual-channel energy + 5s guard (Shin et al. IEEE TBME 2009)

@@ -1,0 +1,100 @@
+#!/bin/bash
+set -euo pipefail
+
+# sp-maintenance — housekeeping tasks run on every boot
+#
+# Called by sleepypod.service ExecStartPre so it runs before the app starts.
+# Keeps disk usage in check on the pod's limited storage (~6GB).
+
+DATA_DIR="/persistent/sleepypod-data"
+INSTALL_DIR="/home/dac/sleepypod-core"
+
+echo "=== SleepyPod Maintenance ==="
+
+# 1. Vacuum systemd journal (cap at 50MB)
+if command -v journalctl &>/dev/null; then
+  # Guard against two failure modes reported on a fresh Pod 4:
+  # (a) /persistent/journal missing → `du` fails, pipefail propagates, the
+  #     whole $(…) subshell errors under `set -e` unless we tolerate it.
+  # (b) directory exists but awk output is empty → `[ "" -gt 50 ]` errors
+  #     with "integer expression expected" under `set -e`.
+  # Belt-and-suspenders: tolerate pipeline failure with `|| true`, then
+  # default the variable to 0 if still unset/empty.
+  JOURNAL_SIZE=$(du -sm /persistent/journal 2>/dev/null | awk '{print $1}' || true)
+  JOURNAL_SIZE=${JOURNAL_SIZE:-0}
+  if [ "$JOURNAL_SIZE" -gt 50 ]; then
+    echo "Vacuuming journal (${JOURNAL_SIZE}MB → 50MB)..."
+    journalctl --vacuum-size=50M 2>/dev/null || true
+  fi
+fi
+
+# 2. Clean stale temp files (leftover from failed updates, builds, etc.)
+TEMP_CLEANED=0
+for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*; do
+  if [ -e "$d" ]; then
+    rm -rf "$d" 2>/dev/null && TEMP_CLEANED=$((TEMP_CLEANED + 1))
+  fi
+done
+[ "$TEMP_CLEANED" -gt 0 ] && echo "Cleaned $TEMP_CLEANED stale temp entries."
+
+# 3. Prune old database backups (keep 3 most recent of each kind).
+# Each backup set is a triplet — sleepypod.db.bak.<ts>, plus the matching
+# sleepypod.db-wal.bak.<ts> and sleepypod.db-shm.bak.<ts> sidecars created
+# by sp-update. Pruning only the .db files would leak WAL/SHM backups for
+# pruned timestamps.
+if [ -d "$DATA_DIR" ]; then
+  prune_bak_pattern() {
+    local pattern="$1"
+    # `ls $DIR/glob | wc -l` dies under set -euo pipefail when the glob
+    # doesn't match (ls exits 1 on "no such file", pipefail propagates,
+    # set -e kills the command substitution). Use `find` instead: clean
+    # exit 0 whether or not matches exist.
+    local count
+    count=$(find "$DATA_DIR" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | wc -l)
+    count=${count:-0}
+    if [ "$count" -gt 3 ]; then
+      local prune=$((count - 3))
+      find "$DATA_DIR" -maxdepth 1 -name "$pattern" -type f -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | tail -n "$prune" | awk '{print $2}' | xargs -r rm -f
+      echo "Pruned $prune old $pattern backups (kept 3)."
+    fi
+  }
+  prune_bak_pattern 'sleepypod.db.bak.*'
+  prune_bak_pattern 'sleepypod.db-wal.bak.*'
+  prune_bak_pattern 'sleepypod.db-shm.bak.*'
+fi
+
+# 4. Prune pnpm content-addressable store
+if command -v pnpm &>/dev/null; then
+  STORE_SIZE=$(du -sm /home/root/.local/share/pnpm/store 2>/dev/null | awk '{print $1}' || true)
+  STORE_SIZE=${STORE_SIZE:-0}
+  if [ "$STORE_SIZE" -gt 100 ]; then
+    echo "Pruning pnpm store (${STORE_SIZE}MB)..."
+    pnpm store prune 2>/dev/null || true
+  fi
+fi
+
+# 5. Self-heal /persistent/deviceinfo perms so next-server can unlink
+# stale dac.sock on startup. Older installs created the dir with mkdir's
+# default umask (root:root 0755), which denies write to the sleepypod user
+# (even with SupplementaryGroups=dac) — getStatus then fails with
+# "EACCES: permission denied, unlink '/persistent/deviceinfo/dac.sock'".
+# Newer installs set this correctly; this block reconciles existing pods.
+DEVICEINFO_DIR=/persistent/deviceinfo
+if getent group dac &>/dev/null; then
+  mkdir -p "$DEVICEINFO_DIR"
+  OWNER_GROUP=$(stat -c '%U:%G' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
+  MODE=$(stat -c '%a' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
+  if [ "$OWNER_GROUP" != "root:dac" ] || [ "$MODE" != "2770" ]; then
+    if [ -z "$OWNER_GROUP" ] || [ -z "$MODE" ]; then
+      echo "Repairing $DEVICEINFO_DIR perms (stat failed → forcing root:dac 2770)..."
+    else
+      echo "Repairing $DEVICEINFO_DIR perms ($OWNER_GROUP $MODE → root:dac 2770)..."
+    fi
+    chown root:dac "$DEVICEINFO_DIR"
+    chown root:dac "$DEVICEINFO_DIR" || { echo "ERROR: chown $DEVICEINFO_DIR failed — next-server will fail to unlink dac.sock" >&2; exit 1; }
+  fi
+fi
+
+DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
+echo "Maintenance complete. ${DISK_AVAIL}MB free."

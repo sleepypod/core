@@ -12,6 +12,8 @@ export enum JobType {
   CALIBRATION = 'calibration',
   REBOOT = 'reboot',
   RUN_ONCE = 'run_once',
+  LED_BRIGHTNESS = 'led_brightness',
+  AWAY_MODE = 'away_mode',
 }
 
 /**
@@ -32,6 +34,12 @@ export interface ScheduledJob {
   schedule: string // Cron expression
   job: Job
   metadata?: Record<string, unknown>
+  /**
+   * True for jobs scheduled at an absolute fireDate (scheduleOneTimeJob).
+   * Preserved across cancelRecurringJobs reloads so in-flight one-shots
+   * (e.g. away-mode transitions) aren't silently dropped.
+   */
+  oneTime?: boolean
 }
 
 /**

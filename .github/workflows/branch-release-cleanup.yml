@@ -1,0 +1,31 @@
+name: Branch Release Cleanup
+
+# Drop the rolling `<slug>-latest` prerelease + tag when a feature branch is
+# deleted. Without this, every short-lived branch would accrete a permanent
+# prerelease in the GitHub Releases page.
+
+on:
+  delete:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.event.ref_type == 'branch' && github.event.ref != 'main' && github.event.ref != 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute tag
+        id: slug
+        run: |
+          REF="${{ github.event.ref }}"
+          SLUG="${REF//\//-}"
+          echo "tag=${SLUG}-latest" >> "$GITHUB_OUTPUT"
+
+      - name: Drop rolling release + tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.slug.outputs.tag }}"
+          # Idempotent — 404 (branch never had a prerelease) is fine.
+          gh release delete "$TAG" --yes --cleanup-tag --repo "${{ github.repository }}" 2>/dev/null || true

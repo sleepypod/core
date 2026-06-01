@@ -5,9 +5,6 @@ import { phaseLabels, phaseColors } from '@/src/lib/sleepCurve/types'
 
 const displayPhases: Phase[] = ['warmUp', 'coolDown', 'deepSleep', 'preWake']
 
-/**
- * Compact horizontal legend showing key sleep phases with color indicators.
- */
 export function PhaseLegend() {
   return (
     <div className="flex flex-wrap justify-center gap-x-4 gap-y-1">

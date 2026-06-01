@@ -54,19 +54,21 @@ function useRelativeTime(timestamp: number | null): string {
   const [text, setText] = useState('')
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (!timestamp) {
       setText('')
       return
     }
 
     function update() {
-      const diff = Math.floor((Date.now() - timestamp!) / 1000)
+      const diff = Math.floor((Date.now() - (timestamp ?? 0)) / 1000)
       if (diff < 2) setText('just now')
       else if (diff < 60) setText(`${diff}s ago`)
       else setText(`${Math.floor(diff / 60)}m ago`)
     }
 
     update()
+    /* eslint-enable react-hooks/set-state-in-effect */
     const interval = setInterval(update, 1000)
     return () => clearInterval(interval)
   }, [timestamp])

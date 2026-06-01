@@ -10,7 +10,11 @@ import { environmentRouter } from './environment'
 import { rawRouter } from './raw'
 import { calibrationRouter } from './calibration'
 import { waterLevelRouter } from './waterLevel'
+import { pumpAlertsRouter } from './pumpAlerts'
 import { runOnceRouter } from './runOnce'
+import { mqttRouter } from './mqtt'
+import { homekitRouter } from './homekit'
+import { archivePushRouter } from './archivePush'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -32,7 +36,11 @@ export const appRouter = router({
   raw: rawRouter,
   calibration: calibrationRouter,
   waterLevel: waterLevelRouter,
+  pumpAlerts: pumpAlertsRouter,
   runOnce: runOnceRouter,
+  mqtt: mqttRouter,
+  homekit: homekitRouter,
+  archivePush: archivePushRouter,
 })
 
 export type AppRouter = typeof appRouter

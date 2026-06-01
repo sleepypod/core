@@ -119,6 +119,42 @@ describe('generateSleepCurve', () => {
     expect(phases.has('preWake')).toBe(true)
     expect(phases.has('wake')).toBe(true)
   })
+
+  it('produces monotonic, non-overlapping phases for short sleep (< 218 min)', () => {
+    // Regression for #327: for sleepDuration ≈ 150 min the original algorithm
+    // emitted maintain-phase points after preWake started, causing legend/chart
+    // rendering to be incorrect after sorting.
+    for (const duration of [150, 180, 200, 217, 240]) {
+      const bedtimeMinutes = 22 * 60
+      const wakeMinutes = (bedtimeMinutes + duration) % (24 * 60)
+      const points = generateSleepCurve({ bedtimeMinutes, wakeMinutes })
+
+      // 1. Points must be sorted by time
+      for (let i = 1; i < points.length; i++) {
+        expect(points[i].minutesFromBedtime).toBeGreaterThanOrEqual(points[i - 1].minutesFromBedtime)
+      }
+
+      // 2. Phases must appear in canonical order without interleaving
+      const phaseOrder: Record<string, number> = {
+        warmUp: 0, coolDown: 1, deepSleep: 2, maintain: 3, preWake: 4, wake: 5,
+      }
+      let lastPhaseOrder = -1
+      for (const p of points) {
+        const order = phaseOrder[p.phase]
+        expect(order).toBeGreaterThanOrEqual(lastPhaseOrder)
+        lastPhaseOrder = order
+      }
+
+      // 3. All phases still present
+      const phases = new Set(points.map(p => p.phase))
+      expect(phases.has('warmUp')).toBe(true)
+      expect(phases.has('coolDown')).toBe(true)
+      expect(phases.has('deepSleep')).toBe(true)
+      expect(phases.has('maintain')).toBe(true)
+      expect(phases.has('preWake')).toBe(true)
+      expect(phases.has('wake')).toBe(true)
+    }
+  })
 })
 
 describe('curveToScheduleTemperatures', () => {

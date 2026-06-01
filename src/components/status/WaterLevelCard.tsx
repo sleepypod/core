@@ -4,9 +4,9 @@ import { useState, useCallback, useMemo } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { Droplets, Play, X, AlertTriangle, TrendingDown, TrendingUp, Minus, Loader2 } from 'lucide-react'
 
-function trendIcon(direction: string) {
-  if (direction === 'falling') return <TrendingDown size={12} className="text-amber-400" />
-  if (direction === 'rising') return <TrendingUp size={12} className="text-emerald-400" />
+function trendIcon(trend: string) {
+  if (trend === 'declining') return <TrendingDown size={12} className="text-amber-400" />
+  if (trend === 'rising') return <TrendingUp size={12} className="text-emerald-400" />
   return <Minus size={12} className="text-zinc-500" />
 }
 
@@ -39,6 +39,7 @@ export function WaterLevelCard() {
   // Last 7 days of readings for the trend chart
   const { data: history } = trpc.waterLevel.getHistory.useQuery(
     {
+      // eslint-disable-next-line react-hooks/purity
       startDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
       limit: 10000,
     },
@@ -61,7 +62,7 @@ export function WaterLevelCard() {
     },
   })
 
-  const dismissPrimeMutation = trpc.device.dismissPrimeNotification.useMutation({
+  trpc.device.dismissPrimeNotification.useMutation({
     onSuccess: () => utils.device.getStatus.invalidate(),
   })
 
@@ -83,7 +84,7 @@ export function WaterLevelCard() {
           <Droplets size={16} className="text-sky-400" />
           <span className="text-sm font-medium text-white">Water Level</span>
         </div>
-        {trend && trendIcon(trend.direction)}
+        {trend && trendIcon(trend.trend)}
       </div>
 
       {/* Current level */}
@@ -98,9 +99,7 @@ export function WaterLevelCard() {
               <div className="flex items-end gap-3">
                 <div>
                   <p className="text-2xl font-bold tabular-nums text-white">
-                    {typeof latest.levelPercent === 'number'
-                      ? `${Math.round(latest.levelPercent)}%`
-                      : '--'}
+                    {latest.level === 'ok' ? 'OK' : 'Low'}
                   </p>
                   <p className="text-[10px] text-zinc-500">
                     {new Date(latest.timestamp).toLocaleTimeString([], {
@@ -111,14 +110,16 @@ export function WaterLevelCard() {
                 </div>
                 {trend && (
                   <div className="mb-1 text-xs text-zinc-500">
-                    {trend.direction !== 'stable' && (
+                    {trend.trend === 'stable' && <span>Stable</span>}
+                    {trend.trend === 'declining' && (
                       <span>
-                        {(trend.changePercent ?? 0) > 0 ? '+' : ''}
-                        {(trend.changePercent ?? 0).toFixed(1)}
-                        % / 24h
+                        Declining (
+                        {trend.lowPercent}
+                        % low)
                       </span>
                     )}
-                    {trend.direction === 'stable' && <span>Stable</span>}
+                    {trend.trend === 'rising' && <span>Rising</span>}
+                    {trend.trend === 'unknown' && <span>Insufficient data</span>}
                   </div>
                 )}
               </div>
@@ -133,7 +134,7 @@ export function WaterLevelCard() {
       {/* Active alerts */}
       {activeAlerts.length > 0 && (
         <div className="space-y-1.5">
-          {activeAlerts.map((alert: { id: number, alertType: string, message: string }) => (
+          {activeAlerts.map(alert => (
             <div
               key={alert.id}
               className="flex items-center gap-2 rounded-lg bg-amber-900/20 px-3 py-2"
@@ -218,11 +219,33 @@ function WaterLevelChart({ history }: { history?: { timestamp: Date, level: stri
     return values.filter((_, i) => i % step === 0 || i === values.length - 1)
   }, [history])
 
-  if (!points || points.length < 2) return null
-
   const W = 300
   const H = 48
   const PAD = 2
+
+  // Day labels — must be called before early return (rules-of-hooks)
+  const dayLabels = useMemo(() => {
+    if (!points || points.length < 2) return []
+    const minTs = points[0].ts
+    const maxTs = points[points.length - 1].ts
+    const tsRange = maxTs - minTs || 1
+    const toX = (ts: number) => PAD + ((ts - minTs) / tsRange) * (W - PAD * 2)
+
+    const labels: { x: number, label: string }[] = []
+    const seen = new Set<string>()
+    for (const p of points) {
+      const d = new Date(p.ts)
+      const day = d.toLocaleDateString('en-US', { weekday: 'short' })
+      if (!seen.has(day)) {
+        seen.add(day)
+        labels.push({ x: toX(p.ts), label: day })
+      }
+    }
+    return labels
+  }, [points, W, PAD])
+
+  if (!points || points.length < 2) return null
+
   const minTs = points[0].ts
   const maxTs = points[points.length - 1].ts
   const tsRange = maxTs - minTs || 1
@@ -240,21 +263,6 @@ function WaterLevelChart({ history }: { history?: { timestamp: Date, level: stri
   // Color based on latest level
   const lastLevel = points[points.length - 1].level
   const color = lastLevel <= 30 ? '#f87171' : lastLevel <= 50 ? '#fbbf24' : '#38bdf8'
-
-  // Day labels
-  const dayLabels = useMemo(() => {
-    const labels: { x: number, label: string }[] = []
-    const seen = new Set<string>()
-    for (const p of points) {
-      const d = new Date(p.ts)
-      const day = d.toLocaleDateString('en-US', { weekday: 'short' })
-      if (!seen.has(day)) {
-        seen.add(day)
-        labels.push({ x: toX(p.ts), label: day })
-      }
-    }
-    return labels
-  }, [points])
 
   return (
     <div className="relative">

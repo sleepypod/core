@@ -13,6 +13,7 @@ import { ConnectionStatusBar } from './ConnectionStatusBar'
 import { PresenceCard } from './PresenceCard'
 import { BedTempMatrix } from './BedTempMatrix'
 import { FreezerHealthCard } from './FreezerHealthCard'
+import { FlowrateChart } from './FlowrateChart'
 import { PiezoWaveform } from './PiezoWaveform'
 
 const DataPipeline = dynamic(() => import('./DataPipeline').then(m => ({ default: m.DataPipeline })), {
@@ -238,6 +239,11 @@ export function SensorsScreen() {
             {/* System — freezer thermal health */}
             <SensorCard>
               <FreezerHealthCard />
+            </SensorCard>
+
+            {/* Flowrate + Pump RPM trend (from biometrics) */}
+            <SensorCard>
+              <FlowrateChart />
             </SensorCard>
           </>
         )}

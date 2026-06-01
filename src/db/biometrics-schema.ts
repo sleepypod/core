@@ -21,7 +21,6 @@ export const vitals = sqliteTable('vitals', {
   hrv: real('hrv'), // ms RMSSD
   breathingRate: real('breathing_rate'), // breaths/min
 }, t => [
-  index('idx_vitals_side_timestamp').on(t.side, t.timestamp),
   uniqueIndex('uq_vitals_side_timestamp').on(t.side, t.timestamp),
 ])
 
@@ -81,6 +80,9 @@ export const waterLevelReadings = sqliteTable('water_level_readings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   level: text('level', { enum: ['low', 'ok'] }).notNull(),
+  raw: integer('raw'),
+  calibratedEmpty: integer('calibrated_empty'),
+  calibratedFull: integer('calibrated_full'),
 }, t => [
   uniqueIndex('idx_water_level_timestamp').on(t.timestamp),
 ])
@@ -102,6 +104,49 @@ export const ambientLight = sqliteTable('ambient_light', {
   lux: real('lux'),
 }, t => [
   uniqueIndex('idx_ambient_light_timestamp').on(t.timestamp),
+])
+
+export const pumpAlerts = sqliteTable('pump_alerts', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  type: text('type', {
+    enum: [
+      'stall_left',
+      'stall_right',
+      'no_flow_left',
+      'no_flow_right',
+      'asymmetry',
+      'clog_suspected',
+      'hub_temp_disputed',
+    ],
+  }).notNull(),
+  side: text('side', { enum: ['left', 'right'] }),
+  rpm: integer('rpm'),
+  flowrateCd: integer('flowrate_cd'),
+  durationSeconds: integer('duration_seconds'),
+  action: text('action', {
+    enum: ['power_off', 'auto_recovered', 'warned', 'none'],
+  }).notNull().default('none'),
+  // Snapshot of side state immediately before the trip so an
+  // acknowledgement can restore it through the normal command path.
+  restoreTargetTemperature: integer('restore_target_temperature'),
+  restoreDurationSeconds: integer('restore_duration_seconds'),
+  acknowledgedAt: integer('acknowledged_at', { mode: 'timestamp' }),
+  dismissedAt: integer('dismissed_at', { mode: 'timestamp' }),
+}, t => [
+  index('idx_pump_alerts_timestamp').on(t.timestamp),
+  index('idx_pump_alerts_acknowledged').on(t.acknowledgedAt),
+])
+
+export const flowReadings = sqliteTable('flow_readings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  leftFlowrateCd: integer('left_flowrate_cd'), // centidegrees, matching bed_temp convention
+  rightFlowrateCd: integer('right_flowrate_cd'),
+  leftPumpRpm: integer('left_pump_rpm'),
+  rightPumpRpm: integer('right_pump_rpm'),
+}, t => [
+  uniqueIndex('idx_flow_readings_timestamp').on(t.timestamp),
 ])
 
 // ── Calibration tables ──

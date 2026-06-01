@@ -1,54 +1,41 @@
 /**
- * Global hardware singleton — ONE franken connection, ONE client, ONE monitor.
+ * Read-side singleton for the DAC: owns the transport connection, the polling
+ * monitor, the gesture handler, and the device-state writer. **Does not** issue
+ * commands itself — every writer goes through `getSharedHardwareClient()` from
+ * `./sharedClient.ts`. Keeping the write surface out of this file makes it
+ * obvious what the monitor's job is (observe + broadcast) and prevents new
+ * accessors from accidentally landing here.
  *
- * Lifecycle (managed by instrumentation.ts):
- *   1. startDacServer()     — connectDac() on dac.sock
- *   2. getDacMonitor()      — create monitor + client, start polling when connected
- *   3. shutdownDacMonitor() — disconnectDac() + stop everything
+ * Lifecycle (driven by `instrumentation.ts`):
+ *   1. `startDacServer()`     — kicks off the DacTransport connection on dac.sock
+ *   2. `getDacMonitor()`      — creates the monitor, gesture handler, state sync;
+ *                               wires status / gesture events; starts polling
+ *   3. `shutdownDacMonitor()` — stops the monitor, cancels snoozes, clears the
+ *                               shared client, disconnects the transport
  *
- * All consumers (DacMonitor, device router, health router) share the same
- * DacTransport connection and HardwareClient. No competing listeners.
- *
- * The HardwareClient returned by getSharedHardwareClient() is a thin wrapper
- * around sendCommand() from ./dacTransport — it implements the same interface
- * as the old SocketClient-based HardwareClient.
+ * Backed by `globalThis` so Turbopack module duplication can't produce two
+ * monitors competing for the same socket.
  */
 
-import { connectDac, disconnectDac, sendCommand, isDacConnected } from './dacTransport'
+import { connectDac, disconnectDac } from './dacTransport'
 import { DacMonitor } from './dacMonitor'
-import type { HardwareClient } from './client'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
 import { DeviceStateSync, getAlarmState } from './deviceStateSync'
 import { trackPrimingState, resetPrimingState, getPrimeCompletedAt } from './primeNotification'
 import { cancelSnooze, getSnoozeStatus } from './snoozeManager'
-import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
-import {
-  type AlarmConfig,
-  type DeviceStatus,
-  type Side,
-  DEFAULT_HEATING_DURATION,
-  HardwareCommand,
-  HardwareError,
-  fahrenheitToLevel,
-  MAX_TEMP,
-  MIN_TEMP,
-} from './types'
+import { clearSharedHardwareClient, getSharedHardwareClient } from './sharedClient'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
 
-// ── Singleton storage on globalThis (survives Turbopack module duplication) ──
-
 const KEYS = {
   server: '__sp_dac_server__',
-  client: '__sp_hw_client__',
   monitor: '__sp_dac_monitor__',
   gesture: '__sp_gesture_handler__',
+  unsubFlow: '__sp_unsub_flow__',
 } as const
 
 const g = globalThis as Record<string, unknown>
-
-// ── DacTransport connection (replaces DacSocketServer) ──
 
 export async function startDacServer(): Promise<void> {
   if (g[KEYS.server]) return
@@ -65,127 +52,9 @@ export function getDacServer(): unknown {
   return g[KEYS.server] ?? null
 }
 
-// ── DacHardwareClient — same interface as HardwareClient, backed by sendCommand() ──
-
-/**
- * Thin wrapper around sendCommand() that presents the same interface as
- * the original HardwareClient. All consumers (DacMonitor, tRPC routers,
- * gesture handler, job manager) use this without knowing the backend changed.
- */
-class DacHardwareClient {
-  async connect(): Promise<void> {
-    // connectDac is called in startDacServer().
-    // If not yet connected, connect now.
-    if (!isDacConnected()) {
-      await connectDac(DAC_SOCK_PATH)
-    }
-  }
-
-  async getDeviceStatus(): Promise<DeviceStatus> {
-    const response = await sendCommand(HardwareCommand.DEVICE_STATUS)
-    return parseDeviceStatus(response)
-  }
-
-  async setTemperature(side: Side, temperature: number, duration?: number): Promise<void> {
-    if (temperature < MIN_TEMP || temperature > MAX_TEMP) {
-      throw new HardwareError(`Temperature must be between ${MIN_TEMP}°F and ${MAX_TEMP}°F`)
-    }
-
-    const level = fahrenheitToLevel(temperature)
-
-    const levelCommand = side === 'left'
-      ? HardwareCommand.TEMP_LEVEL_LEFT
-      : HardwareCommand.TEMP_LEVEL_RIGHT
-
-    await sendCommand(levelCommand, level.toString())
-
-    // Always send duration — default to 8 hours if not specified so the pod actually heats
-    const durationCommand = side === 'left'
-      ? HardwareCommand.LEFT_TEMP_DURATION
-      : HardwareCommand.RIGHT_TEMP_DURATION
-
-    await sendCommand(durationCommand, (duration ?? DEFAULT_HEATING_DURATION).toString())
-  }
-
-  async setAlarm(side: Side, config: AlarmConfig): Promise<void> {
-    if (config.vibrationIntensity < 1 || config.vibrationIntensity > 100) {
-      throw new HardwareError('Vibration intensity must be between 1 and 100')
-    }
-    if (config.duration < 0 || config.duration > 180) {
-      throw new HardwareError('Alarm duration must be between 0 and 180 seconds')
-    }
-
-    const command = side === 'left' ? HardwareCommand.ALARM_LEFT : HardwareCommand.ALARM_RIGHT
-    const patternCode = config.vibrationPattern === 'double' ? '0' : '1'
-    const argument = `${config.vibrationIntensity},${patternCode},${config.duration}`
-
-    const response = await sendCommand(command, argument)
-    const parsed = parseSimpleResponse(response)
-
-    if (!parsed.success) {
-      throw new HardwareError(`Failed to set alarm: ${parsed.message}`)
-    }
-  }
-
-  async clearAlarm(side: Side): Promise<void> {
-    await sendCommand(HardwareCommand.ALARM_CLEAR, side === 'left' ? '0' : '1')
-  }
-
-  async startPriming(): Promise<void> {
-    const response = await sendCommand(HardwareCommand.PRIME)
-    const parsed = parseSimpleResponse(response)
-
-    if (!parsed.success) {
-      throw new HardwareError(`Failed to start priming: ${parsed.message}`)
-    }
-  }
-
-  async setPower(side: Side, powered: boolean, temperature?: number): Promise<void> {
-    if (powered) {
-      const temp = temperature ?? 75
-      await this.setTemperature(side, temp)
-    }
-    else {
-      const command = side === 'left'
-        ? HardwareCommand.TEMP_LEVEL_LEFT
-        : HardwareCommand.TEMP_LEVEL_RIGHT
-
-      const response = await sendCommand(command, '0')
-      const parsed = parseSimpleResponse(response)
-
-      if (!parsed.success) {
-        throw new HardwareError(`Failed to power off: ${parsed.message}`)
-      }
-    }
-  }
-
-  isConnected(): boolean {
-    return isDacConnected()
-  }
-
-  disconnect(): void {
-    // No-op for shared client — disconnectDac() is called at shutdown.
-    // Individual consumers should not tear down the shared connection.
-  }
-
-  getRawClient(): null {
-    return null
-  }
-}
-
-// ── Shared HardwareClient ──
-
-export function getSharedHardwareClient(): HardwareClient {
-  if (g[KEYS.client]) return g[KEYS.client] as HardwareClient
-
-  // Return a DacHardwareClient cast as HardwareClient.
-  // It implements the same interface (duck typing).
-  const client = new DacHardwareClient() as unknown as HardwareClient
-  g[KEYS.client] = client
-  return client
-}
-
-// ── DacMonitor ──
+// Re-export for callers that historically imported from this module. The
+// implementation lives in `./sharedClient.ts` — new code should import there.
+export { getSharedHardwareClient }
 
 let monitorInitPromise: Promise<DacMonitor> | null = null
 
@@ -245,6 +114,13 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
         }).catch(() => { /* WS server may not be started yet */ })
       })
 
+      // Subscribe to frzHealth frames from the sensor stream to record flow data
+      import('../streaming/piezoStream').then(({ onServerFrame }) => {
+        g[KEYS.unsubFlow] = onServerFrame((frame) => {
+          stateSync.recordFlowData(frame as Record<string, unknown>)
+        })
+      }).catch(() => { /* WS server may not be started yet */ })
+
       g[KEYS.monitor] = monitor
       g[KEYS.gesture] = gestureHandler
 
@@ -284,10 +160,14 @@ export const shutdownDacMonitor = async (): Promise<void> => {
   cancelSnooze('right')
   resetPrimingState()
 
+  const unsubFlow = g[KEYS.unsubFlow] as (() => void) | undefined
+  unsubFlow?.()
+
   g[KEYS.monitor] = null
   g[KEYS.gesture] = null
-  g[KEYS.client] = null
   g[KEYS.server] = null
+  g[KEYS.unsubFlow] = null
+  clearSharedHardwareClient()
   monitorInitPromise = null
 
   gestureHandler?.cleanup()

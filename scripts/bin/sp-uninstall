@@ -1,0 +1,165 @@
+#!/bin/bash
+set -euo pipefail
+
+# sp-uninstall — remove sleepypod-core and all installed artifacts
+#
+# Usage:
+#   sp-uninstall              # interactive (prompts for confirmation)
+#   sp-uninstall --force      # skip confirmation
+#   sp-uninstall --keep-data  # remove everything except databases
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: Must run as root (use sudo)" >&2
+  exit 1
+fi
+
+KEEP_DATA=false
+FORCE=false
+for arg in "$@"; do
+  case "$arg" in
+    --keep-data) KEEP_DATA=true ;;
+    --force)     FORCE=true ;;
+  esac
+done
+
+INSTALL_DIR="/home/dac/sleepypod-core"
+DATA_DIR="/persistent/sleepypod-data"
+MODULES_DIR="/opt/sleepypod/modules"
+
+if [ "$FORCE" != true ]; then
+  echo "This will remove sleepypod-core and all related services."
+  if [ "$KEEP_DATA" = true ]; then
+    echo "Databases at $DATA_DIR will be preserved."
+  else
+    echo "WARNING: Databases at $DATA_DIR will be DELETED."
+  fi
+  echo ""
+  read -rp "Continue? [y/N] " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 0
+  fi
+fi
+
+echo "=== Uninstalling SleepyPod ==="
+
+# Stop and disable services
+echo "Stopping services..."
+SERVICES=(
+  sleepypod.service
+  sleepypod-piezo-processor.service
+  sleepypod-sleep-detector.service
+  sleepypod-environment-monitor.service
+  sleepypod-calibrator.service
+  sleepypod-cover-buttons.service
+)
+for svc in "${SERVICES[@]}"; do
+  systemctl stop "$svc" 2>/dev/null || true
+  systemctl disable "$svc" 2>/dev/null || true
+  rm -f "/etc/systemd/system/$svc"
+done
+
+# Drop-ins installed by sp-update (e.g. iptables-lockfile.conf for older pods).
+rm -rf /etc/systemd/system/sleepypod.service.d
+
+# Restore frank.sh from the most recent pre-tmpfs backup BEFORE the mount
+# is torn down — otherwise frank's cwd disappears mid-restart.
+if ls /opt/eight/bin/frank.sh.bak-pre-tmpfs-* >/dev/null 2>&1; then
+  newest_backup=$(ls -1t /opt/eight/bin/frank.sh.bak-pre-tmpfs-* | head -1)
+  echo "Restoring frank.sh from $newest_backup"
+  cp -p "$newest_backup" /opt/eight/bin/frank.sh
+  systemctl restart frank.service 2>/dev/null || true
+fi
+
+# Tear down biometrics-archiver: timers, prep service, mount unit.
+for u in sleepypod-biometrics-archiver.timer sleepypod-biometrics-pruner.timer \
+         sleepypod-tmpfs-prep.service persistent-biometrics.mount; do
+  systemctl stop "$u" 2>/dev/null || true
+  systemctl disable "$u" 2>/dev/null || true
+done
+rm -f /etc/systemd/system/sleepypod-biometrics-archiver.service \
+      /etc/systemd/system/sleepypod-biometrics-archiver.timer \
+      /etc/systemd/system/sleepypod-biometrics-pruner.service \
+      /etc/systemd/system/sleepypod-biometrics-pruner.timer \
+      /etc/systemd/system/sleepypod-tmpfs-prep.service \
+      /etc/systemd/system/persistent-biometrics.mount
+rm -rf /etc/systemd/system/frank.service.d
+rm -f /usr/local/bin/sleepypod-tmpfs-prep \
+      /usr/local/bin/sleepypod-biometrics-archiver \
+      /usr/local/bin/sleepypod-biometrics-pruner
+
+systemctl daemon-reload
+
+# Remove CLI tools
+echo "Removing CLI tools..."
+rm -f /usr/local/bin/sp-status
+rm -f /usr/local/bin/sp-restart
+rm -f /usr/local/bin/sp-logs
+rm -f /usr/local/bin/sp-update
+rm -f /usr/local/bin/sp-uninstall
+
+# Remove Python modules
+if [ -d "$MODULES_DIR" ]; then
+  echo "Removing Python modules..."
+  rm -rf "$MODULES_DIR"
+fi
+rm -rf /etc/sleepypod
+
+# Remove application code
+if [ -d "$INSTALL_DIR" ]; then
+  echo "Removing application code..."
+  rm -rf "$INSTALL_DIR"
+fi
+
+# Remove data (unless --keep-data)
+if [ "$KEEP_DATA" = true ]; then
+  echo "Keeping databases at $DATA_DIR"
+else
+  if [ -d "$DATA_DIR" ]; then
+    echo "Removing databases..."
+    rm -rf "$DATA_DIR"
+  fi
+fi
+
+# Remove /etc/hosts telemetry block
+if grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null && \
+   grep -q "# END sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+  echo "Removing /etc/hosts telemetry block..."
+  sed -i '/# BEGIN sleepypod-telemetry-block/,/# END sleepypod-telemetry-block/d' /etc/hosts
+elif grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+  echo "Warning: Incomplete telemetry block in /etc/hosts (missing END marker), skipping removal"
+fi
+
+# Restore iptables to allow all traffic (IPv4 and IPv6)
+echo "Restoring iptables (allowing all traffic)..."
+iptables -F 2>/dev/null || true
+iptables -X 2>/dev/null || true
+iptables -t nat -F 2>/dev/null || true
+iptables -t nat -X 2>/dev/null || true
+iptables -P INPUT ACCEPT 2>/dev/null || true
+iptables -P OUTPUT ACCEPT 2>/dev/null || true
+iptables -P FORWARD ACCEPT 2>/dev/null || true
+ip6tables -F 2>/dev/null || true
+ip6tables -X 2>/dev/null || true
+ip6tables -t nat -F 2>/dev/null || true
+ip6tables -t nat -X 2>/dev/null || true
+ip6tables -P INPUT ACCEPT 2>/dev/null || true
+ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
+ip6tables -P FORWARD ACCEPT 2>/dev/null || true
+rm -f /etc/iptables/iptables.rules /etc/iptables/rules.v4 /etc/iptables/rules.v6
+
+# Remove the sleepypod system user (the group is kept in case dac is
+# still a member — removing it would orphan file ownership on any
+# databases preserved via --keep-data).
+if id sleepypod &>/dev/null; then
+  echo "Removing sleepypod system user..."
+  userdel sleepypod 2>/dev/null || true
+fi
+
+echo ""
+echo "=== SleepyPod uninstalled ==="
+if [ "$KEEP_DATA" = true ]; then
+  echo "Databases preserved at: $DATA_DIR"
+fi
+echo "Note: Node.js and pnpm were left in place (/usr/local/lib/nodejs)"
+echo "Note: SSH config changes (if any) were not reverted — edit /etc/ssh/sshd_config manually"

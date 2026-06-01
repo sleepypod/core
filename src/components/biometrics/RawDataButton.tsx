@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useCallback } from 'react'
-import { Download, X, FileText, HardDrive, Trash2, Database } from 'lucide-react'
+import { useState, useCallback, useMemo } from 'react'
+import { Download, X, FileText, HardDrive, Trash2, Database, Package } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
@@ -80,7 +80,7 @@ export function RawDataButton() {
 
   // Only fetch when sheet is open to avoid unnecessary queries
   const vitalsQuery = trpc.biometrics.getVitals.useQuery(
-    { side, startDate: weekStart, endDate: weekEnd, limit: 1000 },
+    { side, startDate: weekStart, endDate: weekEnd, limit: 10000 },
     { enabled: isOpen }
   )
   const sleepQuery = trpc.biometrics.getSleepRecords.useQuery(
@@ -119,9 +119,9 @@ export function RawDataButton() {
     },
   })
 
-  const vitals = vitalsQuery.data ?? []
-  const sleepRecords = sleepQuery.data ?? []
-  const movement = movementQuery.data ?? []
+  const vitals = useMemo(() => vitalsQuery.data ?? [], [vitalsQuery.data])
+  const sleepRecords = useMemo(() => sleepQuery.data ?? [], [sleepQuery.data])
+  const movement = useMemo(() => movementQuery.data ?? [], [movementQuery.data])
   const fileCount = fileCountQuery.data
   const diskUsage = diskUsageQuery.data
 
@@ -171,6 +171,14 @@ export function RawDataButton() {
     link.click()
   }, [])
 
+  const exportArchive = useCallback(() => {
+    const startTs = Math.floor(weekStart.getTime() / 1000)
+    const endTs = Math.floor(weekEnd.getTime() / 1000)
+    const link = document.createElement('a')
+    link.href = `/api/export/archive?startTs=${startTs}&endTs=${endTs}&include=raw,db`
+    link.click()
+  }, [weekStart, weekEnd])
+
   return (
     <>
       <button
@@ -194,7 +202,10 @@ export function RawDataButton() {
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-zinc-100">Raw Data</h3>
               <button
-                onClick={() => { setIsOpen(false); setShowFiles(false) }}
+                onClick={() => {
+                  setIsOpen(false)
+                  setShowFiles(false)
+                }}
                 className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800"
               >
                 <X size={16} className="text-zinc-400" />
@@ -312,6 +323,18 @@ export function RawDataButton() {
             {/* Info text — matches iOS */}
             <p className="mt-3 text-center text-[10px] text-zinc-500">
               CSV files can be opened in Excel, Numbers, or imported into Python/R for analysis.
+            </p>
+
+            {/* Full archive — RAW waveforms + biometrics.db dump for the visible week */}
+            <button
+              onClick={exportArchive}
+              className="mt-3 flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-zinc-800/60 p-3 text-sm font-medium text-zinc-200 active:bg-zinc-700"
+            >
+              <Package size={16} className="text-amber-400" />
+              Export Archive (.tar.gz)
+            </button>
+            <p className="mt-2 text-center text-[10px] text-zinc-500">
+              RAW waveforms + biometrics.db copy for this week. Untar and open biometrics.db with any SQLite client.
             </p>
 
             {/* Raw sensor files section — wired to raw.files tRPC router */}

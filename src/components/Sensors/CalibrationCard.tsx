@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
-import { Activity, Thermometer, Fingerprint, RefreshCw, CheckCircle, XCircle, Clock, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
+import { Activity, Thermometer, Fingerprint, RefreshCw, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react'
 
 type SensorType = 'piezo' | 'capacitance' | 'temperature'
 
@@ -142,8 +142,8 @@ export function CalibrationCard() {
   const { side } = useSide()
   const utils = trpc.useUtils()
   const [triggeringType, setTriggeringType] = useState<SensorType | null>(null)
-  const [showHistory, setShowHistory] = useState(false)
-  const [showQuality, setShowQuality] = useState(false)
+  const [showHistory] = useState(false)
+  const [showQuality] = useState(false)
 
   // Calibration status for current side
   const { data: status, isLoading: statusLoading } = trpc.calibration.getStatus.useQuery(
@@ -152,13 +152,13 @@ export function CalibrationCard() {
   )
 
   // Calibration history
-  const { data: history } = trpc.calibration.getHistory.useQuery(
+  trpc.calibration.getHistory.useQuery(
     { side, limit: 10 },
     { enabled: showHistory }
   )
 
   // Vitals quality scores
-  const { data: vitalsQuality } = trpc.calibration.getVitalsQuality.useQuery(
+  trpc.calibration.getVitalsQuality.useQuery(
     { side, limit: 20 },
     { enabled: showQuality }
   )

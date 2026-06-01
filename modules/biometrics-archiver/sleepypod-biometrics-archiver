@@ -1,0 +1,48 @@
+#!/bin/bash
+# Archive RAW files from the /persistent/biometrics tmpfs into a gzipped
+# cold archive on eMMC. Runs every 15 min via timer. Files newer than
+# KEEP_RECENT_MIN are left alone (firmware may still be writing them).
+#
+# Output: /persistent/biometrics-archive/<seqno>.RAW.gz, atomic via tmp
+# file + rename.
+set -euo pipefail
+
+TMPFS_DIR="/persistent/biometrics"
+ARCHIVE_DIR="/persistent/biometrics-archive"
+KEEP_RECENT_MIN="${KEEP_RECENT_MIN:-15}"
+GZIP_LEVEL="${GZIP_LEVEL:-6}"
+
+mkdir -p "$ARCHIVE_DIR"
+
+if ! mountpoint -q "$TMPFS_DIR"; then
+  echo "archiver: $TMPFS_DIR is not a tmpfs mount — skipping" >&2
+  exit 0
+fi
+
+archived=0
+removed=0
+failed=0
+
+while IFS= read -r -d '' src; do
+  base=$(basename "$src")
+  dst="$ARCHIVE_DIR/$base.gz"
+
+  if [ -f "$dst" ]; then
+    rm -f "$src"
+    removed=$((removed + 1))
+    continue
+  fi
+
+  tmp="$dst.tmp.$$"
+  if gzip -"$GZIP_LEVEL" -c "$src" > "$tmp"; then
+    mv -f "$tmp" "$dst"
+    rm -f "$src"
+    archived=$((archived + 1))
+  else
+    rm -f "$tmp"
+    failed=$((failed + 1))
+    echo "archiver: failed to gzip $base" >&2
+  fi
+done < <(find "$TMPFS_DIR" -maxdepth 1 -type f -name '*.RAW' -mmin "+$KEEP_RECENT_MIN" -print0)
+
+echo "archiver: archived=$archived removed=$removed failed=$failed"

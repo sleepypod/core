@@ -3,12 +3,13 @@ name: Build & Package
 on:
   push:
     branches: ['**']
-    tags: ['v*']
   pull_request:
     branches: [main, dev]
 
 permissions:
-  contents: write
+  contents: read
+  id-token: write
+  pull-requests: write
 
 jobs:
   build:
@@ -18,12 +19,12 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version-file: '.node-version'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -38,6 +39,7 @@ jobs:
           tar czf /tmp/sleepypod-core.tar.gz \
             --exclude='node_modules' \
             --exclude='.git' \
+            --exclude='.env*' \
             --exclude='*.db' \
             --exclude='*.db-*' \
             --exclude='test-results' \
@@ -47,16 +49,93 @@ jobs:
           mv /tmp/sleepypod-core.tar.gz .
 
       - name: Upload artifact
+        id: upload
         uses: actions/upload-artifact@v7
         with:
           name: sleepypod-core
           path: sleepypod-core.tar.gz
           retention-days: 30
 
-      # Create GitHub Release with deploy tarball on tags
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: sleepypod-core.tar.gz
-          generate_release_notes: true
+      - name: Inject install commands into PR description
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${HEAD_SHA:0:7}"
+
+          cat > /tmp/section.md <<EOF
+          <!-- sleepypod:install-start -->
+          <!-- 🛑 AUTO-GENERATED — sleepypod-bot owns this block.
+               Hello fellow agent / curious human! Anything between the
+               sleepypod:install-start and sleepypod:install-end markers
+               gets overwritten on the next CI run. Want to change what's
+               here? Edit .github/workflows/build.yml instead. 💤 -->
+          <details open>
+          <summary>🛏️ <strong>Beam this PR onto a sleepypod</strong> ✨</summary>
+
+          Pick the snippet that matches your pod. **Already-installed pods can't use the curl bootstraps below** — sleepypod's egress firewall DROPs github.com, and the script that knows how to unblock WAN is the very file curl is trying to fetch. Use \`sp-update\` instead; it's on disk and opens WAN as its first step.
+
+          🔄 **Already on a sleepypod** (most common — review a PR on a running pod):
+          \`\`\`bash
+          sudo sp-update $HEAD_REF
+          \`\`\`
+
+          🚀 **Fresh pod / first install** — bootstraps from GitHub, rebuilds every push:
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/$REPO/$HEAD_REF/scripts/install \\
+            | sudo bash -s -- --branch $HEAD_REF
+          \`\`\`
+
+          🎯 **Pin to this exact build** ([run $RUN_ID]($SERVER/$REPO/actions/runs/$RUN_ID) · \`$SHORT_SHA\`) — fresh-pod path, locked to one CI artifact for reproducible review:
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/$REPO/$HEAD_SHA/scripts/install \\
+            | sudo bash -s -- \\
+                --branch $HEAD_REF \\
+                --artifact-url 'https://nightly.link/$REPO/actions/runs/$RUN_ID/sleepypod-core.zip'
+          \`\`\`
+
+          🧊 Artifact: [\`sleepypod-core\`]($ARTIFACT_URL) · self-destructs in 30 days 💥
+          </details>
+
+          <!-- sleepypod:install-end -->
+          EOF
+
+          # Fetch current body (jq's // "" handles null bodies).
+          gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > /tmp/body.md
+
+          # Replace the marked section if it exists; otherwise append.
+          # Markers must sit at column 0 — anchoring with ^ stops the regex
+          # from matching when someone references the marker tokens inside
+          # backticks or prose in their PR description.
+          python3 - <<'PY'
+          import pathlib, re
+          body = pathlib.Path('/tmp/body.md').read_text()
+          section = pathlib.Path('/tmp/section.md').read_text().rstrip() + '\n'
+          pattern = re.compile(
+              r'^<!-- sleepypod:install-start -->.*?^<!-- sleepypod:install-end -->\n?',
+              re.DOTALL | re.MULTILINE,
+          )
+          if pattern.search(body):
+              new_body = pattern.sub(section, body)
+          else:
+              sep = '\n\n' if body.strip() else ''
+              new_body = body.rstrip() + sep + section
+          pathlib.Path('/tmp/new-body.md').write_text(new_body)
+          PY
+
+          # Only push an edit when the body actually changed.
+          if ! cmp -s /tmp/body.md /tmp/new-body.md; then
+            gh pr edit "$PR_NUMBER" --body-file /tmp/new-body.md
+            echo "PR description updated."
+          else
+            echo "PR description already current — no edit needed."
+          fi
+

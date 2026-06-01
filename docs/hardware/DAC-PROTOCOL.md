@@ -131,7 +131,7 @@ When no argument is needed, send just the command number:
 | `1` | SET_TEMP | temp value | Set temperature (legacy) |
 | `5` | ALARM_LEFT | hex CBOR | Configure left alarm |
 | `6` | ALARM_RIGHT | hex CBOR | Configure right alarm |
-| `8` | SET_SETTINGS | hex CBOR | LED brightness, etc. |
+| `8` | SET_SETTINGS | hex CBOR | Settings map (see below) |
 | `9` | LEFT_TEMP_DURATION | seconds | Auto-off duration (left) |
 | `10` | RIGHT_TEMP_DURATION | seconds | Auto-off duration (right) |
 | `11` | TEMP_LEVEL_LEFT | -100 to 100 | Set left temperature level |
@@ -139,6 +139,38 @@ When no argument is needed, send just the command number:
 | `13` | PRIME | — | Start water priming |
 | `14` | DEVICE_STATUS | — | Get all device status |
 | `16` | ALARM_CLEAR | 0 or 1 | Clear alarm (0=left, 1=right) |
+
+### SET_SETTINGS (`8`) CBOR schema
+
+Frank's `SetSettings` handler reads a CBOR map with **2-character keys**.
+Unknown keys are silently ignored — the write succeeds but the setting never
+changes. Always verify a new key against a live pod before trusting it.
+
+| Key  | Type   | Description |
+|------|--------|-------------|
+| `v`  | uint   | Schema version (frank emits `1`) |
+| `gl` | uint   | Goal temperature left (frank-internal scale) |
+| `gr` | uint   | Goal temperature right |
+| `lb` | uint 0–100 | LED brightness percentage |
+
+Frank's own emitted spark-settings frame (hex `BF61760162676C190190626772190190626C620AFF`) decodes to `{v:1, gl:400, gr:400, lb:10}` — taken verbatim
+from Pod 5 J55 (192.168.1.88).
+
+Writes are **merge semantics**: send only the keys you want to change.
+
+Example — dim the LED to 10% (cbor-x output is compact, the wire payload is
+`a1 626c62 0a` → hex `a1626c620a`):
+
+```ts
+import { encode as cborEncode } from 'cbor-x'
+const hex = Buffer.from(cborEncode({ lb: 10 })).toString('hex')
+await sendCommand(HardwareCommand.SET_SETTINGS, hex)
+```
+
+> **Pitfall — silent ignore.** Sending `{ledBrightness: 10}` succeeds at the
+> protocol layer but frank discards the map (no recognized key). This bit us
+> in sleepypod-core for ~2 releases; see `src/scheduler/jobManager.ts`
+> `sendLedBrightness` and `applyCurrentLedBrightness`.
 
 ### Temperature Scale
 

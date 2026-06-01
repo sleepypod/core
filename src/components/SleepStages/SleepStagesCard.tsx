@@ -8,10 +8,10 @@ import { QualityScore } from './QualityScore'
 import { TimeRangeSelector, type TimeRange } from './TimeRangeSelector'
 import { WeeklySleepChart } from './WeeklySleepChart'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import {
   type StageDistribution,
   classifySleepStages,
-  mergeIntoBlocks,
   calculateDistribution,
   calculateQualityScore,
 } from '@/src/lib/sleep-stages'
@@ -69,6 +69,12 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
   const [monthOffset, setMonthOffset] = useState(0)
   const [selectedWeekNight, setSelectedWeekNight] = useState<string | null>(null)
 
+  // When the card is locked (parent supplies the navigator), follow the
+  // shared week from context so header arrows actually move the chart;
+  // otherwise the card's own offset state drives navigation.
+  const sharedWeek = useWeekNavigator()
+  const useSharedWeek = hideTimeRangeSelector
+
   // Calculate date ranges
   const { startDate, endDate } = useMemo(() => {
     const now = new Date()
@@ -79,6 +85,9 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
     }
 
     if (timeRange === 'week') {
+      if (useSharedWeek) {
+        return { startDate: sharedWeek.weekStart, endDate: sharedWeek.weekEnd }
+      }
       const weekStart = getWeekStart(now)
       weekStart.setDate(weekStart.getDate() + weekOffset * 7)
       const weekEnd = new Date(weekStart)
@@ -92,7 +101,7 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
     const monthEnd = new Date(monthStart)
     monthEnd.setMonth(monthEnd.getMonth() + 1)
     return { startDate: monthStart, endDate: monthEnd }
-  }, [timeRange, weekOffset, monthOffset])
+  }, [timeRange, weekOffset, monthOffset, useSharedWeek, sharedWeek.weekStart, sharedWeek.weekEnd])
 
   // Night view: get sleep stages for the latest/selected night
   const nightStages = trpc.biometrics.getSleepStages.useQuery(
@@ -133,7 +142,7 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
       side,
       startDate,
       endDate,
-      limit: 1000,
+      limit: 10000,
     },
     { enabled: timeRange !== 'night' && !!startDate },
   )
@@ -181,8 +190,13 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
         adjustedDate.setDate(adjustedDate.getDate() - 1)
       }
       const dateKey = adjustedDate.toISOString().split('T')[0]
-      if (!nightMap.has(dateKey)) nightMap.set(dateKey, [])
-      nightMap.get(dateKey)!.push(record)
+      const existing = nightMap.get(dateKey)
+      if (existing) {
+        existing.push(record)
+      }
+      else {
+        nightMap.set(dateKey, [record])
+      }
     }
 
     // Build 7 days
@@ -309,8 +323,8 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
         )}
       </div>
 
-      {/* Navigation for week/month */}
-      {timeRange !== 'night' && startDate && endDate && (
+      {/* Navigation for week/month — suppressed when a parent owns the week navigator */}
+      {timeRange !== 'night' && startDate && endDate && !useSharedWeek && (
         <div className="flex items-center justify-between">
           <button
             onClick={handlePrev}
@@ -348,28 +362,30 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
       {/* Night view */}
       {!isLoading && !error && timeRange === 'night' && stagesData && (
         <>
-          {stagesData.epochs.length > 0 ? (
-            <>
-              {/* Quality score + distribution row */}
-              <div className="flex items-start gap-4">
-                <QualityScore score={stagesData.qualityScore} />
-                <div className="flex-1 space-y-3">
-                  <StageDistributionBar distribution={stagesData.distribution} />
-                </div>
-              </div>
+          {stagesData.epochs.length > 0
+            ? (
+                <>
+                  {/* Quality score + distribution row */}
+                  <div className="flex items-start gap-4">
+                    <QualityScore score={stagesData.qualityScore} />
+                    <div className="flex-1 space-y-3">
+                      <StageDistributionBar distribution={stagesData.distribution} />
+                    </div>
+                  </div>
 
-              {/* Night date label */}
-              {stagesData.enteredBedAt && (
-                <p className="text-center text-xs text-zinc-500">
-                  {formatNightDate(new Date(stagesData.enteredBedAt))}
-                </p>
+                  {/* Night date label */}
+                  {stagesData.enteredBedAt && (
+                    <p className="text-center text-xs text-zinc-500">
+                      {formatNightDate(new Date(stagesData.enteredBedAt))}
+                    </p>
+                  )}
+                </>
+              )
+            : (
+                <div className="flex h-32 items-center justify-center text-sm text-zinc-500">
+                  No sleep data recorded yet
+                </div>
               )}
-            </>
-          ) : (
-            <div className="flex h-32 items-center justify-center text-sm text-zinc-500">
-              No sleep data recorded yet
-            </div>
-          )}
         </>
       )}
 
@@ -414,59 +430,61 @@ export function SleepStagesCard({ side, defaultTimeRange = 'night', hideTimeRang
       {/* Month view */}
       {!isLoading && !error && timeRange === 'month' && (
         <div className="space-y-2">
-          {monthlySummaries.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-sm text-zinc-500">
-              No sleep data this month
-            </div>
-          ) : (
-            <>
-              {/* Summary stats */}
-              <div className="grid grid-cols-3 gap-2 rounded-lg bg-zinc-800/50 p-3">
-                <div className="text-center">
-                  <div className="text-lg font-semibold text-white">
-                    {monthlySummaries.length}
-                  </div>
-                  <div className="text-[10px] text-zinc-500">Nights</div>
+          {monthlySummaries.length === 0
+            ? (
+                <div className="flex h-32 items-center justify-center text-sm text-zinc-500">
+                  No sleep data this month
                 </div>
-                <div className="text-center">
-                  <div className="text-lg font-semibold text-white">
-                    {(monthlySummaries.reduce((s, n) => s + n.sleepHours, 0) / monthlySummaries.length).toFixed(1)}
-                    h
+              )
+            : (
+                <>
+                  {/* Summary stats */}
+                  <div className="grid grid-cols-3 gap-2 rounded-lg bg-zinc-800/50 p-3">
+                    <div className="text-center">
+                      <div className="text-lg font-semibold text-white">
+                        {monthlySummaries.length}
+                      </div>
+                      <div className="text-[10px] text-zinc-500">Nights</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-lg font-semibold text-white">
+                        {(monthlySummaries.reduce((s, n) => s + n.sleepHours, 0) / monthlySummaries.length).toFixed(1)}
+                        h
+                      </div>
+                      <div className="text-[10px] text-zinc-500">Avg Sleep</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-lg font-semibold text-white">
+                        {(monthlySummaries.reduce((s, n) => s + n.timesExited, 0) / monthlySummaries.length).toFixed(1)}
+                      </div>
+                      <div className="text-[10px] text-zinc-500">Avg Exits</div>
+                    </div>
                   </div>
-                  <div className="text-[10px] text-zinc-500">Avg Sleep</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-lg font-semibold text-white">
-                    {(monthlySummaries.reduce((s, n) => s + n.timesExited, 0) / monthlySummaries.length).toFixed(1)}
-                  </div>
-                  <div className="text-[10px] text-zinc-500">Avg Exits</div>
-                </div>
-              </div>
 
-              {/* Nightly list */}
-              <div className="max-h-64 space-y-1 overflow-y-auto">
-                {monthlySummaries.map(night => (
-                  <div
-                    key={night.id}
-                    className="flex items-center justify-between rounded-lg bg-zinc-800/30 px-3 py-2"
-                  >
-                    <span className="text-xs text-zinc-300">
-                      {night.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                    </span>
-                    <span className="text-xs tabular-nums text-zinc-400">
-                      {(night.sleepHours ?? 0).toFixed(1)}
-                      h
-                    </span>
-                    <span className="text-[10px] text-zinc-500">
-                      {night.timesExited}
-                      {' '}
-                      exits
-                    </span>
+                  {/* Nightly list */}
+                  <div className="max-h-64 space-y-1 overflow-y-auto">
+                    {monthlySummaries.map(night => (
+                      <div
+                        key={night.id}
+                        className="flex items-center justify-between rounded-lg bg-zinc-800/30 px-3 py-2"
+                      >
+                        <span className="text-xs text-zinc-300">
+                          {night.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                        </span>
+                        <span className="text-xs tabular-nums text-zinc-400">
+                          {(night.sleepHours ?? 0).toFixed(1)}
+                          h
+                        </span>
+                        <span className="text-[10px] text-zinc-500">
+                          {night.timesExited}
+                          {' '}
+                          exits
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </>
-          )}
+                </>
+              )}
         </div>
       )}
     </div>

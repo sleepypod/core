@@ -1,0 +1,82 @@
+name: Dev Release
+
+on:
+  push:
+    branches:
+      - dev
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Pin commit metadata into .git-info
+        # prebuild writes .git-info via `git rev-parse` from the CI checkout.
+        # Overwrite with explicit github-context values so the file is correct
+        # even if a future prebuild change starts skipping the write.
+        run: |
+          jq -n \
+            --arg branch "${{ github.ref_name }}" \
+            --arg hash "${GITHUB_SHA:0:7}" \
+            --arg title "$(git log -1 --format=%s)" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{branch:$branch, commitHash:$hash, commitTitle:$title, buildDate:$date}' \
+            > .git-info
+
+      - name: Set install script default branch
+        run: sed -i 's/__BRANCH__/${{ github.ref_name }}/' scripts/install
+
+      - name: Create deploy tarball
+        run: |
+          tar czf /tmp/sleepypod-core.tar.gz \
+            --exclude='node_modules' \
+            --exclude='.git' \
+            --exclude='.env*' \
+            --exclude='*.db' \
+            --exclude='*.db-*' \
+            --exclude='test-results' \
+            --exclude='.serena' \
+            --exclude='.claude' \
+            .
+          mv /tmp/sleepypod-core.tar.gz .
+
+      - name: Update dev release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete dev-latest --yes 2>/dev/null || true
+          git push -d --no-verify origin refs/tags/dev-latest 2>/dev/null || true
+          git tag -f dev-latest
+          git push -f --no-verify origin refs/tags/dev-latest
+          gh release create dev-latest sleepypod-core.tar.gz \
+            --target "${{ github.sha }}" \
+            --title "Dev (latest)" \
+            --notes "Rolling pre-built release from the \`dev\` branch.
+
+          **Commit:** ${{ github.sha }}
+          **Updated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --prerelease

@@ -13,19 +13,11 @@
 import type {
   CoolingIntensity,
   CurvePoint,
-  PhaseOffsets,
   PhaseRatios,
   ScheduleTemperatures,
 } from './types'
 
 const BASE_TEMP_F = 80
-
-/** Phase offsets per intensity (relative to 80°F base) */
-const INTENSITY_OFFSETS: Record<CoolingIntensity, PhaseOffsets> = {
-  cool: { warmUp: 1, fallAsleep: -6, deepSleep: -8, maintain: -6, preWake: 2 },
-  balanced: { warmUp: 2, fallAsleep: -4, deepSleep: -6, maintain: -4, preWake: 4 },
-  warm: { warmUp: 3, fallAsleep: -2, deepSleep: -4, maintain: -2, preWake: 6 },
-}
 
 /** Ratios: how much of available range each transition phase uses */
 const INTENSITY_RATIOS: Record<CoolingIntensity, PhaseRatios> = {
@@ -130,22 +122,26 @@ export function generateSleepCurve(options: GenerateOptions): CurvePoint[] {
   points.push({ minutesFromBedtime: Math.round(maintainStartMin), tempOffset: offsets.maintain, phase: 'maintain' })
 
   // ── Maintain: flat hold ──
-  const preWakeStartMin = sleepDuration - 45
+  const preWakeStartMin = Math.min(
+    sleepDuration,
+    Math.max(maintainStartMin + 30, sleepDuration - 45),
+  )
+  const preWakeRampSpan = Math.max(0, sleepDuration - preWakeStartMin)
   if (preWakeStartMin > maintainStartMin + 30) {
     const mid = (maintainStartMin + preWakeStartMin) / 2
     points.push({ minutesFromBedtime: Math.round(mid), tempOffset: offsets.maintain, phase: 'maintain' })
   }
   points.push({ minutesFromBedtime: Math.round(preWakeStartMin), tempOffset: offsets.maintain, phase: 'maintain' })
 
-  // ── Pre-Wake: gradual warm over 45min ──
+  // ── Pre-Wake: gradual warm over preWakeRampSpan (≤45min) ──
   const pwMaintainDiff = offsets.preWake - offsets.maintain
   points.push({
-    minutesFromBedtime: Math.round(preWakeStartMin + 15),
+    minutesFromBedtime: Math.round(preWakeStartMin + preWakeRampSpan / 3),
     tempOffset: Math.round(offsets.maintain + pwMaintainDiff / 3),
     phase: 'preWake',
   })
   points.push({
-    minutesFromBedtime: Math.round(preWakeStartMin + 30),
+    minutesFromBedtime: Math.round(preWakeStartMin + preWakeRampSpan * 2 / 3),
     tempOffset: Math.round(offsets.maintain + pwMaintainDiff * 2 / 3),
     phase: 'preWake',
   })

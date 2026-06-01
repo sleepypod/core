@@ -84,7 +84,9 @@ export class DacMonitor extends EventEmitter {
       this.intervalHandle = setInterval(() => {
         if (this.isPollInFlight) return
         this.isPollInFlight = true
-        this.poll().finally(() => { this.isPollInFlight = false })
+        this.poll().finally(() => {
+          this.isPollInFlight = false
+        })
       }, ms)
     }
   }
