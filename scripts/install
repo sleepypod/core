@@ -31,12 +31,21 @@ echo ""
 #                      Posted on every PR comment so reviewers can install the
 #                      exact SHA the run built, not whatever's latest.
 #   --restore          List available DB backups and restore a selected one
+#   --node-modules-dir Where node_modules lives. Default: auto-pick rootfs vs
+#                      /persistent by total partition size (see scripts/lib/relocation-helpers).
+#   --swap-dir         Where the build-time swap file lives. Default: auto-pick
+#                      rootfs vs /persistent by total partition size.
 INSTALL_LOCAL=false
 SKIP_SSH=false
 INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
 PURGE_FREE_SLEEP=false
 RESTORE_MODE=false
+# Preserve env-supplied overrides; --node-modules-dir / --swap-dir / --data-dir
+# can still clobber them below. Lets `NODE_MODULES_DIR=/foo bash scripts/install` work.
+NODE_MODULES_DIR="${NODE_MODULES_DIR:-}"
+SWAP_DIR="${SWAP_DIR:-}"
+DATA_DIR_OVERRIDE="${DATA_DIR:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --local)              INSTALL_LOCAL=true ;;
@@ -45,14 +54,56 @@ while [ $# -gt 0 ]; do
     --artifact-url)       shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
     --purge-free-sleep)   PURGE_FREE_SLEEP=true ;;
     --restore)            RESTORE_MODE=true ;;
+    --node-modules-dir)   shift; NODE_MODULES_DIR="${1:-}" ;;
+    --swap-dir)           shift; SWAP_DIR="${1:-}" ;;
+    --data-dir)           shift; DATA_DIR_OVERRIDE="${1:-}" ;;
   esac
   shift
 done
+export NODE_MODULES_DIR
+
+# Resolve DATA_DIR (SQLite home) before anything that touches it. Precedence:
+#   1. --data-dir / DATA_DIR env override
+#   2. /etc/sleepypod/data-dir written by a prior install run
+#   3. Auto: larger of rootfs vs /persistent (total size — same picker as
+#      swap below and node_modules in scripts/lib/relocation-helpers).
+#
+# Restore mode (below) uses $DATA_DIR too, so this MUST run before that block.
+# Relocation-helpers isn't sourced yet (repo not on disk), so the picker is
+# inlined here, matching the swap-picker / iptables-helpers pattern.
+DATA_DIR_REASON=""
+if [ -n "$DATA_DIR_OVERRIDE" ]; then
+  DATA_DIR="$DATA_DIR_OVERRIDE"
+  DATA_DIR_REASON="user override (--data-dir / DATA_DIR)"
+elif [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
+  DATA_DIR="$(cat /etc/sleepypod/data-dir)"
+  DATA_DIR_REASON="cached from prior install (/etc/sleepypod/data-dir)"
+else
+  # Pick by TOTAL partition size, not free space + headroom like the
+  # node_modules / swap pickers — the DBs grow unbounded over the Pod's
+  # life, so the partition with the most ultimate capacity wins.
+  _rootfs_total_mb=$(df -m / 2>/dev/null | awk 'NR==2{print $2}')
+  _rootfs_total_mb=${_rootfs_total_mb:-0}
+  if mountpoint -q /persistent 2>/dev/null; then
+    _persistent_total_mb=$(df -m /persistent 2>/dev/null | awk 'NR==2{print $2}')
+    _persistent_total_mb=${_persistent_total_mb:-0}
+  else
+    _persistent_total_mb=0
+  fi
+  if [ "$_persistent_total_mb" -gt "$_rootfs_total_mb" ]; then
+    DATA_DIR="/persistent/sleepypod-data"
+    DATA_DIR_REASON="/persistent is the larger partition"
+  else
+    DATA_DIR="/sleepypod-data"
+    DATA_DIR_REASON="rootfs is the larger partition"
+  fi
+  unset _rootfs_total_mb _persistent_total_mb
+fi
 
 # --------------------------------------------------------------------------------
 # Restore mode — list and restore a DB backup, then exit
 if [ "$RESTORE_MODE" = true ]; then
-  DATA_DIR="/persistent/sleepypod-data"
+  # $DATA_DIR was resolved above (override > cached > auto-picker).
 
   # Collect all backup files for both databases
   mapfile -t BACKUPS < <(ls -1t "$DATA_DIR"/*.db.bak.* 2>/dev/null)
@@ -606,8 +657,33 @@ fi
 # environment-monitor run as User=dac. Setgid ensures all files created
 # inside inherit the sleepypod group; UMask=0002 on services ensures
 # group-write bits are preserved (including SQLite WAL/SHM files).
-DATA_DIR="/persistent/sleepypod-data"
-echo "Creating data directory at $DATA_DIR..."
+#
+# $DATA_DIR was resolved at the top of this script. Same auto-picker as
+# node_modules / swap — pick the larger of rootfs vs /persistent.
+echo "Creating data directory at $DATA_DIR  (${DATA_DIR_REASON})..."
+
+# Migrate from a legacy /persistent/sleepypod-data layout if the picker
+# now wants a different partition. Same empty-target guard as the
+# node_modules migration in ensure_persistent_node_modules() — avoids
+# mixing DBs from two different installs.
+LEGACY_DATA_DIR="/persistent/sleepypod-data"
+if [ "$DATA_DIR" != "$LEGACY_DATA_DIR" ] && [ -d "$LEGACY_DATA_DIR" ] \
+   && [ -z "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
+  echo "Migrating data dir from $LEGACY_DATA_DIR to $DATA_DIR..."
+  mkdir -p "$(dirname "$DATA_DIR")"
+  # An aborted prior run can leave $DATA_DIR as an empty dir (the guard
+  # above allows that). Drop it so mv renames LEGACY into place rather
+  # than nesting it as $DATA_DIR/sleepypod-data. No-op when absent.
+  rmdir "$DATA_DIR" 2>/dev/null || true
+  mv "$LEGACY_DATA_DIR" "$DATA_DIR"
+fi
+
+# Persist the chosen path so sp-update / sp-maintenance / sp-bundle-logs /
+# sp-uninstall / pod/detect find the DBs in the same place. sp-uninstall
+# already rm -rf's /etc/sleepypod so no cleanup hook needed there.
+mkdir -p /etc/sleepypod
+printf '%s\n' "$DATA_DIR" > /etc/sleepypod/data-dir
+chmod 0644 /etc/sleepypod/data-dir
 # Ensure ReadWritePaths directories exist — systemd's ProtectSystem=strict
 # requires all listed paths to exist or the namespace setup fails.
 # /run/dac is handled by RuntimeDirectory=dac in the service unit.
@@ -699,27 +775,79 @@ fix_db_permissions
 # 2 GiB RAM and zero swap; Next.js 16 / Turbopack peaks around 750 MiB
 # during `next build`, which trips the firmware's earlyoom (configured to
 # fire at <10% available, ~200 MiB on this hardware) and kills the build
-# mid-flight (SIGTERM, exit 143). A 1 GiB swap file on /persistent keeps
-# the build out of earlyoom range without wearing the rootfs eMMC. Used
-# only during build / heavy memory bursts; not relied on at runtime.
-SWAPFILE="/persistent/swapfile"
+# mid-flight (SIGTERM, exit 143). A 1 GiB swap file keeps the build out
+# of earlyoom range. Used only during build / heavy memory bursts; not
+# relied on at runtime.
+#
+# Where it lives: same auto-picker as node_modules — pick the partition
+# with the larger total size. Override with --swap-dir.
+#
+#   Pod 4 stock      / ≈ 5.8 GB total, /persistent ≈ 15 GB total → /persistent
+#   Pod 5            / ≈ 5.8 GB total, /persistent ≈ 15 GB total → /persistent
+#   Pod 3 + SD card  / ≈ 6.6 GB total, /persistent ≈ 966 MB total → rootfs
+#
+# Relocation-helpers isn't sourced yet (repo not on disk), so the picker
+# is inlined here, matching the iptables-helpers pattern above.
 SWAP_SIZE_MB=1024
-if ! mountpoint -q /persistent 2>/dev/null; then
-  echo "Warning: /persistent is not a mountpoint — skipping swap setup to avoid creating $SWAPFILE on rootfs" >&2
-elif ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
-  if [ ! -f "$SWAPFILE" ]; then
-    echo "Creating ${SWAP_SIZE_MB}M swap file at $SWAPFILE..."
-    fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" 2>/dev/null \
-      || dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_SIZE_MB" status=none
-    chmod 0600 "$SWAPFILE"
-    mkswap "$SWAPFILE" >/dev/null
+swap_target_dir=""
+swap_reason=""
+if [ -n "$SWAP_DIR" ]; then
+  swap_target_dir="$SWAP_DIR"
+  swap_reason="user override (--swap-dir)"
+else
+  rootfs_total_mb=$(df -m / 2>/dev/null | awk 'NR==2{print $2}')
+  rootfs_total_mb=${rootfs_total_mb:-0}
+  if mountpoint -q /persistent 2>/dev/null; then
+    persistent_total_mb=$(df -m /persistent 2>/dev/null | awk 'NR==2{print $2}')
+    persistent_total_mb=${persistent_total_mb:-0}
+  else
+    persistent_total_mb=0
   fi
-  swapon "$SWAPFILE" || echo "Warning: swapon failed; on-pod builds may OOM" >&2
+  if [ "$persistent_total_mb" -gt "$rootfs_total_mb" ]; then
+    swap_target_dir="/persistent"
+    swap_reason="/persistent is the larger partition"
+  else
+    swap_target_dir="/"
+    swap_reason="rootfs is the larger partition"
+  fi
 fi
-SWAP_FSTAB_LINE="$SWAPFILE none swap sw,nofail 0 0"
-if mountpoint -q /persistent 2>/dev/null && ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
-  sed -i "\\|^$SWAPFILE |d" /etc/fstab 2>/dev/null || true
-  echo "$SWAP_FSTAB_LINE" >> /etc/fstab
+
+if [ -z "$swap_target_dir" ]; then
+  echo "Warning: no swap target chosen — skipping swap setup; on-pod builds may OOM" >&2
+else
+  # Strip trailing slash so the joined path stays canonical (/swapfile, not //swapfile).
+  SWAPFILE="${swap_target_dir%/}/swapfile"
+  [ "$swap_target_dir" = "/" ] && SWAPFILE="/swapfile"
+  echo "Swap → $SWAPFILE  (${swap_reason})"
+
+  # Remove a stale swapfile on the partition we didn't pick this time
+  # (e.g., prior install chose /persistent, this install picks rootfs).
+  # Without this we'd leak the file and leave a dangling fstab entry.
+  for stale in /swapfile /persistent/swapfile; do
+    if [ "$stale" != "$SWAPFILE" ] && [ -e "$stale" ]; then
+      echo "Removing stale swap file at $stale..."
+      swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$stale" \
+        && swapoff "$stale" 2>/dev/null || true
+      rm -f "$stale"
+      sed -i "\\|^$stale |d" /etc/fstab 2>/dev/null || true
+    fi
+  done
+
+  if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "$SWAPFILE"; then
+    if [ ! -f "$SWAPFILE" ]; then
+      echo "Creating ${SWAP_SIZE_MB}M swap file at $SWAPFILE..."
+      fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" 2>/dev/null \
+        || dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_SIZE_MB" status=none
+      chmod 0600 "$SWAPFILE"
+      mkswap "$SWAPFILE" >/dev/null
+    fi
+    swapon "$SWAPFILE" || echo "Warning: swapon failed; on-pod builds may OOM" >&2
+  fi
+  SWAP_FSTAB_LINE="$SWAPFILE none swap sw,nofail 0 0"
+  if ! grep -qF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
+    sed -i "\\|^$SWAPFILE |d" /etc/fstab 2>/dev/null || true
+    echo "$SWAP_FSTAB_LINE" >> /etc/fstab
+  fi
 fi
 
 # ============================================================================
@@ -1022,9 +1150,9 @@ if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
   print_pod_capabilities
 fi
 
-# Move node_modules off rootfs onto /persistent before pnpm runs so the
-# install writes directly to the persistent partition. On upgrades from
-# a pre-relocation install this migrates the existing tree once.
+# Decide where node_modules lives before pnpm runs. Auto-picks rootfs
+# vs /persistent by total partition size (Pod 3 + SD has tiny /persistent;
+# Pod 4/5 stock has large /persistent). Override via --node-modules-dir <path>.
 if [ -f "$INSTALL_DIR/scripts/lib/relocation-helpers" ]; then
   source "$INSTALL_DIR/scripts/lib/relocation-helpers"
   ensure_persistent_node_modules "$INSTALL_DIR"
@@ -1166,6 +1294,17 @@ Environment="NODE_ENV=production"
 Environment="DATABASE_URL=file:$DATA_DIR/sleepypod.db"
 Environment="BIOMETRICS_DATABASE_URL=file:$DATA_DIR/biometrics.db"
 Environment="DAC_SOCK_PATH=$DAC_SOCK_PATH"
+# Route every runtime path that used to be hardcoded under
+# /persistent/sleepypod-data through the picker-chosen \$DATA_DIR.
+# HomeKit pairing + identity (src/homekit/storage.ts), calibration
+# trigger written by tRPC + scheduler and read by sleepypod-calibrator
+# (src/server/routers/calibration.ts, src/scheduler/jobManager.ts,
+# modules/common/calibration.py), and the archive-export staging dir
+# (app/api/export/archive/route.ts) all read these envs with the legacy
+# hardcoded path as fallback for installs that pre-date this wiring.
+Environment="HOMEKIT_DIR=$DATA_DIR/homekit"
+Environment="CALIBRATION_TRIGGER_PATH=$DATA_DIR/.calibrate-trigger"
+Environment="EXPORT_STAGING_DIR=$DATA_DIR/export-staging"
 # RAW frames live in the tmpfs at /persistent/biometrics (ADR 0018).
 # Without this override piezoStream defaults to /persistent and tries to
 # decode the 16-byte SEQNO.RAW bookkeeping file as CBOR — sensor streaming
@@ -1391,18 +1530,57 @@ else
     # If system python3 is in range it's used; otherwise uv downloads a
     # compatible managed interpreter into UV_PYTHON_INSTALL_DIR (set above
     # to /opt/sleepypod/python so User=dac modules can execute it).
-    (cd "$dest" && uv sync --frozen) || {
+    #
+    # Exception: Pod 3 firmware (debian variant) ships /usr/bin/python3
+    # = 3.9.9 with `unittest`, `dataclasses`, and `pyexpat` stripped from
+    # the stdlib. The version range check passes so uv would happily
+    # bind to it, then the module crashes at startup with
+    # `ModuleNotFoundError: No module named 'unittest'` once numpy lazy-
+    # imports numpy.testing. Force uv onto a managed interpreter when
+    # the stdlib probe (scripts/pod/capabilities) says it's not intact.
+    _uv_sync_args=(--frozen)
+    if [ "${SYSTEM_PYTHON_STDLIB_INTACT:-true}" = "false" ]; then
+      _uv_sync_args+=(--python-preference only-managed)
+    fi
+    (cd "$dest" && uv sync "${_uv_sync_args[@]}") || {
       echo "Warning: uv sync failed for module $name"
+      unset _uv_sync_args
       return
     }
+    unset _uv_sync_args
 
     # Ensure non-root service users (User=dac on calibrator + env-monitor)
     # can read the venv dir + traverse the managed-Python symlink target.
     chmod -R o+rX "$dest/.venv" 2>/dev/null || true
 
-    # Install systemd service
+    # Install systemd service. Substitute the chosen $DATA_DIR for the
+    # baked-in /persistent/sleepypod-data — ReadWritePaths= and the
+    # DATABASE_URL= envs in the unit reference that path, and on installs
+    # where the picker chose /sleepypod-data (rootfs larger than
+    # /persistent — e.g. Pod 3 + SD card) the hardcoded path doesn't
+    # exist, so systemd fails the namespace bind-mount with "Failed to
+    # set up mount namespacing: .../persistent/sleepypod-data: No such
+    # file or directory". ReadWritePaths= is a unit directive so an
+    # EnvironmentFile drop-in can't fix it — substitution at install
+    # time is the only path.
+    #
+    # The match requires /persistent/sleepypod-data to be followed by
+    # one of [/" \t] (path separator, env-value quote closer, or
+    # whitespace) OR end-of-line, so any future hardcoded path that
+    # legitimately starts with the same stem (e.g.
+    # /persistent/sleepypod-data-old/foo) is NOT partially rewritten.
+    # The replacement is sed-escaped for `\` and `&` so an exotic
+    # --data-dir override can't trigger sed's whole-match (&) or
+    # escape (\) substitution syntax. sp-update has the same block —
+    # keep them in sync.
     if [ -f "$dest/$service" ]; then
-      cp "$dest/$service" "/etc/systemd/system/$service"
+      _data_dir_sed=${DATA_DIR//\\/\\\\}
+      _data_dir_sed=${_data_dir_sed//&/\\&}
+      _data_dir_sed=${_data_dir_sed//|/\\|}
+      sed -E "s|/persistent/sleepypod-data([/\"[:space:]])|${_data_dir_sed}\\1|g; s|/persistent/sleepypod-data\$|${_data_dir_sed}|g" \
+        "$dest/$service" > "/etc/systemd/system/$service"
+      chmod 0644 "/etc/systemd/system/$service"
+      unset _data_dir_sed
       systemctl daemon-reload
       systemctl enable "$service"
       systemctl restart "$service"
@@ -1459,7 +1637,20 @@ if [ -d "$PUSH_SRC" ]; then
   echo "Installing archive-push (scp to remote)..."
 
   install -m 0755 "$PUSH_SRC/sleepypod-archive-push" /usr/local/bin/sleepypod-archive-push
-  install -m 0644 "$PUSH_SRC/sleepypod-archive-push.service" /etc/systemd/system/
+  # Substitute $DATA_DIR for the baked-in /persistent/sleepypod-data —
+  # ReadWritePaths= + BIOMETRICS_DB_PATH= + ARCHIVE_PUSH_STAGING_DIR= in
+  # the unit reference that path and the namespace bind-mount fails
+  # when the picker chose /sleepypod-data. Defensive boundary match +
+  # replacement escapes — same regex as install_module() above, see
+  # the comment there for the boundary-match rationale.
+  _data_dir_sed=${DATA_DIR//\\/\\\\}
+  _data_dir_sed=${_data_dir_sed//&/\\&}
+  _data_dir_sed=${_data_dir_sed//|/\\|}
+  sed -E "s|/persistent/sleepypod-data([/\"[:space:]])|${_data_dir_sed}\\1|g; s|/persistent/sleepypod-data\$|${_data_dir_sed}|g" \
+    "$PUSH_SRC/sleepypod-archive-push.service" \
+    > /etc/systemd/system/sleepypod-archive-push.service
+  chmod 0644 /etc/systemd/system/sleepypod-archive-push.service
+  unset _data_dir_sed
   install -m 0644 "$PUSH_SRC/sleepypod-archive-push.timer"   /etc/systemd/system/
 
   # Config dir owned root:sleepypod 0770 so the service user reads + the app

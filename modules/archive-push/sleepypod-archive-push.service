@@ -8,6 +8,11 @@ Wants=network-online.target
 Type=oneshot
 User=sleepypod
 Group=sleepypod
+# Paths are rewritten at install time — `/persistent/sleepypod-data`
+# becomes the picker-chosen $DATA_DIR (see scripts/install archive-push
+# block) so this matches where biometrics.db actually lives.
+Environment="BIOMETRICS_DB_PATH=/persistent/sleepypod-data/biometrics.db"
+Environment="ARCHIVE_PUSH_STAGING_DIR=/persistent/sleepypod-data/archive-push-staging"
 ExecStart=/usr/local/bin/sleepypod-archive-push
 Nice=10
 IOSchedulingClass=idle
