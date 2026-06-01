@@ -527,12 +527,14 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
       JobType.LED_BRIGHTNESS,
       '5 22 * * *',
       expect.any(Function),
+      { brightness: 10 },
     )
     expect(scheduleJob).toHaveBeenCalledWith(
       'led-night-end',
       JobType.LED_BRIGHTNESS,
       '45 6 * * *',
       expect.any(Function),
+      { brightness: 80 },
     )
   })
 

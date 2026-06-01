@@ -93,7 +93,10 @@ function readSettings(): GuardSettings {
   }
 
   const value: GuardSettings = {
-    enabled: row?.pumpStallProtectionEnabled ?? true,
+    // Fail-safe-off: an opt-in power-cutting feature must never arm on missing
+    // data. Matches the schema/seed/router default and the 0012 backfill — the
+    // only way to reach this fallback is a degraded read (row undefined).
+    enabled: row?.pumpStallProtectionEnabled ?? false,
     threshold: row?.pumpStallRpmThreshold ?? 500,
     dwellSamples: row?.pumpStallDwellSamples ?? 2,
     autoRecoveryEnabled: row?.pumpStallAutoRecoveryEnabled ?? false,
