@@ -13,6 +13,7 @@ import { buildOccupancySensor } from '../accessories/occupancySensor'
 function result(occupied: boolean): OccupancyResult {
   return {
     occupied,
+    available: false,
     movement: { active: occupied, peakScore: occupied ? 660 : 12 },
     level: { active: false, deviation: null, threshold: null, ageMs: null },
   }

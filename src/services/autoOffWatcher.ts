@@ -1,21 +1,31 @@
 /**
  * Auto-Off Watcher Service
  *
- * Polls the biometrics DB `sleep_records` table for bed-exit events.
- * When a side has no presence for longer than `autoOffMinutes`, powers
- * off that side via the shared hardware client.
+ * Powers a side off after it has been empty for `autoOffMinutes`, using the
+ * LIVE occupancy sensor (`src/lib/occupancy.ts`) — the same signal HomeKit and
+ * the web PresenceCard use — rather than the `sleep_records` table.
  *
- * Per-side countdown timers reset on bed re-entry and cancel if the side
- * is already off or a run-once session is active.
+ * Why not sleep_records: the Python sleep-detector only writes a row when a
+ * session CLOSES (both entered_bed_at and left_bed_at set, entered < left).
+ * While someone is in bed no row exists for the current session, so the latest
+ * row is the PREVIOUS night with an hours-old left_bed_at. Deriving presence
+ * from that made the watcher think the bed had been empty for hours and power a
+ * just-powered side off within seconds. See sleepypod-core-64.
+ *
+ * Fail-safe: auto-off only acts on a POSITIVE, reliable "empty" reading. If the
+ * presence signal isn't available for a side (no fresh capSense2 frame, or no
+ * completed calibration — `getOccupancy().available === false`), the per-side
+ * timer stands down entirely. Missing or inconsistent biometrics never trigger
+ * a power-off; the global wall-clock cap remains the independent backstop.
  */
 
-import { eq, and, desc } from 'drizzle-orm'
-import { db, biometricsDb } from '@/src/db'
+import { eq, and } from 'drizzle-orm'
+import { db } from '@/src/db'
 import { deviceSettings, sideSettings, deviceState, runOnceSessions } from '@/src/db/schema'
-import { sleepRecords } from '@/src/db/biometrics-schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
+import { getOccupancy } from '@/src/lib/occupancy'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -26,22 +36,15 @@ const SIDES = ['left', 'right'] as const
 type Side = (typeof SIDES)[number]
 
 // ---------------------------------------------------------------------------
-// Per-side timer state
+// Per-side empty-since state
 // ---------------------------------------------------------------------------
 
-interface SideTimer {
-  /** setTimeout handle for the pending auto-off */
-  timer: ReturnType<typeof setTimeout> | null
-  /** Unix-ms when the timer was started (bed-exit time) */
-  startedAt: number | null
-  /** The configured timeout in ms when the timer was created */
-  timeoutMs: number | null
-}
-
-const timers: Record<Side, SideTimer> = {
-  left: { timer: null, startedAt: null, timeoutMs: null },
-  right: { timer: null, startedAt: null, timeoutMs: null },
-}
+/**
+ * Unix-ms when a side was first observed empty-while-sensable, or null when the
+ * side is occupied, off, exempt, or presence can't be sensed. The countdown to
+ * power-off is `now - emptySince >= autoOffMinutes`.
+ */
+const emptySince: Record<Side, number | null> = { left: null, right: null }
 
 let pollHandle: ReturnType<typeof setInterval> | null = null
 
@@ -52,14 +55,9 @@ const pendingPowerOffs = new Set<Promise<void>>()
 // Helpers
 // ---------------------------------------------------------------------------
 
-function clearSideTimer(side: Side): void {
-  const t = timers[side]
-  if (t.timer) {
-    clearTimeout(t.timer)
-    t.timer = null
-    t.startedAt = null
-    t.timeoutMs = null
-  }
+/** Reset a side's empty-since stamp (occupied, off, exempt, or unsensable). */
+function clearEmptySince(side: Side): void {
+  emptySince[side] = null
 }
 
 /** Check whether the side currently has power. */
@@ -167,42 +165,22 @@ function getPoweredOnAtMs(side: Side): number | null {
 }
 
 /**
- * Get the most recent sleep record for a side.
- * Returns the record or null if none exists.
+ * Live presence for a side. Returns:
+ *   'occupied'    — someone is in bed (movement or calibrated level signal)
+ *   'empty'       — reliably sensed empty (level signal evaluable, not occupied)
+ *   'unsensable'  — presence can't be sensed; auto-off must stand down
  */
-function getLatestSleepRecord(side: Side) {
+function presenceState(side: Side): 'occupied' | 'empty' | 'unsensable' {
   try {
-    const [row] = biometricsDb
-      .select()
-      .from(sleepRecords)
-      .where(eq(sleepRecords.side, side))
-      .orderBy(desc(sleepRecords.leftBedAt))
-      .limit(1)
-      .all()
-    return row ?? null
+    const occ = getOccupancy(side)
+    if (occ.occupied) return 'occupied'
+    if (!occ.available) return 'unsensable'
+    return 'empty'
   }
   catch {
-    return null
+    // Treat any failure to read presence as unsensable — fail safe.
+    return 'unsensable'
   }
-}
-
-/**
- * Check whether the user is currently in bed by comparing enteredBedAt
- * and leftBedAt from the latest sleep record. If `enteredBedAt > leftBedAt`,
- * a new session started after the last exit — the user is back in bed.
- */
-function isUserInBed(side: Side): boolean {
-  const record = getLatestSleepRecord(side)
-  if (!record) return false
-
-  const enteredMs = record.enteredBedAt instanceof Date
-    ? record.enteredBedAt.getTime()
-    : (record.enteredBedAt as number) * 1000
-  const leftMs = record.leftBedAt instanceof Date
-    ? record.leftBedAt.getTime()
-    : (record.leftBedAt as number) * 1000
-
-  return enteredMs > leftMs
 }
 
 /** Power off a side via the shared hardware client. */
@@ -250,6 +228,7 @@ async function powerOffSide(side: Side): Promise<void> {
  * Fire powerOffSide and track the promise so shutdown can await it.
  */
 function firePowerOff(side: Side): void {
+  clearEmptySince(side)
   const p = powerOffSide(side).finally(() => {
     pendingPowerOffs.delete(p)
   })
@@ -260,16 +239,6 @@ function firePowerOff(side: Side): void {
 // Core poll logic
 // ---------------------------------------------------------------------------
 
-/**
- * Determine whether a side currently has bed presence.
- *
- * The sleep-detector writes a `sleep_records` row when a session ends
- * (i.e. the person has left the bed). If the most recent record's
- * `leftBedAt` is recent (within the poll window), we consider
- * presence lost. If there is no record or the most recent exit was
- * long ago and the side is still powered, we assume they are in bed
- * (the session hasn't closed yet).
- */
 function evaluateSide(
   side: Side,
   config: Record<Side, SideConfig>,
@@ -279,7 +248,7 @@ function evaluateSide(
 
   // Side already off — nothing to evaluate for either cap
   if (!isSidePowered(side)) {
-    clearSideTimer(side)
+    clearEmptySince(side)
     return
   }
 
@@ -287,14 +256,14 @@ function evaluateSide(
   // the global cap. Run-once is the user's explicit "keep on until X"; the
   // always-on flag is the perpetual-stay-on directive.
   if (hasActiveRunOnce(side) || cfg.alwaysOn) {
-    clearSideTimer(side)
+    clearEmptySince(side)
     return
   }
 
-  // ── Global wall-clock cap (runs independently of sleep_records) ──────────
+  // ── Global wall-clock cap (runs independently of presence) ───────────────
   // If a side has been powered for > globalMaxOnHours, force it off. This is
   // the safety net that fires even when the biometrics pipeline is broken or
-  // the sleep-detector missed a bed-exit.
+  // presence can't be sensed at all.
   if (globalMaxOnHours != null && globalMaxOnHours > 0) {
     const poweredOnAtMs = getPoweredOnAtMs(side)
     if (poweredOnAtMs != null) {
@@ -308,111 +277,53 @@ function evaluateSide(
         console.log(
           `[auto-off] ${side}: global max-on cap exceeded (${globalMaxOnHours}h), powering off`,
         )
-        clearSideTimer(side)
         firePowerOff(side)
         return
       }
     }
   }
 
-  // ── Per-side bed-exit timer ──────────────────────────────────────────────
+  // ── Per-side presence-based auto-off ─────────────────────────────────────
   // Feature disabled for this side
   if (!cfg.enabled) {
-    clearSideTimer(side)
+    clearEmptySince(side)
     return
   }
 
-  const record = getLatestSleepRecord(side)
-  if (!record) {
-    // No sleep records yet — cannot determine presence for the bed-exit path.
-    // The global cap above still applies independently.
-    clearSideTimer(side)
+  const presence = presenceState(side)
+
+  // Fail-safe: if presence can't be sensed (no fresh capSense2 frame / no
+  // calibration), never auto-off on missing data. Reset the countdown so a
+  // later loss of signal doesn't carry stale empty time. The global cap above
+  // is the only thing that may still power a side off in this state.
+  if (presence === 'unsensable') {
+    clearEmptySince(side)
     return
   }
 
-  // Don't arm if the user has returned to bed
-  // (enteredBedAt > leftBedAt means a new session started after the exit)
-  if (isUserInBed(side)) {
-    clearSideTimer(side)
+  // Live occupant — reset the countdown.
+  if (presence === 'occupied') {
+    clearEmptySince(side)
     return
   }
 
-  const leftBedAtMs = record.leftBedAt instanceof Date
-    ? record.leftBedAt.getTime()
-    : (record.leftBedAt as number) * 1000
-  const nowMs = Date.now()
+  // presence === 'empty' and reliably sensed. Stamp the first empty observation,
+  // then fire once the bed has been continuously empty for the timeout.
+  const now = Date.now()
+  const since = emptySince[side]
+  if (since == null) {
+    emptySince[side] = now
+    console.log(`[auto-off] ${side}: bed empty, auto-off in ${cfg.minutes}min if still empty`)
+    return
+  }
+
+  const emptyMs = now - since
   const timeoutMs = cfg.minutes * 60_000
-  const msSinceBedExit = nowMs - leftBedAtMs
-
-  // If past the timeout, fire immediately. Previously this branch was gated
-  // by `msSinceBedExit <= timeoutMs + 2 * POLL_INTERVAL_MS`; that "grace
-  // window" would give up past ~32min and leave the side on forever when
-  // the user left bed long ago and didn't return. The global cap is the
-  // catch-all for wall-clock staleness; here we just fire on any past-due
-  // bed-exit so long as the user hasn't re-entered bed.
-  if (msSinceBedExit > timeoutMs) {
-    clearSideTimer(side)
-    // Re-check conditions before actually powering off
-    if (!isSidePowered(side)) return
-    if (hasActiveRunOnce(side)) return
-    if (isUserInBed(side)) return
-    const freshConfig = getAutoOffConfig()
-    if (!freshConfig[side].enabled || freshConfig[side].alwaysOn) return
-
+  if (emptyMs >= timeoutMs) {
     console.log(
-      `[auto-off] ${side}: bed exit ${Math.round(msSinceBedExit / 1000)}s ago (past ${cfg.minutes}min timeout), powering off`,
+      `[auto-off] ${side}: empty for ${Math.round(emptyMs / 1000)}s (past ${cfg.minutes}min timeout), powering off`,
     )
     firePowerOff(side)
-    return
-  }
-
-  // Bed exit is recent -- check if we need to start or update a timer
-  const existing = timers[side]
-
-  if (existing.timer) {
-    // Timer already running. If it targets the same bed-exit event, keep it.
-    // If the config (minutes) changed, restart with the new timeout.
-    if (existing.startedAt === leftBedAtMs && existing.timeoutMs === timeoutMs) {
-      return // timer is correct
-    }
-    // Config changed or different exit event -- restart
-    clearSideTimer(side)
-  }
-
-  // Start countdown timer
-  const remainingMs = Math.max(0, timeoutMs - msSinceBedExit)
-  console.log(
-    `[auto-off] ${side}: bed exit detected, auto-off in ${Math.round(remainingMs / 1000)}s`,
-  )
-
-  timers[side] = {
-    timer: setTimeout(() => {
-      timers[side] = { timer: null, startedAt: null, timeoutMs: null }
-      // Re-check conditions before actually powering off
-      if (!isSidePowered(side)) return
-      if (hasActiveRunOnce(side)) return
-      const freshConfig = getAutoOffConfig()
-      if (!freshConfig[side].enabled || freshConfig[side].alwaysOn) return
-
-      // Verify the bed-exit that armed this timer is still the latest
-      const latestRecord = getLatestSleepRecord(side)
-      if (latestRecord) {
-        const latestLeftBedMs = latestRecord.leftBedAt instanceof Date
-          ? latestRecord.leftBedAt.getTime()
-          : (latestRecord.leftBedAt as number) * 1000
-        if (latestLeftBedMs !== leftBedAtMs) return // newer event; evaluateSide will re-arm
-      }
-
-      // Fix 1: Check live presence before firing — user may have returned
-      if (isUserInBed(side)) {
-        console.log(`[auto-off] ${side}: user returned to bed, skipping power-off`)
-        return
-      }
-
-      firePowerOff(side)
-    }, remainingMs),
-    startedAt: leftBedAtMs,
-    timeoutMs,
   }
 }
 
@@ -450,8 +361,8 @@ export async function stopAutoOffWatcher(): Promise<void> {
     clearInterval(pollHandle)
     pollHandle = null
   }
-  clearSideTimer('left')
-  clearSideTimer('right')
+  clearEmptySince('left')
+  clearEmptySince('right')
 
   // Await any in-flight powerOffSide() calls
   if (pendingPowerOffs.size > 0) {
@@ -463,26 +374,27 @@ export async function stopAutoOffWatcher(): Promise<void> {
 }
 
 /**
- * Restart timers after settings change.
- * Called when autoOffEnabled or autoOffMinutes is updated via the API.
+ * Re-evaluate after a settings change. Resets the empty-since countdown for
+ * both sides so a freshly-changed timeout/enable starts clean, then polls.
+ * Called when autoOffEnabled / autoOffMinutes / globalMaxOnHours is updated.
  */
 export function restartAutoOffTimers(): void {
-  // Fix 3: Don't poll if watcher is not running (e.g. in CI)
+  // Don't poll if watcher is not running (e.g. in CI)
   if (!pollHandle) return
 
-  clearSideTimer('left')
-  clearSideTimer('right')
+  clearEmptySince('left')
+  clearEmptySince('right')
   poll()
 }
 
 /**
- * Cancel the auto-off timer for a specific side without re-evaluating.
+ * Cancel the auto-off countdown for a specific side without re-evaluating.
  * Called when a scheduled power-on fires — the side is being turned on
  * intentionally, so any pending auto-off countdown should be aborted.
  */
 export function cancelAutoOffTimer(side: Side): void {
-  if (timers[side].timer) {
-    console.log(`[auto-off] ${side}: timer cancelled (scheduled power-on)`)
-    clearSideTimer(side)
+  if (emptySince[side] != null) {
+    console.log(`[auto-off] ${side}: countdown cancelled (scheduled power-on)`)
+    clearEmptySince(side)
   }
 }
