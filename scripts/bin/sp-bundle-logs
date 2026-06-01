@@ -31,7 +31,13 @@ for arg in "$@"; do
 done
 
 INSTALL_DIR="/home/dac/sleepypod-core"
-DATA_DIR="/persistent/sleepypod-data"
+# DATA_DIR pointer is written by scripts/install (storage-aware picker).
+# Legacy fallback keeps installs without the pointer file working.
+if [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
+  DATA_DIR="$(cat /etc/sleepypod/data-dir)"
+else
+  DATA_DIR="/persistent/sleepypod-data"
+fi
 HOMEKIT_DIR="$DATA_DIR/homekit"
 INSTALL_LOG="/tmp/sleepypod-install.log"
 

@@ -6,7 +6,13 @@ set -euo pipefail
 # Called by sleepypod.service ExecStartPre so it runs before the app starts.
 # Keeps disk usage in check on the pod's limited storage (~6GB).
 
-DATA_DIR="/persistent/sleepypod-data"
+# DATA_DIR pointer is written by scripts/install (storage-aware picker).
+# Legacy fallback keeps installs without the pointer file working.
+if [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
+  DATA_DIR="$(cat /etc/sleepypod/data-dir)"
+else
+  DATA_DIR="/persistent/sleepypod-data"
+fi
 INSTALL_DIR="/home/dac/sleepypod-core"
 
 echo "=== SleepyPod Maintenance ==="

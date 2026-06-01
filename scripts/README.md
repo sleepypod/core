@@ -239,7 +239,7 @@ Each module has a `pyproject.toml` and `uv.lock`. The install script runs `uv sy
 ## File Locations
 
 - **Installation**: `/home/dac/sleepypod-core/`
-- **Database**: `/persistent/sleepypod-data/sleepypod.db` (SQLite with Drizzle ORM)
+- **Database**: `$DATA_DIR/sleepypod.db` — `$DATA_DIR` is chosen at install time (larger of `/` vs `/persistent` by total partition size) and persisted to `/etc/sleepypod/data-dir`. Default on Pod 4/5: `/persistent/sleepypod-data`; on Pod 3 + SD card: `/sleepypod-data`. Override with `bash scripts/install --data-dir <path>`.
 - **Service**: `/etc/systemd/system/sleepypod.service`
 - **Environment**: `/home/dac/sleepypod-core/.env`
 
@@ -269,7 +269,7 @@ Common issues:
 Reset database:
 ```bash
 cd /home/dac/sleepypod-core
-rm /persistent/sleepypod-data/sleepypod.db
+rm "$(cat /etc/sleepypod/data-dir 2>/dev/null || echo /persistent/sleepypod-data)/sleepypod.db"
 pnpm db:generate
 pnpm db:push
 sp-restart
