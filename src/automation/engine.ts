@@ -91,6 +91,12 @@ export class AutomationEngine {
   private timer: ReturnType<typeof setInterval> | null = null
   private ticking = false
 
+  // Global kill-switch. When false, ticks short-circuit and no rule is
+  // evaluated or commanded — per-rule enabled/dryRun state is left untouched, so
+  // re-enabling resumes every rule exactly as it was. Persisted in
+  // deviceSettings.autopilotEnabled; the instance restores it at boot.
+  private globalEnabled = true
+
   // Per-side runtime state shared across rules.
   private lastAsserted: Record<Side, number | undefined> = { left: undefined, right: undefined }
   private manualOverrideUntil: Record<Side, number> = { left: 0, right: 0 }
@@ -138,6 +144,17 @@ export class AutomationEngine {
     this.manualOverrideUntil[side] = this.deps.now() + AUTOMATION_MANUAL_OVERRIDE_MS
   }
 
+  /** Flip the global kill-switch. `false` suspends all evaluation immediately. */
+  setGlobalEnabled(on: boolean): void {
+    this.globalEnabled = on
+    this.deps.log?.(`AutomationEngine global kill-switch ${on ? 'ON (running)' : 'OFF (halted)'}`)
+  }
+
+  /** Whether autopilot is globally enabled (kill-switch not engaged). */
+  isGloballyEnabled(): boolean {
+    return this.globalEnabled
+  }
+
   private getRuntime(id: number): RuleRuntime {
     let rt = this.runtime.get(id)
     if (!rt) {
@@ -149,6 +166,7 @@ export class AutomationEngine {
 
   /** One evaluation pass over all enabled rules. */
   async tick(): Promise<void> {
+    if (!this.globalEnabled) return // kill-switch engaged — evaluate nothing
     if (this.ticking) return // never overlap ticks
     this.ticking = true
     try {

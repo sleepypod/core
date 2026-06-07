@@ -117,6 +117,14 @@ export async function getAutomationEngine(): Promise<AutomationEngine> {
         log: msg => console.log(`[automation] ${msg}`),
       })
       await engine.start()
+      // Restore the global kill-switch from persisted settings (default on).
+      try {
+        const [settings] = await db.select({ on: deviceSettings.autopilotEnabled }).from(deviceSettings).limit(1)
+        if (settings && settings.on === false) engine.setGlobalEnabled(false)
+      }
+      catch {
+        // Settings unreadable (e.g. fresh DB) — leave autopilot enabled.
+      }
       engineInstance = engine
       console.log('AutomationEngine initialized with timezone:', timezone)
       return engine

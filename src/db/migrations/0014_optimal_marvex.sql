@@ -1,0 +1,1 @@
+ALTER TABLE `device_settings` ADD `autopilot_enabled` integer DEFAULT true NOT NULL;
