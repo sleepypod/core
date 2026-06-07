@@ -5,7 +5,7 @@
  * (getSharedHardwareClient + per-side mutex + broadcastMutationStatus +
  * markSideMutated). It introduces no new hardware path.
  *
- * Safety properties (see docs/autopilot-plan.md §3):
+ * Safety properties (see docs/adr/0023-autopilot-reactive-automations.md "Safety stack"):
  *   - Two-layer temp clamp: per-action user band, then hardware 55–110°F.
  *   - Anti-thrash: a setpoint is only re-sent to hardware when it moves ≥0.5°F.
  *   - Runaway guard: a rule exceeding N hardware actions/hour auto-disables.

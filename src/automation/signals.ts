@@ -2,7 +2,7 @@
  * Signal sources for the automation engine.
  *
  * A `SignalReader` returns a synchronous snapshot of currently-available
- * numeric signals keyed by the catalog names in docs/autopilot-plan.md. Any
+ * numeric signals keyed by the catalog names in docs/adr/0023-autopilot-reactive-automations.md. Any
  * signal not present resolves to `undefined`, which makes dependent conditions
  * skip rather than fire on stale/missing data.
  *

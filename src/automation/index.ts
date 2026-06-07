@@ -2,7 +2,7 @@
  * Autopilot rules engine — a reactive WHEN/IF/THEN evaluator that sits beside
  * the scheduler's JobManager and writes through the same shared hardware path.
  *
- * See docs/autopilot-plan.md for the model, signal catalog, and safety design.
+ * See docs/adr/0023-autopilot-reactive-automations.md for the model, signal catalog, and safety design.
  */
 
 export { AutomationEngine } from './engine'

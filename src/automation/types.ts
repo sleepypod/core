@@ -90,7 +90,7 @@ export interface AutomationRule {
 export type RunOutcome = 'fired' | 'skipped' | 'clamped' | 'dry_run' | 'error'
 
 // ---------------------------------------------------------------------------
-// Engine tunables (see docs/autopilot-plan.md "Open decisions — RESOLVED")
+// Engine tunables (see docs/adr/0023-autopilot-reactive-automations.md "Resolved tunables")
 // ---------------------------------------------------------------------------
 
 /** Global evaluator tick — 60s aligns to ambient/movement cadence. */

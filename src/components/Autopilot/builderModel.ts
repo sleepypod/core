@@ -10,7 +10,7 @@
  * `setTemperature(currentTemperature − 2)`, "ambient + 3" becomes
  * `setTemperature(ambient.temperature + 3)`. All signals the engine sees are
  * numeric, so the catalog here is the numeric/back-testable subset of the full
- * catalog in docs/autopilot-plan.md. Enum/bool signals (sleep stage, occupancy)
+ * catalog in docs/adr/0023-autopilot-reactive-automations.md. Enum/bool signals (sleep stage, occupancy)
  * are a later phase once those sources are wired.
  *
  * Round-trip contract: `fromAST(toAST(b))` preserves any rule the editor can
