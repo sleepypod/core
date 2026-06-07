@@ -442,8 +442,14 @@ export const healthRouter = router({
         const bedCd = side === 'left' ? (bed?.leftCenterTemp ?? null) : (bed?.rightCenterTemp ?? null)
 
         const isPowered = ds?.isPowered ?? false
-        const target = ds?.targetTemperature ?? null
-        const current = ds?.currentTemperature ?? null
+        // The hardware has no true "off": powering down sets the heat level to 0
+        // (neutral), and level 0 reads back through levelToFahrenheit() as
+        // ~82.5°F → 83°F. That synthetic 83 gets persisted to device_state and
+        // would otherwise surface here as a phantom target/bed temperature on a
+        // side that is actually off. Report null when unpowered so the debug
+        // view renders "off"/"—" instead of a misleading 83.
+        const target = isPowered ? (ds?.targetTemperature ?? null) : null
+        const current = isPowered ? (ds?.currentTemperature ?? null) : null
         const stale = flowAgeSec != null && flowAgeSec > STALE_SEC
         const flowing = pumpRpm != null && pumpRpm >= MIN_FLOW_RPM && !stale
 
