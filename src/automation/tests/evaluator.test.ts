@@ -60,6 +60,11 @@ describe('evaluateCondition — three-valued AND/OR/NOT', () => {
     expect(evaluateCondition({ kind: 'or', conditions: [cmp('<', 'a', 0), cmp('>', 'b', 0)] }, c)).toBeUndefined()
   })
 
+  it('OR of all-definite-false members is false', () => {
+    const c = ctx({ signals: { a: 1 } })
+    expect(evaluateCondition({ kind: 'or', conditions: [cmp('<', 'a', 0), cmp('>', 'a', 5)] }, c)).toBe(false)
+  })
+
   it('NOT inverts, preserving unknown', () => {
     const c = ctx({ signals: { a: 1 } })
     expect(evaluateCondition({ kind: 'not', condition: cmp('>', 'a', 0) }, c)).toBe(false)
@@ -77,6 +82,28 @@ describe('evaluateCondition — between/time/days', () => {
       max: { kind: 'literal', value: 10 },
     }
     expect(evaluateCondition(between, c)).toBe(true)
+  })
+
+  it('returns undefined for a between whose subject is unavailable', () => {
+    const between: Condition = {
+      kind: 'between',
+      subject: { kind: 'signal', signal: 'missing' },
+      min: { kind: 'literal', value: 0 },
+      max: { kind: 'literal', value: 10 },
+    }
+    expect(evaluateCondition(between, ctx({ signals: {} }))).toBeUndefined()
+  })
+
+  it('handles a same-day time window (09:00–17:00)', () => {
+    const win: Condition = { kind: 'timeBetween', start: '09:00', end: '17:00' }
+    expect(evaluateCondition(win, ctx({ nowMinutes: 12 * 60 }))).toBe(true) // inside
+    expect(evaluateCondition(win, ctx({ nowMinutes: 8 * 60 }))).toBe(false) // before start
+    expect(evaluateCondition(win, ctx({ nowMinutes: 18 * 60 }))).toBe(false) // after end
+  })
+
+  it('treats a zero-width time window as always false', () => {
+    const win: Condition = { kind: 'timeBetween', start: '09:00', end: '09:00' }
+    expect(evaluateCondition(win, ctx({ nowMinutes: 9 * 60 }))).toBe(false)
   })
 
   it('handles a time window that wraps past midnight (23:00–06:00)', () => {

@@ -240,3 +240,106 @@ describe('runBacktest — condition-tree introspection', () => {
     expect(r.primary?.key).toBe('left.movement')
   })
 })
+
+describe('runBacktest — sampling & introspection corners', () => {
+  const notifyOn = (conditions: Condition): BacktestRule => ({
+    side: 'left', cooldownMin: null, trigger: tick, conditions, actions: [{ kind: 'notify', message: 'x' }] as Action[],
+  })
+
+  it('defaults the step size to 1 minute when none is given', () => {
+    const r = runBacktest({ rule: notifyOn(vacuous), timezone: 'UTC', startMs: 0, endMs: HOUR, series: {} })
+    expect(r.stepMin).toBe(1)
+  })
+
+  it('reports a null threshold for a compare whose right side is not a literal', () => {
+    const cond: Condition = { kind: 'and', conditions: [{ kind: 'compare', op: '>', left: sig('left.movement'), right: sig('left.heartRate') }] }
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: { 'left.movement': movementSeries() } })
+    expect(r.threshold).toBeNull()
+    expect(r.primary?.key).toBe('left.movement')
+  })
+
+  it('labels a primary signal that has no friendly name with its raw key', () => {
+    const cond: Condition = { kind: 'and', conditions: [{ kind: 'compare', op: '>', left: sig('left.targetTemperature'), right: lit(70) }] }
+    const series = { 'left.targetTemperature': ambientSeries(72) }
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series })
+    expect(r.primary?.label).toBe('left.targetTemperature')
+  })
+
+  it('treats an empty sample buffer as no data', () => {
+    const cond: Condition = { kind: 'and', conditions: [{ kind: 'compare', op: '>', left: sig('left.movement'), right: lit(50) }] }
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: { 'left.movement': [] } })
+    expect(r.primary?.values.every(v => v === null)).toBe(true)
+    expect(r.fires.length).toBe(0)
+  })
+
+  it('ignores samples that lie entirely in the future', () => {
+    const cond: Condition = { kind: 'and', conditions: [{ kind: 'compare', op: '>', left: sig('left.movement'), right: lit(50) }] }
+    // The only sample is 10h ahead of the whole replay window.
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: { 'left.movement': [{ t: 10 * HOUR, v: 300 }] } })
+    expect(r.primary?.values.every(v => v === null)).toBe(true)
+  })
+
+  it('treats a sample older than the staleness bound as unavailable', () => {
+    const cond: Condition = { kind: 'and', conditions: [{ kind: 'compare', op: '>', left: sig('left.movement'), right: lit(50) }] }
+    // A single sample at t=0; by 00:20 it is >15 min stale.
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: { 'left.movement': [{ t: 0, v: 300 }] } })
+    expect(r.primary?.values[0]).toBe(300) // fresh
+    expect(r.primary?.values[20]).toBeNull() // stale
+  })
+
+  it('produces null aggregate values for a windowed compare with no data', () => {
+    const cond: Condition = {
+      kind: 'and',
+      conditions: [{ kind: 'compare', op: '>', left: { kind: 'window', fn: 'avg', signal: 'left.movement', lastMin: 10 }, right: lit(200) }],
+    }
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: {} })
+    expect(r.avg?.values.every(v => v === null)).toBe(true)
+    expect(r.fires.length).toBe(0)
+  })
+
+  it('never fires a signalChange trigger when the signal is absent', () => {
+    const rule: BacktestRule = {
+      side: 'left', cooldownMin: null, trigger: { kind: 'signalChange', signal: 'left.movement' },
+      conditions: vacuous, actions: [{ kind: 'notify', message: 'x' }] as Action[],
+    }
+    const r = runBacktest({ rule, timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: {} })
+    expect(r.fires.length).toBe(0)
+  })
+
+  it('fires a timeOfDay trigger only once even when multiple steps share a minute', () => {
+    const rule: BacktestRule = {
+      side: 'left', cooldownMin: null, trigger: { kind: 'timeOfDay', at: '00:05' },
+      conditions: vacuous, actions: [{ kind: 'notify', message: 'x' }] as Action[],
+    }
+    // Half-minute steps put two steps inside minute 5; the second must dedupe.
+    const r = runBacktest({ rule, timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 0.5, series: {} })
+    expect(r.fires).toHaveLength(1)
+  })
+
+  it('reports a zero net delta for an edge action that subtracts two signals', () => {
+    const rule: BacktestRule = {
+      side: 'left', cooldownMin: null, trigger: tick, conditions: vacuous,
+      actions: [{ kind: 'setTemperature', temp: { kind: 'binary', op: '+', left: sig('left.currentTemperature'), right: sig('ambient.temperature') }, clamp: { min: 60, max: 75 } }] as Action[],
+    }
+    const r = runBacktest({ rule, timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: {} })
+    expect(r.mode).toBe('edge')
+    expect(r.summary.netEffect).toContain('0°F')
+  })
+
+  it('reads through a clamp whose inner value is a literal to a bounding signal', () => {
+    const rule: BacktestRule = {
+      side: null, cooldownMin: null, trigger: tick, conditions: vacuous,
+      actions: [{ kind: 'setTemperature', temp: { kind: 'clamp', value: lit(72), min: sig('ambient.temperature'), max: lit(75) }, clamp: { min: 60, max: 75 } }] as Action[],
+    }
+    const r = runBacktest({ rule, timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: { 'ambient.temperature': ambientSeries(65) } })
+    // The clamp's bounding signal is ambient → policy mode tracking ambient.
+    expect(r.mode).toBe('policy')
+  })
+
+  it('rounds a non-positive primary axis maximum up to a whole number', () => {
+    const cond: Condition = { kind: 'and', conditions: [{ kind: 'compare', op: '>', left: sig('left.movement'), right: lit(0) }] }
+    const series = { 'left.movement': ambientSeries(0) } // every sample is 0
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series })
+    expect(r.primaryAxis?.max).toBe(0)
+  })
+})

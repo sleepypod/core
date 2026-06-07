@@ -118,6 +118,17 @@ describe('automation/instance — init & caching', () => {
     log.mockRestore()
   })
 
+  it('returns the same in-flight promise to concurrent callers', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    selectImpl = async () => [{ timezone: 'UTC', on: true }]
+    const mod = await freshModule()
+    // Both calls race before the first init resolves → second hits the cached promise.
+    const [a, b] = await Promise.all([mod.getAutomationEngine(), mod.getAutomationEngine()])
+    expect(a).toBe(b)
+    expect(ctorMock).toHaveBeenCalledTimes(1)
+    log.mockRestore()
+  })
+
   it('falls back to the default timezone when no settings row exists', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     selectImpl = async () => []
@@ -227,6 +238,12 @@ describe('automation/instance — injected dependency closures', () => {
     }
     await expect(capturedDeps.recordRun(9, 'error', {})).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalled()
+    // A non-Error rejection is logged verbatim (the e-is-not-Error branch).
+    insertImpl = async () => {
+      throw 'string failure'
+    }
+    await expect(capturedDeps.recordRun(9, 'error', {})).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledWith('[automation] failed to record run:', 'string failure')
     warn.mockRestore()
 
     // disableRule resolves through the mocked update chain.

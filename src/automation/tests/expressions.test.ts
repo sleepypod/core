@@ -72,6 +72,18 @@ describe('evaluateExpr', () => {
     expect(evaluateExpr(expr, c)).toBeUndefined()
   })
 
+  it('divides when the denominator is non-zero', () => {
+    const c = ctx({})
+    const expr: Expr = { kind: 'binary', op: '/', left: { kind: 'literal', value: 10 }, right: { kind: 'literal', value: 4 } }
+    expect(evaluateExpr(expr, c)).toBe(2.5)
+  })
+
+  it('returns undefined for an unrecognized binary operator', () => {
+    const c = ctx({})
+    const expr = { kind: 'binary', op: '%', left: { kind: 'literal', value: 10 }, right: { kind: 'literal', value: 4 } } as unknown as Expr
+    expect(evaluateExpr(expr, c)).toBeUndefined()
+  })
+
   it('evaluates clamp() expressions', () => {
     const c = ctx({})
     const expr: Expr = {
@@ -81,6 +93,17 @@ describe('evaluateExpr', () => {
       max: { kind: 'literal', value: 100 },
     }
     expect(evaluateExpr(expr, c)).toBe(100)
+  })
+
+  it('propagates undefined out of a clamp whose value is unavailable', () => {
+    const c = ctx({})
+    const expr: Expr = {
+      kind: 'clamp',
+      value: { kind: 'signal', signal: 'missing' },
+      min: { kind: 'literal', value: 60 },
+      max: { kind: 'literal', value: 100 },
+    }
+    expect(evaluateExpr(expr, c)).toBeUndefined()
   })
 
   it('reads windowed aggregates from the store', () => {

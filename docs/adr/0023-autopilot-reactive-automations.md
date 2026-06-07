@@ -50,7 +50,7 @@ signal buses, and writes through the same hardware path. No new hardware code.
 
 A small, three-primitive model rather than a full visual programming language:
 
-```
+```text
 Automation {
   id, name, enabled, side?, priority, cooldownMin?
   WHEN  trigger          // signal-change | tick | time-of-day
@@ -78,7 +78,7 @@ for testing. Action params may be expressions with a visible clamp.
 Two tables, following `src/db/schema.ts` conventions, with the rule "AST" held
 in JSON columns validated by zod at the tRPC boundary:
 
-```
+```text
 automations(
   id, name, enabled, side? (left|right|null=both),
   priority, cooldownMin?, trigger(json), conditions(json), actions(json),

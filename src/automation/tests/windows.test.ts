@@ -44,4 +44,14 @@ describe('WindowStore', () => {
     w.prune(now, 60)
     expect(w.aggregate('count', 'm', 120, now)).toBe(1)
   })
+
+  it('drops a buffer entirely when every sample ages out', () => {
+    const w = new WindowStore()
+    const now = 100 * MIN
+    w.record('m', 1, now - 90 * MIN)
+    w.record('m', 2, now - 80 * MIN)
+    w.prune(now, 60)
+    // Both samples pruned → key removed → unknown key, not an empty in-window.
+    expect(w.aggregate('count', 'm', 120, now)).toBeUndefined()
+  })
 })

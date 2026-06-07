@@ -3,13 +3,16 @@ import {
   blankRule,
   buildSentence,
   type BuilderRule,
+  fmtClock,
   fromAST,
   parseExpr,
   printExpr,
   type RuleAST,
+  sigLabel,
+  sigUnit,
   toAST,
 } from './builderModel'
-import type { Expr } from '@/src/automation/types'
+import type { Condition, Expr } from '@/src/automation/types'
 
 /** Render a sentence to a flat string for assertions. */
 function sentence(b: BuilderRule): string {
@@ -202,6 +205,130 @@ describe('buildSentence', () => {
       then: [{ action: 'notify', message: '' }], cooldown: 0,
     })
     expect(s).toContain('water low changes')
+  })
+})
+
+describe('parseExpr / printExpr — branch corners', () => {
+  it('rejects an expression that fails the variable regex', () => {
+    expect(parseExpr('3 + ambient', 'both')).toBeNull() // leading digit → no match
+  })
+  it('prints a signal with no friendly variable as its templatized key', () => {
+    expect(printExpr({ kind: 'signal', signal: 'left.movement' }, 'left')).toBe('{side}.movement')
+  })
+  it('prints an unknown expr kind as an empty string', () => {
+    expect(printExpr({ kind: 'bogus' } as unknown as Expr, 'both')).toBe('')
+  })
+})
+
+describe('toAST — action branch corners', () => {
+  const base = (then: BuilderRule['then']): BuilderRule => ({
+    name: 'x', enabled: true, mode: 'active', side: 'left', priority: 0,
+    when: { type: 'time', between: ['23:00', '06:00'] }, ifs: [], then, cooldown: 0,
+  })
+
+  it('defaults an empty notify message', () => {
+    const ast = toAST(base([{ action: 'notify', message: '' }]))
+    expect(ast.actions[0]).toEqual({ kind: 'notify', message: 'Autopilot notification' })
+  })
+  it('falls back to 72°F when an expression cannot be parsed', () => {
+    const ast = toAST(base([{ action: 'setTemperature', expr: 'not valid!!', clamp: [60, 75] }]))
+    expect(ast.actions[0]).toMatchObject({ kind: 'setTemperature', temp: { kind: 'literal', value: 72 } })
+  })
+  it('treats a missing delta as a zero-delta currentTemperature hold', () => {
+    const ast = toAST(base([{ action: 'setTemperature', clamp: [60, 75] }]))
+    expect(ast.actions[0]).toMatchObject({ temp: { kind: 'signal', signal: 'left.currentTemperature' } })
+  })
+  it('emits a + binary for a positive delta', () => {
+    const ast = toAST(base([{ action: 'setTemperature', delta: 3, clamp: [60, 75] }]))
+    expect(ast.actions[0]).toMatchObject({ temp: { kind: 'binary', op: '+', right: { kind: 'literal', value: 3 } } })
+  })
+  it('names an all-whitespace rule "Untitled automation"', () => {
+    const ast = toAST({ ...base([{ action: 'notify', message: 'x' }]), name: '   ' })
+    expect(ast.name).toBe('Untitled automation')
+  })
+})
+
+describe('fromAST — branch corners', () => {
+  const mk = (over: Partial<RuleAST>): RuleAST => ({
+    name: 'n', enabled: true, side: null, priority: 0, dryRun: false, cooldownMin: null,
+    trigger: { kind: 'tick', everyMin: 1 },
+    conditions: { kind: 'and', conditions: [] },
+    actions: [{ kind: 'notify', message: 'hi' }],
+    ...over,
+  })
+
+  it('unwraps a top-level condition that is not an AND', () => {
+    const b = fromAST(mk({ conditions: { kind: 'timeBetween', start: '23:00', end: '06:00' } }))
+    expect(b.when).toEqual({ type: 'time', between: ['23:00', '06:00'] })
+  })
+  it('ignores a compare whose right side is not a literal', () => {
+    const cond: Condition = { kind: 'compare', op: '>', left: { kind: 'signal', signal: 'left.heartRate' }, right: { kind: 'signal', signal: 'left.hrv' } }
+    const b = fromAST(mk({ conditions: { kind: 'and', conditions: [cond] } }))
+    expect(b.when).toEqual({ type: 'cond', signal: '{side}.movement', op: '>', value: 200 }) // unusable → default
+    expect(b.ifs).toEqual([])
+  })
+  it('falls back to ">" for an unrecognized compare operator', () => {
+    const cond = { kind: 'compare', op: '≈', left: { kind: 'signal', signal: 'left.heartRate' }, right: { kind: 'literal', value: 5 } } as unknown as Condition
+    const b = fromAST(mk({ conditions: { kind: 'and', conditions: [cond] } }))
+    expect(b.when).toMatchObject({ type: 'cond', op: '>' })
+  })
+  it('keeps a second time window as an IF when the first drives the WHEN', () => {
+    const b = fromAST(mk({
+      conditions: { kind: 'and', conditions: [
+        { kind: 'timeBetween', start: '23:00', end: '06:00' },
+        { kind: 'timeBetween', start: '12:00', end: '13:00' },
+      ] },
+    }))
+    expect(b.when).toEqual({ type: 'time', between: ['23:00', '06:00'] })
+    expect(b.ifs).toContainEqual({ type: 'time', between: ['12:00', '13:00'] })
+  })
+  it('defaults the clamp band when an action carries none', () => {
+    const b = fromAST(mk({ actions: [{ kind: 'setTemperature', temp: { kind: 'literal', value: 72 }, clamp: undefined } as never] }))
+    expect(b.then[0]).toMatchObject({ clamp: [60, 75] })
+  })
+  it('reads a zero-delta hold with no revert duration', () => {
+    const b = fromAST(mk({ actions: [{ kind: 'setTemperature', temp: { kind: 'signal', signal: 'left.currentTemperature' }, clamp: { min: 60, max: 75 } }] }))
+    expect(b.then[0]).toEqual({ action: 'setTemperature', delta: 0, revert: undefined, clamp: [60, 75] })
+  })
+  it('reads a positive delta binary with no revert duration', () => {
+    const b = fromAST(mk({ actions: [{ kind: 'setTemperature', temp: { kind: 'binary', op: '+', left: { kind: 'signal', signal: 'left.currentTemperature' }, right: { kind: 'literal', value: 2 } }, clamp: { min: 60, max: 75 } }] }))
+    expect(b.then[0]).toEqual({ action: 'setTemperature', delta: 2, revert: undefined, clamp: [60, 75] })
+  })
+  it('falls back to an empty notify when the rule has no actions', () => {
+    const b = fromAST(mk({ actions: [] }))
+    expect(b.then).toEqual([{ action: 'notify', message: '' }])
+  })
+})
+
+describe('label / clock helpers', () => {
+  it('falls back to the bare key for an unknown signal label and unit', () => {
+    expect(sigLabel('mystery.signal')).toBe('mystery.signal')
+    expect(sigUnit('mystery.signal')).toBe('')
+  })
+  it('renders midnight as 12am and keeps non-zero minutes', () => {
+    expect(fmtClock('00:00')).toBe('12am')
+    expect(fmtClock('09:30')).toBe('9:30am')
+  })
+})
+
+describe('buildSentence — remaining shapes', () => {
+  const flat = (b: BuilderRule): string => buildSentence(b).map(c => c.text).join('')
+  it('names a non-average aggregate and a delta-less raise', () => {
+    const s = flat({
+      name: 'x', enabled: true, mode: 'active', side: 'both', priority: 0,
+      when: { type: 'agg', agg: 'max', signal: '{side}.movement', window: 10, op: '>', value: 200 },
+      ifs: [], then: [{ action: 'setTemperature', clamp: [60, 75] }], cooldown: 0,
+    })
+    expect(s).toContain('movement max ')
+    expect(s).toContain('raise temperature by 0°F')
+  })
+  it('reads a power-off action', () => {
+    const s = flat({
+      name: 'x', enabled: true, mode: 'active', side: 'both', priority: 0,
+      when: { type: 'change', signal: 'water.low' }, ifs: [],
+      then: [{ action: 'setPower', on: false }], cooldown: 0,
+    })
+    expect(s).toContain('turn power off')
   })
 })
 
