@@ -53,6 +53,14 @@ describe('evaluateExpr', () => {
     expect(evaluateExpr(expr, c)).toBeUndefined()
   })
 
+  it('computes subtraction and multiplication', () => {
+    const c = ctx({ 'left.currentTemperature': 80 })
+    const sub: Expr = { kind: 'binary', op: '-', left: { kind: 'signal', signal: 'left.currentTemperature' }, right: { kind: 'literal', value: 2 } }
+    const mul: Expr = { kind: 'binary', op: '*', left: { kind: 'literal', value: 4 }, right: { kind: 'literal', value: 3 } }
+    expect(evaluateExpr(sub, c)).toBe(78)
+    expect(evaluateExpr(mul, c)).toBe(12)
+  })
+
   it('treats divide-by-zero as undefined', () => {
     const c = ctx({})
     const expr: Expr = {

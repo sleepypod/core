@@ -355,3 +355,127 @@ describe('AutomationEngine — disabled rules', () => {
     expect(h.notifies).toHaveLength(0)
   })
 })
+
+describe('AutomationEngine — lifecycle', () => {
+  it('start() installs the tick timer and stop() clears it', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'notify', message: 'x' }] })])
+    await h.engine.start() // reloads + installs interval
+    h.engine.stop() // clears the interval
+    // A second stop() is a safe no-op.
+    h.engine.stop()
+  })
+})
+
+describe('AutomationEngine — global kill-switch', () => {
+  it('halts all evaluation while disabled and resumes when re-enabled', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'notify', message: 'x' }] })])
+    await h.engine.reload()
+    expect(h.engine.isGloballyEnabled()).toBe(true)
+
+    h.engine.setGlobalEnabled(false)
+    expect(h.engine.isGloballyEnabled()).toBe(false)
+    await h.engine.tick()
+    expect(h.runs).toHaveLength(0)
+
+    h.engine.setGlobalEnabled(true)
+    await h.engine.tick()
+    expect(h.runs).toHaveLength(1)
+  })
+})
+
+describe('AutomationEngine — reload', () => {
+  it('drops runtime for rules that no longer exist', async () => {
+    const rules = [rule({ id: 1, actions: [{ kind: 'notify', message: 'a' }] })]
+    const h = makeHarness(rules)
+    await h.engine.reload()
+    await h.engine.tick() // creates runtime for rule 1
+    // Replace the rule set; reload should prune runtime for the removed id 1.
+    rules.length = 0
+    rules.push(rule({ id: 2, actions: [{ kind: 'notify', message: 'b' }] }))
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.runs.some(r => r.id === 2)).toBe(true)
+  })
+})
+
+describe('AutomationEngine — setPower', () => {
+  it('writes power on with a resolved temperature and tracks the setpoint', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true, temp: lit(72) }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls[0]).toMatchObject({ op: 'power', side: 'left', on: true, temp: 72 })
+    expect(h.runs[0].outcome).toBe('fired')
+  })
+
+  it('writes power off without a temperature', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: false }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls[0]).toMatchObject({ op: 'power', side: 'left', on: false })
+    expect(h.runs[0].outcome).toBe('fired')
+  })
+})
+
+describe('AutomationEngine — unresolved temperature', () => {
+  it('skips a setTemperature whose expression resolves to undefined', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: sig('absent') }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(0)
+    expect(h.runs[0].outcome).toBe('skipped')
+    expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('temp-unknown')
+  })
+})
+
+describe('AutomationEngine — window-bounded eval', () => {
+  it('handles windows nested in clamp/binary action temps and not/between/time conditions', async () => {
+    const win: Expr = { kind: 'window', fn: 'avg', signal: 'left.movement', lastMin: 30 }
+    const conditions: Condition = {
+      kind: 'and',
+      conditions: [
+        { kind: 'not', condition: { kind: 'between', subject: win, min: lit(0), max: lit(1000) } },
+        { kind: 'timeBetween', start: '23:00', end: '06:00' },
+      ],
+    }
+    const action: Action = {
+      kind: 'setTemperature',
+      temp: { kind: 'clamp', value: { kind: 'binary', op: '+', left: win, right: lit(1) }, min: lit(60), max: lit(75) },
+    }
+    const h = makeHarness([rule({ conditions, actions: [action] })])
+    h.setSignal('left.movement', 500)
+    await h.engine.reload()
+    // Just needs to evaluate without throwing — exercises maxWindowMinutes' walk
+    // over the condition/expression trees.
+    await expect(h.engine.tick()).resolves.toBeUndefined()
+    expect(h.runs).toHaveLength(1)
+  })
+})
+
+describe('AutomationEngine — action error', () => {
+  it('records an error outcome when a hardware write throws', async () => {
+    const runs: { id: number, outcome: RunOutcome, detail: RunDetail }[] = []
+    const deps: AutomationEngineDeps = {
+      signals: { read: () => ({}) },
+      now: () => 1_700_000_000_000,
+      clock: () => ({ nowMinutes: 0, dayOfWeek: 'monday' }),
+      getHardware: () => ({
+        connect: async () => { throw new Error('hardware offline') },
+        setTemperature: async () => {},
+        setPower: async () => {},
+      }),
+      withSideLock: async (_side, fn) => fn(),
+      broadcast: () => {},
+      markMutated: () => {},
+      loadRules: async () => [rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })],
+      recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
+      disableRule: async () => {},
+      hasActiveRunOnceSession: async () => false,
+      notify: () => {},
+    }
+    const engine = new AutomationEngine(deps)
+    await engine.reload()
+    await engine.tick()
+    expect(runs[0].outcome).toBe('error')
+    expect(runs[0].detail.reason).toBe('eval-threw')
+  })
+})

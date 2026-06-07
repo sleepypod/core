@@ -6,8 +6,10 @@ import {
   fromAST,
   parseExpr,
   printExpr,
+  type RuleAST,
   toAST,
 } from './builderModel'
+import type { Expr } from '@/src/automation/types'
 
 /** Render a sentence to a flat string for assertions. */
 function sentence(b: BuilderRule): string {
@@ -172,5 +174,106 @@ describe('buildSentence', () => {
     })
     expect(s).toContain('the clock reaches 11pm–6am')
     expect(s).toContain('set temperature to ambient + 3 (clamped 60–75°F)')
+  })
+
+  it('reads a threshold WHEN, condition IF, raise/notify/power THENs', () => {
+    const s = sentence({
+      name: 'x', enabled: true, mode: 'active', side: 'right', priority: 0,
+      when: { type: 'cond', signal: '{side}.heartRate', op: '>', value: 70 },
+      ifs: [{ type: 'cond', signal: '{side}.movement', op: '≥', value: 100 }],
+      then: [
+        { action: 'setTemperature', delta: 2, clamp: [60, 75] },
+        { action: 'notify', message: 'hi' },
+        { action: 'setPower', on: true },
+      ],
+      cooldown: 0,
+    })
+    expect(s).toContain('heart rate rises above 70bpm')
+    expect(s).toContain('movement is at least 100')
+    expect(s).toContain('raise temperature by 2°F')
+    expect(s).toContain('send a notification')
+    expect(s).toContain('turn power on')
+  })
+
+  it('reads a signal-change WHEN', () => {
+    const s = sentence({
+      name: 'x', enabled: true, mode: 'dryrun', side: 'both', priority: 0,
+      when: { type: 'change', signal: 'water.low' }, ifs: [],
+      then: [{ action: 'notify', message: '' }], cooldown: 0,
+    })
+    expect(s).toContain('water low changes')
+  })
+})
+
+describe('printExpr — clamp passthrough', () => {
+  it('prints a clamp by rendering its inner value', () => {
+    const e: Expr = {
+      kind: 'clamp',
+      value: { kind: 'signal', signal: 'ambient.temperature' },
+      min: { kind: 'literal', value: 60 },
+      max: { kind: 'literal', value: 75 },
+    }
+    expect(printExpr(e, 'both')).toBe('ambient')
+  })
+})
+
+describe('toAST — condition IFs', () => {
+  it('maps a threshold IF to a signal compare', () => {
+    const ast = toAST({
+      name: 'x', enabled: true, mode: 'active', side: 'right', priority: 0,
+      when: { type: 'time', between: ['23:00', '06:00'] },
+      ifs: [{ type: 'cond', signal: '{side}.heartRate', op: '>', value: 60 }],
+      then: [{ action: 'notify', message: 'hi' }], cooldown: 0,
+    })
+    expect(ast.conditions.kind === 'and' && ast.conditions.conditions).toContainEqual({
+      kind: 'compare', op: '>', left: { kind: 'signal', signal: 'right.heartRate' }, right: { kind: 'literal', value: 60 },
+    })
+  })
+})
+
+describe('fromAST — edge cases', () => {
+  it('falls back to a default WHEN when no compare or time condition drives the rule', () => {
+    const ast: RuleAST = {
+      name: 'n', enabled: true, side: null, priority: 0, dryRun: false, cooldownMin: null,
+      trigger: { kind: 'tick', everyMin: 1 },
+      conditions: { kind: 'and', conditions: [] },
+      actions: [{ kind: 'notify', message: 'hi' }],
+    }
+    expect(fromAST(ast).when).toEqual({ type: 'cond', signal: '{side}.movement', op: '>', value: 200 })
+  })
+
+  it('ignores a non-threshold (binary-left) compare and exposes a generic action as an expression', () => {
+    const ast: RuleAST = {
+      name: 'n', enabled: true, side: null, priority: 0, dryRun: false, cooldownMin: null,
+      trigger: { kind: 'tick', everyMin: 1 },
+      conditions: {
+        kind: 'and',
+        conditions: [{ kind: 'compare', op: '>', left: { kind: 'binary', op: '+', left: { kind: 'signal', signal: 'ambient.temperature' }, right: { kind: 'literal', value: 1 } }, right: { kind: 'literal', value: 5 } }],
+      },
+      actions: [{ kind: 'setTemperature', temp: { kind: 'binary', op: '*', left: { kind: 'signal', signal: 'ambient.temperature' }, right: { kind: 'literal', value: 2 } }, clamp: { min: 60, max: 75 } }],
+    }
+    const b = fromAST(ast)
+    expect(b.when).toEqual({ type: 'cond', signal: '{side}.movement', op: '>', value: 200 }) // binary-left compare not usable → default
+    expect(b.then[0]).toEqual({ action: 'setTemperature', expr: 'ambient * 2', clamp: [60, 75] })
+  })
+
+  it('pushes a leftover time window and a non-windowed compare into the IFs', () => {
+    const ast: RuleAST = {
+      name: 'n', enabled: true, side: null, priority: 0, dryRun: false, cooldownMin: null,
+      trigger: { kind: 'tick', everyMin: 1 },
+      conditions: {
+        kind: 'and',
+        conditions: [
+          { kind: 'compare', op: '>', left: { kind: 'window', fn: 'avg', signal: 'left.movement', lastMin: 10 }, right: { kind: 'literal', value: 200 } },
+          { kind: 'timeBetween', start: '23:00', end: '06:00' },
+          { kind: 'compare', op: '<', left: { kind: 'signal', signal: 'left.heartRate' }, right: { kind: 'literal', value: 50 } },
+        ],
+      },
+      actions: [{ kind: 'notify', message: 'hi' }],
+    }
+    const b = fromAST(ast)
+    expect(b.when.type).toBe('agg')
+    expect(b.ifs).toContainEqual({ type: 'time', between: ['23:00', '06:00'] })
+    expect(b.ifs).toContainEqual({ type: 'cond', signal: '{side}.heartRate', op: '<', value: 50 })
   })
 })

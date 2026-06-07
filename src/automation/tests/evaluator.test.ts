@@ -31,6 +31,7 @@ describe('evaluateCondition — comparisons', () => {
     expect(evaluateCondition(cmp('>', 'x', 5), c)).toBe(true)
     expect(evaluateCondition(cmp('<', 'x', 5), c)).toBe(false)
     expect(evaluateCondition(cmp('>=', 'x', 10), c)).toBe(true)
+    expect(evaluateCondition(cmp('<=', 'x', 10), c)).toBe(true)
     expect(evaluateCondition(cmp('==', 'x', 10), c)).toBe(true)
     expect(evaluateCondition(cmp('!=', 'x', 10), c)).toBe(false)
   })
