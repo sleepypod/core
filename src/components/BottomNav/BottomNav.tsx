@@ -2,7 +2,7 @@
 
 import { msg } from '@lingui/core/macro'
 import { useLingui } from '@lingui/react'
-import { Activity, BarChart3, Calendar, Gauge, Radio, SlidersHorizontal, Thermometer } from 'lucide-react'
+import { Activity, BarChart3, Calendar, Gauge, Radio, Thermometer } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
@@ -14,8 +14,11 @@ const tabs = [
   { id: 'data', icon: BarChart3, label: msg`Biometrics`, href: '/data' },
   { id: 'sensors', icon: Radio, label: msg`Sensors`, href: '/sensors' },
   { id: 'status', icon: Activity, label: msg`Status`, href: '/status' },
-  // Autopilot console — desktop/tablet only, like Diagnostics; it's a dense builder surface.
-  { id: 'autopilot', icon: SlidersHorizontal, label: msg`Autopilot`, href: '/autopilot', desktopOnly: true },
+  // Autopilot console — hidden from nav until P2 wires biometric/ambient/enum signals
+  // (sleepypod-core-69). The page still lives at /autopilot (deep-link) and the /debug
+  // Autopilot panel surfaces live engine state for dogfooding. Re-add SlidersHorizontal
+  // import + this entry to re-expose:
+  // { id: 'autopilot', icon: SlidersHorizontal, label: msg`Autopilot`, href: '/autopilot', desktopOnly: true },
   // Diagnostics console — desktop/tablet only; phones reach it via the Status card.
   { id: 'debug', icon: Gauge, label: msg`Diagnostics`, href: '/debug', desktopOnly: true },
 ]
