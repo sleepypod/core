@@ -195,6 +195,32 @@ describe('AutomationEngine — two-layer temp clamp', () => {
   })
 })
 
+describe('AutomationEngine — both-side fan-out', () => {
+  it('applies a null-side (both) hardware action to left and right', async () => {
+    const h = makeHarness([rule({
+      side: null,
+      actions: [{ kind: 'setTemperature', temp: lit(72), clamp: { min: 60, max: 100 } }],
+    })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls.map(c => c.side).sort()).toEqual(['left', 'right'])
+    expect(h.hwCalls.every(c => c.temp === 72)).toBe(true)
+    expect(h.runs[0].detail.actions).toHaveLength(2)
+    expect(h.runs[0].outcome).toBe('fired')
+  })
+
+  it('still honours an explicit per-action side over the null rule side', async () => {
+    const h = makeHarness([rule({
+      side: null,
+      actions: [{ kind: 'setTemperature', side: 'right', temp: lit(72), clamp: { min: 60, max: 100 } }],
+    })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(1)
+    expect(h.hwCalls[0].side).toBe('right')
+  })
+})
+
 describe('AutomationEngine — anti-thrash', () => {
   it('does not re-send a setpoint that moved less than 0.5°F', async () => {
     const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: sig('target') }] })])

@@ -58,10 +58,10 @@ export const AGGS = ['avg', 'max', 'min', 'sum', 'count'] as const
 export type UiAgg = typeof AGGS[number]
 
 /** Display operators (UI) ↔ engine CompareOp. */
-export const UI_OPS = ['>', '≥', '<', '≤', '=='] as const
+export const UI_OPS = ['>', '≥', '<', '≤', '==', '≠'] as const
 export type UiOp = typeof UI_OPS[number]
-const UI_TO_OP: Record<UiOp, '>' | '>=' | '<' | '<=' | '=='> = { '>': '>', '≥': '>=', '<': '<', '≤': '<=', '==': '==' }
-const OP_TO_UI: Record<string, UiOp> = { '>': '>', '>=': '≥', '<': '<', '<=': '≤', '==': '==', '!=': '==' }
+const UI_TO_OP: Record<UiOp, '>' | '>=' | '<' | '<=' | '==' | '!='> = { '>': '>', '≥': '>=', '<': '<', '≤': '<=', '==': '==', '≠': '!=' }
+const OP_TO_UI: Record<string, UiOp> = { '>': '>', '>=': '≥', '<': '<', '<=': '≤', '==': '==', '!=': '≠' }
 
 export const ACTIONS = [
   { id: 'setTemperature', label: 'Set temperature' },
@@ -361,6 +361,15 @@ export function fromAST(row: RuleAST & { id?: number }): BuilderRule {
     const clamp: [number, number] = a.clamp ? [a.clamp.min, a.clamp.max] : [...DEFAULT_CLAMP]
     // Recognise the "currentTemperature ± n" delta shape; else expose as expression.
     const t = a.temp
+    // Zero delta is encoded by toAST as a bare currentTemperature signal.
+    if (t.kind === 'signal' && t.signal === resolveSignal('{side}.currentTemperature', side)) {
+      return {
+        action: 'setTemperature',
+        delta: 0,
+        revert: a.durationSec ? Math.round(a.durationSec / 60) : undefined,
+        clamp,
+      }
+    }
     if (t.kind === 'binary' && t.left.kind === 'signal'
       && t.left.signal === resolveSignal('{side}.currentTemperature', side)
       && t.right.kind === 'literal' && (t.op === '+' || t.op === '-')) {
@@ -405,7 +414,7 @@ export function sigUnit(id: string): string {
 }
 
 function opWord(op: UiOp): string {
-  return ({ '>': 'rises above', '≥': 'is at least', '<': 'drops below', '≤': 'is at most', '==': 'equals' } as Record<UiOp, string>)[op]
+  return ({ '>': 'rises above', '≥': 'is at least', '<': 'drops below', '≤': 'is at most', '==': 'equals', '≠': 'differs from' } as Record<UiOp, string>)[op]
 }
 
 export function fmtClock(hhmm: string): string {

@@ -127,6 +127,16 @@ describe('fromAST(toAST(b)) round-trip', () => {
       when: { type: 'change', signal: 'water.low' }, ifs: [],
       then: [{ action: 'setPower', on: false }], cooldown: 0,
     },
+    {
+      name: 'not-equal threshold', enabled: true, mode: 'active', side: 'right', priority: 1,
+      when: { type: 'cond', signal: '{side}.heartRate', op: '≠', value: 70 }, ifs: [],
+      then: [{ action: 'notify', message: 'HR off baseline' }], cooldown: 0,
+    },
+    {
+      name: 'zero delta hold', enabled: true, mode: 'active', side: 'left', priority: 0,
+      when: { type: 'time', between: ['23:00', '06:00'] }, ifs: [],
+      then: [{ action: 'setTemperature', delta: 0, revert: 20, clamp: [60, 75] }], cooldown: 0,
+    },
   ]
 
   for (const c of cases) {

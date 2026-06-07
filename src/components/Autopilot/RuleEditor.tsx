@@ -300,7 +300,10 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
   const nights = useMemo(() => nightsQ.data ?? [], [nightsQ.data])
   // The picked night, falling back to the most recent — derived, not an effect.
   const [picked, setPicked] = useState<number | null>(null)
-  const nightId = picked ?? nights[0]?.sleepRecordId ?? null
+  // Drop a picked id that isn't in the current side's nights, so switching
+  // sides doesn't send a stale sleepRecordId until the user re-picks.
+  const resolvedPicked = picked != null && nights.some(n => n.sleepRecordId === picked) ? picked : null
+  const nightId = resolvedPicked ?? nights[0]?.sleepRecordId ?? null
 
   const ambientQ = trpc.environment.getLatestBedTemp.useQuery({ unit: 'F' })
   const liveAmbient = ambientQ.data?.ambientTemp ?? null

@@ -33,7 +33,19 @@ function RuleSentence({ b }: { b: BuilderRule }) {
 
 function Row({ a, onToggle, onOpen }: { a: ListItem, onToggle: (id: number, enabled: boolean) => void, onOpen: (a: ListItem) => void }) {
   return (
-    <div onClick={() => onOpen(a)} className="group grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-4 border-b border-zinc-800/60 px-5 py-4 transition-colors hover:bg-zinc-900/40">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(a)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen(a)
+        }
+      }}
+      className="group grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-4 border-b border-zinc-800/60 px-5 py-4 transition-colors hover:bg-zinc-900/40 focus:outline-none focus:ring-2 focus:ring-zinc-500/60"
+    >
       <div onClick={e => e.stopPropagation()} className="pt-0.5">
         <Toggle checked={a.enabled} onChange={() => onToggle(a.id, !a.enabled)} />
       </div>

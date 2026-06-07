@@ -53,7 +53,8 @@ export function clockInTimezone(
   const minute = Number(get('minute'))
   const weekday = get('weekday') // e.g. "Mon"
   const dayIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(weekday)
-  return { nowMinutes: hour * 60 + minute, dayOfWeek: DAYS[dayIndex >= 0 ? dayIndex : 0] }
+  if (dayIndex < 0) throw new Error(`Unexpected weekday token: ${weekday}`)
+  return { nowMinutes: hour * 60 + minute, dayOfWeek: DAYS[dayIndex] }
 }
 
 /**
@@ -77,8 +78,11 @@ export class DeviceSignalReader implements SignalReader {
         snapshot['water.low'] = status.waterLevel === 'low' ? 1 : 0
       }
     }
-    catch {
-      // Monitor not available (e.g. CI/tests) — leave snapshot empty.
+    catch (err) {
+      // A genuine read failure (the "monitor not running" case returns early
+      // above). Surface it rather than swallowing; the empty snapshot makes
+      // dependent rules skip, which we don't want to do silently.
+      console.warn('[automation] DeviceSignalReader.read failed:', err)
     }
     return snapshot
   }

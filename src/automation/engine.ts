@@ -286,7 +286,7 @@ export class AutomationEngine {
     // THEN — run actions, tracking the aggregate outcome.
     const results: ActionResult[] = []
     for (const action of rule.actions) {
-      results.push(await this.runAction(rule, action, ctx, now, rt))
+      results.push(...(await this.runAction(rule, action, ctx, now, rt)))
     }
 
     const outcome = aggregateOutcome(rule.dryRun, results)
@@ -302,16 +302,17 @@ export class AutomationEngine {
     ctx: EvalContext,
     now: number,
     rt: RuleRuntime,
-  ): Promise<ActionResult> {
+  ): Promise<ActionResult[]> {
     if (action.kind === 'notify') {
       this.deps.notify(rule.id, action.message)
-      return { kind: 'notify', notified: true }
+      return [{ kind: 'notify', notified: true }]
     }
 
-    const side = action.side ?? rule.side
-    if (!side) {
-      return { kind: action.kind, error: 'no-side' } // misconfigured rule
-    }
+    // A null rule side (the builder's "both") fans a hardware action out to both
+    // sides. The temp expression's signal keys are already side-resolved at build
+    // time — a "both" rule reads the left side (builderModel.toAST) — so the
+    // resolved setpoint is shared; only the write target differs per side.
+    const sides: Side[] = action.side ? [action.side] : (rule.side ? [rule.side] : ['left', 'right'])
 
     // Resolve the target temperature (setPower may have none → hardware default).
     let raw: number | undefined
@@ -319,7 +320,7 @@ export class AutomationEngine {
     else if (action.temp) raw = evaluateExpr(action.temp, ctx)
 
     if (action.kind === 'setTemperature' && raw === undefined) {
-      return { kind: action.kind, side, skipped: 'temp-unknown' }
+      return sides.map(side => ({ kind: action.kind, side, skipped: 'temp-unknown' }))
     }
 
     // Two-layer clamp (only when a temperature is involved).
@@ -334,6 +335,24 @@ export class AutomationEngine {
       clamped = layer2 !== raw
     }
 
+    const out: ActionResult[] = []
+    for (const side of sides) {
+      out.push(await this.writeSide(rule, action, side, now, rt, raw, temp, clamped))
+    }
+    return out
+  }
+
+  /** Apply one resolved hardware action to a single side (gates + write). */
+  private async writeSide(
+    rule: AutomationRule,
+    action: Exclude<Action, { kind: 'notify' }>,
+    side: Side,
+    now: number,
+    rt: RuleRuntime,
+    raw: number | undefined,
+    temp: number | undefined,
+    clamped: boolean,
+  ): Promise<ActionResult> {
     // Side gates apply only to real hardware writes.
     if (this.manualOverrideUntil[side] > now) {
       return { kind: action.kind, side, skipped: 'manual-override', raw, temp, clamped }

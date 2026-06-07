@@ -15,7 +15,7 @@ export interface NightOption { sleepRecordId: number, label: string, date: strin
 
 function minToClock(m: number): string {
   const h = Math.floor((m / 60) % 24)
-  const mm = Math.round(m % 60)
+  const mm = Math.floor(m % 60)
   const ap = h < 12 ? 'a' : 'p'
   let hh = h % 12
   if (hh === 0) hh = 12

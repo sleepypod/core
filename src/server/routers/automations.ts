@@ -250,7 +250,7 @@ export const automationsRouter = router({
         const [last] = db
           .select({ outcome: automationRuns.outcome, firedAt: automationRuns.firedAt })
           .from(automationRuns)
-          .where(and(eq(automationRuns.automationId, r.id), eq(automationRuns.outcome, 'fired')))
+          .where(eq(automationRuns.automationId, r.id))
           .orderBy(desc(automationRuns.firedAt))
           .limit(1)
           .all()
@@ -322,7 +322,7 @@ export const automationsRouter = router({
         cooldownMin: z.number().int().min(0).max(1440).nullable().default(null),
         trigger: automationTriggerSchema,
         conditions: automationConditionSchema,
-        actions: z.array(automationActionSchema).min(1),
+        actions: z.array(automationActionSchema).min(1).max(10),
       }),
     }).strict())
     .output(z.object({
