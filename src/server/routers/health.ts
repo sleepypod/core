@@ -393,8 +393,10 @@ export const healthRouter = router({
     }))
     .query(() => {
       // A powered side reporting flow below this is not circulating; firmware
-      // locks the TEC at zero flow, so we treat sub-threshold as stalled. 100
-      // matches device_settings.pump_stall_rpm_threshold default sense.
+      // locks the TEC at zero flow, so we treat sub-threshold as stalled. This
+      // is deliberately a conservative "is it moving at all" floor, independent
+      // of the configurable device_settings.pump_stall_rpm_threshold (default
+      // 500) that arms the auto-off guard — health only flags a true dead pump.
       const MIN_FLOW_RPM = 100
       // A flow reading older than this on a powered side means the monitor has
       // stopped seeing frames — also a stall (see the overnight gap in the RCA).
