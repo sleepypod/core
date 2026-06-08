@@ -3,8 +3,12 @@ import {
   blankRule,
   buildSentence,
   type BuilderRule,
+  degToDisplay,
+  degToF,
+  displayToF,
   fmtClock,
   fromAST,
+  fToDisplay,
   parseExpr,
   printExpr,
   type RuleAST,
@@ -402,5 +406,34 @@ describe('fromAST — edge cases', () => {
     expect(b.when.type).toBe('agg')
     expect(b.ifs).toContainEqual({ type: 'time', between: ['23:00', '06:00'] })
     expect(b.ifs).toContainEqual({ type: 'cond', signal: '{side}.heartRate', op: '<', value: 50 })
+  })
+})
+
+describe('temperature unit conversion (display boundary)', () => {
+  it('F unit is identity for absolute + delta', () => {
+    expect(fToDisplay(72, 'F')).toBe(72)
+    expect(displayToF(72, 'F')).toBe(72)
+    expect(degToDisplay(2, 'F')).toBe(2)
+    expect(degToF(2, 'F')).toBe(2)
+  })
+
+  it('converts absolute °F to °C and back near round-trip', () => {
+    expect(fToDisplay(75, 'C')).toBe(24) // (75-32)*5/9 = 23.9 → 24
+    expect(fToDisplay(32, 'C')).toBe(0)
+    expect(displayToF(24, 'C')).toBeCloseTo(75.2, 1)
+  })
+
+  it('converts a degree delta by magnitude, not offset', () => {
+    expect(degToDisplay(9, 'C')).toBe(5) // 9°F span == 5°C span
+    expect(degToF(5, 'C')).toBeCloseTo(9, 1)
+  })
+
+  it('renders the reads-as sentence in the requested unit', () => {
+    const r: BuilderRule = {
+      ...blankRule(),
+      then: [{ action: 'setTemperature', expr: 'ambient + 3', clamp: [60, 75] }],
+    }
+    expect(buildSentence(r, 'F').map(c => c.text).join('')).toContain('clamped 60–75°F')
+    expect(buildSentence(r, 'C').map(c => c.text).join('')).toContain('clamped 16–24°C')
   })
 })

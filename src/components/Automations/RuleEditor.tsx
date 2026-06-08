@@ -10,12 +10,17 @@ import { trpc } from '@/src/utils/trpc'
 import { Icon, type IconName } from './icons'
 import { Button, Card, NumberField, SectionLabel, Segmented, Select, Toggle } from './primitives'
 import { BacktestPanel } from './BacktestPanel'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import {
   AGGS,
   type BuilderRule,
   buildSentence,
   DEFAULT_CLAMP,
+  degToDisplay,
+  degToF,
+  displayToF,
   fmtClock,
+  fToDisplay,
   type IfSpec,
   parseExpr,
   SIGNALS,
@@ -52,7 +57,8 @@ function VarChip({ name, short, desc }: { name: string, short: string, desc: str
 
 // ---------- live sentence preview ----------
 function SentencePreview({ rule }: { rule: BuilderRule }) {
-  const chunks = buildSentence(rule)
+  const { unit } = useTemperatureUnit()
+  const chunks = buildSentence(rule, unit)
   return (
     <Card className="p-4" style={{ background: 'color-mix(in srgb, var(--accent) 7%, #0a0a0b)', borderColor: 'color-mix(in srgb, var(--accent) 22%, transparent)' }}>
       <div className="flex items-center gap-2 mb-2">
@@ -188,6 +194,7 @@ function IfEditor({ rule, set }: { rule: BuilderRule, set: (r: BuilderRule) => v
 
 // ---------- THEN ----------
 function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: BuilderRule) => void, liveAmbient: number | null }) {
+  const { unit } = useTemperatureUnit()
   const a = rule.then[0]
   const setA = (patch: Partial<ThenSpec>) => set({ ...rule, then: [{ ...a, ...patch } as ThenSpec, ...rule.then.slice(1)] })
   const isTemp = a.action === 'setTemperature'
@@ -229,7 +236,7 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
             <div className="flex flex-wrap items-center gap-2 text-[13px] text-zinc-400">
               <Select chip value={(a.delta ?? -2) < 0 ? 'lower' : 'raise'} options={['lower', 'raise']} onChange={v => setA({ delta: (v === 'lower' ? -1 : 1) * Math.abs(a.delta ?? 2) })} />
               <span>by</span>
-              <NumberField value={Math.abs(a.delta ?? 2)} step={1} suffix="°F" onChange={v => setA({ delta: ((a.delta ?? -2) < 0 ? -1 : 1) * Math.max(0, v) })} width={84} />
+              <NumberField value={degToDisplay(Math.abs(a.delta ?? 2), unit)} step={1} suffix={`°${unit}`} onChange={v => setA({ delta: ((a.delta ?? -2) < 0 ? -1 : 1) * Math.max(0, degToF(v, unit)) })} width={84} />
               <label className="ml-1 inline-flex items-center gap-2 text-[12px] text-zinc-400">
                 <Toggle size="sm" checked={!!a.revert} onChange={v => setA({ revert: v ? 20 : undefined })} />
                 revert after
@@ -247,8 +254,9 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
                   <span className="mono whitespace-nowrap rounded-md border border-zinc-700/60 bg-zinc-900/60 px-2 py-2 text-[12px] text-zinc-400">
                     =
                     <span className="text-zinc-100">
-                      {Math.round(exprEval)}
-                      °F
+                      {Math.round(fToDisplay(exprEval, unit))}
+                      °
+                      {unit}
                     </span>
                     {' '}
                     now
@@ -272,9 +280,9 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
             </div>
             <div className="flex items-center gap-2 text-[13px] text-zinc-400">
               <span>min</span>
-              <NumberField value={clamp[0]} step={1} suffix="°F" onChange={v => setA({ clamp: [v, clamp[1]] })} width={84} />
+              <NumberField value={fToDisplay(clamp[0], unit)} step={1} suffix={`°${unit}`} onChange={v => setA({ clamp: [displayToF(v, unit), clamp[1]] })} width={84} />
               <span>max</span>
-              <NumberField value={clamp[1]} step={1} suffix="°F" onChange={v => setA({ clamp: [clamp[0], v] })} width={84} />
+              <NumberField value={fToDisplay(clamp[1], unit)} step={1} suffix={`°${unit}`} onChange={v => setA({ clamp: [clamp[0], displayToF(v, unit)] })} width={84} />
             </div>
           </div>
         </div>

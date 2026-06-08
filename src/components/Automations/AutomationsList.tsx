@@ -5,6 +5,7 @@
  */
 'use client'
 
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { Icon } from './icons'
 import { Button, SideBadge, StatusBadge, Toggle } from './primitives'
 import { type BuilderRule, buildSentence } from './builderModel'
@@ -21,7 +22,8 @@ export interface ListItem {
 }
 
 function RuleSentence({ b }: { b: BuilderRule }) {
-  const chunks = buildSentence(b)
+  const { unit } = useTemperatureUnit()
+  const chunks = buildSentence(b, unit)
   return (
     <span className="text-[13px] leading-snug text-zinc-400" style={{ textWrap: 'pretty' }}>
       {chunks.map((c, i) => (

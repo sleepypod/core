@@ -8,7 +8,9 @@
 'use client'
 
 import { useState } from 'react'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { Icon } from './icons'
+import { fToDisplay } from './builderModel'
 
 import type { BacktestResult } from '@/src/automation/backtest'
 
@@ -54,6 +56,8 @@ function NightPicker({ nights, nightId, onNight }: { nights: NightOption[], nigh
 }
 
 function Chart({ r }: { r: BacktestResult }) {
+  const { unit } = useTemperatureUnit()
+  const ft = (f: number): number => fToDisplay(f, unit)
   const [hover, setHover] = useState<number | null>(null)
   const N = r.clockMin.length
   if (N < 2) return <div className="text-[12px] text-zinc-500 px-2 py-8 text-center">Not enough data in this window to replay.</div>
@@ -166,11 +170,7 @@ function Chart({ r }: { r: BacktestResult }) {
             <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.max)} y2={yTemp(r.clamp.max)} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
             <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.min)} y2={yTemp(r.clamp.min)} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
             <text x={mL + 3} y={yTemp(r.clamp.max) - 3} className="mono" style={{ fontSize: 8, fill: 'var(--accent)', opacity: 0.7 }}>
-              clamp
-              {Math.round(r.clamp.min)}
-              –
-              {Math.round(r.clamp.max)}
-              °
+              {`clamp ${ft(r.clamp.min)}–${ft(r.clamp.max)}°${unit}`}
             </text>
           </>
         )}
@@ -222,12 +222,10 @@ function Chart({ r }: { r: BacktestResult }) {
           </>
         )}
         <text x={W - mR + 3} y={yTemp(policy ? sharedMax : tempA.max) + 8} className="mono" style={{ fontSize: 9, fill: 'var(--accent)' }}>
-          {Math.round(policy ? sharedMax : tempA.max)}
-          °
+          {`${ft(policy ? sharedMax : tempA.max)}°`}
         </text>
         <text x={W - mR + 3} y={yTemp(policy ? sharedMin : tempA.min)} className="mono" style={{ fontSize: 9, fill: 'var(--accent)' }}>
-          {Math.round(policy ? sharedMin : tempA.min)}
-          °
+          {`${ft(policy ? sharedMin : tempA.min)}°`}
         </text>
 
         {/* hover crosshair + per-series dots */}
@@ -253,7 +251,8 @@ function Chart({ r }: { r: BacktestResult }) {
         const av = r.avg?.values[i]
         const sp = r.setpoint[i]
         const raw = r.setpointRaw?.[i]
-        const unit = r.primaryAxis?.unit ?? ''
+        const primaryUnit = r.primaryAxis?.unit ?? ''
+        const primaryIsTemp = primaryUnit === '°F'
         return (
           <div
             className="pointer-events-none absolute top-1 z-10 rounded-md border border-zinc-700/80 bg-zinc-900/95 px-2 py-1.5 text-[11px] leading-tight shadow-lg"
@@ -261,11 +260,11 @@ function Chart({ r }: { r: BacktestResult }) {
           >
             <div className="mono text-zinc-400 mb-1">{minToClock(r.clockMin[i])}</div>
             <div className="flex flex-col gap-0.5">
-              {pv != null && <TipRow color="#a1a1aa" label={r.primary?.label ?? 'signal'} value={`${rnd(pv)}${unit}`} />}
-              {av != null && <TipRow color="#d4d4d8" label={r.avg?.label ?? 'avg'} value={`${rnd(av)}${unit}`} />}
-              {sp != null && <TipRow color="var(--accent)" label="setpoint" value={`${rnd(sp)}°F`} />}
+              {pv != null && <TipRow color="#a1a1aa" label={r.primary?.label ?? 'signal'} value={primaryIsTemp ? `${ft(pv)}°${unit}` : `${rnd(pv)}${primaryUnit}`} />}
+              {av != null && <TipRow color="#d4d4d8" label={r.avg?.label ?? 'avg'} value={primaryIsTemp ? `${ft(av)}°${unit}` : `${rnd(av)}${primaryUnit}`} />}
+              {sp != null && <TipRow color="var(--accent)" label="setpoint" value={`${ft(sp)}°${unit}`} />}
               {raw != null && sp != null && Math.abs(raw - sp) > 0.05 && (
-                <TipRow color="#52525b" label="pre-clamp" value={`${rnd(raw)}°F`} />
+                <TipRow color="#52525b" label="pre-clamp" value={`${ft(raw)}°${unit}`} />
               )}
             </div>
           </div>
@@ -307,6 +306,7 @@ export function BacktestPanel({
   nightId: number | null
   onNight: (id: number) => void
 }) {
+  const { unit } = useTemperatureUnit()
   const r = result
   return (
     <div>
@@ -346,7 +346,7 @@ export function BacktestPanel({
                   <>
                     <Stat label="Mode" value="Continuous" tone="accent" />
                     <Stat label="Clamp hits" value={`${r.summary.clampHits}×`} tone={r.summary.clampHits ? 'red' : 'zinc'} />
-                    <Stat label="Setpoint range" value={r.summary.setpointRange ? `${Math.round(r.summary.setpointRange[0])}–${Math.round(r.summary.setpointRange[1])}°F` : '—'} />
+                    <Stat label="Setpoint range" value={r.summary.setpointRange ? `${fToDisplay(r.summary.setpointRange[0], unit)}–${fToDisplay(r.summary.setpointRange[1], unit)}°${unit}` : '—'} />
                   </>
                 )
               : (

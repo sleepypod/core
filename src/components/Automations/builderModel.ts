@@ -64,6 +64,33 @@ export function signalDefault(id: string): { value: number, step: number } {
   return { value: s?.def ?? 0, step: s?.step ?? 1 }
 }
 
+// ---------------------------------------------------------------------------
+// Temperature unit (display boundary only)
+//
+// The engine/AST is °F-canonical (MIN_TEMP/MAX_TEMP, clamp bands, deltas, and
+// signal literals are all °F). These helpers convert at the UI boundary so the
+// view honors the user's global unit preference; stored values stay °F.
+// ---------------------------------------------------------------------------
+
+export type DisplayUnit = 'F' | 'C'
+
+/** Absolute °F → the user's display unit (whole degrees). */
+export function fToDisplay(f: number, unit: DisplayUnit): number {
+  return unit === 'C' ? Math.round((f - 32) * 5 / 9) : f
+}
+/** Absolute display-unit value → stored °F. */
+export function displayToF(d: number, unit: DisplayUnit): number {
+  return unit === 'C' ? Math.round((d * 9 / 5 + 32) * 10) / 10 : d
+}
+/** A degree *delta* in °F → the user's display unit (whole degrees). */
+export function degToDisplay(fDelta: number, unit: DisplayUnit): number {
+  return unit === 'C' ? Math.round(fDelta * 5 / 9) : fDelta
+}
+/** A degree *delta* in the display unit → stored °F. */
+export function degToF(dDelta: number, unit: DisplayUnit): number {
+  return unit === 'C' ? Math.round(dDelta * 9 / 5 * 10) / 10 : dDelta
+}
+
 export const AGGS = ['avg', 'max', 'min', 'sum', 'count'] as const
 export type UiAgg = typeof AGGS[number]
 
@@ -436,7 +463,7 @@ export function fmtClock(hhmm: string): string {
 }
 
 /** Assemble the plain-English "reads as" sentence with highlightable spans. */
-export function buildSentence(r: BuilderRule): SentenceChunk[] {
+export function buildSentence(r: BuilderRule, unit: DisplayUnit = 'F'): SentenceChunk[] {
   const out: SentenceChunk[] = []
   const sideShort = r.side === 'both' ? '' : `${r.side}-side `
   out.push({ text: 'When ' })
@@ -449,8 +476,10 @@ export function buildSentence(r: BuilderRule): SentenceChunk[] {
     out.push({ text: `${w.window} min`, hot: true })
   }
   else if (w.type === 'cond') {
+    const u = sigUnit(w.signal)
+    const isTemp = u === '°F'
     out.push({ text: `${sideShort}${sigLabel(w.signal).toLowerCase()} `, hot: true })
-    out.push({ text: `${opWord(w.op)} ${w.value}${sigUnit(w.signal)}`, hot: true })
+    out.push({ text: `${opWord(w.op)} ${isTemp ? fToDisplay(w.value, unit) : w.value}${isTemp ? `°${unit}` : u}`, hot: true })
   }
   else if (w.type === 'change') {
     out.push({ text: `${sideShort}${sigLabel(w.signal).toLowerCase()} `, hot: true })
@@ -472,12 +501,12 @@ export function buildSentence(r: BuilderRule): SentenceChunk[] {
       if (a.expr != null) {
         out.push({ text: `set temperature to ` })
         out.push({ text: a.expr, hot: true, mono: true })
-        out.push({ text: ` (clamped ${a.clamp[0]}–${a.clamp[1]}°F)` })
+        out.push({ text: ` (clamped ${fToDisplay(a.clamp[0], unit)}–${fToDisplay(a.clamp[1], unit)}°${unit})` })
       }
       else {
         const delta = a.delta ?? 0
         out.push({ text: `${delta < 0 ? 'lower' : 'raise'} temperature by ` })
-        out.push({ text: `${Math.abs(delta)}°F`, hot: true })
+        out.push({ text: `${degToDisplay(Math.abs(delta), unit)}°${unit}`, hot: true })
         if (a.revert) out.push({ text: ` for ${a.revert} min then revert` })
       }
     }
