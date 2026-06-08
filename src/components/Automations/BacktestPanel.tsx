@@ -7,6 +7,7 @@
  */
 'use client'
 
+import { useState } from 'react'
 import { Icon } from './icons'
 
 import type { BacktestResult } from '@/src/automation/backtest'
@@ -53,6 +54,7 @@ function NightPicker({ nights, nightId, onNight }: { nights: NightOption[], nigh
 }
 
 function Chart({ r }: { r: BacktestResult }) {
+  const [hover, setHover] = useState<number | null>(null)
   const N = r.clockMin.length
   if (N < 2) return <div className="text-[12px] text-zinc-500 px-2 py-8 text-center">Not enough data in this window to replay.</div>
 
@@ -110,9 +112,22 @@ function Chart({ r }: { r: BacktestResult }) {
   // time ticks at ~6 even index positions
   const tickIdx = Array.from({ length: 6 }, (_, k) => Math.round((k / 5) * (N - 1)))
 
+  const hoverF = hover != null ? x(hover) / W : 0
+
   return (
-    <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2">
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+    <div className="relative rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2">
+      <svg
+        width="100%"
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ display: 'block' }}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          const xv = ((e.clientX - rect.left) / rect.width) * W
+          const i = Math.round(((xv - mL) / iw) * (N - 1))
+          setHover(Math.max(0, Math.min(N - 1, i)))
+        }}
+        onMouseLeave={() => setHover(null)}
+      >
         {[0, 0.25, 0.5, 0.75, 1].map((g, i) => (
           <line key={i} x1={mL} x2={W - mR} y1={mT + ih * g} y2={mT + ih * g} stroke="#1c1c20" strokeWidth="1" />
         ))}
@@ -214,7 +229,64 @@ function Chart({ r }: { r: BacktestResult }) {
           {Math.round(policy ? sharedMin : tempA.min)}
           °
         </text>
+
+        {/* hover crosshair + per-series dots */}
+        {hover != null && (() => {
+          const i = hover
+          const pv = r.primary?.values[i]
+          const av = r.avg?.values[i]
+          const sp = r.setpoint[i]
+          return (
+            <g pointerEvents="none">
+              <line x1={x(i)} x2={x(i)} y1={mT} y2={mT + ih} stroke="#a1a1aa" strokeWidth="1" strokeDasharray="2 2" opacity="0.55" />
+              {pv != null && <circle cx={x(i)} cy={yPrimary(pv)} r="3" fill="#3f3f46" stroke="#0a0a0b" strokeWidth="1" />}
+              {av != null && <circle cx={x(i)} cy={yPrimary(av)} r="3" fill="#d4d4d8" stroke="#0a0a0b" strokeWidth="1" />}
+              {sp != null && <circle cx={x(i)} cy={yTemp(sp)} r="3" fill="var(--accent)" stroke="#0a0a0b" strokeWidth="1" />}
+            </g>
+          )
+        })()}
       </svg>
+
+      {hover != null && (() => {
+        const i = hover
+        const pv = r.primary?.values[i]
+        const av = r.avg?.values[i]
+        const sp = r.setpoint[i]
+        const raw = r.setpointRaw?.[i]
+        const unit = r.primaryAxis?.unit ?? ''
+        return (
+          <div
+            className="pointer-events-none absolute top-1 z-10 rounded-md border border-zinc-700/80 bg-zinc-900/95 px-2 py-1.5 text-[11px] leading-tight shadow-lg"
+            style={{ left: `${hoverF * 100}%`, transform: hoverF > 0.6 ? 'translateX(calc(-100% - 10px))' : 'translateX(10px)' }}
+          >
+            <div className="mono text-zinc-400 mb-1">{minToClock(r.clockMin[i])}</div>
+            <div className="flex flex-col gap-0.5">
+              {pv != null && <TipRow color="#a1a1aa" label={r.primary?.label ?? 'signal'} value={`${rnd(pv)}${unit}`} />}
+              {av != null && <TipRow color="#d4d4d8" label={r.avg?.label ?? 'avg'} value={`${rnd(av)}${unit}`} />}
+              {sp != null && <TipRow color="var(--accent)" label="setpoint" value={`${rnd(sp)}°F`} />}
+              {raw != null && sp != null && Math.abs(raw - sp) > 0.05 && (
+                <TipRow color="#52525b" label="pre-clamp" value={`${rnd(raw)}°F`} />
+              )}
+            </div>
+          </div>
+        )
+      })()}
+    </div>
+  )
+}
+
+function rnd(v: number): number {
+  return Math.round(v * 10) / 10
+}
+
+function TipRow({ color, label, value }: { color: string, label: string, value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 whitespace-nowrap">
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+        <span className="text-zinc-400">{label}</span>
+      </span>
+      <span className="mono text-zinc-100 tabular-nums">{value}</span>
     </div>
   )
 }

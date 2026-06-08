@@ -39,20 +39,30 @@ export interface SignalDef {
   icon: string
   perSide?: boolean
   max?: number
+  /** Sensible default threshold + stepper increment for this signal. */
+  def?: number
+  step?: number
 }
 
 /** Numeric, engine-evaluable signals (subset wired for live read and/or backtest). */
 export const SIGNALS: SignalDef[] = [
-  { id: 'ambient.temperature', label: 'Ambient temp', unit: '°F', kind: 'num', group: 'Room', icon: 'Thermometer' },
-  { id: 'ambient.humidity', label: 'Ambient humidity', unit: '%', kind: 'num', group: 'Room', icon: 'Droplet' },
-  { id: '{side}.currentTemperature', label: 'Current temp', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
-  { id: '{side}.targetTemperature', label: 'Target temp', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
-  { id: '{side}.movement', label: 'Movement', unit: '', kind: 'num', group: 'Bio', icon: 'Activity', perSide: true, max: 1000 },
-  { id: '{side}.heartRate', label: 'Heart rate', unit: 'bpm', kind: 'num', group: 'Bio', icon: 'Heart', perSide: true },
-  { id: '{side}.hrv', label: 'HRV', unit: 'ms', kind: 'num', group: 'Bio', icon: 'Pulse', perSide: true },
-  { id: '{side}.breathingRate', label: 'Breathing rate', unit: 'brpm', kind: 'num', group: 'Bio', icon: 'Wind', perSide: true },
-  { id: 'water.low', label: 'Water low', unit: '', kind: 'num', group: 'System', icon: 'Droplet' },
+  { id: 'ambient.temperature', label: 'Ambient temp', unit: '°F', kind: 'num', group: 'Room', icon: 'Thermometer', def: 72, step: 1 },
+  { id: 'ambient.humidity', label: 'Ambient humidity', unit: '%', kind: 'num', group: 'Room', icon: 'Droplet', def: 50, step: 5 },
+  { id: '{side}.currentTemperature', label: 'Current temp', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true, def: 75, step: 1 },
+  { id: '{side}.targetTemperature', label: 'Target temp', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true, def: 75, step: 1 },
+  { id: '{side}.movement', label: 'Movement', unit: '', kind: 'num', group: 'Bio', icon: 'Activity', perSide: true, max: 1000, def: 200, step: 10 },
+  { id: '{side}.heartRate', label: 'Heart rate', unit: 'bpm', kind: 'num', group: 'Bio', icon: 'Heart', perSide: true, def: 60, step: 5 },
+  { id: '{side}.hrv', label: 'HRV', unit: 'ms', kind: 'num', group: 'Bio', icon: 'Pulse', perSide: true, def: 40, step: 5 },
+  { id: '{side}.breathingRate', label: 'Breathing rate', unit: 'brpm', kind: 'num', group: 'Bio', icon: 'Wind', perSide: true, def: 14, step: 1 },
+  { id: 'water.low', label: 'Water low', unit: '', kind: 'num', group: 'System', icon: 'Droplet', def: 1, step: 1 },
 ]
+
+/** Sensible default threshold value + stepper increment for a signal id (templated or concrete). */
+export function signalDefault(id: string): { value: number, step: number } {
+  const base = id.replace('left.', '{side}.').replace('right.', '{side}.')
+  const s = SIGNALS.find(x => x.id === id || x.id === base)
+  return { value: s?.def ?? 0, step: s?.step ?? 1 }
+}
 
 export const AGGS = ['avg', 'max', 'min', 'sum', 'count'] as const
 export type UiAgg = typeof AGGS[number]

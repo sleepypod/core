@@ -396,7 +396,11 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     if (raw != null && c != null && Math.abs(raw - c) > 0.05) clampHits++
   }
 
-  const setRange = setNums.length ? [Math.min(...setNums), Math.max(...setNums)] as [number, number] : null
+  // Range reflects the actual (clamped) setpoint only — not the pre-clamp ghost,
+  // which `setNums` includes for axis fitting. Including raw here would report a
+  // span wider than the clamp band ever allowed.
+  const clampedNums = setpoint.filter((v): v is number => v != null)
+  const setRange = clampedNums.length ? [Math.min(...clampedNums), Math.max(...clampedNums)] as [number, number] : null
 
   let netEffect: string | null = null
   if (setTemp && mode === 'edge') {

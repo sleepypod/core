@@ -186,14 +186,62 @@ export function Select({ value, options, onChange, placeholder = 'Select…', cl
 }
 
 export function NumberField({ value, onChange, step = 1, suffix = '', width = 84 }: { value: number, onChange: (v: number) => void, step?: number, suffix?: string, width?: number }) {
+  // Typeable: the input owns a local string while focused so keystrokes aren't
+  // clobbered by the prop; commits are debounced. Steppers + blur/Enter commit
+  // immediately.
+  const [text, setText] = useState(String(value))
+  const focused = useRef(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Sync external value in only while the user isn't actively editing.
+  useEffect(() => {
+    if (!focused.current) setText(String(value))
+  }, [value])
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [])
+
+  const commit = (raw: string): void => {
+    const n = Number(raw)
+    if (raw.trim() !== '' && Number.isFinite(n)) onChange(n)
+  }
+  const onType = (raw: string): void => {
+    setText(raw)
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => commit(raw), 300)
+  }
+  const bump = (delta: number): void => {
+    if (timer.current) clearTimeout(timer.current)
+    const base = Number(text)
+    const n = (Number.isFinite(base) ? base : value) + delta
+    setText(String(n))
+    onChange(n)
+  }
+
   return (
     <div className="inline-flex items-stretch rounded-lg border border-zinc-700/70 bg-zinc-900/70 overflow-hidden" style={{ width }}>
-      <button type="button" onClick={() => onChange(value - step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Minus size={13} /></button>
-      <div className="flex-1 flex items-center justify-center mono text-[13px] text-zinc-100 tabular-nums">
-        {value}
-        {suffix}
+      <button type="button" onClick={() => bump(-step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Minus size={13} /></button>
+      <div className="flex-1 flex items-center justify-center gap-0.5 min-w-0 px-0.5">
+        <input
+          value={text}
+          inputMode="decimal"
+          spellCheck={false}
+          onChange={e => onType(e.target.value)}
+          onFocus={() => { focused.current = true }}
+          onBlur={() => {
+            focused.current = false
+            if (timer.current) clearTimeout(timer.current)
+            commit(text)
+            setText(String(value))
+          }}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+          className="min-w-0 flex-1 bg-transparent text-center mono text-[13px] text-zinc-100 tabular-nums focus:outline-none"
+        />
+        {suffix && <span className="mono text-[13px] text-zinc-500 shrink-0">{suffix}</span>}
       </div>
-      <button type="button" onClick={() => onChange(value + step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Plus size={13} /></button>
+      <button type="button" onClick={() => bump(step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Plus size={13} /></button>
     </div>
   )
 }

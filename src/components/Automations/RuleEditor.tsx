@@ -19,6 +19,7 @@ import {
   type IfSpec,
   parseExpr,
   SIGNALS,
+  signalDefault,
   sigUnit,
   type ThenSpec,
   toAST,
@@ -98,18 +99,18 @@ function WhenEditor({ rule, set }: { rule: BuilderRule, set: (r: BuilderRule) =>
           <>
             <Select chip value={w.agg} options={[...AGGS]} onChange={v => setW({ agg: v as WhenSpec extends { agg: infer A } ? A : never })} />
             <span>of</span>
-            <Select chip value={w.signal} options={numSignalOpts} onChange={v => setW({ signal: v })} />
+            <Select chip value={w.signal} options={numSignalOpts} onChange={v => setW({ signal: v, value: signalDefault(v).value })} />
             <Select chip value={w.op} options={['>', '≥', '<', '≤']} onChange={v => setW({ op: v as UiOp })} />
-            <NumberField value={w.value} step={10} onChange={v => setW({ value: v })} width={92} />
+            <NumberField value={w.value} step={signalDefault(w.signal).step} onChange={v => setW({ value: v })} width={92} />
             <span>over the last</span>
             <NumberField value={w.window} step={5} suffix="m" onChange={v => setW({ window: Math.max(1, v) })} width={84} />
           </>
         )}
         {w.type === 'cond' && (
           <>
-            <Select chip value={w.signal} options={numSignalOpts} onChange={v => setW({ signal: v })} />
+            <Select chip value={w.signal} options={numSignalOpts} onChange={v => setW({ signal: v, value: signalDefault(v).value })} />
             <Select chip value={w.op} options={[...UI_OPS]} onChange={v => setW({ op: v as UiOp })} />
-            <NumberField value={w.value} step={1} onChange={v => setW({ value: v })} width={92} />
+            <NumberField value={w.value} step={signalDefault(w.signal).step} onChange={v => setW({ value: v })} width={92} />
             <span className="text-zinc-500">{sigUnit(w.signal)}</span>
           </>
         )}
@@ -162,9 +163,9 @@ function IfEditor({ rule, set }: { rule: BuilderRule, set: (r: BuilderRule) => v
                 )
               : (
                   <>
-                    <Select chip value={c.signal} options={numSignalOpts} onChange={v => upd(i, { signal: v })} />
+                    <Select chip value={c.signal} options={numSignalOpts} onChange={v => upd(i, { signal: v, value: signalDefault(v).value })} />
                     <Select chip value={c.op} options={[...UI_OPS]} onChange={v => upd(i, { op: v as UiOp })} />
-                    <NumberField value={c.value} step={1} onChange={v => upd(i, { value: v })} width={88} />
+                    <NumberField value={c.value} step={signalDefault(c.signal).step} onChange={v => upd(i, { value: v })} width={88} />
                   </>
                 )}
             <button type="button" onClick={() => del(i)} className="ml-auto text-zinc-600 hover:text-red-400"><Icon.X size={14} /></button>
