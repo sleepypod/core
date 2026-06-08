@@ -2,7 +2,7 @@
  * Per-side hardware write serialization.
  *
  * Multiple subsystems mutate the same physical side — the scheduler's
- * temperature/power/alarm jobs and the autopilot AutomationEngine. node-schedule
+ * temperature/power/alarm jobs and the AutomationEngine. node-schedule
  * fires same-minute jobs in parallel inside the event loop, and the engine ticks
  * independently, so without a shared mutex a temperature command could land
  * after a power-off and re-enable heat. These module-level promise chains

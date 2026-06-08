@@ -1,5 +1,5 @@
 /**
- * Inline monoline icons for the Autopilot console, ported verbatim from the
+ * Inline monoline icons for the Automations console, ported verbatim from the
  * design bundle (claude.ai/design export). Self-contained SVGs — no dependency
  * on an icon library's export names, so the visual output matches the design
  * exactly. currentColor + a tunable stroke width.

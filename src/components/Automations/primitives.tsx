@@ -1,5 +1,5 @@
 /**
- * Autopilot console primitives — a small, self-contained set ported from the
+ * Automations console primitives — a small, self-contained set ported from the
  * design bundle. Kept local (not the app's src/ui/* primitives) because this is
  * a desktop console surface with its own visual language: a live-swappable
  * accent via the `--accent` CSS var, hairline borders, near-black panels.

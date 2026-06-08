@@ -1,5 +1,5 @@
 /**
- * Diagnostics / status panel — live Autopilot state and the audit trail. Global
+ * Diagnostics / status panel — live Automations state and the audit trail. Global
  * kill-switch, a per-rule card (status, last fire, fires today, dry-run toggle),
  * and the run log: every evaluation that mattered, which is the transparency
  * Eight Sleep's black box lacks.
@@ -176,12 +176,12 @@ export function StatusPanel({ globalEnabled, onKill, rules, runs, loading, onDry
       <div className="flex items-center justify-between gap-4 border-b border-zinc-800 px-5 py-4">
         <div>
           <h1 className="text-[19px] font-semibold tracking-tight text-zinc-100">Diagnostics</h1>
-          <p className="text-[12px] text-zinc-500 mt-0.5">Live Autopilot state &amp; audit trail</p>
+          <p className="text-[12px] text-zinc-500 mt-0.5">Live Automations state &amp; audit trail</p>
         </div>
         <div className={`flex items-center gap-3 rounded-xl border px-3.5 py-2 ${killed ? 'border-red-500/40 bg-red-500/10' : 'border-zinc-800 bg-zinc-900/50'}`}>
           <Icon.Power size={16} className={killed ? 'text-red-400' : 'text-zinc-400'} />
           <div className="leading-tight">
-            <div className="text-[12px] font-medium text-zinc-200">{killed ? 'Autopilot halted' : 'Autopilot running'}</div>
+            <div className="text-[12px] font-medium text-zinc-200">{killed ? 'Automations halted' : 'Automations running'}</div>
             <div className="text-[10px] text-zinc-500">{killed ? 'all rules suspended' : 'global kill-switch'}</div>
           </div>
           <Toggle checked={!killed} onChange={() => onKill(killed)} tone={killed ? 'red' : 'accent'} />

@@ -158,7 +158,7 @@ describe('automation/instance — kill-switch restore', () => {
     expect(setGlobalEnabledMock).toHaveBeenCalledWith(false)
   })
 
-  it('leaves autopilot enabled when the kill-switch read throws', async () => {
+  it('leaves automations enabled when the kill-switch read throws', async () => {
     // First select (timezone) succeeds; second (kill-switch) throws.
     let calls = 0
     selectImpl = async () => {

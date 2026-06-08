@@ -171,7 +171,7 @@ export async function getAutomationEngine(): Promise<AutomationEngine> {
         if (settings && settings.on === false) engine.setGlobalEnabled(false)
       }
       catch {
-        // Settings unreadable (e.g. fresh DB) — leave autopilot enabled.
+        // Settings unreadable (e.g. fresh DB) — leave automations enabled.
       }
       engineInstance = engine
       console.log('AutomationEngine initialized with timezone:', timezone)

@@ -9,7 +9,7 @@
  *   - Two-layer temp clamp: per-action user band, then hardware 55–110°F.
  *   - Anti-thrash: a setpoint is only re-sent to hardware when it moves ≥0.5°F.
  *   - Runaway guard: a rule exceeding N hardware actions/hour auto-disables.
- *   - Manual-override hold: touching the dial suspends autopilot on that side.
+ *   - Manual-override hold: touching the dial suspends automations on that side.
  *   - Run-once gate: never writes a side with an active run-once session.
  *   - Dry-run: notify-only; logs would-fire events without touching hardware.
  *
@@ -150,7 +150,7 @@ export class AutomationEngine {
   }
 
   /**
-   * Suspend autopilot on a side for the manual-override hold window. A router or
+   * Suspend automations on a side for the manual-override hold window. A router or
    * gesture handler calls this when the user changes the dial directly.
    */
   registerManualOverride(side: Side): void {
@@ -163,7 +163,7 @@ export class AutomationEngine {
     this.deps.log?.(`AutomationEngine global kill-switch ${on ? 'ON (running)' : 'OFF (halted)'}`)
   }
 
-  /** Whether autopilot is globally enabled (kill-switch not engaged). */
+  /** Whether automations are globally enabled (kill-switch not engaged). */
   isGloballyEnabled(): boolean {
     return this.globalEnabled
   }

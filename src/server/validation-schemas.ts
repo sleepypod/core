@@ -96,7 +96,7 @@ export function validateDateRange(startDate: Date, endDate: Date): boolean {
 }
 
 // ============================================================================
-// Autopilot — automation rule AST (WHEN / IF / THEN)
+// Automation rule AST (WHEN / IF / THEN)
 //
 // These validate the JSON stored in the automations table against the
 // hand-authored AST types in src/automation/types.ts (the engine's source of

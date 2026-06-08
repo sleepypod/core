@@ -1,5 +1,5 @@
 /**
- * Autopilot automations router — CRUD for user-built WHEN/IF/THEN rules, the
+ * Automations router — CRUD for user-built WHEN/IF/THEN rules, the
  * audit-log/status reads that power the transparency wedge, the global
  * kill-switch, and a backtest endpoint that replays a rule against recorded
  * history. Parallels `schedules.ts`.
@@ -72,7 +72,7 @@ function toOutput(row: AutomationRow) {
 export const automationsRouter = router({
   /** List all automations, highest priority first. */
   list: publicProcedure
-    .meta({ openapi: { method: 'GET', path: '/automations', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'GET', path: '/automations', protect: false, tags: ['Automations'] } })
     .input(z.object({}).strict())
     .output(z.array(automationOutput))
     .query(() => {
@@ -86,7 +86,7 @@ export const automationsRouter = router({
 
   /** Fetch one automation by id. */
   get: publicProcedure
-    .meta({ openapi: { method: 'GET', path: '/automations/get', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'GET', path: '/automations/get', protect: false, tags: ['Automations'] } })
     .input(z.object({ id: idSchema }).strict())
     .output(automationOutput)
     .query(({ input }) => {
@@ -97,7 +97,7 @@ export const automationsRouter = router({
 
   /** Create an automation. */
   create: publicProcedure
-    .meta({ openapi: { method: 'POST', path: '/automations', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'POST', path: '/automations', protect: false, tags: ['Automations'] } })
     .input(automationCreateSchema)
     .output(automationOutput)
     .mutation(async ({ input }) => {
@@ -115,7 +115,7 @@ export const automationsRouter = router({
 
   /** Update an automation (partial). */
   update: publicProcedure
-    .meta({ openapi: { method: 'PATCH', path: '/automations', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'PATCH', path: '/automations', protect: false, tags: ['Automations'] } })
     .input(automationUpdateSchema)
     .output(automationOutput)
     .mutation(async ({ input }) => {
@@ -134,7 +134,7 @@ export const automationsRouter = router({
 
   /** Toggle enabled. */
   setEnabled: publicProcedure
-    .meta({ openapi: { method: 'POST', path: '/automations/enable', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'POST', path: '/automations/enable', protect: false, tags: ['Automations'] } })
     .input(z.object({ id: idSchema, enabled: z.boolean() }).strict())
     .output(automationOutput)
     .mutation(async ({ input }) => {
@@ -146,7 +146,7 @@ export const automationsRouter = router({
 
   /** Toggle dry-run vs active for an enabled rule. */
   setDryRun: publicProcedure
-    .meta({ openapi: { method: 'POST', path: '/automations/dry-run', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'POST', path: '/automations/dry-run', protect: false, tags: ['Automations'] } })
     .input(z.object({ id: idSchema, dryRun: z.boolean() }).strict())
     .output(automationOutput)
     .mutation(async ({ input }) => {
@@ -158,7 +158,7 @@ export const automationsRouter = router({
 
   /** Delete an automation (its runs cascade). */
   delete: publicProcedure
-    .meta({ openapi: { method: 'DELETE', path: '/automations', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'DELETE', path: '/automations', protect: false, tags: ['Automations'] } })
     .input(z.object({ id: idSchema }).strict())
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
@@ -170,7 +170,7 @@ export const automationsRouter = router({
 
   /** Global kill-switch state. */
   getKillSwitch: publicProcedure
-    .meta({ openapi: { method: 'GET', path: '/automations/kill-switch', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'GET', path: '/automations/kill-switch', protect: false, tags: ['Automations'] } })
     .input(z.object({}).strict())
     .output(z.object({ enabled: z.boolean() }))
     .query(() => {
@@ -180,7 +180,7 @@ export const automationsRouter = router({
 
   /** Flip the global kill-switch (persisted + applied to the running engine). */
   setKillSwitch: publicProcedure
-    .meta({ openapi: { method: 'POST', path: '/automations/kill-switch', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'POST', path: '/automations/kill-switch', protect: false, tags: ['Automations'] } })
     .input(z.object({ enabled: z.boolean() }).strict())
     .output(z.object({ enabled: z.boolean() }))
     .mutation(({ input }) => {
@@ -194,7 +194,7 @@ export const automationsRouter = router({
 
   /** Recent run-log rows (audit trail), newest first, joined to the rule name. */
   runs: publicProcedure
-    .meta({ openapi: { method: 'GET', path: '/automations/runs', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'GET', path: '/automations/runs', protect: false, tags: ['Automations'] } })
     .input(z.object({ automationId: idSchema.optional(), limit: z.number().int().min(1).max(500).default(100) }).strict())
     .output(z.array(z.object({
       id: z.number(),
@@ -226,7 +226,7 @@ export const automationsRouter = router({
 
   /** Live status: each rule + its last outcome + fires-today, plus kill-switch. */
   status: publicProcedure
-    .meta({ openapi: { method: 'GET', path: '/automations/status', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'GET', path: '/automations/status', protect: false, tags: ['Automations'] } })
     .input(z.object({}).strict())
     .output(z.object({
       globalEnabled: z.boolean(),
@@ -281,7 +281,7 @@ export const automationsRouter = router({
 
   /** Available past nights to backtest against, derived from sleep records. */
   nights: publicProcedure
-    .meta({ openapi: { method: 'GET', path: '/automations/nights', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'GET', path: '/automations/nights', protect: false, tags: ['Automations'] } })
     .input(z.object({ side: sideSchema, limit: z.number().int().min(1).max(30).default(7) }).strict())
     .output(z.array(z.object({
       sleepRecordId: z.number(),
@@ -313,7 +313,7 @@ export const automationsRouter = router({
    * backtest chart renders.
    */
   backtest: publicProcedure
-    .meta({ openapi: { method: 'POST', path: '/automations/backtest', protect: false, tags: ['Autopilot'] } })
+    .meta({ openapi: { method: 'POST', path: '/automations/backtest', protect: false, tags: ['Automations'] } })
     .input(z.object({
       side: sideSchema,
       sleepRecordId: idSchema.optional(),

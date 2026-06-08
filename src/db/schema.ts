@@ -65,7 +65,7 @@ export const deviceSettings = sqliteTable('device_settings', {
     .default(false),
   pumpStallRecoveryRpm: integer('pump_stall_recovery_rpm').notNull().default(1500),
   pumpStallRecoverySamples: integer('pump_stall_recovery_samples').notNull().default(3),
-  // Autopilot global kill-switch. When false, the AutomationEngine evaluates
+  // Automations global kill-switch. When false, the AutomationEngine evaluates
   // nothing and commands no hardware — per-rule enabled/dryRun state is
   // preserved, so flipping this back on resumes every rule as it was. Persisted
   // so the kill-switch survives reboot.
@@ -279,7 +279,7 @@ export const runOnceSessions = sqliteTable('run_once_sessions', {
 ])
 
 // ============================================================================
-// Autopilot — reactive automations (WHEN / IF / THEN rules engine)
+// Automations — reactive rules engine (WHEN / IF / THEN)
 // ============================================================================
 
 export const automations = sqliteTable('automations', {

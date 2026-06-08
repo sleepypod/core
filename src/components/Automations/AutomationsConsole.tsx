@@ -1,5 +1,5 @@
 /**
- * Autopilot console — the full-bleed desktop surface that hosts the Automations
+ * Automations console — the full-bleed desktop surface that hosts the Automations
  * list, the Rule editor (modal), and the Diagnostics/status panel behind a
  * left side-nav. Breaks out of the app's mobile `max-w-md` shell the same way
  * the diagnostics console does. Owns all tRPC data + mutations.
@@ -45,7 +45,7 @@ function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, labe
   )
 }
 
-export function AutopilotConsole() {
+export function AutomationsConsole() {
   const utils = trpc.useUtils()
   const [screen, setScreen] = useState<'list' | 'status'>('list')
   const [editing, setEditing] = useState<BuilderRule | null>(null)
@@ -112,7 +112,7 @@ export function AutopilotConsole() {
               <Icon.Sliders size={17} />
             </span>
             <div className="leading-tight">
-              <div className="text-[14px] font-semibold text-zinc-100">Autopilot</div>
+              <div className="text-[14px] font-semibold text-zinc-100">Automations</div>
               <div className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">sleepypod</div>
             </div>
           </div>

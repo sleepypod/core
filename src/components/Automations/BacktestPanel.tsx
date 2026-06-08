@@ -147,9 +147,16 @@ function Chart({ r }: { r: BacktestResult }) {
         {/* policy clamp band */}
         {policy && r.clamp && (
           <>
-            <rect x={mL} y={yTemp(r.clamp.max)} width={iw} height={Math.max(0, yTemp(r.clamp.min) - yTemp(r.clamp.max))} fill="color-mix(in srgb, var(--accent) 6%, transparent)" />
-            <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.max)} y2={yTemp(r.clamp.max)} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
-            <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.min)} y2={yTemp(r.clamp.min)} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
+            <rect x={mL} y={yTemp(r.clamp.max)} width={iw} height={Math.max(0, yTemp(r.clamp.min) - yTemp(r.clamp.max))} fill="color-mix(in srgb, var(--accent) 12%, transparent)" />
+            <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.max)} y2={yTemp(r.clamp.max)} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+            <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.min)} y2={yTemp(r.clamp.min)} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+            <text x={mL + 3} y={yTemp(r.clamp.max) - 3} className="mono" style={{ fontSize: 8, fill: 'var(--accent)', opacity: 0.7 }}>
+              clamp
+              {Math.round(r.clamp.min)}
+              –
+              {Math.round(r.clamp.max)}
+              °
+            </text>
           </>
         )}
 
@@ -251,6 +258,7 @@ export function BacktestPanel({
             {r.avg && <Legend swatch="#d4d4d8">{r.avg.label}</Legend>}
             {r.primary && <Legend swatch="#3f3f46">{r.mode === 'policy' ? r.primary.label.toLowerCase() : `raw ${r.primary.label.toLowerCase()}`}</Legend>}
             {r.mode === 'policy' && r.setpointRaw && <Legend dashed swatch="#52525b">pre-clamp</Legend>}
+            {r.mode === 'policy' && r.clamp && <Legend band swatch="var(--accent)">clamp band</Legend>}
             {r.mode === 'edge' && r.threshold != null && <Legend dashed swatch="#ef4444">threshold</Legend>}
             <Legend swatch="var(--accent)">setpoint</Legend>
             {r.mode === 'edge' && (
@@ -283,10 +291,12 @@ export function BacktestPanel({
   )
 }
 
-function Legend({ swatch, dashed, children }: { swatch: string, dashed?: boolean, children: React.ReactNode }) {
+function Legend({ swatch, dashed, band, children }: { swatch: string, dashed?: boolean, band?: boolean, children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className={`h-0.5 w-4 rounded ${dashed ? 'border-t border-dashed' : ''}`} style={dashed ? { borderColor: swatch } : { background: swatch }} />
+      {band
+        ? <span className="h-2.5 w-4 rounded-sm border" style={{ borderColor: `color-mix(in srgb, ${swatch} 70%, transparent)`, background: `color-mix(in srgb, ${swatch} 12%, transparent)` }} />
+        : <span className={`h-0.5 w-4 rounded ${dashed ? 'border-t border-dashed' : ''}`} style={dashed ? { borderColor: swatch } : { background: swatch }} />}
       {children}
     </span>
   )

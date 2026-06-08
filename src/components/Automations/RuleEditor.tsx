@@ -33,6 +33,22 @@ function clone(r: BuilderRule): BuilderRule {
 
 const numSignalOpts = SIGNALS.map(s => ({ value: s.id, label: s.label, icon: s.icon as IconName }))
 
+/** Expression variables, with what each resolves to (mirrors VAR_TO_SIGNAL in builderModel). */
+const VAR_INFO = [
+  { name: 'ambient', short: 'room temp', desc: 'Room temperature from the bed’s ambient sensor' },
+  { name: 'target', short: 'target setpoint', desc: 'The side’s current target setpoint' },
+  { name: 'current', short: 'measured bed temp', desc: 'The side’s current measured bed temperature' },
+] as const
+
+function VarChip({ name, short, desc }: { name: string, short: string, desc: string }) {
+  return (
+    <span title={desc} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700/70 bg-zinc-900/60 px-1.5 py-0.5">
+      <span className="mono text-[12px] text-emerald-300">{name}</span>
+      <span className="text-[10px] text-zinc-500">{short}</span>
+    </span>
+  )
+}
+
 // ---------- live sentence preview ----------
 function SentencePreview({ rule }: { rule: BuilderRule }) {
   const chunks = buildSentence(rule)
@@ -190,7 +206,7 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
 
   return (
     <Card className="p-4">
-      <SectionLabel kicker="Then" color="#22c55e" icon="Play" desc="what Autopilot does when it fires" />
+      <SectionLabel kicker="Then" color="#22c55e" icon="Play" desc="what the automation does when it fires" />
       <div className="flex items-center gap-2 mb-3">
         <Select
           chip
@@ -238,14 +254,11 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
                   </span>
                 )}
               </div>
-              <div className="text-[11px] text-zinc-600">
-                Variables:
-                <span className="mono text-zinc-400">ambient</span>
-                ,
-                <span className="mono text-zinc-400">target</span>
-                ,
-                <span className="mono text-zinc-400">current</span>
-                . Evaluated every tick.
+              <div className="flex flex-col gap-1.5">
+                <div className="text-[11px] text-zinc-600">Variables — evaluated every tick:</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {VAR_INFO.map(v => <VarChip key={v.name} name={v.name} short={v.short} desc={v.desc} />)}
+                </div>
               </div>
             </div>
           )}
@@ -343,17 +356,17 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
             <IfEditor rule={rule} set={setRule} />
             <div className="flex justify-center"><Icon.ArrowDown size={16} className="text-zinc-700" /></div>
             <ThenEditor rule={rule} set={setRule} liveAmbient={liveAmbient} />
-            {rule.mode === 'dryrun' && (
-              <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-400">
-                <Icon.Flask size={14} />
-                Dry-run: Autopilot logs what it would do but never touches hardware.
-              </div>
-            )}
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto bg-zinc-950/40 p-5">
           <div className="mx-auto flex max-w-2xl flex-col gap-4">
+            {rule.mode === 'dryrun' && (
+              <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-400">
+                <Icon.Flask size={14} />
+                Dry-run: the automation logs what it would do but never touches hardware.
+              </div>
+            )}
             <SentencePreview rule={rule} />
             <Card className="p-4">
               <BacktestPanel

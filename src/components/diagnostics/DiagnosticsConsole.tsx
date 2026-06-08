@@ -57,7 +57,7 @@ const SECTIONS = [
   { id: 'sensors', label: 'Sensors', icon: Radio },
   { id: 'health', label: 'Health', icon: ServerCog },
   { id: 'calibration', label: 'Calibration', icon: SlidersHorizontal },
-  { id: 'autopilot', label: 'Autopilot', icon: Wand2 },
+  { id: 'automations', label: 'Automations', icon: Wand2 },
   { id: 'logs', label: 'Logs', icon: ScrollText },
 ] as const
 
@@ -126,7 +126,7 @@ export function DiagnosticsConsole() {
           {section === 'sensors' && <SensorsPanel />}
           {section === 'health' && <HealthPanel />}
           {section === 'calibration' && <CalibrationPanel />}
-          {section === 'autopilot' && <AutopilotPanel />}
+          {section === 'automations' && <AutomationsPanel />}
           {section === 'logs' && <LogsPanel />}
         </div>
       </div>
@@ -763,12 +763,12 @@ function Tag({ children, className }: { children: React.ReactNode, className: st
   return <span className={`rounded px-1.5 py-0.5 ${className}`}>{children}</span>
 }
 
-// ── Autopilot ──────────────────────────────────────────────────────────────
-// Compact mirror of the Autopilot console's diagnostics, in the console's zinc
-// aesthetic. The full builder lives at /autopilot; this surfaces live state and
+// ── Automations ─────────────────────────────────────────────────────────────
+// Compact mirror of the Automations console's diagnostics, in the console's zinc
+// aesthetic. The full builder lives at /automations; this surfaces live state and
 // the audit trail alongside the pod's other diagnostics.
 
-function autopilotAgo(d: Date | string | null): string {
+function automationsAgo(d: Date | string | null): string {
   if (!d) return 'never'
   const ms = Date.now() - new Date(d).getTime()
   if (ms < 60_000) return 'now'
@@ -779,7 +779,7 @@ function autopilotAgo(d: Date | string | null): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
-function AutopilotPanel() {
+function AutomationsPanel() {
   const pathname = usePathname()
   const lang = pathname?.split('/')[1] ?? 'en'
   const status = trpc.automations.status.useQuery({}, { refetchInterval: 15000 })
@@ -793,7 +793,7 @@ function AutopilotPanel() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-zinc-100">Autopilot</h2>
+          <h2 className="text-base font-semibold text-zinc-100">Automations</h2>
           <p className="text-xs text-zinc-500">Reactive WHEN/IF/THEN rules · live state &amp; run log</p>
         </div>
         <div className="flex items-center gap-3">
@@ -805,7 +805,7 @@ function AutopilotPanel() {
             <span className={`h-2 w-2 rounded-full ${globalEnabled ? 'bg-emerald-400' : 'bg-red-400'}`} />
             {globalEnabled ? 'Running' : 'Halted'}
           </button>
-          <Link href={`/${lang}/autopilot`} className="rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700/60">
+          <Link href={`/${lang}/automations`} className="rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700/60">
             Open builder →
           </Link>
         </div>
@@ -814,7 +814,7 @@ function AutopilotPanel() {
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {rules.length === 0 && (
           <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4 text-xs text-zinc-500">
-            No automations yet. Build one in the Autopilot console.
+            No automations yet. Build one in the Automations console.
           </div>
         )}
         {rules.map(r => (
@@ -839,7 +839,7 @@ function AutopilotPanel() {
               <div>
                 <span className="text-zinc-600">last</span>
                 {' '}
-                {autopilotAgo(r.lastFiredAt)}
+                {automationsAgo(r.lastFiredAt)}
               </div>
               <div>
                 <span className="text-zinc-600">cooldown</span>

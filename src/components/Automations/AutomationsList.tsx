@@ -86,7 +86,7 @@ function EmptyState({ onNew }: { onNew: () => void }) {
         </div>
         <h3 className="text-[18px] font-semibold text-zinc-100">No automations yet</h3>
         <p className="mt-2 text-[13px] leading-relaxed text-zinc-500">
-          Autopilot reacts to live signals — movement, heart rate, ambient temperature — instead of just the clock.
+          Automations react to live signals — movement, heart rate, ambient temperature — instead of just the clock.
           Build a rule as
           {' '}
           <span className="text-zinc-300">When</span>

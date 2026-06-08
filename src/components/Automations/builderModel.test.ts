@@ -228,7 +228,7 @@ describe('toAST — action branch corners', () => {
 
   it('defaults an empty notify message', () => {
     const ast = toAST(base([{ action: 'notify', message: '' }]))
-    expect(ast.actions[0]).toEqual({ kind: 'notify', message: 'Autopilot notification' })
+    expect(ast.actions[0]).toEqual({ kind: 'notify', message: 'Automation notification' })
   })
   it('falls back to 72°F when an expression cannot be parsed', () => {
     const ast = toAST(base([{ action: 'setTemperature', expr: 'not valid!!', clamp: [60, 75] }]))

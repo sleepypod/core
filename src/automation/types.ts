@@ -1,5 +1,5 @@
 /**
- * Autopilot rules-engine model — the WHEN / IF / THEN "language".
+ * Automations rules-engine model — the WHEN / IF / THEN "language".
  *
  * These are hand-authored AST types and serve as the single source of truth:
  * the zod schemas in `src/server/validation-schemas.ts` validate JSON against
@@ -111,7 +111,7 @@ export type RunOutcome = 'fired' | 'skipped' | 'clamped' | 'dry_run' | 'error'
 /** Global evaluator tick — 60s aligns to ambient/movement cadence. */
 export const AUTOMATION_TICK_MS = 60_000
 
-/** Manual-override hold: touching the dial suspends autopilot on that side. */
+/** Manual-override hold: touching the dial suspends automations on that side. */
 export const AUTOMATION_MANUAL_OVERRIDE_MS = 30 * 60_000
 
 /** Layer-1 clamp defaults when an action omits its own `clamp` band. */

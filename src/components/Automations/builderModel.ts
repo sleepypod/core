@@ -243,7 +243,7 @@ function ifToCondition(c: IfSpec, side: BuilderRule['side']): Condition {
 }
 
 function thenToAction(t: ThenSpec, side: BuilderRule['side']): Action {
-  if (t.action === 'notify') return { kind: 'notify', message: t.message || 'Autopilot notification' }
+  if (t.action === 'notify') return { kind: 'notify', message: t.message || 'Automation notification' }
   if (t.action === 'setPower') return { kind: 'setPower', on: t.on }
   // setTemperature — amount (delta) or expression
   let temp: Expr
