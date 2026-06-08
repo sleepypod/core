@@ -5,6 +5,7 @@
  * the rule skips rather than firing blind.
  */
 
+import type { ConditionStateStore } from './evaluator'
 import type { DayOfWeek, Expr } from './types'
 import type { WindowStore } from './windows'
 
@@ -17,6 +18,12 @@ export interface EvalContext {
   /** Minutes since local midnight, timezone-aware. */
   nowMinutes: number
   dayOfWeek: DayOfWeek
+  /**
+   * Persistent state for stateful condition nodes (`hysteresis`/`sustained`),
+   * keyed by tree path. Omitted by one-shot callers; those nodes then read
+   * instantaneously rather than latching/debouncing.
+   */
+  condState?: ConditionStateStore
 }
 
 /** Clamp `value` to `[min, max]`. Bounds may be undefined (then ignored). */

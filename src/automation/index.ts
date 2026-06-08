@@ -12,9 +12,10 @@ export {
   getAutomationEngineIfRunning,
   shutdownAutomationEngine,
 } from './instance'
-export { clockInTimezone, collectWindowSignals, DeviceSignalReader } from './signals'
-export type { SignalReader, SignalSnapshot } from './signals'
-export { evaluateCondition } from './evaluator'
+export { clockInTimezone, collectWindowSignals, DeviceSignalReader, resolveSignal } from './signals'
+export type { BaselineMap, SideBaseline, SignalReader, SignalSnapshot } from './signals'
+export { createConditionStateStore, evaluateCondition } from './evaluator'
+export type { ConditionNodeState, ConditionStateStore } from './evaluator'
 export { clamp, evaluateExpr } from './expressions'
 export type { EvalContext } from './expressions'
 export { WindowStore } from './windows'

@@ -343,3 +343,55 @@ describe('runBacktest — sampling & introspection corners', () => {
     expect(r.primaryAxis?.max).toBe(0)
   })
 })
+
+describe('runBacktest — stateful & derived conditions', () => {
+  const notifyOn = (conditions: Condition): BacktestRule => ({
+    side: 'left', cooldownMin: null, trigger: tick, conditions, actions: [{ kind: 'notify', message: 'x' }] as Action[],
+  })
+
+  it('debounces a sustained condition across replay steps', () => {
+    // movementSeries() bursts to 300 for minutes 10–40. Sustained-for-5-min
+    // means fires begin only at minute 15 and stop after the burst ends.
+    const cond: Condition = {
+      kind: 'sustained',
+      forMin: 5,
+      condition: { kind: 'compare', op: '>', left: sig('left.movement'), right: lit(200) },
+    }
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: { 'left.movement': movementSeries() } })
+    // Surfaces the wrapped compare as the primary trace via sustained recursion.
+    expect(r.primary?.key).toBe('left.movement')
+    expect(r.fires).toContain(15) // 5 min after the burst started at minute 10
+    expect(r.fires).not.toContain(11) // streak not yet long enough
+    expect(r.fires).not.toContain(45) // burst is over
+  })
+
+  it('latches a hysteresis condition with a dead-band across steps', () => {
+    // Movement ramps 0→59 (×5 ≈ 0..295). on=200 (minute 40), off=100 (minute 20 on the way down).
+    const ramp: Sample[] = []
+    for (let i = 0; i < 60; i++) {
+      const v = i < 45 ? i * 5 : (60 - i) * 5 // up to 220 then back down
+      ramp.push({ t: i * 60_000, v })
+    }
+    const cond: Condition = { kind: 'hysteresis', subject: sig('left.movement'), on: 200, off: 100 }
+    const r = runBacktest({ rule: notifyOn(cond), timezone: 'UTC', startMs: 0, endMs: HOUR, stepMin: 1, series: { 'left.movement': ramp } })
+    expect(r.fires).toContain(40) // first minute movement reaches 200
+    expect(r.fires).not.toContain(10) // below `on`, never latched
+  })
+
+  it('evaluates a z-score condition against supplied baselines', () => {
+    const hr: Sample[] = []
+    for (let i = 0; i < 60; i++) hr.push({ t: i * 60_000, v: i < 30 ? 62 : 80 }) // normal then +4σ
+    const cond: Condition = { kind: 'compare', op: '>', left: sig('left.heartRate.zscore'), right: lit(2) }
+    const r = runBacktest({
+      rule: notifyOn(cond),
+      timezone: 'UTC',
+      startMs: 0,
+      endMs: HOUR,
+      stepMin: 1,
+      series: { 'left.heartRate': hr },
+      baselines: { left: { hrMean: 60, hrSD: 5 } },
+    })
+    expect(r.fires).not.toContain(10) // 62 bpm → +0.4σ
+    expect(r.fires).toContain(30) // 80 bpm → +4σ
+  })
+})

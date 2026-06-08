@@ -13,7 +13,7 @@
 
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
-import { and, desc, eq, gte, lte } from 'drizzle-orm'
+import { and, avg, count, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { automationRuns, automations, deviceSettings } from '@/src/db/schema'
@@ -30,6 +30,7 @@ import {
 } from '@/src/server/validation-schemas'
 import { getAutomationEngineIfRunning } from '@/src/automation'
 import { runBacktest, type BacktestRule, type Sample } from '@/src/automation/backtest'
+import type { BaselineMap, SideBaseline } from '@/src/automation/signals'
 import type { Action, Condition, Trigger } from '@/src/automation/types'
 
 /** Reload the running engine so a CRUD change takes effect immediately. */
@@ -345,6 +346,7 @@ export const automationsRouter = router({
           endMs: window.endMs,
           stepMin: input.stepMin,
           series,
+          baselines: loadBaselines(input.side),
         })
         return { ok: true, night: { label: window.label, date: window.date }, result }
       }
@@ -452,6 +454,42 @@ function loadSeries(side: 'left' | 'right', startMs: number, endMs: number): Rec
   series['water.low'] = wl.map(r => ({ t: r.t.getTime(), v: r.level === 'low' ? 1 : 0 }))
 
   return series
+}
+
+/** Rolling vitals baseline (mean + population SD) for a side, for z-scores. */
+function loadBaselines(side: 'left' | 'right'): BaselineMap {
+  const now = Date.now()
+  const start = new Date(now - 30 * 24 * 60 * 60 * 1000)
+  const end = new Date(now)
+  const [row] = biometricsDb
+    .select({
+      hrMean: avg(vitals.heartRate),
+      hrSqMean: sql<number | null>`AVG(${vitals.heartRate} * ${vitals.heartRate})`,
+      hrvMean: avg(vitals.hrv),
+      hrvSqMean: sql<number | null>`AVG(${vitals.hrv} * ${vitals.hrv})`,
+      brMean: avg(vitals.breathingRate),
+      brSqMean: sql<number | null>`AVG(${vitals.breathingRate} * ${vitals.breathingRate})`,
+      sampleCount: count(),
+    })
+    .from(vitals)
+    .where(and(eq(vitals.side, side), gte(vitals.timestamp, start), lte(vitals.timestamp, end)))
+    .all()
+  if (!row || row.sampleCount === 0) return {}
+  const sd = (mean: unknown, sqMean: number | null): number | undefined => {
+    if (mean == null || sqMean == null) return undefined
+    const variance = Number(sqMean) - Number(mean) * Number(mean)
+    return variance > 0 ? Math.sqrt(variance) : 0
+  }
+  const num = (x: unknown): number | undefined => (x == null ? undefined : Number(x))
+  const base: SideBaseline = {
+    hrMean: num(row.hrMean),
+    hrSD: sd(row.hrMean, row.hrSqMean),
+    hrvMean: num(row.hrvMean),
+    hrvSD: sd(row.hrvMean, row.hrvSqMean),
+    brMean: num(row.brMean),
+    brSD: sd(row.brMean, row.brSqMean),
+  }
+  return { [side]: base }
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateCondition } from '../evaluator'
+import { createConditionStateStore, evaluateCondition } from '../evaluator'
 import type { EvalContext } from '../expressions'
 import { WindowStore } from '../windows'
 import type { CompareOp, Condition, DayOfWeek } from '../types'
@@ -8,13 +8,16 @@ function ctx(opts: {
   signals?: Record<string, number | undefined>
   nowMinutes?: number
   dayOfWeek?: DayOfWeek
+  nowMs?: number
+  condState?: EvalContext['condState']
 }): EvalContext {
   return {
     signal: k => (opts.signals ?? {})[k],
     windows: new WindowStore(),
-    nowMs: 0,
+    nowMs: opts.nowMs ?? 0,
     nowMinutes: opts.nowMinutes ?? 0,
     dayOfWeek: opts.dayOfWeek ?? 'monday',
+    condState: opts.condState,
   }
 }
 
@@ -117,5 +120,87 @@ describe('evaluateCondition — between/time/days', () => {
     const days: Condition = { kind: 'onDays', days: ['saturday', 'sunday'] }
     expect(evaluateCondition(days, ctx({ dayOfWeek: 'saturday' }))).toBe(true)
     expect(evaluateCondition(days, ctx({ dayOfWeek: 'monday' }))).toBe(false)
+  })
+})
+
+describe('evaluateCondition — hysteresis latch', () => {
+  // Rising: activate at >=70, deactivate at <=65; the 65–70 band is dead.
+  const hyst: Condition = { kind: 'hysteresis', subject: { kind: 'signal', signal: 'x' }, on: 70, off: 65 }
+
+  it('latches on rising past `on` and off only below `off`, holding in the dead-band', () => {
+    const store = createConditionStateStore()
+    const at = (x: number): boolean | undefined => evaluateCondition(hyst, ctx({ signals: { x }, condState: store }))
+    expect(at(60)).toBe(false) // below both
+    expect(at(68)).toBe(false) // in dead-band, not yet activated
+    expect(at(72)).toBe(true) // crosses `on`
+    expect(at(67)).toBe(true) // dead-band, latch holds
+    expect(at(66)).toBe(true) // still above `off`
+    expect(at(64)).toBe(false) // drops to/below `off`
+    expect(at(68)).toBe(false) // dead-band again, stays off until `on`
+  })
+
+  it('supports an inverted (falling) latch when on < off', () => {
+    // Activate when x drops to <=40, deactivate when it rises to >=50.
+    const low: Condition = { kind: 'hysteresis', subject: { kind: 'signal', signal: 'x' }, on: 40, off: 50 }
+    const store = createConditionStateStore()
+    const at = (x: number): boolean | undefined => evaluateCondition(low, ctx({ signals: { x }, condState: store }))
+    expect(at(60)).toBe(false)
+    expect(at(45)).toBe(false) // dead-band
+    expect(at(38)).toBe(true) // crosses `on` downward
+    expect(at(45)).toBe(true) // dead-band, latch holds
+    expect(at(55)).toBe(false) // rises past `off`
+  })
+
+  it('holds the latch when the subject reads unknown', () => {
+    const store = createConditionStateStore()
+    expect(evaluateCondition(hyst, ctx({ signals: { x: 72 }, condState: store }))).toBe(true)
+    expect(evaluateCondition(hyst, ctx({ signals: {}, condState: store }))).toBe(true) // missing → hold
+  })
+
+  it('is unknown when the subject is unavailable with no prior state', () => {
+    expect(evaluateCondition(hyst, ctx({ signals: {}, condState: createConditionStateStore() }))).toBeUndefined()
+  })
+
+  it('reads instantaneously (no latch) without a state store', () => {
+    expect(evaluateCondition(hyst, ctx({ signals: { x: 72 } }))).toBe(true)
+    expect(evaluateCondition(hyst, ctx({ signals: { x: 67 } }))).toBe(false) // dead-band reads as off
+  })
+})
+
+describe('evaluateCondition — sustained debounce', () => {
+  const inner: Condition = { kind: 'compare', op: '>', left: { kind: 'signal', signal: 'x' }, right: { kind: 'literal', value: 100 } }
+  const sustained: Condition = { kind: 'sustained', condition: inner, forMin: 10 }
+
+  it('fires only after the inner condition holds true for the full window', () => {
+    const store = createConditionStateStore()
+    const at = (x: number, min: number): boolean | undefined =>
+      evaluateCondition(sustained, ctx({ signals: { x }, nowMs: min * 60_000, condState: store }))
+    expect(at(150, 0)).toBe(false) // streak starts at t=0
+    expect(at(150, 5)).toBe(false) // 5 min in, not enough
+    expect(at(150, 10)).toBe(true) // 10 min sustained
+    expect(at(150, 11)).toBe(true) // stays true while held
+  })
+
+  it('resets the streak on a false tick', () => {
+    const store = createConditionStateStore()
+    const at = (x: number, min: number): boolean | undefined =>
+      evaluateCondition(sustained, ctx({ signals: { x }, nowMs: min * 60_000, condState: store }))
+    expect(at(150, 0)).toBe(false)
+    expect(at(50, 5)).toBe(false) // breaks the streak
+    expect(at(150, 12)).toBe(false) // streak restarts at t=12
+    expect(at(150, 21)).toBe(false) // only 9 min in
+    expect(at(150, 22)).toBe(true) // 10 min from the restart
+  })
+
+  it('propagates unknown and resets when the inner condition is unknown', () => {
+    const store = createConditionStateStore()
+    expect(evaluateCondition(sustained, ctx({ signals: { x: 150 }, nowMs: 0, condState: store }))).toBe(false)
+    expect(evaluateCondition(sustained, ctx({ signals: {}, nowMs: 5 * 60_000, condState: store }))).toBeUndefined()
+    // streak reset → a fresh true does not immediately satisfy the window
+    expect(evaluateCondition(sustained, ctx({ signals: { x: 150 }, nowMs: 12 * 60_000, condState: store }))).toBe(false)
+  })
+
+  it('never fires without a state store (cannot measure duration)', () => {
+    expect(evaluateCondition(sustained, ctx({ signals: { x: 150 }, nowMs: 0 }))).toBe(false)
   })
 })

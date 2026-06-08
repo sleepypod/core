@@ -13,9 +13,65 @@
  */
 
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
-import type { AutomationRule, DayOfWeek, Expr } from './types'
+import type { AutomationRule, DayOfWeek, Expr, Side } from './types'
 
 export type SignalSnapshot = Record<string, number | undefined>
+
+/** Per-side rolling vitals baseline (mean + SD) from `getVitalsBaseline`. */
+export interface SideBaseline {
+  hrMean?: number
+  hrSD?: number
+  hrvMean?: number
+  hrvSD?: number
+  brMean?: number
+  brSD?: number
+}
+export type BaselineMap = Partial<Record<Side, SideBaseline>>
+
+/** Vital metric → which baseline mean/SD fields back its z-score. */
+const ZSCORE_FIELDS: Record<string, { mean: keyof SideBaseline, sd: keyof SideBaseline }> = {
+  heartRate: { mean: 'hrMean', sd: 'hrSD' },
+  hrv: { mean: 'hrvMean', sd: 'hrvSD' },
+  breathingRate: { mean: 'brMean', sd: 'brSD' },
+}
+
+/**
+ * Resolve a signal key against the live snapshot, computing derived
+ * `{side}.{vital}.zscore` signals from the snapshot's raw vital and the
+ * supplied baselines: `(value − mean) / SD`. Returns `undefined` (→ skip) when
+ * the raw value, the baseline, or a positive SD is missing.
+ */
+export function resolveSignal(
+  get: (key: string) => number | undefined,
+  key: string,
+  baselines?: BaselineMap,
+): number | undefined {
+  const direct = get(key)
+  if (direct !== undefined) return direct
+  if (key.endsWith('.zscore')) return zScore(get, key, baselines)
+  return undefined
+}
+
+function zScore(
+  get: (key: string) => number | undefined,
+  key: string,
+  baselines?: BaselineMap,
+): number | undefined {
+  const parts = key.split('.')
+  if (parts.length !== 3) return undefined
+  const [side, metric] = parts
+  if (side !== 'left' && side !== 'right') return undefined
+  const fields = ZSCORE_FIELDS[metric]
+  if (!fields) return undefined
+  const base = baselines?.[side]
+  if (!base) return undefined
+  const mean = base[fields.mean]
+  const sd = base[fields.sd]
+  if (mean === undefined || sd === undefined || sd <= 0) return undefined
+  const raw = get(`${side}.${metric}`)
+  if (raw === undefined) return undefined
+  return (raw - mean) / sd
+}
 
 export interface SignalReader {
   /** Snapshot the numeric signals available this instant. */
@@ -131,6 +187,12 @@ export function collectWindowSignals(rules: AutomationRule[]): Set<string> {
         collectWindowKeysFromExpr(c.subject, out)
         collectWindowKeysFromExpr(c.min, out)
         collectWindowKeysFromExpr(c.max, out)
+        break
+      case 'hysteresis':
+        collectWindowKeysFromExpr(c.subject, out)
+        break
+      case 'sustained':
+        walkCond(c.condition)
         break
     }
   }

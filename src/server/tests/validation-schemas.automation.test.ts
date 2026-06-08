@@ -55,6 +55,23 @@ describe('automationConditionSchema', () => {
     expect(automationConditionSchema.safeParse({ kind: 'onDays', days: [] }).success).toBe(false)
   })
 
+  it('accepts hysteresis and sustained stability primitives', () => {
+    expect(automationConditionSchema.safeParse({ kind: 'hysteresis', subject: sig('left.movement'), on: 200, off: 100 }).success).toBe(true)
+    const sustained: Condition = {
+      kind: 'sustained',
+      forMin: 10,
+      condition: { kind: 'compare', op: '>', left: sig('left.heartRate.zscore'), right: lit(2) },
+    }
+    expect(automationConditionSchema.safeParse(sustained).success).toBe(true)
+  })
+
+  it('bounds sustained forMin to 1..1440 and rejects extra keys', () => {
+    const base = { kind: 'sustained', condition: { kind: 'compare', op: '>', left: sig('x'), right: lit(1) } }
+    expect(automationConditionSchema.safeParse({ ...base, forMin: 0 }).success).toBe(false)
+    expect(automationConditionSchema.safeParse({ ...base, forMin: 1441 }).success).toBe(false)
+    expect(automationConditionSchema.safeParse({ kind: 'hysteresis', subject: sig('x'), on: 1, off: 0, extra: true }).success).toBe(false)
+  })
+
   it('caps a boolean group at 24 children', () => {
     const many = Array.from({ length: 25 }, () => ({ kind: 'compare', op: '>', left: sig('left.movement'), right: lit(1) }))
     expect(automationConditionSchema.safeParse({ kind: 'and', conditions: many }).success).toBe(false)

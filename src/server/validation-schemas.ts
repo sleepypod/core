@@ -156,6 +156,17 @@ export const automationConditionSchema: z.ZodType<AutomationCondition> = z.lazy(
   }).strict(),
   z.object({ kind: z.literal('timeBetween'), start: timeStringSchema, end: timeStringSchema }).strict(),
   z.object({ kind: z.literal('onDays'), days: z.array(dayOfWeekSchema).min(1) }).strict(),
+  z.object({
+    kind: z.literal('hysteresis'),
+    subject: automationExprSchema,
+    on: z.number(),
+    off: z.number(),
+  }).strict(),
+  z.object({
+    kind: z.literal('sustained'),
+    condition: automationConditionSchema,
+    forMin: z.number().int().min(1).max(1440),
+  }).strict(),
 ]))
 
 /** Trigger (WHEN). */
@@ -250,6 +261,14 @@ function measureCondition(c: AutomationCondition, depth: number): { depth: numbe
     case 'timeBetween':
     case 'onDays':
       return { depth, nodes: 1 }
+    case 'hysteresis': {
+      const s = measureExpr(c.subject, depth + 1)
+      return { depth: s.depth, nodes: 1 + s.nodes }
+    }
+    case 'sustained': {
+      const m = measureCondition(c.condition, depth + 1)
+      return { depth: m.depth, nodes: 1 + m.nodes }
+    }
   }
 }
 

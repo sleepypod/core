@@ -37,6 +37,12 @@ export type Expr
 /**
  * Condition AST — an AND/OR/NOT tree over comparisons. Evaluates to a boolean,
  * or `undefined` ("unknown") when an underlying signal is unavailable.
+ *
+ * `hysteresis` and `sustained` are the stability primitives that keep a rule
+ * from chattering at a threshold. They are stateful across ticks — the engine
+ * and backtest thread a per-rule `condState` keyed by each node's position in
+ * the tree (see EvalContext). In a stateless one-shot evaluation they degrade
+ * to an instantaneous reading.
  */
 export type Condition
   = | { kind: 'and', conditions: Condition[] }
@@ -46,6 +52,15 @@ export type Condition
     | { kind: 'between', subject: Expr, min: Expr, max: Expr }
     | { kind: 'timeBetween', start: string, end: string } // HH:MM, wraps past midnight
     | { kind: 'onDays', days: DayOfWeek[] }
+    // Latching comparison with separate on/off thresholds. Direction is implied
+    // by their order: `on >= off` latches true when `subject` rises to `on` and
+    // false when it falls to `off`; `on < off` latches true when `subject` drops
+    // to `on` and false when it rises to `off`. The gap between the two is the
+    // dead-band that stops boundary chatter.
+    | { kind: 'hysteresis', subject: Expr, on: number, off: number }
+    // Debounce: `condition` must hold true continuously for `forMin` minutes
+    // before this evaluates true. Any false/unknown tick resets the streak.
+    | { kind: 'sustained', condition: Condition, forMin: number }
 
 /**
  * Trigger (WHEN) — what wakes the rule up for an evaluation.

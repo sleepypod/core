@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AutomationEngine, type AutomationEngineDeps } from '../engine'
-import type { SignalSnapshot } from '../signals'
+import type { BaselineMap, SignalSnapshot } from '../signals'
 import { AUTOMATION_TICK_MS, type Action, type AutomationRule, type Condition, type DayOfWeek, type Expr, type RunOutcome, type Trigger, type Side } from '../types'
 
 interface HwCall {
@@ -33,6 +33,7 @@ interface Harness {
   setSignal: (key: string, value: number | undefined) => void
   setClock: (nowMinutes: number, dayOfWeek?: DayOfWeek) => void
   setRunOnce: (active: boolean) => void
+  setBaselines: (b: BaselineMap) => void
   runs: { id: number, outcome: RunOutcome, detail: RunDetail }[]
   notifies: { id: number, message: string }[]
   hwCalls: HwCall[]
@@ -46,6 +47,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
   let runOnce = false
   let nowMinutes = 0
   let dayOfWeek: DayOfWeek = 'monday'
+  let baselines: BaselineMap = {}
   const snapshot: SignalSnapshot = {}
   const runs: Harness['runs'] = []
   const notifies: Harness['notifies'] = []
@@ -65,6 +67,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
     broadcast: () => {},
     markMutated: () => {},
     loadRules: async () => rules,
+    loadBaselines: async () => baselines,
     recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
     disableRule: async (id) => { disabled.push(id) },
     hasActiveRunOnceSession: async () => runOnce,
@@ -82,6 +85,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
       if (d) dayOfWeek = d
     },
     setRunOnce: (a) => { runOnce = a },
+    setBaselines: (b) => { baselines = b },
     runs,
     notifies,
     hwCalls,
@@ -310,6 +314,140 @@ describe('AutomationEngine — windowed aggregate (example 2)', () => {
     await h.engine.tick()
     expect(h.runs[0].outcome).toBe('fired')
     expect(h.notifies[0].message).toBe('restless')
+  })
+})
+
+describe('AutomationEngine — hysteresis & sustained (stability primitives)', () => {
+  it('latches across ticks: fires past `on`, holds in the dead-band, releases below `off`', async () => {
+    const cond: Condition = { kind: 'hysteresis', subject: sig('left.movement'), on: 200, off: 100 }
+    const h = makeHarness([rule({ conditions: cond, actions: [{ kind: 'notify', message: 'restless' }] })])
+    await h.engine.reload()
+
+    h.setSignal('left.movement', 150) // dead-band, never activated
+    await h.engine.tick()
+    expect(h.runs[0].outcome).toBe('skipped')
+
+    h.advance(60_000)
+    h.setSignal('left.movement', 250) // crosses `on` → fires
+    await h.engine.tick()
+    expect(h.runs[1].outcome).toBe('fired')
+
+    h.advance(60_000)
+    h.setSignal('left.movement', 150) // dead-band → latch holds → still fires
+    await h.engine.tick()
+    expect(h.runs[2].outcome).toBe('fired')
+
+    h.advance(60_000)
+    h.setSignal('left.movement', 80) // below `off` → releases
+    await h.engine.tick()
+    expect(h.runs[3].outcome).toBe('skipped')
+  })
+
+  it('debounces with sustained: fires only after the inner holds for N minutes', async () => {
+    const cond: Condition = {
+      kind: 'sustained',
+      forMin: 3,
+      condition: { kind: 'compare', op: '>', left: sig('left.movement'), right: lit(200) },
+    }
+    const h = makeHarness([rule({ conditions: cond, actions: [{ kind: 'notify', message: 'sustained restlessness' }] })])
+    await h.engine.reload()
+    h.setSignal('left.movement', 300)
+
+    await h.engine.tick() // t=0, streak starts
+    expect(h.runs[0].outcome).toBe('skipped')
+    h.advance(2 * 60_000)
+    await h.engine.tick() // t=2, not yet 3 min
+    expect(h.runs[1].outcome).toBe('skipped')
+    h.advance(60_000)
+    await h.engine.tick() // t=3, sustained → fires
+    expect(h.runs[2].outcome).toBe('fired')
+  })
+})
+
+describe('AutomationEngine — z-score conditions (baseline mean/SD)', () => {
+  it('fires when a vital exceeds its personal baseline by N sigma', async () => {
+    // HR baseline mean 60 / SD 5; rule fires when left.heartRate.zscore > 2 (i.e. > 70 bpm).
+    const cond: Condition = { kind: 'compare', op: '>', left: sig('left.heartRate.zscore'), right: lit(2) }
+    const h = makeHarness([rule({ conditions: cond, actions: [{ kind: 'notify', message: 'HR anomaly' }] })])
+    h.setBaselines({ left: { hrMean: 60, hrSD: 5 } })
+    await h.engine.reload()
+
+    h.setSignal('left.heartRate', 68) // +1.6σ → below threshold
+    await h.engine.tick()
+    expect(h.runs[0].outcome).toBe('skipped')
+
+    h.advance(60_000)
+    h.setSignal('left.heartRate', 80) // +4σ → fires
+    await h.engine.tick()
+    expect(h.runs[1].outcome).toBe('fired')
+    expect(h.notifies.at(-1)?.message).toBe('HR anomaly')
+  })
+
+  it('skips (unknown) when no baseline is available for the side', async () => {
+    const cond: Condition = { kind: 'compare', op: '>', left: sig('left.heartRate.zscore'), right: lit(2) }
+    const h = makeHarness([rule({ conditions: cond, actions: [{ kind: 'notify', message: 'x' }] })])
+    h.setSignal('left.heartRate', 80) // no baseline set → zscore undefined
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.runs[0].outcome).toBe('skipped')
+    expect(h.runs[0].detail.reason).toBe('condition-unknown')
+  })
+})
+
+describe('AutomationEngine — motivating examples end-to-end', () => {
+  it('example 1 (continuous policy): holds left target at ambient + 3°F in window, anti-thrash on small moves', async () => {
+    const rule1: AutomationRule = rule({
+      side: 'left',
+      conditions: { kind: 'timeBetween', start: '23:00', end: '06:00' },
+      actions: [{ kind: 'setTemperature', temp: { kind: 'binary', op: '+', left: sig('ambient.temperature'), right: lit(3) }, clamp: { min: 60, max: 100 } }],
+    })
+    const h = makeHarness([rule1])
+    h.setClock(23 * 60 + 30) // inside 23:00–06:00
+    h.setSignal('ambient.temperature', 68)
+    await h.engine.reload()
+
+    await h.engine.tick() // ambient 68 + 3 → 71
+    expect(h.hwCalls[0]).toMatchObject({ op: 'temp', side: 'left', temp: 71 })
+
+    h.advance(60_000)
+    h.setSignal('ambient.temperature', 68.2) // setpoint 71.2 → <0.5 move → anti-thrash
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(1)
+    expect(h.runs[1].detail.actions?.[0]?.antiThrash).toBe(true)
+
+    h.advance(60_000)
+    h.setSignal('ambient.temperature', 70) // setpoint 73 → ≥0.5 move → re-asserts
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(2)
+    expect(h.hwCalls[1].temp).toBe(73)
+
+    // Out of the window → no longer holds the setpoint.
+    h.advance(60_000)
+    h.setClock(12 * 60)
+    await h.engine.tick()
+    expect(h.runs.at(-1)?.outcome).toBe('skipped')
+  })
+
+  it('example 2 (edge-triggered): avg(movement,10m) > 200 lowers temp by 2°F, with cooldown', async () => {
+    const rule2: AutomationRule = rule({
+      side: 'left',
+      cooldownMin: 30,
+      conditions: { kind: 'compare', op: '>', left: { kind: 'window', fn: 'avg', signal: 'left.movement', lastMin: 10 }, right: lit(200) },
+      actions: [{ kind: 'setTemperature', temp: { kind: 'binary', op: '-', left: sig('left.currentTemperature'), right: lit(2) }, clamp: { min: 60, max: 100 } }],
+    })
+    const h = makeHarness([rule2])
+    h.setSignal('left.currentTemperature', 75)
+    h.setSignal('left.movement', 300)
+    await h.engine.reload()
+
+    await h.engine.tick() // avg 300 > 200 → lower to 73
+    expect(h.runs[0].outcome).toBe('fired')
+    expect(h.hwCalls[0]).toMatchObject({ side: 'left', temp: 73 })
+
+    h.advance(5 * 60_000) // still within 30m cooldown
+    await h.engine.tick()
+    expect(h.runs[1].outcome).toBe('skipped')
+    expect(h.runs[1].detail.reason).toBe('cooldown')
   })
 })
 

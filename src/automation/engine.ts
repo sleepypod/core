@@ -22,10 +22,10 @@
  */
 
 import { MAX_TEMP, MIN_TEMP, fahrenheitToLevel } from '@/src/hardware/types'
-import { evaluateCondition } from './evaluator'
+import { createConditionStateStore, evaluateCondition, type ConditionNodeState } from './evaluator'
 import type { EvalContext } from './expressions'
 import { evaluateExpr } from './expressions'
-import { collectWindowSignals, type SignalReader } from './signals'
+import { collectWindowSignals, resolveSignal, type BaselineMap, type SignalReader } from './signals'
 import {
   AUTOMATION_ANTI_THRASH_F,
   AUTOMATION_DEFAULT_USER_MAX,
@@ -60,6 +60,12 @@ export interface AutomationEngineDeps {
   broadcast: (side: Side, overlay: Record<string, unknown>) => void
   markMutated: (side: Side) => void
   loadRules: () => Promise<AutomationRule[]>
+  /**
+   * Per-side vitals baselines (mean/SD) backing `{side}.{vital}.zscore`
+   * signals. Optional — absent → z-score signals read undefined (skip).
+   * Refreshed periodically and on reload.
+   */
+  loadBaselines?: () => Promise<BaselineMap>
   recordRun: (automationId: number, outcome: RunOutcome, detail: unknown) => Promise<void>
   /** Persist enabled=false when the runaway guard trips. */
   disableRule: (automationId: number) => Promise<void>
@@ -80,7 +86,12 @@ interface RuleRuntime {
   lastTickEvalMs: number
   /** Day+minute key the last time a `timeOfDay` trigger fired (dedupe). */
   lastTimeKey?: string
+  /** Latch/debounce state for this rule's stateful condition nodes. */
+  condState: Map<string, ConditionNodeState>
 }
+
+/** How often to refresh the cached vitals baselines from the source. */
+const AUTOMATION_BASELINE_REFRESH_MS = 30 * 60_000
 
 export class AutomationEngine {
   private deps: AutomationEngineDeps
@@ -88,6 +99,8 @@ export class AutomationEngine {
   private runtime = new Map<number, RuleRuntime>()
   private windows = new WindowStore()
   private windowSignals = new Set<string>()
+  private baselines: BaselineMap = {}
+  private lastBaselineRefreshMs = 0
   private timer: ReturnType<typeof setInterval> | null = null
   private ticking = false
 
@@ -158,10 +171,23 @@ export class AutomationEngine {
   private getRuntime(id: number): RuleRuntime {
     let rt = this.runtime.get(id)
     if (!rt) {
-      rt = { lastFiredMs: null, actionTimes: [], lastTriggerSeen: false, lastTickEvalMs: 0 }
+      rt = { lastFiredMs: null, actionTimes: [], lastTriggerSeen: false, lastTickEvalMs: 0, condState: new Map() }
       this.runtime.set(id, rt)
     }
     return rt
+  }
+
+  /** Refresh the cached vitals baselines if the dep is wired and due. */
+  private async refreshBaselines(now: number): Promise<void> {
+    if (!this.deps.loadBaselines) return
+    if (this.lastBaselineRefreshMs !== 0 && now - this.lastBaselineRefreshMs < AUTOMATION_BASELINE_REFRESH_MS) return
+    try {
+      this.baselines = await this.deps.loadBaselines()
+      this.lastBaselineRefreshMs = now
+    }
+    catch (err) {
+      this.deps.log?.(`AutomationEngine baseline refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   /** One evaluation pass over all enabled rules. */
@@ -171,6 +197,7 @@ export class AutomationEngine {
     this.ticking = true
     try {
       const now = this.deps.now()
+      await this.refreshBaselines(now)
       const snapshot = this.deps.signals.read()
       const { nowMinutes, dayOfWeek } = this.deps.clock()
 
@@ -181,8 +208,10 @@ export class AutomationEngine {
       }
       this.windows.prune(now, this.maxWindowMinutes())
 
+      // z-score signals derive from the raw vital plus the cached baselines.
+      const signal = (key: string): number | undefined => resolveSignal(k => snapshot[k], key, this.baselines)
       const ctx: EvalContext = {
-        signal: key => snapshot[key],
+        signal,
         windows: this.windows,
         nowMs: now,
         nowMinutes,
@@ -254,8 +283,12 @@ export class AutomationEngine {
     const rt = this.getRuntime(rule.id)
     if (!this.triggerActive(rule, ctx, now, rt)) return // not an eval; no audit row
 
+    // Per-rule context carrying this rule's latch/debounce state so stateful
+    // condition nodes persist across ticks.
+    const ruleCtx: EvalContext = { ...ctx, condState: createConditionStateStore(rt.condState) }
+
     // IF — three-valued. unknown/false both skip (never fire on missing data).
-    const cond = evaluateCondition(rule.conditions, ctx)
+    const cond = evaluateCondition(rule.conditions, ruleCtx)
     if (cond !== true) {
       await this.deps.recordRun(rule.id, 'skipped', {
         reason: cond === undefined ? 'condition-unknown' : 'condition-false',
@@ -445,6 +478,10 @@ function windowMinsInCondition(cond: AutomationRule['conditions']): number {
         windowMinsInExpr(cond.min),
         windowMinsInExpr(cond.max),
       )
+    case 'hysteresis':
+      return windowMinsInExpr(cond.subject)
+    case 'sustained':
+      return windowMinsInCondition(cond.condition)
     default:
       return 0
   }

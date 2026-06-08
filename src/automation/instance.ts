@@ -7,15 +7,16 @@
  * JobManager from instrumentation.ts.
  */
 
-import { and, eq, gt } from 'drizzle-orm'
-import { db } from '@/src/db'
+import { and, avg, count, eq, gt, gte, lte, sql } from 'drizzle-orm'
+import { biometricsDb, db } from '@/src/db'
+import { vitals } from '@/src/db/biometrics-schema'
 import { automationRuns, automations, deviceSettings, runOnceSessions } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { AutomationEngine } from './engine'
-import { DeviceSignalReader, clockInTimezone } from './signals'
+import { DeviceSignalReader, clockInTimezone, type BaselineMap } from './signals'
 import type {
   Action,
   AutomationRule,
@@ -24,6 +25,9 @@ import type {
   Side,
   Trigger,
 } from './types'
+
+/** Rolling window the z-score baselines are computed over. */
+const BASELINE_WINDOW_DAYS = 30
 
 const DEFAULT_TIMEZONE = 'America/Los_Angeles'
 
@@ -58,6 +62,49 @@ async function loadRules(): Promise<AutomationRule[]> {
     conditions: r.conditions as Condition,
     actions: r.actions as Action[],
   }))
+}
+
+/**
+ * Per-side vitals baselines (mean + population SD) over the trailing window,
+ * computed the same way as `biometrics.getVitalsBaseline` (E[X²] − E[X]²).
+ * Backs `{side}.{vital}.zscore` signals; a side with no samples is omitted.
+ */
+async function loadBaselines(): Promise<BaselineMap> {
+  const out: BaselineMap = {}
+  const now = Date.now()
+  const start = new Date(now - BASELINE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+  const end = new Date(now)
+  const sd = (mean: unknown, sqMean: number | null): number | undefined => {
+    if (mean == null || sqMean == null) return undefined
+    const variance = Number(sqMean) - Number(mean) * Number(mean)
+    return variance > 0 ? Math.sqrt(variance) : 0
+  }
+  const num = (x: unknown): number | undefined => (x == null ? undefined : Number(x))
+
+  for (const side of ['left', 'right'] as const) {
+    const [row] = await biometricsDb
+      .select({
+        hrMean: avg(vitals.heartRate),
+        hrSqMean: sql<number | null>`AVG(${vitals.heartRate} * ${vitals.heartRate})`,
+        hrvMean: avg(vitals.hrv),
+        hrvSqMean: sql<number | null>`AVG(${vitals.hrv} * ${vitals.hrv})`,
+        brMean: avg(vitals.breathingRate),
+        brSqMean: sql<number | null>`AVG(${vitals.breathingRate} * ${vitals.breathingRate})`,
+        sampleCount: count(),
+      })
+      .from(vitals)
+      .where(and(eq(vitals.side, side), gte(vitals.timestamp, start), lte(vitals.timestamp, end)))
+    if (!row || row.sampleCount === 0) continue
+    out[side] = {
+      hrMean: num(row.hrMean),
+      hrSD: sd(row.hrMean, row.hrSqMean),
+      hrvMean: num(row.hrvMean),
+      hrvSD: sd(row.hrvMean, row.hrvSqMean),
+      brMean: num(row.brMean),
+      brSD: sd(row.brMean, row.brSqMean),
+    }
+  }
+  return out
 }
 
 async function recordRun(automationId: number, outcome: RunOutcome, detail: unknown): Promise<void> {
@@ -110,6 +157,7 @@ export async function getAutomationEngine(): Promise<AutomationEngine> {
         broadcast: (side, overlay) => broadcastMutationStatus(side, overlay),
         markMutated: markSideMutated,
         loadRules,
+        loadBaselines,
         recordRun,
         disableRule,
         hasActiveRunOnceSession,

@@ -20,8 +20,8 @@
  */
 
 import { MAX_TEMP, MIN_TEMP } from '@/src/hardware/types'
-import { clockInTimezone } from './signals'
-import { evaluateCondition } from './evaluator'
+import { clockInTimezone, resolveSignal, type BaselineMap } from './signals'
+import { createConditionStateStore, evaluateCondition } from './evaluator'
 import { evaluateExpr, type EvalContext } from './expressions'
 import { WindowStore } from './windows'
 import {
@@ -55,6 +55,8 @@ export interface BacktestInput {
   stepMin?: number
   /** Historical series keyed by concrete signal key (e.g. `left.movement`). */
   series: Record<string, Sample[]>
+  /** Per-side vitals baselines (mean/SD) backing `{side}.{vital}.zscore`. */
+  baselines?: BaselineMap
 }
 
 export interface BacktestSeries {
@@ -136,6 +138,8 @@ function findPrimaryCompare(cond: Condition):
     }
     case 'not':
       return findPrimaryCompare(cond.condition)
+    case 'sustained':
+      return findPrimaryCompare(cond.condition)
     case 'compare': {
       // Prefer a comparison whose left side references a signal.
       const sig = firstSignalInExpr(cond.left)
@@ -164,6 +168,8 @@ function findTimeWindow(trigger: Trigger, cond: Condition): { startMin: number, 
         }
         return null
       case 'not':
+        return walk(c.condition)
+      case 'sustained':
         return walk(c.condition)
       case 'timeBetween':
         return { startMin: toMin(c.start), endMin: toMin(c.end) }
@@ -230,6 +236,9 @@ export function runBacktest(input: BacktestInput): BacktestResult {
   const primaryValues: (number | null)[] = []
   const avgValues: (number | null)[] = []
 
+  // Latch/debounce state persists across steps, exactly as in the live engine.
+  const condState = createConditionStateStore()
+
   let lastFireMs: number | null = null
   let lastTrigVal: number | undefined
   let lastTrigSeen = false
@@ -245,7 +254,9 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     const nowMs = steps[i]
     const { nowMinutes, dayOfWeek } = clockInTimezone(timezone, new Date(nowMs))
 
-    const snap = (key: string): number | undefined => sampleAt(series[key], nowMs, maxAgeMs)
+    const sampleSnap = (key: string): number | undefined => sampleAt(series[key], nowMs, maxAgeMs)
+    // z-score signals derive from the raw vital series plus the baselines.
+    const snap = (key: string): number | undefined => resolveSignal(sampleSnap, key, input.baselines)
 
     // Feed window buffers for any windowed signal referenced by the rule.
     if (primaryCompare) {
@@ -262,6 +273,7 @@ export function runBacktest(input: BacktestInput): BacktestResult {
       nowMs,
       nowMinutes,
       dayOfWeek,
+      condState,
     }
 
     // primary + avg traces

@@ -14,6 +14,8 @@ import {
   DeviceSignalReader,
   clockInTimezone,
   collectWindowSignals,
+  resolveSignal,
+  type BaselineMap,
 } from '../signals'
 
 beforeEach(() => {
@@ -173,5 +175,59 @@ describe('collectWindowSignals', () => {
   it('returns an empty set when no windows are referenced', () => {
     const cond: Condition = { kind: 'compare', op: '>', left: { kind: 'signal', signal: 'left.movement' }, right: lit(1) }
     expect(collectWindowSignals([rule({ conditions: cond })])).toEqual(new Set())
+  })
+
+  it('collects window keys nested inside hysteresis subject and sustained condition', () => {
+    const cond: Condition = {
+      kind: 'and',
+      conditions: [
+        { kind: 'hysteresis', subject: win('left.movement'), on: 200, off: 100 },
+        { kind: 'sustained', forMin: 10, condition: { kind: 'compare', op: '>', left: win('right.heartRate'), right: lit(60) } },
+      ],
+    }
+    expect(collectWindowSignals([rule({ conditions: cond })])).toEqual(
+      new Set(['left.movement', 'right.heartRate']),
+    )
+  })
+})
+
+describe('resolveSignal — z-scores', () => {
+  const snap = (m: Record<string, number | undefined>) => (k: string): number | undefined => m[k]
+  const baselines: BaselineMap = {
+    left: { hrMean: 60, hrSD: 5, hrvMean: 40, hrvSD: 8, brMean: 14, brSD: 2 },
+  }
+
+  it('returns a direct signal value untouched (including zero)', () => {
+    expect(resolveSignal(snap({ 'left.heartRate': 0 }), 'left.heartRate', baselines)).toBe(0)
+  })
+
+  it('computes (value − mean) / SD from the baseline', () => {
+    // hr 70, mean 60, sd 5 → +2σ
+    expect(resolveSignal(snap({ 'left.heartRate': 70 }), 'left.heartRate.zscore', baselines)).toBe(2)
+    // hrv 24, mean 40, sd 8 → −2σ
+    expect(resolveSignal(snap({ 'left.hrv': 24 }), 'left.hrv.zscore', baselines)).toBe(-2)
+  })
+
+  it('is undefined when the raw vital is missing', () => {
+    expect(resolveSignal(snap({}), 'left.heartRate.zscore', baselines)).toBeUndefined()
+  })
+
+  it('is undefined when there is no baseline for the side', () => {
+    expect(resolveSignal(snap({ 'right.heartRate': 70 }), 'right.heartRate.zscore', baselines)).toBeUndefined()
+  })
+
+  it('is undefined when the SD is zero (degenerate baseline)', () => {
+    const flat: BaselineMap = { left: { hrMean: 60, hrSD: 0 } }
+    expect(resolveSignal(snap({ 'left.heartRate': 70 }), 'left.heartRate.zscore', flat)).toBeUndefined()
+  })
+
+  it('is undefined for an unknown metric or malformed key', () => {
+    expect(resolveSignal(snap({ 'left.spo2': 95 }), 'left.spo2.zscore', baselines)).toBeUndefined()
+    expect(resolveSignal(snap({}), 'left.zscore', baselines)).toBeUndefined()
+    expect(resolveSignal(snap({ 'foo.heartRate': 70 }), 'foo.heartRate.zscore', baselines)).toBeUndefined()
+  })
+
+  it('is undefined when no baselines are supplied at all', () => {
+    expect(resolveSignal(snap({ 'left.heartRate': 70 }), 'left.heartRate.zscore')).toBeUndefined()
   })
 })
