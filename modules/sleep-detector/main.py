@@ -84,6 +84,20 @@ SLEEPYPOD_DB = Path(os.environ.get("DATABASE_URL", "file:/persistent/sleepypod-d
 ABSENCE_TIMEOUT_S = 120
 # Minimum session length to record (filters out accidental detections)
 MIN_SESSION_S = 300
+# Presence debounce / hysteresis: a present<->absent flip is only committed
+# after the new raw state has persisted for this many seconds. Without it,
+# brief capSense dropouts (sub-second flaps at 2 Hz while the occupant is
+# genuinely in bed) each split the session and bump times_exited_bed, yielding
+# dozens of <15min fragments with 66-109 bogus exits overnight (pod 88 field
+# debug 2026-06-10). Must be < ABSENCE_TIMEOUT_S so debounced absence still
+# closes the session on a real bed-exit.
+PRESENCE_DEBOUNCE_S = 30.0
+# Hard upper bound on a single session. Belt-and-suspenders against a session
+# that never closes (e.g. presence flapping that historically kept resetting
+# the absence timer, producing 2736/2850min runaway durations). A continuous
+# presence span beyond this is force-closed at the cap rather than persisted as
+# a multi-day sleep_record.
+MAX_SESSION_S = 16 * 3600
 # How often to write a movement row (seconds)
 MOVEMENT_INTERVAL_S = 60
 # Fallback presence threshold when uncalibrated
@@ -587,6 +601,13 @@ class SessionTracker:
     _interval_start: Optional[float] = None
     _was_present: bool = False
     _exit_count: int = 0
+    # Debounced (committed) presence state and the ts at which it began.
+    # Distinct from the raw per-sample `present`: only flips after a candidate
+    # state survives PRESENCE_DEBOUNCE_S (see _apply_debounce).
+    _debounced_present: bool = False
+    _state_since: Optional[float] = None
+    _pending_state: Optional[bool] = None
+    _pending_since: Optional[float] = None
     _movement_buf: list = field(default_factory=list)
     _last_movement_write: float = field(default_factory=time.time)
     _prev_values: Optional[list] = None  # previous sample's channel values
@@ -639,31 +660,70 @@ class SessionTracker:
 
         self._update(ts, present, delta)
 
+    def _apply_debounce(self, ts: float, raw_present: bool) -> bool:
+        """Fold the raw per-sample presence into the committed (debounced)
+        state. A flip is only committed once the differing raw state has
+        persisted for PRESENCE_DEBOUNCE_S; transient flaps are cancelled.
+
+        On commit, _state_since is set to the ts at which the new state
+        actually began (the first differing sample), so interval edges and
+        the session entry time reflect the true transition, not commit time.
+
+        Returns True iff the committed state flipped on this call.
+        """
+        if raw_present == self._debounced_present:
+            # Raw agrees with the committed state — cancel any pending flip.
+            self._pending_state = None
+            self._pending_since = None
+            return False
+
+        if self._pending_state != raw_present:
+            # New candidate differing from committed state — start its dwell.
+            self._pending_state = raw_present
+            self._pending_since = ts
+            return False
+
+        if (self._pending_since is not None
+                and ts - self._pending_since >= PRESENCE_DEBOUNCE_S):
+            self._debounced_present = raw_present
+            self._state_since = self._pending_since
+            self._pending_state = None
+            self._pending_since = None
+            return True
+
+        return False
+
     def _update(self, ts: float, present: bool, movement: float) -> None:
         self._movement_buf.append(movement)
         self._flush_movement(ts)
 
-        if present:
+        # Debounce raw presence so brief capSense dropouts don't fragment the
+        # session or inflate times_exited_bed (pod 88 field debug 2026-06-10).
+        changed = self._apply_debounce(ts, present)
+        # Timestamp of the true transition when one just committed, else `ts`.
+        edge_ts = self._state_since if changed and self._state_since is not None else ts
+
+        if self._debounced_present:
             if self._session_start is None:
-                # New session starts
-                self._session_start = datetime.fromtimestamp(ts, tz=timezone.utc)
-                self._interval_start = ts
+                # New session starts at the true entry time.
+                self._session_start = datetime.fromtimestamp(edge_ts, tz=timezone.utc)
+                self._interval_start = edge_ts
                 self._was_present = True
                 log.info("%s: session started at %s", self.side, self._session_start.isoformat())
 
-            elif not self._was_present and self._interval_start is not None:
+            elif changed and self._interval_start is not None:
                 # Returning from absence — close absent interval, open present interval
-                self._absent_intervals.append([self._interval_start, ts])
-                self._interval_start = ts
+                self._absent_intervals.append([self._interval_start, edge_ts])
+                self._interval_start = edge_ts
 
             self._last_present_ts = ts
             self._was_present = True
 
         else:
-            if self._was_present and self._interval_start is not None:
-                # Just went absent — close present interval, open absent interval
-                self._present_intervals.append([self._interval_start, ts])
-                self._interval_start = ts
+            if changed and self._was_present and self._interval_start is not None:
+                # Confirmed bed-exit — close present interval, open absent interval
+                self._present_intervals.append([self._interval_start, edge_ts])
+                self._interval_start = edge_ts
                 self._exit_count += 1
 
             self._was_present = False
@@ -676,6 +736,12 @@ class SessionTracker:
                 # avoid emitting absent intervals with end < start
                 close_ts = self._interval_start if self._interval_start is not None else self._last_present_ts
                 self._close_session(close_ts)
+
+        # Safety net: force-close a runaway session that never reaches the
+        # absence timeout, capping sleep_duration_seconds at MAX_SESSION_S.
+        if (self._session_start is not None
+                and ts - self._session_start.timestamp() >= MAX_SESSION_S):
+            self._close_session(self._session_start.timestamp() + MAX_SESSION_S)
 
     def _close_session(self, left_ts: float) -> None:
         if self._session_start is None:
@@ -721,6 +787,10 @@ class SessionTracker:
         self._interval_start = None
         self._was_present = False
         self._exit_count = 0
+        self._debounced_present = False
+        self._state_since = None
+        self._pending_state = None
+        self._pending_since = None
         self._prev_values = None  # avoid stale delta on next session start
         self._movement_buf = []   # discard leftover deltas from session end
         self._epoch_scores.clear()
