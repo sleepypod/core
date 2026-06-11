@@ -90,8 +90,8 @@ export interface DeviceStatus {
  * Individual side status
  */
 export interface SideStatus {
-  currentTemperature: number // In Fahrenheit
-  targetTemperature: number // In Fahrenheit
+  currentTemperature: number | null // °F, or null when the level is 0 (off/neutral)
+  targetTemperature: number | null // °F, or null when the level is 0 (off/neutral)
   currentLevel: number // -100 to 100
   targetLevel: number // -100 to 100
   heatingDuration: number // In seconds

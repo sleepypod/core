@@ -116,7 +116,8 @@ function readTargetC(monitor: DacMonitor, side: Side): number {
 function sideC(status: DeviceStatus, side: Side, kind: 'current' | 'target'): number {
   const s = side === 'left' ? status.leftSide : status.rightSide
   const f = kind === 'current' ? s.currentTemperature : s.targetTemperature
-  return f2c(f)
+  // null = level 0 (off); HomeKit characteristics need a number, so map to neutral.
+  return f == null ? NEUTRAL_C : f2c(f)
 }
 
 function deriveCurrentState(monitor: DacMonitor, side: Side): number {

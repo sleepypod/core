@@ -70,8 +70,10 @@ export class DeviceSignalReader implements SignalReader {
       for (const side of ['left', 'right'] as const) {
         const s = side === 'left' ? status.leftSide : status.rightSide
         if (!s) continue
-        snapshot[`${side}.currentTemperature`] = s.currentTemperature
-        snapshot[`${side}.targetTemperature`] = s.targetTemperature
+        // null = level 0 (off); leave the signal absent so conditions don't
+        // fire against a phantom neutral temperature.
+        snapshot[`${side}.currentTemperature`] = s.currentTemperature ?? undefined
+        snapshot[`${side}.targetTemperature`] = s.targetTemperature ?? undefined
         snapshot[`${side}.currentLevel`] = s.currentLevel
       }
       if (status.waterLevel === 'low' || status.waterLevel === 'ok') {

@@ -99,16 +99,16 @@ export const deviceRouter = router({
     .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
     .output(z.object({
       leftSide: z.object({
-        currentTemperature: z.number(),
-        targetTemperature: z.number(),
+        currentTemperature: z.number().nullable(),
+        targetTemperature: z.number().nullable(),
         currentLevel: z.number(),
         targetLevel: z.number(),
         heatingDuration: z.number(),
         isAlarmVibrating: z.boolean().optional(),
       }),
       rightSide: z.object({
-        currentTemperature: z.number(),
-        targetTemperature: z.number(),
+        currentTemperature: z.number().nullable(),
+        targetTemperature: z.number().nullable(),
         currentLevel: z.number(),
         targetLevel: z.number(),
         heatingDuration: z.number(),
@@ -215,7 +215,8 @@ export const deviceRouter = router({
         const leftSnooze = getSnoozeStatus('left')
         const rightSnooze = getSnoozeStatus('right')
 
-        const convertTemp = (f: number) => input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f
+        const convertTemp = (f: number | null) =>
+          f == null ? null : (input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f)
 
         // Best-effort enrichment — nulls on failure
         let wifiStrength: number = -1

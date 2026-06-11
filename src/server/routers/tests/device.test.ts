@@ -191,6 +191,20 @@ describe('device.getStatus', () => {
     expect(result.leftSide.currentTemperature).toBeCloseTo(26.7, 1)
   })
 
+  it('passes null temps through for an off side (no phantom 83°F)', async () => {
+    // The parser returns null for a level-0 (off) side; getStatus must surface
+    // that null rather than the 82.5°F→83°F neutral readback.
+    helpersMock.client.getDeviceStatus.mockResolvedValueOnce({
+      leftSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0, targetLevel: 0, heatingDuration: 0 },
+      rightSide: { currentTemperature: 72, targetTemperature: 75, currentLevel: -35, targetLevel: -25, heatingDuration: 0 },
+      waterLevel: 'ok', isPriming: false, podVersion: 'J00', sensorLabel: 'X', gestures: undefined,
+    })
+    const result = await caller.getStatus({})
+    expect(result.leftSide.targetTemperature).toBeNull()
+    expect(result.leftSide.currentTemperature).toBeNull()
+    expect(result.rightSide.targetTemperature).toBe(75)
+  })
+
   it('exposes pumpStallNotifications when one side has an active notice', async () => {
     pumpStallNotificationMock.getAllPumpStallNotices.mockReturnValueOnce({
       left: null,
