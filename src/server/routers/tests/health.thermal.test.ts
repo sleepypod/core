@@ -97,6 +97,35 @@ describe('health.thermal verdicts', () => {
     expect(res.sides.map(s => s.verdict)).toEqual(['off', 'off'])
   })
 
+  it('reports null target/current on an off side rather than the level-0 (83°F) readback', async () => {
+    // Powering off sets heat level 0, which round-trips through
+    // levelToFahrenheit() to a phantom 83°F and lands in device_state. An off
+    // side must not surface that as a real temperature.
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: false, targetTemperature: 83, currentTemperature: 83, isAlarmVibrating: false, poweredOnAt: null }],
+      [{ side: 'right', isPowered: false, targetTemperature: 83, currentTemperature: 83, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    const res = await caller.thermal({})
+    expect(res.sides[0].targetTempF).toBeNull()
+    expect(res.sides[0].currentTempF).toBeNull()
+    expect(res.sides[1].targetTempF).toBeNull()
+    expect(res.sides[1].currentTempF).toBeNull()
+  })
+
+  it('passes null target/current through on a powered side whose stored temps are null', async () => {
+    // Powered branch with null stored temps (e.g. powered on but no readback
+    // yet): target/current must surface as null rather than coercing to a
+    // value, while the side still evaluates as on.
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
+    const res = await caller.thermal({})
+    expect(res.sides[0].targetTempF).toBeNull()
+    expect(res.sides[0].currentTempF).toBeNull()
+  })
+
   it('stalled when powered with a target but pump rpm is below the flow threshold', async () => {
     rows.deviceStateQueue = [
       [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: new Date() }],

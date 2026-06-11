@@ -37,6 +37,16 @@ export function ThermalTrendChart({ side, points }: { side: 'left' | 'right', po
   }
 
   const temps = points.flatMap(p => [p.target, p.bed, p.water].filter((v): v is number => v != null))
+  // An off side reports null target/bed (no level-0 phantom), so a window with
+  // no water reading either leaves temps empty — Math.min/max would then yield
+  // ±Infinity and hand the Y-axis an invalid domain.
+  if (temps.length === 0) {
+    return (
+      <div className="flex h-[160px] items-center justify-center text-[11px] text-zinc-600">
+        No temperature data yet
+      </div>
+    )
+  }
   const min = Math.floor(Math.min(...temps) - 2)
   const max = Math.ceil(Math.max(...temps) + 2)
   const color = SIDE_COLOR[side]

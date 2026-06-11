@@ -69,6 +69,22 @@ describe('DeviceSignalReader', () => {
     })
   })
 
+  it('omits temperature signals for an off side reporting null level-0 temps', () => {
+    getLastStatusMock = () => ({
+      leftSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0 },
+      rightSide: { currentTemperature: 70, targetTemperature: 68, currentLevel: -5 },
+      waterLevel: 'ok',
+    })
+    const snap = new DeviceSignalReader().read()
+    // Off side: temp signals stay absent so rules don't fire on a phantom neutral.
+    expect(snap['left.currentTemperature']).toBeUndefined()
+    expect(snap['left.targetTemperature']).toBeUndefined()
+    expect(snap['left.currentLevel']).toBe(0)
+    // Powered side still maps its temps through.
+    expect(snap['right.currentTemperature']).toBe(70)
+    expect(snap['right.targetTemperature']).toBe(68)
+  })
+
   it('encodes an ok water level as 0 and skips an absent side', () => {
     getLastStatusMock = () => ({
       leftSide: { currentTemperature: 72, targetTemperature: 72, currentLevel: 0 },

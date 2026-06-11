@@ -29,18 +29,24 @@ export function parseDeviceStatus(response: string): DeviceStatus {
     // Parse gesture data if available
     const gestures = parseGestures(validated)
 
+    // Level 0 is the hardware's neutral/off state, not a real setpoint. Mapping
+    // it through levelToFahrenheit() yields a phantom 82.5°F→83°F that surfaces
+    // as "the pod is set to 83 when it should be off". Report null for a level-0
+    // side so every consumer (UI, HomeKit, MQTT, health) treats it as off.
+    const tempForLevel = (level: number) => (level === 0 ? null : levelToFahrenheit(level))
+
     // Build structured status
     return {
       leftSide: {
-        currentTemperature: levelToFahrenheit(Number(validated.heatLevelL)),
-        targetTemperature: levelToFahrenheit(Number(validated.tgHeatLevelL)),
+        currentTemperature: tempForLevel(Number(validated.heatLevelL)),
+        targetTemperature: tempForLevel(Number(validated.tgHeatLevelL)),
         currentLevel: Number(validated.heatLevelL),
         targetLevel: Number(validated.tgHeatLevelL),
         heatingDuration: Number(validated.heatTimeL),
       },
       rightSide: {
-        currentTemperature: levelToFahrenheit(Number(validated.heatLevelR)),
-        targetTemperature: levelToFahrenheit(Number(validated.tgHeatLevelR)),
+        currentTemperature: tempForLevel(Number(validated.heatLevelR)),
+        targetTemperature: tempForLevel(Number(validated.tgHeatLevelR)),
         currentLevel: Number(validated.heatLevelR),
         targetLevel: Number(validated.tgHeatLevelR),
         heatingDuration: Number(validated.heatTimeR),

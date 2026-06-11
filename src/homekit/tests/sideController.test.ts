@@ -92,6 +92,16 @@ describe('sideController', () => {
       expect(getStagedTargetF(monitor(null), 'left')).toBe(82.5)
     })
 
+    it('falls back to TEMP_NEUTRAL when firmware reports a null (off) target', () => {
+      // Status exists but the off side reports a null level-0 target; with no
+      // cache the staged target must land on neutral, not null.
+      const offNullTarget = monitor({
+        ...offStatus,
+        leftSide: { ...offStatus.leftSide, targetTemperature: null },
+      })
+      expect(getStagedTargetF(offNullTarget, 'left')).toBe(82.5)
+    })
+
     it('prefers cached target once setTargetTemperature runs', async () => {
       const m = monitor(onStatus)
       await setTargetTemperature(m, 'left', 68)

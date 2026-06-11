@@ -17,6 +17,16 @@ describe('ThermalTrendChart', () => {
     expect(screen.getByText(/Collecting samples/i)).toBeTruthy()
   })
 
+  it('shows an empty-state instead of an Infinity Y-axis when every temp is null', () => {
+    const points: ThermalTrendPoint[] = [
+      { t: 1, target: null, bed: null, water: null },
+      { t: 2, target: null, bed: null, water: null },
+    ]
+    const { container } = render(<ThermalTrendChart side="left" points={points} />)
+    expect(screen.getByText(/No temperature data yet/i)).toBeTruthy()
+    expect(container.querySelector('.recharts-responsive-container')).toBeNull()
+  })
+
   it('renders a chart once enough points exist', () => {
     const points: ThermalTrendPoint[] = [
       { t: 1, target: 80, bed: 75, water: 70 },

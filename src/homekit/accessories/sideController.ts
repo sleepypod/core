@@ -90,7 +90,7 @@ export function getStagedTargetF(monitor: DacMonitor, side: Side): number {
   const status = monitor.getLastStatus()
   if (!status) return TEMP_NEUTRAL
   const s = side === 'left' ? status.leftSide : status.rightSide
-  return s.targetTemperature
+  return s.targetTemperature ?? TEMP_NEUTRAL
 }
 
 /**

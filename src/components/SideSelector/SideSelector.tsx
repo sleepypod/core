@@ -75,8 +75,8 @@ interface SideButtonProps {
   isSelected: boolean
   isLinked: boolean
   sideStatus?: {
-    currentTemperature?: number
-    targetTemperature?: number
+    currentTemperature?: number | null
+    targetTemperature?: number | null
     targetLevel?: number
     currentTemperatureF?: number
     targetTemperatureF?: number
