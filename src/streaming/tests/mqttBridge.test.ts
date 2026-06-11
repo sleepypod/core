@@ -814,6 +814,163 @@ describe('mqttBridge — startMqttBridge connect flow', () => {
   })
 })
 
+// The connect-flow test above only confirms *some* discovery topic lands.
+// These pin every field of every published HA discovery config so a single
+// changed string / template / unit / device-class fails a test. deviceId and
+// topicPrefix are fixed so the expected payloads are fully deterministic.
+describe('mqttBridge — HA discovery payload content', () => {
+  const DEVICE = {
+    identifiers: ['testpod'],
+    name: 'Sleepypod testpod',
+    manufacturer: 'Sleepypod',
+    model: 'Pod',
+  }
+  const AVAILABILITY = 'sleepypod/testpod/availability'
+
+  // Shared sensor shape; name + topic + template + unit/device_class vary per call.
+  function sensorCfg(
+    name: string,
+    objectId: string,
+    stateTopic: string,
+    template: string,
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      name,
+      unique_id: `testpod_${objectId}`,
+      availability_topic: AVAILABILITY,
+      payload_available: 'online',
+      payload_not_available: 'offline',
+      state_topic: stateTopic,
+      value_template: template,
+      state_class: 'measurement',
+      device: DEVICE,
+      ...extra,
+    }
+  }
+
+  function climateCfg(side: 'left' | 'right'): Record<string, unknown> {
+    const label = side === 'left' ? 'Left' : 'Right'
+    return {
+      name: `${label} side`,
+      unique_id: `testpod_${side}_climate`,
+      availability_topic: AVAILABILITY,
+      payload_available: 'online',
+      payload_not_available: 'offline',
+      current_temperature_topic: `sleepypod/testpod/state/${side}/climate`,
+      current_temperature_template: '{{ value_json.currentTemperature }}',
+      temperature_state_topic: `sleepypod/testpod/state/${side}/climate`,
+      temperature_state_template: '{{ value_json.targetTemperature }}',
+      mode_state_topic: `sleepypod/testpod/state/${side}/climate`,
+      mode_state_template: '{{ value_json.mode }}',
+      temperature_command_topic: 'sleepypod/testpod/cmd/set-temperature',
+      temperature_command_template: `{ "side": "${side}", "temperature": {{ value | int }} }`,
+      mode_command_topic: 'sleepypod/testpod/cmd/set-power',
+      mode_command_template: `{ "side": "${side}", "powered": {{ "true" if value == "heat" else "false" }} }`,
+      modes: ['off', 'heat'],
+      min_temp: 55,
+      max_temp: 110,
+      temp_step: 1,
+      temperature_unit: 'F',
+      device: DEVICE,
+    }
+  }
+
+  function binaryCfg(side: 'left' | 'right', kind: 'stall' | 'clog'): Record<string, unknown> {
+    const label = side === 'left' ? 'Left' : 'Right'
+    return {
+      name: kind === 'stall' ? `${label} pump stall` : `${label} pump clog detected`,
+      unique_id: `testpod_pump_${side}_${kind}`,
+      availability_topic: AVAILABILITY,
+      payload_available: 'online',
+      payload_not_available: 'offline',
+      state_topic: kind === 'stall'
+        ? `sleepypod/testpod/pump/${side}/stall`
+        : `sleepypod/testpod/pump/${side}/clog_detected`,
+      payload_on: 'on',
+      payload_off: 'off',
+      device_class: 'problem',
+      device: DEVICE,
+    }
+  }
+
+  let configs: Map<string, Record<string, unknown>>
+
+  beforeEach(async () => {
+    process.env.MQTT_DEVICE_ID = 'testpod'
+    const fake = await startBridgeWithFake({ config: { haDiscovery: true, topicPrefix: 'sleepypod' } })
+    fake.connected = true
+    fake.emit('connect')
+    configs = new Map()
+    for (const call of fake.publish.mock.calls) {
+      const [t, payload] = call as [string, unknown]
+      if (typeof t === 'string' && t.startsWith('homeassistant/') && typeof payload === 'string') {
+        configs.set(t, JSON.parse(payload))
+      }
+    }
+    await shutdownMqttBridge()
+  })
+
+  it.each(['left', 'right'] as const)('publishes the full %s climate config', (side) => {
+    expect(configs.get(`homeassistant/climate/testpod/${side}/config`)).toEqual(climateCfg(side))
+  })
+
+  it('publishes the full water_level sensor config', () => {
+    expect(configs.get('homeassistant/sensor/testpod/water_level/config')).toEqual(
+      sensorCfg('Water level', 'water_level', 'sleepypod/testpod/state/water-level', '{{ value_json.level }}'),
+    )
+  })
+
+  it('publishes the full ambient temperature + humidity sensor configs', () => {
+    expect(configs.get('homeassistant/sensor/testpod/ambient_temperature/config')).toEqual(
+      sensorCfg('Ambient temperature', 'ambient_temperature', 'sleepypod/testpod/state/environment/ambient',
+        '{{ value_json.temperature }}', { unit_of_measurement: '°C', device_class: 'temperature' }),
+    )
+    expect(configs.get('homeassistant/sensor/testpod/ambient_humidity/config')).toEqual(
+      sensorCfg('Ambient humidity', 'ambient_humidity', 'sleepypod/testpod/state/environment/ambient',
+        '{{ value_json.humidity }}', { unit_of_measurement: '%', device_class: 'humidity' }),
+    )
+  })
+
+  it.each(['left', 'right'] as const)('publishes the full %s pump rpm + loop-temp sensor configs', (side) => {
+    const label = side === 'left' ? 'Left' : 'Right'
+    expect(configs.get(`homeassistant/sensor/testpod/pump_${side}_rpm/config`)).toEqual(
+      sensorCfg(`${label} pump RPM`, `pump_${side}_rpm`, `sleepypod/testpod/pump/${side}/rpm`,
+        '{{ value_json.rpm }}', { unit_of_measurement: 'rpm' }),
+    )
+    expect(configs.get(`homeassistant/sensor/testpod/pump_${side}_loop_temp/config`)).toEqual(
+      sensorCfg(`${label} pump loop temp`, `pump_${side}_loop_temp`, `sleepypod/testpod/pump/${side}/loop_temp_c`,
+        '{{ value_json.temperature }}', { unit_of_measurement: '°C', device_class: 'temperature' }),
+    )
+  })
+
+  it.each(['left', 'right'] as const)('publishes the full %s pump stall + clog binary-sensor configs', (side) => {
+    expect(configs.get(`homeassistant/binary_sensor/testpod/pump_${side}_stall/config`)).toEqual(binaryCfg(side, 'stall'))
+    expect(configs.get(`homeassistant/binary_sensor/testpod/pump_${side}_clog/config`)).toEqual(binaryCfg(side, 'clog'))
+  })
+
+  it.each(['left', 'right'] as const)('publishes the full %s biometric sensor configs', (side) => {
+    const label = side === 'left' ? 'Left' : 'Right'
+    const bioTopic = `sleepypod/testpod/state/biometrics/${side}`
+    expect(configs.get(`homeassistant/sensor/testpod/${side}_heart_rate/config`)).toEqual(
+      sensorCfg(`${label} heart rate`, `${side}_heart_rate`, bioTopic, '{{ value_json.heartRate }}', { unit_of_measurement: 'bpm' }),
+    )
+    expect(configs.get(`homeassistant/sensor/testpod/${side}_breathing_rate/config`)).toEqual(
+      sensorCfg(`${label} breathing rate`, `${side}_breathing_rate`, bioTopic, '{{ value_json.breathingRate }}', { unit_of_measurement: 'br/min' }),
+    )
+    expect(configs.get(`homeassistant/sensor/testpod/${side}_hrv/config`)).toEqual(
+      sensorCfg(`${label} HRV`, `${side}_hrv`, bioTopic, '{{ value_json.hrv }}', { unit_of_measurement: 'ms' }),
+    )
+  })
+
+  it('attaches the shared device identity block to every published config', () => {
+    expect(configs.size).toBeGreaterThan(0)
+    for (const cfg of configs.values()) {
+      expect(cfg.device).toEqual(DEVICE)
+    }
+  })
+})
+
 describe('mqttBridge — message dispatch', () => {
   it('routes set-temperature payload to caller.device.setTemperature', async () => {
     const fake = await startBridgeWithFake()
