@@ -739,7 +739,11 @@ class SessionTracker:
 
         # Safety net: force-close a runaway session that never reaches the
         # absence timeout, capping sleep_duration_seconds at MAX_SESSION_S.
+        # Only when still debounced-present — once absent, the absence-timeout
+        # path above closes at the true exit edge, so the cap must not move
+        # left_bed_at forward to the cap timestamp.
         if (self._session_start is not None
+                and self._debounced_present
                 and ts - self._session_start.timestamp() >= MAX_SESSION_S):
             self._close_session(self._session_start.timestamp() + MAX_SESSION_S)
 
