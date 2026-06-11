@@ -143,6 +143,28 @@ describe('thermostat accessory', () => {
     expect(target).toBeLessThan(29)
   })
 
+  it('maps a null side temperature to NEUTRAL_C even with a live status', async () => {
+    // Distinct from the no-status case: status exists but the off side reports
+    // null current/target temps (level 0). HomeKit needs a number, so each
+    // maps to neutral rather than passing null through.
+    const offNull: DeviceStatus = {
+      ...status,
+      leftSide: { ...status.leftSide, currentTemperature: null, targetTemperature: null },
+    }
+    const m: Pick<DacMonitor, 'on' | 'getLastStatus'> = {
+      on: vi.fn().mockReturnThis() as never,
+      getLastStatus: () => offNull,
+    }
+    const { service } = buildThermostatService('left', m as DacMonitor)
+    const current = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
+    const target = await service.getCharacteristic(Characteristic.TargetTemperature).handleGetRequest()
+    // NEUTRAL_C = f2c(82.5) ≈ 28.06
+    expect(current).toBeGreaterThan(27)
+    expect(current).toBeLessThan(29)
+    expect(target).toBeGreaterThan(27)
+    expect(target).toBeLessThan(29)
+  })
+
   it('TemperatureDisplayUnits onGet reports Celsius (0)', async () => {
     const { service } = buildThermostatService('left', fakeMonitor as DacMonitor)
     expect(await service.getCharacteristic(Characteristic.TemperatureDisplayUnits).handleGetRequest()).toBe(0)

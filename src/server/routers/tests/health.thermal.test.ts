@@ -112,6 +112,20 @@ describe('health.thermal verdicts', () => {
     expect(res.sides[1].currentTempF).toBeNull()
   })
 
+  it('passes null target/current through on a powered side whose stored temps are null', async () => {
+    // Powered branch with null stored temps (e.g. powered on but no readback
+    // yet): target/current must surface as null rather than coercing to a
+    // value, while the side still evaluates as on.
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
+    const res = await caller.thermal({})
+    expect(res.sides[0].targetTempF).toBeNull()
+    expect(res.sides[0].currentTempF).toBeNull()
+  })
+
   it('stalled when powered with a target but pump rpm is below the flow threshold', async () => {
     rows.deviceStateQueue = [
       [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: new Date() }],
