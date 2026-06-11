@@ -16,6 +16,7 @@
  */
 
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
+import { getAutomationEngine, shutdownAutomationEngine } from '@/src/automation'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
 import { startBiometricsRetention, stopBiometricsRetention } from '@/src/db/retention'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
@@ -61,6 +62,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
   }
   catch (error) {
     console.error('Error shutting down scheduler:', error)
+  }
+
+  // Step 1a: Stop the Autopilot rules engine tick
+  try {
+    await shutdownAutomationEngine()
+  }
+  catch (error) {
+    console.error('Error shutting down automation engine:', error)
   }
 
   // Step 2: Shutdown piezo stream server
@@ -338,6 +347,15 @@ export async function initializeScheduler(): Promise<void> {
 
     // Start biometrics time-series retention loop (non-blocking)
     startBiometricsRetention()
+
+    // Boot the Autopilot rules engine beside the scheduler (non-blocking).
+    // Shares the same hardware path; no-op until automations are created.
+    getAutomationEngine().catch((error) => {
+      console.warn(
+        '[automation] engine failed to start:',
+        error instanceof Error ? error.message : error,
+      )
+    })
   }
   catch (error) {
     console.error('Failed to initialize job scheduler:', error)

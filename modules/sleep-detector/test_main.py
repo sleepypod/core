@@ -230,3 +230,90 @@ class TestSharedConnectionHolder:
         assert holder.conn is replacement
         # The original closed-handle is no longer referenced by the holder, so
         # any tracker reading from holder.conn observes the live connection.
+
+
+def _tracker():
+    """A SessionTracker wired to an in-memory DB. calibration/pump_gate are
+    unused by _update, so None is sufficient for presence/session tests."""
+    holder = main.DBHolder(_make_db())
+    main._db_write_failures = 0
+    return main.SessionTracker(side="left", db=holder,
+                               calibration=None, pump_gate=None)
+
+
+def _feed(t, samples):
+    """Feed (ts, present) pairs through _update with zero movement."""
+    for ts, present in samples:
+        t._update(ts, present, 0.0)
+
+
+def _rows(t):
+    return t.db.conn.execute(
+        "SELECT sleep_duration_seconds, times_exited_bed FROM sleep_records"
+    ).fetchall()
+
+
+class TestPresenceDebounce:
+    """Pod 88 field debug 2026-06-10: brief capSense dropouts fragmented one
+    overnight presence span into dozens of <15min sleep_records with 66-109
+    bogus bed-exits and runaway durations. Presence is now debounced."""
+
+    def test_brief_dropout_does_not_increment_exit_or_split_session(self):
+        t = _tracker()
+        base = 1_777_000_000.0
+        samples = []
+        # Establish committed presence (sustain past PRESENCE_DEBOUNCE_S).
+        samples += [(base, True), (base + 31, True)]
+        # 8h in bed at 2 Hz would be huge; sample sparsely but inject many
+        # sub-debounce dropouts — each a single absent sample immediately
+        # followed by present. None should commit a flip.
+        ts = base + 31
+        for _ in range(50):
+            ts += 60
+            samples.append((ts, False))   # brief dropout
+            samples.append((ts + 1, True))  # back within 1s — under debounce
+        # Real morning exit: sustained absence past debounce + absence timeout.
+        exit_ts = ts + 3600
+        samples.append((exit_ts, False))
+        samples.append((exit_ts + 31, False))   # commits absent flip → 1 exit
+        samples.append((exit_ts + 200, False))  # > ABSENCE_TIMEOUT_S → close
+        _feed(t, samples)
+
+        rows = _rows(t)
+        assert len(rows) == 1
+        duration_s, exits = rows[0]
+        assert exits == 1
+        # One continuous span: duration ~ (exit_ts - base), well over an hour.
+        assert duration_s >= 3600
+
+    def test_sustained_absence_counts_single_exit(self):
+        t = _tracker()
+        base = 1_777_000_000.0
+        samples = [(base, True), (base + 31, True)]
+        # Genuine bed-exit: absence sustained past debounce, then past the
+        # absence timeout so the session closes on that one exit.
+        leave = base + 4000
+        samples += [(leave, False), (leave + 31, False), (leave + 200, False)]
+        _feed(t, samples)
+
+        rows = _rows(t)
+        assert len(rows) == 1
+        _duration, exits = rows[0]
+        assert exits == 1
+
+    def test_runaway_session_is_capped(self):
+        t = _tracker()
+        base = 1_777_000_000.0
+        samples = [(base, True), (base + 31, True)]
+        # Presence that never goes absent for > MAX_SESSION_S of wall-clock.
+        ts = base + 31
+        while ts < base + main.MAX_SESSION_S + 7200:
+            ts += 600
+            samples.append((ts, True))
+        _feed(t, samples)
+
+        rows = _rows(t)
+        assert len(rows) >= 1
+        # No row exceeds the hard cap.
+        for duration_s, _exits in rows:
+            assert duration_s <= main.MAX_SESSION_S

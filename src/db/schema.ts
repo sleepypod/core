@@ -65,6 +65,13 @@ export const deviceSettings = sqliteTable('device_settings', {
     .default(false),
   pumpStallRecoveryRpm: integer('pump_stall_recovery_rpm').notNull().default(1500),
   pumpStallRecoverySamples: integer('pump_stall_recovery_samples').notNull().default(3),
+  // Autopilot global kill-switch. When false, the AutomationEngine evaluates
+  // nothing and commands no hardware — per-rule enabled/dryRun state is
+  // preserved, so flipping this back on resumes every rule as it was. Persisted
+  // so the kill-switch survives reboot.
+  autopilotEnabled: integer('autopilot_enabled', { mode: 'boolean' })
+    .notNull()
+    .default(true),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -269,6 +276,51 @@ export const runOnceSessions = sqliteTable('run_once_sessions', {
     .default(sql`(unixepoch())`),
 }, t => [
   index('idx_run_once_side_status').on(t.side, t.status),
+])
+
+// ============================================================================
+// Autopilot — reactive automations (WHEN / IF / THEN rules engine)
+// ============================================================================
+
+export const automations = sqliteTable('automations', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  // null side = system/both; left/right scopes the rule to one side
+  side: text('side', { enum: ['left', 'right'] }),
+  priority: integer('priority').notNull().default(0),
+  // When true the rule never touches hardware — it logs would-fire events and
+  // emits notify actions only. The safe default for a freshly-built rule.
+  dryRun: integer('dry_run', { mode: 'boolean' }).notNull().default(true),
+  cooldownMin: integer('cooldown_min'),
+  // Rule "AST" as JSON, validated by the zod schemas in validation-schemas.ts.
+  trigger: text('trigger', { mode: 'json' }).notNull(),
+  conditions: text('conditions', { mode: 'json' }).notNull(), // AND/OR/NOT tree
+  actions: text('actions', { mode: 'json' }).notNull(), // expression-param actions
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+}, t => [
+  index('idx_automations_enabled').on(t.enabled),
+])
+
+export const automationRuns = sqliteTable('automation_runs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  automationId: integer('automation_id')
+    .notNull()
+    .references(() => automations.id, { onDelete: 'cascade' }),
+  firedAt: integer('fired_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  outcome: text('outcome', {
+    enum: ['fired', 'skipped', 'clamped', 'dry_run', 'error'],
+  }).notNull(),
+  detail: text('detail', { mode: 'json' }), // evaluated values + action result
+}, t => [
+  index('idx_automation_runs_automation_fired').on(t.automationId, t.firedAt),
 ])
 
 // Indexes are now defined inline within each table definition above using index()
