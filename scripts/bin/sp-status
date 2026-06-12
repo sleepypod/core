@@ -1,2 +1,151 @@
 #!/bin/bash
-systemctl status sleepypod.service
+# sp-status — at-a-glance pod diagnostics. Safe on every firmware variant;
+# prints raw firmware version, biometrics pipeline state (old .RAW tmpfs vs
+# new NATS JetStream), and the sleepypod + firmware service rollup. Output
+# is plain ASCII so it pastes cleanly into Discord support threads.
+#
+# Intentionally NOT using `set -e`: most probes are best-effort and some
+# (`nats`, `nats-server`) are absent on old firmware — failure is signal,
+# not an error.
+
+probe_section() {
+  echo
+  echo "=== $1 ==="
+}
+
+active_or() {
+  # Print "active" / "inactive" / "missing" based on systemctl state, without
+  # leaking systemctl's verbose error text when the unit doesn't exist.
+  local unit="$1" state
+  state=$(systemctl is-active "$unit" 2>/dev/null || true)
+  if [ -z "$state" ]; then
+    echo "missing"
+  else
+    echo "$state"
+  fi
+}
+
+port_open() {
+  # /dev/tcp probe; returns 0 if a TCP connect to host:port succeeds within ~1s.
+  local host="$1" port="$2"
+  (exec 3<>/dev/tcp/"$host"/"$port") 2>/dev/null
+  local rc=$?
+  exec 3<&- 2>/dev/null || true
+  return $rc
+}
+
+human_size() {
+  # du -sh wrapper that hides "No such file" noise.
+  local path="$1"
+  du -sh "$path" 2>/dev/null | awk '{print $1}'
+}
+
+# ----- sleepypod service ---------------------------------------------------
+probe_section "sleepypod service"
+systemctl status sleepypod.service --no-pager -n 0 2>/dev/null \
+  || echo "sleepypod.service: not installed"
+
+# ----- firmware ------------------------------------------------------------
+probe_section "firmware"
+if [ -r /etc/rat_version ]; then
+  printf "rat_version: %s\n" "$(cat /etc/rat_version)"
+else
+  echo "rat_version: missing"
+fi
+if [ -r /etc/build_time_epoch ]; then
+  epoch=$(cat /etc/build_time_epoch)
+  built=$(date -d "@$epoch" 2>/dev/null || echo "$epoch (epoch)")
+  printf "built:       %s\n" "$built"
+fi
+if [ -f /opt/eight/bin/frank.sh ]; then
+  printf "frank.sh:    present (old firmware path)\n"
+else
+  printf "frank.sh:    absent (new firmware path)\n"
+fi
+printf "frank.service: %s\n" "$(active_or frank.service)"
+
+# ----- biometrics pipeline -------------------------------------------------
+probe_section "biometrics pipeline"
+NATS_STATE=$(active_or nats-server.service)
+JETSTREAM_DIR_STATE="missing"
+[ -d /persistent/jetstream ] && JETSTREAM_DIR_STATE="present"
+
+if [ "$NATS_STATE" = "active" ] && [ "$JETSTREAM_DIR_STATE" = "present" ]; then
+  printf "pipeline:    NATS JetStream (new firmware, April 2026+)\n"
+elif [ -f /opt/eight/bin/frank.sh ]; then
+  printf "pipeline:    tmpfs *.RAW via frank.sh shim (old firmware)\n"
+else
+  printf "pipeline:    direct *.RAW (mid-era firmware; frank.sh removed ~year ago, no NATS)\n"
+fi
+
+printf "nats-server: %s" "$NATS_STATE"
+if port_open 127.0.0.1 4222; then
+  printf " (port 4222 open)\n"
+else
+  printf " (port 4222 closed)\n"
+fi
+
+if [ "$JETSTREAM_DIR_STATE" = "present" ]; then
+  printf "jetstream:   /persistent/jetstream present (%s)\n" "$(human_size /persistent/jetstream)"
+else
+  printf "jetstream:   /persistent/jetstream missing\n"
+fi
+printf "jetstream-uploader.service: %s\n" "$(active_or jetstream-uploader.service)"
+
+# `raw` stream probe — only attempt if the CLI exists. Authenticates against
+# the local server with no creds (firmware default).
+if command -v nats >/dev/null 2>&1; then
+  if nats stream info raw --server nats://localhost:4222 -j >/dev/null 2>&1; then
+    printf "raw stream:  present (subject raw.>)\n"
+  else
+    printf "raw stream:  missing or unreachable\n"
+  fi
+else
+  printf "raw stream:  nats CLI not installed — skipping probe\n"
+fi
+
+# Old-format .RAW frame count, excluding SEQNO.RAW which both firmware
+# variants maintain. On new firmware these should all be 0.
+count_raw_excluding_seqno() {
+  shopt -s nullglob
+  local files=( "$1"/*.RAW ) f n=0
+  shopt -u nullglob
+  for f in "${files[@]}"; do
+    [ "$(basename "$f")" = "SEQNO.RAW" ] && continue
+    n=$((n + 1))
+  done
+  echo "$n"
+}
+count_archive_gz() {
+  shopt -s nullglob
+  local files=( "$1"/*.gz )
+  shopt -u nullglob
+  echo "${#files[@]}"
+}
+printf ".RAW @ /persistent:            %s\n" "$(count_raw_excluding_seqno /persistent)"
+printf ".RAW @ /persistent/biometrics: %s\n" "$(count_raw_excluding_seqno /persistent/biometrics)"
+printf ".RAW.gz in archive:            %s\n" "$(count_archive_gz /persistent/biometrics-archive)"
+
+# ----- sleepypod modules ---------------------------------------------------
+probe_section "sleepypod modules"
+for m in sleepypod-piezo-processor sleepypod-sleep-detector \
+         sleepypod-environment-monitor sleepypod-cover-buttons \
+         sleepypod-calibrator; do
+  printf "%-40s %s\n" "$m.service" "$(active_or "$m.service")"
+done
+
+# ----- biometrics-archiver units -------------------------------------------
+probe_section "biometrics-archiver units"
+for u in persistent-biometrics.mount sleepypod-tmpfs-prep.service \
+         sleepypod-biometrics-archiver.timer sleepypod-biometrics-pruner.timer; do
+  printf "%-40s %s\n" "$u" "$(active_or "$u")"
+done
+
+# ----- firmware-side services ----------------------------------------------
+probe_section "firmware services"
+for s in frank.service capybara.service persistent-manager.service \
+         nats-server.service jetstream-uploader.service; do
+  printf "%-40s %s\n" "$s" "$(active_or "$s")"
+done
+
+echo

@@ -24,6 +24,26 @@ install_biometrics_archiver() {
     return 0
   fi
 
+  # New firmware (April 2026+, e.g. rat_version ca35aafa) writes biometric
+  # frames to NATS JetStream stream `raw` (subject raw.>) at
+  # /persistent/jetstream/ instead of /persistent/*.RAW. The whole
+  # tmpfs + cd-patch workflow is inapplicable there; installing the mount
+  # + timers anyway tripped sp-update's set -euo pipefail (a subsequent
+  # `systemctl enable --now <timer>` failure rolled back OTA updates on
+  # Pod 5 with the new firmware). Skip cleanly when NATS is the data path.
+  #
+  # NOTE: `frank.sh` absence is NOT a reliable canary on its own —
+  # frankenfirmware shipped without the shim ~1 year ago, so a large mid-
+  # era population also has no /opt/eight/bin/frank.sh but is still on
+  # the .RAW write path (firmware direct → /persistent/*.RAW). Those pods
+  # depend on the archive/migration loop below to keep eMMC from filling.
+  # Gate strictly on the new-firmware NATS signals.
+  if systemctl is-active --quiet nats-server.service 2>/dev/null \
+     && [ -d /persistent/jetstream ]; then
+    echo "biometrics-archiver: new firmware detected (nats-server active; /persistent/jetstream present) — skipping tmpfs setup"
+    return 0
+  fi
+
   echo "Installing biometrics-archiver (tmpfs + cold archive)..."
 
   # Remember whether the tmpfs was already up. If it was, every caller
