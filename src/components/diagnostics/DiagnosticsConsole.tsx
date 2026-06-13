@@ -41,6 +41,7 @@ import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemLogViewer } from '@/src/components/status/SystemLogViewer'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 import { SensorsScreen } from '@/src/components/Sensors/SensorsScreen'
+import { AutomationsWorkspace } from '@/src/components/Automations/AutomationsConsole'
 
 // Formatting, scheduler-lane, and biometrics/thermal derivations live in
 // ./diagnosticsLogic so they can be unit-tested without React/tRPC.
@@ -126,7 +127,7 @@ export function DiagnosticsConsole() {
           {section === 'sensors' && <SensorsPanel />}
           {section === 'health' && <HealthPanel />}
           {section === 'calibration' && <CalibrationPanel />}
-          {section === 'automations' && <AutomationsPanel />}
+          {section === 'automations' && <AutomationsWorkspace embedded />}
           {section === 'logs' && <LogsPanel />}
         </div>
       </div>
@@ -763,124 +764,3 @@ function Tag({ children, className }: { children: React.ReactNode, className: st
   return <span className={`rounded px-1.5 py-0.5 ${className}`}>{children}</span>
 }
 
-// ── Automations ─────────────────────────────────────────────────────────────
-// Compact mirror of the Automations console's diagnostics, in the console's zinc
-// aesthetic. The full builder lives at /automations; this surfaces live state and
-// the audit trail alongside the pod's other diagnostics.
-
-function automationsAgo(d: Date | string | null): string {
-  if (!d) return 'never'
-  const ms = Date.now() - new Date(d).getTime()
-  if (ms < 60_000) return 'now'
-  const m = Math.floor(ms / 60_000)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
-}
-
-function AutomationsPanel() {
-  const pathname = usePathname()
-  const lang = pathname?.split('/')[1] ?? 'en'
-  const status = trpc.automations.status.useQuery({}, { refetchInterval: 15000 })
-  const runs = trpc.automations.runs.useQuery({ limit: 40 }, { refetchInterval: 15000 })
-  const setKill = trpc.automations.setKillSwitch.useMutation({ onSuccess: () => status.refetch() })
-
-  const globalEnabled = status.data?.globalEnabled ?? true
-  const rules = status.data?.rules ?? []
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-zinc-100">Automations</h2>
-          <p className="text-xs text-zinc-500">Reactive WHEN/IF/THEN rules · live state &amp; run log</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setKill.mutate({ enabled: !globalEnabled })}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${globalEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/40 bg-red-500/10 text-red-300'}`}
-          >
-            <span className={`h-2 w-2 rounded-full ${globalEnabled ? 'bg-emerald-400' : 'bg-red-400'}`} />
-            {globalEnabled ? 'Running' : 'Halted'}
-          </button>
-          <Link href={`/${lang}/automations`} className="rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700/60">
-            Open builder →
-          </Link>
-        </div>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {rules.length === 0 && (
-          <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4 text-xs text-zinc-500">
-            No automations yet. Build one in the Automations console.
-          </div>
-        )}
-        {rules.map(r => (
-          <div key={r.id} className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm font-medium text-zinc-100">{r.name}</span>
-              <Tag className={!r.enabled ? 'bg-zinc-800 text-zinc-400' : r.dryRun ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'}>
-                {!r.enabled ? 'paused' : r.dryRun ? 'dry-run' : 'active'}
-              </Tag>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-zinc-400">
-              <div>
-                <span className="text-zinc-600">side</span>
-                {' '}
-                {r.side ?? 'L+R'}
-              </div>
-              <div>
-                <span className="text-zinc-600">today</span>
-                {' '}
-                {r.firesToday}
-              </div>
-              <div>
-                <span className="text-zinc-600">last</span>
-                {' '}
-                {automationsAgo(r.lastFiredAt)}
-              </div>
-              <div>
-                <span className="text-zinc-600">cooldown</span>
-                {' '}
-                {r.cooldownMin ? `${r.cooldownMin}m` : '—'}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/40">
-        <div className="border-b border-zinc-800/60 px-4 py-2.5 text-xs font-medium text-zinc-300">Run log · audit trail</div>
-        <div className="max-h-[360px] overflow-y-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 bg-zinc-950/90 text-[10px] uppercase tracking-wide text-zinc-600">
-              <tr>
-                <th className="px-4 py-2 font-medium">Time</th>
-                <th className="px-2 py-2 font-medium">Rule</th>
-                <th className="px-2 py-2 font-medium">Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(runs.data ?? []).length === 0 && (
-                <tr><td colSpan={3} className="px-4 py-6 text-center text-zinc-600">No evaluations recorded yet.</td></tr>
-              )}
-              {(runs.data ?? []).map((r) => {
-                const d = new Date(r.firedAt)
-                const tone = r.outcome === 'fired' || r.outcome === 'clamped' ? 'text-red-300' : r.outcome === 'dry_run' ? 'text-amber-300' : 'text-zinc-400'
-                return (
-                  <tr key={r.id} className="border-t border-zinc-800/40">
-                    <td className="px-4 py-2 font-mono text-zinc-400 whitespace-nowrap">{`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`}</td>
-                    <td className="px-2 py-2 text-zinc-200">{r.ruleName ?? `#${r.automationId}`}</td>
-                    <td className={`px-2 py-2 ${tone}`}>{r.outcome.replace('_', '-')}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  )
-}
