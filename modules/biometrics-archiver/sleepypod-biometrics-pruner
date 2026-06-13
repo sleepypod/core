@@ -17,8 +17,12 @@ while :; do
     break
   fi
 
+  # awk takes the first line and consumes the rest of the stream; piping to
+  # `head -1` instead closes the pipe early and, under `set -o pipefail`,
+  # makes `sort` fail with SIGPIPE/"Broken pipe" → the whole script aborts
+  # and never prunes (archive grows unbounded, /persistent fills past target).
   oldest=$(find "$ARCHIVE_DIR" -maxdepth 1 -type f -name '*.RAW.gz' -printf '%T@ %p\n' 2>/dev/null \
-    | sort -n | head -1 | awk '{print $2}')
+    | sort -n | awk 'NR==1{print $2}')
   if [ -z "$oldest" ]; then
     echo "pruner: $used_pct% used but archive is empty — nothing to prune" >&2
     break
