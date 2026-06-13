@@ -87,7 +87,7 @@ function WhenEditor({ rule, set }: { rule: BuilderRule, set: (r: BuilderRule) =>
             <Select chip value={w.op} options={['>', '≥', '<', '≤']} onChange={v => setW({ op: v as UiOp })} />
             <NumberField value={w.value} step={10} onChange={v => setW({ value: v })} width={92} />
             <span>over the last</span>
-            <NumberField value={w.window} step={5} suffix="m" onChange={v => setW({ window: Math.max(1, v) })} width={84} />
+            <NumberField value={w.window} step={5} suffix="minutes" onChange={v => setW({ window: Math.max(1, v) })} width={84} />
           </>
         )}
         {w.type === 'cond' && (
@@ -218,7 +218,7 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
                 <Toggle size="sm" checked={!!a.revert} onChange={v => setA({ revert: v ? 20 : undefined })} />
                 revert after
               </label>
-              {a.revert ? <NumberField value={a.revert} step={5} suffix="m" onChange={v => setA({ revert: Math.max(1, v) })} width={78} /> : null}
+              {a.revert ? <NumberField value={a.revert} step={5} suffix="minutes" onChange={v => setA({ revert: Math.max(1, v) })} width={78} /> : null}
             </div>
           )}
 
@@ -278,7 +278,7 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
         <label className="inline-flex items-center gap-2">
           <Icon.Clock size={13} className="text-zinc-500" />
           cooldown
-          <NumberField value={rule.cooldown} step={5} suffix="m" onChange={v => set({ ...rule, cooldown: Math.max(0, v) })} width={80} />
+          <NumberField value={rule.cooldown} step={5} suffix="minutes" onChange={v => set({ ...rule, cooldown: Math.max(0, v) })} width={80} />
         </label>
       </div>
     </Card>
