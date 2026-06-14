@@ -10,4 +10,4 @@ CREATE TABLE `cap_sense_frames` (
 	`frame_count` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_cap_sense_frames_side_ts` ON `cap_sense_frames` (`side`,`timestamp`);
+CREATE UNIQUE INDEX `uq_cap_sense_frames_side_ts` ON `cap_sense_frames` (`side`,`timestamp`);

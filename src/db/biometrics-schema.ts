@@ -124,7 +124,9 @@ export const capSenseFrames = sqliteTable('cap_sense_frames', {
   peakZone: integer('peak_zone'), // 0–2 modal zone over the window, or null
   frameCount: integer('frame_count').notNull(), // raw frames aggregated into this row
 }, t => [
-  index('idx_cap_sense_frames_side_ts').on(t.side, t.timestamp),
+  // One row per side/window — guards against duplicates if a restart re-reads
+  // the active RAW file from the start (insert is conflict-tolerant).
+  uniqueIndex('uq_cap_sense_frames_side_ts').on(t.side, t.timestamp),
 ])
 
 export const pumpAlerts = sqliteTable('pump_alerts', {

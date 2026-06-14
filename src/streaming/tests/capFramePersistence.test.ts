@@ -1,4 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Keep the suite hermetic: stub the DB so state-machine tests never touch the
+// real biometrics schema. The error/throttle tests re-spy these per case.
+vi.mock('@/src/db', () => {
+  const chain = {
+    values: () => chain,
+    onConflictDoNothing: () => chain,
+    where: () => chain,
+    run: () => {},
+  }
+  return { biometricsDb: { insert: () => chain, delete: () => chain } }
+})
+
 import { biometricsDb } from '@/src/db'
 import {
   _getCapFrameWindow,

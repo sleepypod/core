@@ -661,9 +661,12 @@ export function startPiezoStreamServer(): WebSocketServer {
     })
   })
 
-  // Periodic file-tailing loop: read new data from the RAW file and broadcast
+  // Periodic file-tailing loop: read new data from the RAW file and broadcast.
+  // Runs even with no clients connected — the cap-frame downsampler must keep
+  // persisting through unattended nights so the next morning can be replayed.
+  // Broadcasting is already per-client guarded, so an idle loop does no fan-out.
   streamingInterval = setInterval(() => {
-    if (!wss || wss.clients.size === 0) return
+    if (!wss) return
 
     // Find the latest RAW file
     const latest = findLatestRaw(RAW_DATA_DIR)

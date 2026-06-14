@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "82d7d72a-4151-46cc-9c7b-0c66c5a4d786",
+  "id": "6d9e70b0-4c9e-4a22-9e60-55eda5b6b2ad",
   "prevId": "00d19013-c8ca-4064-92bc-42035032b07e",
   "tables": {
     "ambient_light": {
@@ -429,13 +429,13 @@
         }
       },
       "indexes": {
-        "idx_cap_sense_frames_side_ts": {
-          "name": "idx_cap_sense_frames_side_ts",
+        "uq_cap_sense_frames_side_ts": {
+          "name": "uq_cap_sense_frames_side_ts",
           "columns": [
             "side",
             "timestamp"
           ],
-          "isUnique": false
+          "isUnique": true
         }
       },
       "foreignKeys": {},

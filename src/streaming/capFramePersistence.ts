@@ -84,7 +84,10 @@ export function summarizeWindow(acc: WindowAccumulator): CapFrameRow {
 // Caller invariant: only ever called on rollover, when `acc` holds ≥1 frame.
 function flush(side: Side, acc: WindowAccumulator): void {
   try {
-    biometricsDb.insert(capSenseFrames).values({ side, ...summarizeWindow(acc) }).run()
+    biometricsDb.insert(capSenseFrames)
+      .values({ side, ...summarizeWindow(acc) })
+      .onConflictDoNothing()
+      .run()
   }
   catch (err) {
     // Persistence is best-effort: a write failure must never disrupt the live

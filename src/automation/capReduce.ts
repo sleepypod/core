@@ -41,7 +41,9 @@ export function reduceCap(values: number[]): { max: number, mean: number, spread
  */
 export function zoneTriple(values: number[]): [number, number, number] | null {
   const zones = values.length >= 8 ? values.slice(0, 6) : values
-  if (zones.length < 6) return null
+  // Exactly 6 sensor channels — matches reduceCap's peakZone gating so a
+  // persisted frame never carries zones without a corresponding peak vote.
+  if (zones.length !== 6) return null
   return [
     mean([zones[0], zones[1]]),
     mean([zones[2], zones[3]]),
