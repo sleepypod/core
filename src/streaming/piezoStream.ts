@@ -38,6 +38,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Decoder } from 'cbor-x'
 import { recordCapFrame, resetCapFrameWindows } from './capFramePersistence'
+import { capSideChannels } from './normalizeFrame'
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -764,24 +765,24 @@ export function startPiezoStreamServer(): WebSocketServer {
             }
 
             // Update the live capSense snapshot for in-process readers (virtual
-            // occupancy sensor). Cheap O(1) copy of the small per-frame shape.
+            // occupancy sensor) and downsample into biometrics.db for replay.
+            // Firmware sends per-side channels as {values:[...]} on Pod 4/5 and
+            // {out,cen,in} on Pod 3 — unwrap to a flat array so both paths see
+            // real readings regardless of pod variant.
             if (frameType === 'capSense' || frameType === 'capSense2') {
-              const left = (frame as { left: unknown }).left
-              const right = (frame as { right: unknown }).right
               const ts = (frame as { ts: unknown }).ts
-              if (typeof ts === 'number'
-                && (typeof left === 'number' || Array.isArray(left))
-                && (typeof right === 'number' || Array.isArray(right))) {
+              const left = capSideChannels((frame as { left: unknown }).left)
+              const right = capSideChannels((frame as { right: unknown }).right)
+              if (typeof ts === 'number' && left && right) {
                 latestCapSenseSnapshot = {
                   type: frameType,
                   ts,
                   receivedAtMs: Date.now(),
-                  left: left as number | number[],
-                  right: right as number | number[],
+                  left,
+                  right,
                 }
-                // Downsample into biometrics.db for historical replay.
-                recordCapFrame('left', left as number | number[], ts)
-                recordCapFrame('right', right as number | number[], ts)
+                recordCapFrame('left', left, ts)
+                recordCapFrame('right', right, ts)
               }
             }
           }
