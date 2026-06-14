@@ -17,7 +17,7 @@ import { and, desc, eq, gte, lte } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { automationRuns, automations, deviceSettings } from '@/src/db/schema'
-import { bedTemp, movement, sleepRecords, vitals, waterLevelReadings } from '@/src/db/biometrics-schema'
+import { ambientLight, bedTemp, freezerTemp, movement, sleepRecords, vitals, waterLevelReadings } from '@/src/db/biometrics-schema'
 import { centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
 import {
   automationActionSchema,
@@ -434,14 +434,44 @@ function loadSeries(side: 'left' | 'right', startMs: number, endMs: number): Rec
   series[`${side}.hrv`] = vit.flatMap(r => r.hrv != null ? [{ t: r.t.getTime(), v: r.hrv }] : [])
   series[`${side}.breathingRate`] = vit.flatMap(r => r.br != null ? [{ t: r.t.getTime(), v: r.br }] : [])
 
+  const zoneCols = side === 'left'
+    ? { o: bedTemp.leftOuterTemp, c: bedTemp.leftCenterTemp, n: bedTemp.leftInnerTemp }
+    : { o: bedTemp.rightOuterTemp, c: bedTemp.rightCenterTemp, n: bedTemp.rightInnerTemp }
   const bt = biometricsDb
-    .select({ t: bedTemp.timestamp, amb: bedTemp.ambientTemp, hum: bedTemp.humidity })
+    .select({ t: bedTemp.timestamp, amb: bedTemp.ambientTemp, hum: bedTemp.humidity, o: zoneCols.o, c: zoneCols.c, n: zoneCols.n })
     .from(bedTemp)
     .where(and(gte(bedTemp.timestamp, start), lte(bedTemp.timestamp, end)))
     .orderBy(bedTemp.timestamp)
     .all()
   series['ambient.temperature'] = bt.flatMap(r => r.amb != null ? [{ t: r.t.getTime(), v: centiDegreesToF(r.amb) }] : [])
   series['ambient.humidity'] = bt.flatMap(r => r.hum != null ? [{ t: r.t.getTime(), v: centiPercentToPercent(r.hum) }] : [])
+  series[`${side}.surfaceTemp`] = bt.flatMap((r) => {
+    const zs = [r.o, r.c, r.n].filter((x): x is number => x != null).map(centiDegreesToF)
+    return zs.length ? [{ t: r.t.getTime(), v: zs.reduce((a, b) => a + b, 0) / zs.length }] : []
+  })
+  series[`${side}.surfaceTemp.spread`] = bt.flatMap((r) => {
+    const zs = [r.o, r.c, r.n].filter((x): x is number => x != null).map(centiDegreesToF)
+    return zs.length >= 2 ? [{ t: r.t.getTime(), v: Math.max(...zs) - Math.min(...zs) }] : []
+  })
+  series[`${side}.surfaceTemp.gradient`] = bt.flatMap(r =>
+    r.n != null && r.o != null ? [{ t: r.t.getTime(), v: centiDegreesToF(r.n) - centiDegreesToF(r.o) }] : [])
+
+  const waterCol = side === 'left' ? freezerTemp.leftWaterTemp : freezerTemp.rightWaterTemp
+  const fz = biometricsDb
+    .select({ t: freezerTemp.timestamp, w: waterCol })
+    .from(freezerTemp)
+    .where(and(gte(freezerTemp.timestamp, start), lte(freezerTemp.timestamp, end)))
+    .orderBy(freezerTemp.timestamp)
+    .all()
+  series[`${side}.waterTemp`] = fz.flatMap(r => r.w != null ? [{ t: r.t.getTime(), v: centiDegreesToF(r.w) }] : [])
+
+  const al = biometricsDb
+    .select({ t: ambientLight.timestamp, lux: ambientLight.lux })
+    .from(ambientLight)
+    .where(and(gte(ambientLight.timestamp, start), lte(ambientLight.timestamp, end)))
+    .orderBy(ambientLight.timestamp)
+    .all()
+  series['ambient.light'] = al.flatMap(r => r.lux != null ? [{ t: r.t.getTime(), v: r.lux }] : [])
 
   const wl = biometricsDb
     .select({ t: waterLevelReadings.timestamp, level: waterLevelReadings.level })

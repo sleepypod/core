@@ -90,6 +90,21 @@ export class DeviceSignalReader implements SignalReader {
   }
 }
 
+/**
+ * Merge several readers into one snapshot. Readers are applied in order, so a
+ * later reader overrides an earlier one on key collision — keep the
+ * authoritative source last (e.g. the live DAC reader's `water.low`).
+ */
+export class CompositeSignalReader implements SignalReader {
+  constructor(private readonly readers: SignalReader[]) {}
+
+  read(): SignalSnapshot {
+    const out: SignalSnapshot = {}
+    for (const reader of this.readers) Object.assign(out, reader.read())
+    return out
+  }
+}
+
 /** Walk an expression tree collecting the signal keys referenced by windows. */
 function collectWindowKeysFromExpr(expr: Expr, out: Set<string>): void {
   switch (expr.kind) {

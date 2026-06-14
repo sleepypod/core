@@ -37,7 +37,17 @@ vi.mock('../signals', () => ({
   DeviceSignalReader: class {
     read() { return {} }
   },
+  CompositeSignalReader: class {
+    constructor(readonly readers: Array<{ read: () => Record<string, number> }>) {}
+    read() { return Object.assign({}, ...this.readers.map(r => r.read())) }
+  },
   clockInTimezone: vi.fn(() => ({ nowMinutes: 123, dayOfWeek: 'monday' })),
+}))
+
+vi.mock('../signals.biometrics', () => ({
+  BiometricsSignalReader: class {
+    read() { return {} }
+  },
 }))
 
 const hardwareClient = { connect: async () => {}, setTemperature: async () => {}, setPower: async () => {} }

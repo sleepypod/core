@@ -12,8 +12,9 @@ export {
   getAutomationEngineIfRunning,
   shutdownAutomationEngine,
 } from './instance'
-export { clockInTimezone, collectWindowSignals, DeviceSignalReader } from './signals'
+export { clockInTimezone, collectWindowSignals, CompositeSignalReader, DeviceSignalReader } from './signals'
 export type { SignalReader, SignalSnapshot } from './signals'
+export { BiometricsSignalReader } from './signals.biometrics'
 export { evaluateCondition } from './evaluator'
 export { clamp, evaluateExpr } from './expressions'
 export type { EvalContext } from './expressions'

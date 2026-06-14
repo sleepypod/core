@@ -35,22 +35,33 @@ export interface SignalDef {
   label: string
   unit: string
   kind: SignalKind
-  group: 'Room' | 'Bed' | 'Bio' | 'System'
+  group: 'Room' | 'Bed' | 'Bio' | 'Matrix' | 'System'
   icon: string
   perSide?: boolean
   max?: number
+  /** Live-only: no granular history, so it reads live but can't be back-tested. */
+  liveOnly?: boolean
 }
 
 /** Numeric, engine-evaluable signals (subset wired for live read and/or backtest). */
 export const SIGNALS: SignalDef[] = [
   { id: 'ambient.temperature', label: 'Ambient temp', unit: '°F', kind: 'num', group: 'Room', icon: 'Thermometer' },
   { id: 'ambient.humidity', label: 'Ambient humidity', unit: '%', kind: 'num', group: 'Room', icon: 'Droplet' },
-  { id: '{side}.currentTemperature', label: 'Current temp', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
-  { id: '{side}.targetTemperature', label: 'Target temp', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
+  { id: 'ambient.light', label: 'Ambient light', unit: 'lux', kind: 'num', group: 'Room', icon: 'Moon' },
+  { id: '{side}.currentTemperature', label: 'Current temp (level)', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
+  { id: '{side}.targetTemperature', label: 'Target temp (level)', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
+  { id: '{side}.surfaceTemp', label: 'Bed surface temp', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
+  { id: '{side}.surfaceTemp.spread', label: 'Surface temp spread', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
+  { id: '{side}.surfaceTemp.gradient', label: 'Surface temp gradient', unit: '°F', kind: 'num', group: 'Bed', icon: 'Thermometer', perSide: true },
+  { id: '{side}.waterTemp', label: 'Water temp', unit: '°F', kind: 'num', group: 'Bed', icon: 'Droplet', perSide: true },
   { id: '{side}.movement', label: 'Movement', unit: '', kind: 'num', group: 'Bio', icon: 'Activity', perSide: true, max: 1000 },
   { id: '{side}.heartRate', label: 'Heart rate', unit: 'bpm', kind: 'num', group: 'Bio', icon: 'Heart', perSide: true },
   { id: '{side}.hrv', label: 'HRV', unit: 'ms', kind: 'num', group: 'Bio', icon: 'Pulse', perSide: true },
   { id: '{side}.breathingRate', label: 'Breathing rate', unit: 'brpm', kind: 'num', group: 'Bio', icon: 'Wind', perSide: true },
+  { id: '{side}.cap.max', label: 'Cap matrix peak', unit: '', kind: 'num', group: 'Matrix', icon: 'Activity', perSide: true, liveOnly: true },
+  { id: '{side}.cap.mean', label: 'Cap matrix mean', unit: '', kind: 'num', group: 'Matrix', icon: 'Activity', perSide: true, liveOnly: true },
+  { id: '{side}.cap.spread', label: 'Cap matrix spread', unit: '', kind: 'num', group: 'Matrix', icon: 'Activity', perSide: true, liveOnly: true },
+  { id: '{side}.cap.peakZone', label: 'Cap matrix peak zone', unit: '', kind: 'num', group: 'Matrix', icon: 'Activity', perSide: true, liveOnly: true },
   { id: 'water.low', label: 'Water low', unit: '', kind: 'num', group: 'System', icon: 'Droplet' },
 ]
 
