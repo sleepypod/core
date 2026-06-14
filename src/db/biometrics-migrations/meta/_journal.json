@@ -71,6 +71,13 @@
       "when": 1779761660310,
       "tag": "0009_robust_the_fury",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1781477768520,
+      "tag": "0010_fixed_silvermane",
+      "breakpoints": true
     }
   ]
 }

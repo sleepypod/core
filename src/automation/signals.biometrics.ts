@@ -12,10 +12,11 @@
  *
  * The capacitive presence matrix (capSense2: `[A1,A2,B1,B2,C1,C2,ref1,ref2]` per
  * side — body-contact load across head/torso/legs, NOT temperature) is exposed
- * only as scalar reducers — max / mean / spread — keeping the engine scalar. It
- * is live-only: the raw frames are not persisted granularly, so cap.* signals
- * cannot be back-tested. (`reduceCap` also derives a peakZone index, used by the
- * UI zone visualization rather than the engine.)
+ * to the engine only as scalar reducers — max / mean / spread — keeping the
+ * engine scalar. This reader resolves them from the live in-memory snapshot; a
+ * downsampled copy is persisted separately for historical replay (see
+ * `streaming/capFramePersistence`). (`reduceCap` also derives a peakZone index,
+ * used by the UI zone visualization rather than the engine.)
  */
 
 import { desc, eq } from 'drizzle-orm'
@@ -23,6 +24,7 @@ import { biometricsDb } from '@/src/db'
 import { ambientLight, bedTemp, freezerTemp, movement, vitals } from '@/src/db/biometrics-schema'
 import { centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { getLatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
+import { mean, reduceCap } from './capReduce'
 import type { SignalReader, SignalSnapshot } from './signals'
 
 // Freshness windows (ms). A latest row older than its window is treated as
@@ -34,29 +36,6 @@ const ENV_FRESH_MS = 15 * 60_000
 const CAP_FRESH_MS = 30_000
 
 const SIDES = ['left', 'right'] as const
-
-function mean(xs: number[]): number {
-  return xs.reduce((a, b) => a + b, 0) / xs.length
-}
-
-/**
- * Reduce a per-side capacitive channel array to scalar matrix signals. Returns
- * null when there are no usable channels. `peakZone` is the index (0–2) of the
- * highest paired zone (A/B/C), available only on the full 6-channel frame.
- */
-export function reduceCap(values: number[]): { max: number, mean: number, spread: number, peakZone: number | null } | null {
-  // capSense2 carries 6 sensor channels + 2 reference channels; drop the refs.
-  const zones = values.length >= 8 ? values.slice(0, 6) : values
-  if (zones.length === 0) return null
-  const max = Math.max(...zones)
-  const min = Math.min(...zones)
-  // Three paired zones (A/B/C) only when the full 6-channel frame is present.
-  const peakZone = zones.length === 6
-    ? [mean([zones[0], zones[1]]), mean([zones[2], zones[3]]), mean([zones[4], zones[5]])]
-        .reduce((best, v, i, arr) => (v > arr[best] ? i : best), 0)
-    : null
-  return { max, mean: mean(zones), spread: max - min, peakZone }
-}
 
 export class BiometricsSignalReader implements SignalReader {
   read(): SignalSnapshot {

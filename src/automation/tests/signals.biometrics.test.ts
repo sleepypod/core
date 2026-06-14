@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { reduceCap } from '../signals.biometrics'
+import { reduceCap } from '../capReduce'
 
 describe('reduceCap', () => {
   it('returns null for an empty array', () => {

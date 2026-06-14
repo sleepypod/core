@@ -37,6 +37,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Decoder } from 'cbor-x'
+import { recordCapFrame, resetCapFrameWindows } from './capFramePersistence'
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -680,6 +681,8 @@ export function startPiezoStreamServer(): WebSocketServer {
       // Drop the cached capSense snapshot — old file's last frame doesn't
       // describe the current sensor state.
       latestCapSenseSnapshot = null
+      // Drop any in-flight downsample windows; the new file restarts the stream.
+      resetCapFrameWindows()
     }
 
     // Read any new bytes appended since last read
@@ -773,6 +776,9 @@ export function startPiezoStreamServer(): WebSocketServer {
                   left: left as number | number[],
                   right: right as number | number[],
                 }
+                // Downsample into biometrics.db for historical replay.
+                recordCapFrame('left', left as number | number[], ts)
+                recordCapFrame('right', right as number | number[], ts)
               }
             }
           }
