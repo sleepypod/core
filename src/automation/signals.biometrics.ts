@@ -10,10 +10,12 @@
  * stale or absent sample resolves to `undefined` — the engine then skips, the
  * safe default DeviceSignalReader already relies on.
  *
- * The capacitive matrix (capSense2: `[A1,A2,B1,B2,C1,C2,ref1,ref2]` per side) is
- * exposed only as reducers — max / mean / spread / peakZone — keeping the engine
- * scalar. It is live-only: the raw frames are not persisted granularly, so cap.*
- * signals cannot be back-tested.
+ * The capacitive presence matrix (capSense2: `[A1,A2,B1,B2,C1,C2,ref1,ref2]` per
+ * side — body-contact load across head/torso/legs, NOT temperature) is exposed
+ * only as scalar reducers — max / mean / spread — keeping the engine scalar. It
+ * is live-only: the raw frames are not persisted granularly, so cap.* signals
+ * cannot be back-tested. (`reduceCap` also derives a peakZone index, used by the
+ * UI zone visualization rather than the engine.)
  */
 
 import { desc, eq } from 'drizzle-orm'
@@ -119,7 +121,6 @@ export class BiometricsSignalReader implements SignalReader {
             out[`${side}.cap.max`] = r.max
             out[`${side}.cap.mean`] = r.mean
             out[`${side}.cap.spread`] = r.spread
-            if (r.peakZone != null) out[`${side}.cap.peakZone`] = r.peakZone
           }
         }
       }

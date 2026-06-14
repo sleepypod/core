@@ -35,7 +35,7 @@ export interface SignalDef {
   label: string
   unit: string
   kind: SignalKind
-  group: 'Room' | 'Bed' | 'Bio' | 'Matrix' | 'System'
+  group: 'Room' | 'Bed' | 'Bio' | 'Presence' | 'System'
   icon: string
   perSide?: boolean
   max?: number
@@ -58,10 +58,10 @@ export const SIGNALS: SignalDef[] = [
   { id: '{side}.heartRate', label: 'Heart rate', unit: 'bpm', kind: 'num', group: 'Bio', icon: 'Heart', perSide: true },
   { id: '{side}.hrv', label: 'HRV', unit: 'ms', kind: 'num', group: 'Bio', icon: 'Pulse', perSide: true },
   { id: '{side}.breathingRate', label: 'Breathing rate', unit: 'brpm', kind: 'num', group: 'Bio', icon: 'Wind', perSide: true },
-  { id: '{side}.cap.max', label: 'Cap matrix peak', unit: '', kind: 'num', group: 'Matrix', icon: 'Activity', perSide: true, liveOnly: true },
-  { id: '{side}.cap.mean', label: 'Cap matrix mean', unit: '', kind: 'num', group: 'Matrix', icon: 'Activity', perSide: true, liveOnly: true },
-  { id: '{side}.cap.spread', label: 'Cap matrix spread', unit: '', kind: 'num', group: 'Matrix', icon: 'Activity', perSide: true, liveOnly: true },
-  { id: '{side}.cap.peakZone', label: 'Cap matrix peak zone', unit: '', kind: 'num', group: 'Matrix', icon: 'Activity', perSide: true, liveOnly: true },
+  // Capacitive presence sensing (not temperature): per-zone body-contact load.
+  { id: '{side}.cap.max', label: 'Bed pressure (peak)', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true, liveOnly: true },
+  { id: '{side}.cap.mean', label: 'Bed pressure (avg)', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true, liveOnly: true },
+  { id: '{side}.cap.spread', label: 'Pressure spread', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true, liveOnly: true },
   { id: 'water.low', label: 'Water low', unit: '', kind: 'num', group: 'System', icon: 'Droplet' },
 ]
 

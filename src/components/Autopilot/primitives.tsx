@@ -159,7 +159,7 @@ export function Select({ value, options, onChange, placeholder = 'Select…', cl
         <Icon.ChevDown size={13} className="opacity-60" />
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 min-w-full max-h-64 overflow-auto rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-2xl shadow-black/60" style={{ left: 0 }}>
+        <div className="absolute z-50 mt-1 w-max min-w-full max-w-[280px] max-h-64 overflow-auto rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-2xl shadow-black/60" style={{ left: 0 }}>
           {opts.map((o) => {
             const I = o.icon ? Icon[o.icon] : null
             return (
@@ -172,8 +172,8 @@ export function Select({ value, options, onChange, placeholder = 'Select…', cl
                 }}
                 className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-zinc-800 ${o.value === value ? 'text-white' : 'text-zinc-300'}`}
               >
-                {I ? <I size={14} className="text-zinc-500" /> : null}
-                <span className="flex-1">{o.label}</span>
+                {I ? <I size={14} className="shrink-0 text-zinc-500" /> : null}
+                <span className="flex-1 whitespace-nowrap">{o.label}</span>
                 {o.hint && <span className="text-[11px] text-zinc-500 mono">{o.hint}</span>}
                 {o.value === value && <Icon.Check size={13} style={{ color: 'var(--accent)' }} />}
               </button>
