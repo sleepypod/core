@@ -81,8 +81,8 @@ export function summarizeWindow(acc: WindowAccumulator): CapFrameRow {
   }
 }
 
+// Caller invariant: only ever called on rollover, when `acc` holds ≥1 frame.
 function flush(side: Side, acc: WindowAccumulator): void {
-  if (acc.n === 0) return
   try {
     biometricsDb.insert(capSenseFrames).values({ side, ...summarizeWindow(acc) }).run()
   }
@@ -154,4 +154,11 @@ export function resetCapFrameWindows(): void {
 /** Test-only accessor for the in-flight per-side window state. */
 export function _getCapFrameWindow(side: Side): WindowAccumulator | null {
   return windows[side]
+}
+
+/** Test-only reset of all module state (windows + prune throttle clock). */
+export function _resetForTest(): void {
+  windows.left = null
+  windows.right = null
+  lastPruneMs = 0
 }

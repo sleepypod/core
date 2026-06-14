@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { biometricsDb } from '@/src/db'
 import {
   _getCapFrameWindow,
+  _resetForTest,
   recordCapFrame,
   resetCapFrameWindows,
   summarizeWindow,
@@ -16,7 +18,7 @@ function window(side: 'left' | 'right') {
 }
 
 describe('capFramePersistence', () => {
-  beforeEach(() => resetCapFrameWindows())
+  beforeEach(() => _resetForTest())
 
   it('accumulates frames inside a single window without flushing', () => {
     recordCapFrame('left', A, 1000)
@@ -63,5 +65,35 @@ describe('capFramePersistence', () => {
     recordCapFrame('left', A, 1000)
     resetCapFrameWindows()
     expect(_getCapFrameWindow('left')).toBeNull()
+  })
+
+  describe('best-effort persistence', () => {
+    afterEach(() => vi.restoreAllMocks())
+
+    it('keeps streaming when a flush write throws', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.spyOn(biometricsDb, 'insert').mockImplementation(() => {
+        throw new Error('db down')
+      })
+
+      recordCapFrame('left', A, 1000)
+      expect(() => recordCapFrame('left', A, 1006)).not.toThrow() // rollover → flush
+      expect(warn).toHaveBeenCalled()
+      // A failed write must not stall the stream: the new window still opens.
+      expect(_getCapFrameWindow('left')?.n).toBe(1)
+    })
+
+    it('throttles pruning across rapid rollovers', () => {
+      const del = vi.spyOn(biometricsDb, 'delete')
+      vi.spyOn(biometricsDb, 'insert').mockImplementation(() => {
+        throw new Error('skip write')
+      })
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      recordCapFrame('left', A, 1000)
+      recordCapFrame('left', A, 1006) // first rollover → prune runs
+      recordCapFrame('left', A, 1012) // second rollover within 10min → throttled
+      expect(del).toHaveBeenCalledTimes(1)
+    })
   })
 })
