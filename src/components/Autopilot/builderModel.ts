@@ -59,9 +59,11 @@ export const SIGNALS: SignalDef[] = [
   { id: '{side}.hrv', label: 'HRV', unit: 'ms', kind: 'num', group: 'Bio', icon: 'Pulse', perSide: true },
   { id: '{side}.breathingRate', label: 'Breathing rate', unit: 'brpm', kind: 'num', group: 'Bio', icon: 'Wind', perSide: true },
   // Capacitive presence sensing (not temperature): per-zone body-contact load.
-  { id: '{side}.cap.max', label: 'Bed pressure (peak)', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true, liveOnly: true },
-  { id: '{side}.cap.mean', label: 'Bed pressure (avg)', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true, liveOnly: true },
-  { id: '{side}.cap.spread', label: 'Pressure spread', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true, liveOnly: true },
+  // Back-testable from the downsampled cap_sense_frames history (see automations
+  // loadSeries); the live zone matrix is replayable too but not a scalar signal.
+  { id: '{side}.cap.max', label: 'Bed pressure (peak)', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true },
+  { id: '{side}.cap.mean', label: 'Bed pressure (avg)', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true },
+  { id: '{side}.cap.spread', label: 'Pressure spread', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true },
   { id: 'water.low', label: 'Water low', unit: '', kind: 'num', group: 'System', icon: 'Droplet' },
 ]
 
