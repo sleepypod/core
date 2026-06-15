@@ -196,10 +196,17 @@ export function NumberField({ value, onChange, step = 1, suffix = '', width = 84
     setDraft(String(value))
   }
 
+  // Reset the draft when stepping so stale text can't survive a parent that
+  // clamps back to the same numeric value (no render-time re-sync fires then).
+  const applyStep = (delta: number) => {
+    setDraft(String(value))
+    onChange(value + delta)
+  }
+
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="inline-flex items-stretch rounded-lg border border-zinc-700/70 bg-zinc-900/70 overflow-hidden" style={{ width }}>
-        <button type="button" onClick={() => onChange(value - step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Minus size={13} /></button>
+        <button type="button" onClick={() => applyStep(-step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Minus size={13} /></button>
         <input
           type="text"
           inputMode="numeric"
@@ -213,7 +220,7 @@ export function NumberField({ value, onChange, step = 1, suffix = '', width = 84
           onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
           className="min-w-0 flex-1 bg-transparent px-1 text-center mono text-[13px] text-zinc-100 tabular-nums focus:outline-none"
         />
-        <button type="button" onClick={() => onChange(value + step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Plus size={13} /></button>
+        <button type="button" onClick={() => applyStep(step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Plus size={13} /></button>
       </span>
       {suffix && <span className="text-[12px] text-zinc-500">{suffix}</span>}
     </span>
