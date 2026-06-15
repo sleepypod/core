@@ -1,10 +1,11 @@
 /**
  * Tests for the automations router's capacitive-history reads.
  *
- * Focuses on `capZoneReplay`: night resolution, the spatial-frame select, and
- * the stride downsampling that keeps a full night a light payload. biometricsDb
- * is a queue-backed `.all()` mock (each select pops the next queued row-set in
- * call order); the engine is stubbed so importing the router has no side effects.
+ * Covers `capZoneReplay` (spatial-frame select + stride downsampling) and the
+ * `backtest` path that pulls the scalar `{side}.cap.*` reducers out of the
+ * cap-frame history via `loadSeries`. biometricsDb is a queue-backed `.all()`
+ * mock (each select pops the next queued row-set in call order); the engine is
+ * stubbed so importing the router has no side effects.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -72,5 +73,50 @@ describe('automations.capZoneReplay', () => {
     dbState.queue.push([]) // latest movement fallback → none
     const out = await caller.capZoneReplay({ side: 'right' })
     expect(out).toEqual({ ok: false, night: null, frames: [] })
+  })
+})
+
+describe('automations.backtest — capacitive scalar reducers', () => {
+  function capRow(i: number) {
+    return { t: new Date(night.enteredBedAt.getTime() + i * 5000), max: 100 + i, mean: 50 + i, spread: 10 + i }
+  }
+
+  it('replays a rule over the {side}.cap.* series read from cap_sense_frames', async () => {
+    dbState.queue.push([{ id: 7, ...night }]) // resolveNight by id
+    // loadSeries selects, in order: movement, vitals, bedTemp, freezerTemp,
+    // ambientLight, waterLevelReadings (all empty here), then cap_sense_frames.
+    for (let i = 0; i < 6; i++) dbState.queue.push([])
+    dbState.queue.push([capRow(0), capRow(1), capRow(2)]) // cap_sense_frames
+    dbState.queue.push([]) // loadTimezone → deviceSettings (fallback tz)
+
+    const out = await caller.backtest({
+      side: 'left',
+      sleepRecordId: 7,
+      rule: {
+        side: 'left',
+        cooldownMin: 30,
+        trigger: { kind: 'tick', everyMin: 1 },
+        conditions: {
+          kind: 'and',
+          conditions: [{
+            kind: 'compare',
+            op: '>',
+            left: { kind: 'window', fn: 'avg', signal: 'left.cap.max', lastMin: 10 },
+            right: { kind: 'literal', value: 50 },
+          }],
+        },
+        actions: [{
+          kind: 'setTemperature',
+          temp: { kind: 'literal', value: 68 },
+          clamp: { min: 60, max: 75 },
+          durationSec: 1200,
+        }],
+      },
+    })
+
+    expect(out.ok).toBe(true)
+    expect(out.night?.label).toBe('Last night')
+    // The condition's primary signal resolves to the cap series loadSeries built.
+    expect(out.result?.primary?.key).toBe('left.cap.max')
   })
 })
