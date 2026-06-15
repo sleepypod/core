@@ -15,7 +15,8 @@ import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { AutomationEngine } from './engine'
-import { DeviceSignalReader, clockInTimezone } from './signals'
+import { BiometricsSignalReader } from './signals.biometrics'
+import { CompositeSignalReader, DeviceSignalReader, clockInTimezone } from './signals'
 import type {
   Action,
   AutomationRule,
@@ -100,7 +101,12 @@ export async function getAutomationEngine(): Promise<AutomationEngine> {
   engineInitPromise = (async () => {
     try {
       const timezone = await loadTimezone()
-      const reader = new DeviceSignalReader()
+      // DAC status first, biometrics merged on top; the DAC reader stays
+      // authoritative for any overlapping key (e.g. water.low).
+      const reader = new CompositeSignalReader([
+        new BiometricsSignalReader(),
+        new DeviceSignalReader(),
+      ])
       const engine = new AutomationEngine({
         signals: reader,
         now: () => Date.now(),

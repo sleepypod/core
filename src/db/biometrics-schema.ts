@@ -106,6 +106,29 @@ export const ambientLight = sqliteTable('ambient_light', {
   uniqueIndex('idx_ambient_light_timestamp').on(t.timestamp),
 ])
 
+// Downsampled capacitive presence frames for historical replay. The live
+// capSense matrix arrives ~2 Hz and is never persisted raw; this table holds one
+// windowed row per side (~5s) so the spatial zone replay and cap.* backtest can
+// reach recent nights. Pruned aggressively (~48h) — it is the bulkiest sensor
+// stream and only the last night or two is ever replayed.
+export const capSenseFrames = sqliteTable('cap_sense_frames', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  // [head, torso, legs] windowed-mean zone loads, or null for a scalar (Pod 3)
+  // sensor with no spatial resolution.
+  zones: text('zones', { mode: 'json' }),
+  max: real('max').notNull(),
+  mean: real('mean').notNull(),
+  spread: real('spread').notNull(),
+  peakZone: integer('peak_zone'), // 0–2 modal zone over the window, or null
+  frameCount: integer('frame_count').notNull(), // raw frames aggregated into this row
+}, t => [
+  // One row per side/window — guards against duplicates if a restart re-reads
+  // the active RAW file from the start (insert is conflict-tolerant).
+  uniqueIndex('uq_cap_sense_frames_side_ts').on(t.side, t.timestamp),
+])
+
 export const pumpAlerts = sqliteTable('pump_alerts', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),

@@ -37,6 +37,8 @@ import { WebSocketServer, WebSocket } from 'ws'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Decoder } from 'cbor-x'
+import { recordCapFrame, resetCapFrameWindows } from './capFramePersistence'
+import { capSideChannels } from './normalizeFrame'
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -660,9 +662,12 @@ export function startPiezoStreamServer(): WebSocketServer {
     })
   })
 
-  // Periodic file-tailing loop: read new data from the RAW file and broadcast
+  // Periodic file-tailing loop: read new data from the RAW file and broadcast.
+  // Runs even with no clients connected — the cap-frame downsampler must keep
+  // persisting through unattended nights so the next morning can be replayed.
+  // Broadcasting is already per-client guarded, so an idle loop does no fan-out.
   streamingInterval = setInterval(() => {
-    if (!wss || wss.clients.size === 0) return
+    if (!wss) return
 
     // Find the latest RAW file
     const latest = findLatestRaw(RAW_DATA_DIR)
@@ -680,6 +685,8 @@ export function startPiezoStreamServer(): WebSocketServer {
       // Drop the cached capSense snapshot — old file's last frame doesn't
       // describe the current sensor state.
       latestCapSenseSnapshot = null
+      // Drop any in-flight downsample windows; the new file restarts the stream.
+      resetCapFrameWindows()
     }
 
     // Read any new bytes appended since last read
@@ -758,21 +765,24 @@ export function startPiezoStreamServer(): WebSocketServer {
             }
 
             // Update the live capSense snapshot for in-process readers (virtual
-            // occupancy sensor). Cheap O(1) copy of the small per-frame shape.
+            // occupancy sensor) and downsample into biometrics.db for replay.
+            // Firmware sends per-side channels as {values:[...]} on Pod 4/5 and
+            // {out,cen,in} on Pod 3 — unwrap to a flat array so both paths see
+            // real readings regardless of pod variant.
             if (frameType === 'capSense' || frameType === 'capSense2') {
-              const left = (frame as { left: unknown }).left
-              const right = (frame as { right: unknown }).right
               const ts = (frame as { ts: unknown }).ts
-              if (typeof ts === 'number'
-                && (typeof left === 'number' || Array.isArray(left))
-                && (typeof right === 'number' || Array.isArray(right))) {
+              const left = capSideChannels((frame as { left: unknown }).left)
+              const right = capSideChannels((frame as { right: unknown }).right)
+              if (typeof ts === 'number' && left && right) {
                 latestCapSenseSnapshot = {
                   type: frameType,
                   ts,
                   receivedAtMs: Date.now(),
-                  left: left as number | number[],
-                  right: right as number | number[],
+                  left,
+                  right,
                 }
+                recordCapFrame('left', left, ts)
+                recordCapFrame('right', right, ts)
               }
             }
           }

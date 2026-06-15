@@ -10,6 +10,7 @@ import { trpc } from '@/src/utils/trpc'
 import { Icon, type IconName } from './icons'
 import { Button, Card, NumberField, SectionLabel, Segmented, Select, Toggle } from './primitives'
 import { BacktestPanel } from './BacktestPanel'
+import { CapZoneViz } from './CapZoneViz'
 import {
   AGGS,
   type BuilderRule,
@@ -308,6 +309,15 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
   const ambientQ = trpc.environment.getLatestBedTemp.useQuery({ unit: 'F' })
   const liveAmbient = ambientQ.data?.ambientTemp ?? null
 
+  // Show the live capacitive zone viz when the rule reads a pressure signal —
+  // "zone" is meaningless as a bare number without it.
+  const usesCapSignal = useMemo(() => {
+    const sigs: string[] = []
+    if ('signal' in rule.when && rule.when.signal) sigs.push(rule.when.signal)
+    for (const c of rule.ifs) if (c.type === 'cond') sigs.push(c.signal)
+    return sigs.some(s => s.startsWith('{side}.cap.'))
+  }, [rule])
+
   const ast = useMemo(() => toAST(debounced), [debounced])
   const backtestQ = trpc.automations.backtest.useQuery(
     {
@@ -355,6 +365,7 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
               </div>
             )}
             <SentencePreview rule={rule} />
+            {usesCapSignal && <CapZoneViz side={rule.side} />}
             <Card className="p-4">
               <BacktestPanel
                 result={backtestQ.data?.ok ? (backtestQ.data.result as Parameters<typeof BacktestPanel>[0]['result']) : null}

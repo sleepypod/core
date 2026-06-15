@@ -124,6 +124,34 @@ function cdToC(v: unknown): number | null {
   return v / 100
 }
 
+/**
+ * Unwrap a raw per-side capacitive payload into a flat channel array.
+ *
+ * Firmware shapes vary by pod: Pod 4/5 capSense2 sends `{ values: number[],
+ * status }`, Pod 3 capSense sends `{ out, cen, in }` (projected to the same
+ * 6-slot paired layout capSense2 uses), and some builds send a bare array or
+ * scalar. Returns null when nothing numeric is present so callers can skip.
+ */
+export function capSideChannels(v: unknown): number[] | null {
+  if (typeof v === 'number') return [v]
+  if (Array.isArray(v)) {
+    const nums = v.filter((x): x is number => typeof x === 'number')
+    return nums.length > 0 ? nums : null
+  }
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    if (Array.isArray(o.values)) {
+      const nums = (o.values as unknown[]).filter((x): x is number => typeof x === 'number')
+      return nums.length > 0 ? nums : null
+    }
+    if (typeof o.out === 'number' || typeof o.cen === 'number' || typeof o.in === 'number') {
+      const n = (x: unknown): number => (typeof x === 'number' ? x : 0)
+      return [n(o.out), n(o.out), n(o.cen), n(o.cen), n(o.in), n(o.in)]
+    }
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Normalizer
 // ---------------------------------------------------------------------------
