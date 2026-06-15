@@ -56,12 +56,23 @@ function Chart({ r }: { r: BacktestResult }) {
   const N = r.clockMin.length
   if (N < 2) return <div className="text-[12px] text-zinc-500 px-2 py-8 text-center">Not enough data in this window to replay.</div>
 
-  const W = 660, H = 188, mL = 38, mR = 42, mT = 14, mB = 22
-  const iw = W - mL - mR, ih = H - mT - mB
-  const x = (i: number) => mL + (i / (N - 1)) * iw
-
   // Policy overlays ambient + setpoint on one shared temperature scale.
   const policy = r.mode === 'policy'
+
+  const W = 660, mL = 38, mR = 42, mT = 14
+  const iw = W - mL - mR
+  // Edge mode reserves a dedicated event rail beneath the plot so the plot
+  // itself stays clean at any event density; policy keeps the original layout.
+  const plotH = 152
+  const ih = policy ? plotH : plotH - 2
+  const railGap = 8
+  const railH = 14
+  const railTop = mT + ih + railGap
+  const railBottom = railTop + railH
+  const labelY = policy ? mT + ih + 16 : railBottom + 11
+  const H = policy ? mT + ih + 22 : labelY + 5
+  const x = (i: number) => mL + (i / (N - 1)) * iw
+  const stepX = iw / (N - 1)
   const primA = r.primaryAxis
   const tempA = r.tempAxis ?? { min: 60, max: 80 }
   const sharedMin = policy ? Math.min(primA?.min ?? tempA.min, tempA.min) : tempA.min
@@ -110,6 +121,28 @@ function Chart({ r }: { r: BacktestResult }) {
   // time ticks at ~6 even index positions
   const tickIdx = Array.from({ length: 6 }, (_, k) => Math.round((k / 5) * (N - 1)))
 
+  // Collapse consecutive suppressed indices into cooldown runs so a dense
+  // burst reads as a single band rather than N stacked marks (edge only).
+  const cooldownBands: Array<[number, number]> = (() => {
+    if (policy || r.suppressed.length === 0) return []
+    const sorted = [...r.suppressed].sort((a, b) => a - b)
+    const runs: Array<[number, number]> = []
+    let s = sorted[0]
+    let p = sorted[0]
+    for (let k = 1; k < sorted.length; k++) {
+      const i = sorted[k]
+      if (i === p + 1) {
+        p = i
+        continue
+      }
+      runs.push([s, p])
+      s = i
+      p = i
+    }
+    runs.push([s, p])
+    return runs
+  })()
+
   return (
     <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2">
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
@@ -119,7 +152,7 @@ function Chart({ r }: { r: BacktestResult }) {
         {tickIdx.map((idx, i) => (
           <g key={i}>
             <line x1={x(idx)} x2={x(idx)} y1={mT} y2={mT + ih} stroke="#18181b" strokeWidth="1" />
-            <text x={x(idx)} y={H - 6} textAnchor="middle" className="mono" style={{ fontSize: 9, fill: '#71717a' }}>{minToClock(r.clockMin[idx])}</text>
+            <text x={x(idx)} y={labelY} textAnchor="middle" className="mono" style={{ fontSize: 9, fill: '#71717a' }}>{minToClock(r.clockMin[idx])}</text>
           </g>
         ))}
 
@@ -144,6 +177,13 @@ function Chart({ r }: { r: BacktestResult }) {
           ))
         })()}
 
+        {/* cooldown bands — one rect per suppressed run, padded half a step */}
+        {cooldownBands.map(([a, b], k) => {
+          const x0 = Math.max(mL, x(a) - stepX / 2)
+          const x1 = Math.min(W - mR, x(b) + stepX / 2)
+          return <rect key={`cb${k}`} x={x0} y={mT} width={Math.max(1, x1 - x0)} height={ih} fill="#71717a" opacity="0.07" />
+        })}
+
         {/* policy clamp band */}
         {policy && r.clamp && (
           <>
@@ -153,44 +193,49 @@ function Chart({ r }: { r: BacktestResult }) {
           </>
         )}
 
+        {/* fire zone — faint red tint above the threshold (edge) */}
+        {!policy && r.threshold != null && r.primaryAxis && (
+          <rect x={mL} y={mT} width={iw} height={Math.max(0, yPrimary(r.threshold) - mT)} fill="#ef4444" opacity="0.05" />
+        )}
+
         {/* threshold (edge) */}
         {!policy && r.threshold != null && r.primaryAxis && (
           <>
-            <line x1={mL} x2={W - mR} y1={yPrimary(r.threshold)} y2={yPrimary(r.threshold)} stroke="#ef4444" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.8" />
+            <line x1={mL} x2={W - mR} y1={yPrimary(r.threshold)} y2={yPrimary(r.threshold)} stroke="#ef4444" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.6" />
             <text x={W - mR + 3} y={yPrimary(r.threshold) + 3} className="mono" style={{ fontSize: 9, fill: '#ef4444' }}>{r.threshold}</text>
           </>
         )}
 
-        {/* primary raw trace */}
-        {r.primary && <path d={linePath(r.primary.values, yPrimary)} fill="none" stroke="#3f3f46" strokeWidth="1.3" />}
+        {/* primary raw trace — soft hairline behind the avg (edge) */}
+        {r.primary && <path d={linePath(r.primary.values, yPrimary)} fill="none" stroke="#3f3f46" strokeWidth={policy ? 1.3 : 1} opacity={policy ? 1 : 0.5} />}
         {/* policy raw (pre-clamp) ghost */}
         {policy && r.setpointRaw && <path d={linePath(r.setpointRaw, yTemp)} fill="none" stroke="#52525b" strokeWidth="1" strokeDasharray="3 3" />}
-        {/* windowed avg (edge) */}
-        {r.avg && <path d={linePath(r.avg.values, yPrimary)} fill="none" stroke="#d4d4d8" strokeWidth="1.8" />}
+        {/* windowed avg — brightest, heaviest trace (edge) */}
+        {r.avg && <path d={linePath(r.avg.values, yPrimary)} fill="none" stroke={policy ? '#d4d4d8' : '#fafafa'} strokeWidth={policy ? 1.8 : 2} />}
 
         {/* setpoint */}
         <path d={policy ? linePath(r.setpoint, yTemp) : stepPath} fill="none" stroke="var(--accent)" strokeWidth="2.1" />
 
-        {/* suppressed markers */}
-        {!policy && r.suppressed.map((i, k) => {
-          const av = r.avg?.values[i]
-          return (
-            <g key={`s${k}`}>
-              <line x1={x(i)} x2={x(i)} y1={mT} y2={mT + ih} stroke="#52525b" strokeWidth="1" strokeDasharray="2 3" opacity="0.5" />
-              {av != null && <circle cx={x(i)} cy={yPrimary(av)} r="2.5" fill="#52525b" />}
-            </g>
-          )
-        })}
-        {/* fire markers */}
+        {/* fire dots on the avg curve (edge) */}
         {!policy && r.fires.map((i, k) => {
           const yv = r.avg?.values[i] ?? r.primary?.values[i] ?? null
-          return (
-            <g key={`f${k}`}>
-              <line x1={x(i)} x2={x(i)} y1={mT} y2={mT + ih} stroke="#ef4444" strokeWidth="1" opacity="0.45" />
-              {yv != null && <circle cx={x(i)} cy={yPrimary(yv)} r="4" fill="#ef4444" stroke="#0a0a0b" strokeWidth="1.5" />}
-            </g>
-          )
+          return yv == null
+            ? null
+            : <circle key={`f${k}`} cx={x(i)} cy={yPrimary(yv)} r="4" fill="#ef4444" stroke="#0a0a0b" strokeWidth="1.5" />
         })}
+
+        {/* event rail — carries all event density so the plot stays clean (edge) */}
+        {!policy && (
+          <g>
+            <rect x={mL} y={railTop} width={iw} height={railH} rx={3} fill="#141417" stroke="#26262b" strokeWidth="1" />
+            {r.suppressed.map((i, k) => (
+              <line key={`rs${k}`} x1={x(i)} x2={x(i)} y1={railTop + 3.5} y2={railBottom - 3.5} stroke="#52525b" strokeWidth="1" opacity="0.8" />
+            ))}
+            {r.fires.map((i, k) => (
+              <line key={`rf${k}`} x1={x(i)} x2={x(i)} y1={railTop + 1.5} y2={railBottom - 1.5} stroke="#ef4444" strokeWidth="1.8" />
+            ))}
+          </g>
+        )}
 
         {/* axes labels */}
         {!policy && r.primaryAxis && (
@@ -248,7 +293,7 @@ export function BacktestPanel({
         <>
           <Chart r={r} />
           <div className="mt-3 flex items-center gap-3 flex-wrap text-[11px] text-zinc-400">
-            {r.avg && <Legend swatch="#d4d4d8">{r.avg.label}</Legend>}
+            {r.avg && <Legend swatch={r.mode === 'edge' ? '#fafafa' : '#d4d4d8'}>{r.avg.label}</Legend>}
             {r.primary && <Legend swatch="#3f3f46">{r.mode === 'policy' ? r.primary.label.toLowerCase() : `raw ${r.primary.label.toLowerCase()}`}</Legend>}
             {r.mode === 'policy' && r.setpointRaw && <Legend dashed swatch="#52525b">pre-clamp</Legend>}
             {r.mode === 'edge' && r.threshold != null && <Legend dashed swatch="#ef4444">threshold</Legend>}
@@ -256,7 +301,8 @@ export function BacktestPanel({
             {r.mode === 'edge' && (
               <>
                 <Dot color="#ef4444">fired</Dot>
-                <Dot color="#52525b">suppressed</Dot>
+                <Tick color="#52525b">suppressed</Tick>
+                <Block color="#71717a">cooldown</Block>
               </>
             )}
           </div>
@@ -295,6 +341,22 @@ function Dot({ color, children }: { color: string, children: React.ReactNode }) 
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+      {children}
+    </span>
+  )
+}
+function Tick({ color, children }: { color: string, children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="h-2.5 w-0.5" style={{ background: color }} />
+      {children}
+    </span>
+  )
+}
+function Block({ color, children }: { color: string, children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="h-2.5 w-3 rounded-sm" style={{ background: color, opacity: 0.18 }} />
       {children}
     </span>
   )

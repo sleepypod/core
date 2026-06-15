@@ -186,15 +186,44 @@ export function Select({ value, options, onChange, placeholder = 'Select…', cl
 }
 
 export function NumberField({ value, onChange, step = 1, suffix = '', width = 84 }: { value: number, onChange: (v: number) => void, step?: number, suffix?: string, width?: number }) {
+  // Draft string keeps the field freely typeable (empty/partial entries) while
+  // the numeric value flows up only once it parses; the +/- buttons reuse it.
+  // Re-sync the draft during render whenever the external value changes.
+  const [draft, setDraft] = useState(String(value))
+  const [syncedValue, setSyncedValue] = useState(value)
+  if (value !== syncedValue) {
+    setSyncedValue(value)
+    setDraft(String(value))
+  }
+
+  // Reset the draft when stepping so stale text can't survive a parent that
+  // clamps back to the same numeric value (no render-time re-sync fires then).
+  const applyStep = (delta: number) => {
+    setDraft(String(value))
+    onChange(value + delta)
+  }
+
   return (
-    <div className="inline-flex items-stretch rounded-lg border border-zinc-700/70 bg-zinc-900/70 overflow-hidden" style={{ width }}>
-      <button type="button" onClick={() => onChange(value - step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Minus size={13} /></button>
-      <div className="flex-1 flex items-center justify-center mono text-[13px] text-zinc-100 tabular-nums">
-        {value}
-        {suffix}
-      </div>
-      <button type="button" onClick={() => onChange(value + step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Plus size={13} /></button>
-    </div>
+    <span className="inline-flex items-center gap-1.5">
+      <span className="inline-flex items-stretch rounded-lg border border-zinc-700/70 bg-zinc-900/70 overflow-hidden" style={{ width }}>
+        <button type="button" onClick={() => applyStep(-step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Minus size={13} /></button>
+        <input
+          type="text"
+          inputMode="numeric"
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            const n = Number(e.target.value)
+            if (e.target.value.trim() !== '' && Number.isFinite(n)) onChange(n)
+          }}
+          onBlur={() => setDraft(String(value))}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+          className="min-w-0 flex-1 bg-transparent px-1 text-center mono text-[13px] text-zinc-100 tabular-nums focus:outline-none"
+        />
+        <button type="button" onClick={() => applyStep(step)} className="px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><Icon.Plus size={13} /></button>
+      </span>
+      {suffix && <span className="text-[12px] text-zinc-500">{suffix}</span>}
+    </span>
   )
 }
 
