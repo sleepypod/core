@@ -158,6 +158,8 @@ function ReplayZones({ side, nightId }: { side: 'left' | 'right', nightId: numbe
         <button
           type="button"
           onClick={() => setPlaying(p => !p)}
+          aria-label={playing ? 'Pause replay' : 'Play replay'}
+          aria-pressed={playing}
           className="grid h-6 w-6 place-items-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
         >
           {playing ? <Icon.Pause size={13} /> : <Icon.Play size={13} />}
@@ -166,6 +168,7 @@ function ReplayZones({ side, nightId }: { side: 'left' | 'right', nightId: numbe
       </div>
       <input
         type="range"
+        aria-label="Replay frame"
         min={0}
         max={frames.length - 1}
         value={clamped}

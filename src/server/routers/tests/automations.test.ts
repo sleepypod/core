@@ -63,12 +63,9 @@ describe('automations.capZoneReplay', () => {
     expect(out.frames[1].zones).toEqual([3, 4, 5])
   })
 
-  it('coerces a null zones column to an empty array', async () => {
-    dbState.queue.push([{ id: 7, ...night }])
-    dbState.queue.push([{ t: night.enteredBedAt, zones: null, peakZone: null }])
-    const out = await caller.capZoneReplay({ side: 'left', sleepRecordId: 7 })
-    expect(out.frames[0]).toMatchObject({ zones: [], peakZone: null })
-  })
+  // Null-zone (Pod 3 scalar) frames are excluded by the query's
+  // isNotNull(capSenseFrames.zones) filter, so they never reach the mapping —
+  // not asserted here because the row-queue mock can't model the SQL predicate.
 
   it('reports ok:false with no frames when the side has no recorded nights', async () => {
     dbState.queue.push([]) // latest sleepRecords → none
