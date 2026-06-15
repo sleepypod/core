@@ -72,6 +72,12 @@ export const Icon = {
   ChevDown: mk(<polyline points="6 9 12 15 18 9" />),
   ChevRight: mk(<polyline points="9 6 15 12 9 18" />),
   Play: mk(<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none" />),
+  Pause: mk(
+    <>
+      <rect x="6" y="4" width="4" height="16" fill="currentColor" stroke="none" />
+      <rect x="14" y="4" width="4" height="16" fill="currentColor" stroke="none" />
+    </>,
+  ),
   List: mk(
     <>
       <line x1="8" y1="6" x2="21" y2="6" />

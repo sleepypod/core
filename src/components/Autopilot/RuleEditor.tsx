@@ -365,7 +365,7 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
               </div>
             )}
             <SentencePreview rule={rule} />
-            {usesCapSignal && <CapZoneViz side={rule.side} />}
+            {usesCapSignal && <CapZoneViz side={rule.side} backtestSide={backtestSide} nightId={nightId} />}
             <Card className="p-4">
               <BacktestPanel
                 result={backtestQ.data?.ok ? (backtestQ.data.result as Parameters<typeof BacktestPanel>[0]['result']) : null}

@@ -13,11 +13,11 @@
 
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
-import { and, desc, eq, gte, lte } from 'drizzle-orm'
+import { and, desc, eq, gte, isNotNull, lte } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { automationRuns, automations, deviceSettings } from '@/src/db/schema'
-import { ambientLight, bedTemp, freezerTemp, movement, sleepRecords, vitals, waterLevelReadings } from '@/src/db/biometrics-schema'
+import { ambientLight, bedTemp, capSenseFrames, freezerTemp, movement, sleepRecords, vitals, waterLevelReadings } from '@/src/db/biometrics-schema'
 import { centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
 import {
   automationActionSchema,
@@ -352,6 +352,50 @@ export const automationsRouter = router({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Backtest failed: ${msg(error)}`, cause: error })
       }
     }),
+
+  /**
+   * Spatial zone replay for a chosen night: the per-window [head, torso, legs]
+   * presence loads persisted to cap_sense_frames, downsampled to a frame budget
+   * so a full night stays a light payload the zone viz can scrub. Frames with no
+   * spatial resolution (Pod 3 scalar sensor → null zones) are skipped.
+   */
+  capZoneReplay: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/automations/cap-zone-replay', protect: false, tags: ['Autopilot'] } })
+    .input(z.object({
+      side: z.enum(['left', 'right']),
+      sleepRecordId: idSchema.optional(),
+      maxFrames: z.number().int().min(10).max(1000).default(300),
+    }).strict())
+    .output(z.object({
+      ok: z.boolean(),
+      night: z.object({ label: z.string(), date: z.string() }).nullable(),
+      frames: z.array(z.object({
+        tMs: z.number(),
+        zones: z.array(z.number()),
+        peakZone: z.number().nullable(),
+      })),
+    }))
+    .query(({ input }) => {
+      const window = resolveNight(input.side, input.sleepRecordId)
+      if (!window) return { ok: false, night: null, frames: [] }
+      const rows = biometricsDb
+        .select({ t: capSenseFrames.timestamp, zones: capSenseFrames.zones, peakZone: capSenseFrames.peakZone })
+        .from(capSenseFrames)
+        .where(and(
+          eq(capSenseFrames.side, input.side),
+          gte(capSenseFrames.timestamp, new Date(window.startMs)),
+          lte(capSenseFrames.timestamp, new Date(window.endMs)),
+          isNotNull(capSenseFrames.zones),
+        ))
+        .orderBy(capSenseFrames.timestamp)
+        .all()
+      // Stride to the frame budget — evenly spaced, always keeping the first row.
+      const stride = Math.max(1, Math.ceil(rows.length / input.maxFrames))
+      const frames = rows
+        .filter((_, i) => i % stride === 0)
+        .map(r => ({ tMs: r.t.getTime(), zones: (r.zones as number[] | null) ?? [], peakZone: r.peakZone }))
+      return { ok: true, night: { label: window.label, date: window.date }, frames }
+    }),
 })
 
 // ---------------------------------------------------------------------------
@@ -480,6 +524,18 @@ function loadSeries(side: 'left' | 'right', startMs: number, endMs: number): Rec
     .orderBy(waterLevelReadings.timestamp)
     .all()
   series['water.low'] = wl.map(r => ({ t: r.t.getTime(), v: r.level === 'low' ? 1 : 0 }))
+
+  // Capacitive pressure reducers from the downsampled cap-frame history (~5s
+  // windows). cap.peakZone stays out — it's a spatial index, not an engine signal.
+  const cf = biometricsDb
+    .select({ t: capSenseFrames.timestamp, max: capSenseFrames.max, mean: capSenseFrames.mean, spread: capSenseFrames.spread })
+    .from(capSenseFrames)
+    .where(and(eq(capSenseFrames.side, side), gte(capSenseFrames.timestamp, start), lte(capSenseFrames.timestamp, end)))
+    .orderBy(capSenseFrames.timestamp)
+    .all()
+  series[`${side}.cap.max`] = cf.map(r => ({ t: r.t.getTime(), v: r.max }))
+  series[`${side}.cap.mean`] = cf.map(r => ({ t: r.t.getTime(), v: r.mean }))
+  series[`${side}.cap.spread`] = cf.map(r => ({ t: r.t.getTime(), v: r.spread }))
 
   return series
 }
