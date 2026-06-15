@@ -853,8 +853,8 @@ fi
 # ============================================================================
 # Install Node.js via binary download (works on any Linux, no apt required)
 # ============================================================================
-NODE_WANTED=22
-NODE_FULL="22.17.0"
+NODE_WANTED=24
+NODE_FULL="24.16.0"
 NODE_DIR="/usr/local/lib/nodejs"
 
 # Detect architecture
