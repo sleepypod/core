@@ -908,6 +908,12 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
   const server = wss
   if (server) {
     wss = null
+    // `server.close()` only fires its callback once every client has
+    // disconnected; a still-open socket would hang shutdown forever. Drop
+    // them eagerly so close always completes.
+    for (const client of server.clients) {
+      client.terminate()
+    }
     return new Promise<void>((resolve) => {
       server.close(() => {
         // Drop per-client state explicitly — relying on per-socket close

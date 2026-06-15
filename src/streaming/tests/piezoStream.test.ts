@@ -452,6 +452,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await shutdownPiezoStreamServer()
   })
 
+  // IMPORTANT: write RAW data only AFTER the client has connected. The tailing
+  // loop broadcasts live frames to currently-connected clients only (no
+  // backfill) and advances its read offset to EOF on the first tick. Writing
+  // before connect races that first tick — under load the loop consumes the
+  // file before the socket attaches and the frames are lost for good. Appending
+  // post-connect mirrors production (firmware appends while clients stream).
   function startAndPort(): number {
     const wss = startPiezoStreamServer()
     const addr = wss.address()
@@ -542,14 +548,13 @@ describe('piezoStream — server lifecycle and protocol', () => {
   })
 
   it('streams parsed frames to subscribed clients and updates the time-range index', async () => {
-    // Pre-populate a RAW file so the streaming loop can pick it up immediately.
     const filePath = path.join(tmpRawDir, 'first.RAW')
     const rec1 = buildOuterRecord(1, [{ type: 'capSense', ts: 100, left: 0, right: 0 }])
     const rec2 = buildOuterRecord(2, [{ type: 'capSense2', ts: 101, left: { values: [1, 2] }, right: { values: [3, 4] } }])
-    fs.writeFileSync(filePath, Buffer.concat([rec1, rec2]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([rec1, rec2]))
 
     const cap = await client.waitFor(m => m.type === 'capSense' && m.ts === 100)
     expect(cap.left).toBe(0)
@@ -573,10 +578,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
       left1: int32Buffer([1, 2, 3]),
       right1: int32Buffer([4, 5, 6]),
     }])
-    fs.writeFileSync(filePath, rec)
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     const piezo = await client.waitFor(m => m.type === 'piezo-dual', 3000)
     expect(piezo.left1).toEqual([1, 2, 3])
     expect(piezo.right1).toEqual([4, 5, 6])
@@ -596,10 +601,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
         right: i,
       }]))
     }
-    fs.writeFileSync(filePath, Buffer.concat(records))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(records))
     // Drain initial live frames before seeking.
     await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 5)
 
@@ -617,10 +622,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'filter.RAW')
     const recA = buildOuterRecord(1, [{ type: 'capSense', ts: 300, left: 0, right: 0 }])
     const recB = buildOuterRecord(2, [{ type: 'log', ts: 301, level: 1, msg: 'x' }])
-    fs.writeFileSync(filePath, Buffer.concat([recA, recB]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([recA, recB]))
     await waitUntil(() => client.messages.some(m => m.type === 'log'))
 
     // Subscribe to only capSense, then seek.
@@ -643,10 +648,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const good1 = buildOuterRecord(1, [{ type: 'capSense', ts: 400, left: 0, right: 0 }])
     const garbage = Buffer.from([0xff, 0xff, 0xff, 0xff, 0x00])
     const good2 = buildOuterRecord(2, [{ type: 'capSense', ts: 401, left: 1, right: 1 }])
-    fs.writeFileSync(filePath, Buffer.concat([good1, garbage, good2]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([good1, garbage, good2]))
 
     await client.waitFor(m => m.type === 'capSense' && m.ts === 400)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 401)
@@ -657,12 +662,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'snapshot-a.RAW')
     const channels = [14.5, 14.4, 13.7, 13.6, 19.4, 19.2, 1.157, 1.157]
     const rec = buildOuterRecord(1, [{ type: 'capSense2', ts: 999, left: channels, right: channels }])
-    fs.writeFileSync(filePath, rec)
     const past = Date.now() / 1000 - 60
-    fs.utimesSync(filePath, past, past)
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
+    fs.utimesSync(filePath, past, past)
     await client.waitFor(m => m.type === 'capSense2' && m.ts === 999, 3000)
 
     const snap = getLatestCapSenseSnapshot()
@@ -686,10 +691,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'snapshot-bad.RAW')
     // Missing ts → snapshot block's type guard rejects the frame.
     const rec = buildOuterRecord(1, [{ type: 'capSense', left: 1, right: 2 }])
-    fs.writeFileSync(filePath, rec)
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     await client.waitFor(m => m.type === 'capSense', 3000)
     expect(getLatestCapSenseSnapshot()).toBeNull()
     await client.close()
@@ -698,12 +703,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
   it('switches to a newer .RAW file when one appears with a later mtime', async () => {
     // Older file with a single frame.
     const oldPath = path.join(tmpRawDir, 'old.RAW')
-    fs.writeFileSync(oldPath, buildOuterRecord(1, [{ type: 'capSense', ts: 500, left: 0, right: 0 }]))
     const past = Date.now() / 1000 - 60
-    fs.utimesSync(oldPath, past, past)
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(oldPath, buildOuterRecord(1, [{ type: 'capSense', ts: 500, left: 0, right: 0 }]))
+    fs.utimesSync(oldPath, past, past)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 500)
 
     // Newer file appears.
@@ -764,10 +769,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     // empty-placeholder branch executes and the loop continues.
     const empty = Buffer.from([0xa2, 0x63, 0x73, 0x65, 0x71, 0x01, 0x64, 0x64, 0x61, 0x74, 0x61, 0x40])
     const real = buildOuterRecord(2, [{ type: 'capSense', ts: 800, left: 0, right: 0 }])
-    fs.writeFileSync(filePath, Buffer.concat([empty, real]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([empty, real]))
     await client.waitFor(m => m.type === 'capSense' && m.ts === 800)
     await client.close()
   })
@@ -778,10 +783,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     // Trailing bytes contain NO 0xa2 marker — exercises the "no marker found"
     // branch where the parser drops the rest of the buffer.
     const trailing = Buffer.alloc(64, 0xff)
-    fs.writeFileSync(filePath, Buffer.concat([good, trailing]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([good, trailing]))
     await client.waitFor(m => m.type === 'capSense' && m.ts === 900)
     // Stream should continue working — append a fresh good record and confirm
     // it still gets parsed (the file follower carries on past the resync).
@@ -801,13 +806,13 @@ describe('piezoStream — server lifecycle and protocol', () => {
       right: { tec: { current: 2 }, pump: { mode: 'pwm', rpm: 0, water: true } },
       fan: { top: { rpm: 100 } },
     }])
-    fs.writeFileSync(filePath, rec)
 
     const cb = vi.fn()
     const unsub = onServerFrame(cb)
     try {
       const port = startAndPort()
       const client = await connectClient(port)
+      fs.writeFileSync(filePath, rec)
       await client.waitFor(m => m.type === 'frzHealth')
       expect(cb).toHaveBeenCalled()
       const arg = cb.mock.calls[0][0] as Record<string, unknown>
@@ -829,7 +834,6 @@ describe('piezoStream — server lifecycle and protocol', () => {
       right: { tec: { current: 2 }, pump: { mode: 'pwm', rpm: 0, water: true } },
       fan: { top: { rpm: 100 } },
     }])
-    fs.writeFileSync(filePath, rec)
 
     const a = vi.fn(() => {
       throw new Error('listener boom')
@@ -840,6 +844,7 @@ describe('piezoStream — server lifecycle and protocol', () => {
     try {
       const port = startAndPort()
       const client = await connectClient(port)
+      fs.writeFileSync(filePath, rec)
       await client.waitFor(m => m.type === 'frzHealth')
       expect(a).toHaveBeenCalled()
       expect(b).toHaveBeenCalled()
@@ -862,9 +867,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
       left2: int32Buffer([3]),
       right2: int32Buffer([4]),
     }])
-    fs.writeFileSync(filePath, rec)
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     const piezo = await client.waitFor(m => m.type === 'piezo-dual', 3000)
     expect(piezo.left2).toEqual([3])
     expect(piezo.right2).toEqual([4])
@@ -880,10 +885,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
       buildOuterRecord(2, [{ type: 'capSense', ts: 5001, left: 1, right: 1 }]),
       buildOuterRecord(3, [{ type: 'capSense', ts: 5050, left: 9, right: 9 }]),
     ]
-    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
     await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 3)
 
     const before = client.messages.length
@@ -898,9 +903,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
   it('seek treats a target before the earliest indexed frame as the first entry', async () => {
     const filePath = path.join(tmpRawDir, 'before.RAW')
     const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 6000, left: 0, right: 0 }])
-    fs.writeFileSync(filePath, rec)
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 6000)
 
     // Target slightly before earliest indexed frame, but within the seek window.
@@ -921,9 +926,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
       left1: Buffer.alloc(0),
       right1: Buffer.from([1, 0]), // partial — fewer than 4 bytes
     }])
-    fs.writeFileSync(filePath, rec)
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     const piezo = await client.waitFor(m => m.type === 'piezo-dual', 3000)
     expect(piezo.left1).toEqual([])
     expect(piezo.right1).toEqual([])
@@ -944,9 +949,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
       Buffer.from([0x64, 0x64, 0x61, 0x74, 0x61]),
       encodeByteStringExposed(inner),
     ])
-    fs.writeFileSync(filePath, rec)
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 1401, 3000)
     expect(client.messages.find(m => m.foo === 'bar')).toBeUndefined()
     await client.close()
@@ -983,12 +988,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'partial.RAW')
     const full = buildOuterRecord(1, [{ type: 'capSense', ts: 1600, left: 0, right: 0 }])
     const next = buildOuterRecord(2, [{ type: 'capSense', ts: 1601, left: 1, right: 1 }])
-    // Write the first record + half of the second so readRawRecord throws
-    // RangeError in the middle of decoding the second record.
-    fs.writeFileSync(filePath, Buffer.concat([full, next.subarray(0, Math.floor(next.length / 2))]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    // Write the first record + half of the second so readRawRecord throws
+    // RangeError in the middle of decoding the second record.
+    fs.writeFileSync(filePath, Buffer.concat([full, next.subarray(0, Math.floor(next.length / 2))]))
     await client.waitFor(m => m.type === 'capSense' && m.ts === 1600)
 
     // Now append the rest of the second record. The follower retries on the
@@ -1003,10 +1008,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const real1 = buildOuterRecord(1, [{ type: 'capSense', ts: 1700, left: 0, right: 0 }])
     const placeholder = Buffer.from([0xa2, 0x63, 0x73, 0x65, 0x71, 0x02, 0x64, 0x64, 0x61, 0x74, 0x61, 0x40])
     const real2 = buildOuterRecord(3, [{ type: 'capSense', ts: 1701, left: 1, right: 1 }])
-    fs.writeFileSync(filePath, Buffer.concat([real1, placeholder, real2]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([real1, placeholder, real2]))
     await waitUntil(() => client.messages.some(m => m.type === 'capSense' && m.ts === 1701))
 
     const before = client.messages.length
@@ -1025,10 +1030,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     for (let i = 0; i < 100; i++) {
       recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 1800 + i, left: i, right: i }]))
     }
-    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
     await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 100)
 
     client.ws.send(JSON.stringify({ type: 'seek', timestamp: 1800 }))
@@ -1044,10 +1049,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     for (let i = 0; i < 5; i++) {
       recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 1900 + i, left: i, right: i }]))
     }
-    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
     // Wait for the file to be indexed (at least one frame).
     await waitUntil(() => client.messages.some(m => m.type === 'capSense'), 3000)
 
@@ -1071,7 +1076,6 @@ describe('piezoStream — server lifecycle and protocol', () => {
     for (let i = 0; i < 10; i++) {
       recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 2000 + i, left: i, right: i }]))
     }
-    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     const port = startAndPort()
     const client = await connectClient(port)
@@ -1080,6 +1084,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await waitUntil(() => wss.clients.size > 0, 1000)
     const serverSocket = [...wss.clients][0] as any
     Object.defineProperty(serverSocket, 'bufferedAmount', { get: () => 2 * MAX_BUFFERED_BYTES })
+
+    // Backpressure is in place — now append frames so each live broadcast is
+    // dropped against the (mocked) full send buffer.
+    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     // Wait until at least one drop is recorded for this client.
     await waitUntil(
