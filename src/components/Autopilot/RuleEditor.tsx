@@ -343,17 +343,17 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
             <IfEditor rule={rule} set={setRule} />
             <div className="flex justify-center"><Icon.ArrowDown size={16} className="text-zinc-700" /></div>
             <ThenEditor rule={rule} set={setRule} liveAmbient={liveAmbient} />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto bg-zinc-950/40 p-5">
+          <div className="mx-auto flex max-w-2xl flex-col gap-4">
             {rule.mode === 'dryrun' && (
               <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-400">
                 <Icon.Flask size={14} />
                 Dry-run: Autopilot logs what it would do but never touches hardware.
               </div>
             )}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto bg-zinc-950/40 p-5">
-          <div className="mx-auto flex max-w-2xl flex-col gap-4">
             <SentencePreview rule={rule} />
             <Card className="p-4">
               <BacktestPanel
