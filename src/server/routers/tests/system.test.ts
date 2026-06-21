@@ -75,6 +75,39 @@ function queueExec(matcher: (file: string, args: string[]) => boolean, response:
   })
 }
 
+interface ExecCall { file: string, args: string[], options: Record<string, unknown> | undefined }
+
+/**
+ * Records every execFile invocation (file + args + options) so tests can assert
+ * the *exact* commands the router shells out — this is what kills the large
+ * cluster of StringLiteral / ArrayDeclaration / ObjectLiteral mutants on the
+ * df / du / iptables / journalctl / systemctl / nmcli calls. The `responder`
+ * returns the stdout string for a given (file, args).
+ *
+ * promisify(execFile) calls the mock as (file, args, options, cb) when options
+ * are passed, (file, args, cb) with args only, or (file, cb) with neither — so
+ * options live at index 2 only when there are 4 positional arguments.
+ */
+function recordExec(responder: (file: string, args: string[]) => string = () => ''): ExecCall[] {
+  const calls: ExecCall[] = []
+  execMock.execFile.mockImplementation((...allArgs: unknown[]) => {
+    const file = allArgs[0] as string
+    const args = Array.isArray(allArgs[1]) ? (allArgs[1] as string[]) : []
+    const options = allArgs.length === 4 ? (allArgs[2] as Record<string, unknown>) : undefined
+    const cb = allArgs[allArgs.length - 1] as (e: unknown, o: { stdout: string }) => void
+    calls.push({ file, args, options })
+    cb(null, { stdout: responder(file, args) })
+  })
+  return calls
+}
+
+// Find the first recorded call to a given binary, asserting it happened.
+function callTo(calls: ExecCall[], file: string): ExecCall {
+  const c = calls.find(call => call.file === file)
+  if (!c) throw new Error(`expected an execFile call to "${file}", saw: ${calls.map(x => x.file).join(', ')}`)
+  return c
+}
+
 describe('system.internetStatus', () => {
   it('returns blocked=true when iptables -L OUTPUT shows DROP', async () => {
     queueExec(
@@ -215,6 +248,7 @@ describe('system.triggerUpdate', () => {
     )
     expect(result.triggered).toBe(true)
     expect(result.branch).toBe('feature/cool')
+    expect(result.message).toMatch(/Update started/)
   })
 
   it('defaults branch to "main" when omitted', async () => {
@@ -240,8 +274,9 @@ describe('system.triggerUpdate', () => {
     // Invoke the registered error handler — must not throw (only logs).
     const handler = onSpy.mock.calls.find(c => c[0] === 'error')?.[1] as (e: Error) => void
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(() => handler(new Error('ENOENT'))).not.toThrow()
-    expect(errSpy).toHaveBeenCalled()
+    const bootErr = new Error('ENOENT')
+    expect(() => handler(bootErr)).not.toThrow()
+    expect(errSpy).toHaveBeenCalledWith('[system.triggerUpdate] sp-update spawn failed:', bootErr)
     errSpy.mockRestore()
   })
 
@@ -349,6 +384,16 @@ describe('system.getLogs', () => {
     await expect(
       caller.getLogs({ unit: 'sleepypod.service', lines: 10 }),
     ).rejects.toThrow(/Failed to read logs/)
+  })
+
+  it('labels a non-Error journalctl failure as "Unknown error"', async () => {
+    execMock.execFile.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, o: { stdout: string }) => void
+      cb('weird non-error failure', { stdout: '' })
+    })
+    await expect(
+      caller.getLogs({ unit: 'sleepypod.service', lines: 10 }),
+    ).rejects.toThrow(/Unknown error/)
   })
 
   it('returns nextCursor=null when journalctl omits the cursor line but more entries exist', async () => {
@@ -475,5 +520,232 @@ describe('system.getVersion', () => {
       branch: 'unknown', commitHash: 'unknown',
       commitTitle: 'unknown', buildDate: 'unknown',
     })
+  })
+
+  it('reads the build manifest from ".git-info" as utf-8', async () => {
+    fsPromisesMock.readFile.mockResolvedValueOnce('{}')
+    await caller.getVersion({})
+    expect(fsPromisesMock.readFile).toHaveBeenCalledWith('.git-info', 'utf-8')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Exact-command assertions.
+//
+// The behavioural tests above pin *what comes back*; the blocks below pin
+// *what gets executed* — the literal binary names, argument vectors, and
+// option objects. These exist to kill the StringLiteral / ArrayDeclaration /
+// ObjectLiteral / Regex / arithmetic mutants that survive when only outputs
+// are checked (see the mutation-testing baseline, issue #591).
+// ---------------------------------------------------------------------------
+
+describe('system.internetStatus — command + DROP-rule matching', () => {
+  it('inspects the OUTPUT chain via `iptables -L OUTPUT -n`', async () => {
+    const calls = recordExec(() => '')
+    await caller.internetStatus({})
+    expect(callTo(calls, 'iptables').args).toEqual(['-L', 'OUTPUT', '-n'])
+  })
+
+  it('treats only a line that STARTS with DROP as blocked (anchored ^)', async () => {
+    // A DROP appearing mid-line (e.g. a reject target) must NOT count.
+    recordExec(() => 'ACCEPT all -- 0.0.0.0/0 reject-with DROP\n')
+    const result = await caller.internetStatus({})
+    expect(result.blocked).toBe(false)
+  })
+
+  it('requires a word boundary after DROP (DROPLET is not a DROP rule)', async () => {
+    recordExec(() => 'DROPLET all -- 0.0.0.0/0\n')
+    const result = await caller.internetStatus({})
+    expect(result.blocked).toBe(false)
+  })
+})
+
+describe('system.setInternetAccess — exact iptables sequences', () => {
+  it('unblock flushes the filter + nat tables in order after saving rules', async () => {
+    const calls = recordExec(file => (file === 'iptables-save' ? 'saved\n' : ''))
+    await caller.setInternetAccess({ blocked: false })
+
+    // The final isWanBlocked() check also runs `iptables -L OUTPUT -n` — drop it.
+    const seq = calls.filter(c => c.file === 'iptables' && !c.args.includes('-L')).map(c => c.args)
+    expect(seq).toEqual([
+      ['-F'],
+      ['-X'],
+      ['-t', 'nat', '-F'],
+      ['-t', 'nat', '-X'],
+    ])
+    expect(calls.some(c => c.file === 'iptables-save')).toBe(true)
+  })
+
+  it('block applies the complete LAN-only ruleset in the documented order', async () => {
+    const calls = recordExec((file, args) => {
+      if (file === 'iptables-save') return 'saved-rules\n'
+      if (file === 'iptables' && args.includes('-L') && args.includes('OUTPUT')) return 'DROP all -- 0.0.0.0/0\n'
+      return ''
+    })
+
+    const result = await caller.setInternetAccess({ blocked: true })
+    expect(result.blocked).toBe(true)
+
+    const seq = calls.filter(c => c.file === 'iptables' && !c.args.includes('-L')).map(c => c.args)
+    expect(seq).toEqual([
+      ['-F'],
+      ['-X'],
+      ['-t', 'nat', '-F'],
+      ['-t', 'nat', '-X'],
+      ['-I', 'INPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT'],
+      ['-I', 'OUTPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT'],
+      ['-A', 'INPUT', '-s', '10.0.0.0/8', '-j', 'ACCEPT'],
+      ['-A', 'OUTPUT', '-d', '10.0.0.0/8', '-j', 'ACCEPT'],
+      ['-A', 'INPUT', '-s', '172.16.0.0/12', '-j', 'ACCEPT'],
+      ['-A', 'OUTPUT', '-d', '172.16.0.0/12', '-j', 'ACCEPT'],
+      ['-A', 'INPUT', '-s', '192.168.0.0/16', '-j', 'ACCEPT'],
+      ['-A', 'OUTPUT', '-d', '192.168.0.0/16', '-j', 'ACCEPT'],
+      ['-I', 'OUTPUT', '-p', 'udp', '--dport', '123', '-j', 'ACCEPT'],
+      ['-I', 'INPUT', '-p', 'udp', '--sport', '123', '-j', 'ACCEPT'],
+      ['-A', 'INPUT', '-i', 'lo', '-j', 'ACCEPT'],
+      ['-A', 'OUTPUT', '-o', 'lo', '-j', 'ACCEPT'],
+      ['-A', 'INPUT', '-j', 'DROP'],
+      ['-A', 'OUTPUT', '-j', 'DROP'],
+    ])
+    // Rules are persisted from the iptables-save output.
+    expect(fsPromisesMock.writeFile).toHaveBeenCalledWith('/etc/iptables/iptables.rules', 'saved-rules\n')
+  })
+})
+
+describe('system.wifiStatus — exact command', () => {
+  it('queries nmcli in terse mode for ACTIVE,SSID,SIGNAL', async () => {
+    const calls = recordExec(() => 'yes:Home:80\n')
+    await caller.wifiStatus({})
+    expect(callTo(calls, 'nmcli').args).toEqual(['-t', '-f', 'ACTIVE,SSID,SIGNAL', 'dev', 'wifi'])
+  })
+})
+
+describe('system.getLogSources — exact command', () => {
+  it('runs `systemctl is-active --quiet <unit>` for every tracked unit', async () => {
+    const calls = recordExec(() => '')
+    await caller.getLogSources({})
+    const units = calls.filter(c => c.file === 'systemctl').map(c => c.args)
+    expect(units).toContainEqual(['is-active', '--quiet', 'sleepypod.service'])
+    expect(units).toContainEqual(['is-active', '--quiet', 'sleepypod-piezo-processor.service'])
+    expect(units).toContainEqual(['is-active', '--quiet', 'sleepypod-sleep-detector.service'])
+    expect(units).toContainEqual(['is-active', '--quiet', 'sleepypod-environment-monitor.service'])
+    expect(units).toHaveLength(4)
+  })
+
+  it('pairs each unit with its human-readable name', async () => {
+    recordExec(() => '')
+    const result = await caller.getLogSources({})
+    // Pins the display-name string literals, not just the unit ids.
+    expect(result.sources).toEqual([
+      { unit: 'sleepypod.service', name: 'Core', active: true },
+      { unit: 'sleepypod-piezo-processor.service', name: 'Piezo Processor', active: true },
+      { unit: 'sleepypod-sleep-detector.service', name: 'Sleep Detector', active: true },
+      { unit: 'sleepypod-environment-monitor.service', name: 'Environment Monitor', active: true },
+    ])
+  })
+})
+
+describe('system.getLogs — exact command + options', () => {
+  it('builds the journalctl base args, fetches lines+1, and sets timeout/maxBuffer', async () => {
+    const calls = recordExec(() => 'a\n-- cursor: s=z\n')
+    await caller.getLogs({ unit: 'sleepypod.service', lines: 100 })
+    const c = callTo(calls, 'journalctl')
+    // lines + 1 = 101 (the extra line is how "hasMore" is detected).
+    expect(c.args).toEqual([
+      '-u', 'sleepypod.service',
+      '-n', '101',
+      '--no-pager',
+      '--output', 'short-iso',
+      '--show-cursor',
+    ])
+    expect(c.options).toEqual({ timeout: 10000, maxBuffer: 5 * 1024 * 1024 })
+  })
+
+  it('does NOT paginate when the line count exactly equals the requested limit', async () => {
+    // Exactly `lines` entries (+ cursor) → hasMore must be false. A `>=`
+    // mutant on the `logLines.length > input.lines` check would wrongly
+    // page here and surface a cursor.
+    queueExec(
+      file => file === 'journalctl',
+      { stdout: 'line1\nline2\n-- cursor: s=abc\n' },
+    )
+    const result = await caller.getLogs({ unit: 'sleepypod.service', lines: 2 })
+    expect(result.lines).toEqual(['line2', 'line1'])
+    expect(result.nextCursor).toBeNull()
+  })
+})
+
+describe('system.getDiskUsage — exact command + whitespace/percent edges', () => {
+  it('invokes `df -B1 /` with a 5000ms timeout', async () => {
+    const calls = recordExec(file => (file === 'df'
+      ? 'Filesystem 1B-blocks Used Available Use% Mounted on\n/dev/root 1000 200 800 20% /\n'
+      : ''))
+    await caller.getDiskUsage({})
+    const c = callTo(calls, 'df')
+    expect(c.args).toEqual(['-B1', '/'])
+    expect(c.options).toEqual({ timeout: 5000 })
+  })
+
+  it('splits columns on RUNS of whitespace, not single chars', async () => {
+    // Real df pads columns with multiple spaces. A /\s/ (non-greedy) mutant
+    // would yield empty fields and mis-parse every number.
+    recordExec(() => 'Filesystem     1B-blocks      Used  Available Use% Mounted\n/dev/root      1000       200        800  20% /\n')
+    const result = await caller.getDiskUsage({})
+    expect(result.totalBytes).toBe(1000)
+    expect(result.usedBytes).toBe(200)
+    expect(result.availableBytes).toBe(800)
+    expect(result.usedPercent).toBe(20)
+  })
+
+  it('returns usedPercent=0 (not Infinity) when totalBytes is 0', async () => {
+    // Guards the `totalBytes > 0 ? … : 0` branch: a `>= 0`/`true` mutant would
+    // divide by zero and surface Infinity.
+    recordExec(() => 'Filesystem 1B-blocks Used Available Use% Mounted\noverlay 0 5 0 0% /\n')
+    const result = await caller.getDiskUsage({})
+    expect(result.totalBytes).toBe(0)
+    expect(result.usedPercent).toBe(0)
+  })
+})
+
+describe('system.getStorageBreakdown — exact commands', () => {
+  it('queries df per-mount and du for the archive, each with a 5000ms timeout', async () => {
+    const calls = recordExec((file, args) => {
+      if (file === 'df' && args.includes('/persistent') && !args.includes('/persistent/biometrics'))
+        return 'Filesystem 1B-blocks Used Available Use% Mounted\n/dev/mmcblk0   2000   500   1500 25% /persistent\n'
+      if (file === 'df' && args.includes('/persistent/biometrics'))
+        return 'Filesystem 1B-blocks Used Available Use% Mounted\ntmpfs   100   40   60 40% /persistent/biometrics\n'
+      if (file === 'du') return '1234\t/persistent/biometrics-archive\n'
+      return ''
+    })
+    fsPromisesMock.readdir.mockResolvedValueOnce([{ isFile: () => true } as never])
+
+    const result = await caller.getStorageBreakdown({})
+
+    const dfArgs = calls.filter(c => c.file === 'df').map(c => c.args)
+    expect(dfArgs).toContainEqual(['-B1', '/persistent'])
+    expect(dfArgs).toContainEqual(['-B1', '/persistent/biometrics'])
+    for (const c of calls.filter(c => c.file === 'df')) expect(c.options).toEqual({ timeout: 5000 })
+
+    const du = callTo(calls, 'du')
+    expect(du.args).toEqual(['-sb', '/persistent/biometrics-archive'])
+    expect(du.options).toEqual({ timeout: 5000 })
+
+    // Assert the parsed values too — the multi-space fixture means a /\s/
+    // (single-char) regex mutant in dfBreakdown would mis-parse the columns.
+    expect(result.emmc).toEqual({ totalBytes: 2000, usedBytes: 500, availableBytes: 1500, usedPercent: 25 })
+    expect(result.biometricsTmpfs).toEqual({ totalBytes: 100, usedBytes: 40, availableBytes: 60, usedPercent: 40 })
+    expect(result.biometricsArchive).toEqual({ usedBytes: 1234, fileCount: 1 })
+  })
+
+  it('reports usedPercent=0 (not Infinity) for a mount that reports 0 total blocks', async () => {
+    recordExec((file, args) => {
+      if (file === 'df' && args.includes('/persistent') && !args.includes('/persistent/biometrics'))
+        return 'Filesystem 1B-blocks Used Available Use% Mounted\noverlay   0   5   0 0% /persistent\n'
+      return ''
+    })
+    fsPromisesMock.readdir.mockResolvedValueOnce([])
+    const result = await caller.getStorageBreakdown({})
+    expect(result.emmc.totalBytes).toBe(0)
+    expect(result.emmc.usedPercent).toBe(0)
   })
 })
