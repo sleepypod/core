@@ -19,7 +19,7 @@ the concrete change to make. Execute in batch order; commit per batch.
 
 ## Batch 1 — Critical + High (do first, one commit each)
 
-- [ ] **1.1 [critical] Fix biometrics migration journal ordering**
+- [x] **1.1 [critical] Fix biometrics migration journal ordering**
   `src/db/biometrics-migrations/meta/_journal.json` — the idx-3 entry
   (`0003_sensor_calibration`) has hand-edited `when: 1773714000000`, which is greater
   than idx 4 (`1773621733014`) and idx 5 (`1773626902925`). Drizzle's migrator skips
@@ -31,7 +31,7 @@ the concrete change to make. Execute in batch order; commit per batch.
   fresh SQLite db, then run the full migrator again and assert 0004+ apply and
   `water_level_readings`/`ambient_light`/`water_level_alerts` exist.
 
-- [ ] **1.2 [high] Fix scheduler-drift miscount in health check**
+- [x] **1.2 [high] Fix scheduler-drift miscount in health check**
   `src/server/routers/health.ts:223,238` — `expectedJobCount` counts only
   temperature/power/alarm schedule jobs, while `actualUserJobs = schedulerJobCount -
   systemJobCount` subtracts only `PRIME`+`REBOOT`. `LED_BRIGHTNESS` (2 jobs when night
@@ -43,7 +43,7 @@ the concrete change to make. Execute in batch order; commit per batch.
   run-once/calibration. Add a regression test: enable LED night mode, call the health
   check, assert `drifted === false` and `reloadSchedules` not called.
 
-- [ ] **1.3 [high] Make DAC transport reads cancelable / correlated**
+- [x] **1.3 [high] Make DAC transport reads cancelable / correlated**
   `src/hardware/dacTransport.ts:244` — `sendMessage` races
   `messageStream.readMessage()` vs a 30s timeout but never cancels the losing read.
   The orphaned read later consumes the NEXT command's response, permanently shifting
@@ -55,7 +55,7 @@ the concrete change to make. Execute in batch order; commit per batch.
   the identical flaw — item 3.5). Test: simulate a dropped response then a second
   command; assert the second command receives its own response.
 
-- [ ] **1.4 [high] Add timestamp sanity gate to environment-monitor**
+- [x] **1.4 [high] Add timestamp sanity gate to environment-monitor**
   `modules/environment-monitor/main.py:240` — `ts = float(record.get("ts",
   time.time()))` has no upper/lower bound; downsample cursors seed from
   `MAX(timestamp)` (lines ~223–228), so one far-future timestamp permanently blocks
@@ -160,7 +160,7 @@ the concrete change to make. Execute in batch order; commit per batch.
   **Change:** gate per-side, or restrict full gating to the correlated ref-anomaly
   path (Signal 2). Validate against recorded data if available before/after.
 
-- [ ] **3.5 Dev/test SocketClient response misalignment**
+- [x] **3.5 Dev/test SocketClient response misalignment** (fixed with 1.3)
   `src/hardware/messageStream.ts:35` — single `pendingRead` slot resolves a late/lost
   response into the NEXT command's read. Fix together with 1.3 (same correlation
   mechanism).

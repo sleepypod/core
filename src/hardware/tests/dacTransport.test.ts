@@ -258,8 +258,9 @@ describe('dacTransport', () => {
       // Firmware that silently drops '14' but answers everything else.
       // Before the abortable read, the orphaned reader from the timed-out
       // '14' consumed the NEXT response, shifting pairing forever.
+      const franken = mockFranken
       let buffer = ''
-      mockFranken.on('data', (chunk) => {
+      franken.on('data', (chunk) => {
         buffer += chunk.toString('utf-8')
         while (buffer.includes('\n\n')) {
           const idx = buffer.indexOf('\n\n')
@@ -267,7 +268,7 @@ describe('dacTransport', () => {
           buffer = buffer.substring(idx + 2)
           const command = message.split('\n')[0].trim()
           if (command === '14') continue // drop: no response ever
-          mockFranken!.write((command === '0' ? 'READY' : 'SET: ok') + '\n\n')
+          franken.write((command === '0' ? 'READY' : 'SET: ok') + '\n\n')
         }
       })
 
