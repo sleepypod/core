@@ -13,7 +13,7 @@ import { PrimingIndicator } from '@/src/components/TempScreen/PrimingIndicator'
 import { PrimeCompleteNotification } from '@/src/components/TempScreen/PrimeCompleteNotification'
 import { PumpStallNotification } from '@/src/components/TempScreen/PumpStallNotification'
 import { AmbientLightChip } from '@/src/components/TempScreen/AmbientLightChip'
-import { type TempUnit } from '@/src/lib/tempUtils'
+import { displayToSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 import { TEMP } from '@/src/lib/tempColors'
 import { Minus, Plus, Power } from 'lucide-react'
 import clsx from 'clsx'
@@ -103,7 +103,9 @@ export const TempScreen = () => {
   }, [activeSides, setTempMutation, refetch, targetOpt])
 
   const handleTempAdjust = (delta: number) => {
-    const newTemp = Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, targetTemp + delta))
+    const displayValue = setpointFToDisplay(targetTemp, unit) ?? targetTemp
+    const converted = displayToSetpointF(displayValue + delta, unit) ?? targetTemp
+    const newTemp = Math.round(Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, converted)))
     targetOpt.commit(newTemp)
     for (const side of activeSides) {
       setTempMutation.mutate(
@@ -186,6 +188,7 @@ export const TempScreen = () => {
         currentTempF={currentTemp}
         targetTempF={targetTemp}
         isOn={isOn}
+        unit={unit}
         onTemperatureChange={handleDialChange}
         onTemperatureCommit={handleDialCommit}
       />

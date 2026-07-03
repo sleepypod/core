@@ -2,6 +2,7 @@ import type { HardwareClient } from './client'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
 import { getAutomationEngineIfRunning } from '@/src/automation'
+import { withSideLock } from '@/src/hardware/sideLock'
 
 // Re-export for callers that need to build deps
 export type { GestureActionDeps }
@@ -100,15 +101,17 @@ export class GestureActionHandler {
     const delta = gesture.temperatureChange === 'increment' ? amount : -amount
     const newTemp = Math.min(MAX_TEMP, Math.max(MIN_TEMP, currentTemp + delta))
 
-    const client = this.deps.newHardwareClient(this.socketPath)
-    try {
-      getAutomationEngineIfRunning()?.registerManualOverride(event.side)
-      await client.connect()
-      await client.setTemperature(event.side, newTemp)
-    }
-    finally {
-      client.disconnect()
-    }
+    await withSideLock(event.side, async () => {
+      const client = this.deps.newHardwareClient(this.socketPath)
+      try {
+        getAutomationEngineIfRunning()?.registerManualOverride(event.side)
+        await client.connect()
+        await client.setTemperature(event.side, newTemp)
+      }
+      finally {
+        client.disconnect()
+      }
+    })
   }
 
   private handleAlarmAction = async (
@@ -164,15 +167,17 @@ export class GestureActionHandler {
         // across off-cycles instead of landing on the firmware-default
         // fallback in DacHardwareClient.setPower.
         const target = state?.targetTemperature ?? TEMP_NEUTRAL
-        const client = this.deps.newHardwareClient(this.socketPath)
-        try {
-          getAutomationEngineIfRunning()?.registerManualOverride(event.side)
-          await client.connect()
-          await client.setPower(event.side, nextPowered, nextPowered ? target : undefined)
-        }
-        finally {
-          client.disconnect()
-        }
+        await withSideLock(event.side, async () => {
+          const client = this.deps.newHardwareClient(this.socketPath)
+          try {
+            getAutomationEngineIfRunning()?.registerManualOverride(event.side)
+            await client.connect()
+            await client.setPower(event.side, nextPowered, nextPowered ? target : undefined)
+          }
+          finally {
+            client.disconnect()
+          }
+        })
       }
       // alarmInactiveBehavior === 'none': no-op
     }

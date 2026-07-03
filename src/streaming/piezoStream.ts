@@ -38,7 +38,7 @@ import * as fs from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import * as path from 'node:path'
 import { Decoder } from 'cbor-x'
-import { recordCapFrame, resetCapFrameWindows } from './capFramePersistence'
+import { flushCapFrameWindows, recordCapFrame, resetCapFrameWindows } from './capFramePersistence'
 import { capSideChannels } from './normalizeFrame'
 // ---------------------------------------------------------------------------
 // Configuration
@@ -707,7 +707,8 @@ export function startPiezoStreamServer(): WebSocketServer {
       // Drop the cached capSense snapshot — old file's last frame doesn't
       // describe the current sensor state.
       latestCapSenseSnapshot = null
-      // Drop any in-flight downsample windows; the new file restarts the stream.
+      // Persist the previous file's tail windows, then restart the stream.
+      flushCapFrameWindows()
       resetCapFrameWindows()
     }
 
@@ -926,6 +927,7 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
     clearInterval(streamingInterval)
     streamingInterval = null
   }
+  flushCapFrameWindows()
 
   const server = wss
   if (server) {

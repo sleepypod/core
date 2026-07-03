@@ -85,6 +85,13 @@
       "when": 1783062862056,
       "tag": "0011_retention_timestamp_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1783119596827,
+      "tag": "0012_careful_microchip",
+      "breakpoints": true
     }
   ]
 }

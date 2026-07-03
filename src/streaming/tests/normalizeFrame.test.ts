@@ -19,6 +19,11 @@ describe('capSideChannels', () => {
     expect(capSideChannels({ out: 10, cen: 20, in: 30 })).toEqual([10, 10, 20, 20, 30, 30])
   })
 
+  it('rejects partial Pod 3 channel objects instead of zero-filling missing zones', () => {
+    expect(capSideChannels({ out: 10 })).toBeNull()
+    expect(capSideChannels({ out: 10, cen: 20 })).toBeNull()
+  })
+
   it('passes a bare numeric array through, dropping non-numbers', () => {
     expect(capSideChannels([1, 2, null, 3])).toEqual([1, 2, 3])
   })

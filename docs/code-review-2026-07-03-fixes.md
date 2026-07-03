@@ -26,7 +26,7 @@ Remaining: **1 Major + 4 Minor**, planned below. Previous repo-wide review
 
 ## Batch 1 — Major: shared side-lock invariant
 
-- [ ] **1.1 Route manual hardware writes through `withSideLock()`**
+- [x] **1.1 Route manual hardware writes through `withSideLock()`**
 
   The branch introduced `withSideLock()` (`src/hardware/sideLock.ts`) as the
   global per-side hardware mutex, and CLAUDE.md declares it an invariant:
@@ -77,7 +77,7 @@ These three touch the same new persistence path (`piezoStream` →
 `capFramePersistence` → `cap_sense_frames`). One commit each, or a single
 grouped `fix(streaming)` commit if the diffs stay small.
 
-- [ ] **2.1 Reject partial Pod 3 capSense payloads instead of zero-filling**
+- [x] **2.1 Reject partial Pod 3 capSense payloads instead of zero-filling**
 
   `capSideChannels()` (`src/streaming/normalizeFrame.ts:147-149`) expands any
   object with *at least one* of `out`/`cen`/`in` to six channels, zero-filling
@@ -90,7 +90,7 @@ grouped `fix(streaming)` commit if the diffs stay small.
   is the persistence path (`src/streaming/piezoStream.ts:796-797`); the live
   WS stream does not use this helper.
 
-- [ ] **2.2 Sanity-guard firmware timestamps before cap-frame persistence**
+- [x] **2.2 Sanity-guard firmware timestamps before cap-frame persistence**
 
   `piezoStream` passes raw `frame.ts` to `recordCapFrame()` whenever it is a
   number (`src/streaming/piezoStream.ts:806-807`), and `recordCapFrame()`
@@ -109,7 +109,7 @@ grouped `fix(streaming)` commit if the diffs stay small.
   before accepting a timestamp; skip invalid/future frames (or fall back to
   `Date.now() / 1000`).
 
-- [ ] **2.3 Flush in-flight cap windows on RAW file switch and shutdown**
+- [x] **2.3 Flush in-flight cap windows on RAW file switch and shutdown**
 
   `recordCapFrame()` flushes a window only on a ≥5s rollover
   (`src/streaming/capFramePersistence.ts:118-134`); `resetCapFrameWindows()`
@@ -126,7 +126,7 @@ grouped `fix(streaming)` commit if the diffs stay small.
 
 ## Batch 3 — Minor: DB retention index
 
-- [ ] **3.1 Timestamp-leading index for `cap_sense_frames` pruning**
+- [x] **3.1 Timestamp-leading index for `cap_sense_frames` pruning**
 
   The only index on `cap_sense_frames` is the unique `(side, timestamp)` pair
   (`src/db/biometrics-schema.ts:134`), but retention deletes filter on

@@ -5,7 +5,8 @@ import { Link, LinkIcon, Power, TrendingDown, TrendingUp } from 'lucide-react'
 import { useSide } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { useSideNames } from '@/src/hooks/useSideNames'
-import { determineTrend, ensureF, formatTemp } from '@/src/lib/tempUtils'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { determineTrend, ensureF, formatSetpointF } from '@/src/lib/tempUtils'
 import { tempFToOffset, offsetDisplay } from '@/src/lib/tempColors'
 
 /**
@@ -20,6 +21,7 @@ import { tempFToOffset, offsetDisplay } from '@/src/lib/tempColors'
 export const SideSelector = () => {
   const { selectedSide, isLinked, selectSide, toggleLink } = useSide()
   const { leftName, rightName } = useSideNames()
+  const { unit } = useTemperatureUnit()
 
   const { status } = useDeviceStatus()
 
@@ -37,6 +39,7 @@ export const SideSelector = () => {
           label={leftName}
           isSelected={selectedSide === 'left' || selectedSide === 'both'}
           isLinked={isLinked}
+          unit={unit}
           sideStatus={status?.leftSide}
           onSelect={() => selectSide('left')}
         />
@@ -44,6 +47,7 @@ export const SideSelector = () => {
           label={rightName}
           isSelected={selectedSide === 'right' || selectedSide === 'both'}
           isLinked={isLinked}
+          unit={unit}
           sideStatus={status?.rightSide}
           onSelect={() => selectSide('right')}
         />
@@ -74,6 +78,7 @@ interface SideButtonProps {
   label: string
   isSelected: boolean
   isLinked: boolean
+  unit: 'F' | 'C'
   sideStatus?: {
     currentTemperature?: number | null
     targetTemperature?: number | null
@@ -88,6 +93,7 @@ const SideButton = ({
   label,
   isSelected,
   isLinked,
+  unit,
   sideStatus,
   onSelect,
 }: SideButtonProps) => {
@@ -142,7 +148,7 @@ const SideButton = ({
                   <span className="text-zinc-400">
                     {offsetDisplay(offset)}
                     {' · '}
-                    {formatTemp(currentF, 'F')}
+                    {formatSetpointF(currentF, unit)}
                   </span>
                 </>
               )

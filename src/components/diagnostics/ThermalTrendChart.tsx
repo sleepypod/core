@@ -11,7 +11,7 @@ import {
   Legend,
 } from 'recharts'
 
-import type { ThermalTrendPoint } from './diagnosticsLogic'
+import { fmtF, type ThermalTrendPoint } from './diagnosticsLogic'
 
 export type { ThermalTrendPoint }
 
@@ -74,7 +74,7 @@ export function ThermalTrendChart({ side, points }: { side: 'left' | 'right', po
           <Tooltip
             contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: 8, fontSize: 12, color: '#fff' }}
             labelFormatter={v => new Date(v as number).toLocaleTimeString()}
-            formatter={(value, name) => [value == null ? '—' : `${Number(value).toFixed(1)}°F`, String(name)]}
+            formatter={(value, name) => [fmtF(value == null ? null : Number(value)), String(name)]}
           />
           <Legend iconType="circle" iconSize={6} wrapperStyle={{ fontSize: 10, color: '#a1a1aa' }} align="center" />
           <Line type="monotone" dataKey="target" name="Target" stroke="#d4a84a" strokeWidth={1} strokeDasharray="4 2" dot={false} connectNulls />

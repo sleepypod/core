@@ -21,6 +21,8 @@ import { reduceCap, zoneTriple } from '@/src/automation/capReduce'
 const WINDOW_MS = 5_000
 const RETENTION_MS = 48 * 60 * 60_000
 const PRUNE_INTERVAL_MS = 10 * 60_000
+const MIN_VALID_WALL_CLOCK_TS_SECONDS = 1_577_836_800 // 2020-01-01 00:00:00 UTC
+const MAX_FUTURE_SKEW_SECONDS = 60
 
 type Side = 'left' | 'right'
 
@@ -109,6 +111,13 @@ function maybePrune(nowMs: number): void {
   }
 }
 
+function isSaneFirmwareTimestamp(tsSeconds: number): boolean {
+  if (!Number.isFinite(tsSeconds)) return false
+  if (tsSeconds < MIN_VALID_WALL_CLOCK_TS_SECONDS) return false
+  if (tsSeconds > Date.now() / 1000 + MAX_FUTURE_SKEW_SECONDS) return false
+  return true
+}
+
 /**
  * Feed one per-side capacitive reading from the live broadcast loop. `raw` is the
  * frame's `left`/`right` channel value (scalar for Pod 3, the raw 8-channel array
@@ -116,6 +125,8 @@ function maybePrune(nowMs: number): void {
  * Flushes a downsampled row whenever the window rolls over.
  */
 export function recordCapFrame(side: Side, raw: number | number[], tsSeconds: number): void {
+  if (!isSaneFirmwareTimestamp(tsSeconds)) return
+
   const tsMs = tsSeconds * 1000
   const values = Array.isArray(raw) ? raw : [raw]
   const r = reduceCap(values)
@@ -146,6 +157,22 @@ export function recordCapFrame(side: Side, raw: number | number[], tsSeconds: nu
     acc.zoneSums[2] += triple[2]
     if (r.peakZone != null) acc.peakCounts[r.peakZone] += 1
   }
+}
+
+/** Persist any non-empty in-flight windows, then clear them. */
+export function flushCapFrameWindows(): void {
+  let flushed = false
+  for (const side of ['left', 'right'] as const) {
+    const acc = windows[side]
+    if (!acc || acc.n === 0) {
+      windows[side] = null
+      continue
+    }
+    flush(side, acc)
+    flushed = true
+    windows[side] = null
+  }
+  if (flushed) maybePrune(Date.now())
 }
 
 /** Reset accumulators — called when the active RAW file switches. */

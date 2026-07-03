@@ -15,6 +15,8 @@ import type { CurvePoint } from '@/src/lib/sleepCurve/types'
 import { colorForTempOffset } from '@/src/lib/sleepCurve/tempColor'
 import { phaseLabels } from '@/src/lib/sleepCurve/types'
 import { curvePointToDisplayTime } from '@/src/lib/sleepCurve/generate'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { formatSetpointF, type TempUnit } from '@/src/lib/tempUtils'
 
 const BASE_TEMP_F = 80
 
@@ -41,7 +43,7 @@ interface ChartDataPoint {
 }
 
 /** Custom tooltip for the temperature curve chart */
-function CurveTooltip({ active, payload }: { active?: boolean, payload?: Array<{ payload: ChartDataPoint }> }) {
+function CurveTooltip({ active, payload, unit }: { active?: boolean, payload?: Array<{ payload: ChartDataPoint }>, unit: TempUnit }) {
   if (!active || !payload?.[0]) return null
   const data = payload[0].payload
   return (
@@ -53,8 +55,7 @@ function CurveTooltip({ active, payload }: { active?: boolean, payload?: Array<{
           style={{ backgroundColor: colorForTempOffset(data.tempOffset) }}
         />
         <span className="text-zinc-300">
-          {data.tempF}
-          °F
+          {formatSetpointF(data.tempF, unit)}
         </span>
         <span className="text-zinc-500">·</span>
         <span className="text-zinc-400">{data.phase}</span>
@@ -104,6 +105,7 @@ export function CurveChart({
   onSelectIndex,
   compact = false,
 }: CurveChartProps) {
+  const { unit } = useTemperatureUnit()
   const showDots = onSelectIndex != null
 
   const chartData = useMemo<ChartDataPoint[]>(() => {
@@ -195,10 +197,10 @@ export function CurveChart({
             tick={{ fill: '#71717a', fontSize: 10 }}
             axisLine={false}
             tickLine={false}
-            tickFormatter={(v: number) => `${v}°`}
+            tickFormatter={(v: number) => formatSetpointF(v, unit, { includeUnit: false })}
           />
           <Tooltip
-            content={<CurveTooltip />}
+            content={<CurveTooltip unit={unit} />}
             cursor={{ stroke: '#52525b', strokeDasharray: '3 3' }}
           />
           {/* Base temperature reference line */}
@@ -206,7 +208,7 @@ export function CurveChart({
             y={BASE_TEMP_F}
             stroke="#52525b"
             strokeDasharray="4 4"
-            label={{ value: '80°F', position: 'right', fill: '#71717a', fontSize: 9 }}
+            label={{ value: formatSetpointF(BASE_TEMP_F, unit), position: 'right', fill: '#71717a', fontSize: 9 }}
           />
           {/* Min temp reference */}
           <ReferenceLine
@@ -214,7 +216,7 @@ export function CurveChart({
             stroke="#3b82f6"
             strokeDasharray="2 2"
             strokeOpacity={0.4}
-            label={{ value: `${minTempF}°`, position: 'left', fill: '#3b82f6', fontSize: 9 }}
+            label={{ value: formatSetpointF(minTempF, unit, { includeUnit: false }), position: 'left', fill: '#3b82f6', fontSize: 9 }}
           />
           {/* Max temp reference */}
           <ReferenceLine
@@ -222,7 +224,7 @@ export function CurveChart({
             stroke="#f97316"
             strokeDasharray="2 2"
             strokeOpacity={0.4}
-            label={{ value: `${maxTempF}°`, position: 'left', fill: '#f97316', fontSize: 9 }}
+            label={{ value: formatSetpointF(maxTempF, unit, { includeUnit: false }), position: 'left', fill: '#f97316', fontSize: 9 }}
           />
           {/* Bedtime marker */}
           <ReferenceLine

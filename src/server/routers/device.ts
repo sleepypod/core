@@ -14,6 +14,7 @@ import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { withSideLock } from '@/src/hardware/sideLock'
 import { getAutomationEngineIfRunning } from '@/src/automation'
 import {
   sideSchema,
@@ -370,10 +371,10 @@ export const deviceRouter = router({
         const timer = setTimeout(async () => {
           pendingTemps.delete(input.side)
           try {
-            await withHardwareClient(async (client) => {
+            await withSideLock(input.side, () => withHardwareClient(async (client) => {
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
-            }, 'Failed to set temperature')
+            }, 'Failed to set temperature'))
             broadcastMutationStatus(input.side, {
               targetTemperature: input.temperature,
               targetLevel: fahrenheitToLevel(input.temperature),
@@ -441,7 +442,7 @@ export const deviceRouter = router({
       }
 
       registerManualOverride(input.side)
-      return withHardwareClient(async (client) => {
+      return withSideLock(input.side, () => withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
@@ -486,7 +487,7 @@ export const deviceRouter = router({
           : { targetLevel: 0 },
         )
         return { success: true }
-      }, 'Failed to set power')
+      }, 'Failed to set power'))
     }),
 
   /**

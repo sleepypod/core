@@ -8,6 +8,8 @@ import { FIXED_INTENSITY, FIXED_PATTERN, VIBRATION_PRESETS } from '@/src/lib/vib
 import { DAYS, type DayOfWeek } from './DaySelector'
 import { TimeInput } from './TimeInput'
 import type { AlarmGroup } from './AlarmCard'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 
 type Side = 'left' | 'right'
 
@@ -42,11 +44,15 @@ export function AlarmEditor({
   onSaved,
 }: AlarmEditorProps) {
   const isEdit = existingGroup !== null
+  const { unit } = useTemperatureUnit()
+  const minDisplayTemp = Math.round(setpointFToDisplay(MIN_TEMP, unit) ?? MIN_TEMP)
+  const maxDisplayTemp = Math.round(setpointFToDisplay(MAX_TEMP, unit) ?? MAX_TEMP)
+  const defaultDisplayTemp = Math.round(setpointFToDisplay(DEFAULT_TEMP, unit) ?? DEFAULT_TEMP)
 
   const [days, setDays] = useState<Set<DayOfWeek>>(new Set())
   const [time, setTime] = useState(DEFAULT_TIME)
   const [duration, setDuration] = useState(DEFAULT_DURATION)
-  const [temperature, setTemperature] = useState(DEFAULT_TEMP)
+  const [displayTemperature, setDisplayTemperature] = useState(defaultDisplayTemp)
   const [saveError, setSaveError] = useState<string | null>(null)
 
   // Reset local state when opening
@@ -57,17 +63,17 @@ export function AlarmEditor({
       setDays(new Set(existingGroup.days))
       setTime(existingGroup.time)
       setDuration(existingGroup.duration)
-      setTemperature(Math.round(existingGroup.alarmTemperature))
+      setDisplayTemperature(Math.round(setpointFToDisplay(existingGroup.alarmTemperature, unit) ?? existingGroup.alarmTemperature))
     }
     else {
       setDays(new Set())
       setTime(DEFAULT_TIME)
       setDuration(DEFAULT_DURATION)
-      setTemperature(DEFAULT_TEMP)
+      setDisplayTemperature(defaultDisplayTemp)
     }
     setSaveError(null)
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [open, existingGroup])
+  }, [open, existingGroup, unit, defaultDisplayTemp])
 
   // Lock body scroll
   useEffect(() => {
@@ -115,6 +121,7 @@ export function AlarmEditor({
     setSaveError(null)
 
     const targetDays = Array.from(days)
+    const temperatureF = Math.round(displayToSetpointF(displayTemperature, unit) ?? DEFAULT_TEMP)
     // Preserve enabled state when editing a paused alarm; new alarms default to enabled.
     const enabled = existingGroup?.enabled ?? true
     const creates = targetDays.map(dayOfWeek => ({
@@ -124,7 +131,7 @@ export function AlarmEditor({
       vibrationIntensity: FIXED_INTENSITY,
       vibrationPattern: FIXED_PATTERN,
       duration,
-      alarmTemperature: temperature,
+      alarmTemperature: temperatureF,
       enabled,
     }))
 
@@ -141,7 +148,7 @@ export function AlarmEditor({
     catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save alarm')
     }
-  }, [days, side, time, duration, temperature, existingGroup, batchUpdate, utils, onSaved, onClose])
+  }, [days, side, time, duration, displayTemperature, unit, existingGroup, batchUpdate, utils, onSaved, onClose])
 
   const handleDelete = useCallback(async () => {
     if (!existingGroup) return
@@ -279,27 +286,30 @@ export function AlarmEditor({
           <div className="mb-1 flex items-center justify-between">
             <span className="text-xs font-medium text-zinc-400">Bed temperature at wake</span>
             <span className="text-xs font-medium text-white">
-              {temperature}
-              °F
+              {displayTemperature}
+              °
+              {unit}
             </span>
           </div>
           <input
             type="range"
-            min={MIN_TEMP}
-            max={MAX_TEMP}
+            min={minDisplayTemp}
+            max={maxDisplayTemp}
             step={1}
-            value={temperature}
-            onChange={e => setTemperature(parseInt(e.target.value, 10))}
+            value={displayTemperature}
+            onChange={e => setDisplayTemperature(parseInt(e.target.value, 10))}
             className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
           />
           <div className="flex justify-between text-[10px] text-zinc-600">
             <span>
-              {MIN_TEMP}
-              °F
+              {minDisplayTemp}
+              °
+              {unit}
             </span>
             <span>
-              {MAX_TEMP}
-              °F
+              {maxDisplayTemp}
+              °
+              {unit}
             </span>
           </div>
         </div>

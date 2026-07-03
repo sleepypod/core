@@ -7,29 +7,8 @@ import { Moon, Plane, Settings } from 'lucide-react'
 import { useSide } from '@/src/providers/SideProvider'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { trpc } from '@/src/utils/trpc'
+import { isInWindowForTimezone } from '@/src/lib/scheduleTime'
 import styles from './Header.module.css'
-
-function isInNightWindow(start: string, end: string, timezone: string): boolean {
-  const [sH, sM] = start.split(':').map(Number)
-  const [eH, eM] = end.split(':').map(Number)
-  if ([sH, sM, eH, eM].some(n => Number.isNaN(n))) return false
-
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-  }).formatToParts(new Date())
-  const hour = Number(parts.find(p => p.type === 'hour')?.value ?? '0')
-  const minute = Number(parts.find(p => p.type === 'minute')?.value ?? '0')
-
-  const now = hour * 60 + minute
-  const startMin = sH * 60 + sM
-  const endMin = eH * 60 + eM
-  return startMin <= endMin
-    ? now >= startMin && now < endMin
-    : now >= startMin || now < endMin
-}
 
 /**
  * Global header — shows the active user name with a tappable settings icon.
@@ -59,7 +38,7 @@ export const Header = () => {
     device?.ledNightModeEnabled
     && device.ledNightStartTime
     && device.ledNightEndTime
-    && isInNightWindow(device.ledNightStartTime, device.ledNightEndTime, device.timezone),
+    && isInWindowForTimezone(device.ledNightStartTime, device.ledNightEndTime, device.timezone),
   )
   void nightTick
 

@@ -5,10 +5,14 @@
  * these functions.
  */
 
+import { formatDisplayTemp, formatSetpointF } from '@/src/lib/tempUtils'
+
 // ── Formatting ───────────────────────────────────────────────────────────────
 
+// Thermal diagnostics are engineering telemetry and intentionally displayed in
+// Fahrenheit to match hardware setpoints and scheduler payloads.
 export function fmtF(v: number | null | undefined): string {
-  return v == null ? '—' : `${v.toFixed(1)}°F`
+  return formatDisplayTemp(v, 'F', { decimals: 1, nullDisplay: '—' })
 }
 
 export function fmtAge(sec: number | null | undefined): string {
@@ -75,7 +79,7 @@ export interface SchedJob {
 
 /** The job's payload value as a short display string ('82°F', '40%', or '—'). */
 export function fmtJobValue(job: Pick<SchedJob, 'targetTempF' | 'brightness'>): string {
-  if (job.targetTempF != null) return `${Math.round(job.targetTempF)}°F`
+  if (job.targetTempF != null) return formatSetpointF(job.targetTempF, 'F')
   if (job.brightness != null) return `${job.brightness}%`
   return '—'
 }

@@ -22,6 +22,7 @@ import {
   setSidePowerOn,
   setTargetTemperature,
 } from '../accessories/sideController'
+import { withSideLock } from '@/src/hardware/sideLock'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus } from '@/src/hardware/types'
 
@@ -180,6 +181,34 @@ describe('sideController', () => {
   })
 
   describe('serialization', () => {
+    it('waits behind the shared side lock before writing hardware', async () => {
+      let releaseLeft: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        releaseLeft = resolve
+      }))
+      await Promise.resolve()
+
+      try {
+        const left = setTargetTemperature(monitor(onStatus), 'left', 78)
+        await Promise.resolve()
+        expect(setTemperature).not.toHaveBeenCalled()
+
+        await setTargetTemperature(monitor(onStatus), 'right', 79)
+        expect(setTemperature).toHaveBeenCalledWith('right', 79)
+        expect(setTemperature).not.toHaveBeenCalledWith('left', 78)
+
+        releaseLeft()
+        await holder
+        await left
+
+        expect(setTemperature).toHaveBeenCalledWith('left', 78)
+      }
+      finally {
+        releaseLeft()
+        await holder.catch(() => {})
+      }
+    })
+
     it('serializes concurrent writes to the same side in submission order', async () => {
       const order: string[] = []
       let resolveTemp: () => void = () => {}

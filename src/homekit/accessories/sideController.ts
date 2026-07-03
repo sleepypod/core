@@ -11,9 +11,9 @@
  *   t2  TargetHeatingCoolingState.onSet → reads stale 70°F target  │ concurrent
  *   t3  setPower(side, true, 70) → setTemperature(side, 70)       ──┘
  *
- * This module funnels every hardware write through a per-side promise queue,
- * and keeps an in-process cache of the user's last requested target so the
- * power-on path doesn't depend on firmware preserving targetTemperature
+ * This module funnels every hardware write through the shared per-side hardware
+ * lock, and keeps an in-process cache of the user's last requested target so
+ * the power-on path doesn't depend on firmware preserving targetTemperature
  * across off-cycles.
  */
 
@@ -22,6 +22,7 @@ import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getAutomationEngineIfRunning } from '@/src/automation'
+import { withSideLock } from '@/src/hardware/sideLock'
 
 const lastTargetF: Record<Side, number | null> = { left: null, right: null }
 
@@ -31,19 +32,8 @@ const lastTargetF: Record<Side, number | null> = { left: null, right: null }
 // the pre-toggle value and silently swallow the queued setTemperature.
 const intendedPower: Record<Side, boolean | null> = { left: null, right: null }
 
-const sideQueues: Record<Side, Promise<unknown>> = {
-  left: Promise.resolve(),
-  right: Promise.resolve(),
-}
-
 function registerManualOverride(side: Side): void {
   getAutomationEngineIfRunning()?.registerManualOverride(side)
-}
-
-function serialize<T>(side: Side, fn: () => Promise<T>): Promise<T> {
-  const next = sideQueues[side].then(fn, fn)
-  sideQueues[side] = next.catch(() => undefined)
-  return next
 }
 
 async function logged<T>(label: string, fn: () => Promise<T>): Promise<T> {
@@ -134,7 +124,7 @@ export async function setTargetTemperature(
 ): Promise<void> {
   const f = clampF(requestedF)
   lastTargetF[side] = f
-  await serialize(side, async () => {
+  await withSideLock(side, async () => {
     const intended = intendedPower[side]
     const powered = intended !== null ? intended : isCurrentlyPowered(monitor, side)
     if (!powered) return
@@ -159,7 +149,7 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
   const prev = intendedPower[side]
   intendedPower[side] = true
   try {
-    await serialize(side, async () => {
+    await withSideLock(side, async () => {
       const target = clampF(getStagedTargetF(monitor, side))
       lastTargetF[side] = target
       registerManualOverride(side)
@@ -179,7 +169,7 @@ export async function setSidePowerOff(monitor: DacMonitor, side: Side): Promise<
   const prev = intendedPower[side]
   intendedPower[side] = false
   try {
-    await serialize(side, () => logged(
+    await withSideLock(side, () => logged(
       `setPower(${side}, false)`,
       () => {
         registerManualOverride(side)
@@ -194,7 +184,7 @@ export async function setSidePowerOff(monitor: DacMonitor, side: Side): Promise<
 }
 
 /**
- * Test-only: clear cached target and reset the side queues.
+ * Test-only: clear cached target and intent state.
  * Module-level state survives across tests in the same file otherwise.
  */
 export function __resetSideController(): void {
@@ -202,6 +192,4 @@ export function __resetSideController(): void {
   lastTargetF.right = null
   intendedPower.left = null
   intendedPower.right = null
-  sideQueues.left = Promise.resolve()
-  sideQueues.right = Promise.resolve()
 }

@@ -144,9 +144,8 @@ export function capSideChannels(v: unknown): number[] | null {
       const nums = (o.values as unknown[]).filter((x): x is number => typeof x === 'number')
       return nums.length > 0 ? nums : null
     }
-    if (typeof o.out === 'number' || typeof o.cen === 'number' || typeof o.in === 'number') {
-      const n = (x: unknown): number => (typeof x === 'number' ? x : 0)
-      return [n(o.out), n(o.out), n(o.cen), n(o.cen), n(o.in), n(o.in)]
+    if (typeof o.out === 'number' && typeof o.cen === 'number' && typeof o.in === 'number') {
+      return [o.out, o.out, o.cen, o.cen, o.in, o.in]
     }
   }
   return null

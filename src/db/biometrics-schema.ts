@@ -132,6 +132,7 @@ export const capSenseFrames = sqliteTable('cap_sense_frames', {
   // One row per side/window — guards against duplicates if a restart re-reads
   // the active RAW file from the start (insert is conflict-tolerant).
   uniqueIndex('uq_cap_sense_frames_side_ts').on(t.side, t.timestamp),
+  index('idx_cap_sense_frames_timestamp').on(t.timestamp),
 ])
 
 export const pumpAlerts = sqliteTable('pump_alerts', {

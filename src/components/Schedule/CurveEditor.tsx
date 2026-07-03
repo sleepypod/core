@@ -19,6 +19,8 @@ import {
 } from '@/src/lib/sleepCurve/generate'
 import { rebaseSetPoints } from '@/src/lib/sleepCurve/rebase'
 import { sortChronological } from '@/src/lib/scheduleGrouping'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { displayToSetpointF, formatSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 
 interface CurveEditorProps {
   open: boolean
@@ -106,6 +108,7 @@ export function CurveEditor({
   initialSetPoints = [],
 }: CurveEditorProps) {
   const { saveCurve, detectCurveConflicts, isMutating } = useSchedule()
+  const { unit } = useTemperatureUnit()
 
   const isEdit = initialDays.length > 0
   const initialSorted = useMemo(() => sortChronological(initialSetPoints), [initialSetPoints])
@@ -410,6 +413,7 @@ export function CurveEditor({
             label="Coolest"
             value={minTemp}
             onChange={v => setMinTemp(Math.min(v, maxTemp - 2))}
+            unit={unit}
             icon={<Snowflake size={12} />}
             accentClass="text-blue-400"
           />
@@ -417,6 +421,7 @@ export function CurveEditor({
             label="Warmest"
             value={maxTemp}
             onChange={v => setMaxTemp(Math.max(v, minTemp + 2))}
+            unit={unit}
             icon={<Flame size={12} />}
             accentClass="text-orange-400"
           />
@@ -571,11 +576,21 @@ interface TempStepperProps {
   label: string
   value: number
   onChange: (value: number) => void
+  unit: TempUnit
   icon?: React.ReactNode
   accentClass?: string
 }
 
-function TempStepper({ label, value, onChange, icon, accentClass }: TempStepperProps) {
+function TempStepper({ label, value, onChange, unit, icon, accentClass }: TempStepperProps) {
+  const displayValue = Math.round(setpointFToDisplay(value, unit) ?? value)
+  const minDisplay = Math.round(setpointFToDisplay(TEMP_FLOOR, unit) ?? TEMP_FLOOR)
+  const maxDisplay = Math.round(setpointFToDisplay(TEMP_CEIL, unit) ?? TEMP_CEIL)
+  const applyDisplayDelta = (delta: number) => {
+    const nextDisplay = Math.max(minDisplay, Math.min(maxDisplay, displayValue + delta))
+    const nextF = Math.round(displayToSetpointF(nextDisplay, unit) ?? value)
+    onChange(Math.max(TEMP_FLOOR, Math.min(TEMP_CEIL, nextF)))
+  }
+
   return (
     <div className="flex flex-col gap-1.5">
       <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-400">
@@ -585,7 +600,7 @@ function TempStepper({ label, value, onChange, icon, accentClass }: TempStepperP
       <div className="flex h-11 items-center rounded-lg border border-zinc-700 bg-zinc-800/50">
         <button
           type="button"
-          onClick={() => onChange(Math.max(TEMP_FLOOR, value - 1))}
+          onClick={() => applyDisplayDelta(-1)}
           disabled={value <= TEMP_FLOOR}
           className="flex h-full w-10 items-center justify-center text-zinc-400 transition-colors active:text-white disabled:opacity-30"
           aria-label={`Decrease ${label}`}
@@ -593,12 +608,11 @@ function TempStepper({ label, value, onChange, icon, accentClass }: TempStepperP
           <Minus size={14} strokeWidth={3} />
         </button>
         <span className="flex-1 text-center text-sm font-semibold tabular-nums text-white">
-          {value}
-          °F
+          {formatSetpointF(value, unit)}
         </span>
         <button
           type="button"
-          onClick={() => onChange(Math.min(TEMP_CEIL, value + 1))}
+          onClick={() => applyDisplayDelta(1)}
           disabled={value >= TEMP_CEIL}
           className="flex h-full w-10 items-center justify-center text-zinc-400 transition-colors active:text-white disabled:opacity-30"
           aria-label={`Increase ${label}`}

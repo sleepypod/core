@@ -8,6 +8,7 @@
 
 import { Icon } from './icons'
 import { Badge, Card, SideBadge, StatusBadge, Toggle } from './primitives'
+import { formatSetpointF } from '@/src/lib/tempUtils'
 
 export interface RuleStatus {
   id: number
@@ -73,7 +74,7 @@ function actionText(detail: unknown): string {
   if (a.kind === 'setTemperature') {
     if (a.skipped) return a.skipped.replace(/-/g, ' ')
     const verb = a.sent ? 'set' : a.dryRun ? 'would set' : a.antiThrash ? 'held' : 'set'
-    return a.temp != null ? `${verb} ${Math.round(a.temp)}°F${a.clamped ? ' (clamped)' : ''}` : verb
+    return a.temp != null ? `${verb} ${formatSetpointF(a.temp, 'F')}${a.clamped ? ' (clamped)' : ''}` : verb
   }
   return a.kind ?? ''
 }

@@ -1,4 +1,4 @@
-import type { DayOfWeek } from '@/src/components/Schedule/DaySelector'
+import { DAYS_OF_WEEK, type DayOfWeek } from '@/src/lib/scheduleTime'
 
 export interface SetPoint {
   time: string
@@ -16,15 +16,7 @@ export interface ScheduleGroup {
   allDisabled?: boolean
 }
 
-const ALL_DAYS: DayOfWeek[] = [
-  'sunday',
-  'monday',
-  'tuesday',
-  'wednesday',
-  'thursday',
-  'friday',
-  'saturday',
-]
+const ALL_DAYS: DayOfWeek[] = [...DAYS_OF_WEEK]
 
 /**
  * Build a deterministic fingerprint for a set of temperature set points.

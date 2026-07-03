@@ -17,6 +17,9 @@
  * downsampled copy is persisted separately for historical replay (see
  * `streaming/capFramePersistence`). (`reduceCap` also derives a peakZone index,
  * used by the UI zone visualization rather than the engine.)
+ *
+ * Automation temperature signals are Fahrenheit by contract because automation
+ * actions target hardware setpoints, which are also Fahrenheit.
  */
 
 import { desc, eq } from 'drizzle-orm'

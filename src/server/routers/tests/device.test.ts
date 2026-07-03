@@ -139,6 +139,7 @@ vi.mock('@/src/db', () => ({
 vi.mock('@/src/hardware/wifi', () => wifiMock)
 
 const { deviceRouter } = await import('@/src/server/routers/device')
+const { withSideLock } = await import('@/src/hardware/sideLock')
 const caller = deviceRouter.createCaller({})
 
 beforeEach(() => {
@@ -292,6 +293,35 @@ describe('device.getStatus', () => {
 })
 
 describe('device.setTemperature', () => {
+  it('waits behind an existing shared side lock before writing hardware', async () => {
+    vi.useFakeTimers()
+    let releaseLock: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      releaseLock = resolve
+    }))
+    await Promise.resolve()
+
+    try {
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
+      await vi.advanceTimersByTimeAsync(250)
+      await Promise.resolve()
+
+      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+
+      releaseLock()
+      await holder
+      await promise
+
+      expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('left', 70, undefined)
+    }
+    finally {
+      releaseLock()
+      await holder.catch(() => {})
+      vi.useRealTimers()
+    }
+  })
+
   it('debounces and resolves after timer fires', async () => {
     vi.useFakeTimers()
     try {
@@ -393,6 +423,36 @@ describe('device.setTemperature', () => {
 })
 
 describe('device.setPower', () => {
+  it('waits behind an existing shared side lock without blocking the opposite side', async () => {
+    let releaseLeft: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      releaseLeft = resolve
+    }))
+    await Promise.resolve()
+
+    try {
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      const left = caller.setPower({ side: 'left', powered: true, temperature: 72 })
+      await Promise.resolve()
+      expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      await caller.setPower({ side: 'right', powered: true, temperature: 73 })
+      expect(helpersMock.client.setPower).toHaveBeenCalledWith('right', true, 73)
+      expect(helpersMock.client.setPower).not.toHaveBeenCalledWith('left', true, 72)
+
+      releaseLeft()
+      await holder
+      await left
+
+      expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 72)
+    }
+    finally {
+      releaseLeft()
+      await holder.catch(() => {})
+    }
+  })
+
   it('powers on with the provided temperature, broadcasts, syncs DB', async () => {
     dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
 
