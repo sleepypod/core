@@ -20,6 +20,7 @@ Medical threshold citations:
   - Presence via noise floor: PMC6522616 (BCG adaptive thresholds)
 """
 
+import itertools
 import json
 import math
 import os
@@ -235,7 +236,9 @@ class CapCalibrator:
         best_variance = float("inf")
         window_samples = self.MIN_WINDOW_S  # ~1 sample/sec for capSense
 
-        for i in range(len(timestamps) - window_samples):
+        # +1 so the final window is scanned (and a dataset exactly one window
+        # long yields one candidate instead of none) — matches CapSense2Calibrator.
+        for i in range(len(timestamps) - window_samples + 1):
             total_var = 0
             for ch in self.CHANNELS:
                 segment = channels[ch][i:i + window_samples]
@@ -307,14 +310,21 @@ class CapSense2Calibrator:
         for rec in records:
             data = rec.get(side, {})
             vals = data.get("values") if data else None
-            if not vals or len(vals) < 8:
+            # Newer Pod 4 / Pod 5 firmware emits 6-value capSense2 frames
+            # (3 sensing pairs, no REF pair). The REF pair (indices 6-7) is
+            # optional — mirror sleep-detector._extract_channel_values, which
+            # accepts >=6 and uses the REF pair only when present.
+            if not vals or len(vals) < 6:
                 continue
             ts = float(rec.get("ts", 0))
             timestamps.append(ts)
             for name, ia, ib in self.SENSE_PAIRS:
                 channels[name].append((vals[ia] + vals[ib]) / 2.0)
-            rn, ria, rib = self.REF_PAIR
-            channels["REF"].append((vals[ria] + vals[rib]) / 2.0)
+            if len(vals) >= 8:
+                rn, ria, rib = self.REF_PAIR
+                channels["REF"].append((vals[ria] + vals[rib]) / 2.0)
+            else:
+                channels["REF"].append(None)  # keep aligned with timestamps
 
         if len(timestamps) < 60:
             raise ValueError(
@@ -349,11 +359,14 @@ class CapSense2Calibrator:
             std = max(std, self.MIN_STD)
             baseline["channels"][name] = {"mean": round(m, 4), "std": round(std, 4)}
 
-        # Store REF baseline for drift compensation
-        ref_seg = channels["REF"][best_start:window_end]
-        ref_mean = sum(ref_seg) / len(ref_seg)
-        ref_std = math.sqrt(sum((x - ref_mean) ** 2 for x in ref_seg) / len(ref_seg))
-        baseline["ref"] = {"mean": round(ref_mean, 4), "std": round(max(ref_std, 0.001), 4)}
+        # Store REF baseline for drift compensation — only when the firmware
+        # actually emits the reference pair (8-value frames). Consumers treat
+        # `ref` as optional, so omitting it on 6-value firmware is safe.
+        ref_seg = [v for v in channels["REF"][best_start:window_end] if v is not None]
+        if ref_seg:
+            ref_mean = sum(ref_seg) / len(ref_seg)
+            ref_std = math.sqrt(sum((x - ref_mean) ** 2 for x in ref_seg) / len(ref_seg))
+            baseline["ref"] = {"mean": round(ref_mean, 4), "std": round(max(ref_std, 0.001), 4)}
 
         # Quality: lower variance = better baseline
         # capSense2 floats are ~10-30 range, so normalize differently than capSense ints
@@ -729,7 +742,9 @@ def is_present_capsense2_calibrated(
     """
     data = record.get(side, {})
     vals = data.get("values") if data else None
-    if not vals or len(vals) < 8:
+    # Accept 6-value frames (newer firmware drops the optional REF pair).
+    # Only indices 0-5 (A/B/C sensing pairs) are used below.
+    if not vals or len(vals) < 6:
         return False
 
     if baselines is None or baselines.get("format") != "capSense2":
@@ -782,6 +797,11 @@ class CalibrationWatcher:
             if not triggers:
                 return None
             data = json.loads(triggers[0].read_text())
+            if not isinstance(data, dict):
+                # Valid JSON but not an object — consumers call .get() on it
+                # and would crash-loop on the same file after every restart.
+                triggers[0].unlink(missing_ok=True)
+                return None
             return data
         except (json.JSONDecodeError, OSError):
             # Corrupt trigger file — remove it
@@ -803,14 +823,31 @@ class CalibrationWatcher:
             pass
 
 
+_trigger_seq = itertools.count()
+
+
 def write_trigger_atomic(payload: dict) -> None:
     """Write a calibration trigger file atomically.
 
-    Uses write-to-tmp-then-rename to prevent partial reads.
-    Each trigger gets a unique filename to support queuing.
+    Uses write-to-tmp-then-rename to prevent partial reads. The
+    pid + counter uniquifier keeps concurrent writers from colliding on a
+    same-millisecond timestamp — and from sharing a tmp path (the old
+    with_suffix(".tmp") collapsed every trigger's tmp file to one name).
+    fsync of the file and its directory make the rename durable, so a power
+    cut can't leave a truncated trigger that check_trigger then deletes,
+    silently dropping the request.
     """
     ts = int(time.time() * 1000)
-    target = TRIGGER_PATH.parent / f".calibrate-trigger.{ts}"
-    tmp = target.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload))
+    unique = f"{ts}.{os.getpid()}.{next(_trigger_seq)}"
+    target = TRIGGER_PATH.parent / f".calibrate-trigger.{unique}"
+    tmp = TRIGGER_PATH.parent / f".calibrate-trigger.{unique}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload))
+        f.flush()
+        os.fsync(f.fileno())
     tmp.rename(target)
+    dir_fd = os.open(str(TRIGGER_PATH.parent), os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)

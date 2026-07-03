@@ -639,6 +639,64 @@ class TestHRTracker:
         # The value is returned even though it's an outlier
         assert result == 200.0
 
+    def test_sustained_shift_reseeds_instead_of_freezing(self):
+        """A streak of uncorrectable readings re-seeds the tracker (#4.9).
+        Previously the stale median rejected every new reading forever."""
+        tracker = HRTracker()
+        for hr in [70.0, 71.0, 69.0, 70.5, 70.0]:
+            tracker.update(hr, 0.5)
+
+        # Sustained genuine shift the harmonic correction can't explain
+        # (190: direct/half/double all inconsistent with the 70 median)
+        for _ in range(HRTracker.FALLBACK_RESET_STREAK):
+            tracker.update(190.0, 0.5)
+
+        # Tracker has re-seeded at the new level…
+        assert 190.0 in tracker.history
+        # …and consistent readings near it are accepted into history again.
+        result = tracker.update(185.0, 0.5)
+        assert result == 185.0
+        assert 185.0 in tracker.history
+
+    def test_single_outlier_does_not_trigger_reseed(self):
+        """One wild reading between good ones must not reset the tracker."""
+        tracker = HRTracker()
+        for hr in [70.0, 71.0, 69.0, 70.5, 70.0]:
+            tracker.update(hr, 0.5)
+
+        tracker.update(200.0, 0.5)  # outlier (streak 1)
+        tracker.update(70.0, 0.5)   # consistent — streak resets
+        tracker.update(200.0, 0.5)  # outlier (streak 1 again)
+        tracker.update(200.0, 0.5)  # outlier (streak 2)
+
+        assert 200.0 not in tracker.history
+
+
+class TestInt32Samples:
+    """_int32_samples must tolerate truncated buffers (#4.7) — a RAW record
+    cut mid-write has len % 4 != 0 and np.frombuffer raised ValueError."""
+
+    def test_whole_samples_decoded(self):
+        import main
+        buf = np.array([1, -2, 3], dtype=np.int32).tobytes()
+        out = main._int32_samples(buf)
+        assert out.tolist() == [1, -2, 3]
+
+    def test_truncated_tail_dropped(self):
+        import main
+        buf = np.array([1, -2, 3], dtype=np.int32).tobytes() + b"\x07\x07"
+        out = main._int32_samples(buf)
+        assert out.tolist() == [1, -2, 3]
+
+    def test_sub_sample_buffer_is_empty(self):
+        import main
+        assert main._int32_samples(b"\x01\x02").size == 0
+
+    def test_non_bytes_is_empty(self):
+        import main
+        assert main._int32_samples(None).size == 0
+        assert main._int32_samples(12345).size == 0
+
     def test_history_bounded_under_sustained_input(self):
         """HRTracker history must not grow unbounded — only the last
         history_len entries are ever consulted, so retaining more leaks
