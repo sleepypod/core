@@ -37,6 +37,16 @@ describe('SocketClient', () => {
     expect(responses[2]).toContain('OK')
   })
 
+  test('discards stale buffered responses before sending the next command', async () => {
+    // A response that arrives while no read is pending (e.g. after a read
+    // timeout) is buffered; the next command must not consume it as its own.
+    ctx.server.sendToClient(0, 'STALE-RESPONSE\n\n')
+    await new Promise(r => setTimeout(r, 50))
+
+    const response = await ctx.socketClient!.executeCommand(HardwareCommand.HELLO)
+    expect(response.trim()).toBe('READY')
+  })
+
   test('sanitizes newlines in arguments', async () => {
     // This test verifies that embedded newlines don't corrupt the protocol
     const maliciousArg = '50\n14\n\n' // Tries to inject DEVICE_STATUS command

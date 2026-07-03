@@ -20,7 +20,8 @@ export class MessageStream {
 
   constructor(
     private readonly stream: Readable,
-    delimiter = '\n\n'
+    delimiter = '\n\n',
+    private readonly readTimeoutMs = 30000
   ) {
     this.delimiter = Buffer.from(delimiter)
     this.setupStream()
@@ -93,12 +94,26 @@ export class MessageStream {
       const timer = setTimeout(() => {
         if (this.pendingRead) {
           this.pendingRead = null
-          reject(new Error('Message read timeout after 30 seconds'))
+          reject(new Error(`Message read timeout after ${this.readTimeoutMs / 1000} seconds`))
         }
-      }, 30000)
+      }, this.readTimeoutMs)
 
       this.pendingRead = { resolve, reject, timer }
     })
+  }
+
+  /**
+   * Drop any buffered messages, returning how many were discarded.
+   *
+   * Called before sending a new command: commands execute strictly
+   * sequentially, so a message still buffered here can only be a stale
+   * response to an earlier command whose read timed out — consuming it
+   * would shift every subsequent command/response pair by one.
+   */
+  discardBuffered(): number {
+    const discarded = this.messageQueue.length
+    this.messageQueue.length = 0
+    return discarded
   }
 
   /**
