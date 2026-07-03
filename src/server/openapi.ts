@@ -17,7 +17,10 @@ export function getOpenApiDocument(baseUrl: string) {
     baseUrl,
     description:
       'REST-style API for the Sleepypod Pod controller. '
-      + 'All endpoints are also available via tRPC at /api/trpc.',
+      + 'All endpoints are also available via tRPC at /api/trpc. '
+      + 'There is no authentication: the API trusts the local network '
+      + '(the pod firewalls WAN exposure via iptables — see /health/system). '
+      + 'Do not port-forward or reverse-proxy this API to the internet.',
     tags: ['Health', 'Device', 'Settings', 'Schedules', 'Biometrics', 'System', 'Environment', 'Raw', 'Calibration', 'Water Level'],
     securitySchemes: {},
   })
