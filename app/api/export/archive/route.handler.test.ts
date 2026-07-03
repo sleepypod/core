@@ -27,6 +27,7 @@ vi.mock('node:fs/promises', () => ({ ...fsMock, default: fsMock }))
 interface FakeChild extends EventEmitter {
   stdout: Readable
   stderr: EventEmitter
+  kill: ReturnType<typeof vi.fn>
 }
 
 const spawnMock = vi.hoisted(() => ({
@@ -60,6 +61,7 @@ function makeFakeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild
   child.stdout = stdout
   child.stderr = stderr
+  child.kill = vi.fn()
   return child
 }
 
@@ -260,6 +262,65 @@ describe('GET /api/export/archive', () => {
 
     const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
     expect(res2.status).not.toBe(429)
+  })
+
+  it('rejects non-numeric startTs/endTs with 400 without latching inflight', async () => {
+    const { GET } = await loadRoute()
+    const res = await GET(new Request('http://localhost/api/export/archive?startTs=garbage'))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body).toEqual({ error: 'startTs and endTs must be numeric epoch seconds' })
+    expect(spawnMock.spawn).not.toHaveBeenCalled()
+
+    // inflight must not have been taken by the rejected request.
+    const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+    expect(res2.status).toBe(200)
+  })
+
+  it('kills tar, clears inflight, and removes staging when the client disconnects', async () => {
+    const { GET } = await loadRoute()
+    const controller = new AbortController()
+    const req = new Request('http://localhost/api/export/archive?include=raw', {
+      signal: controller.signal,
+    })
+    const res = await GET(req)
+    expect(res.status).toBe(200)
+
+    const child = spawnMock.lastChild
+    if (!child) throw new Error('expected spawn to have been called')
+
+    controller.abort()
+
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(fsMock.rm).toHaveBeenCalledWith(
+      expect.stringContaining('sp-export-'),
+      { recursive: true, force: true },
+    )
+    // inflight cleared — a follow-up export is allowed.
+    const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+    expect(res2.status).not.toBe(429)
+  })
+
+  it('kills tar and clears inflight when the watchdog expires', async () => {
+    process.env.EXPORT_WATCHDOG_MS = '30'
+    try {
+      const { GET } = await loadRoute()
+      const res = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+      expect(res.status).toBe(200)
+
+      const child = spawnMock.lastChild
+      if (!child) throw new Error('expected spawn to have been called')
+
+      // tar never emits close/error — the watchdog must fire.
+      await new Promise(r => setTimeout(r, 80))
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+
+      const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+      expect(res2.status).not.toBe(429)
+    }
+    finally {
+      delete process.env.EXPORT_WATCHDOG_MS
+    }
   })
 
   it('uses the provided startTs and endTs in the filename', async () => {

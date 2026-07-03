@@ -24,6 +24,14 @@ const SAFE_RAW_NAME = /^[\w.-]+\.RAW(\.gz)?$/i
 
 let inflight = false
 
+// A hung tar (no close/error event) or a client that disconnects mid-stream
+// must not leave `inflight` latched (429s until restart) or leak the staging
+// dir. Env override exists for tests.
+const EXPORT_WATCHDOG_MS = (() => {
+  const raw = Number(process.env.EXPORT_WATCHDOG_MS ?? '')
+  return Number.isFinite(raw) && raw > 0 ? raw : 30 * 60 * 1000
+})()
+
 interface SourceFile {
   abs: string
   basename: string
@@ -97,10 +105,20 @@ export async function GET(request: Request) {
       { status: 429, headers: { 'Retry-After': '60' } },
     )
   }
-  inflight = true
 
   const startTs = Number(url.searchParams.get('startTs') ?? '0')
   const endTs = Number(url.searchParams.get('endTs') ?? String(Math.floor(Date.now() / 1000)))
+  if (Number.isNaN(startTs) || Number.isNaN(endTs)) {
+    // A malformed range would silently export everything in [NaN, NaN] → [].
+    // Worse, `?startTs=garbage` used to fall through as an all-time export.
+    return Response.json(
+      { error: 'startTs and endTs must be numeric epoch seconds' },
+      { status: 400 },
+    )
+  }
+
+  inflight = true
+
   const include = (url.searchParams.get('include') ?? 'raw,db')
     .split(',')
     .map(s => s.trim())
@@ -142,11 +160,29 @@ export async function GET(request: Request) {
       if (dir) rm(dir, { recursive: true, force: true }).catch(() => {})
       inflight = false
     }
+
+    // Both paths kill tar and clean up: a disconnected client stops reading
+    // the stream, and a wedged tar never emits close on its own.
+    const abortExport = () => {
+      tarChild.kill('SIGKILL')
+      cleanup()
+    }
+    const watchdog = setTimeout(abortExport, EXPORT_WATCHDOG_MS)
+    request.signal.addEventListener('abort', abortExport, { once: true })
+    const settle = () => {
+      clearTimeout(watchdog)
+      request.signal.removeEventListener('abort', abortExport)
+    }
+
     tarChild.on('close', (code) => {
+      settle()
       if (code !== 0 && tarStderr) console.error('tar:', tarStderr)
       cleanup()
     })
-    tarChild.on('error', cleanup)
+    tarChild.on('error', () => {
+      settle()
+      cleanup()
+    })
 
     const stream = Readable.toWeb(tarChild.stdout) as ReadableStream<Uint8Array>
     const filename = `sleepypod-export-${startTs}-${endTs}.tar.gz`
