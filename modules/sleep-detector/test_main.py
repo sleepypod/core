@@ -232,6 +232,50 @@ class TestSharedConnectionHolder:
         # any tracker reading from holder.conn observes the live connection.
 
 
+class TestPumpGatePerSide:
+    """Gating both beds whenever EITHER pump ran zeroed real movement on the
+    idle side for the whole pump runtime, under-counting the movement table.
+    Signal 1 (RPM) and Signal 3 (guard period) are now per-side; cross-side
+    mechanical coupling remains covered by Signal 2 (correlated ref-anomaly)."""
+
+    def _frz(self, left_rpm, right_rpm):
+        return {
+            "type": "frzHealth",
+            "left": {"pumpRpm": left_rpm},
+            "right": {"pumpRpm": right_rpm},
+        }
+
+    def test_only_running_side_is_gated(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=0))
+
+        assert gate.is_gated({}, "left") is True
+        assert gate.is_gated({}, "right") is False
+
+    def test_both_sides_gated_when_both_pumps_run(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=2800))
+
+        assert gate.is_gated({}, "left") is True
+        assert gate.is_gated({}, "right") is True
+
+    def test_guard_period_applies_per_side(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=0))
+        # Left pump turns off → left enters its guard period; right never ran.
+        gate.update_pump_state(self._frz(left_rpm=0, right_rpm=0))
+
+        assert gate.is_gated({}, "left") is True, "guard period must gate the side that ran"
+        assert gate.is_gated({}, "right") is False, "idle side must not inherit the guard"
+
+    def test_no_pumps_no_gate(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state(self._frz(left_rpm=0, right_rpm=0))
+
+        assert gate.is_gated({}, "left") is False
+        assert gate.is_gated({}, "right") is False
+
+
 def _tracker():
     """A SessionTracker wired to an in-memory DB. calibration/pump_gate are
     unused by _update, so None is sufficient for presence/session tests."""

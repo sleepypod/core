@@ -478,10 +478,16 @@ class PumpGateCapSense:
     def __init__(self):
         # Per-side pump RPM state from frzHealth records
         self._pump_rpm: Dict[str, float] = {"left": 0.0, "right": 0.0}
-        # Timestamp (monotonic) when pump last turned off — for guard period
-        self._pump_off_at: float = 0.0
-        # Whether pump was active on previous check (for detecting pump-off transition)
-        self._was_pump_active: bool = False
+        # Per-side timestamp (monotonic) when that pump last turned off —
+        # for the guard period. Per-side because gating both beds on either
+        # pump under-counted the movement table during long pump runtimes;
+        # cross-side mechanical coupling is what Signal 2 (correlated
+        # ref-anomaly) exists to catch. -inf = never turned off (0.0 would
+        # falsely gate the first PUMP_GUARD_S after process start, since
+        # time.monotonic() has an arbitrary, possibly near-zero origin).
+        self._pump_off_at: Dict[str, float] = {"left": float("-inf"), "right": float("-inf")}
+        # Whether each pump was active on previous check (for detecting pump-off transition)
+        self._was_pump_active: Dict[str, bool] = {"left": False, "right": False}
         # Reference channel anomaly state
         self._ref_anomaly_active: bool = False
 
@@ -536,12 +542,13 @@ class PumpGateCapSense:
 
             self._pump_rpm[side] = rpm
 
-        # Track pump-off transitions for guard period
-        pump_active = self._pump_rpm["left"] > 0 or self._pump_rpm["right"] > 0
-        if self._was_pump_active and not pump_active:
-            # Pump just turned off — start guard period
-            self._pump_off_at = time.monotonic()
-        self._was_pump_active = pump_active
+        # Track per-side pump-off transitions for the guard period
+        for side in ("left", "right"):
+            pump_active = self._pump_rpm[side] > 0
+            if self._was_pump_active[side] and not pump_active:
+                # This side's pump just turned off — start its guard period
+                self._pump_off_at[side] = time.monotonic()
+            self._was_pump_active[side] = pump_active
 
     def is_gated(self, record: dict, side: str,
                  channel_deltas: Optional[List[float]] = None,
@@ -558,12 +565,15 @@ class PumpGateCapSense:
 
         Returns True if the delta should be suppressed.
         """
-        # Signal 1: frzHealth pump RPM
-        if self._pump_rpm["left"] > 0 or self._pump_rpm["right"] > 0:
+        # Signal 1: frzHealth pump RPM — this side's pump only. Gating both
+        # sides on either pump zeroed real movement on the idle side for the
+        # whole pump runtime; the other pump's mechanical coupling (if any)
+        # is caught by the correlated ref-anomaly check below.
+        if self._pump_rpm.get(side, 0.0) > 0:
             return True
 
         # Signal 3: Guard period (checked before ref anomaly since it's cheap)
-        if time.monotonic() - self._pump_off_at < PUMP_GUARD_S:
+        if time.monotonic() - self._pump_off_at.get(side, float("-inf")) < PUMP_GUARD_S:
             return True
 
         # Signal 2: Reference channel anomaly (capSense2 only)
