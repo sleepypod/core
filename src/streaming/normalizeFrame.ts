@@ -223,32 +223,35 @@ export function normalizeFrame(rec: Record<string, unknown>): Record<string, unk
         amb: cdToC(rec.amb), hs: cdToC(rec.hs),
       }
     case 'frzHealth': {
+      // Fully optional-chained: a firmware build that omits a nested branch
+      // (pump/tec/fan.top) must degrade to zeros, not throw inside the WS
+      // message handler.
       const wire = rec as unknown as WireFrzHealth
       return {
         type: 'frzHealth', ts: wire.ts,
         left: {
-          pumpRpm: wire.left.pump.rpm ?? 0,
-          pumpDuty: wire.left.pump.duty ?? 0,
-          tecCurrent: wire.left.tec.current ?? 0,
-          flowrate: wire.left.temps?.flowrate ?? null,
+          pumpRpm: wire.left?.pump?.rpm ?? 0,
+          pumpDuty: wire.left?.pump?.duty ?? 0,
+          tecCurrent: wire.left?.tec?.current ?? 0,
+          flowrate: wire.left?.temps?.flowrate ?? null,
         },
         right: {
-          pumpRpm: wire.right.pump.rpm ?? 0,
-          pumpDuty: wire.right.pump.duty ?? 0,
-          tecCurrent: wire.right.tec.current ?? 0,
-          flowrate: wire.right.temps?.flowrate ?? null,
+          pumpRpm: wire.right?.pump?.rpm ?? 0,
+          pumpDuty: wire.right?.pump?.duty ?? 0,
+          tecCurrent: wire.right?.tec?.current ?? 0,
+          flowrate: wire.right?.temps?.flowrate ?? null,
         },
         fan: {
-          rpm: wire.fan.top.rpm ?? 0,
-          duty: wire.fan.top.duty ?? 0,
-          bottomRpm: wire.fan.bottom?.rpm ?? null,
+          rpm: wire.fan?.top?.rpm ?? 0,
+          duty: wire.fan?.top?.duty ?? 0,
+          bottomRpm: wire.fan?.bottom?.rpm ?? null,
         },
       }
     }
     case 'frzTherm': {
       const wire = rec as unknown as WireFrzTherm
-      const leftVal = typeof wire.left === 'number' ? wire.left : wire.left.power
-      const rightVal = typeof wire.right === 'number' ? wire.right : wire.right.power
+      const leftVal = typeof wire.left === 'number' ? wire.left : wire.left?.power
+      const rightVal = typeof wire.right === 'number' ? wire.right : wire.right?.power
       return {
         type: 'frzTherm', ts: wire.ts,
         left: leftVal ?? 0,

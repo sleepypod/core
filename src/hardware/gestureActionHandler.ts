@@ -129,7 +129,12 @@ export class GestureActionHandler {
         }
         else if (gesture.alarmBehavior === 'snooze') {
           await client.clearAlarm(event.side)
-          const snoozeDuration = gesture.alarmSnoozeDuration ?? 300
+          // Clamp to setTimeout's 32-bit ms ceiling — a larger delay wraps
+          // and fires immediately, restarting the alarm the user snoozed.
+          const snoozeDuration = Math.min(
+            gesture.alarmSnoozeDuration ?? 300,
+            Math.floor((2 ** 31 - 1) / 1000),
+          )
           const timeoutId = setTimeout(() => {
             this.snoozeTimeouts.delete(timeoutId)
             const restartClient = this.deps.newHardwareClient(this.socketPath)

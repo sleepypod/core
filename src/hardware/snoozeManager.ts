@@ -36,6 +36,11 @@ export function snoozeAlarm(
   // Cancel any existing snooze for this side
   cancelSnooze(side)
 
+  // Clamp to setTimeout's 32-bit ms ceiling — a larger delay wraps and the
+  // alarm restarts immediately instead of after the snooze. (The tRPC route
+  // caps duration at 1800s; this guards other callers.)
+  durationSeconds = Math.min(durationSeconds, Math.floor((2 ** 31 - 1) / 1000))
+
   const snoozeUntil = new Date(Date.now() + durationSeconds * 1000)
 
   const timeoutId = setTimeout(async () => {

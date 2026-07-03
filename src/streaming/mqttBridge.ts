@@ -654,10 +654,13 @@ export interface TestConnectionResult {
 }
 
 export async function testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
-  // Test connection respects MQTT_TLS_INSECURE so a "Test" button surfaces
-  // the same cert-trust outcome the running bridge would see. tlsEnabled on
-  // its own does not relax cert verification — mqtt.js defaults to strict.
-  const tlsInsecure = envBool(process.env.MQTT_TLS_INSECURE) === true
+  // Test connection resolves tlsInsecure through the same db-then-env
+  // precedence as the running bridge (resolveConfig), so the "Test" button
+  // surfaces the same cert-trust outcome — env-only reads disagreed with a
+  // db-configured bridge. tlsEnabled on its own does not relax cert
+  // verification — mqtt.js defaults to strict.
+  const { config } = await resolveConfig()
+  const tlsInsecure = config.tlsInsecure
   return new Promise((resolve) => {
     let settled = false
     const finalize = (result: TestConnectionResult) => {

@@ -452,7 +452,9 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
         ws.send(JSON.stringify({ type: 'error', message: 'seek requires a numeric timestamp' }))
         return
       }
-      handleSeek(ws, targetTs)
+      // Fire-and-forget: handleSeek settles internally (errors are caught
+      // and reported to the client via seek_complete/error messages).
+      void handleSeek(ws, targetTs)
     }
     else {
       ws.send(JSON.stringify({ type: 'error', message: `Unknown message type: ${msg.type}` }))
@@ -501,7 +503,7 @@ function findIndexEntry(targetTs: number): number {
  * Uses a separate file descriptor so the main live-streaming loop is
  * not affected.
  */
-function handleSeek(ws: WebSocket, targetTs: number): void {
+async function handleSeek(ws: WebSocket, targetTs: number): Promise<void> {
   if (!indexedFilePath) {
     ws.send(JSON.stringify({ type: 'error', message: 'No RAW file indexed yet' }))
     ws.send(JSON.stringify({ type: 'seek_complete' }))
@@ -521,34 +523,56 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
   // Check subscription filter for this client
   const subs = clientSubscriptions.get(ws)
 
-  let fd: number | null = null
+  let fh: import('node:fs/promises').FileHandle | null = null
   try {
-    fd = fs.openSync(filePath, 'r')
-    const stat = fs.fstatSync(fd)
+    fh = await fs.promises.open(filePath, 'r')
+    const stat = await fh.stat()
     const fileSize = stat.size
 
     // Read from startOffset to end of file, capped at 64 MB to prevent memory exhaustion
     const MAX_SEEK_BUFFER = 64 * 1024 * 1024
     const rawBytesToRead = fileSize - startOffset
     if (rawBytesToRead <= 0) {
-      fs.closeSync(fd)
+      await fh.close()
+      fh = null
       ws.send(JSON.stringify({ type: 'seek_complete' }))
       return
     }
     const bytesToRead = Math.min(rawBytesToRead, MAX_SEEK_BUFFER)
 
-    const seekBuffer = Buffer.alloc(bytesToRead)
-    fs.readSync(fd, seekBuffer, 0, bytesToRead, startOffset)
-    fs.closeSync(fd)
-    fd = null
+    // Chunked async reads: a single readSync of up to 64 MB blocked the
+    // event loop, stalling live streaming for every other client.
+    const READ_CHUNK = 4 * 1024 * 1024
+    let seekBuffer = Buffer.alloc(bytesToRead)
+    let readTotal = 0
+    while (readTotal < bytesToRead) {
+      const { bytesRead } = await fh.read(
+        seekBuffer,
+        readTotal,
+        Math.min(READ_CHUNK, bytesToRead - readTotal),
+        startOffset + readTotal,
+      )
+      if (bytesRead === 0) break // file shrank (rotation) — parse what we have
+      readTotal += bytesRead
+    }
+    if (readTotal < bytesToRead) seekBuffer = seekBuffer.subarray(0, readTotal)
+    await fh.close()
+    fh = null
 
     // Parse records and send frames, stopping after SEEK_MAX_DURATION_S
     let bufPos = 0
     const maxTs = targetTs + SEEK_MAX_DURATION_S
     let done = false
     let droppedDuringReplay = 0
+    let recordsSinceYield = 0
 
     while (bufPos < seekBuffer.length && !done) {
+      // Yield to the event loop periodically — the parse of a large replay
+      // is CPU-bound and would otherwise block live frames.
+      if (++recordsSinceYield >= 500) {
+        recordsSinceYield = 0
+        await new Promise(resolve => setImmediate(resolve))
+      }
       try {
         const { data, nextOffset } = readRawRecord(seekBuffer, bufPos)
         bufPos = nextOffset
@@ -595,11 +619,8 @@ function handleSeek(ws: WebSocket, targetTs: number): void {
     }
   }
   catch {
-    if (fd !== null) {
-      try {
-        fs.closeSync(fd)
-      }
-      catch { /* ignore */ }
+    if (fh !== null) {
+      await fh.close().catch(() => { /* ignore */ })
     }
   }
 }
