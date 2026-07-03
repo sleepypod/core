@@ -865,12 +865,12 @@ class TestWriteVitalsResilience:
         from datetime import datetime, timezone
         import main
         conn = self._make_db()
-        main._db_write_failures = 0
-        result_conn, wrote = main.write_vitals(conn, "left",
-                                               datetime.now(timezone.utc),
-                                               70.0, 40.0, 15.0,
-                                               quality_score=0.9)
-        assert result_conn is conn
+        holder = main.DBHolder(conn)
+        wrote = main.write_vitals(holder, "left",
+                                  datetime.now(timezone.utc),
+                                  70.0, 40.0, 15.0,
+                                  quality_score=0.9)
+        assert holder.conn is conn
         assert wrote is True
         rows = conn.execute("SELECT * FROM vitals").fetchall()
         assert len(rows) == 1
@@ -887,19 +887,20 @@ class TestWriteVitalsResilience:
             def execute(self, *a, **k):
                 raise sqlite3.OperationalError("disk I/O error")
 
-        main._db_write_failures = 0
+        holder = main.DBHolder(BadConn())
         # Should not raise
-        result_conn, wrote = main.write_vitals(BadConn(), "left",
-                                               datetime.now(timezone.utc),
-                                               70.0, 40.0, 15.0,
-                                               quality_score=0.9)
-        # Returns the bad conn unchanged on the first failure, with wrote=False.
-        assert result_conn is not None
+        wrote = main.write_vitals(holder, "left",
+                                  datetime.now(timezone.utc),
+                                  70.0, 40.0, 15.0,
+                                  quality_score=0.9)
+        # Keeps the bad conn on the first failure, with wrote=False.
+        assert holder.conn is not None
         assert wrote is False
+        assert holder.write_failures == 1
 
     def test_reconnect_after_threshold(self, monkeypatch):
-        """After _DB_RECONNECT_THRESHOLD consecutive failures, the connection
-        is replaced via open_biometrics_db()."""
+        """After _DB_RECONNECT_THRESHOLD consecutive failures, the holder's
+        connection is replaced via open_biometrics_db()."""
         from datetime import datetime, timezone
         import sqlite3
         import main
@@ -919,22 +920,60 @@ class TestWriteVitalsResilience:
             replaced.append(1)
             return self._make_db()
 
-        main._db_write_failures = 0
         monkeypatch.setattr(main, "open_biometrics_db", fake_open)
 
         bad = BadConn()
+        holder = main.DBHolder(bad)
         ts = datetime.now(timezone.utc)
-        conn = bad
         for i in range(main._DB_RECONNECT_THRESHOLD):
-            conn, wrote = main.write_vitals(conn, "left", ts, 70.0, 40.0, 15.0,
-                                            quality_score=0.9)
+            wrote = main.write_vitals(holder, "left", ts, 70.0, 40.0, 15.0,
+                                      quality_score=0.9)
             assert wrote is False
 
         # After crossing the threshold the function must have reopened the DB
         assert len(replaced) == 1, \
             "expected one reconnect after _DB_RECONNECT_THRESHOLD failures"
+        # The stale handle is closed and swapped out of the holder
+        assert bad.closed is True
+        assert holder.conn is not bad
         # Failure counter resets after reconnect
-        assert main._db_write_failures == 0
+        assert holder.write_failures == 0
+
+    def test_sibling_processor_sees_reconnected_handle(self, monkeypatch):
+        """Regression: both SideProcessors share one DBHolder, so a reconnect
+        triggered by one side must be visible to the other. Previously each
+        side held a raw connection and the sibling kept writing to the closed
+        handle forever."""
+        from datetime import datetime, timezone
+        import sqlite3
+        import main
+
+        class BadConn:
+            closed = False
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("disk full")
+            def close(self):
+                self.closed = True
+
+        good = self._make_db()
+        monkeypatch.setattr(main, "open_biometrics_db", lambda: good)
+
+        holder = main.DBHolder(BadConn())
+        ts = datetime.now(timezone.utc)
+        # "Left side" fails through the threshold and triggers the reconnect
+        for _ in range(main._DB_RECONNECT_THRESHOLD):
+            main.write_vitals(holder, "left", ts, 70.0, 40.0, 15.0,
+                              quality_score=0.9)
+
+        # "Right side" writes through the same holder and must hit the fresh
+        # connection, not the closed one.
+        wrote = main.write_vitals(holder, "right", ts, 65.0, 35.0, 14.0,
+                                  quality_score=0.8)
+        assert wrote is True
+        rows = good.execute("SELECT side FROM vitals").fetchall()
+        assert rows == [("right",)]
 
 
 class TestSideProcessorAbsenceThrottle:
@@ -947,7 +986,7 @@ class TestSideProcessorAbsenceThrottle:
         the next ingest call does not immediately re-enter the heavy
         signal-processing path."""
         np.random.seed(42)
-        proc = SideProcessor("left", db_conn=None)
+        proc = SideProcessor("left", db_holder=None)
         # Simulate extended absence — _last_write far in the past.
         proc._last_write = time.time() - 3600  # 1 hour ago
         assert time.time() - proc._last_write > VITALS_INTERVAL_S

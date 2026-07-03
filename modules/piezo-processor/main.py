@@ -118,49 +118,63 @@ def open_biometrics_db() -> sqlite3.Connection:
 # After this many consecutive write failures, discard the connection and
 # reopen on the next write attempt (#325).
 _DB_RECONNECT_THRESHOLD = 5
-_db_write_failures = 0
-_db_conn_ref: Optional[sqlite3.Connection] = None
 
 
-def _replace_db_connection() -> Optional[sqlite3.Connection]:
-    """Close the current biometrics connection and open a fresh one.
+class DBHolder:
+    """Shared mutable reference to the biometrics connection.
 
-    Returns the new connection, or None if reconnection failed. On failure the
-    caller should keep using the old handle so subsequent writes can retry.
+    Both SideProcessor instances point at the same DBHolder so that when one
+    side triggers a reconnect, the other automatically observes the new
+    connection on its next write. Holding raw sqlite3.Connection refs on each
+    processor orphaned the sibling after a reconnect — it kept writing to the
+    closed handle (the exact bug sleep-detector's DBHolder docstring warns
+    about).
+
+    The consecutive-failure counter lives on the holder, making it
+    per-connection: failures observed against a stale handle can no longer
+    discard a healthy replacement.
     """
-    global _db_conn_ref
-    old = _db_conn_ref
+    __slots__ = ("conn", "write_failures")
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+        self.write_failures = 0
+
+
+def _reconnect_db(holder: "DBHolder") -> None:
+    """Open a fresh connection, swap into *holder*, then close the old one.
+    Open-first-then-swap means an open failure leaves the live handle in
+    place; the close happens after the swap so writers always see a valid
+    handle. Never raises."""
+    old = holder.conn
     try:
-        if old is not None:
-            try:
-                old.close()
-            except sqlite3.Error:
-                pass
-        _db_conn_ref = open_biometrics_db()
-        log.info("Reopened biometrics DB connection after write failures")
-        return _db_conn_ref
+        new = open_biometrics_db()
     except sqlite3.Error as e:
         log.error("Failed to reopen biometrics DB: %s", e)
-        return None
+        return
+    holder.conn = new
+    log.info("Reopened biometrics DB connection after write failures")
+    try:
+        old.close()
+    except sqlite3.Error:
+        pass
 
 
-def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
+def write_vitals(holder: "DBHolder", side: str, ts: datetime,
                  heart_rate: Optional[float], hrv: Optional[float],
                  breathing_rate: Optional[float],
                  quality_score: float,
                  flags: Optional[list] = None,
-                 hr_raw: Optional[float] = None) -> tuple[sqlite3.Connection, bool]:
+                 hr_raw: Optional[float] = None) -> bool:
     """Insert one vitals row + paired vitals_quality row. Logs and swallows
     sqlite3 errors so the main loop survives transient WAL/disk issues (#325).
-    After _DB_RECONNECT_THRESHOLD consecutive failures, the connection is
-    replaced and the new handle is returned.
+    After _DB_RECONNECT_THRESHOLD consecutive failures, the holder's
+    connection is replaced in place.
 
-    Returns (conn, wrote): caller must use the returned connection for
-    subsequent writes; `wrote` is True only when both inserts committed
-    so callers don't advance their downsample cursor on a failed write.
+    Returns True only when both inserts committed so callers don't advance
+    their downsample cursor on a failed write.
     """
-    global _db_write_failures, _db_conn_ref
-    _db_conn_ref = conn
+    conn = holder.conn
     ts_unix = int(ts.timestamp())
     now_unix = int(time.time())
     flags_json = json.dumps(flags) if flags else None
@@ -175,18 +189,16 @@ def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, now_unix),
             )
-        _db_write_failures = 0
-        return conn, True
+        holder.write_failures = 0
+        return True
     except sqlite3.Error as e:
-        _db_write_failures += 1
+        holder.write_failures += 1
         log.warning("write_vitals failed (%d consecutive): %s",
-                    _db_write_failures, e)
-        if _db_write_failures >= _DB_RECONNECT_THRESHOLD:
-            new_conn = _replace_db_connection()
-            _db_write_failures = 0
-            if new_conn is not None:
-                return new_conn, False
-        return conn, False
+                    holder.write_failures, e)
+        if holder.write_failures >= _DB_RECONNECT_THRESHOLD:
+            _reconnect_db(holder)
+            holder.write_failures = 0
+        return False
 
 
 def report_health(status: str, message: str) -> None:
@@ -765,10 +777,10 @@ def compute_hrv(samples: np.ndarray,
 # ---------------------------------------------------------------------------
 
 class SideProcessor:
-    def __init__(self, side: str, db_conn: sqlite3.Connection,
+    def __init__(self, side: str, db_holder: DBHolder,
                  pump_state: Optional[FrzHealthPumpState] = None):
         self.side = side
-        self.db = db_conn
+        self.db_holder = db_holder
         self._hr_buf: deque = deque(maxlen=HR_WINDOW_S * SAMPLE_RATE)
         self._hrv_buf: deque = deque(maxlen=HRV_WINDOW_S * SAMPLE_RATE)
         self._br_buf: deque = deque(maxlen=BREATHING_WINDOW_S * SAMPLE_RATE)
@@ -883,9 +895,9 @@ class SideProcessor:
                 flags.append("no_br")
             if med_std < self._presence.enter_threshold:
                 flags.append("low_signal")
-            self.db, wrote = write_vitals(self.db, self.side, ts, hr, hrv, br,
-                                          quality_score=quality, flags=flags or None,
-                                          hr_raw=hr_raw)
+            wrote = write_vitals(self.db_holder, self.side, ts, hr, hrv, br,
+                                 quality_score=quality, flags=flags or None,
+                                 hr_raw=hr_raw)
             log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f q=%.2f", self.side,
                      hr or 0, hrv or 0, br or 0, quality)
             # Only advance the downsample cursor when the write actually
@@ -908,11 +920,11 @@ def main() -> None:
         log.error("Biometrics DB directory does not exist: %s", BIOMETRICS_DB.parent)
         sys.exit(1)
 
-    db_conn = open_biometrics_db()
+    db_holder = DBHolder(open_biometrics_db())
     pump_gate = PumpGate()
     pump_state = FrzHealthPumpState()
-    left = SideProcessor("left", db_conn, pump_state=pump_state)
-    right = SideProcessor("right", db_conn, pump_state=pump_state)
+    left = SideProcessor("left", db_holder, pump_state=pump_state)
+    right = SideProcessor("right", db_holder, pump_state=pump_state)
     left._other = right
     right._other = left
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
@@ -950,7 +962,7 @@ def main() -> None:
         report_health("down", str(e))
         sys.exit(1)
     finally:
-        db_conn.close()
+        db_holder.conn.close()
         log.info("Shutdown complete")
 
     # Only reached on clean shutdown (not via sys.exit)
