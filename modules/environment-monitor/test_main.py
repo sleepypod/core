@@ -22,8 +22,11 @@ sys.modules.setdefault("common.dialect", _dialect_stub)
 
 from main import (  # noqa: E402
     _safe_freezer_centidegrees,
+    sanitize_ts,
     write_freezer_temp,
     write_bed_temp,
+    MAX_FUTURE_SKEW_S,
+    MIN_VALID_WALL_CLOCK_TS,
     NO_SENSOR,
 )
 
@@ -128,6 +131,52 @@ class TestWriteFreezerTempFiltering:
         rows = conn.execute("SELECT * FROM freezer_temp").fetchall()
         assert len(rows) == 1
         assert rows[0][2] is None, "out-of-range heatsink must be NULL"
+
+
+class TestSanitizeTs:
+    """Timestamp sanity gate: one far-future ts must not be able to poison
+    the MAX(timestamp)-seeded downsample cursors and block all writes."""
+
+    def test_valid_recent_ts_passes_through(self):
+        import time
+        ts = time.time() - 5
+        assert sanitize_ts(ts) == ts
+
+    def test_slight_future_within_skew_passes_through(self):
+        import time
+        ts = time.time() + MAX_FUTURE_SKEW_S / 2
+        assert sanitize_ts(ts) == ts
+
+    def test_far_future_falls_back_to_now(self):
+        import time
+        before = time.time()
+        result = sanitize_ts(before + 10 * 365 * 86400)
+        assert before <= result <= time.time() + 1
+
+    def test_pre_2020_falls_back_to_now(self):
+        import time
+        before = time.time()
+        result = sanitize_ts(MIN_VALID_WALL_CLOCK_TS - 1)
+        assert before <= result <= time.time() + 1
+
+    def test_missing_falls_back_to_now(self):
+        import time
+        before = time.time()
+        result = sanitize_ts(None)
+        assert before <= result <= time.time() + 1
+
+    def test_nan_and_inf_fall_back_to_now(self):
+        import time
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            before = time.time()
+            result = sanitize_ts(bad)
+            assert before <= result <= time.time() + 1
+
+    def test_non_numeric_falls_back_to_now(self):
+        import time
+        before = time.time()
+        result = sanitize_ts("not-a-timestamp")
+        assert before <= result <= time.time() + 1
 
 
 # NOTE: bed_temp sentinel filtering moved into common.dialect.normalize_bed_temp
