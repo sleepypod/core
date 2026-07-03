@@ -271,6 +271,15 @@ export const systemRouter = router({
     .input(z.object({
       branch: z.string()
         .regex(/^[a-zA-Z0-9._\-/]+$/, 'Invalid branch name')
+        // git-ref safety the character class can't express: no path
+        // traversal ('..'), no leading/trailing '/', no empty segments
+        // ('//'), and no leading '-' (option injection into git argv).
+        .refine(
+          b => !b.includes('..') && !b.includes('//')
+            && !b.startsWith('/') && !b.endsWith('/')
+            && !b.startsWith('-') && !b.endsWith('.lock'),
+          'Invalid branch name',
+        )
         .optional(),
     }))
     .output(z.object({

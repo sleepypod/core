@@ -78,8 +78,15 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   const [pumpRecoveryRpm, setPumpRecoveryRpm] = useState(device.pumpStallRecoveryRpm)
   const [pumpRecoverySamples, setPumpRecoverySamples] = useState(device.pumpStallRecoverySamples)
 
-  // Sync from server data when it changes
+  // Sync from server data when it changes. Gated on a value fingerprint:
+  // `device` gets a new object identity on every refetch (poll, focus,
+  // mutation invalidate), and resetting on identity alone stomped fields the
+  // user was actively editing.
+  const lastSyncedDevice = useRef(JSON.stringify(device))
   useEffect(() => {
+    const fingerprint = JSON.stringify(device)
+    if (fingerprint === lastSyncedDevice.current) return
+    lastSyncedDevice.current = fingerprint
     /* eslint-disable react-hooks/set-state-in-effect */
     setTimezone(device.timezone)
     setTempUnit(device.temperatureUnit)

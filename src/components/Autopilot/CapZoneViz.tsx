@@ -139,7 +139,15 @@ function ReplayZones({ side, nightId }: { side: 'left' | 'right', nightId: numbe
   }, [playing, frames.length])
 
   // Stable scale across the night so the scrub doesn't re-normalize per frame.
-  const scale = useMemo(() => Math.max(0.01, ...frames.flatMap(f => f.zones)), [frames])
+  // Reduce instead of spreading into Math.max — a long replay's flattened
+  // zone array can exceed the engine argument limit (RangeError).
+  const scale = useMemo(
+    () => frames.reduce(
+      (max, f) => f.zones.reduce((m, z) => (z > m ? z : m), max),
+      0.01,
+    ),
+    [frames],
+  )
 
   if (q.isLoading && frames.length === 0) {
     return <div className="grid h-24 place-items-center text-[12px] text-zinc-600">Loading replay…</div>

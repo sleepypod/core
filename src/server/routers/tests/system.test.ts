@@ -264,6 +264,17 @@ describe('system.triggerUpdate', () => {
     await expect(caller.triggerUpdate({ branch: 'evil; rm -rf /' })).rejects.toThrow(/Invalid branch name/)
   })
 
+  it('rejects git-ref-unsafe branch names the character class allows', async () => {
+    for (const branch of ['../etc', 'a//b', '/leading', 'trailing/', '-rf', 'x.lock']) {
+      await expect(caller.triggerUpdate({ branch })).rejects.toThrow(/Invalid branch name/)
+    }
+  })
+
+  it('accepts a normal nested feature branch', async () => {
+    const result = await caller.triggerUpdate({ branch: 'feat/pump-2.0_fix' })
+    expect(result.triggered).toBe(true)
+  })
+
   it('registers an error listener on the child to swallow spawn failures', async () => {
     const onSpy = vi.fn()
     const unrefSpy = vi.fn()

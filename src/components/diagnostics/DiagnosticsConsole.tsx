@@ -151,7 +151,8 @@ function OverviewPanel({ onJump }: { onJump: (s: SectionId) => void }) {
         <Metric label="DB" value={system.data?.database?.status === 'ok' ? fmtMs(system.data.database.latencyMs) : (system.data?.database?.status ?? '—')} good={system.data?.database?.status === 'ok'} />
         <Metric label="DAC socket" value={hardware.data?.status === 'ok' ? fmtMs(hardware.data.latencyMs) : (hardware.data?.status ?? '—')} good={hardware.data?.status === 'ok'} />
         <Metric label="Scheduler" value={scheduler.data?.enabled ? `${scheduler.data.jobCounts?.total ?? 0} jobs` : 'off'} good={scheduler.data?.healthy ?? true} />
-        <Metric label="Pump-stall" value={t?.pumpStallProtectionEnabled ? 'armed' : 'opt-in off'} good={!t?.pumpStallProtectionEnabled} />
+        {/* armed = green; the inverted flag painted the armed guard amber */}
+        <Metric label="Pump-stall" value={t?.pumpStallProtectionEnabled ? 'armed' : 'opt-in off'} good={t?.pumpStallProtectionEnabled} />
         <Metric label="Heatsink" value={fmtF(t?.heatsinkTempF)} />
         <Metric label="Ambient" value={fmtF(t?.ambientTempF)} />
       </div>
