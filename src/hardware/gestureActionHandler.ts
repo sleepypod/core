@@ -1,6 +1,7 @@
 import type { HardwareClient } from './client'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
+import { getAutomationEngineIfRunning } from '@/src/automation'
 
 // Re-export for callers that need to build deps
 export type { GestureActionDeps }
@@ -101,6 +102,7 @@ export class GestureActionHandler {
 
     const client = this.deps.newHardwareClient(this.socketPath)
     try {
+      getAutomationEngineIfRunning()?.registerManualOverride(event.side)
       await client.connect()
       await client.setTemperature(event.side, newTemp)
     }
@@ -164,6 +166,7 @@ export class GestureActionHandler {
         const target = state?.targetTemperature ?? TEMP_NEUTRAL
         const client = this.deps.newHardwareClient(this.socketPath)
         try {
+          getAutomationEngineIfRunning()?.registerManualOverride(event.side)
           await client.connect()
           await client.setPower(event.side, nextPowered, nextPowered ? target : undefined)
         }

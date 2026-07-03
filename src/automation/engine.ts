@@ -90,6 +90,7 @@ export class AutomationEngine {
   private deps: AutomationEngineDeps
   private rules: AutomationRule[] = []
   private runtime = new Map<number, RuleRuntime>()
+  private triggerFingerprints = new Map<number, string>()
   private windows = new WindowStore()
   private windowSignals = new Set<string>()
   private timer: ReturnType<typeof setInterval> | null = null
@@ -124,12 +125,25 @@ export class AutomationEngine {
 
   /** Reload automations from the source (call after CRUD mutations). */
   async reload(): Promise<void> {
-    this.rules = await this.deps.loadRules()
+    const nextRules = await this.deps.loadRules()
+    const nextIds = new Set<number>()
+    for (const rule of nextRules) {
+      nextIds.add(rule.id)
+      const nextTrigger = JSON.stringify(rule.trigger)
+      if (this.triggerFingerprints.get(rule.id) !== nextTrigger) {
+        this.runtime.delete(rule.id)
+      }
+      this.triggerFingerprints.set(rule.id, nextTrigger)
+    }
+
+    this.rules = nextRules
     this.windowSignals = collectWindowSignals(this.rules)
     // Drop runtime for rules that no longer exist.
-    const ids = new Set(this.rules.map(r => r.id))
     for (const id of [...this.runtime.keys()]) {
-      if (!ids.has(id)) this.runtime.delete(id)
+      if (!nextIds.has(id)) this.runtime.delete(id)
+    }
+    for (const id of [...this.triggerFingerprints.keys()]) {
+      if (!nextIds.has(id)) this.triggerFingerprints.delete(id)
     }
   }
 
@@ -335,6 +349,9 @@ export class AutomationEngine {
     else if (action.temp) raw = evaluateExpr(action.temp, ctx)
 
     if (action.kind === 'setTemperature' && raw === undefined) {
+      return sides.map(side => ({ kind: action.kind, side, skipped: 'temp-unknown' }))
+    }
+    if (action.kind === 'setPower' && action.on && action.temp && raw === undefined) {
       return sides.map(side => ({ kind: action.kind, side, skipped: 'temp-unknown' }))
     }
 

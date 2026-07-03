@@ -62,6 +62,11 @@ const pumpStallNotificationMock = vi.hoisted(() => ({
   getAllPumpStallNotices: vi.fn<() => { left: unknown, right: unknown }>(() => ({ left: null, right: null })),
 }))
 
+const automationMock = vi.hoisted(() => ({
+  registerManualOverride: vi.fn(),
+  getAutomationEngineIfRunning: vi.fn(() => ({ registerManualOverride: automationMock.registerManualOverride })),
+}))
+
 const dbState = vi.hoisted(() => ({
   rowsQueue: [] as unknown[][],
   pop(): unknown[] { return dbState.rowsQueue.shift() ?? [] },
@@ -126,6 +131,7 @@ vi.mock('@/src/hardware/sharedClient', () => ({ getSharedHardwareClient: sharedC
 vi.mock('@/src/hardware/deviceStateSync', () => stateSyncMock)
 vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/hardware/pumpStallNotification', () => pumpStallNotificationMock)
+vi.mock('@/src/automation', () => ({ getAutomationEngineIfRunning: automationMock.getAutomationEngineIfRunning }))
 vi.mock('@/src/db', () => ({
   db: dbMock,
   biometricsDb: biometricsDbMock,
@@ -163,6 +169,8 @@ beforeEach(() => {
   stateSyncMock.markSideMutated.mockReset()
   pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
   pumpStallNotificationMock.getAllPumpStallNotices.mockReset().mockReturnValue({ left: null, right: null })
+  automationMock.registerManualOverride.mockReset()
+  automationMock.getAutomationEngineIfRunning.mockClear()
   dbState.rowsQueue.length = 0
   dbMock.select.mockClear()
   dbMock.update.mockClear()
@@ -298,6 +306,7 @@ describe('device.setTemperature', () => {
       expect(helpersMock.client.setTemperature).toHaveBeenCalledTimes(1)
       expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalled()
       expect(stateSyncMock.markSideMutated).toHaveBeenCalledWith('left')
+      expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
     }
     finally {
       vi.useRealTimers()
@@ -308,6 +317,7 @@ describe('device.setTemperature', () => {
     pumpStallMock.shouldBlock.mockReturnValueOnce(true)
     await expect(caller.setTemperature({ side: 'left', temperature: 70 })).rejects.toThrow(/Pump stall protection active/)
     expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
   })
 
   it('swallows DB sync errors so the timer still fires', async () => {
@@ -373,6 +383,8 @@ describe('device.setTemperature', () => {
       // Only the second call's value reaches hardware
       expect(helpersMock.client.setTemperature).toHaveBeenCalledTimes(1)
       expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('left', 75, undefined)
+      expect(automationMock.registerManualOverride).toHaveBeenCalledTimes(2)
+      expect(automationMock.registerManualOverride).toHaveBeenLastCalledWith('left')
     }
     finally {
       vi.useRealTimers()
@@ -387,6 +399,7 @@ describe('device.setPower', () => {
     const result = await caller.setPower({ side: 'left', powered: true, temperature: 72 })
     expect(result).toEqual({ success: true })
     expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 72)
+    expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', expect.objectContaining({
       targetTemperature: 72,
     }))
@@ -397,6 +410,7 @@ describe('device.setPower', () => {
 
     await caller.setPower({ side: 'left', powered: false })
     expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', false, undefined)
+    expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
   })
 
@@ -404,6 +418,7 @@ describe('device.setPower', () => {
     pumpStallMock.shouldBlock.mockReturnValueOnce(true)
     await expect(caller.setPower({ side: 'left', powered: true, temperature: 72 })).rejects.toThrow(/Pump stall protection active/)
     expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
   })
 
   it('allows powering off even when pump stall guard is active', async () => {

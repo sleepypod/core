@@ -21,6 +21,7 @@ import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { getAutomationEngineIfRunning } from '@/src/automation'
 
 const lastTargetF: Record<Side, number | null> = { left: null, right: null }
 
@@ -33,6 +34,10 @@ const intendedPower: Record<Side, boolean | null> = { left: null, right: null }
 const sideQueues: Record<Side, Promise<unknown>> = {
   left: Promise.resolve(),
   right: Promise.resolve(),
+}
+
+function registerManualOverride(side: Side): void {
+  getAutomationEngineIfRunning()?.registerManualOverride(side)
 }
 
 function serialize<T>(side: Side, fn: () => Promise<T>): Promise<T> {
@@ -133,6 +138,7 @@ export async function setTargetTemperature(
     const intended = intendedPower[side]
     const powered = intended !== null ? intended : isCurrentlyPowered(monitor, side)
     if (!powered) return
+    registerManualOverride(side)
     await logged(
       `setTemperature(${side}, ${f})`,
       () => getSharedHardwareClient().setTemperature(side, f),
@@ -156,6 +162,7 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
     await serialize(side, async () => {
       const target = clampF(getStagedTargetF(monitor, side))
       lastTargetF[side] = target
+      registerManualOverride(side)
       await logged(
         `setPower(${side}, true, ${target})`,
         () => getSharedHardwareClient().setPower(side, true, target),
@@ -174,7 +181,10 @@ export async function setSidePowerOff(monitor: DacMonitor, side: Side): Promise<
   try {
     await serialize(side, () => logged(
       `setPower(${side}, false)`,
-      () => getSharedHardwareClient().setPower(side, false),
+      () => {
+        registerManualOverride(side)
+        return getSharedHardwareClient().setPower(side, false)
+      },
     ))
   }
   catch (e) {

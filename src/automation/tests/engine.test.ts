@@ -446,6 +446,31 @@ describe('AutomationEngine — reload', () => {
     await h.engine.tick()
     expect(h.runs.some(r => r.id === 2)).toBe(true)
   })
+
+  it('resets trigger memory when an existing rule changes trigger shape', async () => {
+    const rules = [rule({
+      trigger: { kind: 'signalChange', signal: 'x' },
+      actions: [{ kind: 'notify', message: 'changed' }],
+    })]
+    const h = makeHarness(rules)
+    h.setSignal('x', 1)
+    await h.engine.reload()
+    await h.engine.tick() // first observation only; no change yet
+    expect(h.runs).toHaveLength(0)
+
+    rules[0] = rule({
+      trigger: { kind: 'signalChange', signal: 'y' },
+      actions: [{ kind: 'notify', message: 'changed' }],
+    })
+    h.setSignal('y', 2)
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.runs).toHaveLength(0)
+
+    h.setSignal('y', 3)
+    await h.engine.tick()
+    expect(h.runs[0].outcome).toBe('fired')
+  })
 })
 
 describe('AutomationEngine — setPower', () => {
@@ -469,6 +494,15 @@ describe('AutomationEngine — setPower', () => {
 describe('AutomationEngine — unresolved temperature', () => {
   it('skips a setTemperature whose expression resolves to undefined', async () => {
     const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: sig('absent') }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(0)
+    expect(h.runs[0].outcome).toBe('skipped')
+    expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('temp-unknown')
+  })
+
+  it('skips setPower when an explicit power-on temp expression is unknown', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true, temp: sig('absent') }] })])
     await h.engine.reload()
     await h.engine.tick()
     expect(h.hwCalls).toHaveLength(0)

@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const setTemperature = vi.fn()
 const setPower = vi.fn()
+const registerManualOverride = vi.fn()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setTemperature, setPower }),
+}))
+vi.mock('@/src/automation', () => ({
+  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
 }))
 
 import {
@@ -44,6 +48,7 @@ describe('sideController', () => {
     __resetSideController()
     setTemperature.mockReset()
     setPower.mockReset()
+    registerManualOverride.mockReset()
     setTemperature.mockResolvedValue(undefined)
     setPower.mockResolvedValue(undefined)
   })
@@ -134,12 +139,14 @@ describe('sideController', () => {
     it('caches the requested target even when the side is off (no firmware write)', async () => {
       await setTargetTemperature(monitor(offStatus), 'left', 68)
       expect(setTemperature).not.toHaveBeenCalled()
+      expect(registerManualOverride).not.toHaveBeenCalled()
       expect(getStagedTargetF(monitor(offStatus), 'left')).toBe(68)
     })
 
     it('caches AND writes when the side is on', async () => {
       await setTargetTemperature(monitor(onStatus), 'left', 72)
       expect(setTemperature).toHaveBeenCalledWith('left', 72)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
       expect(getStagedTargetF(monitor(onStatus), 'left')).toBe(72)
     })
   })
@@ -150,6 +157,7 @@ describe('sideController', () => {
       await setTargetTemperature(m, 'left', 68)
       await setSidePowerOn(m, 'left')
       expect(setPower).toHaveBeenCalledWith('left', true, 68)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
 
     it('falls back to firmware status target when no cache exists', async () => {
@@ -167,6 +175,7 @@ describe('sideController', () => {
     it('routes to setPower(side, false)', async () => {
       await setSidePowerOff(monitor(onStatus), 'left')
       expect(setPower).toHaveBeenCalledWith('left', false)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
   })
 

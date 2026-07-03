@@ -14,6 +14,7 @@ import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { getAutomationEngineIfRunning } from '@/src/automation'
 import {
   sideSchema,
   temperatureSchema,
@@ -61,6 +62,10 @@ interface PendingTemp {
 }
 
 const pendingTemps = new Map<string, PendingTemp>()
+
+function registerManualOverride(side: 'left' | 'right'): void {
+  getAutomationEngineIfRunning()?.registerManualOverride(side)
+}
 
 /**
  * Device control router - direct hardware control for immediate operations.
@@ -332,6 +337,7 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
+      registerManualOverride(input.side)
       markSideMutated(input.side)
 
       // The DB is updated optimistically on every call for responsive UI.
@@ -434,6 +440,7 @@ export const deviceRouter = router({
         })
       }
 
+      registerManualOverride(input.side)
       return withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 

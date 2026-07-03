@@ -3,9 +3,13 @@ import { Characteristic } from 'hap-nodejs'
 
 const setTemperature = vi.fn().mockResolvedValue(undefined)
 const setPower = vi.fn().mockResolvedValue(undefined)
+const registerManualOverride = vi.fn()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setTemperature, setPower }),
+}))
+vi.mock('@/src/automation', () => ({
+  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
 }))
 
 import { buildThermostatService } from '../accessories/thermostat'
@@ -34,6 +38,7 @@ describe('thermostat accessory', () => {
     __resetSideController()
     setTemperature.mockClear()
     setPower.mockClear()
+    registerManualOverride.mockClear()
   })
 
   it('reports current temperature in Celsius via onGet', async () => {

@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { GestureActionHandler, type GestureActionDeps } from '../gestureActionHandler'
+import type { GestureActionDeps } from '../gestureActionHandler'
 import type { GestureEvent } from '../dacMonitor'
 import type { HardwareClient } from '../client'
+
+const registerManualOverride = vi.fn()
+
+vi.mock('@/src/automation', () => ({
+  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+}))
+
+const { GestureActionHandler } = await import('../gestureActionHandler')
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,6 +54,7 @@ const makeDeps = (
 describe('GestureActionHandler', () => {
   afterEach(() => {
     vi.clearAllTimers()
+    registerManualOverride.mockClear()
     vi.useRealTimers()
   })
 
@@ -69,6 +78,7 @@ describe('GestureActionHandler', () => {
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
       expect(client.setTemperature).toHaveBeenCalledWith('left', 75)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
 
     test('decrements temperature', async () => {
@@ -167,6 +177,7 @@ describe('GestureActionHandler', () => {
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
       expect(client.setPower).toHaveBeenCalledWith('left', true, 70)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
 
     test('power-on falls back to TEMP_NEUTRAL when no targetTemperature is cached', async () => {
