@@ -32,6 +32,10 @@ reports/mutation
 sleepypod.dev.db
 sleepypod.dev.db-shm
 sleepypod.dev.db-wal
+# biometrics.dev.db itself stays tracked (intentional dev fixture); the WAL/SHM
+# sidecars are transient per-machine state and must not be committed.
+biometrics.dev.db-shm
+biometrics.dev.db-wal
 
 # SQLite test/local databases
 sleepypod.test.db

@@ -87,7 +87,6 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     const fingerprint = JSON.stringify(device)
     if (fingerprint === lastSyncedDevice.current) return
     lastSyncedDevice.current = fingerprint
-    /* eslint-disable react-hooks/set-state-in-effect */
     setTimezone(device.timezone)
     setTempUnit(device.temperatureUnit)
     setRebootDaily(device.rebootDaily)
@@ -107,7 +106,6 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     setPumpAutoRecover(device.pumpStallAutoRecoveryEnabled)
     setPumpRecoveryRpm(device.pumpStallRecoveryRpm)
     setPumpRecoverySamples(device.pumpStallRecoverySamples)
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, [device])
 
   const [savedFlash, setSavedFlash] = useState(false)

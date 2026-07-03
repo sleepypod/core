@@ -201,43 +201,43 @@ the concrete change to make. Execute in batch order; commit per batch.
 
 **Server/API**
 - [x] 4.1 (done with 2.6) `app/api/export/archive/route.ts:102` — 400 on `Number.isNaN(startTs) || Number.isNaN(endTs)` instead of silently exporting everything.
-- [ ] 4.2 `src/server/routers/system.ts:272` — tighten branch regex to reject `..`, leading/trailing `/`, `//` (git-ref-safe).
+- [x] 4.2 `src/server/routers/system.ts:272` — tighten branch regex to reject `..`, leading/trailing `/`, `//` (git-ref-safe).
 
 **Hardware/streaming**
-- [ ] 4.3 `src/streaming/normalizeFrame.ts:230` — optional-chain `wire.left.pump.rpm` / `wire.fan.top.rpm` / `wire.*.power` with `?? null`/`?? 0` in `frzHealth`/`frzTherm` cases.
-- [ ] 4.4 `src/hardware/gestureActionHandler.ts:133` + `src/hardware/snoozeManager.ts:41,52` — clamp `setTimeout` delays to `2**31 - 1` ms or reject out-of-range snooze durations at config time.
-- [ ] 4.5 `src/streaming/mqttBridge.ts:660` — `testConnection` should resolve `tlsInsecure` via the same DB-then-env precedence as `resolveConfig`.
-- [ ] 4.6 `src/streaming/piezoStream.ts:540` — replace sync `Buffer.alloc`+`fs.readSync` seek with async/chunked reads so the event loop yields.
+- [x] 4.3 `src/streaming/normalizeFrame.ts:230` — optional-chain `wire.left.pump.rpm` / `wire.fan.top.rpm` / `wire.*.power` with `?? null`/`?? 0` in `frzHealth`/`frzTherm` cases.
+- [x] 4.4 `src/hardware/gestureActionHandler.ts:133` + `src/hardware/snoozeManager.ts:41,52` — clamp `setTimeout` delays to `2**31 - 1` ms or reject out-of-range snooze durations at config time.
+- [x] 4.5 `src/streaming/mqttBridge.ts:660` — `testConnection` should resolve `tlsInsecure` via the same DB-then-env precedence as `resolveConfig`.
+- [x] 4.6 `src/streaming/piezoStream.ts:540` — replace sync `Buffer.alloc`+`fs.readSync` seek with async/chunked reads so the event loop yields.
 
 **Python modules**
-- [ ] 4.7 `modules/piezo-processor/main.py:935` — guard `np.frombuffer` against non-multiple-of-4 buffers (truncate `len//4*4` or per-record try/except).
-- [ ] 4.8 `modules/calibrator/main.py:234` — validate trigger JSON `isinstance(dict)`; clear the trigger file on invalid content to break the crash loop.
-- [ ] 4.9 `modules/piezo-processor/main.py:558` — `HRTracker` fallback path should append to `history` (or decay/reset) so the median tracker can't freeze.
-- [ ] 4.10 `modules/common/calibration.py:238` — `range(len(timestamps) - window_samples + 1)` (match CapSense2Calibrator line ~337).
-- [ ] 4.11 `modules/common/calibration.py:824` — `write_trigger_atomic`: add pid/counter uniquifier to filename; fsync file + parent dir around rename.
+- [x] 4.7 `modules/piezo-processor/main.py:935` — guard `np.frombuffer` against non-multiple-of-4 buffers (truncate `len//4*4` or per-record try/except).
+- [x] 4.8 `modules/calibrator/main.py:234` — validate trigger JSON `isinstance(dict)`; clear the trigger file on invalid content to break the crash loop.
+- [x] 4.9 `modules/piezo-processor/main.py:558` — `HRTracker` fallback path should append to `history` (or decay/reset) so the median tracker can't freeze.
+- [x] 4.10 `modules/common/calibration.py:238` — `range(len(timestamps) - window_samples + 1)` (match CapSense2Calibrator line ~337).
+- [x] 4.11 `modules/common/calibration.py:824` — `write_trigger_atomic`: add pid/counter uniquifier to filename; fsync file + parent dir around rename.
 
 **Scheduler/automation**
-- [ ] 4.12 `src/automation/engine.ts:240-249,168-171` — fire `timeOfDay` when `nowMinutes >= atMin` and not already fired for the day-key (instead of exact-minute equality that a >60s tick can skip).
-- [ ] 4.13 `src/scheduler/jobManager.ts:1042-1067,1178-1189` — index run-once jobs by original setpoint index, or cancel all `runonce-${sessionId}-*` before rescheduling, to prevent duplicate setpoint fires after in-process reload.
+- [x] 4.12 `src/automation/engine.ts:240-249,168-171` — fire `timeOfDay` when `nowMinutes >= atMin` and not already fired for the day-key (instead of exact-minute equality that a >60s tick can skip).
+- [x] 4.13 `src/scheduler/jobManager.ts:1042-1067,1178-1189` — index run-once jobs by original setpoint index, or cancel all `runonce-${sessionId}-*` before rescheduling, to prevent duplicate setpoint fires after in-process reload.
 
 **DB/migrations/scripts**
-- [ ] 4.14 `src/db/migrations/0002_nappy_warpath.sql` — delete (orphaned byte-identical duplicate of `0003_previous_phil_sheldon.sql`, not in journal).
-- [ ] 4.15 `src/db/migrations/meta/` — regenerate/restore missing `0007_snapshot.json`.
-- [ ] 4.16 `src/db/retention.ts:67` — add plain `timestamp` index on `vitals` and `movement` (new migration) so retention pruning can seek.
-- [ ] 4.17 `src/db/biometrics-schema.ts:215` — `vitals_quality.vitalsId`: add real FK with `onDelete: 'cascade'` or document the owning module's pruning; today rows orphan forever.
-- [ ] 4.18 `scripts/install:158` — `--restore`: remove/restore matching `-wal`/`-shm` sidecars before copying the `.db` (mirror `scripts/bin/sp-update:106-117`).
-- [ ] 4.19 `src/db/migrations/0012_backfill_pump_stall_optin.sql` — intentional safety reset; no change unless preserving explicit opt-ins matters (then gate with a marker column). Decide and note.
+- [x] 4.14 `src/db/migrations/0002_nappy_warpath.sql` — delete (orphaned byte-identical duplicate of `0003_previous_phil_sheldon.sql`, not in journal).
+- [x] 4.15 `src/db/migrations/meta/` — regenerate/restore missing `0007_snapshot.json`.
+- [x] 4.16 `src/db/retention.ts:67` — add plain `timestamp` index on `vitals` and `movement` (new migration) so retention pruning can seek.
+- [x] 4.17 (chose retention-pruning over FK — SQLite FKs unenforced without PRAGMA in every writer) `src/db/biometrics-schema.ts:215` — `vitals_quality.vitalsId`: add real FK with `onDelete: 'cascade'` or document the owning module's pruning; today rows orphan forever.
+- [x] 4.18 `scripts/install:158` — `--restore`: remove/restore matching `-wal`/`-shm` sidecars before copying the `.db` (mirror `scripts/bin/sp-update:106-117`).
+- [x] 4.19 `src/db/migrations/0012_backfill_pump_stall_optin.sql` — DECIDED: keep the safety reset as-is, no marker column. Pump-stall protection cuts power, so defaulting everyone back to opt-in after the backfill is the safer failure mode; the handful of early opt-ins re-enable in one toggle.
 
 **Frontend**
 - [x] 4.20 (done with 3.9) `src/components/PowerButton/PowerButton.tsx:16-38` — covered by 3.9 (optimistic toggle or fix comment).
-- [ ] 4.21 `src/components/Settings/DeviceSettingsForm.tsx:82-104` — don't overwrite dirty/focused fields when `[device]` identity changes on refetch; reset only on actual data change.
-- [ ] 4.22 `src/components/diagnostics/DiagnosticsConsole.tsx:154` — invert: `good={t?.pumpStallProtectionEnabled}` (armed = green).
-- [ ] 4.23 `src/components/Autopilot/CapZoneViz.tsx:142` — replace `Math.max(0.01, ...bigArray)` spread with a reduce/loop (RangeError on long replays).
+- [x] 4.21 `src/components/Settings/DeviceSettingsForm.tsx:82-104` — don't overwrite dirty/focused fields when `[device]` identity changes on refetch; reset only on actual data change.
+- [x] 4.22 `src/components/diagnostics/DiagnosticsConsole.tsx:154` — invert: `good={t?.pumpStallProtectionEnabled}` (armed = green).
+- [x] 4.23 `src/components/Autopilot/CapZoneViz.tsx:142` — replace `Math.max(0.01, ...bigArray)` spread with a reduce/loop (RangeError on long replays).
 
 **Repo hygiene**
-- [ ] 4.24 gitignore + `git rm --cached` the SQLite sidecars `biometrics.dev.db-shm` / `biometrics.dev.db-wal` (keep the `.db` if it's an intentional fixture).
-- [ ] 4.25 Fill in `CLAUDE.md` placeholder sections (Build & Test: `pnpm test`, `pnpm tsc`, `pnpm lint`, `pnpm test:mutation`; brief architecture overview).
-- [ ] 4.26 Dependency audit: GitHub reports 24 Dependabot vulnerabilities on the default branch (1 critical, 12 high) — https://github.com/sleepypod/core/security/dependabot. Triage separately.
+- [x] 4.24 gitignore + `git rm --cached` the SQLite sidecars `biometrics.dev.db-shm` / `biometrics.dev.db-wal` (keep the `.db` if it's an intentional fixture).
+- [x] 4.25 Fill in `CLAUDE.md` placeholder sections (Build & Test: `pnpm test`, `pnpm tsc`, `pnpm lint`, `pnpm test:mutation`; brief architecture overview).
+- [x] 4.26 Dependency audit — tracked separately as ygg task core-3 (triage the 24 Dependabot findings; 1 critical, 12 high).
 
 ---
 

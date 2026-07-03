@@ -35,6 +35,7 @@
 
 import { WebSocketServer, WebSocket } from 'ws'
 import * as fs from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
 import * as path from 'node:path'
 import { Decoder } from 'cbor-x'
 import { recordCapFrame, resetCapFrameWindows } from './capFramePersistence'
@@ -523,7 +524,7 @@ async function handleSeek(ws: WebSocket, targetTs: number): Promise<void> {
   // Check subscription filter for this client
   const subs = clientSubscriptions.get(ws)
 
-  let fh: import('node:fs/promises').FileHandle | null = null
+  let fh: FileHandle | null = null
   try {
     fh = await fs.promises.open(filePath, 'r')
     const stat = await fh.stat()
