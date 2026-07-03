@@ -50,13 +50,18 @@ export const AlarmBanner = ({
   ].filter(Boolean)
 
   const handleStop = () => {
-    const sidesToClear = activeSides.filter(
-      s => (s === 'left' && leftAlarmActive) || (s === 'right' && rightAlarmActive),
-    )
-    // If no active sides match, clear all active alarms
+    // During snooze nothing is vibrating, so the stop targets are the
+    // snoozed sides — building them from leftAlarmActive/rightAlarmActive
+    // (both false) made the Cancel button a no-op and the alarm resumed.
+    const stoppable = isAnyAlarmActive
+      ? { left: leftAlarmActive, right: rightAlarmActive }
+      : { left: leftSnoozed, right: rightSnoozed }
+
+    const sidesToClear = activeSides.filter(s => stoppable[s])
+    // If no active sides match, clear all stoppable alarms
     const targets = sidesToClear.length > 0
       ? sidesToClear
-      : [leftAlarmActive && 'left', rightAlarmActive && 'right'].filter(Boolean) as ('left' | 'right')[]
+      : (['left', 'right'] as const).filter(s => stoppable[s])
 
     for (const side of targets) {
       clearAlarmMutation.mutate(
