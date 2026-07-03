@@ -200,3 +200,48 @@ class TestCorruptionRecoveryIntegration:
         assert skip_to >= len(corrupt), \
             "corruption recovery must clear a 1 KiB corrupt region in one step"
         follower._file.close()
+
+
+class TestRotationRace:
+    """The RAW file can rotate away between _find_latest() and open(); the
+    resulting FileNotFoundError must not propagate (it killed the whole
+    module via sys.exit(1) in every consumer)."""
+
+    def test_vanished_file_is_retried_not_fatal(self, monkeypatch, tmp_path):
+        import common.raw_follower as rf_mod
+
+        real_path = tmp_path / "DATA.RAW"
+        real_path.write_bytes(b"\x00")
+        ghost_path = tmp_path / "GHOST.RAW"  # never created on disk
+
+        # First poll returns a path that no longer exists (rotated away);
+        # second returns the real file.
+        finds = iter([ghost_path, real_path])
+        monkeypatch.setattr(
+            rf_mod.RawFileFollower, "_find_latest",
+            lambda self: next(finds, real_path),
+        )
+        monkeypatch.setattr(rf_mod.time, "sleep", lambda *_a, **_k: None)
+
+        records = iter([b"payload"])
+
+        def fake_read(f):
+            try:
+                return next(records)
+            except StopIteration:
+                event.set()  # stop the loop after the first record
+                raise EOFError
+
+        monkeypatch.setattr(rf_mod, "read_raw_record", fake_read)
+        monkeypatch.setattr(rf_mod.cbor2, "loads", lambda b: {"decoded": b}, raising=False)
+
+        event = threading.Event()
+        follower = rf_mod.RawFileFollower(tmp_path, event)
+
+        # Must not raise FileNotFoundError; must switch to the real file and
+        # yield its record.
+        record = next(follower.read_records())
+        assert record == {"decoded": b"payload"}
+        assert follower._path == real_path
+        if follower._file:
+            follower._file.close()
