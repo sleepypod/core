@@ -8,18 +8,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { withSideLock } from '../sideLock'
 
-const G = globalThis as Record<string, unknown>
-const SIDE_LOCKS_KEY = '__sp_side_locks__'
+const G = globalThis as { __sp_side_locks__?: unknown }
 
 afterEach(() => {
-  delete G[SIDE_LOCKS_KEY]
+  delete G.__sp_side_locks__
 })
 
 describe('withSideLock', () => {
   it('serializes writers for the same side', async () => {
     const order: string[] = []
     let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
 
     const p1 = withSideLock('left', async () => {
       order.push('first-start')
@@ -41,7 +42,9 @@ describe('withSideLock', () => {
   it('does not block writers on the other side', async () => {
     const order: string[] = []
     let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
 
     const p1 = withSideLock('left', async () => {
       await gate
@@ -74,7 +77,9 @@ describe('withSideLock', () => {
 
     const order: string[] = []
     let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
 
     // Lock taken through the original module instance...
     const p1 = withSideLock('left', async () => {

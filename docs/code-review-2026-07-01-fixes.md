@@ -69,7 +69,7 @@ the concrete change to make. Execute in batch order; commit per batch.
 
 ## Batch 2 — Medium: device-control correctness
 
-- [ ] **2.1 HomeKit stale `intendedPower` latch**
+- [x] **2.1 HomeKit stale `intendedPower` latch**
   `src/homekit/accessories/sideController.ts:31,74-78,114-117` — `intendedPower` is
   set on every HomeKit toggle and never reconciled with firmware, so external power
   changes (scheduler off, auto-off) are shadowed; `setTargetTemperature` can re-heat a
@@ -77,7 +77,7 @@ the concrete change to make. Execute in batch order; commit per batch.
   **Change:** in the `status:updated` handler, once firmware state is observed, clear
   `intendedPower[side]` to `null` (or set it to the observed value).
 
-- [ ] **2.2 Timezone change never reaches AutomationEngine**
+- [x] **2.2 Timezone change never reaches AutomationEngine**
   `src/automation/instance.ts:33,113` + `src/server/routers/settings.ts:117-120` —
   settings handler calls `jobManager.updateTimezone` but the engine's `clock` closure
   captured the old timezone and `cachedTimezone` is never invalidated.
@@ -85,21 +85,21 @@ the concrete change to make. Execute in batch order; commit per batch.
   resets the clock closure and `cachedTimezone`; call it from the settings timezone
   handler alongside the scheduler update.
 
-- [ ] **2.3 Partial scheduler init leaks live jobs**
+- [x] **2.3 Partial scheduler init leaks live jobs**
   `src/scheduler/instance.ts:59-77` — if `loadSchedules()` throws after registering
   some jobs, the partially-built `JobManager` is discarded but node-schedule keeps its
   timers; a retry registers duplicates → double hardware commands.
   **Change:** wrap the init body in try/catch; on failure call
   `manager.shutdown()`/`cancelAllJobs()` before rejecting.
 
-- [ ] **2.4 Gesture replay after dacMonitor recovery**
+- [x] **2.4 Gesture replay after dacMonitor recovery**
   `src/hardware/dacMonitor.ts:186` — after `degraded → running`, `lastGestures` still
   holds pre-outage counters, so the first good poll emits every gesture performed
   during the outage as fresh events.
   **Change:** on the degraded→running transition, re-baseline gesture counters
   without emitting (same as the `isFirstPoll` path).
 
-- [ ] **2.5 `sideLock` not `globalThis`-backed**
+- [x] **2.5 `sideLock` not `globalThis`-backed**
   `src/hardware/sideLock.ts:18` — module-level `Record` mutex; sibling singletons
   (`snoozeManager`, `pumpStallGuard`, `primeNotification`, `dacMonitor.instance`) all
   use `globalThis` because Turbopack can duplicate modules across chunks, which would
@@ -108,14 +108,14 @@ the concrete change to make. Execute in batch order; commit per batch.
   sibling pattern. (Optional follow-up: route device tRPC router hardware writes
   through `withSideLock` — currently unlocked; verify before changing behavior.)
 
-- [ ] **2.6 Export archive endpoint can wedge permanently**
+- [x] **2.6 Export archive endpoint can wedge permanently**
   `app/api/export/archive/route.ts:25,145` — module-level `inflight` flag is cleared
   only by tar `close`/`error`; a stuck tar or client disconnect leaves it `true`
   forever (429s until restart) and leaks the staging dir.
   **Change:** listen on `request.signal` abort + add a watchdog timeout; both paths
   `tarChild.kill()`, run `cleanup()`, and clear `inflight`.
 
-- [ ] **2.7 `protect: true` on `raw.deleteFile` is unenforced**
+- [x] **2.7 `protect: true` on `raw.deleteFile` is unenforced**
   `src/server/routers/raw.ts:63`; `createContext` returns `{}` in
   `app/api/[...rest]/route.ts:9` and `app/api/trpc/[trpc]/route.ts:10`;
   `securitySchemes: {}` in `src/server/openapi.ts:22`.
@@ -123,7 +123,7 @@ the concrete change to make. Execute in batch order; commit per batch.
   remove the flag and document the LAN-only trust model uniformly. Pick one; don't
   leave the misleading flag. (Pairs with 2.8.)
 
-- [ ] **2.8 tRPC panel is an unauthenticated device-control surface**
+- [x] **2.8 tRPC panel is an unauthenticated device-control surface**
   `proxy.ts:44` whitelists `/panel`; `app/panel/route.ts` exposes every procedure
   (`device.execute`, `system.setInternetAccess`, `system.triggerUpdate`,
   `raw.deleteFile`) with no gate.
@@ -200,7 +200,7 @@ the concrete change to make. Execute in batch order; commit per batch.
 ## Batch 4 — Lows (batch into a few commits by area)
 
 **Server/API**
-- [ ] 4.1 `app/api/export/archive/route.ts:102` — 400 on `Number.isNaN(startTs) || Number.isNaN(endTs)` instead of silently exporting everything.
+- [x] 4.1 (done with 2.6) `app/api/export/archive/route.ts:102` — 400 on `Number.isNaN(startTs) || Number.isNaN(endTs)` instead of silently exporting everything.
 - [ ] 4.2 `src/server/routers/system.ts:272` — tighten branch regex to reject `..`, leading/trailing `/`, `//` (git-ref-safe).
 
 **Hardware/streaming**
