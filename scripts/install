@@ -156,6 +156,10 @@ if [ "$RESTORE_MODE" = true ]; then
   echo ""
   echo "Restoring $fname -> $(basename "$target")"
   cp "$selected" "$target"
+  # Remove live WAL/SHM sidecars: a sidecar newer than the restored .db
+  # would let SQLite replay post-backup transactions on top of it, silently
+  # undoing the restore (mirrors the sp-update rollback handling).
+  rm -f "${target}-wal" "${target}-shm"
   echo "Done. Restart the service to pick up the restored database:"
   echo "  systemctl restart sleepypod"
   exit 0

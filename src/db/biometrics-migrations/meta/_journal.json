@@ -78,6 +78,13 @@
       "when": 1781480384713,
       "tag": "0010_tidy_senator_kelly",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1783062862056,
+      "tag": "0011_retention_timestamp_indexes",
+      "breakpoints": true
     }
   ]
 }

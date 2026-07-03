@@ -22,6 +22,9 @@ export const vitals = sqliteTable('vitals', {
   breathingRate: real('breathing_rate'), // breaths/min
 }, t => [
   uniqueIndex('uq_vitals_side_timestamp').on(t.side, t.timestamp),
+  // Retention pruning deletes WHERE timestamp < cutoff; without a plain
+  // timestamp index that is a full scan of the pod's largest table.
+  index('idx_vitals_timestamp').on(t.timestamp),
 ])
 
 export const sleepRecords = sqliteTable('sleep_records', {
@@ -47,6 +50,8 @@ export const movement = sqliteTable('movement', {
   totalMovement: integer('total_movement').notNull(),
 }, t => [
   index('idx_movement_side_timestamp').on(t.side, t.timestamp),
+  // See idx_vitals_timestamp — retention pruning needs a timestamp seek.
+  index('idx_movement_timestamp').on(t.timestamp),
 ])
 
 export const bedTemp = sqliteTable('bed_temp', {
@@ -212,7 +217,12 @@ export const calibrationRuns = sqliteTable('calibration_runs', {
 
 export const vitalsQuality = sqliteTable('vitals_quality', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  vitalsId: integer('vitals_id').notNull(), // FK to vitals.id
+  // Logical reference to vitals.id — intentionally NOT a real FK: SQLite
+  // only enforces FKs with PRAGMA foreign_keys=ON, which none of the
+  // writers (Node or Python) enable, and adding one now would need a full
+  // table rebuild. Rows are kept in lockstep with vitals by retention.ts
+  // pruning both tables on the same timestamp cutoff.
+  vitalsId: integer('vitals_id').notNull(),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   qualityScore: real('quality_score').notNull(), // 0.0–1.0
@@ -222,4 +232,6 @@ export const vitalsQuality = sqliteTable('vitals_quality', {
 }, t => [
   index('idx_vq_vitals_id').on(t.vitalsId),
   index('idx_vq_side_ts').on(t.side, t.timestamp),
+  // See idx_vitals_timestamp — retention pruning needs a timestamp seek.
+  index('idx_vq_timestamp').on(t.timestamp),
 ])

@@ -9,6 +9,7 @@ import {
   movement,
   pumpAlerts,
   vitals,
+  vitalsQuality,
   waterLevelReadings,
 } from './biometrics-schema'
 
@@ -22,18 +23,21 @@ import {
  *
  * Tables covered (all write at ≥1/minute and have no referential joins):
  *   vitals, movement, bed_temp, freezer_temp, flow_readings,
- *   ambient_light, water_level_readings, pump_alerts
+ *   ambient_light, water_level_readings, pump_alerts, vitals_quality
+ *
+ * vitals_quality shares vitals' timestamp cutoff so each quality row dies
+ * with its paired vitals row (vitals_id is a logical, unenforced reference —
+ * no module prunes this table, so it orphaned forever before).
  *
  * NOT covered (deliberately):
  *   sleep_records     — derived summaries, low volume, keep indefinitely
  *   water_level_alerts — user-facing events, low volume, keep indefinitely
  *   calibration_*     — small, correctness-critical, keep indefinitely
- *   vitals_quality    — small per-sample diagnostics, retention handled
- *                       by the owning module
  */
 
 const RETENTION_TABLES = [
   { table: vitals, column: vitals.timestamp, name: 'vitals' },
+  { table: vitalsQuality, column: vitalsQuality.timestamp, name: 'vitals_quality' },
   { table: movement, column: movement.timestamp, name: 'movement' },
   { table: bedTemp, column: bedTemp.timestamp, name: 'bed_temp' },
   { table: freezerTemp, column: freezerTemp.timestamp, name: 'freezer_temp' },
