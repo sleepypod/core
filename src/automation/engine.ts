@@ -42,6 +42,9 @@ import {
 } from './types'
 import { WindowStore } from './windows'
 
+/** How many minutes after a timeOfDay slot a late tick may still fire it. */
+const TIME_OF_DAY_GRACE_MIN = 10
+
 /** Minimal hardware surface the engine writes through (shared client shape). */
 export interface HardwareWriter {
   connect: () => Promise<void>
@@ -53,8 +56,9 @@ export interface AutomationEngineDeps {
   signals: SignalReader
   /** Epoch ms — injectable for deterministic tests. */
   now: () => number
-  /** Timezone-aware wall clock. */
-  clock: () => { nowMinutes: number, dayOfWeek: DayOfWeek }
+  /** Timezone-aware wall clock. dateKey (local yyyy-mm-dd) keys timeOfDay
+   * "already fired today"; when absent, dayOfWeek is used as a fallback. */
+  clock: () => { nowMinutes: number, dayOfWeek: DayOfWeek, dateKey?: string }
   getHardware: () => HardwareWriter
   withSideLock: <T>(side: Side, fn: () => Promise<T>) => Promise<T>
   broadcast: (side: Side, overlay: Record<string, unknown>) => void
@@ -172,7 +176,7 @@ export class AutomationEngine {
     try {
       const now = this.deps.now()
       const snapshot = this.deps.signals.read()
-      const { nowMinutes, dayOfWeek } = this.deps.clock()
+      const { nowMinutes, dayOfWeek, dateKey } = this.deps.clock()
 
       // Feed windowed-aggregate buffers, then prune to the largest window asked.
       for (const key of this.windowSignals) {
@@ -187,6 +191,7 @@ export class AutomationEngine {
         nowMs: now,
         nowMinutes,
         dayOfWeek,
+        dateKey,
       }
 
       for (const rule of this.rules) {
@@ -240,10 +245,20 @@ export class AutomationEngine {
       case 'timeOfDay': {
         const [h, m] = t.at.split(':').map(Number)
         const atMin = h * 60 + m
-        if (ctx.nowMinutes !== atMin) return false
         if (t.days && !t.days.includes(ctx.dayOfWeek)) return false
-        const key = `${ctx.dayOfWeek}:${atMin}`
-        if (rt.lastTimeKey === key) return false // already fired this minute
+        // Fire on the first tick at-or-after the slot, within a grace window:
+        // exact-minute equality silently skipped the slot whenever a tick
+        // landed >60s late (engine stall, scheduler reload). The window stays
+        // bounded so an engine (re)started hours later doesn't fire a long-
+        // gone morning slot at 3pm.
+        if (ctx.nowMinutes < atMin || ctx.nowMinutes > atMin + TIME_OF_DAY_GRACE_MIN) {
+          return false
+        }
+        // Key by local calendar date so the same slot re-arms next week
+        // (weekday-only keys blocked every later occurrence for the life of
+        // the process) but fires at most once per day.
+        const key = `${ctx.dateKey ?? ctx.dayOfWeek}:${atMin}`
+        if (rt.lastTimeKey === key) return false // already fired today
         rt.lastTimeKey = key
         return true
       }

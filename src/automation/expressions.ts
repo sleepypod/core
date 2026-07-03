@@ -17,6 +17,8 @@ export interface EvalContext {
   /** Minutes since local midnight, timezone-aware. */
   nowMinutes: number
   dayOfWeek: DayOfWeek
+  /** Local calendar date (yyyy-mm-dd) — keys once-per-day trigger state. */
+  dateKey?: string
 }
 
 /** Clamp `value` to `[min, max]`. Bounds may be undefined (then ignored). */

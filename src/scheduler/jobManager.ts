@@ -1039,6 +1039,16 @@ export class JobManager {
   ): void {
     const now = new Date()
 
+    // Cancel anything already scheduled for this session. Rescheduling
+    // in-process (restoreRunOnceSessions after a reload) passes a FILTERED
+    // set-point list whose indices shift, so a surviving `runonce-S-3` and a
+    // re-indexed `runonce-S-0` could both fire the same set point.
+    for (const job of this.scheduler.getJobs()) {
+      if (job.id.startsWith(`runonce-${sessionId}-`) || job.id === `runonce-cleanup-${sessionId}`) {
+        this.scheduler.cancelJob(job.id)
+      }
+    }
+
     for (let i = 0; i < setPoints.length; i++) {
       const sp = setPoints[i]
       const fireDate = timeToDate(sp.time, timezone, now)

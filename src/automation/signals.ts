@@ -32,14 +32,18 @@ const DAYS: DayOfWeek[] = [
   'saturday',
 ]
 
-/** Timezone-aware wall clock: minutes since local midnight + day of week. */
+/** Timezone-aware wall clock: minutes since local midnight + day of week +
+ * local calendar date (used to key "already fired today" per actual day). */
 export function clockInTimezone(
   timezone: string,
   now: Date,
-): { nowMinutes: number, dayOfWeek: DayOfWeek } {
+): { nowMinutes: number, dayOfWeek: DayOfWeek, dateKey: string } {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     weekday: 'short',
@@ -54,7 +58,11 @@ export function clockInTimezone(
   const weekday = get('weekday') // e.g. "Mon"
   const dayIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(weekday)
   if (dayIndex < 0) throw new Error(`Unexpected weekday token: ${weekday}`)
-  return { nowMinutes: hour * 60 + minute, dayOfWeek: DAYS[dayIndex] }
+  return {
+    nowMinutes: hour * 60 + minute,
+    dayOfWeek: DAYS[dayIndex],
+    dateKey: `${get('year')}-${get('month')}-${get('day')}`,
+  }
 }
 
 /**

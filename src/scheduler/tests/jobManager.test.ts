@@ -211,6 +211,40 @@ describe('JobManager public surface (stub DB)', () => {
     expect(ids).toContain('runonce-cleanup-123')
   })
 
+  it('rescheduling a session with a filtered set-point list leaves no stale jobs', () => {
+    // Regression (review 4.13): restoreRunOnceSessions passes a FILTERED
+    // list whose indices shift; a surviving runonce-S-2 plus a re-indexed
+    // runonce-S-0 could fire the same set point twice.
+    const now = new Date()
+    const fmt = (d: Date) =>
+      `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+    const t1 = fmt(new Date(now.getTime() + 5 * 60_000))
+    const t2 = fmt(new Date(now.getTime() + 10 * 60_000))
+    const t3 = fmt(new Date(now.getTime() + 15 * 60_000))
+    const wakeTime = fmt(new Date(now.getTime() + 60 * 60_000))
+
+    manager.scheduleRunOnceSession(7, 'left', [
+      { time: t1, temperature: 78 },
+      { time: t2, temperature: 76 },
+      { time: t3, temperature: 74 },
+    ], wakeTime, 'UTC')
+    expect(manager.getScheduler().getJobs()).toHaveLength(4) // 3 points + cleanup
+
+    // In-process reschedule with the first point filtered out (already fired)
+    manager.scheduleRunOnceSession(7, 'left', [
+      { time: t2, temperature: 76 },
+      { time: t3, temperature: 74 },
+    ], wakeTime, 'UTC')
+
+    const jobs = manager.getScheduler().getJobs()
+    expect(jobs).toHaveLength(3) // 2 points + cleanup, no leftovers
+    const temps = jobs
+      .filter(j => j.id.startsWith('runonce-7-'))
+      .map(j => j.metadata?.targetTemperature)
+      .sort()
+    expect(temps).toEqual([74, 76]) // each set point scheduled exactly once
+  })
+
   it('cancelRunOnceSession removes only run-once jobs scoped to the side', () => {
     const now = new Date()
     const fmt = (d: Date) =>

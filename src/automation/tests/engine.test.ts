@@ -31,7 +31,7 @@ interface Harness {
   setNow: (ms: number) => void
   advance: (ms: number) => void
   setSignal: (key: string, value: number | undefined) => void
-  setClock: (nowMinutes: number, dayOfWeek?: DayOfWeek) => void
+  setClock: (nowMinutes: number, dayOfWeek?: DayOfWeek, dateKey?: string) => void
   setRunOnce: (active: boolean) => void
   runs: { id: number, outcome: RunOutcome, detail: RunDetail }[]
   notifies: { id: number, message: string }[]
@@ -46,6 +46,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
   let runOnce = false
   let nowMinutes = 0
   let dayOfWeek: DayOfWeek = 'monday'
+  let dateKey = '2026-07-01'
   const snapshot: SignalSnapshot = {}
   const runs: Harness['runs'] = []
   const notifies: Harness['notifies'] = []
@@ -55,7 +56,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
   const deps: AutomationEngineDeps = {
     signals: { read: () => ({ ...snapshot }) },
     now: () => nowMs,
-    clock: () => ({ nowMinutes, dayOfWeek }),
+    clock: () => ({ nowMinutes, dayOfWeek, dateKey }),
     getHardware: () => ({
       connect: async () => {},
       setTemperature: async (side, temp, duration) => { hwCalls.push({ op: 'temp', side, temp, duration }) },
@@ -77,9 +78,10 @@ function makeHarness(rules: AutomationRule[]): Harness {
     setNow: (ms) => { nowMs = ms },
     advance: (ms) => { nowMs += ms },
     setSignal: (key, value) => { snapshot[key] = value },
-    setClock: (m, d) => {
+    setClock: (m, d, date) => {
       nowMinutes = m
       if (d) dayOfWeek = d
+      if (date) dateKey = date
     },
     setRunOnce: (a) => { runOnce = a },
     runs,
@@ -344,6 +346,53 @@ describe('AutomationEngine — triggers', () => {
     await h.engine.tick() // 23:00 → fire
     await h.engine.tick() // same minute → no double-fire
     expect(h.runs).toHaveLength(1)
+  })
+
+  it('timeOfDay fires on a late tick within the grace window', async () => {
+    // Regression: exact-minute equality skipped the slot entirely when a
+    // tick landed >60s late (engine stall, ~7s scheduler reloads, GC).
+    const h = makeHarness([rule({
+      trigger: { kind: 'timeOfDay', at: '23:00' },
+      actions: [{ kind: 'notify', message: 'bedtime' }],
+    })])
+    await h.engine.reload()
+    h.setClock(22 * 60 + 59)
+    await h.engine.tick() // 22:59 → not yet
+    h.setClock(23 * 60 + 3)
+    await h.engine.tick() // 23:03 — tick skipped past 23:00 → still fires
+    expect(h.runs).toHaveLength(1)
+    await h.engine.tick() // later tick same day → no double-fire
+    expect(h.runs).toHaveLength(1)
+  })
+
+  it('timeOfDay does not resurrect a slot beyond the grace window', async () => {
+    // An engine (re)started hours later must not fire a long-gone slot.
+    const h = makeHarness([rule({
+      trigger: { kind: 'timeOfDay', at: '07:00' },
+      actions: [{ kind: 'notify', message: 'morning' }],
+    })])
+    await h.engine.reload()
+    h.setClock(15 * 60) // 15:00
+    await h.engine.tick()
+    expect(h.runs).toHaveLength(0)
+  })
+
+  it('timeOfDay re-arms on the next calendar day', async () => {
+    // Regression: weekday-keyed state blocked the same slot the following
+    // week for the life of the process.
+    const h = makeHarness([rule({
+      trigger: { kind: 'timeOfDay', at: '23:00' },
+      actions: [{ kind: 'notify', message: 'bedtime' }],
+    })])
+    await h.engine.reload()
+    h.setClock(23 * 60, 'monday', '2026-07-06')
+    await h.engine.tick()
+    expect(h.runs).toHaveLength(1)
+
+    // Same weekday, one week later
+    h.setClock(23 * 60, 'monday', '2026-07-13')
+    await h.engine.tick()
+    expect(h.runs).toHaveLength(2)
   })
 })
 
