@@ -27,10 +27,13 @@ export function useOptimisticValue<T>(serverValue: T, timeoutMs = 6_000) {
   }
 
   // Reconcile: once the server reports the optimistic value, it is no longer
-  // an override — drop it so later external changes show through.
+  // an override — drop it so later external changes show through. Terminates
+  // after one extra render (clearing doesn't change the rendered value:
+  // server === local at that point).
   useEffect(() => {
     if (local !== null && Object.is(serverValue, local)) {
       clearTimer()
+      /* eslint-disable-next-line react-hooks/set-state-in-effect */
       setLocal(null)
     }
   }, [serverValue, local])

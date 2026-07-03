@@ -30,11 +30,14 @@ const trpcMock = vi.hoisted(() => {
     trpc: {
       device: {
         getStatus: {
-          useQuery: vi.fn(() => ({
-            data: state.http,
-            isLoading: state.isLoading,
-            refetch,
-          })),
+          useQuery: vi.fn((...args: [unknown, { refetchInterval?: number | false, staleTime?: number }?]) => {
+            void args
+            return {
+              data: state.http,
+              isLoading: state.isLoading,
+              refetch,
+            }
+          }),
         },
       },
     },

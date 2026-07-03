@@ -133,7 +133,7 @@ the concrete change to make. Execute in batch order; commit per batch.
 
 ## Batch 3 — Medium: data pipeline (Python) + frontend seams
 
-- [ ] **3.1 piezo-processor orphaned DB handle on reconnect**
+- [x] **3.1 piezo-processor orphaned DB handle on reconnect**
   `modules/piezo-processor/main.py:184` — `_replace_db_connection` swaps only the
   calling `SideProcessor`'s handle; the sibling keeps the closed connection and the
   shared `_db_write_failures` counter can discard a healthy connection.
@@ -141,19 +141,19 @@ the concrete change to make. Execute in batch order; commit per batch.
   `DBHolder` (its docstring documents this exact bug); make the failure counter
   per-connection.
 
-- [ ] **3.2 Calibrator runs full recalibration on every process start**
+- [x] **3.2 Calibrator runs full recalibration on every process start**
   `modules/calibrator/main.py:200` — `should_run_daily` uses in-memory
   `daily_last_run` (starts 0) and ignores `DAILY_HOUR` (read at line ~45).
   **Change:** gate on persisted profile age via `store.get_profile_age_hours` and
   only run within the `DAILY_HOUR` window.
 
-- [ ] **3.3 raw_follower rotation race kills modules**
+- [x] **3.3 raw_follower rotation race kills modules**
   `modules/common/raw_follower.py:94` — `open(latest, "rb")` outside the `try`; if
   the RAW file rotates between `_find_latest()` and `open()`, `FileNotFoundError`
   propagates → module `sys.exit(1)`.
   **Change:** wrap the file-switch/open in `try/except OSError` and `continue`.
 
-- [ ] **3.4 Pump gate discards real movement on both sides**
+- [x] **3.4 Pump gate discards real movement on both sides**
   `modules/sleep-detector/main.py:562` — `PumpGateCapSense.is_gated` zeroes movement
   for BOTH sides whenever EITHER pump has RPM>0 (Signal 1 is side-independent),
   under-counting the `movement` table during long pump runtimes.
@@ -165,28 +165,28 @@ the concrete change to make. Execute in batch order; commit per batch.
   response into the NEXT command's read. Fix together with 1.3 (same correlation
   mechanism).
 
-- [ ] **3.6 WS fallback latch freezes device status UI**
+- [x] **3.6 WS fallback latch freezes device status UI**
   `src/hooks/useDeviceStatus.ts:28-38` — after the first WS frame,
   `hasReceivedWs.current` permanently sets `refetchInterval: false`; if the WS server
   dies, status (temps, pump-stall, alarm, water level) freezes with no HTTP fallback.
   **Change:** re-enable HTTP polling when stream status ≠ `connected` or no frame has
   arrived within N seconds; consider clearing `latestFrames` on reconnect.
 
-- [ ] **3.7 Snoozed alarm "Cancel" button is dead**
+- [x] **3.7 Snoozed alarm "Cancel" button is dead**
   `src/components/TempScreen/AlarmBanner.tsx:52-67,150` — during snooze,
   `handleStop` builds targets from `leftAlarmActive`/`rightAlarmActive` (both false),
   so no `clearAlarm` fires and the alarm resumes.
   **Change:** when nothing is actively vibrating, compute targets from
   `leftSnoozed`/`rightSnoozed`.
 
-- [ ] **3.8 Temp dial snaps back after commit**
+- [x] **3.8 Temp dial snaps back after commit**
   `src/components/TempScreen/TempScreen.tsx:88-100` — `onSettled` clears
   `localTarget` before the WS frame reflects the change (~2s), so the dial jumps
   back then forward.
   **Change:** keep `localTarget` until an incoming frame's `targetTemperature`
   matches the committed value (with a timeout fallback).
 
-- [ ] **3.9 Mutations refetch HTTP while UI reads WS**
+- [x] **3.9 Mutations refetch HTTP while UI reads WS**
   `src/components/TempScreen/TempScreen.tsx:93-119`,
   `src/components/PowerButton/PowerButton.tsx:26-61` — `refetch()`/`invalidate()`
   after `setTemperature`/`setPower` never updates the visible (WS-preferred) status;
@@ -229,7 +229,7 @@ the concrete change to make. Execute in batch order; commit per batch.
 - [ ] 4.19 `src/db/migrations/0012_backfill_pump_stall_optin.sql` — intentional safety reset; no change unless preserving explicit opt-ins matters (then gate with a marker column). Decide and note.
 
 **Frontend**
-- [ ] 4.20 `src/components/PowerButton/PowerButton.tsx:16-38` — covered by 3.9 (optimistic toggle or fix comment).
+- [x] 4.20 (done with 3.9) `src/components/PowerButton/PowerButton.tsx:16-38` — covered by 3.9 (optimistic toggle or fix comment).
 - [ ] 4.21 `src/components/Settings/DeviceSettingsForm.tsx:82-104` — don't overwrite dirty/focused fields when `[device]` identity changes on refetch; reset only on actual data change.
 - [ ] 4.22 `src/components/diagnostics/DiagnosticsConsole.tsx:154` — invert: `good={t?.pumpStallProtectionEnabled}` (armed = green).
 - [ ] 4.23 `src/components/Autopilot/CapZoneViz.tsx:142` — replace `Math.max(0.01, ...bigArray)` spread with a reduce/loop (RangeError on long replays).

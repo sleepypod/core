@@ -37,8 +37,10 @@ export function useDeviceStatus() {
 
   // Track when the last deviceStatus frame arrived (client clock). Frame
   // identity comparison in render is safe: new frames re-render this hook
-  // via the per-sensor listener.
-  /* eslint-disable react-hooks/refs */
+  // via the per-sensor listener. Date.now() impurity is intentional: the
+  // freshness check re-evaluates on every render, and renders are driven by
+  // frames, status changes, and the idle HTTP poll.
+  /* eslint-disable react-hooks/refs, react-hooks/purity */
   const lastWsFrameAt = useRef<number | null>(null)
   const prevWsFrame = useRef<DeviceStatusFrame | undefined>(undefined)
   if (wsFrame != null && wsFrame !== prevWsFrame.current) {
@@ -98,5 +100,5 @@ export function useDeviceStatus() {
     /** Whether device status is being received live via WebSocket */
     isStreaming: wsLive,
   }
-  /* eslint-enable react-hooks/refs */
+  /* eslint-enable react-hooks/refs, react-hooks/purity */
 }
