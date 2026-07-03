@@ -36,10 +36,14 @@ const dbMock = vi.hoisted(() => {
   })
   const where = vi.fn(() => ({ all }))
   const from = vi.fn((table: unknown) => {
-    // Detect which schedule table is being queried
-    const name = String(table?.constructor?.name ?? '')
-    if (name.includes('Power')) activeTable = 'pow'
-    else if (name.includes('Alarm')) activeTable = 'alm'
+    // Detect which schedule table is being queried. Drizzle tables all share
+    // the constructor name SQLiteTable, so read the real table name from the
+    // drizzle:Name symbol instead.
+    const name = String(
+      (table as Record<symbol, unknown> | undefined)?.[Symbol.for('drizzle:Name')] ?? '',
+    )
+    if (name.includes('power')) activeTable = 'pow'
+    else if (name.includes('alarm')) activeTable = 'alm'
     else activeTable = 'temp'
     return { where }
   })
@@ -200,6 +204,28 @@ describe('health.system', () => {
     const result = await caller.system({})
     expect(result.scheduler.drift?.drifted).toBe(false)
     expect(result.scheduler.drift?.schedulerJobCount).toBe(1)
+  })
+
+  it('does not flag drift for LED/away/run-once/calibration jobs', async () => {
+    // Regression: these job types have no schedule row; counting them on
+    // only one side of the comparison made every health poll reload the
+    // whole scheduler (~7s cron rebuild).
+    dbMock.allSchedules.temp.push({ id: 1 })
+    schedulerMock.scheduler.getJobs.mockReturnValue([
+      { id: 't-1', type: 'temperature' },
+      { id: 'led-am', type: 'led_brightness' },
+      { id: 'led-pm', type: 'led_brightness' },
+      { id: 'away', type: 'away_mode' },
+      { id: 'ro-1', type: 'run_once' },
+      { id: 'cal', type: 'calibration' },
+      { id: 'prime', type: 'prime' },
+      { id: 'reboot', type: 'reboot' },
+    ])
+
+    const result = await caller.system({})
+    expect(result.scheduler.drift?.drifted).toBe(false)
+    expect(result.scheduler.drift?.schedulerJobCount).toBe(1)
+    expect(schedulerMock.jobManager.reloadSchedules).not.toHaveBeenCalled()
   })
 
   it('auto-reloads scheduler when drift detected and clears drifted flag on success', async () => {

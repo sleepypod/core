@@ -220,22 +220,29 @@ export const healthRouter = router({
         // Each power schedule creates 2 jobs (on + off), others create 1 each
         const expectedJobCount = tempSchedules.length + (powSchedules.length * 2) + almSchedules.length
 
-        const systemJobTypes = [JobType.PRIME, JobType.REBOOT]
-        let systemJobCount = 0
+        // Only count job types that originate from the schedule tables above.
+        // Every other type (prime, reboot, LED brightness, away-mode,
+        // run-once, calibration, future additions) has no DB schedule row, so
+        // including it would flag phantom drift and trigger a full reload.
+        const scheduleBackedJobTypes = [
+          JobType.TEMPERATURE,
+          JobType.POWER_ON,
+          JobType.POWER_OFF,
+          JobType.ALARM,
+        ]
+        let actualUserJobs = 0
         try {
           const jobManager = await getJobManager()
           const scheduler = jobManager.getScheduler()
           for (const job of scheduler.getJobs()) {
-            if (systemJobTypes.includes(job.type)) {
-              systemJobCount++
+            if (scheduleBackedJobTypes.includes(job.type)) {
+              actualUserJobs++
             }
           }
         }
         catch {
         // Already handled above
         }
-
-        const actualUserJobs = schedulerJobCount - systemJobCount
         const drifted = expectedJobCount !== actualUserJobs
         drift = {
           dbScheduleCount: expectedJobCount,
