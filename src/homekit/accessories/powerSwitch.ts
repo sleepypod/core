@@ -14,6 +14,7 @@ import type { DeviceStatus, Side } from '@/src/hardware/types'
 import {
   isEffectivelyPowered,
   isPoweredFromStatus,
+  reconcileIntendedPower,
   setSidePowerOff,
   setSidePowerOn,
 } from './sideController'
@@ -34,6 +35,11 @@ export function buildPowerSwitch(side: Side, monitor: DacMonitor): PowerSwitchAc
     })
 
   const onStatus = (status: DeviceStatus): void => {
+    // Drop the intent latch once firmware confirms it, so later external
+    // power changes (scheduler, auto-off) are reflected instead of shadowed.
+    // Lives here rather than in the thermostat: both accessories share the
+    // sideController latch and are always built together in bridge.ts.
+    reconcileIntendedPower(status, side)
     service.updateCharacteristic(Characteristic.On, isPoweredFromStatus(status, side))
   }
   monitor.on('status:updated', onStatus)

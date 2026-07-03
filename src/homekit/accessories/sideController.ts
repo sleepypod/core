@@ -78,6 +78,24 @@ export function isEffectivelyPowered(monitor: DacMonitor, side: Side): boolean {
 }
 
 /**
+ * Reconcile the intent latch with observed firmware state. Once firmware
+ * reports the side in the intended power state, the intent has been realized
+ * and firmware becomes the source of truth again. Without this, the latch
+ * shadowed every external power transition (scheduler off, auto-off, pump
+ * stall guard) forever: isEffectivelyPowered kept reporting stale ON and
+ * setTargetTemperature could re-heat a bed the scheduler had shut off.
+ * While intent and status still disagree, the write is presumed in flight
+ * (status lags a poll interval) and the latch is kept.
+ */
+export function reconcileIntendedPower(status: DeviceStatus, side: Side): void {
+  const intended = intendedPower[side]
+  if (intended === null) return
+  if (isPoweredFromStatus(status, side) === intended) {
+    intendedPower[side] = null
+  }
+}
+
+/**
  * Resolve the target setpoint to use when powering a side back on.
  * Cache wins because firmware may not preserve targetTemperature across
  * a level=0 (off) write. Falls back to the last firmware status, then to

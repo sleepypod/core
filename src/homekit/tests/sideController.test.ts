@@ -13,6 +13,7 @@ import {
   isCurrentlyPowered,
   isEffectivelyPowered,
   isPoweredFromStatus,
+  reconcileIntendedPower,
   setSidePowerOff,
   setSidePowerOn,
   setTargetTemperature,
@@ -277,6 +278,45 @@ describe('sideController', () => {
         'comms',
       )
       warn.mockRestore()
+    })
+  })
+
+  describe('reconcileIntendedPower', () => {
+    it('clears the latch once firmware confirms the intent, so external power changes show through', async () => {
+      // HomeKit turns the side on; latch reports ON ahead of firmware.
+      await setSidePowerOn(monitor(offStatus), 'left')
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(true)
+
+      // Firmware catches up and confirms ON → latch cleared.
+      reconcileIntendedPower(onStatus, 'left')
+
+      // Scheduler later powers the side off. Without reconciliation the
+      // stale ON latch shadowed this forever.
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+    })
+
+    it('keeps the latch while firmware still reports the pre-write state', async () => {
+      await setSidePowerOn(monitor(offStatus), 'left')
+
+      // Status still shows OFF (write in flight) → latch must survive.
+      reconcileIntendedPower(offStatus, 'left')
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(true)
+    })
+
+    it('after reconciliation, setTargetTemperature no longer re-heats a scheduler-stopped side', async () => {
+      await setSidePowerOn(monitor(offStatus), 'left')
+      reconcileIntendedPower(onStatus, 'left') // firmware confirmed ON
+      setTemperature.mockClear()
+      setPower.mockClear()
+
+      // Scheduler turns the side off; firmware now reports OFF.
+      await setTargetTemperature(monitor(offStatus), 'left', 68)
+      expect(setTemperature).not.toHaveBeenCalled()
+    })
+
+    it('is a no-op when no intent is latched', () => {
+      expect(() => reconcileIntendedPower(onStatus, 'left')).not.toThrow()
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
     })
   })
 
