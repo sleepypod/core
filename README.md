@@ -120,7 +120,10 @@ boundary; the in-app unit preference is unaffected.
 The bridge's HomeKit identity (MAC-style username, pincode, setupId) is
 **deterministically derived** from a hardware-rooted seed (eMMC CID →
 machine-id → random fallback) via HKDF, and cached at
-`/persistent/sleepypod-data/homekit/identity.json`. A `/persistent` wipe or
+`$DATA_DIR/homekit/identity.json` (where `$DATA_DIR` is the picker-chosen
+data dir — see [`scripts/README.md`](scripts/README.md#file-locations);
+typically `/persistent/sleepypod-data/homekit/identity.json` on Pod 4/5).
+A `/persistent` wipe or
 firmware reflash regenerates the **same** identity, so iOS still recognizes
 the bridge — you only re-pair, your automations and rooms stay intact. See
 **[ADR 0020](docs/adr/0020-homekit-identity-derivation.md)** for the full

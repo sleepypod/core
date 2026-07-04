@@ -1,0 +1,12 @@
+-- Backfill: force pump-stall protection back to opt-in (off) on already-migrated pods.
+--
+-- 0010 added `pump_stall_protection_enabled` with `DEFAULT true NOT NULL`, so every
+-- existing pod's device_settings row was silently set to 1 (armed at 500 rpm). 0011
+-- rebuilt the table with `DEFAULT false`, but its INSERT...SELECT carried the existing
+-- `1` forward — the new default only applies to fresh rows. Pods upgraded through #614
+-- are therefore armed without ever opting in, which can cut power on a stalled-but-cold
+-- pod (the "bed VERY cold" incident).
+--
+-- This is a power-cutting safety feature: it must be opt-in. Reset existing rows to the
+-- intended default. Auto-recovery was already DEFAULT false in 0010, so it needs no reset.
+UPDATE `device_settings` SET `pump_stall_protection_enabled` = false;

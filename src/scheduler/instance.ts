@@ -61,7 +61,24 @@ export async function getJobManager(): Promise<JobManager> {
       const timezone = await loadTimezone()
 
       const manager = new JobManager(timezone)
-      await manager.loadSchedules()
+      try {
+        await manager.loadSchedules()
+      }
+      catch (error) {
+        // loadSchedules can throw after registering some jobs; the discarded
+        // manager's node-schedule timers would keep firing, and a successful
+        // retry would register duplicates → double hardware commands.
+        try {
+          await manager.shutdown()
+        }
+        catch (shutdownError) {
+          console.warn(
+            'Failed to clean up partially-initialized JobManager:',
+            shutdownError instanceof Error ? shutdownError.message : shutdownError,
+          )
+        }
+        throw error
+      }
 
       jobManagerInstance = manager
       console.log('JobManager initialized with timezone:', timezone)

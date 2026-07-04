@@ -118,49 +118,63 @@ def open_biometrics_db() -> sqlite3.Connection:
 # After this many consecutive write failures, discard the connection and
 # reopen on the next write attempt (#325).
 _DB_RECONNECT_THRESHOLD = 5
-_db_write_failures = 0
-_db_conn_ref: Optional[sqlite3.Connection] = None
 
 
-def _replace_db_connection() -> Optional[sqlite3.Connection]:
-    """Close the current biometrics connection and open a fresh one.
+class DBHolder:
+    """Shared mutable reference to the biometrics connection.
 
-    Returns the new connection, or None if reconnection failed. On failure the
-    caller should keep using the old handle so subsequent writes can retry.
+    Both SideProcessor instances point at the same DBHolder so that when one
+    side triggers a reconnect, the other automatically observes the new
+    connection on its next write. Holding raw sqlite3.Connection refs on each
+    processor orphaned the sibling after a reconnect — it kept writing to the
+    closed handle (the exact bug sleep-detector's DBHolder docstring warns
+    about).
+
+    The consecutive-failure counter lives on the holder, making it
+    per-connection: failures observed against a stale handle can no longer
+    discard a healthy replacement.
     """
-    global _db_conn_ref
-    old = _db_conn_ref
+    __slots__ = ("conn", "write_failures")
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+        self.write_failures = 0
+
+
+def _reconnect_db(holder: "DBHolder") -> None:
+    """Open a fresh connection, swap into *holder*, then close the old one.
+    Open-first-then-swap means an open failure leaves the live handle in
+    place; the close happens after the swap so writers always see a valid
+    handle. Never raises."""
+    old = holder.conn
     try:
-        if old is not None:
-            try:
-                old.close()
-            except sqlite3.Error:
-                pass
-        _db_conn_ref = open_biometrics_db()
-        log.info("Reopened biometrics DB connection after write failures")
-        return _db_conn_ref
+        new = open_biometrics_db()
     except sqlite3.Error as e:
         log.error("Failed to reopen biometrics DB: %s", e)
-        return None
+        return
+    holder.conn = new
+    log.info("Reopened biometrics DB connection after write failures")
+    try:
+        old.close()
+    except sqlite3.Error:
+        pass
 
 
-def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
+def write_vitals(holder: "DBHolder", side: str, ts: datetime,
                  heart_rate: Optional[float], hrv: Optional[float],
                  breathing_rate: Optional[float],
                  quality_score: float,
                  flags: Optional[list] = None,
-                 hr_raw: Optional[float] = None) -> tuple[sqlite3.Connection, bool]:
+                 hr_raw: Optional[float] = None) -> bool:
     """Insert one vitals row + paired vitals_quality row. Logs and swallows
     sqlite3 errors so the main loop survives transient WAL/disk issues (#325).
-    After _DB_RECONNECT_THRESHOLD consecutive failures, the connection is
-    replaced and the new handle is returned.
+    After _DB_RECONNECT_THRESHOLD consecutive failures, the holder's
+    connection is replaced in place.
 
-    Returns (conn, wrote): caller must use the returned connection for
-    subsequent writes; `wrote` is True only when both inserts committed
-    so callers don't advance their downsample cursor on a failed write.
+    Returns True only when both inserts committed so callers don't advance
+    their downsample cursor on a failed write.
     """
-    global _db_write_failures, _db_conn_ref
-    _db_conn_ref = conn
+    conn = holder.conn
     ts_unix = int(ts.timestamp())
     now_unix = int(time.time())
     flags_json = json.dumps(flags) if flags else None
@@ -175,18 +189,16 @@ def write_vitals(conn: sqlite3.Connection, side: str, ts: datetime,
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (cur.lastrowid, side, ts_unix, quality_score, flags_json, hr_raw, now_unix),
             )
-        _db_write_failures = 0
-        return conn, True
+        holder.write_failures = 0
+        return True
     except sqlite3.Error as e:
-        _db_write_failures += 1
+        holder.write_failures += 1
         log.warning("write_vitals failed (%d consecutive): %s",
-                    _db_write_failures, e)
-        if _db_write_failures >= _DB_RECONNECT_THRESHOLD:
-            new_conn = _replace_db_connection()
-            _db_write_failures = 0
-            if new_conn is not None:
-                return new_conn, False
-        return conn, False
+                    holder.write_failures, e)
+        if holder.write_failures >= _DB_RECONNECT_THRESHOLD:
+            _reconnect_db(holder)
+            holder.write_failures = 0
+        return False
 
 
 def report_health(status: str, message: str) -> None:
@@ -234,8 +246,10 @@ class FrzHealthPumpState:
 
     def __init__(self):
         self._pump_rpm = {"left": 0.0, "right": 0.0}
-        # monotonic seconds when each side's pump last turned off
-        self._pump_off_at = {"left": 0.0, "right": 0.0}
+        # monotonic seconds when each side's pump last turned off; -inf =
+        # never (0.0 would falsely assert the guard for the first
+        # PUMP_OFF_GUARD_S when time.monotonic() has a near-zero origin)
+        self._pump_off_at = {"left": float("-inf"), "right": float("-inf")}
         self._was_active = {"left": False, "right": False}
 
     def update(self, record: dict) -> None:
@@ -511,12 +525,19 @@ class HRTracker:
     Bruser et al. 2011.
     """
 
+    # After this many consecutive uncorrectable readings, re-seed history at
+    # the new level. A lone outlier must not poison the median, but a
+    # sustained shift (e.g. different occupant) previously froze the tracker:
+    # the stale median rejected every new reading forever.
+    FALLBACK_RESET_STREAK = 3
+
     def __init__(self, max_delta: float = 15.0, history_len: int = 5):
         # Bounded deque: only the last history_len entries are ever consulted,
         # so retaining the full list would leak ~1440 floats/day (#325).
         self.history: deque = deque(maxlen=history_len)
         self.max_delta = max_delta
         self.history_len = history_len
+        self._fallback_streak = 0
 
     def update(self, hr_candidate: Optional[float],
                score: float) -> Optional[float]:
@@ -533,6 +554,7 @@ class HRTracker:
         # Gaussian consistency weight
         consistency = np.exp(-0.5 * (delta / self.max_delta) ** 2)
         if consistency > 0.3:
+            self._fallback_streak = 0
             self.history.append(hr_candidate)
             return hr_candidate
 
@@ -542,6 +564,7 @@ class HRTracker:
             half_delta = abs(half_hr - recent)
             half_consistency = np.exp(-0.5 * (half_delta / self.max_delta) ** 2)
             if half_consistency > 0.3:
+                self._fallback_streak = 0
                 self.history.append(half_hr)
                 return half_hr
 
@@ -552,10 +575,19 @@ class HRTracker:
             double_consistency = np.exp(
                 -0.5 * (double_delta / self.max_delta) ** 2)
             if double_consistency > 0.3:
+                self._fallback_streak = 0
                 self.history.append(double_hr)
                 return double_hr
 
-        # Accept anyway but don't poison history
+        # Accept anyway but keep a lone outlier out of history. A sustained
+        # streak of uncorrectable readings means the tracked level itself is
+        # stale (e.g. different occupant) — previously the frozen median then
+        # rejected every reading forever, so re-seed at the new level.
+        self._fallback_streak += 1
+        if self._fallback_streak >= self.FALLBACK_RESET_STREAK:
+            self.history.clear()
+            self.history.append(hr_candidate)
+            self._fallback_streak = 0
         return hr_candidate
 
 # ---------------------------------------------------------------------------
@@ -765,10 +797,10 @@ def compute_hrv(samples: np.ndarray,
 # ---------------------------------------------------------------------------
 
 class SideProcessor:
-    def __init__(self, side: str, db_conn: sqlite3.Connection,
+    def __init__(self, side: str, db_holder: DBHolder,
                  pump_state: Optional[FrzHealthPumpState] = None):
         self.side = side
-        self.db = db_conn
+        self.db_holder = db_holder
         self._hr_buf: deque = deque(maxlen=HR_WINDOW_S * SAMPLE_RATE)
         self._hrv_buf: deque = deque(maxlen=HRV_WINDOW_S * SAMPLE_RATE)
         self._br_buf: deque = deque(maxlen=BREATHING_WINDOW_S * SAMPLE_RATE)
@@ -883,9 +915,9 @@ class SideProcessor:
                 flags.append("no_br")
             if med_std < self._presence.enter_threshold:
                 flags.append("low_signal")
-            self.db, wrote = write_vitals(self.db, self.side, ts, hr, hrv, br,
-                                          quality_score=quality, flags=flags or None,
-                                          hr_raw=hr_raw)
+            wrote = write_vitals(self.db_holder, self.side, ts, hr, hrv, br,
+                                 quality_score=quality, flags=flags or None,
+                                 hr_raw=hr_raw)
             log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f q=%.2f", self.side,
                      hr or 0, hrv or 0, br or 0, quality)
             # Only advance the downsample cursor when the write actually
@@ -901,6 +933,21 @@ class SideProcessor:
 # Main loop
 # ---------------------------------------------------------------------------
 
+def _int32_samples(buf) -> np.ndarray:
+    """Decode an int32 sample buffer, tolerating truncated tails.
+
+    A RAW record cut mid-write can carry a payload whose length is not a
+    multiple of 4; np.frombuffer would raise ValueError and kill the module.
+    Truncate to whole samples instead.
+    """
+    if not isinstance(buf, (bytes, bytearray, memoryview)):
+        return np.empty(0, dtype=np.int32)
+    usable = len(buf) - (len(buf) % 4)
+    if usable == 0:
+        return np.empty(0, dtype=np.int32)
+    return np.frombuffer(buf[:usable], dtype=np.int32)
+
+
 def main() -> None:
     log.info("Starting piezo-processor v2 (biometrics.db=%s)", BIOMETRICS_DB)
 
@@ -908,11 +955,11 @@ def main() -> None:
         log.error("Biometrics DB directory does not exist: %s", BIOMETRICS_DB.parent)
         sys.exit(1)
 
-    db_conn = open_biometrics_db()
+    db_holder = DBHolder(open_biometrics_db())
     pump_gate = PumpGate()
     pump_state = FrzHealthPumpState()
-    left = SideProcessor("left", db_conn, pump_state=pump_state)
-    right = SideProcessor("right", db_conn, pump_state=pump_state)
+    left = SideProcessor("left", db_holder, pump_state=pump_state)
+    right = SideProcessor("right", db_holder, pump_state=pump_state)
     left._other = right
     right._other = left
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
@@ -932,8 +979,8 @@ def main() -> None:
                 continue
 
             # Each record contains ~500 int32 samples per channel
-            l_samples = np.frombuffer(record.get("left1", b""), dtype=np.int32)
-            r_samples = np.frombuffer(record.get("right1", b""), dtype=np.int32)
+            l_samples = _int32_samples(record.get("left1", b""))
+            r_samples = _int32_samples(record.get("right1", b""))
 
             if l_samples.size == 0 or r_samples.size == 0:
                 continue
@@ -950,7 +997,7 @@ def main() -> None:
         report_health("down", str(e))
         sys.exit(1)
     finally:
-        db_conn.close()
+        db_holder.conn.close()
         log.info("Shutdown complete")
 
     # Only reached on clean shutdown (not via sys.exit)

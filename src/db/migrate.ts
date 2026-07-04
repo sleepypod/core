@@ -43,13 +43,16 @@ export async function seedDefaultData() {
       // Wrap all inserts in a transaction for atomicity
       // Note: better-sqlite3 transactions are synchronous — cannot use async/await
       db.transaction((tx) => {
-        // Insert default device settings
+        // Insert default device settings. pumpStallProtectionEnabled is set
+        // explicitly to false (opt-in): it acts on flow/RPM data not all pods
+        // report consistently, and a power-cutting feature must not default on.
         tx.insert(deviceSettings).values({
           id: 1,
           timezone: 'America/Los_Angeles',
           temperatureUnit: 'F',
           rebootDaily: false,
           primePodDaily: false,
+          pumpStallProtectionEnabled: false,
         }).run()
 
         // Insert default side settings

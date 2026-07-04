@@ -9,14 +9,22 @@ const setPower = vi.fn<AnyAsync>()
 const setAlarm = vi.fn<AnyAsync>()
 const startPriming = vi.fn<AnyAsync>()
 const connect = vi.fn<() => Promise<void>>()
+const sendRaw = vi.fn<(command: string, args?: string) => Promise<string>>()
 setTemperature.mockResolvedValue(undefined)
 setPower.mockResolvedValue(undefined)
 setAlarm.mockResolvedValue(undefined)
 startPriming.mockResolvedValue(undefined)
 connect.mockResolvedValue(undefined)
+// Production sendRaw guards every write with a connect check (it lives in the
+// same module as dacTransport), so the mock mirrors that — keeps the LED
+// brightness coverage that asserts on connect calls intact.
+sendRaw.mockImplementation(async () => {
+  await connect()
+  return ''
+})
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getSharedHardwareClient: () => ({ connect, setTemperature, setPower, setAlarm, startPriming }),
+  getSharedHardwareClient: () => ({ connect, setTemperature, setPower, setAlarm, startPriming, sendRaw }),
 }))
 
 vi.mock('@/src/hardware/dacTransport', () => ({
@@ -159,6 +167,13 @@ function resetSchema(): void {
       mqtt_tls_enabled INTEGER,
       mqtt_tls_insecure INTEGER,
       homekit_enabled INTEGER NOT NULL DEFAULT 0,
+      pump_stall_protection_enabled INTEGER NOT NULL DEFAULT 1,
+      pump_stall_rpm_threshold INTEGER NOT NULL DEFAULT 500,
+      pump_stall_dwell_samples INTEGER NOT NULL DEFAULT 2,
+      pump_stall_auto_recovery_enabled INTEGER NOT NULL DEFAULT 0,
+      pump_stall_recovery_rpm INTEGER NOT NULL DEFAULT 1500,
+      pump_stall_recovery_samples INTEGER NOT NULL DEFAULT 3,
+      autopilot_enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );

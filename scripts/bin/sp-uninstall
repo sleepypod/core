@@ -23,7 +23,14 @@ for arg in "$@"; do
 done
 
 INSTALL_DIR="/home/dac/sleepypod-core"
-DATA_DIR="/persistent/sleepypod-data"
+# DATA_DIR pointer is written by scripts/install (storage-aware picker).
+# Legacy fallback keeps installs without the pointer file working.
+# The pointer itself is cleaned up by `rm -rf /etc/sleepypod` below.
+if [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
+  DATA_DIR="$(cat /etc/sleepypod/data-dir)"
+else
+  DATA_DIR="/persistent/sleepypod-data"
+fi
 MODULES_DIR="/opt/sleepypod/modules"
 
 if [ "$FORCE" != true ]; then
@@ -58,6 +65,9 @@ for svc in "${SERVICES[@]}"; do
   systemctl disable "$svc" 2>/dev/null || true
   rm -f "/etc/systemd/system/$svc"
 done
+
+# Drop-ins installed by sp-update (e.g. iptables-lockfile.conf for older pods).
+rm -rf /etc/systemd/system/sleepypod.service.d
 
 # Restore frank.sh from the most recent pre-tmpfs backup BEFORE the mount
 # is torn down — otherwise frank's cwd disappears mid-restart.

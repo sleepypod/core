@@ -230,3 +230,134 @@ class TestSharedConnectionHolder:
         assert holder.conn is replacement
         # The original closed-handle is no longer referenced by the holder, so
         # any tracker reading from holder.conn observes the live connection.
+
+
+class TestPumpGatePerSide:
+    """Gating both beds whenever EITHER pump ran zeroed real movement on the
+    idle side for the whole pump runtime, under-counting the movement table.
+    Signal 1 (RPM) and Signal 3 (guard period) are now per-side; cross-side
+    mechanical coupling remains covered by Signal 2 (correlated ref-anomaly)."""
+
+    def _frz(self, left_rpm, right_rpm):
+        return {
+            "type": "frzHealth",
+            "left": {"pumpRpm": left_rpm},
+            "right": {"pumpRpm": right_rpm},
+        }
+
+    def test_only_running_side_is_gated(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=0))
+
+        assert gate.is_gated({}, "left") is True
+        assert gate.is_gated({}, "right") is False
+
+    def test_both_sides_gated_when_both_pumps_run(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=2800))
+
+        assert gate.is_gated({}, "left") is True
+        assert gate.is_gated({}, "right") is True
+
+    def test_guard_period_applies_per_side(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=0))
+        # Left pump turns off → left enters its guard period; right never ran.
+        gate.update_pump_state(self._frz(left_rpm=0, right_rpm=0))
+
+        assert gate.is_gated({}, "left") is True, "guard period must gate the side that ran"
+        assert gate.is_gated({}, "right") is False, "idle side must not inherit the guard"
+
+    def test_no_pumps_no_gate(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state(self._frz(left_rpm=0, right_rpm=0))
+
+        assert gate.is_gated({}, "left") is False
+        assert gate.is_gated({}, "right") is False
+
+
+def _tracker():
+    """A SessionTracker wired to an in-memory DB. calibration/pump_gate are
+    unused by _update, so None is sufficient for presence/session tests."""
+    holder = main.DBHolder(_make_db())
+    main._db_write_failures = 0
+    return main.SessionTracker(side="left", db=holder,
+                               calibration=None, pump_gate=None)
+
+
+def _feed(t, samples):
+    """Feed (ts, present) pairs through _update with zero movement."""
+    for ts, present in samples:
+        t._update(ts, present, 0.0)
+
+
+def _rows(t):
+    return t.db.conn.execute(
+        "SELECT sleep_duration_seconds, times_exited_bed FROM sleep_records"
+    ).fetchall()
+
+
+class TestPresenceDebounce:
+    """Pod 88 field debug 2026-06-10: brief capSense dropouts fragmented one
+    overnight presence span into dozens of <15min sleep_records with 66-109
+    bogus bed-exits and runaway durations. Presence is now debounced."""
+
+    def test_brief_dropout_does_not_increment_exit_or_split_session(self):
+        t = _tracker()
+        base = 1_777_000_000.0
+        samples = []
+        # Establish committed presence (sustain past PRESENCE_DEBOUNCE_S).
+        samples += [(base, True), (base + 31, True)]
+        # 8h in bed at 2 Hz would be huge; sample sparsely but inject many
+        # sub-debounce dropouts — each a single absent sample immediately
+        # followed by present. None should commit a flip.
+        ts = base + 31
+        for _ in range(50):
+            ts += 60
+            samples.append((ts, False))   # brief dropout
+            samples.append((ts + 1, True))  # back within 1s — under debounce
+        # Real morning exit: sustained absence past debounce + absence timeout.
+        exit_ts = ts + 3600
+        samples.append((exit_ts, False))
+        samples.append((exit_ts + 31, False))   # commits absent flip → 1 exit
+        samples.append((exit_ts + 200, False))  # > ABSENCE_TIMEOUT_S → close
+        _feed(t, samples)
+
+        rows = _rows(t)
+        assert len(rows) == 1
+        duration_s, exits = rows[0]
+        assert exits == 1
+        # One continuous span: duration ~ (exit_ts - base), well over an hour.
+        assert duration_s >= 3600
+
+    def test_sustained_absence_counts_single_exit(self):
+        t = _tracker()
+        base = 1_777_000_000.0
+        samples = [(base, True), (base + 31, True)]
+        # Genuine bed-exit: absence sustained past debounce, then past the
+        # absence timeout so the session closes on that one exit.
+        leave = base + 4000
+        samples += [(leave, False), (leave + 31, False), (leave + 200, False)]
+        _feed(t, samples)
+
+        rows = _rows(t)
+        assert len(rows) == 1
+        _duration, exits = rows[0]
+        assert exits == 1
+
+    def test_runaway_session_is_capped(self):
+        t = _tracker()
+        base = 1_777_000_000.0
+        samples = [(base, True), (base + 31, True)]
+        # Presence that never goes absent for > MAX_SESSION_S of wall-clock.
+        ts = base + 31
+        while ts < base + main.MAX_SESSION_S + 7200:
+            ts += 600
+            samples.append((ts, True))
+        _feed(t, samples)
+
+        rows = _rows(t)
+        assert len(rows) >= 1
+        # No row exceeds the hard cap.
+        for duration_s, _exits in rows:
+            assert duration_s <= main.MAX_SESSION_S

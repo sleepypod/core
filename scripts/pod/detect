@@ -9,6 +9,12 @@
 # via the hardware sensor label (see src/hardware/responseParser.ts).
 
 INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
+# DATA_DIR pointer is written by scripts/install (storage-aware picker:
+# /persistent vs rootfs by total partition size). Env override > pointer
+# file > legacy /persistent default for installs that pre-date the pointer.
+if [ -z "${DATA_DIR:-}" ] && [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
+  DATA_DIR="$(cat /etc/sleepypod/data-dir)"
+fi
 DATA_DIR="${DATA_DIR:-/persistent/sleepypod-data}"
 
 # Only accept known firmware-supported socket locations
@@ -76,8 +82,10 @@ detect_dac_sock() {
     fi
   done
 
-  # Priority 4: Default to Pod 5 path
-  echo "Warning: dac.sock not found, using default: /persistent/deviceinfo/dac.sock" >&2
+  # Priority 4: Default to Pod 5 path. Common at fresh-install time —
+  # frankenfirmware hasn't restarted yet, so the socket file doesn't
+  # exist and frank.sh may be absent on newer Pod 5 firmware variants.
+  echo "dac.sock not yet present — assuming Pod 5 default (/persistent/deviceinfo/dac.sock)" >&2
   echo "/persistent/deviceinfo/dac.sock"
 }
 

@@ -240,8 +240,66 @@ describe('dacTransport', () => {
       const firstResult = sendCommand('14')
       await expect(firstResult).rejects.toBeInstanceOf(MessageResponseTimeoutError)
 
-      // Now firmware becomes responsive. The queue must not be stuck.
+      // Now firmware becomes responsive. Attaching the handler resumes the
+      // socket and delivers the buffered '14', so its late response arrives
+      // first — give it time to land so the next send discards it as stale.
       handleCommands(mockFranken)
+      await new Promise(r => setTimeout(r, 100))
+      const response = await sendCommand('0')
+      expect(response).toBe('READY')
+    })
+
+    test('dropped response does not shift pairing — next command gets its own response', async () => {
+      const connectPromise = connectDac(socketPath)
+
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+
+      // Firmware that silently drops '14' but answers everything else.
+      // Before the abortable read, the orphaned reader from the timed-out
+      // '14' consumed the NEXT response, shifting pairing forever.
+      const franken = mockFranken
+      let buffer = ''
+      franken.on('data', (chunk) => {
+        buffer += chunk.toString('utf-8')
+        while (buffer.includes('\n\n')) {
+          const idx = buffer.indexOf('\n\n')
+          const message = buffer.substring(0, idx)
+          buffer = buffer.substring(idx + 2)
+          const command = message.split('\n')[0].trim()
+          if (command === '14') continue // drop: no response ever
+          franken.write((command === '0' ? 'READY' : 'SET: ok') + '\n\n')
+        }
+      })
+
+      await connectPromise
+
+      await expect(sendCommand('14')).rejects.toBeInstanceOf(MessageResponseTimeoutError)
+
+      const response = await sendCommand('0')
+      expect(response).toBe('READY')
+    })
+
+    test('late response buffered after timeout is discarded, not paired with next command', async () => {
+      const connectPromise = connectDac(socketPath)
+
+      await new Promise(r => setTimeout(r, 200))
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      await connectPromise
+
+      // Firmware hangs on '14' — the command times out.
+      await expect(sendCommand('14')).rejects.toBeInstanceOf(MessageResponseTimeoutError)
+
+      // The '14' response arrives late, after its read was abandoned.
+      mockFranken.write('LATE-STALE-14\n\n')
+      await new Promise(r => setTimeout(r, 100))
+
+      // The next command must get its own response, not the stale one.
+      // (Attaching the handler also replays the buffered '14' command; wait
+      // for its response to land so both stale messages are buffered before
+      // the next send discards them.)
+      handleCommands(mockFranken)
+      await new Promise(r => setTimeout(r, 100))
       const response = await sendCommand('0')
       expect(response).toBe('READY')
     })

@@ -12,12 +12,12 @@ import {
 } from '@/src/db/schema'
 import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
-import { sendCommand } from '@/src/hardware/dacTransport'
 import { encode as cborEncode } from 'cbor-x'
 import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { withSideLock } from '@/src/hardware/sideLock'
 import { timeToDate, nowInTimezone } from './timeUtils'
 
 const HEARTBEAT_INTERVAL_MS_DEFAULT = 60_000
@@ -36,10 +36,6 @@ export class JobManager {
   private scheduler: Scheduler
   private reloadInProgress: Promise<void> | null = null
   private reloadPending: boolean = false
-  private sideLocks: Record<'left' | 'right', Promise<void>> = {
-    left: Promise.resolve(),
-    right: Promise.resolve(),
-  }
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private readonly heartbeatIntervalMs: number
@@ -56,33 +52,6 @@ export class JobManager {
     this.heartbeatStaleMs = options.heartbeatStaleMs ?? HEARTBEAT_STALE_MS_DEFAULT
 
     this.setupEventListeners()
-  }
-
-  // ---------------------------------------------------------------------------
-  // Per-side serialization
-  //
-  // Power-off, power-on, temperature, alarm, and run-once temp handlers all
-  // mutate the same hardware side. node-schedule fires same-minute jobs in
-  // parallel inside the event loop, which previously let a `temperature` job
-  // win the race against a same-minute `power_off` (the temp's setTemperature
-  // command landed last and re-enabled heat). Wrapping the handlers in a
-  // per-side mutex serializes them; combined with power_off updating
-  // device_state.isPowered before sending hardware, any temp/alarm that
-  // acquires the lock after power_off observes isPowered=false and skips.
-  // ---------------------------------------------------------------------------
-  private async withSideLock<T>(side: 'left' | 'right', fn: () => Promise<T>): Promise<T> {
-    const prev = this.sideLocks[side]
-    let release!: () => void
-    this.sideLocks[side] = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    try {
-      await prev
-      return await fn()
-    }
-    finally {
-      release()
-    }
   }
 
   /**
@@ -133,9 +102,12 @@ export class JobManager {
     return [hour, minute]
   }
 
-  private onJobScheduled = (job: { id: string, type: string }) => {
-    console.log(`Job scheduled: ${job.id} [${job.type}]`)
-  }
+  // No-op listener. The per-job log line synchronously hits journald which
+  // dominates reloadSchedules() cost at our job count (357+) — measured ~7s
+  // on-device for the rebuild was almost entirely journald writes.
+  // loadSchedules logs the totals at the end. Re-enable behind an env flag
+  // if you need to trace individual job registration.
+  private onJobScheduled = () => {}
 
   private onJobExecuted = (jobId: string, result: { success: boolean, error?: string }) => {
     if (result.success) {
@@ -176,29 +148,41 @@ export class JobManager {
   async loadSchedules(): Promise<void> {
     console.log('Loading schedules from database...')
 
+    // node-schedule's scheduleJob is synchronous and CPU-bound; registering
+    // hundreds of cron jobs in a tight loop blocks the event loop for seconds
+    // and starves the HTTP layer of the chance to flush API responses.
+    // Yielding every YIELD_EVERY iterations lets the response flush while the
+    // remainder of the rebuild continues. Incremental scheduling (issue #612)
+    // is the proper fix.
+    const YIELD_EVERY = 25
+    const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve))
+
     // Load temperature schedules
     const tempSchedules = await db.select().from(temperatureSchedules)
-    for (const sched of tempSchedules) {
-      if (sched.enabled) {
-        this.scheduleTemperature(sched)
+    for (let i = 0; i < tempSchedules.length; i++) {
+      if (tempSchedules[i].enabled) {
+        this.scheduleTemperature(tempSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load power schedules
     const powSchedules = await db.select().from(powerSchedules)
-    for (const sched of powSchedules) {
-      if (sched.enabled) {
-        this.schedulePowerOn(sched)
-        this.schedulePowerOff(sched)
+    for (let i = 0; i < powSchedules.length; i++) {
+      if (powSchedules[i].enabled) {
+        this.schedulePowerOn(powSchedules[i])
+        this.schedulePowerOff(powSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load alarm schedules
     const almSchedules = await db.select().from(alarmSchedules)
-    for (const sched of almSchedules) {
-      if (sched.enabled) {
-        this.scheduleAlarm(sched)
+    for (let i = 0; i < almSchedules.length; i++) {
+      if (almSchedules[i].enabled) {
+        this.scheduleAlarm(almSchedules[i])
       }
+      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
     }
 
     // Load system schedules (priming, reboot)
@@ -323,7 +307,7 @@ export class JobManager {
       JobType.TEMPERATURE,
       cron,
       () => this.runTemperatureJob(sched),
-      { scheduleId: sched.id, side: sched.side }
+      { scheduleId: sched.id, side: sched.side, targetTemperature: sched.temperature }
     )
   }
 
@@ -337,7 +321,7 @@ export class JobManager {
       console.log(`Skipping recurring temp job temp-${sched.id} — run-once session active for ${sched.side}`)
       return
     }
-    await this.withSideLock(sched.side, async () => {
+    await withSideLock(sched.side, async () => {
       if (!(await this.isSidePowered(sched.side))) {
         console.log(`Skipping temp job temp-${sched.id} — ${sched.side} is not powered`)
         return
@@ -365,7 +349,7 @@ export class JobManager {
       JobType.POWER_ON,
       cron,
       () => this.runPowerOnJob(sched),
-      { scheduleId: sched.id, side: sched.side }
+      { scheduleId: sched.id, side: sched.side, targetTemperature: sched.onTemperature }
     )
   }
 
@@ -374,7 +358,7 @@ export class JobManager {
       console.log(`Skipping recurring power-on job — run-once session active for ${sched.side}`)
       return
     }
-    await this.withSideLock(sched.side, async () => {
+    await withSideLock(sched.side, async () => {
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
@@ -409,7 +393,7 @@ export class JobManager {
       console.log(`Skipping recurring power-off job — run-once session active for ${sched.side}`)
       return
     }
-    await this.withSideLock(sched.side, async () => {
+    await withSideLock(sched.side, async () => {
       // Mark off in DB BEFORE hardware so any temp/alarm job that acquires
       // the side lock after this one observes isPowered=false and skips its
       // setTemperature command.
@@ -433,12 +417,12 @@ export class JobManager {
       JobType.ALARM,
       cron,
       () => this.runAlarmJob(sched),
-      { scheduleId: sched.id, side: sched.side }
+      { scheduleId: sched.id, side: sched.side, targetTemperature: sched.alarmTemperature }
     )
   }
 
   async runAlarmJob(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
-    await this.withSideLock(sched.side, async () => {
+    await withSideLock(sched.side, async () => {
       // Vibration must fire regardless of power state — the alarm's purpose is
       // to wake the user, who often sleeps with the bed off or on a power
       // schedule that hasn't kicked in yet at wake time. Temperature, however,
@@ -504,12 +488,69 @@ export class JobManager {
 
   /**
    * Send a LED brightness command via the shared hardware client.
+   *
+   * Frank's SetSettings (cmd 8) CBOR map uses 2-char keys. The full schema as
+   * emitted by firmware: {v:<schema-ver>, gl:<temp-left>, gr:<temp-right>, lb:<0..100>}.
+   * Sending unknown keys (e.g. {ledBrightness}) is silently ignored — the
+   * write succeeds but the LED never changes. See docs/hardware/DAC-PROTOCOL.md.
    */
   private async sendLedBrightness(brightness: number): Promise<void> {
-    const client = getSharedHardwareClient()
-    await client.connect()
-    const hexCbor = Buffer.from(cborEncode({ ledBrightness: brightness })).toString('hex')
-    await sendCommand(HardwareCommand.SET_SETTINGS, hexCbor)
+    // Route through the client's sendRaw so the connect() check and the actual
+    // write share the same dacTransport module instance. Importing sendCommand
+    // directly from another module can land in a separate Turbopack chunk
+    // whose `transport` singleton is undefined, which makes every LED write
+    // throw "[DAC] not connected" and stalls 9–15s on a retried server start.
+    // Cast mirrors device.ts's debug-execute path — sendRaw lives on the
+    // shared client but isn't on the dev HardwareClient interface.
+    const client = getSharedHardwareClient() as unknown as { sendRaw(command: string, args?: string): Promise<string> }
+    const hexCbor = Buffer.from(cborEncode({ lb: brightness })).toString('hex')
+    await client.sendRaw(HardwareCommand.SET_SETTINGS, hexCbor)
+  }
+
+  /**
+   * Apply the correct LED brightness right now based on persisted device
+   * settings and the scheduler's configured timezone. Called from
+   * settings.updateDevice so a brightness slider change reflects on the pod
+   * within ~1s, regardless of whether night mode is enabled (in which case
+   * the next cron-fired update will overwrite this when the window flips).
+   */
+  async applyCurrentLedBrightness(): Promise<void> {
+    const [settings] = await db.select().from(deviceSettings).limit(1)
+    if (!settings) return
+
+    const target = this.computeCurrentLedBrightness(
+      settings.ledNightModeEnabled,
+      settings.ledNightStartTime,
+      settings.ledNightEndTime,
+      settings.ledDayBrightness,
+      settings.ledNightBrightness,
+    )
+    await this.sendLedBrightness(target)
+  }
+
+  private computeCurrentLedBrightness(
+    nightModeEnabled: boolean,
+    nightStartTime: string | null,
+    nightEndTime: string | null,
+    dayBrightness: number,
+    nightBrightness: number,
+  ): number {
+    if (!nightModeEnabled || !nightStartTime || !nightEndTime) {
+      return dayBrightness
+    }
+
+    const [startHour, startMinute] = this.parseTime(nightStartTime)
+    const [endHour, endMinute] = this.parseTime(nightEndTime)
+    const { hour: nowHour, minute: nowMinute } = nowInTimezone(this.scheduler.getTimezone())
+    const nowMinutes = nowHour * 60 + nowMinute
+    const startMinutes = startHour * 60 + startMinute
+    const endMinutes = endHour * 60 + endMinute
+
+    const isNight = startMinutes <= endMinutes
+      ? nowMinutes >= startMinutes && nowMinutes < endMinutes
+      : nowMinutes >= startMinutes || nowMinutes < endMinutes
+
+    return isNight ? nightBrightness : dayBrightness
   }
 
   /**
@@ -526,35 +567,38 @@ export class JobManager {
     const [startHour, startMinute] = this.parseTime(nightStartTime)
     const startCron = `${startMinute} ${startHour} * * *`
 
+    // Closures read brightness from the DB at fire time. This lets brightness
+    // sliders skip reloadSchedules() (which rebuilds thousands of temperature
+    // cron jobs) — a captured value would otherwise go stale until the next
+    // unrelated scheduler reload.
     this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
-      console.log(`LED night mode: setting brightness to ${nightBrightness}`)
-      await this.sendLedBrightness(nightBrightness)
-    })
+      const [s] = await db.select().from(deviceSettings).limit(1)
+      const target = s?.ledNightBrightness ?? nightBrightness
+      console.log(`LED night mode: setting brightness to ${target}`)
+      await this.sendLedBrightness(target)
+    }, { brightness: nightBrightness })
 
     const [endHour, endMinute] = this.parseTime(nightEndTime)
     const endCron = `${endMinute} ${endHour} * * *`
 
     this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
-      console.log(`LED night mode: setting brightness to ${dayBrightness}`)
-      await this.sendLedBrightness(dayBrightness)
-    })
+      const [s] = await db.select().from(deviceSettings).limit(1)
+      const target = s?.ledDayBrightness ?? dayBrightness
+      console.log(`LED night mode: setting brightness to ${target}`)
+      await this.sendLedBrightness(target)
+    }, { brightness: dayBrightness })
 
     // Apply correct brightness immediately based on whether we're in the night window.
-    // Use the configured scheduler timezone (which matches the cron jobs above) rather
-    // than the OS clock, which on embedded targets is often UTC and would flip the
-    // window for any user not on UTC.
-    const { hour: nowHour, minute: nowMinute } = nowInTimezone(this.scheduler.getTimezone())
-    const nowMinutes = nowHour * 60 + nowMinute
-    const startMinutes = startHour * 60 + startMinute
-    const endMinutes = endHour * 60 + endMinute
-
-    const isNight = startMinutes <= endMinutes
-      ? nowMinutes >= startMinutes && nowMinutes < endMinutes // same-day window (e.g. 01:00-06:00)
-      : nowMinutes >= startMinutes || nowMinutes < endMinutes // midnight-crossing window (e.g. 22:00-06:00)
-
-    const targetBrightness = isNight ? nightBrightness : dayBrightness
+    // Delegates to computeCurrentLedBrightness so the window math has one source of
+    // truth (it also serves applyCurrentLedBrightness for slider-driven writes).
+    const targetBrightness = this.computeCurrentLedBrightness(
+      true,
+      nightStartTime,
+      nightEndTime,
+      dayBrightness,
+      nightBrightness,
+    )
     try {
-      console.log(`LED night mode: applying initial brightness ${targetBrightness} (${isNight ? 'night' : 'day'} window)`)
       await this.sendLedBrightness(targetBrightness)
     }
     catch (e) {
@@ -740,6 +784,174 @@ export class JobManager {
     return `${minute} ${hour} * * ${dayNum}`
   }
 
+  // ---------------------------------------------------------------------------
+  // Per-schedule incremental upsert / cancel
+  //
+  // The full `reloadSchedules()` cancels every recurring job and rebuilds from
+  // the DB. That is correct for heartbeat liveness and drift recovery but
+  // catastrophic when only one row changed: a reload that lands inside a
+  // job's fire window (e.g. HH:MM:04 for a job whose cron fires at HH:MM)
+  // cancels the just-fired job and recreates it computing the next invocation
+  // from the cron — which skips to next week for a weekly recurring job
+  // (yggdrasil-49). It also magnifies the wall-clock cost of every CRUD into
+  // a full DB re-scan + N rescheduleJob calls.
+  //
+  // These helpers touch only the affected job(s):
+  // - upsert*Job(sched) — schedules or replaces a single row's job(s).
+  //   Idempotent: calling twice with the same input leaves exactly one job
+  //   in the scheduler (scheduleJob cancels the prior id before scheduling).
+  //   When `enabled === false`, the upsert acts as cancel.
+  // - cancel*Job(id) — removes the job(s) for that row id. No-op if absent.
+  //
+  // Two styles exist below:
+  // - Single-id helpers (temp/alarm/power) rely on scheduleJob's
+  //   cancel-existing-by-id semantics: schedule*() is called with the same
+  //   id and the prior job is replaced atomically.
+  // - Multi-id helpers (reboot/prime/awayMode) explicitly cancel every
+  //   sub-job up front, because the new schedule may leave a strict subset
+  //   armed (e.g. awayStart set but awayReturn null) and the old sub-jobs
+  //   would otherwise persist.
+  //
+  // Residual self-edit caveat: editing a row inside its own fire window still
+  // recreates that row's job and recomputes nextInvocation from "now". The
+  // currently-firing handler runs to completion (node-schedule does not
+  // interrupt in-flight invocations), and the next fire reflects the new row
+  // state — which is the desired behavior for a user-driven edit.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Upsert the cron job for a single temperature schedule.
+   * Cancels the existing `temp-${id}` job if disabled; otherwise (re)schedules.
+   */
+  upsertTemperatureJob(sched: typeof temperatureSchedules.$inferSelect): void {
+    if (!sched.enabled) {
+      this.cancelTemperatureJob(sched.id)
+      return
+    }
+    this.scheduleTemperature(sched)
+  }
+
+  cancelTemperatureJob(id: number): void {
+    this.scheduler.cancelJob(`temp-${id}`)
+  }
+
+  /**
+   * Upsert both on/off cron jobs for a single power schedule.
+   */
+  upsertPowerJob(sched: typeof powerSchedules.$inferSelect): void {
+    if (!sched.enabled) {
+      this.cancelPowerJob(sched.id)
+      return
+    }
+    this.schedulePowerOn(sched)
+    this.schedulePowerOff(sched)
+  }
+
+  cancelPowerJob(id: number): void {
+    this.scheduler.cancelJob(`power-on-${id}`)
+    this.scheduler.cancelJob(`power-off-${id}`)
+  }
+
+  /**
+   * Upsert the cron job for a single alarm schedule.
+   */
+  upsertAlarmJob(sched: typeof alarmSchedules.$inferSelect): void {
+    if (!sched.enabled) {
+      this.cancelAlarmJob(sched.id)
+      return
+    }
+    this.scheduleAlarm(sched)
+  }
+
+  cancelAlarmJob(id: number): void {
+    this.scheduler.cancelJob(`alarm-${id}`)
+  }
+
+  /**
+   * Upsert the LED night-mode jobs from the latest device-settings values.
+   * Pass `enabled=false` (or omit start/end) to cancel; pass enabled+times
+   * to (re)schedule. scheduleLedNightMode also applies the correct brightness
+   * immediately based on the configured timezone window, so a settings change
+   * is reflected on the hardware without waiting for the next cron fire.
+   */
+  async upsertLedNightMode(
+    enabled: boolean,
+    nightStartTime: string | null,
+    nightEndTime: string | null,
+    dayBrightness: number,
+    nightBrightness: number,
+  ): Promise<void> {
+    this.cancelLedNightMode()
+    if (!enabled || !nightStartTime || !nightEndTime) {
+      // Night mode just turned off — restore day brightness so the hardware
+      // doesn't sit at the dimmed value until something else writes to LEDs.
+      if (!enabled) {
+        try {
+          await this.sendLedBrightness(dayBrightness)
+        }
+        catch (e) {
+          console.warn('LED night mode: failed to restore day brightness on disable:', e)
+        }
+      }
+      return
+    }
+    await this.scheduleLedNightMode(nightStartTime, nightEndTime, dayBrightness, nightBrightness)
+  }
+
+  cancelLedNightMode(): void {
+    this.scheduler.cancelJob('led-night-start')
+    this.scheduler.cancelJob('led-night-end')
+  }
+
+  /**
+   * Upsert the daily-reboot cron job. Pass `null` (or rebootDaily=false) to cancel.
+   */
+  upsertRebootJob(rebootDaily: boolean, time: string | null): void {
+    this.cancelRebootJob()
+    if (rebootDaily && time) {
+      this.scheduleDailyReboot(time)
+    }
+  }
+
+  cancelRebootJob(): void {
+    this.scheduler.cancelJob('daily-reboot')
+  }
+
+  /**
+   * Upsert the daily-prime cron group: priming, pre-prime reboot, calibration.
+   * All three are tied to the same primePodTime; cancel/reschedule together.
+   */
+  upsertPrimeJob(primePodDaily: boolean, time: string | null): void {
+    this.cancelPrimeJob()
+    if (primePodDaily && time) {
+      this.scheduleDailyPriming(time)
+      this.schedulePrimePreReboot(time)
+      this.schedulePrePrimeCalibration(time)
+    }
+  }
+
+  cancelPrimeJob(): void {
+    this.scheduler.cancelJob('daily-prime')
+    this.scheduler.cancelJob('prime-prereboot')
+    this.scheduler.cancelJob('pre-prime-calibration')
+  }
+
+  /**
+   * Upsert away-mode one-time jobs for a side. Cancels both `away-start-${side}`
+   * and `away-return-${side}` first, then reschedules only the ones with a
+   * non-null incoming time. The explicit pre-cancel is required because the
+   * new schedule may set just one side of the pair, and `scheduleAwayMode`
+   * only registers the ones that are present — without the pre-cancel, the
+   * stale half would survive.
+   */
+  upsertAwayMode(side: 'left' | 'right', awayStart: string | null, awayReturn: string | null): void {
+    this.scheduler.cancelJob(`away-start-${side}`)
+    this.scheduler.cancelJob(`away-return-${side}`)
+    if (awayStart || awayReturn) {
+      this.scheduleAwayMode(side, awayStart, awayReturn)
+    }
+  }
+
   /**
    * Reload all schedules (useful after database changes).
    *
@@ -750,6 +962,12 @@ export class JobManager {
    * is requested while one is in flight, we set a pending flag and the
    * in-flight cycle loops to perform one more pass. All overlapping callers
    * await the same final promise, so they all observe the latest DB state.
+   *
+   * Routes that mutate a single schedule should use the incremental
+   * `upsert*Job` / `cancel*Job` helpers above instead — a full reload that
+   * lands inside a job's fire window drops the just-fired occurrence.
+   * Only the heartbeat liveness recovery and drift detection in
+   * health.ts still call this.
    */
   async reloadSchedules(): Promise<void> {
     if (this.reloadInProgress) {
@@ -821,6 +1039,16 @@ export class JobManager {
   ): void {
     const now = new Date()
 
+    // Cancel anything already scheduled for this session. Rescheduling
+    // in-process (restoreRunOnceSessions after a reload) passes a FILTERED
+    // set-point list whose indices shift, so a surviving `runonce-S-3` and a
+    // re-indexed `runonce-S-0` could both fire the same set point.
+    for (const job of this.scheduler.getJobs()) {
+      if (job.id.startsWith(`runonce-${sessionId}-`) || job.id === `runonce-cleanup-${sessionId}`) {
+        this.scheduler.cancelJob(job.id)
+      }
+    }
+
     for (let i = 0; i < setPoints.length; i++) {
       const sp = setPoints[i]
       const fireDate = timeToDate(sp.time, timezone, now)
@@ -833,7 +1061,7 @@ export class JobManager {
         JobType.RUN_ONCE,
         fireDate,
         async () => {
-          await this.withSideLock(side, async () => {
+          await withSideLock(side, async () => {
             markSideMutated(side)
             const client = getSharedHardwareClient()
             await client.connect()
@@ -844,7 +1072,7 @@ export class JobManager {
             })
           })
         },
-        { sessionId, side, index: i },
+        { sessionId, side, index: i, targetTemperature: sp.temperature },
       )
     }
 
@@ -873,7 +1101,7 @@ export class JobManager {
           .set({ status: 'completed' })
           .where(eq(runOnceSessions.id, sessionId))
 
-        await this.withSideLock(side, async () => {
+        await withSideLock(side, async () => {
           await this.markSideOff(side)
           try {
             const client = getSharedHardwareClient()

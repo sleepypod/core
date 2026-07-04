@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const setTemperature = vi.fn()
 const setPower = vi.fn()
+const registerManualOverride = vi.fn()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setTemperature, setPower }),
+}))
+vi.mock('@/src/automation', () => ({
+  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
 }))
 
 import {
@@ -13,10 +17,12 @@ import {
   isCurrentlyPowered,
   isEffectivelyPowered,
   isPoweredFromStatus,
+  reconcileIntendedPower,
   setSidePowerOff,
   setSidePowerOn,
   setTargetTemperature,
 } from '../accessories/sideController'
+import { withSideLock } from '@/src/hardware/sideLock'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus } from '@/src/hardware/types'
 
@@ -43,6 +49,7 @@ describe('sideController', () => {
     __resetSideController()
     setTemperature.mockReset()
     setPower.mockReset()
+    registerManualOverride.mockReset()
     setTemperature.mockResolvedValue(undefined)
     setPower.mockResolvedValue(undefined)
   })
@@ -92,6 +99,16 @@ describe('sideController', () => {
       expect(getStagedTargetF(monitor(null), 'left')).toBe(82.5)
     })
 
+    it('falls back to TEMP_NEUTRAL when firmware reports a null (off) target', () => {
+      // Status exists but the off side reports a null level-0 target; with no
+      // cache the staged target must land on neutral, not null.
+      const offNullTarget = monitor({
+        ...offStatus,
+        leftSide: { ...offStatus.leftSide, targetTemperature: null },
+      })
+      expect(getStagedTargetF(offNullTarget, 'left')).toBe(82.5)
+    })
+
     it('prefers cached target once setTargetTemperature runs', async () => {
       const m = monitor(onStatus)
       await setTargetTemperature(m, 'left', 68)
@@ -123,12 +140,14 @@ describe('sideController', () => {
     it('caches the requested target even when the side is off (no firmware write)', async () => {
       await setTargetTemperature(monitor(offStatus), 'left', 68)
       expect(setTemperature).not.toHaveBeenCalled()
+      expect(registerManualOverride).not.toHaveBeenCalled()
       expect(getStagedTargetF(monitor(offStatus), 'left')).toBe(68)
     })
 
     it('caches AND writes when the side is on', async () => {
       await setTargetTemperature(monitor(onStatus), 'left', 72)
       expect(setTemperature).toHaveBeenCalledWith('left', 72)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
       expect(getStagedTargetF(monitor(onStatus), 'left')).toBe(72)
     })
   })
@@ -139,6 +158,7 @@ describe('sideController', () => {
       await setTargetTemperature(m, 'left', 68)
       await setSidePowerOn(m, 'left')
       expect(setPower).toHaveBeenCalledWith('left', true, 68)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
 
     it('falls back to firmware status target when no cache exists', async () => {
@@ -156,10 +176,39 @@ describe('sideController', () => {
     it('routes to setPower(side, false)', async () => {
       await setSidePowerOff(monitor(onStatus), 'left')
       expect(setPower).toHaveBeenCalledWith('left', false)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
   })
 
   describe('serialization', () => {
+    it('waits behind the shared side lock before writing hardware', async () => {
+      let releaseLeft: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        releaseLeft = resolve
+      }))
+      await Promise.resolve()
+
+      try {
+        const left = setTargetTemperature(monitor(onStatus), 'left', 78)
+        await Promise.resolve()
+        expect(setTemperature).not.toHaveBeenCalled()
+
+        await setTargetTemperature(monitor(onStatus), 'right', 79)
+        expect(setTemperature).toHaveBeenCalledWith('right', 79)
+        expect(setTemperature).not.toHaveBeenCalledWith('left', 78)
+
+        releaseLeft()
+        await holder
+        await left
+
+        expect(setTemperature).toHaveBeenCalledWith('left', 78)
+      }
+      finally {
+        releaseLeft()
+        await holder.catch(() => {})
+      }
+    })
+
     it('serializes concurrent writes to the same side in submission order', async () => {
       const order: string[] = []
       let resolveTemp: () => void = () => {}
@@ -267,6 +316,45 @@ describe('sideController', () => {
         'comms',
       )
       warn.mockRestore()
+    })
+  })
+
+  describe('reconcileIntendedPower', () => {
+    it('clears the latch once firmware confirms the intent, so external power changes show through', async () => {
+      // HomeKit turns the side on; latch reports ON ahead of firmware.
+      await setSidePowerOn(monitor(offStatus), 'left')
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(true)
+
+      // Firmware catches up and confirms ON → latch cleared.
+      reconcileIntendedPower(onStatus, 'left')
+
+      // Scheduler later powers the side off. Without reconciliation the
+      // stale ON latch shadowed this forever.
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+    })
+
+    it('keeps the latch while firmware still reports the pre-write state', async () => {
+      await setSidePowerOn(monitor(offStatus), 'left')
+
+      // Status still shows OFF (write in flight) → latch must survive.
+      reconcileIntendedPower(offStatus, 'left')
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(true)
+    })
+
+    it('after reconciliation, setTargetTemperature no longer re-heats a scheduler-stopped side', async () => {
+      await setSidePowerOn(monitor(offStatus), 'left')
+      reconcileIntendedPower(onStatus, 'left') // firmware confirmed ON
+      setTemperature.mockClear()
+      setPower.mockClear()
+
+      // Scheduler turns the side off; firmware now reports OFF.
+      await setTargetTemperature(monitor(offStatus), 'left', 68)
+      expect(setTemperature).not.toHaveBeenCalled()
+    })
+
+    it('is a no-op when no intent is latched', () => {
+      expect(() => reconcileIntendedPower(onStatus, 'left')).not.toThrow()
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
     })
   })
 

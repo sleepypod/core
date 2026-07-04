@@ -190,17 +190,29 @@ def run_calibration(store: CalibrationStore, side: str, sensor_type: str,
         return False
 
 
-def should_run_daily(now: float, last_run: float) -> bool:
+def should_run_daily(store: CalibrationStore, now: float, last_run: float) -> bool:
     """Fallback daily calibration if scheduler trigger didn't fire.
 
     The primary trigger is the jobManager's pre-prime-calibration job
     (30min before pod priming). This fallback only fires if no calibration
     has run in the last 25 hours — covers the case where priming is disabled.
+
+    Gated on PERSISTED profile age, not just the in-memory last_run:
+    last_run starts at 0 on every process start, so without the persisted
+    check every restart re-ran a full recalibration. Also restricted to the
+    DAILY_HOUR UTC window so the fallback fires at the configured quiet hour
+    instead of whenever the process happens to (re)start.
     """
     if now - last_run < 25 * 3600:
         return False
-    # Check if any profile is older than 25h
-    return True
+    if time.gmtime(now).tm_hour != DAILY_HOUR:
+        return False
+    for side in ("left", "right"):
+        for sensor_type in ("capacitance", "piezo", "temperature"):
+            age = store.get_profile_age_hours(side, sensor_type)
+            if age is None or age >= 25:
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +258,7 @@ def main() -> None:
 
             # Check daily schedule
             now = time.time()
-            if should_run_daily(now, daily_last_run):
+            if should_run_daily(store, now, daily_last_run):
                 log.info("Running daily calibration")
                 for side in ("left", "right"):
                     for st in ("capacitance", "piezo", "temperature"):

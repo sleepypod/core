@@ -64,12 +64,24 @@ const schedulesCollectionOutput = z.object({
 import { getJobManager } from '@/src/scheduler'
 import { toC } from '@/src/lib/tempUtils'
 
+type TemperatureRow = typeof temperatureSchedules.$inferSelect
+type PowerRow = typeof powerSchedules.$inferSelect
+type AlarmRow = typeof alarmSchedules.$inferSelect
+
 /**
- * Reload schedules in the job manager after database changes
+ * Apply an incremental scheduler mutation. The helper resolves the job
+ * manager and invokes `fn`; failures are logged but never thrown out of the
+ * route handler — schedule writes already committed, and the heartbeat
+ * liveness loop will recover any drift.
  */
-async function reloadScheduler(): Promise<void> {
-  const jobManager = await getJobManager()
-  await jobManager.reloadSchedules()
+async function applyScheduler(fn: (jm: Awaited<ReturnType<typeof getJobManager>>) => void | Promise<void>): Promise<void> {
+  try {
+    const jobManager = await getJobManager()
+    await fn(jobManager)
+  }
+  catch (e) {
+    console.error('Scheduler update failed:', e)
+  }
 }
 
 const unitSchema = z.enum(['F', 'C']).default('F')
@@ -169,12 +181,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.upsertTemperatureJob(created))
 
         return created
       }
@@ -226,12 +233,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.upsertTemperatureJob(updated))
 
         return updated
       }
@@ -275,12 +277,7 @@ export const schedulesRouter = router({
           }
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.cancelTemperatureJob(input.id))
 
         return { success: true }
       }
@@ -327,12 +324,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.upsertPowerJob(created))
 
         return created
       }
@@ -385,12 +377,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.upsertPowerJob(updated))
 
         return updated
       }
@@ -434,12 +421,7 @@ export const schedulesRouter = router({
           }
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.cancelPowerJob(input.id))
 
         return { success: true }
       }
@@ -488,12 +470,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.upsertAlarmJob(created))
 
         return created
       }
@@ -548,12 +525,7 @@ export const schedulesRouter = router({
           return result
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.upsertAlarmJob(updated))
 
         return updated
       }
@@ -597,12 +569,7 @@ export const schedulesRouter = router({
           }
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler(jm => jm.cancelAlarmJob(input.id))
 
         return { success: true }
       }
@@ -686,6 +653,10 @@ export const schedulesRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
+        const upsertTemp: TemperatureRow[] = []
+        const upsertPower: PowerRow[] = []
+        const upsertAlarm: AlarmRow[] = []
+
         db.transaction((tx) => {
           // Deletes first
           for (const id of input.deletes.temperature) {
@@ -701,38 +672,50 @@ export const schedulesRouter = router({
             if (!deleted) throw new TRPCError({ code: 'NOT_FOUND', message: `Alarm schedule with ID ${id} not found` })
           }
 
-          // Creates
+          // Creates — capture the returned rows so we can hand them to the scheduler
+          // post-commit (upsert needs the autogenerated id).
           for (const entry of input.creates.temperature) {
-            tx.insert(temperatureSchedules).values(entry).run()
+            const [row] = tx.insert(temperatureSchedules).values(entry).returning().all()
+            if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create temperature schedule - no record returned' })
+            upsertTemp.push(row)
           }
           for (const entry of input.creates.power) {
-            tx.insert(powerSchedules).values(entry).run()
+            const [row] = tx.insert(powerSchedules).values(entry).returning().all()
+            if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create power schedule - no record returned' })
+            upsertPower.push(row)
           }
           for (const entry of input.creates.alarm) {
-            tx.insert(alarmSchedules).values(entry).run()
+            const [row] = tx.insert(alarmSchedules).values(entry).returning().all()
+            if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create alarm schedule - no record returned' })
+            upsertAlarm.push(row)
           }
 
           // Updates
           for (const { id, ...updates } of input.updates.temperature) {
             const [updated] = tx.update(temperatureSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(temperatureSchedules.id, id)).returning().all()
             if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Temperature schedule with ID ${id} not found` })
+            upsertTemp.push(updated)
           }
           for (const { id, ...updates } of input.updates.power) {
             const [updated] = tx.update(powerSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(powerSchedules.id, id)).returning().all()
             if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Power schedule with ID ${id} not found` })
+            upsertPower.push(updated)
           }
           for (const { id, ...updates } of input.updates.alarm) {
             const [updated] = tx.update(alarmSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(alarmSchedules.id, id)).returning().all()
             if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Alarm schedule with ID ${id} not found` })
+            upsertAlarm.push(updated)
           }
         })
 
-        try {
-          await reloadScheduler()
-        }
-        catch (e) {
-          console.error('Scheduler reload failed:', e)
-        }
+        await applyScheduler((jm) => {
+          for (const id of input.deletes.temperature) jm.cancelTemperatureJob(id)
+          for (const id of input.deletes.power) jm.cancelPowerJob(id)
+          for (const id of input.deletes.alarm) jm.cancelAlarmJob(id)
+          for (const row of upsertTemp) jm.upsertTemperatureJob(row)
+          for (const row of upsertPower) jm.upsertPowerJob(row)
+          for (const row of upsertAlarm) jm.upsertAlarmJob(row)
+        })
 
         return { success: true }
       }

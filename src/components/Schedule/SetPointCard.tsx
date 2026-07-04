@@ -5,6 +5,8 @@ import clsx from 'clsx'
 import type { SchedulePhase } from '@/src/hooks/useSchedules'
 import { formatTime12h } from './TimeInput'
 import { colorForTempF } from '@/src/lib/sleepCurve/tempColor'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { formatSetpointF } from '@/src/lib/tempUtils'
 
 interface SetPointCardProps {
   phase: SchedulePhase
@@ -27,6 +29,7 @@ export function SetPointCard({
   disabled = false,
   autoLabel = null,
 }: SetPointCardProps) {
+  const { unit } = useTemperatureUnit()
   const tempColor = colorForTempF(phase.temperature)
 
   return (
@@ -63,8 +66,7 @@ export function SetPointCard({
           style={{ backgroundColor: tempColor }}
         />
         <span className="text-sm font-bold tabular-nums text-white">
-          {phase.temperature}
-          °
+          {formatSetpointF(phase.temperature, unit)}
         </span>
       </div>
 

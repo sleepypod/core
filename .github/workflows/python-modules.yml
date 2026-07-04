@@ -57,6 +57,11 @@ jobs:
             target: .
             cov_source: .
             deps: ""
+          - name: calibrator
+            workdir: modules/calibrator
+            target: .
+            cov_source: .
+            deps: ""
           - name: piezo-processor
             workdir: modules/piezo-processor
             target: .

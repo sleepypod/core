@@ -47,12 +47,16 @@ describe('parseDeviceStatus', () => {
     expect(status.waterLevel).toBe('ok')
     expect(status.isPriming).toBe(false)
 
-    // All values at neutral
+    // All values at neutral. Level 0 is off, not a real setpoint — it must
+    // surface as null, not the phantom 82.5°F→83°F readback.
     expect(status.leftSide.currentLevel).toBe(0)
     expect(status.leftSide.targetLevel).toBe(0)
-    expect(status.leftSide.currentTemperature).toBe(83) // Level 0 = 82.5°F, rounded to 83
+    expect(status.leftSide.currentTemperature).toBeNull()
+    expect(status.leftSide.targetTemperature).toBeNull()
     expect(status.rightSide.currentLevel).toBe(0)
     expect(status.rightSide.targetLevel).toBe(0)
+    expect(status.rightSide.currentTemperature).toBeNull()
+    expect(status.rightSide.targetTemperature).toBeNull()
 
     // No gestures for Pod 3
     expect(status.gestures).toBeUndefined()

@@ -2,11 +2,9 @@
 
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from './useSide'
-import { formatTime12h } from '@/src/components/Schedule/TimeInput'
+import { DAYS_OF_WEEK, formatTime12h, hhmmToMinutes } from '@/src/lib/scheduleTime'
 
 interface TempSchedule { enabled: boolean, dayOfWeek: string, time: string, temperature: number }
-
-const DAYS_OF_WEEK = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
 
 export interface NextScheduleEvent {
   time: string
@@ -31,18 +29,13 @@ export function useScheduleActive() {
   const currentMinutes = now.getHours() * 60 + now.getMinutes()
   const todayIdx = now.getDay()
 
-  const toMinutes = (t: string): number => {
-    const [h, m] = t.split(':').map(Number)
-    return h * 60 + m
-  }
-
   // Walk forward across the next 7 days, picking the first set point
   // strictly after "now".
   for (let offset = 0; offset < 7; offset++) {
     const day = DAYS_OF_WEEK[(todayIdx + offset) % 7]
     const dayPoints = enabled
       .filter(t => t.dayOfWeek === day)
-      .map(t => ({ time: t.time, temperature: t.temperature, minutes: toMinutes(t.time) }))
+      .map(t => ({ time: t.time, temperature: t.temperature, minutes: hhmmToMinutes(t.time) }))
       .filter(t => offset > 0 || t.minutes > currentMinutes)
       .sort((a, b) => a.minutes - b.minutes)
 

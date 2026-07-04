@@ -2,8 +2,9 @@
  * On-disk storage for HomeKit pairings, accessory identity, and setup code.
  *
  * Persists across next-server restart and sp-update. Lives under
- * /persistent/sleepypod-data/homekit/ in production; falls back to a path
- * under the project root in dev.
+ * $HOMEKIT_DIR (set by the systemd unit to $DATA_DIR/homekit, where
+ * $DATA_DIR is chosen by the install-time storage picker) in production;
+ * falls back to a path under the project root in dev.
  *
  * Identity is derived deterministically (HKDF over a hardware-rooted seed
  * chain — see ADR 0020) so that wiping /persistent regenerates the same
@@ -18,7 +19,10 @@ import { hkdfSync, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { HAPStorage } from 'hap-nodejs'
 
-const PERSISTENT_DIR = '/persistent/sleepypod-data/homekit'
+// Env override lets the install script point this at the picker-chosen
+// $DATA_DIR (e.g. /sleepypod-data on Pod 3 + SD card). The hardcoded
+// legacy default keeps installs that pre-date the env wiring working.
+const PERSISTENT_DIR = process.env.HOMEKIT_DIR ?? '/persistent/sleepypod-data/homekit'
 const DEV_DIR = join(process.cwd(), '.homekit-data')
 
 const IDENTITY_FILE = 'identity.json'

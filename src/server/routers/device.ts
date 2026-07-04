@@ -1,16 +1,21 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { db } from '@/src/db'
+import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
-import { eq } from 'drizzle-orm'
+import { bedTemp, waterLevelReadings } from '@/src/db/biometrics-schema'
+import { eq, desc } from 'drizzle-orm'
 import { withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
+import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { withSideLock } from '@/src/hardware/sideLock'
+import { getAutomationEngineIfRunning } from '@/src/automation'
 import {
   sideSchema,
   temperatureSchema,
@@ -18,7 +23,8 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
-import { toC } from '@/src/lib/tempUtils'
+import { toC, centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
+import { getWifiInfo } from '@/src/hardware/wifi'
 
 // ---------------------------------------------------------------------------
 // Command name → HardwareCommand mapping for the raw execute endpoint
@@ -58,6 +64,10 @@ interface PendingTemp {
 
 const pendingTemps = new Map<string, PendingTemp>()
 
+function registerManualOverride(side: 'left' | 'right'): void {
+  getAutomationEngineIfRunning()?.registerManualOverride(side)
+}
+
 /**
  * Device control router - direct hardware control for immediate operations.
  *
@@ -95,16 +105,16 @@ export const deviceRouter = router({
     .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
     .output(z.object({
       leftSide: z.object({
-        currentTemperature: z.number(),
-        targetTemperature: z.number(),
+        currentTemperature: z.number().nullable(),
+        targetTemperature: z.number().nullable(),
         currentLevel: z.number(),
         targetLevel: z.number(),
         heatingDuration: z.number(),
         isAlarmVibrating: z.boolean().optional(),
       }),
       rightSide: z.object({
-        currentTemperature: z.number(),
-        targetTemperature: z.number(),
+        currentTemperature: z.number().nullable(),
+        targetTemperature: z.number().nullable(),
         currentLevel: z.number(),
         targetLevel: z.number(),
         heatingDuration: z.number(),
@@ -120,9 +130,42 @@ export const deviceRouter = router({
         quadTap: z.object({ l: z.number(), r: z.number() }).optional(),
       }).optional(),
       primeCompletedNotification: z.object({ timestamp: z.number() }).optional(),
+      pumpStallNotifications: z.object({
+        left: z.object({
+          alertId: z.number(),
+          trippedAt: z.number(),
+          rpm: z.number(),
+          restore: z.object({
+            targetTemperature: z.number(),
+            durationSeconds: z.number(),
+          }).nullable(),
+        }).nullable(),
+        right: z.object({
+          alertId: z.number(),
+          trippedAt: z.number(),
+          rpm: z.number(),
+          restore: z.object({
+            targetTemperature: z.number(),
+            durationSeconds: z.number(),
+          }).nullable(),
+        }).nullable(),
+      }).optional(),
       snooze: z.object({
         left: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
         right: z.object({ active: z.boolean(), snoozeUntil: z.number().nullable() }),
+      }),
+      wifiStrength: z.number(),
+      wifiSSID: z.string(),
+      roomClimate: z.object({
+        temperatureC: z.number().nullable(),
+        humidity: z.number().nullable(),
+        timestamp: z.number().nullable(),
+      }),
+      waterLevelRaw: z.object({
+        raw: z.number().nullable(),
+        calibratedEmpty: z.number().nullable(),
+        calibratedFull: z.number().nullable(),
+        timestamp: z.number().nullable(),
       }),
     }))
     .query(async ({ input }) => {
@@ -174,10 +217,42 @@ export const deviceRouter = router({
         }
 
         const primeCompletedAt = getPrimeCompletedAt()
+        const stallNotices = getAllPumpStallNotices()
         const leftSnooze = getSnoozeStatus('left')
         const rightSnooze = getSnoozeStatus('right')
 
-        const convertTemp = (f: number) => input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f
+        const convertTemp = (f: number | null) =>
+          f == null ? null : (input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f)
+
+        // Best-effort enrichment — nulls on failure
+        let wifiStrength: number = -1
+        let wifiSSID: string = 'unknown'
+        let roomClimate: { temperatureC: number | null, humidity: number | null, timestamp: number | null } = { temperatureC: null, humidity: null, timestamp: null }
+        let waterLevelRaw: { raw: number | null, calibratedEmpty: number | null, calibratedFull: number | null, timestamp: number | null } = { raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null }
+        try {
+          const wifi = getWifiInfo()
+          wifiStrength = wifi.wifiStrength
+          wifiSSID = wifi.wifiSSID
+
+          const [latestBed] = await biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1)
+          if (latestBed) {
+            roomClimate = {
+              temperatureC: latestBed.ambientTemp !== null ? centiDegreesToC(latestBed.ambientTemp) : null,
+              humidity: latestBed.humidity !== null ? centiPercentToPercent(latestBed.humidity) : null,
+              timestamp: latestBed.timestamp ? latestBed.timestamp.getTime() : null,
+            }
+          }
+          const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
+          if (latestWater) {
+            waterLevelRaw = {
+              raw: latestWater.raw ?? null,
+              calibratedEmpty: latestWater.calibratedEmpty ?? null,
+              calibratedFull: latestWater.calibratedFull ?? null,
+              timestamp: latestWater.timestamp ? latestWater.timestamp.getTime() : null,
+            }
+          }
+        }
+        catch { /* enrichment is best-effort */ }
 
         return {
           ...status,
@@ -192,7 +267,12 @@ export const deviceRouter = router({
             targetTemperature: convertTemp(status.rightSide.targetTemperature),
           },
           ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+          ...((stallNotices.left || stallNotices.right) && { pumpStallNotifications: stallNotices }),
           snooze: { left: leftSnooze, right: rightSnooze },
+          wifiStrength,
+          wifiSSID,
+          roomClimate,
+          waterLevelRaw,
         }
       }, 'Failed to get device status')
     }),
@@ -242,6 +322,13 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
+      if (pumpStallShouldBlock(input.side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+
       // Server-side debounce: collapse rapid dial-drag calls into one hardware command.
       // Cancel any pending hardware call for this side BEFORE the first await
       // so ordering is consistent with other side commands (setPower, setAlarm, etc.)
@@ -251,6 +338,7 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
+      registerManualOverride(input.side)
       markSideMutated(input.side)
 
       // The DB is updated optimistically on every call for responsive UI.
@@ -283,10 +371,10 @@ export const deviceRouter = router({
         const timer = setTimeout(async () => {
           pendingTemps.delete(input.side)
           try {
-            await withHardwareClient(async (client) => {
+            await withSideLock(input.side, () => withHardwareClient(async (client) => {
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
-            }, 'Failed to set temperature')
+            }, 'Failed to set temperature'))
             broadcastMutationStatus(input.side, {
               targetTemperature: input.temperature,
               targetLevel: fahrenheitToLevel(input.temperature),
@@ -344,7 +432,17 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
-      return withHardwareClient(async (client) => {
+      // Only block when raising power. Powering off is always allowed —
+      // it's the safe direction, and the guard's own trip uses this path.
+      if (input.powered && pumpStallShouldBlock(input.side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+
+      registerManualOverride(input.side)
+      return withSideLock(input.side, () => withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
@@ -389,7 +487,7 @@ export const deviceRouter = router({
           : { targetLevel: 0 },
         )
         return { success: true }
-      }, 'Failed to set power')
+      }, 'Failed to set power'))
     }),
 
   /**

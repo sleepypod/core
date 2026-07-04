@@ -29,6 +29,12 @@ const deviceSettingsSchema = z.object({
   ledNightEndTime: z.string().nullable(),
   globalMaxOnHours: z.number().nullable(),
   homekitEnabled: z.boolean(),
+  pumpStallProtectionEnabled: z.boolean(),
+  pumpStallRpmThreshold: z.number(),
+  pumpStallDwellSamples: z.number(),
+  pumpStallAutoRecoveryEnabled: z.boolean(),
+  pumpStallRecoveryRpm: z.number(),
+  pumpStallRecoverySamples: z.number(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
 })
@@ -72,31 +78,70 @@ const getAllSettingsResponse = z.object({
   }),
 })
 import { getJobManager } from '@/src/scheduler'
+import { updateAutomationTimezone } from '@/src/automation/instance'
 import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
 import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
+import { invalidateGuardSettingsCache } from '@/src/hardware/pumpStallGuard'
+
+const REBOOT_KEYS = ['rebootDaily', 'rebootTime'] as const
+const PRIME_KEYS = ['primePodDaily', 'primePodTime'] as const
+// Brightness values are deliberately excluded — they don't affect cron timing,
+// and the led-night-{start,end} closures re-read brightness from device_settings
+// at fire time. Including them here would cancel-and-recreate both cron jobs on
+// every slider release (wasted work) and emit a redundant SET_SETTINGS write on
+// top of applyCurrentLedBrightness below.
+const LED_KEYS = [
+  'ledNightModeEnabled', 'ledNightStartTime', 'ledNightEndTime',
+] as const
 
 /**
- * Reload schedules in the job manager after settings changes
- * that affect scheduling (timezone, priming, reboot)
+ * Apply scheduler mutations triggered by a device-settings update. Re-reads
+ * the persisted settings row so the helpers see the merged state instead of
+ * just the incoming patch (`enabled=false` updates can omit the time fields,
+ * and the upserts need both to decide schedule vs. cancel).
+ *
+ * Timezone changes still force a full reload — every cron job is bound to its
+ * tz at creation time inside node-schedule and cannot be rebound in place.
+ * Per-kind keys go through the incremental upserts so an unrelated alarm
+ * fire-window isn't disturbed by a reboot-time toggle.
  */
-async function reloadSchedulerIfNeeded(input: Record<string, unknown>): Promise<void> {
-  const schedulingKeys = [
-    'timezone', 'rebootDaily', 'rebootTime', 'primePodDaily', 'primePodTime',
-    'ledNightModeEnabled', 'ledDayBrightness', 'ledNightBrightness',
-    'ledNightStartTime', 'ledNightEndTime',
-  ]
-  const hasSchedulingChanges = schedulingKeys.some(key => key in input)
+async function applySettingsSchedulerChanges(input: Record<string, unknown>): Promise<void> {
+  const tzChanged = 'timezone' in input && typeof input.timezone === 'string'
+  const rebootChanged = REBOOT_KEYS.some(k => k in input)
+  const primeChanged = PRIME_KEYS.some(k => k in input)
+  const ledChanged = LED_KEYS.some(k => k in input)
 
-  if (hasSchedulingChanges) {
-    const jobManager = await getJobManager()
+  if (!tzChanged && !rebootChanged && !primeChanged && !ledChanged) return
 
-    // If timezone changed, use updateTimezone which reloads automatically
-    if ('timezone' in input && typeof input.timezone === 'string') {
-      await jobManager.updateTimezone(input.timezone)
-    }
-    else {
-      await jobManager.reloadSchedules()
-    }
+  const jobManager = await getJobManager()
+
+  if (tzChanged) {
+    // Full reload — every cron job rebinds against the new tz.
+    await jobManager.updateTimezone(input.timezone as string)
+    // The automation engine's clock closure must follow too, or timeOfDay
+    // triggers keep firing in the boot-time timezone until restart.
+    updateAutomationTimezone(input.timezone as string)
+    return
+  }
+
+  // Re-read the row so the upserts see post-commit values, not the diff.
+  const [settings] = await db.select().from(deviceSettings).limit(1)
+  if (!settings) return
+
+  if (rebootChanged) {
+    jobManager.upsertRebootJob(settings.rebootDaily, settings.rebootTime)
+  }
+  if (primeChanged) {
+    jobManager.upsertPrimeJob(settings.primePodDaily, settings.primePodTime)
+  }
+  if (ledChanged) {
+    await jobManager.upsertLedNightMode(
+      settings.ledNightModeEnabled,
+      settings.ledNightStartTime,
+      settings.ledNightEndTime,
+      settings.ledDayBrightness,
+      settings.ledNightBrightness,
+    )
   }
 }
 
@@ -133,6 +178,12 @@ export const settingsRouter = router({
             ledNightEndTime: '07:00',
             globalMaxOnHours: null,
             homekitEnabled: false,
+            pumpStallProtectionEnabled: false,
+            pumpStallRpmThreshold: 500,
+            pumpStallDwellSamples: 2,
+            pumpStallAutoRecoveryEnabled: false,
+            pumpStallRecoveryRpm: 1500,
+            pumpStallRecoverySamples: 3,
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -177,6 +228,12 @@ export const settingsRouter = router({
           // Global wall-clock auto-off cap. `null` disables; 1–48 hours when set.
           globalMaxOnHours: z.number().int().min(1).max(48).nullable().optional(),
           homekitEnabled: z.boolean().optional(),
+          pumpStallProtectionEnabled: z.boolean().optional(),
+          pumpStallRpmThreshold: z.number().int().min(100).max(1500).optional(),
+          pumpStallDwellSamples: z.number().int().min(1).max(10).optional(),
+          pumpStallAutoRecoveryEnabled: z.boolean().optional(),
+          pumpStallRecoveryRpm: z.number().int().min(500).max(3000).optional(),
+          pumpStallRecoverySamples: z.number().int().min(1).max(10).optional(),
         })
         .strict()
     )
@@ -194,6 +251,12 @@ export const settingsRouter = router({
       ledNightStartTime: z.string().nullable(),
       ledNightEndTime: z.string().nullable(),
       homekitEnabled: z.boolean(),
+      pumpStallProtectionEnabled: z.boolean(),
+      pumpStallRpmThreshold: z.number(),
+      pumpStallDwellSamples: z.number(),
+      pumpStallAutoRecoveryEnabled: z.boolean(),
+      pumpStallRecoveryRpm: z.number(),
+      pumpStallRecoverySamples: z.number(),
       createdAt: z.date(),
       updatedAt: z.date(),
     }))
@@ -269,10 +332,42 @@ export const settingsRouter = router({
         })
 
         try {
-          await reloadSchedulerIfNeeded(input)
+          await applySettingsSchedulerChanges(input)
         }
         catch (e) {
-          console.error('Scheduler reload failed:', e)
+          console.error('Scheduler update failed:', e)
+        }
+
+        // Immediate LED apply when brightness fields or the night-mode toggle
+        // change. Without this the pod LED only updates on the next cron
+        // boundary, which makes the slider feel broken and — when night mode
+        // is disabled while currently in the night window — leaves the LED
+        // dim until the user manually nudges the day slider.
+        if (
+          'ledDayBrightness' in input
+          || 'ledNightBrightness' in input
+          || 'ledNightModeEnabled' in input
+          || 'ledNightStartTime' in input
+          || 'ledNightEndTime' in input
+        ) {
+          try {
+            const jobManager = await getJobManager()
+            await jobManager.applyCurrentLedBrightness()
+          }
+          catch (e) {
+            console.error('LED brightness immediate apply failed:', e)
+          }
+        }
+
+        if (
+          'pumpStallProtectionEnabled' in input
+          || 'pumpStallRpmThreshold' in input
+          || 'pumpStallDwellSamples' in input
+          || 'pumpStallAutoRecoveryEnabled' in input
+          || 'pumpStallRecoveryRpm' in input
+          || 'pumpStallRecoverySamples' in input
+        ) {
+          invalidateGuardSettingsCache()
         }
 
         // Re-evaluate autoOffWatcher immediately so a tightened cap fires
@@ -419,14 +514,14 @@ export const settingsRouter = router({
           return result
         })
 
-        // Reload scheduler if away mode scheduling changed
+        // Apply away-mode scheduling incrementally if it changed
         if ('awayStart' in input || 'awayReturn' in input) {
           try {
             const jobManager = await getJobManager()
-            await jobManager.reloadSchedules()
+            jobManager.upsertAwayMode(updated.side, updated.awayStart, updated.awayReturn)
           }
           catch (e) {
-            console.error('Scheduler reload failed:', e)
+            console.error('Scheduler update failed:', e)
           }
         }
 

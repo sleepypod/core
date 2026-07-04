@@ -1,18 +1,17 @@
 'use client'
 
 import { cn } from '@/lib/utils'
+import { DAYS_OF_WEEK, getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
 
-export const DAYS = [
-  { key: 'sunday', short: 'S', label: 'Sun' },
-  { key: 'monday', short: 'M', label: 'Mon' },
-  { key: 'tuesday', short: 'T', label: 'Tue' },
-  { key: 'wednesday', short: 'W', label: 'Wed' },
-  { key: 'thursday', short: 'T', label: 'Thu' },
-  { key: 'friday', short: 'F', label: 'Fri' },
-  { key: 'saturday', short: 'S', label: 'Sat' },
-] as const
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
 
-export type DayOfWeek = (typeof DAYS)[number]['key']
+export const DAYS = DAYS_OF_WEEK.map((key, index) => ({
+  key,
+  short: DAY_LABELS[index][0],
+  label: DAY_LABELS[index],
+})) as Array<{ key: DayOfWeek, short: string, label: string }>
+
+export { getCurrentDay, type DayOfWeek }
 
 /** Predefined day groups for "Apply to" shortcuts */
 export const DAY_GROUPS = {
@@ -113,18 +112,4 @@ export function DaySelector({
       })}
     </div>
   )
-}
-
-/**
- * Get the current day of week as a DayOfWeek string.
- * Adjusts for early morning (before 4am counts as previous day).
- */
-export function getCurrentDay(): DayOfWeek {
-  const now = new Date()
-  const adjusted = new Date(now)
-  if (now.getHours() < 4) {
-    adjusted.setDate(adjusted.getDate() - 1)
-  }
-  const dayIndex = adjusted.getDay()
-  return DAYS[dayIndex].key
 }

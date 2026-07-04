@@ -22,6 +22,9 @@ export const vitals = sqliteTable('vitals', {
   breathingRate: real('breathing_rate'), // breaths/min
 }, t => [
   uniqueIndex('uq_vitals_side_timestamp').on(t.side, t.timestamp),
+  // Retention pruning deletes WHERE timestamp < cutoff; without a plain
+  // timestamp index that is a full scan of the pod's largest table.
+  index('idx_vitals_timestamp').on(t.timestamp),
 ])
 
 export const sleepRecords = sqliteTable('sleep_records', {
@@ -47,6 +50,8 @@ export const movement = sqliteTable('movement', {
   totalMovement: integer('total_movement').notNull(),
 }, t => [
   index('idx_movement_side_timestamp').on(t.side, t.timestamp),
+  // See idx_vitals_timestamp — retention pruning needs a timestamp seek.
+  index('idx_movement_timestamp').on(t.timestamp),
 ])
 
 export const bedTemp = sqliteTable('bed_temp', {
@@ -80,6 +85,9 @@ export const waterLevelReadings = sqliteTable('water_level_readings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   level: text('level', { enum: ['low', 'ok'] }).notNull(),
+  raw: integer('raw'),
+  calibratedEmpty: integer('calibrated_empty'),
+  calibratedFull: integer('calibrated_full'),
 }, t => [
   uniqueIndex('idx_water_level_timestamp').on(t.timestamp),
 ])
@@ -101,6 +109,62 @@ export const ambientLight = sqliteTable('ambient_light', {
   lux: real('lux'),
 }, t => [
   uniqueIndex('idx_ambient_light_timestamp').on(t.timestamp),
+])
+
+// Downsampled capacitive presence frames for historical replay. The live
+// capSense matrix arrives ~2 Hz and is never persisted raw; this table holds one
+// windowed row per side (~5s) so the spatial zone replay and cap.* backtest can
+// reach recent nights. Pruned aggressively (~48h) — it is the bulkiest sensor
+// stream and only the last night or two is ever replayed.
+export const capSenseFrames = sqliteTable('cap_sense_frames', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  // [head, torso, legs] windowed-mean zone loads, or null for a scalar (Pod 3)
+  // sensor with no spatial resolution.
+  zones: text('zones', { mode: 'json' }),
+  max: real('max').notNull(),
+  mean: real('mean').notNull(),
+  spread: real('spread').notNull(),
+  peakZone: integer('peak_zone'), // 0–2 modal zone over the window, or null
+  frameCount: integer('frame_count').notNull(), // raw frames aggregated into this row
+}, t => [
+  // One row per side/window — guards against duplicates if a restart re-reads
+  // the active RAW file from the start (insert is conflict-tolerant).
+  uniqueIndex('uq_cap_sense_frames_side_ts').on(t.side, t.timestamp),
+  index('idx_cap_sense_frames_timestamp').on(t.timestamp),
+])
+
+export const pumpAlerts = sqliteTable('pump_alerts', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  type: text('type', {
+    enum: [
+      'stall_left',
+      'stall_right',
+      'no_flow_left',
+      'no_flow_right',
+      'asymmetry',
+      'clog_suspected',
+      'hub_temp_disputed',
+    ],
+  }).notNull(),
+  side: text('side', { enum: ['left', 'right'] }),
+  rpm: integer('rpm'),
+  flowrateCd: integer('flowrate_cd'),
+  durationSeconds: integer('duration_seconds'),
+  action: text('action', {
+    enum: ['power_off', 'auto_recovered', 'warned', 'none'],
+  }).notNull().default('none'),
+  // Snapshot of side state immediately before the trip so an
+  // acknowledgement can restore it through the normal command path.
+  restoreTargetTemperature: integer('restore_target_temperature'),
+  restoreDurationSeconds: integer('restore_duration_seconds'),
+  acknowledgedAt: integer('acknowledged_at', { mode: 'timestamp' }),
+  dismissedAt: integer('dismissed_at', { mode: 'timestamp' }),
+}, t => [
+  index('idx_pump_alerts_timestamp').on(t.timestamp),
+  index('idx_pump_alerts_acknowledged').on(t.acknowledgedAt),
 ])
 
 export const flowReadings = sqliteTable('flow_readings', {
@@ -154,7 +218,12 @@ export const calibrationRuns = sqliteTable('calibration_runs', {
 
 export const vitalsQuality = sqliteTable('vitals_quality', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  vitalsId: integer('vitals_id').notNull(), // FK to vitals.id
+  // Logical reference to vitals.id — intentionally NOT a real FK: SQLite
+  // only enforces FKs with PRAGMA foreign_keys=ON, which none of the
+  // writers (Node or Python) enable, and adding one now would need a full
+  // table rebuild. Rows are kept in lockstep with vitals by retention.ts
+  // pruning both tables on the same timestamp cutoff.
+  vitalsId: integer('vitals_id').notNull(),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   qualityScore: real('quality_score').notNull(), // 0.0–1.0
@@ -164,4 +233,6 @@ export const vitalsQuality = sqliteTable('vitals_quality', {
 }, t => [
   index('idx_vq_vitals_id').on(t.vitalsId),
   index('idx_vq_side_ts').on(t.side, t.timestamp),
+  // See idx_vitals_timestamp — retention pruning needs a timestamp seek.
+  index('idx_vq_timestamp').on(t.timestamp),
 ])

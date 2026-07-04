@@ -164,7 +164,8 @@ export class DacMonitor extends EventEmitter {
       // but an async tick may have changed it.
       if ((this.monitorStatus as DacMonitorStatus) === 'stopped' || this.client !== client) return
 
-      if (this.monitorStatus === 'degraded') {
+      const recovering = this.monitorStatus === 'degraded'
+      if (recovering) {
         this.monitorStatus = 'running'
         this.emit('connection:established')
       }
@@ -173,8 +174,11 @@ export class DacMonitor extends EventEmitter {
       this.emit('status:updated', status)
 
       if (status.gestures) {
-        if (this.isFirstPoll) {
-          // Establish baseline — do not emit gesture events for initial counts.
+        if (this.isFirstPoll || recovering) {
+          // Establish baseline — do not emit gesture events for initial
+          // counts, nor replay gestures performed during an outage: on
+          // recovery lastGestures still holds pre-outage counters, so
+          // detectGestures would emit everything missed as fresh events.
           this.lastGestures = this.extractGestureCounters(status.gestures)
         }
         else {

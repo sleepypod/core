@@ -97,8 +97,15 @@ class MessageStream {
     readable.on('error', error => this.splitter.destroy(error as Error))
   }
 
-  public async readMessage(): Promise<Buffer> {
+  /**
+   * Read the next message. When `signal` aborts, the read settles immediately
+   * and stops listening — so an abandoned (timed-out) read can never consume
+   * a later command's response from the shared queue.
+   */
+  public async readMessage(signal?: AbortSignal): Promise<Buffer> {
     while (true) {
+      signal?.throwIfAborted()
+
       if (this.queue.length > 0) {
         return this.queue.shift() as Buffer
       }
@@ -113,8 +120,20 @@ class MessageStream {
         throw new Error('stream ended')
       }
 
-      await once(this.splitter, 'data')
+      await once(this.splitter, 'data', { signal })
     }
+  }
+
+  /**
+   * Drop any buffered messages. Commands execute strictly sequentially, so a
+   * message still buffered when the next command is about to be sent can only
+   * be a stale response to an earlier, timed-out command — consuming it would
+   * shift every subsequent command/response pair by one.
+   */
+  public discardBuffered(): number {
+    const discarded = this.queue.length
+    this.queue.length = 0
+    return discarded
   }
 }
 
@@ -228,27 +247,38 @@ class DacTransport {
 
   public async sendMessage(message: string) {
     return this.sequentialQueue.exec(async () => {
+      // A response to an earlier timed-out command may have arrived after its
+      // read was abandoned; it must not be paired with this command. (A stale
+      // response arriving between this write and our read would still be
+      // mispaired — the protocol has no correlation ids — but the abort below
+      // guarantees the misalignment can no longer become permanent.)
+      const stale = this.messageStream.discardBuffered()
+      if (stale > 0) {
+        console.warn(`[DAC] discarded ${stale} stale response(s) before sending next command`)
+      }
+
       const requestBytes = Buffer.concat([Buffer.from(message), SEPARATOR])
       await this.write(requestBytes)
 
       const timeoutMs = messageResponseTimeoutMs()
-      let timeout: NodeJS.Timeout | undefined
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new MessageResponseTimeoutError(timeoutMs)),
-          timeoutMs,
-        )
-      })
+      const abort = new AbortController()
+      const timeout = setTimeout(() => abort.abort(), timeoutMs)
 
       try {
-        const resp = await Promise.race([this.messageStream.readMessage(), timeoutPromise])
+        const resp = await this.messageStream.readMessage(abort.signal)
         if (RESPONSE_DELAY_MS > 0) {
           await wait(RESPONSE_DELAY_MS)
         }
         return resp.toString()
       }
+      catch (error) {
+        if (abort.signal.aborted) {
+          throw new MessageResponseTimeoutError(timeoutMs)
+        }
+        throw error
+      }
       finally {
-        if (timeout) clearTimeout(timeout)
+        clearTimeout(timeout)
       }
     })
   }

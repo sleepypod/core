@@ -5,6 +5,8 @@ import { X, Minus, Plus, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { TimeInput } from './TimeInput'
 import type { SchedulePhase } from '@/src/hooks/useSchedules'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 
 interface SetPointEditorProps {
   /** Phase to edit, or null for create mode */
@@ -40,9 +42,13 @@ export function SetPointEditor({
   onDelete,
 }: SetPointEditorProps) {
   const isEditing = editingPhase !== null
+  const { unit } = useTemperatureUnit()
+  const minDisplayTemp = Math.round(setpointFToDisplay(MIN_TEMP, unit) ?? MIN_TEMP)
+  const maxDisplayTemp = Math.round(setpointFToDisplay(MAX_TEMP, unit) ?? MAX_TEMP)
+  const defaultDisplayTemp = Math.round(setpointFToDisplay(DEFAULT_TEMP, unit) ?? DEFAULT_TEMP)
 
   const [time, setTime] = useState(DEFAULT_TIME)
-  const [temperature, setTemperature] = useState(DEFAULT_TEMP)
+  const [displayTemperature, setDisplayTemperature] = useState(defaultDisplayTemp)
   const [enabled, setEnabled] = useState(true)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
@@ -51,23 +57,24 @@ export function SetPointEditor({
     /* eslint-disable react-hooks/set-state-in-effect */
     if (editingPhase) {
       setTime(editingPhase.time)
-      setTemperature(editingPhase.temperature)
+      setDisplayTemperature(Math.round(setpointFToDisplay(editingPhase.temperature, unit) ?? editingPhase.temperature))
       setEnabled(editingPhase.enabled)
     }
     else {
       setTime(DEFAULT_TIME)
-      setTemperature(DEFAULT_TEMP)
+      setDisplayTemperature(defaultDisplayTemp)
       setEnabled(true)
     }
     setShowDeleteConfirm(false)
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [editingPhase, open])
+  }, [editingPhase, open, unit, defaultDisplayTemp])
 
   const handleSave = useCallback(() => {
+    const temperatureF = Math.round(displayToSetpointF(displayTemperature, unit) ?? DEFAULT_TEMP)
     if (isEditing && editingPhase) {
       const updates: { time?: string, temperature?: number, enabled?: boolean } = {}
       if (time !== editingPhase.time) updates.time = time
-      if (temperature !== editingPhase.temperature) updates.temperature = temperature
+      if (temperatureF !== editingPhase.temperature) updates.temperature = temperatureF
       if (enabled !== editingPhase.enabled) updates.enabled = enabled
       // Only call update if something changed
       if (Object.keys(updates).length > 0) {
@@ -75,10 +82,10 @@ export function SetPointEditor({
       }
     }
     else {
-      onCreate(time, temperature)
+      onCreate(time, temperatureF)
     }
     onClose()
-  }, [isEditing, editingPhase, time, temperature, enabled, onCreate, onUpdate, onClose])
+  }, [isEditing, editingPhase, time, displayTemperature, unit, enabled, onCreate, onUpdate, onClose])
 
   const handleDelete = useCallback(() => {
     if (editingPhase) {
@@ -88,14 +95,16 @@ export function SetPointEditor({
   }, [editingPhase, onDelete, onClose])
 
   const adjustTemp = (delta: number) => {
-    setTemperature(prev => Math.max(MIN_TEMP, Math.min(MAX_TEMP, prev + delta)))
+    setDisplayTemperature(prev => Math.max(minDisplayTemp, Math.min(maxDisplayTemp, prev + delta)))
   }
+
+  const temperatureF = Math.round(displayToSetpointF(displayTemperature, unit) ?? DEFAULT_TEMP)
 
   // Temperature color
   const tempColor
-    = temperature <= 74
+    = temperatureF <= 74
       ? 'text-sky-400'
-      : temperature <= 80
+      : temperatureF <= 80
         ? 'text-zinc-300'
         : 'text-amber-400'
 
@@ -142,7 +151,7 @@ export function SetPointEditor({
           <div className="flex items-center justify-center gap-4">
             <button
               onClick={() => adjustTemp(-2)}
-              disabled={temperature <= MIN_TEMP}
+              disabled={displayTemperature <= minDisplayTemp}
               className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 text-zinc-300 transition-colors active:bg-zinc-700 disabled:opacity-30"
               aria-label="Decrease temperature"
             >
@@ -151,20 +160,21 @@ export function SetPointEditor({
 
             <div className="flex flex-col items-center">
               <span className={clsx('text-4xl font-bold tabular-nums', tempColor)}>
-                {temperature}
-                °F
+                {displayTemperature}
+                °
+                {unit}
               </span>
               <span className="mt-1 text-[10px] text-zinc-600">
-                {MIN_TEMP}
+                {minDisplayTemp}
                 ° –
-                {MAX_TEMP}
+                {maxDisplayTemp}
                 °
               </span>
             </div>
 
             <button
               onClick={() => adjustTemp(2)}
-              disabled={temperature >= MAX_TEMP}
+              disabled={displayTemperature >= maxDisplayTemp}
               className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 text-zinc-300 transition-colors active:bg-zinc-700 disabled:opacity-30"
               aria-label="Increase temperature"
             >
@@ -176,11 +186,11 @@ export function SetPointEditor({
           <div className="mt-3 px-2">
             <input
               type="range"
-              min={MIN_TEMP}
-              max={MAX_TEMP}
+              min={minDisplayTemp}
+              max={maxDisplayTemp}
               step={1}
-              value={temperature}
-              onChange={e => setTemperature(Number(e.target.value))}
+              value={displayTemperature}
+              onChange={e => setDisplayTemperature(Number(e.target.value))}
               className="w-full accent-sky-500"
               aria-label="Temperature slider"
             />

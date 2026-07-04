@@ -7,7 +7,38 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { normalizeFrame } from '../normalizeFrame'
+import { capSideChannels, normalizeFrame } from '../normalizeFrame'
+
+describe('capSideChannels', () => {
+  it('unwraps the Pod 4/5 {values,status} object', () => {
+    expect(capSideChannels({ values: [16.2, 16.1, 22.2, 1.16], status: 'good' }))
+      .toEqual([16.2, 16.1, 22.2, 1.16])
+  })
+
+  it('projects the Pod 3 {out,cen,in} object into the 6-slot paired layout', () => {
+    expect(capSideChannels({ out: 10, cen: 20, in: 30 })).toEqual([10, 10, 20, 20, 30, 30])
+  })
+
+  it('rejects partial Pod 3 channel objects instead of zero-filling missing zones', () => {
+    expect(capSideChannels({ out: 10 })).toBeNull()
+    expect(capSideChannels({ out: 10, cen: 20 })).toBeNull()
+  })
+
+  it('passes a bare numeric array through, dropping non-numbers', () => {
+    expect(capSideChannels([1, 2, null, 3])).toEqual([1, 2, 3])
+  })
+
+  it('wraps a scalar (degenerate) reading', () => {
+    expect(capSideChannels(42)).toEqual([42])
+  })
+
+  it('returns null for empty/garbage payloads', () => {
+    expect(capSideChannels({ values: [] })).toBeNull()
+    expect(capSideChannels({})).toBeNull()
+    expect(capSideChannels(null)).toBeNull()
+    expect(capSideChannels('nope')).toBeNull()
+  })
+})
 
 // ---------------------------------------------------------------------------
 // Real firmware payloads (captured from pod 2026-03-22)

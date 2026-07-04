@@ -1,0 +1,1 @@
+CREATE INDEX `idx_cap_sense_frames_timestamp` ON `cap_sense_frames` (`timestamp`);

@@ -16,6 +16,7 @@ counts (~1440 rows/day vs 21k if writing every raw sample).
 
 import os
 import sys
+import math
 import time
 import signal
 import logging
@@ -23,6 +24,7 @@ import sqlite3
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -47,6 +49,36 @@ SLEEPYPOD_DB = Path(os.environ.get(
 # Write at most once per 60s per record type
 DOWNSAMPLE_INTERVAL_S = 60
 
+# Timestamp sanity window (mirrors sleep-detector's sanitize_ts)
+MIN_VALID_WALL_CLOCK_TS = 1577836800.0  # 2020-01-01 00:00:00 UTC
+MAX_FUTURE_SKEW_S = 60.0
+
+
+def sanitize_ts(raw_ts) -> float:
+    """Coerce a RAW frame's `ts` field into a sane wall-clock timestamp.
+
+    The downsample cursors seed from MAX(timestamp) at startup, so a single
+    far-future timestamp written to the DB would permanently block all
+    subsequent writes — surviving restarts. Falls back to time.time() when:
+      - the field is missing or not a number
+      - the value is NaN or +/-inf (CBOR-encoded IEEE 754 specials)
+      - the value is < 2020-01-01 epoch (firmware emitted a relative
+        timestamp before establishing wall-clock)
+      - the value is more than MAX_FUTURE_SKEW_S in the future
+    """
+    now = time.time()
+    try:
+        ts = float(raw_ts) if raw_ts is not None else now
+    except (TypeError, ValueError):
+        return now
+    if not math.isfinite(ts):
+        return now
+    if ts < MIN_VALID_WALL_CLOCK_TS:
+        return now
+    if ts > now + MAX_FUTURE_SKEW_S:
+        return now
+    return ts
+
 # Hardware sentinel for "no sensor connected"
 NO_SENSOR = -327.68
 # u16-domain sentinels emitted by freezer firmware on disconnected sensors.
@@ -59,7 +91,7 @@ _FRZ_MIN_CENTIDEGREES = -5000
 _FRZ_MAX_CENTIDEGREES = 12500
 
 
-def _safe_freezer_centidegrees(val) -> int | None:
+def _safe_freezer_centidegrees(val) -> Optional[int]:
     """Validate a raw firmware centidegrees value for freezer_temp insertion.
 
     Rejects sentinel values (disconnected sensor) and out-of-range values
@@ -218,13 +250,16 @@ def main() -> None:
     db_conn = open_biometrics_db()
     follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
-    # Seed cursors from DB so restarts don't replay already-ingested samples
-    last_bed_write = float(
+    # Seed cursors from DB so restarts don't replay already-ingested samples.
+    # Clamp to now so a DB already poisoned by a far-future timestamp (written
+    # before sanitize_ts existed) self-heals instead of blocking writes forever.
+    now = time.time()
+    last_bed_write = min(now, float(
         db_conn.execute("SELECT COALESCE(MAX(timestamp), 0) FROM bed_temp").fetchone()[0] or 0
-    )
-    last_frz_write = float(
+    ))
+    last_frz_write = min(now, float(
         db_conn.execute("SELECT COALESCE(MAX(timestamp), 0) FROM freezer_temp").fetchone()[0] or 0
-    )
+    ))
 
     report_health("healthy", "environment-monitor started")
 
@@ -235,11 +270,7 @@ def main() -> None:
             rtype = record.get("type")
             if rtype not in ("bedTemp", "bedTemp2", "frzTemp"):
                 continue
-            try:
-                ts = float(record.get("ts", time.time()))
-            except (TypeError, ValueError):
-                log.warning("Skipping record with invalid ts: %r", record.get("ts"))
-                continue
+            ts = sanitize_ts(record.get("ts"))
 
             if rtype in ("bedTemp", "bedTemp2"):
                 if ts - last_bed_write >= DOWNSAMPLE_INTERVAL_S:

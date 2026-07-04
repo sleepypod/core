@@ -2,9 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Characteristic } from 'hap-nodejs'
 
 const setPower = vi.fn().mockResolvedValue(undefined)
+const registerManualOverride = vi.fn()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setPower }),
+}))
+vi.mock('@/src/automation', () => ({
+  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
 }))
 
 import { buildPowerSwitch } from '../accessories/powerSwitch'
@@ -30,6 +34,7 @@ describe('powerSwitch accessory', () => {
   beforeEach(() => {
     __resetSideController()
     setPower.mockClear()
+    registerManualOverride.mockClear()
   })
 
   it('On.onGet reflects targetLevel !== 0', async () => {

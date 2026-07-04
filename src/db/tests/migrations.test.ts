@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
@@ -44,6 +46,62 @@ describe('migrations smoke test', () => {
     }
     finally {
       raw.close()
+    }
+  })
+
+  it('biometrics journal timestamps are strictly increasing', () => {
+    // Drizzle's migrator skips any entry whose `when` is <= the max recorded
+    // created_at, so a hand-edited out-of-order journal silently drops
+    // migrations on incremental upgrades (pods stuck mid-history).
+    const journal = JSON.parse(fs.readFileSync(
+      path.resolve(process.cwd(), 'src/db/biometrics-migrations/meta/_journal.json'),
+      'utf-8',
+    )) as { entries: Array<{ idx: number, when: number, tag: string }> }
+
+    for (let i = 1; i < journal.entries.length; i++) {
+      const prev = journal.entries[i - 1]
+      const curr = journal.entries[i]
+      expect(curr.when, `journal entry ${curr.tag} must have when > ${prev.tag}`)
+        .toBeGreaterThan(prev.when)
+    }
+  })
+
+  it('biometrics DB upgrades incrementally from a db stopped at 0003', () => {
+    // Simulate a pod that last migrated at 0003_sensor_calibration, then
+    // receives an update with the full migration history. All of 0004+ must
+    // apply — with the old out-of-order journal they were silently skipped.
+    const migrationsDir = path.resolve(process.cwd(), 'src/db/biometrics-migrations')
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biometrics-partial-'))
+    const raw = new Database(':memory:')
+    try {
+      // Build a partial migrations folder containing only entries 0000–0003
+      fs.cpSync(migrationsDir, tmpDir, { recursive: true })
+      const journalPath = path.join(tmpDir, 'meta/_journal.json')
+      const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8')) as {
+        entries: Array<{ idx: number }>
+      }
+      journal.entries = journal.entries.filter(e => e.idx <= 3)
+      fs.writeFileSync(journalPath, JSON.stringify(journal))
+
+      const db = drizzle(raw, { schema: biometricsSchema })
+      migrate(db, { migrationsFolder: tmpDir })
+
+      const tableNames = () => (raw.prepare(
+        'SELECT name FROM sqlite_master WHERE type = \'table\' ORDER BY name',
+      ).all() as Array<{ name: string }>).map(r => r.name)
+      expect(tableNames()).not.toContain('water_level_readings')
+
+      // Incremental upgrade: run the real migrator over the same db
+      expect(() => migrate(db, { migrationsFolder: migrationsDir })).not.toThrow()
+
+      const after = tableNames()
+      expect(after).toContain('water_level_readings')
+      expect(after).toContain('ambient_light')
+      expect(after).toContain('water_level_alerts')
+    }
+    finally {
+      raw.close()
+      fs.rmSync(tmpDir, { recursive: true, force: true })
     }
   })
 

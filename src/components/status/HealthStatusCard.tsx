@@ -41,6 +41,8 @@ interface HealthStatusCardProps {
   expandedContent?: React.ReactNode
   /** Optional callback when header is clicked (overrides default expand behavior) */
   onHeaderClick?: () => void
+  /** Start expanded (desktop dashboards have room to show all detail). */
+  defaultExpanded?: boolean
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -78,8 +80,9 @@ export function HealthStatusCard({
   isLoading,
   expandedContent,
   onHeaderClick,
+  defaultExpanded = false,
 }: HealthStatusCardProps) {
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded)
 
   const healthyCount = services.filter(s => s.status === 'ok').length
   const totalCount = services.length

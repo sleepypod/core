@@ -203,6 +203,49 @@ describe('MessageStream', () => {
     await expect(messageStream.readMessage()).rejects.toThrow('Test error')
   })
 
+  test('discardBuffered drops queued messages and reports the count', async () => {
+    const stream = createMockReadable(['stale1', 'stale2'])
+    const messageStream = new MessageStream(stream as any)
+
+    await sleep(10)
+    expect(messageStream.queueSize).toBe(2)
+
+    expect(messageStream.discardBuffered()).toBe(2)
+    expect(messageStream.queueSize).toBe(0)
+    expect(messageStream.discardBuffered()).toBe(0)
+  })
+
+  test('late response after read timeout is buffered, then discardable — not paired with next read', async () => {
+    let dest: any
+    const stream: any = {
+      pipe: (destination: any) => {
+        dest = destination
+        return destination
+      },
+      unpipe: () => {},
+      on: () => stream,
+      once: () => stream,
+      removeListener: () => stream,
+    }
+
+    // Short read timeout so the test doesn't wait 30s
+    const messageStream = new MessageStream(stream, '\n\n', 50)
+
+    // Read times out — its response never arrived in time
+    await expect(messageStream.readMessage()).rejects.toThrow('Message read timeout')
+
+    // The response arrives late: with no pending read it lands in the queue
+    dest.emit('data', Buffer.from('stale-response'))
+    expect(messageStream.queueSize).toBe(1)
+
+    // The next command discards it instead of consuming it as its own
+    expect(messageStream.discardBuffered()).toBe(1)
+
+    const nextRead = messageStream.readMessage()
+    dest.emit('data', Buffer.from('fresh-response'))
+    expect((await nextRead).toString()).toBe('fresh-response')
+  })
+
   test('handles pending read when data arrives', async () => {
     const stream: any = {
       pipe: (destination: any) => {

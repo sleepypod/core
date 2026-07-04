@@ -198,6 +198,33 @@ describe('scheduler/instance', () => {
     expect(loadSchedulesMock).toHaveBeenCalledTimes(2)
   })
 
+  it('shuts down a partially-initialized manager when loadSchedules throws', async () => {
+    const mod = await freshModule()
+    dbBehavior = async () => [{ timezone: 'UTC' }]
+    // loadSchedules can fail after registering some jobs; the discarded
+    // manager's node-schedule timers would keep firing and a retry would
+    // register duplicates → double hardware commands.
+    loadSchedulesMock.mockRejectedValueOnce(new Error('partial init'))
+
+    await expect(mod.getJobManager()).rejects.toThrow('partial init')
+    expect(shutdownMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('still surfaces the loadSchedules error when cleanup shutdown also fails', async () => {
+    const mod = await freshModule()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    dbBehavior = async () => [{ timezone: 'UTC' }]
+    loadSchedulesMock.mockRejectedValueOnce(new Error('partial init'))
+    shutdownMock.mockRejectedValueOnce(new Error('shutdown also broken'))
+
+    await expect(mod.getJobManager()).rejects.toThrow('partial init')
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Failed to clean up partially-initialized JobManager:',
+      'shutdown also broken',
+    )
+    warnSpy.mockRestore()
+  })
+
   it('caches the resolved timezone across retries (single db read)', async () => {
     const mod = await freshModule()
     let dbCalls = 0

@@ -3,9 +3,13 @@ import { Characteristic } from 'hap-nodejs'
 
 const setTemperature = vi.fn().mockResolvedValue(undefined)
 const setPower = vi.fn().mockResolvedValue(undefined)
+const registerManualOverride = vi.fn()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setTemperature, setPower }),
+}))
+vi.mock('@/src/automation', () => ({
+  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
 }))
 
 import { buildThermostatService } from '../accessories/thermostat'
@@ -34,6 +38,7 @@ describe('thermostat accessory', () => {
     __resetSideController()
     setTemperature.mockClear()
     setPower.mockClear()
+    registerManualOverride.mockClear()
   })
 
   it('reports current temperature in Celsius via onGet', async () => {
@@ -134,6 +139,28 @@ describe('thermostat accessory', () => {
       getLastStatus: () => null,
     }
     const { service } = buildThermostatService('left', blank as DacMonitor)
+    const current = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
+    const target = await service.getCharacteristic(Characteristic.TargetTemperature).handleGetRequest()
+    // NEUTRAL_C = f2c(82.5) ≈ 28.06
+    expect(current).toBeGreaterThan(27)
+    expect(current).toBeLessThan(29)
+    expect(target).toBeGreaterThan(27)
+    expect(target).toBeLessThan(29)
+  })
+
+  it('maps a null side temperature to NEUTRAL_C even with a live status', async () => {
+    // Distinct from the no-status case: status exists but the off side reports
+    // null current/target temps (level 0). HomeKit needs a number, so each
+    // maps to neutral rather than passing null through.
+    const offNull: DeviceStatus = {
+      ...status,
+      leftSide: { ...status.leftSide, currentTemperature: null, targetTemperature: null },
+    }
+    const m: Pick<DacMonitor, 'on' | 'getLastStatus'> = {
+      on: vi.fn().mockReturnThis() as never,
+      getLastStatus: () => offNull,
+    }
+    const { service } = buildThermostatService('left', m as DacMonitor)
     const current = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
     const target = await service.getCharacteristic(Characteristic.TargetTemperature).handleGetRequest()
     // NEUTRAL_C = f2c(82.5) ≈ 28.06

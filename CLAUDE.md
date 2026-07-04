@@ -4,21 +4,75 @@ This file provides instructions and context for AI coding agents working on this
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+pnpm install            # deps (pnpm workspace)
+pnpm dev                # Next.js dev server
+pnpm build              # production build (standalone output)
+pnpm tsc                # type-check (quality gate)
+pnpm lint               # eslint (quality gate)
+pnpm test               # vitest unit suite (quality gate)
+pnpm test:mutation      # Stryker mutation testing (slow; CI tracks score)
+
+# Python modules (each modules/<name>/ is a uv project):
+cd modules/<name> && uv run --with pytest pytest test_main.py
+# Use the module's locked deps (uv run), NOT an ad-hoc venv — unpinned
+# numpy/scipy versions change signal-processing results.
 ```
+
+Quality gates (`pnpm tsc && pnpm lint && pnpm test`) also run in the pre-push
+hook. CI runs the Python module matrix in
+`.github/workflows/python-modules.yml`.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+Next.js (App Router) server that runs ON the pod and controls it:
+
+- `src/hardware/` — DAC transport over Unix socket to frankenfirmware
+  (`dacTransport.ts` prod server-mode, `socketClient.ts` dev client-mode),
+  `dacMonitor` status polling, gesture detection, pump-stall guard, snooze.
+- `src/server/` — tRPC routers (also exposed REST-style via trpc-to-openapi
+  at `/api/*`). **No auth: LAN-only trust model** — see `openapi.ts`.
+- `src/scheduler/` — node-schedule JobManager (temperature/power/alarm
+  schedules from sleepypod.db plus prime/reboot/LED/run-once system jobs).
+- `src/automation/` — Autopilot engine: signal-driven rules with tick /
+  timeOfDay / signalChange triggers, evaluated in the device timezone.
+- `src/streaming/` — WebSocket sensor stream on port 3001 (`piezoStream`),
+  frame normalization, optional MQTT bridge (Home Assistant discovery).
+- `src/homekit/` — HAP bridge (thermostat, power/snooze switches, sensors);
+  hardware writes serialize through `sideController` + `sideLock`.
+- `src/db/` — two SQLite DBs via drizzle: `sleepypod.db` (config/state,
+  `migrations/`) and `biometrics.db` (time-series, `biometrics-migrations/`);
+  `retention.ts` prunes time-series tables.
+- `modules/` — Python daemons reading CBOR `*.RAW` sensor files and writing
+  biometrics.db: piezo-processor (vitals), sleep-detector (presence/sessions),
+  environment-monitor (temps), calibrator, cover-buttons; `modules/common/`
+  is their shared library.
+- `app/` — routes/UI; `src/components/` + `src/hooks/` — frontend. Device
+  status prefers the WS stream with tRPC HTTP fallback (`useDeviceStatus`).
+
+Cross-cutting invariants:
+- Per-side hardware writes MUST go through `withSideLock` (globalThis-backed).
+- Singletons live on `globalThis` (Turbopack can duplicate module instances).
+- DAC protocol has no correlation ids — commands are strictly sequential;
+  never read a response you didn't just send a command for.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- One commit per fix/feature; conventional-commit subjects (semantic-release).
+- Vitest tests live in `tests/` dirs beside the code (`src/**/tests/*.test.ts`);
+  Python tests are `modules/<name>/test_main.py` with pod-only imports stubbed
+  via `sys.modules` so they run on dev machines.
+- Stryker mutation testing is active — behavioral fixes need a pinning test
+  or they surface as surviving mutants.
+- DB schema changes: edit `src/db/*schema.ts`, then `pnpm db:generate` /
+  `pnpm db:biometrics:generate`. Never hand-edit migration journals — entry
+  `when` values must stay strictly increasing (enforced by a test).
+
+## Debugging a pod
+
+Field debugging runbook — SSH access, data paths, "biometrics not writing" and
+"stalled pump" symptom flows: **`docs/DEBUGGING.md`**. The desktop diagnostics
+console (`/debug`) surfaces most of these signals live.
 
 <!-- BEGIN YGG INTEGRATION v:1 hash:a463a568 -->
 ## Yggdrasil Agent Coordination

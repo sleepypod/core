@@ -639,6 +639,64 @@ class TestHRTracker:
         # The value is returned even though it's an outlier
         assert result == 200.0
 
+    def test_sustained_shift_reseeds_instead_of_freezing(self):
+        """A streak of uncorrectable readings re-seeds the tracker (#4.9).
+        Previously the stale median rejected every new reading forever."""
+        tracker = HRTracker()
+        for hr in [70.0, 71.0, 69.0, 70.5, 70.0]:
+            tracker.update(hr, 0.5)
+
+        # Sustained genuine shift the harmonic correction can't explain
+        # (190: direct/half/double all inconsistent with the 70 median)
+        for _ in range(HRTracker.FALLBACK_RESET_STREAK):
+            tracker.update(190.0, 0.5)
+
+        # Tracker has re-seeded at the new level…
+        assert 190.0 in tracker.history
+        # …and consistent readings near it are accepted into history again.
+        result = tracker.update(185.0, 0.5)
+        assert result == 185.0
+        assert 185.0 in tracker.history
+
+    def test_single_outlier_does_not_trigger_reseed(self):
+        """One wild reading between good ones must not reset the tracker."""
+        tracker = HRTracker()
+        for hr in [70.0, 71.0, 69.0, 70.5, 70.0]:
+            tracker.update(hr, 0.5)
+
+        tracker.update(200.0, 0.5)  # outlier (streak 1)
+        tracker.update(70.0, 0.5)   # consistent — streak resets
+        tracker.update(200.0, 0.5)  # outlier (streak 1 again)
+        tracker.update(200.0, 0.5)  # outlier (streak 2)
+
+        assert 200.0 not in tracker.history
+
+
+class TestInt32Samples:
+    """_int32_samples must tolerate truncated buffers (#4.7) — a RAW record
+    cut mid-write has len % 4 != 0 and np.frombuffer raised ValueError."""
+
+    def test_whole_samples_decoded(self):
+        import main
+        buf = np.array([1, -2, 3], dtype=np.int32).tobytes()
+        out = main._int32_samples(buf)
+        assert out.tolist() == [1, -2, 3]
+
+    def test_truncated_tail_dropped(self):
+        import main
+        buf = np.array([1, -2, 3], dtype=np.int32).tobytes() + b"\x07\x07"
+        out = main._int32_samples(buf)
+        assert out.tolist() == [1, -2, 3]
+
+    def test_sub_sample_buffer_is_empty(self):
+        import main
+        assert main._int32_samples(b"\x01\x02").size == 0
+
+    def test_non_bytes_is_empty(self):
+        import main
+        assert main._int32_samples(None).size == 0
+        assert main._int32_samples(12345).size == 0
+
     def test_history_bounded_under_sustained_input(self):
         """HRTracker history must not grow unbounded — only the last
         history_len entries are ever consulted, so retaining more leaks
@@ -865,12 +923,12 @@ class TestWriteVitalsResilience:
         from datetime import datetime, timezone
         import main
         conn = self._make_db()
-        main._db_write_failures = 0
-        result_conn, wrote = main.write_vitals(conn, "left",
-                                               datetime.now(timezone.utc),
-                                               70.0, 40.0, 15.0,
-                                               quality_score=0.9)
-        assert result_conn is conn
+        holder = main.DBHolder(conn)
+        wrote = main.write_vitals(holder, "left",
+                                  datetime.now(timezone.utc),
+                                  70.0, 40.0, 15.0,
+                                  quality_score=0.9)
+        assert holder.conn is conn
         assert wrote is True
         rows = conn.execute("SELECT * FROM vitals").fetchall()
         assert len(rows) == 1
@@ -887,19 +945,20 @@ class TestWriteVitalsResilience:
             def execute(self, *a, **k):
                 raise sqlite3.OperationalError("disk I/O error")
 
-        main._db_write_failures = 0
+        holder = main.DBHolder(BadConn())
         # Should not raise
-        result_conn, wrote = main.write_vitals(BadConn(), "left",
-                                               datetime.now(timezone.utc),
-                                               70.0, 40.0, 15.0,
-                                               quality_score=0.9)
-        # Returns the bad conn unchanged on the first failure, with wrote=False.
-        assert result_conn is not None
+        wrote = main.write_vitals(holder, "left",
+                                  datetime.now(timezone.utc),
+                                  70.0, 40.0, 15.0,
+                                  quality_score=0.9)
+        # Keeps the bad conn on the first failure, with wrote=False.
+        assert holder.conn is not None
         assert wrote is False
+        assert holder.write_failures == 1
 
     def test_reconnect_after_threshold(self, monkeypatch):
-        """After _DB_RECONNECT_THRESHOLD consecutive failures, the connection
-        is replaced via open_biometrics_db()."""
+        """After _DB_RECONNECT_THRESHOLD consecutive failures, the holder's
+        connection is replaced via open_biometrics_db()."""
         from datetime import datetime, timezone
         import sqlite3
         import main
@@ -919,22 +978,60 @@ class TestWriteVitalsResilience:
             replaced.append(1)
             return self._make_db()
 
-        main._db_write_failures = 0
         monkeypatch.setattr(main, "open_biometrics_db", fake_open)
 
         bad = BadConn()
+        holder = main.DBHolder(bad)
         ts = datetime.now(timezone.utc)
-        conn = bad
         for i in range(main._DB_RECONNECT_THRESHOLD):
-            conn, wrote = main.write_vitals(conn, "left", ts, 70.0, 40.0, 15.0,
-                                            quality_score=0.9)
+            wrote = main.write_vitals(holder, "left", ts, 70.0, 40.0, 15.0,
+                                      quality_score=0.9)
             assert wrote is False
 
         # After crossing the threshold the function must have reopened the DB
         assert len(replaced) == 1, \
             "expected one reconnect after _DB_RECONNECT_THRESHOLD failures"
+        # The stale handle is closed and swapped out of the holder
+        assert bad.closed is True
+        assert holder.conn is not bad
         # Failure counter resets after reconnect
-        assert main._db_write_failures == 0
+        assert holder.write_failures == 0
+
+    def test_sibling_processor_sees_reconnected_handle(self, monkeypatch):
+        """Regression: both SideProcessors share one DBHolder, so a reconnect
+        triggered by one side must be visible to the other. Previously each
+        side held a raw connection and the sibling kept writing to the closed
+        handle forever."""
+        from datetime import datetime, timezone
+        import sqlite3
+        import main
+
+        class BadConn:
+            closed = False
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("disk full")
+            def close(self):
+                self.closed = True
+
+        good = self._make_db()
+        monkeypatch.setattr(main, "open_biometrics_db", lambda: good)
+
+        holder = main.DBHolder(BadConn())
+        ts = datetime.now(timezone.utc)
+        # "Left side" fails through the threshold and triggers the reconnect
+        for _ in range(main._DB_RECONNECT_THRESHOLD):
+            main.write_vitals(holder, "left", ts, 70.0, 40.0, 15.0,
+                              quality_score=0.9)
+
+        # "Right side" writes through the same holder and must hit the fresh
+        # connection, not the closed one.
+        wrote = main.write_vitals(holder, "right", ts, 65.0, 35.0, 14.0,
+                                  quality_score=0.8)
+        assert wrote is True
+        rows = good.execute("SELECT side FROM vitals").fetchall()
+        assert rows == [("right",)]
 
 
 class TestSideProcessorAbsenceThrottle:
@@ -947,7 +1044,7 @@ class TestSideProcessorAbsenceThrottle:
         the next ingest call does not immediately re-enter the heavy
         signal-processing path."""
         np.random.seed(42)
-        proc = SideProcessor("left", db_conn=None)
+        proc = SideProcessor("left", db_holder=None)
         # Simulate extended absence — _last_write far in the past.
         proc._last_write = time.time() - 3600  # 1 hour ago
         assert time.time() - proc._last_write > VITALS_INTERVAL_S

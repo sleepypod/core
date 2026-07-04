@@ -48,19 +48,25 @@ vi.mock('@/src/db/schema', () => {
   }
 })
 
-vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getSharedHardwareClient: () => ({
-    connect: vi.fn(async () => {}),
-    setTemperature: vi.fn(async () => {}),
-    setPower: vi.fn(async () => {}),
-    setAlarm: vi.fn(async () => {}),
-    startPriming: vi.fn(async () => {}),
-  }),
+vi.mock('@/src/hardware/dacTransport', () => ({
+  sendCommand: vi.fn(async () => ''),
+  connectDac: vi.fn(async () => {}),
+  isDacConnected: vi.fn(() => true),
 }))
 
-vi.mock('@/src/hardware/dacTransport', () => ({
-  sendCommand: vi.fn(async () => {}),
-}))
+vi.mock('@/src/hardware/dacMonitor.instance', async () => {
+  const { sendCommand } = await import('@/src/hardware/dacTransport')
+  return {
+    getSharedHardwareClient: () => ({
+      connect: vi.fn(async () => {}),
+      setTemperature: vi.fn(async () => {}),
+      setPower: vi.fn(async () => {}),
+      setAlarm: vi.fn(async () => {}),
+      startPriming: vi.fn(async () => {}),
+      sendRaw: vi.fn(async (command: string, arg?: string) => sendCommand(command, arg)),
+    }),
+  }
+})
 
 vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
   broadcastMutationStatus: vi.fn(),
@@ -70,6 +76,10 @@ vi.mock('@/src/services/autoOffWatcher', () => ({
   cancelAutoOffTimer: vi.fn(),
 }))
 
+import { decode as cborDecode } from 'cbor-x'
+import { db } from '@/src/db'
+import { sendCommand } from '@/src/hardware/dacTransport'
+import { HardwareCommand } from '@/src/hardware/types'
 import { JobManager } from '../jobManager'
 import { JobType } from '../types'
 
@@ -199,6 +209,40 @@ describe('JobManager public surface (stub DB)', () => {
     const ids = manager.getScheduler().getJobs().map(j => j.id)
     expect(ids).toContain('runonce-123-0')
     expect(ids).toContain('runonce-cleanup-123')
+  })
+
+  it('rescheduling a session with a filtered set-point list leaves no stale jobs', () => {
+    // Regression (review 4.13): restoreRunOnceSessions passes a FILTERED
+    // list whose indices shift; a surviving runonce-S-2 plus a re-indexed
+    // runonce-S-0 could fire the same set point twice.
+    const now = new Date()
+    const fmt = (d: Date) =>
+      `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+    const t1 = fmt(new Date(now.getTime() + 5 * 60_000))
+    const t2 = fmt(new Date(now.getTime() + 10 * 60_000))
+    const t3 = fmt(new Date(now.getTime() + 15 * 60_000))
+    const wakeTime = fmt(new Date(now.getTime() + 60 * 60_000))
+
+    manager.scheduleRunOnceSession(7, 'left', [
+      { time: t1, temperature: 78 },
+      { time: t2, temperature: 76 },
+      { time: t3, temperature: 74 },
+    ], wakeTime, 'UTC')
+    expect(manager.getScheduler().getJobs()).toHaveLength(4) // 3 points + cleanup
+
+    // In-process reschedule with the first point filtered out (already fired)
+    manager.scheduleRunOnceSession(7, 'left', [
+      { time: t2, temperature: 76 },
+      { time: t3, temperature: 74 },
+    ], wakeTime, 'UTC')
+
+    const jobs = manager.getScheduler().getJobs()
+    expect(jobs).toHaveLength(3) // 2 points + cleanup, no leftovers
+    const temps = jobs
+      .filter(j => j.id.startsWith('runonce-7-'))
+      .map(j => j.metadata?.targetTemperature)
+      .sort()
+    expect(temps).toEqual([74, 76]) // each set point scheduled exactly once
   })
 
   it('cancelRunOnceSession removes only run-once jobs scoped to the side', () => {
@@ -517,12 +561,14 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
       JobType.LED_BRIGHTNESS,
       '5 22 * * *',
       expect.any(Function),
+      { brightness: 10 },
     )
     expect(scheduleJob).toHaveBeenCalledWith(
       'led-night-end',
       JobType.LED_BRIGHTNESS,
       '45 6 * * *',
       expect.any(Function),
+      { brightness: 80 },
     )
   })
 
@@ -547,5 +593,420 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
 
     await endCb()
     expect(sendLed).toHaveBeenLastCalledWith(80) // morning → day brightness
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Incremental upsert / cancel — the API that route handlers call instead of
+// reloadSchedules(). Pins:
+//   1. Idempotency: upserting the same row twice leaves exactly one job.
+//   2. No-wipe: mutating one row's job doesn't touch any other row's job.
+//   3. Disabled rows act as cancel: upsertX({enabled:false, ...}) removes the
+//      existing job rather than scheduling a disabled-but-armed timer.
+//   4. yggdrasil-49 regression: an unrelated upsert at HH:MM:04 (inside an
+//      alarm's fire window) does NOT cancel-and-recreate the alarm job, so
+//      its `nextInvocation` is not bumped 7 days into the future.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager incremental upsert/cancel', () => {
+  let manager: JobManager
+
+  // Use a far-future date so weekly cron jobs registered in these tests sit
+  // safely in the next-invocation window and won't accidentally fire.
+  const baseTemp = {
+    id: 1,
+    side: 'left' as const,
+    dayOfWeek: 'monday' as const,
+    time: '22:00',
+    temperature: 68,
+    enabled: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }
+  const basePower = {
+    id: 1,
+    side: 'left' as const,
+    dayOfWeek: 'monday' as const,
+    onTime: '22:00',
+    offTime: '07:00',
+    onTemperature: 75,
+    enabled: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }
+  const baseAlarm = {
+    id: 1,
+    side: 'left' as const,
+    dayOfWeek: 'monday' as const,
+    time: '07:00',
+    vibrationIntensity: 50,
+    vibrationPattern: 'rise' as const,
+    duration: 120,
+    alarmTemperature: 80,
+    enabled: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }
+
+  beforeEach(() => {
+    manager = new JobManager('UTC', {
+      heartbeatIntervalMs: 1_000_000,
+      heartbeatStaleMs: 90_000,
+    })
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('upsertTemperatureJob is idempotent: two calls with the same row leave one job', () => {
+    manager.upsertTemperatureJob(baseTemp)
+    manager.upsertTemperatureJob(baseTemp)
+    const jobs = manager.getScheduler().getJobs().filter(j => j.id === `temp-${baseTemp.id}`)
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].type).toBe(JobType.TEMPERATURE)
+  })
+
+  it('upsertPowerJob schedules both on+off, cancelPowerJob removes both', () => {
+    manager.upsertPowerJob(basePower)
+    const sched = manager.getScheduler()
+    expect(sched.getJob(`power-on-${basePower.id}`)).toBeDefined()
+    expect(sched.getJob(`power-off-${basePower.id}`)).toBeDefined()
+
+    manager.cancelPowerJob(basePower.id)
+    expect(sched.getJob(`power-on-${basePower.id}`)).toBeUndefined()
+    expect(sched.getJob(`power-off-${basePower.id}`)).toBeUndefined()
+  })
+
+  it('upsertAlarmJob with enabled=false acts as cancel', () => {
+    manager.upsertAlarmJob(baseAlarm)
+    expect(manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)).toBeDefined()
+
+    manager.upsertAlarmJob({ ...baseAlarm, enabled: false })
+    expect(manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)).toBeUndefined()
+  })
+
+  it('upsertTemperatureJob with enabled=false acts as cancel', () => {
+    manager.upsertTemperatureJob(baseTemp)
+    expect(manager.getScheduler().getJob(`temp-${baseTemp.id}`)).toBeDefined()
+
+    manager.upsertTemperatureJob({ ...baseTemp, enabled: false })
+    expect(manager.getScheduler().getJob(`temp-${baseTemp.id}`)).toBeUndefined()
+  })
+
+  it('upsertPowerJob with enabled=false acts as cancel of both on+off', () => {
+    manager.upsertPowerJob(basePower)
+    expect(manager.getScheduler().getJob(`power-on-${basePower.id}`)).toBeDefined()
+    expect(manager.getScheduler().getJob(`power-off-${basePower.id}`)).toBeDefined()
+
+    manager.upsertPowerJob({ ...basePower, enabled: false })
+    expect(manager.getScheduler().getJob(`power-on-${basePower.id}`)).toBeUndefined()
+    expect(manager.getScheduler().getJob(`power-off-${basePower.id}`)).toBeUndefined()
+  })
+
+  it('cancelX is a no-op when the job is absent', () => {
+    expect(() => manager.cancelTemperatureJob(999)).not.toThrow()
+    expect(() => manager.cancelPowerJob(999)).not.toThrow()
+    expect(() => manager.cancelAlarmJob(999)).not.toThrow()
+  })
+
+  it('no-wipe: upserting one alarm leaves an unrelated temperature job untouched', () => {
+    manager.upsertTemperatureJob(baseTemp)
+    const tempJobBefore = manager.getScheduler().getJob(`temp-${baseTemp.id}`)
+    expect(tempJobBefore).toBeDefined()
+    const nextBefore = manager.getScheduler().getNextInvocation(`temp-${baseTemp.id}`)?.getTime()
+
+    // Upsert an unrelated alarm — the temperature job's identity and next-fire
+    // time must not move. reloadSchedules() would have cancelled+recreated it.
+    manager.upsertAlarmJob(baseAlarm)
+    const tempJobAfter = manager.getScheduler().getJob(`temp-${baseTemp.id}`)
+    expect(tempJobAfter).toBe(tempJobBefore) // same object identity → not recreated
+    expect(manager.getScheduler().getNextInvocation(`temp-${baseTemp.id}`)?.getTime()).toBe(nextBefore)
+  })
+
+  it('yggdrasil-49 regression: upserting an unrelated row inside an alarm fire-window does not bump the alarm', () => {
+    // Schedule the alarm and remember its next invocation.
+    manager.upsertAlarmJob(baseAlarm)
+    const alarmJobBefore = manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)
+    expect(alarmJobBefore).toBeDefined()
+    const nextBefore = manager.getScheduler().getNextInvocation(`alarm-${baseAlarm.id}`)?.getTime()
+    expect(nextBefore).toBeDefined()
+
+    // Simulate the mutation landing 4s past the cron minute. With the old
+    // reloadSchedules() this would cancel-and-recreate every recurring job;
+    // the alarm whose `time` already passed today would skip to next week.
+    manager.upsertTemperatureJob({ ...baseTemp, id: 99, temperature: 70 })
+
+    // The alarm's underlying job is the same instance and its nextInvocation
+    // hasn't moved. Net effect: the alarm still fires this week.
+    const alarmJobAfter = manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)
+    expect(alarmJobAfter).toBe(alarmJobBefore)
+    expect(manager.getScheduler().getNextInvocation(`alarm-${baseAlarm.id}`)?.getTime()).toBe(nextBefore)
+  })
+
+  it('alarm CRUD via incremental helpers completes well under the 200ms unit-test budget', () => {
+    const start = performance.now()
+    for (let i = 0; i < 50; i++) {
+      manager.upsertAlarmJob({ ...baseAlarm, id: i, time: '07:00' })
+    }
+    for (let i = 0; i < 50; i++) {
+      manager.cancelAlarmJob(i)
+    }
+    const elapsed = performance.now() - start
+    // 100 ops well under 200ms — incremental work is O(1) per call, no DB scan.
+    expect(elapsed).toBeLessThan(200)
+  })
+
+  it('upsertRebootJob with rebootDaily=false cancels any existing daily-reboot job', () => {
+    manager.upsertRebootJob(true, '03:00')
+    expect(manager.getScheduler().getJob('daily-reboot')).toBeDefined()
+    manager.upsertRebootJob(false, '03:00')
+    expect(manager.getScheduler().getJob('daily-reboot')).toBeUndefined()
+  })
+
+  it('upsertPrimeJob (re)schedules all three prime-related jobs together', () => {
+    manager.upsertPrimeJob(true, '14:00')
+    const sched = manager.getScheduler()
+    expect(sched.getJob('daily-prime')).toBeDefined()
+    expect(sched.getJob('prime-prereboot')).toBeDefined()
+    expect(sched.getJob('pre-prime-calibration')).toBeDefined()
+
+    manager.cancelPrimeJob()
+    expect(sched.getJob('daily-prime')).toBeUndefined()
+    expect(sched.getJob('prime-prereboot')).toBeUndefined()
+    expect(sched.getJob('pre-prime-calibration')).toBeUndefined()
+  })
+
+  it('upsertPrimeJob with primePodDaily=false cancels any existing prime jobs', () => {
+    manager.upsertPrimeJob(true, '14:00')
+    manager.upsertPrimeJob(false, '14:00')
+    const sched = manager.getScheduler()
+    expect(sched.getJob('daily-prime')).toBeUndefined()
+    expect(sched.getJob('prime-prereboot')).toBeUndefined()
+    expect(sched.getJob('pre-prime-calibration')).toBeUndefined()
+  })
+
+  it('upsertLedNightMode applies day brightness immediately when disabled (200ms LED budget)', async () => {
+    const sendLed = vi.fn(async () => {})
+    ;(manager as any).sendLedBrightness = sendLed
+
+    // First enable so jobs exist.
+    await manager.upsertLedNightMode(true, '22:00', '06:00', 80, 10)
+    expect(manager.getScheduler().getJob('led-night-start')).toBeDefined()
+
+    // Now disable — jobs cancelled, day brightness restored on the hardware.
+    sendLed.mockClear()
+    const start = performance.now()
+    await manager.upsertLedNightMode(false, '22:00', '06:00', 80, 10)
+    const elapsed = performance.now() - start
+    expect(manager.getScheduler().getJob('led-night-start')).toBeUndefined()
+    expect(manager.getScheduler().getJob('led-night-end')).toBeUndefined()
+    expect(sendLed).toHaveBeenCalledWith(80)
+    expect(elapsed).toBeLessThan(200)
+  })
+
+  it('upsertLedNightMode swallows sendLedBrightness failure on disable so the route still succeeds', async () => {
+    const sendLed = vi.fn(async () => {
+      throw new Error('DAC not connected')
+    })
+    ;(manager as any).sendLedBrightness = sendLed
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(
+      manager.upsertLedNightMode(false, '22:00', '06:00', 80, 10)
+    ).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('LED night mode'),
+      expect.any(Error),
+    )
+    warn.mockRestore()
+  })
+
+  it('upsertLedNightMode with enabled=true but null times is a no-op (cancel without day-brightness restore)', async () => {
+    const sendLed = vi.fn(async () => {})
+    ;(manager as any).sendLedBrightness = sendLed
+
+    await manager.upsertLedNightMode(true, '22:00', '06:00', 80, 10)
+    sendLed.mockClear()
+
+    // enabled=true so the `if (!enabled)` restore branch must NOT fire — but the
+    // outer guard still cancels the cron jobs because times are null.
+    await manager.upsertLedNightMode(true, null, '06:00', 80, 10)
+    expect(manager.getScheduler().getJob('led-night-start')).toBeUndefined()
+    expect(manager.getScheduler().getJob('led-night-end')).toBeUndefined()
+    expect(sendLed).not.toHaveBeenCalled()
+  })
+
+  it('upsertAwayMode schedules away-start and away-return when values are non-null', () => {
+    const future = new Date(Date.now() + 7 * 86_400_000).toISOString()
+    const later = new Date(Date.now() + 8 * 86_400_000).toISOString()
+    manager.upsertAwayMode('left', future, later)
+    expect(manager.getScheduler().getJob('away-start-left')).toBeDefined()
+    expect(manager.getScheduler().getJob('away-return-left')).toBeDefined()
+  })
+
+  it('upsertAwayMode cancels existing jobs when both inputs are null', () => {
+    const future = new Date(Date.now() + 7 * 86_400_000).toISOString()
+    const later = new Date(Date.now() + 8 * 86_400_000).toISOString()
+    manager.upsertAwayMode('left', future, later)
+    manager.upsertAwayMode('left', null, null)
+    expect(manager.getScheduler().getJob('away-start-left')).toBeUndefined()
+    expect(manager.getScheduler().getJob('away-return-left')).toBeUndefined()
+  })
+})
+// ─────────────────────────────────────────────────────────────────────────────
+// sendLedBrightness CBOR wire format. Frank's SetSettings (cmd 8) silently
+// ignores unknown keys — so the test pins the exact key ("lb") and value the
+// firmware actually consumes. Belt-and-suspenders: the key-bytes regex (`626c62`)
+// pins the wire key name independent of cbor-x's map-header encoding; the
+// decode round-trip is the authoritative structural check.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager.sendLedBrightness CBOR payload', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+    ;(sendCommand as ReturnType<typeof vi.fn>).mockClear()
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('encodes {lb: N} under SET_SETTINGS — not the legacy ledBrightness key', async () => {
+    await (manager as any).sendLedBrightness(42)
+
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    const [cmd, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    expect(cmd).toBe(HardwareCommand.SET_SETTINGS)
+
+    // Wire format check: the key bytes for "lb" (text2 → 62 6c 62) must be
+    // present. The value byte is verified by the decode round-trip below;
+    // pinning it with an anchored regex would falsely fail if cbor-x ever
+    // emitted an indefinite-length map terminator (`ff`).
+    expect(hex).toMatch(/626c62/)
+
+    // Decode round-trip — authoritative source of truth.
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 42 })
+    expect(decoded).not.toHaveProperty('ledBrightness')
+  })
+
+  it('encodes 0 (full-dim) without ambiguity', async () => {
+    await (manager as any).sendLedBrightness(0)
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 0 })
+  })
+
+  it('encodes 100 (full-bright) as a single-byte uint', async () => {
+    await (manager as any).sendLedBrightness(100)
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [HardwareCommand, string]
+    const decoded = cborDecode(Buffer.from(hex, 'hex'))
+    expect(decoded).toEqual({ lb: 100 })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeCurrentLedBrightness — the in-window math is exercised exhaustively
+// via scheduleLedNightMode tests above. These cover the branches that path
+// doesn't reach: night mode disabled, null start/end (corrupted DB row).
+// applyCurrentLedBrightness has its own short check that exits cleanly when
+// the device_settings row is missing.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('JobManager.computeCurrentLedBrightness — out-of-window branches', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('returns day brightness when night mode is disabled', () => {
+    const result = (manager as any).computeCurrentLedBrightness(false, '22:00', '06:00', 80, 10)
+    expect(result).toBe(80)
+  })
+
+  it('returns day brightness when night start time is null (mis-seeded row)', () => {
+    const result = (manager as any).computeCurrentLedBrightness(true, null, '06:00', 80, 10)
+    expect(result).toBe(80)
+  })
+
+  it('returns day brightness when night end time is null', () => {
+    const result = (manager as any).computeCurrentLedBrightness(true, '22:00', null, 80, 10)
+    expect(result).toBe(80)
+  })
+})
+
+describe('JobManager.applyCurrentLedBrightness', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+    ;(sendCommand as ReturnType<typeof vi.fn>).mockClear()
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+  })
+
+  it('is a no-op when device_settings is empty (fresh install)', async () => {
+    await manager.applyCurrentLedBrightness()
+    expect(sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('sends day brightness CBOR when night mode is disabled', async () => {
+    vi.spyOn(db, 'select').mockReturnValueOnce({
+      from: () => ({
+        limit: async () => [{
+          ledNightModeEnabled: false,
+          ledNightStartTime: '22:00',
+          ledNightEndTime: '06:00',
+          ledDayBrightness: 75,
+          ledNightBrightness: 10,
+        }],
+      }),
+    } as any)
+    await manager.applyCurrentLedBrightness()
+    expect(sendCommand).toHaveBeenCalledWith(HardwareCommand.SET_SETTINGS, expect.any(String))
+    const [, hex] = (sendCommand as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(cborDecode(Buffer.from(hex, 'hex'))).toEqual({ lb: 75 })
+  })
+})
+
+describe('JobManager.loadSchedules YIELD_EVERY yielding', () => {
+  let manager: JobManager
+
+  beforeEach(() => {
+    manager = new JobManager('UTC')
+  })
+
+  afterEach(async () => {
+    await manager.shutdown()
+    vi.restoreAllMocks()
+  })
+
+  it('awaits setImmediate every 25 entries so the event loop can service I/O', async () => {
+    // 30 rows per kind exceeds YIELD_EVERY=25, so each of the three loops
+    // (temperature, power, alarm) must take the yield branch at least once.
+    const rows = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, enabled: false }))
+    vi.spyOn(db, 'select').mockImplementation((() => ({
+      from: () => {
+        const q: any = {
+          where: () => q,
+          limit: () => Promise.resolve([]),
+          then: (resolve: (v: any) => void) => resolve(rows),
+        }
+        return q
+      },
+    })) as any)
+
+    const setImmediateSpy = vi.spyOn(global, 'setImmediate') as unknown as ReturnType<typeof vi.fn>
+    await manager.loadSchedules()
+    // Three loops, each yielding at i=24 (1-indexed 25). The system schedules
+    // call also runs but uses .limit, not the looped path.
+    expect(setImmediateSpy.mock.calls.length).toBeGreaterThanOrEqual(3)
   })
 })

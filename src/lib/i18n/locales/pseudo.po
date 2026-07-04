@@ -13,13 +13,13 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
-#: src/components/BottomNav/BottomNav.tsx:13
+#: src/components/BottomNav/BottomNav.tsx:14
 msgid "Biometrics"
 msgstr ""
 
-#: src/components/BottomNav/BottomNav.tsx:13
-#~ msgid "Data"
-#~ msgstr ""
+#: src/components/BottomNav/BottomNav.tsx:18
+msgid "Diagnostics"
+msgstr ""
 
 #: app/[lang]/health/page.tsx:13
 msgid "Hello, tRPC test page!"
@@ -29,22 +29,18 @@ msgstr ""
 msgid "Offline"
 msgstr ""
 
-#: src/components/BottomNav/BottomNav.tsx:12
+#: src/components/BottomNav/BottomNav.tsx:13
 msgid "Schedule"
 msgstr ""
 
-#: src/components/BottomNav/BottomNav.tsx:14
+#: src/components/BottomNav/BottomNav.tsx:15
 msgid "Sensors"
 msgstr ""
 
 #: src/components/BottomNav/BottomNav.tsx:16
-#~ msgid "Settings"
-#~ msgstr ""
-
-#: src/components/BottomNav/BottomNav.tsx:15
 msgid "Status"
 msgstr ""
 
-#: src/components/BottomNav/BottomNav.tsx:11
+#: src/components/BottomNav/BottomNav.tsx:12
 msgid "Temp"
 msgstr ""

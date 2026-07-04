@@ -39,7 +39,8 @@ import mqtt, { type IClientOptions, type IClientPublishOptions, type MqttClient 
 import { eq, desc } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
 import { deviceSettings, deviceState } from '@/src/db/schema'
-import { bedTemp, vitals } from '@/src/db/biometrics-schema'
+import { bedTemp, flowReadings, vitals } from '@/src/db/biometrics-schema'
+import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import { centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { onServerFrame } from './piezoStream'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
@@ -347,6 +348,74 @@ function publishHaDiscovery(): void {
     JSON.stringify(ambientHumidity),
     RETAINED_QOS_0,
   )
+  // Pump topics — one set per side. RPM + loop temp as measurement sensors;
+  // stall / clog as binary sensors with the `problem` device_class so HA
+  // renders them as red alert tiles.
+  for (const side of ['left', 'right'] as const) {
+    const rpmTopic = topic('pump', side, 'rpm')
+    const loopTopic = topic('pump', side, 'loop_temp_c')
+    const stallTopic = topic('pump', side, 'stall')
+    const clogTopic = topic('pump', side, 'clog_detected')
+
+    const pumpRpm = sensor(
+      `pump_${side}_rpm`,
+      `${side === 'left' ? 'Left' : 'Right'} pump RPM`,
+      rpmTopic,
+      '{{ value_json.rpm }}',
+      'rpm',
+    )
+    safePublish(
+      `${haPrefix}/sensor/${id}/pump_${side}_rpm/config`,
+      JSON.stringify(pumpRpm),
+      RETAINED_QOS_0,
+    )
+    const pumpLoop = sensor(
+      `pump_${side}_loop_temp`,
+      `${side === 'left' ? 'Left' : 'Right'} pump loop temp`,
+      loopTopic,
+      '{{ value_json.temperature }}',
+      '°C',
+    )
+    pumpLoop.device_class = 'temperature'
+    safePublish(
+      `${haPrefix}/sensor/${id}/pump_${side}_loop_temp/config`,
+      JSON.stringify(pumpLoop),
+      RETAINED_QOS_0,
+    )
+    safePublish(
+      `${haPrefix}/binary_sensor/${id}/pump_${side}_stall/config`,
+      JSON.stringify({
+        name: `${side === 'left' ? 'Left' : 'Right'} pump stall`,
+        unique_id: `${id}_pump_${side}_stall`,
+        availability_topic: availability,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: stallTopic,
+        payload_on: 'on',
+        payload_off: 'off',
+        device_class: 'problem',
+        device: dev,
+      }),
+      RETAINED_QOS_0,
+    )
+    safePublish(
+      `${haPrefix}/binary_sensor/${id}/pump_${side}_clog/config`,
+      JSON.stringify({
+        name: `${side === 'left' ? 'Left' : 'Right'} pump clog detected`,
+        unique_id: `${id}_pump_${side}_clog`,
+        availability_topic: availability,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: clogTopic,
+        payload_on: 'on',
+        payload_off: 'off',
+        device_class: 'problem',
+        device: dev,
+      }),
+      RETAINED_QOS_0,
+    )
+  }
+
   for (const side of ['left', 'right'] as const) {
     safePublish(
       `${haPrefix}/sensor/${id}/${side}_heart_rate/config`,
@@ -457,6 +526,47 @@ async function publishState(): Promise<void> {
   catch (err) {
     console.warn('[mqtt] ambient environment publish failed:', err instanceof Error ? err.message : err)
   }
+
+  try {
+    const [latestFlow] = await biometricsDb
+      .select()
+      .from(flowReadings)
+      .orderBy(desc(flowReadings.timestamp))
+      .limit(1)
+    if (latestFlow) {
+      const ts = latestFlow.timestamp.getTime()
+      safePublish(topic('pump', 'left', 'rpm'), JSON.stringify({
+        ts,
+        rpm: latestFlow.leftPumpRpm,
+      }), RETAINED_QOS_0)
+      safePublish(topic('pump', 'right', 'rpm'), JSON.stringify({
+        ts,
+        rpm: latestFlow.rightPumpRpm,
+      }), RETAINED_QOS_0)
+      safePublish(topic('pump', 'left', 'loop_temp_c'), JSON.stringify({
+        ts,
+        temperature: latestFlow.leftFlowrateCd != null ? latestFlow.leftFlowrateCd / 100 : null,
+      }), RETAINED_QOS_0)
+      safePublish(topic('pump', 'right', 'loop_temp_c'), JSON.stringify({
+        ts,
+        temperature: latestFlow.rightFlowrateCd != null ? latestFlow.rightFlowrateCd / 100 : null,
+      }), RETAINED_QOS_0)
+    }
+  }
+  catch (err) {
+    console.warn('[mqtt] pump rpm publish failed:', err instanceof Error ? err.message : err)
+  }
+
+  // Stall + clog state per side. Clog stays 'off' until the nightly job
+  // lands — that work is out of scope for this PR.
+  for (const side of ['left', 'right'] as const) {
+    safePublish(
+      topic('pump', side, 'stall'),
+      getPumpStallNotice(side) ? 'on' : 'off',
+      RETAINED_QOS_0,
+    )
+    safePublish(topic('pump', side, 'clog_detected'), 'off', RETAINED_QOS_0)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -544,10 +654,13 @@ export interface TestConnectionResult {
 }
 
 export async function testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
-  // Test connection respects MQTT_TLS_INSECURE so a "Test" button surfaces
-  // the same cert-trust outcome the running bridge would see. tlsEnabled on
-  // its own does not relax cert verification — mqtt.js defaults to strict.
-  const tlsInsecure = envBool(process.env.MQTT_TLS_INSECURE) === true
+  // Test connection resolves tlsInsecure through the same db-then-env
+  // precedence as the running bridge (resolveConfig), so the "Test" button
+  // surfaces the same cert-trust outcome — env-only reads disagreed with a
+  // db-configured bridge. tlsEnabled on its own does not relax cert
+  // verification — mqtt.js defaults to strict.
+  const { config } = await resolveConfig()
+  const tlsInsecure = config.tlsInsecure
   return new Promise((resolve) => {
     let settled = false
     const finalize = (result: TestConnectionResult) => {

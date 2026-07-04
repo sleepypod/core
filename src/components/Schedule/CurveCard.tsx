@@ -9,6 +9,8 @@ import { sortChronological } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from './DaySelector'
 import { colorForTempF } from '@/src/lib/sleepCurve/tempColor'
 import { formatTime12h } from './TimeInput'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { formatSetpointF } from '@/src/lib/tempUtils'
 
 interface CurveCardProps {
   group: ScheduleGroup
@@ -49,6 +51,7 @@ function formatDayRange(days: DayOfWeek[]): string {
 }
 
 export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null }: CurveCardProps) {
+  const { unit } = useTemperatureUnit()
   const hasSetPoints = group.setPoints.length > 0
   const minTemp = hasSetPoints ? Math.min(...group.setPoints.map(p => p.temperature)) : 0
   const maxTemp = hasSetPoints ? Math.max(...group.setPoints.map(p => p.temperature)) : 0
@@ -132,10 +135,9 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
                   </>
                 )}
                 <span>
-                  {minTemp}
-                  °–
-                  {maxTemp}
-                  °F
+                  {formatSetpointF(minTemp, unit)}
+                  {' – '}
+                  {formatSetpointF(maxTemp, unit)}
                 </span>
               </>
             )
@@ -151,8 +153,7 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
           <span className="font-medium text-emerald-400">{nextEvent.time}</span>
           <span className="text-zinc-600">·</span>
           <span className="font-medium text-zinc-300">
-            {nextEvent.temperature}
-            °F
+            {formatSetpointF(nextEvent.temperature, unit)}
           </span>
         </div>
       )}
