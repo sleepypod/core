@@ -41,6 +41,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => {
 import {
   __test__,
   broadcastFrame,
+  findLatestRaw,
   getLatestCapSenseSnapshot,
   onServerFrame,
   startPiezoStreamServer,
@@ -1113,5 +1114,52 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await waitUntil(() => monitor.setIdle.mock.calls.length > 0, 2000)
     expect(monitor.setActive).toHaveBeenCalled()
     expect(monitor.setIdle).toHaveBeenCalled()
+  })
+})
+
+describe('piezoStream — findLatestRaw selection and fallback', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'piezo-find-raw-'))
+  })
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('ignores SEQNO.RAW when a real capture exists alongside it', () => {
+    fs.writeFileSync(path.join(dir, 'SEQNO.RAW'), 'seqno')
+    fs.writeFileSync(path.join(dir, '00D0660E.RAW'), 'real')
+    expect(findLatestRaw(dir)).toBe(path.join(dir, '00D0660E.RAW'))
+  })
+
+  it('returns null when SEQNO.RAW is the only RAW at top level and no fallback dir exists', () => {
+    fs.writeFileSync(path.join(dir, 'SEQNO.RAW'), 'seqno')
+    expect(findLatestRaw(dir)).toBeNull()
+  })
+
+  it('falls back to <dir>/biometrics when the top-level dir has no usable RAW', () => {
+    // Reproduces the pod-5 layout that motivated this fix: SEQNO.RAW symlink
+    // sits at /persistent root, real captures land in /persistent/biometrics.
+    fs.writeFileSync(path.join(dir, 'SEQNO.RAW'), 'seqno')
+    const bio = path.join(dir, 'biometrics')
+    fs.mkdirSync(bio)
+    fs.writeFileSync(path.join(bio, '00D0660E.RAW'), 'real')
+    expect(findLatestRaw(dir)).toBe(path.join(bio, '00D0660E.RAW'))
+  })
+
+  it('prefers a top-level RAW over the fallback when both are present', () => {
+    // Older firmware still writes captures at the top level; do not migrate
+    // away from them just because /persistent/biometrics also exists.
+    fs.writeFileSync(path.join(dir, 'top.RAW'), 'top')
+    const bio = path.join(dir, 'biometrics')
+    fs.mkdirSync(bio)
+    fs.writeFileSync(path.join(bio, 'fallback.RAW'), 'fallback')
+    expect(findLatestRaw(dir)).toBe(path.join(dir, 'top.RAW'))
+  })
+
+  it('returns null when neither the top-level dir nor the fallback has a usable RAW', () => {
+    expect(findLatestRaw(dir)).toBeNull()
   })
 })
