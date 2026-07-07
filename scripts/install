@@ -1270,12 +1270,25 @@ echo "Creating systemd service..."
 # the runtime's checkAndRepairIptables() writes /etc/iptables/rules.v4).
 mkdir -p /etc/iptables
 
-# Only emit SupplementaryGroups=dac when the dac group exists — otherwise
-# systemd refuses to start the unit with "Failed to determine supplementary
-# group: No such file or directory".
-SUPP_GROUPS_LINE=""
+# Only emit groups that exist — otherwise systemd refuses to start the
+# unit with "Failed to determine supplementary group: No such file or
+# directory". systemd-journal (adm on images without it) lets the
+# next-server's /system/logs endpoint run journalctl as User=sleepypod;
+# without it the log viewer fails with "No journal files were opened due
+# to insufficient permissions" on pods where the journal isn't
+# world-readable.
+SUPP_GROUPS=()
 if getent group dac &>/dev/null; then
-  SUPP_GROUPS_LINE="SupplementaryGroups=dac"
+  SUPP_GROUPS+=(dac)
+fi
+if getent group systemd-journal &>/dev/null; then
+  SUPP_GROUPS+=(systemd-journal)
+elif getent group adm &>/dev/null; then
+  SUPP_GROUPS+=(adm)
+fi
+SUPP_GROUPS_LINE=""
+if [ ${#SUPP_GROUPS[@]} -gt 0 ]; then
+  SUPP_GROUPS_LINE="SupplementaryGroups=${SUPP_GROUPS[*]}"
 fi
 
 cat > /etc/systemd/system/sleepypod.service << EOF
