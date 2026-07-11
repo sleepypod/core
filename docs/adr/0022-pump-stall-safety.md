@@ -341,6 +341,26 @@ the wire protocol's actual reliability.
   placeholder. Needs data from a pod with a known clog episode to
   calibrate, or a longer in-field bake before enabling by default.
 
+## Addendum (2026-07-11): false trips on firmware-initiated pump stops
+
+Field report (Pod 4): the guard tripped both sides daily, always with
+`rpm = 0`, at exactly session-duration expiry and at the end of the
+scheduled daily prime. Root cause: `expectedActive` was derived solely
+from `device_state`, which mirrors the firmware through the
+`durationExpired` heuristic and can report a side as powered for
+minutes after the firmware ends a session (`currentLevel` stays
+non-zero while the water equalizes). The frzHealth frame cadence
+(~10s, not the 60s assumed in "Alternatives considered" §7) made the
+2-sample dwell a ~20s window — far shorter than the mirror lag.
+
+Fix: `DeviceStateSync` now suppresses stall counting when the stop is
+firmware-commanded, using lag-free firmware-side signals — `pump.duty
+= 0` (a genuinely stalled pump under closed-loop control is driven at
+duty > 0 while RPM reads 0), priming active or ended within 120s, the
+firmware `targetLevel` reading neutral, or the session countdown
+(`heatTime`) within 90s of its natural end. A zero-RPM frame
+mid-session with the pump still driven trips exactly as before.
+
 ## References
 
 - Incident report: Discord, 2026-05-24, free-sleep user thread.
