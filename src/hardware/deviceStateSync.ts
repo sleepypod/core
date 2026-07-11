@@ -87,6 +87,7 @@ const ANOMALY_LOG_COOLDOWN_MS = 300_000 // 5 min between repeated warnings per t
 // ── Expected-pump-stop suppression (stall guard false-trip fix) ──
 const PRIME_GRACE_MS = 120_000 // pumps spin down at prime end; RPM 0 is expected
 const SESSION_END_GRACE_S = 90 // remaining session seconds within which a stop is natural
+const SESSION_END_STALE_S = 600 // stop trusting the projected countdown this long past its end
 
 export class DeviceStateSync {
   private lastWaterLevelWrite = 0
@@ -269,9 +270,11 @@ export class DeviceStateSync {
    * session ends on the firmware side.
    */
   private isExpectedPumpStop(side: Side, duty: number | null, now: number): boolean {
-    // Firmware isn't driving the pump. A genuinely stalled pump under
-    // closed-loop control shows duty > 0 while RPM reads 0.
-    if (duty === 0) return true
+    // Duty is authoritative when the frame carries it: 0 means the firmware
+    // isn't driving the pump (commanded stop), while a driven pump (duty > 0)
+    // reading 0 RPM is exactly the stall signature — never suppress it, even
+    // inside a prime or session-end window.
+    if (duty !== null) return duty === 0
 
     // Priming spins both pumps regardless of side power; the spin-down at
     // the end of the cycle reads as RPM 0 for a few frames.
@@ -286,11 +289,15 @@ export class DeviceStateSync {
 
     // Session countdown at or past its natural end. heatingDuration is the
     // remaining seconds at poll time; project it forward so a stalled status
-    // stream can't hold suppression off after the session should have ended.
+    // stream can't hold suppression off after the session should have ended,
+    // but only within a bounded window — a snapshot that is long past its
+    // projected end must not suppress a later session's genuine stall.
     // The > 0 gate keeps firmware variants that report 0 during an active
     // session (no countdown) on the plain device_state path.
     const remaining = last.heatingDuration - (now - last.at) / 1000
-    return last.heatingDuration > 0 && remaining <= SESSION_END_GRACE_S
+    return last.heatingDuration > 0
+      && remaining <= SESSION_END_GRACE_S
+      && remaining >= -SESSION_END_STALE_S
   }
 
   /** Look up the side's commanded state and feed the pump stall guard. */

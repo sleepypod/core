@@ -354,12 +354,16 @@ non-zero while the water equalizes). The frzHealth frame cadence
 2-sample dwell a ~20s window — far shorter than the mirror lag.
 
 Fix: `DeviceStateSync` now suppresses stall counting when the stop is
-firmware-commanded, using lag-free firmware-side signals — `pump.duty
-= 0` (a genuinely stalled pump under closed-loop control is driven at
-duty > 0 while RPM reads 0), priming active or ended within 120s, the
-firmware `targetLevel` reading neutral, or the session countdown
-(`heatTime`) within 90s of its natural end. A zero-RPM frame
-mid-session with the pump still driven trips exactly as before.
+firmware-commanded, using lag-free firmware-side signals. `pump.duty`
+is authoritative when the frame carries it: 0 means a commanded stop,
+while a driven pump (duty > 0) reading 0 RPM is the stall signature
+and is never suppressed. When duty is absent, fall back to priming
+active or ended within 120s, the firmware `targetLevel` reading
+neutral, or the session countdown (`heatTimeL/R` on the wire,
+`heatingDuration` in `DeviceStatus`) within 90s of its natural end —
+bounded to 600s past the projected end so a stale snapshot cannot
+suppress a later session's genuine stall. A zero-RPM frame mid-session
+with the pump still driven trips exactly as before.
 
 ## References
 

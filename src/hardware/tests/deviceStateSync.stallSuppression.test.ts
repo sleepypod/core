@@ -164,6 +164,18 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 
+  it('duty > 0 overrides priming — a driven-but-stopped pump is a stall even mid-prime', async () => {
+    await sync.sync(status({ isPriming: true }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('duty > 0 overrides the session-end grace window', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 60 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
   it('falls back to device_state when the frame omits duty', async () => {
     sync.recordFlowData(frame({ rpm: 0 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
@@ -209,6 +221,16 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     vi.setSystemTime(new Date('2026-07-11T08:04:10Z'))
     sync.recordFlowData(frame({ rpm: 0 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+  })
+
+  it('stops trusting the projected countdown long past its end (stale snapshot)', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 300 }))
+    // 1000s later the projection is 700s past the session end — beyond the
+    // 600s staleness bound, so a genuine stall in a later session is not
+    // masked by the old snapshot.
+    vi.setSystemTime(new Date('2026-07-11T08:16:40Z'))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 
   it('does not treat heatingDuration=0 with a non-neutral target as session end', async () => {
