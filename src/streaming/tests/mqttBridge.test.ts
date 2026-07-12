@@ -649,6 +649,7 @@ describe('mqttBridge — startMqttBridge early exits', () => {
   })
 
   it('logs and stays stopped when config is disabled', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     bridgeState.runState = 'stopped'
     bridgeState.client = null
     dbMock.state.row = { mqttEnabled: false, mqttUrl: 'mqtt://x' }
@@ -657,6 +658,8 @@ describe('mqttBridge — startMqttBridge early exits', () => {
 
     expect(mqttMock.connect).not.toHaveBeenCalled()
     expect(bridgeState.runState).toBe('stopped')
+    expect(log).toHaveBeenCalledWith('[mqtt] disabled (set mqtt_enabled=true in device_settings or MQTT_ENABLED=true)')
+    log.mockRestore()
   })
 
   it('records an errored state when enabled but URL is missing', async () => {
@@ -715,12 +718,16 @@ describe('mqttBridge — startMqttBridge connect flow', () => {
   })
 
   it('publishes availability + HA discovery + subscribes on connect', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const fake = await startBridgeWithFake({ config: { haDiscovery: true } })
     fake.connected = true
     fake.emit('connect')
 
     expect(bridgeState.runState).toBe('connected')
     expect(bridgeState.lastError).toBeNull()
+    expect(log).toHaveBeenCalledWith(
+      `[mqtt] connected to mqtt://broker.local:1883 (deviceId=${deviceId()}, prefix=sleepypod)`,
+    )
 
     // First publish is availability=online retained.
     expect(fake.publish).toHaveBeenCalledWith(
@@ -743,6 +750,7 @@ describe('mqttBridge — startMqttBridge connect flow', () => {
     const haPublishes = fake.publish.mock.calls.filter(([t]) => typeof t === 'string' && (t as string).startsWith('homeassistant/'))
     expect(haPublishes.length).toBeGreaterThan(0)
 
+    log.mockRestore()
     await shutdownMqttBridge()
   })
 
@@ -795,6 +803,7 @@ describe('mqttBridge — startMqttBridge connect flow', () => {
   })
 
   it('records reconnect/close/error transitions', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const fake = await startBridgeWithFake()
     fake.connected = true
     fake.emit('connect')
@@ -802,6 +811,7 @@ describe('mqttBridge — startMqttBridge connect flow', () => {
 
     fake.emit('reconnect')
     expect(bridgeState.runState).toBe('reconnecting')
+    expect(log).toHaveBeenCalledWith('[mqtt] reconnecting…')
 
     bridgeState.runState = 'connected'
     fake.emit('close')
@@ -810,6 +820,7 @@ describe('mqttBridge — startMqttBridge connect flow', () => {
     fake.emit('error', new Error('socket gone'))
     expect(bridgeState.lastError).toBe('socket gone')
 
+    log.mockRestore()
     await shutdownMqttBridge()
   })
 })
@@ -1293,6 +1304,27 @@ describe('mqttBridge — periodic publish + shutdown edges', () => {
     }
   })
 
+  it('skips periodic DB reads while the MQTT client is disconnected', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    try {
+      const fake = await startBridgeWithFake()
+      fake.connected = true
+      fake.emit('connect')
+      await vi.advanceTimersByTimeAsync(0)
+      dbMock.select.mockClear()
+
+      fake.connected = false
+      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(dbMock.select).not.toHaveBeenCalled()
+      await shutdownMqttBridge()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('resolves shutdown even when c.end() throws synchronously', async () => {
     const fake = await startBridgeWithFake()
     fake.connected = true
@@ -1522,12 +1554,16 @@ describe('mqttBridge — safePublish counters', () => {
 
 describe('mqttBridge — shutdownMqttBridge', () => {
   it('returns immediately when bridge was never started', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     bridgeState.client = null
     bridgeState.runState = 'stopped'
     await expect(shutdownMqttBridge()).resolves.toBeUndefined()
+    expect(log).not.toHaveBeenCalled()
+    log.mockRestore()
   })
 
   it('clears the publish timer, unsubscribes the frame listener, and ends the client', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const fake = await startBridgeWithFake()
     fake.connected = true
     fake.emit('connect')
@@ -1542,6 +1578,8 @@ describe('mqttBridge — shutdownMqttBridge', () => {
     expect(bridgeState.runState).toBe('stopped')
     expect(piezoMock.unsubscribe).toHaveBeenCalled()
     expect(fake.end).toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[mqtt] shutting down…')
+    log.mockRestore()
   })
 
   it('publishes retained offline availability when shutting down a connected client', async () => {
@@ -1556,6 +1594,49 @@ describe('mqttBridge — shutdownMqttBridge', () => {
       typeof t === 'string' && (t as string).endsWith('/availability') && payload === 'offline',
     )
     expect(offlineCall).toBeDefined()
+  })
+
+  it('does not publish offline availability when the client is already disconnected', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    fake.connected = false
+    fake.publish.mockClear()
+
+    await shutdownMqttBridge()
+
+    const offlineCall = fake.publish.mock.calls.find(([t, payload]) =>
+      typeof t === 'string' && (t as string).endsWith('/availability') && payload === 'offline',
+    )
+    expect(offlineCall).toBeUndefined()
+  })
+
+  it('waits for the 500ms offline-publish fallback before ending the client', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const fake = await startBridgeWithFake()
+      fake.connected = true
+      fake.emit('connect')
+      fake.publish.mockImplementation(() => fake)
+
+      let settled = false
+      const shutdown = shutdownMqttBridge().then(() => {
+        settled = true
+      })
+
+      await vi.advanceTimersByTimeAsync(499)
+      expect(settled).toBe(false)
+      expect(fake.end).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+      await shutdown
+
+      expect(settled).toBe(true)
+      expect(fake.end).toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('swallows errors from the unsubscribe callback', async () => {
@@ -2155,5 +2236,31 @@ describe('mqttBridge — testConnection TLS option matrix (mutation coverage)', 
 
     const [, opts] = mqttMock.connect.mock.calls.at(-1) as unknown as [string, any]
     expect(opts.rejectUnauthorized).toBeUndefined()
+  })
+
+  it('resolves with connect timeout only after the 5500ms fallback expires', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const fake = createFakeClient()
+      mqttMock.state.nextClient = fake
+
+      let result: Awaited<ReturnType<typeof testConnection>> | undefined
+      const promise = testConnection({ url: 'mqtt://slow' }).then((r) => {
+        result = r
+      })
+
+      await vi.advanceTimersByTimeAsync(5_499)
+      expect(result).toBeUndefined()
+      expect(fake.end).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+      await promise
+
+      expect(result).toEqual({ ok: false, error: 'connect timeout' })
+      expect(fake.end).toHaveBeenCalledWith(true)
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })
