@@ -20,12 +20,15 @@ describe('scheduleTime', () => {
     expect(formatTime12h('00:00')).toBe('12:00 AM')
     expect(formatTime12h('12:00')).toBe('12:00 PM')
     expect(formatTime12h('23:45')).toBe('11:45 PM')
+    expect(formatTime12h('7')).toBe('7:00 AM')
+    expect(formatTime12h('bad')).toBe('bad')
   })
 
   it('calculates wrapped and same-day durations', () => {
     expect(calcDuration('07:00', '09:30')).toBe('2h 30m')
     expect(calcDuration('22:00', '07:00')).toBe('9h 0m')
     expect(calcDuration('bad', '07:00')).toBe('—')
+    expect(calcDuration('07:00', 'bad')).toBe('—')
   })
 
   it('checks same-day and overnight windows', () => {
@@ -34,6 +37,12 @@ describe('scheduleTime', () => {
     expect(isInWindow(23 * 60, '22:00', '07:00')).toBe(true)
     expect(isInWindow(6 * 60, '22:00', '07:00')).toBe(true)
     expect(isInWindow(12 * 60, '22:00', '07:00')).toBe(false)
+  })
+
+  it('rejects windows with a NaN clock or unparseable bounds', () => {
+    expect(isInWindow(Number.NaN, '07:00', '09:00')).toBe(false)
+    expect(isInWindow(8 * 60, 'bad', '09:00')).toBe(false)
+    expect(isInWindow(8 * 60, '07:00', 'bad')).toBe(false)
   })
 
   it('treats local pre-4am as the previous schedule day', () => {
@@ -51,5 +60,7 @@ describe('scheduleTime', () => {
   it('gets the schedule day in a timezone', () => {
     const earlyLa = new Date('2026-07-01T10:30:00.000Z') // 03:30 Wednesday America/Los_Angeles
     expect(getCurrentDayForTimezone('America/Los_Angeles', earlyLa)).toBe('tuesday')
+    const afternoonLa = new Date('2026-07-01T22:30:00.000Z') // 15:30 Wednesday America/Los_Angeles
+    expect(getCurrentDayForTimezone('America/Los_Angeles', afternoonLa)).toBe('wednesday')
   })
 })

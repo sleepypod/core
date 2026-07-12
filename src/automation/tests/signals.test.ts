@@ -11,6 +11,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 }))
 
 import {
+  CompositeSignalReader,
   DeviceSignalReader,
   clockInTimezone,
   collectWindowSignals,
@@ -119,6 +120,22 @@ describe('DeviceSignalReader', () => {
   })
 })
 
+describe('CompositeSignalReader', () => {
+  it('merges reader snapshots in order, with later readers winning collisions', () => {
+    const first = { read: () => ({ 'left.movement': 1, 'water.low': 1 }) }
+    const second = { read: () => ({ 'water.low': 0, 'ambient.light': 12 }) }
+    expect(new CompositeSignalReader([first, second]).read()).toEqual({
+      'left.movement': 1,
+      'water.low': 0,
+      'ambient.light': 12,
+    })
+  })
+
+  it('returns an empty snapshot with no readers', () => {
+    expect(new CompositeSignalReader([]).read()).toEqual({})
+  })
+})
+
 describe('collectWindowSignals', () => {
   const win = (signal: string): Expr => ({ kind: 'window', fn: 'avg', signal, lastMin: 10 })
   const lit = (value: number): Expr => ({ kind: 'literal', value })
@@ -163,6 +180,18 @@ describe('collectWindowSignals', () => {
       ],
     })]
     expect(collectWindowSignals(rules)).toEqual(new Set(['ambient.temperature', 'left.breathingRate']))
+  })
+
+  it('collects window keys from both operands of a binary expression', () => {
+    const cond: Condition = {
+      kind: 'compare',
+      op: '>',
+      left: { kind: 'binary', op: '-', left: win('left.surfaceTemp'), right: win('ambient.temperature') },
+      right: lit(5),
+    }
+    expect(collectWindowSignals([rule({ conditions: cond })])).toEqual(
+      new Set(['left.surfaceTemp', 'ambient.temperature']),
+    )
   })
 
   it('ignores disabled rules', () => {
