@@ -1,5 +1,5 @@
 ---
-name: mutation-week
+name: mutation-hitlist
 description: Work the weekly mutation-testing hit list (issue #591) — look up the top surviving file, pull the full survivor list from CI artifacts, write killing tests, verify with a scoped Stryker run, and report back. Use when asked to "address this week's mutation testing", "work the hit list", or kill surviving mutants.
 ---
 
@@ -27,7 +27,7 @@ Each shard uploads `mutation-report-<shard>` containing `mutation.json`:
 ```bash
 cd $(mktemp -d)
 gh run download <RUN_ID> --repo sleepypod/core -n mutation-report-<shard>
-python3 <repo>/.claude/skills/mutation-week/survivors.py mutation.json <fileBasename>
+python3 <repo>/.claude/skills/mutation-hitlist/survivors.py mutation.json <fileBasename>
 ```
 
 Shard names: `hardware-lib`, `homekit`, `hooks`, `server`,
