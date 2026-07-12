@@ -11,9 +11,9 @@
  *   t2  TargetHeatingCoolingState.onSet → reads stale 70°F target  │ concurrent
  *   t3  setPower(side, true, 70) → setTemperature(side, 70)       ──┘
  *
- * This module funnels every hardware write through a per-side promise queue,
- * and keeps an in-process cache of the user's last requested target so the
- * power-on path doesn't depend on firmware preserving targetTemperature
+ * This module funnels every hardware write through the shared per-side hardware
+ * lock, and keeps an in-process cache of the user's last requested target so
+ * the power-on path doesn't depend on firmware preserving targetTemperature
  * across off-cycles.
  */
 
@@ -21,6 +21,8 @@ import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { getAutomationEngineIfRunning } from '@/src/automation'
+import { withSideLock } from '@/src/hardware/sideLock'
 
 const lastTargetF: Record<Side, number | null> = { left: null, right: null }
 
@@ -30,15 +32,8 @@ const lastTargetF: Record<Side, number | null> = { left: null, right: null }
 // the pre-toggle value and silently swallow the queued setTemperature.
 const intendedPower: Record<Side, boolean | null> = { left: null, right: null }
 
-const sideQueues: Record<Side, Promise<unknown>> = {
-  left: Promise.resolve(),
-  right: Promise.resolve(),
-}
-
-function serialize<T>(side: Side, fn: () => Promise<T>): Promise<T> {
-  const next = sideQueues[side].then(fn, fn)
-  sideQueues[side] = next.catch(() => undefined)
-  return next
+function registerManualOverride(side: Side): void {
+  getAutomationEngineIfRunning()?.registerManualOverride(side)
 }
 
 async function logged<T>(label: string, fn: () => Promise<T>): Promise<T> {
@@ -78,6 +73,24 @@ export function isEffectivelyPowered(monitor: DacMonitor, side: Side): boolean {
 }
 
 /**
+ * Reconcile the intent latch with observed firmware state. Once firmware
+ * reports the side in the intended power state, the intent has been realized
+ * and firmware becomes the source of truth again. Without this, the latch
+ * shadowed every external power transition (scheduler off, auto-off, pump
+ * stall guard) forever: isEffectivelyPowered kept reporting stale ON and
+ * setTargetTemperature could re-heat a bed the scheduler had shut off.
+ * While intent and status still disagree, the write is presumed in flight
+ * (status lags a poll interval) and the latch is kept.
+ */
+export function reconcileIntendedPower(status: DeviceStatus, side: Side): void {
+  const intended = intendedPower[side]
+  if (intended === null) return
+  if (isPoweredFromStatus(status, side) === intended) {
+    intendedPower[side] = null
+  }
+}
+
+/**
  * Resolve the target setpoint to use when powering a side back on.
  * Cache wins because firmware may not preserve targetTemperature across
  * a level=0 (off) write. Falls back to the last firmware status, then to
@@ -90,7 +103,7 @@ export function getStagedTargetF(monitor: DacMonitor, side: Side): number {
   const status = monitor.getLastStatus()
   if (!status) return TEMP_NEUTRAL
   const s = side === 'left' ? status.leftSide : status.rightSide
-  return s.targetTemperature
+  return s.targetTemperature ?? TEMP_NEUTRAL
 }
 
 /**
@@ -111,10 +124,11 @@ export async function setTargetTemperature(
 ): Promise<void> {
   const f = clampF(requestedF)
   lastTargetF[side] = f
-  await serialize(side, async () => {
+  await withSideLock(side, async () => {
     const intended = intendedPower[side]
     const powered = intended !== null ? intended : isCurrentlyPowered(monitor, side)
     if (!powered) return
+    registerManualOverride(side)
     await logged(
       `setTemperature(${side}, ${f})`,
       () => getSharedHardwareClient().setTemperature(side, f),
@@ -135,9 +149,10 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
   const prev = intendedPower[side]
   intendedPower[side] = true
   try {
-    await serialize(side, async () => {
+    await withSideLock(side, async () => {
       const target = clampF(getStagedTargetF(monitor, side))
       lastTargetF[side] = target
+      registerManualOverride(side)
       await logged(
         `setPower(${side}, true, ${target})`,
         () => getSharedHardwareClient().setPower(side, true, target),
@@ -154,9 +169,12 @@ export async function setSidePowerOff(monitor: DacMonitor, side: Side): Promise<
   const prev = intendedPower[side]
   intendedPower[side] = false
   try {
-    await serialize(side, () => logged(
+    await withSideLock(side, () => logged(
       `setPower(${side}, false)`,
-      () => getSharedHardwareClient().setPower(side, false),
+      () => {
+        registerManualOverride(side)
+        return getSharedHardwareClient().setPower(side, false)
+      },
     ))
   }
   catch (e) {
@@ -166,7 +184,7 @@ export async function setSidePowerOff(monitor: DacMonitor, side: Side): Promise<
 }
 
 /**
- * Test-only: clear cached target and reset the side queues.
+ * Test-only: clear cached target and intent state.
  * Module-level state survives across tests in the same file otherwise.
  */
 export function __resetSideController(): void {
@@ -174,6 +192,4 @@ export function __resetSideController(): void {
   lastTargetF.right = null
   intendedPower.left = null
   intendedPower.right = null
-  sideQueues.left = Promise.resolve()
-  sideQueues.right = Promise.resolve()
 }

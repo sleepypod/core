@@ -60,7 +60,11 @@ export const rawRouter = router({
     }),
 
   deleteFile: publicProcedure
-    .meta({ openapi: { method: 'POST', path: '/raw/files/delete', protect: true, tags: ['Raw'] } })
+    // protect:false like every other route — there is no auth middleware, so
+    // protect:true only lied in the OpenAPI doc. The API's trust model is
+    // LAN-only (see src/server/openapi.ts); destructive operations rely on
+    // the pod not being internet-reachable, not on per-route auth.
+    .meta({ openapi: { method: 'POST', path: '/raw/files/delete', protect: false, tags: ['Raw'] } })
     .input(z.object({ filename: z.string() }).strict())
     .output(z.object({ deleted: z.boolean(), message: z.string() }))
     .mutation(async ({ input }) => {

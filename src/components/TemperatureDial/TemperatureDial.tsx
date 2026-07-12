@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { colorForDelta, glowColorForDelta, TEMP, tempFToOffset, offsetDisplay, theme } from '@/src/lib/tempColors'
-import { formatTemp } from '@/src/lib/tempUtils'
+import { displayToSetpointF, formatSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 
 // Dial geometry — matches iOS TemperatureDialView
 const DIAL_SIZE = 280
@@ -31,6 +31,8 @@ interface TemperatureDialProps {
   onTemperatureChange: (tempF: number) => void
   /** Called when drag ends (for committing the final value) */
   onTemperatureCommit?: (tempF: number) => void
+  /** User display unit; hardware values remain Fahrenheit. */
+  unit?: TempUnit
 }
 
 /** Convert degrees to radians. */
@@ -73,6 +75,7 @@ export function TemperatureDial({
   isOn,
   onTemperatureChange,
   onTemperatureCommit,
+  unit = 'F',
 }: TemperatureDialProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -85,10 +88,13 @@ export function TemperatureDial({
     else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') delta = -1
     if (delta === 0) return
     e.preventDefault()
-    const newTemp = Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, targetTempF + delta))
+    const displayValue = setpointFToDisplay(targetTempF, unit) ?? targetTempF
+    const nextDisplay = displayValue + delta
+    const converted = displayToSetpointF(nextDisplay, unit) ?? targetTempF
+    const newTemp = Math.round(Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, converted)))
     onTemperatureChange(newTemp)
     onTemperatureCommit?.(newTemp)
-  }, [isOn, targetTempF, onTemperatureChange, onTemperatureCommit])
+  }, [isOn, targetTempF, unit, onTemperatureChange, onTemperatureCommit])
 
   const targetProgress = tempToProgress(targetTempF)
   const currentProgress = tempToProgress(currentTempF)
@@ -215,7 +221,7 @@ export function TemperatureDial({
         aria-valuemin={TEMP.MIN_F}
         aria-valuemax={TEMP.MAX_F}
         aria-valuenow={targetTempF}
-        aria-valuetext={`${targetTempF}°F`}
+        aria-valuetext={formatSetpointF(targetTempF, unit)}
         tabIndex={isOn ? 0 : -1}
       >
         {/* Background track (full arc) */}
@@ -337,7 +343,7 @@ export function TemperatureDial({
                         fontVariantNumeric: 'tabular-nums',
                       }}
                     >
-                      {formatTemp(targetTempF)}
+                      {formatSetpointF(targetTempF, unit)}
                     </span>
 
                     {/* Offset + current temp */}
@@ -356,7 +362,7 @@ export function TemperatureDial({
                       <span style={{ color: theme.textMuted, fontSize: 13 }}>
                         Now
                         {' '}
-                        {formatTemp(currentTempF)}
+                        {formatSetpointF(currentTempF, unit)}
                       </span>
                     </div>
                   </>

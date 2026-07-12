@@ -2,6 +2,9 @@
 
 import { Clock } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { calcDuration, formatTime12h } from '@/src/lib/scheduleTime'
+
+export { calcDuration, formatTime12h }
 
 interface TimeInputProps {
   label: string
@@ -37,31 +40,4 @@ export function TimeInput({ label, value, onChange, disabled = false, icon, acce
       </div>
     </div>
   )
-}
-
-/**
- * Format HH:MM to 12-hour display string.
- */
-export function formatTime12h(time: string): string {
-  const [hourStr, minuteStr] = time.split(':')
-  const hour = parseInt(hourStr, 10)
-  const minute = minuteStr ?? '00'
-  if (isNaN(hour)) return time
-  const period = hour >= 12 ? 'PM' : 'AM'
-  const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour
-  return `${displayHour}:${minute} ${period}`
-}
-
-/**
- * Calculate duration between two HH:MM times (handles overnight).
- */
-export function calcDuration(onTime: string, offTime: string): string {
-  const [onH, onM] = onTime.split(':').map(Number)
-  const [offH, offM] = offTime.split(':').map(Number)
-  if (isNaN(onH) || isNaN(onM) || isNaN(offH) || isNaN(offM)) return '—'
-  let totalMinutes = (offH * 60 + offM) - (onH * 60 + onM)
-  if (totalMinutes < 0) totalMinutes += 24 * 60
-  const hours = Math.floor(totalMinutes / 60)
-  const mins = totalMinutes % 60
-  return `${hours}h ${mins}m`
 }

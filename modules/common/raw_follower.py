@@ -88,10 +88,20 @@ class RawFileFollower:
                 continue
 
             if latest != self._path:
+                # Open before closing the old handle: the file can rotate
+                # away between _find_latest() and open(), and an unhandled
+                # FileNotFoundError here used to kill the whole module.
+                try:
+                    new_file = open(latest, "rb")
+                except OSError as e:
+                    log.warning("RAW file %s vanished before open (%s); retrying",
+                                latest.name, e)
+                    time.sleep(self._poll_interval)
+                    continue
                 log.info("Switched to RAW file: %s", latest.name)
                 if self._file:
                     self._file.close()
-                self._file = open(latest, "rb")
+                self._file = new_file
                 self._path = latest
                 self._last_pos = 0
                 self._consecutive_failures = 0

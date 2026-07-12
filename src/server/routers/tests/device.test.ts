@@ -62,6 +62,11 @@ const pumpStallNotificationMock = vi.hoisted(() => ({
   getAllPumpStallNotices: vi.fn<() => { left: unknown, right: unknown }>(() => ({ left: null, right: null })),
 }))
 
+const automationMock = vi.hoisted(() => ({
+  registerManualOverride: vi.fn(),
+  getAutomationEngineIfRunning: vi.fn(() => ({ registerManualOverride: automationMock.registerManualOverride })),
+}))
+
 const dbState = vi.hoisted(() => ({
   rowsQueue: [] as unknown[][],
   pop(): unknown[] { return dbState.rowsQueue.shift() ?? [] },
@@ -126,6 +131,7 @@ vi.mock('@/src/hardware/sharedClient', () => ({ getSharedHardwareClient: sharedC
 vi.mock('@/src/hardware/deviceStateSync', () => stateSyncMock)
 vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/hardware/pumpStallNotification', () => pumpStallNotificationMock)
+vi.mock('@/src/automation', () => ({ getAutomationEngineIfRunning: automationMock.getAutomationEngineIfRunning }))
 vi.mock('@/src/db', () => ({
   db: dbMock,
   biometricsDb: biometricsDbMock,
@@ -133,6 +139,7 @@ vi.mock('@/src/db', () => ({
 vi.mock('@/src/hardware/wifi', () => wifiMock)
 
 const { deviceRouter } = await import('@/src/server/routers/device')
+const { withSideLock } = await import('@/src/hardware/sideLock')
 const caller = deviceRouter.createCaller({})
 
 beforeEach(() => {
@@ -163,6 +170,8 @@ beforeEach(() => {
   stateSyncMock.markSideMutated.mockReset()
   pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
   pumpStallNotificationMock.getAllPumpStallNotices.mockReset().mockReturnValue({ left: null, right: null })
+  automationMock.registerManualOverride.mockReset()
+  automationMock.getAutomationEngineIfRunning.mockClear()
   dbState.rowsQueue.length = 0
   dbMock.select.mockClear()
   dbMock.update.mockClear()
@@ -189,6 +198,20 @@ describe('device.getStatus', () => {
     const result = await caller.getStatus({ unit: 'C' })
     // 80°F → 26.7°C (rounded to one decimal by router)
     expect(result.leftSide.currentTemperature).toBeCloseTo(26.7, 1)
+  })
+
+  it('passes null temps through for an off side (no phantom 83°F)', async () => {
+    // The parser returns null for a level-0 (off) side; getStatus must surface
+    // that null rather than the 82.5°F→83°F neutral readback.
+    helpersMock.client.getDeviceStatus.mockResolvedValueOnce({
+      leftSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0, targetLevel: 0, heatingDuration: 0 },
+      rightSide: { currentTemperature: 72, targetTemperature: 75, currentLevel: -35, targetLevel: -25, heatingDuration: 0 },
+      waterLevel: 'ok', isPriming: false, podVersion: 'J00', sensorLabel: 'X', gestures: undefined,
+    })
+    const result = await caller.getStatus({})
+    expect(result.leftSide.targetTemperature).toBeNull()
+    expect(result.leftSide.currentTemperature).toBeNull()
+    expect(result.rightSide.targetTemperature).toBe(75)
   })
 
   it('exposes pumpStallNotifications when one side has an active notice', async () => {
@@ -270,6 +293,35 @@ describe('device.getStatus', () => {
 })
 
 describe('device.setTemperature', () => {
+  it('waits behind an existing shared side lock before writing hardware', async () => {
+    vi.useFakeTimers()
+    let releaseLock: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      releaseLock = resolve
+    }))
+    await Promise.resolve()
+
+    try {
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
+      await vi.advanceTimersByTimeAsync(250)
+      await Promise.resolve()
+
+      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+
+      releaseLock()
+      await holder
+      await promise
+
+      expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('left', 70, undefined)
+    }
+    finally {
+      releaseLock()
+      await holder.catch(() => {})
+      vi.useRealTimers()
+    }
+  })
+
   it('debounces and resolves after timer fires', async () => {
     vi.useFakeTimers()
     try {
@@ -284,6 +336,7 @@ describe('device.setTemperature', () => {
       expect(helpersMock.client.setTemperature).toHaveBeenCalledTimes(1)
       expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalled()
       expect(stateSyncMock.markSideMutated).toHaveBeenCalledWith('left')
+      expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
     }
     finally {
       vi.useRealTimers()
@@ -294,6 +347,7 @@ describe('device.setTemperature', () => {
     pumpStallMock.shouldBlock.mockReturnValueOnce(true)
     await expect(caller.setTemperature({ side: 'left', temperature: 70 })).rejects.toThrow(/Pump stall protection active/)
     expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
   })
 
   it('swallows DB sync errors so the timer still fires', async () => {
@@ -359,6 +413,8 @@ describe('device.setTemperature', () => {
       // Only the second call's value reaches hardware
       expect(helpersMock.client.setTemperature).toHaveBeenCalledTimes(1)
       expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('left', 75, undefined)
+      expect(automationMock.registerManualOverride).toHaveBeenCalledTimes(2)
+      expect(automationMock.registerManualOverride).toHaveBeenLastCalledWith('left')
     }
     finally {
       vi.useRealTimers()
@@ -367,12 +423,43 @@ describe('device.setTemperature', () => {
 })
 
 describe('device.setPower', () => {
+  it('waits behind an existing shared side lock without blocking the opposite side', async () => {
+    let releaseLeft: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      releaseLeft = resolve
+    }))
+    await Promise.resolve()
+
+    try {
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      const left = caller.setPower({ side: 'left', powered: true, temperature: 72 })
+      await Promise.resolve()
+      expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      await caller.setPower({ side: 'right', powered: true, temperature: 73 })
+      expect(helpersMock.client.setPower).toHaveBeenCalledWith('right', true, 73)
+      expect(helpersMock.client.setPower).not.toHaveBeenCalledWith('left', true, 72)
+
+      releaseLeft()
+      await holder
+      await left
+
+      expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 72)
+    }
+    finally {
+      releaseLeft()
+      await holder.catch(() => {})
+    }
+  })
+
   it('powers on with the provided temperature, broadcasts, syncs DB', async () => {
     dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
 
     const result = await caller.setPower({ side: 'left', powered: true, temperature: 72 })
     expect(result).toEqual({ success: true })
     expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 72)
+    expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', expect.objectContaining({
       targetTemperature: 72,
     }))
@@ -383,6 +470,7 @@ describe('device.setPower', () => {
 
     await caller.setPower({ side: 'left', powered: false })
     expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', false, undefined)
+    expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
   })
 
@@ -390,6 +478,7 @@ describe('device.setPower', () => {
     pumpStallMock.shouldBlock.mockReturnValueOnce(true)
     await expect(caller.setPower({ side: 'left', powered: true, temperature: 72 })).rejects.toThrow(/Pump stall protection active/)
     expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
   })
 
   it('allows powering off even when pump stall guard is active', async () => {

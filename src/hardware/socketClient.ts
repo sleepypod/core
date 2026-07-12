@@ -102,6 +102,15 @@ export class SocketClient {
 
     return this.queue.exec(async () => {
       try {
+        // A response to an earlier timed-out command may still be buffered;
+        // pairing it with this command would misalign every response after
+        // it. Commands are strictly sequential, so anything buffered here
+        // is stale by definition.
+        const stale = this.messageStream.discardBuffered()
+        if (stale > 0) {
+          console.warn(`Discarded ${stale} stale response(s) before sending ${command}`)
+        }
+
         // Remove newlines to prevent protocol injection attacks.
         // Hardware uses \n as delimiter, so embedded newlines would
         // corrupt the message framing.

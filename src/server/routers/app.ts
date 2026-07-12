@@ -15,6 +15,7 @@ import { runOnceRouter } from './runOnce'
 import { mqttRouter } from './mqtt'
 import { homekitRouter } from './homekit'
 import { archivePushRouter } from './archivePush'
+import { automationsRouter } from './automations'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -41,6 +42,7 @@ export const appRouter = router({
   mqtt: mqttRouter,
   homekit: homekitRouter,
   archivePush: archivePushRouter,
+  automations: automationsRouter,
 })
 
 export type AppRouter = typeof appRouter

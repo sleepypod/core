@@ -165,6 +165,19 @@ for svc in sleepypod sleepypod-piezo-processor sleepypod-sleep-detector \
     'systemctl show -p Environment "$1.service" | sed "s/^Environment=//" | tr " " "\n" | grep -E "^RAW_DATA_DIR=" || true' _ "$svc"
 done
 
+# Which RAW file the WebSocket streamer actually attached to. It only tails
+# while a Sensors/debug client is connected. "Switched to RAW file: SEQNO.RAW"
+# followed by "Resync:" spam is the classic wrong-file symptom (attaching to
+# the 16-byte counter instead of a real capture) — only DEV shows in the tab.
+capture "raw/ws-3001.txt"          bash -c 'ss -ltn 2>/dev/null | grep -q ":3001 " && echo "port 3001 listening" || echo "port 3001 NOT listening"'
+capture "raw/sensorstream-log.txt" bash -c 'journalctl -u sleepypod.service -b --no-pager 2>/dev/null | grep -iE "\[sensorStream\]" | tail -40'
+
+# Retention: gzip cold-archive size vs disk. A large archive next to a
+# near-full /persistent means the pruner has stalled — the usual cause of
+# "No space left on device" on update. Pruner/archiver journals are captured
+# above under journals/.
+capture "raw/archive-size.txt" bash -c 'du -sh /persistent/biometrics-archive 2>/dev/null; echo "gz files: $(find /persistent/biometrics-archive -maxdepth 1 -type f -name "*.gz" 2>/dev/null | wc -l)"; df -h /persistent 2>/dev/null'
+
 # --- install log ---------------------------------------------------------
 if [ -f "$INSTALL_LOG" ]; then
   cp "$INSTALL_LOG" "$STAGE/sleepypod-install.log"

@@ -41,6 +41,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => {
 import {
   __test__,
   broadcastFrame,
+  findLatestRaw,
   getLatestCapSenseSnapshot,
   onServerFrame,
   startPiezoStreamServer,
@@ -51,6 +52,9 @@ const {
   appendFrameIndex,
   cleanupClient,
   sendWithBackpressure,
+  readRawRecord,
+  findIndexEntry,
+  decodeSensorFrames,
   frameIndex,
   clientSubscriptions,
   clientDroppedFrames,
@@ -332,6 +336,161 @@ function int32Buffer(values: number[]): Buffer {
 }
 
 // ---------------------------------------------------------------------------
+// readRawRecord — direct parser tests (byte-level CBOR framing)
+// ---------------------------------------------------------------------------
+
+/** Assemble an outer record from raw parts, bypassing the seq-value helper. */
+function outerRecord(seqBytes: Buffer, dataBytes: Buffer): Buffer {
+  return Buffer.concat([
+    Buffer.from([0xa2]),
+    Buffer.from([0x63, 0x73, 0x65, 0x71]), // "seq"
+    seqBytes,
+    Buffer.from([0x64, 0x64, 0x61, 0x74, 0x61]), // "data"
+    dataBytes,
+  ])
+}
+
+describe('piezoStream — readRawRecord CBOR parser', () => {
+  const innerBlob = Buffer.from(innerEncoder.encode({ type: 'log', ts: 1, msg: 'x' }))
+
+  it('parses a record, returning the exact inner bytes and nextOffset', () => {
+    const rec = outerRecord(encodeSeqValue(1), encodeByteString(innerBlob))
+    const { data, nextOffset } = readRawRecord(rec, 0)
+    expect(nextOffset).toBe(rec.length)
+    expect(data).not.toBeNull()
+    expect((data as Buffer).equals(innerBlob)).toBe(true)
+  })
+
+  it('parses records at a nonzero offset', () => {
+    const rec = outerRecord(encodeSeqValue(1), encodeByteString(innerBlob))
+    const padded = Buffer.concat([Buffer.alloc(7, 0xee), rec])
+    const { data, nextOffset } = readRawRecord(padded, 7)
+    expect(nextOffset).toBe(padded.length)
+    expect((data as Buffer).equals(innerBlob)).toBe(true)
+  })
+
+  it('throws RangeError("Incomplete record") when the buffer is truncated', () => {
+    const rec = outerRecord(encodeSeqValue(1), encodeByteString(innerBlob))
+    // Truncate at every prefix length — all must signal "wait for more data".
+    for (const cut of [0, 1, 4, 5, 9, 10, rec.length - 1]) {
+      expect(() => readRawRecord(rec.subarray(0, cut), 0))
+        .toThrow(new RangeError('Incomplete record'))
+    }
+  })
+
+  it('rejects a wrong outer-map marker with the offending byte in the message', () => {
+    const rec = outerRecord(encodeSeqValue(1), encodeByteString(innerBlob))
+    rec[0] = 0xa3
+    expect(() => readRawRecord(rec, 0)).toThrow('Expected outer map 0xa2, got 0xa3')
+  })
+
+  it('rejects a record when any single byte of the "seq" key is wrong', () => {
+    for (let i = 0; i < 4; i++) {
+      const rec = outerRecord(encodeSeqValue(1), encodeByteString(innerBlob))
+      rec[1 + i] ^= 0xff
+      expect(() => readRawRecord(rec, 0)).toThrow('Expected seq key')
+    }
+  })
+
+  it('rejects a seq value that is not an unsigned int', () => {
+    // 0x20 = major type 1 (negative int) — same length as the inline uint it replaces.
+    const rec = outerRecord(Buffer.from([0x20]), encodeByteString(innerBlob))
+    expect(() => readRawRecord(rec, 0)).toThrow('seq must be unsigned int, got major type 1')
+  })
+
+  it('accepts every seq integer encoding width', () => {
+    const seqEncodings: Buffer[] = [
+      Buffer.from([0x17]), // inline 23
+      Buffer.from([0x18, 0xff]), // 1-byte
+      Buffer.from([0x19, 0x01, 0x2c]), // 2-byte (300)
+      Buffer.from([0x1a, 0x00, 0x01, 0x11, 0x70]), // 4-byte (70000)
+      Buffer.from([0x1b, 0, 0, 0, 0, 0, 0, 0, 1]), // 8-byte
+    ]
+    for (const seqBytes of seqEncodings) {
+      const rec = outerRecord(seqBytes, encodeByteString(innerBlob))
+      const { data, nextOffset } = readRawRecord(rec, 0)
+      expect(nextOffset).toBe(rec.length)
+      expect((data as Buffer).equals(innerBlob)).toBe(true)
+    }
+  })
+
+  it('rejects an unsupported seq encoding', () => {
+    const rec = outerRecord(Buffer.from([0x1c]), encodeByteString(innerBlob))
+    expect(() => readRawRecord(rec, 0)).toThrow('Unexpected seq encoding: 0x1c')
+  })
+
+  it('rejects a record when any single byte of the "data" key is wrong', () => {
+    for (let i = 0; i < 5; i++) {
+      const rec = outerRecord(encodeSeqValue(1), encodeByteString(innerBlob))
+      rec[6 + i] ^= 0xff // seq value for seq=1 is 1 byte → data key starts at 6
+      expect(() => readRawRecord(rec, 0)).toThrow('Expected data key')
+    }
+  })
+
+  it('accepts every data byte-string length encoding, including the 23-byte inline boundary', () => {
+    for (const len of [0x17, 0x18, 300, 70000]) {
+      const payload = Buffer.alloc(len, 0xab)
+      const rec = outerRecord(encodeSeqValue(1), encodeByteString(payload))
+      const { data, nextOffset } = readRawRecord(rec, 0)
+      expect(nextOffset).toBe(rec.length)
+      expect((data as Buffer).length).toBe(len)
+      expect((data as Buffer).equals(payload)).toBe(true)
+    }
+  })
+
+  it('rejects an unsupported data length encoding', () => {
+    // 0x5b = byte string with 8-byte length (ai=27) — parser supports up to ai=26.
+    const rec = outerRecord(
+      encodeSeqValue(1),
+      Buffer.concat([Buffer.from([0x5b, 0, 0, 0, 0, 0, 0, 0, 1]), Buffer.alloc(1)]),
+    )
+    expect(() => readRawRecord(rec, 0)).toThrow('Unsupported length encoding: 27')
+  })
+
+  it('returns data:null (not an empty buffer) for zero-length placeholder records', () => {
+    const rec = outerRecord(encodeSeqValue(1), Buffer.from([0x40]))
+    const { data, nextOffset } = readRawRecord(rec, 0)
+    expect(data).toBeNull()
+    expect(nextOffset).toBe(rec.length)
+  })
+})
+
+describe('piezoStream — decodeSensorFrames', () => {
+  it('skips non-object and null inner values without aborting the batch', () => {
+    // A primitive before a valid frame: if the type guard regresses, the
+    // `'type' in` check throws and the whole batch is lost.
+    const inner = Buffer.concat([
+      Buffer.from(innerEncoder.encode(42)),
+      Buffer.from(innerEncoder.encode(null)),
+      Buffer.from(innerEncoder.encode({ type: 'log', ts: 1, msg: 'x' })),
+    ])
+    expect(decodeSensorFrames(inner)).toEqual([{ type: 'log', ts: 1, msg: 'x' }])
+  })
+})
+
+describe('piezoStream — findIndexEntry binary search', () => {
+  beforeEach(() => {
+    resetFrameIndex()
+  })
+
+  it('returns -1 when nothing is indexed', () => {
+    expect(findIndexEntry(123)).toBe(-1)
+  })
+
+  it('finds the entry at or just before the target timestamp', () => {
+    for (const [i, ts] of [10, 20, 30].entries()) {
+      appendFrameIndex({ ts, offset: i * 100 })
+    }
+    expect(findIndexEntry(5)).toBe(0) // before all → first entry
+    expect(findIndexEntry(10)).toBe(0)
+    expect(findIndexEntry(20)).toBe(1)
+    expect(findIndexEntry(25)).toBe(1)
+    expect(findIndexEntry(30)).toBe(2)
+    expect(findIndexEntry(99)).toBe(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Server-side listener fan-out / broadcastFrame gating
 // ---------------------------------------------------------------------------
 
@@ -450,8 +609,15 @@ describe('piezoStream — server lifecycle and protocol', () => {
 
   afterEach(async () => {
     await shutdownPiezoStreamServer()
+    vi.restoreAllMocks()
   })
 
+  // IMPORTANT: write RAW data only AFTER the client has connected. The tailing
+  // loop broadcasts live frames to currently-connected clients only (no
+  // backfill) and advances its read offset to EOF on the first tick. Writing
+  // before connect races that first tick — under load the loop consumes the
+  // file before the socket attaches and the frames are lost for good. Appending
+  // post-connect mirrors production (firmware appends while clients stream).
   function startAndPort(): number {
     const wss = startPiezoStreamServer()
     const addr = wss.address()
@@ -479,11 +645,26 @@ describe('piezoStream — server lifecycle and protocol', () => {
   })
 
   it('subscribe with valid sensors → server filters subscription set', async () => {
+    const logSpy = vi.spyOn(console, 'log')
     const port = startAndPort()
     const client = await connectClient(port)
     client.ws.send(JSON.stringify({ type: 'subscribe', sensors: ['piezo-dual', 'capSense'] }))
     const ack = await client.waitFor(m => m.type === 'subscribed')
     expect(ack.sensors).toEqual(['piezo-dual', 'capSense'])
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Client subscribed to'), 'piezo-dual, capSense')
+    await client.close()
+  })
+
+  it('subscribe with an empty sensors array → subscribes to all types', async () => {
+    const logSpy = vi.spyOn(console, 'log')
+    const port = startAndPort()
+    const client = await connectClient(port)
+    client.ws.send(JSON.stringify({ type: 'subscribe', sensors: [] }))
+    const ack = await client.waitFor(m => m.type === 'subscribed')
+    expect(ack.sensors).toContain('piezo-dual')
+    expect(ack.sensors.length).toBeGreaterThan(5)
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Client subscribed to: all'))
     await client.close()
   })
 
@@ -493,6 +674,8 @@ describe('piezoStream — server lifecycle and protocol', () => {
     client.ws.send(JSON.stringify({ type: 'subscribe', sensors: ['not-a-sensor'] }))
     const err = await client.waitFor(m => m.type === 'error')
     expect(err.message).toMatch(/No valid sensor types/)
+    // The valid-types list must be spelled out, comma-separated.
+    expect(err.message).toContain('piezo-dual, capSense')
     await client.close()
   })
 
@@ -536,20 +719,57 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const port = startAndPort()
     const client = await connectClient(port)
     client.ws.send(JSON.stringify({ type: 'seek', timestamp: 1 }))
-    await client.waitFor(m => m.type === 'error')
+    const err = await client.waitFor(m => m.type === 'error')
+    expect(err.message).toMatch(/No RAW file indexed yet/)
+    await client.waitFor(m => m.type === 'seek_complete')
+    await client.close()
+  })
+
+  it('seek with a numeric-string timestamp → rejected as non-numeric', async () => {
+    const port = startAndPort()
+    const client = await connectClient(port)
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: '123' }))
+    const err = await client.waitFor(m => m.type === 'error')
+    expect(err.message).toMatch(/numeric timestamp/)
+    await client.close()
+  })
+
+  it('seek with a non-finite timestamp → rejected as non-numeric', async () => {
+    const port = startAndPort()
+    const client = await connectClient(port)
+    // 1e999 parses to Infinity on the server (JSON.stringify can't emit it).
+    client.ws.send('{"type":"seek","timestamp":1e999}')
+    const err = await client.waitFor(m => m.type === 'error')
+    expect(err.message).toMatch(/numeric timestamp/)
+    await client.close()
+  })
+
+  it('seek when the file is indexed but holds no timestamped frames → "No frames indexed yet"', async () => {
+    const filePath = path.join(tmpRawDir, 'no-ts-frames.RAW')
+    // `log` frame without ts: the follower switches to the file (indexedFilePath
+    // set) but never appends to frameIndex, so seek hits the idx < 0 branch.
+    const rec = buildOuterRecord(1, [{ type: 'log', level: 1, msg: 'no-ts' }])
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
+    await client.waitFor(m => m.type === 'log' && m.msg === 'no-ts', 3000)
+
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 123 }))
+    const err = await client.waitFor(m => m.type === 'error')
+    expect(err.message).toMatch(/No frames indexed yet/)
     await client.waitFor(m => m.type === 'seek_complete')
     await client.close()
   })
 
   it('streams parsed frames to subscribed clients and updates the time-range index', async () => {
-    // Pre-populate a RAW file so the streaming loop can pick it up immediately.
     const filePath = path.join(tmpRawDir, 'first.RAW')
     const rec1 = buildOuterRecord(1, [{ type: 'capSense', ts: 100, left: 0, right: 0 }])
     const rec2 = buildOuterRecord(2, [{ type: 'capSense2', ts: 101, left: { values: [1, 2] }, right: { values: [3, 4] } }])
-    fs.writeFileSync(filePath, Buffer.concat([rec1, rec2]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([rec1, rec2]))
 
     const cap = await client.waitFor(m => m.type === 'capSense' && m.ts === 100)
     expect(cap.left).toBe(0)
@@ -573,10 +793,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
       left1: int32Buffer([1, 2, 3]),
       right1: int32Buffer([4, 5, 6]),
     }])
-    fs.writeFileSync(filePath, rec)
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     const piezo = await client.waitFor(m => m.type === 'piezo-dual', 3000)
     expect(piezo.left1).toEqual([1, 2, 3])
     expect(piezo.right1).toEqual([4, 5, 6])
@@ -596,10 +816,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
         right: i,
       }]))
     }
-    fs.writeFileSync(filePath, Buffer.concat(records))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(records))
     // Drain initial live frames before seeking.
     await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 5)
 
@@ -617,10 +837,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'filter.RAW')
     const recA = buildOuterRecord(1, [{ type: 'capSense', ts: 300, left: 0, right: 0 }])
     const recB = buildOuterRecord(2, [{ type: 'log', ts: 301, level: 1, msg: 'x' }])
-    fs.writeFileSync(filePath, Buffer.concat([recA, recB]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([recA, recB]))
     await waitUntil(() => client.messages.some(m => m.type === 'log'))
 
     // Subscribe to only capSense, then seek.
@@ -643,13 +863,33 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const good1 = buildOuterRecord(1, [{ type: 'capSense', ts: 400, left: 0, right: 0 }])
     const garbage = Buffer.from([0xff, 0xff, 0xff, 0xff, 0x00])
     const good2 = buildOuterRecord(2, [{ type: 'capSense', ts: 401, left: 1, right: 1 }])
-    fs.writeFileSync(filePath, Buffer.concat([good1, garbage, good2]))
 
+    const warnSpy = vi.spyOn(console, 'warn')
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([good1, garbage, good2]))
 
     await client.waitFor(m => m.type === 'capSense' && m.ts === 400)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 401)
+    // The whole file lands in one poll tick, so the skip count is exactly the
+    // garbage length — the field engineers grep for this line, keep it exact.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Resync: skipped %d bytes'), garbage.length, expect.any(String))
+    await client.close()
+  })
+
+  it('resyncs when the malformed record itself starts with an 0xa2 marker', async () => {
+    // 0xa2 followed by a wrong seq key: the parser throws at the record start,
+    // and resync must search from the NEXT byte or it would re-find the same
+    // marker and never advance.
+    const filePath = path.join(tmpRawDir, 'resync-a2.RAW')
+    const bad = Buffer.from([0xa2, 0x60, 0x60, 0x60, 0x60])
+    const good = buildOuterRecord(1, [{ type: 'capSense', ts: 410, left: 0, right: 0 }])
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([bad, good]))
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 410, 3000)
     await client.close()
   })
 
@@ -657,12 +897,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'snapshot-a.RAW')
     const channels = [14.5, 14.4, 13.7, 13.6, 19.4, 19.2, 1.157, 1.157]
     const rec = buildOuterRecord(1, [{ type: 'capSense2', ts: 999, left: channels, right: channels }])
-    fs.writeFileSync(filePath, rec)
     const past = Date.now() / 1000 - 60
-    fs.utimesSync(filePath, past, past)
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
+    fs.utimesSync(filePath, past, past)
     await client.waitFor(m => m.type === 'capSense2' && m.ts === 999, 3000)
 
     const snap = getLatestCapSenseSnapshot()
@@ -686,10 +926,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'snapshot-bad.RAW')
     // Missing ts → snapshot block's type guard rejects the frame.
     const rec = buildOuterRecord(1, [{ type: 'capSense', left: 1, right: 2 }])
-    fs.writeFileSync(filePath, rec)
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     await client.waitFor(m => m.type === 'capSense', 3000)
     expect(getLatestCapSenseSnapshot()).toBeNull()
     await client.close()
@@ -698,12 +938,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
   it('switches to a newer .RAW file when one appears with a later mtime', async () => {
     // Older file with a single frame.
     const oldPath = path.join(tmpRawDir, 'old.RAW')
-    fs.writeFileSync(oldPath, buildOuterRecord(1, [{ type: 'capSense', ts: 500, left: 0, right: 0 }]))
     const past = Date.now() / 1000 - 60
-    fs.utimesSync(oldPath, past, past)
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(oldPath, buildOuterRecord(1, [{ type: 'capSense', ts: 500, left: 0, right: 0 }]))
+    fs.utimesSync(oldPath, past, past)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 500)
 
     // Newer file appears.
@@ -764,10 +1004,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     // empty-placeholder branch executes and the loop continues.
     const empty = Buffer.from([0xa2, 0x63, 0x73, 0x65, 0x71, 0x01, 0x64, 0x64, 0x61, 0x74, 0x61, 0x40])
     const real = buildOuterRecord(2, [{ type: 'capSense', ts: 800, left: 0, right: 0 }])
-    fs.writeFileSync(filePath, Buffer.concat([empty, real]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([empty, real]))
     await client.waitFor(m => m.type === 'capSense' && m.ts === 800)
     await client.close()
   })
@@ -778,11 +1018,15 @@ describe('piezoStream — server lifecycle and protocol', () => {
     // Trailing bytes contain NO 0xa2 marker — exercises the "no marker found"
     // branch where the parser drops the rest of the buffer.
     const trailing = Buffer.alloc(64, 0xff)
-    fs.writeFileSync(filePath, Buffer.concat([good, trailing]))
 
+    const warnSpy = vi.spyOn(console, 'warn')
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([good, trailing]))
     await client.waitFor(m => m.type === 'capSense' && m.ts === 900)
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('no 0xa2 marker in remaining %d bytes'),
+      trailing.length, expect.any(String))
     // Stream should continue working — append a fresh good record and confirm
     // it still gets parsed (the file follower carries on past the resync).
     await new Promise(r => setTimeout(r, 50))
@@ -801,13 +1045,13 @@ describe('piezoStream — server lifecycle and protocol', () => {
       right: { tec: { current: 2 }, pump: { mode: 'pwm', rpm: 0, water: true } },
       fan: { top: { rpm: 100 } },
     }])
-    fs.writeFileSync(filePath, rec)
 
     const cb = vi.fn()
     const unsub = onServerFrame(cb)
     try {
       const port = startAndPort()
       const client = await connectClient(port)
+      fs.writeFileSync(filePath, rec)
       await client.waitFor(m => m.type === 'frzHealth')
       expect(cb).toHaveBeenCalled()
       const arg = cb.mock.calls[0][0] as Record<string, unknown>
@@ -829,7 +1073,6 @@ describe('piezoStream — server lifecycle and protocol', () => {
       right: { tec: { current: 2 }, pump: { mode: 'pwm', rpm: 0, water: true } },
       fan: { top: { rpm: 100 } },
     }])
-    fs.writeFileSync(filePath, rec)
 
     const a = vi.fn(() => {
       throw new Error('listener boom')
@@ -840,6 +1083,7 @@ describe('piezoStream — server lifecycle and protocol', () => {
     try {
       const port = startAndPort()
       const client = await connectClient(port)
+      fs.writeFileSync(filePath, rec)
       await client.waitFor(m => m.type === 'frzHealth')
       expect(a).toHaveBeenCalled()
       expect(b).toHaveBeenCalled()
@@ -862,9 +1106,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
       left2: int32Buffer([3]),
       right2: int32Buffer([4]),
     }])
-    fs.writeFileSync(filePath, rec)
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     const piezo = await client.waitFor(m => m.type === 'piezo-dual', 3000)
     expect(piezo.left2).toEqual([3])
     expect(piezo.right2).toEqual([4])
@@ -880,10 +1124,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
       buildOuterRecord(2, [{ type: 'capSense', ts: 5001, left: 1, right: 1 }]),
       buildOuterRecord(3, [{ type: 'capSense', ts: 5050, left: 9, right: 9 }]),
     ]
-    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
     await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 3)
 
     const before = client.messages.length
@@ -898,9 +1142,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
   it('seek treats a target before the earliest indexed frame as the first entry', async () => {
     const filePath = path.join(tmpRawDir, 'before.RAW')
     const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 6000, left: 0, right: 0 }])
-    fs.writeFileSync(filePath, rec)
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 6000)
 
     // Target slightly before earliest indexed frame, but within the seek window.
@@ -921,9 +1165,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
       left1: Buffer.alloc(0),
       right1: Buffer.from([1, 0]), // partial — fewer than 4 bytes
     }])
-    fs.writeFileSync(filePath, rec)
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     const piezo = await client.waitFor(m => m.type === 'piezo-dual', 3000)
     expect(piezo.left1).toEqual([])
     expect(piezo.right1).toEqual([])
@@ -944,9 +1188,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
       Buffer.from([0x64, 0x64, 0x61, 0x74, 0x61]),
       encodeByteStringExposed(inner),
     ])
-    fs.writeFileSync(filePath, rec)
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 1401, 3000)
     expect(client.messages.find(m => m.foo === 'bar')).toBeUndefined()
     await client.close()
@@ -983,12 +1227,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'partial.RAW')
     const full = buildOuterRecord(1, [{ type: 'capSense', ts: 1600, left: 0, right: 0 }])
     const next = buildOuterRecord(2, [{ type: 'capSense', ts: 1601, left: 1, right: 1 }])
-    // Write the first record + half of the second so readRawRecord throws
-    // RangeError in the middle of decoding the second record.
-    fs.writeFileSync(filePath, Buffer.concat([full, next.subarray(0, Math.floor(next.length / 2))]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    // Write the first record + half of the second so readRawRecord throws
+    // RangeError in the middle of decoding the second record.
+    fs.writeFileSync(filePath, Buffer.concat([full, next.subarray(0, Math.floor(next.length / 2))]))
     await client.waitFor(m => m.type === 'capSense' && m.ts === 1600)
 
     // Now append the rest of the second record. The follower retries on the
@@ -1003,10 +1247,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const real1 = buildOuterRecord(1, [{ type: 'capSense', ts: 1700, left: 0, right: 0 }])
     const placeholder = Buffer.from([0xa2, 0x63, 0x73, 0x65, 0x71, 0x02, 0x64, 0x64, 0x61, 0x74, 0x61, 0x40])
     const real2 = buildOuterRecord(3, [{ type: 'capSense', ts: 1701, left: 1, right: 1 }])
-    fs.writeFileSync(filePath, Buffer.concat([real1, placeholder, real2]))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([real1, placeholder, real2]))
     await waitUntil(() => client.messages.some(m => m.type === 'capSense' && m.ts === 1701))
 
     const before = client.messages.length
@@ -1025,10 +1269,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     for (let i = 0; i < 100; i++) {
       recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 1800 + i, left: i, right: i }]))
     }
-    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
     await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 100)
 
     client.ws.send(JSON.stringify({ type: 'seek', timestamp: 1800 }))
@@ -1044,10 +1288,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     for (let i = 0; i < 5; i++) {
       recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 1900 + i, left: i, right: i }]))
     }
-    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     const port = startAndPort()
     const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
     // Wait for the file to be indexed (at least one frame).
     await waitUntil(() => client.messages.some(m => m.type === 'capSense'), 3000)
 
@@ -1071,7 +1315,6 @@ describe('piezoStream — server lifecycle and protocol', () => {
     for (let i = 0; i < 10; i++) {
       recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 2000 + i, left: i, right: i }]))
     }
-    fs.writeFileSync(filePath, Buffer.concat(recs))
 
     const port = startAndPort()
     const client = await connectClient(port)
@@ -1081,6 +1324,10 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const serverSocket = [...wss.clients][0] as any
     Object.defineProperty(serverSocket, 'bufferedAmount', { get: () => 2 * MAX_BUFFERED_BYTES })
 
+    // Backpressure is in place — now append frames so each live broadcast is
+    // dropped against the (mocked) full send buffer.
+    fs.writeFileSync(filePath, Buffer.concat(recs))
+
     // Wait until at least one drop is recorded for this client.
     await waitUntil(
       () => clientDroppedFrames.get(serverSocket as never) !== undefined
@@ -1088,8 +1335,183 @@ describe('piezoStream — server lifecycle and protocol', () => {
       3000,
     )
 
+    const logSpy = vi.spyOn(console, 'log')
     await client.close()
     await waitUntil(() => clientDroppedFrames.size === 0, 2000)
+    // Disconnect log must call out the drop count for field debugging.
+    expect(logSpy.mock.calls.some(c => typeof c[0] === 'string'
+      && /disconnected \(dropped \d+ frames due to backpressure\)/.test(c[0]))).toBe(true)
+  })
+
+  it('seek replays every frame in the window, not a truncated prefix', async () => {
+    const filePath = path.join(tmpRawDir, 'full-window.RAW')
+    // Six records (~280 bytes total) so a regressed read cap (e.g. 64 bytes)
+    // silently truncates the replay.
+    const recs: Buffer[] = []
+    for (let i = 0; i < 6; i++) {
+      recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 8000 + i, left: i, right: i }]))
+    }
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 6)
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 8000 }))
+    const complete = await client.waitFor(m => m.type === 'seek_complete')
+    const replayed = client.messages.slice(before).filter(m => m.type === 'capSense')
+    expect(replayed.map(m => m.ts)).toEqual([8000, 8001, 8002, 8003, 8004, 8005])
+    // A clean replay must not carry the incomplete/droppedFrames markers.
+    expect(complete.incomplete).toBeUndefined()
+    expect(complete.droppedFrames).toBeUndefined()
+    await client.close()
+  })
+
+  it('seek includes a frame exactly at the window boundary and excludes the next second', async () => {
+    const filePath = path.join(tmpRawDir, 'boundary.RAW')
+    const recs = [
+      buildOuterRecord(1, [{ type: 'capSense', ts: 9500, left: 0, right: 0 }]),
+      buildOuterRecord(2, [{ type: 'capSense', ts: 9530, left: 1, right: 1 }]), // == target + 30s
+      buildOuterRecord(3, [{ type: 'capSense', ts: 9531, left: 2, right: 2 }]),
+    ]
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 3)
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 9500 }))
+    await client.waitFor(m => m.type === 'seek_complete')
+    const replayed = client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)
+    expect(replayed).toContain(9530)
+    expect(replayed).not.toContain(9531)
+    await client.close()
+  })
+
+  it('seek replay stops for good at the first out-of-window frame', async () => {
+    const filePath = path.join(tmpRawDir, 'stop-window.RAW')
+    // Non-monotonic tail: an in-window frame AFTER an out-of-window one must
+    // not be replayed — the loop is done, not skipping. ts 9035 stays inside
+    // FRAME_INDEX_RETENTION_S so the 9000 index entry survives for the seek.
+    const recs = [
+      buildOuterRecord(1, [{ type: 'capSense', ts: 9000, left: 0, right: 0 }]),
+      buildOuterRecord(2, [{ type: 'capSense', ts: 9035, left: 1, right: 1 }]),
+      buildOuterRecord(3, [{ type: 'capSense', ts: 9005, left: 2, right: 2 }]),
+    ]
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 3)
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 9000 }))
+    await client.waitFor(m => m.type === 'seek_complete')
+    const replayed = client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)
+    expect(replayed).toEqual([9000])
+    await client.close()
+  })
+
+  it('delivers a record split across appends exactly once, with a seekable index offset', async () => {
+    const filePath = path.join(tmpRawDir, 'split.RAW')
+    const rec1 = buildOuterRecord(1, [{ type: 'capSense', ts: 2100, left: 0, right: 0 }])
+    const rec2 = buildOuterRecord(2, [{ type: 'capSense', ts: 2101, left: 1, right: 1 }])
+    const half = Math.floor(rec2.length / 2)
+
+    const warnSpy = vi.spyOn(console, 'warn')
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([rec1, rec2.subarray(0, half)]))
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 2100)
+
+    fs.appendFileSync(filePath, rec2.subarray(half))
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 2101, 3000)
+
+    // Leftover-buffer accounting: the completed first record must not be
+    // re-parsed on the second tick, and a clean split produces no resync noise.
+    expect(client.messages.filter(m => m.type === 'capSense' && m.ts === 2100).length).toBe(1)
+    expect(warnSpy).not.toHaveBeenCalled()
+
+    // The split record's index entry must point at its true file offset —
+    // seek to it and verify the replay actually contains it.
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2101 }))
+    await client.waitFor(m => m.type === 'seek_complete')
+    const replayed = client.messages.slice(before).filter(m => m.type === 'capSense')
+    expect(replayed.some(m => m.ts === 2101)).toBe(true)
+    await client.close()
+  })
+
+  it('snapshots Pod 3 scalar capSense frames and logs the RAW file switch', async () => {
+    const filePath = path.join(tmpRawDir, 'pod3-cap.RAW')
+    const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 2200, left: 5, right: 7 }])
+
+    const logSpy = vi.spyOn(console, 'log')
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 2200, 3000)
+
+    const snap = getLatestCapSenseSnapshot()
+    expect(snap?.type).toBe('capSense')
+    expect(snap?.ts).toBe(2200)
+    expect(snap?.left).toEqual([5])
+    expect(snap?.right).toEqual([7])
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Switched to RAW file: pod3-cap.RAW'))
+    await client.close()
+  })
+
+  it('does not fan non-frzHealth file frames out to server-side listeners', async () => {
+    const filePath = path.join(tmpRawDir, 'not-health.RAW')
+    const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 2300, left: 0, right: 0 }])
+
+    const cb = vi.fn()
+    const unsub = onServerFrame(cb)
+    try {
+      const port = startAndPort()
+      const client = await connectClient(port)
+      fs.writeFileSync(filePath, rec)
+      await client.waitFor(m => m.type === 'capSense' && m.ts === 2300)
+      expect(cb).not.toHaveBeenCalled()
+      await client.close()
+    }
+    finally {
+      unsub()
+    }
+  })
+
+  it('shutdown actually closes the listening socket and logs start/stop', async () => {
+    const logSpy = vi.spyOn(console, 'log')
+    const port = startAndPort()
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('WebSocket server listening on port'))
+
+    await shutdownPiezoStreamServer()
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('WebSocket server closed'))
+
+    // The port must refuse new connections after shutdown.
+    await expect(new Promise((resolve, reject) => {
+      const probe = new WsClient(`ws://127.0.0.1:${port}`)
+      probe.once('open', () => resolve('open'))
+      probe.once('error', reject)
+    })).rejects.toThrow()
+  })
+
+  it('logs client connect and plain disconnect (no drop suffix for healthy clients)', async () => {
+    const logSpy = vi.spyOn(console, 'log')
+    const port = startAndPort()
+    const client = await connectClient(port)
+    await waitUntil(() => logSpy.mock.calls.some(
+      c => typeof c[0] === 'string' && c[0].includes('Client connected')))
+
+    await client.close()
+    // A client with zero dropped frames gets the plain message, verbatim.
+    await waitUntil(() => logSpy.mock.calls.some(
+      c => c.length === 1 && c[0] === '[sensorStream] Client disconnected'))
   })
 
   it('updates DAC monitor poll rate when clients connect and disconnect', async () => {
@@ -1105,5 +1527,52 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await waitUntil(() => monitor.setIdle.mock.calls.length > 0, 2000)
     expect(monitor.setActive).toHaveBeenCalled()
     expect(monitor.setIdle).toHaveBeenCalled()
+  })
+})
+
+describe('piezoStream — findLatestRaw selection and fallback', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'piezo-find-raw-'))
+  })
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('ignores SEQNO.RAW when a real capture exists alongside it', () => {
+    fs.writeFileSync(path.join(dir, 'SEQNO.RAW'), 'seqno')
+    fs.writeFileSync(path.join(dir, '00D0660E.RAW'), 'real')
+    expect(findLatestRaw(dir)).toBe(path.join(dir, '00D0660E.RAW'))
+  })
+
+  it('returns null when SEQNO.RAW is the only RAW at top level and no fallback dir exists', () => {
+    fs.writeFileSync(path.join(dir, 'SEQNO.RAW'), 'seqno')
+    expect(findLatestRaw(dir)).toBeNull()
+  })
+
+  it('falls back to <dir>/biometrics when the top-level dir has no usable RAW', () => {
+    // Reproduces the pod-5 layout that motivated this fix: SEQNO.RAW symlink
+    // sits at /persistent root, real captures land in /persistent/biometrics.
+    fs.writeFileSync(path.join(dir, 'SEQNO.RAW'), 'seqno')
+    const bio = path.join(dir, 'biometrics')
+    fs.mkdirSync(bio)
+    fs.writeFileSync(path.join(bio, '00D0660E.RAW'), 'real')
+    expect(findLatestRaw(dir)).toBe(path.join(bio, '00D0660E.RAW'))
+  })
+
+  it('prefers a top-level RAW over the fallback when both are present', () => {
+    // Older firmware still writes captures at the top level; do not migrate
+    // away from them just because /persistent/biometrics also exists.
+    fs.writeFileSync(path.join(dir, 'top.RAW'), 'top')
+    const bio = path.join(dir, 'biometrics')
+    fs.mkdirSync(bio)
+    fs.writeFileSync(path.join(bio, 'fallback.RAW'), 'fallback')
+    expect(findLatestRaw(dir)).toBe(path.join(dir, 'top.RAW'))
+  })
+
+  it('returns null when neither the top-level dir nor the fallback has a usable RAW', () => {
+    expect(findLatestRaw(dir)).toBeNull()
   })
 })

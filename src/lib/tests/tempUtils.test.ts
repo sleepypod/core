@@ -2,11 +2,18 @@ import { describe, expect, test } from 'vitest'
 import {
   centiDegreesToC,
   centiDegreesToF,
+  centidegreesToDisplay,
   centiPercentToPercent,
   determineTrend,
+  displayToSetpointF,
   ensureF,
+  formatDisplayTemp,
+  formatSensorC,
+  formatSetpointF,
   formatTemp,
   mapToEightSleepScale,
+  sensorCToDisplay,
+  setpointFToDisplay,
   toC,
   toF,
 } from '../tempUtils'
@@ -103,6 +110,53 @@ describe('formatTemp', () => {
 
   test('handles negative values', () => {
     expect(formatTemp(-5.4, 'C')).toBe('-5°C')
+  })
+})
+
+describe('temperature domain helpers', () => {
+  test('converts canonical Fahrenheit setpoints to display units', () => {
+    expect(setpointFToDisplay(68, 'F')).toBe(68)
+    expect(setpointFToDisplay(68, 'C')).toBe(20)
+    expect(setpointFToDisplay(null, 'C')).toBeNull()
+  })
+
+  test('converts display edits back to canonical Fahrenheit setpoints', () => {
+    expect(displayToSetpointF(68, 'F')).toBe(68)
+    expect(displayToSetpointF(20, 'C')).toBe(68)
+    expect(displayToSetpointF(undefined, 'F')).toBeNull()
+  })
+
+  test('converts live Celsius sensors to display units', () => {
+    expect(sensorCToDisplay(20, 'C')).toBe(20)
+    expect(sensorCToDisplay(20, 'F')).toBe(68)
+    expect(sensorCToDisplay(null, 'F')).toBeNull()
+  })
+
+  test('converts stored centidegrees Celsius to display units', () => {
+    expect(centidegreesToDisplay(2000, 'C')).toBe(20)
+    expect(centidegreesToDisplay(2000, 'F')).toBe(68)
+    expect(centidegreesToDisplay(undefined, 'F')).toBeNull()
+  })
+
+  test('formats display values with configurable precision and null output', () => {
+    expect(formatDisplayTemp(68.25, 'F')).toBe('68°F')
+    expect(formatDisplayTemp(68.25, 'F', { decimals: 1 })).toBe('68.3°F')
+    expect(formatDisplayTemp(68.25, 'F', { includeUnit: false })).toBe('68°')
+    expect(formatDisplayTemp(null, 'F')).toBe('--')
+    expect(formatDisplayTemp(undefined, 'C', { nullDisplay: '—' })).toBe('—')
+  })
+
+  test('formats setpoints and sensors from their source units', () => {
+    expect(formatSetpointF(68, 'C')).toBe('20°C')
+    expect(formatSetpointF(null, 'C')).toBe('--')
+    expect(formatSensorC(20, 'F', { decimals: 1 })).toBe('68.0°F')
+    expect(formatSensorC(undefined, 'F')).toBe('--')
+  })
+
+  test('round trips Celsius setpoint edits back to Fahrenheit', () => {
+    const display = setpointFToDisplay(77, 'C')
+    expect(display).toBe(25)
+    expect(displayToSetpointF(display, 'C')).toBe(77)
   })
 })
 

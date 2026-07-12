@@ -17,6 +17,7 @@ import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { withSideLock } from '@/src/hardware/sideLock'
 import { timeToDate, nowInTimezone } from './timeUtils'
 
 const HEARTBEAT_INTERVAL_MS_DEFAULT = 60_000
@@ -35,10 +36,6 @@ export class JobManager {
   private scheduler: Scheduler
   private reloadInProgress: Promise<void> | null = null
   private reloadPending: boolean = false
-  private sideLocks: Record<'left' | 'right', Promise<void>> = {
-    left: Promise.resolve(),
-    right: Promise.resolve(),
-  }
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private readonly heartbeatIntervalMs: number
@@ -55,33 +52,6 @@ export class JobManager {
     this.heartbeatStaleMs = options.heartbeatStaleMs ?? HEARTBEAT_STALE_MS_DEFAULT
 
     this.setupEventListeners()
-  }
-
-  // ---------------------------------------------------------------------------
-  // Per-side serialization
-  //
-  // Power-off, power-on, temperature, alarm, and run-once temp handlers all
-  // mutate the same hardware side. node-schedule fires same-minute jobs in
-  // parallel inside the event loop, which previously let a `temperature` job
-  // win the race against a same-minute `power_off` (the temp's setTemperature
-  // command landed last and re-enabled heat). Wrapping the handlers in a
-  // per-side mutex serializes them; combined with power_off updating
-  // device_state.isPowered before sending hardware, any temp/alarm that
-  // acquires the lock after power_off observes isPowered=false and skips.
-  // ---------------------------------------------------------------------------
-  private async withSideLock<T>(side: 'left' | 'right', fn: () => Promise<T>): Promise<T> {
-    const prev = this.sideLocks[side]
-    let release!: () => void
-    this.sideLocks[side] = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    try {
-      await prev
-      return await fn()
-    }
-    finally {
-      release()
-    }
   }
 
   /**
@@ -351,7 +321,7 @@ export class JobManager {
       console.log(`Skipping recurring temp job temp-${sched.id} — run-once session active for ${sched.side}`)
       return
     }
-    await this.withSideLock(sched.side, async () => {
+    await withSideLock(sched.side, async () => {
       if (!(await this.isSidePowered(sched.side))) {
         console.log(`Skipping temp job temp-${sched.id} — ${sched.side} is not powered`)
         return
@@ -388,7 +358,7 @@ export class JobManager {
       console.log(`Skipping recurring power-on job — run-once session active for ${sched.side}`)
       return
     }
-    await this.withSideLock(sched.side, async () => {
+    await withSideLock(sched.side, async () => {
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
@@ -423,7 +393,7 @@ export class JobManager {
       console.log(`Skipping recurring power-off job — run-once session active for ${sched.side}`)
       return
     }
-    await this.withSideLock(sched.side, async () => {
+    await withSideLock(sched.side, async () => {
       // Mark off in DB BEFORE hardware so any temp/alarm job that acquires
       // the side lock after this one observes isPowered=false and skips its
       // setTemperature command.
@@ -452,7 +422,7 @@ export class JobManager {
   }
 
   async runAlarmJob(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
-    await this.withSideLock(sched.side, async () => {
+    await withSideLock(sched.side, async () => {
       // Vibration must fire regardless of power state — the alarm's purpose is
       // to wake the user, who often sleeps with the bed off or on a power
       // schedule that hasn't kicked in yet at wake time. Temperature, however,
@@ -1069,6 +1039,16 @@ export class JobManager {
   ): void {
     const now = new Date()
 
+    // Cancel anything already scheduled for this session. Rescheduling
+    // in-process (restoreRunOnceSessions after a reload) passes a FILTERED
+    // set-point list whose indices shift, so a surviving `runonce-S-3` and a
+    // re-indexed `runonce-S-0` could both fire the same set point.
+    for (const job of this.scheduler.getJobs()) {
+      if (job.id.startsWith(`runonce-${sessionId}-`) || job.id === `runonce-cleanup-${sessionId}`) {
+        this.scheduler.cancelJob(job.id)
+      }
+    }
+
     for (let i = 0; i < setPoints.length; i++) {
       const sp = setPoints[i]
       const fireDate = timeToDate(sp.time, timezone, now)
@@ -1081,7 +1061,7 @@ export class JobManager {
         JobType.RUN_ONCE,
         fireDate,
         async () => {
-          await this.withSideLock(side, async () => {
+          await withSideLock(side, async () => {
             markSideMutated(side)
             const client = getSharedHardwareClient()
             await client.connect()
@@ -1121,7 +1101,7 @@ export class JobManager {
           .set({ status: 'completed' })
           .where(eq(runOnceSessions.id, sessionId))
 
-        await this.withSideLock(side, async () => {
+        await withSideLock(side, async () => {
           await this.markSideOff(side)
           try {
             const client = getSharedHardwareClient()

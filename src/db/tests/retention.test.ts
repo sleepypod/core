@@ -118,11 +118,17 @@ describe('pruneOldBiometrics', () => {
       { timestamp: fresh, type: 'stall_right' },
     ]).run()
 
+    db.insert(schema.vitalsQuality).values([
+      { vitalsId: 1, side: 'left', timestamp: old, qualityScore: 0.5 },
+      { vitalsId: 2, side: 'left', timestamp: fresh, qualityScore: 0.9 },
+    ]).run()
+
     const result = pruneOldBiometrics(cutoff, db)
 
-    expect(result.rowsDeleted).toBe(8)
+    expect(result.rowsDeleted).toBe(9)
     expect(result.perTable).toEqual({
       vitals: 1,
+      vitals_quality: 1,
       movement: 1,
       bed_temp: 1,
       freezer_temp: 1,
@@ -173,32 +179,30 @@ describe('pruneOldBiometrics', () => {
     expect(db.select().from(schema.calibrationProfiles).all()).toHaveLength(1)
   })
 
-  it('leaves vitals_quality untouched (current explicit exclusion)', () => {
+  it('prunes vitals_quality in lockstep with vitals (no orphans)', () => {
     // vitals_quality.vitals_id logically references vitals.id but no FK is
-    // enforced. pruneOldBiometrics deletes vitals but excludes vitals_quality,
-    // so quality rows pointing at deleted vitals become permanent orphans.
-    // This test documents the current behavior; follow-up to either include
-    // vitals_quality in the prune set or implement cascade-delete is tracked
-    // in the PR description.
+    // enforced (SQLite FKs are off in every writer). Both tables share the
+    // same timestamp cutoff so each quality row dies with its paired vitals
+    // row — previously quality rows orphaned forever (review 4.17).
     const old = new Date('2020-01-01T00:00:00Z')
-    const inserted = db.insert(vitals).values({
-      side: 'left', timestamp: old, heartRate: 60,
-    }).returning({ id: vitals.id }).all()
-    const vitalsId = inserted[0].id
-    db.insert(schema.vitalsQuality).values({
-      vitalsId,
-      side: 'left',
-      timestamp: old,
-      qualityScore: 0.8,
-    }).run()
+    const fresh = new Date('2026-06-01T00:00:00Z')
+    const inserted = db.insert(vitals).values([
+      { side: 'left', timestamp: old, heartRate: 60 },
+      { side: 'left', timestamp: fresh, heartRate: 62 },
+    ]).returning({ id: vitals.id }).all()
+    db.insert(schema.vitalsQuality).values([
+      { vitalsId: inserted[0].id, side: 'left', timestamp: old, qualityScore: 0.8 },
+      { vitalsId: inserted[1].id, side: 'left', timestamp: fresh, qualityScore: 0.9 },
+    ]).run()
 
     const result = pruneOldBiometrics(new Date('2026-01-01T00:00:00Z'), db)
 
-    expect(result.rowsDeleted).toBeGreaterThan(0)
-    expect(db.select().from(vitals).all()).toHaveLength(0)
-    // The orphan survives — call this out so the next iteration of retention
-    // policy explicitly handles it.
-    expect(db.select().from(schema.vitalsQuality).all()).toHaveLength(1)
+    expect(result.perTable.vitals).toBe(1)
+    expect(result.perTable.vitals_quality).toBe(1)
+    // The surviving quality row still pairs with the surviving vitals row.
+    const remaining = db.select().from(schema.vitalsQuality).all()
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].vitalsId).toBe(inserted[1].id)
   })
 
   it('uses strict less-than semantics at the cutoff boundary', () => {
@@ -230,6 +234,7 @@ describe('pruneOldBiometrics', () => {
     expect(result.rowsDeleted).toBe(0)
     expect(result.perTable).toEqual({
       vitals: 0,
+      vitals_quality: 0,
       movement: 0,
       bed_temp: 0,
       freezer_temp: 0,

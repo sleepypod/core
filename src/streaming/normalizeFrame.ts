@@ -124,6 +124,33 @@ function cdToC(v: unknown): number | null {
   return v / 100
 }
 
+/**
+ * Unwrap a raw per-side capacitive payload into a flat channel array.
+ *
+ * Firmware shapes vary by pod: Pod 4/5 capSense2 sends `{ values: number[],
+ * status }`, Pod 3 capSense sends `{ out, cen, in }` (projected to the same
+ * 6-slot paired layout capSense2 uses), and some builds send a bare array or
+ * scalar. Returns null when nothing numeric is present so callers can skip.
+ */
+export function capSideChannels(v: unknown): number[] | null {
+  if (typeof v === 'number') return [v]
+  if (Array.isArray(v)) {
+    const nums = v.filter((x): x is number => typeof x === 'number')
+    return nums.length > 0 ? nums : null
+  }
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    if (Array.isArray(o.values)) {
+      const nums = (o.values as unknown[]).filter((x): x is number => typeof x === 'number')
+      return nums.length > 0 ? nums : null
+    }
+    if (typeof o.out === 'number' && typeof o.cen === 'number' && typeof o.in === 'number') {
+      return [o.out, o.out, o.cen, o.cen, o.in, o.in]
+    }
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Normalizer
 // ---------------------------------------------------------------------------
@@ -195,32 +222,35 @@ export function normalizeFrame(rec: Record<string, unknown>): Record<string, unk
         amb: cdToC(rec.amb), hs: cdToC(rec.hs),
       }
     case 'frzHealth': {
+      // Fully optional-chained: a firmware build that omits a nested branch
+      // (pump/tec/fan.top) must degrade to zeros, not throw inside the WS
+      // message handler.
       const wire = rec as unknown as WireFrzHealth
       return {
         type: 'frzHealth', ts: wire.ts,
         left: {
-          pumpRpm: wire.left.pump.rpm ?? 0,
-          pumpDuty: wire.left.pump.duty ?? 0,
-          tecCurrent: wire.left.tec.current ?? 0,
-          flowrate: wire.left.temps?.flowrate ?? null,
+          pumpRpm: wire.left?.pump?.rpm ?? 0,
+          pumpDuty: wire.left?.pump?.duty ?? 0,
+          tecCurrent: wire.left?.tec?.current ?? 0,
+          flowrate: wire.left?.temps?.flowrate ?? null,
         },
         right: {
-          pumpRpm: wire.right.pump.rpm ?? 0,
-          pumpDuty: wire.right.pump.duty ?? 0,
-          tecCurrent: wire.right.tec.current ?? 0,
-          flowrate: wire.right.temps?.flowrate ?? null,
+          pumpRpm: wire.right?.pump?.rpm ?? 0,
+          pumpDuty: wire.right?.pump?.duty ?? 0,
+          tecCurrent: wire.right?.tec?.current ?? 0,
+          flowrate: wire.right?.temps?.flowrate ?? null,
         },
         fan: {
-          rpm: wire.fan.top.rpm ?? 0,
-          duty: wire.fan.top.duty ?? 0,
-          bottomRpm: wire.fan.bottom?.rpm ?? null,
+          rpm: wire.fan?.top?.rpm ?? 0,
+          duty: wire.fan?.top?.duty ?? 0,
+          bottomRpm: wire.fan?.bottom?.rpm ?? null,
         },
       }
     }
     case 'frzTherm': {
       const wire = rec as unknown as WireFrzTherm
-      const leftVal = typeof wire.left === 'number' ? wire.left : wire.left.power
-      const rightVal = typeof wire.right === 'number' ? wire.right : wire.right.power
+      const leftVal = typeof wire.left === 'number' ? wire.left : wire.left?.power
+      const rightVal = typeof wire.right === 'number' ? wire.right : wire.right?.power
       return {
         type: 'frzTherm', ts: wire.ts,
         left: leftVal ?? 0,

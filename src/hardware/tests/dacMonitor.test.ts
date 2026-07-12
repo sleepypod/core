@@ -145,6 +145,40 @@ describe('DacMonitor', () => {
     expect(monitor.getStatus()).toBe('running')
   })
 
+  test('does not replay gestures performed during an outage after recovery', async () => {
+    const monitor = createMonitor()
+    monitor.on('error', () => {}) // prevent unhandled rejection on parse error
+    const gestures: Array<{ side: string, tapType: string }> = []
+    monitor.on('gesture:detected', e => gestures.push(e))
+
+    await monitor.start()
+    await waitFor(() => monitor.getLastStatus() !== null, 500)
+
+    // Outage begins
+    ctx.server.setCommandResponse(HardwareCommand.DEVICE_STATUS, 'GARBAGE\n\n')
+    await waitFor(() => monitor.getStatus() === 'degraded', 500)
+
+    // During the outage the user taps 3× — counters advance unseen (l:0→3)
+    ctx.server.setCommandResponse(
+      HardwareCommand.DEVICE_STATUS,
+      DEVICE_STATUS_POD4.replace('"l":0,"r":1', '"l":3,"r":1')
+    )
+    await waitFor(() => monitor.getStatus() === 'running', 1000)
+    await sleep(POLL_MS * 2 + 20)
+
+    // The missed taps must re-baseline silently, not fire as fresh events
+    expect(gestures).toHaveLength(0)
+
+    // A genuinely new tap after recovery emits exactly one event
+    ctx.server.setCommandResponse(
+      HardwareCommand.DEVICE_STATUS,
+      DEVICE_STATUS_POD4.replace('"l":0,"r":1', '"l":4,"r":1')
+    )
+    await waitFor(() => gestures.length > 0, 500)
+    expect(gestures).toHaveLength(1)
+    expect(gestures[0]).toMatchObject({ side: 'left', tapType: 'doubleTap' })
+  })
+
   test('stop clears interval and disconnects', async () => {
     const monitor = createMonitor()
     await monitor.start()

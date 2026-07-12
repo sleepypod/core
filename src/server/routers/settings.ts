@@ -78,6 +78,7 @@ const getAllSettingsResponse = z.object({
   }),
 })
 import { getJobManager } from '@/src/scheduler'
+import { updateAutomationTimezone } from '@/src/automation/instance'
 import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
 import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
 import { invalidateGuardSettingsCache } from '@/src/hardware/pumpStallGuard'
@@ -117,6 +118,9 @@ async function applySettingsSchedulerChanges(input: Record<string, unknown>): Pr
   if (tzChanged) {
     // Full reload — every cron job rebinds against the new tz.
     await jobManager.updateTimezone(input.timezone as string)
+    // The automation engine's clock closure must follow too, or timeOfDay
+    // triggers keep firing in the boot-time timezone until restart.
+    updateAutomationTimezone(input.timezone as string)
     return
   }
 

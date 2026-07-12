@@ -9,16 +9,32 @@ TARGET_USED_PCT="${TARGET_USED_PCT:-80}"
 
 mkdir -p "$ARCHIVE_DIR"
 
+# Portable disk-usage read. `df --output=pcent` (and `df -h`) are GNU-only;
+# pods can ship busybox df (see the sha256sum/busybox fallback in
+# scripts/install), where `--output` is rejected → empty stdout → used_pct
+# defaults to 0 → the loop never prunes and the archive grows unbounded. `df -P`
+# is POSIX (busybox + GNU) and always prints one data row whose 5th field is
+# the capacity percent.
+disk_used_pct() {
+  local pct
+  pct=$(df -P /persistent | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
+  echo "${pct:-0}"
+}
+
 pruned=0
 while :; do
-  used_pct=$(df --output=pcent /persistent | tail -1 | tr -dc '0-9')
-  used_pct=${used_pct:-0}
+  used_pct=$(disk_used_pct)
   if [ "$used_pct" -le "$TARGET_USED_PCT" ]; then
     break
   fi
 
-  oldest=$(find "$ARCHIVE_DIR" -maxdepth 1 -type f -name '*.RAW.gz' -printf '%T@ %p\n' 2>/dev/null \
-    | sort -n | head -1 | awk '{print $2}')
+  # Oldest archive by mtime. `ls -tr` (mtime order, oldest first) is
+  # busybox-safe; the old `find -printf` is GNU-only and silently no-ops on
+  # busybox find. `awk NR==1` rather than `head -1` consumes the whole stream —
+  # `head` closes the pipe early and, under `set -o pipefail`, aborts the
+  # script on SIGPIPE so it never prunes (archive grows unbounded, /persistent
+  # fills past target).
+  oldest=$(ls -1tr "$ARCHIVE_DIR"/*.RAW.gz 2>/dev/null | awk 'NR==1')
   if [ -z "$oldest" ]; then
     echo "pruner: $used_pct% used but archive is empty — nothing to prune" >&2
     break
@@ -28,5 +44,4 @@ while :; do
   pruned=$((pruned + 1))
 done
 
-used_pct=$(df --output=pcent /persistent | tail -1 | tr -dc '0-9')
-echo "pruner: pruned=$pruned used_pct=$used_pct%"
+echo "pruner: pruned=$pruned used_pct=$(disk_used_pct)%"

@@ -26,7 +26,7 @@
     {
       "idx": 3,
       "version": "6",
-      "when": 1773714000000,
+      "when": 1773621733013,
       "tag": "0003_sensor_calibration",
       "breakpoints": true
     },
@@ -70,6 +70,27 @@
       "version": "6",
       "when": 1779761660310,
       "tag": "0009_robust_the_fury",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1781480384713,
+      "tag": "0010_tidy_senator_kelly",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1783062862056,
+      "tag": "0011_retention_timestamp_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1783119596827,
+      "tag": "0012_careful_microchip",
       "breakpoints": true
     }
   ]

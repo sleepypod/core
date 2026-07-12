@@ -4,6 +4,8 @@ import { Bell, Pencil, Play, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import type { DayOfWeek } from './DaySelector'
 import { formatTime12h } from './TimeInput'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { formatSetpointF } from '@/src/lib/tempUtils'
 
 export interface AlarmGroup {
   /** All underlying alarm_schedules row ids in this group */
@@ -51,6 +53,7 @@ function formatDayRange(days: DayOfWeek[]): string {
 }
 
 export function AlarmCard({ group, onEdit, onDelete, onTest, isTesting = false }: AlarmCardProps) {
+  const { unit } = useTemperatureUnit()
   const label = formatDayRange(group.days)
 
   return (
@@ -84,8 +87,7 @@ export function AlarmCard({ group, onEdit, onDelete, onTest, isTesting = false }
             </span>
             <span>·</span>
             <span>
-              {group.alarmTemperature}
-              °F
+              {formatSetpointF(group.alarmTemperature, unit)}
             </span>
           </div>
         </div>

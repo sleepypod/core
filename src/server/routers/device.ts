@@ -14,6 +14,8 @@ import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { withSideLock } from '@/src/hardware/sideLock'
+import { getAutomationEngineIfRunning } from '@/src/automation'
 import {
   sideSchema,
   temperatureSchema,
@@ -62,6 +64,10 @@ interface PendingTemp {
 
 const pendingTemps = new Map<string, PendingTemp>()
 
+function registerManualOverride(side: 'left' | 'right'): void {
+  getAutomationEngineIfRunning()?.registerManualOverride(side)
+}
+
 /**
  * Device control router - direct hardware control for immediate operations.
  *
@@ -99,16 +105,16 @@ export const deviceRouter = router({
     .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
     .output(z.object({
       leftSide: z.object({
-        currentTemperature: z.number(),
-        targetTemperature: z.number(),
+        currentTemperature: z.number().nullable(),
+        targetTemperature: z.number().nullable(),
         currentLevel: z.number(),
         targetLevel: z.number(),
         heatingDuration: z.number(),
         isAlarmVibrating: z.boolean().optional(),
       }),
       rightSide: z.object({
-        currentTemperature: z.number(),
-        targetTemperature: z.number(),
+        currentTemperature: z.number().nullable(),
+        targetTemperature: z.number().nullable(),
         currentLevel: z.number(),
         targetLevel: z.number(),
         heatingDuration: z.number(),
@@ -215,7 +221,8 @@ export const deviceRouter = router({
         const leftSnooze = getSnoozeStatus('left')
         const rightSnooze = getSnoozeStatus('right')
 
-        const convertTemp = (f: number) => input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f
+        const convertTemp = (f: number | null) =>
+          f == null ? null : (input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f)
 
         // Best-effort enrichment — nulls on failure
         let wifiStrength: number = -1
@@ -331,6 +338,7 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
+      registerManualOverride(input.side)
       markSideMutated(input.side)
 
       // The DB is updated optimistically on every call for responsive UI.
@@ -363,10 +371,10 @@ export const deviceRouter = router({
         const timer = setTimeout(async () => {
           pendingTemps.delete(input.side)
           try {
-            await withHardwareClient(async (client) => {
+            await withSideLock(input.side, () => withHardwareClient(async (client) => {
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
-            }, 'Failed to set temperature')
+            }, 'Failed to set temperature'))
             broadcastMutationStatus(input.side, {
               targetTemperature: input.temperature,
               targetLevel: fahrenheitToLevel(input.temperature),
@@ -433,7 +441,8 @@ export const deviceRouter = router({
         })
       }
 
-      return withHardwareClient(async (client) => {
+      registerManualOverride(input.side)
+      return withSideLock(input.side, () => withHardwareClient(async (client) => {
         await client.setPower(input.side, input.powered, input.temperature)
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
@@ -478,7 +487,7 @@ export const deviceRouter = router({
           : { targetLevel: 0 },
         )
         return { success: true }
-      }, 'Failed to set power')
+      }, 'Failed to set power'))
     }),
 
   /**

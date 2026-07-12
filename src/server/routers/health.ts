@@ -220,22 +220,29 @@ export const healthRouter = router({
         // Each power schedule creates 2 jobs (on + off), others create 1 each
         const expectedJobCount = tempSchedules.length + (powSchedules.length * 2) + almSchedules.length
 
-        const systemJobTypes = [JobType.PRIME, JobType.REBOOT]
-        let systemJobCount = 0
+        // Only count job types that originate from the schedule tables above.
+        // Every other type (prime, reboot, LED brightness, away-mode,
+        // run-once, calibration, future additions) has no DB schedule row, so
+        // including it would flag phantom drift and trigger a full reload.
+        const scheduleBackedJobTypes = [
+          JobType.TEMPERATURE,
+          JobType.POWER_ON,
+          JobType.POWER_OFF,
+          JobType.ALARM,
+        ]
+        let actualUserJobs = 0
         try {
           const jobManager = await getJobManager()
           const scheduler = jobManager.getScheduler()
           for (const job of scheduler.getJobs()) {
-            if (systemJobTypes.includes(job.type)) {
-              systemJobCount++
+            if (scheduleBackedJobTypes.includes(job.type)) {
+              actualUserJobs++
             }
           }
         }
         catch {
         // Already handled above
         }
-
-        const actualUserJobs = schedulerJobCount - systemJobCount
         const drifted = expectedJobCount !== actualUserJobs
         drift = {
           dbScheduleCount: expectedJobCount,
@@ -393,8 +400,10 @@ export const healthRouter = router({
     }))
     .query(() => {
       // A powered side reporting flow below this is not circulating; firmware
-      // locks the TEC at zero flow, so we treat sub-threshold as stalled. 100
-      // matches device_settings.pump_stall_rpm_threshold default sense.
+      // locks the TEC at zero flow, so we treat sub-threshold as stalled. This
+      // is deliberately a conservative "is it moving at all" floor, independent
+      // of the configurable device_settings.pump_stall_rpm_threshold (default
+      // 500) that arms the auto-off guard — health only flags a true dead pump.
       const MIN_FLOW_RPM = 100
       // A flow reading older than this on a powered side means the monitor has
       // stopped seeing frames — also a stall (see the overnight gap in the RCA).
@@ -442,8 +451,14 @@ export const healthRouter = router({
         const bedCd = side === 'left' ? (bed?.leftCenterTemp ?? null) : (bed?.rightCenterTemp ?? null)
 
         const isPowered = ds?.isPowered ?? false
-        const target = ds?.targetTemperature ?? null
-        const current = ds?.currentTemperature ?? null
+        // The hardware has no true "off": powering down sets the heat level to 0
+        // (neutral), and level 0 reads back through levelToFahrenheit() as
+        // ~82.5°F → 83°F. That synthetic 83 gets persisted to device_state and
+        // would otherwise surface here as a phantom target/bed temperature on a
+        // side that is actually off. Report null when unpowered so the debug
+        // view renders "off"/"—" instead of a misleading 83.
+        const target = isPowered ? (ds?.targetTemperature ?? null) : null
+        const current = isPowered ? (ds?.currentTemperature ?? null) : null
         const stale = flowAgeSec != null && flowAgeSec > STALE_SEC
         const flowing = pumpRpm != null && pumpRpm >= MIN_FLOW_RPM && !stale
 

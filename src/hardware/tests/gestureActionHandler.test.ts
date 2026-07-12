@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { GestureActionHandler, type GestureActionDeps } from '../gestureActionHandler'
+import type { GestureActionDeps } from '../gestureActionHandler'
 import type { GestureEvent } from '../dacMonitor'
 import type { HardwareClient } from '../client'
+
+const registerManualOverride = vi.fn()
+
+vi.mock('@/src/automation', () => ({
+  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+}))
+
+const { GestureActionHandler } = await import('../gestureActionHandler')
+const { withSideLock } = await import('../sideLock')
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,6 +55,7 @@ const makeDeps = (
 describe('GestureActionHandler', () => {
   afterEach(() => {
     vi.clearAllTimers()
+    registerManualOverride.mockClear()
     vi.useRealTimers()
   })
 
@@ -61,6 +71,43 @@ describe('GestureActionHandler', () => {
   })
 
   describe('temperature action', () => {
+    test('waits behind the shared side lock before writing hardware', async () => {
+      let releaseLeft: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        releaseLeft = resolve
+      }))
+      await Promise.resolve()
+
+      try {
+        const client = makeMockClient()
+        const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 5 }
+        const deps: GestureActionDeps = {
+          findGestureConfig: vi.fn().mockResolvedValue(gesture),
+          findDeviceState: vi.fn().mockResolvedValue({ targetTemperature: 70 }),
+          newHardwareClient: vi.fn().mockReturnValue(client),
+        }
+        const handler = new GestureActionHandler(SOCKET_PATH, deps)
+
+        const left = handler.handle(makeEvent('left', 'doubleTap'))
+        await Promise.resolve()
+        expect(client.setTemperature).not.toHaveBeenCalled()
+
+        await handler.handle(makeEvent('right', 'doubleTap'))
+        expect(client.setTemperature).toHaveBeenCalledWith('right', 75)
+        expect(client.setTemperature).not.toHaveBeenCalledWith('left', 75)
+
+        releaseLeft()
+        await holder
+        await left
+
+        expect(client.setTemperature).toHaveBeenCalledWith('left', 75)
+      }
+      finally {
+        releaseLeft()
+        await holder.catch(() => {})
+      }
+    })
+
     test('increments temperature', async () => {
       const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 5 }
       const state = { targetTemperature: 70, isPowered: true, isAlarmVibrating: false }
@@ -69,6 +116,7 @@ describe('GestureActionHandler', () => {
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
       expect(client.setTemperature).toHaveBeenCalledWith('left', 75)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
 
     test('decrements temperature', async () => {
@@ -159,6 +207,34 @@ describe('GestureActionHandler', () => {
   })
 
   describe('alarm action — inactive alarm', () => {
+    test('power toggle waits behind the shared side lock before writing hardware', async () => {
+      let releaseLeft: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        releaseLeft = resolve
+      }))
+      await Promise.resolve()
+
+      try {
+        const client = makeMockClient()
+        const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
+        const { deps } = makeDeps(gesture, { isAlarmVibrating: false, isPowered: false, targetTemperature: 70 }, client)
+        const pending = new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+        await Promise.resolve()
+
+        expect(client.setPower).not.toHaveBeenCalled()
+
+        releaseLeft()
+        await holder
+        await pending
+
+        expect(client.setPower).toHaveBeenCalledWith('left', true, 70)
+      }
+      finally {
+        releaseLeft()
+        await holder.catch(() => {})
+      }
+    })
+
     test('toggles power on when pod is off (alarmInactiveBehavior=power) — preserves polled target', async () => {
       const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
       const state = { isAlarmVibrating: false, isPowered: false, targetTemperature: 70 }
@@ -167,6 +243,7 @@ describe('GestureActionHandler', () => {
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
       expect(client.setPower).toHaveBeenCalledWith('left', true, 70)
+      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
 
     test('power-on falls back to TEMP_NEUTRAL when no targetTemperature is cached', async () => {

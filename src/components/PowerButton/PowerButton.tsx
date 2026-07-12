@@ -5,6 +5,7 @@ import { useCallback } from 'react'
 import { useSide } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
+import { useOptimisticValue } from '@/src/hooks/useOptimisticValue'
 import styles from './PowerButton.module.css'
 
 /**
@@ -14,7 +15,9 @@ import styles from './PowerButton.module.css'
  * - Toggles power for the currently selected side(s)
  * - When linked mode is active, toggles both sides simultaneously
  * - Shows visual on/off state via color changes
- * - Optimistic UI: toggles appearance immediately, reverts on error
+ * - Optimistic UI: toggles appearance immediately, held until a status frame
+ *   confirms it (the visible status is WS-preferred, so an HTTP invalidate
+ *   alone never updated the button); reverts on error
  */
 export const PowerButton = () => {
   const { activeSides, primarySide } = useSide()
@@ -30,17 +33,21 @@ export const PowerButton = () => {
     },
   })
 
-  // Determine if the primary side is currently powered on
-  const isPowered = (() => {
+  // Whether the primary side is powered, per the latest status frame
+  const serverPowered = (() => {
     if (!status) return false
     const side = primarySide === 'left' ? status.leftSide : status.rightSide
     return side?.targetLevel !== 0
   })()
 
+  const powerOpt = useOptimisticValue(serverPowered)
+  const isPowered = powerOpt.value
+
   const handleToggle = useCallback(async () => {
     if (setPower.isPending) return
 
     const newPowered = !isPowered
+    powerOpt.commit(newPowered)
 
     // Fire mutations for all active sides atomically (both must succeed/fail together)
     try {
@@ -55,10 +62,11 @@ export const PowerButton = () => {
       )
     }
     catch {
-      // Refetch to show actual state after partial failure
+      // Revert the optimistic state and refetch after partial failure
+      powerOpt.discard()
       utils.device.getStatus.invalidate()
     }
-  }, [isPowered, activeSides, setPower, utils])
+  }, [isPowered, activeSides, setPower, utils, powerOpt])
 
   return (
     <button

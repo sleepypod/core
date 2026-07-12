@@ -11,7 +11,7 @@ import {
   Legend,
 } from 'recharts'
 
-import type { ThermalTrendPoint } from './diagnosticsLogic'
+import { fmtF, type ThermalTrendPoint } from './diagnosticsLogic'
 
 export type { ThermalTrendPoint }
 
@@ -37,6 +37,16 @@ export function ThermalTrendChart({ side, points }: { side: 'left' | 'right', po
   }
 
   const temps = points.flatMap(p => [p.target, p.bed, p.water].filter((v): v is number => v != null))
+  // An off side reports null target/bed (no level-0 phantom), so a window with
+  // no water reading either leaves temps empty — Math.min/max would then yield
+  // ±Infinity and hand the Y-axis an invalid domain.
+  if (temps.length === 0) {
+    return (
+      <div className="flex h-[160px] items-center justify-center text-[11px] text-zinc-600">
+        No temperature data yet
+      </div>
+    )
+  }
   const min = Math.floor(Math.min(...temps) - 2)
   const max = Math.ceil(Math.max(...temps) + 2)
   const color = SIDE_COLOR[side]
@@ -64,7 +74,7 @@ export function ThermalTrendChart({ side, points }: { side: 'left' | 'right', po
           <Tooltip
             contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: 8, fontSize: 12, color: '#fff' }}
             labelFormatter={v => new Date(v as number).toLocaleTimeString()}
-            formatter={(value, name) => [value == null ? '—' : `${Number(value).toFixed(1)}°F`, String(name)]}
+            formatter={(value, name) => [fmtF(value == null ? null : Number(value)), String(name)]}
           />
           <Legend iconType="circle" iconSize={6} wrapperStyle={{ fontSize: 10, color: '#a1a1aa' }} align="center" />
           <Line type="monotone" dataKey="target" name="Target" stroke="#d4a84a" strokeWidth={1} strokeDasharray="4 2" dot={false} connectNulls />

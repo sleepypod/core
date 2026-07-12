@@ -64,14 +64,17 @@ export function getAlarmState(): { left: boolean, right: boolean } {
  * Extract a well-formed pump object from a frzHealth side. Returns the pump
  * only when `side.pump.rpm` is a finite number — otherwise frzHealth-shaped
  * frames with a null/garbled pump would crash the downstream insert.
+ * `duty` (commanded PWM drive) is optional on the wire; null when absent
+ * or malformed.
  */
-function pumpOf(side: unknown): { rpm: number } | null {
+function pumpOf(side: unknown): { rpm: number, duty: number | null } | null {
   if (!side || typeof side !== 'object') return null
   const pump = (side as { pump?: unknown }).pump
   if (!pump || typeof pump !== 'object') return null
   const rpm = (pump as { rpm?: unknown }).rpm
   if (typeof rpm !== 'number' || !Number.isFinite(rpm)) return null
-  return { rpm }
+  const duty = (pump as { duty?: unknown }).duty
+  return { rpm, duty: typeof duty === 'number' && Number.isFinite(duty) ? duty : null }
 }
 
 // ── Flow anomaly detection thresholds ──
@@ -81,14 +84,34 @@ const FLOWRATE_SUDDEN_CHANGE_CD = 500 // centidegrees — large delta between co
 const ASYMMETRY_THRESHOLD_CD = 300 // centidegrees — left/right divergence threshold
 const ANOMALY_LOG_COOLDOWN_MS = 300_000 // 5 min between repeated warnings per type
 
+// ── Expected-pump-stop suppression (stall guard false-trip fix) ──
+const PRIME_GRACE_MS = 120_000 // pumps spin down at prime end; RPM 0 is expected
+const SESSION_END_GRACE_S = 90 // remaining session seconds within which a stop is natural
+const SESSION_END_STALE_S = 600 // stop trusting the projected countdown this long past its end
+
 export class DeviceStateSync {
   private lastWaterLevelWrite = 0
   private lastFlowWrite = 0
   private lastAnomalyLog: Record<string, number> = {}
   private prevFlowLeft: number | null = null
   private prevFlowRight: number | null = null
+  // Latest firmware-reported side state, kept off the DB mirror: device_state
+  // can report a side powered for minutes after the firmware ends a session
+  // (currentLevel stays non-zero while the water equalizes), which is exactly
+  // the lag that false-tripped the stall guard on every session end.
+  private lastSideStatus: Record<Side, { targetLevel: number, heatingDuration: number, at: number } | null> = { left: null, right: null }
+  private isPriming = false
+  private primeEndedAt = 0
 
   sync = async (status: DeviceStatus): Promise<void> => {
+    const now = Date.now()
+    if (this.isPriming && !status.isPriming) {
+      this.primeEndedAt = now
+    }
+    this.isPriming = status.isPriming
+    this.lastSideStatus.left = { targetLevel: status.leftSide.targetLevel, heatingDuration: status.leftSide.heatingDuration, at: now }
+    this.lastSideStatus.right = { targetLevel: status.rightSide.targetLevel, heatingDuration: status.rightSide.heatingDuration, at: now }
+
     this.recordWaterLevel(status)
     try {
       await Promise.all([
@@ -217,7 +240,7 @@ export class DeviceStateSync {
     const now = Date.now()
 
     // Run anomaly checks on every frame (not rate-limited)
-    this.checkFlowAnomalies(frzHealth, now)
+    this.checkFlowAnomalies(frzHealth, leftPump, rightPump, now)
 
     if (now - this.lastFlowWrite < 60_000) return
 
@@ -239,8 +262,46 @@ export class DeviceStateSync {
     }
   }
 
+  /**
+   * True when a zero-RPM frame is explainable by a firmware-commanded pump
+   * stop rather than a mechanical stall. Every signal here is firmware-side
+   * and lag-free — unlike device_state, which mirrors the firmware through
+   * the durationExpired heuristic and stays "powered" for minutes after a
+   * session ends on the firmware side.
+   */
+  private isExpectedPumpStop(side: Side, duty: number | null, now: number): boolean {
+    // Duty is authoritative when the frame carries it: 0 means the firmware
+    // isn't driving the pump (commanded stop), while a driven pump (duty > 0)
+    // reading 0 RPM is exactly the stall signature — never suppress it, even
+    // inside a prime or session-end window.
+    if (duty !== null) return duty === 0
+
+    // Priming spins both pumps regardless of side power; the spin-down at
+    // the end of the cycle reads as RPM 0 for a few frames.
+    if (this.isPriming || (this.primeEndedAt > 0 && now - this.primeEndedAt < PRIME_GRACE_MS)) return true
+
+    const last = this.lastSideStatus[side]
+    if (!last) return false
+
+    // Firmware target is neutral — the pump is expected to stop even while
+    // device_state still mirrors the old session.
+    if (last.targetLevel === 0) return true
+
+    // Session countdown at or past its natural end. heatingDuration is the
+    // remaining seconds at poll time; project it forward so a stalled status
+    // stream can't hold suppression off after the session should have ended,
+    // but only within a bounded window — a snapshot that is long past its
+    // projected end must not suppress a later session's genuine stall.
+    // The > 0 gate keeps firmware variants that report 0 during an active
+    // session (no countdown) on the plain device_state path.
+    const remaining = last.heatingDuration - (now - last.at) / 1000
+    return last.heatingDuration > 0
+      && remaining <= SESSION_END_GRACE_S
+      && remaining >= -SESSION_END_STALE_S
+  }
+
   /** Look up the side's commanded state and feed the pump stall guard. */
-  private async runStallGuard(side: Side, rpm: number): Promise<void> {
+  private async runStallGuard(side: Side, rpm: number, duty: number | null): Promise<void> {
     try {
       const [row] = db
         .select({
@@ -251,7 +312,8 @@ export class DeviceStateSync {
         .where(eq(deviceState.side, side))
         .limit(1)
         .all()
-      const expectedActive = Boolean(row?.isPowered && row.targetTemperature != null)
+      const expectedActive = !this.isExpectedPumpStop(side, duty, Date.now())
+        && Boolean(row?.isPowered && row.targetTemperature != null)
       await pumpStallOnFrame({
         side,
         rpm,
@@ -277,17 +339,17 @@ export class DeviceStateSync {
   private checkFlowAnomalies(frzHealth: {
     left: { pump: { rpm: number }, temps?: { flowrate?: number } }
     right: { pump: { rpm: number }, temps?: { flowrate?: number } }
-  }, now: number): void {
-    const leftRpm = frzHealth.left.pump.rpm
-    const rightRpm = frzHealth.right.pump.rpm
+  }, leftPump: { rpm: number, duty: number | null }, rightPump: { rpm: number, duty: number | null }, now: number): void {
+    const leftRpm = leftPump.rpm
+    const rightRpm = rightPump.rpm
     const leftFlowCd = frzHealth.left.temps?.flowrate != null ? Math.round(frzHealth.left.temps.flowrate * 100) : NaN
     const rightFlowCd = frzHealth.right.temps?.flowrate != null ? Math.round(frzHealth.right.temps.flowrate * 100) : NaN
 
     // Feed the per-side stall guard. Reads current device_state to derive
     // expectedActive — a side that's commanded off should not trip on
     // RPM = 0 since that is the correct value.
-    void this.runStallGuard('left', leftRpm)
-    void this.runStallGuard('right', rightRpm)
+    void this.runStallGuard('left', leftRpm, leftPump.duty)
+    void this.runStallGuard('right', rightRpm, rightPump.duty)
 
     // Pump running but flowrate missing — possible sensor fault
     if (leftRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(leftFlowCd)) {

@@ -1,9 +1,10 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
+import { useOptimisticValue } from '@/src/hooks/useOptimisticValue'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { TemperatureDial } from '@/src/components/TemperatureDial/TemperatureDial'
@@ -12,7 +13,7 @@ import { PrimingIndicator } from '@/src/components/TempScreen/PrimingIndicator'
 import { PrimeCompleteNotification } from '@/src/components/TempScreen/PrimeCompleteNotification'
 import { PumpStallNotification } from '@/src/components/TempScreen/PumpStallNotification'
 import { AmbientLightChip } from '@/src/components/TempScreen/AmbientLightChip'
-import { type TempUnit } from '@/src/lib/tempUtils'
+import { displayToSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 import { TEMP } from '@/src/lib/tempColors'
 import { Minus, Plus, Power } from 'lucide-react'
 import clsx from 'clsx'
@@ -58,18 +59,20 @@ export const TempScreen = () => {
   const setTempMutation = trpc.device.setTemperature.useMutation()
   const setPowerMutation = trpc.device.setPower.useMutation()
 
-  // Optimistic local target temp while dragging
-  const [localTarget, setLocalTarget] = useState<number | null>(null)
-
   // Get current side's status
   const currentSideStatus = primarySide === 'left' ? status?.leftSide : status?.rightSide
   const currentTemp = currentSideStatus?.currentTemperature ?? 80
   const serverTarget = currentSideStatus?.targetTemperature ?? 80
   const targetLevel = currentSideStatus?.targetLevel ?? 0
-  const isOn = targetLevel !== 0
 
-  // Use local target while dragging, server target otherwise
-  const targetTemp = localTarget ?? serverTarget
+  // Optimistic overrides: the visible status is WS-preferred (~2s cadence),
+  // so clearing local state in onSettled snapped the dial back to the stale
+  // value, then forward when the next frame arrived. These hold the local
+  // value until the server confirms it (or a timeout gives up).
+  const targetOpt = useOptimisticValue(serverTarget)
+  const powerOpt = useOptimisticValue(targetLevel !== 0)
+  const targetTemp = targetOpt.value
+  const isOn = powerOpt.value
 
   // Alarm & priming status from device
   const leftAlarmActive = status?.leftSide?.isAlarmVibrating ?? false
@@ -81,40 +84,50 @@ export const TempScreen = () => {
 
   /** Handle continuous drag updates — visual only, no hardware calls. */
   const handleDialChange = useCallback((tempF: number) => {
-    setLocalTarget(tempF)
-  }, [])
+    targetOpt.preview(tempF)
+  }, [targetOpt])
 
-  /** Handle drag end — send final value to hardware. */
+  /** Handle drag end — send final value to hardware, keep it visible until
+   * an incoming status frame confirms it. */
   const handleDialCommit = useCallback((tempF: number) => {
+    targetOpt.commit(tempF)
     for (const side of activeSides) {
       setTempMutation.mutate(
         { side, temperature: tempF },
         {
-          onSettled: () => {
-            setLocalTarget(null)
-            refetch()
-          },
+          onSettled: () => refetch(),
+          onError: () => targetOpt.discard(),
         },
       )
     }
-  }, [activeSides, setTempMutation, refetch])
+  }, [activeSides, setTempMutation, refetch, targetOpt])
 
   const handleTempAdjust = (delta: number) => {
-    const newTemp = Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, targetTemp + delta))
-    setLocalTarget(null)
+    const displayValue = setpointFToDisplay(targetTemp, unit) ?? targetTemp
+    const converted = displayToSetpointF(displayValue + delta, unit) ?? targetTemp
+    const newTemp = Math.round(Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, converted)))
+    targetOpt.commit(newTemp)
     for (const side of activeSides) {
       setTempMutation.mutate(
         { side, temperature: newTemp },
-        { onSettled: () => refetch() },
+        {
+          onSettled: () => refetch(),
+          onError: () => targetOpt.discard(),
+        },
       )
     }
   }
 
   const handlePowerToggle = () => {
+    const nextPowered = !isOn
+    powerOpt.commit(nextPowered)
     for (const side of activeSides) {
       setPowerMutation.mutate(
-        { side, powered: !isOn },
-        { onSettled: () => refetch() },
+        { side, powered: nextPowered },
+        {
+          onSettled: () => refetch(),
+          onError: () => powerOpt.discard(),
+        },
       )
     }
   }
@@ -175,6 +188,7 @@ export const TempScreen = () => {
         currentTempF={currentTemp}
         targetTempF={targetTemp}
         isOn={isOn}
+        unit={unit}
         onTemperatureChange={handleDialChange}
         onTemperatureCommit={handleDialCommit}
       />
