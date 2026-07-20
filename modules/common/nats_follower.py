@@ -49,6 +49,7 @@ log = logging.getLogger(__name__)
 NATS_DEFAULT_SERVER = "nats://127.0.0.1:4222"
 NATS_DEFAULT_HOST = "127.0.0.1"
 NATS_DEFAULT_PORT = 4222
+NATS_INFO_MAX_BYTES = 4096
 
 # Subjects consumed by the biometrics modules. raw.log lives outside these
 # prefixes on purpose — it is a firmware log channel surfaced by sp-status,
@@ -94,8 +95,21 @@ def nats_reachable(host: str = NATS_DEFAULT_HOST, port: int = NATS_DEFAULT_PORT,
     """
     try:
         with socket.create_connection((host, port), timeout=timeout) as s:
-            s.settimeout(timeout)
-            return s.recv(512).startswith(b"INFO ")
+            deadline = time.monotonic() + timeout
+            greeting = bytearray()
+            while len(greeting) < NATS_INFO_MAX_BYTES:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                s.settimeout(remaining)
+                chunk = s.recv(min(512, NATS_INFO_MAX_BYTES - len(greeting)))
+                if not chunk:
+                    return False
+                greeting.extend(chunk)
+                if b"\n" in chunk:
+                    first_line = bytes(greeting).split(b"\n", 1)[0]
+                    return first_line.startswith(b"INFO ")
+            return False
     except OSError:
         return False
 

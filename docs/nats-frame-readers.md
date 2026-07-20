@@ -1,7 +1,6 @@
 # NATS Frame Readers
 
 **Status:** implemented — automated validation complete; field validation pending
-**Branch:** `feat/cap-frame-readers`
 **Source data:** 1-minute `raw.>` capture from a field Pod 5 on new firmware
 (Discord user report, 2026-07-19), taken with `scripts/probe-nats-capture.py`.
 236 messages across 8 subjects.

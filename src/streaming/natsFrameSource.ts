@@ -48,6 +48,7 @@ export const SUBSCRIBE_SUBJECTS = ['raw.sens.>', 'raw.frz.>'] as const
 const MAX_RECONNECT_ATTEMPTS = -1
 const RECONNECT_TIME_WAIT_MS = 2_000
 const PROBE_TIMEOUT_MS = 2_000
+const PROBE_MAX_GREETING_BYTES = 16 * 1024
 // A live pod ticks capSense at 2 Hz, so a subscription silent this long past
 // startup is worth surfacing once — a health signal, not a source-selection input.
 const SILENCE_WARN_MS = 60_000
@@ -71,6 +72,8 @@ export function natsReachable(
 
   return new Promise<boolean>((resolve) => {
     let settled = false
+    let greeting = Buffer.alloc(0)
+    const socket = new net.Socket()
     const finish = (result: boolean): void => {
       if (settled) return
       settled = true
@@ -78,13 +81,29 @@ export function natsReachable(
       resolve(result)
     }
 
-    const socket = net.createConnection({ host, port })
     socket.setTimeout(timeoutMs)
-    socket.once('data', (chunk: Buffer) => {
-      finish(chunk.length >= 5 && chunk.toString('latin1', 0, 5) === 'INFO ')
+    socket.on('data', (chunk: Buffer) => {
+      if (greeting.length + chunk.length > PROBE_MAX_GREETING_BYTES) {
+        finish(false)
+        return
+      }
+
+      greeting = Buffer.concat([greeting, chunk])
+      if (greeting.length >= 5 && greeting.toString('latin1', 0, 5) !== 'INFO ') {
+        finish(false)
+        return
+      }
+
+      // TCP may split the INFO control line across any number of packets.
+      // Wait for its newline rather than treating the first data event as the
+      // complete greeting.
+      if (greeting.indexOf(0x0A) !== -1) finish(true)
     })
     socket.once('timeout', () => finish(false)) // connected but silent ⇒ not NATS
     socket.once('error', () => finish(false)) // refused / unreachable
+    socket.once('end', () => finish(false)) // clean EOF before a complete INFO line
+    socket.once('close', () => finish(false))
+    socket.connect({ host, port })
   })
 }
 

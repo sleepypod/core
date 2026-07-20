@@ -90,9 +90,22 @@ describe('natsReachable', () => {
     expect(await natsReachable({ host: '127.0.0.1', port, timeoutMs: 500 })).toBe(true)
   })
 
+  it('is true when TCP fragments the INFO greeting', async () => {
+    const port = await listen((sock) => {
+      sock.write('IN')
+      setImmediate(() => sock.end('FO {"server_id":"x"}\r\n'))
+    })
+    expect(await natsReachable({ host: '127.0.0.1', port, timeoutMs: 500 })).toBe(true)
+  })
+
   it('is false for an open port that never greets', async () => {
     const port = await listen(() => { /* accept but stay silent */ })
     expect(await natsReachable({ host: '127.0.0.1', port, timeoutMs: 200 })).toBe(false)
+  })
+
+  it('is false when the peer closes before sending a greeting', async () => {
+    const port = await listen(sock => sock.end())
+    expect(await natsReachable({ host: '127.0.0.1', port, timeoutMs: 500 })).toBe(false)
   })
 
   it('is false when the connection is refused', async () => {

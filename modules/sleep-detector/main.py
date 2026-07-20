@@ -523,20 +523,33 @@ class PumpGateCapSense:
                         except (TypeError, ValueError):
                             pass
                         break
+                # NATS Pod 5 frzHealth nests pump state under side.pump.
+                pump = side_data.get("pump")
+                if rpm == 0 and isinstance(pump, dict):
+                    val = pump.get("rpm")
+                    if val is not None:
+                        try:
+                            rpm = float(val)
+                        except (TypeError, ValueError):
+                            pass
                 # Also check pumpDuty as fallback — any duty > 0 means pump is running
                 if rpm == 0:
-                    for key in ("pumpDuty", "pump_duty", "duty"):
-                        val = side_data.get(key)
-                        if val is not None:
-                            try:
-                                rpm = 1.0 if float(val) > 0 else 0.0
-                            except (TypeError, ValueError):
-                                pass
-                            break
+                    duty = next((side_data.get(key) for key in
+                                 ("pumpDuty", "pump_duty", "duty")
+                                 if side_data.get(key) is not None), None)
+                    if duty is None and isinstance(pump, dict):
+                        duty = next((pump.get(key) for key in ("duty", "power")
+                                     if pump.get(key) is not None), None)
+                    if duty is not None:
+                        try:
+                            rpm = 1.0 if float(duty) > 0 else 0.0
+                        except (TypeError, ValueError):
+                            pass
 
             elif rtype == "frzTherm":
                 # frzTherm may carry pump duty cycle
-                for key in ("pumpDuty", "pump_duty", "duty", "pumpRpm", "pump_rpm"):
+                for key in ("pumpDuty", "pump_duty", "duty", "pumpRpm",
+                            "pump_rpm", "power"):
                     val = side_data.get(key)
                     if val is not None:
                         try:

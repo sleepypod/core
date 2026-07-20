@@ -269,15 +269,27 @@ class FrzHealthPumpState:
                     except (TypeError, ValueError):
                         rpm = 0.0
                     break
+            # New NATS firmware nests the same reading at side.pump.rpm.
+            pump = data.get("pump")
+            if rpm == 0 and isinstance(pump, dict):
+                val = pump.get("rpm")
+                if val is not None:
+                    try:
+                        rpm = float(val)
+                    except (TypeError, ValueError):
+                        rpm = 0.0
             if rpm == 0:
-                for key in ("pumpDuty", "pump_duty", "duty"):
-                    val = data.get(key)
-                    if val is not None:
-                        try:
-                            rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(val) > 0 else 0.0
-                        except (TypeError, ValueError):
-                            rpm = 0.0
-                        break
+                duty = next((data.get(key) for key in
+                             ("pumpDuty", "pump_duty", "duty")
+                             if data.get(key) is not None), None)
+                if duty is None and isinstance(pump, dict):
+                    duty = next((pump.get(key) for key in ("duty", "power")
+                                 if pump.get(key) is not None), None)
+                if duty is not None:
+                    try:
+                        rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(duty) > 0 else 0.0
+                    except (TypeError, ValueError):
+                        rpm = 0.0
 
             now_active = rpm >= PUMP_ACTIVE_RPM_MIN
             if self._was_active[side] and not now_active:

@@ -1177,6 +1177,17 @@ class TestFrzHealthPumpState:
         assert ps.is_side_pump_active("left") is True
         assert ps.is_side_pump_active("right") is False
 
+    def test_captured_nats_nested_pump_rpm(self):
+        """Field Pod 5 frzHealth carries side.pump.rpm, not flat pumpRpm."""
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pump": {"mode": "pwm", "rpm": 1868, "water": True}},
+            "right": {"pump": {"mode": "pwm", "rpm": 0, "water": True}},
+        })
+        assert ps.is_side_pump_active("left") is True
+        assert ps.is_side_pump_active("right") is False
+
     def test_is_asymmetric_true_when_only_own_side_running(self):
         ps = FrzHealthPumpState()
         ps.update({

@@ -1,21 +1,20 @@
 """
-Real NATS ``raw.>`` capture fixtures for SleepyPod frame-reader tests.
+Real NATS sensor capture fixtures for SleepyPod frame-reader tests.
 
-One exemplar payload per subject from a 2-minute ``raw.>`` capture off a field
-Pod 5 running new (NATS) firmware (Discord report, 2026-07-19), taken with
-``scripts/probe-nats-capture.py``. The capture is anonymized and cleared for
-use as test data (design review 2026-07-19) — no scrubbing required.
+One exemplar payload for each sensor subject from a 1-minute ``raw.>`` capture
+off a field Pod 5 running new (NATS) firmware (Discord report, 2026-07-19),
+taken with ``scripts/probe-nats-capture.py``. These seven sensor payloads were
+cleared for test use. The retained ``raw.log`` message is intentionally omitted
+because it contains a persistent hardware identifier and is outside the live
+reader subscription.
 
 Each entry's ``payload_b64`` is the base64 of the exact bytes as published.
 
 Wire-format contract: every ``raw.sens.*`` / ``raw.frz.*`` sensor subject is a
 single, complete CBOR map — one message == one record — which is what
 :class:`common.nats_follower.NatsFollower` decodes (its live subscription is
-``raw.sens.>`` + ``raw.frz.>``). The lone exception is ``raw.log``
-(``single_map=False``): its payload is *concatenated* CBOR log maps, so it must
-NOT be fed to the single-record decode path. It is retained here only as
-diagnostic evidence (the firmware ``SENSOR_SAMPLES_DROPPED`` line sp-status
-surfaces); the sensor subscription deliberately excludes it.
+``raw.sens.>`` + ``raw.frz.>``). The sensor subscription deliberately excludes
+the concatenated-map ``raw.log`` diagnostic subject.
 
 Decode a single-map fixture with ``cbor2.loads(base64.b64decode(b64))``.
 
@@ -165,41 +164,6 @@ CAPTURE_FIXTURES = {
             'd19kaXJlY3Rpb272c2NvcnJlY3Rfb3JpZW50YXRpb272/2VyaWdodL9kdGVtcPpBxIAAYXj6'
             'vU0AAGF6+jyCAABhefo8lgAAbGVycm9yX3N0cmluZ/ZsaXNfY29ubmVjdGVk9G5mbG93X2Rp'
             'cmVjdGlvbvZzY29ycmVjdF9vcmllbnRhdGlvbvb//w=='
-        ),
-    },
-    'raw.log': {
-        "type": 'log',
-        "size": 1507,
-        "single_map": False,
-        "payload_b64": (
-            'pGR0eXBlY2xvZ2J0cxpqXQlxZWxldmVsZGluZm9jbXNneEc0MDgwMTYxMjQgU3lzSW5mby5j'
-            'cHA6OTUgbmV4dHxbc3lzaV0gU0VOU09SX1NBTVBMRVNfRFJPUFBFRDogMjE0NzQ4ODQ0OKRk'
-            'dHlwZWNsb2didHMaal0JcWVsZXZlbGRpbmZvY21zZ3g4NDA4MDE2MTI0IFN5c0luZm8uY3Bw'
-            'OjQxIGluaXRHcm91cHxbc3lzaV0gYnVpbGQ6IDU3ZDEwZDmkZHR5cGVjbG9nYnRzGmpdCXFl'
-            'bGV2ZWxkaW5mb2Ntc2d4VjQwODAxNjEyNCBTeXNJbmZvLmNwcDo0MyBpbml0R3JvdXB8W3N5'
-            'c2ldIGNvdmVyOiAiMjA2MDAtMDAwMy1KNTUtRDA5MTA1OEEiIChjb25uZWN0ZWQppGR0eXBl'
-            'Y2xvZ2J0cxpqXQmxZWxldmVsZWRlYnVnY21zZ3h3NDA4MDc5NDkzIFNlbnNvci5jcHA6NjU0'
-            'IGhhbmRsZUNvbW1hbmR8W3NlbnNvcl0gLT4gRlc6IDQwODA3MDM2NCBbY2FwX3NhbXBsaW5n'
-            'TF0gbWluL2F2Zy9tYXggY3ljbGUgdGltZSAybXMvOC4xNG1zLzE4bXOkZHR5cGVjbG9nYnRz'
-            'GmpdCd5lbGV2ZWxlZGVidWdjbXNneF40MDgxMjUzNTQgZnJvemVuLmNwcDoyOTIgaGFuZGxl'
-            'Q29tbWFuZHxbZnJvemVuXSAtPiBGVzogW3NvbGVub2lkXSBzb2xlbm9pZF9jdXJyZW50IEAg'
-            'MC4wMDI1MDBBpGR0eXBlY2xvZ2J0cxpqXQn6ZWxldmVsZWRlYnVnY21zZ3hUNDA4MTUyOTY4'
-            'IGZyb3plbi5jcHA6MzE2IGhhbmRsZUNvbW1hbmR8W2Zyb3plbl0gLT4gRlc6IHRlbXBzIDI3'
-            'LjAwIDIzLjc1IDIzLjkzIDIzLjI1pGR0eXBlY2xvZ2J0cxpqXQpMZWxldmVsZWRlYnVnY21z'
-            'Z3iGNDA4MjM0NDE3IFNlbnNvci5jcHA6NjU0IGhhbmRsZUNvbW1hbmR8W3NlbnNvcl0gLT4g'
-            'Rlc6IDQwODIyNTI4OSBbc2FtcGxpbmddIGF2ZyByYXRlcyA0OTkuOTlIei80OTkuOTlIeiwg'
-            'MjMuMTkvMjMuMzAgc3RhbGUgc2FtcGxlcy9zZWOkZHR5cGVjbG9nYnRzGmpdClplbGV2ZWxl'
-            'ZGVidWdjbXNneEo0MDgyNDkxNzggU2Vuc29yLmNwcDo2NjYgaGFuZGxlQ29tbWFuZHxbc2Vu'
-            'c29yXWF2ZyBzYW1wbGVzL3NlYzogNDk5Ljk5NDY1OaRkdHlwZWNsb2didHMaal0KWmVsZXZl'
-            'bGVkZWJ1Z2Ntc2d4TjQwODI0OTE3OCBTZW5zb3IuY3BwOjY3MCBoYW5kbGVDb21tYW5kfFtz'
-            'ZW5zb3JdYXZnIGFjY2VsIHNhbXBsZXMvc2VjOiAwLjAwMDAwMKRkdHlwZWNsb2didHMaal0K'
-            'kGVsZXZlbGVkZWJ1Z2Ntc2d4WTQwODMwMzA4MCBmcm96ZW4uY3BwOjI5MiBoYW5kbGVDb21t'
-            'YW5kfFtmcm96ZW5dIC0+IEZXOiBbdGVtcHNdIDAgcmVhZHMgZmFpbGVkIG91dCBvZiAxMjAw'
-            'pGR0eXBlY2xvZ2J0cxpqXQqRZWxldmVsZWRlYnVnY21zZ3hPNDA4MzA0MDk2IGZyb3plbi5j'
-            'cHA6MjkyIGhhbmRsZUNvbW1hbmR8W2Zyb3plbl0gLT4gRlc6IHRlY1tyaWdodF0gbG9ja2Vk'
-            'IChwdW1wKaRkdHlwZWNsb2didHMaal0KkmVsZXZlbGVkZWJ1Z2Ntc2d4cjQwODMwNDc2MiBm'
-            'cm96ZW4uY3BwOjI5MiBoYW5kbGVDb21tYW5kfFtmcm96ZW5dIC0+IEZXOiBwaWRbZmFuX3Jw'
-            'bV0gNDA4LjAwMDAwMCAwLjI0MjY0MiAwLjAwMDg1NiAwLjI0MTc4NiAwLjAwMDAwMA=='
         ),
     },
 }
