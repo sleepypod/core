@@ -1660,9 +1660,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
   })
 
   /** JSON.stringify calls whose argument is a decoded frame of `type`. */
-  function frameSerializations(spy: ReturnType<typeof vi.spyOn>, type: string): unknown[] {
+  function frameSerializations(spy: { mock: { calls: unknown[][] } }, type: string): unknown[] {
     return spy.mock.calls.filter(
-      c => typeof c[0] === 'object' && c[0] !== null && (c[0] as any).type === type)
+      (c: unknown[]) => typeof c[0] === 'object' && c[0] !== null && (c[0] as any).type === type)
   }
 
   it('yields exactly once at the 500-record replay boundary', async () => {
