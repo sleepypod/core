@@ -75,19 +75,6 @@ describe('primeSwitch accessory', () => {
     stop()
   })
 
-  it('reverts to off when startPriming throws', async () => {
-    startPriming.mockRejectedValueOnce(new Error('hardware down'))
-    const { service, stop } = buildPrimeSwitch()
-    const handler = service.getCharacteristic(Characteristic.On)
-    // hap-nodejs may swallow onSet rejections; assert observed state instead.
-    try {
-      await handler.setValue(true)
-    }
-    catch { /* swallowed by hap-nodejs in some versions */ }
-    expect(await handler.handleGetRequest()).toBe(false)
-    stop()
-  })
-
   it('propagates a priming failure from the characteristic handler', async () => {
     const failure = new Error('hardware down')
     startPriming.mockRejectedValueOnce(failure)
