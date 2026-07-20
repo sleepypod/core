@@ -1285,6 +1285,23 @@ describe('biometrics numeric coercion and computed windows', () => {
     expect(query.params).toEqual(['left', FAKE_NOW_SECONDS - 30 * 24 * 60 * 60, FAKE_NOW_SECONDS])
   })
 
+  it('getVitalsBaseline asks SQLite for E[X²] on each vital', async () => {
+    // The SD maths is E[X²] − E[X]², so each *SqMean column must average the
+    // SQUARE of its own vital. Only the returned rows are asserted elsewhere,
+    // which cannot tell a correct aggregate from a blank one.
+    dbState.rowsQueue.push([{
+      hrMean: null, hrSqMean: null,
+      hrvMean: null, hrvSqMean: null,
+      brMean: null, brSqMean: null,
+      sampleCount: 0,
+    }])
+    await caller.getVitalsBaseline({ side: 'left', days: 30 })
+    const fields = dbState.selectFields[0] as Record<string, unknown>
+    expect(toQuery(fields.hrSqMean).sql).toBe('AVG("vitals"."heart_rate" * "vitals"."heart_rate")')
+    expect(toQuery(fields.hrvSqMean).sql).toBe('AVG("vitals"."hrv" * "vitals"."hrv")')
+    expect(toQuery(fields.brSqMean).sql).toBe('AVG("vitals"."breathing_rate" * "vitals"."breathing_rate")')
+  })
+
   it('getVitalsBaseline clamps a negative variance to SD 0', async () => {
     // mean=60, sqMean=3500 → variance=-100; sqrt would be NaN.
     dbState.rowsQueue.push([{
