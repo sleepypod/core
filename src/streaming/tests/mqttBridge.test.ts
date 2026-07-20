@@ -570,6 +570,12 @@ describe('mqttBridge — parsePayload', () => {
     expect(parsePayload(Buffer.from('   \n  '))).toEqual({})
   })
 
+  // A retained payload republished by some brokers carries a UTF-8 BOM, which
+  // JSON.parse rejects but String.trim() strips — the trim is load-bearing.
+  it('parses a payload wrapped in BOM / non-breaking whitespace', () => {
+    expect(parsePayload(Buffer.from('﻿{"side":"left"} '))).toEqual({ side: 'left' })
+  })
+
   it('returns {} for malformed JSON', () => {
     expect(parsePayload(Buffer.from('{not json'))).toEqual({})
     expect(parsePayload(Buffer.from('{"a":'))).toEqual({})
@@ -1758,6 +1764,22 @@ describe('mqttBridge — testConnection', () => {
     const result = await testConnection({ url: 'not-a-url' })
 
     expect(result).toEqual({ ok: false, error: 'bad url' })
+  })
+
+  it('gives the probe client an 8-hex-digit suffix, not the raw random float', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.123456789)
+    const fake = createFakeClient()
+    mqttMock.state.nextClient = fake
+
+    const promise = testConnection({ url: 'mqtt://x' })
+    await new Promise(r => setTimeout(r, 0))
+    fake.emit('connect')
+    await promise
+
+    const [, opts] = mqttMock.connect.mock.calls.at(-1) as unknown as [string, any]
+    expect(opts.clientId).toBe('sleepypod-test-1f9add37')
+
+    random.mockRestore()
   })
 
   it('passes username/password/TLS-insecure to mqtt.connect', async () => {
