@@ -85,6 +85,47 @@ describe('getWifiInfo — iw primary path (Pod 5)', () => {
     })
     expect(getWifiInfo().wifiStrength).toBe(0)
   })
+
+  it('accepts protocol whitespace but rejects prefixed lookalike fields', () => {
+    mockSpawn((cmd, args) => {
+      if (cmd === 'iw' && args[0] === 'dev' && args.length === 1) {
+        return { stdout: 'phy#0\n\tInterface   wlan-long0\n' }
+      }
+      if (cmd === 'iw' && args[2] === 'link') {
+        return {
+          stdout: [
+            'noise signal: -1 dBm',
+            'signal:\t-67   dBm',
+            'prefix SSID: wrong',
+            'SSID:   living room wifi',
+          ].join('\n'),
+        }
+      }
+      return {}
+    })
+
+    expect(getWifiInfo()).toEqual({ wifiStrength: 66, wifiSSID: 'living room wifi' })
+    expect(spawnSyncMock).toHaveBeenNthCalledWith(
+      2,
+      'iw',
+      ['dev', 'wlan-long0', 'link'],
+      expect.objectContaining({
+        encoding: 'utf-8',
+        timeout: 2000,
+        env: expect.objectContaining({ PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' }),
+      }),
+    )
+  })
+
+  it('parses a positive signed signal value', () => {
+    mockSpawn((cmd, args) => {
+      if (cmd === 'iw' && args.length === 1) return { stdout: IW_DEV_OUTPUT }
+      if (cmd === 'iw' && args[2] === 'link') return { stdout: 'signal: 1 dBm\nSSID: lab' }
+      return {}
+    })
+
+    expect(getWifiInfo()).toEqual({ wifiStrength: 100, wifiSSID: 'lab' })
+  })
 })
 
 describe('getWifiInfo — fallback to /proc/net/wireless and iwgetid', () => {
@@ -103,6 +144,16 @@ describe('getWifiInfo — fallback to /proc/net/wireless and iwgetid', () => {
     // 35/70 * 100 = 50
     expect(info.wifiStrength).toBe(50)
     expect(info.wifiSSID).toBe('legacy-ssid')
+    expect(readFileSyncMock).toHaveBeenCalledWith('/proc/net/wireless', 'utf-8')
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      'iwgetid',
+      ['-r'],
+      expect.objectContaining({
+        encoding: 'utf-8',
+        timeout: 2000,
+        env: expect.objectContaining({ PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' }),
+      }),
+    )
   })
 
   it('uses /proc + iwgetid when `iw dev <iface> link` says "Not connected"', () => {
@@ -115,6 +166,20 @@ describe('getWifiInfo — fallback to /proc/net/wireless and iwgetid', () => {
     readFileSyncMock.mockReturnValue('hdr\nhdr\n wlan0: 0000   35.  -50.  -256\n')
     expect(getWifiInfo().wifiSSID).toBe('legacy-ssid')
     expect(getWifiInfo().wifiStrength).toBe(50)
+  })
+
+  it('treats a not-connected prefix as authoritative even if stale fields follow it', () => {
+    mockSpawn((cmd, args) => {
+      if (cmd === 'iw' && args[0] === 'dev' && args.length === 1) return { stdout: IW_DEV_OUTPUT }
+      if (cmd === 'iw' && args[0] === 'dev' && args[2] === 'link') {
+        return { stdout: 'Not connected.\nSSID: stale-primary' }
+      }
+      if (cmd === 'iwgetid') return { stdout: 'fallback-ssid' }
+      return {}
+    })
+    readFileSyncMock.mockReturnValue('hdr\nhdr\n wlan0: 0000   35.  -50.  -256\n')
+
+    expect(getWifiInfo()).toEqual({ wifiStrength: 50, wifiSSID: 'fallback-ssid' })
   })
 })
 

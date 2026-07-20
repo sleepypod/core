@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { PodVersion } from '../types'
 import { decodeSettings, parseDeviceStatus, parseSimpleResponse } from '../responseParser'
 import {
@@ -114,6 +114,30 @@ priming = false
     expect(status.sensorLabel).toBe('FOO=BAR=BAZ')
   })
 
+  test('trims keys and values independently on every wire line', () => {
+    const padded = [
+      '  tgHeatLevelR = 0  ',
+      '  tgHeatLevelL = 0  ',
+      '  heatTimeL = 0  ',
+      '  heatLevelL = 0  ',
+      '  heatTimeR = 0  ',
+      '  heatLevelR = 0  ',
+      '  sensorLabel = J55  ',
+      '  waterLevel = true  ',
+      '  priming = false  ',
+      '',
+      '',
+    ].join('\n')
+
+    const status = parseDeviceStatus(padded)
+    expect(status).toEqual(expect.objectContaining({
+      podVersion: PodVersion.POD_5,
+      sensorLabel: 'J55',
+      waterLevel: 'ok',
+      isPriming: false,
+    }))
+  })
+
   test('strips surrounding quotes from sensorLabel', () => {
     const withQuotes = `tgHeatLevelR = 0
 tgHeatLevelL = 0
@@ -134,6 +158,53 @@ priming = false
     expect(status.podVersion).toBe(PodVersion.POD_5)
   })
 
+  test.each([
+    ['"20600-0003-J55-B0708DE3', '20600-0003-J55-B0708DE3'],
+    ['20600-0003-J55-B0708DE3"', '20600-0003-J55-B0708DE3'],
+    ['20600-00"03-J55-B0708DE3', '20600-00"03-J55-B0708DE3'],
+  ])('only strips a quote at either edge of sensorLabel', (wireLabel, expected) => {
+    const status = parseDeviceStatus(`tgHeatLevelR = 0
+tgHeatLevelL = 0
+heatTimeL = 0
+heatLevelL = 0
+heatTimeR = 0
+heatLevelR = 0
+sensorLabel = ${wireLabel}
+waterLevel = true
+priming = false
+
+`)
+
+    expect(status.sensorLabel).toBe(expected)
+    expect(status.podVersion).toBe(PodVersion.POD_5)
+  })
+
+  test.each([
+    ['J55', PodVersion.POD_5],
+    ['I00', PodVersion.POD_4],
+    ['H00', PodVersion.POD_3],
+    ['prefix-J55x', PodVersion.POD_3],
+    ['prefix-xJ55', PodVersion.POD_3],
+    ['prefix-J5', PodVersion.POD_3],
+    ['prefix-J555', PodVersion.POD_3],
+    ['prefix-j55', PodVersion.POD_3],
+    ['prefix-Jxx', PodVersion.POD_3],
+  ])('classifies exact revision segment %s', (sensorLabel, expected) => {
+    const status = parseDeviceStatus(`tgHeatLevelR = 0
+tgHeatLevelL = 0
+heatTimeL = 0
+heatLevelL = 0
+heatTimeR = 0
+heatLevelR = 0
+sensorLabel = ${sensorLabel}
+waterLevel = true
+priming = false
+
+`)
+
+    expect(status.podVersion).toBe(expected)
+  })
+
   test('handles invalid gesture JSON', () => {
     const invalidGesture = `tgHeatLevelR = 0
 tgHeatLevelL = 0
@@ -148,9 +219,13 @@ doubleTap = {invalid json}
 
 `
 
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const status = parseDeviceStatus(invalidGesture)
     // Should parse successfully but gestures should be undefined
     expect(status.gestures).toBeUndefined()
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith('Failed to parse gesture data:', expect.any(SyntaxError))
+    warn.mockRestore()
   })
 })
 

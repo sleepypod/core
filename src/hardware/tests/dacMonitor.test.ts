@@ -1,10 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { DacMonitor } from '../dacMonitor'
+import type { HardwareClient } from '../client'
 import { HardwareCommand } from '../types'
+import { parseDeviceStatus } from '../responseParser'
 import {
   DEVICE_STATUS_POD3,
   DEVICE_STATUS_POD4,
 } from './fixtures'
+import { MockHardwareServer, createTestSocketPath } from './mockServer'
 import { setupMockServer, sleep, waitFor } from './testUtils'
 
 // Fast poll interval so tests don't take too long
@@ -20,6 +23,8 @@ describe('DacMonitor', () => {
 
   afterEach(() => {
     for (const m of monitors) m.stop()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
   })
 
   const createMonitor = (pollIntervalMs = POLL_MS): DacMonitor => {
@@ -43,6 +48,18 @@ describe('DacMonitor', () => {
     await waitFor(() => updates.length >= 2, 500)
 
     expect(updates.length).toBeGreaterThanOrEqual(2)
+  })
+
+  test('emits connection:established only for the initial connection while healthy', async () => {
+    const monitor = createMonitor()
+    const established = vi.fn()
+    monitor.on('connection:established', established)
+
+    await monitor.start()
+    await waitFor(() => monitor.getLastStatus() !== null, 500)
+    await sleep(POLL_MS * 2 + 20)
+
+    expect(established).toHaveBeenCalledOnce()
   })
 
   test('does not emit gesture:detected on first poll (baseline)', async () => {
@@ -130,6 +147,21 @@ describe('DacMonitor', () => {
     expect(monitor.getStatus()).toBe('degraded')
   })
 
+  test('emits connection:lost only once across consecutive failed polls', async () => {
+    const monitor = createMonitor()
+    monitor.on('error', () => {})
+    const lost = vi.fn()
+    monitor.on('connection:lost', lost)
+    await monitor.start()
+    await waitFor(() => monitor.getLastStatus() !== null, 500)
+
+    ctx.server.setCommandResponse(HardwareCommand.DEVICE_STATUS, 'GARBAGE\n\n')
+    await waitFor(() => monitor.getStatus() === 'degraded', 500)
+    await sleep(POLL_MS * 2 + 20)
+
+    expect(lost).toHaveBeenCalledOnce()
+  })
+
   test('recovers from degraded on next successful poll', async () => {
     const monitor = createMonitor()
     monitor.on('error', () => {}) // prevent unhandled rejection on parse error
@@ -200,9 +232,11 @@ describe('DacMonitor', () => {
     await monitor.start()
     await monitor.start() // second call is no-op
     expect(monitor.getStatus()).toBe('running')
+    expect(ctx.server.getClientCount()).toBe(1)
   })
 
   test('counter reset re-baselines without emitting a gesture', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const monitor = createMonitor()
     const gestures: unknown[] = []
     monitor.on('gesture:detected', e => gestures.push(e))
@@ -221,6 +255,10 @@ describe('DacMonitor', () => {
     await sleep(POLL_MS * 2 + 20)
 
     expect(gestures).toHaveLength(0)
+    expect(warning).toHaveBeenCalledWith(
+      '[DacMonitor] Gesture counter reset for doubleTap (l: 0→0, r: 1→0); re-baselining',
+    )
+    warning.mockRestore()
   })
 
   test('counter reset re-establishes baseline for subsequent increments', async () => {
@@ -289,6 +327,88 @@ describe('DacMonitor', () => {
     expect(updates.length).toBeLessThanOrEqual(before + 1)
   })
 
+  test('does not install a poll timer when changing cadence while stopped', () => {
+    vi.useFakeTimers()
+    const monitor = createMonitor(POLL_MS)
+
+    monitor.setPollInterval(POLL_MS + 1)
+
+    expect(vi.getTimerCount()).toBe(0)
+    expect(monitor.getStatus()).toBe('stopped')
+  })
+
+  test('does not restart the timer when cadence is unchanged', async () => {
+    vi.useFakeTimers()
+    const status = parseDeviceStatus(DEVICE_STATUS_POD4)
+    const client = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+      getDeviceStatus: vi.fn().mockResolvedValue(status),
+    } as unknown as HardwareClient
+    const monitor = new DacMonitor({ socketPath: '/unused', pollIntervalMs: 25, hardwareClient: client })
+    monitors.push(monitor)
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+    await monitor.start()
+
+    monitor.setPollInterval(25)
+
+    expect(setIntervalSpy).toHaveBeenCalledOnce()
+    expect(clearIntervalSpy).not.toHaveBeenCalled()
+  })
+
+  test('never overlaps interval polls while a hardware read is unresolved', async () => {
+    vi.useFakeTimers()
+    let resolveStatus!: (status: ReturnType<typeof parseDeviceStatus>) => void
+    const pending = new Promise<ReturnType<typeof parseDeviceStatus>>((resolve) => {
+      resolveStatus = resolve
+    })
+    const client = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+      getDeviceStatus: vi.fn().mockReturnValue(pending),
+    } as unknown as HardwareClient
+    const monitor = new DacMonitor({ socketPath: '/unused', pollIntervalMs: 10, hardwareClient: client })
+    monitors.push(monitor)
+    await monitor.start()
+
+    await vi.advanceTimersByTimeAsync(100)
+    expect(client.getDeviceStatus).toHaveBeenCalledOnce()
+
+    resolveStatus(parseDeviceStatus(DEVICE_STATUS_POD4))
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(client.getDeviceStatus).toHaveBeenCalledTimes(2)
+  })
+
+  test('discards a poll result that resolves after stop and disconnects once', async () => {
+    vi.useFakeTimers()
+    let resolveStatus!: (status: ReturnType<typeof parseDeviceStatus>) => void
+    const pending = new Promise<ReturnType<typeof parseDeviceStatus>>((resolve) => {
+      resolveStatus = resolve
+    })
+    const client = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+      getDeviceStatus: vi.fn().mockReturnValue(pending),
+    } as unknown as HardwareClient
+    const monitor = new DacMonitor({ socketPath: '/unused', pollIntervalMs: 10, hardwareClient: client })
+    monitors.push(monitor)
+    const updated = vi.fn()
+    monitor.on('status:updated', updated)
+    await monitor.start()
+    await vi.advanceTimersByTimeAsync(10)
+
+    monitor.stop()
+    resolveStatus(parseDeviceStatus(DEVICE_STATUS_POD4))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(updated).not.toHaveBeenCalled()
+    expect(monitor.getLastStatus()).toBeNull()
+    expect(client.disconnect).toHaveBeenCalledOnce()
+  })
+
   test('setPollInterval restarts the interval timer at the new cadence', async () => {
     const monitor = createMonitor(200) // start slow
     await monitor.start()
@@ -314,6 +434,16 @@ describe('DacMonitor', () => {
     expect(monitor.getStatus()).toBe('running')
   })
 
+  test('setActive and setIdle select their exact documented cadences', () => {
+    const monitor = createMonitor()
+    const setPollInterval = vi.spyOn(monitor, 'setPollInterval')
+
+    monitor.setActive()
+    monitor.setIdle()
+
+    expect(setPollInterval.mock.calls).toEqual([[1000], [5000]])
+  })
+
   test('start marks status degraded when daemon is unreachable', async () => {
     const monitor = new DacMonitor({
       socketPath: '/tmp/sleepypod-test-nonexistent.sock',
@@ -327,6 +457,26 @@ describe('DacMonitor', () => {
 
     expect(monitor.getStatus()).toBe('degraded')
     expect(errors.length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('recovers when the daemon appears after an initially failed default-client connection', async () => {
+    const socketPath = createTestSocketPath()
+    const server = new MockHardwareServer(socketPath)
+    const monitor = new DacMonitor({ socketPath, pollIntervalMs: 20 })
+    monitors.push(monitor)
+    monitor.on('error', () => {})
+
+    await monitor.start()
+    expect(monitor.getStatus()).toBe('degraded')
+    await server.start()
+    try {
+      await waitFor(() => monitor.getStatus() === 'running', 1000)
+      expect(monitor.getLastStatus()).toEqual(expect.objectContaining({ podVersion: 'I00' }))
+    }
+    finally {
+      monitor.stop()
+      await server.stop()
+    }
   })
 
   test('gesture:detected event includes timestamp', async () => {

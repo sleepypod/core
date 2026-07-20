@@ -198,6 +198,22 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 
+  it('does not suppress at the exact 120-second post-prime boundary', async () => {
+    await sync.sync(status({ isPriming: true }))
+    await sync.sync(status({ isPriming: false }))
+    vi.advanceTimersByTime(120_000)
+
+    sync.recordFlowData(frame({ rpm: 0 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('does not invent a prime grace period when primeEndedAt is still zero', async () => {
+    vi.setSystemTime(new Date(60_000))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
   it('suppresses when firmware targetLevel is 0 while device_state still says powered', async () => {
     // The field-observed failure: firmware commanded neutral, but
     // device_state.isPowered stays true because durationExpired requires
@@ -211,6 +227,19 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
 
   it('suppresses inside the session-end grace window (countdown nearly elapsed)', async () => {
     await sync.sync(status({ targetLevel: 5, heatingDuration: 60 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+  })
+
+  it('suppresses at exactly the 90-second session-end grace boundary', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 90 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+  })
+
+  it('still suppresses at exactly the 600-second stale boundary', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 300 }))
+    vi.advanceTimersByTime(900_000)
     sync.recordFlowData(frame({ rpm: 0 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
   })
@@ -239,5 +268,31 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
     sync.recordFlowData(frame({ rpm: 0 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each([
+    [false, 75, false, 75],
+    [true, null, false, null],
+    [false, null, false, null],
+  ])('requires powered=%s and target=%s together', async (isPowered, target, expectedActive, preStallTarget) => {
+    seedSide('left', isPowered, target)
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    expect(await lastGuardInput('left')).toEqual(expect.objectContaining({
+      expectedActive,
+      preStallTarget,
+      preStallDurationSeconds: null,
+    }))
+  })
+
+  it('passes an absent row to the guard as inactive with a null snapshot', async () => {
+    ;(sqlite as any).exec('DELETE FROM device_state WHERE side = \'left\'')
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    expect(await lastGuardInput('left')).toEqual(expect.objectContaining({
+      expectedActive: false,
+      preStallTarget: null,
+      preStallDurationSeconds: null,
+    }))
   })
 })

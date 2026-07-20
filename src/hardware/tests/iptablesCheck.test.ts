@@ -127,6 +127,7 @@ describe('iptablesCheck — resolveIptablesPath', () => {
     expect(calls.some(c => c === 'which iptables 2>/dev/null')).toBe(true)
     expect(calls.some(c => c.startsWith('test -x /sbin/iptables'))).toBe(true)
     expect(calls.some(c => c.startsWith('/sbin/iptables -L'))).toBe(true)
+    expect(execSyncMock).toHaveBeenCalledWith('test -x /sbin/iptables', { timeout: 2000 })
   })
 
   it('falls back to bare "iptables" when which fails and no candidate is executable', async () => {
@@ -236,6 +237,50 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     const result = checkIptables()
     expect(result.ok).toBe(true)
   })
+
+  it.each([
+    [unavailableError('binary not found')],
+    [unavailableError('spawn ENOENT')],
+    [unavailableError('No such file')],
+    [unavailableError('Permission denied')],
+    [unavailableError('Operation not permitted')],
+    [unavailableError('exit 127', 127)],
+    [unavailableError('exit 3', 3)],
+    [unavailableError('exit 4', 4)],
+  ])('independently recognises unavailable listing error %#', async (failure) => {
+    setExecHandler(({ cmd, options }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -L')) {
+        expect(options).toEqual({ encoding: 'utf-8', timeout: 5000 })
+        throw failure
+      }
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables()).toEqual(expect.objectContaining({
+      ok: true,
+      repaired: [],
+      rules: expect.arrayContaining([expect.objectContaining({ present: true })]),
+    }))
+  })
+
+  it.each([null, 'raw failure'])('handles non-Error listing failure %j without throwing', async (failure) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -L')) throw failure
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    const status = checkIptables()
+
+    expect(status.ok).toBe(false)
+    expect(status.rules.every(rule => !rule.present)).toBe(true)
+    expect(warn).toHaveBeenCalledWith('[iptables] Failed to check mDNS outbound (UDP 5353): ')
+    warn.mockRestore()
+  })
 })
 
 describe('iptablesCheck — checkAndRepairIptables', () => {
@@ -293,6 +338,14 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     const messages = logSpy.mock.calls.map(c => String(c[0]))
     expect(messages.some(m => m.includes('Repaired missing rule'))).toBe(true)
     expect(messages.some(m => m.includes('Saved 1 repaired rules'))).toBe(true)
+    expect(execSyncMock).toHaveBeenCalledWith(
+      '/sbin/iptables -A INPUT -s 192.168.0.0/16 -j ACCEPT',
+      { encoding: 'utf-8', timeout: 5000 },
+    )
+    expect(execSyncMock).toHaveBeenCalledWith(
+      '/sbin/iptables-save > /etc/iptables/rules.v4',
+      { encoding: 'utf-8', timeout: 5000 },
+    )
     logSpy.mockRestore()
   })
 
@@ -378,5 +431,23 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     expect(result.repaired.length).toBeGreaterThan(0)
     expect(saveCmd.startsWith('/usr/sbin/iptables-save > /etc/iptables/rules.v4')).toBe(true)
     logSpy.mockRestore()
+  })
+
+  it('replaces only the final iptables path component when deriving iptables-save', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const commands: string[] = []
+    setExecHandler(({ cmd }) => {
+      commands.push(cmd)
+      if (cmd.includes(' -L INPUT')) return 'udp dpt:5353'
+      if (cmd.includes(' -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
+      return ''
+    })
+
+    const { checkAndRepairIptables } = await import('../iptablesCheck')
+    const status = checkAndRepairIptables('/opt/iptables-tools/iptables')
+
+    expect(status.repaired).toEqual(['LAN access (192.168.0.0/16)'])
+    expect(commands).toContain('/opt/iptables-tools/iptables-save > /etc/iptables/rules.v4')
+    log.mockRestore()
   })
 })

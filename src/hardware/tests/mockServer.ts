@@ -36,6 +36,7 @@ export class MockHardwareServer {
   private clients: Socket[] = []
   private commandResponses = new Map<string, string>()
   private commandDelays = new Map<string, number>()
+  private receivedCommands: Array<{ command: string, argument: string }> = []
   private shouldReject = false
   private connectionDelay = 0
 
@@ -101,6 +102,7 @@ export class MockHardwareServer {
     this.commandDelays.clear()
     this.shouldReject = false
     this.connectionDelay = 0
+    this.receivedCommands = []
     this.setupDefaultResponses()
   }
 
@@ -172,7 +174,8 @@ export class MockHardwareServer {
   private handleCommand(socket: Socket, message: string) {
     const lines = message.split('\n')
     const command = lines[0].trim() // Trim whitespace as defensive measure
-    // const argument = lines[1] || '' // Not currently used, but protocol includes arguments
+    const argument = lines[1] || ''
+    this.receivedCommands.push({ command, argument })
 
     const response = this.commandResponses.get(command) || ERROR_RESPONSE
     const delay = this.commandDelays.get(command) || 0
@@ -222,6 +225,10 @@ export class MockHardwareServer {
    */
   getClientCount(): number {
     return this.clients.length
+  }
+
+  getReceivedCommands(): ReadonlyArray<{ command: string, argument: string }> {
+    return this.receivedCommands
   }
 
   /**

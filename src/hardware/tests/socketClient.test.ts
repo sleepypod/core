@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { HardwareCommand } from '../types'
 import { connectToSocket } from '../socketClient'
 import { ERROR_RESPONSE } from './fixtures'
@@ -14,8 +14,14 @@ describe('SocketClient', () => {
   })
 
   test('executes command and receives response', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const response = await ctx.socketClient!.executeCommand(HardwareCommand.HELLO)
     expect(response.trim()).toBe('READY')
+    expect(ctx.server.getReceivedCommands()).toEqual([
+      { command: HardwareCommand.HELLO, argument: '' },
+    ])
+    expect(warning).not.toHaveBeenCalled()
+    warning.mockRestore()
   })
 
   test('executes command with argument', async () => {
@@ -38,6 +44,7 @@ describe('SocketClient', () => {
   })
 
   test('discards stale buffered responses before sending the next command', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // A response that arrives while no read is pending (e.g. after a read
     // timeout) is buffered; the next command must not consume it as its own.
     ctx.server.sendToClient(0, 'STALE-RESPONSE\n\n')
@@ -45,6 +52,8 @@ describe('SocketClient', () => {
 
     const response = await ctx.socketClient!.executeCommand(HardwareCommand.HELLO)
     expect(response.trim()).toBe('READY')
+    expect(warning).toHaveBeenCalledWith(`Discarded 1 stale response(s) before sending ${HardwareCommand.HELLO}`)
+    warning.mockRestore()
   })
 
   test('sanitizes newlines in arguments', async () => {
@@ -52,6 +61,11 @@ describe('SocketClient', () => {
     const maliciousArg = '50\n14\n\n' // Tries to inject DEVICE_STATUS command
 
     await ctx.socketClient!.executeCommand(HardwareCommand.TEMP_LEVEL_LEFT, maliciousArg)
+
+    expect(ctx.server.getReceivedCommands()[0]).toEqual({
+      command: HardwareCommand.TEMP_LEVEL_LEFT,
+      argument: '5014',
+    })
 
     // Should succeed without protocol corruption
     const status = await ctx.socketClient!.executeCommand(HardwareCommand.DEVICE_STATUS)
@@ -64,6 +78,40 @@ describe('SocketClient', () => {
     ctx.socketClient!.close()
 
     expect(ctx.socketClient!.isClosed()).toBe(true)
+  })
+
+  test('logs socket errors with the original Error object', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failure = new Error('wire broke')
+
+    ctx.socketClient!.getSocket().emit('error', failure)
+
+    expect(error).toHaveBeenCalledWith('Socket error:', failure)
+    error.mockRestore()
+  })
+
+  test('marks itself closed when the remote socket emits close', () => {
+    expect(ctx.socketClient!.isClosed()).toBe(false)
+
+    ctx.socketClient!.getSocket().emit('close', false)
+
+    expect(ctx.socketClient!.isClosed()).toBe(true)
+  })
+
+  test('wraps write callback failures with command context', async () => {
+    const socket = ctx.socketClient!.getSocket()
+    vi.spyOn(socket, 'write').mockImplementation(((...args: unknown[]) => {
+      const callback = args.find(arg => typeof arg === 'function') as ((error?: Error) => void) | undefined
+      callback?.(new Error('write boom'))
+      return false
+    }) as typeof socket.write)
+
+    await expect(ctx.socketClient!.executeCommand(HardwareCommand.PRIME)).rejects.toMatchObject({
+      name: 'CommandExecutionError',
+      code: 'COMMAND_EXECUTION_FAILED',
+      command: HardwareCommand.PRIME,
+      message: `Failed to execute command ${HardwareCommand.PRIME}: Error: write boom`,
+    })
   })
 
   test('throws when executing command on closed socket', async () => {
@@ -91,11 +139,13 @@ describe('SocketClient', () => {
   })
 
   test('close is idempotent', () => {
+    const destroy = vi.spyOn(ctx.socketClient!.getSocket(), 'destroy')
     ctx.socketClient!.close()
     ctx.socketClient!.close()
     ctx.socketClient!.close()
 
     expect(ctx.socketClient!.isClosed()).toBe(true)
+    expect(destroy).toHaveBeenCalledOnce()
   })
 })
 
@@ -144,6 +194,10 @@ describe('connectToSocket', () => {
     // Test that connection errors are wrapped in HardwareError
     const nonExistentPath = `/tmp/nonexistent-${Date.now()}.sock`
 
-    await expect(connectToSocket(nonExistentPath, 100)).rejects.toThrow('Socket connection failed')
+    await expect(connectToSocket(nonExistentPath, 100)).rejects.toMatchObject({
+      name: 'HardwareError',
+      code: 'SOCKET_ERROR',
+      message: expect.stringContaining('Socket connection failed:'),
+    })
   })
 })
