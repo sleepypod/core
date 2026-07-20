@@ -9,6 +9,74 @@ import {
 import type { CurvePoint } from './types'
 
 describe('generateSleepCurve', () => {
+  it('pins every phase transition for an eight-hour balanced curve', () => {
+    const points = generateSleepCurve({
+      bedtimeMinutes: 22 * 60,
+      wakeMinutes: 6 * 60,
+      intensity: 'balanced',
+      minTempF: 69,
+      maxTempF: 87,
+    })
+
+    expect(points.map(point => [point.minutesFromBedtime, point.tempOffset, point.phase])).toEqual([
+      [-45, 0, 'warmUp'],
+      [-30, 1, 'warmUp'],
+      [-15, 1, 'warmUp'],
+      [0, 2, 'warmUp'],
+      [18, 1, 'coolDown'],
+      [36, -3, 'coolDown'],
+      [54, -5, 'coolDown'],
+      [72, -7, 'coolDown'],
+      [96, -9, 'deepSleep'],
+      [120, -11, 'deepSleep'],
+      [165, -11, 'deepSleep'],
+      [210, -11, 'deepSleep'],
+      [225, -9, 'maintain'],
+      [240, -8, 'maintain'],
+      [255, -6, 'maintain'],
+      [345, -6, 'maintain'],
+      [435, -6, 'maintain'],
+      [450, -2, 'preWake'],
+      [465, 3, 'preWake'],
+      [480, 7, 'preWake'],
+      [490, 5, 'wake'],
+      [500, 2, 'wake'],
+      [510, 0, 'wake'],
+    ])
+  })
+
+  it('pins the compressed transition arithmetic for a short curve', () => {
+    const points = generateSleepCurve({
+      bedtimeMinutes: 22 * 60,
+      wakeMinutes: 30,
+      intensity: 'cool',
+      minTempF: 69,
+      maxTempF: 87,
+    })
+
+    expect(points.map(point => [point.minutesFromBedtime, point.tempOffset, point.phase])).toEqual([
+      [-45, 0, 'warmUp'], [-30, 0, 'warmUp'], [-15, 1, 'warmUp'], [0, 1, 'warmUp'],
+      [6, 1, 'coolDown'], [11, -4, 'coolDown'], [17, -6, 'coolDown'], [23, -8, 'coolDown'],
+      [30, -9, 'deepSleep'], [38, -11, 'deepSleep'], [53, -11, 'deepSleep'], [68, -11, 'deepSleep'],
+      [83, -10, 'maintain'], [98, -8, 'maintain'], [113, -7, 'maintain'], [143, -7, 'maintain'],
+      [145, -2, 'preWake'], [148, 2, 'preWake'], [150, 7, 'preWake'],
+      [160, 5, 'wake'], [170, 2, 'wake'], [180, 0, 'wake'],
+    ])
+  })
+
+  it('treats equal bedtime and wake time as a full twenty-four-hour window', () => {
+    const points = generateSleepCurve({
+      bedtimeMinutes: 7 * 60,
+      wakeMinutes: 7 * 60,
+      intensity: 'warm',
+      minTempF: 69,
+      maxTempF: 87,
+    })
+
+    expect(points.findLast(point => point.phase === 'preWake')?.minutesFromBedtime).toBe(1440)
+    expect(points.at(-1)?.minutesFromBedtime).toBe(1470)
+  })
+
   it('generates sorted points for a typical 8-hour sleep', () => {
     const points = generateSleepCurve({
       bedtimeMinutes: 22 * 60, // 10 PM
@@ -202,5 +270,6 @@ describe('time utility functions', () => {
     expect(curvePointToDisplayTime(0, 22 * 60)).toBe('10:00 PM')
     expect(curvePointToDisplayTime(120, 22 * 60)).toBe('12:00 AM')
     expect(curvePointToDisplayTime(480, 22 * 60)).toBe('6:00 AM')
+    expect(curvePointToDisplayTime(0, 12 * 60)).toBe('12:00 PM')
   })
 })

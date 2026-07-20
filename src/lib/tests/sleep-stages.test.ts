@@ -385,6 +385,48 @@ describe('filterOutliers — windowed median filter', () => {
     expect(r[3].heartRate).toBe(60)
     expect(r[4].heartRate).toBe(60)
   })
+
+  it('uses only the two neighboring readings on each side', () => {
+    const vitals = [130, 130, 60, 60, 100, 60, 60, 130, 130]
+      .map((heartRate, index) => vitalRow(index * 5, heartRate))
+
+    expect(classifySleepStages(vitals, [], 1.0)[4].heartRate).toBeNull()
+  })
+
+  it('includes the valid lower HR boundary in the median window', () => {
+    const vitals = [45, 45, 46, 80, 80]
+      .map((heartRate, index) => vitalRow(index * 5, heartRate))
+
+    expect(classifySleepStages(vitals, [], 1.0)[2].heartRate).toBe(46)
+  })
+
+  it('includes the valid upper HR boundary in the median window', () => {
+    const vitals = [60, 60, 46, 130, 130]
+      .map((heartRate, index) => vitalRow(index * 5, heartRate))
+
+    expect(classifySleepStages(vitals, [], 1.0)[2].heartRate).toBe(46)
+  })
+})
+
+describe('classifySleepStages — average HR selection', () => {
+  it('excludes null readings from the average HR denominator', () => {
+    const result = classifySleepStages([
+      vitalRow(0, 50),
+      vitalRow(5, null),
+      vitalRow(10, 70),
+    ], [], 1.0)
+
+    expect(result[0].stage).toBe('deep')
+  })
+
+  it('uses the observed average whenever at least one valid HR exists', () => {
+    const result = classifySleepStages([
+      vitalRow(0, 58),
+      vitalRow(5, 82),
+    ], [], 1.0)
+
+    expect(result[0].stage).toBe('deep')
+  })
 })
 
 describe('classifySleepStages — sort and duration', () => {
@@ -625,6 +667,35 @@ describe('classifyEpoch — high-cal wake threshold at movement > 200', () => {
   })
 })
 
+describe('classifyEpoch — exact HR-ratio boundaries', () => {
+  it('does not classify an exact 0.92 HR ratio as deep', () => {
+    const vitals = [69, 69, 69, 84, 84]
+      .map((heartRate, index) => vitalRow(index * 5, heartRate))
+
+    expect(classifySleepStages(vitals, [], 1.0)[0].stage).toBe('light')
+  })
+
+  it('enters the elevated-HR branch at an exact 0.95 ratio', () => {
+    const vitals = [76, 76, 76, 86, 86]
+      .map((heartRate, index) => vitalRow(index * 5, heartRate, index === 0 ? 20 : null))
+
+    expect(classifySleepStages(vitals, [movRow(0, 10)], 1.0)[0].stage).toBe('rem')
+  })
+
+  it('does not classify moderate movement as REM through the narrow first branch', () => {
+    const result = classifySleepStages(
+      [vitalRow(0, 70, 20, 14)],
+      [movRow(0, 100)],
+      1.0,
+    )
+    expect(result[0].stage).toBe('light')
+  })
+
+  it('does not infer deep sleep from a missing heart rate', () => {
+    expect(classifySleepStages([vitalRow(0, null)], [], 1.0)[0].stage).toBe('light')
+  })
+})
+
 describe('mergeIntoBlocks — boundary arithmetic', () => {
   it('computes block end as start + duration on stage change', () => {
     // ArithmeticOperator `+` → `-` at line 281: end would collapse to 0.
@@ -659,6 +730,10 @@ describe('calculateQualityScore — exact penalty arithmetic', () => {
   it('subtracts 2 per percentage point below the 15% deep target', () => {
     // deep=10 → penalty (15-10)*2 = 10 → score 90.
     expect(calculateQualityScore({ deep: 10, light: 60, rem: 25, wake: 5 })).toBe(90)
+  })
+
+  it('does not let a below-threshold wake percentage cancel another penalty', () => {
+    expect(calculateQualityScore({ deep: 10, light: 65, rem: 25, wake: 0 })).toBe(90)
   })
 
   it('subtracts 1.5 per percentage point above the 30% deep target', () => {

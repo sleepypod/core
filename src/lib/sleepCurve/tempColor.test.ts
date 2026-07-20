@@ -40,6 +40,7 @@ describe('tempGradientStops', () => {
     // [-4, 4] window admits the -2/0/+2 stops.
     const colours = stops.map(s => s[0])
     expect(colours).toEqual(['#7ab5e0', '#9ca3af', '#e0976a'])
+    expect(tempGradientStops(-2, 2)).toBe('#7ab5e0 0%, #9ca3af 50%, #e0976a 100%')
   })
 
   test('emits percentages clamped to [0, 100]', () => {
@@ -61,6 +62,13 @@ describe('tempGradientStops', () => {
       expect(pct).toBeGreaterThanOrEqual(0)
       expect(pct).toBeLessThanOrEqual(100)
     }
+    expect(result).toBe('#7ab5e0 0%, #9ca3af 0%, #e0976a 100%')
+  })
+
+  test('uses both inclusive two-degree filter buffers and exact range arithmetic', () => {
+    expect(tempGradientStops(0, 4)).toBe(
+      '#7ab5e0 0%, #9ca3af 0%, #e0976a 50%, #dc6646 100%',
+    )
   })
 
   test('renders the cool end of the spectrum for a fully cold range', () => {

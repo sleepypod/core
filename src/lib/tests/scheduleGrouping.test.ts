@@ -48,6 +48,26 @@ describe('sortChronological', () => {
       { time: '23:00', temperature: 68 },
     ])
   })
+
+  test('orders minute components arithmetically within the same hour', () => {
+    expect(sortChronological([
+      { time: '12:50', temperature: 68 },
+      { time: '12:10', temperature: 72 },
+    ])).toEqual([
+      { time: '12:10', temperature: 72 },
+      { time: '12:50', temperature: 68 },
+    ])
+  })
+
+  test('does not treat an exact twelve-hour gap as an overnight wrap', () => {
+    expect(sortChronological([
+      { time: '12:00', temperature: 68 },
+      { time: '00:00', temperature: 72 },
+    ])).toEqual([
+      { time: '00:00', temperature: 72 },
+      { time: '12:00', temperature: 68 },
+    ])
+  })
 })
 
 describe('groupDaysBySharedCurve', () => {
@@ -59,6 +79,7 @@ describe('groupDaysBySharedCurve', () => {
     ])
     expect(groups[0].setPoints).toEqual([])
     expect(groups[0].allDisabled).toBeUndefined()
+    expect(groups[0].key).toBe('__empty__')
   })
 
   test('groups identical curves across days regardless of input ordering', () => {
@@ -76,6 +97,19 @@ describe('groupDaysBySharedCurve', () => {
     expect(matched.days).toEqual(['monday', 'tuesday'])
   })
 
+  test('uses temperature as the fingerprint tiebreaker for duplicate times', () => {
+    const groups = groupDaysBySharedCurve([
+      { dayOfWeek: 'monday', time: '08:00', temperature: 72, enabled: true },
+      { dayOfWeek: 'monday', time: '08:00', temperature: 68, enabled: true },
+      { dayOfWeek: 'tuesday', time: '08:00', temperature: 68, enabled: true },
+      { dayOfWeek: 'tuesday', time: '08:00', temperature: 72, enabled: true },
+    ])
+
+    const shared = groups.find(group => group.days.includes('monday'))
+    expect(shared?.days).toEqual(['monday', 'tuesday'])
+    expect(shared?.key).toBe('08:00@68|08:00@72')
+  })
+
   test('keeps days with paused schedules separate from active days', () => {
     const schedules = [
       { dayOfWeek: 'monday', time: '08:00', temperature: 70, enabled: true },
@@ -89,6 +123,7 @@ describe('groupDaysBySharedCurve', () => {
     if (!monday || !tuesday) return
     expect(monday.allDisabled).toBeUndefined()
     expect(tuesday.allDisabled).toBe(true)
+    expect(tuesday.key).toBe('__disabled__:08:00@70')
     // Paused days still surface their saved curve
     expect(tuesday.setPoints).toEqual([{ time: '08:00', temperature: 70 }])
   })
@@ -143,5 +178,15 @@ describe('groupDaysBySharedCurve', () => {
     expect(monday).toBeDefined()
     if (!monday) return
     expect(monday.setPoints.map(p => p.time)).toEqual(['22:00', '00:30', '06:00'])
+  })
+
+  test('sorts equal-sized active groups by their earliest weekday', () => {
+    const groups = groupDaysBySharedCurve([
+      { dayOfWeek: 'sunday', time: '09:00', temperature: 70, enabled: true },
+      { dayOfWeek: 'monday', time: '10:00', temperature: 71, enabled: true },
+      { dayOfWeek: 'tuesday', time: '11:00', temperature: 72, enabled: true },
+    ]).filter(group => group.setPoints.length > 0 && !group.allDisabled)
+
+    expect(groups.map(group => group.days[0])).toEqual(['sunday', 'monday', 'tuesday'])
   })
 })

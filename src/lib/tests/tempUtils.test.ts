@@ -144,6 +144,7 @@ describe('temperature domain helpers', () => {
     expect(formatDisplayTemp(68.25, 'F', { includeUnit: false })).toBe('68°')
     expect(formatDisplayTemp(null, 'F')).toBe('--')
     expect(formatDisplayTemp(undefined, 'C', { nullDisplay: '—' })).toBe('—')
+    expect(formatDisplayTemp(-0.1, 'C', { decimals: 0 })).toBe('0°C')
   })
 
   test('formats setpoints and sensors from their source units', () => {
