@@ -322,6 +322,9 @@ describe('runRetentionPass', () => {
 
     expect(result.rowsDeleted).toBeGreaterThan(0)
     expect(runSpy).toHaveBeenCalledTimes(1)
+    expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({
+      queryChunks: [expect.objectContaining({ value: ['PRAGMA incremental_vacuum'] })],
+    }))
   })
 
   it('swallows incremental_vacuum failures and still returns the result', () => {
@@ -452,6 +455,19 @@ describe('startBiometricsRetention / stopBiometricsRetention', () => {
     seedAllTables(getDb(), new Date(Date.now() - 365 * 86_400_000))
     vi.advanceTimersByTime(3_600_000)
     expect(getDb().select().from(vitals).all()).toHaveLength(0)
+  })
+
+  it('does not log a prune message for a successful zero-delete pass', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    startBiometricsRetention({
+      retentionDays: 30,
+      intervalHours: 1,
+      initialDelayMs: 0,
+    })
+    vi.advanceTimersByTime(0)
+
+    expect(log).not.toHaveBeenCalled()
   })
 
   it('is idempotent: a second start while one is pending is a no-op', () => {
