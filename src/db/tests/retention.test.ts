@@ -357,6 +357,17 @@ describe('runRetentionPass', () => {
 })
 
 describe('configureAutoVacuum', () => {
+  it('always closes the temporary SQLite handle', () => {
+    const close = vi.spyOn(Database.prototype, 'close')
+    try {
+      configureAutoVacuum(':memory:')
+      expect(close).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      close.mockRestore()
+    }
+  })
+
   it('sets auto_vacuum = INCREMENTAL on a fresh DB file', () => {
     const tmpPath = path.join(
       process.cwd(),
@@ -393,6 +404,19 @@ describe('startBiometricsRetention / stopBiometricsRetention', () => {
     mockState.db = opened.db
     close = opened.close
     vi.useFakeTimers()
+
+    // Guard mutation tests against invalid zero/sub-millisecond recurring
+    // intervals. Without this, arithmetic/validation mutants can make a
+    // large fake-timer advance execute millions of callbacks and time out
+    // instead of failing at the faulty interval calculation.
+    const fakeSetInterval = globalThis.setInterval
+    vi.spyOn(globalThis, 'setInterval').mockImplementation(((...params: Parameters<typeof setInterval>) => {
+      const [callback, delay, ...args] = params
+      if (typeof delay === 'number' && delay < 1_000) {
+        throw new Error(`retention interval is implausibly short: ${delay}`)
+      }
+      return fakeSetInterval(callback, delay, ...args)
+    }) as typeof setInterval)
   })
 
   afterEach(() => {
@@ -436,12 +460,14 @@ describe('startBiometricsRetention / stopBiometricsRetention', () => {
       intervalHours: 24,
       initialDelayMs: 5_000,
     })
+    expect(vi.getTimerCount()).toBe(1)
     // Second call should NOT replace the timer or schedule extra work.
     startBiometricsRetention({
       retentionDays: 7,
       intervalHours: 24,
       initialDelayMs: 5_000,
     })
+    expect(vi.getTimerCount()).toBe(1)
 
     seedAllTables(getDb(), new Date(Date.now() - 365 * 86_400_000))
     vi.advanceTimersByTime(5_000)
@@ -482,6 +508,15 @@ describe('startBiometricsRetention / stopBiometricsRetention', () => {
     // Crossing 24h should fire.
     vi.advanceTimersByTime(1)
     expect(getDb().select().from(vitals).all()).toHaveLength(0)
+  })
+
+  it('uses a valid interval from BIOMETRICS_RETENTION_INTERVAL_HOURS', () => {
+    process.env.BIOMETRICS_RETENTION_INTERVAL_HOURS = '2'
+
+    startBiometricsRetention({ retentionDays: 30, initialDelayMs: 0 })
+    vi.advanceTimersByTime(0)
+
+    expect(globalThis.setInterval).toHaveBeenCalledWith(expect.any(Function), 2 * 3_600_000)
   })
 
   it('falls back to 24h when intervalHours option is zero', () => {
