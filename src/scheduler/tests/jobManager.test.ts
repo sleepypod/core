@@ -1,6 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
+const hardwareClient = vi.hoisted(() => ({
+  connect: vi.fn(async () => {}),
+  setTemperature: vi.fn(async () => {}),
+  setPower: vi.fn(async () => {}),
+  setAlarm: vi.fn(async () => {}),
+  startPriming: vi.fn(async () => {}),
+  sendRaw: vi.fn<(command: string, arg?: string) => Promise<string>>(),
+}))
+const writeFileMock = vi.hoisted(() => vi.fn<(path: string, data: string) => Promise<void>>(async () => {}))
+const renameMock = vi.hoisted(() => vi.fn<(from: string, to: string) => Promise<void>>(async () => {}))
+const execMock = vi.hoisted(() => vi.fn())
+
 vi.mock('@/src/db', () => {
   // Minimal drizzle-shaped stub. Each .select().from(...) is a thenable
   // that resolves to an empty row set on the next microtask. loadSchedules
@@ -56,15 +68,9 @@ vi.mock('@/src/hardware/dacTransport', () => ({
 
 vi.mock('@/src/hardware/dacMonitor.instance', async () => {
   const { sendCommand } = await import('@/src/hardware/dacTransport')
+  hardwareClient.sendRaw.mockImplementation(async (command: string, arg?: string) => sendCommand(command, arg))
   return {
-    getSharedHardwareClient: () => ({
-      connect: vi.fn(async () => {}),
-      setTemperature: vi.fn(async () => {}),
-      setPower: vi.fn(async () => {}),
-      setAlarm: vi.fn(async () => {}),
-      startPriming: vi.fn(async () => {}),
-      sendRaw: vi.fn(async (command: string, arg?: string) => sendCommand(command, arg)),
-    }),
+    getSharedHardwareClient: () => hardwareClient,
   }
 })
 
@@ -76,10 +82,18 @@ vi.mock('@/src/services/autoOffWatcher', () => ({
   cancelAutoOffTimer: vi.fn(),
 }))
 
+vi.mock('node:fs/promises', () => ({
+  writeFile: writeFileMock,
+  rename: renameMock,
+}))
+
+vi.mock('child_process', () => ({ exec: execMock }))
+
 import { decode as cborDecode } from 'cbor-x'
 import { db } from '@/src/db'
 import { sendCommand } from '@/src/hardware/dacTransport'
-import { HardwareCommand } from '@/src/hardware/types'
+import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
+import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { JobManager } from '../jobManager'
 import { JobType } from '../types'
 
@@ -189,6 +203,7 @@ describe('JobManager public surface (stub DB)', () => {
   afterEach(async () => {
     vi.useRealTimers()
     await manager.shutdown()
+    vi.restoreAllMocks()
   })
 
   it('getScheduler exposes the underlying Scheduler', () => {
@@ -216,6 +231,17 @@ describe('JobManager public surface (stub DB)', () => {
     expect(log).toHaveBeenCalledWith('Job executed successfully: job-ok')
     expect(error).toHaveBeenCalledWith('Job execution failed: job-failed', 'hardware failed')
     expect(error).toHaveBeenCalledWith('Job error: job-error', failure)
+  })
+
+  it('re-registers lifecycle listeners without leaving duplicates behind', () => {
+    const scheduler = manager.getScheduler()
+
+    ;(manager as any).setupEventListeners()
+    ;(manager as any).setupEventListeners()
+
+    expect(scheduler.listenerCount('jobScheduled')).toBe(1)
+    expect(scheduler.listenerCount('jobExecuted')).toBe(1)
+    expect(scheduler.listenerCount('jobError')).toBe(1)
   })
 
   it('logs exact aggregate messages while loading an empty schedule set', async () => {
@@ -287,6 +313,21 @@ describe('JobManager public surface (stub DB)', () => {
     expect(temps).toEqual([74, 76]) // each set point scheduled exactly once
   })
 
+  it('rescheduling one run-once session preserves every unrelated job', () => {
+    const now = new Date()
+    const fmt = (d: Date) =>
+      `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+    const setPointTime = fmt(new Date(now.getTime() + 10 * 60_000))
+    const wakeTime = fmt(new Date(now.getTime() + 60 * 60_000))
+
+    manager.scheduleRunOnceSession(1, 'left', [{ time: setPointTime, temperature: 78 }], wakeTime, 'UTC')
+    manager.scheduleRunOnceSession(2, 'right', [{ time: setPointTime, temperature: 80 }], wakeTime, 'UTC')
+    manager.scheduleRunOnceSession(1, 'left', [{ time: setPointTime, temperature: 76 }], wakeTime, 'UTC')
+
+    expect(manager.getScheduler().getJob('runonce-2-0')).toBeDefined()
+    expect(manager.getScheduler().getJob('runonce-cleanup-2')).toBeDefined()
+  })
+
   it('cancelRunOnceSession removes only run-once jobs scoped to the side', () => {
     const now = new Date()
     const fmt = (d: Date) =>
@@ -313,6 +354,18 @@ describe('JobManager public surface (stub DB)', () => {
     manager.stopHeartbeat() // double-stop is safe
   })
 
+  it('stopHeartbeat clears its timer and permits a fresh timer to start', () => {
+    const interval = vi.spyOn(globalThis, 'setInterval')
+    const clear = vi.spyOn(globalThis, 'clearInterval')
+
+    manager.startHeartbeat()
+    manager.stopHeartbeat()
+    manager.startHeartbeat()
+
+    expect(interval).toHaveBeenCalledTimes(2)
+    expect(clear).toHaveBeenCalledOnce()
+  })
+
   it('startHeartbeat does not create a second interval on re-entry (kills L258 guard mutant)', () => {
     // Kills `if (this.heartbeatTimer) return` → `if (false) return`. Without
     // the guard, every call would leak a new setInterval and the cleanup in
@@ -336,6 +389,21 @@ describe('JobManager public surface (stub DB)', () => {
     await manager.shutdown()
     await manager.shutdown()
     // afterEach will call once more
+  })
+
+  it('shutdown stops the heartbeat, removes listeners, and delegates to Scheduler', async () => {
+    const scheduler = manager.getScheduler()
+    const clear = vi.spyOn(globalThis, 'clearInterval')
+    const shutdown = vi.spyOn(scheduler, 'shutdown').mockResolvedValue()
+    manager.startHeartbeat()
+
+    await manager.shutdown()
+
+    expect(clear).toHaveBeenCalledOnce()
+    expect(scheduler.listenerCount('jobScheduled')).toBe(0)
+    expect(scheduler.listenerCount('jobExecuted')).toBe(0)
+    expect(scheduler.listenerCount('jobError')).toBe(0)
+    expect(shutdown).toHaveBeenCalledOnce()
   })
 })
 
@@ -471,6 +539,58 @@ describe('JobManager.checkLiveness', () => {
     await manager.checkLiveness() // first call sets cooldown
     expect(await manager.checkLiveness()).toEqual(['temp-1'])
   })
+
+  it('uses a strict cooldown boundary and reloads when exactly 300 seconds elapsed', async () => {
+    const fixedNow = 1_700_000_000_000
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow)
+    const reload = vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    stubScheduler(
+      [{ id: 'temp-boundary', type: JobType.TEMPERATURE }],
+      () => new Date(fixedNow - STALE_MS - 1),
+    )
+    ;(manager as any).lastHeartbeatReloadAt = fixedNow - 300_000
+
+    expect(await manager.checkLiveness()).toEqual(['temp-boundary'])
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('logs the exact cooldown warning with only the first three stale ids', async () => {
+    const fixedNow = 1_700_000_000_000
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow)
+    vi.spyOn(manager, 'reloadSchedules').mockResolvedValue()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const jobs = ['temp-a', 'temp-b', 'temp-c', 'temp-d']
+      .map(id => ({ id, type: JobType.TEMPERATURE }))
+    stubScheduler(jobs, () => new Date(fixedNow - STALE_MS - 1))
+    ;(manager as any).lastHeartbeatReloadAt = fixedNow - 175_000
+
+    expect(await manager.checkLiveness()).toEqual(['temp-a', 'temp-b', 'temp-c', 'temp-d'])
+    expect(warn).toHaveBeenCalledWith(
+      '[scheduler] 4 jobs overdue past nextRun by >90000ms '
+      + '(examples: temp-a, temp-b, temp-c). Reload cooldown active for 125s.',
+    )
+  })
+
+  it('logs the exact forced-reload warning and exact reload error', async () => {
+    const fixedNow = 1_700_000_000_000
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow)
+    vi.spyOn(manager, 'reloadSchedules').mockRejectedValue(new Error('reload boom'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const jobs = ['temp-a', 'temp-b', 'temp-c', 'temp-d']
+      .map(id => ({ id, type: JobType.TEMPERATURE }))
+    stubScheduler(jobs, () => new Date(fixedNow - STALE_MS - 1))
+
+    expect(await manager.checkLiveness()).toEqual(['temp-a', 'temp-b', 'temp-c', 'temp-d'])
+    expect(warn).toHaveBeenCalledWith(
+      '[scheduler] 4 jobs overdue past nextRun by >90000ms '
+      + '(examples: temp-a, temp-b, temp-c). Forcing reloadSchedules().',
+    )
+    expect(error).toHaveBeenCalledWith(
+      '[scheduler] heartbeat-triggered reload failed:',
+      'reload boom',
+    )
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -565,6 +685,18 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
     expect(sendLed).toHaveBeenLastCalledWith(10)
   })
 
+  it('includes the exact start minute of a cross-midnight window', async () => {
+    const { sendLed } = run('2026-01-15T22:00:00Z')
+    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(10)
+  })
+
+  it('excludes the exact end minute of a cross-midnight window', async () => {
+    const { sendLed } = run('2026-01-15T06:00:00Z')
+    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(80)
+  })
+
   // Same-day window with current well outside. Mutating `&&` → `||` would
   // flip this to NIGHT because >= startMinutes alone is true.
   it('day when current is past the same-day window — kills && → ||', async () => {
@@ -619,6 +751,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // the two scheduleJob arrow bodies (lines 519-522, 527-530).
   it('scheduled callbacks send the correct brightness for night vs day', async () => {
     const { sendLed, scheduleJob } = run('2026-01-15T12:00:00Z')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
 
     // Clear the initial-apply call; we want to inspect what the cron
@@ -632,9 +765,28 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
 
     await startCb()
     expect(sendLed).toHaveBeenLastCalledWith(10) // night → night brightness
+    expect(log).toHaveBeenCalledWith('LED night mode: setting brightness to 10')
 
     await endCb()
     expect(sendLed).toHaveBeenLastCalledWith(80) // morning → day brightness
+    expect(log).toHaveBeenCalledWith('LED night mode: setting brightness to 80')
+  })
+
+  it('logs the exact initial-brightness failure and keeps both jobs scheduled', async () => {
+    const { sendLed, scheduleJob } = run('2026-01-15T12:00:00Z')
+    const failure = new Error('DAC offline')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    sendLed.mockRejectedValueOnce(failure)
+
+    await expect(
+      (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10),
+    ).resolves.toBeUndefined()
+
+    expect(scheduleJob).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenCalledWith(
+      'LED night mode: failed to apply initial brightness:',
+      failure,
+    )
   })
 })
 
@@ -706,6 +858,41 @@ describe('JobManager incremental upsert/cancel', () => {
     const jobs = manager.getScheduler().getJobs().filter(j => j.id === `temp-${baseTemp.id}`)
     expect(jobs).toHaveLength(1)
     expect(jobs[0].type).toBe(JobType.TEMPERATURE)
+  })
+
+  it('registers exact metadata for temperature, power, and alarm jobs', () => {
+    manager.upsertTemperatureJob(baseTemp)
+    manager.upsertPowerJob(basePower)
+    manager.upsertAlarmJob(baseAlarm)
+    const scheduler = manager.getScheduler()
+
+    expect(scheduler.getJob('temp-1')?.metadata).toEqual({
+      scheduleId: 1,
+      side: 'left',
+      targetTemperature: 68,
+    })
+    expect(scheduler.getJob('power-on-1')?.metadata).toEqual({
+      scheduleId: 1,
+      side: 'left',
+      targetTemperature: 75,
+    })
+    expect(scheduler.getJob('power-off-1')?.metadata).toEqual({
+      scheduleId: 1,
+      side: 'left',
+    })
+    expect(scheduler.getJob('alarm-1')?.metadata).toEqual({
+      scheduleId: 1,
+      side: 'left',
+      targetTemperature: 80,
+    })
+  })
+
+  it('registers exact daily prime and reboot cron expressions', () => {
+    ;(manager as any).scheduleDailyPriming('14:05')
+    ;(manager as any).scheduleDailyReboot('03:07')
+
+    expect(manager.getScheduler().getJob('daily-prime')?.schedule).toBe('5 14 * * *')
+    expect(manager.getScheduler().getJob('daily-reboot')?.schedule).toBe('7 3 * * *')
   })
 
   it('upsertPowerJob schedules both on+off, cancelPowerJob removes both', () => {
@@ -886,6 +1073,19 @@ describe('JobManager incremental upsert/cancel', () => {
     expect(manager.getScheduler().getJob('away-return-left')).toBeDefined()
   })
 
+  it.each([
+    ['start only', 'left', 7, null, 'away-start-left'],
+    ['return only', 'right', null, 8, 'away-return-right'],
+  ] as const)('upsertAwayMode schedules a %s window', (_label, side, startDays, returnDays, expectedId) => {
+    const date = (days: number | null) => days == null
+      ? null
+      : new Date(Date.now() + days * 86_400_000).toISOString()
+
+    manager.upsertAwayMode(side, date(startDays), date(returnDays))
+
+    expect(manager.getScheduler().getJob(expectedId)).toBeDefined()
+  })
+
   it('upsertAwayMode cancels existing jobs when both inputs are null', () => {
     const future = new Date(Date.now() + 7 * 86_400_000).toISOString()
     const later = new Date(Date.now() + 8 * 86_400_000).toISOString()
@@ -1049,6 +1249,423 @@ describe('JobManager.loadSchedules YIELD_EVERY yielding', () => {
     await manager.loadSchedules()
     // Three loops, each yielding at i=24 (1-indexed 25). The system schedules
     // call also runs but uses .limit, not the looped path.
-    expect(setImmediateSpy.mock.calls.length).toBeGreaterThanOrEqual(3)
+    expect(setImmediateSpy).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('JobManager residual mutation contracts', () => {
+  let manager: JobManager
+
+  const row = {
+    enabled: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }
+
+  function queryRows(rows: unknown[]): any {
+    const query: any = Promise.resolve(rows)
+    query.where = () => query
+    query.limit = () => query
+    return query
+  }
+
+  function required<T>(value: T | undefined, label: string): T {
+    if (value === undefined) throw new Error(`Missing captured ${label}`)
+    return value
+  }
+
+  function mockSelectRows(...results: unknown[][]): ReturnType<typeof vi.spyOn> {
+    const select = vi.spyOn(db, 'select') as any
+    for (const rows of results) {
+      select.mockReturnValueOnce({ from: () => queryRows(rows) })
+    }
+    return select
+  }
+
+  function captureOneTimeJobs(): Map<string, { handler: () => Promise<void>, metadata: unknown }> {
+    const captured = new Map<string, { handler: () => Promise<void>, metadata: unknown }>()
+    vi.spyOn(manager.getScheduler(), 'scheduleOneTimeJob').mockImplementation((
+      id,
+      type,
+      fireDate,
+      handler,
+      metadata,
+    ) => {
+      captured.set(id, { handler, metadata })
+      return {
+        id,
+        type,
+        schedule: fireDate.toISOString(),
+        job: { cancel: vi.fn() },
+        metadata,
+      } as any
+    })
+    return captured
+  }
+
+  beforeEach(() => {
+    manager = new JobManager('UTC', {
+      heartbeatIntervalMs: 1_000_000,
+      heartbeatStaleMs: 90_000,
+    })
+    for (const mock of Object.values(hardwareClient)) mock.mockClear()
+    hardwareClient.connect.mockResolvedValue(undefined)
+    hardwareClient.setTemperature.mockResolvedValue(undefined)
+    hardwareClient.setPower.mockResolvedValue(undefined)
+    vi.mocked(broadcastMutationStatus).mockClear()
+    writeFileMock.mockClear()
+    renameMock.mockClear()
+    execMock.mockReset()
+  })
+
+  afterEach(async () => {
+    delete process.env.CALIBRATION_TRIGGER_PATH
+    vi.useRealTimers()
+    await manager.shutdown()
+    vi.restoreAllMocks()
+  })
+
+  it('logs every recurring-job skip and the alarm vibration-only branch exactly', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(manager, 'hasActiveRunOnceSession')
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false)
+
+    await manager.runTemperatureJob({
+      ...row,
+      id: 11,
+      side: 'left',
+      dayOfWeek: 'monday',
+      time: '08:00',
+      temperature: 78,
+    })
+    await manager.runPowerOnJob({
+      ...row,
+      id: 12,
+      side: 'right',
+      dayOfWeek: 'monday',
+      onTime: '22:00',
+      offTime: '07:00',
+      onTemperature: 80,
+    })
+    await manager.runPowerOffJob({
+      ...row,
+      id: 13,
+      side: 'left',
+      dayOfWeek: 'monday',
+      onTime: '22:00',
+      offTime: '07:00',
+      onTemperature: 80,
+    })
+    await manager.runTemperatureJob({
+      ...row,
+      id: 14,
+      side: 'right',
+      dayOfWeek: 'monday',
+      time: '08:00',
+      temperature: 76,
+    })
+    await manager.runAlarmJob({
+      ...row,
+      id: 15,
+      side: 'right',
+      dayOfWeek: 'monday',
+      time: '06:30',
+      alarmTemperature: 88,
+      vibrationIntensity: 50,
+      vibrationPattern: 'rise',
+      duration: 30,
+    })
+
+    expect(log).toHaveBeenCalledWith(
+      'Skipping recurring temp job temp-11 — run-once session active for left',
+    )
+    expect(log).toHaveBeenCalledWith(
+      'Skipping recurring power-on job — run-once session active for right',
+    )
+    expect(log).toHaveBeenCalledWith(
+      'Skipping recurring power-off job — run-once session active for left',
+    )
+    expect(log).toHaveBeenCalledWith('Skipping temp job temp-14 — right is not powered')
+    expect(log).toHaveBeenCalledWith(
+      'Alarm job alarm-15 — right not powered; skipping temperature, firing vibration only',
+    )
+  })
+
+  it('pins away-mode state writes, payloads, metadata, logs, and failure warnings', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+    const updates: Array<Record<string, unknown>> = []
+    vi.spyOn(db, 'transaction').mockImplementation(((callback: any) => callback({
+      update: () => ({
+        set: (values: Record<string, unknown>) => {
+          updates.push(values)
+          return { where: () => ({ run: vi.fn() }) }
+        },
+      }),
+    })) as any)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const futureStart = new Date(Date.now() + 60_000).toISOString()
+    const futureReturn = new Date(Date.now() + 120_000).toISOString()
+
+    ;(manager as any).scheduleAwayMode('left', futureStart, futureReturn)
+
+    expect(captured.get('away-start-left')?.metadata).toEqual({ side: 'left' })
+    expect(captured.get('away-return-left')?.metadata).toEqual({ side: 'left' })
+    await required(captured.get('away-start-left'), 'away-start-left').handler()
+    expect(updates[0]).toMatchObject({ awayMode: true })
+    expect(log).toHaveBeenCalledWith('Away mode: activating for left')
+    expect(hardwareClient.setPower).toHaveBeenCalledWith('left', false)
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+
+    await required(captured.get('away-return-left'), 'away-return-left').handler()
+    expect(updates[1]).toMatchObject({ awayMode: false })
+    expect(log).toHaveBeenCalledWith('Away mode: deactivating for left')
+    expect(hardwareClient.setPower).toHaveBeenCalledWith('left', true)
+
+    const startFailure = new Error('off failed')
+    hardwareClient.setPower.mockRejectedValueOnce(startFailure)
+    await required(captured.get('away-start-left'), 'away-start-left').handler()
+    expect(warn).toHaveBeenCalledWith('[awayMode] Failed to power off left:', startFailure)
+
+    const returnFailure = new Error('on failed')
+    hardwareClient.setPower.mockRejectedValueOnce(returnFailure)
+    await required(captured.get('away-return-left'), 'away-return-left').handler()
+    expect(warn).toHaveBeenCalledWith('[awayMode] Failed to power on left:', returnFailure)
+  })
+
+  it('pins reboot, pre-prime, and calibration handler effects and exact logs', async () => {
+    vi.useFakeTimers()
+    const now = new Date('2026-07-20T12:34:56.789Z')
+    vi.setSystemTime(now)
+    const handlers = new Map<string, () => Promise<void>>()
+    vi.spyOn(manager.getScheduler(), 'scheduleJob').mockImplementation((
+      id,
+      type,
+      schedule,
+      handler,
+      metadata,
+    ) => {
+      handlers.set(id, handler)
+      return { id, type, schedule, handler, metadata, job: { cancel: vi.fn() } } as any
+    })
+    const reboot = vi.spyOn(manager as any, 'executeReboot').mockResolvedValue(undefined)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    ;(manager as any).scheduleDailyReboot('03:00')
+    ;(manager as any).schedulePrimePreReboot('14:00')
+    ;(manager as any).schedulePrePrimeCalibration('14:00')
+    await required(handlers.get('daily-reboot'), 'daily-reboot')()
+    await required(handlers.get('prime-prereboot'), 'prime-prereboot')()
+    await required(handlers.get('pre-prime-calibration'), 'pre-prime-calibration')()
+
+    expect(reboot).toHaveBeenCalledTimes(2)
+    expect(log).toHaveBeenCalledWith('Executing daily system reboot...')
+    expect(log).toHaveBeenCalledWith('Executing pre-prime system reboot...')
+    expect(log).toHaveBeenCalledWith('Triggering pre-prime sensor calibration...')
+    expect(log).toHaveBeenCalledWith(
+      'Calibration trigger written — calibrator module will process within 10s',
+    )
+    const [tmpPath, payload] = writeFileMock.mock.calls[0]
+    const target = `/persistent/sleepypod-data/.calibrate-trigger.${now.getTime()}`
+    expect(tmpPath).toBe(`${target}.tmp`)
+    expect(renameMock).toHaveBeenCalledWith(`${target}.tmp`, target)
+    expect(JSON.parse(payload as string)).toEqual({
+      side: 'all',
+      sensor_type: 'all',
+      ts: Math.floor(now.getTime() / 1000),
+    })
+
+    reboot.mockRestore()
+    const failure = new Error('permission denied')
+    execMock.mockImplementationOnce((_command: string, callback: (error: Error) => void) => callback(failure))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect((manager as any).executeReboot()).rejects.toBe(failure)
+    expect(error).toHaveBeenCalledWith('Reboot command failed:', 'permission denied')
+  })
+
+  it('pins run-once setpoint payloads and cleanup metadata', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+
+    manager.scheduleRunOnceSession(
+      77,
+      'left',
+      [{ time: '12:10', temperature: 78 }],
+      '13:00',
+      'UTC',
+    )
+
+    expect(captured.get('runonce-cleanup-77')?.metadata).toEqual({
+      sessionId: 77,
+      side: 'left',
+      cleanup: true,
+    })
+    await required(captured.get('runonce-77-0'), 'runonce-77-0').handler()
+    expect(hardwareClient.setTemperature).toHaveBeenCalledWith('left', 78)
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', {
+      targetTemperature: 78,
+      targetLevel: fahrenheitToLevel(78),
+    })
+  })
+
+  it('logs exact cancelled and missing cleanup statuses without powering off', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+    manager.scheduleRunOnceSession(21, 'left', [], '13:00', 'UTC')
+    manager.scheduleRunOnceSession(22, 'right', [], '13:00', 'UTC')
+    mockSelectRows([{ status: 'cancelled' }], [])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await required(captured.get('runonce-cleanup-21'), 'runonce-cleanup-21').handler()
+    await required(captured.get('runonce-cleanup-22'), 'runonce-cleanup-22').handler()
+
+    expect(log).toHaveBeenCalledWith('Run-once cleanup 21 skipped — status is cancelled')
+    expect(log).toHaveBeenCalledWith('Run-once cleanup 22 skipped — status is missing')
+    expect(hardwareClient.setPower).not.toHaveBeenCalled()
+  })
+
+  it('pins successful cleanup payload and completion log', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+    manager.scheduleRunOnceSession(31, 'right', [], '13:00', 'UTC')
+    mockSelectRows([{ status: 'active' }])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await required(captured.get('runonce-cleanup-31'), 'runonce-cleanup-31').handler()
+
+    expect(hardwareClient.setPower).toHaveBeenCalledWith('right', false)
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('right', { targetLevel: 0 })
+    expect(log).toHaveBeenCalledWith('Run-once session 31 completed — right powered off')
+  })
+
+  it('logs the exact cleanup hardware warning and still completes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+    manager.scheduleRunOnceSession(32, 'left', [], '13:00', 'UTC')
+    mockSelectRows([{ status: 'active' }])
+    const failure = new Error('wake power failed')
+    hardwareClient.setPower.mockRejectedValueOnce(failure)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(
+      required(captured.get('runonce-cleanup-32'), 'runonce-cleanup-32').handler(),
+    ).resolves.toBeUndefined()
+
+    expect(warn).toHaveBeenCalledWith(
+      '[runOnce] Failed to power off left at wake:',
+      failure,
+    )
+  })
+
+  it('expires a session at the exact boundary with exact payload and log', async () => {
+    vi.useFakeTimers()
+    const now = new Date('2026-07-20T12:00:00.000Z')
+    vi.setSystemTime(now)
+    mockSelectRows([{
+      id: 41,
+      side: 'left',
+      expiresAt: now,
+    }], [])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await (manager as any).loadRunOnceSessions()
+
+    expect(hardwareClient.setPower).toHaveBeenCalledWith('left', false)
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+    expect(log).toHaveBeenCalledWith('Expired run-once session 41 — left powered off')
+  })
+
+  it('logs the exact malformed-setPoints recovery message', async () => {
+    mockSelectRows([], [{
+      id: 42,
+      side: 'right',
+      setPoints: 'not-json',
+    }])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (manager as any).loadRunOnceSessions()
+
+    expect(warn).toHaveBeenCalledWith(
+      '[runOnce] Malformed setPoints for session 42, marking completed',
+    )
+  })
+
+  it('restores the persisted timezone and logs the exact remaining count', async () => {
+    const session = {
+      id: 51,
+      side: 'left',
+      setPoints: '[]',
+      startedAt: new Date('2026-07-20T08:00:00.000Z'),
+      wakeTime: '13:00',
+    }
+    mockSelectRows([], [session], [{ timezone: 'UTC' }])
+    const schedule = vi.spyOn(manager, 'scheduleRunOnceSession').mockImplementation(() => {})
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await (manager as any).loadRunOnceSessions()
+
+    expect(schedule).toHaveBeenCalledWith(51, 'left', [], '13:00', 'UTC')
+    expect(log).toHaveBeenCalledWith(
+      'Restored run-once session 51 for left (0/0 points remaining)',
+    )
+  })
+
+  it('uses the default timezone when device settings are absent', async () => {
+    const session = {
+      id: 52,
+      side: 'right',
+      setPoints: '[]',
+      startedAt: new Date('2026-07-20T08:00:00.000Z'),
+      wakeTime: '13:00',
+    }
+    mockSelectRows([], [session], [])
+    const schedule = vi.spyOn(manager, 'scheduleRunOnceSession').mockImplementation(() => {})
+
+    await expect((manager as any).loadRunOnceSessions()).resolves.toBeUndefined()
+
+    expect(schedule).toHaveBeenCalledWith(
+      52,
+      'right',
+      [],
+      '13:00',
+      'America/Los_Angeles',
+    )
+  })
+
+  it('restores only points strictly later than now', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const session = {
+      id: 53,
+      side: 'left',
+      setPoints: JSON.stringify([
+        { time: '09:00', temperature: 80 },
+        { time: '12:00', temperature: 78 },
+        { time: '13:00', temperature: 76 },
+      ]),
+      startedAt: new Date('2026-07-20T08:00:00.000Z'),
+      wakeTime: '14:00',
+    }
+    mockSelectRows([], [session], [{ timezone: 'UTC' }])
+    const schedule = vi.spyOn(manager, 'scheduleRunOnceSession').mockImplementation(() => {})
+
+    await (manager as any).loadRunOnceSessions()
+
+    expect(schedule).toHaveBeenCalledWith(
+      53,
+      'left',
+      [{ time: '13:00', temperature: 76 }],
+      '14:00',
+      'UTC',
+    )
   })
 })

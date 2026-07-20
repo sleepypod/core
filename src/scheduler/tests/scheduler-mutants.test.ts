@@ -108,5 +108,39 @@ describe('Scheduler mutation pinning', () => {
 
       await running
     })
+
+    it('stops polling at the exact timeout boundary', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date(0))
+      const inFlight = (scheduler as unknown as { inFlightJobs: Set<string> }).inFlightJobs
+      inFlight.add('boundary-job')
+      let settled = false
+      const waiting = scheduler.waitForInFlightJobs(100).then(() => {
+        settled = true
+      })
+
+      await vi.advanceTimersByTimeAsync(100)
+      const settledAtBoundary = settled
+
+      // Always clean up before asserting so a mutant cannot strand afterEach.
+      inFlight.delete('boundary-job')
+      await vi.runAllTimersAsync()
+      await waiting
+      expect(settledAtBoundary).toBe(true)
+    })
+
+    it('separates every in-flight id in the force-shutdown warning', async () => {
+      const inFlight = (scheduler as unknown as { inFlightJobs: Set<string> }).inFlightJobs
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      inFlight.add('alpha')
+      inFlight.add('beta')
+
+      await scheduler.waitForInFlightJobs(0)
+
+      expect(warn).toHaveBeenCalledWith(
+        'Force shutdown with 2 in-flight job(s) still running: alpha, beta',
+      )
+      inFlight.clear()
+    })
   })
 })
