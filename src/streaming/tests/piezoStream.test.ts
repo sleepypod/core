@@ -28,6 +28,10 @@ const tmpRawDir = vi.hoisted(() => {
   const dir = fsh.mkdtempSync(pth.join(osh.tmpdir(), 'piezo-stream-test-'))
   process.env.RAW_DATA_DIR = dir
   process.env.PIEZO_WS_PORT = '0'
+  // This suite exercises the legacy `.RAW` tailer. Disable NATS source selection
+  // so startPiezoStreamServer starts file tailing immediately instead of probing
+  // loopback:4222 across the 60 s grace window. NATS selection has its own suite.
+  process.env.PIEZO_NATS_DISABLED = '1'
   return dir
 })
 
