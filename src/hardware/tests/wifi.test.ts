@@ -126,6 +126,35 @@ describe('getWifiInfo — iw primary path (Pod 5)', () => {
 
     expect(getWifiInfo()).toEqual({ wifiStrength: 100, wifiSSID: 'lab' })
   })
+
+  it('accepts compact signal and SSID fields without optional whitespace', () => {
+    mockSpawn((cmd, args) => {
+      if (cmd === 'iw' && args.length === 1) return { stdout: IW_DEV_OUTPUT }
+      if (cmd === 'iw' && args[2] === 'link') return { stdout: 'signal:-67dBm\nSSID:lab' }
+      return {}
+    })
+
+    expect(getWifiInfo()).toEqual({ wifiStrength: 66, wifiSSID: 'lab' })
+  })
+
+  it('does not let later prefixed lookalike fields overwrite valid fields', () => {
+    mockSpawn((cmd, args) => {
+      if (cmd === 'iw' && args.length === 1) return { stdout: IW_DEV_OUTPUT }
+      if (cmd === 'iw' && args[2] === 'link') {
+        return {
+          stdout: [
+            'signal: -67 dBm',
+            'SSID: primary',
+            'noise signal: -1 dBm',
+            'prefix SSID: wrong',
+          ].join('\n'),
+        }
+      }
+      return {}
+    })
+
+    expect(getWifiInfo()).toEqual({ wifiStrength: 66, wifiSSID: 'primary' })
+  })
 })
 
 describe('getWifiInfo — fallback to /proc/net/wireless and iwgetid', () => {
@@ -173,6 +202,20 @@ describe('getWifiInfo — fallback to /proc/net/wireless and iwgetid', () => {
       if (cmd === 'iw' && args[0] === 'dev' && args.length === 1) return { stdout: IW_DEV_OUTPUT }
       if (cmd === 'iw' && args[0] === 'dev' && args[2] === 'link') {
         return { stdout: 'Not connected.\nSSID: stale-primary' }
+      }
+      if (cmd === 'iwgetid') return { stdout: 'fallback-ssid' }
+      return {}
+    })
+    readFileSyncMock.mockReturnValue('hdr\nhdr\n wlan0: 0000   35.  -50.  -256\n')
+
+    expect(getWifiInfo()).toEqual({ wifiStrength: 50, wifiSSID: 'fallback-ssid' })
+  })
+
+  it('trims leading whitespace before recognizing a not-connected response', () => {
+    mockSpawn((cmd, args) => {
+      if (cmd === 'iw' && args[0] === 'dev' && args.length === 1) return { stdout: IW_DEV_OUTPUT }
+      if (cmd === 'iw' && args[0] === 'dev' && args[2] === 'link') {
+        return { stdout: '  \nNot connected.\nSSID: stale-primary' }
       }
       if (cmd === 'iwgetid') return { stdout: 'fallback-ssid' }
       return {}

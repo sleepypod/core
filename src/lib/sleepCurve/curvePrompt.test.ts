@@ -64,6 +64,29 @@ describe('parseAIResponse', () => {
     expect(result).toEqual({ success: true, curve: VALID_CURVE })
   })
 
+  it('trims outer whitespace before stripping fences around a non-object value', () => {
+    expect(parseAIResponse('  \n```[]```\n  ')).toEqual({
+      success: false,
+      error: 'Missing or invalid "bedtime" field (expected "HH:mm").',
+    })
+  })
+
+  it('supports compact bare fences around a non-object value', () => {
+    expect(parseAIResponse('```[]```')).toEqual({
+      success: false,
+      error: 'Missing or invalid "bedtime" field (expected "HH:mm").',
+    })
+  })
+
+  it('preserves triple backticks inside JSON string values', () => {
+    const reasoning = 'Keep the literal ``` marker intact.'
+
+    expect(parseAIResponse(validJson({ reasoning }))).toMatchObject({
+      success: true,
+      curve: { reasoning },
+    })
+  })
+
   it('reports malformed JSON with the public copy/paste guidance', () => {
     expect(parseAIResponse('{not json')).toEqual({
       success: false,
@@ -169,9 +192,12 @@ describe('parseAIResponse', () => {
 
 describe('curve template persistence', () => {
   it('returns an empty list on the server, missing storage, malformed JSON, or storage failure', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem')
     vi.stubGlobal('window', undefined)
     expect(loadTemplates()).toEqual([])
+    expect(getItem).not.toHaveBeenCalled()
     vi.unstubAllGlobals()
+    getItem.mockRestore()
 
     expect(loadTemplates()).toEqual([])
     localStorage.setItem('sleepypod_curve_templates', '{bad json')
@@ -200,6 +226,18 @@ describe('curve template persistence', () => {
 
     const added = saveTemplate({ ...VALID_CURVE, name: 'New Curve' })
     expect(loadTemplates()[0]).toEqual(added)
+  })
+
+  it('replaces an exact-name match at the first array position', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T08:00:00.000Z'))
+    const matching = { ...VALID_CURVE, createdAt: 1 }
+    const trailing = { ...VALID_CURVE, name: 'Trailing', createdAt: 2 }
+    localStorage.setItem('sleepypod_curve_templates', JSON.stringify([matching, trailing]))
+
+    const replacement = saveTemplate({ ...VALID_CURVE, reasoning: 'Updated first' })
+
+    expect(loadTemplates()).toEqual([replacement, trailing])
   })
 
   it('deletes only templates whose names match exactly', () => {

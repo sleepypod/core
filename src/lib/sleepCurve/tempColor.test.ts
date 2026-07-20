@@ -71,6 +71,10 @@ describe('tempGradientStops', () => {
     )
   })
 
+  test('includes a stop exactly on the upper two-degree filter buffer', () => {
+    expect(tempGradientStops(0, 3)).toContain('#dc6646 100%')
+  })
+
   test('renders the cool end of the spectrum for a fully cold range', () => {
     const result = tempGradientStops(-10, -5)
     expect(result).toContain('#2563eb')

@@ -279,6 +279,24 @@ describe('getOccupancy', () => {
     expect(r.level.threshold).toBeNull()
   })
 
+  it.each(['B', 'C'] as const)('validates malformed calibration channel %s independently', (channel) => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [25, 25, 23, 23, 30, 30, 1.157, 1.157])
+    calRows = [{
+      parameters: {
+        ...BASELINE_CAL,
+        channels: {
+          ...BASELINE_CAL.channels,
+          [channel]: { mean: 'bad' },
+        },
+      },
+    }]
+
+    const result = getOccupancy('left')
+
+    expect(result.level).toMatchObject({ active: false, deviation: null, threshold: null })
+  })
+
   it('skips level signal when calibration threshold is missing', () => {
     const noThreshold = { ...BASELINE_CAL } as Partial<typeof BASELINE_CAL>
     delete noThreshold.threshold

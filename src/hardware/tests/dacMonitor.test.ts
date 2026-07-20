@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { DacMonitor } from '../dacMonitor'
-import type { HardwareClient } from '../client'
+import { HardwareClient } from '../client'
 import { HardwareCommand } from '../types'
 import { parseDeviceStatus } from '../responseParser'
 import {
@@ -261,6 +261,28 @@ describe('DacMonitor', () => {
     warning.mockRestore()
   })
 
+  test('a left-only counter decrease re-baselines without emitting a gesture', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ctx.server.setCommandResponse(
+      HardwareCommand.DEVICE_STATUS,
+      DEVICE_STATUS_POD4.replace('"l":0,"r":1', '"l":1,"r":1'),
+    )
+    const monitor = createMonitor()
+    const gestures: unknown[] = []
+    monitor.on('gesture:detected', event => gestures.push(event))
+
+    await monitor.start()
+    await waitFor(() => monitor.getLastStatus() !== null, 500)
+    ctx.server.reset()
+    await sleep(POLL_MS * 2 + 20)
+
+    expect(gestures).toHaveLength(0)
+    expect(warning).toHaveBeenCalledWith(
+      '[DacMonitor] Gesture counter reset for doubleTap (l: 1→0, r: 1→1); re-baselining',
+    )
+    warning.mockRestore()
+  })
+
   test('counter reset re-establishes baseline for subsequent increments', async () => {
     const monitor = createMonitor()
     const gestures: Array<{ side: string, tapType: string }> = []
@@ -337,6 +359,24 @@ describe('DacMonitor', () => {
     expect(monitor.getStatus()).toBe('stopped')
   })
 
+  test('stop removes the installed interval timer', async () => {
+    vi.useFakeTimers()
+    const client = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+      getDeviceStatus: vi.fn(),
+    } as unknown as HardwareClient
+    const monitor = new DacMonitor({ socketPath: '/unused', pollIntervalMs: 25, hardwareClient: client })
+    monitors.push(monitor)
+
+    await monitor.start()
+    expect(vi.getTimerCount()).toBe(1)
+
+    monitor.stop()
+
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   test('does not restart the timer when cadence is unchanged', async () => {
     vi.useFakeTimers()
     const status = parseDeviceStatus(DEVICE_STATUS_POD4)
@@ -407,6 +447,37 @@ describe('DacMonitor', () => {
     expect(updated).not.toHaveBeenCalled()
     expect(monitor.getLastStatus()).toBeNull()
     expect(client.disconnect).toHaveBeenCalledOnce()
+  })
+
+  test('discards an old default-client poll that resolves after stop and restart', async () => {
+    vi.useFakeTimers()
+    const status = parseDeviceStatus(DEVICE_STATUS_POD4)
+    let resolveOldPoll!: (value: typeof status) => void
+    const oldPoll = new Promise<typeof status>((resolve) => {
+      resolveOldPoll = resolve
+    })
+    vi.spyOn(HardwareClient.prototype, 'connect').mockResolvedValue(undefined)
+    vi.spyOn(HardwareClient.prototype, 'disconnect').mockImplementation(() => {})
+    const getDeviceStatus = vi.spyOn(HardwareClient.prototype, 'getDeviceStatus')
+      .mockReturnValueOnce(oldPoll)
+      .mockResolvedValue(status)
+    const monitor = new DacMonitor({ socketPath: '/unused', pollIntervalMs: 10 })
+    monitors.push(monitor)
+    const updated = vi.fn()
+    monitor.on('status:updated', updated)
+
+    await monitor.start()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(getDeviceStatus).toHaveBeenCalledOnce()
+
+    monitor.stop()
+    await monitor.start()
+    resolveOldPoll(status)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(monitor.getStatus()).toBe('running')
+    expect(updated).not.toHaveBeenCalled()
   })
 
   test('setPollInterval restarts the interval timer at the new cadence', async () => {

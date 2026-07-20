@@ -282,6 +282,20 @@ describe('pumpStallGuard', () => {
     expect(getPumpStallNotice('left')).toBeNull()
   })
 
+  it('reset(side) preserves the other side guard and notification', async () => {
+    for (const side of ['left', 'right'] as const) {
+      await onFrame({ side, rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+      await onFrame({ side, rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    }
+
+    reset('left')
+
+    expect(shouldBlock('left')).toBe(false)
+    expect(getPumpStallNotice('left')).toBeNull()
+    expect(shouldBlock('right')).toBe(true)
+    expect(getPumpStallNotice('right')).not.toBeNull()
+  })
+
   it('fails safe-off and warns when settings read throws', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     ;(sqlite as any).exec(`DROP TABLE device_settings`)
