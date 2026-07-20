@@ -72,6 +72,22 @@ describe('useOptimisticValue', () => {
     expect(result.current.isOptimistic).toBe(false)
   })
 
+  it('uses an updated timeout for commits made after rerender', () => {
+    const { result, rerender } = renderHook(
+      ({ timeoutMs }) => useOptimisticValue(70, timeoutMs),
+      { initialProps: { timeoutMs: 6_000 } },
+    )
+
+    rerender({ timeoutMs: 1_000 })
+    act(() => result.current.commit(75))
+    act(() => vi.advanceTimersByTime(999))
+    expect(result.current.isOptimistic).toBe(true)
+
+    act(() => vi.advanceTimersByTime(1))
+    expect(result.current.value).toBe(70)
+    expect(result.current.isOptimistic).toBe(false)
+  })
+
   it('preview shows the value with no expiry (in-progress drag)', () => {
     const { result } = renderHook(() => useOptimisticValue(70))
 

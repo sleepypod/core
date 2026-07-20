@@ -855,6 +855,14 @@ describe('useSensorStream — mutation boundaries and lifecycle contracts', () =
     unmount()
   })
 
+  it('does not sort the caller-owned sensor array in place', () => {
+    const sensors = ['capSense', 'bedTemp'] as any
+    const { unmount } = renderHook(() => useSensorStream({ sensors }))
+
+    expect(sensors).toEqual(['capSense', 'bedTemp'])
+    unmount()
+  })
+
   it('distinguishes wildcard and empty subscriptions', async () => {
     const { rerender, unmount } = renderHook(
       ({ sensors }) => useSensorStream({ sensors }),

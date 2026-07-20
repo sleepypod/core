@@ -270,12 +270,15 @@ describe('usePullToRefresh', () => {
     })
     await waitFor(() => expect(result.current.isRefreshing).toBe(true))
     expect(onRefresh).toHaveBeenCalled()
+    expect(result.current.pullDistance).toBe(0)
+    expect(result.current.isPastThreshold).toBe(false)
     await act(async () => {
       resolve()
       await endPromise
     })
     expect(result.current.isRefreshing).toBe(false)
     expect(result.current.pullDistance).toBe(0)
+    expect(result.current.isPastThreshold).toBe(false)
   })
 
   it('treats a pull exactly at the threshold as refreshable', async () => {

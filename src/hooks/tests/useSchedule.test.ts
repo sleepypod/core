@@ -1366,6 +1366,56 @@ describe('useSchedule — mutation boundary and dependency regressions', () => {
     expect(trpcMock.batchMutate).toHaveBeenCalledOnce()
   })
 
+  it('toggleAllSchedules batches a temperature-only disable', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 41, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.overrides.day = {
+      temperature: [],
+      power: [{ id: 99, enabled: true }],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+
+    await act(async () => result.current.toggleAllSchedules())
+
+    expect(trpcMock.batchMutate).toHaveBeenCalledWith({
+      updates: {
+        temperature: [{ id: 41, enabled: false }],
+        power: [],
+        alarm: [],
+      },
+      creates: { power: [] },
+    })
+  })
+
+  it('toggleAllSchedules batches an alarm-only disable', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [],
+      power: [],
+      alarm: [{ id: 42, dayOfWeek: 'monday', enabled: true }],
+    }
+    trpcMock.overrides.day = {
+      temperature: [],
+      power: [{ id: 99, enabled: true }],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+
+    await act(async () => result.current.toggleAllSchedules())
+
+    expect(trpcMock.batchMutate).toHaveBeenCalledWith({
+      updates: {
+        temperature: [],
+        power: [],
+        alarm: [{ id: 42, enabled: false }],
+      },
+      creates: { power: [] },
+    })
+  })
+
   it('toggleAllSchedules uses the latest selected days and clears its exact confirmation', async () => {
     trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
     trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
@@ -1703,6 +1753,21 @@ describe('useSchedule — mutation boundary and dependency regressions', () => {
     await act(async () => result.current.deleteCurve(['monday']))
     const payload = trpcMock.batchMutate.mock.calls[0][0]
     expect(payload.deletes).toEqual({ temperature: [1, 3], power: [2, 4] })
+  })
+
+  it('deleteCurve batches a matching power row when no temperature rows match', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [],
+      power: [{ id: 51, dayOfWeek: 'monday' }],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+
+    await act(async () => result.current.deleteCurve(['monday']))
+
+    expect(trpcMock.batchMutate).toHaveBeenCalledWith({
+      deletes: { temperature: [], power: [51] },
+    })
   })
 
   it('deleteCurve uses all-schedule data that arrives after mount', async () => {
