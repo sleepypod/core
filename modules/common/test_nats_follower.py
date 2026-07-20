@@ -34,10 +34,9 @@ def _payload(subject: str) -> bytes:
     return base64.b64decode(CAPTURE_FIXTURES[subject]["payload_b64"])
 
 
-# Single-map sensor subjects only. raw.log is concatenated CBOR log maps and
-# lives outside the raw.sens.>/raw.frz.> subscription — never a NatsFollower
-# single-record payload.
-SENSOR_SUBJECTS = [s for s, e in CAPTURE_FIXTURES.items() if e["single_map"]]
+# Every committed fixture is a single-map sensor subject. raw.log is outside
+# the raw.sens.>/raw.frz.> subscription and intentionally not committed.
+SENSOR_SUBJECTS = list(CAPTURE_FIXTURES)
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +46,7 @@ SENSOR_SUBJECTS = [s for s, e in CAPTURE_FIXTURES.items() if e["single_map"]]
 class _FakeServer:
     """Minimal TCP server; optionally greets like NATS with an INFO line."""
 
-    def __init__(self, greeting: bytes):
+    def __init__(self, greeting):
         self._greeting = greeting
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -60,8 +59,11 @@ class _FakeServer:
     def _serve(self):
         try:
             conn, _ = self._sock.accept()
-            if self._greeting:
-                conn.sendall(self._greeting)
+            chunks = self._greeting if isinstance(self._greeting, list) else [self._greeting]
+            for chunk in chunks:
+                if chunk:
+                    conn.sendall(chunk)
+                    time.sleep(0.01)
             time.sleep(0.2)
             conn.close()
         except OSError:
@@ -77,6 +79,13 @@ class _FakeServer:
 class TestNatsReachable:
     def test_info_greeting_is_reachable(self):
         srv = _FakeServer(b"INFO {\"server_id\":\"x\"}\r\n")
+        try:
+            assert nats_reachable("127.0.0.1", srv.port, timeout=1.0) is True
+        finally:
+            srv.close()
+
+    def test_fragmented_info_greeting_is_reachable(self):
+        srv = _FakeServer([b"IN", b"FO ", b'{"server_id":"x"}', b"\r\n"])
         try:
             assert nats_reachable("127.0.0.1", srv.port, timeout=1.0) is True
         finally:
@@ -137,26 +146,8 @@ class TestDecodePath:
         # Decoded record was enqueued for the generator to hand out.
         assert f._queue.qsize() == 1
 
-    def test_raw_log_is_excluded_from_sensor_subscription(self):
-        # The live subscription is raw.sens.> + raw.frz.>; raw.log is neither,
-        # so its concatenated log maps never reach the single-record path.
+    def test_raw_log_is_excluded_from_sensor_fixtures(self):
         assert "raw.log" not in SENSOR_SUBJECTS
-        assert CAPTURE_FIXTURES["raw.log"]["single_map"] is False
-
-    def test_raw_log_retains_concatenated_diagnostic_maps(self):
-        # raw.log carries multiple CBOR log maps back-to-back — kept only as
-        # diagnostic evidence (sp-status surfaces SENSOR_SAMPLES_DROPPED).
-        import io
-        import cbor2
-        raw = _payload("raw.log")
-        stream = io.BytesIO(raw)
-        decoder = cbor2.CBORDecoder(stream)
-        maps = []
-        while stream.tell() < len(raw):
-            maps.append(decoder.decode())
-        assert len(maps) > 1
-        assert all(m.get("type") == "log" for m in maps)
-        assert any("SENSOR_SAMPLES_DROPPED" in str(m.get("msg")) for m in maps)
 
     def test_malformed_payload_is_dropped_and_counted(self):
         f = self._follower()

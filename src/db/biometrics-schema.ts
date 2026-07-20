@@ -218,7 +218,7 @@ export const calibrationRuns = sqliteTable('calibration_runs', {
   samplesUsed: integer('samples_used'),
   errorMessage: text('error_message'),
   durationMs: integer('duration_ms'),
-  triggeredBy: text('triggered_by', { enum: ['daily', 'manual', 'startup'] }).notNull(),
+  triggeredBy: text('triggered_by', { enum: ['daily', 'manual', 'startup', 'retry'] }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, t => [
   index('idx_cal_runs_side_type').on(t.side, t.sensorType, t.createdAt),

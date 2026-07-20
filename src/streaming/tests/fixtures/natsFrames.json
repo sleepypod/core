@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-subject exemplar NATS payloads from a field Pod 5 raw.> capture (2026-07-19, scripts/probe-nats-capture.py). Every sensor subject (raw.sens.*, raw.frz.*) carries a single complete CBOR map per message; raw.log is the one exception — a retained batched-log fixture of concatenated CBOR maps, excluded from live subscriptions (SUBSCRIBE_SUBJECTS covers only raw.sens.> / raw.frz.>). Anonymized and cleared for use (docs/nats-frame-readers.md review 2026-07-19). payloadB64 is the raw CBOR message body as published on the subject.",
+  "_comment": "Seven cleared sensor exemplars from a 1-minute field Pod 5 raw.> capture (2026-07-19, scripts/probe-nats-capture.py). Each raw.sens.* / raw.frz.* message carries one complete CBOR map. raw.log is excluded from both live subscriptions and fixtures because the retained message contains a persistent hardware identifier. payloadB64 is the raw CBOR message body as published on the subject.",
   "frames": [
     {
       "subject": "raw.sens.capsense",
@@ -42,12 +42,6 @@
       "type": "frzTherm",
       "size": 124,
       "payloadB64": "v2R0eXBlaGZyelRoZXJtYnRzGmpdCpRndmVyc2lvbgFkbGVmdKRmdGFyZ2V0+kHYAABlcG93ZXL6PMRGM2V2YWxpZPVnZW5hYmxlZPVlcmlnaHSkZnRhcmdldPpB2AAAZXBvd2Vy+gAAAABldmFsaWT1Z2VuYWJsZWT0/w=="
-    },
-    {
-      "subject": "raw.log",
-      "type": "log",
-      "size": 1507,
-      "payloadB64": "pGR0eXBlY2xvZ2J0cxpqXQlxZWxldmVsZGluZm9jbXNneEc0MDgwMTYxMjQgU3lzSW5mby5jcHA6OTUgbmV4dHxbc3lzaV0gU0VOU09SX1NBTVBMRVNfRFJPUFBFRDogMjE0NzQ4ODQ0OKRkdHlwZWNsb2didHMaal0JcWVsZXZlbGRpbmZvY21zZ3g4NDA4MDE2MTI0IFN5c0luZm8uY3BwOjQxIGluaXRHcm91cHxbc3lzaV0gYnVpbGQ6IDU3ZDEwZDmkZHR5cGVjbG9nYnRzGmpdCXFlbGV2ZWxkaW5mb2Ntc2d4VjQwODAxNjEyNCBTeXNJbmZvLmNwcDo0MyBpbml0R3JvdXB8W3N5c2ldIGNvdmVyOiAiMjA2MDAtMDAwMy1KNTUtRDA5MTA1OEEiIChjb25uZWN0ZWQppGR0eXBlY2xvZ2J0cxpqXQmxZWxldmVsZWRlYnVnY21zZ3h3NDA4MDc5NDkzIFNlbnNvci5jcHA6NjU0IGhhbmRsZUNvbW1hbmR8W3NlbnNvcl0gLT4gRlc6IDQwODA3MDM2NCBbY2FwX3NhbXBsaW5nTF0gbWluL2F2Zy9tYXggY3ljbGUgdGltZSAybXMvOC4xNG1zLzE4bXOkZHR5cGVjbG9nYnRzGmpdCd5lbGV2ZWxlZGVidWdjbXNneF40MDgxMjUzNTQgZnJvemVuLmNwcDoyOTIgaGFuZGxlQ29tbWFuZHxbZnJvemVuXSAtPiBGVzogW3NvbGVub2lkXSBzb2xlbm9pZF9jdXJyZW50IEAgMC4wMDI1MDBBpGR0eXBlY2xvZ2J0cxpqXQn6ZWxldmVsZWRlYnVnY21zZ3hUNDA4MTUyOTY4IGZyb3plbi5jcHA6MzE2IGhhbmRsZUNvbW1hbmR8W2Zyb3plbl0gLT4gRlc6IHRlbXBzIDI3LjAwIDIzLjc1IDIzLjkzIDIzLjI1pGR0eXBlY2xvZ2J0cxpqXQpMZWxldmVsZWRlYnVnY21zZ3iGNDA4MjM0NDE3IFNlbnNvci5jcHA6NjU0IGhhbmRsZUNvbW1hbmR8W3NlbnNvcl0gLT4gRlc6IDQwODIyNTI4OSBbc2FtcGxpbmddIGF2ZyByYXRlcyA0OTkuOTlIei80OTkuOTlIeiwgMjMuMTkvMjMuMzAgc3RhbGUgc2FtcGxlcy9zZWOkZHR5cGVjbG9nYnRzGmpdClplbGV2ZWxlZGVidWdjbXNneEo0MDgyNDkxNzggU2Vuc29yLmNwcDo2NjYgaGFuZGxlQ29tbWFuZHxbc2Vuc29yXWF2ZyBzYW1wbGVzL3NlYzogNDk5Ljk5NDY1OaRkdHlwZWNsb2didHMaal0KWmVsZXZlbGVkZWJ1Z2Ntc2d4TjQwODI0OTE3OCBTZW5zb3IuY3BwOjY3MCBoYW5kbGVDb21tYW5kfFtzZW5zb3JdYXZnIGFjY2VsIHNhbXBsZXMvc2VjOiAwLjAwMDAwMKRkdHlwZWNsb2didHMaal0KkGVsZXZlbGVkZWJ1Z2Ntc2d4WTQwODMwMzA4MCBmcm96ZW4uY3BwOjI5MiBoYW5kbGVDb21tYW5kfFtmcm96ZW5dIC0+IEZXOiBbdGVtcHNdIDAgcmVhZHMgZmFpbGVkIG91dCBvZiAxMjAwpGR0eXBlY2xvZ2J0cxpqXQqRZWxldmVsZWRlYnVnY21zZ3hPNDA4MzA0MDk2IGZyb3plbi5jcHA6MjkyIGhhbmRsZUNvbW1hbmR8W2Zyb3plbl0gLT4gRlc6IHRlY1tyaWdodF0gbG9ja2VkIChwdW1wKaRkdHlwZWNsb2didHMaal0KkmVsZXZlbGVkZWJ1Z2Ntc2d4cjQwODMwNDc2MiBmcm96ZW4uY3BwOjI5MiBoYW5kbGVDb21tYW5kfFtmcm96ZW5dIC0+IEZXOiBwaWRbZmFuX3JwbV0gNDA4LjAwMDAwMCAwLjI0MjY0MiAwLjAwMDg1NiAwLjI0MTc4NiAwLjAwMDAwMA=="
     }
   ]
 }

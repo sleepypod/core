@@ -281,6 +281,26 @@ class TestPumpGatePerSide:
         assert gate.is_gated({}, "left") is False
         assert gate.is_gated({}, "right") is False
 
+    def test_captured_nats_nested_health_rpm(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state({
+            "type": "frzHealth",
+            "left": {"pump": {"mode": "pwm", "rpm": 1868, "water": True}},
+            "right": {"pump": {"mode": "pwm", "rpm": 0, "water": True}},
+        })
+        assert gate.is_gated({}, "left") is True
+        assert gate.is_gated({}, "right") is False
+
+    def test_captured_nats_therm_power(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state({
+            "type": "frzTherm",
+            "left": {"power": 0.024},
+            "right": {"power": 0.0},
+        })
+        assert gate.is_gated({}, "left") is True
+        assert gate.is_gated({}, "right") is False
+
 
 def _tracker():
     """A SessionTracker wired to an in-memory DB. calibration/pump_gate are
