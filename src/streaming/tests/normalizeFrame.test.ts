@@ -6,7 +6,7 @@
  * If the firmware struct changes, update these fixtures and the normalizer.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { capSideChannels, normalizeFrame } from '../normalizeFrame'
 
 describe('capSideChannels', () => {
@@ -163,6 +163,21 @@ const FIRMWARE_FIXTURES = {
 // ---------------------------------------------------------------------------
 
 describe('normalizeFrame', () => {
+  it('re-evaluates the negative sensor sentinel after a fresh import', async () => {
+    vi.resetModules()
+    const { normalizeFrame: freshNormalizeFrame } = await import('../normalizeFrame')
+    const frame = {
+      type: 'bedTemp2', ts: 1,
+      left: { amb: -327.68, hu: 50, temps: [-327.68] },
+      right: { temps: [] },
+    }
+
+    const result = freshNormalizeFrame(frame as Record<string, unknown>)
+
+    expect(result.ambientTemp).toBeNull()
+    expect(result.leftOuterTemp).toBeNull()
+  })
+
   describe('frzHealth', () => {
     it('extracts pump RPM from nested left.pump.rpm', () => {
       const result = normalizeFrame(FIRMWARE_FIXTURES.frzHealth as Record<string, unknown>)

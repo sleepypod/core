@@ -247,4 +247,55 @@ describe('capFramePersistence', () => {
       expect(run).toHaveBeenCalledOnce()
     })
   })
+
+  describe('module initialization contracts', () => {
+    async function loadFreshModule() {
+      vi.resetModules()
+      const persistence = await import('../capFramePersistence')
+      const { biometricsDb: freshBiometricsDb } = await import('@/src/db')
+      persistence._resetForTest()
+      return { persistence, freshBiometricsDb }
+    }
+
+    it('uses the full 48-hour retention interval after a fresh import', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date(TS * 1000))
+      const { persistence, freshBiometricsDb } = await loadFreshModule()
+      const run = vi.fn()
+      const where = vi.fn((condition: unknown) => {
+        void condition
+        return { run }
+      })
+      vi.spyOn(freshBiometricsDb, 'delete').mockReturnValue({ where } as never)
+
+      persistence.recordCapFrame('left', A, TS)
+      persistence.recordCapFrame('left', A, TS + 5)
+
+      const condition = where.mock.calls[0]?.[0] as unknown as {
+        queryChunks: Array<{ value?: unknown }>
+      }
+      const cutoff = condition.queryChunks.find(chunk => chunk.value instanceof Date)?.value
+      expect(cutoff).toEqual(new Date(TS * 1000 - 48 * 60 * 60_000))
+      expect(run).toHaveBeenCalledOnce()
+    })
+
+    it('keeps the full 10-minute prune throttle after a fresh import', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date(TS * 1000))
+      const { persistence, freshBiometricsDb } = await loadFreshModule()
+      const del = vi.spyOn(freshBiometricsDb, 'delete')
+
+      persistence.recordCapFrame('left', A, TS)
+      persistence.recordCapFrame('left', A, TS + 5)
+      expect(del).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(1)
+      persistence.recordCapFrame('left', A, TS + 10)
+      expect(del).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(10 * 60_000 - 1)
+      persistence.recordCapFrame('left', A, TS + 15)
+      expect(del).toHaveBeenCalledTimes(2)
+    })
+  })
 })

@@ -78,6 +78,13 @@ describe('parseAIResponse', () => {
     })
   })
 
+  it('does not strip non-whitespace trailing text after a closing fence', () => {
+    expect(parseAIResponse('```[]```junk')).toEqual({
+      success: false,
+      error: 'Invalid JSON. Make sure you copied the complete response.',
+    })
+  })
+
   it('preserves triple backticks inside JSON string values', () => {
     const reasoning = 'Keep the literal ``` marker intact.'
 

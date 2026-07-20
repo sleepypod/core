@@ -47,6 +47,7 @@ describe('scheduleTime', () => {
   })
 
   it('uses inclusive starts and exclusive ends for both window shapes', () => {
+    expect(isInWindow(6 * 60 + 59, '07:00', '09:00')).toBe(false)
     expect(isInWindow(7 * 60, '07:00', '09:00')).toBe(true)
     expect(isInWindow(9 * 60, '07:00', '09:00')).toBe(false)
     expect(isInWindow(22 * 60, '22:00', '07:00')).toBe(true)
@@ -82,10 +83,45 @@ describe('scheduleTime', () => {
     expect(getCurrentDayForTimezone('America/Los_Angeles', fourAmLa)).toBe('wednesday')
   })
 
+  it('recognizes Sunday as a valid timezone-local schedule day', () => {
+    const sundayAtFourAm = new Date('2026-07-19T04:00:00.000Z')
+    expect(getCurrentDayForTimezone('UTC', sundayAtFourAm)).toBe('sunday')
+  })
+
+  it('selects timezone weekday and hour parts by type rather than position', () => {
+    const FakeDateTimeFormat = function () {
+      return {
+        formatToParts: () => [
+          { type: 'hour', value: '05' },
+          { type: 'literal', value: ' ' },
+          { type: 'weekday', value: 'Sunday' },
+        ],
+      }
+    } as unknown as typeof Intl.DateTimeFormat
+    vi.spyOn(Intl, 'DateTimeFormat').mockImplementationOnce(FakeDateTimeFormat)
+
+    expect(getCurrentDayForTimezone('Fake/Zone')).toBe('sunday')
+  })
+
   it('uses the timezone-local hour and minute exactly', () => {
     const now = new Date('2026-07-01T04:37:00.000Z')
     expect(isInWindowForTimezone('04:37', '04:38', 'UTC', now)).toBe(true)
     expect(isInWindowForTimezone('04:36', '04:37', 'UTC', now)).toBe(false)
+  })
+
+  it('selects timezone hour and minute parts by type rather than position', () => {
+    const FakeDateTimeFormat = function () {
+      return {
+        formatToParts: () => [
+          { type: 'minute', value: '37' },
+          { type: 'literal', value: ':' },
+          { type: 'hour', value: '04' },
+        ],
+      }
+    } as unknown as typeof Intl.DateTimeFormat
+    vi.spyOn(Intl, 'DateTimeFormat').mockImplementationOnce(FakeDateTimeFormat)
+
+    expect(isInWindowForTimezone('04:37', '04:38', 'Fake/Zone')).toBe(true)
   })
 
   it('reports the custom invalid-timezone result when Intl yields no known weekday', () => {

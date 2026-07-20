@@ -1202,12 +1202,23 @@ describe('piezoStream — server lifecycle and protocol', () => {
     // marker and never advance.
     const filePath = path.join(tmpRawDir, 'resync-a2.RAW')
     const bad = Buffer.from([0xa2, 0x60, 0x60, 0x60, 0x60])
-    const good = buildOuterRecord(1, [{ type: 'capSense', ts: 410, left: 0, right: 0 }])
+    const good1 = buildOuterRecord(1, [{ type: 'capSense', ts: 410, left: 0, right: 0 }])
+    const good2 = buildOuterRecord(2, [{ type: 'capSense', ts: 411, left: 1, right: 1 }])
+    expect(good1.at(-1)).not.toBe(0xa2)
 
     const port = startAndPort()
     const client = await connectClient(port)
-    fs.writeFileSync(filePath, Buffer.concat([bad, good]))
+    fs.writeFileSync(filePath, Buffer.concat([good1, bad, good2]))
     await client.waitFor(m => m.type === 'capSense' && m.ts === 410, 3000)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 411, 3000)
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 410 }))
+    await client.waitFor(m => m.type === 'seek_complete', 3000)
+    expect(client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)).toEqual([
+      410,
+      411,
+    ])
     await client.close()
   })
 
@@ -1946,7 +1957,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const filePath = path.join(tmpRawDir, 'seek-closed.RAW')
     const recs: Buffer[] = []
     for (let i = 0; i < 500; i++) {
-      recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 2400, left: i, right: i }]))
+      recs.push(buildOuterRecord(i + 1, [{
+        type: 'capSense',
+        ts: 2400 + i / 100,
+        left: i,
+        right: i,
+      }]))
     }
 
     const port = startAndPort()
@@ -1965,7 +1981,7 @@ describe('piezoStream — server lifecycle and protocol', () => {
       configurable: true,
     })
 
-    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2400 }))
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2399 }))
     await new Promise(r => setTimeout(r, 250))
 
     expect(frameSerializations(stringifySpy, 'capSense')).toHaveLength(0)

@@ -77,6 +77,27 @@ describe('generateSleepCurve', () => {
     expect(points.at(-1)?.minutesFromBedtime).toBe(1470)
   })
 
+  it('keeps a positive same-day sleep window on the same day', () => {
+    const points = generateSleepCurve({
+      bedtimeMinutes: 60,
+      wakeMinutes: 9 * 60,
+    })
+
+    expect(points.findLast(point => point.phase === 'preWake')?.minutesFromBedtime).toBe(480)
+    expect(points.at(-1)?.minutesFromBedtime).toBe(510)
+  })
+
+  it('sorts even a one-minute curve by minutes from bedtime', () => {
+    const points = generateSleepCurve({
+      bedtimeMinutes: 60,
+      wakeMinutes: 61,
+    })
+
+    for (let i = 1; i < points.length; i++) {
+      expect(points[i].minutesFromBedtime).toBeGreaterThanOrEqual(points[i - 1].minutesFromBedtime)
+    }
+  })
+
   it('generates sorted points for a typical 8-hour sleep', () => {
     const points = generateSleepCurve({
       bedtimeMinutes: 22 * 60, // 10 PM

@@ -292,6 +292,26 @@ describe('device.getStatus', () => {
     })
   })
 
+  it('still enriches water data when there is no bed-temperature row', async () => {
+    const timestamp = new Date('2026-07-20T10:00:00Z')
+    biometricsState.rowsQueue.push([])
+    biometricsState.rowsQueue.push([{
+      raw: 1234,
+      calibratedEmpty: 500,
+      calibratedFull: 2000,
+      timestamp,
+    }])
+
+    const result = await caller.getStatus({})
+    expect(result.roomClimate).toEqual({ temperatureC: null, humidity: null, timestamp: null })
+    expect(result.waterLevelRaw).toEqual({
+      raw: 1234,
+      calibratedEmpty: 500,
+      calibratedFull: 2000,
+      timestamp: timestamp.getTime(),
+    })
+  })
+
   it('falls back to defaults when the enrichment block throws (best-effort)', async () => {
     biometricsState.throwOnSelect = true
     wifiMock.getWifiInfo.mockImplementationOnce(() => {
@@ -307,8 +327,8 @@ describe('device.getStatus', () => {
 
   it('persists both sides with exact powered flags in insert and conflict-update payloads', async () => {
     helpersMock.client.getDeviceStatus.mockResolvedValueOnce({
-      leftSide: { currentTemperature: 70, targetTemperature: 74, currentLevel: -10, targetLevel: -30, heatingDuration: 4 },
-      rightSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0, targetLevel: 0, heatingDuration: 0 },
+      leftSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0, targetLevel: 0, heatingDuration: 0 },
+      rightSide: { currentTemperature: 70, targetTemperature: 74, currentLevel: -10, targetLevel: -30, heatingDuration: 4 },
       waterLevel: 'ok', isPriming: false, podVersion: 'J00', sensorLabel: 'X', gestures: undefined,
     })
 
@@ -316,33 +336,33 @@ describe('device.getStatus', () => {
     expect(dbMock.insert).toHaveBeenCalledTimes(2)
     expect(dbChain('insert', 0).values).toHaveBeenCalledWith({
       side: 'left',
-      currentTemperature: 70,
-      targetTemperature: 74,
-      isPowered: true,
-      lastUpdated: expect.any(Date),
-    })
-    expect(dbChain('insert', 0).onConflictDoUpdate).toHaveBeenCalledWith({
-      target: expect.anything(),
-      set: {
-        currentTemperature: 70,
-        targetTemperature: 74,
-        isPowered: true,
-        lastUpdated: expect.any(Date),
-      },
-    })
-    expect(dbChain('insert', 1).values).toHaveBeenCalledWith({
-      side: 'right',
       currentTemperature: null,
       targetTemperature: null,
       isPowered: false,
       lastUpdated: expect.any(Date),
     })
-    expect(dbChain('insert', 1).onConflictDoUpdate).toHaveBeenCalledWith({
+    expect(dbChain('insert', 0).onConflictDoUpdate).toHaveBeenCalledWith({
       target: expect.anything(),
       set: {
         currentTemperature: null,
         targetTemperature: null,
         isPowered: false,
+        lastUpdated: expect.any(Date),
+      },
+    })
+    expect(dbChain('insert', 1).values).toHaveBeenCalledWith({
+      side: 'right',
+      currentTemperature: 70,
+      targetTemperature: 74,
+      isPowered: true,
+      lastUpdated: expect.any(Date),
+    })
+    expect(dbChain('insert', 1).onConflictDoUpdate).toHaveBeenCalledWith({
+      target: expect.anything(),
+      set: {
+        currentTemperature: 70,
+        targetTemperature: 74,
+        isPowered: true,
         lastUpdated: expect.any(Date),
       },
     })
@@ -437,6 +457,25 @@ describe('device.setTemperature', () => {
         poweredOnAt,
       }))
       expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('right', 69, 600)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stamps poweredOnAt when changing temperature without a prior device-state row', async () => {
+    vi.useFakeTimers()
+    try {
+      const pending = caller.setTemperature({ side: 'left', temperature: 71 })
+      await vi.advanceTimersByTimeAsync(250)
+      await pending
+
+      expect(dbChain('update').set).toHaveBeenCalledWith({
+        targetTemperature: 71,
+        isPowered: true,
+        poweredOnAt: expect.any(Date),
+        lastUpdated: expect.any(Date),
+      })
     }
     finally {
       vi.useRealTimers()
@@ -571,6 +610,18 @@ describe('device.setPower', () => {
     })
     expect(stateSyncMock.markSideMutated).toHaveBeenCalledWith('left')
     expect(helpersMock.withHardwareClient.mock.calls[0]?.[1]).toBe('Failed to set power')
+  })
+
+  it('persists an OFF-to-ON transition without a prior device-state row', async () => {
+    await caller.setPower({ side: 'right', powered: true, temperature: 72 })
+
+    expect(dbChain('update').set).toHaveBeenCalledWith({
+      isPowered: true,
+      poweredOnAt: expect.any(Date),
+      targetTemperature: 72,
+      lastUpdated: expect.any(Date),
+    })
+    expect(stateSyncMock.markSideMutated).toHaveBeenCalledWith('right')
   })
 
   it('powers off and broadcasts targetLevel: 0', async () => {

@@ -454,7 +454,7 @@ describe('system.getLogs', () => {
 
   it('trims cursor padding and discards whitespace-only log lines', async () => {
     queueExec(file => file === 'journalctl', {
-      stdout: 'line1\n   \nline2\nline3\n-- cursor: s=padded   \n',
+      stdout: 'line1\nline2\n   \nline3\n-- cursor: s=padded   \n',
     })
     const result = await caller.getLogs({ unit: 'sleepypod.service', lines: 2 })
     expect(result).toEqual({ lines: ['line3', 'line2'], nextCursor: 's=padded' })

@@ -246,6 +246,7 @@ describe('health.system', () => {
     const result = await caller.system({})
     expect(result.status).toBe('ok')
     expect(result.database.status).toBe('ok')
+    expect(dbMock.sqlitePragma).toHaveBeenCalledWith('quick_check(1)')
     expect(result.scheduler.enabled).toBe(true)
     expect(result.scheduler.drift?.drifted).toBe(false)
     expect(result.scheduler.drift).toEqual({ dbScheduleCount: 4, schedulerJobCount: 4, drifted: false })

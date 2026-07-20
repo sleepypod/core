@@ -131,6 +131,16 @@ describe('waterLevel.getTrend', () => {
     })
   })
 
+  it('reports a single low reading as exactly 100 percent low', async () => {
+    dbState.rowsQueue.push([{ level: 'low', cnt: 1 }])
+    await expect(caller.getTrend({ hours: 1 })).resolves.toEqual({
+      totalReadings: 1,
+      okPercent: 0,
+      lowPercent: 100,
+      trend: 'unknown',
+    })
+  })
+
   it('finds level counts by name and computes exact percentages', async () => {
     dbState.rowsQueue.push([
       { level: 'low', cnt: 1 },
@@ -364,10 +374,10 @@ describe('waterLevel error wrappers', () => {
   })
 
   it.each([
-    [3, 1, 10, 10],
-    [1, 3, 10, 10],
+    [1, 0, 5, 5],
+    [0, 1, 5, 5],
   ])('keeps stable at the exact 0.2 trend boundary %#', async (recentLow, olderLow, recentTotal, olderTotal) => {
-    dbState.rowsQueue.push([{ level: 'ok', cnt: 3 }, { level: 'low', cnt: 1 }])
+    dbState.rowsQueue.push([{ level: 'ok', cnt: 9 }, { level: 'low', cnt: 1 }])
     dbState.rowsQueue.push([{ cnt: recentLow }], [{ cnt: olderLow }], [{ cnt: recentTotal }], [{ cnt: olderTotal }])
     expect((await caller.getTrend({ hours: 24 })).trend).toBe('stable')
   })

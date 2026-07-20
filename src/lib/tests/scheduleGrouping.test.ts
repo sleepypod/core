@@ -7,6 +7,7 @@ describe('sortChronological', () => {
     const result = sortChronological(single)
     expect(result).toEqual(single)
     expect(result).not.toBe(single)
+    expect(result[0]).toBe(single[0])
     expect(sortChronological([])).toEqual([])
   })
 
@@ -188,5 +189,36 @@ describe('groupDaysBySharedCurve', () => {
     ]).filter(group => group.setPoints.length > 0 && !group.allDisabled)
 
     expect(groups.map(group => group.days[0])).toEqual(['sunday', 'monday', 'tuesday'])
+  })
+
+  test('sorts a Sunday active curve before a larger empty-day group', () => {
+    const groups = groupDaysBySharedCurve([
+      { dayOfWeek: 'sunday', time: '09:00', temperature: 70, enabled: true },
+    ])
+
+    expect(groups[0].days).toEqual(['sunday'])
+    expect(groups[0].setPoints).toEqual([{ time: '09:00', temperature: 70 }])
+  })
+
+  test('sorts a Monday active curve before an earlier, larger empty-day group', () => {
+    const groups = groupDaysBySharedCurve([
+      { dayOfWeek: 'monday', time: '09:00', temperature: 70, enabled: true },
+    ])
+
+    expect(groups[0].days).toEqual(['monday'])
+    expect(groups[0].setPoints).toEqual([{ time: '09:00', temperature: 70 }])
+  })
+
+  test('sorts a shared two-day curve before an earlier one-day curve', () => {
+    const groups = groupDaysBySharedCurve([
+      { dayOfWeek: 'sunday', time: '09:00', temperature: 70, enabled: true },
+      { dayOfWeek: 'monday', time: '10:00', temperature: 71, enabled: true },
+      { dayOfWeek: 'tuesday', time: '10:00', temperature: 71, enabled: true },
+    ]).filter(group => group.setPoints.length > 0)
+
+    expect(groups.map(group => group.days)).toEqual([
+      ['monday', 'tuesday'],
+      ['sunday'],
+    ])
   })
 })

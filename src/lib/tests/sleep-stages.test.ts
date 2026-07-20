@@ -406,6 +406,13 @@ describe('filterOutliers — windowed median filter', () => {
 
     expect(classifySleepStages(vitals, [], 1.0)[2].heartRate).toBe(46)
   })
+
+  it('excludes above-range neighbors from the median window', () => {
+    const vitals = [60, 131, 131]
+      .map((heartRate, index) => vitalRow(index * 5, heartRate))
+
+    expect(classifySleepStages(vitals, [], 1.0)[0].heartRate).toBe(60)
+  })
 })
 
 describe('classifySleepStages — average HR selection', () => {
@@ -482,6 +489,26 @@ describe('classifySleepStages — phase 2 smoothing only fires when neighbors ma
 })
 
 describe('classifySleepStages — phase 3 transition constraints', () => {
+  it('does not rewrite a wake → wake transition', () => {
+    const vitals = [vitalRow(0, 70), vitalRow(5, 70)]
+    const movement = [movRow(0, 300), movRow(5, 300)]
+
+    expect(classifySleepStages(vitals, movement, 1.0).map(epoch => epoch.stage)).toEqual([
+      'wake',
+      'wake',
+    ])
+  })
+
+  it('does not rewrite a rem → rem transition', () => {
+    const vitals = [vitalRow(0, 70, 20), vitalRow(5, 70, 20)]
+    const movement = [movRow(0, 10), movRow(5, 10)]
+
+    expect(classifySleepStages(vitals, movement, 1.0).map(epoch => epoch.stage)).toEqual([
+      'rem',
+      'rem',
+    ])
+  })
+
   it('inserts light between wake → deep', () => {
     const v = [vitalRow(0, 70), vitalRow(5, 50)]
     const m = [movRow(0, 300), movRow(5, 0)]
