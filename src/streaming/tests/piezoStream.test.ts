@@ -1659,6 +1659,191 @@ describe('piezoStream — server lifecycle and protocol', () => {
       c => c.length === 1 && c[0] === '[sensorStream] Client disconnected'))
   })
 
+  /** JSON.stringify calls whose argument is a decoded frame of `type`. */
+  function frameSerializations(spy: ReturnType<typeof vi.spyOn>, type: string): unknown[] {
+    return spy.mock.calls.filter(
+      c => typeof c[0] === 'object' && c[0] !== null && (c[0] as any).type === type)
+  }
+
+  it('yields exactly once at the 500-record replay boundary', async () => {
+    const filePath = path.join(tmpRawDir, 'yield-boundary.RAW')
+    // Exactly 500 records: the counter reaches the yield threshold on the last
+    // one. An off-by-one boundary never yields; yielding per record yields 500x.
+    const records = Array.from({ length: 500 }, (_, i) => buildOuterRecord(i + 1, [{
+      type: 'capSense',
+      ts: 2500,
+      left: i,
+      right: i,
+    }]))
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(records))
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 500, 5000)
+
+    const immediateSpy = vi.spyOn(globalThis, 'setImmediate')
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2499 }))
+    await client.waitFor(m => m.type === 'seek_complete', 5000)
+
+    expect(immediateSpy.mock.calls.length).toBeGreaterThanOrEqual(1)
+    expect(immediateSpy.mock.calls.length).toBeLessThan(50)
+    await client.close()
+  }, 20000)
+
+  it('seek neither serializes nor sends once the requesting client is no longer OPEN', async () => {
+    const filePath = path.join(tmpRawDir, 'seek-closed.RAW')
+    const recs: Buffer[] = []
+    for (let i = 0; i < 5; i++) {
+      recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 2400 + i, left: i, right: i }]))
+    }
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(recs))
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 5)
+
+    // Pin the server-side socket to CLOSED so the replay loop must bail on its
+    // first frame and the completion notice must be withheld.
+    const serverSocket = [...startPiezoStreamServer().clients][0] as any
+    const sendSpy = vi.spyOn(serverSocket, 'send')
+    const stringifySpy = vi.spyOn(JSON, 'stringify')
+    Object.defineProperty(serverSocket, 'readyState', {
+      get: () => WsClient.CLOSED,
+      configurable: true,
+    })
+
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2400 }))
+    await new Promise(r => setTimeout(r, 250))
+
+    expect(frameSerializations(stringifySpy, 'capSense')).toHaveLength(0)
+    expect(sendSpy).not.toHaveBeenCalled()
+
+    delete serverSocket.readyState
+    await client.close()
+  })
+
+  it('serializes a live frame once no matter how many clients receive it', async () => {
+    const filePath = path.join(tmpRawDir, 'one-serialize.RAW')
+    const port = startAndPort()
+    const a = await connectClient(port)
+    const b = await connectClient(port)
+
+    const stringifySpy = vi.spyOn(JSON, 'stringify')
+    fs.writeFileSync(filePath, buildOuterRecord(1, [{
+      type: 'capSense', ts: 2700, left: 0, right: 0,
+    }]))
+    await a.waitFor(m => m.type === 'capSense' && m.ts === 2700, 3000)
+    await b.waitFor(m => m.type === 'capSense' && m.ts === 2700, 3000)
+
+    expect(frameSerializations(stringifySpy, 'capSense')).toHaveLength(1)
+    await a.close()
+    await b.close()
+  })
+
+  it('does not serialize a live frame when the only client is not OPEN', async () => {
+    const filePath = path.join(tmpRawDir, 'live-closed.RAW')
+    // frzHealth reaches server-side listeners regardless of client state, so it
+    // marks the tick that already processed the preceding capSense record.
+    const bytes = Buffer.concat([
+      buildOuterRecord(1, [{ type: 'capSense', ts: 2600, left: 0, right: 0 }]),
+      buildOuterRecord(2, [{
+        type: 'frzHealth',
+        ts: 2601,
+        left: { tec: { current: 1 } },
+        right: { tec: { current: 2 } },
+        fan: { top: { rpm: 100 } },
+      }]),
+    ])
+
+    const cb = vi.fn()
+    const unsub = onServerFrame(cb)
+    try {
+      const port = startAndPort()
+      const client = await connectClient(port)
+      const serverSocket = [...startPiezoStreamServer().clients][0] as any
+      Object.defineProperty(serverSocket, 'readyState', {
+        get: () => WsClient.CLOSED,
+        configurable: true,
+      })
+
+      const stringifySpy = vi.spyOn(JSON, 'stringify')
+      fs.writeFileSync(filePath, bytes)
+      await waitUntil(() => cb.mock.calls.length > 0, 3000)
+
+      expect(frameSerializations(stringifySpy, 'capSense')).toHaveLength(0)
+      delete serverSocket.readyState
+      await client.close()
+    }
+    finally {
+      unsub()
+    }
+  })
+
+  it('serializes a broadcast frame once no matter how many clients receive it', async () => {
+    const port = startAndPort()
+    const a = await connectClient(port)
+    const b = await connectClient(port)
+    await waitUntil(() => startPiezoStreamServer().clients.size === 2)
+
+    const frame = { type: 'deviceStatus', ts: 2800 }
+    const stringifySpy = vi.spyOn(JSON, 'stringify')
+    broadcastFrame(frame)
+    await a.waitFor(m => m.type === 'deviceStatus' && m.ts === 2800)
+    await b.waitFor(m => m.type === 'deviceStatus' && m.ts === 2800)
+
+    expect(stringifySpy.mock.calls.filter(c => c[0] === frame)).toHaveLength(1)
+    await a.close()
+    await b.close()
+  })
+
+  it('does not serialize a broadcast frame when the only client is not OPEN', async () => {
+    const port = startAndPort()
+    const client = await connectClient(port)
+    const serverSocket = [...startPiezoStreamServer().clients][0] as any
+    Object.defineProperty(serverSocket, 'readyState', {
+      get: () => WsClient.CLOSED,
+      configurable: true,
+    })
+
+    const frame = { type: 'deviceStatus', ts: 2900 }
+    const stringifySpy = vi.spyOn(JSON, 'stringify')
+    broadcastFrame(frame)
+
+    expect(stringifySpy.mock.calls.filter(c => c[0] === frame)).toHaveLength(0)
+    delete serverSocket.readyState
+    await client.close()
+  })
+
+  it('replays a seek buffer larger than one read chunk without gaps or aborts', async () => {
+    const filePath = path.join(tmpRawDir, 'multi-chunk.RAW')
+    // >4 MB of payload between the two capSense records forces the chunked read
+    // loop to run more than once. A wrong chunk length or read position either
+    // aborts the seek outright or hands the parser corrupted bytes.
+    const bulk = 'x'.repeat(5 * 1024 * 1024)
+    const bytes = Buffer.concat([
+      buildOuterRecord(1, [{ type: 'capSense', ts: 3000, left: 0, right: 0 }]),
+      buildOuterRecord(2, [{ type: 'log', ts: 3001, level: 1, msg: bulk }]),
+      buildOuterRecord(3, [{ type: 'capSense', ts: 3002, left: 1, right: 1 }]),
+    ])
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    // Filter to capSense so the multi-megabyte log frame is never sent over the
+    // socket — the read path is what matters here, not the fan-out.
+    client.ws.send(JSON.stringify({ type: 'subscribe', sensors: ['capSense'] }))
+    await client.waitFor(m => m.type === 'subscribed')
+    fs.writeFileSync(filePath, bytes)
+    await waitUntil(() => client.messages.some(m => m.type === 'capSense' && m.ts === 3002), 10000)
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2999 }))
+    await client.waitFor(m => m.type === 'seek_complete', 10000)
+
+    const replayed = client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)
+    expect(replayed).toEqual([3000, 3002])
+    await client.close()
+  }, 30000)
+
   it('updates DAC monitor poll rate when clients connect and disconnect', async () => {
     const monitorMod: any = await import('@/src/hardware/dacMonitor.instance')
     const monitor = monitorMod.__monitor
