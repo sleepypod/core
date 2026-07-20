@@ -801,6 +801,34 @@ describe('useSensorStream — mutation boundaries and lifecycle contracts', () =
     }
   })
 
+  it('does not let a completed request timeout remove a later time-range resolver', async () => {
+    vi.useFakeTimers()
+    try {
+      const stream = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      const ws = wsMock.sockets[0] as FakeWS
+      act(() => ws.triggerOpen())
+
+      void stream.result.current.getTimeRange()
+      act(() => ws.triggerMessage({ type: 'time_range', min: 100, max: 200 }))
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      let later: any = 'pending'
+      void stream.result.current.getTimeRange().then(value => later = value)
+
+      // The first request's timer fires now. It must leave the later resolver intact.
+      await vi.advanceTimersByTimeAsync(4_000)
+      act(() => ws.triggerMessage({ type: 'time_range', min: 300, max: 400 }))
+      await Promise.resolve()
+
+      expect(later).toEqual({ min: 300, max: 400 })
+      stream.unmount()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps a range when exactly one endpoint is zero', async () => {
     const stream = renderHook(() => useSensorStream())
     await waitFor(() => expect(wsMock.sockets.length).toBe(1))
