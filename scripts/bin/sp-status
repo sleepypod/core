@@ -60,7 +60,7 @@ fi
 if [ -f /opt/eight/bin/frank.sh ]; then
   printf "frank.sh:    present (old firmware path)\n"
 else
-  printf "frank.sh:    absent (new firmware path)\n"
+  printf "frank.sh:    absent (mid/new firmware variants)\n"
 fi
 printf "frank.service: %s\n" "$(active_or frank.service)"
 
@@ -72,10 +72,18 @@ JETSTREAM_DIR_STATE="missing"
 
 if [ "$NATS_STATE" = "active" ] && [ "$JETSTREAM_DIR_STATE" = "present" ]; then
   printf "pipeline:    NATS JetStream (new firmware, April 2026+)\n"
-elif [ -f /opt/eight/bin/frank.sh ]; then
-  printf "pipeline:    tmpfs *.RAW via frank.sh shim (old firmware)\n"
+elif mountpoint -q /persistent/biometrics 2>/dev/null; then
+  if [ -f /opt/eight/bin/frank.sh ] \
+     && grep -q 'cd /persistent/biometrics' /opt/eight/bin/frank.sh 2>/dev/null; then
+    printf "pipeline:    tmpfs *.RAW via patched frank.sh shim\n"
+  elif systemctl cat frank.service 2>/dev/null \
+       | grep -q '^WorkingDirectory=/persistent/biometrics$'; then
+    printf "pipeline:    tmpfs *.RAW via frank.service WorkingDirectory\n"
+  else
+    printf "pipeline:    tmpfs mounted at /persistent/biometrics (writer routing unverified)\n"
+  fi
 else
-  printf "pipeline:    direct *.RAW (mid-era firmware; frank.sh removed ~year ago, no NATS)\n"
+  printf "pipeline:    filesystem *.RAW (tmpfs not mounted; legacy/mid-era firmware)\n"
 fi
 
 printf "nats-server: %s" "$NATS_STATE"

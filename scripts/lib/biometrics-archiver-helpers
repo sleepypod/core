@@ -17,6 +17,84 @@
 #
 # Requires INSTALL_DIR to be set by the caller.
 
+remove_biometrics_archiver_for_nats() {
+  # A pod can be upgraded from RAW-writing firmware after this module was
+  # already installed. Merely skipping setup would leave frank.service's
+  # WorkingDirectory override, the tmpfs mount, and archive timers enabled.
+  # Remove only Sleepypod-owned artifacts; preserve the cold archive.
+  local dropin=/etc/systemd/system/frank.service.d/sleepypod-biometrics-tmpfs.conf
+  local restart_frank=false
+  local u
+
+  for u in sleepypod-biometrics-archiver.timer sleepypod-biometrics-pruner.timer \
+           sleepypod-biometrics-archiver.service sleepypod-biometrics-pruner.service \
+           sleepypod-tmpfs-prep.service; do
+    systemctl stop "$u" 2>/dev/null || true
+    systemctl disable "$u" 2>/dev/null || true
+  done
+
+  # Undo the exact firmware shim edit this helper owns. Prefer the preserved
+  # pre-tmpfs file; reverse the narrow substitution when no backup survived a
+  # firmware upgrade.
+  if [ -f /opt/eight/bin/frank.sh ] \
+     && grep -q 'cd /persistent/biometrics' /opt/eight/bin/frank.sh; then
+    local backups newest_backup backup
+    shopt -s nullglob
+    backups=(/opt/eight/bin/frank.sh.bak-pre-tmpfs-*)
+    shopt -u nullglob
+    if [ "${#backups[@]}" -gt 0 ]; then
+      newest_backup=${backups[0]}
+      for backup in "${backups[@]:1}"; do
+        if [ "$backup" -nt "$newest_backup" ]; then
+          newest_backup=$backup
+        fi
+      done
+      cp -f "$newest_backup" /opt/eight/bin/frank.sh
+    else
+      sed -i 's|cd /persistent/biometrics \&\&|cd /persistent \&\&|' \
+        /opt/eight/bin/frank.sh
+    fi
+    restart_frank=true
+  fi
+
+  if [ -f "$dropin" ]; then
+    rm -f "$dropin"
+    restart_frank=true
+  fi
+  rmdir /etc/systemd/system/frank.service.d 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+
+  # Restart after removing the override so frank releases any cwd held inside
+  # the tmpfs. New firmware resumes publishing to NATS immediately.
+  if [ "$restart_frank" = true ]; then
+    systemctl restart frank.service 2>/dev/null || true
+  fi
+
+  # Preserve every remaining RAW frame before unmounting the volatile tmpfs.
+  # KEEP_RECENT_MIN=-1 includes files younger than the normal 15-minute guard;
+  # frank has already restarted on the NATS path and no longer writes them.
+  if mountpoint -q /persistent/biometrics \
+     && [ -x /usr/local/bin/sleepypod-biometrics-archiver ]; then
+    KEEP_RECENT_MIN=-1 /usr/local/bin/sleepypod-biometrics-archiver \
+      || echo "Warning: failed to archive all remaining tmpfs RAW frames before NATS cleanup" >&2
+  fi
+
+  systemctl stop persistent-biometrics.mount 2>/dev/null || true
+  systemctl disable persistent-biometrics.mount 2>/dev/null || true
+
+  rm -f /etc/systemd/system/sleepypod-biometrics-archiver.service \
+        /etc/systemd/system/sleepypod-biometrics-archiver.timer \
+        /etc/systemd/system/sleepypod-biometrics-pruner.service \
+        /etc/systemd/system/sleepypod-biometrics-pruner.timer \
+        /etc/systemd/system/sleepypod-tmpfs-prep.service \
+        /etc/systemd/system/persistent-biometrics.mount \
+        /usr/local/bin/sleepypod-tmpfs-prep \
+        /usr/local/bin/sleepypod-biometrics-archiver \
+        /usr/local/bin/sleepypod-biometrics-pruner
+  systemctl daemon-reload 2>/dev/null || true
+  echo "biometrics-archiver: removed legacy RAW tmpfs units for NATS firmware (cold archive preserved)"
+}
+
 install_biometrics_archiver() {
   local archiver_src="${INSTALL_DIR:-/home/dac/sleepypod-core}/modules/biometrics-archiver"
 
@@ -37,10 +115,13 @@ install_biometrics_archiver() {
   # era population also has no /opt/eight/bin/frank.sh but is still on
   # the .RAW write path (firmware direct → /persistent/*.RAW). Those pods
   # depend on the archive/migration loop below to keep eMMC from filling.
-  # Gate strictly on the new-firmware NATS signals.
-  if systemctl is-active --quiet nats-server.service 2>/dev/null \
-     && [ -d /persistent/jetstream ]; then
-    echo "biometrics-archiver: new firmware detected (nats-server active; /persistent/jetstream present) — skipping tmpfs setup"
+  # Gate on persistent firmware identity, not transient service health. The
+  # server may be restarting during sp-update; an installed unit plus its
+  # JetStream store still identifies the NATS-writing firmware generation.
+  if [ -d /persistent/jetstream ] \
+     && systemctl cat nats-server.service >/dev/null 2>&1; then
+    echo "biometrics-archiver: NATS firmware detected (nats-server installed; /persistent/jetstream present) — removing/skipping RAW tmpfs setup"
+    remove_biometrics_archiver_for_nats
     return 0
   fi
 
