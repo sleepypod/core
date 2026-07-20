@@ -268,6 +268,21 @@ describe('startKeepalive', () => {
     expect(setTemperature).toHaveBeenCalledTimes(3)
   })
 
+  it('arms the interval at exactly 6 hours in milliseconds', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 88 })
+    setSideSettings('left', { alwaysOn: 1 })
+
+    const interval = vi.spyOn(globalThis, 'setInterval')
+
+    startKeepalive('left')
+    await flushAsync()
+
+    // Pins the unit of KEEPALIVE_INTERVAL_MS — a mis-scaled constant would
+    // still "fire on the interval" under fake timers, but would blow past the
+    // firmware's 8-hour duration limit (or hammer the DAC every 21ms).
+    expect(interval).toHaveBeenCalledWith(expect.any(Function), 21_600_000)
+  })
+
   it('swallows hardware errors so the interval keeps running', async () => {
     setSideState('left', { isPowered: 1, targetTemperature: 92 })
     setSideSettings('left', { alwaysOn: 1 })
