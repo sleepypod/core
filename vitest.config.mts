@@ -4,22 +4,30 @@ import react from '@vitejs/plugin-react'
 import tsconfigPaths from 'vite-tsconfig-paths'
 import { defineConfig } from 'vitest/config'
 
+const serverOnlyTestStub = '\0server-only-test-stub'
+
 export default defineConfig({
-  plugins: [tsconfigPaths(), react({
+  plugins: [{
+    name: 'server-only-test-stub',
+    enforce: 'pre',
+    resolveId(id) {
+      if (id === 'server-only') return serverOnlyTestStub
+    },
+    load(id) {
+      if (id === serverOnlyTestStub) return 'export {}'
+    },
+  }, tsconfigPaths(), react({
     babel: {
       plugins: ['@lingui/babel-plugin-lingui-macro'],
     },
   }), lingui()],
   resolve: {
     alias: {
-      // Next.js resolves this marker package in server builds. Vitest needs a
-      // no-op equivalent so server-only modules can be exercised directly.
-      'server-only': fileURLToPath(new URL('./src/lib/i18n/server-only.test-stub.ts', import.meta.url)),
       // The `mqtt` npm package is added by sleepypod-core-28 (frontend PR).
       // Until that lands, alias it to a local test stub so the bridge module
       // is resolvable under vitest. Tests then layer vi.mock('mqtt') on top
       // to control behaviour.
-      'mqtt': fileURLToPath(new URL('./src/streaming/tests/__stubs__/mqtt.ts', import.meta.url)),
+      mqtt: fileURLToPath(new URL('./src/streaming/tests/__stubs__/mqtt.ts', import.meta.url)),
     },
   },
   test: {
