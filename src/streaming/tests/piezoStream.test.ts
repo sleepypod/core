@@ -779,16 +779,6 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await client.close()
   })
 
-  it('seek before any RAW file is indexed → error + seek_complete', async () => {
-    const port = startAndPort()
-    const client = await connectClient(port)
-    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 1 }))
-    const err = await client.waitFor(m => m.type === 'error')
-    expect(err.message).toMatch(/No RAW file indexed yet/)
-    await client.waitFor(m => m.type === 'seek_complete')
-    await client.close()
-  })
-
   it('seek with a numeric-string timestamp → rejected as non-numeric', async () => {
     const port = startAndPort()
     const client = await connectClient(port)
@@ -1976,20 +1966,27 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const sendSpy = vi.spyOn(serverSocket, 'send')
     const stringifySpy = vi.spyOn(JSON, 'stringify')
     const immediateSpy = vi.spyOn(globalThis, 'setImmediate')
+    let readyStateReads = 0
     Object.defineProperty(serverSocket, 'readyState', {
-      get: () => WsClient.CLOSED,
+      get: () => {
+        readyStateReads += 1
+        return WsClient.CLOSED
+      },
       configurable: true,
     })
 
-    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2399 }))
-    await new Promise(r => setTimeout(r, 250))
+    try {
+      client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2399 }))
+      await waitUntil(() => readyStateReads > 0, 3_000)
 
-    expect(frameSerializations(stringifySpy, 'capSense')).toHaveLength(0)
-    expect(sendSpy).not.toHaveBeenCalled()
-    expect(immediateSpy).not.toHaveBeenCalled()
-
-    delete serverSocket.readyState
-    await client.close()
+      expect(frameSerializations(stringifySpy, 'capSense')).toHaveLength(0)
+      expect(sendSpy).not.toHaveBeenCalled()
+      expect(immediateSpy).not.toHaveBeenCalled()
+    }
+    finally {
+      delete serverSocket.readyState
+      await client.close()
+    }
   }, 20000)
 
   it('serializes a live frame once no matter how many clients receive it', async () => {

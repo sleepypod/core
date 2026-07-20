@@ -38,6 +38,14 @@ const {
   stopBiometricsRetention,
 } = await import('../retention')
 
+const originalRetentionDays = process.env.BIOMETRICS_RETENTION_DAYS
+const originalRetentionIntervalHours = process.env.BIOMETRICS_RETENTION_INTERVAL_HOURS
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) Reflect.deleteProperty(process.env, name)
+  else process.env[name] = value
+}
+
 type BiometricsDb = ReturnType<typeof drizzle<typeof schema>>
 
 function openTempDb(): { db: BiometricsDb, close: () => void } {
@@ -423,13 +431,21 @@ describe('startBiometricsRetention / stopBiometricsRetention', () => {
   })
 
   afterEach(() => {
-    stopBiometricsRetention()
-    vi.useRealTimers()
-    vi.restoreAllMocks()
-    delete process.env.BIOMETRICS_RETENTION_DAYS
-    delete process.env.BIOMETRICS_RETENTION_INTERVAL_HOURS
-    close()
-    mockState.db = null
+    try {
+      stopBiometricsRetention()
+    }
+    finally {
+      try {
+        close()
+      }
+      finally {
+        vi.useRealTimers()
+        vi.restoreAllMocks()
+        restoreEnv('BIOMETRICS_RETENTION_DAYS', originalRetentionDays)
+        restoreEnv('BIOMETRICS_RETENTION_INTERVAL_HOURS', originalRetentionIntervalHours)
+        mockState.db = null
+      }
+    }
   })
 
   it('runs the initial pass after the configured delay and again per interval', () => {

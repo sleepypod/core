@@ -5,7 +5,7 @@
  * range. fs/promises and biometricsDb fully mocked.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as DrizzleOrmModule from 'drizzle-orm'
 
 const sqlMock = vi.hoisted(() => ({
@@ -94,6 +94,10 @@ beforeEach(() => {
   dbMock.qualityRows.length = 0
   dbMock.setActive('profiles')
   Object.values(sqlMock).forEach(mock => mock.mockClear())
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('calibration.getStatus', () => {

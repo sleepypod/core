@@ -106,6 +106,12 @@ function resetSchedulerMocks() {
   mocks.cancelAlarmJob.mockReset()
 }
 
+function restoreDynamicModuleMocks() {
+  vi.doUnmock('@/src/db')
+  vi.doUnmock('@/src/scheduler')
+  vi.resetModules()
+}
+
 describe('schedules.batchUpdate', () => {
   beforeEach(() => {
     clearTables()
@@ -852,6 +858,8 @@ describe('schedules incremental scheduler API', () => {
 })
 
 describe('schedules query error paths', () => {
+  afterEach(restoreDynamicModuleMocks)
+
   it('getAll wraps DB errors as INTERNAL_SERVER_ERROR', async () => {
     // Re-mock db to throw inside .all()
     const failing = { db: {
@@ -885,10 +893,6 @@ describe('schedules query error paths', () => {
     await expect(
       failingCaller.getByDay({ side: 'left', dayOfWeek: 'monday' })
     ).rejects.toThrow(/Failed to fetch schedules by day/)
-
-    vi.doUnmock('@/src/db')
-    vi.doUnmock('@/src/scheduler')
-    vi.resetModules()
   })
 
   it('create handlers throw INTERNAL_SERVER_ERROR when insert returns no row', async () => {
@@ -931,10 +935,6 @@ describe('schedules query error paths', () => {
       side: 'left', dayOfWeek: 'monday', time: '07:00',
       vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
     } as any)).rejects.toThrow(/no record returned/)
-
-    vi.doUnmock('@/src/db')
-    vi.doUnmock('@/src/scheduler')
-    vi.resetModules()
   })
 
   it('batchUpdate.creates throws INTERNAL_SERVER_ERROR per kind when insert returns no row', async () => {
@@ -964,22 +964,23 @@ describe('schedules query error paths', () => {
       ['power', { side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true }, 'power schedule'],
       ['alarm', { side: 'left', dayOfWeek: 'monday', time: '07:00', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, alarmTemperature: 80, enabled: true }, 'alarm schedule'],
     ] as const) {
-      vi.resetModules()
-      vi.doMock('@/src/db', () => makeFailingDb())
-      vi.doMock('@/src/scheduler', () => scheduler)
-      const { schedulesRouter } = await import('@/src/server/routers/schedules')
-      const c = schedulesRouter.createCaller({})
+      try {
+        vi.resetModules()
+        vi.doMock('@/src/db', () => makeFailingDb())
+        vi.doMock('@/src/scheduler', () => scheduler)
+        const { schedulesRouter } = await import('@/src/server/routers/schedules')
+        const c = schedulesRouter.createCaller({})
 
-      const err = await rejection(() => c.batchUpdate({
-        creates: { temperature: [], power: [], alarm: [], [kind]: [payload] } as any,
-      }))
-      expect(err.code, kind).toBe('INTERNAL_SERVER_ERROR')
-      expect(err.message, kind).toBe(`Failed to create ${label} - no record returned`)
-
-      vi.doUnmock('@/src/db')
-      vi.doUnmock('@/src/scheduler')
+        const err = await rejection(() => c.batchUpdate({
+          creates: { temperature: [], power: [], alarm: [], [kind]: [payload] } as any,
+        }))
+        expect(err.code, kind).toBe('INTERNAL_SERVER_ERROR')
+        expect(err.message, kind).toBe(`Failed to create ${label} - no record returned`)
+      }
+      finally {
+        restoreDynamicModuleMocks()
+      }
     }
-    vi.resetModules()
   })
 
   it('mutation handlers wrap non-TRPC DB errors as INTERNAL_SERVER_ERROR', async () => {
@@ -1041,10 +1042,6 @@ describe('schedules query error paths', () => {
     await expect(failingCaller.batchUpdate({
       creates: { temperature: [{ side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68 }] },
     })).rejects.toThrow(/Failed to batch update schedules/)
-
-    vi.doUnmock('@/src/db')
-    vi.doUnmock('@/src/scheduler')
-    vi.resetModules()
   })
 })
 
@@ -1065,6 +1062,8 @@ describe('schedules error passthrough', () => {
     clearTables()
     resetSchedulerMocks()
   })
+
+  afterEach(restoreDynamicModuleMocks)
 
   it('re-throws NOT_FOUND TRPCErrors verbatim instead of rewrapping them', async () => {
     const cases: [string, () => Promise<unknown>, string][] = [
@@ -1136,10 +1135,6 @@ describe('schedules error passthrough', () => {
       expect(err.code, label).toBe('INTERNAL_SERVER_ERROR')
       expect(err.message, label).toBe(message)
     }
-
-    vi.doUnmock('@/src/db')
-    vi.doUnmock('@/src/scheduler')
-    vi.resetModules()
   })
 
   it('wraps generic Errors as INTERNAL_SERVER_ERROR with the exact prefixed message', async () => {
@@ -1177,10 +1172,6 @@ describe('schedules error passthrough', () => {
       expect(err.code, label).toBe('INTERNAL_SERVER_ERROR')
       expect(err.message, label).toBe(message)
     }
-
-    vi.doUnmock('@/src/db')
-    vi.doUnmock('@/src/scheduler')
-    vi.resetModules()
   })
 
   it('renders "Unknown error" when the thrown value is not an Error', async () => {
@@ -1221,10 +1212,6 @@ describe('schedules error passthrough', () => {
       expect(err.code, label).toBe('INTERNAL_SERVER_ERROR')
       expect(err.message, label).toBe(message)
     }
-
-    vi.doUnmock('@/src/db')
-    vi.doUnmock('@/src/scheduler')
-    vi.resetModules()
   })
 })
 
@@ -1289,11 +1276,7 @@ describe('schedules openapi meta + input schema contract', () => {
     return fresh.createCaller({})
   }
 
-  afterEach(() => {
-    vi.doUnmock('@/src/db')
-    vi.doUnmock('@/src/scheduler')
-    vi.resetModules()
-  })
+  afterEach(restoreDynamicModuleMocks)
 
   it('exposes exact openapi method/path/protect/tags for every procedure', async () => {
     const procedures = await loadProcedures()
@@ -1437,4 +1420,3 @@ describe('schedules openapi meta + input schema contract', () => {
       .toEqual({ deletes: empty, creates: empty, updates: empty })
   })
 })
-

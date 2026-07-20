@@ -15,19 +15,62 @@ const fsMock = vi.hoisted(() => ({
 }))
 
 const wsMock = vi.hoisted(() => {
+  type Handler = (...args: unknown[]) => void
+
+  class FakeClient {
+    readonly bufferedAmount = 0
+    readonly sent: string[] = []
+    readyState = 1
+    private readonly handlers = new Map<string, Handler[]>()
+
+    on(eventName: string, listener: Handler): this {
+      const listeners = this.handlers.get(eventName) ?? []
+      listeners.push(listener)
+      this.handlers.set(eventName, listeners)
+      return this
+    }
+
+    send(payload: string): void {
+      this.sent.push(payload)
+    }
+
+    emitMessage(payload: string): void {
+      for (const listener of this.handlers.get('message') ?? []) {
+        listener(Buffer.from(payload))
+      }
+    }
+
+    terminate(): void {
+      this.readyState = 3
+      for (const listener of this.handlers.get('close') ?? []) listener()
+    }
+  }
+
   const state = {
+    connectionHandler: null as ((client: FakeClient) => void) | null,
     options: [] as Array<Record<string, unknown>>,
+    servers: [] as FakeWebSocketServer[],
   }
 
   class FakeWebSocketServer {
-    readonly clients = new Set<never>()
+    readonly clients = new Set<FakeClient>()
 
     constructor(options: Record<string, unknown>) {
       state.options.push(options)
+      state.servers.push(this)
     }
 
-    on(): this {
+    on(eventName: string, listener: Handler): this {
+      if (eventName === 'connection') {
+        state.connectionHandler = listener as (client: FakeClient) => void
+      }
       return this
+    }
+
+    connect(client = new FakeClient()): FakeClient {
+      this.clients.add(client)
+      state.connectionHandler?.(client)
+      return client
     }
 
     close(callback?: () => void): void {
@@ -62,6 +105,9 @@ vi.mock('ws', () => ({
 
 vi.mock('../capFramePersistence', () => persistenceMock)
 vi.mock('../normalizeFrame', () => ({ capSideChannels: vi.fn(() => null) }))
+vi.mock('@/src/hardware/dacMonitor.instance', () => ({
+  getDacMonitorIfRunning: vi.fn(() => null),
+}))
 
 type PiezoStreamModule = typeof PiezoStream
 
@@ -94,7 +140,9 @@ beforeEach(() => {
   loadedModule = null
   fsMock.readdirSync.mockReset().mockReturnValue([])
   fsMock.statSync.mockReset().mockReturnValue({ mtimeMs: 0 })
+  wsMock.state.connectionHandler = null
   wsMock.state.options.length = 0
+  wsMock.state.servers.length = 0
   vi.spyOn(console, 'log').mockImplementation(() => {})
 })
 
@@ -144,5 +192,21 @@ describe('piezoStream module initialization contracts', () => {
     const encoded = Buffer.from(new Encoder({ useRecords: false }).encode(frame))
 
     expect(piezoStream.__test__.decodeSensorFrames(encoded)).toEqual([frame])
+  })
+
+  it('rejects a seek before any RAW file is indexed and still completes it', async () => {
+    const piezoStream = await loadFreshModule()
+    piezoStream.startPiezoStreamServer()
+    const server = wsMock.state.servers.at(-1)
+    if (!server) throw new Error('fake WebSocket server was not created')
+    const client = server.connect()
+
+    client.emitMessage(JSON.stringify({ type: 'seek', timestamp: 1 }))
+
+    await vi.waitFor(() => expect(client.sent).toHaveLength(2))
+    expect(client.sent.map(message => JSON.parse(message))).toEqual([
+      { type: 'error', message: 'No RAW file indexed yet' },
+      { type: 'seek_complete' },
+    ])
   })
 })

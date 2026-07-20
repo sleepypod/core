@@ -5,7 +5,7 @@
  * so generateKey + testConnection happy/error branches are exercised
  * without invoking real binaries.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -46,25 +46,54 @@ vi.mock('node:child_process', () => {
 
 let configDir: string
 
-beforeAll(async () => {
-  configDir = await mkdtemp(path.join(tmpdir(), 'sp-push-test-'))
+const ARCHIVE_PUSH_ENV_KEYS = [
+  'ARCHIVE_PUSH_CONFIG_DIR',
+  'ARCHIVE_PUSH_CONFIG',
+  'ARCHIVE_PUSH_IDENTITY',
+] as const
+const originalArchivePushEnv = Object.fromEntries(
+  ARCHIVE_PUSH_ENV_KEYS.map(key => [key, process.env[key]]),
+) as Record<(typeof ARCHIVE_PUSH_ENV_KEYS)[number], string | undefined>
+
+function setTestArchivePushEnv() {
   process.env.ARCHIVE_PUSH_CONFIG_DIR = configDir
   process.env.ARCHIVE_PUSH_CONFIG = path.join(configDir, 'archive-push.conf')
   process.env.ARCHIVE_PUSH_IDENTITY = path.join(configDir, 'archive-push.id_ed25519')
+}
+
+function restoreOriginalArchivePushEnv() {
+  for (const key of ARCHIVE_PUSH_ENV_KEYS) {
+    const value = originalArchivePushEnv[key]
+    if (value === undefined) Reflect.deleteProperty(process.env, key)
+    else process.env[key] = value
+  }
+}
+
+beforeAll(async () => {
+  configDir = await mkdtemp(path.join(tmpdir(), 'sp-push-test-'))
+  setTestArchivePushEnv()
 })
 
 afterAll(async () => {
-  await rm(configDir, { recursive: true, force: true })
-  delete process.env.ARCHIVE_PUSH_CONFIG_DIR
-  delete process.env.ARCHIVE_PUSH_CONFIG
-  delete process.env.ARCHIVE_PUSH_IDENTITY
+  try {
+    await rm(configDir, { recursive: true, force: true })
+  }
+  finally {
+    restoreOriginalArchivePushEnv()
+  }
 })
 
 beforeEach(async () => {
+  setTestArchivePushEnv()
   await rm(path.join(configDir, 'archive-push.conf'), { force: true })
   await rm(path.join(configDir, 'archive-push.id_ed25519'), { force: true })
   await rm(path.join(configDir, 'archive-push.id_ed25519.pub'), { force: true })
   // Reset execFile behaviour to a benign success — tests opt into failures.
+  execMock.impl = () => ({ stdout: '', stderr: '' })
+})
+
+afterEach(() => {
+  setTestArchivePushEnv()
   execMock.impl = () => ({ stdout: '', stderr: '' })
 })
 
@@ -189,9 +218,6 @@ describe('archivePush.getConfig', () => {
     const result = await caller.getConfig({})
     expect(result.config.identity).toBe(path.join(configDir, 'archive-push.id_ed25519'))
     expect(result.publicKey).toBeNull()
-
-    process.env.ARCHIVE_PUSH_CONFIG = path.join(configDir, 'archive-push.conf')
-    process.env.ARCHIVE_PUSH_IDENTITY = path.join(configDir, 'archive-push.id_ed25519')
   })
 
   it('uses the system directory fallback to derive the identity path', async () => {
@@ -200,9 +226,6 @@ describe('archivePush.getConfig', () => {
 
     const result = await caller.getConfig({})
     expect(result.config.identity).toBe('/etc/sleepypod/archive-push.id_ed25519')
-
-    process.env.ARCHIVE_PUSH_CONFIG_DIR = configDir
-    process.env.ARCHIVE_PUSH_IDENTITY = path.join(configDir, 'archive-push.id_ed25519')
   })
 
   it('returns defaults when no conf exists', async () => {

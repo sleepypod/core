@@ -13,6 +13,10 @@ describe('Scheduler', () => {
   })
 
   afterEach(async () => {
+    // Assertions (including mutation-induced failures) must not leave global
+    // timers or console/native-method spies active for the next test.
+    vi.useRealTimers()
+    vi.restoreAllMocks()
     await scheduler.shutdown()
   })
 
@@ -391,13 +395,16 @@ describe('Scheduler', () => {
 
       // Wait for the job to actually start (in-flight)
       await new Promise(resolve => setTimeout(resolve, 100))
-      await scheduler.waitForInFlightJobs(150)
+      try {
+        await scheduler.waitForInFlightJobs(150)
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        'Force shutdown with 1 in-flight job(s) still running: hang',
-      )
-      release()
-      warnSpy.mockRestore()
+        expect(warnSpy).toHaveBeenCalledWith(
+          'Force shutdown with 1 in-flight job(s) still running: hang',
+        )
+      }
+      finally {
+        release()
+      }
     })
   })
 

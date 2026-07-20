@@ -10,7 +10,7 @@
  * returns rows from a queue in that order.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deviceSettings, deviceState } from '@/src/db/schema'
 import { bedTemp, flowReadings, freezerTemp } from '@/src/db/biometrics-schema'
 
@@ -85,6 +85,10 @@ beforeEach(() => {
   rows.flow = []
   rows.freezer = []
   rows.bed = []
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('health.thermal verdicts', () => {

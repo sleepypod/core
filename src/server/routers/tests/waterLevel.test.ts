@@ -6,7 +6,7 @@
  * awaitable returning whatever the test queues into `nextRows`/`nextRow`.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as DrizzleOrmModule from 'drizzle-orm'
 
 const sqlMock = vi.hoisted(() => ({
@@ -73,6 +73,10 @@ beforeEach(() => {
   dbMock.insert.mockClear()
   dbMock.delete.mockClear()
   Object.values(sqlMock).forEach(mock => mock.mockClear())
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('waterLevel.getHistory', () => {

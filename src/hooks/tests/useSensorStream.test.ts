@@ -10,7 +10,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   useOnSensorFrame,
   useSensorFrame,
@@ -19,6 +19,14 @@ import {
 } from '../useSensorStream'
 
 const sensorSingleton = (globalThis as any).__sleepypod_sensorStream
+const originalWebSocket = globalThis.WebSocket
+const originalLocationDescriptor = Object.getOwnPropertyDescriptor(window, 'location')
+const originalPiezoWsPort = process.env.NEXT_PUBLIC_PIEZO_WS_PORT
+
+function restorePiezoWsPort(): void {
+  if (originalPiezoWsPort === undefined) delete process.env.NEXT_PUBLIC_PIEZO_WS_PORT
+  else process.env.NEXT_PUBLIC_PIEZO_WS_PORT = originalPiezoWsPort
+}
 
 interface FakeWS {
   url: string
@@ -87,6 +95,13 @@ beforeAll(() => {
   })
 })
 
+afterAll(() => {
+  globalThis.WebSocket = originalWebSocket
+  if (originalLocationDescriptor) {
+    Object.defineProperty(window, 'location', originalLocationDescriptor)
+  }
+})
+
 beforeEach(() => {
   // The module owns a process-wide singleton. Keep the global reference
   // available for white-box lifecycle assertions and reset registries that
@@ -109,12 +124,19 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  // Best-effort: clear any open sockets so reconnect timers don't fire
-  for (const ws of wsMock.sockets) {
-    try {
-      ws.triggerClose()
+  try {
+    // Best-effort: clear any open sockets so reconnect timers don't fire.
+    for (const ws of wsMock.sockets) {
+      try {
+        ws.triggerClose()
+      }
+      catch { /* noop */ }
     }
-    catch { /* noop */ }
+  }
+  finally {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    restorePiezoWsPort()
   }
 })
 

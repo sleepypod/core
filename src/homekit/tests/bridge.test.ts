@@ -159,8 +159,19 @@ describe('homekit bridge', () => {
     m.hasAccessoryInfo.mockReturnValue(false)
   })
 
-  afterEach(() => {
-    vi.clearAllMocks()
+  afterEach(async () => {
+    try {
+      // startBridge registers accessory subscriptions and the pair-observer
+      // interval in its public teardown stack. Run that stack before the next
+      // test clears the global singleton keys so no timer can outlive its test.
+      const { stopBridge } = await import('../bridge')
+      await stopBridge()
+    }
+    finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+      vi.clearAllMocks()
+    }
   })
 
   it('startBridge wires Thermostat + Occupancy + Snooze + Power per side, plus Prime and Ambient', { timeout: 30_000 }, async () => {

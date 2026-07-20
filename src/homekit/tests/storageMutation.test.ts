@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 
 const state = vi.hoisted(() => {
+  const originalHomekitDir = process.env.HOMEKIT_DIR
   process.env.HOMEKIT_DIR = '/virtual/homekit'
 
   const existing = new Set<string>()
@@ -53,6 +54,7 @@ const state = vi.hoisted(() => {
     deriveImpl: (info: string, length: number) => Buffer
     hkdfSync: ReturnType<typeof vi.fn>
     randomBytes: ReturnType<typeof vi.fn>
+    originalHomekitDir: string | undefined
   } = {
     existing,
     files,
@@ -68,6 +70,7 @@ const state = vi.hoisted(() => {
     deriveImpl: (_info, length) => Buffer.alloc(length, 1),
     hkdfSync: vi.fn(),
     randomBytes: vi.fn((length: number) => Buffer.alloc(length, 0xab)),
+    originalHomekitDir,
   }
   bag.hkdfSync.mockImplementation(
     (_digest: string, _seed: string, _salt: string, info: string, length: number) =>
@@ -128,6 +131,7 @@ function resetSingletons(): void {
 
 describe('homekit storage mutation contracts', () => {
   beforeEach(() => {
+    process.env.HOMEKIT_DIR = '/virtual/homekit'
     resetSingletons()
     state.existing.clear()
     state.files.clear()
@@ -143,6 +147,17 @@ describe('homekit storage mutation contracts', () => {
     state.hkdfSync.mockClear()
     state.randomBytes.mockClear()
     state.deriveImpl = (_info, length) => Buffer.alloc(length, 1)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    resetSingletons()
+    if (state.originalHomekitDir === undefined) {
+      delete process.env.HOMEKIT_DIR
+    }
+    else {
+      process.env.HOMEKIT_DIR = state.originalHomekitDir
+    }
   })
 
   it('chooses, creates, and caches the persistent directory exactly', () => {
@@ -272,28 +287,32 @@ describe('homekit storage mutation contracts', () => {
       return Buffer.alloc(length)
     }
 
-    const identity = loadOrCreateIdentity()
+    try {
+      const identity = loadOrCreateIdentity()
 
-    expect(identity).toEqual({
-      username: '02:02:03:04:05:06',
-      pincode: '123-45-679',
-      setupId: 'AZ09',
-      derivedFrom: 'mmc-cid',
-      derivedAt: 1_700_000_123,
-      rotation: 0,
-    })
-    expect(state.hkdfSync.mock.calls.map(call => call[3])).toEqual([
-      'username/0',
-      'pincode/0/0',
-      'pincode/0/1',
-      'setupid/0',
-    ])
-    expect(state.writeFileSync).toHaveBeenCalledWith(
-      identityFile,
-      JSON.stringify(identity, null, 2),
-      { mode: 0o600 },
-    )
-    now.mockRestore()
+      expect(identity).toEqual({
+        username: '02:02:03:04:05:06',
+        pincode: '123-45-679',
+        setupId: 'AZ09',
+        derivedFrom: 'mmc-cid',
+        derivedAt: 1_700_000_123,
+        rotation: 0,
+      })
+      expect(state.hkdfSync.mock.calls.map(call => call[3])).toEqual([
+        'username/0',
+        'pincode/0/0',
+        'pincode/0/1',
+        'setupid/0',
+      ])
+      expect(state.writeFileSync).toHaveBeenCalledWith(
+        identityFile,
+        JSON.stringify(identity, null, 2),
+        { mode: 0o600 },
+      )
+    }
+    finally {
+      now.mockRestore()
+    }
   })
 
   it('skips the read/backup path entirely and logs the seed source on a fresh pod', () => {
@@ -380,14 +399,19 @@ describe('homekit storage mutation contracts', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(4242)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    loadOrCreateIdentity()
+    try {
+      loadOrCreateIdentity()
 
-    expect(state.renameSync).toHaveBeenCalledWith(identityFile, `${identityFile}.corrupt.4242`)
-    expect(warn).toHaveBeenCalledWith(
-      `[homekit] identity.json unparseable, backed up to ${identityFile}.corrupt.4242, regenerating:`,
-      expect.stringContaining('JSON'),
-    )
-    now.mockRestore()
+      expect(state.renameSync).toHaveBeenCalledWith(identityFile, `${identityFile}.corrupt.4242`)
+      expect(warn).toHaveBeenCalledWith(
+        `[homekit] identity.json unparseable, backed up to ${identityFile}.corrupt.4242, regenerating:`,
+        expect.stringContaining('JSON'),
+      )
+    }
+    finally {
+      warn.mockRestore()
+      now.mockRestore()
+    }
   })
 
   it('warns with the backup error when corrupt identity preservation fails', () => {
@@ -476,10 +500,7 @@ describe('homekit storage mutation contracts', () => {
 
   it('returns silently, without reading or warning, when identity.json is absent', () => {
     state.existing.add('/persistent')
-    // An earlier case leaves console.warn spied; re-spying reuses that mock,
-    // so drop its history before asserting this call made none of its own.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    warn.mockClear()
 
     try {
       markIdentityPaired()

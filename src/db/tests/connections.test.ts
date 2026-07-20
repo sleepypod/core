@@ -12,6 +12,14 @@ const mocks = vi.hoisted(() => ({
   drizzle: vi.fn(),
 }))
 
+const originalDatabaseUrl = process.env.DATABASE_URL
+const originalBiometricsDatabaseUrl = process.env.BIOMETRICS_DATABASE_URL
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) Reflect.deleteProperty(process.env, name)
+  else process.env[name] = value
+}
+
 vi.mock('better-sqlite3', () => ({
   default: mocks.database,
 }))
@@ -46,8 +54,8 @@ describe('database connection modules', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
-    delete process.env.DATABASE_URL
-    delete process.env.BIOMETRICS_DATABASE_URL
+    restoreEnv('DATABASE_URL', originalDatabaseUrl)
+    restoreEnv('BIOMETRICS_DATABASE_URL', originalBiometricsDatabaseUrl)
   })
 
   it('opens the main database at its default path with every required pragma', async () => {

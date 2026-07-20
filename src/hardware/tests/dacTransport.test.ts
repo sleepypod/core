@@ -90,13 +90,19 @@ describe('dacTransport', () => {
   })
 
   afterEach(async () => {
-    mockFranken?.destroy()
-    mockFranken = undefined
-    await disconnectDac()
     try {
-      await fs.unlink(socketPath)
+      mockFranken?.destroy()
+      await disconnectDac()
     }
-    catch { /* ignore */ }
+    finally {
+      mockFranken = undefined
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+      try {
+        await fs.unlink(socketPath)
+      }
+      catch { /* ignore */ }
+    }
   })
 
   test('creates socket server and accepts frankenfirmware connection', async () => {
@@ -149,7 +155,7 @@ describe('dacTransport', () => {
 
   test('formats undefined, empty, and non-empty arguments on the wire', async () => {
     const connectPromise = connectDac(socketPath)
-    await new Promise(r => setTimeout(r, 200))
+    await vi.waitFor(() => fs.access(socketPath), { timeout: 5_000, interval: 5 })
     mockFranken = await connectAsFrankenfirmware(socketPath)
     const requests: string[] = []
     let buffer = ''

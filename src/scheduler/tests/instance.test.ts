@@ -85,11 +85,16 @@ describe('scheduler/instance', () => {
   })
 
   afterEach(async () => {
-    // Best-effort cleanup so a leaked instance from one test can't bleed into
-    // the next module-load. vi.resetModules() in freshModule() handles the
-    // rest.
-    const mod = await import('../instance')
-    await mod.shutdownJobManager().catch(() => {})
+    try {
+      // Best-effort cleanup so a leaked instance from one test can't bleed into
+      // the next module-load. vi.resetModules() in freshModule() handles the
+      // rest.
+      const mod = await import('../instance')
+      await mod.shutdownJobManager().catch(() => {})
+    }
+    finally {
+      vi.restoreAllMocks()
+    }
   })
 
   it('falls back to America/Los_Angeles when device_settings row is missing', async () => {

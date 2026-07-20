@@ -86,7 +86,7 @@ describe('homekit lifecycle', () => {
     m.status.transitioning = false
   })
   afterEach(() => {
-    // Drain serializer between cases by re-importing fresh module.
+    vi.restoreAllMocks()
   })
 
   it('startHomeKitIfEnabled is a no-op when flag is false', async () => {

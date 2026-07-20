@@ -113,6 +113,18 @@ const chownSyncMock = vi.fn<(path: string, uid: number, gid: number) => void>()
 const chmodSyncMock = vi.fn<(path: string, mode: number) => void>()
 const unlinkMock = vi.fn<(path: string) => Promise<void>>()
 
+const originalTransportEnv = {
+  connectionTimeout: process.env.DAC_CONNECTION_TIMEOUT_MS,
+  messageResponseTimeout: process.env.DAC_MESSAGE_RESPONSE_TIMEOUT_MS,
+  reconnectDelay: process.env.DAC_RECONNECT_DELAY_MS,
+  reconnectMaxAttempts: process.env.DAC_RECONNECT_MAX_ATTEMPTS,
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) Reflect.deleteProperty(process.env, name)
+  else process.env[name] = value
+}
+
 let transport: TransportModule
 
 function enoent(): Error & { code: string } {
@@ -186,8 +198,17 @@ describe('dacTransport private transport contracts through the public API', () =
   })
 
   afterEach(async () => {
-    await transport.disconnectDac()
-    vi.restoreAllMocks()
+    try {
+      await transport.disconnectDac()
+    }
+    finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+      restoreEnv('DAC_MESSAGE_RESPONSE_TIMEOUT_MS', originalTransportEnv.messageResponseTimeout)
+      restoreEnv('DAC_CONNECTION_TIMEOUT_MS', originalTransportEnv.connectionTimeout)
+      restoreEnv('DAC_RECONNECT_DELAY_MS', originalTransportEnv.reconnectDelay)
+      restoreEnv('DAC_RECONNECT_MAX_ATTEMPTS', originalTransportEnv.reconnectMaxAttempts)
+    }
   })
 
   afterAll(() => {
