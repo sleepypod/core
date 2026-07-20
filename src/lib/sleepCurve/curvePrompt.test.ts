@@ -108,6 +108,13 @@ describe('parseAIResponse', () => {
     })
   })
 
+  it.each(['}', '{'])('does not extract a lone %s from a valid JSON string', (brace) => {
+    expect(parseAIResponse(JSON.stringify(brace))).toEqual({
+      success: false,
+      error: 'Missing or invalid "bedtime" field (expected "HH:mm").',
+    })
+  })
+
   it('extracts JSON when the opening brace is exactly index one', () => {
     expect(parseAIResponse(`x${validJson()}`)).toEqual({ success: true, curve: VALID_CURVE })
   })

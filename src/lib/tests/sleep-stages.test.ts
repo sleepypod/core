@@ -413,6 +413,13 @@ describe('filterOutliers — windowed median filter', () => {
 
     expect(classifySleepStages(vitals, [], 1.0)[0].heartRate).toBe(60)
   })
+
+  it('excludes below-range neighbors from the median window', () => {
+    const vitals = [1, 80, 100, 80]
+      .map((heartRate, index) => vitalRow(index * 5, heartRate))
+
+    expect(classifySleepStages(vitals, [], 1.0)[2].heartRate).toBeNull()
+  })
 })
 
 describe('classifySleepStages — average HR selection', () => {
