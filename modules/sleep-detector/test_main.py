@@ -14,10 +14,16 @@ _stubs = {
     "cbor2": type(sys)("cbor2"),
     "common": type(sys)("common"),
     "common.raw_follower": type(sys)("common.raw_follower"),
+    "common.nats_follower": type(sys)("common.nats_follower"),
+    "common.dialect": type(sys)("common.dialect"),
     "common.calibration": type(sys)("common.calibration"),
     "common.health": type(sys)("common.health"),
 }
 _stubs["common.raw_follower"].RawFileFollower = None
+_stubs["common.nats_follower"].create_follower = None
+_stubs["common.dialect"].KNOWN_RECORD_TYPES = frozenset()
+_stubs["common.dialect"].warn_unknown_type_once = lambda *a, **kw: None
+_stubs["common.dialect"].log_capsense_status_once = lambda *a, **kw: None
 _stubs["common.calibration"].CalibrationStore = None
 _stubs["common.calibration"].is_present_capsense_calibrated = lambda *a, **kw: False
 _stubs["common.calibration"].is_present_capsense2_calibrated = lambda *a, **kw: False

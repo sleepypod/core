@@ -65,7 +65,12 @@ from typing import Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
-from common.raw_follower import RawFileFollower
+from common.nats_follower import create_follower
+from common.dialect import (
+    KNOWN_RECORD_TYPES,
+    log_capsense_status_once,
+    warn_unknown_type_once,
+)
 from common.calibration import (
     CalibrationStore,
     is_present_capsense_calibrated,
@@ -885,7 +890,9 @@ def main() -> None:
     # side is observed by the other on its next write (no orphaned handles).
     left = SessionTracker(side="left", db=db_holder, calibration=cal_cache, pump_gate=pump_gate)
     right = SessionTracker(side="right", db=db_holder, calibration=cal_cache, pump_gate=pump_gate)
-    follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
+    # Source selected once at startup: NatsFollower on new-firmware pods (NATS
+    # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
+    follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
     report_health("healthy", "sleep-detector started")
     log.info("Calibration profiles will be loaded from biometrics.db (reload every %ds)", CALIBRATION_RELOAD_S)
@@ -900,6 +907,12 @@ def main() -> None:
         for record in follower.read_records():
             rtype = record.get("type")
 
+            # Surface genuinely-new firmware types once (blanketReadings, log,
+            # …) instead of dropping them silently.
+            if rtype not in KNOWN_RECORD_TYPES:
+                warn_unknown_type_once(record, "sleep-detector")
+                continue
+
             # Update pump state from freezer health/thermal records
             if rtype in PUMP_STATE_TYPES:
                 pump_gate.update_pump_state(record)
@@ -907,6 +920,9 @@ def main() -> None:
 
             if rtype not in CAPSENSE_TYPES:
                 continue
+
+            # Record (do not gate on) new-firmware capSense per-side status.
+            log_capsense_status_once(record, "sleep-detector")
 
             ts = sanitize_ts(record.get("ts"))
             left.process(ts, record)
