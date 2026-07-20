@@ -685,6 +685,22 @@ describe('piezoStream — server lifecycle and protocol', () => {
     expect(a).toBe(b)
   })
 
+  it('does not inspect broadcast frames while the running server has no clients', () => {
+    const server = startPiezoStreamServer()
+    expect(server.clients.size).toBe(0)
+
+    let typeReads = 0
+    const frame: Record<string, unknown> = {
+      get type() {
+        typeReads++
+        throw new Error('zero-client broadcasts must return before reading the frame')
+      },
+    }
+
+    expect(() => broadcastFrame(frame)).not.toThrow()
+    expect(typeReads).toBe(0)
+  })
+
   it('logs the exact server-side WebSocket error without crashing the connection', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const port = startAndPort()
