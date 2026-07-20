@@ -6,6 +6,17 @@ describe('appRouter public surface', () => {
     await expect(appRouter.createCaller({}).healthcheck({})).resolves.toBe('yay!')
   })
 
+  it('publishes the exact healthcheck OpenAPI contract', () => {
+    expect(appRouter._def.record.healthcheck._def.meta).toEqual({
+      openapi: {
+        method: 'GET',
+        path: '/healthcheck',
+        protect: false,
+        tags: ['Health'],
+      },
+    })
+  })
+
   it('mounts every feature router', () => {
     expect(Object.keys(appRouter._def.record)).toEqual([
       'healthcheck',

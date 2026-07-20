@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { bedTemp, freezerTemp } from '@/src/db/biometrics-schema'
 
 function queuedChainState() {
   return {
@@ -94,6 +95,23 @@ function resetDb(mock: typeof primaryDb): void {
       (value as ReturnType<typeof vi.fn>).mockClear()
     }
   }
+}
+
+function selectionWith(
+  mock: typeof primaryDb | typeof biometricsDb,
+  keys: string[],
+  exact = false,
+): Record<string, unknown> {
+  const calls = mock.select.mock.calls as unknown as Array<[unknown?]>
+  const selection = calls
+    .map(call => call[0])
+    .find((value): value is Record<string, unknown> => {
+      if (value == null || typeof value !== 'object') return false
+      const actual = Object.keys(value)
+      return keys.every(key => actual.includes(key)) && (!exact || actual.length === keys.length)
+    })
+  if (!selection) throw new Error(`No select projection found with keys: ${keys.join(', ')}`)
+  return selection
 }
 
 beforeEach(() => {
@@ -366,6 +384,17 @@ describe('automations kill switch, runs, and status', () => {
         },
       ],
     })
+    expect(selectionWith(primaryDb, ['firedAt'], true)).toEqual({ firedAt: expect.anything() })
+  })
+
+  it('defaults live status to globally enabled when device settings have no row', async () => {
+    states.primary.queue.push([])
+    states.primary.queue.push([])
+
+    await expect(caller.status({})).resolves.toEqual({
+      globalEnabled: true,
+      rules: [],
+    })
   })
 })
 
@@ -430,6 +459,12 @@ describe('automations nights and historical series', () => {
       rule: { side: 'left', cooldownMin: 10, trigger, conditions, actions },
     })
 
+    const bedSelection = selectionWith(biometricsDb, ['o', 'c', 'n'])
+    expect(bedSelection.o).toBe(bedTemp.leftOuterTemp)
+    expect(bedSelection.c).toBe(bedTemp.leftCenterTemp)
+    expect(bedSelection.n).toBe(bedTemp.leftInnerTemp)
+    expect(selectionWith(biometricsDb, ['w']).w).toBe(freezerTemp.leftWaterTemp)
+
     expect(backtest.run).toHaveBeenCalledOnce()
     const options = backtest.run.mock.calls[0]?.[0]
     expect(options).toMatchObject({
@@ -457,6 +492,57 @@ describe('automations nights and historical series', () => {
     })
   })
 
+  it('drops null bed zones and emits spread only when at least two zones exist', async () => {
+    const start = new Date('2026-07-19T20:00:00Z')
+    const end = new Date('2026-07-20T04:00:00Z')
+    const oneZoneAt = new Date('2026-07-19T21:00:00Z')
+    const twoZonesAt = new Date('2026-07-19T22:00:00Z')
+    states.biometrics.queue.push([{ enteredBedAt: start, leftBedAt: end }])
+    states.biometrics.queue.push(
+      [],
+      [],
+      [
+        { t: oneZoneAt, amb: null, hum: null, o: 2000, c: null, n: null },
+        { t: twoZonesAt, amb: null, hum: null, o: 2000, c: 2200, n: null },
+      ],
+      [],
+      [],
+      [],
+      [],
+    )
+    states.primary.queue.push([])
+
+    await caller.backtest({
+      side: 'left',
+      sleepRecordId: 4,
+      rule: { side: 'left', cooldownMin: null, trigger, conditions, actions },
+    })
+
+    const series = backtest.run.mock.calls[0]?.[0].series
+    expect(series['left.surfaceTemp']).toHaveLength(2)
+    expect(series['left.surfaceTemp'][0]).toEqual({ t: oneZoneAt.getTime(), v: 68 })
+    expect(series['left.surfaceTemp'][1].t).toBe(twoZonesAt.getTime())
+    expect(series['left.surfaceTemp'][1].v).toBeCloseTo(69.8)
+    expect(series['left.surfaceTemp.spread']).toHaveLength(1)
+    expect(series['left.surfaceTemp.spread'][0].t).toBe(twoZonesAt.getTime())
+    expect(series['left.surfaceTemp.spread'][0].v).toBeCloseTo(3.6)
+  })
+
+  it('returns the exact no-history response when no sleep or movement window exists', async () => {
+    states.biometrics.queue.push([], [])
+
+    await expect(caller.backtest({
+      side: 'right',
+      rule: { side: 'right', cooldownMin: null, trigger, conditions, actions },
+    })).resolves.toEqual({
+      ok: false,
+      message: 'No recorded nights for this side yet — backtest needs sleep history.',
+      night: null,
+      result: null,
+    })
+    expect(backtest.run).not.toHaveBeenCalled()
+  })
+
   it('falls back from a missing requested record to the latest side record', async () => {
     const latest = { enteredBedAt: new Date('2026-07-19T20:00:00Z'), leftBedAt: new Date('2026-07-20T04:00:00Z') }
     states.biometrics.queue.push([])
@@ -476,6 +562,11 @@ describe('automations nights and historical series', () => {
       startMs: latest.enteredBedAt.getTime(),
       endMs: latest.leftBedAt.getTime(),
     })
+    const bedSelection = selectionWith(biometricsDb, ['o', 'c', 'n'])
+    expect(bedSelection.o).toBe(bedTemp.rightOuterTemp)
+    expect(bedSelection.c).toBe(bedTemp.rightCenterTemp)
+    expect(bedSelection.n).toBe(bedTemp.rightInnerTemp)
+    expect(selectionWith(biometricsDb, ['w']).w).toBe(freezerTemp.rightWaterTemp)
   })
 
   it('uses an exact twelve-hour movement window when there is no sleep record', async () => {

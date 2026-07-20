@@ -208,6 +208,15 @@ describe('system.wifiStatus', () => {
     expect(result.signal).toBe(80)
   })
 
+  it('trims leading whitespace before finding the active nmcli row', async () => {
+    queueExec(file => file === 'nmcli', { stdout: '   yes:HomeWiFi:80\n' })
+    await expect(caller.wifiStatus({})).resolves.toEqual({
+      connected: true,
+      ssid: 'HomeWiFi',
+      signal: 80,
+    })
+  })
+
   it('handles escaped colons in SSID', async () => {
     queueExec(
       file => file === 'nmcli',
@@ -242,6 +251,15 @@ describe('system.wifiStatus', () => {
     queueExec(file => file === 'nmcli', { stdout: 'yes:Home\\\\:77\n' })
     const result = await caller.wifiStatus({})
     expect(result).toEqual({ connected: true, ssid: 'Home\\', signal: 77 })
+  })
+
+  it('keeps an unescaped backslash at the absolute end of the active row', async () => {
+    queueExec(file => file === 'nmcli', { stdout: 'yes:Trailing\\' })
+    await expect(caller.wifiStatus({})).resolves.toEqual({
+      connected: true,
+      ssid: 'Trailing\\',
+      signal: null,
+    })
   })
 })
 
@@ -422,6 +440,16 @@ describe('system.getLogs', () => {
     const result = await caller.getLogs({ unit: 'sleepypod.service', lines: 2 })
     expect(result.lines).toHaveLength(2)
     expect(result.nextCursor).toBeNull()
+  })
+
+  it('normalizes an empty journal cursor to null when more entries exist', async () => {
+    queueExec(file => file === 'journalctl', {
+      stdout: 'line1\nline2\nline3\n-- cursor:    \n',
+    })
+    await expect(caller.getLogs({ unit: 'sleepypod.service', lines: 2 })).resolves.toEqual({
+      lines: ['line3', 'line2'],
+      nextCursor: null,
+    })
   })
 
   it('trims cursor padding and discards whitespace-only log lines', async () => {

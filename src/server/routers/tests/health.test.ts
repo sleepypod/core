@@ -107,6 +107,7 @@ beforeEach(() => {
   dbMock.allSchedules.temp.length = 0
   dbMock.allSchedules.pow.length = 0
   dbMock.allSchedules.alm.length = 0
+  dbMock.db.select.mockClear()
   sharedClientMock.client.connect.mockReset().mockResolvedValue(undefined)
   sharedClientMock.getDacMonitorIfRunning.mockReset()
   iptablesMock.checkIptables.mockReset().mockReturnValue({ ok: true, rules: [] })
@@ -163,6 +164,23 @@ describe('health.scheduler', () => {
     // Sorted ascending: a-1 (100ms), p-on-1, t-1, p-off-1, pr-1, rb-1
     expect(result.upcomingJobs.map(j => j.id)).toEqual(['a-1', 'p-on-1', 't-1', 'p-off-1', 'pr-1', 'rb-1'])
     expect(result.healthy).toBe(true)
+  })
+
+  it('caps the upcoming scheduler list at ten jobs', async () => {
+    schedulerMock.scheduler.getJobs.mockReturnValue(Array.from({ length: 11 }, (_, index) => ({
+      id: `job-${index}`,
+      type: 'temperature',
+    })))
+    schedulerMock.scheduler.getNextInvocation.mockImplementation((id: string) => {
+      const index = Number(id.slice('job-'.length))
+      return new Date(Date.UTC(2026, 6, 20, 0, index))
+    })
+
+    const result = await caller.scheduler({})
+    expect(result.upcomingJobs).toHaveLength(10)
+    expect(result.upcomingJobs.map(job => job.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `job-${index}`),
+    )
   })
 
   it('drops jobs without a next invocation and exposes typed metadata exactly', async () => {
@@ -233,6 +251,12 @@ describe('health.system', () => {
     expect(result.scheduler.drift).toEqual({ dbScheduleCount: 4, schedulerJobCount: 4, drifted: false })
     expect(sqlMock.eq).toHaveBeenCalledTimes(3)
     expect(sqlMock.eq.mock.calls.map(call => call[1])).toEqual([true, true, true])
+    const scheduleSelections = dbMock.db.select.mock.calls as unknown as Array<[Record<string, unknown>]>
+    expect(scheduleSelections.map(call => Object.keys(call[0]))).toEqual([
+      ['id'],
+      ['id'],
+      ['id'],
+    ])
     expect(result.iptables.ok).toBe(true)
   })
 
@@ -300,11 +324,14 @@ describe('health.system', () => {
   it('auto-reloads scheduler when drift detected and clears drifted flag on success', async () => {
     dbMock.allSchedules.temp.push({ id: 1 })
     schedulerMock.scheduler.getJobs.mockReturnValue([])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
 
     const result = await caller.system({})
     expect(schedulerMock.jobManager.reloadSchedules).toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[health] Schedule drift detected — auto-reloaded scheduler')
     expect(result.scheduler.drift?.drifted).toBe(false)
     expect(result.status).toBe('ok')
+    log.mockRestore()
   })
 
   it('marks system degraded when drift auto-reload throws', async () => {
@@ -338,6 +365,17 @@ describe('health.system', () => {
     schedulerMock.getJobManager.mockRejectedValueOnce(new Error('scheduler down'))
     const result = await caller.system({})
     expect(result.status).toBe('degraded')
+    expect(result.scheduler.enabled).toBe(false)
+    expect(result.scheduler.jobCount).toBe(0)
+  })
+
+  it('uses permissive empty iptables defaults when the checker is unavailable', async () => {
+    iptablesMock.checkIptables.mockImplementationOnce(() => {
+      throw new Error('iptables unavailable')
+    })
+
+    const result = await caller.system({})
+    expect(result.iptables).toEqual({ ok: true, missing: [] })
   })
 })
 

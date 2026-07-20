@@ -115,6 +115,29 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('pumpAlerts OpenAPI contract', () => {
+  it('publishes exact metadata for every procedure', () => {
+    const expected = {
+      list: { method: 'GET', path: '/pump-alerts' },
+      getCapabilities: { method: 'GET', path: '/pump-alerts/capabilities' },
+      acknowledgeAndRestore: { method: 'POST', path: '/pump-alerts/acknowledge' },
+      dismissNotification: { method: 'POST', path: '/pump-alerts/dismiss-notification' },
+      dismissAlert: { method: 'POST', path: '/pump-alerts/dismiss' },
+    } as const
+
+    for (const [name, route] of Object.entries(expected)) {
+      const procedure = pumpAlertsRouter._def.record[name as keyof typeof expected]
+      expect(procedure._def.meta, name).toEqual({
+        openapi: {
+          ...route,
+          protect: false,
+          tags: ['Pump Alerts'],
+        },
+      })
+    }
+  })
+})
+
 describe('pumpAlerts.list', () => {
   it('returns newest-first active unacknowledged rows using the defaults', async () => {
     dbState.queue.push([alert])
