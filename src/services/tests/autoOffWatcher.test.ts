@@ -263,6 +263,27 @@ describe('autoOffWatcher — live presence', () => {
     expect(markSideMutated).not.toHaveBeenCalled()
   })
 
+  it('logs the countdown start with the configured timeout', () => {
+    setSideSettings('left', { autoOffMinutes: 45 })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    startAutoOffWatcher()
+
+    expect(log).toHaveBeenCalledWith('[auto-off] left: bed empty, auto-off in 45min if still empty')
+  })
+
+  it('logs the elapsed empty seconds when the timeout fires', async () => {
+    setSideSettings('left', { autoOffMinutes: 1 })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    startAutoOffWatcher()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(log).toHaveBeenCalledWith(
+      '[auto-off] left: empty for 60s (past 1min timeout), powering off',
+    )
+  })
+
   it('does NOT power off while the bed is occupied, however long', async () => {
     mockOccupancy.left = occ(true, true)
     startAutoOffWatcher()
@@ -331,6 +352,82 @@ describe('autoOffWatcher — exemptions', () => {
     startAutoOffWatcher()
     await vi.advanceTimersByTimeAsync(60 * 60_000)
     expect(setPower).not.toHaveBeenCalled()
+  })
+})
+
+describe('autoOffWatcher — unreadable state falls back to standing down', () => {
+  it('treats a side with no device_state row as unpowered', async () => {
+    ;(sqlite as any).prepare('DELETE FROM device_state WHERE side=?').run('left')
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('treats an unreadable device_state table as unpowered', async () => {
+    ;(sqlite as any).exec('DROP TABLE device_state')
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('does not exempt a side when the run-once table is unreadable', async () => {
+    ;(sqlite as any).exec('DROP TABLE run_once_sessions')
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(31 * 60_000)
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('leaves auto-off disabled for a side with no settings row', async () => {
+    ;(sqlite as any).exec('DELETE FROM side_settings')
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('does not treat a side with no settings row as always-on', async () => {
+    ;(sqlite as any).exec('DELETE FROM side_settings')
+    setGlobalCap(1)
+    setSideOn('left', Date.now() - 2 * 3600_000)
+
+    startAutoOffWatcher()
+    await vi.runAllTicks()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+})
+
+describe('autoOffWatcher — per-side config lookup', () => {
+  function seedSideSettings(first: 'left' | 'right', enabledSide: 'left' | 'right'): void {
+    const second = first === 'left' ? 'right' : 'left'
+    ;(sqlite as any).exec('DELETE FROM side_settings')
+    for (const side of [first, second]) {
+      ;(sqlite as any)
+        .prepare(`
+          INSERT INTO side_settings (side, name, auto_off_enabled, auto_off_minutes)
+          VALUES (?, ?, ?, 30)
+        `)
+        .run(side, side, side === enabledSide ? 1 : 0)
+    }
+  }
+
+  it('reads left config from the left row even when right is stored first', async () => {
+    seedSideSettings('right', 'left')
+
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(31 * 60_000)
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('reads right config from the right row, not the first row', async () => {
+    seedSideSettings('left', 'right')
+    setSideOn('right', Date.now())
+
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(31 * 60_000)
+
+    expect(setPower).toHaveBeenCalledWith('right', false)
+    expect(setPower).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -438,7 +535,9 @@ describe('autoOffWatcher — lifecycle', () => {
   })
 
   it('restartAutoOffTimers does nothing if watcher is not running', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(() => restartAutoOffTimers()).not.toThrow()
+    expect(log).not.toHaveBeenCalled() // no poll ran, so no countdown was stamped
     expect(setPower).not.toHaveBeenCalled()
   })
 
@@ -472,6 +571,19 @@ describe('autoOffWatcher — lifecycle', () => {
     await stop
     expect(stopped).toBe(true)
     expect(log).toHaveBeenCalledWith('[auto-off] Watcher stopped')
+  })
+
+  it('does not announce a wait once a power-off has settled', async () => {
+    setSideSettings('left', { autoOffMinutes: 1 })
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(setPower).toHaveBeenCalledWith('left', false)
+
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await stopAutoOffWatcher()
+
+    expect(log).toHaveBeenCalledWith('[auto-off] Watcher stopped')
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('in-flight power-off'))
   })
 
   it('isolates and names an unexpected per-side evaluation error', () => {
