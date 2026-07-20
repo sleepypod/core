@@ -6,22 +6,25 @@ import type { OccupancyResult } from '@/src/lib/occupancy'
 // ── Shared mocks ──────────────────────────────────────────────────────────
 const setPower = vi.fn(async () => {})
 const connect = vi.fn(async () => {})
+const broadcastMutationStatus = vi.fn()
+const markSideMutated = vi.fn()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ connect, setPower }),
 }))
 
 vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
-  broadcastMutationStatus: vi.fn(),
+  broadcastMutationStatus: (...args: unknown[]) => broadcastMutationStatus(...args),
 }))
 
 vi.mock('@/src/hardware/deviceStateSync', () => ({
-  markSideMutated: vi.fn(),
+  markSideMutated: (...args: unknown[]) => markSideMutated(...args),
 }))
 
 // Live occupancy is the presence source (replaces sleep_records). Per-side
 // result is read from this mutable map so each test can shape presence.
 let mockOccupancy: Record<'left' | 'right', OccupancyResult>
+let occupancyFailure: unknown = null
 
 function occ(occupied: boolean, available: boolean): OccupancyResult {
   return {
@@ -38,7 +41,10 @@ function occ(occupied: boolean, available: boolean): OccupancyResult {
 }
 
 vi.mock('@/src/lib/occupancy', () => ({
-  getOccupancy: (side: 'left' | 'right') => mockOccupancy[side],
+  getOccupancy: (side: 'left' | 'right') => {
+    if (occupancyFailure !== null) throw occupancyFailure
+    return mockOccupancy[side]
+  },
 }))
 
 // In-memory primary DB — a real sqlite so `where(side)` actually filters.
@@ -171,10 +177,14 @@ function insertActiveRunOnce(side: 'left' | 'right'): void {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-06-01T00:00:00Z'))
   setPower.mockClear()
   connect.mockClear()
+  broadcastMutationStatus.mockClear()
+  markSideMutated.mockClear()
+  occupancyFailure = null
   resetSchema()
   // Default: left powered now, presence available + empty.
   setSideOn('left', Date.now())
@@ -198,6 +208,59 @@ describe('autoOffWatcher — live presence', () => {
     startAutoOffWatcher()
     await vi.advanceTimersByTimeAsync(20 * 60_000)
     expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('powers off at the exact configured timeout boundary', async () => {
+    setSideSettings('left', { autoOffMinutes: 1 })
+    startAutoOffWatcher()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('logs and publishes the exact successful power-off effects', async () => {
+    setSideSettings('left', { autoOffMinutes: 1 })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    startAutoOffWatcher()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(connect).toHaveBeenCalledOnce()
+    expect(setPower).toHaveBeenCalledWith('left', false)
+    expect(markSideMutated).toHaveBeenCalledWith('left')
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+    expect(log).toHaveBeenCalledWith('[auto-off] Powered off left side (no presence detected)')
+    const state = (sqlite as any)
+      .prepare('SELECT is_powered, powered_on_at, target_temperature FROM device_state WHERE side=?')
+      .get('left')
+    expect(state).toEqual({ is_powered: 0, powered_on_at: null, target_temperature: null })
+  })
+
+  it('continues publishing after a best-effort DB sync failure', async () => {
+    setSideSettings('left', { autoOffMinutes: 1 })
+    setPower.mockImplementationOnce(async () => {
+      ;(sqlite as any).exec('DROP TABLE device_state')
+    })
+    startAutoOffWatcher()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(markSideMutated).toHaveBeenCalledWith('left')
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+  })
+
+  it('logs hardware failures and does not publish a false off state', async () => {
+    setSideSettings('left', { autoOffMinutes: 1 })
+    connect.mockRejectedValueOnce(new Error('offline'))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    startAutoOffWatcher()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(error).toHaveBeenCalledWith('[auto-off] Failed to power off left:', 'offline')
+    expect(broadcastMutationStatus).not.toHaveBeenCalled()
+    expect(markSideMutated).not.toHaveBeenCalled()
   })
 
   it('does NOT power off while the bed is occupied, however long', async () => {
@@ -230,6 +293,13 @@ describe('autoOffWatcher — fail-safe on unsensable presence', () => {
     mockOccupancy.left = occ(false, false)
     startAutoOffWatcher()
     await vi.advanceTimersByTimeAsync(35 * 60_000)
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('treats a thrown occupancy read as unsensable', async () => {
+    occupancyFailure = new Error('sensor unavailable')
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
     expect(setPower).not.toHaveBeenCalled()
   })
 })
@@ -283,6 +353,62 @@ describe('autoOffWatcher — global wall-clock cap', () => {
     expect(setPower).not.toHaveBeenCalled()
   })
 
+  it('does not fire at the exact cap boundary because the limit is strictly exceeded', () => {
+    setGlobalCap(8)
+    mockOccupancy.left = occ(true, true)
+    setSideOn('left', Date.now() - 8 * 3600_000)
+
+    startAutoOffWatcher()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('fires one second beyond the global cap and logs the exact reason', async () => {
+    setGlobalCap(8)
+    mockOccupancy.left = occ(true, true)
+    setSideOn('left', Date.now() - 8 * 3600_000 - 1_000)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    startAutoOffWatcher()
+    await vi.runAllTicks()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+    expect(log).toHaveBeenCalledWith(
+      '[auto-off] left: global max-on cap exceeded (8h), powering off',
+    )
+  })
+
+  it.each([null, 0, -1])('disables the global cap for %s', (hours) => {
+    setGlobalCap(hours)
+    mockOccupancy.left = occ(true, true)
+    setSideOn('left', Date.now() - 48 * 3600_000)
+
+    startAutoOffWatcher()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('accepts exactly seven days of elapsed time as sane', async () => {
+    setGlobalCap(1)
+    mockOccupancy.left = occ(true, true)
+    setSideOn('left', Date.now() - 7 * 86_400_000)
+
+    startAutoOffWatcher()
+    await vi.runAllTicks()
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('rejects elapsed time beyond seven days as suspicious', () => {
+    setGlobalCap(1)
+    mockOccupancy.left = occ(true, true)
+    setSideOn('left', Date.now() - 7 * 86_400_000 - 1_000)
+
+    startAutoOffWatcher()
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
   it('treats a future powered_on_at as suspicious and skips', async () => {
     setGlobalCap(8)
     mockOccupancy.left = occ(true, true)
@@ -295,14 +421,20 @@ describe('autoOffWatcher — global wall-clock cap', () => {
 
 describe('autoOffWatcher — lifecycle', () => {
   it('startAutoOffWatcher is idempotent', async () => {
+    const interval = vi.spyOn(globalThis, 'setInterval')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     startAutoOffWatcher()
     startAutoOffWatcher() // no-op
+    expect(interval).toHaveBeenCalledOnce()
+    expect(log.mock.calls.filter(call => call[0] === '[auto-off] Watcher started (poll every 30s)')).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(31 * 60_000)
     expect(setPower).toHaveBeenCalledTimes(1)
   })
 
   it('stopAutoOffWatcher is safe when never started', async () => {
+    const clear = vi.spyOn(globalThis, 'clearInterval')
     await expect(stopAutoOffWatcher()).resolves.toBeUndefined()
+    expect(clear).not.toHaveBeenCalled()
   })
 
   it('restartAutoOffTimers does nothing if watcher is not running', () => {
@@ -317,18 +449,57 @@ describe('autoOffWatcher — lifecycle', () => {
     await vi.advanceTimersByTimeAsync(20 * 60_000) // only 20min since reset
     expect(setPower).not.toHaveBeenCalled()
   })
+
+  it('stop waits for an in-flight power-off and logs its exact count', async () => {
+    setSideSettings('left', { autoOffMinutes: 1 })
+    let release: () => void = () => {}
+    setPower.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    let stopped = false
+    const stop = stopAutoOffWatcher().then(() => {
+      stopped = true
+    })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    expect(log).toHaveBeenCalledWith('[auto-off] Waiting for 1 in-flight power-off(s)...')
+
+    release()
+    await stop
+    expect(stopped).toBe(true)
+    expect(log).toHaveBeenCalledWith('[auto-off] Watcher stopped')
+  })
+
+  it('isolates and names an unexpected per-side evaluation error', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(Date, 'now').mockImplementationOnce(() => {
+      throw new Error('clock failed')
+    })
+
+    startAutoOffWatcher()
+
+    expect(error).toHaveBeenCalledWith('[auto-off] Error evaluating left:', 'clock failed')
+  })
 })
 
 describe('autoOffWatcher — cancelAutoOffTimer', () => {
   it('resets a pending countdown so a later empty period starts fresh', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     startAutoOffWatcher()
     await vi.advanceTimersByTimeAsync(20 * 60_000)
     cancelAutoOffTimer('left') // scheduled power-on aborts the countdown
+    expect(log).toHaveBeenCalledWith('[auto-off] left: countdown cancelled (scheduled power-on)')
     await vi.advanceTimersByTimeAsync(20 * 60_000)
     expect(setPower).not.toHaveBeenCalled()
   })
 
   it('is a no-op when no countdown is set', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(() => cancelAutoOffTimer('right')).not.toThrow()
+    expect(log).not.toHaveBeenCalled()
   })
 })

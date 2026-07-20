@@ -187,6 +187,7 @@ describe('JobManager public surface (stub DB)', () => {
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     await manager.shutdown()
   })
 
@@ -195,6 +196,47 @@ describe('JobManager public surface (stub DB)', () => {
     expect(sched).toBeDefined()
     expect(typeof sched.scheduleJob).toBe('function')
     expect(sched.getTimezone()).toBe('UTC')
+    expect(sched.isEnabled()).toBe(true)
+  })
+
+  it('logs exact job execution and error event messages', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const scheduler = manager.getScheduler()
+    const failure = new Error('event failure')
+
+    scheduler.emit('jobExecuted', 'job-ok', { success: true, timestamp: new Date(0) })
+    scheduler.emit('jobExecuted', 'job-failed', {
+      success: false,
+      error: 'hardware failed',
+      timestamp: new Date(0),
+    })
+    scheduler.emit('jobError', 'job-error', failure)
+
+    expect(log).toHaveBeenCalledWith('Job executed successfully: job-ok')
+    expect(error).toHaveBeenCalledWith('Job execution failed: job-failed', 'hardware failed')
+    expect(error).toHaveBeenCalledWith('Job error: job-error', failure)
+  })
+
+  it('logs exact aggregate messages while loading an empty schedule set', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await manager.loadSchedules()
+
+    expect(log).toHaveBeenCalledWith('Loading schedules from database...')
+    expect(log).toHaveBeenCalledWith('Loaded 0 scheduled jobs')
+  })
+
+  it('does not schedule away transitions at the exact current instant', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const now = new Date().toISOString()
+
+    manager.upsertAwayMode('left', now, now)
+
+    expect(manager.getScheduler().getJob('away-start-left')).toBeUndefined()
+    expect(manager.getScheduler().getJob('away-return-left')).toBeUndefined()
+    vi.useRealTimers()
   })
 
   it('scheduleRunOnceSession adds setpoint + cleanup jobs', () => {
