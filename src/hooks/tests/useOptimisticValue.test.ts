@@ -82,6 +82,27 @@ describe('useOptimisticValue', () => {
     expect(result.current.isOptimistic).toBe(true)
   })
 
+  it('does not clear a timer when no timer has been armed', () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    const { result } = renderHook(() => useOptimisticValue(70))
+    clearTimeoutSpy.mockClear()
+
+    act(() => result.current.preview(72))
+
+    expect(clearTimeoutSpy).not.toHaveBeenCalled()
+  })
+
+  it('clears an armed expiry timer on unmount', () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    const { result, unmount } = renderHook(() => useOptimisticValue(70))
+    act(() => result.current.commit(72))
+    clearTimeoutSpy.mockClear()
+
+    unmount()
+
+    expect(clearTimeoutSpy).toHaveBeenCalledOnce()
+  })
+
   it('discard reverts to server truth immediately (mutation error)', () => {
     const { result } = renderHook(() => useOptimisticValue(70))
 
