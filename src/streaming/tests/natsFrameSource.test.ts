@@ -20,20 +20,25 @@ const nats = vi.hoisted(() => {
     subs: [] as Sub[],
     connectOpts: null as Record<string, unknown> | null,
     drained: false,
-    closedResolve: null as (() => void) | null,
+    closedResolve: null as ((err?: Error) => void) | null,
+    statusEvents: [] as Array<{ type: string }>,
   }
   const makeNc = () => ({
     subscribe(subject: string, opts: { callback: Sub['cb'] }) {
       state.subs.push({ subject, cb: opts.callback })
       return { unsubscribe: () => {} }
     },
-    // Status iterator that yields no transitions in these tests.
     status: () => ({
       [Symbol.asyncIterator]() {
-        return { next: () => Promise.resolve({ done: true, value: undefined }) }
+        let index = 0
+        return {
+          next: () => Promise.resolve(index < state.statusEvents.length
+            ? { done: false, value: state.statusEvents[index++] }
+            : { done: true, value: undefined }),
+        }
       },
     }),
-    closed: () => new Promise<void>((res) => { state.closedResolve = res }),
+    closed: () => new Promise<Error | undefined>((res) => { state.closedResolve = res }),
     drain: async () => {
       state.drained = true
       state.closedResolve?.()
@@ -103,6 +108,17 @@ describe('natsReachable', () => {
     expect(await natsReachable({ host: '127.0.0.1', port, timeoutMs: 200 })).toBe(false)
   })
 
+  it('is false when the peer sends a non-NATS greeting', async () => {
+    const port = await listen(sock => sock.end('HTTP/1.1 200 OK\r\n'))
+    expect(await natsReachable({ host: '127.0.0.1', port, timeoutMs: 500 })).toBe(false)
+  })
+
+  it('is false when an unterminated INFO greeting exceeds the byte cap', async () => {
+    const oversized = Buffer.concat([Buffer.from('INFO '), Buffer.alloc(16 * 1024, 0x20)])
+    const port = await listen(sock => sock.end(oversized))
+    expect(await natsReachable({ host: '127.0.0.1', port, timeoutMs: 500 })).toBe(false)
+  })
+
   it('is false when the peer closes before sending a greeting', async () => {
     const port = await listen(sock => sock.end())
     expect(await natsReachable({ host: '127.0.0.1', port, timeoutMs: 500 })).toBe(false)
@@ -123,6 +139,7 @@ describe('startNatsFrameSource', () => {
     nats.state.connectOpts = null
     nats.state.drained = false
     nats.state.closedResolve = null
+    nats.state.statusEvents.length = 0
     nats.connect.mockClear()
   })
 
@@ -187,6 +204,79 @@ describe('startNatsFrameSource', () => {
     expect(onFrame).not.toHaveBeenCalled()
     expect(src.stats).toMatchObject({ messages: 1, framesDecoded: 0, decodeFailures: 1 })
     vi.restoreAllMocks()
+  })
+
+  it('counts a decoder exception as a decode failure', async () => {
+    const onFrame = vi.fn()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const src = await startNatsFrameSource({
+      decode: () => { throw new Error('bad cbor') },
+      onFrame,
+    })
+
+    deliver('raw.sens.capsense', new Uint8Array([0xFF]))
+
+    expect(onFrame).not.toHaveBeenCalled()
+    expect(src.stats).toMatchObject({ messages: 1, framesDecoded: 0, decodeFailures: 1 })
+    await src.stop()
+    warn.mockRestore()
+  })
+
+  it('surfaces subscription errors without counting them as messages', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const src = await startNatsFrameSource({ decode, onFrame: vi.fn() })
+
+    nats.state.subs[0].cb(new Error('permission denied'), { data: new Uint8Array() })
+
+    expect(src.stats.messages).toBe(0)
+    expect(warn).toHaveBeenCalledWith('[natsSource] subscription error:', 'permission denied')
+    await src.stop()
+    warn.mockRestore()
+  })
+
+  it('logs disconnect/reconnect transitions and reports a permanent close', async () => {
+    nats.state.statusEvents.push({ type: 'disconnect' }, { type: 'reconnect' })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const onClose = vi.fn()
+    const src = await startNatsFrameSource({ decode, onFrame: vi.fn(), onClose })
+
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith('[natsSource] disconnected from NATS — reconnecting')
+      expect(log).toHaveBeenCalledWith('[natsSource] reconnected to NATS')
+    })
+
+    const closeError = new Error('connection closed')
+    nats.state.closedResolve?.(closeError)
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledWith(closeError))
+    expect(error).toHaveBeenCalledWith(
+      '[natsSource] NATS connection closed permanently',
+      closeError,
+    )
+
+    await src.stop()
+    log.mockRestore()
+    warn.mockRestore()
+    error.mockRestore()
+  })
+
+  it('warns once when the subscription stays silent', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const src = await startNatsFrameSource({ decode, onFrame: vi.fn() })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(warn).toHaveBeenCalledWith(
+        '[natsSource] no frames received %ds after subscribing — sensor idle or firmware not publishing',
+        60,
+      )
+      await src.stop()
+    }
+    finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
   })
 
   it('invokes onReady once subscriptions are live', async () => {

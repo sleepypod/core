@@ -32,17 +32,30 @@ const tmpRawDir = vi.hoisted(() => {
 // captured options let us drive the real dispatch via onFrame.
 const natsMock = vi.hoisted(() => ({
   reachable: false,
+  probeErrorOnce: false,
+  startError: null as Error | null,
+  startPromise: null as Promise<void> | null,
+  resolveStart: null as (() => void) | null,
   startCalls: 0,
+  stopCalls: 0,
   captured: null as any,
-  stop: () => Promise.resolve(),
+  stop: async () => { natsMock.stopCalls += 1 },
 }))
 
 vi.mock('../natsFrameSource', () => ({
   SUBSCRIBE_SUBJECTS: ['raw.sens.>', 'raw.frz.>'],
-  natsReachable: vi.fn(async () => natsMock.reachable),
+  natsReachable: vi.fn(async () => {
+    if (natsMock.probeErrorOnce) {
+      natsMock.probeErrorOnce = false
+      throw new Error('probe failed')
+    }
+    return natsMock.reachable
+  }),
   startNatsFrameSource: vi.fn(async (opts: any) => {
     natsMock.startCalls += 1
     natsMock.captured = opts
+    if (natsMock.startError) throw natsMock.startError
+    if (natsMock.startPromise) await natsMock.startPromise
     opts.onReady?.()
     return { stop: natsMock.stop, stats: { messages: 0, framesDecoded: 0, decodeFailures: 0 } }
   }),
@@ -101,7 +114,12 @@ describe('startPiezoStreamServer — source selection', () => {
   afterEach(async () => {
     await shutdownPiezoStreamServer()
     natsMock.reachable = false
+    natsMock.probeErrorOnce = false
+    natsMock.startError = null
+    natsMock.startPromise = null
+    natsMock.resolveStart = null
     natsMock.startCalls = 0
+    natsMock.stopCalls = 0
     natsMock.captured = null
     for (const f of fs.readdirSync(tmpRawDir)) fs.rmSync(path.join(tmpRawDir, f), { force: true })
     vi.clearAllMocks()
@@ -109,6 +127,7 @@ describe('startPiezoStreamServer — source selection', () => {
 
   it('selects NATS when reachable and routes its frames into the shared dispatch', async () => {
     natsMock.reachable = true
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     startPiezoStreamServer()
 
     await waitFor(() => __test__.natsSourceActive)
@@ -126,6 +145,11 @@ describe('startPiezoStreamServer — source selection', () => {
     const snap = getLatestCapSenseSnapshot()
     expect(snap?.type).toBe('capSense')
     expect(snap?.left).toEqual([100, 100, 200, 200, 300, 300])
+
+    const closeError = new Error('closed')
+    natsMock.captured.onClose(closeError)
+    expect(error).toHaveBeenCalledWith('[sensorStream] NATS frame source closed', closeError)
+    error.mockRestore()
   })
 
   it('falls back to .RAW tailing when NATS is unreachable', async () => {
@@ -152,5 +176,85 @@ describe('startPiezoStreamServer — source selection', () => {
     expect(startNatsFrameSource).not.toHaveBeenCalled()
     // The probe was attempted (reachability drives selection).
     expect(natsReachable).toHaveBeenCalled()
+  })
+
+  it('continues probing after a reachability probe throws, then selects RAW', async () => {
+    natsMock.probeErrorOnce = true
+    natsMock.reachable = false
+    startPiezoStreamServer()
+
+    const now = Math.floor(Date.now() / 1000)
+    fs.writeFileSync(
+      path.join(tmpRawDir, 'probe-error.RAW'),
+      buildOuterRecord(2, {
+        type: 'capSense',
+        ts: now,
+        left: { out: 15, cen: 16, in: 17 },
+        right: { out: 18, cen: 19, in: 20 },
+      }),
+    )
+
+    await waitFor(() => {
+      const left = getLatestCapSenseSnapshot()?.left
+      return Array.isArray(left) && left[0] === 15
+    })
+    expect(vi.mocked(natsReachable).mock.calls.length).toBeGreaterThan(1)
+    expect(startNatsFrameSource).not.toHaveBeenCalled()
+  })
+
+  it('falls back to RAW when NATS connect fails after a positive probe', async () => {
+    natsMock.reachable = true
+    natsMock.startError = new Error('connect raced')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    startPiezoStreamServer()
+
+    const now = Math.floor(Date.now() / 1000)
+    fs.writeFileSync(
+      path.join(tmpRawDir, 'connect-error.RAW'),
+      buildOuterRecord(3, {
+        type: 'capSense',
+        ts: now,
+        left: { out: 25, cen: 26, in: 27 },
+        right: { out: 28, cen: 29, in: 30 },
+      }),
+    )
+
+    await waitFor(() => {
+      const left = getLatestCapSenseSnapshot()?.left
+      return Array.isArray(left) && left[0] === 25
+    })
+    expect(startNatsFrameSource).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledWith(
+      '[sensorStream] NATS connect failed, falling back to .RAW tailing:',
+      natsMock.startError,
+    )
+    error.mockRestore()
+  })
+
+  it('stops source selection when shutdown happens during the retry delay', async () => {
+    natsMock.reachable = false
+    startPiezoStreamServer()
+    await waitFor(() => vi.mocked(natsReachable).mock.calls.length > 0)
+
+    await shutdownPiezoStreamServer()
+    await new Promise(resolve => setTimeout(resolve, 30))
+
+    expect(startNatsFrameSource).not.toHaveBeenCalled()
+    expect(__test__.natsSourceActive).toBe(false)
+  })
+
+  it('stops a NATS source whose first connection completes after shutdown', async () => {
+    natsMock.reachable = true
+    natsMock.startPromise = new Promise<void>((resolve) => {
+      natsMock.resolveStart = resolve
+    })
+    startPiezoStreamServer()
+    await waitFor(() => natsMock.startCalls === 1)
+
+    await shutdownPiezoStreamServer()
+    natsMock.resolveStart?.()
+    await waitFor(() => natsMock.stopCalls === 1)
+
+    expect(__test__.natsSourceActive).toBe(false)
   })
 })
