@@ -406,6 +406,20 @@ EOF
   systemctl daemon-reload
 fi
 
+# Order the Node sensor streamer after firmware NATS when that unit exists.
+# This is deliberately ordering-only (no Wants=/Requires=): old-firmware pods
+# do not ship nats-server.service and must continue starting normally. The
+# streamer's own 60-second probe remains the race-safe runtime selector.
+NATS_ORDERING_DROPIN=/etc/systemd/system/sleepypod.service.d/nats-ordering.conf
+if [ ! -f "$NATS_ORDERING_DROPIN" ]; then
+  mkdir -p "$(dirname "$NATS_ORDERING_DROPIN")"
+  cat > "$NATS_ORDERING_DROPIN" << 'EOF'
+[Unit]
+After=nats-server.service
+EOF
+  systemctl daemon-reload
+fi
+
 # Install CLI tools from new source.
 #
 # Use `install` (atomic mkstemp + rename) instead of `cp` — sp-update is
