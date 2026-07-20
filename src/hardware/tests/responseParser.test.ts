@@ -190,6 +190,8 @@ priming = false
     ['prefix-j55', PodVersion.POD_3],
     ['prefix-Jxx', PodVersion.POD_3],
     ['JxJ55', PodVersion.POD_3],
+    ['J55-A00', PodVersion.POD_5],
+    ['J55-H00', PodVersion.POD_3],
   ])('classifies exact revision segment %s', (sensorLabel, expected) => {
     const status = parseDeviceStatus(`tgHeatLevelR = 0
 tgHeatLevelL = 0
