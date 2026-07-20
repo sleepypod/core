@@ -128,6 +128,14 @@ export const capSenseFrames = sqliteTable('cap_sense_frames', {
   spread: real('spread').notNull(),
   peakZone: integer('peak_zone'), // 0–2 modal zone over the window, or null
   frameCount: integer('frame_count').notNull(), // raw frames aggregated into this row
+  // Per-side status histogram `{status: sampleCount}` over the window, e.g.
+  // `{"good": 8, "warmup": 2}`. Null when every sample was "good" (or carried
+  // no status, as on legacy .RAW frames) — the overwhelmingly common case, so
+  // storage cost ≈ nil. Populated only from the NATS capSense dialect, whose
+  // per-side records carry `status`. Feeds the future capSense.status gate:
+  // lets us correlate historically which windows were non-good before gating
+  // on states we have not yet observed in the field.
+  statusCounts: text('status_counts', { mode: 'json' }),
 }, t => [
   // One row per side/window — guards against duplicates if a restart re-reads
   // the active RAW file from the start (insert is conflict-tolerant).
@@ -210,7 +218,7 @@ export const calibrationRuns = sqliteTable('calibration_runs', {
   samplesUsed: integer('samples_used'),
   errorMessage: text('error_message'),
   durationMs: integer('duration_ms'),
-  triggeredBy: text('triggered_by', { enum: ['daily', 'manual', 'startup'] }).notNull(),
+  triggeredBy: text('triggered_by', { enum: ['daily', 'manual', 'startup', 'retry'] }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, t => [
   index('idx_cal_runs_side_type').on(t.side, t.sensorType, t.createdAt),

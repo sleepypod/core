@@ -148,7 +148,7 @@ After installation (installed from `scripts/bin/`):
 
 Ad-hoc Python probes under `scripts/` (run in place; not copied to `/usr/local/bin/`):
 
-- `probe-nats-capture.py` - Subscribe to a NATS subject filter (default `raw.>`) for a fixed window, dump every message as NDJSON (subject, headers, payload bytes, CBOR-decoded shape), and print a per-subject histogram on exit. Use on new-firmware pods to discover what frankenfirmware actually publishes before building a consumer. Self-contained — uv shebang pulls `nats-py` + `cbor2` on first run. See script header for usage.
+- `probe-nats-capture.py` - Subscribe to a NATS subject filter (default `raw.>`) for a fixed window, dump every message as private NDJSON (subject, headers, payload bytes, CBOR-decoded shape), and print a per-subject histogram on exit. Use on new-firmware pods to discover what frankenfirmware actually publishes before building a consumer. Its uv shebang resolves `nats-py` + `cbor2` on first run, so temporarily enable WAN or pre-warm the uv cache before running it on an internet-blocked pod. See the script header for usage.
 - `probe-cover-side.ts` / `probe-formats.ts` - One-shot TypeScript probes; ad-hoc, see file headers.
 
 ## Internet Control

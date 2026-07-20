@@ -165,6 +165,21 @@ describe('calibration.getHistory', () => {
     expect(sqlMock.and.mock.calls[0]).toHaveLength(2)
     expect(sqlMock.eq).toHaveBeenCalledWith(expect.anything(), 'capacitance')
   })
+
+  it('accepts retry-triggered runs written by the calibrator', async () => {
+    dbMock.setActive('runs')
+    dbMock.runRows.push({
+      id: 2, side: 'right', sensorType: 'temperature', status: 'failed',
+      parameters: null, qualityScore: null,
+      sourceWindowStart: null, sourceWindowEnd: null,
+      samplesUsed: null, errorMessage: 'insufficient data', durationMs: 25,
+      triggeredBy: 'retry', createdAt: new Date(0),
+    })
+
+    const out = await caller.getHistory({ side: 'right', limit: 5 })
+    expect(out).toHaveLength(1)
+    expect(out[0].triggeredBy).toBe('retry')
+  })
 })
 
 describe('calibration.triggerCalibration', () => {

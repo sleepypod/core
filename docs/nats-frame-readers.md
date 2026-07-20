@@ -1,8 +1,7 @@
-# NATS Frame Readers — Design Spec (draft for review)
+# NATS Frame Readers
 
-**Status:** draft — review before implementation
-**Branch:** `worktree-pod5-debug` (`feat/cap-frame-readers`)
-**Source data:** 2-minute `raw.>` capture from a field Pod 5 on new firmware
+**Status:** implemented — automated validation complete; field validation pending
+**Source data:** 1-minute `raw.>` capture from a field Pod 5 on new firmware
 (Discord user report, 2026-07-19), taken with `scripts/probe-nats-capture.py`.
 236 messages across 8 subjects.
 
@@ -10,12 +9,15 @@
 
 New Pod 5 firmware (~April 2026+) stops writing CBOR `*.RAW` spool files and
 instead publishes sensor frames to a local NATS server (JetStream-enabled,
-`nats://localhost:4222`, no auth on loopback). Every biometrics module
-(piezo-processor, sleep-detector, environment-monitor, calibrator,
-cover-buttons) ingests via `common.raw_follower.RawFileFollower`, which tails
-`*.RAW` files — so on these pods every module runs cleanly and ingests
-nothing. Field signature: services active, journals clean, calibrator errors
-`No capSense records available` / `Insufficient temp data: 0 rows`.
+`nats://localhost:4222`, no auth on loopback). Piezo-processor,
+sleep-detector, environment-monitor, and cover-buttons ingest through
+`common.raw_follower.RawFileFollower`; calibrator scans the same `*.RAW`
+files in bounded historical batches. On NATS-only pods those paths run
+cleanly and ingest nothing. Field signature: services active, journals clean,
+calibrator errors `No capSense records available` /
+`Insufficient temp data: 0 rows`. The Node live streamer is another RAW
+consumer, feeding WebSocket clients, automation snapshots, and cap-frame
+persistence.
 
 Constraint (non-negotiable): the `.RAW` path must keep working unchanged on
 old-shim and mid-era pods. The NATS reader is **added alongside**, selected at
@@ -23,9 +25,14 @@ runtime — never a replacement.
 
 ## Wire format (as captured)
 
-All payloads are single, complete CBOR maps (indefinite-length, `0xbf`
-leading byte). One message = one record. No framing, no magic-byte scanning,
-no corruption recovery needed — the transport guarantees message boundaries.
+Each subscribed sensor message (`raw.sens.>` / `raw.frz.>`) contains one
+complete CBOR value whose decoded value is a record map. Definite and
+indefinite maps both occur; consumers must not depend on a leading encoding
+byte. NATS supplies the message boundary, so sensor readers need no outer
+framing, magic-byte scan, or corruption recovery. `raw.log` is the exception:
+the captured retained message is a CBOR sequence of 12 concatenated log maps.
+It is deliberately excluded from live sensor subscriptions and queried only
+as a JetStream diagnostic by `sp-status`.
 
 | Subject | `type` | Rate | Size | Consumed by |
 |---|---|---|---|---|
@@ -34,9 +41,9 @@ no corruption recovery needed — the transport guarantees message boundaries.
 | `raw.sens.bedtemp` | `bedTemp` | 0.1 Hz | 112 B | environment-monitor |
 | `raw.frz.temp` | `frzTemp` | 0.1 Hz | 53 B | environment-monitor |
 | `raw.frz.health` | `frzHealth` | 0.1 Hz | 213 B | flow-chart (via server) |
-| `raw.frz.therm` | `frzTherm` (new) | 0.1 Hz | 124 B | — (out of scope v1) |
+| `raw.frz.therm` | `frzTherm` | 0.1 Hz | 124 B | sleep-detector pump gate, Node stream |
 | `raw.sens.blanket` | `blanketReadings` (new) | 0.5 Hz | 247 B | — (out of scope v1) |
-| `raw.log` | `log` (new) | sporadic | varies | — (out of scope v1) |
+| `raw.log` | `log` | sporadic | varies | `sp-status` only (not live-subscribed) |
 
 ### Records match the existing `.RAW` dialects
 
@@ -52,23 +59,27 @@ Verified field-for-field against the parsers:
   integer channels. This is the **Pod 3 dialect**, not the Pod 4/5
   `capSense2 {values: [], status}` wrapper. The sleep-detector's existing
   `capSense` path and `CapCalibrator.CHANNELS = ("out", "cen", "in")` work
-  as-is. `status` ("good" observed) is new; ignored in v1, available as a
-  future quality gate.
+  as-is. Per-side `status` also exists on legacy RAW records; the field-capture
+  sample was `"good"`. This implementation records it without gating, leaving
+  it available for a future quality rule.
 - **`bedTemp`** — matches the v1 dialect in `common.dialect.normalize_bed_temp`
   exactly: `amb`/`mcu`/`hu` + per-side `{out, cen, in}`, all integer
   centidegrees. One new per-side key `side` — already ignored by the
   normalizer.
 - **`frzTemp`** — `{left, right, amb, hs}` centidegrees; exact match for
   `environment-monitor.write_freezer_temp` including sentinel filtering.
-- **`frzHealth`** — `pump.{mode, rpm, water}`, `tec.current`,
+- **`frzHealth`** — per side, nested `pump.{mode, rpm, water}`, `tec.current`,
   `temps.flowrate`, `fan.{top,bottom}.rpm`. Note: `temps` carries **only**
   `flowrate` (the #593 fallback for missing `frzHealth.temps` fields is
-  load-bearing here; `pump.rpm` is present directly).
+  load-bearing here). Existing pump guards accepted flat `pumpRpm` aliases;
+  the NATS integration also reads nested `pump.rpm`. Captured `frzTherm`
+  carries per-side `power`, which is likewise treated as pump activity.
 
-New types (`blanketReadings`, `frzTherm`, `log`) are passed to
+The subscribed but unsupported `blanketReadings` type is passed to
 `warn_unknown_type_once` semantics: logged once, not ingested, until a
-consumer exists. `blanketReadings` (per-side temp + xyz accel,
-`is_connected`) is the likely v2 candidate for cover pods.
+consumer exists. It carries per-side temperature + xyz acceleration and
+`is_connected`, and is the likely v2 candidate for cover pods. `frzTherm`
+already feeds pump-state handling; `raw.log` never reaches these readers.
 
 ## How we detect NATS ("does NATS exist?")
 
@@ -81,9 +92,15 @@ is what the follower itself uses.
 systemctl is-active --quiet nats-server.service && [ -d /persistent/jetstream ]
 ```
 
-Coarse install-time/diagnostic signal. Used to pick the `sp-status` pipeline
-label and to skip tmpfs `.RAW` scaffolding in the archiver helpers. Not
-sufficient for runtime: says a server exists, not that frames flow.
+This is the live diagnostic signal used by `sp-status`. The install/update
+helper uses the more restart-tolerant persistent identity — the NATS unit is
+installed and `/persistent/jetstream` exists — so a transiently restarting
+server cannot accidentally install RAW tmpfs routing. When a pod transitions
+from RAW firmware, the helper removes Sleepypod-owned tmpfs units and the
+`frank.service` routing drop-in after archiving any remaining volatile RAW
+frames; the cold archive is preserved. Neither script-layer check is
+sufficient for runtime selection: identity does not prove the protocol is
+reachable or frames are flowing.
 
 **2. Protocol layer (cheap runtime reachability):** open a TCP connection to
 `127.0.0.1:4222`; a real NATS server greets immediately with an `INFO {...}`
@@ -95,15 +112,24 @@ def nats_reachable(host="127.0.0.1", port=4222, timeout=2.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout) as s:
             s.settimeout(timeout)
-            return s.recv(512).startswith(b"INFO ")
+            greeting = b""
+            while b"\n" not in greeting and len(greeting) < 4096:
+                chunk = s.recv(512)
+                if not chunk:
+                    return False
+                greeting += chunk
+            return greeting.startswith(b"INFO ")
     except OSError:
         return False
 ```
 
+The implementation also bounds total greeting length/time and tests an INFO
+line split across multiple TCP reads.
+
 **3. Data layer (health signal, NOT a selection input):** once subscribed,
-count messages on `raw.>`. On live firmware capSense ticks at 2 Hz, so a
-silent subscription is worth logging (once, at 60 s) — but it does not
-change the source choice. See selection rationale below.
+count messages on `raw.sens.>` and `raw.frz.>`. On live firmware capSense
+ticks at 2 Hz, so a silent subscription is worth logging (once, at 60 s) —
+but it does not change the source choice. See selection rationale below.
 
 ## Source selection
 
@@ -130,29 +156,33 @@ else:
   (archiver-helpers) already treats server-presence as "new firmware". We
   keep the safe failure mode: a NATS server's presence selects NATS, and the
   follower simply waits for frames (logging once if silent past 60 s).
-- **The 60 s grace window** covers the inverse race (module up before
+- **The 60 s grace window** covers the inverse race (consumer up before
   nats-server) on new-firmware pods. Cost on old pods: worst-case 60 s of
   retries before file tailing starts — acceptable per review. Belt-and-
-  braces: the module units gain an `After=nats-server.service` ordering
-  drop-in (ignored by systemd on pods where that unit doesn't exist).
+  braces: the four Python module units and the Node `sleepypod.service` gain
+  `After=nats-server.service` ordering (ignored by systemd on pods where that
+  unit doesn't exist; there is intentionally no `Wants` or `Requires`).
 - Probe once at startup; no mid-flight source switching. "NATS was up, then
   died" is handled by `Restart=always`: the process exits after
   `MAX_RECONNECT_FAILURES` and the whole selection re-runs on restart. This
-  mirrors how `RawFileFollower` already handles unrecoverable file states.
+  avoids leaving a healthy-looking process permanently stranded on a dead
+  source.
 - The two sources never run concurrently in one process (duplicate-row risk).
 
 ## `NatsFollower` design
 
 New file: `modules/common/nats_follower.py`. Interface-compatible with
 `RawFileFollower`: a blocking generator yielding decoded record dicts, so each
-module's dispatch loop is unchanged — the only edit per module is the source
-selection above.
+streaming module's dispatch loop remains unchanged behind the source selector.
+Calibrator is the deliberate exception: it uses a bounded live NATS buffer in
+place of its historical RAW scan and readiness-aware startup retries as data
+accrues.
 
 - **Client:** `nats-py` (asyncio). Runs in a daemon thread owning its event
   loop; messages are CBOR-decoded and pushed onto a bounded
   `queue.Queue(maxsize=256)`; the generator `get()`s from the queue. Queue
   full ⇒ drop-oldest + counter (matches tailer semantics: live data beats
-  backlog; 256 ≈ 2 min of capsense).
+  backlog; 256 is about one minute of the full captured sensor firehose).
 - **Subscription:** core NATS subscribe on `raw.sens.>` and `raw.frz.>`
   (plain subscribe, not JetStream pull — see Backfill below). Per-module
   subject narrowing is a premature optimization at these rates
@@ -174,7 +204,7 @@ selection above.
 
 Each side of a `capSense` record carries `status` (only `"good"` observed in
 the capture; the failure vocabulary is unknown — plausibly mirrors the read
-errors that capSense2 signals via its 65535 sentinel values).
+errors that capSense2 signals via its `-1.0` sentinel values).
 
 *How gating would work:* the mechanism is per-side sample suppression at the
 extraction layer, identical in spirit to the existing capSense2 sentinel
@@ -212,60 +242,61 @@ observed status. v1 records status two ways:
 
 The `raw` JetStream stream exists and retains messages
 (`/persistent/jetstream`, consumed by firmware's `jetstream-uploader`). A
-durable JetStream consumer could give the modules restart backfill — something
-the file tailer never had (it jumps to EOF; see the piezoStream backfill
-gap). v1 uses core subscribe to keep semantics identical to today and avoid:
+durable JetStream consumer could give every reader deterministic restart
+backfill beyond the current RAW file. v1 uses core subscribe to keep the live
+path small and avoid:
 durable-consumer state management, ack policy, retention interplay with the
-uploader, and replay-vs-live dedup in the DB writers. Revisit once v1 is
-stable in the field; `INSERT OR IGNORE` on timestamped tables already makes
-modest replay safe.
+uploader, and replay-vs-live dedup in the DB writers. This is not perfectly
+identical to Python's RAW restart behavior: `RawFileFollower` reads the newest
+file from offset zero, whereas core NATS only sees messages published after
+subscription. The bounded calibrator buffer therefore fills from live data
+and retries when its minima are ready; other readers intentionally do not
+backfill in v1. Revisit once the live path is stable in the field;
+`INSERT OR IGNORE` on timestamped tables already makes modest replay safe.
 
 ## Testing
 
-1. **Fixtures from the field capture:** commit per-subject exemplar payloads
-   from the capture (`payload_b64` → raw CBOR bytes) as test fixtures, real
-   sample data included — the capture is anonymized and cleared for use
-   (review 2026-07-19). Unit tests decode fixtures through `NatsFollower`'s
-   decode path and assert the yielded dicts satisfy the existing parsers
-   (`normalize_bed_temp`, `_int32_samples` length/dtype, capSense channel
-   extraction).
-2. **Probe tests:** fake NATS greeting (`INFO {...}`) vs silent socket vs
-   connection refused; traffic-window timeout.
-3. **Module tests:** existing `test_main.py` pattern — `nats` stubbed via
-   `sys.modules`, follower fed from fixture queue; assert rows land in
-   biometrics.db tables.
-4. **Live validation:** the reporting user's pod (new-firmware Pod 5) +
+1. **Fixtures from the field capture:** commit one exemplar for each of the
+   seven sensor subjects (`payload_b64` → raw CBOR bytes). `raw.log` is omitted:
+   it is outside reader scope and contains a persistent hardware identifier.
+   Unit tests decode the sensor fixtures through the actual NATS decode path
+   and assert bed-temperature normalization, 500-sample piezo channels,
+   capSense extraction/status recording, freezer shapes, and nested pump-state
+   gating.
+2. **Probe/selection tests:** fake whole and fragmented NATS INFO greetings,
+   silent sockets, connection refusal, shutdown during the grace window,
+   one-source-only selection, silence warning, bounded reconnect failure, and
+   clean source shutdown. Frame traffic is never a selection input.
+3. **Module/stream tests:** existing module tests pin unchanged RAW behavior;
+   Node tests run captured NATS frames through the same broadcast, snapshot,
+   listener, and `cap_sense_frames` persistence path and verify nullable/mixed
+   per-side `statusCounts` windows.
+4. **Live validation (pending):** the reporting user's pod (new-firmware Pod 5) +
    `eight-pod` (J55, shim variant) as the regression control. `sp-status`
    must show: NATS pipeline + rows accruing on the former; `.RAW` pipeline
-   unchanged on the latter. Calibrator errors clear within one
-   `LOOKBACK_HOURS` window.
+   unchanged on the latter. Calibrator errors should clear once the live
+   buffer reaches each sensor's sample minimum.
 
-## Rollout
+## Implementation and rollout
 
-1. `NatsFollower` + probe in `modules/common`, selection wired into
-   piezo-processor, sleep-detector, environment-monitor, calibrator
-   (cover-buttons deferred — button events' NATS subject is unconfirmed; not
-   in this capture).
-1a. **Node streaming side is a second `.RAW` consumer** (found during status-
-   column review): the live broadcast loop in `src/streaming` tails RAW files
-   to feed the WS stream, the in-memory `signals.biometrics` snapshot, and
-   `capFramePersistence` — so on NATS-only pods the web UI live stream,
-   `cap_sense_frames` (including the new `statusCounts` column), and `cap.*`
-   automation signals stay empty even with all Python modules fixed. Needs a
-   TypeScript NATS source (`nats` npm client) behind the same
-   reachability-probe selection. Same scope decision as the Python side:
-   part of this branch, since shipping one without the other leaves
-   new-firmware pods half-working in a way that's confusing to diagnose.
-2. Ship on `worktree-pod5-debug`; field-test via `sudo sp-update
-   worktree-pod5-debug` on the reporter's pod.
-3. `sp-status` gains a firmware-log line (decided in review): fetch the most
-   recent `raw.log` message from the JetStream `raw` stream —
-   `nats stream get raw --last-for raw.log` (already guarded on nats CLI
-   presence, same as the existing stream probe) — and surface
-   `SENSOR_SAMPLES_DROPPED` when present. JetStream retention makes this a
-   point read; no subscribe-and-wait needed for a sporadic subject.
-4. ADR after review: this doc graduates to `docs/adr/0024-nats-frame-readers.md`
-   once accepted.
+1. `NatsFollower` and the robust INFO probe live in `modules/common`; runtime
+   selection is wired into piezo-processor, sleep-detector, and
+   environment-monitor. Calibrator selects the same transport, starts a
+   bounded live buffer on NATS, and retries pending startup profiles only when
+   their data minima are ready. Cover-buttons remains deferred because its
+   NATS event subject is unconfirmed and absent from the capture.
+2. The Node streamer uses the official v3 `@nats-io/transport-node` client
+   behind the same exclusive selector. Both sources feed one shared dispatch
+   path, so WebSocket streaming, server listeners, the cap snapshot,
+   automation, and cap-frame persistence behave consistently.
+3. `sp-status` point-fetches the retained `raw.log` message with
+   `nats stream get raw --last-for raw.log` and surfaces
+   `SENSOR_SAMPLES_DROPPED` when present. The discovery probe preserves CBOR
+   sequences rather than hiding trailing log maps and writes captures as
+   private, exclusive files.
+4. Field validation is the remaining rollout step. After it succeeds, this
+   document can graduate to an ADR; cover events and durable backfill stay
+   follow-up work.
 
 ## Review resolutions (2026-07-19)
 
@@ -283,5 +314,6 @@ modest replay safe.
    their statuses is one column, not a new archive.
 3. **`SENSOR_SAMPLES_DROPPED` in `sp-status`: yes** — via JetStream
    last-message fetch (rollout item 3).
-4. **Fixtures: real captured payloads are cleared for use** (data is
-   anonymized); no scrubbing/zeroing required.
+4. **Fixtures:** the seven sensor payload exemplars are cleared for use. The
+   retained `raw.log` sample is deliberately not committed because it contains
+   a persistent hardware identifier and is not needed by either live reader.

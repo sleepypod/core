@@ -60,7 +60,7 @@ fi
 if [ -f /opt/eight/bin/frank.sh ]; then
   printf "frank.sh:    present (old firmware path)\n"
 else
-  printf "frank.sh:    absent (new firmware path)\n"
+  printf "frank.sh:    absent (mid/new firmware variants)\n"
 fi
 printf "frank.service: %s\n" "$(active_or frank.service)"
 
@@ -72,10 +72,18 @@ JETSTREAM_DIR_STATE="missing"
 
 if [ "$NATS_STATE" = "active" ] && [ "$JETSTREAM_DIR_STATE" = "present" ]; then
   printf "pipeline:    NATS JetStream (new firmware, April 2026+)\n"
-elif [ -f /opt/eight/bin/frank.sh ]; then
-  printf "pipeline:    tmpfs *.RAW via frank.sh shim (old firmware)\n"
+elif mountpoint -q /persistent/biometrics 2>/dev/null; then
+  if [ -f /opt/eight/bin/frank.sh ] \
+     && grep -q 'cd /persistent/biometrics' /opt/eight/bin/frank.sh 2>/dev/null; then
+    printf "pipeline:    tmpfs *.RAW via patched frank.sh shim\n"
+  elif systemctl cat frank.service 2>/dev/null \
+       | grep -q '^WorkingDirectory=/persistent/biometrics$'; then
+    printf "pipeline:    tmpfs *.RAW via frank.service WorkingDirectory\n"
+  else
+    printf "pipeline:    tmpfs mounted at /persistent/biometrics (writer routing unverified)\n"
+  fi
 else
-  printf "pipeline:    direct *.RAW (mid-era firmware; frank.sh removed ~year ago, no NATS)\n"
+  printf "pipeline:    filesystem *.RAW (tmpfs not mounted; legacy/mid-era firmware)\n"
 fi
 
 printf "nats-server: %s" "$NATS_STATE"
@@ -97,6 +105,23 @@ printf "jetstream-uploader.service: %s\n" "$(active_or jetstream-uploader.servic
 if command -v nats >/dev/null 2>&1; then
   if nats stream info raw --server nats://localhost:4222 -j >/dev/null 2>&1; then
     printf "raw stream:  present (subject raw.>)\n"
+
+    # The firmware log subject is sporadic, so read the retained last message
+    # instead of subscribing and waiting.  CBOR payloads contain binary bytes;
+    # strip those before looking for the printable diagnostic marker.
+    dropped_sample_log=$(
+      nats stream get raw --last-for raw.log --server nats://localhost:4222 2>/dev/null \
+        | LC_ALL=C tr -cd '\11\12\15\40-\176' \
+        | awk '
+            match($0, /SENSOR_SAMPLES_DROPPED[[:space:]:=]+[0-9]+/) {
+              print substr($0, RSTART, RLENGTH)
+              exit
+            }
+          ' \
+    )
+    if [ -n "$dropped_sample_log" ]; then
+      printf "sensor drops: %s\n" "$dropped_sample_log"
+    fi
   else
     printf "raw stream:  missing or unreachable\n"
   fi

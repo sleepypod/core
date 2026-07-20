@@ -17,6 +17,126 @@
 #
 # Requires INSTALL_DIR to be set by the caller.
 
+remove_biometrics_archiver_for_nats() {
+  # A pod can be upgraded from RAW-writing firmware after this module was
+  # already installed. Merely skipping setup would leave frank.service's
+  # WorkingDirectory override, the tmpfs mount, and archive timers enabled.
+  # Remove only Sleepypod-owned artifacts; preserve the cold archive.
+  # Path overrides keep the destructive transition testable without touching
+  # the host. Production callers use these defaults.
+  local systemd_dir="${BIOMETRICS_SYSTEMD_DIR:-/etc/systemd/system}"
+  local local_bin_dir="${BIOMETRICS_LOCAL_BIN_DIR:-/usr/local/bin}"
+  local tmpfs_dir="${BIOMETRICS_TMPFS_DIR:-/persistent/biometrics}"
+  local archiver_bin="${BIOMETRICS_ARCHIVER_BIN:-$local_bin_dir/sleepypod-biometrics-archiver}"
+  local frank_sh="${BIOMETRICS_FRANK_SH:-/opt/eight/bin/frank.sh}"
+  local dropin="$systemd_dir/frank.service.d/sleepypod-biometrics-tmpfs.conf"
+  local restart_frank=false
+  local u
+
+  for u in sleepypod-biometrics-archiver.timer sleepypod-biometrics-pruner.timer \
+           sleepypod-biometrics-archiver.service sleepypod-biometrics-pruner.service \
+           sleepypod-tmpfs-prep.service; do
+    systemctl stop "$u" 2>/dev/null || true
+    systemctl disable "$u" 2>/dev/null || true
+  done
+
+  # Undo the exact firmware shim edit this helper owns. Prefer the preserved
+  # pre-tmpfs file; reverse the narrow substitution when no backup survived a
+  # firmware upgrade.
+  if [ -f "$frank_sh" ] \
+     && grep -q 'cd /persistent/biometrics' "$frank_sh"; then
+    local backups newest_backup backup
+    shopt -s nullglob
+    backups=("$frank_sh".bak-pre-tmpfs-*)
+    shopt -u nullglob
+    if [ "${#backups[@]}" -gt 0 ]; then
+      newest_backup=${backups[0]}
+      for backup in "${backups[@]:1}"; do
+        if [ "$backup" -nt "$newest_backup" ]; then
+          newest_backup=$backup
+        fi
+      done
+      cp -f "$newest_backup" "$frank_sh"
+    else
+      sed -i 's|cd /persistent/biometrics \&\&|cd /persistent \&\&|' \
+        "$frank_sh"
+    fi
+    restart_frank=true
+  fi
+
+  if [ -f "$dropin" ]; then
+    rm -f "$dropin"
+    restart_frank=true
+  fi
+  rmdir "$systemd_dir/frank.service.d" 2>/dev/null || true
+  if ! systemctl daemon-reload 2>/dev/null; then
+    echo "Error: failed to reload systemd before NATS firmware cleanup" >&2
+    return 1
+  fi
+
+  # Restart after removing the override so frank releases any cwd held inside
+  # the tmpfs. Always do this for a mounted transition: if an earlier attempt
+  # removed the override but its restart failed, the next attempt must retry.
+  # New firmware resumes publishing to NATS immediately.
+  if [ "$restart_frank" = true ] || mountpoint -q "$tmpfs_dir"; then
+    if ! systemctl restart frank.service 2>/dev/null; then
+      echo "Error: failed to restart frank.service; preserving RAW tmpfs and recovery tools" >&2
+      return 1
+    fi
+  fi
+
+  # Preserve every remaining RAW frame before unmounting the volatile tmpfs.
+  # KEEP_RECENT_MIN=-1 includes files younger than the normal 15-minute guard;
+  # frank has already restarted on the NATS path and no longer writes them.
+  local tmpfs_was_mounted=false
+  if mountpoint -q "$tmpfs_dir"; then
+    tmpfs_was_mounted=true
+    if [ -x "$archiver_bin" ] \
+       && ! KEEP_RECENT_MIN=-1 "$archiver_bin"; then
+      echo "Error: failed to archive all remaining tmpfs RAW frames; preserving mount and recovery tools" >&2
+      return 1
+    fi
+
+    # The archiver's exit status is the first barrier; this independent check
+    # catches a skipped/missed file before the only volatile copy is unmounted.
+    local raw_file
+    local remaining_raw
+    shopt -s nullglob
+    remaining_raw=("$tmpfs_dir"/*.RAW)
+    shopt -u nullglob
+    for raw_file in "${remaining_raw[@]}"; do
+      [ -f "$raw_file" ] || continue
+      if [ "$(basename "$raw_file")" != "SEQNO.RAW" ]; then
+        echo "Error: unarchived RAW frame remains at $raw_file; preserving mount and recovery tools" >&2
+        return 1
+      fi
+    done
+  fi
+
+  if ! systemctl stop persistent-biometrics.mount 2>/dev/null \
+     && [ "$tmpfs_was_mounted" = true ]; then
+    echo "Error: failed to stop persistent-biometrics.mount; preserving recovery tools" >&2
+    return 1
+  fi
+  if mountpoint -q "$tmpfs_dir"; then
+    echo "Error: $tmpfs_dir is still mounted; preserving recovery tools" >&2
+    return 1
+  fi
+  systemctl disable persistent-biometrics.mount 2>/dev/null || true
+
+  rm -f "$systemd_dir/sleepypod-biometrics-archiver.service" \
+        "$systemd_dir/sleepypod-biometrics-archiver.timer" \
+        "$systemd_dir/sleepypod-biometrics-pruner.service" \
+        "$systemd_dir/sleepypod-biometrics-pruner.timer" \
+        "$systemd_dir/sleepypod-tmpfs-prep.service" \
+        "$systemd_dir/persistent-biometrics.mount" \
+        "$local_bin_dir/sleepypod-tmpfs-prep" \
+        "$local_bin_dir/sleepypod-biometrics-archiver" \
+        "$local_bin_dir/sleepypod-biometrics-pruner"
+  systemctl daemon-reload 2>/dev/null || true
+  echo "biometrics-archiver: removed legacy RAW tmpfs units for NATS firmware (cold archive preserved)"
+}
+
 install_biometrics_archiver() {
   local archiver_src="${INSTALL_DIR:-/home/dac/sleepypod-core}/modules/biometrics-archiver"
 
@@ -37,10 +157,16 @@ install_biometrics_archiver() {
   # era population also has no /opt/eight/bin/frank.sh but is still on
   # the .RAW write path (firmware direct → /persistent/*.RAW). Those pods
   # depend on the archive/migration loop below to keep eMMC from filling.
-  # Gate strictly on the new-firmware NATS signals.
-  if systemctl is-active --quiet nats-server.service 2>/dev/null \
-     && [ -d /persistent/jetstream ]; then
-    echo "biometrics-archiver: new firmware detected (nats-server active; /persistent/jetstream present) — skipping tmpfs setup"
+  # Gate on persistent firmware identity, not transient service health. The
+  # server may be restarting during sp-update; an installed unit plus its
+  # JetStream store still identifies the NATS-writing firmware generation.
+  if [ -d /persistent/jetstream ] \
+     && systemctl cat nats-server.service >/dev/null 2>&1; then
+    echo "biometrics-archiver: NATS firmware detected (nats-server installed; /persistent/jetstream present) — removing/skipping RAW tmpfs setup"
+    if ! remove_biometrics_archiver_for_nats; then
+      echo "biometrics-archiver: NATS cleanup stopped to preserve unarchived RAW data" >&2
+      return 1
+    fi
     return 0
   fi
 

@@ -13,13 +13,15 @@ consumer. The output file is grep/jq-friendly; SCP it off the pod and
 inspect locally.
 
 Usage on a pod (new firmware only — needs nats-server up):
+  # The first uv run downloads nats-py/cbor2; temporarily enable WAN or
+  # pre-warm the uv cache on pods whose normal WAN policy is blocked.
   sudo -u dac /home/dac/sleepypod-core/scripts/probe-nats-capture.py
   sudo -u dac /home/dac/sleepypod-core/scripts/probe-nats-capture.py \
       --duration 30 --subject 'raw.>' --out /tmp/raw-capture.ndjson
 
 Inspect afterwards:
   jq -r '.subject' < /tmp/raw-capture.ndjson | sort | uniq -c | sort -rn
-  jq 'select(.subject == "raw.piezo") | .cbor' < /tmp/raw-capture.ndjson | head
+  jq 'select(.subject == "raw.sens.piezo") | .cbor' < /tmp/raw-capture.ndjson | head
 
 Output paths default under /tmp to avoid burning eMMC during exploration.
 Move captures you want to keep to /persistent before reboot.
@@ -28,7 +30,9 @@ Move captures you want to keep to /persistent before reboot.
 import argparse
 import asyncio
 import base64
+import io
 import json
+import os
 import signal
 import time
 from collections import Counter, defaultdict
@@ -58,6 +62,25 @@ def stringify_cbor(value, depth=0):
     return value
 
 
+def decode_cbor_payload(payload):
+    """Decode every CBOR item in *payload* without hiding trailing items.
+
+    Sensor subjects carry one complete map per NATS message, while ``raw.log``
+    has been observed carrying a CBOR sequence (multiple maps concatenated in
+    one message). ``cbor2.loads`` returns only the first item in that case, so
+    use a streaming decoder and preserve the full sequence in discovery output.
+    Single-item messages retain the original JSON shape for jq compatibility.
+    """
+    stream = io.BytesIO(payload)
+    decoder = cbor2.CBORDecoder(stream)
+    values = []
+    while stream.tell() < len(payload):
+        values.append(stringify_cbor(decoder.decode()))
+    if len(values) == 1:
+        return values[0]
+    return {"_cbor_sequence_len": len(values), "_items": values}
+
+
 async def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--duration", type=int, default=60, help="seconds to capture (default 60)")
@@ -81,7 +104,9 @@ async def main() -> None:
     )
     args = p.parse_args()
 
-    print(f"connecting to {args.url} ...")
+    # Do not echo the URL: callers may supply credentials even though the
+    # firmware's loopback server is unauthenticated by default.
+    print("connecting to configured NATS server ...")
     nc = await nats.connect(args.url, connect_timeout=2)
     print(f"connected. capturing subject={args.subject!r} for {args.duration}s → {args.out}")
     print(f"(max output: {args.max_bytes // (1024 * 1024)} MB; ctrl-c to stop early)")
@@ -89,7 +114,12 @@ async def main() -> None:
     subject_count: Counter[str] = Counter()
     subject_bytes: dict[str, int] = defaultdict(int)
     decode_errors: Counter[str] = Counter()
-    out = open(args.out, "w", buffering=8192)
+    # Captures contain raw biometric/environment frames. Create them private
+    # and exclusively so a predictable /tmp name cannot truncate or follow a
+    # pre-created symlink owned by another local user.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    out_fd = os.open(args.out, flags, 0o600)
+    out = os.fdopen(out_fd, "w", buffering=8192)
     bytes_written = 0
     stop_event = asyncio.Event()
 
@@ -104,7 +134,7 @@ async def main() -> None:
         }
         if not args.no_cbor:
             try:
-                rec["cbor"] = stringify_cbor(cbor2.loads(msg.data))
+                rec["cbor"] = decode_cbor_payload(msg.data)
             except Exception as exc:  # noqa: BLE001 — any decode failure is signal
                 rec["cbor_error"] = repr(exc)
                 decode_errors[type(exc).__name__] += 1

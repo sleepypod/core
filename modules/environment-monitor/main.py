@@ -29,8 +29,12 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
-from common.raw_follower import RawFileFollower
-from common.dialect import normalize_bed_temp
+from common.nats_follower import create_follower
+from common.dialect import (
+    KNOWN_RECORD_TYPES,
+    normalize_bed_temp,
+    warn_unknown_type_once,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -248,7 +252,9 @@ def main() -> None:
         sys.exit(1)
 
     db_conn = open_biometrics_db()
-    follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
+    # Source selected once at startup: NatsFollower on new-firmware pods (NATS
+    # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
+    follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
     # Seed cursors from DB so restarts don't replay already-ingested samples.
     # Clamp to now so a DB already poisoned by a far-future timestamp (written
@@ -268,6 +274,11 @@ def main() -> None:
             if not isinstance(record, dict):
                 continue
             rtype = record.get("type")
+            # Surface genuinely-new firmware types once (blanketReadings, log,
+            # …); known types this module doesn't consume fall through quietly.
+            if rtype not in KNOWN_RECORD_TYPES:
+                warn_unknown_type_once(record, "environment-monitor")
+                continue
             if rtype not in ("bedTemp", "bedTemp2", "frzTemp"):
                 continue
             ts = sanitize_ts(record.get("ts"))
