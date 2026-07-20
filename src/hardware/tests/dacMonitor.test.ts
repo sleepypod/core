@@ -421,6 +421,31 @@ describe('DacMonitor', () => {
     expect(client.getDeviceStatus).toHaveBeenCalledTimes(2)
   })
 
+  test('never overlaps interval polls after changing the cadence', async () => {
+    vi.useFakeTimers()
+    let resolveStatus!: (status: ReturnType<typeof parseDeviceStatus>) => void
+    const pending = new Promise<ReturnType<typeof parseDeviceStatus>>((resolve) => {
+      resolveStatus = resolve
+    })
+    const client = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+      getDeviceStatus: vi.fn().mockReturnValue(pending),
+    } as unknown as HardwareClient
+    const monitor = new DacMonitor({ socketPath: '/unused', pollIntervalMs: 1_000, hardwareClient: client })
+    monitors.push(monitor)
+    await monitor.start()
+
+    monitor.setPollInterval(10)
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(client.getDeviceStatus).toHaveBeenCalledOnce()
+
+    resolveStatus(parseDeviceStatus(DEVICE_STATUS_POD4))
+    await pending
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
   test('discards a poll result that resolves after stop and disconnects once', async () => {
     vi.useFakeTimers()
     let resolveStatus!: (status: ReturnType<typeof parseDeviceStatus>) => void

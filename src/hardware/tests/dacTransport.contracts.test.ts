@@ -325,6 +325,16 @@ describe('dacTransport private transport contracts through the public API', () =
     expect(server.closeCalls).toBe(1)
   })
 
+  it('does not destroy the active socket again when it is already destroyed', async () => {
+    const { socket } = await connectHarnessSocket()
+    socket.destroy()
+    expect(socket.destroyCalls).toBe(1)
+
+    await transport.disconnectDac()
+
+    expect(socket.destroyCalls).toBe(1)
+  })
+
   it('consumes a connection queued before waitForConnection starts', async () => {
     const socket = new HarnessSocket()
     harness.prequeuedSocket = socket

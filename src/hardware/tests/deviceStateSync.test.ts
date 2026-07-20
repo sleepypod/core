@@ -286,6 +286,26 @@ describe('DeviceStateSync — mutation freshness window', () => {
     expect(row?.is_powered).toBe(0)
     expect(row?.target_temperature).toBeNull()
   })
+
+  it('inserts observation fields for a fresh mutation with no prior state row', async () => {
+    markSideMutated('right')
+
+    await sync.sync(status({
+      side: 'right',
+      currentTemperature: 80,
+      targetTemperature: 78,
+      currentLevel: 5,
+      targetLevel: 5,
+      heatingDuration: 100,
+    }))
+
+    expect(readSide('right')).toEqual(expect.objectContaining({
+      current_temperature: 80,
+      is_powered: 0,
+      powered_on_at: null,
+      target_temperature: null,
+    }))
+  })
 })
 
 function readWaterLevels() {
@@ -706,19 +726,23 @@ describe('DeviceStateSync — flow anomaly detection', () => {
     expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] right_flowrate_missing: Right pump running at 200 RPM but flowrate unavailable')
   })
 
-  it('warns for missing flow at exactly 50 RPM but not at 49 RPM', () => {
-    sync.recordFlowData(frame({ leftRpm: 50, leftFlow: null, rightRpm: 49, rightFlow: null }))
-    expect(anomalyTypes()).toContain('left_flowrate_missing')
+  it('warns for missing flow at exactly 50 RPM on either side but not at 49 RPM', () => {
+    sync.recordFlowData(frame({ leftRpm: 49, leftFlow: null, rightRpm: 49, rightFlow: null }))
+    expect(anomalyTypes()).not.toContain('left_flowrate_missing')
     expect(anomalyTypes()).not.toContain('right_flowrate_missing')
+
+    sync.recordFlowData(frame({ leftRpm: 50, leftFlow: null, rightRpm: 50, rightFlow: null }))
+    expect(anomalyTypes()).toContain('left_flowrate_missing')
+    expect(anomalyTypes()).toContain('right_flowrate_missing')
   })
 
   it('warns when pump runs but flowrate is near zero', () => {
-    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 0.01, rightRpm: 100, rightFlow: 0.02 }))
+    sync.recordFlowData(frame({ leftRpm: 50, leftFlow: 0.01, rightRpm: 50, rightFlow: 0.02 }))
     const types = anomalyTypes()
     expect(types).toContain('left_pump_no_flow')
     expect(types).toContain('right_pump_no_flow')
-    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] left_pump_no_flow: Left pump running at 100 RPM but flowrate near zero (1 cd)')
-    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] right_pump_no_flow: Right pump running at 100 RPM but flowrate near zero (2 cd)')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] left_pump_no_flow: Left pump running at 50 RPM but flowrate near zero (1 cd)')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] right_pump_no_flow: Right pump running at 50 RPM but flowrate near zero (2 cd)')
   })
 
   it('treats exactly 5cd as non-zero flow on both sides', () => {
@@ -774,9 +798,9 @@ describe('DeviceStateSync — flow anomaly detection', () => {
     expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] right_flow_spike: Right flowrate sudden change: 100 -> 700 cd (delta 600)')
   })
 
-  it('does not report an exact 500cd delta or a small change with a large sum', () => {
-    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 1.0, rightRpm: 100, rightFlow: 3.0 }))
-    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 6.0, rightRpm: 100, rightFlow: 4.0 }))
+  it('does not report an exact 500cd delta on either side', () => {
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 1.0, rightRpm: 100, rightFlow: 1.0 }))
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 6.0, rightRpm: 100, rightFlow: 6.0 }))
     expect(anomalyTypes()).not.toContain('left_flow_spike')
     expect(anomalyTypes()).not.toContain('right_flow_spike')
   })
@@ -846,6 +870,37 @@ describe('DeviceStateSync — sync targetTemperature behaviour without mutation'
     const row = readSide('right')
     expect(row?.target_temperature).toBe(78)
     expect(row?.is_powered).toBe(1)
+  })
+
+  it('does not expire a zero target level while heating duration remains', async () => {
+    await sync.sync(status({
+      side: 'right',
+      targetTemperature: 78,
+      currentLevel: 5,
+      targetLevel: 0,
+      heatingDuration: 100,
+    }))
+
+    expect(readSide('right')).toEqual(expect.objectContaining({
+      is_powered: 1,
+      target_temperature: 78,
+    }))
+  })
+
+  it('keeps a side off when its current level is zero during an active target', async () => {
+    await sync.sync(status({
+      side: 'right',
+      targetTemperature: 78,
+      currentLevel: 0,
+      targetLevel: 5,
+      heatingDuration: 100,
+    }))
+
+    expect(readSide('right')).toEqual(expect.objectContaining({
+      is_powered: 0,
+      powered_on_at: null,
+      target_temperature: 78,
+    }))
   })
 
   it('podVersion field on status payload is irrelevant to upsert', async () => {

@@ -332,6 +332,8 @@ describe('pumpStallGuard', () => {
 
     // Now three back-to-back healthy frames recover.
     await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(shouldBlock('left')).toBe(true)
+    expect(setPower).not.toHaveBeenCalledWith('left', true, expect.any(Number))
     await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
     await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
     expect(shouldBlock('left')).toBe(false)
