@@ -12,12 +12,17 @@ _cbor2_stub = type(sys)("cbor2")
 _common_stub = type(sys)("common")
 _raw_follower_stub = type(sys)("common.raw_follower")
 _raw_follower_stub.RawFileFollower = None
+_nats_follower_stub = type(sys)("common.nats_follower")
+_nats_follower_stub.create_follower = None
 _dialect_stub = type(sys)("common.dialect")
 # Pass-through stub: tests use already-normalized records, so identity is fine.
 _dialect_stub.normalize_bed_temp = lambda record, *a, **kw: record
+_dialect_stub.KNOWN_RECORD_TYPES = frozenset()
+_dialect_stub.warn_unknown_type_once = lambda *a, **kw: None
 sys.modules.setdefault("cbor2", _cbor2_stub)
 sys.modules.setdefault("common", _common_stub)
 sys.modules.setdefault("common.raw_follower", _raw_follower_stub)
+sys.modules.setdefault("common.nats_follower", _nats_follower_stub)
 sys.modules.setdefault("common.dialect", _dialect_stub)
 
 from main import (  # noqa: E402
