@@ -29,6 +29,7 @@ vi.mock('@/src/hardware/sharedClient', () => ({
 
 import * as dbModule from '@/src/db'
 import {
+  __test__,
   acknowledge,
   invalidateGuardSettingsCache,
   onFrame,
@@ -127,6 +128,7 @@ describe('pumpStallGuard', () => {
   })
   afterEach(() => {
     reset()
+    vi.restoreAllMocks()
   })
 
   it('does not trip when expectedActive is false (side off)', async () => {
@@ -151,6 +153,10 @@ describe('pumpStallGuard', () => {
     expect(setPower).toHaveBeenCalledWith('left', false)
     const notice = getPumpStallNotice('left')
     expect(notice?.rpm).toBe(100)
+    expect((biometricsSqlite as any).prepare('SELECT type, side FROM pump_alerts').get()).toEqual({
+      type: 'stall_left',
+      side: 'left',
+    })
   })
 
   it('does not trip when settings disable the guard', async () => {
@@ -176,6 +182,43 @@ describe('pumpStallGuard', () => {
     expect(shouldBlock('left')).toBe(false)
   })
 
+  it('treats RPM exactly at the trip threshold as healthy', async () => {
+    await onFrame({ side: 'left', rpm: 500, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 500, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+    expect(shouldBlock('left')).toBe(false)
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('refreshes cached settings at the exact five-second TTL boundary', () => {
+    let now = 10_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    expect(__test__.readSettings().threshold).toBe(500)
+    setSettings({ pump_stall_rpm_threshold: 777 })
+
+    now += 4_999
+    expect(__test__.readSettings().threshold).toBe(500)
+    now += 1
+    expect(__test__.readSettings().threshold).toBe(777)
+  })
+
+  it('uses the complete fail-safe defaults after a degraded settings read', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ;(sqlite as any).exec('DROP TABLE device_settings')
+    invalidateGuardSettingsCache()
+
+    expect(__test__.readSettings()).toEqual({
+      enabled: false,
+      threshold: 500,
+      dwellSamples: 2,
+      autoRecoveryEnabled: false,
+      recoveryRpm: 1500,
+      recoverySamples: 3,
+    })
+    warn.mockRestore()
+  })
+
   it('auto-recovers only when enabled and after recoverySamples healthy frames', async () => {
     setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
     invalidateGuardSettingsCache()
@@ -190,6 +233,20 @@ describe('pumpStallGuard', () => {
     expect(shouldBlock('left')).toBe(false)
     expect(setPower).toHaveBeenCalledWith('left', true, 78)
     expect(setTemperature).toHaveBeenCalledWith('left', 78, 28800)
+  })
+
+  it('counts RPM exactly at recoveryRpm as a healthy frame', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+    await onFrame({ side: 'left', rpm: 1500, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(shouldBlock('left')).toBe(true)
+    await onFrame({ side: 'left', rpm: 1500, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+    expect(shouldBlock('left')).toBe(false)
+    expect(setPower).toHaveBeenCalledWith('left', true, 78)
   })
 
   it('does not auto-recover when auto-recovery is disabled', async () => {
@@ -223,6 +280,20 @@ describe('pumpStallGuard', () => {
     reset('left')
     expect(shouldBlock('left')).toBe(false)
     expect(getPumpStallNotice('left')).toBeNull()
+  })
+
+  it('reset(side) preserves the other side guard and notification', async () => {
+    for (const side of ['left', 'right'] as const) {
+      await onFrame({ side, rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+      await onFrame({ side, rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    }
+
+    reset('left')
+
+    expect(shouldBlock('left')).toBe(false)
+    expect(getPumpStallNotice('left')).toBeNull()
+    expect(shouldBlock('right')).toBe(true)
+    expect(getPumpStallNotice('right')).not.toBeNull()
   })
 
   it('fails safe-off and warns when settings read throws', async () => {
@@ -261,6 +332,8 @@ describe('pumpStallGuard', () => {
 
     // Now three back-to-back healthy frames recover.
     await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(shouldBlock('left')).toBe(true)
+    expect(setPower).not.toHaveBeenCalledWith('left', true, expect.any(Number))
     await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
     await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
     expect(shouldBlock('left')).toBe(false)
@@ -274,6 +347,49 @@ describe('pumpStallGuard', () => {
 
     const notice = getPumpStallNotice('left')
     expect(notice?.restore).toEqual({ targetTemperature: 82, durationSeconds: 28800 })
+  })
+
+  it('does not warn when no device_state snapshot row exists', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ;(sqlite as any).exec('DELETE FROM device_state WHERE side = \'left\'')
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+
+    expect(shouldBlock('left')).toBe(true)
+    expect(warn.mock.calls.some(([message]) => String(message).includes('snapshot read failed'))).toBe(false)
+    warn.mockRestore()
+  })
+
+  it('persists the exact right-side trip snapshot, state, notice, and log', async () => {
+    const now = 1_720_000_123_987
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await onFrame({ side: 'right', rpm: 499, expectedActive: true, preStallTarget: 80, preStallDurationSeconds: 1234 })
+    await onFrame({ side: 'right', rpm: 499, expectedActive: true, preStallTarget: 80, preStallDurationSeconds: 1234 })
+
+    expect((sqlite as any).prepare('SELECT is_powered, powered_on_at, target_temperature FROM device_state WHERE side = ?').get('right')).toEqual({
+      is_powered: 0,
+      powered_on_at: null,
+      target_temperature: null,
+    })
+    expect((biometricsSqlite as any).prepare('SELECT timestamp, type, side, rpm, action, restore_target_temperature, restore_duration_seconds FROM pump_alerts').get()).toEqual({
+      timestamp: 1_720_000_123,
+      type: 'stall_right',
+      side: 'right',
+      rpm: 499,
+      action: 'power_off',
+      restore_target_temperature: 80,
+      restore_duration_seconds: 1234,
+    })
+    expect(getPumpStallNotice('right')).toEqual(expect.objectContaining({
+      trippedAt: 1_720_000_123,
+      rpm: 499,
+      restore: { targetTemperature: 80, durationSeconds: 1234 },
+    }))
+    expect(warning).toHaveBeenCalledWith('[pumpStallGuard] tripped right at 499 rpm — powering off until acknowledged')
+    warning.mockRestore()
   })
 
   it('warns when device_state snapshot read fails inside trip()', async () => {
@@ -569,6 +685,7 @@ describe('pumpStallGuard', () => {
   })
 
   it('falls back alertId to 0 when pump_alerts insert returns no row', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const origBioInsert = (dbModule.biometricsDb as any).insert.bind(dbModule.biometricsDb)
     ;(dbModule.biometricsDb as any).insert = () => ({
       values: () => ({
@@ -584,7 +701,9 @@ describe('pumpStallGuard', () => {
     expect(shouldBlock('left')).toBe(true)
     const { alertId } = acknowledge('left')
     expect(alertId).toBeNull()
+    expect(err).not.toHaveBeenCalledWith(expect.stringContaining('pump_alerts insert failed'), expect.anything())
     ;(dbModule.biometricsDb as any).insert = origBioInsert
+    err.mockRestore()
   })
 
   it('skips the alert update during auto-recover when activeAlertId is null', async () => {
@@ -615,5 +734,26 @@ describe('pumpStallGuard', () => {
     updateSpy.mockRestore()
     warn.mockRestore()
     err.mockRestore()
+  })
+
+  it('persists exact recovered device and alert state before clearing the guard', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 79, preStallDurationSeconds: 4321 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 79, preStallDurationSeconds: 4321 })
+    await onFrame({ side: 'left', rpm: 1500, expectedActive: true, preStallTarget: 79, preStallDurationSeconds: 4321 })
+    await onFrame({ side: 'left', rpm: 1500, expectedActive: true, preStallTarget: 79, preStallDurationSeconds: 4321 })
+
+    expect((sqlite as any).prepare('SELECT is_powered, target_temperature FROM device_state WHERE side = ?').get('left')).toEqual({
+      is_powered: 1,
+      target_temperature: 79,
+    })
+    const alert = (biometricsSqlite as any).prepare('SELECT action, acknowledged_at FROM pump_alerts').get()
+    expect(alert.action).toBe('auto_recovered')
+    expect(alert.acknowledged_at).toBeTypeOf('number')
+    expect(log).toHaveBeenCalledWith('[pumpStallGuard] auto-recovered left')
+    log.mockRestore()
   })
 })

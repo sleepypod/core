@@ -10,7 +10,7 @@
  * returns rows from a queue in that order.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deviceSettings, deviceState } from '@/src/db/schema'
 import { bedTemp, flowReadings, freezerTemp } from '@/src/db/biometrics-schema'
 
@@ -85,6 +85,10 @@ beforeEach(() => {
   rows.flow = []
   rows.freezer = []
   rows.bed = []
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('health.thermal verdicts', () => {
@@ -169,6 +173,87 @@ describe('health.thermal verdicts', () => {
     rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
     const res = await caller.thermal({})
     expect(res.sides[0].verdict).toBe('idle')
+  })
+
+  it('treats the exact freshness, rpm, and target-delta boundaries as flowing and on-target', async () => {
+    const now = new Date('2026-07-20T01:00:00Z').getTime()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 82, currentTemperature: 80, isAlarmVibrating: false, poweredOnAt: null }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{
+      timestamp: new Date(now - 180_000),
+      leftPumpRpm: 100,
+      rightPumpRpm: 0,
+      leftFlowrateCd: 1,
+      rightFlowrateCd: 0,
+    }]
+
+    const left = (await caller.thermal({})).sides[0]
+    expect(left.readingAgeSec).toBe(180)
+    expect(left.pumpRpm).toBe(100)
+    expect(left.verdict).toBe('idle')
+  })
+
+  it('maps asymmetric flow, water, and bed fields to the correct side', async () => {
+    const poweredOnAt = new Date('2026-07-19T23:00:00Z')
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 80, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt }],
+      [{ side: 'right', isPowered: true, targetTemperature: 75, currentTemperature: 74, isAlarmVibrating: true, poweredOnAt }],
+    ]
+    rows.flow = [{
+      timestamp: FRESH,
+      leftPumpRpm: 111,
+      rightPumpRpm: 222,
+      leftFlowrateCd: 333,
+      rightFlowrateCd: 444,
+    }]
+    rows.freezer = [{
+      leftWaterTemp: 1000,
+      rightWaterTemp: 2000,
+      heatsinkTemp: null,
+      ambientTemp: null,
+    }]
+    rows.bed = [{ leftCenterTemp: 1500, rightCenterTemp: 2500 }]
+
+    const result = await caller.thermal({})
+    expect(result.sides).toEqual([
+      expect.objectContaining({
+        side: 'left',
+        pumpRpm: 111,
+        flowrate: 333,
+        waterTempF: 50,
+        bedSurfaceTempF: 59,
+        isAlarmVibrating: false,
+        poweredOnAt: poweredOnAt.toISOString(),
+      }),
+      expect.objectContaining({
+        side: 'right',
+        pumpRpm: 222,
+        flowrate: 444,
+        waterTempF: 68,
+        bedSurfaceTempF: 77,
+        isAlarmVibrating: true,
+        poweredOnAt: poweredOnAt.toISOString(),
+      }),
+    ])
+  })
+
+  it('defaults absent settings and device-state flags to false', async () => {
+    rows.settings = []
+    rows.deviceStateQueue = [[], []]
+    const result = await caller.thermal({})
+    expect(result.pumpStallProtectionEnabled).toBe(false)
+    expect(result.sides.map(side => ({
+      isPowered: side.isPowered,
+      isAlarmVibrating: side.isAlarmVibrating,
+      poweredOnAt: side.poweredOnAt,
+      verdict: side.verdict,
+    }))).toEqual([
+      { isPowered: false, isAlarmVibrating: false, poweredOnAt: null, verdict: 'off' },
+      { isPowered: false, isAlarmVibrating: false, poweredOnAt: null, verdict: 'off' },
+    ])
   })
 
   it('converts centi-°C water/bed/ambient sensors to °F and surfaces guard + settings flags', async () => {

@@ -1,6 +1,11 @@
 import { is, SQL } from 'drizzle-orm'
-import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core'
+import {
+  getTableConfig,
+  SQLiteSyncDialect,
+  type SQLiteTable,
+} from 'drizzle-orm/sqlite-core'
 import { describe, expect, it } from 'vitest'
+import * as biometricsSchema from '../biometrics-schema'
 import * as schema from '../schema'
 
 // These tests pin the drizzle table definitions in schema.ts: table names,
@@ -65,6 +70,94 @@ function describeTable(table: SQLiteTable): TableSpec {
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),
   }
+}
+
+const dialect = new SQLiteSyncDialect()
+
+function describeExactDefault(
+  column: ReturnType<typeof getTableConfig>['columns'][number],
+): DefaultDescriptor | 'auto' | 'fn:Date' | `fn:${string}` | `sql:${string}` {
+  if (!column.hasDefault) return undefined
+  if (is(column.default, SQL)) {
+    return `sql:${dialect.sqlToQuery(column.default).sql}`
+  }
+  if (column.default !== undefined) return column.default as DefaultDescriptor
+  if (column.defaultFn) {
+    const value = column.defaultFn()
+    return value instanceof Date ? 'fn:Date' : `fn:${JSON.stringify(value)}`
+  }
+  return 'auto'
+}
+
+/**
+ * Normalize every observable Drizzle schema attribute into deterministic data.
+ * The external snapshot is deliberately exhaustive: table/column names and
+ * order, logical and physical types, exact defaults, nullability, enum values,
+ * primary/unique/autoincrement flags, indexes, foreign keys, and the absence of
+ * table-level constraints are all part of the database contract.
+ */
+function describeExactTable(table: SQLiteTable) {
+  const config = getTableConfig(table)
+  return {
+    name: config.name,
+    columns: config.columns.map((column) => {
+      const defaultValue = describeExactDefault(column)
+      const autoIncrement = 'autoIncrement' in column
+        ? Boolean(column.autoIncrement)
+        : false
+      return [
+        column.name,
+        `sql:${column.getSQLType()}`,
+        `logical:${column.dataType}/${column.columnType}`,
+        column.notNull ? 'not-null' : 'nullable',
+        `default:${defaultValue === undefined ? 'none' : String(defaultValue)}`,
+        column.primary ? 'primary-key' : 'not-primary-key',
+        column.isUnique ? `unique:${column.uniqueName}` : 'not-unique',
+        autoIncrement ? 'autoincrement' : 'not-autoincrement',
+        `enum:${column.enumValues?.join(',') ?? 'none'}`,
+      ].join(' | ')
+    }),
+    indexes: config.indexes
+      .map((index) => {
+        const columns = index.config.columns.map(column => (
+          'name' in column ? column.name : dialect.sqlToQuery(column).sql
+        )).join(',')
+        const where = index.config.where
+          ? dialect.sqlToQuery(index.config.where).sql
+          : 'none'
+        return `${index.config.name} | ${index.config.unique ? 'unique' : 'non-unique'} | columns:${columns} | where:${where}`
+      })
+      .sort(),
+    foreignKeys: config.foreignKeys
+      .map((foreignKey) => {
+        const reference = foreignKey.reference()
+        const columns = reference.columns.map(column => column.name).join(',')
+        const foreignColumns = reference.foreignColumns.map(column => column.name).join(',')
+        const foreignTable = getTableConfig(reference.foreignTable).name
+        return `${foreignKey.getName()} | columns:${columns} | references:${foreignTable}(${foreignColumns}) | on-delete:${foreignKey.onDelete ?? 'none'} | on-update:${foreignKey.onUpdate ?? 'none'}`
+      })
+      .sort(),
+    primaryKeys: config.primaryKeys
+      .map(primaryKey => `${primaryKey.getName()} | columns:${primaryKey.columns.map(column => column.name).join(',')}`)
+      .sort(),
+    uniqueConstraints: config.uniqueConstraints
+      .map(unique => `${unique.getName() ?? 'unnamed'} | columns:${unique.columns.map(column => column.name).join(',')}`)
+      .sort(),
+    checks: config.checks.length,
+  }
+}
+
+function describeSchema(module: Record<string, unknown>) {
+  return Object.entries(module)
+    .flatMap(([exportName, value]) => {
+      try {
+        return [{ exportName, ...describeExactTable(value as SQLiteTable) }]
+      }
+      catch {
+        return []
+      }
+    })
+    .sort((a, b) => a.exportName.localeCompare(b.exportName))
 }
 
 const expectedTables: Record<string, TableSpec> = {
@@ -291,5 +384,15 @@ describe('db schema definitions', () => {
       .map(([k]) => k)
       .sort()
     expect(actualTableExports).toEqual(Object.keys(expectedTables).sort())
+  })
+})
+
+describe('complete Drizzle schema contracts', () => {
+  it('pins every main-database table, column, type, default, and constraint', () => {
+    expect(describeSchema(schema)).toMatchSnapshot()
+  })
+
+  it('pins every biometrics table, column, type, default, and constraint', () => {
+    expect(describeSchema(biometricsSchema)).toMatchSnapshot()
   })
 })

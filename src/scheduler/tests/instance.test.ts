@@ -85,16 +85,23 @@ describe('scheduler/instance', () => {
   })
 
   afterEach(async () => {
-    // Best-effort cleanup so a leaked instance from one test can't bleed into
-    // the next module-load. vi.resetModules() in freshModule() handles the
-    // rest.
-    const mod = await import('../instance')
-    await mod.shutdownJobManager().catch(() => {})
+    try {
+      // Best-effort cleanup so a leaked instance from one test can't bleed into
+      // the next module-load. vi.resetModules() in freshModule() handles the
+      // rest.
+      const mod = await import('../instance')
+      await mod.shutdownJobManager().catch(() => {})
+    }
+    finally {
+      vi.restoreAllMocks()
+    }
   })
 
   it('falls back to America/Los_Angeles when device_settings row is missing', async () => {
     const mod = await freshModule()
     dbBehavior = async () => [] // no rows
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const m = await mod.getJobManager()
 
@@ -102,6 +109,7 @@ describe('scheduler/instance', () => {
     expect(ctorMock).toHaveBeenCalledWith('America/Los_Angeles')
     expect((m as any).timezone).toBe('America/Los_Angeles')
     expect(loadSchedulesMock).toHaveBeenCalledTimes(1)
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('uses the timezone stored in device_settings when present', async () => {
@@ -132,8 +140,36 @@ describe('scheduler/instance', () => {
     await mod.getJobManager()
 
     expect(ctorMock).toHaveBeenCalledWith('America/Los_Angeles')
-    expect(warnSpy).toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Failed to load timezone from database, using default:',
+      'db down',
+    )
     warnSpy.mockRestore()
+  })
+
+  it('logs the raw value when timezone loading throws a non-Error', async () => {
+    const mod = await freshModule()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    dbBehavior = async () => {
+      throw 'plain failure'
+    }
+
+    await mod.getJobManager()
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Failed to load timezone from database, using default:',
+      'plain failure',
+    )
+  })
+
+  it('logs the exact initialized timezone', async () => {
+    const mod = await freshModule()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    dbBehavior = async () => [{ timezone: 'Asia/Tokyo' }]
+
+    await mod.getJobManager()
+
+    expect(log).toHaveBeenCalledWith('JobManager initialized with timezone:', 'Asia/Tokyo')
   })
 
   it('returns the same instance on the second call (idempotent)', async () => {
@@ -265,6 +301,16 @@ describe('scheduler/instance', () => {
     expect(ctorMock).toHaveBeenCalledTimes(2)
     expect(dbReads).toBe(1)
     expect(ctorMock).toHaveBeenNthCalledWith(2, 'Europe/Paris')
+  })
+
+  it('logs the exact shutdown message after an initialized manager stops', async () => {
+    const mod = await freshModule()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await mod.getJobManager()
+
+    await mod.shutdownJobManager()
+
+    expect(log).toHaveBeenCalledWith('JobManager shut down')
   })
 
   it('shutdownJobManager is a no-op when no instance exists', async () => {

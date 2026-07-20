@@ -105,6 +105,39 @@ describe('useDualSideData', () => {
     expect(calls.every((c: any[]) => c[1].enabled === false)).toBe(true)
   })
 
+  it('enables every data category by default for both active sides', () => {
+    renderHook(() => useDualSideData())
+    for (const method of Object.values(trpcMock.biometrics) as any[]) {
+      expect(method.useQuery.mock.calls).toHaveLength(2)
+      expect(method.useQuery.mock.calls.every((call: any[]) => call[1].enabled === true)).toBe(true)
+    }
+  })
+
+  it('passes date ranges and per-category limits to both sides', () => {
+    const startDate = new Date('2026-01-01T00:00:00Z')
+    const endDate = new Date('2026-01-02T00:00:00Z')
+    renderHook(() => useDualSideData({
+      startDate,
+      endDate,
+      vitalsLimit: 11,
+      sleepLimit: 12,
+      movementLimit: 13,
+    }))
+
+    expect(trpcMock.biometrics.getVitals.useQuery).toHaveBeenCalledWith(
+      { side: 'left', startDate, endDate, limit: 11 },
+      { enabled: true },
+    )
+    expect(trpcMock.biometrics.getSleepRecords.useQuery).toHaveBeenCalledWith(
+      { side: 'right', startDate, endDate, limit: 12 },
+      { enabled: true },
+    )
+    expect(trpcMock.biometrics.getMovement.useQuery).toHaveBeenCalledWith(
+      { side: 'left', startDate, endDate, limit: 13 },
+      { enabled: true },
+    )
+  })
+
   it('respects the global enabled=false flag', () => {
     renderHook(() => useDualSideData({ enabled: false }))
     const allEnabled = Object.values(trpcMock.biometrics)
@@ -142,6 +175,21 @@ describe('useDualSideData', () => {
     expect(result.current.sleepRecords[1].side).toBe('left')
   })
 
+  it('merges movement from both sides ascending by timestamp', () => {
+    trpcMock.overrides.set('getMovement:left', {
+      data: [
+        { id: 1, timestamp: new Date('2026-01-01T10:00:00Z'), totalMovement: 10 },
+        { id: 2, timestamp: new Date('2026-01-01T06:00:00Z'), totalMovement: 20 },
+      ],
+    })
+    trpcMock.overrides.set('getMovement:right', {
+      data: [{ id: 3, timestamp: new Date('2026-01-01T08:00:00Z'), totalMovement: 30 }],
+    })
+    const { result } = renderHook(() => useDualSideData())
+    expect(result.current.movement.map(m => m.id)).toEqual([2, 3, 1])
+    expect(result.current.movement.map(m => m.side)).toEqual(['left', 'right', 'left'])
+  })
+
   it('emits one entry per active side in vitalsSummaries and sleepStages', () => {
     trpcMock.overrides.set('getVitalsSummary:left', {
       data: { avgHeartRate: 60, minHeartRate: 50, maxHeartRate: 70, avgHRV: 40, avgBreathingRate: 14, recordCount: 10 },
@@ -156,10 +204,78 @@ describe('useDualSideData', () => {
     expect(result.current.sleepStages[0]).toMatchObject({ side: 'right', qualityScore: 80 })
   })
 
+  it('labels right summaries and left sleep stages', () => {
+    trpcMock.overrides.set('getVitalsSummary:right', {
+      data: { avgHeartRate: 70, minHeartRate: 60, maxHeartRate: 80, avgHRV: 45, avgBreathingRate: 16, recordCount: 12 },
+    })
+    trpcMock.overrides.set('getSleepStages:left', {
+      data: { epochs: [], blocks: [], distribution: { wake: 0, light: 0, deep: 0, rem: 0 }, qualityScore: 90, totalSleepMs: 0, sleepRecordId: null, enteredBedAt: null, leftBedAt: null },
+    })
+    const { result } = renderHook(() => useDualSideData())
+    expect(result.current.vitalsSummaries).toEqual([
+      expect.objectContaining({ side: 'right', avgHeartRate: 70 }),
+    ])
+    expect(result.current.sleepStages).toEqual([
+      expect.objectContaining({ side: 'left', qualityScore: 90 }),
+    ])
+  })
+
+  it('recomputes every derived collection when query data arrives', () => {
+    const { result, rerender } = renderHook(() => useDualSideData())
+    expect(result.current.vitals).toEqual([])
+
+    trpcMock.overrides.set('getVitals:left', {
+      data: [{ id: 1, timestamp: new Date('2026-01-01T01:00:00Z') }],
+    })
+    trpcMock.overrides.set('getSleepRecords:left', {
+      data: [{ id: 2, enteredBedAt: new Date('2026-01-01T01:00:00Z') }],
+    })
+    trpcMock.overrides.set('getMovement:left', {
+      data: [{ id: 3, timestamp: new Date('2026-01-01T01:00:00Z') }],
+    })
+    trpcMock.overrides.set('getVitalsSummary:left', {
+      data: { avgHeartRate: 60 },
+    })
+    trpcMock.overrides.set('getSleepStages:left', {
+      data: { qualityScore: 75 },
+    })
+    rerender()
+
+    expect(result.current.vitals).toHaveLength(1)
+    expect(result.current.sleepRecords).toHaveLength(1)
+    expect(result.current.movement).toHaveLength(1)
+    expect(result.current.vitalsSummaries).toHaveLength(1)
+    expect(result.current.sleepStages).toHaveLength(1)
+  })
+
   it('aggregates loading state across active queries', () => {
     trpcMock.overrides.set('getVitals:left', { isLoading: true, fetchStatus: 'fetching' })
     const { result } = renderHook(() => useDualSideData())
     expect(result.current.isLoading).toBe(true)
+  })
+
+  it.each([
+    'getVitals',
+    'getSleepRecords',
+    'getMovement',
+    'getVitalsSummary',
+    'getSleepStages',
+  ])('includes %s in loading aggregation', (method) => {
+    trpcMock.overrides.set(`${method}:left`, { isLoading: true, fetchStatus: 'fetching' })
+    const { result } = renderHook(() => useDualSideData())
+    expect(result.current.isLoading).toBe(true)
+  })
+
+  it('does not report loading for an idle query even if its loading flag is set', () => {
+    trpcMock.overrides.set('getVitals:left', { isLoading: true, fetchStatus: 'idle' })
+    const { result } = renderHook(() => useDualSideData())
+    expect(result.current.isLoading).toBe(false)
+  })
+
+  it('does not report loading from fetch status alone', () => {
+    trpcMock.overrides.set('getVitals:left', { isLoading: false, fetchStatus: 'fetching' })
+    const { result } = renderHook(() => useDualSideData())
+    expect(result.current.isLoading).toBe(false)
   })
 
   it('aggregates error state and surfaces error messages', () => {
@@ -167,6 +283,7 @@ describe('useDualSideData', () => {
     const { result } = renderHook(() => useDualSideData())
     expect(result.current.isError).toBe(true)
     expect(result.current.errors).toContain('left vitals failed')
+    expect(result.current.errors).toEqual(['left vitals failed'])
   })
 
   it('falls back to "Unknown error" when error has no message', () => {
@@ -178,7 +295,7 @@ describe('useDualSideData', () => {
   it('refetch fires refetch on every active query', () => {
     const { result } = renderHook(() => useDualSideData())
     result.current.refetch()
-    expect(trpcMock.refetch).toHaveBeenCalled()
+    expect(trpcMock.refetch).toHaveBeenCalledTimes(10)
   })
 })
 
@@ -201,8 +318,8 @@ describe('useDualSideData utility helpers', () => {
       { side: 'right' as const, value: 2 },
     ]
     const grouped = groupBySide(data)
-    expect(grouped.left).toHaveLength(1)
-    expect(grouped.right).toHaveLength(1)
+    expect(grouped.left).toEqual([{ side: 'left', value: 1 }])
+    expect(grouped.right).toEqual([{ side: 'right', value: 2 }])
   })
 
   it('getSideColor returns sky/violet primary and muted variants', () => {
@@ -214,8 +331,11 @@ describe('useDualSideData utility helpers', () => {
 
   it('getSideColorClass returns the right Tailwind class per type', () => {
     expect(getSideColorClass('left')).toBe('text-sky-400')
+    expect(getSideColorClass('left', 'bg')).toBe('bg-sky-400')
     expect(getSideColorClass('right', 'bg')).toBe('bg-violet-400')
     expect(getSideColorClass('left', 'border')).toBe('border-sky-400')
+    expect(getSideColorClass('right', 'text')).toBe('text-violet-400')
+    expect(getSideColorClass('right', 'border')).toBe('border-violet-400')
   })
 
   it('getSideLabel returns Left/Right', () => {

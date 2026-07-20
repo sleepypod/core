@@ -30,6 +30,14 @@ afterEach(() => {
 })
 
 describe('useTemperatureUnit', () => {
+  it('refreshes the temperature preference once per minute', () => {
+    renderHook(() => useTemperatureUnit())
+    expect(trpcMock.trpc.settings.getAll.useQuery).toHaveBeenLastCalledWith(
+      {},
+      { staleTime: 60_000, refetchInterval: 60_000 },
+    )
+  })
+
   it('defaults to Fahrenheit when settings are unavailable', () => {
     const { result } = renderHook(() => useTemperatureUnit())
     expect(result.current.unit).toBe('F')

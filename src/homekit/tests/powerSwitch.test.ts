@@ -25,8 +25,9 @@ const status: DeviceStatus = {
   sensorLabel: 'pod4',
 }
 
-const fakeMonitor: Pick<DacMonitor, 'on' | 'getLastStatus'> = {
+const fakeMonitor: Pick<DacMonitor, 'on' | 'off' | 'getLastStatus'> = {
   on: vi.fn().mockReturnThis() as never,
+  off: vi.fn().mockReturnThis() as never,
   getLastStatus: () => status,
 }
 
@@ -35,6 +36,13 @@ describe('powerSwitch accessory', () => {
     __resetSideController()
     setPower.mockClear()
     registerManualOverride.mockClear()
+  })
+
+  it.each(['left', 'right'] as const)('uses stable metadata for the %s side', (side) => {
+    const { service, stop } = buildPowerSwitch(side, fakeMonitor as DacMonitor)
+    expect(service.displayName).toBe(`Bed ${side} power`)
+    expect(service.subtype).toBe(`power-${side}`)
+    stop()
   })
 
   it('On.onGet reflects targetLevel !== 0', async () => {

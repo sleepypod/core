@@ -213,6 +213,27 @@ describe('DeviceStateSync — mutation freshness window', () => {
     expect(readSide('right')?.is_powered).toBe(0)
   })
 
+  it('expires mutation freshness at exactly 5000ms', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-09T12:00:00Z'))
+    seedSide('right', true, 83)
+    markSideMutated('right')
+    vi.advanceTimersByTime(5_000)
+
+    await sync.sync(status({
+      side: 'right',
+      currentLevel: 0,
+      targetLevel: 0,
+      heatingDuration: 0,
+    }))
+
+    expect(readSide('right')).toEqual(expect.objectContaining({
+      is_powered: 0,
+      target_temperature: null,
+      powered_on_at: null,
+    }))
+  })
+
   it('does not affect the opposite side', async () => {
     seedSide('left', true, 80)
     seedSide('right', false, null)
@@ -264,6 +285,26 @@ describe('DeviceStateSync — mutation freshness window', () => {
     const row = readSide('right')
     expect(row?.is_powered).toBe(0)
     expect(row?.target_temperature).toBeNull()
+  })
+
+  it('inserts observation fields for a fresh mutation with no prior state row', async () => {
+    markSideMutated('right')
+
+    await sync.sync(status({
+      side: 'right',
+      currentTemperature: 80,
+      targetTemperature: 78,
+      currentLevel: 5,
+      targetLevel: 5,
+      heatingDuration: 100,
+    }))
+
+    expect(readSide('right')).toEqual(expect.objectContaining({
+      current_temperature: 80,
+      is_powered: 0,
+      powered_on_at: null,
+      target_temperature: null,
+    }))
   })
 })
 
@@ -335,6 +376,27 @@ describe('DeviceStateSync — power transition stamps poweredOnAt', () => {
     expect(row?.powered_on_at).toBeNull()
   })
 
+  it('leaves poweredOnAt null across a stable OFF→OFF poll', async () => {
+    seedSide('right', false, null)
+
+    await sync.sync(status({ side: 'right', currentLevel: 0, targetLevel: 0, heatingDuration: 0 }))
+
+    expect(readSide('right')?.powered_on_at).toBeNull()
+  })
+
+  it('preserves poweredOnAt across a stable ON→ON poll', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-09T12:00:00Z'))
+    seedSide('right', true, 80)
+    const before = readSide('right')?.powered_on_at
+    vi.advanceTimersByTime(10_000)
+
+    await sync.sync(status({ side: 'right', currentLevel: 5, targetLevel: 5, heatingDuration: 100 }))
+
+    expect(readSide('right')?.powered_on_at).toBe(before)
+    vi.useRealTimers()
+  })
+
   it('initial sync with no prior row treats wasPowered as false', async () => {
     // No seed; row absent
     await sync.sync(status({
@@ -383,6 +445,13 @@ describe('DeviceStateSync — getAlarmState', () => {
     expect(getAlarmState()).toEqual({ left: true, right: false })
   })
 
+  it('maps each alarm side correctly regardless of database row order', () => {
+    setAlarmVibrating('right', true)
+    setAlarmVibrating('left', false)
+
+    expect(getAlarmState()).toEqual({ left: false, right: true })
+  })
+
   it('defaults to false for sides not yet present in DB', () => {
     // No rows present at all
     expect(getAlarmState()).toEqual({ left: false, right: false })
@@ -393,7 +462,10 @@ describe('DeviceStateSync — getAlarmState', () => {
     ;(sqlite as any).exec(`DROP TABLE device_state`)
 
     expect(getAlarmState()).toEqual({ left: false, right: false })
-    expect(errSpy).toHaveBeenCalled()
+    expect(errSpy).toHaveBeenCalledWith(
+      'getAlarmState: failed to read alarm state from DB, falling back to false:',
+      expect.any(String),
+    )
     errSpy.mockRestore()
   })
 })
@@ -423,8 +495,8 @@ describe('DeviceStateSync — recordWaterLevel', () => {
     await sync.sync(status({ side: 'right' }))
     expect(readWaterLevels().length).toBe(1)
 
-    // After 60s — writes again.
-    vi.setSystemTime(new Date('2026-05-09T12:01:01Z'))
+    // At exactly 60s — writes again.
+    vi.setSystemTime(new Date('2026-05-09T12:01:00Z'))
     await sync.sync(status({ side: 'right' }))
     expect(readWaterLevels().length).toBe(2)
   })
@@ -496,8 +568,8 @@ describe('DeviceStateSync — recordFlowData', () => {
     sync.recordFlowData(frzHealthFrame({ leftFlow: 1.5, rightFlow: 1.5 }))
     expect(readFlowReadings().length).toBe(1)
 
-    // After 60s → writes again
-    vi.setSystemTime(new Date('2026-05-09T12:01:01Z'))
+    // At exactly 60s → writes again
+    vi.setSystemTime(new Date('2026-05-09T12:01:00Z'))
     sync.recordFlowData(frzHealthFrame({ leftFlow: 1.5, rightFlow: 1.5 }))
     expect(readFlowReadings().length).toBe(2)
   })
@@ -650,13 +722,33 @@ describe('DeviceStateSync — flow anomaly detection', () => {
     const types = anomalyTypes()
     expect(types).toContain('left_flowrate_missing')
     expect(types).toContain('right_flowrate_missing')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] left_flowrate_missing: Left pump running at 100 RPM but flowrate unavailable')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] right_flowrate_missing: Right pump running at 200 RPM but flowrate unavailable')
+  })
+
+  it('warns for missing flow at exactly 50 RPM on either side but not at 49 RPM', () => {
+    sync.recordFlowData(frame({ leftRpm: 49, leftFlow: null, rightRpm: 49, rightFlow: null }))
+    expect(anomalyTypes()).not.toContain('left_flowrate_missing')
+    expect(anomalyTypes()).not.toContain('right_flowrate_missing')
+
+    sync.recordFlowData(frame({ leftRpm: 50, leftFlow: null, rightRpm: 50, rightFlow: null }))
+    expect(anomalyTypes()).toContain('left_flowrate_missing')
+    expect(anomalyTypes()).toContain('right_flowrate_missing')
   })
 
   it('warns when pump runs but flowrate is near zero', () => {
-    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 0.01, rightRpm: 100, rightFlow: 0.02 }))
+    sync.recordFlowData(frame({ leftRpm: 50, leftFlow: 0.01, rightRpm: 50, rightFlow: 0.02 }))
     const types = anomalyTypes()
     expect(types).toContain('left_pump_no_flow')
     expect(types).toContain('right_pump_no_flow')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] left_pump_no_flow: Left pump running at 50 RPM but flowrate near zero (1 cd)')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] right_pump_no_flow: Right pump running at 50 RPM but flowrate near zero (2 cd)')
+  })
+
+  it('treats exactly 5cd as non-zero flow on both sides', () => {
+    sync.recordFlowData(frame({ leftRpm: 50, leftFlow: 0.05, rightRpm: 50, rightFlow: -0.05 }))
+    expect(anomalyTypes()).not.toContain('left_pump_no_flow')
+    expect(anomalyTypes()).not.toContain('right_pump_no_flow')
   })
 
   it('does NOT warn no-flow when pump is below RPM minimum', () => {
@@ -669,6 +761,23 @@ describe('DeviceStateSync — flow anomaly detection', () => {
     // 5.0 vs 1.0 → 500cd vs 100cd, diff 400 > 300 threshold
     sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 5.0, rightRpm: 100, rightFlow: 1.0 }))
     expect(anomalyTypes()).toContain('flow_asymmetry')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] flow_asymmetry: Left/right flowrate diverged: 500 vs 100 cd')
+  })
+
+  it('does not warn for exactly 300cd divergence or equal high flows', () => {
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 4.0, rightRpm: 100, rightFlow: 1.0 }))
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 2.0, rightRpm: 100, rightFlow: 2.0 }))
+    expect(anomalyTypes()).not.toContain('flow_asymmetry')
+  })
+
+  it('requires each side to exceed 5cd before reporting asymmetry', () => {
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 4.0, rightRpm: 100, rightFlow: 0.05 }))
+    expect(anomalyTypes()).not.toContain('flow_asymmetry')
+  })
+
+  it('requires the left side to exceed, not merely equal, the 5cd asymmetry floor', () => {
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 0.05, rightRpm: 100, rightFlow: 4.0 }))
+    expect(anomalyTypes()).not.toContain('flow_asymmetry')
   })
 
   it('does NOT warn asymmetry when one side is near-zero', () => {
@@ -685,6 +794,15 @@ describe('DeviceStateSync — flow anomaly detection', () => {
     const types = anomalyTypes()
     expect(types).toContain('left_flow_spike')
     expect(types).toContain('right_flow_spike')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] left_flow_spike: Left flowrate sudden change: 100 -> 700 cd (delta 600)')
+    expect(warnSpy).toHaveBeenCalledWith('[FlowAnomaly] right_flow_spike: Right flowrate sudden change: 100 -> 700 cd (delta 600)')
+  })
+
+  it('does not report an exact 500cd delta on either side', () => {
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 1.0, rightRpm: 100, rightFlow: 1.0 }))
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: 6.0, rightRpm: 100, rightFlow: 6.0 }))
+    expect(anomalyTypes()).not.toContain('left_flow_spike')
+    expect(anomalyTypes()).not.toContain('right_flow_spike')
   })
 
   it('rate-limits repeated anomaly warnings of the same type', () => {
@@ -704,6 +822,14 @@ describe('DeviceStateSync — flow anomaly detection', () => {
     vi.setSystemTime(new Date('2026-05-09T12:06:00Z'))
     sync.recordFlowData(frame({ leftRpm: 100, leftFlow: null, rightRpm: 0, rightFlow: 0.5 }))
     expect(anomalyTypes().filter(t => t === 'left_flowrate_missing').length).toBe(2)
+  })
+
+  it('emits a repeated warning at the exact five-minute cooldown boundary', () => {
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: null, rightRpm: 0, rightFlow: 0.5 }))
+    vi.setSystemTime(new Date('2026-05-09T12:05:00Z'))
+    sync.recordFlowData(frame({ leftRpm: 100, leftFlow: null, rightRpm: 0, rightFlow: 0.5 }))
+
+    expect(anomalyTypes().filter(type => type === 'left_flowrate_missing')).toHaveLength(2)
   })
 })
 
@@ -744,6 +870,37 @@ describe('DeviceStateSync — sync targetTemperature behaviour without mutation'
     const row = readSide('right')
     expect(row?.target_temperature).toBe(78)
     expect(row?.is_powered).toBe(1)
+  })
+
+  it('does not expire a zero target level while heating duration remains', async () => {
+    await sync.sync(status({
+      side: 'right',
+      targetTemperature: 78,
+      currentLevel: 5,
+      targetLevel: 0,
+      heatingDuration: 100,
+    }))
+
+    expect(readSide('right')).toEqual(expect.objectContaining({
+      is_powered: 1,
+      target_temperature: 78,
+    }))
+  })
+
+  it('keeps a side off when its current level is zero during an active target', async () => {
+    await sync.sync(status({
+      side: 'right',
+      targetTemperature: 78,
+      currentLevel: 0,
+      targetLevel: 5,
+      heatingDuration: 100,
+    }))
+
+    expect(readSide('right')).toEqual(expect.objectContaining({
+      is_powered: 0,
+      powered_on_at: null,
+      target_temperature: 78,
+    }))
   })
 
   it('podVersion field on status payload is irrelevant to upsert', async () => {

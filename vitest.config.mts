@@ -4,8 +4,19 @@ import react from '@vitejs/plugin-react'
 import tsconfigPaths from 'vite-tsconfig-paths'
 import { defineConfig } from 'vitest/config'
 
+const serverOnlyTestStub = '\0server-only-test-stub'
+
 export default defineConfig({
-  plugins: [tsconfigPaths(), react({
+  plugins: [{
+    name: 'server-only-test-stub',
+    enforce: 'pre',
+    resolveId(id) {
+      if (id === 'server-only') return serverOnlyTestStub
+    },
+    load(id) {
+      if (id === serverOnlyTestStub) return 'export {}'
+    },
+  }, tsconfigPaths(), react({
     babel: {
       plugins: ['@lingui/babel-plugin-lingui-macro'],
     },

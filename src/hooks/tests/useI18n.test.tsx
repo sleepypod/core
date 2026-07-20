@@ -5,7 +5,7 @@
  */
 
 import { renderHook } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const linguiMock = vi.hoisted(() => {
   const i18n = {
@@ -20,6 +20,10 @@ vi.mock('@lingui/react', () => ({ useLingui: linguiMock.useLingui }))
 import { useI18n } from '../useI18n'
 
 describe('useI18n', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('returns the i18n instance and locale', () => {
     const { result } = renderHook(() => useI18n())
     expect(result.current.i18n).toBe(linguiMock.i18n)

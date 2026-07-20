@@ -48,6 +48,9 @@ const dbState = vi.hoisted(() => ({
   txRowsQueue: [] as unknown[][],
   // Sequential queue for db.update().set().where() awaitable result (lifecycle revert path)
   topUpdateQueue: [] as Array<unknown>,
+  // Recorded .set(payload) arguments so tests can pin what actually gets written
+  txSetCalls: [] as unknown[],
+  topSetCalls: [] as unknown[],
   popTop(): unknown[] { return dbState.topRowsQueue.shift() ?? [] },
   popTx(): unknown[] { return dbState.txRowsQueue.shift() ?? [] },
 }))
@@ -60,7 +63,10 @@ const dbMock = vi.hoisted(() => {
     chain.where = vi.fn(() => chain)
     chain.limit = vi.fn(() => chain)
     chain.from = vi.fn(() => chain)
-    chain.set = vi.fn(() => chain)
+    chain.set = vi.fn((payload: unknown) => {
+      dbState.topSetCalls.push(payload)
+      return chain
+    })
     return chain
   }
 
@@ -71,7 +77,10 @@ const dbMock = vi.hoisted(() => {
     chain.limit = vi.fn(() => chain)
     chain.from = vi.fn(() => chain)
     chain.values = vi.fn(() => chain)
-    chain.set = vi.fn(() => chain)
+    chain.set = vi.fn((payload: unknown) => {
+      dbState.txSetCalls.push(payload)
+      return chain
+    })
     chain.returning = vi.fn(() => chain)
     chain.all = vi.fn(() => dbState.popTx())
     chain.run = vi.fn(() => undefined)
@@ -124,6 +133,8 @@ beforeEach(() => {
   homekitMock.disable.mockReset().mockResolvedValue(undefined)
   dbState.topRowsQueue.length = 0
   dbState.txRowsQueue.length = 0
+  dbState.txSetCalls.length = 0
+  dbState.topSetCalls.length = 0
   dbMock.select.mockClear()
   dbMock.update.mockClear()
   dbMock.transaction.mockClear()
@@ -341,7 +352,7 @@ describe('settings.updateDevice', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await caller.updateDevice({ ledDayBrightness: 80 })
-    expect(errorSpy).toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith('LED brightness immediate apply failed:', expect.any(Error))
     errorSpy.mockRestore()
   })
 
@@ -570,7 +581,7 @@ describe('settings.updateDevice — extra branches', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const result = await caller.updateDevice({ timezone: 'America/New_York' })
     expect(result.timezone).toBe('America/New_York')
-    expect(errorSpy).toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith('Scheduler update failed:', expect.any(Error))
     errorSpy.mockRestore()
   })
 
@@ -591,7 +602,7 @@ describe('settings.updateDevice — extra branches', () => {
     })
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await caller.updateDevice({ globalMaxOnHours: 12 })
-    expect(errorSpy).toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith('autoOff restart failed:', expect.any(Error))
     errorSpy.mockRestore()
   })
 
@@ -640,7 +651,7 @@ describe('settings.updateSide — extra branches', () => {
     })
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await caller.updateSide({ side: 'left', awayReturn: '2025-01-02T00:00:00Z' })
-    expect(errorSpy).toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith('Scheduler update failed:', expect.any(Error))
     errorSpy.mockRestore()
   })
 
@@ -661,7 +672,7 @@ describe('settings.updateSide — extra branches', () => {
     })
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await caller.updateSide({ side: 'left', autoOffEnabled: true })
-    expect(errorSpy).toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith('Auto-off timer restart failed:', expect.any(Error))
     errorSpy.mockRestore()
   })
 
@@ -727,5 +738,396 @@ describe('settings.deleteGesture — extra branches', () => {
       throw new Error('delete boom')
     })
     await expect(caller.deleteGesture({ side: 'left', tapType: 'doubleTap' })).rejects.toThrow(/Failed to delete gesture: delete boom/)
+  })
+})
+
+/**
+ * Throws a value that is NOT an `instanceof Error` so the routers' catch-block
+ * ternaries fall through to their 'Unknown error' branch.
+ */
+function throwNonError(): never {
+  const notAnError: unknown = { code: 'ENOENT' }
+  throw notAnError
+}
+
+const baseRightSide = {
+  side: 'right' as const, name: 'R', awayMode: false, alwaysOn: false,
+  autoOffEnabled: false, autoOffMinutes: 30,
+  awayStart: null, awayReturn: null,
+  createdAt: new Date(0), updatedAt: new Date(0),
+}
+
+describe('settings.getAll — defaults and partitioning', () => {
+  it('fills every device field from the synthetic default row', async () => {
+    dbState.topRowsQueue.push([], [], [])
+    const result = await caller.getAll({})
+    // Each value is pinned — a silently-changed default ships a pod that
+    // reboots/primes at the wrong hour or dims its LED at the wrong time.
+    expect(result.device).toMatchObject({
+      id: 1,
+      timezone: 'America/Los_Angeles',
+      temperatureUnit: 'F',
+      rebootDaily: false,
+      rebootTime: '03:00',
+      primePodDaily: false,
+      primePodTime: '14:00',
+      ledNightModeEnabled: false,
+      ledDayBrightness: 100,
+      ledNightBrightness: 0,
+      ledNightStartTime: '22:00',
+      ledNightEndTime: '07:00',
+      globalMaxOnHours: null,
+      homekitEnabled: false,
+      pumpStallProtectionEnabled: false,
+      pumpStallRpmThreshold: 500,
+      pumpStallDwellSamples: 2,
+      pumpStallAutoRecoveryEnabled: false,
+      pumpStallRecoveryRpm: 1500,
+      pumpStallRecoverySamples: 3,
+    })
+  })
+
+  it('fills every side field from the synthetic default rows', async () => {
+    dbState.topRowsQueue.push([{ ...baseDevice }], [], [])
+    const result = await caller.getAll({})
+    expect(result.sides.left).toMatchObject({
+      side: 'left', name: 'Left', alwaysOn: false, awayMode: false,
+      autoOffEnabled: false, autoOffMinutes: 30,
+    })
+    expect(result.sides.right).toMatchObject({
+      side: 'right', name: 'Right', alwaysOn: false, awayMode: false,
+      autoOffEnabled: false, autoOffMinutes: 30,
+    })
+  })
+
+  it('matches side rows by the side column, not by row order', async () => {
+    // Right row first — a row-order match would hand the right row back as left.
+    dbState.topRowsQueue.push([{ ...baseDevice }], [baseRightSide, baseSide], [])
+    const result = await caller.getAll({})
+    expect(result.sides.left.side).toBe('left')
+    expect(result.sides.left.name).toBe('L')
+    expect(result.sides.right.side).toBe('right')
+    expect(result.sides.right.name).toBe('R')
+  })
+
+  it('routes each gesture to the bucket matching its own side', async () => {
+    const gestures = [
+      { id: 1, side: 'left', tapType: 'doubleTap', actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 1, createdAt: new Date(0), updatedAt: new Date(0) },
+      { id: 2, side: 'right', tapType: 'doubleTap', actionType: 'alarm', alarmBehavior: 'snooze', createdAt: new Date(0), updatedAt: new Date(0) },
+    ]
+    dbState.topRowsQueue.push([{ ...baseDevice }], [baseSide, baseRightSide], gestures)
+    const result = await caller.getAll({})
+    expect(result.gestures.left.map(g => g.id)).toEqual([1])
+    expect(result.gestures.right.map(g => g.id)).toEqual([2])
+    expect(result.gestures.left[0].side).toBe('left')
+    expect(result.gestures.right[0].side).toBe('right')
+  })
+
+  it('reports "Unknown error" when the thrown value is not an Error', async () => {
+    dbMock.select.mockImplementationOnce(() => throwNonError())
+    await expect(caller.getAll({})).rejects.toThrow('Failed to fetch settings: Unknown error')
+  })
+})
+
+describe('settings.updateDevice — scheduler key detection', () => {
+  it('does not treat an explicitly-undefined timezone as a timezone change', async () => {
+    const current = { ...baseDevice }
+    dbState.txRowsQueue.push([current], [current])
+
+    // The key IS present in the parsed input, so only the typeof guard keeps
+    // this from reloading every cron job against `undefined`.
+    await caller.updateDevice({ timezone: undefined })
+    expect(schedulerMock.jm.updateTimezone).not.toHaveBeenCalled()
+    expect(schedulerMock.getJobManager).not.toHaveBeenCalled()
+  })
+
+  it('treats a lone rebootDaily patch as a reboot change and keeps the persisted time', async () => {
+    const current = { ...baseDevice, rebootTime: '03:00' }
+    const updated = { ...current, rebootDaily: true }
+    dbState.txRowsQueue.push([current], [updated])
+    dbState.topRowsQueue.push([updated])
+
+    await caller.updateDevice({ rebootDaily: true })
+    expect(schedulerMock.jm.upsertRebootJob).toHaveBeenCalledWith(true, '03:00')
+    expect(schedulerMock.jm.upsertPrimeJob).not.toHaveBeenCalled()
+    expect(schedulerMock.jm.upsertLedNightMode).not.toHaveBeenCalled()
+  })
+
+  it('treats a lone primePodDaily patch as a prime change and keeps the persisted time', async () => {
+    const current = { ...baseDevice, primePodTime: '14:00' }
+    const updated = { ...current, primePodDaily: true }
+    dbState.txRowsQueue.push([current], [updated])
+    dbState.topRowsQueue.push([updated])
+
+    await caller.updateDevice({ primePodDaily: true })
+    expect(schedulerMock.jm.upsertPrimeJob).toHaveBeenCalledWith(true, '14:00')
+    expect(schedulerMock.jm.upsertRebootJob).not.toHaveBeenCalled()
+    expect(schedulerMock.jm.upsertLedNightMode).not.toHaveBeenCalled()
+  })
+
+  it('skips the scheduler entirely when no scheduling key is present', async () => {
+    const current = { ...baseDevice }
+    dbState.txRowsQueue.push([current], [{ ...current, temperatureUnit: 'C' }])
+
+    await caller.updateDevice({ temperatureUnit: 'C' })
+    expect(schedulerMock.getJobManager).not.toHaveBeenCalled()
+    expect(autoOffMock.restartAutoOffTimers).not.toHaveBeenCalled()
+    expect(pumpStallMock.invalidateGuardSettingsCache).not.toHaveBeenCalled()
+    expect(homekitMock.enable).not.toHaveBeenCalled()
+    expect(homekitMock.disable).not.toHaveBeenCalled()
+    expect(dbState.txSetCalls).toEqual([{ temperatureUnit: 'C', updatedAt: expect.any(Date) }])
+  })
+
+  it('bails out quietly when the post-commit re-read finds no row', async () => {
+    const current = { ...baseDevice }
+    dbState.txRowsQueue.push([current], [{ ...current, rebootDaily: true }])
+    // topRowsQueue deliberately empty — the re-read yields no settings row.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await caller.updateDevice({ rebootDaily: true })
+    expect(schedulerMock.jm.upsertRebootJob).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+})
+
+describe('settings.updateDevice — LED and pump-stall key coverage', () => {
+  it('fires immediate LED apply when ledNightStartTime changes', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, ledNightStartTime: '23:30' }
+    dbState.txRowsQueue.push([current], [updated])
+    dbState.topRowsQueue.push([updated])
+
+    await caller.updateDevice({ ledNightStartTime: '23:30' })
+    expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires immediate LED apply when ledNightEndTime changes', async () => {
+    const current = { ...baseDevice }
+    const updated = { ...current, ledNightEndTime: '06:15' }
+    dbState.txRowsQueue.push([current], [updated])
+    dbState.topRowsQueue.push([updated])
+
+    await caller.updateDevice({ ledNightEndTime: '06:15' })
+    expect(schedulerMock.jm.applyCurrentLedBrightness).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates the pump stall guard cache for each pump_stall_* field', async () => {
+    const patches: Array<Parameters<typeof caller.updateDevice>[0]> = [
+      { pumpStallProtectionEnabled: true },
+      { pumpStallDwellSamples: 5 },
+      { pumpStallAutoRecoveryEnabled: true },
+      { pumpStallRecoveryRpm: 900 },
+      { pumpStallRecoverySamples: 4 },
+    ]
+
+    for (const patch of patches) {
+      pumpStallMock.invalidateGuardSettingsCache.mockClear()
+      const current = { ...baseDevice }
+      dbState.txRowsQueue.push([current], [{ ...current, ...patch }])
+      await caller.updateDevice(patch)
+      expect(pumpStallMock.invalidateGuardSettingsCache).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+
+describe('settings.updateDevice — homekit lifecycle', () => {
+  it('reverts to the prior persisted flag when the lifecycle call fails', async () => {
+    // Prior row already had homekit ON — the revert must restore true, not the
+    // `false` initializer.
+    dbState.topRowsQueue.push([{ homekitEnabled: true }])
+    const current = { ...baseDevice, homekitEnabled: true }
+    dbState.txRowsQueue.push([current], [current])
+    homekitMock.enable.mockRejectedValueOnce(new Error('mDNS failed'))
+
+    await expect(caller.updateDevice({ homekitEnabled: true })).rejects.toThrow(/mDNS failed/)
+    expect(dbState.topSetCalls).toEqual([{ homekitEnabled: true, updatedAt: expect.any(Date) }])
+  })
+
+  it('tolerates a missing prior device row when toggling homekit', async () => {
+    dbState.topRowsQueue.push([]) // prior-row read returns nothing
+    const current = { ...baseDevice }
+    const updated = { ...current, homekitEnabled: true }
+    dbState.txRowsQueue.push([current], [updated])
+
+    const result = await caller.updateDevice({ homekitEnabled: true })
+    expect(result.homekitEnabled).toBe(true)
+    expect(homekitMock.enable).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('settings.updateDevice — error surface', () => {
+  it('preserves the BAD_REQUEST code for validation failures', async () => {
+    dbState.txRowsQueue.push([{ ...baseDevice, rebootTime: null }])
+    await expect(caller.updateDevice({ rebootDaily: true })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'rebootTime is required when rebootDaily is enabled',
+    })
+  })
+
+  it('reports "Unknown error" when the thrown value is not an Error', async () => {
+    dbMock.transaction.mockImplementationOnce(() => throwNonError())
+    await expect(caller.updateDevice({ timezone: 'UTC' }))
+      .rejects.toThrow('Failed to update device settings: Unknown error')
+  })
+})
+
+describe('settings.updateSide — merged-state validation', () => {
+  it('rejects an incoming alwaysOn that collides with persisted autoOffEnabled', async () => {
+    const current = { ...baseSide, alwaysOn: false, autoOffEnabled: true }
+    dbState.txRowsQueue.push([current])
+
+    await expect(caller.updateSide({ side: 'left', alwaysOn: true }))
+      .rejects.toThrow(/mutually exclusive/)
+  })
+
+  it('rejects an incoming awayStart that lands after the persisted awayReturn', async () => {
+    const current = { ...baseSide, awayStart: null, awayReturn: '2025-01-01T00:00:00Z' }
+    dbState.txRowsQueue.push([current])
+
+    await expect(caller.updateSide({ side: 'left', awayStart: '2025-01-10T00:00:00Z' }))
+      .rejects.toThrow(/awayReturn must not be before awayStart/)
+  })
+
+  it('accepts an away window whose start and return are the same instant', async () => {
+    const current = { ...baseSide }
+    const updated = { ...current, awayStart: '2025-01-01T00:00:00Z', awayReturn: '2025-01-01T00:00:00Z' }
+    dbState.txRowsQueue.push([current], [updated])
+
+    // Equal timestamps are a zero-length window, not a reversed one.
+    await caller.updateSide({
+      side: 'left',
+      awayStart: '2025-01-01T00:00:00Z',
+      awayReturn: '2025-01-01T00:00:00Z',
+    })
+    expect(schedulerMock.jm.upsertAwayMode)
+      .toHaveBeenCalledWith('left', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z')
+  })
+
+  it('leaves a reversed persisted window alone when the patch touches neither field', async () => {
+    const current = { ...baseSide, awayStart: '2025-01-10T00:00:00Z', awayReturn: '2025-01-01T00:00:00Z' }
+    const updated = { ...current, name: 'Renamed' }
+    dbState.txRowsQueue.push([current], [updated])
+
+    const result = await caller.updateSide({ side: 'left', name: 'Renamed' })
+    expect(result.name).toBe('Renamed')
+  })
+
+  it('preserves the BAD_REQUEST code for validation failures', async () => {
+    const current = { ...baseSide, alwaysOn: true }
+    dbState.txRowsQueue.push([current])
+    await expect(caller.updateSide({ side: 'left', autoOffEnabled: true })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'alwaysOn and autoOffEnabled are mutually exclusive — set the other to false in the same call',
+    })
+  })
+})
+
+describe('settings.updateSide — side effects are scoped to the changed keys', () => {
+  it('runs no away/keepalive/auto-off side effects for a name-only update', async () => {
+    const current = { ...baseSide }
+    const updated = { ...current, name: 'Renamed' }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateSide({ side: 'left', name: 'Renamed' })
+    expect(schedulerMock.jm.upsertAwayMode).not.toHaveBeenCalled()
+    expect(keepaliveMock.startKeepalive).not.toHaveBeenCalled()
+    expect(keepaliveMock.stopKeepalive).not.toHaveBeenCalled()
+    expect(autoOffMock.restartAutoOffTimers).not.toHaveBeenCalled()
+    expect(dbState.txSetCalls).toEqual([{ name: 'Renamed', updatedAt: expect.any(Date) }])
+  })
+
+  it('reports "Unknown error" when the thrown value is not an Error', async () => {
+    dbMock.transaction.mockImplementationOnce(() => throwNonError())
+    await expect(caller.updateSide({ side: 'left', name: 'X' }))
+      .rejects.toThrow('Failed to update side settings: Unknown error')
+  })
+})
+
+describe('settings.setAlwaysOn — write payload and error surface', () => {
+  it('writes only the alwaysOn flag and a fresh updatedAt', async () => {
+    dbState.txRowsQueue.push([{ ...baseSide, alwaysOn: true }])
+    await caller.setAlwaysOn({ side: 'left', alwaysOn: true })
+    expect(dbState.txSetCalls).toEqual([{ alwaysOn: true, updatedAt: expect.any(Date) }])
+  })
+
+  it('preserves the NOT_FOUND code when the row is missing', async () => {
+    dbState.txRowsQueue.push([])
+    await expect(caller.setAlwaysOn({ side: 'left', alwaysOn: true })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'Side settings for left not found',
+    })
+  })
+
+  it('reports "Unknown error" when the thrown value is not an Error', async () => {
+    dbMock.transaction.mockImplementationOnce(() => throwNonError())
+    await expect(caller.setAlwaysOn({ side: 'left', alwaysOn: true }))
+      .rejects.toThrow('Failed to set alwaysOn: Unknown error')
+  })
+})
+
+describe('settings.setGesture — write payload and error surface', () => {
+  it('writes the merged gesture payload when updating an existing row', async () => {
+    const existing = { id: 5, side: 'left', tapType: 'doubleTap' }
+    const updated = {
+      id: 5, side: 'left', tapType: 'doubleTap', actionType: 'alarm',
+      alarmBehavior: 'snooze', createdAt: new Date(0), updatedAt: new Date(0),
+    }
+    dbState.txRowsQueue.push([existing], [updated])
+
+    await caller.setGesture({
+      side: 'left',
+      tapType: 'doubleTap',
+      actionType: 'alarm',
+      alarmBehavior: 'snooze',
+    })
+    expect(dbState.txSetCalls).toEqual([{
+      side: 'left',
+      tapType: 'doubleTap',
+      actionType: 'alarm',
+      alarmBehavior: 'snooze',
+      updatedAt: expect.any(Date),
+    }])
+  })
+
+  it('rethrows the inner TRPCError unwrapped when the update returns no row', async () => {
+    dbState.txRowsQueue.push([{ id: 9, side: 'left', tapType: 'doubleTap' }], [])
+    await expect(caller.setGesture({
+      side: 'left',
+      tapType: 'doubleTap',
+      actionType: 'temperature',
+      temperatureChange: 'increment',
+      temperatureAmount: 1,
+    })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to update gesture - no record returned',
+    })
+  })
+
+  it('reports "Unknown error" when the thrown value is not an Error', async () => {
+    dbMock.transaction.mockImplementationOnce(() => throwNonError())
+    await expect(caller.setGesture({
+      side: 'left',
+      tapType: 'doubleTap',
+      actionType: 'temperature',
+      temperatureChange: 'increment',
+      temperatureAmount: 1,
+    })).rejects.toThrow('Failed to set gesture: Unknown error')
+  })
+})
+
+describe('settings.deleteGesture — error surface', () => {
+  it('preserves the NOT_FOUND code when nothing was deleted', async () => {
+    dbState.txRowsQueue.push([])
+    await expect(caller.deleteGesture({ side: 'left', tapType: 'doubleTap' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'Gesture for left doubleTap not found',
+    })
+  })
+
+  it('reports "Unknown error" when the thrown value is not an Error', async () => {
+    dbMock.transaction.mockImplementationOnce(() => throwNonError())
+    await expect(caller.deleteGesture({ side: 'left', tapType: 'doubleTap' }))
+      .rejects.toThrow('Failed to delete gesture: Unknown error')
   })
 })

@@ -34,6 +34,13 @@ describe('snoozeSwitch accessory', () => {
     vi.useRealTimers()
   })
 
+  it.each(['left', 'right'] as const)('uses stable metadata for the %s side', (side) => {
+    const { service, stop } = buildSnoozeSwitch(side)
+    expect(service.displayName).toBe(`Snooze ${side}`)
+    expect(service.subtype).toBe(`snooze-${side}`)
+    stop()
+  })
+
   it('on → clears alarm and registers snooze with neutral pattern', async () => {
     const { service, stop } = buildSnoozeSwitch('left')
     await service.getCharacteristic(Characteristic.On).setValue(true)
@@ -57,9 +64,28 @@ describe('snoozeSwitch accessory', () => {
 
   it('still registers snooze when clearAlarm fails (non-fatal)', async () => {
     clearAlarm.mockRejectedValueOnce(new Error('hardware unreachable'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { service, stop } = buildSnoozeSwitch('left')
     await service.getCharacteristic(Characteristic.On).setValue(true)
     expect(snoozeAlarm).toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      '[homekit] clearAlarm(left) failed during snooze:',
+      'hardware unreachable',
+    )
+    stop()
+  })
+
+  it('logs a raw non-Error clearAlarm failure', async () => {
+    clearAlarm.mockRejectedValueOnce('plain failure')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { service, stop } = buildSnoozeSwitch('right')
+
+    await service.getCharacteristic(Characteristic.On).handleSetRequest(true)
+
+    expect(warn).toHaveBeenCalledWith(
+      '[homekit] clearAlarm(right) failed during snooze:',
+      'plain failure',
+    )
     stop()
   })
 
@@ -72,10 +98,31 @@ describe('snoozeSwitch accessory', () => {
     stop()
   })
 
-  it('stop() clears the poll interval', () => {
-    const { stop } = buildSnoozeSwitch('left')
+  it('publishes the latest snooze state on each poll', () => {
+    const { service, stop } = buildSnoozeSwitch('left')
+    const update = vi.spyOn(service, 'updateCharacteristic')
+    state.active = true
+
+    vi.advanceTimersByTime(5_000)
+
+    expect(update).toHaveBeenCalledWith(Characteristic.On, true)
     stop()
-    // Advance well past the poll interval — no errors / no leaked timers.
+  })
+
+  it('does not require Node-specific unref support on the poll handle', () => {
+    vi.spyOn(globalThis, 'setInterval').mockReturnValue(7 as never)
+    expect(() => buildSnoozeSwitch('left')).not.toThrow()
+  })
+
+  it('stop() clears the poll interval', () => {
+    const { service, stop } = buildSnoozeSwitch('left')
+    const update = vi.spyOn(service, 'updateCharacteristic')
+    stop()
+    state.active = true
+
+    // Advance well past the poll interval — a stopped switch publishes nothing.
     vi.advanceTimersByTime(60_000)
+
+    expect(update).not.toHaveBeenCalled()
   })
 })

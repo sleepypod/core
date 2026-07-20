@@ -8,6 +8,15 @@ let movementRows: MovementRow[] = []
 let calRows: CalRow[] = []
 let snapshot: LatestCapSenseSnapshot | null = null
 
+const drizzle = vi.hoisted(() => ({
+  and: vi.fn((...conditions: unknown[]) => ({ op: 'and', conditions })),
+  eq: vi.fn((left: unknown, right: unknown) => ({ op: 'eq', left, right })),
+  gte: vi.fn((left: unknown, right: unknown) => ({ op: 'gte', left, right })),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings: [...strings], values })),
+}))
+
+vi.mock('drizzle-orm', () => drizzle)
+
 const movementAll = vi.fn<() => MovementRow[]>(() => movementRows)
 const calAll = vi.fn<() => CalRow[]>(() => calRows)
 
@@ -73,6 +82,7 @@ describe('getOccupancy', () => {
     snapshot = null
     movementAll.mockClear()
     calAll.mockClear()
+    drizzle.gte.mockClear()
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -86,6 +96,7 @@ describe('getOccupancy', () => {
     expect(r.occupied).toBe(false)
     expect(r.movement.active).toBe(false)
     expect(r.level.active).toBe(false)
+    expect(r.available).toBe(true)
   })
 
   it('returns occupied=true via the movement signal alone', () => {
@@ -96,6 +107,18 @@ describe('getOccupancy', () => {
     expect(r.movement.peakScore).toBe(350)
     expect(r.level.active).toBe(false)
     expect(r.occupied).toBe(true)
+    expect(r.available).toBe(false)
+  })
+
+  it('queries movement from exactly fifteen minutes ago and treats the threshold as active', () => {
+    movementRows = [{ peak: 50 }]
+
+    const result = getOccupancy('left')
+
+    expect(drizzle.gte).toHaveBeenCalledOnce()
+    expect(drizzle.gte.mock.calls[0]?.[1]).toEqual(new Date(FIXED_NOW - 15 * 60_000))
+    expect(drizzle.sql.mock.calls[0]?.[0]).toEqual(['MAX(', ')'])
+    expect(result.movement).toEqual({ active: true, peakScore: 50 })
   })
 
   it('returns occupied=true via the level signal alone (still occupant)', () => {
@@ -119,6 +142,26 @@ describe('getOccupancy', () => {
     calRows = [{ parameters: BASELINE_CAL }]
     const r = getOccupancy('left')
     expect(r.level.active).toBe(false)
+    expect(r.level.deviation).toBeCloseTo(6, 10)
+    expect(r.level.threshold).toBe(6)
+  })
+
+  it('uses strict greater-than for the calibrated deviation threshold', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [16.45, 16.45, 15.65, 15.65, 21.3, 21.3])
+    calRows = [{ parameters: BASELINE_CAL }]
+
+    const result = getOccupancy('left')
+    expect(result.level.deviation).toBeCloseTo(6, 10)
+    expect(result.level.active).toBe(false)
+  })
+
+  it('adds all three compensated channel deviations', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [15.45, 15.45, 15.65, 15.65, 22.3, 22.3])
+    calRows = [{ parameters: BASELINE_CAL }]
+
+    expect(getOccupancy('left').level.deviation).toBeCloseTo(6, 10)
   })
 
   it('ignores stale capSense frames', () => {
@@ -138,6 +181,20 @@ describe('getOccupancy', () => {
     expect(r.occupied).toBe(false)
   })
 
+  it('accepts a capSense frame at the exact thirty-second freshness boundary', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = {
+      ...makeFrame('left', [25, 25, 23, 23, 30, 30, 1.157, 1.157]),
+      receivedAtMs: FIXED_NOW - 30_000,
+    }
+    calRows = [{ parameters: BASELINE_CAL }]
+
+    const result = getOccupancy('left')
+    expect(result.level.ageMs).toBe(30_000)
+    expect(result.level.deviation).not.toBeNull()
+    expect(result.available).toBe(true)
+  })
+
   it('skips level signal for legacy capSense (Pod 3) frames', () => {
     movementRows = [{ peak: 0 }]
     snapshot = {
@@ -151,6 +208,8 @@ describe('getOccupancy', () => {
     const r = getOccupancy('left')
     expect(r.level.active).toBe(false)
     expect(r.level.deviation).toBeNull()
+    expect(r.level.threshold).toBeNull()
+    expect(calAll).not.toHaveBeenCalled()
   })
 
   it('skips level signal when calibration is missing', () => {
@@ -218,6 +277,24 @@ describe('getOccupancy', () => {
     const r = getOccupancy('left')
     expect(r.level.active).toBe(false)
     expect(r.level.threshold).toBeNull()
+  })
+
+  it.each(['B', 'C'] as const)('validates malformed calibration channel %s independently', (channel) => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeFrame('left', [25, 25, 23, 23, 30, 30, 1.157, 1.157])
+    calRows = [{
+      parameters: {
+        ...BASELINE_CAL,
+        channels: {
+          ...BASELINE_CAL.channels,
+          [channel]: { mean: 'bad' },
+        },
+      },
+    }]
+
+    const result = getOccupancy('left')
+
+    expect(result.level).toMatchObject({ active: false, deviation: null, threshold: null })
   })
 
   it('skips level signal when calibration threshold is missing', () => {

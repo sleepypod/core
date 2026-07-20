@@ -253,7 +253,10 @@ describe('hardware/dacMonitor.instance', () => {
       await mod.startDacServer()
       await flushMicrotasks()
 
-      expect(warnSpy).toHaveBeenCalled()
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[DAC] connection failed (will retry on next command):',
+        'no socket',
+      )
       expect(mod.getDacServer()).toBe(true) // server flag still set
       warnSpy.mockRestore()
     })
@@ -266,7 +269,10 @@ describe('hardware/dacMonitor.instance', () => {
       await mod.startDacServer()
       await flushMicrotasks()
 
-      expect(warnSpy).toHaveBeenCalled()
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[DAC] connection failed (will retry on next command):',
+        'string failure',
+      )
       warnSpy.mockRestore()
     })
 
@@ -477,10 +483,13 @@ describe('hardware/dacMonitor.instance', () => {
 
     it('lazy-constructs a DacMonitor on first call and starts it', async () => {
       const mod = await freshModule()
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const monitor = await mod.getDacMonitor()
       expect(monitorInstances).toHaveLength(1)
       expect(monitor).toBe(monitorInstances[0])
       expect(monitorInstances[0].start).toHaveBeenCalledTimes(1)
+      expect(log).toHaveBeenCalledWith('[DAC] monitor started')
+      log.mockRestore()
     })
 
     it('is idempotent — second call returns the same monitor without re-starting', async () => {
@@ -537,6 +546,38 @@ describe('hardware/dacMonitor.instance', () => {
       expect(broadcastFrameMock.mock.calls.length).toBeGreaterThan(beforeCalls)
     })
 
+    it('broadcasts the exact deviceStatus frame with alarm and snooze state', async () => {
+      const mod = await freshModule()
+      vi.spyOn(Date, 'now').mockReturnValue(1_720_000_123_456)
+      getAlarmStateMock.mockReturnValue({ left: true, right: false })
+      getSnoozeStatusMock.mockImplementation(side => side === 'left'
+        ? { active: true, snoozeUntil: 123 }
+        : { active: false, snoozeUntil: null })
+      await mod.getDacMonitor()
+      await flushMicrotasks()
+      broadcastFrameMock.mockClear()
+      getSnoozeStatusMock.mockClear()
+      const status = parseDeviceStatusMock('raw')
+
+      monitorInstances[0].emit('status:updated', status)
+      await flushMicrotasks()
+
+      expect(broadcastFrameMock).toHaveBeenCalledWith({
+        type: 'deviceStatus',
+        ts: 1_720_000_123_456,
+        leftSide: { ...status.leftSide, isAlarmVibrating: true },
+        rightSide: { ...status.rightSide, isAlarmVibrating: false },
+        waterLevel: 'ok',
+        isPriming: false,
+        snooze: {
+          left: { active: true, snoozeUntil: 123 },
+          right: { active: false, snoozeUntil: null },
+        },
+      })
+      expect(getSnoozeStatusMock.mock.calls).toEqual([['left'], ['right']])
+      vi.restoreAllMocks()
+    })
+
     it('status:updated includes primeCompletedNotification when getPrimeCompletedAt returns a value', async () => {
       const mod = await freshModule()
       await mod.getDacMonitor()
@@ -565,7 +606,7 @@ describe('hardware/dacMonitor.instance', () => {
       const status: DeviceStatus = parseDeviceStatusMock('raw')
       expect(() => monitor.emit('status:updated', status)).not.toThrow()
       await flushMicrotasks()
-      expect(errSpy).toHaveBeenCalled()
+      expect(errSpy).toHaveBeenCalledWith('[DacMonitor] primeNotification error:', expect.objectContaining({ message: 'prime-bad' }))
       errSpy.mockRestore()
     })
 
@@ -606,7 +647,7 @@ describe('hardware/dacMonitor.instance', () => {
       monitor.emit('status:updated', parseDeviceStatusMock('raw'))
       await flushMicrotasks()
       await flushMicrotasks()
-      expect(errSpy).toHaveBeenCalled()
+      expect(errSpy).toHaveBeenCalledWith('[DacMonitor] DeviceStateSync error:', expect.objectContaining({ message: 'sync-bad' }))
       errSpy.mockRestore()
     })
   })
@@ -646,13 +687,24 @@ describe('hardware/dacMonitor.instance', () => {
 
     it('awaits an in-flight monitorInitPromise without throwing', async () => {
       const mod = await freshModule()
-      nextStartImpl = async () => {
-        throw new Error('start-fail')
-      }
+      let release!: () => void
+      nextStartImpl = () => new Promise<void>((resolve) => {
+        release = resolve
+      })
 
-      const initP = mod.getDacMonitor().catch(() => { /* swallow */ })
-      await mod.shutdownDacMonitor()
+      const initP = mod.getDacMonitor()
+      let shutdownSettled = false
+      const shutdown = mod.shutdownDacMonitor().then(() => {
+        shutdownSettled = true
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(shutdownSettled).toBe(false)
+
+      release()
       await initP
+      await shutdown
+      expect(shutdownSettled).toBe(true)
     })
 
     it('invokes the flow-data unsubscribe handle stored on globalThis', async () => {
@@ -665,6 +717,16 @@ describe('hardware/dacMonitor.instance', () => {
       await mod.shutdownDacMonitor()
 
       expect(unsub).toHaveBeenCalled()
+    })
+
+    it('logs the exact shutdown completion message', async () => {
+      const mod = await freshModule()
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      await mod.shutdownDacMonitor()
+
+      expect(log).toHaveBeenCalledWith('[DAC] shutdown complete')
+      log.mockRestore()
     })
   })
 })
