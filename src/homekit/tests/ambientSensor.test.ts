@@ -13,7 +13,6 @@ const dbMock = vi.hoisted(() => {
       orderBy: vi.fn(() => ({
         limit: vi.fn(async () => {
           if (state.throws !== false) {
-            // eslint-disable-next-line @typescript-eslint/only-throw-error
             throw typeof state.throws === 'string' ? state.throws : new Error('biometrics db down')
           }
           return state.row ? [state.row] : []
@@ -38,6 +37,13 @@ describe('ambientSensor accessory', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('uses the stable HomeKit display name and subtype', () => {
+    const { service, stop } = buildAmbientSensor()
+    expect(service.displayName).toBe('Pod ambient')
+    expect(service.subtype).toBe('ambient')
+    stop()
   })
 
   it('reads latest ambient_temp (centidegrees) and converts to Celsius', async () => {

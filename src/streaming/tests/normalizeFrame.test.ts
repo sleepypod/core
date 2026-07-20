@@ -449,6 +449,13 @@ describe('normalizeFrame', () => {
       expect(result.right).toBeCloseTo(22.25)
     })
 
+    it.each([-32769, -32767])('does not classify the exclusive %s boundary as the sentinel', (value) => {
+      const boundary = { type: 'frzTemp', ts: 1, left: value, right: 0, amb: 0, hs: 0 }
+      const result = normalizeFrame(boundary as Record<string, unknown>)
+
+      expect(result.left).toBe(value / 100)
+    })
+
     it('treats non-numeric values as null', () => {
       // Exercises the `typeof v !== 'number'` branch in cdToC.
       const garbage = { type: 'frzTemp', ts: 1, left: 'oops', right: null, amb: undefined, hs: 2531 }
@@ -528,6 +535,96 @@ describe('normalizeFrame', () => {
       const fan = result.fan as Record<string, unknown>
       expect(fan.bottomRpm).toBeNull()
     })
+
+    it('defaults every left-side field when the whole side is absent', () => {
+      const noLeft = {
+        type: 'frzHealth', ts: 100,
+        right: {
+          tec: { current: 3 },
+          pump: { mode: 'pwm', rpm: 1200, water: true, duty: 40 },
+          temps: { flowrate: 23.5 },
+        },
+        fan: { top: { rpm: 500, duty: 50 }, bottom: { rpm: 250 } },
+      }
+
+      const result = normalizeFrame(noLeft as Record<string, unknown>)
+
+      expect(result.left).toEqual({
+        pumpRpm: 0,
+        pumpDuty: 0,
+        tecCurrent: 0,
+        flowrate: null,
+      })
+    })
+
+    it('defaults every right-side field when the whole side is absent', () => {
+      const noRight = {
+        type: 'frzHealth', ts: 100,
+        left: {
+          tec: { current: 3 },
+          pump: { mode: 'pwm', rpm: 1200, water: true, duty: 40 },
+          temps: { flowrate: 23.5 },
+        },
+        fan: { top: { rpm: 500, duty: 50 }, bottom: { rpm: 250 } },
+      }
+
+      const result = normalizeFrame(noRight as Record<string, unknown>)
+
+      expect(result.right).toEqual({
+        pumpRpm: 0,
+        pumpDuty: 0,
+        tecCurrent: 0,
+        flowrate: null,
+      })
+    })
+
+    it.each(['left', 'right'] as const)('defaults %s pump and TEC branches independently', (side) => {
+      const sparseSide = { temps: { flowrate: 21.25 } }
+      const frame = {
+        type: 'frzHealth', ts: 100,
+        left: side === 'left'
+          ? sparseSide
+          : { tec: { current: 1 }, pump: { mode: 'pwm', rpm: 900, water: true } },
+        right: side === 'right'
+          ? sparseSide
+          : { tec: { current: 1 }, pump: { mode: 'pwm', rpm: 900, water: true } },
+        fan: { top: { rpm: 500 } },
+      }
+
+      const result = normalizeFrame(frame as Record<string, unknown>)
+
+      expect(result[side]).toEqual({
+        pumpRpm: 0,
+        pumpDuty: 0,
+        tecCurrent: 0,
+        flowrate: 21.25,
+      })
+    })
+
+    it('defaults fan fields when the whole fan branch is absent', () => {
+      const noFan = {
+        type: 'frzHealth', ts: 100,
+        left: { tec: { current: 0 }, pump: { mode: 'pwm', rpm: 0, water: true } },
+        right: { tec: { current: 0 }, pump: { mode: 'pwm', rpm: 0, water: true } },
+      }
+
+      const result = normalizeFrame(noFan as Record<string, unknown>)
+
+      expect(result.fan).toEqual({ rpm: 0, duty: 0, bottomRpm: null })
+    })
+
+    it('defaults top-fan fields when fan exists without a top branch', () => {
+      const noTop = {
+        type: 'frzHealth', ts: 100,
+        left: { tec: { current: 0 }, pump: { mode: 'pwm', rpm: 0, water: true } },
+        right: { tec: { current: 0 }, pump: { mode: 'pwm', rpm: 0, water: true } },
+        fan: { bottom: { rpm: 250 } },
+      }
+
+      const result = normalizeFrame(noTop as Record<string, unknown>)
+
+      expect(result.fan).toEqual({ rpm: 0, duty: 0, bottomRpm: 250 })
+    })
   })
 
   describe('frzTherm edge cases', () => {
@@ -560,6 +657,12 @@ describe('normalizeFrame', () => {
       const result = normalizeFrame(mixed as Record<string, unknown>)
       expect(result.left).toBe(-0.75)
       expect(result.right).toBe(0.5)
+    })
+
+    it('defaults missing sides and preserves the canonical type', () => {
+      const result = normalizeFrame({ type: 'frzTherm', ts: 1 })
+
+      expect(result).toEqual({ type: 'frzTherm', ts: 1, left: 0, right: 0 })
     })
   })
 

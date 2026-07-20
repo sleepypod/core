@@ -25,12 +25,13 @@ vi.mock('node:fs', async (importOriginal) => {
 })
 
 const m = vi.hoisted(() => {
+  const infoService = {
+    setCharacteristic: vi.fn().mockReturnThis(),
+  }
   const fakeAccessory = (name: string) => ({
     name,
     addService: vi.fn(),
-    getService: vi.fn().mockReturnValue({
-      setCharacteristic: vi.fn().mockReturnThis(),
-    }),
+    getService: vi.fn().mockReturnValue(infoService),
     addBridgedAccessory: vi.fn(),
     publish: vi.fn().mockResolvedValue(undefined),
     unpublish: vi.fn().mockResolvedValue(undefined),
@@ -39,6 +40,7 @@ const m = vi.hoisted(() => {
   })
 
   return {
+    infoService,
     bridgeInstance: null as ReturnType<typeof fakeAccessory> | null,
     BridgeCtor: vi.fn(function BridgeCtor(this: unknown, name: string) {
       const inst = fakeAccessory(name)
@@ -130,6 +132,7 @@ describe('homekit bridge', () => {
     m.bridgeInstance = null
     m.BridgeCtor.mockClear()
     m.AccessoryCtor.mockClear()
+    m.infoService.setCharacteristic.mockClear()
     m.thermostatStop.mockClear()
     m.occupancyStop.mockClear()
     m.snoozeStop.mockClear()
@@ -186,6 +189,89 @@ describe('homekit bridge', () => {
     const { startBridge } = await import('../bridge')
     await startBridge(fakeMonitor)
     expect(m.BridgeCtor).toHaveBeenCalledWith('sleepypod', expect.any(String))
+  })
+
+  it('sets exact bridge information characteristics and publish options', async () => {
+    const previousSha = process.env.GIT_SHA
+    const previousAdvertiser = process.env.HOMEKIT_ADVERTISER
+    const previousBind = process.env.HOMEKIT_BIND
+    delete process.env.GIT_SHA
+    delete process.env.HOMEKIT_ADVERTISER
+    delete process.env.HOMEKIT_BIND
+    fsState.wlan0Exists = false
+    try {
+      const { Characteristic } = await import('hap-nodejs')
+      const { startBridge } = await import('../bridge')
+      await startBridge(fakeMonitor)
+
+      expect(m.infoService.setCharacteristic.mock.calls).toEqual([
+        [Characteristic.Manufacturer, 'Sleepypod'],
+        [Characteristic.Model, 'Pod Bridge'],
+        [Characteristic.SerialNumber, 'AA:BB:CC:DD:EE:FF'],
+        [Characteristic.FirmwareRevision, '0.0.0'],
+      ])
+      expect(m.bridgeInstance?.publish).toHaveBeenCalledWith({
+        username: 'AA:BB:CC:DD:EE:FF',
+        pincode: '123-45-678',
+        port: 51827,
+        category: 2,
+        setupID: 'XXXX',
+        advertiser: 'ciao',
+        bind: undefined,
+      })
+    }
+    finally {
+      fsState.wlan0Exists = null
+      if (previousSha === undefined) delete process.env.GIT_SHA
+      else process.env.GIT_SHA = previousSha
+      if (previousAdvertiser === undefined) delete process.env.HOMEKIT_ADVERTISER
+      else process.env.HOMEKIT_ADVERTISER = previousAdvertiser
+      if (previousBind === undefined) delete process.env.HOMEKIT_BIND
+      else process.env.HOMEKIT_BIND = previousBind
+    }
+  })
+
+  it('uses GIT_SHA verbatim for the firmware revision', async () => {
+    const previous = process.env.GIT_SHA
+    process.env.GIT_SHA = 'abc123'
+    try {
+      const { Characteristic } = await import('hap-nodejs')
+      const { startBridge } = await import('../bridge')
+      await startBridge(fakeMonitor)
+      expect(m.infoService.setCharacteristic).toHaveBeenCalledWith(
+        Characteristic.FirmwareRevision,
+        'abc123',
+      )
+    }
+    finally {
+      if (previous === undefined) delete process.env.GIT_SHA
+      else process.env.GIT_SHA = previous
+    }
+  })
+
+  it('wraps every bridged accessory with exact names and deterministic UUID inputs', async () => {
+    const { uuid } = await import('hap-nodejs')
+    const { startBridge } = await import('../bridge')
+    await startBridge(fakeMonitor)
+
+    const expected = [
+      ['Bed left', 'bed-left'],
+      ['Bed left occupancy', 'occupancy-left'],
+      ['Snooze left', 'snooze-left'],
+      ['Bed left power', 'power-left'],
+      ['Bed right', 'bed-right'],
+      ['Bed right occupancy', 'occupancy-right'],
+      ['Snooze right', 'snooze-right'],
+      ['Bed right power', 'power-right'],
+      ['Prime pod', 'prime'],
+      ['Pod ambient', 'ambient'],
+      ['Pod pump left', 'pump-left'],
+      ['Pod pump right', 'pump-right'],
+    ]
+    expect(m.AccessoryCtor.mock.calls).toEqual(expected.map(([name, id]) => [
+      name,
+      uuid.generate(`sleepypod:AA:BB:CC:DD:EE:FF:${id}`),
+    ]))
   })
 
   it('startBridge is idempotent when a bridge is already published', async () => {
@@ -379,6 +465,30 @@ describe('homekit bridge', () => {
     expect(getStatus().pincode).toBe('999-99-999')
   })
 
+  it('logs the exact wasPaired stranded-bridge reason without pairing secrets', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { startBridge } = await import('../bridge')
+    m.loadOrCreateIdentity.mockReturnValueOnce({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'XXXX',
+      derivedFrom: 'test',
+      wasPaired: true,
+    })
+    m.regenerateIdentity.mockReturnValueOnce({
+      username: 'NN:NN:NN:NN:NN:NN',
+      pincode: '999-99-999',
+      setupId: 'YYYY',
+      rotation: 1,
+    })
+
+    await startBridge(fakeMonitor)
+
+    expect(log).toHaveBeenCalledWith(
+      '[homekit] stranded bridge detected (wasPaired, paired=0) — rotating identity from AA:BB:CC:DD:EE:FF',
+    )
+  })
+
   it('startBridge does NOT rotate when identity was never paired (fresh install)', async () => {
     const { startBridge, getStatus } = await import('../bridge')
     // loadOrCreateIdentity default returns no wasPaired; pairedClients empty.
@@ -424,6 +534,49 @@ describe('homekit bridge', () => {
     expect(m.clearPairings).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF')
     expect(m.regenerateIdentity).toHaveBeenCalledTimes(1)
     expect(getStatus().username).toBe('NN:NN:NN:NN:NN:NN')
+  })
+
+  it('logs the exact legacy stranded-bridge reason', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { startBridge } = await import('../bridge')
+    m.loadOrCreateIdentity.mockReturnValueOnce({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'XXXX',
+    })
+    m.hasAccessoryInfo.mockReturnValue(true)
+    m.regenerateIdentity.mockReturnValueOnce({
+      username: 'NN:NN:NN:NN:NN:NN',
+      pincode: '999-99-999',
+      setupId: 'YYYY',
+      rotation: 0,
+      derivedFrom: 'test',
+    })
+
+    await startBridge(fakeMonitor)
+
+    expect(log).toHaveBeenCalledWith(
+      '[homekit] stranded bridge detected (legacy-published, paired=0) — rotating identity from AA:BB:CC:DD:EE:FF',
+    )
+  })
+
+  it.each([
+    { rotation: 0 },
+    { derivedFrom: 'mmc-cid' },
+  ])('does not treat a partially modern identity as legacy: %j', async (modernField) => {
+    const { startBridge } = await import('../bridge')
+    m.loadOrCreateIdentity.mockReturnValueOnce({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'XXXX',
+      ...modernField,
+    })
+    m.hasAccessoryInfo.mockReturnValue(true)
+
+    await startBridge(fakeMonitor)
+
+    expect(m.hasAccessoryInfo).not.toHaveBeenCalled()
+    expect(m.regenerateIdentity).not.toHaveBeenCalled()
   })
 
   it('startBridge does NOT rotate legacy identity when no AccessoryInfo exists (fresh enable)', async () => {
@@ -544,6 +697,111 @@ describe('homekit bridge', () => {
     }
     finally {
       vi.useRealTimers()
+    }
+  })
+
+  it('stopBridge cancels an unpaired pair-observe interval', async () => {
+    vi.useFakeTimers()
+    try {
+      const { startBridge, stopBridge } = await import('../bridge')
+      m.readPairedControllers.mockReturnValue([])
+      await startBridge(fakeMonitor)
+      await stopBridge()
+      m.readPairedControllers.mockClear()
+
+      vi.advanceTimersByTime(60_000)
+
+      expect(m.readPairedControllers).not.toHaveBeenCalled()
+      expect(m.markIdentityPaired).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not require unref support on the pair-observe interval', async () => {
+    vi.spyOn(globalThis, 'setInterval').mockReturnValue(7 as never)
+    const { startBridge } = await import('../bridge')
+    await expect(startBridge(fakeMonitor)).resolves.toBeUndefined()
+  })
+
+  it('logs the exact published identity provenance and pairing count', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    m.readPairedControllers.mockReturnValue(['controller-1', 'controller-2'])
+    const { startBridge } = await import('../bridge')
+
+    await startBridge(fakeMonitor)
+
+    expect(log).toHaveBeenCalledWith(
+      '[homekit] Bridge published: username=AA:BB:CC:DD:EE:FF, derivedFrom=test, paired=2',
+    )
+  })
+
+  it('does not report a singleton invariant violation after a normal publish', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { startBridge } = await import('../bridge')
+
+    await startBridge(fakeMonitor)
+
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('getStatus is empty and does not read pairing storage before identity exists', async () => {
+    const { getStatus } = await import('../bridge')
+    expect(getStatus()).toEqual({
+      running: false,
+      transitioning: false,
+      pincode: null,
+      setupId: null,
+      setupURI: null,
+      username: null,
+      pairedControllers: [],
+    })
+    expect(m.readPairedControllers).not.toHaveBeenCalled()
+  })
+
+  it('logs an exact destroy warning and keeps bridge state on teardown failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startBridge, stopBridge, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    if (!m.bridgeInstance) throw new Error('bridge instance missing')
+    m.bridgeInstance.destroy = vi.fn().mockRejectedValue(new Error('destroy boom'))
+
+    await stopBridge()
+
+    expect(warn).toHaveBeenCalledWith('[homekit] destroy failed:', 'destroy boom')
+    expect(getStatus().running).toBe(true)
+  })
+
+  it.each(['avahi', 'ciao'] as const)('honors HOMEKIT_ADVERTISER=%s', async (advertiser) => {
+    const previous = process.env.HOMEKIT_ADVERTISER
+    process.env.HOMEKIT_ADVERTISER = advertiser
+    try {
+      const { startBridge } = await import('../bridge')
+      await startBridge(fakeMonitor)
+      expect(m.bridgeInstance?.publish).toHaveBeenCalledWith(
+        expect.objectContaining({ advertiser }),
+      )
+    }
+    finally {
+      if (previous === undefined) delete process.env.HOMEKIT_ADVERTISER
+      else process.env.HOMEKIT_ADVERTISER = previous
+    }
+  })
+
+  it('ignores an unsupported HOMEKIT_ADVERTISER value', async () => {
+    const previous = process.env.HOMEKIT_ADVERTISER
+    process.env.HOMEKIT_ADVERTISER = 'unsupported'
+    try {
+      const { startBridge } = await import('../bridge')
+      await startBridge(fakeMonitor)
+      expect(m.bridgeInstance?.publish).toHaveBeenCalledWith(
+        expect.objectContaining({ advertiser: 'ciao' }),
+      )
+    }
+    finally {
+      if (previous === undefined) delete process.env.HOMEKIT_ADVERTISER
+      else process.env.HOMEKIT_ADVERTISER = previous
     }
   })
 

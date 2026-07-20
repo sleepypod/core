@@ -55,6 +55,7 @@ const {
   readRawRecord,
   findIndexEntry,
   decodeSensorFrames,
+  int32BufferToArray,
   frameIndex,
   clientSubscriptions,
   clientDroppedFrames,
@@ -139,6 +140,19 @@ describe('piezoStream — bounded frame index', () => {
     for (let i = 1; i < frameIndex.length; i++) {
       expect(frameIndex[i].ts).toBeGreaterThanOrEqual(frameIndex[i - 1].ts)
     }
+  })
+
+  it('evicts entries older than the cutoff but retains the exact boundary', () => {
+    const cutoff = 1_000_000
+    appendFrameIndex({ ts: cutoff - 1, offset: 0 })
+    appendFrameIndex({ ts: cutoff, offset: 100 })
+
+    appendFrameIndex({ ts: cutoff + FRAME_INDEX_RETENTION_S, offset: 200 })
+
+    expect(frameIndex.map(entry => entry.ts)).toEqual([
+      cutoff,
+      cutoff + FRAME_INDEX_RETENTION_S,
+    ])
   })
 
   it('does not grow when the same ts is pushed repeatedly (entries still retained within window)', () => {
@@ -466,6 +480,33 @@ describe('piezoStream — decodeSensorFrames', () => {
     ])
     expect(decodeSensorFrames(inner)).toEqual([{ type: 'log', ts: 1, msg: 'x' }])
   })
+
+  it('uses epoch seconds for a piezo frame whose firmware timestamp is missing', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_987)
+    const inner = Buffer.from(innerEncoder.encode({
+      type: 'piezo-dual',
+      freq: 50,
+      left1: int32Buffer([1]),
+      right1: int32Buffer([2]),
+    }))
+
+    expect(decodeSensorFrames(inner)).toEqual([{
+      type: 'piezo-dual',
+      ts: 1_700_000_000,
+      freq: 50,
+      left1: [1],
+      right1: [2],
+      left2: undefined,
+      right2: undefined,
+    }])
+    now.mockRestore()
+  })
+
+  it('turns missing, empty, and partial int32 buffers into empty arrays', () => {
+    expect(int32BufferToArray(undefined)).toEqual([])
+    expect(int32BufferToArray(Buffer.alloc(0))).toEqual([])
+    expect(int32BufferToArray(Buffer.from([1, 2, 3]))).toEqual([])
+  })
 })
 
 describe('piezoStream — findIndexEntry binary search', () => {
@@ -531,7 +572,8 @@ describe('piezoStream — broadcastFrame and onServerFrame', () => {
     unsubB()
   })
 
-  it('returns early without crashing when no server is running and no listeners are registered', () => {
+  it('returns early without crashing when no server is running and no listeners are registered', async () => {
+    await shutdownPiezoStreamServer()
     expect(() => broadcastFrame({ type: 'deviceStatus', ts: 1 })).not.toThrow()
   })
 })
@@ -632,6 +674,19 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const a = startPiezoStreamServer()
     const b = startPiezoStreamServer()
     expect(a).toBe(b)
+  })
+
+  it('logs the exact server-side WebSocket error without crashing the connection', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const port = startAndPort()
+    const client = await connectClient(port)
+    const serverSocket = [...startPiezoStreamServer().clients][0]
+
+    serverSocket.emit('error', new Error('socket boom'))
+
+    expect(errorSpy).toHaveBeenCalledWith('[sensorStream] WebSocket error:', 'socket boom')
+    expect(client.ws.readyState).toBe(WsClient.OPEN)
+    await client.close()
   })
 
   it('subscribe with no sensors → server acks all sensor types', async () => {
@@ -833,6 +888,67 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await client.close()
   })
 
+  it('completes a seek when the indexed file was truncated at its indexed offset', async () => {
+    const filePath = path.join(tmpRawDir, 'truncated-at-offset.RAW')
+    const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 250, left: 1, right: 2 }])
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, rec)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 250)
+
+    fs.truncateSync(filePath, 0)
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 250 }))
+    await client.waitFor(m => m.type === 'seek_complete')
+
+    expect(client.messages.slice(before)).toContainEqual({ type: 'seek_complete' })
+    await client.close()
+  })
+
+  it('yields while replaying 500 records and still completes the full seek', async () => {
+    const filePath = path.join(tmpRawDir, 'yielding-replay.RAW')
+    const records = Array.from({ length: 501 }, (_, i) => buildOuterRecord(i + 1, [{
+      type: 'capSense',
+      ts: 260,
+      left: i,
+      right: i,
+    }]))
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(records))
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 501, 5000)
+
+    const immediateSpy = vi.spyOn(globalThis, 'setImmediate')
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 259 }))
+    await client.waitFor(m => m.type === 'seek_complete', 5000)
+
+    expect(immediateSpy).toHaveBeenCalled()
+    expect(client.messages.slice(before).filter(m => m.type === 'capSense')).toHaveLength(501)
+    await client.close()
+  })
+
+  it('completes a seek after replaying the valid prefix of a truncated record', async () => {
+    const filePath = path.join(tmpRawDir, 'truncated-seek-record.RAW')
+    const valid = buildOuterRecord(1, [{ type: 'capSense', ts: 270, left: 1, right: 2 }])
+    const truncated = buildOuterRecord(2, [{ type: 'capSense', ts: 271, left: 3, right: 4 }])
+    const bytes = Buffer.concat([valid, truncated.subarray(0, Math.floor(truncated.length / 2))])
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, bytes)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 270)
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 270 }))
+    await client.waitFor(m => m.type === 'seek_complete')
+
+    expect(client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)).toEqual([270])
+    await client.close()
+  })
+
   it('seek honours the subscription filter — frames outside the set are not replayed', async () => {
     const filePath = path.join(tmpRawDir, 'filter.RAW')
     const recA = buildOuterRecord(1, [{ type: 'capSense', ts: 300, left: 0, right: 0 }])
@@ -875,6 +991,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
     // garbage length — the field engineers grep for this line, keep it exact.
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Resync: skipped %d bytes'), garbage.length, expect.any(String))
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 400 }))
+    await client.waitFor(m => m.type === 'seek_complete')
+    const replayed = client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)
+    expect(replayed).toEqual([400, 401])
     await client.close()
   })
 
@@ -1027,6 +1149,12 @@ describe('piezoStream — server lifecycle and protocol', () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('no 0xa2 marker in remaining %d bytes'),
       trailing.length, expect.any(String))
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 900 }))
+    await client.waitFor(m => m.type === 'seek_complete')
+    expect(client.messages.slice(before).some(m => m.type === 'capSense' && m.ts === 900)).toBe(true)
+
     // Stream should continue working — append a fresh good record and confirm
     // it still gets parsed (the file follower carries on past the resync).
     await new Promise(r => setTimeout(r, 50))
@@ -1263,17 +1391,17 @@ describe('piezoStream — server lifecycle and protocol', () => {
 
   it('seek aborts cleanly if the client closes mid-replay', async () => {
     const filePath = path.join(tmpRawDir, 'mid-close.RAW')
-    // Many small frames so the replay loop has multiple iterations to
-    // notice the closed socket.
+    // The 500-record cooperative yield gives the close handshake a chance to
+    // finish before the replay loop checks readyState again.
     const recs: Buffer[] = []
-    for (let i = 0; i < 100; i++) {
-      recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 1800 + i, left: i, right: i }]))
+    for (let i = 0; i < 600; i++) {
+      recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 1800, left: i, right: i }]))
     }
 
     const port = startAndPort()
     const client = await connectClient(port)
     fs.writeFileSync(filePath, Buffer.concat(recs))
-    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 100)
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 600, 5000)
 
     client.ws.send(JSON.stringify({ type: 'seek', timestamp: 1800 }))
     // Close the socket immediately — the replay loop must notice and bail.
@@ -1499,6 +1627,23 @@ describe('piezoStream — server lifecycle and protocol', () => {
       probe.once('open', () => resolve('open'))
       probe.once('error', reject)
     })).rejects.toThrow()
+  })
+
+  it('terminates active clients and clears their state during shutdown', async () => {
+    const port = startAndPort()
+    const client = await connectClient(port)
+    const serverSocket = [...startPiezoStreamServer().clients][0]
+    const terminateSpy = vi.spyOn(serverSocket, 'terminate')
+    clientSubscriptions.set(serverSocket, new Set(['capSense']))
+    clientDroppedFrames.set(serverSocket, 3)
+
+    await shutdownPiezoStreamServer()
+
+    expect(terminateSpy).toHaveBeenCalledOnce()
+    expect(clientSubscriptions.size).toBe(0)
+    expect(clientDroppedFrames.size).toBe(0)
+    await waitUntil(() => client.ws.readyState === WsClient.CLOSED)
+    expect(client.ws.readyState).toBe(WsClient.CLOSED)
   })
 
   it('logs client connect and plain disconnect (no drop suffix for healthy clients)', async () => {

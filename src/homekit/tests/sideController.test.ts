@@ -317,6 +317,19 @@ describe('sideController', () => {
       )
       warn.mockRestore()
     })
+
+    it('logs the exact powered-on target when setPower rejects', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      setPower.mockRejectedValueOnce(new Error('comms'))
+
+      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('comms')
+
+      expect(warn).toHaveBeenCalledWith(
+        '[homekit] setPower(left, true, 70) failed:',
+        'comms',
+      )
+      warn.mockRestore()
+    })
   })
 
   describe('reconcileIntendedPower', () => {

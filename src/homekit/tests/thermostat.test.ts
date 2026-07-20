@@ -26,8 +26,9 @@ const status: DeviceStatus = {
   sensorLabel: 'pod4',
 }
 
-const fakeMonitor: Pick<DacMonitor, 'on' | 'getLastStatus'> = {
+const fakeMonitor: Pick<DacMonitor, 'on' | 'off' | 'getLastStatus'> = {
   on: vi.fn().mockReturnThis() as never,
+  off: vi.fn().mockReturnThis() as never,
   getLastStatus: () => status,
 }
 
@@ -39,6 +40,33 @@ describe('thermostat accessory', () => {
     setTemperature.mockClear()
     setPower.mockClear()
     registerManualOverride.mockClear()
+  })
+
+  it.each(['left', 'right'] as const)('uses stable metadata for the %s side', (side) => {
+    const { service, stop } = buildThermostatService(side, fakeMonitor as DacMonitor)
+    expect(service.displayName).toBe(`Bed ${side}`)
+    expect(service.subtype).toBe(side)
+    stop()
+  })
+
+  it('sets exact temperature bounds, mode values, and read-only display-unit permissions', () => {
+    const { service, stop } = buildThermostatService('left', fakeMonitor as DacMonitor)
+    const minC = f2c(55)
+    const maxC = f2c(110)
+
+    expect(service.getCharacteristic(Characteristic.CurrentTemperature).props).toMatchObject({
+      minValue: minC,
+      maxValue: maxC,
+      minStep: 0.5,
+    })
+    expect(service.getCharacteristic(Characteristic.TargetTemperature).props).toMatchObject({
+      minValue: minC,
+      maxValue: maxC,
+      minStep: 0.5,
+    })
+    expect(service.getCharacteristic(Characteristic.TargetHeatingCoolingState).props.validValues).toEqual([0, 3])
+    expect(service.getCharacteristic(Characteristic.TemperatureDisplayUnits).props.perms).toEqual(['pr', 'ev'])
+    stop()
   })
 
   it('reports current temperature in Celsius via onGet', async () => {

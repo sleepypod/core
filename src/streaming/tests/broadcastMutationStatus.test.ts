@@ -191,6 +191,16 @@ describe('broadcastMutationStatus', () => {
     expect(frame.leftSide).toEqual({ temperatureC: 22, isOn: true, isAlarmVibrating: false })
   })
 
+  it('ignores an overlay payload when no side is provided', () => {
+    setLastStatus(baseStatus)
+
+    broadcastMutationStatus(undefined, { temperatureC: 99, isOn: false })
+
+    const frame = piezoMock.broadcastFrame.mock.calls[0]?.[0] as Record<string, any>
+    expect(frame.leftSide).toEqual({ temperatureC: 22, isOn: true, isAlarmVibrating: false })
+    expect(frame.rightSide).toEqual({ temperatureC: 24, isOn: false, isAlarmVibrating: false })
+  })
+
   it('includes primeCompletedNotification when a timestamp is set', () => {
     setLastStatus(baseStatus)
     primeMock.state.primeCompletedAt = 1_700_000_000_000
