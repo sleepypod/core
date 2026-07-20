@@ -1118,11 +1118,14 @@ describe('mqttBridge — frame subscription', () => {
     fake.connected = true
     fake.emit('connect')
     fake.publish.mockClear()
+    const stringify = vi.spyOn(JSON, 'stringify')
 
     fake.connected = false
+    stringify.mockClear()
     piezoMock.state.listener?.({ type: 'deviceStatus' })
 
     expect(fake.publish).not.toHaveBeenCalled()
+    expect(stringify).not.toHaveBeenCalled()
 
     await shutdownMqttBridge()
   })

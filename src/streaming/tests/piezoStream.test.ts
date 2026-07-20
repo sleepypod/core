@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
 import { Encoder } from 'cbor-x'
 import { WebSocket as WsClient } from 'ws'
 
@@ -529,6 +530,14 @@ describe('piezoStream — findIndexEntry binary search', () => {
     expect(findIndexEntry(30)).toBe(2)
     expect(findIndexEntry(99)).toBe(2)
   })
+
+  it('returns the last indexed entry when the earliest timestamp is duplicated', () => {
+    appendFrameIndex({ ts: 10, offset: 0 })
+    appendFrameIndex({ ts: 10, offset: 100 })
+    appendFrameIndex({ ts: 20, offset: 200 })
+
+    expect(findIndexEntry(10)).toBe(1)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -888,22 +897,181 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await client.close()
   })
 
-  it('completes a seek when the indexed file was truncated at its indexed offset', async () => {
+  it('completes a seek when the file was truncated below a positive indexed offset', async () => {
     const filePath = path.join(tmpRawDir, 'truncated-at-offset.RAW')
-    const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 250, left: 1, right: 2 }])
+    const first = buildOuterRecord(1, [{ type: 'capSense', ts: 250, left: 1, right: 2 }])
+    const second = buildOuterRecord(2, [{ type: 'capSense', ts: 251, left: 3, right: 4 }])
 
     const port = startAndPort()
     const client = await connectClient(port)
-    fs.writeFileSync(filePath, rec)
-    await client.waitFor(m => m.type === 'capSense' && m.ts === 250)
+    fs.writeFileSync(filePath, Buffer.concat([first, second]))
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 251)
 
     fs.truncateSync(filePath, 0)
     const before = client.messages.length
-    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 250 }))
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 251 }))
     await client.waitFor(m => m.type === 'seek_complete')
 
     expect(client.messages.slice(before)).toContainEqual({ type: 'seek_complete' })
     await client.close()
+  })
+
+  it('sizes a nonzero-offset seek from the remaining bytes without exceeding the cap', async () => {
+    const filePath = path.join(tmpRawDir, 'seek-buffer-size.RAW')
+    const first = buildOuterRecord(1, [{ type: 'capSense', ts: 252, left: 1, right: 2 }])
+    const second = buildOuterRecord(2, [{ type: 'capSense', ts: 253, left: 3, right: 4 }])
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([first, second]))
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 253)
+
+    const startOffset = frameIndex.find(entry => entry.ts === 253)?.offset
+    expect(startOffset).toBe(first.length)
+    const remainder = 7
+    const close = vi.fn(async () => {})
+    const read = vi.fn(async (...args: [Buffer, number, number, number]) => ({
+      bytesRead: 0,
+      buffer: args[0],
+    }))
+    const open = vi.spyOn(fs.promises, 'open').mockResolvedValue({
+      stat: vi.fn(async () => ({ size: (startOffset as number) + remainder })),
+      read,
+      close,
+    } as never)
+    const realAlloc = Buffer.alloc.bind(Buffer)
+    const alloc = vi.spyOn(Buffer, 'alloc').mockImplementation(
+      ((size: number) => realAlloc(Math.min(size, 1024))) as typeof Buffer.alloc,
+    )
+
+    try {
+      client.ws.send(JSON.stringify({ type: 'seek', timestamp: 253 }))
+      await client.waitFor(m => m.type === 'seek_complete')
+
+      expect(alloc).toHaveBeenCalledWith(remainder)
+      expect(read).toHaveBeenCalledOnce()
+      expect(read.mock.calls[0]?.[2]).toBe(remainder)
+      expect(read.mock.calls[0]?.[3]).toBe(startOffset)
+      expect(close).toHaveBeenCalledOnce()
+    }
+    finally {
+      alloc.mockRestore()
+      open.mockRestore()
+      await client.close()
+    }
+  })
+
+  it('uses the zero-byte early completion even if the requester closes during stat', async () => {
+    const filePath = path.join(tmpRawDir, 'seek-zero-byte-close.RAW')
+    const record = buildOuterRecord(1, [{ type: 'capSense', ts: 254, left: 1, right: 2 }])
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, record)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 254)
+
+    let resolveStat: (value: { size: number }) => void = () => {}
+    const statGate = new Promise<{ size: number }>((resolve) => {
+      resolveStat = resolve
+    })
+    const stat = vi.fn(() => statGate)
+    const close = vi.fn(async () => {})
+    const open = vi.spyOn(fs.promises, 'open').mockResolvedValue({ stat, close } as never)
+    const serverSocket = [...startPiezoStreamServer().clients][0] as any
+    const send = vi.spyOn(serverSocket, 'send').mockImplementation(() => {})
+
+    try {
+      client.ws.send(JSON.stringify({ type: 'seek', timestamp: 254 }))
+      await waitUntil(() => stat.mock.calls.length === 1)
+      Object.defineProperty(serverSocket, 'readyState', {
+        get: () => WsClient.CLOSED,
+        configurable: true,
+      })
+      resolveStat({ size: 0 })
+      await waitUntil(() => send.mock.calls.length > 0)
+
+      expect(send.mock.calls.some(([payload]) =>
+        JSON.parse(String(payload)).type === 'seek_complete')).toBe(true)
+      expect(close).toHaveBeenCalledOnce()
+    }
+    finally {
+      delete serverSocket.readyState
+      send.mockRestore()
+      open.mockRestore()
+      await client.close()
+    }
+  })
+
+  it('stops on a zero-byte short read and trims the unread seek-buffer tail', async () => {
+    const filePath = path.join(tmpRawDir, 'seek-short-read.RAW')
+    const record = buildOuterRecord(1, [{ type: 'capSense', ts: 255, left: 1, right: 2 }])
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, record)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 255)
+
+    const declaredSize = record.length + 8
+    const realAlloc = Buffer.alloc.bind(Buffer)
+    const seekBuffer = realAlloc(declaredSize)
+    const subarray = vi.spyOn(seekBuffer, 'subarray')
+    const alloc = vi.spyOn(Buffer, 'alloc').mockImplementation(
+      ((size: number) => size === declaredSize ? seekBuffer : realAlloc(size)) as typeof Buffer.alloc,
+    )
+    let readCount = 0
+    const read = vi.fn(async (buffer: Buffer, offset: number) => {
+      readCount += 1
+      if (readCount === 1) {
+        record.copy(buffer, offset)
+        return { bytesRead: record.length, buffer }
+      }
+      if (readCount === 2) return { bytesRead: 0, buffer }
+      throw new Error('read loop did not stop after EOF')
+    })
+    const close = vi.fn(async () => {})
+    const open = vi.spyOn(fs.promises, 'open').mockResolvedValue({
+      stat: vi.fn(async () => ({ size: declaredSize })),
+      read,
+      close,
+    } as never)
+
+    try {
+      const before = client.messages.length
+      client.ws.send(JSON.stringify({ type: 'seek', timestamp: 255 }))
+      await client.waitFor(m => m.type === 'seek_complete')
+
+      expect(read).toHaveBeenCalledTimes(2)
+      expect(subarray).toHaveBeenCalledWith(0, record.length)
+      expect(client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)).toEqual([255])
+      expect(close).toHaveBeenCalledOnce()
+    }
+    finally {
+      alloc.mockRestore()
+      open.mockRestore()
+      await client.close()
+    }
+  })
+
+  it('closes the seek file handle when a post-open operation fails', async () => {
+    const filePath = path.join(tmpRawDir, 'seek-handle-cleanup.RAW')
+    const record = buildOuterRecord(1, [{ type: 'capSense', ts: 256, left: 1, right: 2 }])
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, record)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 256)
+
+    const close = vi.fn(async () => {})
+    const open = vi.spyOn(fs.promises, 'open').mockResolvedValue({
+      stat: vi.fn(async () => { throw new Error('stat failed') }),
+      close,
+    } as never)
+
+    try {
+      client.ws.send(JSON.stringify({ type: 'seek', timestamp: 256 }))
+      await waitUntil(() => close.mock.calls.length === 1)
+      expect(close).toHaveBeenCalledOnce()
+    }
+    finally {
+      open.mockRestore()
+      await client.close()
+    }
   })
 
   it('yields while replaying 500 records and still completes the full seek', async () => {
@@ -946,6 +1114,34 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await client.waitFor(m => m.type === 'seek_complete')
 
     expect(client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)).toEqual([270])
+    await client.close()
+  })
+
+  it('does not resync through a marker-shaped payload inside an incomplete record', async () => {
+    const filePath = path.join(tmpRawDir, 'truncated-seek-marker.RAW')
+    const valid = buildOuterRecord(1, [{ type: 'capSense', ts: 272, left: 1, right: 2 }])
+    const markerShapedPayload = buildOuterRecord(3, [{
+      type: 'capSense', ts: 273, left: 3, right: 4,
+    }])
+    const declaredLength = markerShapedPayload.length + 20
+    expect(declaredLength).toBeLessThan(256)
+    const incomplete = Buffer.concat([
+      Buffer.from([0xa2, 0x63, 0x73, 0x65, 0x71]),
+      encodeSeqValueExposed(2),
+      Buffer.from([0x64, 0x64, 0x61, 0x74, 0x61, 0x58, declaredLength]),
+      markerShapedPayload,
+    ])
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat([valid, incomplete]))
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 272)
+
+    const before = client.messages.length
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 272 }))
+    await client.waitFor(m => m.type === 'seek_complete')
+
+    expect(client.messages.slice(before).filter(m => m.type === 'capSense').map(m => m.ts)).toEqual([272])
     await client.close()
   })
 
@@ -1592,6 +1788,40 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await client.close()
   })
 
+  it('closes the live-tail descriptor when a read fails after open', async () => {
+    const filePath = path.join(tmpRawDir, 'live-read-error.RAW')
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.from([0xa2]))
+
+    // Built-in ESM namespace exports are non-configurable; patch the shared
+    // CommonJS fs object that backs piezoStream's live bindings instead.
+    const mutableFs = require('node:fs') as typeof fs
+    const open = vi.spyOn(mutableFs, 'openSync').mockReturnValue(91)
+    const stat = vi.spyOn(mutableFs, 'fstatSync').mockReturnValue({ size: 1 } as never)
+    const read = vi.spyOn(mutableFs, 'readSync').mockImplementation(() => {
+      throw new Error('read failed')
+    })
+    const close = vi.spyOn(mutableFs, 'closeSync').mockImplementation(() => {})
+    syncBuiltinESMExports()
+
+    try {
+      await waitUntil(() => close.mock.calls.some(([fd]) => fd === 91))
+      expect(open).toHaveBeenCalled()
+      expect(stat).toHaveBeenCalledWith(91)
+      expect(read).toHaveBeenCalled()
+      expect(close).toHaveBeenCalledWith(91)
+    }
+    finally {
+      close.mockRestore()
+      read.mockRestore()
+      stat.mockRestore()
+      open.mockRestore()
+      syncBuiltinESMExports()
+      await client.close()
+    }
+  })
+
   it('does not fan non-frzHealth file frames out to server-side listeners', async () => {
     const filePath = path.join(tmpRawDir, 'not-health.RAW')
     const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 2300, left: 0, right: 0 }])
@@ -1665,6 +1895,28 @@ describe('piezoStream — server lifecycle and protocol', () => {
       (c: unknown[]) => typeof c[0] === 'object' && c[0] !== null && (c[0] as any).type === type)
   }
 
+  it('does not yield for a complete replay of exactly 499 records', async () => {
+    const filePath = path.join(tmpRawDir, 'yield-before-boundary.RAW')
+    const records = Array.from({ length: 499 }, (_, i) => buildOuterRecord(i + 1, [{
+      type: 'capSense',
+      ts: 2490,
+      left: i,
+      right: i,
+    }]))
+
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, Buffer.concat(records))
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 499, 5000)
+
+    const immediateSpy = vi.spyOn(globalThis, 'setImmediate')
+    client.ws.send(JSON.stringify({ type: 'seek', timestamp: 2489 }))
+    await client.waitFor(m => m.type === 'seek_complete', 5000)
+
+    expect(immediateSpy).not.toHaveBeenCalled()
+    await client.close()
+  }, 20000)
+
   it('yields exactly once at the 500-record replay boundary', async () => {
     const filePath = path.join(tmpRawDir, 'yield-boundary.RAW')
     // Exactly 500 records: the counter reaches the yield threshold on the last
@@ -1693,20 +1945,21 @@ describe('piezoStream — server lifecycle and protocol', () => {
   it('seek neither serializes nor sends once the requesting client is no longer OPEN', async () => {
     const filePath = path.join(tmpRawDir, 'seek-closed.RAW')
     const recs: Buffer[] = []
-    for (let i = 0; i < 5; i++) {
-      recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 2400 + i, left: i, right: i }]))
+    for (let i = 0; i < 500; i++) {
+      recs.push(buildOuterRecord(i + 1, [{ type: 'capSense', ts: 2400, left: i, right: i }]))
     }
 
     const port = startAndPort()
     const client = await connectClient(port)
     fs.writeFileSync(filePath, Buffer.concat(recs))
-    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 5)
+    await waitUntil(() => client.messages.filter(m => m.type === 'capSense').length >= 500, 5000)
 
     // Pin the server-side socket to CLOSED so the replay loop must bail on its
     // first frame and the completion notice must be withheld.
     const serverSocket = [...startPiezoStreamServer().clients][0] as any
     const sendSpy = vi.spyOn(serverSocket, 'send')
     const stringifySpy = vi.spyOn(JSON, 'stringify')
+    const immediateSpy = vi.spyOn(globalThis, 'setImmediate')
     Object.defineProperty(serverSocket, 'readyState', {
       get: () => WsClient.CLOSED,
       configurable: true,
@@ -1717,10 +1970,11 @@ describe('piezoStream — server lifecycle and protocol', () => {
 
     expect(frameSerializations(stringifySpy, 'capSense')).toHaveLength(0)
     expect(sendSpy).not.toHaveBeenCalled()
+    expect(immediateSpy).not.toHaveBeenCalled()
 
     delete serverSocket.readyState
     await client.close()
-  })
+  }, 20000)
 
   it('serializes a live frame once no matter how many clients receive it', async () => {
     const filePath = path.join(tmpRawDir, 'one-serialize.RAW')
