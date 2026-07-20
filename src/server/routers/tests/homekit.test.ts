@@ -29,7 +29,8 @@ const qrcodeMock = vi.hoisted(() => ({
 // the set/where pair.
 const dbMock = vi.hoisted(() => {
   const selectRow: { homekitEnabled: boolean } = { homekitEnabled: false }
-  const limit = vi.fn(async () => [selectRow])
+  const state = { hasRow: true }
+  const limit = vi.fn(async () => state.hasRow ? [selectRow] : [])
   const where = vi.fn(() => ({ limit }))
   const from = vi.fn(() => ({ where }))
   const select = vi.fn(() => ({ from }))
@@ -39,7 +40,7 @@ const dbMock = vi.hoisted(() => {
   )
   const update = vi.fn(() => ({ set: setSpy }))
 
-  return { select, update, setSpy, selectRow, limit, where, from }
+  return { select, update, setSpy, selectRow, state, limit, where, from }
 })
 
 vi.mock('@/src/homekit', () => homekitMock)
@@ -74,6 +75,7 @@ beforeEach(() => {
   dbMock.update.mockClear()
   dbMock.setSpy.mockClear()
   dbMock.selectRow.homekitEnabled = false
+  dbMock.state.hasRow = true
 })
 
 describe('homekit.getStatus', () => {
@@ -144,6 +146,11 @@ describe('homekit.getStatus', () => {
     expect(result.transitioning).toBe(true)
     expect(result.running).toBe(false)
   })
+
+  it('defaults enabled=false when the singleton settings row is absent', async () => {
+    dbMock.state.hasRow = false
+    await expect(caller.getStatus({})).resolves.toMatchObject({ enabled: false })
+  })
 })
 
 describe('homekit.setEnabled', () => {
@@ -185,10 +192,38 @@ describe('homekit.setEnabled', () => {
     expect(homekitMock.disable).toHaveBeenCalledTimes(1)
   })
 
+  it('rolls a failed disable persistence back to the previously-enabled runtime', async () => {
+    dbMock.selectRow.homekitEnabled = true
+    dbMock.setSpy.mockReturnValueOnce({
+      where: vi.fn(async () => { throw new Error('disk full') }),
+    })
+
+    await expect(caller.setEnabled({ enabled: false })).rejects.toThrow('Failed to toggle HomeKit: disk full')
+    expect(homekitMock.disable).toHaveBeenCalledOnce()
+    expect(homekitMock.enable).toHaveBeenCalledOnce()
+  })
+
+  it('treats a missing previous settings row as disabled during rollback', async () => {
+    dbMock.state.hasRow = false
+    dbMock.setSpy.mockReturnValueOnce({
+      where: vi.fn(async () => { throw new Error('disk full') }),
+    })
+
+    await expect(caller.setEnabled({ enabled: true })).rejects.toThrow('Failed to toggle HomeKit: disk full')
+    expect(homekitMock.enable).toHaveBeenCalledOnce()
+    expect(homekitMock.disable).toHaveBeenCalledOnce()
+  })
+
   it('wraps lifecycle errors as INTERNAL_SERVER_ERROR', async () => {
     homekitMock.enable.mockRejectedValueOnce(new Error('mDNS failure'))
 
     await expect(caller.setEnabled({ enabled: true })).rejects.toThrow(/Failed to toggle HomeKit: mDNS failure/)
+  })
+
+  it('uses the lowercase unknown fallback for a non-Error lifecycle rejection', async () => {
+    homekitMock.enable.mockRejectedValueOnce({ failed: true })
+    await expect(caller.setEnabled({ enabled: true }))
+      .rejects.toThrow('Failed to toggle HomeKit: unknown')
   })
 })
 

@@ -6,6 +6,20 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type * as DrizzleOrmModule from 'drizzle-orm'
+
+const sqlMock = vi.hoisted(() => ({
+  and: vi.fn((...conditions: unknown[]) => ({ op: 'and', conditions })),
+  desc: vi.fn((column: unknown) => ({ op: 'desc', column })),
+  eq: vi.fn((left: unknown, right: unknown) => ({ op: 'eq', left, right })),
+  gte: vi.fn((left: unknown, right: unknown) => ({ op: 'gte', left, right })),
+  lte: vi.fn((left: unknown, right: unknown) => ({ op: 'lte', left, right })),
+}))
+
+vi.mock('drizzle-orm', async (importOriginal) => {
+  const actual = await importOriginal<typeof DrizzleOrmModule>()
+  return { ...actual, ...sqlMock }
+})
 
 const fsMock = vi.hoisted(() => ({
   writeFile: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
@@ -49,6 +63,7 @@ const dbMock = vi.hoisted(() => {
 
   return {
     select, insert, values, onConflict,
+    whereRuns, whereQuality, limitRuns, limitQuality,
     profileRows, runRows, qualityRows,
     setActive: (t: 'profiles' | 'runs' | 'quality') => { activeTable = t },
   }
@@ -78,6 +93,7 @@ beforeEach(() => {
   dbMock.runRows.length = 0
   dbMock.qualityRows.length = 0
   dbMock.setActive('profiles')
+  Object.values(sqlMock).forEach(mock => mock.mockClear())
 })
 
 describe('calibration.getStatus', () => {
@@ -93,6 +109,29 @@ describe('calibration.getStatus', () => {
     expect(result.piezo?.status).toBe('completed')
     expect(result.capacitance).toBeNull()
     expect(result.temperature).toBeNull()
+  })
+
+  it('maps all three sensor types to their complete profile objects', async () => {
+    const base = {
+      side: 'right' as const,
+      status: 'completed' as const,
+      qualityScore: 0.91,
+      samplesUsed: 400,
+      createdAt: new Date(10),
+      expiresAt: new Date(20),
+      errorMessage: null,
+    }
+    dbMock.profileRows.push(
+      { ...base, id: 1, sensorType: 'capacitance' },
+      { ...base, id: 2, sensorType: 'piezo' },
+      { ...base, id: 3, sensorType: 'temperature' },
+    )
+
+    expect(await caller.getStatus({ side: 'right' })).toEqual({
+      capacitance: { ...base, id: 1, sensorType: 'capacitance' },
+      piezo: { ...base, id: 2, sensorType: 'piezo' },
+      temperature: { ...base, id: 3, sensorType: 'temperature' },
+    })
   })
 })
 
@@ -110,17 +149,23 @@ describe('calibration.getHistory', () => {
     const out = await caller.getHistory({ side: 'left', limit: 5 })
     expect(out).toHaveLength(1)
     expect(out[0].sensorType).toBe('piezo')
+    expect(dbMock.limitRuns).toHaveBeenCalledWith(5)
+    expect(sqlMock.and.mock.calls[0]?.[0]).toMatchObject({ op: 'eq', right: 'left' })
+    expect(sqlMock.and.mock.calls[0]).toHaveLength(1)
   })
 
   it('with no sensorType filter still resolves', async () => {
     dbMock.setActive('runs')
     const out = await caller.getHistory({ side: 'right', sensorType: 'capacitance', limit: 1 })
     expect(out).toEqual([])
+    expect(sqlMock.and.mock.calls[0]).toHaveLength(2)
+    expect(sqlMock.eq).toHaveBeenCalledWith(expect.anything(), 'capacitance')
   })
 })
 
 describe('calibration.triggerCalibration', () => {
   it('writes the trigger payload atomically (write tmp → rename) and queues pending row', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_123)
     const result = await caller.triggerCalibration({ side: 'left', sensorType: 'piezo' })
 
     // Atomic write pattern: writeFile to .tmp first, then rename
@@ -128,24 +173,40 @@ describe('calibration.triggerCalibration', () => {
     expect(fsMock.rename).toHaveBeenCalledTimes(1)
     const [tmpPath, payload] = fsMock.writeFile.mock.calls[0]
     expect(typeof tmpPath).toBe('string')
-    expect(String(tmpPath)).toMatch(/\.tmp$/)
+    expect(tmpPath).toBe('/persistent/sleepypod-data/.calibrate-trigger.1700000000123.tmp')
     const parsed = JSON.parse(String(payload))
     expect(parsed.side).toBe('left')
     expect(parsed.sensor_type).toBe('piezo')
-    expect(typeof parsed.ts).toBe('number')
+    expect(parsed.ts).toBe(1_700_000_000)
 
     // The rename target must drop the .tmp suffix
     const [renameSrc, renameDst] = fsMock.rename.mock.calls[0]
     expect(renameSrc).toBe(tmpPath)
-    expect(String(renameDst)).not.toMatch(/\.tmp$/)
+    expect(renameDst).toBe('/persistent/sleepypod-data/.calibrate-trigger.1700000000123')
 
     // Pending row inserted with onConflictDoUpdate
     expect(dbMock.insert).toHaveBeenCalledTimes(1)
     expect(dbMock.onConflict).toHaveBeenCalledTimes(1)
+    expect(dbMock.values).toHaveBeenCalledWith({
+      side: 'left',
+      sensorType: 'piezo',
+      status: 'pending',
+      parameters: {},
+      createdAt: expect.any(Date),
+    })
+    expect(dbMock.onConflict).toHaveBeenCalledWith({
+      target: [expect.anything(), expect.anything()],
+      set: { status: 'pending', createdAt: expect.any(Date), errorMessage: null },
+    })
 
     expect(result.triggered).toBe(true)
-    expect(result.message).toContain('left')
-    expect(result.message).toContain('piezo')
+    expect(result.message).toBe('Calibration queued for left/piezo. The calibrator module will process it within 10 seconds.')
+  })
+
+  it('uses Unknown error for a non-Error trigger failure', async () => {
+    fsMock.writeFile.mockRejectedValueOnce('disk unavailable')
+    await expect(caller.triggerCalibration({ side: 'right', sensorType: 'temperature' }))
+      .rejects.toThrow('Failed to trigger calibration: Unknown error')
   })
 
   it('wraps fs failures as INTERNAL_SERVER_ERROR', async () => {
@@ -159,13 +220,30 @@ describe('calibration.triggerCalibration', () => {
 
 describe('calibration.triggerFullCalibration', () => {
   it('writes the all/all payload', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_999)
     const result = await caller.triggerFullCalibration({})
 
     expect(fsMock.writeFile).toHaveBeenCalledTimes(1)
     const payload = JSON.parse(String(fsMock.writeFile.mock.calls[0][1]))
     expect(payload.side).toBe('all')
     expect(payload.sensor_type).toBe('all')
+    expect(payload.ts).toBe(1_700_000_000)
+    expect(fsMock.writeFile).toHaveBeenCalledWith(
+      '/persistent/sleepypod-data/.calibrate-trigger.1700000000999.tmp',
+      JSON.stringify({ side: 'all', sensor_type: 'all', ts: 1_700_000_000 }),
+    )
+    expect(fsMock.rename).toHaveBeenCalledWith(
+      '/persistent/sleepypod-data/.calibrate-trigger.1700000000999.tmp',
+      '/persistent/sleepypod-data/.calibrate-trigger.1700000000999',
+    )
     expect(result.triggered).toBe(true)
+    expect(result.message).toBe('Full calibration queued for all sensors on both sides.')
+  })
+
+  it('uses Unknown error for a non-Error full-calibration failure', async () => {
+    fsMock.rename.mockRejectedValueOnce(null)
+    await expect(caller.triggerFullCalibration({}))
+      .rejects.toThrow('Failed to trigger calibration: Unknown error')
   })
 
   it('wraps fs failures', async () => {
@@ -197,5 +275,25 @@ describe('calibration.getVitalsQuality', () => {
       limit: 50,
     })
     expect(out).toEqual([])
+    expect(sqlMock.and.mock.calls[0]).toHaveLength(3)
+    expect(sqlMock.gte).toHaveBeenCalledOnce()
+    expect(sqlMock.lte).toHaveBeenCalledOnce()
+    expect(dbMock.limitQuality).toHaveBeenCalledWith(50)
+  })
+
+  it('adds only the supplied start-date predicate', async () => {
+    dbMock.setActive('quality')
+    await caller.getVitalsQuality({ side: 'left', startDate: new Date('2025-01-01'), limit: 1 })
+    expect(sqlMock.and.mock.calls[0]).toHaveLength(2)
+    expect(sqlMock.gte).toHaveBeenCalledOnce()
+    expect(sqlMock.lte).not.toHaveBeenCalled()
+  })
+
+  it('adds only the supplied end-date predicate', async () => {
+    dbMock.setActive('quality')
+    await caller.getVitalsQuality({ side: 'left', endDate: new Date('2025-01-01'), limit: 1 })
+    expect(sqlMock.and.mock.calls[0]).toHaveLength(2)
+    expect(sqlMock.gte).not.toHaveBeenCalled()
+    expect(sqlMock.lte).toHaveBeenCalledOnce()
   })
 })

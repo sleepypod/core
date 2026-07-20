@@ -19,12 +19,8 @@ const schedulerMock = vi.hoisted(() => ({
 }))
 
 const helpersMock = vi.hoisted(() => ({
-  withHardwareClient: vi.fn(async (cb: (client: unknown) => Promise<unknown>) => {
-    const client = {
-      setPower: vi.fn(async () => undefined),
-    }
-    return cb(client)
-  }),
+  client: { setPower: vi.fn(async () => undefined) },
+  withHardwareClient: vi.fn(),
 }))
 
 const broadcastMock = vi.hoisted(() => ({
@@ -82,7 +78,7 @@ const dbMock = vi.hoisted(() => {
       returning.mockResolvedValue(id === null ? [] : [{ id }])
     },
     settingsRow, txExisting,
-    txUpdateRun, transactionFn: transaction,
+    values, updateSet, updateWhere, txUpdateSet, txUpdateWhere, txUpdateRun, transactionFn: transaction,
   }
 })
 
@@ -107,6 +103,8 @@ beforeEach(() => {
   jobManagerMock.cancelRunOnceSession.mockReset()
   jobManagerMock.scheduleRunOnceSession.mockReset()
   helpersMock.withHardwareClient.mockClear()
+  helpersMock.withHardwareClient.mockImplementation(async (cb: (client: unknown) => Promise<unknown>) => cb(helpersMock.client))
+  helpersMock.client.setPower.mockReset().mockResolvedValue(undefined)
   broadcastMock.broadcastMutationStatus.mockReset()
   timeUtilsMock.timeToDate.mockReset().mockImplementation(
     (_t, _tz, now) => new Date(now.getTime() + 60 * 60 * 1000),
@@ -115,6 +113,11 @@ beforeEach(() => {
   dbMock.insert.mockClear()
   dbMock.update.mockClear()
   dbMock.transactionFn.mockClear()
+  dbMock.values.mockClear()
+  dbMock.updateSet.mockClear()
+  dbMock.updateWhere.mockClear()
+  dbMock.txUpdateSet.mockClear()
+  dbMock.txUpdateWhere.mockClear()
   dbMock.txExisting.length = 0
   dbMock.setNextInsertId(42)
   dbMock.settingsRow.timezone = 'America/Los_Angeles'
@@ -122,6 +125,9 @@ beforeEach(() => {
 
 describe('runOnce.start', () => {
   it('powers on the side with the first set-point temperature, persists session, and schedules the rest', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const expiresAt = new Date(Date.now() + 3_600_123)
+    timeUtilsMock.timeToDate.mockReturnValueOnce(expiresAt)
     const result = await caller.start({
       side: 'left',
       setPoints: [
@@ -133,6 +139,8 @@ describe('runOnce.start', () => {
 
     // Hardware was invoked with the first set-point temp
     expect(helpersMock.withHardwareClient).toHaveBeenCalledTimes(1)
+    expect(helpersMock.withHardwareClient.mock.calls[0]?.[1]).toBe('Failed to start run-once session')
+    expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 70)
 
     // Mutation broadcast for live UI
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', expect.objectContaining({
@@ -149,8 +157,21 @@ describe('runOnce.start', () => {
     expect(args[3]).toBe('07:00')
     expect(args[4]).toBe('America/Los_Angeles')
 
+    expect(dbMock.values).toHaveBeenCalledWith({
+      side: 'left',
+      setPoints: JSON.stringify([
+        { time: '23:00', temperature: 70 },
+        { time: '03:00', temperature: 65 },
+      ]),
+      wakeTime: '07:00',
+      expiresAt,
+      status: 'active',
+    })
+
     expect(result.sessionId).toBe(42)
-    expect(typeof result.expiresAt).toBe('number')
+    expect(result.expiresAt).toBe(Math.floor(expiresAt.getTime() / 1000))
+    expect(log).toHaveBeenCalledWith('Run-once session 42 started for left until 07:00')
+    log.mockRestore()
   })
 
   it('falls back to the default timezone when settings row is missing', async () => {
@@ -187,6 +208,32 @@ describe('runOnce.start', () => {
     expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
   })
 
+  it('accepts a session exactly 14 hours long', async () => {
+    timeUtilsMock.timeToDate.mockImplementation(
+      (_t, _tz, now) => new Date(now.getTime() + 14 * 60 * 60 * 1000),
+    )
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).resolves.toMatchObject({ sessionId: 42 })
+    expect(helpersMock.client.setPower).toHaveBeenCalledOnce()
+  })
+
+  it('reports the rounded over-limit duration in hours', async () => {
+    timeUtilsMock.timeToDate.mockImplementation(
+      (_t, _tz, now) => new Date(now.getTime() + 15.4 * 60 * 60 * 1000),
+    )
+    await expect(caller.start({
+      side: 'right',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Session too long (15h). Wake time may have already passed.',
+    })
+  })
+
   it('throws when DB insert returns no row (e.g. constraint violation)', async () => {
     dbMock.setNextInsertId(null)
 
@@ -209,6 +256,8 @@ describe('runOnce.start', () => {
 
     // Both prior rows were updated to cancelled (one .run() per row)
     expect(dbMock.txUpdateRun).toHaveBeenCalledTimes(2)
+    expect(dbMock.txUpdateSet).toHaveBeenNthCalledWith(1, { status: 'cancelled' })
+    expect(dbMock.txUpdateSet).toHaveBeenNthCalledWith(2, { status: 'cancelled' })
     expect(jobManagerMock.cancelRunOnceSession).toHaveBeenCalledWith('left')
   })
 })
@@ -244,6 +293,10 @@ describe('runOnce.getActive', () => {
     expect(result?.id).toBe(99)
     expect(result?.setPoints).toEqual([{ time: '02:00', temperature: 67 }])
     expect(result?.startedAt).toBe(Math.floor(1700000000000 / 1000))
+    expect(result?.expiresAt).toBe(Math.floor(1700100000000 / 1000))
+    expect(result).toMatchObject({
+      side: 'left', wakeTime: '07:00', status: 'active',
+    })
   })
 
   it('returns empty setPoints when persisted JSON is malformed', async () => {
@@ -268,11 +321,15 @@ describe('runOnce.getActive', () => {
 
 describe('runOnce.cancel', () => {
   it('marks active session cancelled, cancels scheduler jobs, broadcasts', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const result = await caller.cancel({ side: 'right' })
 
     expect(dbMock.update).toHaveBeenCalledTimes(1)
+    expect(dbMock.updateSet).toHaveBeenCalledWith({ status: 'cancelled' })
     expect(jobManagerMock.cancelRunOnceSession).toHaveBeenCalledWith('right')
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('right')
     expect(result).toEqual({ success: true })
+    expect(log).toHaveBeenCalledWith('Run-once session cancelled for right')
+    log.mockRestore()
   })
 })

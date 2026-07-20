@@ -6,14 +6,14 @@
  * without invoking real binaries.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 // Hoisted control surface for the execFile mock. Each test sets `impl` to
 // the (cmd, args) -> { stdout, stderr } | throw it wants.
 const execMock = vi.hoisted(() => {
-  type Impl = (cmd: string, args: readonly string[]) => { stdout?: string, stderr?: string } | Promise<{ stdout?: string, stderr?: string }>
+  type Impl = (cmd: string, args: readonly string[], opts?: unknown) => { stdout?: string, stderr?: string } | Promise<{ stdout?: string, stderr?: string }>
   const state: { impl: Impl } = { impl: () => ({ stdout: '', stderr: '' }) }
   return state
 })
@@ -28,7 +28,7 @@ vi.mock('node:child_process', () => {
     cb: (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void,
   ): void {
     Promise.resolve()
-      .then(() => execMock.impl(cmd, args))
+      .then(() => execMock.impl(cmd, args, _opts))
       .then(
         out => cb(null, out?.stdout ?? '', out?.stderr ?? ''),
         (err: Error & { stderr?: string }) => {
@@ -99,6 +99,18 @@ describe('parseConf', () => {
     const result = parseConf('=novalue\nHOST=h')
     expect(result).toEqual({ HOST: 'h' })
   })
+
+  it('trims only surrounding key/value whitespace and keeps additional equals signs', () => {
+    expect(parseConf('  REMOTE_PATH = /archive/a=b=c  ')).toEqual({ REMOTE_PATH: '/archive/a=b=c' })
+  })
+
+  it('treats every line starting with # as a comment, even if it contains =', () => {
+    expect(parseConf('#HOST=attacker\n   # REMOTE_USER=attacker\nHOST=pod.local')).toEqual({ HOST: 'pod.local' })
+  })
+
+  it('does not mistake a value ending in # for a comment', () => {
+    expect(parseConf('HOST=pod#')).toEqual({ HOST: 'pod#' })
+  })
 })
 
 describe('renderConf', () => {
@@ -143,14 +155,64 @@ describe('renderConf', () => {
     expect(parsed.REMOTE_PATH).toBe(cfg.remotePath)
     expect(parsed.IDENTITY).toBe(cfg.identity)
   })
+
+  it('renders the complete managed file byte-for-byte', () => {
+    expect(renderConf({
+      enabled: false,
+      host: 'nas.local',
+      remoteUser: 'backup',
+      remotePath: '/archive',
+      port: 2200,
+      identity: '/keys/archive',
+      include: ['db'],
+    })).toBe([
+      '# /etc/sleepypod/archive-push.conf — managed by Settings → Backup.',
+      '# Read by sleepypod-archive-push as plain KEY=VALUE. Do NOT `source` it —',
+      '# values are not shell-quoted on purpose.',
+      'ENABLED=false',
+      'HOST=nas.local',
+      'REMOTE_USER=backup',
+      'REMOTE_PATH=/archive',
+      'PORT=2200',
+      'IDENTITY=/keys/archive',
+      'INCLUDE=db',
+      '',
+    ].join('\n'))
+  })
 })
 
 describe('archivePush.getConfig', () => {
+  it('derives default config and identity paths from the configured directory', async () => {
+    delete process.env.ARCHIVE_PUSH_CONFIG
+    delete process.env.ARCHIVE_PUSH_IDENTITY
+
+    const result = await caller.getConfig({})
+    expect(result.config.identity).toBe(path.join(configDir, 'archive-push.id_ed25519'))
+    expect(result.publicKey).toBeNull()
+
+    process.env.ARCHIVE_PUSH_CONFIG = path.join(configDir, 'archive-push.conf')
+    process.env.ARCHIVE_PUSH_IDENTITY = path.join(configDir, 'archive-push.id_ed25519')
+  })
+
+  it('uses the system directory fallback to derive the identity path', async () => {
+    delete process.env.ARCHIVE_PUSH_CONFIG_DIR
+    delete process.env.ARCHIVE_PUSH_IDENTITY
+
+    const result = await caller.getConfig({})
+    expect(result.config.identity).toBe('/etc/sleepypod/archive-push.id_ed25519')
+
+    process.env.ARCHIVE_PUSH_CONFIG_DIR = configDir
+    process.env.ARCHIVE_PUSH_IDENTITY = path.join(configDir, 'archive-push.id_ed25519')
+  })
+
   it('returns defaults when no conf exists', async () => {
     const result = await caller.getConfig({})
     expect(result.config.enabled).toBe(false)
     expect(result.config.host).toBe('')
+    expect(result.config.remoteUser).toBe('')
+    expect(result.config.remotePath).toBe('')
     expect(result.config.port).toBe(22)
+    expect(result.config.identity).toBe(path.join(configDir, 'archive-push.id_ed25519'))
     expect(result.config.include).toEqual(['raw', 'db'])
     expect(result.publicKey).toBeNull()
   })
@@ -193,6 +255,33 @@ describe('archivePush.getConfig', () => {
     expect(result.config.include).toEqual(['raw', 'db'])
   })
 
+  it.each(['0', '-1', 'Infinity'])('falls back to port 22 for invalid parsed PORT=%s', async (port) => {
+    await writeFile(path.join(configDir, 'archive-push.conf'), `PORT=${port}`)
+    expect((await caller.getConfig({})).config.port).toBe(22)
+  })
+
+  it('filters unknown include tokens and defaults when none remain', async () => {
+    await writeFile(path.join(configDir, 'archive-push.conf'), 'INCLUDE= unknown, db ,other,raw ')
+    expect((await caller.getConfig({})).config.include).toEqual(['db', 'raw'])
+
+    await writeFile(path.join(configDir, 'archive-push.conf'), 'INCLUDE=unknown,other')
+    expect((await caller.getConfig({})).config.include).toEqual(['raw', 'db'])
+  })
+
+  it('defaults omitted config fields independently', async () => {
+    await writeFile(path.join(configDir, 'archive-push.conf'), 'PORT=2200')
+
+    const result = await caller.getConfig({})
+    expect(result.config).toMatchObject({
+      enabled: false,
+      host: '',
+      remoteUser: '',
+      remotePath: '',
+      port: 2200,
+      include: ['raw', 'db'],
+    })
+  })
+
   it('propagates non-ENOENT errors from readFile', async () => {
     // Replace the conf path with a directory — readFile then rejects EISDIR
     // which the router rethrows (only ENOENT is swallowed).
@@ -221,22 +310,66 @@ describe('archivePush.setConfig', () => {
     })
 
     const text = await readFile(path.join(configDir, 'archive-push.conf'), 'utf8')
-    expect(text).toMatch(/ENABLED=true/)
-    expect(text).toMatch(/HOST=nas\.local/)
-    expect(text).toMatch(/INCLUDE=raw/)
+    expect(text).toContain('ENABLED=true\n')
+    expect(text).toContain('HOST=nas.local\n')
+    expect(text).toContain('REMOTE_USER=sp\n')
+    expect(text).toContain('REMOTE_PATH=/volume1/sp\n')
+    expect(text).toContain('PORT=22\n')
+    expect(text).toContain(`IDENTITY=${path.join(configDir, 'archive-push.id_ed25519')}\n`)
+    expect(text).toContain('INCLUDE=raw\n')
+    expect((await stat(path.join(configDir, 'archive-push.conf'))).mode & 0o777).toBe(0o640)
 
     const reread = await caller.getConfig({})
     expect(reread.config.enabled).toBe(true)
     expect(reread.config.host).toBe('nas.local')
     expect(reread.config.include).toEqual(['raw'])
   })
+
+  it.each([
+    ['host', 'bad\nhost'],
+    ['remoteUser', 'bad\ruser'],
+    ['remotePath', 'bad\0path'],
+    ['identity', 'bad\nidentity'],
+  ] as const)('rejects line-breaking %s values', async (field, value) => {
+    const input = {
+      enabled: false,
+      host: 'nas.local',
+      remoteUser: 'sp',
+      remotePath: '/archive',
+      port: 22,
+      identity: '/key',
+      include: ['raw'] as ('raw' | 'db')[],
+      [field]: value,
+    }
+    await expect(caller.setConfig(input)).rejects.toThrow(/no newlines or NUL/)
+  })
+
+  it.each([0, 65536, 22.5])('rejects invalid port %s', async (port) => {
+    await expect(caller.setConfig({
+      enabled: false,
+      host: 'nas.local',
+      remoteUser: 'sp',
+      remotePath: '/archive',
+      port,
+      identity: '/key',
+      include: ['raw'],
+    })).rejects.toThrow()
+  })
 })
 
 describe('archivePush.generateKey', () => {
   it('shells out to ssh-keygen, writes pubkey, returns generated=true', async () => {
     const pubPath = path.join(configDir, 'archive-push.id_ed25519.pub')
-    execMock.impl = async (cmd, args) => {
+    execMock.impl = async (cmd, args, opts) => {
       expect(cmd).toBe('ssh-keygen')
+      expect(opts).toEqual({ timeout: 15000 })
+      expect(args).toEqual([
+        '-t', 'ed25519',
+        '-N', '',
+        '-q',
+        '-f', path.join(configDir, 'archive-push.id_ed25519'),
+        '-C', 'sleepypod-archive-push',
+      ])
       // Identity path is passed via -f
       const idIdx = args.indexOf('-f')
       expect(idIdx).toBeGreaterThan(-1)
@@ -252,6 +385,7 @@ describe('archivePush.generateKey', () => {
     const result = await caller.generateKey({})
     expect(result.generated).toBe(true)
     expect(result.publicKey).toContain('ssh-ed25519')
+    expect((await stat(path.join(configDir, 'archive-push.id_ed25519'))).mode & 0o777).toBe(0o600)
   })
 
   it('returns generated=false when identity already exists', async () => {
@@ -299,6 +433,38 @@ describe('archivePush.testConnection', () => {
     expect(result.message).toMatch(/host and remoteUser/)
   })
 
+  it('rejects when only remoteUser is set', async () => {
+    await caller.setConfig({
+      enabled: false,
+      host: '',
+      remoteUser: 'sp',
+      remotePath: '/x',
+      port: 22,
+      identity: path.join(configDir, 'archive-push.id_ed25519'),
+      include: ['raw'],
+    })
+    await expect(caller.testConnection({})).resolves.toEqual({
+      ok: false,
+      message: 'host and remoteUser must be set before testing',
+    })
+  })
+
+  it('rejects when only host is set', async () => {
+    await caller.setConfig({
+      enabled: false,
+      host: 'nas.local',
+      remoteUser: '',
+      remotePath: '/x',
+      port: 22,
+      identity: path.join(configDir, 'archive-push.id_ed25519'),
+      include: ['raw'],
+    })
+    await expect(caller.testConnection({})).resolves.toEqual({
+      ok: false,
+      message: 'host and remoteUser must be set before testing',
+    })
+  })
+
   it('rejects when identity is missing', async () => {
     await caller.setConfig({
       enabled: false,
@@ -328,8 +494,9 @@ describe('archivePush.testConnection', () => {
     })
 
     let observed: { cmd: string, args: readonly string[] } | null = null
-    execMock.impl = (cmd, args) => {
+    execMock.impl = (cmd, args, opts) => {
       observed = { cmd, args }
+      expect(opts).toEqual({ timeout: 15000 })
       return { stdout: '', stderr: '' }
     }
 
@@ -346,6 +513,16 @@ describe('archivePush.testConnection', () => {
     // user@host and port are passed through
     expect(seen.args).toContain('sp@nas.local')
     expect(seen.args).toContain('2222')
+    expect(seen.args).toEqual([
+      '-o', 'BatchMode=yes',
+      '-o', 'StrictHostKeyChecking=accept-new',
+      '-o', `UserKnownHostsFile=${path.join(configDir, 'known_hosts')}`,
+      '-o', 'ConnectTimeout=10',
+      '-i', identity,
+      '-p', '2222',
+      'sp@nas.local',
+      'true',
+    ])
   })
 
   it('returns ok=false carrying ssh stderr on failure', async () => {
@@ -394,5 +571,27 @@ describe('archivePush.testConnection', () => {
     // execFile's callback strips Error -> ErrnoException-shaped object; the
     // router falls back to the err.message string when stderr is empty.
     expect(result.message).toMatch(/connect timeout|exit/i)
+  })
+
+  it('trims and caps an ssh stderr response at 500 characters', async () => {
+    const identity = path.join(configDir, 'archive-push.id_ed25519')
+    await writeFile(identity, 'PRIVATE')
+    await caller.setConfig({
+      enabled: true,
+      host: 'nas.local',
+      remoteUser: 'sp',
+      remotePath: '/x',
+      port: 22,
+      identity,
+      include: ['raw'],
+    })
+    execMock.impl = () => {
+      const error = new Error('ssh failed') as Error & { stderr?: string }
+      error.stderr = `  ${'x'.repeat(550)}  `
+      throw error
+    }
+
+    const result = await caller.testConnection({})
+    expect(result).toEqual({ ok: false, message: 'x'.repeat(500) })
   })
 })
