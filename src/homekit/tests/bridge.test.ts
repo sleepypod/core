@@ -680,6 +680,9 @@ describe('homekit bridge', () => {
       m.readPairedControllers.mockReturnValue(['controller-1'])
       vi.advanceTimersByTime(30_000)
       expect(m.markIdentityPaired).toHaveBeenCalledTimes(1)
+      expect((globalThis as Record<string, unknown>).__sp_homekit_identity__).toMatchObject({
+        wasPaired: true,
+      })
 
       // Third tick: interval has self-cancelled — no further calls.
       m.markIdentityPaired.mockClear()
@@ -772,6 +775,23 @@ describe('homekit bridge', () => {
     )
   })
 
+  it('logs legacy provenance when the identity has no derivation source', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    m.loadOrCreateIdentity.mockReturnValue({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'XXXX',
+      rotation: 0,
+    })
+    const { startBridge } = await import('../bridge')
+
+    await startBridge(fakeMonitor)
+
+    expect(log).toHaveBeenCalledWith(
+      '[homekit] Bridge published: username=AA:BB:CC:DD:EE:FF, derivedFrom=legacy, paired=0',
+    )
+  })
+
   it('does not report a singleton invariant violation after a normal publish', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { startBridge } = await import('../bridge')
@@ -831,14 +851,30 @@ describe('homekit bridge', () => {
     expect(getStatus().running).toBe(true)
   })
 
-  it.each(['avahi', 'ciao'] as const)('honors HOMEKIT_ADVERTISER=%s', async (advertiser) => {
+  it('honors HOMEKIT_ADVERTISER=avahi', async () => {
     const previous = process.env.HOMEKIT_ADVERTISER
-    process.env.HOMEKIT_ADVERTISER = advertiser
+    process.env.HOMEKIT_ADVERTISER = 'avahi'
     try {
       const { startBridge } = await import('../bridge')
       await startBridge(fakeMonitor)
       expect(m.bridgeInstance?.publish).toHaveBeenCalledWith(
-        expect.objectContaining({ advertiser }),
+        expect.objectContaining({ advertiser: 'avahi' }),
+      )
+    }
+    finally {
+      if (previous === undefined) delete process.env.HOMEKIT_ADVERTISER
+      else process.env.HOMEKIT_ADVERTISER = previous
+    }
+  })
+
+  it('honors HOMEKIT_ADVERTISER=ciao', async () => {
+    const previous = process.env.HOMEKIT_ADVERTISER
+    process.env.HOMEKIT_ADVERTISER = 'ciao'
+    try {
+      const { startBridge } = await import('../bridge')
+      await startBridge(fakeMonitor)
+      expect(m.bridgeInstance?.publish).toHaveBeenCalledWith(
+        expect.objectContaining({ advertiser: 'ciao' }),
       )
     }
     finally {
