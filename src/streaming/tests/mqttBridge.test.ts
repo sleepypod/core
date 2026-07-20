@@ -1020,15 +1020,16 @@ describe('mqttBridge — message dispatch', () => {
 
     const id = deviceId()
     fake.emit('message', `sleepypod/${id}/cmd/set-power`, Buffer.from(JSON.stringify({ side: 'left', powered: true })))
-    fake.emit('message', `sleepypod/${id}/cmd/set-alarm`, Buffer.from(JSON.stringify({ side: 'left' })))
-    fake.emit('message', `sleepypod/${id}/cmd/clear-alarm`, Buffer.from(JSON.stringify({ side: 'left' })))
-    fake.emit('message', `sleepypod/${id}/cmd/start-priming`, Buffer.from(''))
+    await vi.waitFor(() => expect(deviceMock.setPower).toHaveBeenCalled())
 
-    await new Promise(r => setTimeout(r, 0))
-    expect(deviceMock.setPower).toHaveBeenCalled()
-    expect(deviceMock.setAlarm).toHaveBeenCalled()
-    expect(deviceMock.clearAlarm).toHaveBeenCalled()
-    expect(deviceMock.startPriming).toHaveBeenCalledWith({})
+    fake.emit('message', `sleepypod/${id}/cmd/set-alarm`, Buffer.from(JSON.stringify({ side: 'left' })))
+    await vi.waitFor(() => expect(deviceMock.setAlarm).toHaveBeenCalled())
+
+    fake.emit('message', `sleepypod/${id}/cmd/clear-alarm`, Buffer.from(JSON.stringify({ side: 'left' })))
+    await vi.waitFor(() => expect(deviceMock.clearAlarm).toHaveBeenCalled())
+
+    fake.emit('message', `sleepypod/${id}/cmd/start-priming`, Buffer.from(''))
+    await vi.waitFor(() => expect(deviceMock.startPriming).toHaveBeenCalledWith({}))
 
     await shutdownMqttBridge()
   })
