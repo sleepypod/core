@@ -82,4 +82,8 @@ describe('tempGradientStops', () => {
     // Warm-end colours should be excluded
     expect(result).not.toContain('#dc2626')
   })
+
+  test('renders the deepest warm stop at the hot end of the spectrum', () => {
+    expect(tempGradientStops(6, 8)).toBe('#dc6646 0%, #dc2626 100%')
+  })
 })
