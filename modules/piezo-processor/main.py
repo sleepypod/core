@@ -416,10 +416,10 @@ class PresenceDetector:
     def __init__(self):
         self.state = self.ABSENT
         self.consecutive_low = 0
-        self.enter_threshold = 400_000
-        self.exit_threshold = 150_000
+        self.enter_threshold = 200_000
+        self.exit_threshold = 100_000
         self.exit_count = 3       # 3 consecutive low windows to declare absent
-        self.acr_threshold = 0.45
+        self.acr_threshold = 0.30
 
     def update(self, window_std: float, acr_qual: float) -> bool:
         """Update state and return True if user is present."""
@@ -490,7 +490,7 @@ def subharmonic_summation_hr(samples: np.ndarray, fs: float = SAMPLE_RATE,
         return None, 0.0
 
     candidate_lags = peaks + min_lag
-    weights = [1.0, 0.8, 0.6][:n_harmonics]
+    weights = [1.0, 0.6, 0.3][:n_harmonics]
 
     best_lag = None
     best_score = 0.0
@@ -848,10 +848,14 @@ class SideProcessor:
             other_std = self._other._last_med_std
             other_acr = self._other._last_acr_qual
             # Only suppress if: other side has real periodicity (someone there),
-            # other side's energy is >= ours, and our energy is below threshold
+            # other side's energy is >= ours, and our energy is below threshold.
+            #
+            # TWEAK: if both sides are below the enter_threshold, we relax this
+            # to avoid mutual suppression of a faint but real signal (#325).
             if (other_acr > 0.3
                     and other_std > med_std * 0.7
-                    and med_std < self._presence.enter_threshold):
+                    and med_std < self._presence.enter_threshold
+                    and other_std > self._presence.enter_threshold):
                 acr_qual = 0.0
 
         # Cache AFTER suppression so the other side sees post-suppression values
