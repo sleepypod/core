@@ -83,6 +83,15 @@ describe('thermostat accessory', () => {
     expect(Math.abs((value as number) - f2c(70))).toBeLessThan(0.5)
   })
 
+  it('reads the right side, not the left, when built for right', async () => {
+    const { service } = buildThermostatService('right', fakeMonitor as DacMonitor)
+    const current = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
+    const target = await service.getCharacteristic(Characteristic.TargetTemperature).handleGetRequest()
+    // Right fixture reads 80/80°F — the left fixture's 75/70°F must not leak through.
+    expect(Math.abs((current as number) - f2c(80))).toBeLessThan(0.5)
+    expect(Math.abs((target as number) - f2c(80))).toBeLessThan(0.5)
+  })
+
   it('forwards TargetTemperature onSet to setTemperature with clamped F', async () => {
     setTemperature.mockClear()
     const { service } = buildThermostatService('left', fakeMonitor as DacMonitor)

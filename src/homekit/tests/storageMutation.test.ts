@@ -235,6 +235,23 @@ describe('homekit storage mutation contracts', () => {
     expect(probeSeedSources().resolved).toBe('random-dev')
   })
 
+  it('trims a probed seed before classifying it as degenerate', () => {
+    state.files.set(seedPaths.cid, '0000\n')
+    state.readErrors.set(seedPaths.serial, enoent())
+    state.readErrors.set(seedPaths.machine, enoent())
+
+    const probe = probeSeedSources()
+
+    expect(probe.sources[0]).toEqual({
+      source: 'mmc-cid',
+      path: seedPaths.cid,
+      present: true,
+      readable: true,
+      looksDegenerate: true,
+    })
+    expect(probe.resolved).toBe('random-dev')
+  })
+
   it('derives every identity field, retries a forbidden pincode, and writes securely', () => {
     state.existing.add('/persistent')
     state.files.set(seedPaths.cid, 'seed')
@@ -279,6 +296,50 @@ describe('homekit storage mutation contracts', () => {
     now.mockRestore()
   })
 
+  it('skips the read/backup path entirely and logs the seed source on a fresh pod', () => {
+    state.existing.add('/persistent')
+    state.files.set(seedPaths.cid, 'seed')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    try {
+      loadOrCreateIdentity()
+
+      expect(state.readFileSync).not.toHaveBeenCalledWith(identityFile, 'utf8')
+      expect(state.renameSync).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalledWith('[homekit] derived identity from mmc-cid (rotation=0)')
+    }
+    finally {
+      log.mockRestore()
+    }
+  })
+
+  it.each([
+    { pincode: '123-45-678', setupId: 'ABCD' },
+    { username: 'AA:BB:CC:DD:EE:FF', setupId: 'ABCD' },
+    { username: 'AA:BB:CC:DD:EE:FF', pincode: '123-45-678' },
+  ])('re-derives rather than returning a stored identity missing one field: %j', (partial) => {
+    state.existing.add('/persistent')
+    state.existing.add(identityFile)
+    state.files.set(identityFile, JSON.stringify(partial))
+    state.files.set(seedPaths.cid, 'seed')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    try {
+      const identity = loadOrCreateIdentity()
+
+      expect(identity.derivedFrom).toBe('mmc-cid')
+      expect(identity.rotation).toBe(0)
+      expect(state.writeFileSync).toHaveBeenCalledWith(
+        identityFile,
+        JSON.stringify(identity, null, 2),
+        { mode: 0o600 },
+      )
+    }
+    finally {
+      log.mockRestore()
+    }
+  })
+
   it('stops pincode derivation after exactly 32 rejected candidates', () => {
     state.existing.add('/persistent')
     state.files.set(seedPaths.cid, 'seed')
@@ -302,6 +363,13 @@ describe('homekit storage mutation contracts', () => {
     state.files.set(identityFile, JSON.stringify(partial))
 
     expect(readIdentityIfPresent()).toBeNull()
+  })
+
+  it('never touches the disk when identity.json is absent', () => {
+    state.existing.add('/persistent')
+
+    expect(readIdentityIfPresent()).toBeNull()
+    expect(state.readFileSync).not.toHaveBeenCalledWith(identityFile, 'utf8')
   })
 
   it('backs up malformed identity JSON with the exact timestamp and warning', () => {
@@ -349,6 +417,13 @@ describe('homekit storage mutation contracts', () => {
     expect(state.readFileSync).toHaveBeenCalledWith(file, 'utf8')
   })
 
+  it('never reads an absent accessory info file', () => {
+    state.existing.add('/persistent')
+
+    expect(readPairedControllers('AA:BB:CC:DD:EE:FF')).toEqual([])
+    expect(state.readFileSync).not.toHaveBeenCalled()
+  })
+
   it('marks only a complete identity as paired and preserves every field', () => {
     state.existing.add('/persistent')
     state.existing.add(identityFile)
@@ -384,6 +459,40 @@ describe('homekit storage mutation contracts', () => {
     expect(state.writeFileSync).not.toHaveBeenCalled()
   })
 
+  it('skips the rewrite when the paired marker is already set', () => {
+    state.existing.add('/persistent')
+    state.existing.add(identityFile)
+    state.files.set(identityFile, JSON.stringify({
+      username: 'AA:BB:CC:DD:EE:FF',
+      pincode: '123-45-678',
+      setupId: 'ABCD',
+      wasPaired: true,
+    }))
+
+    markIdentityPaired()
+
+    expect(state.writeFileSync).not.toHaveBeenCalled()
+  })
+
+  it('returns silently, without reading or warning, when identity.json is absent', () => {
+    state.existing.add('/persistent')
+    // An earlier case leaves console.warn spied; re-spying reuses that mock,
+    // so drop its history before asserting this call made none of its own.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    warn.mockClear()
+
+    try {
+      markIdentityPaired()
+
+      expect(state.readFileSync).not.toHaveBeenCalled()
+      expect(state.writeFileSync).not.toHaveBeenCalled()
+      expect(warn).not.toHaveBeenCalled()
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
   it.each([
     [undefined, 0],
     ['3', 0],
@@ -400,5 +509,13 @@ describe('homekit storage mutation contracts', () => {
 
     expect(identity.rotation).toBe(expected)
     expect(state.hkdfSync.mock.calls.map(call => call[3])).toContain(`username/${expected}`)
+  })
+
+  it('does not probe an absent identity file for a prior rotation', () => {
+    state.existing.add('/persistent')
+    state.files.set(seedPaths.cid, 'seed')
+
+    expect(regenerateIdentity().rotation).toBe(0)
+    expect(state.readFileSync).not.toHaveBeenCalledWith(identityFile, 'utf8')
   })
 })

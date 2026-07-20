@@ -191,6 +191,25 @@ describe('homekit bridge', () => {
     expect(m.BridgeCtor).toHaveBeenCalledWith('sleepypod', expect.any(String))
   })
 
+  it('derives the bridge UUID from the identity username', async () => {
+    const { uuid } = await import('hap-nodejs')
+    const { startBridge } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    // The seed is what makes the bridge stable across restarts and distinct
+    // after a rotation — pin the exact string, not just "some UUID".
+    expect(m.BridgeCtor).toHaveBeenCalledWith(
+      'sleepypod',
+      uuid.generate('sleepypod:AA:BB:CC:DD:EE:FF'),
+    )
+  })
+
+  it('getStatus exposes the setupURI captured at publish time', async () => {
+    const { startBridge, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    expect(m.bridgeInstance?.setupURI).toHaveBeenCalledTimes(1)
+    expect(getStatus().setupURI).toBe('X-HM://test')
+  })
+
   it('sets exact bridge information characteristics and publish options', async () => {
     const previousSha = process.env.GIT_SHA
     const previousAdvertiser = process.env.HOMEKIT_ADVERTISER
@@ -423,6 +442,22 @@ describe('homekit bridge', () => {
     await stopBridge()
     expect(getStatus().setupURI).toBeNull()
     expect(getStatus().running).toBe(false)
+  })
+
+  it('stopBridge clears a stale setupURI when the bridge singleton is already gone', async () => {
+    const { startBridge, stopBridge, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    expect(getStatus().setupURI).toBe('X-HM://test')
+
+    // Bridge reference vanished (chunk divergence / external teardown) while
+    // the published setupURI stayed cached. A QR code that outlives the
+    // bridge it points at pairs iOS against nothing.
+    const g = globalThis as Record<string, unknown>
+    delete g.__sp_homekit_bridge__
+
+    await stopBridge()
+
+    expect(getStatus().setupURI).toBeNull()
   })
 
   it('regenerate stops the bridge, clears pairings, and replaces identity', async () => {
@@ -744,6 +779,29 @@ describe('homekit bridge', () => {
     await startBridge(fakeMonitor)
 
     expect(error).not.toHaveBeenCalled()
+  })
+
+  it('reports a singleton invariant violation when the globalThis bridge diverges', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const g = globalThis as Record<string, unknown>
+    // Reproduce the Turbopack chunk split this guard exists for: setBridge's
+    // write lands somewhere the module's own read can't see it back.
+    Object.defineProperty(g, '__sp_homekit_bridge__', {
+      configurable: true,
+      get: () => null,
+      set: () => {},
+    })
+    try {
+      const { startBridge } = await import('../bridge')
+      await startBridge(fakeMonitor)
+      expect(error).toHaveBeenCalledWith(
+        '[homekit] singleton invariant violated: globalThis bridge !== freshly published accessory',
+      )
+    }
+    finally {
+      delete g.__sp_homekit_bridge__
+      error.mockRestore()
+    }
   })
 
   it('getStatus is empty and does not read pairing storage before identity exists', async () => {
