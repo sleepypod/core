@@ -100,33 +100,46 @@ def nats_reachable(host="127.0.0.1", port=4222, timeout=2.0) -> bool:
         return False
 ```
 
-**3. Data layer (the truth test, used for source selection):** subscribe to
-`raw.>` and wait for ≥1 message within a probe window. On live firmware the
-slowest interesting subject ticks at 0.1 Hz and capSense at 2 Hz, so
-**15 s of silence ⇒ NATS is not the pipeline** (server may exist for other
-reasons; firmware isn't publishing).
+**3. Data layer (health signal, NOT a selection input):** once subscribed,
+count messages on `raw.>`. On live firmware capSense ticks at 2 Hz, so a
+silent subscription is worth logging (once, at 60 s) — but it does not
+change the source choice. See selection rationale below.
 
 ## Source selection
 
-At module startup:
+Reachability decides; traffic does not. Robustness beats latency here
+(reviewed 2026-07-19: "we don't need data immediately").
 
 ```
-if nats_reachable() and raw_traffic_within(15s):   # layers 2 + 3
-    source = NatsFollower(...)
+deadline = now + 60s                          # boot-ordering grace window
+while now < deadline:
+    if nats_reachable():                      # layer 2, retried every 5 s
+        source = NatsFollower(...)            # patient: waits for frames
+        break
 else:
-    source = RawFileFollower(RAW_DATA_DIR, ...)     # existing path, untouched
+    source = RawFileFollower(RAW_DATA_DIR, ...)  # existing path, untouched
 ```
 
-- Probe once at startup (with the 15 s data window). No mid-flight source
-  switching — the failure mode "NATS was up, then died" is handled by
-  `Restart=always` on the module units: the process exits after
-  `MAX_RECONNECT_FAILURES` and re-probes on restart. This mirrors how
-  `RawFileFollower` already handles unrecoverable file states.
+- **Why reachability alone, not a traffic window:** the two candidate rules
+  fail differently. A traffic-window rule ("NATS must show a message within
+  15 s") loses a real race on every new-firmware boot — if the firmware
+  publisher starts later than our probe, we'd lock onto the file tailer and
+  ingest nothing until the next restart. Reachability-alone only misfires on
+  a hypothetical variant that runs a NATS server while still writing `.RAW`
+  spools — no such variant is known, and the shipped script-layer gate
+  (archiver-helpers) already treats server-presence as "new firmware". We
+  keep the safe failure mode: a NATS server's presence selects NATS, and the
+  follower simply waits for frames (logging once if silent past 60 s).
+- **The 60 s grace window** covers the inverse race (module up before
+  nats-server) on new-firmware pods. Cost on old pods: worst-case 60 s of
+  retries before file tailing starts — acceptable per review. Belt-and-
+  braces: the module units gain an `After=nats-server.service` ordering
+  drop-in (ignored by systemd on pods where that unit doesn't exist).
+- Probe once at startup; no mid-flight source switching. "NATS was up, then
+  died" is handled by `Restart=always`: the process exits after
+  `MAX_RECONNECT_FAILURES` and the whole selection re-runs on restart. This
+  mirrors how `RawFileFollower` already handles unrecoverable file states.
 - The two sources never run concurrently in one process (duplicate-row risk).
-- Field reality makes the probe unambiguous: shim/mid-era firmware has no
-  nats-server (probe fails in <2 s, cost ≈ zero); new firmware never writes
-  `.RAW` (file tailer would idle forever). There is no known both-present
-  variant; if one appears, NATS wins by probe order.
 
 ## `NatsFollower` design
 
@@ -157,6 +170,30 @@ selection above.
   ships 3.9.9; no PEP 604 (`int | None`) annotations (the #616 crash-loop
   lesson), `Optional[...]` only.
 
+### `capSense.status` handling
+
+Each side of a `capSense` record carries `status` (only `"good"` observed in
+the capture; the failure vocabulary is unknown — plausibly mirrors the read
+errors that capSense2 signals via its 65535 sentinel values).
+
+*How gating would work:* the mechanism is per-side sample suppression at the
+extraction layer, identical in spirit to the existing capSense2 sentinel
+filtering — when `side.status != "good"`, that side's `{out, cen, in}` values
+are excluded from that sample: not fed to the sleep-detector's presence/
+movement scoring, not eligible for `CapCalibrator` quiet-window selection,
+and not written as channel values. The other side and other record types are
+unaffected. This prevents error-state garbage (rail values, zeros) from
+polluting calibration baselines and inflating movement scores — the same
+class of bug the capSense2 sentinel filter and pump-artifact gate exist for.
+
+*Decision (review 2026-07-19):* **v1 records but does not gate.** Because the
+non-good vocabulary and its actual channel behavior are unobserved, gating
+now risks silently discarding usable data on states we haven't seen (e.g. a
+transient warm-up status at boot). v1 counts statuses and logs first
+occurrence of each distinct non-good value; once field data shows what
+non-good looks like, the suppression above lands as a follow-up with a
+pinning test per observed status.
+
 ## Backfill (explicitly out of scope for v1)
 
 The `raw` JetStream stream exists and retains messages
@@ -171,10 +208,11 @@ modest replay safe.
 
 ## Testing
 
-1. **Fixtures from the field capture:** commit a scrubbed subset of the
-   capture (per-subject exemplar payloads, `payload_b64` → raw CBOR) as test
-   fixtures. Unit tests decode fixtures through `NatsFollower`'s decode path
-   and assert the yielded dicts satisfy the existing parsers
+1. **Fixtures from the field capture:** commit per-subject exemplar payloads
+   from the capture (`payload_b64` → raw CBOR bytes) as test fixtures, real
+   sample data included — the capture is anonymized and cleared for use
+   (review 2026-07-19). Unit tests decode fixtures through `NatsFollower`'s
+   decode path and assert the yielded dicts satisfy the existing parsers
    (`normalize_bed_temp`, `_int32_samples` length/dtype, capSense channel
    extraction).
 2. **Probe tests:** fake NATS greeting (`INFO {...}`) vs silent socket vs
@@ -196,19 +234,27 @@ modest replay safe.
    in this capture).
 2. Ship on `worktree-pod5-debug`; field-test via `sudo sp-update
    worktree-pod5-debug` on the reporter's pod.
-3. `sp-status` already reports the variant — no diagnostic changes needed.
+3. `sp-status` gains a firmware-log line (decided in review): fetch the most
+   recent `raw.log` message from the JetStream `raw` stream —
+   `nats stream get raw --last-for raw.log` (already guarded on nats CLI
+   presence, same as the existing stream probe) — and surface
+   `SENSOR_SAMPLES_DROPPED` when present. JetStream retention makes this a
+   point read; no subscribe-and-wait needed for a sporadic subject.
 4. ADR after review: this doc graduates to `docs/adr/0024-nats-frame-readers.md`
    once accepted.
 
-## Open questions for review
+## Review resolutions (2026-07-19)
 
-1. Probe window: 15 s adds startup latency on new-firmware pods only when
-   NATS is reachable but silent (rare). Acceptable, or should reachability
-   alone (layer 2) select NATS?
-2. Should `capSense.status != "good"` gate ingestion in v1, or land as a
-   recorded column first?
-3. `raw.log` `SENSOR_SAMPLES_DROPPED` counter — worth surfacing in
-   `sp-status` / health endpoint while we're here?
-4. Fixture privacy: piezo samples are raw vibration data from a real user's
-   bed. Proposal: fixtures use truncated/zeroed sample bytes with real
-   headers, never real biometric waveforms.
+1. **Source selection: robustness over startup latency.** Reachability
+   (retried over a 60 s grace window) selects NATS; the traffic window was
+   dropped as a selection input because its boot-race failure mode starves
+   ingestion until the next restart, which is worse than the hypothetical it
+   guarded against. Data-layer silence is a logged health signal only.
+2. **`capSense.status`: record, don't gate, in v1.** Gating mechanism
+   (per-side sample suppression, mirroring capSense2 sentinel filtering) is
+   specified above and lands as a follow-up once non-good statuses are
+   observed in the field.
+3. **`SENSOR_SAMPLES_DROPPED` in `sp-status`: yes** — via JetStream
+   last-message fetch (rollout item 3).
+4. **Fixtures: real captured payloads are cleared for use** (data is
+   anonymized); no scrubbing/zeroing required.
