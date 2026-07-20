@@ -153,7 +153,7 @@ class TestLogCapsenseStatusOnce:
         dialect._capsense_status_seen.clear()
 
     def test_all_good_logs_nothing(self, caplog):
-        with caplog.at_level(logging.WARNING, logger="calibration"):
+        with caplog.at_level(logging.WARNING):
             log_capsense_status_once(CAPSENSE_GOOD)
         assert not [r for r in caplog.records if "status" in r.getMessage()]
 

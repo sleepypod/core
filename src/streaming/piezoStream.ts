@@ -74,8 +74,16 @@ const WS_MAX_PAYLOAD_BYTES = 1024
 // before nats-server still selects NATS; worst case on a `.RAW`-only pod is
 // GRACE_MS of retries before file tailing starts (accepted per review).
 const NATS_SOURCE_DISABLED = process.env.PIEZO_NATS_DISABLED === '1'
-const NATS_GRACE_MS = Number(process.env.PIEZO_NATS_GRACE_MS ?? 60_000)
-const NATS_PROBE_INTERVAL_MS = Number(process.env.PIEZO_NATS_PROBE_INTERVAL_MS ?? 5_000)
+
+function envMilliseconds(name: string, fallback: number, minimum: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  const value = Number(raw)
+  return Number.isFinite(value) && value >= minimum ? value : fallback
+}
+
+const NATS_GRACE_MS = envMilliseconds('PIEZO_NATS_GRACE_MS', 60_000, 0)
+const NATS_PROBE_INTERVAL_MS = envMilliseconds('PIEZO_NATS_PROBE_INTERVAL_MS', 5_000, 1)
 
 // ---------------------------------------------------------------------------
 // In-memory sidecar index: maps timestamps to byte offsets in the current RAW
@@ -728,10 +736,13 @@ export function startPiezoStreamServer(): WebSocketServer {
  * nats-server still lands on NATS. Never runs both sources (duplicate-row risk).
  */
 async function selectAndStartSource(): Promise<void> {
+  const server = wss
+  if (!server) return
+
   if (!NATS_SOURCE_DISABLED) {
     const deadline = Date.now() + NATS_GRACE_MS
     for (;;) {
-      if (!wss) return // shut down mid-selection
+      if (wss !== server) return // shut down or superseded by a restart
       let reachable = false
       try {
         reachable = await natsReachable()
@@ -739,9 +750,9 @@ async function selectAndStartSource(): Promise<void> {
       catch {
         reachable = false
       }
-      if (!wss) return
+      if (wss !== server) return
       if (reachable) {
-        await startNatsSource()
+        await startNatsSource(server)
         return
       }
       const remaining = deadline - Date.now()
@@ -751,20 +762,27 @@ async function selectAndStartSource(): Promise<void> {
     console.log('[sensorStream] no NATS server after %ds — tailing .RAW files',
       Math.round(NATS_GRACE_MS / 1000))
   }
-  startRawTailingLoop()
+  if (wss === server) startRawTailingLoop()
 }
 
 /** Connect the loopback-NATS source, feeding decoded frames into the shared dispatch. */
-async function startNatsSource(): Promise<void> {
+async function startNatsSource(server: WebSocketServer): Promise<void> {
   try {
     const source = await startNatsFrameSource({
       decode: decodeSensorFrames,
-      onFrame: dispatchSensorFrame,
-      onReady: () => console.log('[sensorStream] NATS frame source active'),
-      onClose: err => console.error('[sensorStream] NATS frame source closed', err ?? ''),
+      onFrame: (frame) => {
+        if (wss === server) dispatchSensorFrame(frame)
+      },
+      onReady: () => {
+        if (wss === server) console.log('[sensorStream] NATS frame source active')
+      },
+      onClose: (err) => {
+        if (wss === server) console.error('[sensorStream] NATS frame source closed', err ?? '')
+      },
     })
-    if (!wss) {
-      // Server shut down while we were connecting — don't leak the connection.
+    if (wss !== server) {
+      // Server shut down or restarted while connecting — don't leak or attach
+      // a stale source to the newer lifecycle.
       await source.stop()
       return
     }
@@ -775,7 +793,7 @@ async function startNatsSource(): Promise<void> {
     // tailer — on a NATS-only pod it finds nothing, which is the pre-existing
     // (safe) empty state, not a regression.
     console.error('[sensorStream] NATS connect failed, falling back to .RAW tailing:', err)
-    if (wss) startRawTailingLoop()
+    if (wss === server) startRawTailingLoop()
   }
 }
 
@@ -1037,6 +1055,7 @@ export const __test__ = {
   int32BufferToArray,
   decodeSensorFrames,
   dispatchSensorFrame,
+  envMilliseconds,
   warnedUnknownTypes,
   get frameIndex(): readonly FrameIndexEntry[] { return frameIndex },
   get natsSourceActive(): boolean { return natsSource !== null },

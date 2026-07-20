@@ -1,7 +1,7 @@
 # NATS Frame Readers
 
 **Status:** implemented — automated validation complete; field validation pending
-**Source data:** 1-minute `raw.>` capture from a field Pod 5 on new firmware
+**Source data:** roughly one-minute `raw.>` capture from a field Pod 5 on new firmware
 (Discord user report, 2026-07-19), taken with `scripts/probe-nats-capture.py`.
 236 messages across 8 subjects.
 
@@ -109,11 +109,15 @@ open port with no dependencies and ~zero cost:
 
 ```python
 def nats_reachable(host="127.0.0.1", port=4222, timeout=2.0) -> bool:
+    deadline = time.monotonic() + timeout
     try:
         with socket.create_connection((host, port), timeout=timeout) as s:
-            s.settimeout(timeout)
             greeting = b""
             while b"\n" not in greeting and len(greeting) < 4096:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                s.settimeout(remaining)
                 chunk = s.recv(512)
                 if not chunk:
                     return False
@@ -136,7 +140,7 @@ but it does not change the source choice. See selection rationale below.
 Reachability decides; traffic does not. Robustness beats latency here
 (reviewed 2026-07-19: "we don't need data immediately").
 
-```
+```text
 deadline = now + 60s                          # boot-ordering grace window
 while now < deadline:
     if nats_reachable():                      # layer 2, retried every 5 s

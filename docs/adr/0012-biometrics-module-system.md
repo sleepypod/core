@@ -10,8 +10,8 @@ sleepypod needs to process raw biometric sensor data from the Pod hardware and d
 The key constraints are:
 
 - **Signal processing is compute-heavy**: Heart rate extraction from 500 Hz piezoelectric data requires FFT, bandpass filtering, and peak detection. Node.js is not suited for this; Python (scipy/numpy) or Rust handle it naturally.
-- **Raw data is filesystem-based**: The hardware daemon writes binary CBOR files to `/persistent/biometrics/*.RAW` continuously (tmpfs since ADR 0018; previously `/persistent/*.RAW` on eMMC). There is no streaming API through `dac.sock` — that socket is command/response only.
-- **Embedded hardware**: The Pod runs constrained Linux (ARM). Heavy dependencies (InfluxDB, message queues, etc.) are ruled out.
+- **Raw sensor transport varies by firmware**: Old and mid-era firmware writes binary CBOR records to `*.RAW` spool files; new firmware publishes equivalent records to the local NATS `raw.>` stream and writes no `.RAW` files. `dac.sock` remains command/response only.
+- **Embedded hardware**: The Pod runs constrained Linux (ARM). Additional infrastructure is ruled out; the NATS path reuses the broker already shipped by new firmware.
 - **Community extensibility**: We want people to be able to swap in better algorithms (e.g., a Rust implementation, an ML-based sleep scorer) without touching the core app.
 - **Time-series vs config data have different access patterns**: Config/state data is small and randomly accessed. Biometrics data is append-only, queried by time range, and may grow to tens of thousands of rows.
 
@@ -22,17 +22,18 @@ We will use a **plugin/sidecar module system** with a **separate `biometrics.db`
 The architecture:
 
 ```text
-/persistent/biometrics/*.RAW   ←  hardware daemon writes CBOR sensor data
-                                  continuously into tmpfs (ADR 0018)
-                ↓
-        [module process]       reads + tails RAW files, processes signals (any language)
+[firmware] writes CBOR sensor data continuously
+        ├── old/mid: *.RAW ─────────→ RawFileFollower
+        └── new: NATS `raw.>` ──────→ NatsFollower
+                                      ↓
+                              [module process] processes signals (any language)
                 ↓
         [biometrics.db]        module writes to agreed schema tables (eMMC, durable)
                 ↑
         [sleepypod-core]       reads biometrics.db via tRPC API → UI
 ```
 
-The path above is the **hot** RAW dir on tmpfs. Files older than 15 minutes are gzipped into `/persistent/biometrics-archive/` on eMMC by a separate archiver/pruner pair — modules read from the hot path only and need not be aware of the cold archive.
+Old and mid-era pods retain the RAW path; ADR 0018 documents the full firmware matrix and archive behavior. New-firmware pods consume live frames from the firmware-provided NATS server. Each process selects exactly one source at startup. See `docs/nats-frame-readers.md` for transport selection and failure behavior.
 
 The **database schema is the public contract**. Modules do not call into the core app. The core app does not call into modules. They share only a file.
 
@@ -154,7 +155,7 @@ modules/
 ```
 
 Each module:
-1. Tails `/persistent/biometrics/*.RAW` for new CBOR sensor data
+1. Selects one raw-frame source at startup: NATS on reachable new firmware, otherwise the existing `.RAW` follower
 2. Processes its relevant signal type
 3. Writes results to `biometrics.db` using transactions
 4. Writes its health status to `system_health` table in `sleepypod.db`
@@ -179,8 +180,8 @@ Community modules can be installed the same way by dropping a directory into `/o
 ### WebSocket proxy (core app re-streams raw data)
 
 **Pros**: Modules don't need filesystem access to `/persistent`; enables modules running on separate hardware
-**Cons**: Unnecessary complexity for the current single-device setup — modules run on the same device and can read the files directly; adds latency and a failure point
-**Verdict**: Not adopted for now (file access is simpler on a single device). **Not ruled out** — if modules need to run on a separate host, or if the core app wants to push real-time sensor data to the UI, a WebSocket transport is a natural fit for that phase.
+**Cons**: Unnecessary complexity for the current single-device setup — modules run on the same device and can consume the firmware source directly; adds latency and a failure point
+**Verdict**: Not adopted for module ingestion. **Not ruled out** — if modules need to run on a separate host, a WebSocket transport is a natural fit for that phase.
 
 ### InfluxDB or other time-series DB
 
@@ -222,6 +223,8 @@ Community modules can be installed the same way by dropping a directory into `/o
 
 ## References
 
+- [ADR 0018 — tmpfs RAW frames and firmware applicability](0018-tmpfs-raw-frames.md)
+- [NATS frame readers](../nats-frame-readers.md)
 - [free-sleep biometrics stream processor](https://github.com/samholton/free-sleep) — prior art this system is based on
 - [SQLite WAL mode](https://www.sqlite.org/wal.html)
 - [HeartPy — Python heart rate analysis](https://python-heart-rate-analysis-toolkit.readthedocs.io/)
@@ -230,4 +233,4 @@ Community modules can be installed the same way by dropping a directory into `/o
 ---
 
 **Authors**: @ng (decision), Claude (documentation)
-**Last Updated**: 2026-02-23
+**Last Updated**: 2026-07-20

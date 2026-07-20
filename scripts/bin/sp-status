@@ -16,22 +16,21 @@ probe_section() {
 active_or() {
   # Print "active" / "inactive" / "missing" based on systemctl state, without
   # leaking systemctl's verbose error text when the unit doesn't exist.
-  local unit="$1" state
-  state=$(systemctl is-active "$unit" 2>/dev/null || true)
-  if [ -z "$state" ]; then
+  local unit="$1" load_state state
+  load_state=$(systemctl show "$unit" --property=LoadState 2>/dev/null || true)
+  if [ -z "$load_state" ] || [ "$load_state" = "LoadState=not-found" ]; then
     echo "missing"
-  else
-    echo "$state"
+    return
   fi
+  state=$(systemctl is-active "$unit" 2>/dev/null || true)
+  echo "${state:-inactive}"
 }
 
 port_open() {
   # /dev/tcp probe; returns 0 if a TCP connect to host:port succeeds within ~1s.
   local host="$1" port="$2"
   (exec 3<>/dev/tcp/"$host"/"$port") 2>/dev/null
-  local rc=$?
-  exec 3<&- 2>/dev/null || true
-  return $rc
+  return $?
 }
 
 human_size() {

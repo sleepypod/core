@@ -33,6 +33,8 @@ const tmpRawDir = vi.hoisted(() => {
 const natsMock = vi.hoisted(() => ({
   reachable: false,
   probeErrorOnce: false,
+  probePromise: null as Promise<boolean> | null,
+  resolveProbe: null as ((reachable: boolean) => void) | null,
   startError: null as Error | null,
   startPromise: null as Promise<void> | null,
   resolveStart: null as (() => void) | null,
@@ -45,6 +47,7 @@ const natsMock = vi.hoisted(() => ({
 vi.mock('../natsFrameSource', () => ({
   SUBSCRIBE_SUBJECTS: ['raw.sens.>', 'raw.frz.>'],
   natsReachable: vi.fn(async () => {
+    if (natsMock.probePromise) return natsMock.probePromise
     if (natsMock.probeErrorOnce) {
       natsMock.probeErrorOnce = false
       throw new Error('probe failed')
@@ -115,6 +118,8 @@ describe('startPiezoStreamServer — source selection', () => {
     await shutdownPiezoStreamServer()
     natsMock.reachable = false
     natsMock.probeErrorOnce = false
+    natsMock.probePromise = null
+    natsMock.resolveProbe = null
     natsMock.startError = null
     natsMock.startPromise = null
     natsMock.resolveStart = null
@@ -256,5 +261,54 @@ describe('startPiezoStreamServer — source selection', () => {
     await waitFor(() => natsMock.stopCalls === 1)
 
     expect(__test__.natsSourceActive).toBe(false)
+  })
+
+  it('does not attach a stale NATS source after shutdown and restart', async () => {
+    natsMock.reachable = true
+    natsMock.startPromise = new Promise<void>((resolve) => {
+      natsMock.resolveStart = resolve
+    })
+    startPiezoStreamServer()
+    await waitFor(() => natsMock.startCalls === 1)
+
+    await shutdownPiezoStreamServer()
+    natsMock.reachable = false
+    startPiezoStreamServer()
+
+    natsMock.resolveStart?.()
+    await waitFor(() => natsMock.stopCalls === 1)
+
+    expect(__test__.natsSourceActive).toBe(false)
+    expect(natsMock.startCalls).toBe(1)
+  })
+
+  it('does not continue a stale reachability probe after restart', async () => {
+    natsMock.probePromise = new Promise<boolean>((resolve) => {
+      natsMock.resolveProbe = resolve
+    })
+    startPiezoStreamServer()
+    await waitFor(() => vi.mocked(natsReachable).mock.calls.length === 1)
+
+    await shutdownPiezoStreamServer()
+    startPiezoStreamServer()
+    await waitFor(() => vi.mocked(natsReachable).mock.calls.length === 2)
+
+    natsMock.resolveProbe?.(true)
+    await waitFor(() => __test__.natsSourceActive)
+
+    expect(startNatsFrameSource).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to safe defaults for invalid source-selection timings', () => {
+    process.env.TEST_NATS_TIMING = 'not-a-number'
+    expect(__test__.envMilliseconds('TEST_NATS_TIMING', 123, 0)).toBe(123)
+    process.env.TEST_NATS_TIMING = ''
+    expect(__test__.envMilliseconds('TEST_NATS_TIMING', 123, 0)).toBe(123)
+    process.env.TEST_NATS_TIMING = '-1'
+    expect(__test__.envMilliseconds('TEST_NATS_TIMING', 123, 0)).toBe(123)
+    process.env.TEST_NATS_TIMING = '0'
+    expect(__test__.envMilliseconds('TEST_NATS_TIMING', 123, 1)).toBe(123)
+    expect(__test__.envMilliseconds('TEST_NATS_TIMING', 123, 0)).toBe(0)
+    delete process.env.TEST_NATS_TIMING
   })
 })

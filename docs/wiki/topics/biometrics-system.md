@@ -5,12 +5,9 @@ Plugin/sidecar module architecture for processing raw sensor data into health me
 ## Architecture
 
 ```
-[firmware] writes CBOR sensor data continuously to:
-  - /persistent/*.RAW                              (old + mid-era firmware)
-  - NATS JetStream stream `raw`, subject raw.>     (new firmware, April 2026+)
+/persistent/*.RAW   ←  hardware daemon writes CBOR sensor data continuously
        ↓
-[module process]    consumes via RawFileFollower or (planned) NatsJetstreamSource;
-                    processes signals in any language
+[module process]    reads + tails RAW files, processes signals (any language)
        ↓
 [biometrics.db]     module writes to agreed schema tables
        ↑
@@ -18,16 +15,6 @@ Plugin/sidecar module architecture for processing raw sensor data into health me
 ```
 
 The **database schema is the public contract**. Modules do not call into the core app. The core app does not call into modules. They share only a file.
-
-### Firmware-variant data sources
-
-Three firmware generations coexist in the fleet (as of 2026-05):
-
-- **Old (Pod 3 / Pod 4 / early Pod 5)** — `/opt/eight/bin/frank.sh` present. Frankenfirmware runs via the shim and writes `*.RAW` files. Tmpfs redirect + cold archive applies (ADR 0018).
-- **Mid (~2025 → April 2026)** — `frank.sh` removed from firmware. Frankenfirmware writes `*.RAW` files directly to `/persistent/`. Tmpfs redirect doesn't apply (no shim to patch), but the archive/prune loop still rotates the live files.
-- **New (April 2026+, e.g. `rat_version ca35aafa`)** — Frankenfirmware publishes CBOR frames to NATS JetStream stream `raw` (subject `raw.>`), persisted under `/persistent/jetstream/`. No `.RAW` files written. Modules need a NATS subscriber to ingest; tracked in sleepypod-core-54. The existing `RawFileFollower` path must remain functional in parallel — additive only, never replace.
-
-`sp-status` reports which path a pod is on (`pipeline:` line). The discovery probe `scripts/probe-nats-capture.py` records `raw.>` traffic for offline schema analysis.
 
 ## Why Sidecar Processes
 
