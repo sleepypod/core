@@ -368,6 +368,31 @@ describe('device.getStatus', () => {
     })
   })
 
+  it('derives the opposite powered flags for both insert and conflict-update payloads', async () => {
+    helpersMock.client.getDeviceStatus.mockResolvedValueOnce({
+      leftSide: { currentTemperature: 70, targetTemperature: 74, currentLevel: -10, targetLevel: -30, heatingDuration: 4 },
+      rightSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0, targetLevel: 0, heatingDuration: 0 },
+      waterLevel: 'ok', isPriming: false, podVersion: 'J00', sensorLabel: 'X', gestures: undefined,
+    })
+
+    await caller.getStatus({})
+
+    expect(dbChain('insert', 0).values).toHaveBeenCalledWith(expect.objectContaining({
+      side: 'left',
+      isPowered: true,
+    }))
+    expect(dbChain('insert', 0).onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      set: expect.objectContaining({ isPowered: true }),
+    }))
+    expect(dbChain('insert', 1).values).toHaveBeenCalledWith(expect.objectContaining({
+      side: 'right',
+      isPowered: false,
+    }))
+    expect(dbChain('insert', 1).onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      set: expect.objectContaining({ isPowered: false }),
+    }))
+  })
+
   it('logs the exact DB-sync failure and still returns hardware status', async () => {
     dbMock.insert.mockImplementationOnce(() => {
       throw new Error('sqlite read-only')
