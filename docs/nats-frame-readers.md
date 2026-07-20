@@ -189,10 +189,24 @@ class of bug the capSense2 sentinel filter and pump-artifact gate exist for.
 *Decision (review 2026-07-19):* **v1 records but does not gate.** Because the
 non-good vocabulary and its actual channel behavior are unobserved, gating
 now risks silently discarding usable data on states we haven't seen (e.g. a
-transient warm-up status at boot). v1 counts statuses and logs first
-occurrence of each distinct non-good value; once field data shows what
-non-good looks like, the suppression above lands as a follow-up with a
-pinning test per observed status.
+transient warm-up status at boot). Once field data shows what non-good looks
+like, the suppression above lands as a follow-up with a pinning test per
+observed status. v1 records status two ways:
+
+- **Log:** first occurrence of each distinct non-good value, with the channel
+  values alongside (journald → `sp-bundle-logs`, so field reports carry the
+  evidence).
+- **Persist (review 2026-07-19): one column on the existing window row.**
+  `cap_sense_frames` already aggregates ~2 Hz frames into 5 s windows with a
+  `frameCount` (`src/streaming/capFramePersistence.ts`); add a `statusCounts`
+  JSON column — a per-window `{status: sampleCount}` map, `null` when every
+  sample in the window was `"good"` (the overwhelmingly common case, so
+  storage cost ≈ nil). Follows the existing `zones` JSON-column pattern,
+  rides the existing 48h retention, and gives the historical correlation
+  ("were the garbage-looking windows also the non-good ones?") needed to
+  validate the future gate against real data. Schema change via
+  `src/db/biometrics-schema.ts` + `pnpm db:biometrics:generate` (journals are
+  never hand-edited).
 
 ## Backfill (explicitly out of scope for v1)
 
@@ -232,6 +246,16 @@ modest replay safe.
    piezo-processor, sleep-detector, environment-monitor, calibrator
    (cover-buttons deferred — button events' NATS subject is unconfirmed; not
    in this capture).
+1a. **Node streaming side is a second `.RAW` consumer** (found during status-
+   column review): the live broadcast loop in `src/streaming` tails RAW files
+   to feed the WS stream, the in-memory `signals.biometrics` snapshot, and
+   `capFramePersistence` — so on NATS-only pods the web UI live stream,
+   `cap_sense_frames` (including the new `statusCounts` column), and `cap.*`
+   automation signals stay empty even with all Python modules fixed. Needs a
+   TypeScript NATS source (`nats` npm client) behind the same
+   reachability-probe selection. Same scope decision as the Python side:
+   part of this branch, since shipping one without the other leaves
+   new-firmware pods half-working in a way that's confusing to diagnose.
 2. Ship on `worktree-pod5-debug`; field-test via `sudo sp-update
    worktree-pod5-debug` on the reporter's pod.
 3. `sp-status` gains a firmware-log line (decided in review): fetch the most
@@ -253,7 +277,10 @@ modest replay safe.
 2. **`capSense.status`: record, don't gate, in v1.** Gating mechanism
    (per-side sample suppression, mirroring capSense2 sentinel filtering) is
    specified above and lands as a follow-up once non-good statuses are
-   observed in the field.
+   observed in the field. Recorded two ways: first-occurrence logging, plus a
+   `statusCounts` JSON column on the existing `cap_sense_frames` 5 s window
+   row (null = all good) — since the window already counts samples, carrying
+   their statuses is one column, not a new archive.
 3. **`SENSOR_SAMPLES_DROPPED` in `sp-status`: yes** — via JetStream
    last-message fetch (rollout item 3).
 4. **Fixtures: real captured payloads are cleared for use** (data is
