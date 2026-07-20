@@ -15,6 +15,11 @@ describe('capSideChannels', () => {
       .toEqual([16.2, 16.1, 22.2, 1.16])
   })
 
+  it('drops non-numbers from the Pod 4/5 values array', () => {
+    expect(capSideChannels({ values: [16.2, null, 'nope', 1.16], status: 'good' }))
+      .toEqual([16.2, 1.16])
+  })
+
   it('projects the Pod 3 {out,cen,in} object into the 6-slot paired layout', () => {
     expect(capSideChannels({ out: 10, cen: 20, in: 30 })).toEqual([10, 10, 20, 20, 30, 30])
   })
@@ -26,6 +31,11 @@ describe('capSideChannels', () => {
 
   it('passes a bare numeric array through, dropping non-numbers', () => {
     expect(capSideChannels([1, 2, null, 3])).toEqual([1, 2, 3])
+  })
+
+  it('returns null for an array with nothing numeric left after filtering', () => {
+    expect(capSideChannels([])).toBeNull()
+    expect(capSideChannels([null, 'nope'])).toBeNull()
   })
 
   it('wraps a scalar (degenerate) reading', () => {
@@ -454,6 +464,13 @@ describe('normalizeFrame', () => {
       const result = normalizeFrame(boundary as Record<string, unknown>)
 
       expect(result.left).toBe(value / 100)
+    })
+
+    it('does not treat the positive mirror of the -32768 sentinel as missing', () => {
+      // Only the negative sentinel means "no sensor"; +32768 is a real reading.
+      const mirrored = { type: 'frzTemp', ts: 1, left: 32768, right: 2225, amb: 2237, hs: 2531 }
+      const result = normalizeFrame(mirrored as Record<string, unknown>)
+      expect(result.left).toBeCloseTo(327.68)
     })
 
     it('treats non-numeric values as null', () => {

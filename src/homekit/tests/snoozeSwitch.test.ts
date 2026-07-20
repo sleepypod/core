@@ -115,9 +115,14 @@ describe('snoozeSwitch accessory', () => {
   })
 
   it('stop() clears the poll interval', () => {
-    const { stop } = buildSnoozeSwitch('left')
+    const { service, stop } = buildSnoozeSwitch('left')
+    const update = vi.spyOn(service, 'updateCharacteristic')
     stop()
-    // Advance well past the poll interval — no errors / no leaked timers.
+    state.active = true
+
+    // Advance well past the poll interval — a stopped switch publishes nothing.
     vi.advanceTimersByTime(60_000)
+
+    expect(update).not.toHaveBeenCalled()
   })
 })
