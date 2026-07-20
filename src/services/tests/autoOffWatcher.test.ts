@@ -450,12 +450,13 @@ describe('autoOffWatcher — global wall-clock cap', () => {
     expect(setPower).not.toHaveBeenCalled()
   })
 
-  it('does not fire at the exact cap boundary because the limit is strictly exceeded', () => {
+  it('does not fire at the exact cap boundary because the limit is strictly exceeded', async () => {
     setGlobalCap(8)
     mockOccupancy.left = occ(true, true)
     setSideOn('left', Date.now() - 8 * 3600_000)
 
     startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(setPower).not.toHaveBeenCalled()
   })
@@ -475,12 +476,35 @@ describe('autoOffWatcher — global wall-clock cap', () => {
     )
   })
 
-  it.each([null, 0, -1])('disables the global cap for %s', (hours) => {
-    setGlobalCap(hours)
+  it('disables the global cap when it is null', async () => {
+    setGlobalCap(null)
     mockOccupancy.left = occ(true, true)
     setSideOn('left', Date.now() - 48 * 3600_000)
 
     startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('disables the global cap when it is zero', async () => {
+    setGlobalCap(0)
+    mockOccupancy.left = occ(true, true)
+    setSideOn('left', Date.now() - 48 * 3600_000)
+
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('disables the global cap when it is negative', async () => {
+    setGlobalCap(-1)
+    mockOccupancy.left = occ(true, true)
+    setSideOn('left', Date.now() - 48 * 3600_000)
+
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(setPower).not.toHaveBeenCalled()
   })
@@ -496,12 +520,13 @@ describe('autoOffWatcher — global wall-clock cap', () => {
     expect(setPower).toHaveBeenCalledWith('left', false)
   })
 
-  it('rejects elapsed time beyond seven days as suspicious', () => {
+  it('rejects elapsed time beyond seven days as suspicious', async () => {
     setGlobalCap(1)
     mockOccupancy.left = occ(true, true)
     setSideOn('left', Date.now() - 7 * 86_400_000 - 1_000)
 
     startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(setPower).not.toHaveBeenCalled()
   })
@@ -563,6 +588,7 @@ describe('autoOffWatcher — lifecycle', () => {
     const stop = stopAutoOffWatcher().then(() => {
       stopped = true
     })
+    await Promise.resolve()
     await Promise.resolve()
     expect(stopped).toBe(false)
     expect(log).toHaveBeenCalledWith('[auto-off] Waiting for 1 in-flight power-off(s)...')

@@ -347,6 +347,21 @@ describe('JobManager public surface (stub DB)', () => {
     expect(remaining.filter(j => j.metadata?.side === 'left')).toHaveLength(2)
   })
 
+  it('cancelRunOnceSession preserves a same-side recurring job', () => {
+    const scheduler = manager.getScheduler()
+    scheduler.scheduleJob(
+      'left-recurring-temperature',
+      JobType.TEMPERATURE,
+      '0 8 * * *',
+      async () => {},
+      { side: 'left' },
+    )
+
+    manager.cancelRunOnceSession('left')
+
+    expect(scheduler.getJob('left-recurring-temperature')).toBeDefined()
+  })
+
   it('startHeartbeat / stopHeartbeat are idempotent', () => {
     manager.startHeartbeat()
     manager.startHeartbeat() // second call no-ops
@@ -648,13 +663,19 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
     expect(sendLed).toHaveBeenLastCalledWith(80)
   })
 
-  // Same-day window: current is inside but past a mutated end. A smaller
-  // mutated end (22*60-30=1290) would flip it to outside → kills + → - on
-  // endMinutes (and / 60).
-  it('night brightness when current is just inside the end of a tight window — kills + → - on endMinutes', async () => {
+  // Same-day window with a non-zero end minute, observed from inside.
+  it('night brightness when current is just inside the end of a tight window', async () => {
     const { sendLed } = run('2026-01-15T22:15:00Z')
     await (manager as any).scheduleLedNightMode('22:00', '22:30', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(10)
+  })
+
+  // The mutated end (22*60-30=1290) makes this look like a cross-midnight
+  // window, incorrectly keeping 22:45 in night mode.
+  it('day brightness after a same-day window with a non-zero end minute', async () => {
+    const { sendLed } = run('2026-01-15T22:45:00Z')
+    await (manager as any).scheduleLedNightMode('22:00', '22:30', 80, 10)
+    expect(sendLed).toHaveBeenLastCalledWith(80)
   })
 
   // start === end: with the real `<=` we take the same-day branch which
