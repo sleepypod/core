@@ -480,6 +480,8 @@ describe('automations nights and historical series', () => {
 
   it('uses an exact twelve-hour movement window when there is no sleep record', async () => {
     const latest = new Date('2026-07-20T04:00:00Z')
+    const localMonth = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][latest.getMonth()]
     states.biometrics.queue.push([])
     states.biometrics.queue.push([{ t: latest }])
     for (let i = 0; i < 7; i++) states.biometrics.queue.push([])
@@ -489,7 +491,10 @@ describe('automations nights and historical series', () => {
       side: 'left',
       rule: { side: null, cooldownMin: null, trigger, conditions, actions },
     })
-    expect(result.night).toEqual({ label: 'Recent', date: 'Jul 19' })
+    expect(result.night).toEqual({
+      label: 'Recent',
+      date: `${localMonth} ${latest.getDate()}`,
+    })
     expect(backtest.run.mock.calls[0]?.[0]).toMatchObject({
       startMs: latest.getTime() - 12 * 3_600_000,
       endMs: latest.getTime(),
