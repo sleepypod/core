@@ -3,12 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const setTemperature = vi.fn()
 const setPower = vi.fn()
 const registerManualOverride = vi.fn()
+const shouldBlock = vi.fn<(side: 'left' | 'right') => boolean>()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setTemperature, setPower }),
 }))
 vi.mock('@/src/automation', () => ({
   getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+}))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  shouldBlock: (side: 'left' | 'right') => shouldBlock(side),
 }))
 
 import {
@@ -50,8 +54,10 @@ describe('sideController', () => {
     setTemperature.mockReset()
     setPower.mockReset()
     registerManualOverride.mockReset()
+    shouldBlock.mockReset()
     setTemperature.mockResolvedValue(undefined)
     setPower.mockResolvedValue(undefined)
+    shouldBlock.mockReturnValue(false)
   })
 
   afterEach(() => {
@@ -400,6 +406,68 @@ describe('sideController', () => {
       await setTargetTemperature(monitor(onStatus), 'left', 72)
       expect(setTemperature).toHaveBeenCalledWith('left', 72)
       warn.mockRestore()
+    })
+  })
+
+  describe('pump stall guard gate', () => {
+    it('setSidePowerOn refuses a guard-blocked side without touching hardware or the intent latch', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      shouldBlock.mockReturnValue(true)
+
+      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('Pump stall protection active')
+      expect(setPower).not.toHaveBeenCalled()
+      expect(registerManualOverride).not.toHaveBeenCalled()
+      // Latch must stay untouched so onGet keeps reporting the true (off) state.
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+      warn.mockRestore()
+    })
+
+    it('setTargetTemperature refuses the firmware push on a blocked powered side but still caches the target', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      shouldBlock.mockReturnValue(true)
+
+      await expect(setTargetTemperature(monitor(onStatus), 'left', 68)).rejects.toThrow('Pump stall protection active')
+      expect(setTemperature).not.toHaveBeenCalled()
+      expect(getStagedTargetF(monitor(onStatus), 'left')).toBe(68)
+      warn.mockRestore()
+    })
+
+    it('setTargetTemperature refuses when the trip left the intent latch stuck ON', async () => {
+      // Real-stall scenario: HomeKit powered the side on, the guard tripped
+      // (firmware now off, side blocked). reconcileIntendedPower never clears
+      // the latch because firmware never confirms ON — so the push path
+      // computes powered=true from the latch and must be stopped by the gate.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      await setSidePowerOn(monitor(offStatus), 'left')
+      setTemperature.mockClear()
+
+      shouldBlock.mockReturnValue(true)
+      await expect(setTargetTemperature(monitor(offStatus), 'left', 72)).rejects.toThrow('Pump stall protection active')
+      expect(setTemperature).not.toHaveBeenCalled()
+      warn.mockRestore()
+    })
+
+    it('setTargetTemperature still stages silently on a blocked side that is off with no latch', async () => {
+      shouldBlock.mockReturnValue(true)
+
+      await expect(setTargetTemperature(monitor(offStatus), 'left', 66)).resolves.toBeUndefined()
+      expect(setTemperature).not.toHaveBeenCalled()
+      expect(getStagedTargetF(monitor(offStatus), 'left')).toBe(66)
+    })
+
+    it('setSidePowerOff is never gated', async () => {
+      shouldBlock.mockReturnValue(true)
+
+      await setSidePowerOff(monitor(onStatus), 'left')
+      expect(setPower).toHaveBeenCalledWith('left', false)
+    })
+
+    it('consults the guard for the specific side being written', async () => {
+      shouldBlock.mockImplementation((side: 'left' | 'right') => side === 'left')
+
+      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('Pump stall protection active')
+      await setSidePowerOn(monitor(offStatus), 'right')
+      expect(setPower).toHaveBeenCalledWith('right', true, expect.any(Number))
     })
   })
 })

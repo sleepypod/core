@@ -23,6 +23,20 @@ import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getAutomationEngineIfRunning } from '@/src/automation'
 import { withSideLock } from '@/src/hardware/sideLock'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
+
+/**
+ * HomeKit must honor the pump stall guard like every other write surface
+ * (device router, keepalive). Without this gate a guard-blocked side could
+ * be silently re-powered from the Home app — re-heating a side with zero
+ * flow and defeating the fail-safe. Powering OFF is never gated: it is the
+ * safe direction and the guard's own trip path uses it.
+ */
+function assertNotGuardBlocked(side: Side, label: string): void {
+  if (!pumpStallShouldBlock(side)) return
+  console.warn(`[homekit] refused ${label} — pump stall protection active on ${side}`)
+  throw new Error('Pump stall protection active — acknowledge the alert first')
+}
 
 const lastTargetF: Record<Side, number | null> = { left: null, right: null }
 
@@ -128,6 +142,10 @@ export async function setTargetTemperature(
     const intended = intendedPower[side]
     const powered = intended !== null ? intended : isCurrentlyPowered(monitor, side)
     if (!powered) return
+    // Gate only the firmware push: staging a target on an off side is
+    // harmless, and the guard trip leaves the intent latch stuck ON
+    // (firmware never confirms), so `powered` alone can't be trusted here.
+    assertNotGuardBlocked(side, `setTemperature(${side}, ${f})`)
     registerManualOverride(side)
     await logged(
       `setTemperature(${side}, ${f})`,
@@ -146,6 +164,7 @@ export async function setTargetTemperature(
  * that the failed power-on left in an unknown state.
  */
 export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<void> {
+  assertNotGuardBlocked(side, `setPower(${side}, true)`)
   const prev = intendedPower[side]
   intendedPower[side] = true
   try {
