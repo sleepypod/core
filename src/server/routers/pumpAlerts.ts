@@ -119,12 +119,37 @@ export const pumpAlertsRouter = router({
     .mutation(async ({ input }) => {
       const { restore, alertId } = guardAcknowledge(input.side)
 
-      if (alertId != null) {
+      // A restart wipes the guard's in-memory state, so a trip from before
+      // the restart has no activeAlertId anymore and its row would strand
+      // unacknowledged in the active list forever. Fall back to the newest
+      // active power_off row for this side.
+      let stampId = alertId
+      if (stampId == null) {
+        try {
+          const [orphan] = await biometricsDb
+            .select({ id: pumpAlerts.id })
+            .from(pumpAlerts)
+            .where(and(
+              eq(pumpAlerts.side, input.side),
+              eq(pumpAlerts.action, 'power_off'),
+              isNull(pumpAlerts.acknowledgedAt),
+              isNull(pumpAlerts.dismissedAt),
+            ))
+            .orderBy(desc(pumpAlerts.timestamp))
+            .limit(1)
+          stampId = orphan?.id ?? null
+        }
+        catch (err) {
+          console.warn('[pumpAlerts] orphaned-alert lookup failed:', err instanceof Error ? err.message : err)
+        }
+      }
+
+      if (stampId != null) {
         try {
           await biometricsDb
             .update(pumpAlerts)
             .set({ acknowledgedAt: new Date() })
-            .where(eq(pumpAlerts.id, alertId))
+            .where(eq(pumpAlerts.id, stampId))
         }
         catch (err) {
           console.warn('[pumpAlerts] failed to stamp acknowledgedAt:', err instanceof Error ? err.message : err)
