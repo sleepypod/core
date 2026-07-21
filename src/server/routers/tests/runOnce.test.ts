@@ -147,6 +147,28 @@ describe('runOnce.start', () => {
     expect(dbMock.insert).not.toHaveBeenCalled()
   })
 
+  it('re-checks the guard at the hardware write and blocks a trip that lands mid-flight', async () => {
+    // Entry check passes, then the guard trips during the awaited session
+    // cancellation / settings lookup — the write-time re-check must stop the
+    // power-on and the session insert.
+    pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Pump stall protection active — re-enable the side first',
+    })
+
+    expect(dbMock.transactionFn).toHaveBeenCalled()
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(broadcastMock.broadcastMutationStatus).not.toHaveBeenCalled()
+    expect(dbMock.insert).not.toHaveBeenCalled()
+    expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+  })
+
   it('powers on the side with the first set-point temperature, persists session, and schedules the rest', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const expiresAt = new Date(Date.now() + 3_600_123)

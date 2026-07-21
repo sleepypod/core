@@ -87,6 +87,15 @@ export const runOnceRouter = router({
       // so a hardware failure doesn't leave an orphaned active session)
       const firstTemp = input.setPoints[0].temperature
       await withHardwareClient(async (client) => {
+        // Re-check at the write: the guard can trip during the awaited session
+        // cancellation and settings lookup above, and a stale start must not
+        // re-energize a parked side.
+        if (pumpStallShouldBlock(input.side)) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Pump stall protection active — re-enable the side first',
+          })
+        }
         await client.setPower(input.side, true, firstTemp)
         return { success: true }
       }, 'Failed to start run-once session')

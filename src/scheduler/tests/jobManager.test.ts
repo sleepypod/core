@@ -99,6 +99,7 @@ import { db } from '@/src/db'
 import { sendCommand } from '@/src/hardware/dacTransport'
 import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
+import { withSideLock } from '@/src/hardware/sideLock'
 import { JobManager } from '../jobManager'
 import { JobType } from '../types'
 
@@ -1502,6 +1503,36 @@ describe('JobManager residual mutation contracts', () => {
     await required(captured.get('away-return-left'), 'away-return-left').handler()
 
     expect(updates[0]).toMatchObject({ awayMode: false })
+    expect(hardwareClient.setPower).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('[jobManager] skipped away-return power-on: pump stall guard blocks left')
+  })
+
+  it('re-checks the guard inside the side lock — a trip while away-return is queued blocks the power-on', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+    vi.spyOn(db, 'transaction').mockImplementation(((callback: any) => callback({
+      update: () => ({ set: () => ({ where: () => ({ run: vi.fn() }) }) }),
+    })) as any)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    pumpStallMock.shouldBlock.mockReturnValue(false)
+
+    ;(manager as any).scheduleAwayMode('left', null, new Date(Date.now() + 60_000).toISOString())
+
+    // Hold the real side lock, start the job so its power-on queues behind us,
+    // trip the guard, then release: the queued write must observe the trip.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const lockHeld = withSideLock('left', () => gate)
+    const jobRun = required(captured.get('away-return-left'), 'away-return-left').handler()
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+    release()
+    await lockHeld
+    await jobRun
+
     expect(hardwareClient.setPower).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledWith('[jobManager] skipped away-return power-on: pump stall guard blocks left')
   })

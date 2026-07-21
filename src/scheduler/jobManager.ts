@@ -677,21 +677,25 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
-            if (pumpStallShouldBlock(side)) {
-              console.warn(`[jobManager] skipped away-return power-on: pump stall guard blocks ${side}`)
-              return
-            }
-            // Restore power for the side
-            try {
-              const client = getSharedHardwareClient()
-              await client.connect()
-              await client.setPower(side, true)
-              cancelAutoOffTimer(side)
-              broadcastMutationStatus(side, {})
-            }
-            catch (e) {
-              console.warn(`[awayMode] Failed to power on ${side}:`, e)
-            }
+            // Restore power for the side — inside the side lock, with the
+            // guard checked there, so a stall trip while this job is queued
+            // still blocks the power-on (ADR 0022).
+            await withSideLock(side, async () => {
+              if (pumpStallShouldBlock(side)) {
+                console.warn(`[jobManager] skipped away-return power-on: pump stall guard blocks ${side}`)
+                return
+              }
+              try {
+                const client = getSharedHardwareClient()
+                await client.connect()
+                await client.setPower(side, true)
+                cancelAutoOffTimer(side)
+                broadcastMutationStatus(side, {})
+              }
+              catch (e) {
+                console.warn(`[awayMode] Failed to power on ${side}:`, e)
+              }
+            })
           },
           { side },
         )
