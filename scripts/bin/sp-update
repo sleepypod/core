@@ -6,6 +6,26 @@ set -euo pipefail
 # shim shadows ours and fails with "Volta error: Node is not available".
 export PATH="/usr/local/bin:$PATH"
 
+# Privileged firewall dispatch for the unprivileged web service. Keep this
+# before every updater side effect: the installed sudoers rule already permits
+# the root-owned sp-update binary, which lets the first OTA bootstrap the new
+# sp-internet-control helper without widening that rule.
+if [ "${1:-}" = "--internet-access" ]; then
+  if [ "$#" -ne 2 ] || { [ "$2" != "block" ] && [ "$2" != "unblock" ]; }; then
+    echo "Usage: sp-update --internet-access {block|unblock}" >&2
+    exit 2
+  fi
+
+  INTERNET_CONTROL_HELPER="/usr/local/bin/sp-internet-control"
+  HELPER_META="$(stat -c '%u:%a' "$INTERNET_CONTROL_HELPER" 2>/dev/null || true)"
+  if [ ! -f "$INTERNET_CONTROL_HELPER" ] || [ ! -x "$INTERNET_CONTROL_HELPER" ] \
+    || [[ ! "$HELPER_META" =~ ^0:[0-7]*[0145][0145]$ ]]; then
+    echo "Error: firewall helper is missing or has unsafe ownership/mode" >&2
+    exit 1
+  fi
+  exec "$INTERNET_CONTROL_HELPER" "$2"
+fi
+
 # sp-update — self-update sleepypod-core from GitHub via curl+tarball
 #
 # Usage:

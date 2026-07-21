@@ -126,53 +126,73 @@ describe('system.internetStatus', () => {
 })
 
 describe('system.setInternetAccess', () => {
-  it('unblocks WAN by flushing rules and re-checks state', async () => {
-    // After unblock, isWanBlocked should return false (no DROP)
+  it('unblocks WAN through the privileged helper and verifies the result', async () => {
+    const calls = recordExec()
     const result = await caller.setInternetAccess({ blocked: false })
+
     expect(result.blocked).toBe(false)
+    expect(callTo(calls, 'sudo')).toEqual({
+      file: 'sudo',
+      args: ['-n', '/usr/local/bin/sp-update', '--internet-access', 'unblock'],
+      options: { timeout: 30_000 },
+    })
   })
 
-  it('blocks WAN by applying LAN-only rules and persists iptables-save output', async () => {
-    // Final isWanBlocked check should see DROP after blockWan applies its rules.
-    let callCount = 0
+  it('blocks WAN through the privileged helper and verifies the result', async () => {
+    const calls = recordExec((file, args) => {
+      if (file === 'iptables' && args.includes('-L')) return 'DROP all -- 0.0.0.0/0\n'
+      return ''
+    })
+
+    const result = await caller.setInternetAccess({ blocked: true })
+
+    expect(result.blocked).toBe(true)
+    expect(callTo(calls, 'sudo')).toEqual({
+      file: 'sudo',
+      args: ['-n', '/usr/local/bin/sp-update', '--internet-access', 'block'],
+      options: { timeout: 30_000 },
+    })
+  })
+
+  it('rejects a successful helper exit when the requested state was not applied', async () => {
+    recordExec()
+
+    await expect(caller.setInternetAccess({ blocked: true }))
+      .rejects.toThrow(/helper completed but WAN is open/)
+  })
+
+  it('serializes concurrent firewall transitions', async () => {
+    let firstHelperCallback: ((error: unknown, output: { stdout: string }) => void) | undefined
+    let helperCalls = 0
     execMock.execFile.mockImplementation((...args: unknown[]) => {
-      // promisify(execFile)(file) → (file, callback); with args → (file, args, callback)
-      const second = args[1]
-      const argList: string[] = Array.isArray(second) ? (second as string[]) : []
-      const cb = args[args.length - 1] as (e: unknown, o: { stdout: string }) => void
-      callCount++
-      // iptables-save (no args) → return a sentinel payload for persistence
-      if (argList.length === 0) {
-        cb(null, { stdout: 'saved-rules\n' })
-        return
-      }
-      // The final isWanBlocked call uses -L OUTPUT → fake a DROP rule
-      if (argList.includes('-L') && argList.includes('OUTPUT')) {
-        cb(null, { stdout: 'DROP all -- 0.0.0.0/0\n' })
-        return
+      const file = args[0] as string
+      const cb = args[args.length - 1] as (error: unknown, output: { stdout: string }) => void
+      if (file === 'sudo') {
+        helperCalls++
+        if (helperCalls === 1) {
+          firstHelperCallback = cb
+          return
+        }
       }
       cb(null, { stdout: '' })
     })
-    const result = await caller.setInternetAccess({ blocked: true })
-    expect(result.blocked).toBe(true)
-    // mkdir + writeFile invoked when persistence runs
-    expect(fsPromisesMock.mkdir).toHaveBeenCalledWith('/etc/iptables', { recursive: true })
-    expect(fsPromisesMock.writeFile).toHaveBeenCalledWith('/etc/iptables/iptables.rules', 'saved-rules\n')
-    // Sanity: many iptables invocations happened (flush, allow rules, drops)
-    expect(callCount).toBeGreaterThan(10)
+
+    const first = caller.setInternetAccess({ blocked: false })
+    await vi.waitFor(() => expect(helperCalls).toBe(1))
+    const second = caller.setInternetAccess({ blocked: false })
+    await Promise.resolve()
+
+    expect(helperCalls).toBe(1)
+    firstHelperCallback?.(null, { stdout: '' })
+    await expect(first).resolves.toEqual({ blocked: false })
+    await expect(second).resolves.toEqual({ blocked: false })
+    expect(helperCalls).toBe(2)
   })
 
-  it('swallows persistence errors during blockWan as best-effort', async () => {
-    fsPromisesMock.mkdir.mockRejectedValueOnce(new Error('readonly fs'))
-    // Default execFile mock returns empty stdout — isWanBlocked sees no DROP → false
-    const result = await caller.setInternetAccess({ blocked: true })
-    expect(result.blocked).toBe(false)
-  })
-
-  it('wraps execFile failures as INTERNAL_SERVER_ERROR', async () => {
+  it('wraps helper failures as INTERNAL_SERVER_ERROR', async () => {
     execMock.execFile.mockImplementation((...args: unknown[]) => {
       const cb = args[args.length - 1] as (e: unknown, o: { stdout: string }) => void
-      cb(new Error('iptables boom'), { stdout: '' })
+      cb(new Error('firewall helper failed'), { stdout: '' })
     })
     await expect(caller.setInternetAccess({ blocked: false })).rejects.toThrow(/Failed to update iptables/)
   })
@@ -613,55 +633,37 @@ describe('system.internetStatus — command + DROP-rule matching', () => {
   })
 })
 
-describe('system.setInternetAccess — exact iptables sequences', () => {
-  it('unblock flushes the filter + nat tables in order after saving rules', async () => {
-    const calls = recordExec(file => (file === 'iptables-save' ? 'saved\n' : ''))
+describe('system.setInternetAccess — helper ordering', () => {
+  it('runs the unblock helper before checking the resulting firewall state', async () => {
+    const calls = recordExec()
     await caller.setInternetAccess({ blocked: false })
 
-    // The final isWanBlocked() check also runs `iptables -L OUTPUT -n` — drop it.
-    const seq = calls.filter(c => c.file === 'iptables' && !c.args.includes('-L')).map(c => c.args)
-    expect(seq).toEqual([
-      ['-F'],
-      ['-X'],
-      ['-t', 'nat', '-F'],
-      ['-t', 'nat', '-X'],
+    expect(calls.map(({ file, args, options }) => ({ file, args, options }))).toEqual([
+      {
+        file: 'sudo',
+        args: ['-n', '/usr/local/bin/sp-update', '--internet-access', 'unblock'],
+        options: { timeout: 30_000 },
+      },
+      { file: 'iptables', args: ['-L', 'OUTPUT', '-n'], options: undefined },
     ])
-    expect(calls.some(c => c.file === 'iptables-save')).toBe(true)
   })
 
-  it('block applies the complete LAN-only ruleset in the documented order', async () => {
+  it('runs the block helper before checking the resulting firewall state', async () => {
     const calls = recordExec((file, args) => {
-      if (file === 'iptables-save') return 'saved-rules\n'
       if (file === 'iptables' && args.includes('-L') && args.includes('OUTPUT')) return 'DROP all -- 0.0.0.0/0\n'
       return ''
     })
 
     const result = await caller.setInternetAccess({ blocked: true })
     expect(result.blocked).toBe(true)
-
-    const seq = calls.filter(c => c.file === 'iptables' && !c.args.includes('-L')).map(c => c.args)
-    expect(seq).toEqual([
-      ['-F'],
-      ['-X'],
-      ['-t', 'nat', '-F'],
-      ['-t', 'nat', '-X'],
-      ['-I', 'INPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT'],
-      ['-I', 'OUTPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT'],
-      ['-A', 'INPUT', '-s', '10.0.0.0/8', '-j', 'ACCEPT'],
-      ['-A', 'OUTPUT', '-d', '10.0.0.0/8', '-j', 'ACCEPT'],
-      ['-A', 'INPUT', '-s', '172.16.0.0/12', '-j', 'ACCEPT'],
-      ['-A', 'OUTPUT', '-d', '172.16.0.0/12', '-j', 'ACCEPT'],
-      ['-A', 'INPUT', '-s', '192.168.0.0/16', '-j', 'ACCEPT'],
-      ['-A', 'OUTPUT', '-d', '192.168.0.0/16', '-j', 'ACCEPT'],
-      ['-I', 'OUTPUT', '-p', 'udp', '--dport', '123', '-j', 'ACCEPT'],
-      ['-I', 'INPUT', '-p', 'udp', '--sport', '123', '-j', 'ACCEPT'],
-      ['-A', 'INPUT', '-i', 'lo', '-j', 'ACCEPT'],
-      ['-A', 'OUTPUT', '-o', 'lo', '-j', 'ACCEPT'],
-      ['-A', 'INPUT', '-j', 'DROP'],
-      ['-A', 'OUTPUT', '-j', 'DROP'],
+    expect(calls.map(({ file, args, options }) => ({ file, args, options }))).toEqual([
+      {
+        file: 'sudo',
+        args: ['-n', '/usr/local/bin/sp-update', '--internet-access', 'block'],
+        options: { timeout: 30_000 },
+      },
+      { file: 'iptables', args: ['-L', 'OUTPUT', '-n'], options: undefined },
     ])
-    // Rules are persisted from the iptables-save output.
-    expect(fsPromisesMock.writeFile).toHaveBeenCalledWith('/etc/iptables/iptables.rules', 'saved-rules\n')
   })
 })
 

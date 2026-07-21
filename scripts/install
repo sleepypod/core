@@ -729,13 +729,11 @@ if id dac &>/dev/null; then
   usermod -aG dac sleepypod
 fi
 
-# Allow the sleepypod service user to run sp-update as root without a
-# password. The next-server runs as User=sleepypod and exposes a tRPC
-# system.triggerUpdate mutation that spawns sp-update; without this
-# rule the spawn dies on the first iptables / systemctl call inside the
-# script and the API silently does nothing. Branch input is regex-
-# validated at the tRPC layer (^[a-zA-Z0-9._\-/]+$) and sp-update only
-# uses it as a tag/path component, so the privilege scope is narrow.
+# Allow the sleepypod service user to run the root-owned sp-update entrypoint
+# without a password. It serves two validated paths: system.triggerUpdate's
+# regex-checked branch update, and the exact `--internet-access block|unblock`
+# dispatcher for the root-owned sp-internet-control helper. Without this rule,
+# either path dies on its first privileged iptables / systemctl operation.
 #
 # The Defaults secure_path line re-adds /usr/local/bin to sudo's PATH.
 # The pod ships with the system-wide secure_path commented out in

@@ -1,0 +1,258 @@
+#!/bin/bash
+set -euo pipefail
+
+# This helper is installed root:root in /usr/local/bin. Keep command lookup
+# independent of the calling service's environment: it is reached through the
+# narrowly dispatched `sp-update --internet-access` sudo path.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+RULES_DIR="/etc/iptables"
+IPV4_RULES="$RULES_DIR/iptables.rules"
+IPV6_RULES="$RULES_DIR/ip6tables.rules"
+LOCK_FILE="/run/lock/sleepypod-internet-control.lock"
+
+usage() {
+  echo "Usage: $(basename "$0") {block|unblock}" >&2
+  exit 2
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
+fi
+
+case "$1" in
+  block|unblock) ACTION="$1" ;;
+  *) usage ;;
+esac
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: sp-internet-control must run as root" >&2
+  exit 1
+fi
+
+resolve_required() {
+  local name="$1"
+  local path
+  path="$(command -v "$name" 2>/dev/null || true)"
+  if [ -z "$path" ]; then
+    echo "Error: required command not found: $name" >&2
+    exit 1
+  fi
+  printf '%s' "$path"
+}
+
+IPTABLES="$(resolve_required iptables)"
+IPTABLES_SAVE="$(resolve_required iptables-save)"
+IPTABLES_RESTORE="$(resolve_required iptables-restore)"
+FLOCK="$(resolve_required flock)"
+
+IP6TABLES="$(command -v ip6tables 2>/dev/null || true)"
+IP6TABLES_SAVE="$(command -v ip6tables-save 2>/dev/null || true)"
+IP6TABLES_RESTORE="$(command -v ip6tables-restore 2>/dev/null || true)"
+HAS_IPV6=false
+if [ -n "$IP6TABLES" ] || [ -n "$IP6TABLES_SAVE" ] || [ -n "$IP6TABLES_RESTORE" ]; then
+  if [ -z "$IP6TABLES" ] || [ -z "$IP6TABLES_SAVE" ] || [ -z "$IP6TABLES_RESTORE" ]; then
+    echo "Error: incomplete ip6tables toolchain; refusing a partial firewall transition" >&2
+    exit 1
+  fi
+  HAS_IPV6=true
+fi
+
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! "$FLOCK" -w 15 9; then
+  echo "Error: another firewall transition is still running" >&2
+  exit 1
+fi
+
+WORK_DIR="$(mktemp -d /tmp/sp-internet-control.XXXXXX)"
+RUNTIME_V4="$WORK_DIR/runtime-v4.rules"
+RUNTIME_V6="$WORK_DIR/runtime-v6.rules"
+ROLLBACK_NEEDED=false
+
+backup_file() {
+  local path="$1"
+  local key="$2"
+  if [ -e "$path" ]; then
+    cp -p "$path" "$WORK_DIR/$key"
+    : > "$WORK_DIR/$key.present"
+  fi
+}
+
+restore_file() {
+  local path="$1"
+  local key="$2"
+  if [ -f "$WORK_DIR/$key.present" ]; then
+    cp -p "$WORK_DIR/$key" "$path" 2>/dev/null || true
+  else
+    rm -f "$path"
+  fi
+}
+
+rollback() {
+  echo "Firewall transition failed; restoring the previous state" >&2
+  "$IPTABLES_RESTORE" < "$RUNTIME_V4" 2>/dev/null || true
+  if [ "$HAS_IPV6" = true ] && [ -s "$RUNTIME_V6" ]; then
+    "$IP6TABLES_RESTORE" < "$RUNTIME_V6" 2>/dev/null || true
+  fi
+  restore_file "$IPV4_RULES" ipv4-persisted
+  if [ "$HAS_IPV6" = true ]; then
+    restore_file "$IPV6_RULES" ipv6-persisted
+  fi
+}
+
+finish() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$ROLLBACK_NEEDED" = true ]; then
+    rollback
+  fi
+  rm -rf "$WORK_DIR"
+  exit "$status"
+}
+trap finish EXIT
+
+# Snapshot both runtime and persisted state before the first mutation. A bare
+# iptables-save is safe here because this process is root; Pod 5's legacy build
+# only rejects it for the unprivileged Node service.
+"$IPTABLES_SAVE" > "$RUNTIME_V4"
+if [ ! -s "$RUNTIME_V4" ]; then
+  echo "Error: iptables-save produced an empty snapshot" >&2
+  exit 1
+fi
+if [ "$HAS_IPV6" = true ]; then
+  "$IP6TABLES_SAVE" > "$RUNTIME_V6"
+  if [ ! -s "$RUNTIME_V6" ]; then
+    echo "Error: ip6tables-save produced an empty snapshot" >&2
+    exit 1
+  fi
+fi
+backup_file "$IPV4_RULES" ipv4-persisted
+if [ "$HAS_IPV6" = true ]; then
+  backup_file "$IPV6_RULES" ipv6-persisted
+fi
+ROLLBACK_NEEDED=true
+
+reset_ipv4_filter() {
+  "$IPTABLES" -P INPUT ACCEPT
+  "$IPTABLES" -P OUTPUT ACCEPT
+  "$IPTABLES" -P FORWARD ACCEPT
+  "$IPTABLES" -F
+  "$IPTABLES" -X
+}
+
+reset_ipv6_filter() {
+  "$IP6TABLES" -P INPUT ACCEPT
+  "$IP6TABLES" -P OUTPUT ACCEPT
+  "$IP6TABLES" -P FORWARD ACCEPT
+  "$IP6TABLES" -F
+  "$IP6TABLES" -X
+}
+
+block_ipv4() {
+  reset_ipv4_filter
+
+  "$IPTABLES" -A INPUT -i lo -j ACCEPT
+  "$IPTABLES" -A OUTPUT -o lo -j ACCEPT
+
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    "$IPTABLES" -A INPUT -s "$cidr" -j ACCEPT
+    "$IPTABLES" -A OUTPUT -d "$cidr" -j ACCEPT
+  done
+
+  "$IPTABLES" -A OUTPUT -p udp --dport 123 -j ACCEPT
+  "$IPTABLES" -A INPUT -p udp --sport 123 -j ACCEPT
+  "$IPTABLES" -A OUTPUT -p udp -d 224.0.0.251/32 --dport 5353 -j ACCEPT
+
+  # Persisted rules load before Wi-Fi has an address. Permit the DHCP client
+  # exchange so a reboot under Local Only can still reacquire its LAN lease.
+  "$IPTABLES" -A OUTPUT -p udp --sport 68 --dport 67 -d 255.255.255.255/32 -j ACCEPT
+  "$IPTABLES" -A INPUT -p udp --sport 67 --dport 68 -j ACCEPT
+
+  # Direct terminal rules keep the runtime/UI status checks compatible with
+  # stock and free-sleep rulesets (both detect DROP in OUTPUT).
+  "$IPTABLES" -A INPUT -j DROP
+  "$IPTABLES" -A OUTPUT -j DROP
+}
+
+block_ipv6() {
+  reset_ipv6_filter
+
+  "$IP6TABLES" -A INPUT -i lo -j ACCEPT
+  "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT
+
+  for cidr in fe80::/10 fc00::/7; do
+    "$IP6TABLES" -A INPUT -s "$cidr" -j ACCEPT
+    "$IP6TABLES" -A OUTPUT -d "$cidr" -j ACCEPT
+  done
+
+  "$IP6TABLES" -A OUTPUT -p udp --dport 123 -j ACCEPT
+  "$IP6TABLES" -A INPUT -p udp --sport 123 -j ACCEPT
+  "$IP6TABLES" -A OUTPUT -p udp -d ff02::fb/128 --dport 5353 -j ACCEPT
+
+  # DHCPv6 and ICMPv6 router/neighbor discovery use link-local multicast that
+  # is outside fe80::/10 and fc00::/7 destination matches.
+  "$IP6TABLES" -A OUTPUT -p udp -d ff02::1:2/128 --sport 546 --dport 547 -j ACCEPT
+  "$IP6TABLES" -A INPUT -p udp --sport 547 --dport 546 -j ACCEPT
+  "$IP6TABLES" -A INPUT -p ipv6-icmp -d ff02::/16 -j ACCEPT
+  "$IP6TABLES" -A OUTPUT -p ipv6-icmp -d ff02::/16 -j ACCEPT
+
+  "$IP6TABLES" -A INPUT -j DROP
+  "$IP6TABLES" -A OUTPUT -j DROP
+}
+
+persist_family() {
+  local save_bin="$1"
+  local restore_bin="$2"
+  local destination="$3"
+  local prefix="$4"
+  local staged
+
+  mkdir -p "$RULES_DIR"
+  staged="$(mktemp "$RULES_DIR/.${prefix}.XXXXXX")"
+  if ! "$save_bin" > "$staged"; then
+    rm -f "$staged"
+    return 1
+  fi
+  if [ ! -s "$staged" ] || ! "$restore_bin" --test < "$staged"; then
+    rm -f "$staged"
+    return 1
+  fi
+  chmod 0600 "$staged"
+  chown root:root "$staged"
+  mv -f "$staged" "$destination"
+}
+
+if [ "$ACTION" = block ]; then
+  block_ipv4
+  if [ "$HAS_IPV6" = true ]; then
+    block_ipv6
+  fi
+  "$IPTABLES" -C OUTPUT -j DROP
+  if [ "$HAS_IPV6" = true ]; then
+    "$IP6TABLES" -C OUTPUT -j DROP
+  fi
+else
+  reset_ipv4_filter
+  if [ "$HAS_IPV6" = true ]; then
+    reset_ipv6_filter
+  fi
+fi
+
+persist_family "$IPTABLES_SAVE" "$IPTABLES_RESTORE" "$IPV4_RULES" iptables.rules
+if [ "$HAS_IPV6" = true ]; then
+  persist_family "$IP6TABLES_SAVE" "$IP6TABLES_RESTORE" "$IPV6_RULES" ip6tables.rules
+fi
+
+ROLLBACK_NEEDED=false
+
+# A missing restore file leaves the stock Pod 5 unit failed. The new persisted
+# state is now valid; clear the stale failure without re-applying it in-place.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl reset-failed iptables.service >/dev/null 2>&1 || true
+  if [ "$HAS_IPV6" = true ]; then
+    systemctl reset-failed ip6tables.service >/dev/null 2>&1 || true
+  fi
+fi
+
+echo "WAN access ${ACTION}ed and persisted"

@@ -102,6 +102,7 @@ echo "Removing CLI tools..."
 rm -f /usr/local/bin/sp-status
 rm -f /usr/local/bin/sp-restart
 rm -f /usr/local/bin/sp-logs
+rm -f /usr/local/bin/sp-internet-control
 rm -f /usr/local/bin/sp-update
 rm -f /usr/local/bin/sp-uninstall
 
@@ -153,7 +154,8 @@ ip6tables -t nat -X 2>/dev/null || true
 ip6tables -P INPUT ACCEPT 2>/dev/null || true
 ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
 ip6tables -P FORWARD ACCEPT 2>/dev/null || true
-rm -f /etc/iptables/iptables.rules /etc/iptables/rules.v4 /etc/iptables/rules.v6
+rm -f /etc/iptables/iptables.rules /etc/iptables/ip6tables.rules \
+      /etc/iptables/rules.v4 /etc/iptables/rules.v6
 
 # Remove the sleepypod system user (the group is kept in case dac is
 # still a member — removing it would orphan file ownership on any
