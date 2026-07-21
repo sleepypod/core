@@ -151,6 +151,7 @@ export const TempScreen = () => {
           side="left"
           rpm={stallNotices.left.rpm}
           trippedAt={stallNotices.left.trippedAt}
+          alertId={stallNotices.left.alertId}
           onAction={() => refetch()}
         />
       )}
@@ -159,6 +160,7 @@ export const TempScreen = () => {
           side="right"
           rpm={stallNotices.right.rpm}
           trippedAt={stallNotices.right.trippedAt}
+          alertId={stallNotices.right.alertId}
           onAction={() => refetch()}
         />
       )}

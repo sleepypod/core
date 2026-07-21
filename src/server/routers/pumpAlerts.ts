@@ -110,7 +110,7 @@ export const pumpAlertsRouter = router({
    */
   acknowledgeAndRestore: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/pump-alerts/acknowledge', protect: false, tags: ['Pump Alerts'] } })
-    .input(z.object({ side: sideSchema }).strict())
+    .input(z.object({ side: sideSchema, alertId: idSchema.optional() }).strict())
     .output(z.object({
       success: z.boolean(),
       restoredTarget: z.number().nullable(),
@@ -123,15 +123,20 @@ export const pumpAlertsRouter = router({
       const priorNotice = getPumpStallNotice(input.side)
       const { restore, alertId } = guardAcknowledge(input.side)
 
-      // A restart wipes the guard's in-memory state, so a trip from before
-      // the restart has no activeAlertId anymore and its row would strand
-      // unacknowledged in the active list forever. Fall back to the newest
-      // active power_off row for this side — but only when the restore
-      // snapshot is gone too: a failed alert INSERT at trip time also
-      // returns a null id while the snapshot survives, and falling back
-      // there would stamp an older, unrelated row. The row's persisted
-      // restore columns (ADR 0022) stand in for the lost snapshot.
-      let stampId = alertId
+      // Identity correlation: a client that saw the banner passes the
+      // notice's alertId, so a stale or replayed request stamps exactly
+      // that incident's row (and never falls through to guessing).
+      //
+      // Without a client id, a restart wipes the guard's in-memory state,
+      // so a trip from before the restart has no activeAlertId anymore and
+      // its row would strand unacknowledged in the active list forever.
+      // Fall back to the newest active power_off row for this side — but
+      // only when the restore snapshot is gone too: a failed alert INSERT
+      // at trip time also returns a null id while the snapshot survives,
+      // and falling back there would stamp an older, unrelated row. The
+      // row's persisted restore columns (ADR 0022) stand in for the lost
+      // snapshot.
+      let stampId = input.alertId ?? alertId
       let orphanRecovered = false
       let orphanRestore: { targetTemperature: number, durationSeconds: number } | null = null
       if (stampId == null && restore == null) {
@@ -175,14 +180,25 @@ export const pumpAlertsRouter = router({
       }
 
       // Best-effort by design: a stamp failure only leaves the row in the
-      // active list; the guard itself is already released.
+      // active list; the guard itself is already released. The WHERE clause
+      // re-checks activity so a concurrently dismissed row is not stamped
+      // twice (mirroring dismissAlert), and a client-provided id must also
+      // prove it names this side's power_off incident.
       const stampAcknowledged = async (): Promise<void> => {
         if (stampId == null) return
+        const conditions = [
+          eq(pumpAlerts.id, stampId),
+          isNull(pumpAlerts.acknowledgedAt),
+          isNull(pumpAlerts.dismissedAt),
+        ]
+        if (input.alertId != null) {
+          conditions.push(eq(pumpAlerts.side, input.side), eq(pumpAlerts.action, 'power_off'))
+        }
         try {
           await biometricsDb
             .update(pumpAlerts)
             .set({ acknowledgedAt: new Date() })
-            .where(eq(pumpAlerts.id, stampId))
+            .where(and(...conditions))
         }
         catch (err) {
           console.warn('[pumpAlerts] failed to stamp acknowledgedAt:', err instanceof Error ? err.message : err)
@@ -277,17 +293,31 @@ export const pumpAlertsRouter = router({
    */
   dismissNotification: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/pump-alerts/dismiss-notification', protect: false, tags: ['Pump Alerts'] } })
-    .input(z.object({ side: sideSchema }).strict())
+    .input(z.object({ side: sideSchema, alertId: idSchema.optional() }).strict())
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       const { alertId } = guardAcknowledge(input.side)
       clearPumpStallNotice(input.side)
-      if (alertId != null) {
+      // A client-provided id survives a restart (the guard's is wiped) and
+      // pins the stamp to the incident the user actually dismissed; it must
+      // prove it names this side's power_off incident. There is no
+      // newest-row fallback here on purpose — without an id there is no way
+      // to tell which incident a stale request meant.
+      const stampId = input.alertId ?? alertId
+      if (stampId != null) {
+        const conditions = [eq(pumpAlerts.id, stampId), isNull(pumpAlerts.dismissedAt)]
+        if (input.alertId != null) {
+          conditions.push(
+            eq(pumpAlerts.side, input.side),
+            eq(pumpAlerts.action, 'power_off'),
+            isNull(pumpAlerts.acknowledgedAt),
+          )
+        }
         try {
           await biometricsDb
             .update(pumpAlerts)
             .set({ dismissedAt: new Date() })
-            .where(eq(pumpAlerts.id, alertId))
+            .where(and(...conditions))
         }
         catch (err) {
           console.warn('[pumpAlerts] failed to stamp dismissedAt:', err instanceof Error ? err.message : err)

@@ -481,7 +481,16 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
 
       await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toMatchObject({ success: true })
       expect(dbMock.select).not.toHaveBeenCalled()
-      expect(sql.eq).toHaveBeenCalledWith(expect.anything(), 42)
+      // The stamp re-checks activity so a concurrently dismissed row is
+      // not also acknowledged (TOCTOU with dismissAlert).
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 42)
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+      expect(sql.and).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'eq' }),
+        expect.objectContaining({ kind: 'isNull' }),
+        expect.objectContaining({ kind: 'isNull' }),
+      )
     })
 
     it('skips the fallback when the guard kept its restore snapshot (failed insert, not a restart)', async () => {
@@ -528,6 +537,51 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       expect(dbMock.update).not.toHaveBeenCalled()
     })
   })
+
+  describe('identity correlation', () => {
+    it('stamps exactly the client-provided alert id, constrained to this side\'s active power_off row', async () => {
+      // Post-restart the guard is empty, but the client saw the banner and
+      // still knows which incident it is acknowledging.
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      dbState.queue.push([]) // acknowledgedAt update
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left', alertId: 38 })).resolves.toEqual({
+        success: true,
+        restoredTarget: null,
+        restoredDuration: null,
+        orphanRecovered: false,
+      })
+      // No newest-row heuristic when the client names the row.
+      expect(dbMock.select).not.toHaveBeenCalled()
+      expect(dbMock.chain.set).toHaveBeenCalledWith({ acknowledgedAt: expect.any(Date) })
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 38)
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.side, 'left')
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.action, 'power_off')
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+      expect(sql.and).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'eq' }),
+        expect.objectContaining({ kind: 'isNull' }),
+        expect.objectContaining({ kind: 'isNull' }),
+        expect.objectContaining({ kind: 'eq' }),
+        expect.objectContaining({ kind: 'eq', right: 'power_off' }),
+      )
+    })
+
+    it('prefers the client-provided id over the guard-held one', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: 42 })
+      dbState.queue.push([]) // acknowledgedAt update
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left', alertId: 38 })).resolves.toMatchObject({ success: true })
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 38)
+      expect(sql.eq).not.toHaveBeenCalledWith(pumpAlerts.id, 42)
+    })
+
+    it('rejects a non-positive alert id', async () => {
+      await expect(caller.acknowledgeAndRestore({ side: 'left', alertId: 0 })).rejects.toThrow()
+      expect(dbMock.update).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('pumpAlerts dismissals', () => {
@@ -545,8 +599,45 @@ describe('pumpAlerts dismissals', () => {
 
     await expect(caller.dismissNotification({ side: 'right' })).resolves.toEqual({ success: true })
     expect(dbMock.chain.set).toHaveBeenCalledWith({ dismissedAt: expect.any(Date) })
-    expect(sql.eq).toHaveBeenCalledWith(expect.anything(), 12)
+    // Re-checks the row is not already dismissed (TOCTOU with dismissAlert).
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 12)
+    expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+    expect(sql.and).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'eq' }),
+      expect.objectContaining({ kind: 'isNull' }),
+    )
     expect(warn).toHaveBeenCalledWith('[pumpAlerts] failed to stamp dismissedAt:', 'write failed')
+  })
+
+  it('stamps the client-provided id with full identity constraints when the guard is empty', async () => {
+    // Post-restart dismissal: the guard lost the id but the client kept it.
+    guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+    dbState.queue.push([]) // dismissedAt update
+
+    await expect(caller.dismissNotification({ side: 'left', alertId: 31 })).resolves.toEqual({ success: true })
+    expect(dbMock.select).not.toHaveBeenCalled()
+    expect(dbMock.chain.set).toHaveBeenCalledWith({ dismissedAt: expect.any(Date) })
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 31)
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.side, 'left')
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.action, 'power_off')
+    expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
+    expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+    expect(sql.and).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'eq' }),
+      expect.objectContaining({ kind: 'isNull' }),
+      expect.objectContaining({ kind: 'eq' }),
+      expect.objectContaining({ kind: 'eq', right: 'power_off' }),
+      expect.objectContaining({ kind: 'isNull' }),
+    )
+  })
+
+  it('prefers the client-provided id over the guard-held one when dismissing', async () => {
+    guard.acknowledge.mockReturnValue({ restore: null, alertId: 12 })
+    dbState.queue.push([]) // dismissedAt update
+
+    await expect(caller.dismissNotification({ side: 'right', alertId: 31 })).resolves.toEqual({ success: true })
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 31)
+    expect(sql.eq).not.toHaveBeenCalledWith(pumpAlerts.id, 12)
   })
 
   it('dismisses a specific active history row', async () => {

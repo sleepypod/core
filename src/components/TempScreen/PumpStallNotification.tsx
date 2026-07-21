@@ -8,6 +8,8 @@ interface PumpStallNotificationProps {
   rpm: number
   /** unix seconds */
   trippedAt: number
+  /** pump_alerts row id from the notice; 0 when the trip-time insert failed. */
+  alertId?: number
   /** Called after either re-enable or dismiss settles so the parent can refetch. */
   onAction?: () => void
 }
@@ -25,9 +27,12 @@ const formatTime = (unixSeconds: number): string => {
  *     frame; the banner returns.
  *   Dismiss — clears the notification only. Side stays off.
  */
-export const PumpStallNotification = ({ side, rpm, trippedAt, onAction }: PumpStallNotificationProps) => {
+export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, onAction }: PumpStallNotificationProps) => {
   const acknowledge = trpc.pumpAlerts.acknowledgeAndRestore.useMutation()
   const dismiss = trpc.pumpAlerts.dismissNotification.useMutation()
+  // Correlate the mutation with the incident shown here — the server then
+  // stamps exactly this row even across a restart. 0 means "no row".
+  const alertRef = alertId || undefined
 
   return (
     <div className="flex items-center gap-2 rounded-2xl border border-red-500/20 bg-red-950/30 p-3 sm:p-4">
@@ -50,14 +55,14 @@ export const PumpStallNotification = ({ side, rpm, trippedAt, onAction }: PumpSt
         </p>
       </div>
       <button
-        onClick={() => acknowledge.mutate({ side }, { onSettled: onAction })}
+        onClick={() => acknowledge.mutate({ side, alertId: alertRef }, { onSettled: onAction })}
         disabled={acknowledge.isPending}
         className="rounded-full bg-red-500/20 px-3 py-2 text-xs text-red-100 transition-all hover:bg-red-500/30 active:scale-95 disabled:opacity-50"
       >
         Re-enable
       </button>
       <button
-        onClick={() => dismiss.mutate({ side }, { onSettled: onAction })}
+        onClick={() => dismiss.mutate({ side, alertId: alertRef }, { onSettled: onAction })}
         disabled={dismiss.isPending}
         className="flex h-11 w-11 items-center justify-center rounded-full text-red-400/60 transition-all hover:text-red-300 active:scale-90 disabled:opacity-50"
       >
