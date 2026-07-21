@@ -115,6 +115,7 @@ export const pumpAlertsRouter = router({
       success: z.boolean(),
       restoredTarget: z.number().nullable(),
       restoredDuration: z.number().nullable(),
+      orphanRecovered: z.boolean(),
     }))
     .mutation(async ({ input }) => {
       const { restore, alertId } = guardAcknowledge(input.side)
@@ -125,12 +126,20 @@ export const pumpAlertsRouter = router({
       // active power_off row for this side — but only when the restore
       // snapshot is gone too: a failed alert INSERT at trip time also
       // returns a null id while the snapshot survives, and falling back
-      // there would stamp an older, unrelated row.
+      // there would stamp an older, unrelated row. The row's persisted
+      // restore columns (ADR 0022) stand in for the lost snapshot.
       let stampId = alertId
+      let orphanRecovered = false
+      let orphanRestore: { targetTemperature: number, durationSeconds: number } | null = null
       if (stampId == null && restore == null) {
+        let orphan
         try {
-          const [orphan] = await biometricsDb
-            .select({ id: pumpAlerts.id })
+          [orphan] = await biometricsDb
+            .select({
+              id: pumpAlerts.id,
+              restoreTargetTemperature: pumpAlerts.restoreTargetTemperature,
+              restoreDurationSeconds: pumpAlerts.restoreDurationSeconds,
+            })
             .from(pumpAlerts)
             .where(and(
               eq(pumpAlerts.side, input.side),
@@ -138,12 +147,27 @@ export const pumpAlertsRouter = router({
               isNull(pumpAlerts.acknowledgedAt),
               isNull(pumpAlerts.dismissedAt),
             ))
-            .orderBy(desc(pumpAlerts.timestamp))
+            .orderBy(desc(pumpAlerts.timestamp), desc(pumpAlerts.id))
             .limit(1)
-          stampId = orphan?.id ?? null
         }
         catch (err) {
-          console.warn('[pumpAlerts] orphaned-alert lookup failed:', err instanceof Error ? err.message : err)
+          // This lookup is the mutation's only route to the stranded row —
+          // when it fails the whole restart-recovery action failed.
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: `Failed to look up orphaned pump alert: ${err instanceof Error ? err.message : 'Unknown error'}`,
+            cause: err,
+          })
+        }
+        if (orphan) {
+          stampId = orphan.id
+          orphanRecovered = true
+          if (orphan.restoreTargetTemperature != null && orphan.restoreDurationSeconds != null) {
+            orphanRestore = {
+              targetTemperature: orphan.restoreTargetTemperature,
+              durationSeconds: orphan.restoreDurationSeconds,
+            }
+          }
         }
       }
 
@@ -159,8 +183,8 @@ export const pumpAlertsRouter = router({
         }
       }
 
-      if (!restore) {
-        return { success: true, restoredTarget: null, restoredDuration: null }
+      if (restore == null && orphanRestore == null) {
+        return { success: true, restoredTarget: null, restoredDuration: null, orphanRecovered }
       }
 
       // Route through the device router so debounce, freshness stamping,
@@ -168,12 +192,35 @@ export const pumpAlertsRouter = router({
       // user mutation.
       const { appRouter } = await import('./app')
       const caller = appRouter.createCaller({})
+
+      let effectiveRestore = restore
+      if (effectiveRestore == null && orphanRestore != null) {
+        // Replay the persisted snapshot only when the side is still parked:
+        // after an earlier silent stamp failure the side may already be
+        // running a newer setpoint, and blind replay would clobber it. A
+        // failed status read skips the replay — leaving the side off is
+        // the conservative outcome.
+        try {
+          const status = await caller.device.getStatus({})
+          const sideStatus = input.side === 'left' ? status.leftSide : status.rightSide
+          if (sideStatus.targetLevel === 0) {
+            effectiveRestore = orphanRestore
+          }
+        }
+        catch (err) {
+          console.warn('[pumpAlerts] status read before orphan replay failed — leaving the side off:', err instanceof Error ? err.message : err)
+        }
+      }
+      if (effectiveRestore == null) {
+        return { success: true, restoredTarget: null, restoredDuration: null, orphanRecovered }
+      }
+
       try {
-        await caller.device.setPower({ side: input.side, powered: true, temperature: restore.targetTemperature })
+        await caller.device.setPower({ side: input.side, powered: true, temperature: effectiveRestore.targetTemperature })
         await caller.device.setTemperature({
           side: input.side,
-          temperature: restore.targetTemperature,
-          duration: restore.durationSeconds,
+          temperature: effectiveRestore.targetTemperature,
+          duration: effectiveRestore.durationSeconds,
         })
       }
       catch (err) {
@@ -186,8 +233,9 @@ export const pumpAlertsRouter = router({
 
       return {
         success: true,
-        restoredTarget: restore.targetTemperature,
-        restoredDuration: restore.durationSeconds,
+        restoredTarget: effectiveRestore.targetTemperature,
+        restoredDuration: effectiveRestore.durationSeconds,
+        orphanRecovered,
       }
     }),
 
