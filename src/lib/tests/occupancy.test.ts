@@ -298,6 +298,36 @@ describe('getOccupancy', () => {
     expect(result.available).toBe(false)
   })
 
+  it('rejects named-channel calibration with a missing channel', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeNamedFrame('left', [1030, 1030, 2040, 2040, 3050, 3050])
+    calRows = [{
+      parameters: {
+        ...NAMED_CAPSENSE_CAL,
+        channels: {
+          ...NAMED_CAPSENSE_CAL.channels,
+          cen: undefined,
+        },
+      },
+    }]
+
+    const result = getOccupancy('left')
+
+    expect(result.level).toMatchObject({ active: false, deviation: null, threshold: null })
+    expect(result.available).toBe(false)
+  })
+
+  it('rejects a non-finite named-channel calibration threshold', () => {
+    movementRows = [{ peak: 0 }]
+    snapshot = makeNamedFrame('left', [1030, 1030, 2040, 2040, 3050, 3050])
+    calRows = [{ parameters: { ...NAMED_CAPSENSE_CAL, threshold: Number.NaN } }]
+
+    const result = getOccupancy('left')
+
+    expect(result.level).toMatchObject({ active: false, deviation: null, threshold: null })
+    expect(result.available).toBe(false)
+  })
+
   it('rejects non-finite named-channel frame values without marking presence available', () => {
     movementRows = [{ peak: 0 }]
     snapshot = makeNamedFrame('left', [Number.NaN, 1000, 2000, 2000, 3000, 3000])

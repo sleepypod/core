@@ -233,9 +233,10 @@ function readCapSenseCalibration(side: Side): CapSenseCalibration | null {
   if (!parsed || (parsed.format !== undefined && parsed.format !== 'capSense')) return null
 
   const channels = [parsed.channels?.out, parsed.channels?.cen, parsed.channels?.in]
-  if (!channels.every(channel => Number.isFinite(channel?.mean)
-    && Number.isFinite(channel?.std)
-    && (channel?.std ?? 0) > 0)) {
+  if (!channels.every(channel => channel !== undefined
+    && Number.isFinite(channel.mean)
+    && Number.isFinite(channel.std)
+    && channel.std > 0)) {
     return null
   }
   if (!Number.isFinite(parsed.threshold)) return null

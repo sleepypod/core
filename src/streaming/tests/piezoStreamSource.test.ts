@@ -157,6 +157,37 @@ describe('startPiezoStreamServer — source selection', () => {
     error.mockRestore()
   })
 
+  it('warns once for unknown frames and ignores callbacks from a stale source', async () => {
+    natsMock.reachable = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    startPiezoStreamServer()
+    await waitFor(() => __test__.natsSourceActive)
+
+    const callbacks = natsMock.captured
+    const unknownFrame = { type: 'blanketReadings', ts: 1 }
+    callbacks.onFrame(unknownFrame)
+    callbacks.onFrame(unknownFrame)
+    callbacks.onClose()
+
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(
+      '[sensorStream] unknown sensor frame type "%s" — broadcasting but not ingesting',
+      'blanketReadings',
+    )
+    expect(error).toHaveBeenCalledWith('[sensorStream] NATS frame source closed', '')
+
+    await shutdownPiezoStreamServer()
+    callbacks.onFrame({ type: 'log', ts: 2 })
+    callbacks.onClose(new Error('stale source'))
+    __test__.dispatchSensorFrame({ type: 'log', ts: 3 })
+
+    expect(warn).toHaveBeenCalledOnce()
+    expect(error).toHaveBeenCalledOnce()
+    warn.mockRestore()
+    error.mockRestore()
+  })
+
   it('falls back to .RAW tailing when NATS is unreachable', async () => {
     natsMock.reachable = false
     startPiezoStreamServer()

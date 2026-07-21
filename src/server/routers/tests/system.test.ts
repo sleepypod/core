@@ -161,6 +161,16 @@ describe('system.setInternetAccess', () => {
       .rejects.toThrow(/helper completed but WAN is open/)
   })
 
+  it('reports when an unblock helper exits but WAN remains blocked', async () => {
+    recordExec((file, args) => {
+      if (file === 'iptables' && args.includes('-L')) return 'DROP all -- 0.0.0.0/0\n'
+      return ''
+    })
+
+    await expect(caller.setInternetAccess({ blocked: false }))
+      .rejects.toThrow(/helper completed but WAN is blocked/)
+  })
+
   it('serializes concurrent firewall transitions', async () => {
     let firstHelperCallback: ((error: unknown, output: { stdout: string }) => void) | undefined
     let helperCalls = 0
