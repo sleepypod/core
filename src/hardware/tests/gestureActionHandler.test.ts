@@ -5,9 +5,13 @@ import type { HardwareClient } from '../client'
 import { TEMP_NEUTRAL } from '../types'
 
 const registerManualOverride = vi.fn()
+const pumpStallShouldBlock = vi.fn<(side: 'left' | 'right') => boolean>(() => false)
 
 vi.mock('@/src/automation', () => ({
   getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+}))
+vi.mock('../pumpStallGuard', () => ({
+  shouldBlock: (side: 'left' | 'right') => pumpStallShouldBlock(side),
 }))
 
 const { GestureActionHandler } = await import('../gestureActionHandler')
@@ -57,6 +61,7 @@ describe('GestureActionHandler', () => {
   afterEach(() => {
     vi.clearAllTimers()
     registerManualOverride.mockClear()
+    pumpStallShouldBlock.mockReset().mockReturnValue(false)
     vi.useRealTimers()
   })
 
@@ -418,5 +423,48 @@ describe('GestureActionHandler', () => {
     )
     expect(client.disconnect).toHaveBeenCalledOnce()
     error.mockRestore()
+  })
+
+  describe('pump stall guard', () => {
+    test('skips a temperature gesture while the guard blocks the side', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      pumpStallShouldBlock.mockReturnValue(true)
+      const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 5 }
+      const { deps, client } = makeDeps(gesture, { targetTemperature: 70 })
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+      expect(deps.newHardwareClient).not.toHaveBeenCalled()
+      expect(client.setTemperature).not.toHaveBeenCalled()
+      expect(registerManualOverride).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped setTemperature: pump stall guard blocks left')
+      warn.mockRestore()
+    })
+
+    test('skips a power-on toggle while the guard blocks the side', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      pumpStallShouldBlock.mockReturnValue(true)
+      const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
+      const state = { isAlarmVibrating: false, isPowered: false, targetTemperature: 70 }
+      const { deps, client } = makeDeps(gesture, state)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
+
+      expect(deps.newHardwareClient).not.toHaveBeenCalled()
+      expect(client.setPower).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped power-on: pump stall guard blocks right')
+      warn.mockRestore()
+    })
+
+    test('still allows a power-off toggle while the guard blocks the side', async () => {
+      pumpStallShouldBlock.mockReturnValue(true)
+      const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
+      const state = { isAlarmVibrating: false, isPowered: true, targetTemperature: 72 }
+      const { deps, client } = makeDeps(gesture, state)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
+
+      expect(client.setPower).toHaveBeenCalledWith('right', false, undefined)
+    })
   })
 })

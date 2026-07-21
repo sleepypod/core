@@ -27,6 +27,10 @@ const broadcastMock = vi.hoisted(() => ({
   broadcastMutationStatus: vi.fn(),
 }))
 
+const pumpStallMock = vi.hoisted(() => ({
+  shouldBlock: vi.fn<(side: 'left' | 'right') => boolean>(() => false),
+}))
+
 const timeUtilsMock = vi.hoisted(() => ({
   // Default: wake time 1 hour from now
   timeToDate: vi.fn((_t: string, _tz: string, now: Date) => new Date(now.getTime() + 60 * 60 * 1000)),
@@ -83,6 +87,7 @@ const dbMock = vi.hoisted(() => {
 })
 
 vi.mock('@/src/scheduler', () => schedulerMock)
+vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/server/helpers', () => helpersMock)
 vi.mock('@/src/streaming/broadcastMutationStatus', () => broadcastMock)
 vi.mock('@/src/scheduler/timeUtils', () => timeUtilsMock)
@@ -106,6 +111,7 @@ beforeEach(() => {
   helpersMock.withHardwareClient.mockImplementation(async (cb: (client: unknown) => Promise<unknown>) => cb(helpersMock.client))
   helpersMock.client.setPower.mockReset().mockResolvedValue(undefined)
   broadcastMock.broadcastMutationStatus.mockReset()
+  pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
   timeUtilsMock.timeToDate.mockReset().mockImplementation(
     (_t, _tz, now) => new Date(now.getTime() + 60 * 60 * 1000),
   )
@@ -124,6 +130,23 @@ beforeEach(() => {
 })
 
 describe('runOnce.start', () => {
+  it('throws PRECONDITION_FAILED before touching sessions while pump stall guard blocks the side', async () => {
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toThrow(/Pump stall protection active/)
+
+    // Fails fast: the existing session is not cancelled, no hardware write,
+    // no session row inserted.
+    expect(dbMock.transactionFn).not.toHaveBeenCalled()
+    expect(jobManagerMock.cancelRunOnceSession).not.toHaveBeenCalled()
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(dbMock.insert).not.toHaveBeenCalled()
+  })
+
   it('powers on the side with the first set-point temperature, persists session, and schedules the rest', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const expiresAt = new Date(Date.now() + 3_600_123)

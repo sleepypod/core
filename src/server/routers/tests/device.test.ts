@@ -514,6 +514,22 @@ describe('device.setTemperature', () => {
     expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
   })
 
+  it('re-checks the guard inside the side lock — a trip during the debounce window blocks the queued command', async () => {
+    vi.useFakeTimers()
+    try {
+      // Early check passes, then the guard trips while the command is debounced.
+      pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
+      const assertion = expect(pending).rejects.toThrow(/Pump stall protection active/)
+      await vi.advanceTimersByTimeAsync(250)
+      await assertion
+      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('swallows DB sync errors so the timer still fires', async () => {
     vi.useFakeTimers()
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -686,6 +702,13 @@ describe('device.setPower', () => {
     await expect(caller.setPower({ side: 'left', powered: true, temperature: 72 })).rejects.toThrow(/Pump stall protection active/)
     expect(helpersMock.client.setPower).not.toHaveBeenCalled()
     expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
+  })
+
+  it('re-checks the guard inside the side lock before sending power-on', async () => {
+    // Early check passes; the trip lands while the command queues on the lock.
+    pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+    await expect(caller.setPower({ side: 'left', powered: true, temperature: 72 })).rejects.toThrow(/Pump stall protection active/)
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
   })
 
   it('allows powering off even when pump stall guard is active', async () => {

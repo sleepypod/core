@@ -372,6 +372,15 @@ export const deviceRouter = router({
           pendingTemps.delete(input.side)
           try {
             await withSideLock(input.side, () => withHardwareClient(async (client) => {
+              // Re-check inside the lock: the guard can trip during the
+              // debounce window or while queued behind the side lock, and a
+              // stale queued command must not re-energize a parked side.
+              if (pumpStallShouldBlock(input.side)) {
+                throw new TRPCError({
+                  code: 'PRECONDITION_FAILED',
+                  message: 'Pump stall protection active — re-enable the side first',
+                })
+              }
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
             }, 'Failed to set temperature'))
@@ -443,6 +452,14 @@ export const deviceRouter = router({
 
       registerManualOverride(input.side)
       return withSideLock(input.side, () => withHardwareClient(async (client) => {
+        // Re-check inside the lock (see setTemperature): a trip while this
+        // command queued must not let it re-energize the side.
+        if (input.powered && pumpStallShouldBlock(input.side)) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Pump stall protection active — re-enable the side first',
+          })
+        }
         await client.setPower(input.side, input.powered, input.temperature)
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails

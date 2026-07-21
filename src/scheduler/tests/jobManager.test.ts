@@ -9,6 +9,9 @@ const hardwareClient = vi.hoisted(() => ({
   startPriming: vi.fn(async () => {}),
   sendRaw: vi.fn<(command: string, arg?: string) => Promise<string>>(),
 }))
+const pumpStallMock = vi.hoisted(() => ({
+  shouldBlock: vi.fn<(side: 'left' | 'right') => boolean>(() => false),
+}))
 const writeFileMock = vi.hoisted(() => vi.fn<(path: string, data: string) => Promise<void>>(async () => {}))
 const renameMock = vi.hoisted(() => vi.fn<(from: string, to: string) => Promise<void>>(async () => {}))
 const execMock = vi.hoisted(() => vi.fn())
@@ -77,6 +80,8 @@ vi.mock('@/src/hardware/dacMonitor.instance', async () => {
 vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
   broadcastMutationStatus: vi.fn(),
 }))
+
+vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 
 vi.mock('@/src/services/autoOffWatcher', () => ({
   cancelAutoOffTimer: vi.fn(),
@@ -1334,6 +1339,7 @@ describe('JobManager residual mutation contracts', () => {
     hardwareClient.setTemperature.mockResolvedValue(undefined)
     hardwareClient.setPower.mockResolvedValue(undefined)
     vi.mocked(broadcastMutationStatus).mockClear()
+    pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
     writeFileMock.mockClear()
     renameMock.mockClear()
     execMock.mockReset()
@@ -1413,6 +1419,106 @@ describe('JobManager residual mutation contracts', () => {
     expect(log).toHaveBeenCalledWith(
       'Alarm job alarm-15 — right not powered; skipping temperature, firing vibration only',
     )
+  })
+
+  it('skips energizing temp and power-on jobs while the pump stall guard blocks the side', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(manager, 'hasActiveRunOnceSession').mockResolvedValue(false)
+    vi.spyOn(manager as any, 'isSidePowered').mockResolvedValue(true)
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+
+    await manager.runTemperatureJob({
+      ...row,
+      id: 41,
+      side: 'left',
+      dayOfWeek: 'monday',
+      time: '08:00',
+      temperature: 78,
+    })
+    await manager.runPowerOnJob({
+      ...row,
+      id: 42,
+      side: 'right',
+      dayOfWeek: 'monday',
+      onTime: '22:00',
+      offTime: '07:00',
+      onTemperature: 80,
+    })
+
+    expect(hardwareClient.setTemperature).not.toHaveBeenCalled()
+    expect(hardwareClient.setPower).not.toHaveBeenCalled()
+    expect(broadcastMutationStatus).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('[jobManager] skipped temp job temp-41: pump stall guard blocks left')
+    expect(warn).toHaveBeenCalledWith('[jobManager] skipped power-on power-on-42: pump stall guard blocks right')
+  })
+
+  it('fires alarm vibration but skips its temperature while the guard blocks the side', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(manager as any, 'isSidePowered').mockResolvedValue(true)
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+
+    await manager.runAlarmJob({
+      ...row,
+      id: 43,
+      side: 'right',
+      dayOfWeek: 'monday',
+      time: '06:30',
+      alarmTemperature: 88,
+      vibrationIntensity: 50,
+      vibrationPattern: 'rise',
+      duration: 30,
+    })
+
+    expect(hardwareClient.setTemperature).not.toHaveBeenCalled()
+    expect(hardwareClient.setAlarm).toHaveBeenCalledWith('right', {
+      vibrationIntensity: 50,
+      vibrationPattern: 'rise',
+      duration: 30,
+    })
+    expect(warn).toHaveBeenCalledWith(
+      '[jobManager] skipped alarm temperature alarm-43: pump stall guard blocks right; firing vibration only',
+    )
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('right', { isAlarmVibrating: true })
+  })
+
+  it('skips away-return power-on while the guard blocks the side but still clears awayMode', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+    const updates: Array<Record<string, unknown>> = []
+    vi.spyOn(db, 'transaction').mockImplementation(((callback: any) => callback({
+      update: () => ({
+        set: (values: Record<string, unknown>) => {
+          updates.push(values)
+          return { where: () => ({ run: vi.fn() }) }
+        },
+      }),
+    })) as any)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+
+    ;(manager as any).scheduleAwayMode('left', null, new Date(Date.now() + 60_000).toISOString())
+    await required(captured.get('away-return-left'), 'away-return-left').handler()
+
+    expect(updates[0]).toMatchObject({ awayMode: false })
+    expect(hardwareClient.setPower).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('[jobManager] skipped away-return power-on: pump stall guard blocks left')
+  })
+
+  it('skips a run-once set point while the guard blocks the side', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+
+    manager.scheduleRunOnceSession(78, 'left', [{ time: '12:10', temperature: 78 }], '13:00', 'UTC')
+    await required(captured.get('runonce-78-0'), 'runonce-78-0').handler()
+
+    expect(hardwareClient.setTemperature).not.toHaveBeenCalled()
+    expect(broadcastMutationStatus).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('[jobManager] skipped run-once set point: pump stall guard blocks left')
   })
 
   it('pins away-mode state writes, payloads, metadata, logs, and failure warnings', async () => {

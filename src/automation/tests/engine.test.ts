@@ -33,6 +33,7 @@ interface Harness {
   setSignal: (key: string, value: number | undefined) => void
   setClock: (nowMinutes: number, dayOfWeek?: DayOfWeek, dateKey?: string) => void
   setRunOnce: (active: boolean) => void
+  setStallBlocked: (side: Side, blocked: boolean) => void
   runs: { id: number, outcome: RunOutcome, detail: RunDetail }[]
   notifies: { id: number, message: string }[]
   hwCalls: HwCall[]
@@ -44,6 +45,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
   // due (production `now` is always >> any everyMin window from epoch 0).
   let nowMs = 1_700_000_000_000
   let runOnce = false
+  const stallBlocked: Record<Side, boolean> = { left: false, right: false }
   let nowMinutes = 0
   let dayOfWeek: DayOfWeek = 'monday'
   let dateKey = '2026-07-01'
@@ -63,6 +65,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
       setPower: async (side, on, temp) => { hwCalls.push({ op: 'power', side, on, temp }) },
     }),
     withSideLock: async (_side, fn) => fn(),
+    pumpStallShouldBlock: side => stallBlocked[side],
     broadcast: () => {},
     markMutated: () => {},
     loadRules: async () => rules,
@@ -84,6 +87,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
       if (date) dateKey = date
     },
     setRunOnce: (a) => { runOnce = a },
+    setStallBlocked: (side, blocked) => { stallBlocked[side] = blocked },
     runs,
     notifies,
     hwCalls,
@@ -548,6 +552,7 @@ describe('AutomationEngine — action error', () => {
         setPower: async () => {},
       }),
       withSideLock: async (_side, fn) => fn(),
+      pumpStallShouldBlock: () => false,
       broadcast: () => {},
       markMutated: () => {},
       loadRules: async () => [rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })],
@@ -571,6 +576,7 @@ describe('AutomationEngine — action error', () => {
       clock: () => ({ nowMinutes: 0, dayOfWeek: 'monday' }),
       getHardware: () => ({ connect: async () => {}, setTemperature: async () => {}, setPower: async () => {} }),
       withSideLock: async (_side, fn) => fn(),
+      pumpStallShouldBlock: () => false,
       broadcast: () => {},
       markMutated: () => {},
       loadRules: async () => [rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })],
@@ -644,6 +650,7 @@ describe('AutomationEngine — branch coverage corners', () => {
       clock: () => ({ nowMinutes: 0, dayOfWeek: 'monday' }),
       getHardware: () => ({ connect: async () => {}, setTemperature: async () => {}, setPower: async () => {} }),
       withSideLock: async (_side, fn) => fn(),
+      pumpStallShouldBlock: () => false,
       broadcast: () => {},
       markMutated: () => {},
       loadRules: async () => [],
@@ -726,5 +733,65 @@ describe('AutomationEngine — branch coverage corners', () => {
     await h.engine.tick()
     expect(h.runs[1].detail.actions?.[0]?.antiThrash).toBe(true)
     expect(h.runs[1].outcome).toBe('clamped')
+  })
+})
+
+describe('AutomationEngine — pump stall guard gate', () => {
+  it('skips a setTemperature action while the guard blocks the side', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
+      h.setStallBlocked('left', true)
+      await h.engine.reload()
+      await h.engine.tick()
+      expect(h.hwCalls).toHaveLength(0)
+      expect(h.runs[0].outcome).toBe('skipped')
+      expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('pump-stall')
+      expect(warn).toHaveBeenCalledWith('[automation] skipped setTemperature: pump stall guard blocks left')
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('skips a setPower(on) action while the guard blocks the side', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true, temp: lit(70) }] })])
+      h.setStallBlocked('left', true)
+      await h.engine.reload()
+      await h.engine.tick()
+      expect(h.hwCalls).toHaveLength(0)
+      expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('pump-stall')
+      expect(warn).toHaveBeenCalledWith('[automation] skipped setPower: pump stall guard blocks left')
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('still sends setPower(off) while the guard blocks the side', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: false }] })])
+    h.setStallBlocked('left', true)
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls[0]).toMatchObject({ op: 'power', side: 'left', on: false })
+    expect(h.runs[0].outcome).toBe('fired')
+  })
+
+  it('only skips the blocked side when a rule fans out to both', async () => {
+    const h = makeHarness([rule({ side: null, actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      h.setStallBlocked('left', true)
+      await h.engine.reload()
+      await h.engine.tick()
+      expect(h.hwCalls).toHaveLength(1)
+      expect(h.hwCalls[0]).toMatchObject({ op: 'temp', side: 'right', temp: 72 })
+      expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('pump-stall')
+    }
+    finally {
+      warn.mockRestore()
+    }
   })
 })

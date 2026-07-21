@@ -17,6 +17,7 @@ import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { timeToDate, nowInTimezone } from './timeUtils'
 
@@ -326,6 +327,10 @@ export class JobManager {
         console.log(`Skipping temp job temp-${sched.id} — ${sched.side} is not powered`)
         return
       }
+      if (pumpStallShouldBlock(sched.side)) {
+        console.warn(`[jobManager] skipped temp job temp-${sched.id}: pump stall guard blocks ${sched.side}`)
+        return
+      }
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
@@ -359,6 +364,10 @@ export class JobManager {
       return
     }
     await withSideLock(sched.side, async () => {
+      if (pumpStallShouldBlock(sched.side)) {
+        console.warn(`[jobManager] skipped power-on power-on-${sched.id}: pump stall guard blocks ${sched.side}`)
+        return
+      }
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
@@ -430,11 +439,15 @@ export class JobManager {
       // explicit power-off and would re-arm the same race the temperature
       // path's gate was added to prevent (see withSideLock comment).
       const powered = await this.isSidePowered(sched.side)
+      const stallBlocked = pumpStallShouldBlock(sched.side)
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
-      if (powered) {
+      if (powered && !stallBlocked) {
         await client.setTemperature(sched.side, sched.alarmTemperature)
+      }
+      else if (powered) {
+        console.warn(`[jobManager] skipped alarm temperature alarm-${sched.id}: pump stall guard blocks ${sched.side}; firing vibration only`)
       }
       else {
         console.log(`Alarm job alarm-${sched.id} — ${sched.side} not powered; skipping temperature, firing vibration only`)
@@ -445,7 +458,7 @@ export class JobManager {
         duration: sched.duration,
       })
       broadcastMutationStatus(sched.side, {
-        ...(powered && {
+        ...(powered && !stallBlocked && {
           targetTemperature: sched.alarmTemperature,
           targetLevel: fahrenheitToLevel(sched.alarmTemperature),
         }),
@@ -664,6 +677,10 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
+            if (pumpStallShouldBlock(side)) {
+              console.warn(`[jobManager] skipped away-return power-on: pump stall guard blocks ${side}`)
+              return
+            }
             // Restore power for the side
             try {
               const client = getSharedHardwareClient()
@@ -1062,6 +1079,10 @@ export class JobManager {
         fireDate,
         async () => {
           await withSideLock(side, async () => {
+            if (pumpStallShouldBlock(side)) {
+              console.warn(`[jobManager] skipped run-once set point: pump stall guard blocks ${side}`)
+              return
+            }
             markSideMutated(side)
             const client = getSharedHardwareClient()
             await client.connect()

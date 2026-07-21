@@ -5,6 +5,7 @@ import { db } from '@/src/db'
 import { runOnceSessions, deviceSettings } from '@/src/db/schema'
 import { eq, and, gt } from 'drizzle-orm'
 import { getJobManager } from '@/src/scheduler'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withHardwareClient } from '@/src/server/helpers'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { fahrenheitToLevel } from '@/src/hardware/types'
@@ -35,6 +36,15 @@ export const runOnceRouter = router({
       expiresAt: z.number(),
     }))
     .mutation(async ({ input }) => {
+      // Fail fast before cancelling the existing session — starting a session
+      // powers the side on, which a tripped pump stall guard must block.
+      if (pumpStallShouldBlock(input.side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+
       const jobManager = await getJobManager()
 
       // Cancel any existing active session for this side

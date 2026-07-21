@@ -22,6 +22,7 @@ import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getAutomationEngineIfRunning } from '@/src/automation'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 
 const lastTargetF: Record<Side, number | null> = { left: null, right: null }
@@ -128,6 +129,12 @@ export async function setTargetTemperature(
     const intended = intendedPower[side]
     const powered = intended !== null ? intended : isCurrentlyPowered(monitor, side)
     if (!powered) return
+    if (pumpStallShouldBlock(side)) {
+      // Keep the staged target (same semantics as adjusting while OFF) but
+      // never push a write that would re-energize a parked side.
+      console.warn(`[homekit] skipped setTemperature(${side}): pump stall guard blocks ${side}`)
+      return
+    }
     registerManualOverride(side)
     await logged(
       `setTemperature(${side}, ${f})`,
@@ -150,6 +157,12 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
   intendedPower[side] = true
   try {
     await withSideLock(side, async () => {
+      // Throw rather than silently skip: the catch below rolls intendedPower
+      // back so iOS Home reverts the toggle instead of showing a phantom ON.
+      if (pumpStallShouldBlock(side)) {
+        console.warn(`[homekit] skipped setPower(${side}, true): pump stall guard blocks ${side}`)
+        throw new Error(`pump stall protection active on ${side}`)
+      }
       const target = clampF(getStagedTargetF(monitor, side))
       lastTargetF[side] = target
       registerManualOverride(side)

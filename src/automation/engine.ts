@@ -61,6 +61,9 @@ export interface AutomationEngineDeps {
   clock: () => { nowMinutes: number, dayOfWeek: DayOfWeek, dateKey?: string }
   getHardware: () => HardwareWriter
   withSideLock: <T>(side: Side, fn: () => Promise<T>) => Promise<T>
+  /** Pump stall guard gate — energizing writes are skipped while it blocks
+   * the side (ADR 0022: a tripped side stays parked until acknowledged). */
+  pumpStallShouldBlock: (side: Side) => boolean
   broadcast: (side: Side, overlay: Record<string, unknown>) => void
   markMutated: (side: Side) => void
   loadRules: () => Promise<AutomationRule[]>
@@ -406,8 +409,16 @@ export class AutomationEngine {
       return { kind: action.kind, side, dryRun: true, raw, temp, clamped, on: action.kind === 'setPower' ? action.on : undefined }
     }
 
-    // Real write through the shared, serialized hardware path.
+    // Real write through the shared, serialized hardware path. The stall-guard
+    // check runs inside the lock so a trip while this write is queued still
+    // blocks it; power-off is the safe direction and is never blocked.
+    const energizing = action.kind === 'setTemperature' || action.on
+    let stallBlocked = false
     await this.deps.withSideLock(side, async () => {
+      if (energizing && this.deps.pumpStallShouldBlock(side)) {
+        stallBlocked = true
+        return
+      }
       const hw = this.deps.getHardware()
       await hw.connect()
       if (action.kind === 'setTemperature') {
@@ -427,6 +438,10 @@ export class AutomationEngine {
         else if (!action.on) this.lastAsserted[side] = undefined
       }
     })
+    if (stallBlocked) {
+      console.warn(`[automation] skipped ${action.kind}: pump stall guard blocks ${side}`)
+      return { kind: action.kind, side, skipped: 'pump-stall', raw, temp, clamped }
+    }
     rt.actionTimes.push(now)
     return { kind: action.kind, side, sent: true, raw, temp, clamped, on: action.kind === 'setPower' ? action.on : undefined }
   }
