@@ -4,8 +4,8 @@ import { and, desc, eq, isNull } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
 import { bedTemp, pumpAlerts } from '@/src/db/biometrics-schema'
-import { acknowledge as guardAcknowledge } from '@/src/hardware/pumpStallGuard'
-import { clearPumpStallNotice } from '@/src/hardware/pumpStallNotification'
+import { acknowledge as guardAcknowledge, rearm as guardRearm } from '@/src/hardware/pumpStallGuard'
+import { clearPumpStallNotice, getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import { idSchema, sideSchema } from '@/src/server/validation-schemas'
 
 const ALERT_TYPE = z.enum([
@@ -118,6 +118,9 @@ export const pumpAlertsRouter = router({
       orphanRecovered: z.boolean(),
     }))
     .mutation(async ({ input }) => {
+      // Snapshot the notice before acknowledge() clears it — a failed
+      // restore re-arms the guard with the original trip metadata.
+      const priorNotice = getPumpStallNotice(input.side)
       const { restore, alertId } = guardAcknowledge(input.side)
 
       // A restart wipes the guard's in-memory state, so a trip from before
@@ -171,7 +174,10 @@ export const pumpAlertsRouter = router({
         }
       }
 
-      if (stampId != null) {
+      // Best-effort by design: a stamp failure only leaves the row in the
+      // active list; the guard itself is already released.
+      const stampAcknowledged = async (): Promise<void> => {
+        if (stampId == null) return
         try {
           await biometricsDb
             .update(pumpAlerts)
@@ -184,6 +190,7 @@ export const pumpAlertsRouter = router({
       }
 
       if (restore == null && orphanRestore == null) {
+        await stampAcknowledged()
         return { success: true, restoredTarget: null, restoredDuration: null, orphanRecovered }
       }
 
@@ -212,11 +219,17 @@ export const pumpAlertsRouter = router({
         }
       }
       if (effectiveRestore == null) {
+        await stampAcknowledged()
         return { success: true, restoredTarget: null, restoredDuration: null, orphanRecovered }
       }
 
+      // Restore first, stamp after: if the hardware calls fail the row must
+      // stay in the active list and the guard must re-arm, or the fault is
+      // hidden while the side sits in an unknown power state.
+      let poweredOn = false
       try {
         await caller.device.setPower({ side: input.side, powered: true, temperature: effectiveRestore.targetTemperature })
+        poweredOn = true
         await caller.device.setTemperature({
           side: input.side,
           temperature: effectiveRestore.targetTemperature,
@@ -224,12 +237,31 @@ export const pumpAlertsRouter = router({
         })
       }
       catch (err) {
+        if (poweredOn) {
+          // Partial restore: the side energized but the setpoint didn't
+          // take. Park it again before re-arming; if that also fails the
+          // guard still re-arms below.
+          try {
+            await caller.device.setPower({ side: input.side, powered: false })
+          }
+          catch (offErr) {
+            console.warn('[pumpAlerts] failed to park side after partial restore:', offErr instanceof Error ? offErr.message : offErr)
+          }
+        }
+        guardRearm(input.side, {
+          alertId: stampId,
+          restore: effectiveRestore,
+          trippedAt: priorNotice ? priorNotice.trippedAt * 1000 : undefined,
+          rpm: priorNotice?.rpm,
+        })
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to restore side: ${err instanceof Error ? err.message : 'Unknown error'}`,
           cause: err,
         })
       }
+
+      await stampAcknowledged()
 
       return {
         success: true,

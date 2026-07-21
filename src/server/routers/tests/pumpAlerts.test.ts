@@ -44,10 +44,12 @@ const dbMock = vi.hoisted(() => {
 
 const guard = vi.hoisted(() => ({
   acknowledge: vi.fn(),
+  rearm: vi.fn(),
 }))
 
 const notices = vi.hoisted(() => ({
   clearPumpStallNotice: vi.fn(),
+  getPumpStallNotice: vi.fn(),
 }))
 
 const device = vi.hoisted(() => ({
@@ -58,7 +60,7 @@ const device = vi.hoisted(() => ({
 }))
 
 vi.mock('@/src/db', () => ({ biometricsDb: dbMock }))
-vi.mock('@/src/hardware/pumpStallGuard', () => ({ acknowledge: guard.acknowledge }))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({ acknowledge: guard.acknowledge, rearm: guard.rearm }))
 vi.mock('@/src/hardware/pumpStallNotification', () => notices)
 vi.mock('@/src/server/routers/app', () => ({
   appRouter: {
@@ -102,7 +104,9 @@ beforeEach(() => {
   }
   Object.values(sql).forEach(mock => mock.mockClear())
   guard.acknowledge.mockReset().mockReturnValue({ restore: null, alertId: null })
+  guard.rearm.mockReset()
   notices.clearPumpStallNotice.mockReset()
+  notices.getPumpStallNotice.mockReset().mockReturnValue(null)
   device.setPower.mockReset().mockResolvedValue({ success: true })
   device.setTemperature.mockReset().mockResolvedValue({ success: true })
   device.getStatus.mockReset().mockResolvedValue({
@@ -266,6 +270,8 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
     expect(device.setPower).toHaveBeenCalledWith({ side: 'left', powered: true, temperature: 71 })
     expect(device.setTemperature).toHaveBeenCalledWith({ side: 'left', temperature: 71, duration: 5400 })
     expect(device.setPower.mock.invocationCallOrder[0]).toBeLessThan(device.setTemperature.mock.invocationCallOrder[0] ?? 0)
+    // acknowledgedAt is stamped only after both restore calls succeed.
+    expect(dbMock.update.mock.invocationCallOrder[0]).toBeGreaterThan(device.setTemperature.mock.invocationCallOrder[0] ?? Infinity)
   })
 
   it('logs an acknowledgement stamp failure but still restores the side', async () => {
@@ -281,7 +287,7 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
     expect(device.setPower).toHaveBeenCalledOnce()
   })
 
-  it('wraps an Error from the device restore path', async () => {
+  it('wraps an Error from the device restore path and re-arms without trip metadata', async () => {
     guard.acknowledge.mockReturnValue({
       restore: { targetTemperature: 69, durationSeconds: 1200 },
       alertId: null,
@@ -293,6 +299,15 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       message: 'Failed to restore side: hardware offline',
     })
     expect(device.setTemperature).not.toHaveBeenCalled()
+    // Power-on itself failed, so there is nothing to park again.
+    expect(device.setPower).toHaveBeenCalledTimes(1)
+    expect(guard.rearm).toHaveBeenCalledWith('left', {
+      alertId: null,
+      restore: { targetTemperature: 69, durationSeconds: 1200 },
+      trippedAt: undefined,
+      rpm: undefined,
+    })
+    expect(dbMock.update).not.toHaveBeenCalled()
   })
 
   it('uses Unknown error for a non-Error device restore rejection', async () => {
@@ -306,6 +321,69 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       code: 'INTERNAL_SERVER_ERROR',
       message: 'Failed to restore side: Unknown error',
     })
+  })
+
+  it('does not stamp and re-arms with the prior notice metadata when the restore fails', async () => {
+    notices.getPumpStallNotice.mockReturnValue({
+      alertId: 7,
+      trippedAt: 1_720_000_000,
+      rpm: 55,
+      restore: { targetTemperature: 69, durationSeconds: 1200 },
+    })
+    guard.acknowledge.mockReturnValue({
+      restore: { targetTemperature: 69, durationSeconds: 1200 },
+      alertId: 7,
+    })
+    device.setPower.mockRejectedValueOnce(new Error('hardware offline'))
+
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+    })
+    expect(notices.getPumpStallNotice).toHaveBeenCalledWith('left')
+    expect(guard.rearm).toHaveBeenCalledWith('left', {
+      alertId: 7,
+      restore: { targetTemperature: 69, durationSeconds: 1200 },
+      trippedAt: 1_720_000_000_000,
+      rpm: 55,
+    })
+    expect(dbMock.update).not.toHaveBeenCalled()
+  })
+
+  it('parks the side again when the setpoint fails after a successful power-on', async () => {
+    guard.acknowledge.mockReturnValue({
+      restore: { targetTemperature: 71, durationSeconds: 5400 },
+      alertId: 42,
+    })
+    device.setTemperature.mockRejectedValueOnce(new Error('setpoint refused'))
+
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to restore side: setpoint refused',
+    })
+    expect(device.setPower).toHaveBeenCalledTimes(2)
+    expect(device.setPower).toHaveBeenLastCalledWith({ side: 'left', powered: false })
+    expect(guard.rearm).toHaveBeenCalledWith('left', expect.objectContaining({ alertId: 42 }))
+    expect(dbMock.update).not.toHaveBeenCalled()
+  })
+
+  it('still re-arms and warns when the post-failure park also fails', async () => {
+    guard.acknowledge.mockReturnValue({
+      restore: { targetTemperature: 71, durationSeconds: 5400 },
+      alertId: 42,
+    })
+    device.setTemperature.mockRejectedValueOnce(new Error('setpoint refused'))
+    device.setPower
+      .mockResolvedValueOnce({ success: true })
+      .mockRejectedValueOnce(new Error('park failed'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to restore side: setpoint refused',
+    })
+    expect(warn).toHaveBeenCalledWith('[pumpAlerts] failed to park side after partial restore:', 'park failed')
+    expect(guard.rearm).toHaveBeenCalledWith('left', expect.objectContaining({ alertId: 42 }))
+    expect(dbMock.update).not.toHaveBeenCalled()
   })
 
   describe('restart-orphaned alerts', () => {

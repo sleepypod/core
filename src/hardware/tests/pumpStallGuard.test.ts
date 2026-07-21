@@ -33,6 +33,7 @@ import {
   acknowledge,
   invalidateGuardSettingsCache,
   onFrame,
+  rearm,
   rehydrate,
   reset,
   shouldBlock,
@@ -273,6 +274,42 @@ describe('pumpStallGuard', () => {
     expect(alertId).toBeGreaterThan(0)
     expect(shouldBlock('right')).toBe(false)
     expect(getPumpStallNotice('right')).toBeNull()
+  })
+
+  it('rearm restores blocked state, snapshot, and notice', () => {
+    rearm('left', {
+      alertId: 9,
+      restore: { targetTemperature: 77, durationSeconds: 3600 },
+      trippedAt: 1_720_000_111_000,
+      rpm: 42,
+    })
+
+    expect(shouldBlock('left')).toBe(true)
+    const state = __test__.getState().left
+    expect(state.activeAlertId).toBe(9)
+    expect(state.trippedAt).toBe(1_720_000_111_000)
+    expect(state.preStall).toEqual({ targetTemperature: 77, durationSeconds: 3600 })
+    expect(getPumpStallNotice('left')).toEqual({
+      alertId: 9,
+      trippedAt: 1_720_000_111,
+      rpm: 42,
+      restore: { targetTemperature: 77, durationSeconds: 3600 },
+    })
+  })
+
+  it('rearm falls back to now and zeroed notice fields when trip metadata is unknown', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_720_000_500_000)
+
+    rearm('right', { alertId: null, restore: null })
+
+    expect(shouldBlock('right')).toBe(true)
+    expect(__test__.getState().right.activeAlertId).toBeNull()
+    expect(getPumpStallNotice('right')).toEqual({
+      alertId: 0,
+      trippedAt: 1_720_000_500,
+      rpm: 0,
+      restore: null,
+    })
   })
 
   it('reset() clears guard and notification', async () => {

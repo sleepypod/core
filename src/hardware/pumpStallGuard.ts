@@ -218,6 +218,37 @@ export function acknowledge(side: Side): {
   return { restore, alertId }
 }
 
+// ── Re-arm after a failed acknowledge-and-restore ──────────────────────────
+
+/**
+ * Re-block a side whose acknowledgement could not complete. acknowledge()
+ * clears the guard optimistically; when the subsequent hardware restore
+ * fails, the alert row is still active (nothing was stamped) and the block
+ * plus banner must come back with it — otherwise the protection is
+ * silently lost while the side sits in an unknown power state.
+ */
+export function rearm(side: Side, params: {
+  alertId: number | null
+  restore: { targetTemperature: number, durationSeconds: number } | null
+  /** ms epoch of the original trip; defaults to now */
+  trippedAt?: number
+  rpm?: number
+}): void {
+  const state = getState()[side]
+  state.blocked = true
+  state.trippedAt = params.trippedAt ?? Date.now()
+  state.activeAlertId = params.alertId
+  state.preStall = params.restore
+  state.consecutiveLowFrames = 0
+  state.consecutiveHealthyFrames = 0
+  setPumpStallNotice(side, {
+    alertId: params.alertId ?? 0,
+    trippedAt: Math.floor(state.trippedAt / 1000),
+    rpm: params.rpm ?? 0,
+    restore: params.restore,
+  })
+}
+
 // ── Startup rehydration ────────────────────────────────────────────────────
 
 /**
