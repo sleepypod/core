@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TRPCError } from '@trpc/server'
 import type * as DrizzleOrmModule from 'drizzle-orm'
+import { pumpAlerts } from '@/src/db/biometrics-schema'
 
 const sql = vi.hoisted(() => ({
   and: vi.fn((...conditions: unknown[]) => ({ kind: 'and', conditions })),
@@ -316,11 +317,18 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
         expect.objectContaining({ kind: 'isNull' }),
         expect.objectContaining({ kind: 'isNull' }),
       )
-      expect(sql.eq).toHaveBeenCalledWith(expect.anything(), 'left')
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.side, 'left')
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.action, 'power_off')
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+      expect(sql.desc).toHaveBeenCalledWith(pumpAlerts.timestamp)
       expect(dbMock.chain.orderBy).toHaveBeenCalledWith(expect.objectContaining({ kind: 'desc' }))
+      expect(dbMock.chain.limit).toHaveBeenCalledWith(1)
       expect(dbMock.chain.set).toHaveBeenCalledWith({ acknowledgedAt: expect.any(Date) })
-      expect(sql.eq).toHaveBeenCalledWith(expect.anything(), 38)
-      // No in-memory snapshot survives a restart — nothing to restore.
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 38)
+      // The guard's in-memory snapshot did not survive the restart, so
+      // there is nothing to restore from memory (the row's persisted
+      // restore columns are deliberately not replayed here).
       expect(device.createCaller).not.toHaveBeenCalled()
     })
 
@@ -344,6 +352,25 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toMatchObject({ success: true })
       expect(dbMock.select).not.toHaveBeenCalled()
       expect(sql.eq).toHaveBeenCalledWith(expect.anything(), 42)
+    })
+
+    it('skips the fallback when the guard kept its restore snapshot (failed insert, not a restart)', async () => {
+      // A failed alert INSERT at trip time leaves alertId null but keeps
+      // the snapshot — the current trip has no row of its own, so falling
+      // back would stamp an older, unrelated incident.
+      guard.acknowledge.mockReturnValue({
+        restore: { targetTemperature: 70, durationSeconds: 1800 },
+        alertId: null,
+      })
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toEqual({
+        success: true,
+        restoredTarget: 70,
+        restoredDuration: 1800,
+      })
+      expect(dbMock.select).not.toHaveBeenCalled()
+      expect(dbMock.update).not.toHaveBeenCalled()
+      expect(device.setPower).toHaveBeenCalledWith({ side: 'left', powered: true, temperature: 70 })
     })
 
     it('tolerates a failed orphan lookup and still resolves', async () => {

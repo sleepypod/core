@@ -122,9 +122,12 @@ export const pumpAlertsRouter = router({
       // A restart wipes the guard's in-memory state, so a trip from before
       // the restart has no activeAlertId anymore and its row would strand
       // unacknowledged in the active list forever. Fall back to the newest
-      // active power_off row for this side.
+      // active power_off row for this side — but only when the restore
+      // snapshot is gone too: a failed alert INSERT at trip time also
+      // returns a null id while the snapshot survives, and falling back
+      // there would stamp an older, unrelated row.
       let stampId = alertId
-      if (stampId == null) {
+      if (stampId == null && restore == null) {
         try {
           const [orphan] = await biometricsDb
             .select({ id: pumpAlerts.id })
