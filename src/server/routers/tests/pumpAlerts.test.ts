@@ -19,12 +19,20 @@ const dbState = vi.hoisted(() => ({
   queue: [] as unknown[],
   rejection: undefined as unknown,
   shouldReject: false,
+  exhausted: false,
   pop(): unknown {
     if (dbState.shouldReject) {
       dbState.shouldReject = false
       return Promise.reject(dbState.rejection)
     }
-    return dbState.queue.shift() ?? []
+    if (dbState.queue.length === 0) {
+      // Loud on purpose: a silently-successful unexpected query hid real
+      // DB traffic behind tolerant catch blocks. Every test enqueues every
+      // expected result; the afterEach flag check catches swallowed throws.
+      dbState.exhausted = true
+      throw new Error('dbState queue exhausted — enqueue a result for every expected DB call')
+    }
+    return dbState.queue.shift()
   },
 }))
 
@@ -95,6 +103,7 @@ beforeEach(() => {
   dbState.queue.length = 0
   dbState.shouldReject = false
   dbState.rejection = undefined
+  dbState.exhausted = false
   dbMock.select.mockClear()
   dbMock.update.mockClear()
   for (const value of Object.values(dbMock.chain)) {
@@ -124,6 +133,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  expect(dbState.exhausted, 'a DB call ran without an enqueued result').toBe(false)
 })
 
 describe('pumpAlerts OpenAPI contract', () => {
