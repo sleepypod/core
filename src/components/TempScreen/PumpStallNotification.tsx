@@ -25,7 +25,9 @@ const formatTime = (unixSeconds: number): string => {
  *   Re-enable — restores the pre-stall setpoint via the normal command
  *     path. If the pump is still bad, the guard re-trips on the next
  *     frame; the banner returns.
- *   Dismiss — clears the notification only. Side stays off.
+ *   Dismiss — clears the notification and re-arms stall protection; the
+ *     side stays off until the user powers it back on, and any command
+ *     path re-triggers the guard if the pump is still bad.
  */
 export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, onAction }: PumpStallNotificationProps) => {
   const acknowledge = trpc.pumpAlerts.acknowledgeAndRestore.useMutation()
@@ -34,8 +36,12 @@ export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, onAction 
   // stamps exactly this row even across a restart. 0 means "no row".
   const alertRef = alertId || undefined
 
+  // While either mutation is in flight, both actions stay disabled — the
+  // two paths race for the same guard state and alert row.
+  const busy = acknowledge.isPending || dismiss.isPending
+
   return (
-    <div className="flex items-center gap-2 rounded-2xl border border-red-500/20 bg-red-950/30 p-3 sm:p-4">
+    <div role="alert" className="flex items-center gap-2 rounded-2xl border border-red-500/20 bg-red-950/30 p-3 sm:p-4">
       <AlertTriangle size={18} className="shrink-0 text-red-400" />
       <div className="flex-1 text-sm text-red-200">
         <p className="font-medium">
@@ -56,14 +62,15 @@ export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, onAction 
       </div>
       <button
         onClick={() => acknowledge.mutate({ side, alertId: alertRef }, { onSettled: onAction })}
-        disabled={acknowledge.isPending}
+        disabled={busy}
         className="rounded-full bg-red-500/20 px-3 py-2 text-xs text-red-100 transition-all hover:bg-red-500/30 active:scale-95 disabled:opacity-50"
       >
         Re-enable
       </button>
       <button
         onClick={() => dismiss.mutate({ side, alertId: alertRef }, { onSettled: onAction })}
-        disabled={dismiss.isPending}
+        disabled={busy}
+        aria-label="Dismiss pump stall notification"
         className="flex h-11 w-11 items-center justify-center rounded-full text-red-400/60 transition-all hover:text-red-300 active:scale-90 disabled:opacity-50"
       >
         <X size={16} />
