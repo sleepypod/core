@@ -355,6 +355,16 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       expect(warn).toHaveBeenCalledWith('[pumpAlerts] orphaned-alert lookup failed:', 'sqlite locked')
       expect(dbMock.update).not.toHaveBeenCalled()
     })
+
+    it('logs the raw value for a non-Error orphan lookup failure', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      rejectNext('sqlite unavailable')
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toMatchObject({ success: true })
+      expect(warn).toHaveBeenCalledWith('[pumpAlerts] orphaned-alert lookup failed:', 'sqlite unavailable')
+      expect(dbMock.update).not.toHaveBeenCalled()
+    })
   })
 })
 
