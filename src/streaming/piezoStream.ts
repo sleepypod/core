@@ -117,7 +117,8 @@ export interface LatestCapSenseSnapshot {
   ts: number
   /** Wall-clock epoch ms when the snapshot was written. Used for staleness. */
   receivedAtMs: number
-  /** Per-side channels — capSense (Pod 3) carries a scalar; capSense2 carries the
+  /** Per-side channels — legacy Pod 3 capSense carries a scalar; named-channel
+   *  capSense is projected to `[out,out,cen,cen,in,in]`; capSense2 carries the
    *  raw `[A1,A2,B1,B2,C1,C2,ref1,ref2]` array. */
   left: number | number[]
   right: number | number[]
@@ -129,8 +130,9 @@ let latestCapSenseSnapshot: LatestCapSenseSnapshot | null = null
  * Read the most recent capSense / capSense2 frame seen on the live RAW stream.
  * Returns null until the first frame arrives or after the RAW file switches.
  *
- * Consumers should treat a `receivedAtMs` older than ~30s as stale — capSense2
- * frames arrive at ~2 Hz; long gaps mean the sensor or the streamer is down.
+ * Consumers should treat a `receivedAtMs` older than ~30s as stale —
+ * capacitance frames arrive at ~2 Hz; long gaps mean the sensor or streamer is
+ * down.
  */
 export function getLatestCapSenseSnapshot(): LatestCapSenseSnapshot | null {
   return latestCapSenseSnapshot

@@ -13,8 +13,8 @@
  * just-powered side off within seconds. See sleepypod-core-64.
  *
  * Fail-safe: auto-off only acts on a POSITIVE, reliable "empty" reading. If the
- * presence signal isn't available for a side (no fresh capSense2 frame, or no
- * completed calibration — `getOccupancy().available === false`), the per-side
+ * presence signal isn't available for a side (no fresh capacitance frame, or
+ * no matching calibration — `getOccupancy().available === false`), the per-side
  * timer stands down entirely. Missing or inconsistent biometrics never trigger
  * a power-off; the global wall-clock cap remains the independent backstop.
  */
@@ -292,8 +292,8 @@ function evaluateSide(
 
   const presence = presenceState(side)
 
-  // Fail-safe: if presence can't be sensed (no fresh capSense2 frame / no
-  // calibration), never auto-off on missing data. Reset the countdown so a
+  // Fail-safe: if presence can't be sensed (no fresh capacitance frame / no
+  // matching calibration), never auto-off on missing data. Reset the countdown so a
   // later loss of signal doesn't carry stale empty time. The global cap above
   // is the only thing that may still power a side off in this state.
   if (presence === 'unsensable') {
