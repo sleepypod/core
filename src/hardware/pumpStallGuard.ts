@@ -17,7 +17,7 @@
  * shouldBlock is read from API route handlers.
  */
 
-import { eq } from 'drizzle-orm'
+import { and, desc, eq, isNull } from 'drizzle-orm'
 import { biometricsDb, db } from '@/src/db'
 import { pumpAlerts } from '@/src/db/biometrics-schema'
 import { deviceSettings, deviceState } from '@/src/db/schema'
@@ -198,6 +198,65 @@ export function acknowledge(side: Side): {
   getState()[side] = emptyState()
   clearPumpStallNotice(side)
   return { restore, alertId }
+}
+
+// ── Startup rehydration ────────────────────────────────────────────────────
+
+/**
+ * Restore per-side guard state from the newest still-active `power_off`
+ * row. A restart wipes the in-memory block and banner while the fault row
+ * (and possibly the stalled pump) persists — without this the side comes
+ * back unguarded and the acknowledgement path has nothing to stamp.
+ * Skipped when stall protection is disabled; DB errors warn, never throw.
+ */
+export function rehydrate(): void {
+  if (!readSettings().enabled) return
+  for (const side of ['left', 'right'] as Side[]) {
+    const state = getState()[side]
+    if (state.blocked || state.activeAlertId != null) continue
+
+    let row
+    try {
+      [row] = biometricsDb
+        .select({
+          id: pumpAlerts.id,
+          timestamp: pumpAlerts.timestamp,
+          rpm: pumpAlerts.rpm,
+          restoreTargetTemperature: pumpAlerts.restoreTargetTemperature,
+          restoreDurationSeconds: pumpAlerts.restoreDurationSeconds,
+        })
+        .from(pumpAlerts)
+        .where(and(
+          eq(pumpAlerts.side, side),
+          eq(pumpAlerts.action, 'power_off'),
+          isNull(pumpAlerts.acknowledgedAt),
+          isNull(pumpAlerts.dismissedAt),
+        ))
+        .orderBy(desc(pumpAlerts.timestamp), desc(pumpAlerts.id))
+        .limit(1)
+        .all()
+    }
+    catch (err) {
+      console.warn('[pumpStallGuard] rehydration read failed:', err instanceof Error ? err.message : err)
+      continue
+    }
+    if (!row) continue
+
+    const restore = row.restoreTargetTemperature != null && row.restoreDurationSeconds != null
+      ? { targetTemperature: row.restoreTargetTemperature, durationSeconds: row.restoreDurationSeconds }
+      : null
+    state.blocked = true
+    state.trippedAt = row.timestamp.getTime()
+    state.activeAlertId = row.id
+    state.preStall = restore
+    setPumpStallNotice(side, {
+      alertId: row.id,
+      trippedAt: Math.floor(row.timestamp.getTime() / 1000),
+      rpm: row.rpm ?? 0,
+      restore,
+    })
+    console.warn(`[pumpStallGuard] rehydrated active stall for ${side} from alert ${row.id} — blocked until acknowledged`)
+  }
 }
 
 // ── Test / runtime reset ───────────────────────────────────────────────────

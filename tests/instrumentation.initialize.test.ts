@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   runMigrations: vi.fn(async () => undefined),
   seedDefaultData: vi.fn(async () => undefined),
   checkAndRepairIptables: vi.fn(() => ({ ok: true, repaired: [] })),
+  rehydratePumpStallGuard: vi.fn(),
 }))
 
 vi.mock('@/src/scheduler', () => ({
@@ -85,6 +86,9 @@ vi.mock('@/src/db/migrate', () => ({
 }))
 vi.mock('@/src/hardware/iptablesCheck', () => ({
   checkAndRepairIptables: mocks.checkAndRepairIptables,
+}))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  rehydrate: mocks.rehydratePumpStallGuard,
 }))
 
 const scheduler = {
@@ -142,7 +146,11 @@ describe('initializeScheduler — happy path', () => {
     expect(mocks.getJobManager).toHaveBeenCalled()
     expect(mocks.startDacServer).toHaveBeenCalled()
     expect(mocks.getDacMonitor).toHaveBeenCalled()
+    expect(mocks.rehydratePumpStallGuard).toHaveBeenCalled()
     expect(mocks.initializeKeepalives).toHaveBeenCalled()
+    // The guard must be re-armed before keepalives can consult shouldBlock.
+    expect(mocks.rehydratePumpStallGuard.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.initializeKeepalives.mock.invocationCallOrder[0] ?? 0)
     expect(mocks.startPiezoStreamServer).toHaveBeenCalled()
     expect(mocks.startMqttBridge).toHaveBeenCalled()
     expect(mocks.startAutoOffWatcher).toHaveBeenCalled()
@@ -203,6 +211,19 @@ describe('initializeScheduler — error swallowing', () => {
     const { initializeScheduler } = await fresh()
     await initializeScheduler()
     expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/Piezo stream server failed/), expect.anything())
+    warnSpy.mockRestore()
+  })
+
+  it('logs and swallows when pump stall guard rehydration throws', async () => {
+    mocks.rehydratePumpStallGuard.mockImplementationOnce((): never => {
+      throw new Error('bio db locked')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const { initializeScheduler } = await fresh()
+    await initializeScheduler()
+    expect(warnSpy).toHaveBeenCalledWith('[pumpStallGuard] rehydration failed:', 'bio db locked')
+    expect(mocks.initializeKeepalives).toHaveBeenCalled()
     warnSpy.mockRestore()
   })
 

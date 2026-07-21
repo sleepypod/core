@@ -33,6 +33,7 @@ import {
   acknowledge,
   invalidateGuardSettingsCache,
   onFrame,
+  rehydrate,
   reset,
   shouldBlock,
 } from '../pumpStallGuard'
@@ -755,5 +756,132 @@ describe('pumpStallGuard', () => {
     expect(alert.acknowledged_at).toBeTypeOf('number')
     expect(log).toHaveBeenCalledWith('[pumpStallGuard] auto-recovered left')
     log.mockRestore()
+  })
+
+  describe('rehydrate', () => {
+    function insertAlert(row: {
+      side: 'left' | 'right'
+      timestamp?: number
+      rpm?: number | null
+      action?: string
+      restoreTarget?: number | null
+      restoreDuration?: number | null
+      acknowledgedAt?: number | null
+      dismissedAt?: number | null
+    }): number {
+      const result = (biometricsSqlite as any).prepare(`
+        INSERT INTO pump_alerts (timestamp, type, side, rpm, action, restore_target_temperature, restore_duration_seconds, acknowledged_at, dismissed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        row.timestamp ?? 1_720_000_000,
+        row.side === 'left' ? 'stall_left' : 'stall_right',
+        row.side,
+        row.rpm === undefined ? 120 : row.rpm,
+        row.action ?? 'power_off',
+        row.restoreTarget === undefined ? 78 : row.restoreTarget,
+        row.restoreDuration === undefined ? 28800 : row.restoreDuration,
+        row.acknowledgedAt ?? null,
+        row.dismissedAt ?? null,
+      )
+      return Number(result.lastInsertRowid)
+    }
+
+    it('restores blocked state, snapshot, and notice from an active power_off row', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const id = insertAlert({ side: 'left', timestamp: 1_720_000_050, rpm: 90, restoreTarget: 81, restoreDuration: 5400 })
+
+      rehydrate()
+
+      expect(shouldBlock('left')).toBe(true)
+      expect(shouldBlock('right')).toBe(false)
+      const state = __test__.getState().left
+      expect(state.activeAlertId).toBe(id)
+      expect(state.trippedAt).toBe(1_720_000_050_000)
+      expect(state.preStall).toEqual({ targetTemperature: 81, durationSeconds: 5400 })
+      expect(getPumpStallNotice('left')).toEqual({
+        alertId: id,
+        trippedAt: 1_720_000_050,
+        rpm: 90,
+        restore: { targetTemperature: 81, durationSeconds: 5400 },
+      })
+      expect(warn).toHaveBeenCalledWith(`[pumpStallGuard] rehydrated active stall for left from alert ${id} — blocked until acknowledged`)
+      // A rehydrated block behaves like a live one: acknowledge clears it
+      // and hands the persisted snapshot back for restoration.
+      const { restore, alertId } = acknowledge('left')
+      expect(alertId).toBe(id)
+      expect(restore).toEqual({ targetTemperature: 81, durationSeconds: 5400 })
+      warn.mockRestore()
+    })
+
+    it('picks the newest row by timestamp then id for same-second rows', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      insertAlert({ side: 'left', timestamp: 1_720_000_010 })
+      const sameSecondOlder = insertAlert({ side: 'left', timestamp: 1_720_000_099 })
+      const sameSecondNewer = insertAlert({ side: 'left', timestamp: 1_720_000_099 })
+      expect(sameSecondNewer).toBeGreaterThan(sameSecondOlder)
+
+      rehydrate()
+
+      expect(__test__.getState().left.activeAlertId).toBe(sameSecondNewer)
+      warn.mockRestore()
+    })
+
+    it('skips entirely when stall protection is disabled', () => {
+      insertAlert({ side: 'left' })
+      setSettings({ pump_stall_protection_enabled: 0 })
+      invalidateGuardSettingsCache()
+
+      rehydrate()
+
+      expect(shouldBlock('left')).toBe(false)
+      expect(getPumpStallNotice('left')).toBeNull()
+    })
+
+    it('ignores acknowledged, dismissed, and non-power_off rows', () => {
+      insertAlert({ side: 'left', acknowledgedAt: 1_720_000_100 })
+      insertAlert({ side: 'left', dismissedAt: 1_720_000_100 })
+      insertAlert({ side: 'left', action: 'warned' })
+
+      rehydrate()
+
+      expect(shouldBlock('left')).toBe(false)
+      expect(getPumpStallNotice('left')).toBeNull()
+    })
+
+    it('rehydrates with a null snapshot and zero rpm when the row carries none', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const id = insertAlert({ side: 'right', rpm: null, restoreTarget: null, restoreDuration: null })
+
+      rehydrate()
+
+      expect(shouldBlock('right')).toBe(true)
+      expect(__test__.getState().right.preStall).toBeNull()
+      expect(getPumpStallNotice('right')).toEqual(expect.objectContaining({ alertId: id, rpm: 0, restore: null }))
+      warn.mockRestore()
+    })
+
+    it('does not disturb a side that is already blocked in memory', async () => {
+      await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+      await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+      const liveAlertId = __test__.getState().left.activeAlertId
+      insertAlert({ side: 'left', timestamp: 1_700_000_000 })
+
+      rehydrate()
+
+      expect(__test__.getState().left.activeAlertId).toBe(liveAlertId)
+    })
+
+    it('warns and continues when the rehydration read fails', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      ;(biometricsSqlite as any).exec('DROP TABLE pump_alerts')
+
+      expect(() => rehydrate()).not.toThrow()
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('rehydration read failed'),
+        expect.anything(),
+      )
+      expect(shouldBlock('left')).toBe(false)
+      warn.mockRestore()
+    })
   })
 })
