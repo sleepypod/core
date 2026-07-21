@@ -12,6 +12,7 @@
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import { broadcastFrame } from './piezoStream'
 import { getPrimeCompletedAt } from '@/src/hardware/primeNotification'
+import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
 import { getAlarmState } from '@/src/hardware/deviceStateSync'
 import { getSnoozeStatus } from '@/src/hardware/snoozeManager'
 
@@ -26,6 +27,7 @@ export function broadcastMutationStatus(
 
     const primeCompletedAt = getPrimeCompletedAt()
     const alarmState = getAlarmState()
+    const stallNotices = getAllPumpStallNotices()
     const leftSide = { ...lastStatus.leftSide, isAlarmVibrating: alarmState.left }
     const rightSide = { ...lastStatus.rightSide, isAlarmVibrating: alarmState.right }
 
@@ -42,6 +44,7 @@ export function broadcastMutationStatus(
       waterLevel: lastStatus.waterLevel,
       isPriming: lastStatus.isPriming,
       ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+      ...((stallNotices.left || stallNotices.right) && { pumpStallNotifications: stallNotices }),
       snooze: {
         left: getSnoozeStatus('left'),
         right: getSnoozeStatus('right'),

@@ -90,6 +90,7 @@ const cancelSnoozeMock = vi.fn<(side: 'left' | 'right') => void>()
 const resetPrimingStateMock = vi.fn()
 const trackPrimingStateMock = vi.fn<(priming: boolean) => void>()
 const getPrimeCompletedAtMock = vi.fn(() => null as number | null)
+const getAllPumpStallNoticesMock = vi.fn<() => { left: unknown, right: unknown }>(() => ({ left: null, right: null }))
 const getAlarmStateMock = vi.fn(() => ({ left: false, right: false }))
 const getSnoozeStatusMock = vi.fn<(side: 'left' | 'right') => { active: boolean, snoozeUntil: number | null }>(
   () => ({ active: false, snoozeUntil: null }),
@@ -128,6 +129,10 @@ vi.mock('../primeNotification', () => ({
   trackPrimingState: (priming: boolean) => trackPrimingStateMock(priming),
   resetPrimingState: () => resetPrimingStateMock(),
   getPrimeCompletedAt: () => getPrimeCompletedAtMock(),
+}))
+
+vi.mock('../pumpStallNotification', () => ({
+  getAllPumpStallNotices: () => getAllPumpStallNoticesMock(),
 }))
 
 vi.mock('../snoozeManager', () => ({
@@ -197,6 +202,7 @@ describe('hardware/dacMonitor.instance', () => {
     resetPrimingStateMock.mockClear()
     trackPrimingStateMock.mockClear()
     getPrimeCompletedAtMock.mockReset().mockReturnValue(null)
+    getAllPumpStallNoticesMock.mockReset().mockReturnValue({ left: null, right: null })
     getAlarmStateMock.mockReset().mockReturnValue({ left: false, right: false })
     getSnoozeStatusMock.mockReset().mockReturnValue({ active: false, snoozeUntil: null })
     broadcastFrameMock.mockClear()
@@ -592,6 +598,38 @@ describe('hardware/dacMonitor.instance', () => {
       const lastFrame = broadcastFrameMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
       expect(lastFrame).toBeDefined()
       expect(lastFrame?.primeCompletedNotification).toEqual({ timestamp: 123_456 })
+    })
+
+    it('status:updated includes pumpStallNotifications when one side has an active notice', async () => {
+      const mod = await freshModule()
+      await mod.getDacMonitor()
+      await flushMicrotasks()
+      const monitor = monitorInstances[0]
+      const notice = { alertId: 42, trippedAt: 1_700_000_000, rpm: 0, restore: null }
+      getAllPumpStallNoticesMock.mockReturnValue({ left: null, right: notice })
+
+      const status: DeviceStatus = parseDeviceStatusMock('raw')
+      monitor.emit('status:updated', status)
+      await flushMicrotasks()
+
+      const lastFrame = broadcastFrameMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
+      expect(lastFrame).toBeDefined()
+      expect(lastFrame?.pumpStallNotifications).toEqual({ left: null, right: notice })
+    })
+
+    it('status:updated omits pumpStallNotifications when both sides are null', async () => {
+      const mod = await freshModule()
+      await mod.getDacMonitor()
+      await flushMicrotasks()
+      const monitor = monitorInstances[0]
+
+      const status: DeviceStatus = parseDeviceStatusMock('raw')
+      monitor.emit('status:updated', status)
+      await flushMicrotasks()
+
+      const lastFrame = broadcastFrameMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
+      expect(lastFrame).toBeDefined()
+      expect(lastFrame && 'pumpStallNotifications' in lastFrame).toBe(false)
     })
 
     it('status:updated does NOT crash when trackPrimingState throws', async () => {
