@@ -34,6 +34,9 @@ interface GuardState {
    *  update `action` on the same row. */
   activeAlertId: number | null
   preStall: { targetTemperature: number, durationSeconds: number } | null
+  /** true when the trip-time hardware power-off never went out — retried
+   *  on every subsequent frame until it succeeds. */
+  cutoffPending: boolean
 }
 
 interface GuardSettings {
@@ -68,6 +71,7 @@ function emptyState(): GuardState {
     trippedAt: null,
     activeAlertId: null,
     preStall: null,
+    cutoffPending: false,
   }
 }
 
@@ -162,7 +166,21 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     return
   }
 
-  // Already blocked — track healthy recovery frames if auto-recovery is on.
+  // Already blocked — if the trip-time cutoff never reached the hardware,
+  // the side may still be energized against a stalled pump. Retry until
+  // the command is confirmed sent; the alert row already says power_off.
+  if (state.cutoffPending) {
+    try {
+      const client = getSharedHardwareClient()
+      await client.setPower(input.side, false)
+      state.cutoffPending = false
+    }
+    catch (err) {
+      console.warn(`[pumpStallGuard] cutoff retry for ${input.side} failed:`, err instanceof Error ? err.message : err)
+    }
+  }
+
+  // Track healthy recovery frames if auto-recovery is on.
   if (input.rpm >= settings.recoveryRpm) {
     state.consecutiveHealthyFrames += 1
   }
@@ -310,6 +328,7 @@ async function trip(side: Side, rpm: number): Promise<void> {
     await client.setPower(side, false)
   }
   catch (err) {
+    state.cutoffPending = true
     console.error('[pumpStallGuard] hardware power-off failed:', err instanceof Error ? err.message : err)
   }
 

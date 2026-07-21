@@ -423,6 +423,44 @@ describe('pumpStallGuard', () => {
     err.mockRestore()
   })
 
+  it('retries a failed trip-time cutoff on subsequent frames until it succeeds', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setPower.mockRejectedValueOnce(new Error('hw down'))
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(shouldBlock('left')).toBe(true)
+    expect(__test__.getState().left.cutoffPending).toBe(true)
+
+    // First retry also fails — warn per retry, stay pending.
+    setPower.mockRejectedValueOnce(new Error('still down'))
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(warn).toHaveBeenCalledWith('[pumpStallGuard] cutoff retry for left failed:', 'still down')
+    expect(__test__.getState().left.cutoffPending).toBe(true)
+
+    // Second retry succeeds and stops.
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(setPower).toHaveBeenCalledTimes(3)
+    expect(setPower).toHaveBeenLastCalledWith('left', false)
+    expect(__test__.getState().left.cutoffPending).toBe(false)
+
+    // No further retries once the cutoff is confirmed sent.
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(setPower).toHaveBeenCalledTimes(3)
+    err.mockRestore()
+    warn.mockRestore()
+  })
+
+  it('does not retry the cutoff when the trip-time power-off succeeded', async () => {
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(__test__.getState().left.cutoffPending).toBe(false)
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(setPower).toHaveBeenCalledTimes(1)
+  })
+
   it('warns when device_state update fails after a trip', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
