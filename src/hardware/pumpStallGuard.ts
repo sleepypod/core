@@ -17,7 +17,7 @@
  * shouldBlock is read from API route handlers.
  */
 
-import { eq } from 'drizzle-orm'
+import { and, desc, eq, isNull } from 'drizzle-orm'
 import { biometricsDb, db } from '@/src/db'
 import { pumpAlerts } from '@/src/db/biometrics-schema'
 import { deviceSettings, deviceState } from '@/src/db/schema'
@@ -34,6 +34,9 @@ interface GuardState {
    *  update `action` on the same row. */
   activeAlertId: number | null
   preStall: { targetTemperature: number, durationSeconds: number } | null
+  /** true when the trip-time hardware power-off never went out — retried
+   *  on every subsequent frame until it succeeds. */
+  cutoffPending: boolean
 }
 
 interface GuardSettings {
@@ -68,6 +71,7 @@ function emptyState(): GuardState {
     trippedAt: null,
     activeAlertId: null,
     preStall: null,
+    cutoffPending: false,
   }
 }
 
@@ -162,7 +166,21 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     return
   }
 
-  // Already blocked — track healthy recovery frames if auto-recovery is on.
+  // Already blocked — if the trip-time cutoff never reached the hardware,
+  // the side may still be energized against a stalled pump. Retry until
+  // the command is confirmed sent; the alert row already says power_off.
+  if (state.cutoffPending) {
+    try {
+      const client = getSharedHardwareClient()
+      await client.setPower(input.side, false)
+      state.cutoffPending = false
+    }
+    catch (err) {
+      console.warn(`[pumpStallGuard] cutoff retry for ${input.side} failed:`, err instanceof Error ? err.message : err)
+    }
+  }
+
+  // Track healthy recovery frames if auto-recovery is on.
   if (input.rpm >= settings.recoveryRpm) {
     state.consecutiveHealthyFrames += 1
   }
@@ -198,6 +216,96 @@ export function acknowledge(side: Side): {
   getState()[side] = emptyState()
   clearPumpStallNotice(side)
   return { restore, alertId }
+}
+
+// ── Re-arm after a failed acknowledge-and-restore ──────────────────────────
+
+/**
+ * Re-block a side whose acknowledgement could not complete. acknowledge()
+ * clears the guard optimistically; when the subsequent hardware restore
+ * fails, the alert row is still active (nothing was stamped) and the block
+ * plus banner must come back with it — otherwise the protection is
+ * silently lost while the side sits in an unknown power state.
+ */
+export function rearm(side: Side, params: {
+  alertId: number | null
+  restore: { targetTemperature: number, durationSeconds: number } | null
+  /** ms epoch of the original trip; defaults to now */
+  trippedAt?: number
+  rpm?: number
+}): void {
+  const state = getState()[side]
+  state.blocked = true
+  state.trippedAt = params.trippedAt ?? Date.now()
+  state.activeAlertId = params.alertId
+  state.preStall = params.restore
+  state.consecutiveLowFrames = 0
+  state.consecutiveHealthyFrames = 0
+  setPumpStallNotice(side, {
+    alertId: params.alertId ?? 0,
+    trippedAt: Math.floor(state.trippedAt / 1000),
+    rpm: params.rpm ?? 0,
+    restore: params.restore,
+  })
+}
+
+// ── Startup rehydration ────────────────────────────────────────────────────
+
+/**
+ * Restore per-side guard state from the newest still-active `power_off`
+ * row. A restart wipes the in-memory block and banner while the fault row
+ * (and possibly the stalled pump) persists — without this the side comes
+ * back unguarded and the acknowledgement path has nothing to stamp.
+ * Skipped when stall protection is disabled; DB errors warn, never throw.
+ */
+export function rehydrate(): void {
+  if (!readSettings().enabled) return
+  for (const side of ['left', 'right'] as Side[]) {
+    const state = getState()[side]
+    if (state.blocked || state.activeAlertId != null) continue
+
+    let row
+    try {
+      [row] = biometricsDb
+        .select({
+          id: pumpAlerts.id,
+          timestamp: pumpAlerts.timestamp,
+          rpm: pumpAlerts.rpm,
+          restoreTargetTemperature: pumpAlerts.restoreTargetTemperature,
+          restoreDurationSeconds: pumpAlerts.restoreDurationSeconds,
+        })
+        .from(pumpAlerts)
+        .where(and(
+          eq(pumpAlerts.side, side),
+          eq(pumpAlerts.action, 'power_off'),
+          isNull(pumpAlerts.acknowledgedAt),
+          isNull(pumpAlerts.dismissedAt),
+        ))
+        .orderBy(desc(pumpAlerts.timestamp), desc(pumpAlerts.id))
+        .limit(1)
+        .all()
+    }
+    catch (err) {
+      console.warn('[pumpStallGuard] rehydration read failed:', err instanceof Error ? err.message : err)
+      continue
+    }
+    if (!row) continue
+
+    const restore = row.restoreTargetTemperature != null && row.restoreDurationSeconds != null
+      ? { targetTemperature: row.restoreTargetTemperature, durationSeconds: row.restoreDurationSeconds }
+      : null
+    state.blocked = true
+    state.trippedAt = row.timestamp.getTime()
+    state.activeAlertId = row.id
+    state.preStall = restore
+    setPumpStallNotice(side, {
+      alertId: row.id,
+      trippedAt: Math.floor(row.timestamp.getTime() / 1000),
+      rpm: row.rpm ?? 0,
+      restore,
+    })
+    console.warn(`[pumpStallGuard] rehydrated active stall for ${side} from alert ${row.id} — blocked until acknowledged`)
+  }
 }
 
 // ── Test / runtime reset ───────────────────────────────────────────────────
@@ -251,6 +359,7 @@ async function trip(side: Side, rpm: number): Promise<void> {
     await client.setPower(side, false)
   }
   catch (err) {
+    state.cutoffPending = true
     console.error('[pumpStallGuard] hardware power-off failed:', err instanceof Error ? err.message : err)
   }
 
