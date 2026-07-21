@@ -63,6 +63,7 @@ export const VERDICT_STYLES: Record<string, { label: string, className: string }
   delivering: { label: 'DELIVERING', className: 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30' },
   idle: { label: 'IDLE', className: 'bg-sky-500/15 text-sky-300 ring-sky-500/30' },
   off: { label: 'OFF', className: 'bg-zinc-600/20 text-zinc-400 ring-zinc-600/30' },
+  starting: { label: 'STARTING', className: 'bg-sky-500/15 text-sky-300 ring-sky-500/30' },
   stalled: { label: 'STALLED', className: 'bg-red-500/20 text-red-300 ring-red-500/40' },
 }
 

@@ -243,7 +243,7 @@ function ThermalPanel() {
                     <h2 className="text-sm font-medium capitalize text-white">{`${s.side} side`}</h2>
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${v?.className ?? ''}`}>{v?.label ?? s.verdict}</span>
                   </div>
-                  {s.note && <p className="text-[11px] text-red-300">{s.note}</p>}
+                  {s.note && <p className={`text-[11px] ${diverged ? 'text-red-300' : 'text-sky-300'}`}>{s.note}</p>}
                   <div className="grid grid-cols-3 gap-x-3 gap-y-1.5 text-xs">
                     <Stat label="Target" value={s.isPowered ? fmtF(s.targetTempF) : 'off'} />
                     <Stat label="Bed" value={fmtF(s.currentTempF)} />
