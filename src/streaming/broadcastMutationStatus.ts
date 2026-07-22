@@ -3,10 +3,12 @@
  *
  * Overlays the mutation onto the last polled status from DacMonitor so all
  * WS clients see the change immediately. Fire-and-forget — never blocks the
- * caller. DacMonitor's 2s poll remains the authoritative consistency backstop.
+ * caller. DacMonitor's adaptive poll (1–5s) remains the authoritative
+ * consistency backstop.
  *
- * Used by both the device router (user-initiated mutations) and the scheduler
- * (automated jobs) so all writers go through the same broadcast path.
+ * Called by the device/runOnce routers, scheduler jobs, snooze manager,
+ * automation engine, and auto-off watcher. Not every writer broadcasts —
+ * HomeKit and gesture writes rely on the poll to surface their changes.
  */
 
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
