@@ -256,7 +256,8 @@ describe('broadcastMutationStatus', () => {
     broadcastMutationStatus()
 
     const frame = piezoMock.broadcastFrame.mock.calls[0]?.[0] as Record<string, unknown>
-    expect('pumpStallNotifications' in frame).toBe(false)
+    expect(frame).toBeDefined()
+    expect(frame && 'pumpStallNotifications' in frame).toBe(false)
   })
 
   it('catches and logs errors thrown by downstream dependencies', () => {
