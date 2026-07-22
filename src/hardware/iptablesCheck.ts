@@ -10,6 +10,7 @@
  */
 
 import { execSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 
 import { POD_CAPS } from './pods'
 
@@ -56,17 +57,29 @@ function isConfirmedMissingRule(error: unknown): boolean {
     && /Bad rule|matching rule (?:does not|exist)|does a matching rule exist/i.test(diagnostic)
 }
 
-/** Resolve ip6tables beside the selected iptables binary, or prove it absent. */
+/** Resolve a complete IPv6 firewall toolchain beside the selected iptables. */
 function resolveIp6tablesPath(iptables: string): string | null {
   if (!iptables.endsWith('iptables')) return null
-  const candidate = `${iptables.slice(0, -'iptables'.length)}ip6tables`
-  try {
-    execSync(`test -x ${candidate}`, { timeout: 2000 })
-    return candidate
+  const prefix = iptables.slice(0, -'iptables'.length)
+  const candidates = [
+    `${prefix}ip6tables`,
+    `${prefix}ip6tables-save`,
+    `${prefix}ip6tables-restore`,
+  ]
+  for (const candidate of candidates) {
+    try {
+      execSync(`test -x ${candidate}`, { timeout: 2000 })
+    }
+    catch {
+      return null
+    }
   }
-  catch {
-    return null
-  }
+  return candidates[0]
+}
+
+function kernelHasIpv6(): boolean {
+  const root = process.env.SLEEPYPOD_IPV6_SYSCTL_ROOT || '/proc/sys/net/ipv6/conf'
+  return existsSync(root)
 }
 
 /**
@@ -144,6 +157,7 @@ export function checkIptables(iptablesPath?: string): IptablesStatus {
   let modeReadable = false
   let repairable = true
   let localOnly = false
+  let intentionallyOpen = false
 
   // An ACCEPT-policy OUTPUT chain without a known unconditional blocking
   // target is the deliberate "Internet Enabled" state. Explicit LAN/mDNS/NTP
@@ -164,17 +178,7 @@ export function checkIptables(iptablesPath?: string): IptablesStatus {
       || unconditionalTargets.some(target => KNOWN_BLOCKING_TARGETS.has(target))
     localOnly = wanBlocked
     if (policyAccept && !wanBlocked) {
-      return {
-        ok: true,
-        rules: requiredRules.map(rule => ({
-          name: rule.name,
-          chain: rule.chain,
-          present: true,
-          critical: rule.critical,
-        })),
-        repaired: [],
-        repairable: true,
-      }
+      intentionallyOpen = true
     }
   }
   catch {
@@ -183,18 +187,49 @@ export function checkIptables(iptablesPath?: string): IptablesStatus {
     repairable = false
   }
 
-  // IPv6 is optional on older firmware. When the executable exists and IPv4
-  // says Local Only is active, require the matching terminal IPv6 egress DROP
-  // so health cannot report privacy while IPv6 WAN traffic remains open.
-  if (localOnly) {
-    const ip6tables = resolveIp6tablesPath(iptables)
-    if (ip6tables) {
+  // IPv6 is optional on older firmware only when the kernel family is absent.
+  // A per-interface disable_ipv6 value is not durable because NetworkManager
+  // can re-enable it during activation. Match install/update semantics: an
+  // IPv6-capable pod needs the complete runtime + persistence toolchain.
+  if (modeReadable) {
+    const hasIpv6 = kernelHasIpv6()
+    const ip6tables = hasIpv6 ? resolveIp6tablesPath(iptables) : null
+    if (hasIpv6 && !ip6tables) {
+      rules.push({
+        name: 'IPv6 firewall toolchain',
+        chain: 'OUTPUT',
+        present: false,
+        critical: true,
+      })
+      allOk = false
+      // The privileged dispatcher deliberately refuses this unsupported
+      // platform state, so do not loop an automatic repair that cannot pass.
+      repairable = false
+    }
+    else if (localOnly && ip6tables) {
       requiredRules.push({
         name: 'IPv6 WAN block',
         chain: 'OUTPUT',
         check: `${ip6tables} -C OUTPUT -j DROP`,
         critical: true,
       })
+    }
+  }
+
+  if (intentionallyOpen) {
+    return {
+      ok: allOk,
+      rules: [
+        ...requiredRules.map(rule => ({
+          name: rule.name,
+          chain: rule.chain,
+          present: true,
+          critical: rule.critical,
+        })),
+        ...rules,
+      ],
+      repaired: [],
+      repairable,
     }
   }
 

@@ -54,6 +54,7 @@ echo "=== Uninstalling SleepyPod ==="
 echo "Stopping services..."
 SERVICES=(
   sleepypod.service
+  sleepypod-firewall-restore.service
   sleepypod-piezo-processor.service
   sleepypod-sleep-detector.service
   sleepypod-environment-monitor.service
@@ -103,8 +104,12 @@ rm -f /usr/local/bin/sp-status
 rm -f /usr/local/bin/sp-restart
 rm -f /usr/local/bin/sp-logs
 rm -f /usr/local/bin/sp-internet-control
+rm -f /usr/local/bin/sp-firewall-restore
+rm -f /usr/local/bin/sp-network-privacy
+rm -f /usr/local/bin/sp-maintenance
 rm -f /usr/local/bin/sp-update
 rm -f /usr/local/bin/sp-uninstall
+rm -f /etc/sudoers.d/sleepypod-update
 
 # Remove Python modules
 if [ -d "$MODULES_DIR" ]; then
@@ -147,15 +152,29 @@ iptables -t nat -X 2>/dev/null || true
 iptables -P INPUT ACCEPT 2>/dev/null || true
 iptables -P OUTPUT ACCEPT 2>/dev/null || true
 iptables -P FORWARD ACCEPT 2>/dev/null || true
-ip6tables -F 2>/dev/null || true
-ip6tables -X 2>/dev/null || true
-ip6tables -t nat -F 2>/dev/null || true
-ip6tables -t nat -X 2>/dev/null || true
-ip6tables -P INPUT ACCEPT 2>/dev/null || true
-ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
-ip6tables -P FORWARD ACCEPT 2>/dev/null || true
-rm -f /etc/iptables/iptables.rules /etc/iptables/ip6tables.rules \
-      /etc/iptables/rules.v4 /etc/iptables/rules.v6
+if [ -d /proc/sys/net/ipv6/conf ]; then
+  ip6tables -F 2>/dev/null || true
+  ip6tables -X 2>/dev/null || true
+  ip6tables -t nat -F 2>/dev/null || true
+  ip6tables -t nat -X 2>/dev/null || true
+  ip6tables -P INPUT ACCEPT 2>/dev/null || true
+  ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
+  ip6tables -P FORWARD ACCEPT 2>/dev/null || true
+fi
+
+# Leave stock Pod 5 restore units with a valid allow-all snapshot instead of
+# deleting their inputs and making systemd report a degraded boot.
+mkdir -p /etc/iptables
+if command -v iptables-save >/dev/null 2>&1; then
+  iptables-save > /etc/iptables/iptables.rules
+  cp -f /etc/iptables/iptables.rules /etc/iptables/rules.v4
+fi
+if [ -d /proc/sys/net/ipv6/conf ] && command -v ip6tables-save >/dev/null 2>&1; then
+  ip6tables-save > /etc/iptables/ip6tables.rules
+  cp -f /etc/iptables/ip6tables.rules /etc/iptables/rules.v6
+else
+  rm -f /etc/iptables/ip6tables.rules /etc/iptables/rules.v6
+fi
 
 # Remove the sleepypod system user (the group is kept in case dac is
 # still a member — removing it would orphan file ownership on any

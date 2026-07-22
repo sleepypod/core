@@ -38,6 +38,22 @@ function unavailableError(message: string, status?: number): Error {
 
 const OPEN_OUTPUT = '-P OUTPUT ACCEPT\n'
 const LOCAL_ONLY_OUTPUT = '-P OUTPUT ACCEPT\n-A OUTPUT -j DROP\n'
+const ORIGINAL_IPV6_SYSCTL_ROOT = process.env.SLEEPYPOD_IPV6_SYSCTL_ROOT
+
+beforeEach(() => {
+  // Most unit cases model firmware with no IPv6 kernel family. Individual
+  // tests opt into an existing path when exercising toolchain enforcement.
+  process.env.SLEEPYPOD_IPV6_SYSCTL_ROOT = '/__sleepypod_test_no_ipv6__'
+})
+
+afterEach(() => {
+  if (ORIGINAL_IPV6_SYSCTL_ROOT === undefined) {
+    delete process.env.SLEEPYPOD_IPV6_SYSCTL_ROOT
+  }
+  else {
+    process.env.SLEEPYPOD_IPV6_SYSCTL_ROOT = ORIGINAL_IPV6_SYSCTL_ROOT
+  }
+})
 
 function missingRule(): Error {
   return unavailableError('iptables: Bad rule (does a matching rule exist?)', 1)
@@ -268,6 +284,50 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     expect(checkIptables().ok).toBe(false)
   })
 
+  it('reports a partial IPv6 toolchain as degraded without repair looping', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    process.env.SLEEPYPOD_IPV6_SYSCTL_ROOT = process.cwd()
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd === 'test -x /sbin/ip6tables') return ''
+      if (cmd === 'test -x /sbin/ip6tables-save') throw unavailableError('not found', 1)
+      if (cmd.startsWith('/sbin/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      return ''
+    })
+
+    const { checkAndRepairIptables } = await import('../iptablesCheck')
+    const result = checkAndRepairIptables()
+
+    expect(result.ok).toBe(false)
+    expect(result.repairable).toBe(false)
+    expect(result.rules).toContainEqual(expect.objectContaining({
+      name: 'IPv6 firewall toolchain',
+      present: false,
+      critical: true,
+    }))
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).startsWith('sudo '))).toBe(false)
+    expect(warn).toHaveBeenCalledWith(
+      '[iptables] Skipping automatic repair because firewall inspection was inconclusive',
+    )
+    warn.mockRestore()
+  })
+
+  it('ignores stray IPv6 userspace tools when the kernel family is absent', async () => {
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('test -x /sbin/ip6tables')) return ''
+      if (cmd.startsWith('/sbin/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    const result = checkIptables()
+
+    expect(result.ok).toBe(true)
+    expect(result.rules.some(rule => rule.name.startsWith('IPv6'))).toBe(false)
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).startsWith('test -x /sbin/ip6tables'))).toBe(false)
+  })
+
   it('reports installed-but-unreadable iptables as degraded and not repairable', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     setExecHandler(({ cmd }) => {
@@ -461,6 +521,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
   it('repairs an open IPv6 egress path when Local Only is active', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     let policyReapplied = false
+    process.env.SLEEPYPOD_IPV6_SYSCTL_ROOT = process.cwd()
 
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
