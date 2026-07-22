@@ -12,6 +12,7 @@ import { db } from '@/src/db'
 import { automationRuns, automations, deviceSettings, runOnceSessions } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { AutomationEngine } from './engine'
@@ -117,6 +118,7 @@ export async function getAutomationEngine(): Promise<AutomationEngine> {
         clock: () => clockInTimezone(activeTimezone, new Date()),
         getHardware: () => getSharedHardwareClient(),
         withSideLock,
+        pumpStallShouldBlock,
         broadcast: (side, overlay) => broadcastMutationStatus(side, overlay),
         markMutated: markSideMutated,
         loadRules,

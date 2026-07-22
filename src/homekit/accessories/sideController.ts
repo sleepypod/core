@@ -22,8 +22,8 @@ import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getAutomationEngineIfRunning } from '@/src/automation'
-import { withSideLock } from '@/src/hardware/sideLock'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
+import { withSideLock } from '@/src/hardware/sideLock'
 
 /**
  * HomeKit must honor the pump stall guard like every other write surface
@@ -169,6 +169,12 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
   intendedPower[side] = true
   try {
     await withSideLock(side, async () => {
+      // Throw rather than silently skip: the catch below rolls intendedPower
+      // back so iOS Home reverts the toggle instead of showing a phantom ON.
+      if (pumpStallShouldBlock(side)) {
+        console.warn(`[homekit] skipped setPower(${side}, true): pump stall guard blocks ${side}`)
+        throw new Error(`pump stall protection active on ${side}`)
+      }
       const target = clampF(getStagedTargetF(monitor, side))
       lastTargetF[side] = target
       registerManualOverride(side)

@@ -422,6 +422,21 @@ describe('sideController', () => {
       warn.mockRestore()
     })
 
+    it('setSidePowerOn re-checks inside the lock and rolls back intent when a trip lands while queued', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // Guard is clear at the ingress assert, then trips before the locked
+      // section runs — the in-lock re-check must still refuse the write.
+      shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+
+      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('pump stall protection active on left')
+
+      expect(setPower).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[homekit] skipped setPower(left, true): pump stall guard blocks left')
+      // Intent rolled back — iOS Home reads OFF again instead of a phantom ON.
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+      warn.mockRestore()
+    })
+
     it('setTargetTemperature refuses the firmware push on a blocked powered side but still caches the target', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       shouldBlock.mockReturnValue(true)

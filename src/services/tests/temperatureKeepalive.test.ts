@@ -37,6 +37,7 @@ vi.mock('@/src/db', async () => {
 })
 
 import * as dbModule from '@/src/db'
+import { withSideLock } from '@/src/hardware/sideLock'
 import {
   startKeepalive,
   stopKeepalive,
@@ -173,6 +174,55 @@ describe('startKeepalive', () => {
 
     expect(setTemperature).not.toHaveBeenCalled()
     expect(connect).not.toHaveBeenCalled()
+  })
+
+  it('serializes the reissue through the side lock — a trip while queued blocks it', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 95 })
+    setSideSettings('left', { alwaysOn: 1 })
+
+    let release: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await flushAsync()
+
+    // The immediate tick queues behind the held lock while the guard is
+    // still healthy — the trip below lands strictly after, so only an
+    // in-lock check can observe it.
+    startKeepalive('left')
+    await flushAsync()
+    expect(setTemperature).not.toHaveBeenCalled()
+
+    pumpStallShouldBlock.mockReturnValue(true)
+    release()
+    await holder
+    await flushAsync()
+
+    expect(setTemperature).not.toHaveBeenCalled()
+    expect(connect).not.toHaveBeenCalled()
+  })
+
+  it('observes a power-off that landed while the reissue was queued on the lock', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 95 })
+    setSideSettings('left', { alwaysOn: 1 })
+
+    let release: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await flushAsync()
+
+    startKeepalive('left')
+    await flushAsync()
+
+    // A power-off handler (e.g. markSideOff) serialized ahead of the queued
+    // reissue clears isPowered — the reissue must skip, not re-energize.
+    setSideState('left', { isPowered: 0 })
+    release()
+    await holder
+    await flushAsync()
+
+    expect(setTemperature).not.toHaveBeenCalled()
   })
 
   it('skips setTemperature when targetTemperature is null', async () => {

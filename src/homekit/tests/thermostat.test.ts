@@ -11,6 +11,9 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 vi.mock('@/src/automation', () => ({
   getAutomationEngineIfRunning: () => ({ registerManualOverride }),
 }))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  shouldBlock: () => false,
+}))
 
 import { buildThermostatService } from '../accessories/thermostat'
 import { __resetSideController } from '../accessories/sideController'
