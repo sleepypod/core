@@ -19,7 +19,7 @@
  * deviation. The OR closes both gaps.
  */
 
-import { and, eq, gte, sql } from 'drizzle-orm'
+import { and, eq, gt, gte, isNull, or, sql } from 'drizzle-orm'
 import { biometricsDb } from '@/src/db/biometrics'
 import { calibrationProfiles, movement } from '@/src/db/biometrics-schema'
 import { getLatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
@@ -206,6 +206,10 @@ function readCalibrationParameters(side: Side): unknown | null {
         eq(calibrationProfiles.side, side),
         eq(calibrationProfiles.sensorType, 'capacitance'),
         eq(calibrationProfiles.status, 'completed'),
+        or(
+          isNull(calibrationProfiles.qualityScore),
+          gt(calibrationProfiles.qualityScore, 0),
+        ),
       ))
       .limit(1)
       .all()

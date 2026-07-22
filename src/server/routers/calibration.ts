@@ -7,7 +7,7 @@ import {
   calibrationRuns,
   vitalsQuality,
 } from '@/src/db/biometrics-schema'
-import { and, eq, desc, gte, lte } from 'drizzle-orm'
+import { and, eq, desc, gte, lte, ne } from 'drizzle-orm'
 import { sideSchema } from '@/src/server/validation-schemas'
 import { rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -135,7 +135,10 @@ export const calibrationRouter = router({
         await writeFile(tmp, payload)
         await rename(tmp, target)
 
-        // Mark as pending in DB for immediate status feedback
+        // A first calibration gets immediate pending feedback, but never
+        // overwrite a completed profile with transient replacement state.
+        // The conditional conflict update is one SQLite statement, avoiding a
+        // SELECT/upsert race if the calibrator completes just after the rename.
         await biometricsDb
           .insert(calibrationProfiles)
           .values({
@@ -148,6 +151,7 @@ export const calibrationRouter = router({
           .onConflictDoUpdate({
             target: [calibrationProfiles.side, calibrationProfiles.sensorType],
             set: { status: 'pending', createdAt: new Date(), errorMessage: null },
+            setWhere: ne(calibrationProfiles.status, 'completed'),
           })
 
         return {

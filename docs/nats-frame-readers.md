@@ -1,6 +1,6 @@
 # NATS Frame Readers
 
-**Status:** implemented — automated validation complete; field validation pending
+**Status:** implemented — automated validation complete; field validation in progress
 **Source data:** roughly one-minute `raw.>` capture from a field Pod 5 on new firmware
 (Discord user report, 2026-07-19), taken with `scripts/probe-nats-capture.py`.
 236 messages across 8 subjects.
@@ -275,11 +275,14 @@ backfill in v1. Revisit once the live path is stable in the field;
    Node tests run captured NATS frames through the same broadcast, snapshot,
    listener, and `cap_sense_frames` persistence path and verify nullable/mixed
    per-side `statusCounts` windows.
-4. **Live validation (pending):** the reporting user's pod (new-firmware Pod 5) +
-   `eight-pod` (J55, shim variant) as the regression control. `sp-status`
-   must show: NATS pipeline + rows accruing on the former; `.RAW` pipeline
-   unchanged on the latter. Calibrator errors should clear once the live
-   buffer reaches each sensor's sample minimum.
+4. **Live validation (in progress):** the reporting user's new-firmware pod
+   confirms NATS ingestion, biometrics, and the pump-state fix. The first run
+   exposed a capacitance edge case: 60–299 records could produce no candidate
+   window yet still activate a quality-0 profile. Calibration now requires a
+   complete 300-record window, rejects quality-0 candidates, preserves the
+   last usable profile, and retries as the live buffer fills. Presence and
+   Local Only persistence remain pending on-pod retest; an old-firmware pod
+   remains the `.RAW` regression control.
 
 ## Implementation and rollout
 

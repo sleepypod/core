@@ -163,6 +163,8 @@ block_ipv4() {
   "$IPTABLES" -A OUTPUT -p udp --dport 123 -j ACCEPT
   "$IPTABLES" -A INPUT -p udp --sport 123 -j ACCEPT
   "$IPTABLES" -A OUTPUT -p udp -d 224.0.0.251/32 --dport 5353 -j ACCEPT
+  "$IPTABLES" -A OUTPUT -p udp -d 224.0.0.251/32 --sport 5353 -j ACCEPT
+  "$IPTABLES" -A INPUT -p udp -d 224.0.0.251/32 --dport 5353 -j ACCEPT
 
   # Persisted rules load before Wi-Fi has an address. Permit the DHCP client
   # exchange so a reboot under Local Only can still reacquire its LAN lease.
@@ -189,6 +191,8 @@ block_ipv6() {
   "$IP6TABLES" -A OUTPUT -p udp --dport 123 -j ACCEPT
   "$IP6TABLES" -A INPUT -p udp --sport 123 -j ACCEPT
   "$IP6TABLES" -A OUTPUT -p udp -d ff02::fb/128 --dport 5353 -j ACCEPT
+  "$IP6TABLES" -A OUTPUT -p udp -d ff02::fb/128 --sport 5353 -j ACCEPT
+  "$IP6TABLES" -A INPUT -p udp -d ff02::fb/128 --dport 5353 -j ACCEPT
 
   # DHCPv6 and ICMPv6 router/neighbor discovery use link-local multicast that
   # is outside fe80::/10 and fc00::/7 destination matches.

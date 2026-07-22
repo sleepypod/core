@@ -90,10 +90,17 @@ class CalibrationStore:
         return self._conn
 
     def get_active(self, side: str, sensor_type: str) -> Optional[dict]:
-        """Return the active calibration profile or None."""
+        """Return the active, usable calibration profile or None.
+
+        A zero quality score means the candidate failed the calibrator's own
+        quality model. Older profiles may have a NULL score, so retain those
+        for backwards compatibility rather than forcing every upgraded pod to
+        recalibrate immediately.
+        """
         row = self._get_conn().execute(
             """SELECT * FROM calibration_profiles
                WHERE side=? AND sensor_type=? AND status='completed'
+                 AND (quality_score IS NULL OR quality_score > 0)
                ORDER BY created_at DESC LIMIT 1""",
             (side, sensor_type),
         ).fetchone()
@@ -104,6 +111,15 @@ class CalibrationStore:
                        window_start: int, window_end: int,
                        samples: int) -> int:
         """Insert or update the active calibration profile."""
+        # All consumers treat quality <= 0 as the calibrator's rejection
+        # floor. Enforce that invariant here as a final guard for every sensor
+        # dialect so no calibrator can overwrite a usable profile with a
+        # completed-but-inactive row.
+        if not math.isfinite(quality) or quality <= 0:
+            raise ValueError(
+                f"Refusing unusable {side}/{sensor_type} calibration "
+                f"(quality={quality})"
+            )
         now = int(time.time())
         expires = now + 86400 * 2  # 48h expiry
         conn = self._get_conn()
@@ -130,7 +146,14 @@ class CalibrationStore:
             return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def mark_running(self, side: str, sensor_type: str) -> None:
-        """Mark a calibration as in-progress."""
+        """Mark a calibration as in-progress when no active profile exists.
+
+        A replacement calibration is computed before it is activated. Keep an
+        existing completed profile readable while that work is in flight; the
+        calibration_runs audit table records the eventual outcome.
+        """
+        if self.get_active(side, sensor_type) is not None:
+            return
         now = int(time.time())
         conn = self._get_conn()
         with conn:
@@ -144,7 +167,14 @@ class CalibrationStore:
             )
 
     def mark_failed(self, side: str, sensor_type: str, error: str) -> None:
-        """Mark a calibration as failed."""
+        """Mark a first calibration as failed, preserving an active profile.
+
+        Failed replacements must not take a previously working baseline out of
+        service. The failure itself is still appended to calibration_runs by
+        the caller.
+        """
+        if self.get_active(side, sensor_type) is not None:
+            return
         now = int(time.time())
         conn = self._get_conn()
         with conn:
@@ -203,14 +233,18 @@ class CapCalibrator:
     """
 
     LOOKBACK_HOURS = 6
-    MIN_WINDOW_S = 300       # 5 minutes
+    # A complete candidate is required before a profile may become active.
+    # Legacy .RAW capSense is ~1 Hz; the named NATS dialect is ~2 Hz, so this
+    # represents roughly 2.5--5 minutes depending on firmware.
+    MIN_WINDOW_SAMPLES = 300
     CHANNELS = ("out", "cen", "in")
     MIN_STD = 5.0            # prevent division by zero
+    VARIANCE_QUALITY_SCALE = 100000.0
 
     def calibrate(self, records: list, side: str) -> CalibrationResult:
         """
-        Given capSense records, find the quietest 5-min window and compute
-        per-channel mean+std baselines.
+        Given capSense records, find the quietest complete 300-sample window
+        and compute per-channel mean+std baselines.
         """
         if not records:
             raise ValueError("No capSense records available for calibration")
@@ -228,13 +262,16 @@ class CapCalibrator:
             for ch in self.CHANNELS:
                 channels[ch].append(int(data.get(ch, 0)))
 
-        if len(timestamps) < 60:
-            raise ValueError(f"Insufficient capSense data: {len(timestamps)} samples (need ≥60)")
+        if len(timestamps) < self.MIN_WINDOW_SAMPLES:
+            raise ValueError(
+                f"Insufficient capSense data: {len(timestamps)} samples "
+                f"(need ≥{self.MIN_WINDOW_SAMPLES})"
+            )
 
-        # Find quietest 5-minute window (lowest total variance)
+        # Find quietest complete candidate window (lowest total variance).
         best_start = 0
         best_variance = float("inf")
-        window_samples = self.MIN_WINDOW_S  # ~1 sample/sec for capSense
+        window_samples = self.MIN_WINDOW_SAMPLES
 
         # +1 so the final window is scanned (and a dataset exactly one window
         # long yields one candidate instead of none) — matches CapSense2Calibrator.
@@ -261,12 +298,28 @@ class CapCalibrator:
             std = max(std, self.MIN_STD)
             baseline["channels"][ch] = {"mean": round(mean, 2), "std": round(std, 2)}
 
-        # Quality: lower variance = better baseline (normalize against typical)
-        quality = max(0.0, min(1.0, 1.0 - (best_variance / 100000)))
+        if not math.isfinite(best_variance):
+            raise ValueError("No complete capSense calibration window available")
+        # Quality 0 is the model's rejection floor, not a usable baseline.
+        # Keeping it "completed" makes an occupied/noisy window look normal
+        # and can suppress presence indefinitely. Leave it pending for a later
+        # empty-bed retry instead.
+        quality = max(
+            0.0,
+            min(1.0, 1.0 - (best_variance / self.VARIANCE_QUALITY_SCALE)),
+        )
+        rounded_quality = round(quality, 3)
+        if rounded_quality <= 0:
+            raise ValueError(
+                "No stable capSense calibration window available "
+                f"(variance={best_variance:.1f}, need "
+                f"<{self.VARIANCE_QUALITY_SCALE:.0f}); keep the bed empty and retry"
+            )
 
+        # Quality: lower variance = better baseline (normalize against typical)
         return CalibrationResult(
             params=baseline,
-            quality_score=round(quality, 3),
+            quality_score=rounded_quality,
             window_start=int(timestamps[best_start]),
             window_end=int(timestamps[window_end - 1]),
             samples_used=window_end - best_start,

@@ -36,6 +36,13 @@ function unavailableError(message: string, status?: number): Error {
   return err
 }
 
+const OPEN_OUTPUT = '-P OUTPUT ACCEPT\n'
+const LOCAL_ONLY_OUTPUT = '-P OUTPUT ACCEPT\n-A OUTPUT -j DROP\n'
+
+function missingRule(): Error {
+  return unavailableError('iptables: Bad rule (does a matching rule exist?)', 1)
+}
+
 describe('iptablesCheck — module surface', () => {
   beforeEach(() => {
     execSyncMock.mockReset()
@@ -95,8 +102,8 @@ describe('iptablesCheck — resolveIptablesPath', () => {
       if (cmd.includes('which iptables')) {
         throw new Error('which should not have been called')
       }
-      // Listing always finds the rule
-      return 'udp dpt:5353 udp spt:5353 192.168.0.0/16 udp dpt:123'
+      if (cmd.includes(' -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      return '' // every exact `-C` rule check succeeds
     })
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables('/custom/path/iptables')
@@ -104,7 +111,8 @@ describe('iptablesCheck — resolveIptablesPath', () => {
     // No `which` call should have happened in this run
     const calls = execSyncMock.mock.calls.map(c => String(c[0]))
     expect(calls.some(c => c.includes('which iptables'))).toBe(false)
-    expect(calls.some(c => c.startsWith('/custom/path/iptables -L'))).toBe(true)
+    expect(calls.some(c => c.startsWith('/custom/path/iptables -S OUTPUT'))).toBe(true)
+    expect(calls.some(c => c.startsWith('/custom/path/iptables -C'))).toBe(true)
   })
 
   it('falls back to known POD_CAPS paths when which fails and a candidate is executable', async () => {
@@ -115,8 +123,8 @@ describe('iptablesCheck — resolveIptablesPath', () => {
         if (cmd.includes('/sbin/iptables')) return ''
         throw unavailableError('not found', 1)
       }
-      // Listing returns rule presence
-      return 'udp dpt:5353 udp spt:5353 192.168.0.0/16 udp dpt:123'
+      if (cmd.includes(' -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      return '' // every exact `-C` rule check succeeds
     })
 
     const { checkIptables } = await import('../iptablesCheck')
@@ -126,7 +134,8 @@ describe('iptablesCheck — resolveIptablesPath', () => {
     const calls = execSyncMock.mock.calls.map(c => String(c[0]))
     expect(calls.some(c => c === 'which iptables 2>/dev/null')).toBe(true)
     expect(calls.some(c => c.startsWith('test -x /sbin/iptables'))).toBe(true)
-    expect(calls.some(c => c.startsWith('/sbin/iptables -L'))).toBe(true)
+    expect(calls.some(c => c.startsWith('/sbin/iptables -S OUTPUT'))).toBe(true)
+    expect(calls.some(c => c.startsWith('/sbin/iptables -C'))).toBe(true)
     expect(execSyncMock).toHaveBeenCalledWith('test -x /sbin/iptables', { timeout: 2000 })
   })
 
@@ -134,7 +143,8 @@ describe('iptablesCheck — resolveIptablesPath', () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) throw unavailableError('which: not found', 127)
       if (cmd.startsWith('test -x ')) throw unavailableError('not found', 1)
-      // Listing — return empty so rules are seen as missing (not assumed-ok via unavailable)
+      if (cmd.includes(' -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd.includes(' -C ')) throw missingRule()
       return ''
     })
 
@@ -142,8 +152,9 @@ describe('iptablesCheck — resolveIptablesPath', () => {
     const result = checkIptables()
 
     const calls = execSyncMock.mock.calls.map(c => String(c[0]))
-    expect(calls.some(c => c.startsWith('iptables -L INPUT'))).toBe(true)
-    expect(calls.some(c => c.startsWith('iptables -L OUTPUT'))).toBe(true)
+    expect(calls.some(c => c.startsWith('iptables -S OUTPUT'))).toBe(true)
+    expect(calls.some(c => c.startsWith('iptables -C INPUT'))).toBe(true)
+    expect(calls.some(c => c.startsWith('iptables -C OUTPUT'))).toBe(true)
     // All rules missing → ok=false
     expect(result.ok).toBe(false)
     expect(result.rules.every(r => r.present === false)).toBe(true)
@@ -155,11 +166,10 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     execSyncMock.mockReset()
   })
 
-  it('marks each rule present when listing output contains its check token', async () => {
+  it('marks each rule present only when its exact ACCEPT rule exists', async () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return 'udp dpt:5353 192.168.0.0/16'
-      if (cmd.includes('-L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
+      if (cmd.includes('-S OUTPUT')) return LOCAL_ONLY_OUTPUT
       return ''
     })
 
@@ -171,11 +181,13 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     expect(result.rules.find(r => r.name === 'mDNS outbound source (UDP 5353)')?.present).toBe(true)
   })
 
-  it('marks rule absent when listing output omits the token (and is reachable)', async () => {
+  it('marks exact rules absent even when a similarly shaped DROP exists', async () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return '' // no INPUT rules
-      if (cmd.includes('-L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
+      if (cmd.includes('-S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd.includes('-C INPUT -p udp') || cmd.includes('-C INPUT -s 192.168.0.0/16')) {
+        throw missingRule()
+      }
       return ''
     })
 
@@ -188,26 +200,116 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     expect(inboundMdns?.present).toBe(false)
   })
 
-  it('treats Permission denied / Operation not permitted from listing as "assume ok"', async () => {
+  it('treats an intentionally open firewall as healthy without explicit exceptions', async () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) {
-        throw unavailableError('iptables v1.8.7: Permission denied (you must be root)')
-      }
+      if (cmd.includes('-S OUTPUT')) return OPEN_OUTPUT
       return ''
     })
 
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
     expect(result.ok).toBe(true)
-    expect(result.rules.every(r => r.present)).toBe(true)
+    expect(result.rules.every(rule => rule.present)).toBe(true)
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).includes(' -C '))).toBe(false)
+  })
+
+  it('recognises the legacy SLEEPYPOD-BLOCK jump as Local Only', async () => {
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.includes('-S OUTPUT')) {
+        return '-P OUTPUT ACCEPT\n-A OUTPUT -j SLEEPYPOD-BLOCK\n'
+      }
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables().ok).toBe(true)
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).includes(' -C '))).toBe(true)
+  })
+
+  it('does not mistake an ACCEPT policy with a narrow DROP for Local Only', async () => {
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.includes('-S OUTPUT')) {
+        return '-P OUTPUT ACCEPT\n-A OUTPUT -p tcp --dport 443 -j DROP\n'
+      }
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables().ok).toBe(true)
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).includes(' -C '))).toBe(false)
+  })
+
+  it('does not mistake an unconditional LOG target for Local Only', async () => {
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.includes('-S OUTPUT')) {
+        return '-P OUTPUT ACCEPT\n-A OUTPUT -j LOG\n'
+      }
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables().ok).toBe(true)
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).includes(' -C '))).toBe(false)
+  })
+
+  it('does not classify malformed successful mode output as intentionally open', async () => {
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.includes('-S OUTPUT')) return ''
+      if (cmd.includes(' -C ')) throw missingRule()
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables().ok).toBe(false)
+  })
+
+  it('reports installed-but-unreadable iptables as degraded and not repairable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -')) {
+        throw unavailableError('iptables v1.8.7: Permission denied (you must be root)')
+      }
+      return ''
+    })
+
+    const { checkAndRepairIptables } = await import('../iptablesCheck')
+    const result = checkAndRepairIptables()
+    expect(result.ok).toBe(false)
+    expect(result.repairable).toBe(false)
+    expect(result.rules.every(r => !r.present)).toBe(true)
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).startsWith('sudo '))).toBe(false)
+    warn.mockRestore()
+  })
+
+  it('does not treat a status-1 permission failure as a missing rule', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -')) {
+        throw unavailableError('iptables: Permission denied (you must be root)', 1)
+      }
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    const result = checkIptables()
+    expect(result.ok).toBe(false)
+    expect(result.repairable).toBe(false)
+    expect(result.rules.every(r => !r.present)).toBe(true)
+    warn.mockRestore()
   })
 
   it('treats unknown listing failures as rule-missing and warns', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) {
+      if (cmd.startsWith('/sbin/iptables -')) {
         // status=2 is "other error" in iptables: not in the assumed-ok list
         throw unavailableError('iptables: kernel module xt_udp not loaded', 2)
       }
@@ -224,10 +326,11 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     warnSpy.mockRestore()
   })
 
-  it('treats exit code 3 / 4 from listing as "assume ok"', async () => {
+  it('treats exit code 3 / 4 as inconclusive instead of healthy', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) {
+      if (cmd.startsWith('/sbin/iptables -')) {
         throw unavailableError('chain not found', 3)
       }
       return ''
@@ -235,22 +338,18 @@ describe('iptablesCheck — checkIptables rule classification', () => {
 
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
-    expect(result.ok).toBe(true)
+    expect(result.ok).toBe(false)
+    expect(result.repairable).toBe(false)
+    warn.mockRestore()
   })
 
   it.each([
-    [unavailableError('binary not found')],
-    [unavailableError('spawn ENOENT')],
-    [unavailableError('No such file')],
-    [unavailableError('Permission denied')],
-    [unavailableError('Operation not permitted')],
+    [Object.assign(unavailableError('spawn failed'), { code: 'ENOENT' })],
     [unavailableError('exit 127', 127)],
-    [unavailableError('exit 3', 3)],
-    [unavailableError('exit 4', 4)],
-  ])('independently recognises unavailable listing error %#', async (failure) => {
+  ])('independently recognises absent executable error %#', async (failure) => {
     setExecHandler(({ cmd, options }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) {
+      if (cmd.startsWith('/sbin/iptables -')) {
         expect(options).toEqual({ encoding: 'utf-8', timeout: 5000 })
         throw failure
       }
@@ -269,7 +368,7 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) throw failure
+      if (cmd.startsWith('/sbin/iptables -')) throw failure
       return ''
     })
 
@@ -295,8 +394,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
   it('returns repaired=[] when all rules are already present', async () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return 'udp dpt:5353 192.168.0.0/16'
-      if (cmd.includes('-L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
+      if (cmd.includes('-S OUTPUT')) return LOCAL_ONLY_OUTPUT
       return ''
     })
 
@@ -304,150 +402,180 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     const result = checkAndRepairIptables()
     expect(result.ok).toBe(true)
     expect(result.repaired).toEqual([])
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).startsWith('sudo '))).toBe(false)
   })
 
-  it('repairs missing rules and persists via iptables-save', async () => {
+  it('re-applies and verifies the root-owned Local Only policy', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const repaired: string[] = []
-    let savedRules = false
+    let policyReapplied = false
 
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      // Missing: LAN access; rest present
-      if (cmd.startsWith('/sbin/iptables -L INPUT')) return 'udp dpt:5353' // omits 192.168.0.0/16
-      if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
-      // Repair invocation
-      if (cmd.includes('-A INPUT -s 192.168.0.0/16')) {
-        repaired.push(cmd)
+      if (cmd.startsWith('/sbin/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd === 'sudo -n /usr/local/bin/sp-update --internet-access block') {
+        policyReapplied = true
         return ''
       }
-      // Persist
-      if (cmd.startsWith('/sbin/iptables-save')) {
-        savedRules = true
-        return ''
+      if (!policyReapplied && cmd.startsWith('/sbin/iptables -C INPUT -s 192.168.0.0/16')) {
+        throw missingRule()
       }
       return ''
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
     const result = checkAndRepairIptables()
+
+    expect(result.ok).toBe(true)
     expect(result.repaired).toEqual(['LAN access (192.168.0.0/16)'])
-    expect(repaired.length).toBe(1)
-    expect(savedRules).toBe(true)
-    expect(logSpy).toHaveBeenCalled()
-    const messages = logSpy.mock.calls.map(c => String(c[0]))
-    expect(messages.some(m => m.includes('Repaired missing rule'))).toBe(true)
-    expect(messages.some(m => m.includes('Saved 1 repaired rules'))).toBe(true)
     expect(execSyncMock).toHaveBeenCalledWith(
-      '/sbin/iptables -A INPUT -s 192.168.0.0/16 -j ACCEPT',
-      { encoding: 'utf-8', timeout: 5000 },
+      'sudo -n /usr/local/bin/sp-update --internet-access block',
+      { encoding: 'utf-8', timeout: 30_000 },
     )
-    expect(execSyncMock).toHaveBeenCalledWith(
-      '/sbin/iptables-save > /etc/iptables/rules.v4',
-      { encoding: 'utf-8', timeout: 5000 },
+    expect(logSpy).toHaveBeenCalledWith(
+      '[iptables] Repaired Local Only policy: LAN access (192.168.0.0/16)',
     )
     logSpy.mockRestore()
   })
 
-  it('logs an error and continues when a repair invocation fails', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L INPUT')) return ''
-      if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return ''
-      // Every repair fails
-      if (cmd.includes('-I OUTPUT') || cmd.includes('-I INPUT') || cmd.includes('-A INPUT')) {
-        throw unavailableError('iptables: not permitted', 4)
-      }
-      // No persist call expected since repaired list is empty
-      return ''
-    })
-
-    const { checkAndRepairIptables } = await import('../iptablesCheck')
-    const result = checkAndRepairIptables()
-    expect(result.repaired).toEqual([])
-    expect(errSpy).toHaveBeenCalled()
-    const errMsgs = errSpy.mock.calls.map(c => String(c[0]))
-    expect(errMsgs.some(m => m.includes('Failed to repair rule'))).toBe(true)
-
-    // No "Saved N repaired rules" log when nothing was repaired
-    const logMsgs = logSpy.mock.calls.map(c => String(c[0]))
-    expect(logMsgs.some(m => m.includes('Saved'))).toBe(false)
-
-    logSpy.mockRestore()
-    errSpy.mockRestore()
-  })
-
-  it('warns when persisting via iptables-save fails after a successful repair', async () => {
+  it('does not mutate the firewall after an ambiguous status-1 inspection failure', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L INPUT')) return 'udp dpt:5353' // missing LAN
-      if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
-      if (cmd.includes('-A INPUT -s 192.168.0.0/16')) return ''
-      if (cmd.startsWith('/sbin/iptables-save')) {
-        throw unavailableError('No such file or directory: /etc/iptables/rules.v4')
-      }
+      if (cmd.startsWith('/sbin/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd.includes(' -C ')) throw unavailableError('iptables exited unsuccessfully', 1)
       return ''
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
     const result = checkAndRepairIptables()
-    expect(result.repaired).toEqual(['LAN access (192.168.0.0/16)'])
-    const warnMsgs = warnSpy.mock.calls.map(c => String(c[0]))
-    expect(warnMsgs.some(m => m.includes('Failed to persist rules'))).toBe(true)
 
-    logSpy.mockRestore()
+    expect(result.ok).toBe(false)
+    expect(result.repairable).toBe(false)
+    expect(execSyncMock.mock.calls.some(call => String(call[0]).startsWith('sudo '))).toBe(false)
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[iptables] Skipping automatic repair because firewall inspection was inconclusive',
+    )
     warnSpy.mockRestore()
   })
 
-  it('derives iptables-save path from the resolved iptables path', async () => {
+  it('repairs an open IPv6 egress path when Local Only is active', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    let saveCmd = ''
+    let policyReapplied = false
 
     setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) throw unavailableError('not found', 1)
-      if (cmd.startsWith('test -x ')) {
-        if (cmd.includes('/usr/sbin/iptables')) return ''
-        throw unavailableError('not found', 1)
-      }
-      if (cmd.startsWith('/usr/sbin/iptables -L INPUT')) return ''
-      if (cmd.startsWith('/usr/sbin/iptables -L OUTPUT')) return ''
-      // Repairs succeed
-      if (cmd.includes('-I ') || cmd.includes('-A ')) return ''
-      if (cmd.includes('iptables-save')) {
-        saveCmd = cmd
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd === 'sudo -n /usr/local/bin/sp-update --internet-access block') {
+        policyReapplied = true
         return ''
+      }
+      if (!policyReapplied && cmd === '/sbin/ip6tables -C OUTPUT -j DROP') {
+        throw missingRule()
       }
       return ''
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
     const result = checkAndRepairIptables()
-    expect(result.repaired.length).toBeGreaterThan(0)
-    expect(saveCmd.startsWith('/usr/sbin/iptables-save > /etc/iptables/rules.v4')).toBe(true)
+
+    expect(result.ok).toBe(true)
+    expect(result.repaired).toEqual(['IPv6 WAN block'])
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'sudo -n /usr/local/bin/sp-update --internet-access block',
+      { encoding: 'utf-8', timeout: 30_000 },
+    )
     logSpy.mockRestore()
   })
 
-  it('replaces only the final iptables path component when deriving iptables-save', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const commands: string[] = []
+  it('checks the same multicast-scoped mDNS rule installed by the helper', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let policyReapplied = false
     setExecHandler(({ cmd }) => {
-      commands.push(cmd)
-      if (cmd.includes(' -L INPUT')) return 'udp dpt:5353'
-      if (cmd.includes(' -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd === 'sudo -n /usr/local/bin/sp-update --internet-access block') {
+        policyReapplied = true
+        return ''
+      }
+      if (!policyReapplied
+        && cmd.startsWith('/sbin/iptables -C OUTPUT -p udp -d 224.0.0.251/32 --sport 5353')) {
+        throw missingRule()
+      }
+      return ''
+    })
+
+    const { checkAndRepairIptables } = await import('../iptablesCheck')
+    const result = checkAndRepairIptables()
+
+    expect(result.repaired).toEqual(['mDNS outbound source (UDP 5353)'])
+    expect(execSyncMock.mock.calls.some(call => String(call[0])
+      .startsWith('/sbin/iptables -C OUTPUT -p udp -d 224.0.0.251/32 --sport 5353 -j ACCEPT'))).toBe(true)
+    logSpy.mockRestore()
+  })
+
+  it('returns the original degraded state when the root helper fails', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failure = unavailableError('sudo: a password is required', 1)
+
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd.includes(' -C ')) throw missingRule()
+      if (cmd.startsWith('sudo -n ')) throw failure
+      return ''
+    })
+
+    const { checkAndRepairIptables } = await import('../iptablesCheck')
+    const result = checkAndRepairIptables()
+    expect(result.ok).toBe(false)
+    expect(result.repaired).toEqual([])
+    expect(errSpy).toHaveBeenCalledWith('[iptables] Failed to repair Local Only policy:', failure)
+    errSpy.mockRestore()
+  })
+
+  it('reports degraded when post-helper verification still finds a missing rule', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd.startsWith('/sbin/iptables -C INPUT -s 192.168.0.0/16')) throw missingRule()
+      return ''
+    })
+
+    const { checkAndRepairIptables } = await import('../iptablesCheck')
+    const result = checkAndRepairIptables()
+    expect(result.ok).toBe(false)
+    expect(result.repaired).toEqual([])
+
+    logSpy.mockRestore()
+  })
+
+  it('uses the resolved override for checks but the fixed privileged dispatcher for repair', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let policyReapplied = false
+
+    setExecHandler(({ cmd }) => {
+      if (cmd.startsWith('/opt/iptables-tools/iptables -S OUTPUT')) return LOCAL_ONLY_OUTPUT
+      if (cmd === 'sudo -n /usr/local/bin/sp-update --internet-access block') {
+        policyReapplied = true
+        return ''
+      }
+      if (!policyReapplied && cmd.startsWith('/opt/iptables-tools/iptables -C INPUT -s 192.168.0.0/16')) {
+        throw missingRule()
+      }
       return ''
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
     const status = checkAndRepairIptables('/opt/iptables-tools/iptables')
 
+    expect(status.ok).toBe(true)
     expect(status.repaired).toEqual(['LAN access (192.168.0.0/16)'])
-    expect(commands).toContain('/opt/iptables-tools/iptables-save > /etc/iptables/rules.v4')
-    log.mockRestore()
+    expect(execSyncMock.mock.calls.some(call => String(call[0])
+      .startsWith('/opt/iptables-tools/iptables -C '))).toBe(true)
+    expect(execSyncMock.mock.calls.some(call => String(call[0])
+      .startsWith('sudo -n /usr/local/bin/sp-update'))).toBe(true)
+    logSpy.mockRestore()
   })
 })

@@ -11,7 +11,10 @@ let snapshot: LatestCapSenseSnapshot | null = null
 const drizzle = vi.hoisted(() => ({
   and: vi.fn((...conditions: unknown[]) => ({ op: 'and', conditions })),
   eq: vi.fn((left: unknown, right: unknown) => ({ op: 'eq', left, right })),
+  gt: vi.fn((left: unknown, right: unknown) => ({ op: 'gt', left, right })),
   gte: vi.fn((left: unknown, right: unknown) => ({ op: 'gte', left, right })),
+  isNull: vi.fn((column: unknown) => ({ op: 'isNull', column })),
+  or: vi.fn((...conditions: unknown[]) => ({ op: 'or', conditions })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings: [...strings], values })),
 }))
 
@@ -46,6 +49,7 @@ vi.mock('@/src/db/biometrics-schema', () => ({
     sensorType: {},
     status: {},
     parameters: {},
+    qualityScore: {},
   },
 }))
 
@@ -102,6 +106,9 @@ describe('getOccupancy', () => {
     movementAll.mockClear()
     calAll.mockClear()
     drizzle.gte.mockClear()
+    drizzle.gt.mockClear()
+    drizzle.isNull.mockClear()
+    drizzle.or.mockClear()
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -116,6 +123,7 @@ describe('getOccupancy', () => {
     expect(r.movement.active).toBe(false)
     expect(r.level.active).toBe(false)
     expect(r.available).toBe(true)
+    expect(drizzle.gt).toHaveBeenCalledWith(expect.anything(), 0)
   })
 
   it('returns occupied=true via the movement signal alone', () => {
