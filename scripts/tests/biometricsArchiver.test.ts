@@ -25,6 +25,7 @@ let stubBinDir: string
 let archiverBin: string
 let recoveryTool: string
 let mountUnit: string
+let frankSh: string
 let callsFile: string
 let unmountedFile: string
 
@@ -53,7 +54,7 @@ function runHelper(extraEnv: Partial<NodeJS.ProcessEnv> = {}) {
       BIOMETRICS_LOCAL_BIN_DIR: localBinDir,
       BIOMETRICS_TMPFS_DIR: tmpfsDir,
       BIOMETRICS_ARCHIVER_BIN: archiverBin,
-      BIOMETRICS_FRANK_SH: join(root, 'frank.sh'),
+      BIOMETRICS_FRANK_SH: frankSh,
       CALLS_FILE: callsFile,
       UNMOUNTED_FILE: unmountedFile,
       FAIL_RESTART: '0',
@@ -98,6 +99,7 @@ beforeEach(() => {
   archiverBin = join(localBinDir, 'sleepypod-biometrics-archiver')
   recoveryTool = join(localBinDir, 'sleepypod-biometrics-pruner')
   mountUnit = join(systemdDir, 'persistent-biometrics.mount')
+  frankSh = join(root, 'frank.sh')
   writeExecutable(archiverBin, ['#!/usr/bin/env bash', 'exit 0'])
   writeExecutable(recoveryTool, ['#!/usr/bin/env bash', 'exit 0'])
   writeFileSync(mountUnit, '[Mount]')
@@ -192,6 +194,28 @@ describe('remove_biometrics_archiver_for_nats', () => {
     expect(calls()).toContain('stop persistent-biometrics.mount')
     expect(existsSync(raw)).toBe(false)
     expect(existsSync(join(archiveDir, '00001.RAW.gz'))).toBe(true)
+    expect(existsSync(mountUnit)).toBe(false)
+    expect(existsSync(recoveryTool)).toBe(false)
+  })
+
+  it('restores a patched frank.sh and restarts frank.service', () => {
+    const original = '#!/usr/bin/env bash\ncd /persistent && exec ./frankenfirmware\n'
+    writeFileSync(frankSh, '#!/usr/bin/env bash\ncd /persistent/biometrics && exec ./frankenfirmware\n')
+    writeFileSync(`${frankSh}.bak-pre-tmpfs-1`, original)
+
+    const result = runHelper()
+
+    expect(result.status).toBe(0)
+    expect(readFileSync(frankSh, 'utf8')).toBe(original)
+    expect(calls()).toContain('restart frank.service')
+  })
+
+  it('succeeds when cleanup is invoked again after artifacts are gone', () => {
+    const first = runHelper()
+    const second = runHelper()
+
+    expect(first.status).toBe(0)
+    expect(second.status).toBe(0)
     expect(existsSync(mountUnit)).toBe(false)
     expect(existsSync(recoveryTool)).toBe(false)
   })

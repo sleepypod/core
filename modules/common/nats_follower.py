@@ -218,6 +218,10 @@ class NatsFollower:
             return None
         if not isinstance(record, dict):
             self._decode_failures += 1
+            if not self._decode_logged:
+                self._decode_logged = True
+                log.warning("Dropping non-dict NATS payload (decoded type=%s)",
+                            type(record).__name__)
             return None
         self._msg_count += 1
         self._offer(record)
@@ -284,8 +288,10 @@ class NatsFollower:
                 loop.close()
             except Exception:
                 pass
-            # Unblock read_records() so the module exits and systemd re-probes.
-            self._offer(_FATAL)
+            # Only unrecoverable failures should wake read_records() with a
+            # fatal sentinel. Graceful shutdown exits through its event.
+            if not self._shutdown.is_set():
+                self._offer(_FATAL)
 
     async def _connect_and_run(self, nats) -> None:
         async def on_error(e):

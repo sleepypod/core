@@ -64,7 +64,7 @@ The frank.sh-shim assumption holds on a shrinking slice of the fleet. As of 2026
 | Mid (~2025 → April 2026) | **absent** | absent | absent | frankenfirmware writes `/persistent/*.RAW` directly (shim removed in firmware ~year ago) | No shim to patch; mount + archive still useful as a cold-storage rotation against the live `/persistent/*.RAW` files |
 | New (April 2026+, e.g. `rat_version ca35aafa`) | absent | active | present | frankenfirmware → NATS JetStream stream `raw` (subject `raw.>`); no `.RAW` files written | Tmpfs + cd-patch workflow inapplicable; skip install entirely. Biometrics ingestion needs a NATS consumer (sleepypod-core-54) — out of scope for this ADR |
 
-`scripts/lib/biometrics-archiver-helpers` gates on `systemctl is-active nats-server.service && [ -d /persistent/jetstream ]` (the new-firmware signal) and returns early on that path only. Mid-era pods continue on the existing warn-and-continue path that has carried them for ~year. See PR #594.
+`scripts/lib/biometrics-archiver-helpers` gates on the presence of `nats-server.service` via `systemctl cat` and `[ -d /persistent/jetstream ]` (the new-firmware signal) and returns early on that path only. Mid-era pods continue on the existing warn-and-continue path that has carried them for ~year. See PR #594.
 
 ## Refs
 

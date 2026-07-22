@@ -10,11 +10,14 @@ existing parsers — exactly the contract the .RAW path already relies on.
 """
 
 import base64
+import logging
 import socket
 import struct
+import sys
 import threading
 import time
 
+import cbor2
 import pytest
 
 from common.nats_follower import (
@@ -155,6 +158,21 @@ class TestDecodePath:
         assert f._decode_failures == 1
         assert f._queue.qsize() == 0
 
+    def test_non_dict_payload_is_logged_once_and_counted(self, caplog):
+        f = self._follower()
+        payload = cbor2.dumps(["not", "a", "record"])
+
+        with caplog.at_level(logging.WARNING, logger="common.nats_follower"):
+            assert f._handle_payload(payload) is None
+            assert f._handle_payload(payload) is None
+
+        diagnostics = [record.message for record in caplog.records
+                       if "non-dict NATS payload" in record.message]
+        assert diagnostics == [
+            "Dropping non-dict NATS payload (decoded type=list)"]
+        assert f._decode_failures == 2
+        assert f._queue.qsize() == 0
+
     def test_capsense_fixture_has_pod3_channel_dialect(self):
         rec = self._follower()._handle_payload(_payload("raw.sens.capsense"))
         for side in ("left", "right"):
@@ -228,6 +246,38 @@ class TestReadRecords:
         f._started = True
         ev.set()
         assert list(f.read_records()) == []
+
+    @pytest.mark.parametrize("shutting_down, expected_queue_size", [
+        (True, 0),
+        (False, 1),
+    ])
+    def test_run_signals_fatal_only_for_unrecoverable_exit(
+            self, monkeypatch, shutting_down, expected_queue_size):
+        class FakeLoop:
+            def __init__(self):
+                self.closed = False
+
+            def run_until_complete(self, coroutine):
+                coroutine.close()
+
+            def close(self):
+                self.closed = True
+
+        ev = threading.Event()
+        if shutting_down:
+            ev.set()
+        f = NatsFollower(ev)
+        loop = FakeLoop()
+        monkeypatch.setitem(sys.modules, "nats", object())
+        monkeypatch.setattr("common.nats_follower.asyncio.new_event_loop",
+                            lambda: loop)
+        monkeypatch.setattr("common.nats_follower.asyncio.set_event_loop",
+                            lambda _loop: None)
+
+        f._run()
+
+        assert loop.closed is True
+        assert f._queue.qsize() == expected_queue_size
 
 
 # ---------------------------------------------------------------------------

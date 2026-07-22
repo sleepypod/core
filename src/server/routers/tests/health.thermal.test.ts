@@ -76,7 +76,7 @@ const { healthRouter } = await import('@/src/server/routers/health')
 const caller = healthRouter.createCaller({})
 
 const FRESH = new Date(Date.now() - 30_000) // 30s old → not stale
-const POWERED_BEFORE_FRESH = new Date(FRESH.getTime() - 60_000)
+const POWERED_BEFORE_FRESH = new Date(FRESH.getTime() - 120_000)
 
 beforeEach(() => {
   guardMock.shouldBlock.mockReset().mockReturnValue(false)
@@ -151,6 +151,27 @@ describe('health.thermal verdicts', () => {
       [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
     ]
     rows.flow = [{ timestamp: new Date(now - 30_000), leftPumpRpm: 0, rightPumpRpm: 0, leftFlowrateCd: 0, rightFlowrateCd: 0 }]
+
+    const left = (await caller.thermal({})).sides[0]
+
+    expect(left.verdict).toBe('starting')
+    expect(left.note).toBe('waiting for the first pump reading after power-on')
+  })
+
+  it('keeps startup grace side-specific when only the other pump is moving', async () => {
+    const now = new Date('2026-07-20T01:00:00Z').getTime()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 74, isAlarmVibrating: false, poweredOnAt: new Date(now - 10_000) }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{
+      timestamp: new Date(now - 5_000),
+      leftPumpRpm: 0,
+      rightPumpRpm: 2000,
+      leftFlowrateCd: 0,
+      rightFlowrateCd: 2600,
+    }]
 
     const left = (await caller.thermal({})).sides[0]
 

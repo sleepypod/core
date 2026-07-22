@@ -468,8 +468,12 @@ export const healthRouter = router({
         const powerAgeSec = poweredOnAtMs == null
           ? null
           : Math.max(0, Math.round((now - poweredOnAtMs) / 1000))
-        const hasPostPowerReading = flowTimestampMs != null
-          && (poweredOnAtMs == null || flowTimestampMs > poweredOnAtMs)
+        // A flow row has one shared timestamp for both pumps. Treat it as a
+        // post-power reading for this side only once this pump reports motion;
+        // the other side's running pump must not end this side's startup grace.
+        const sideFlowTimestampMs = pumpRpm != null && pumpRpm > 0 ? flowTimestampMs : null
+        const hasPostPowerReading = sideFlowTimestampMs != null
+          && (poweredOnAtMs == null || sideFlowTimestampMs > poweredOnAtMs)
         const awaitingPostPowerReading = poweredOnAtMs != null
           && powerAgeSec != null
           && powerAgeSec <= POST_POWER_FLOW_GRACE_SEC
