@@ -143,11 +143,41 @@ remains stall-driven; cross-check is for sensor sanity.
 
 ### Control intervention
 
-`pumpStallGuard.shouldBlock(side)` is consulted at three points:
+`pumpStallGuard.shouldBlock(side)` is consulted at every energizing
+ingress (inventory refreshed 2026-07-22; the original text listed only
+the first three device-router/keepalive points and went stale as new
+write surfaces landed — treat this list as the authoritative one and
+update it when adding an ingress):
 
-- `device.setTemperature` (`src/server/routers/device.ts:232`),
-- `device.setPower` when raising a side,
-- `temperatureKeepalive` re-issue path (`src/services/temperatureKeepalive.ts`).
+- **tRPC/REST** (via `assertPumpStallNotBlocked`, `src/server/helpers.ts`):
+  - `device.setTemperature` — pre-debounce ingress + re-check inside the
+    side lock (`src/server/routers/device.ts`),
+  - `device.setPower` when raising a side — ingress + in-lock re-check,
+  - `device.execute` — raw opcodes that energize a side, ingress +
+    in-lock re-check (left-before-right when SET_TEMP spans both sides),
+  - `runOnce.start` — before cancelling the prior session + re-check at
+    the write (`src/server/routers/runOnce.ts`).
+- **Scheduler** (`src/scheduler/jobManager.ts`, all inside the side lock):
+  recurring temperature jobs, recurring power-on jobs, away-return power
+  restore, and run-once set-point jobs skip a blocked side; alarm jobs
+  suppress the temperature push but still fire vibration (waking the
+  user is the alarm's purpose and moves no water).
+- **HomeKit** (`src/homekit/accessories/sideController.ts`):
+  `setSidePowerOn` — ingress + in-lock re-check; `setTargetTemperature`
+  — in-lock gate on the firmware push (staging a target on an off side
+  is not gated). Denials throw `NOT_ALLOWED_IN_CURRENT_STATE` so iOS
+  shows a refusal, not a bridge outage.
+- **Gestures** (`src/hardware/gestureActionHandler.ts`, in-lock):
+  temperature gestures and power-raising alarm-inactive toggles.
+- **Automation engine** (`src/automation/engine.ts`, injected via
+  `src/automation/instance.ts`): energizing rule actions are skipped on
+  a blocked side.
+- **Keepalive** (`src/services/temperatureKeepalive.ts`): the re-issue
+  path skips blocked sides.
+
+Read-only exposure (not a gate): the `health` router reports
+`guardBlocked` per side. Power-off writes are never gated anywhere — off
+is the safe direction and the guard's own trip path uses it.
 
 On a confirmed stall, the guard:
 
