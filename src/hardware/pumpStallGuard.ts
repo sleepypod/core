@@ -137,8 +137,11 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     return
   }
 
-  if (!input.expectedActive) {
+  if (!input.expectedActive && !state.blocked) {
     // Side commanded off — RPM of zero is the correct state, don't penalize.
+    // A blocked side falls through: trip() mirrors isPowered=false, so
+    // expectedActive is false for every post-trip frame and returning here
+    // would make the cutoff retry and recovery tracking below unreachable.
     state.consecutiveLowFrames = 0
     return
   }

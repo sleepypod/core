@@ -489,6 +489,40 @@ describe('pumpStallGuard', () => {
     warn.mockRestore()
   })
 
+  it('retries the cutoff on post-trip frames where the DB mirror makes expectedActive false', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    setPower.mockRejectedValueOnce(new Error('hw down'))
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(__test__.getState().left.cutoffPending).toBe(true)
+
+    // trip() mirrors isPowered=false, so every real post-trip frame arrives
+    // with expectedActive=false — the pending cutoff must still be retried.
+    await onFrame({ side: 'left', rpm: 100, expectedActive: false, preStallTarget: null, preStallDurationSeconds: null })
+    expect(setPower).toHaveBeenLastCalledWith('left', false)
+    expect(__test__.getState().left.cutoffPending).toBe(false)
+    err.mockRestore()
+  })
+
+  it('auto-recovers from post-trip frames where expectedActive is false', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(shouldBlock('left')).toBe(true)
+
+    // Same DB-mirror reality as above: recovery tracking must keep running
+    // on expectedActive=false frames or auto-recovery is unreachable.
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: false, preStallTarget: null, preStallDurationSeconds: null })
+    expect(shouldBlock('left')).toBe(true)
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: false, preStallTarget: null, preStallDurationSeconds: null })
+    expect(shouldBlock('left')).toBe(false)
+    expect(setPower).toHaveBeenLastCalledWith('left', true, 78)
+    expect(setTemperature).toHaveBeenCalledWith('left', 78, 28800)
+  })
+
   it('does not retry the cutoff when the trip-time power-off succeeded', async () => {
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
