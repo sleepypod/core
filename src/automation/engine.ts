@@ -62,7 +62,8 @@ export interface AutomationEngineDeps {
   getHardware: () => HardwareWriter
   withSideLock: <T>(side: Side, fn: () => Promise<T>) => Promise<T>
   /** Pump stall guard gate — energizing writes are skipped while it blocks
-   * the side (ADR 0022: a tripped side stays parked until acknowledged). */
+   * the side (ADR 0022: a tripped side stays parked until acknowledgment
+   * or successful opt-in auto-recovery). */
   pumpStallShouldBlock: (side: Side) => boolean
   broadcast: (side: Side, overlay: Record<string, unknown>) => void
   markMutated: (side: Side) => void
@@ -163,6 +164,10 @@ export class AutomationEngine {
    */
   registerManualOverride(side: Side): void {
     this.manualOverrideUntil[side] = this.deps.now() + AUTOMATION_MANUAL_OVERRIDE_MS
+    // The user changed the setpoint out from under us — the anti-thrash
+    // baseline no longer reflects hardware, and keeping it would suppress
+    // the first re-assertion after the override window expires.
+    this.lastAsserted[side] = undefined
   }
 
   /** Flip the global kill-switch. `false` suspends all evaluation immediately. */

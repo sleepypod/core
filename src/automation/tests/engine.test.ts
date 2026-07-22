@@ -722,6 +722,27 @@ describe('AutomationEngine — branch coverage corners', () => {
     expect(h.runs[0].outcome).toBe('fired')
   })
 
+  it('re-asserts after a manual override expires even when the target is unchanged', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(1)
+
+    // The user dials the side directly: the override suspends autopilot AND
+    // invalidates the anti-thrash baseline — hardware is no longer at 72.
+    h.engine.registerManualOverride('left')
+    h.advance(60_000)
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(1) // suspended inside the override window
+
+    h.advance(2 * 60 * 60_000) // override expired
+    await h.engine.tick()
+    // With a stale baseline this would be anti-thrash-skipped (|72−72| < 0.5)
+    // and the user's manual setpoint would silently stick forever.
+    expect(h.hwCalls).toHaveLength(2)
+    expect(h.hwCalls[1]).toMatchObject({ op: 'temp', side: 'left', temp: 72 })
+  })
+
   it('reports clamped when an anti-thrash re-assertion is still out of band', async () => {
     const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: sig('target'), clamp: { min: 60, max: 75 } }] })])
     h.setSignal('target', 200) // clamps to 75, sent + clamped
@@ -777,6 +798,59 @@ describe('AutomationEngine — pump stall guard gate', () => {
     await h.engine.tick()
     expect(h.hwCalls[0]).toMatchObject({ op: 'power', side: 'left', on: false })
     expect(h.runs[0].outcome).toBe('fired')
+  })
+
+  it('blocks a write whose trip lands while it is queued on the side lock', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const runs: { id: number, outcome: RunOutcome, detail: RunDetail }[] = []
+      const hwCalls: HwCall[] = []
+      let blocked = false
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const deps: AutomationEngineDeps = {
+        signals: { read: () => ({}) },
+        now: () => 1_700_000_000_000,
+        clock: () => ({ nowMinutes: 0, dayOfWeek: 'monday' }),
+        getHardware: () => ({
+          connect: async () => {},
+          setTemperature: async (side, temp, duration) => { hwCalls.push({ op: 'temp', side, temp, duration }) },
+          setPower: async (side, on, temp) => { hwCalls.push({ op: 'power', side, on, temp }) },
+        }),
+        // Simulates queueing behind another writer: the locked callback only
+        // runs once release() fires — the trip lands during that wait, so
+        // only a check inside the lock body can observe it.
+        withSideLock: async (_side, fn) => {
+          await gate
+          return fn()
+        },
+        pumpStallShouldBlock: () => blocked,
+        broadcast: () => {},
+        markMutated: () => {},
+        loadRules: async () => [rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })],
+        recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
+        disableRule: async () => {},
+        hasActiveRunOnceSession: async () => false,
+        notify: () => {},
+      }
+      const engine = new AutomationEngine(deps)
+      await engine.reload()
+      const tick = engine.tick()
+      // Let the tick reach withSideLock and park on the gate while healthy.
+      await new Promise((resolve) => {
+        setImmediate(resolve)
+      })
+      blocked = true
+      release()
+      await tick
+      expect(hwCalls).toHaveLength(0)
+      expect(runs[0].detail.actions?.[0]?.skipped).toBe('pump-stall')
+    }
+    finally {
+      warn.mockRestore()
+    }
   })
 
   it('only skips the blocked side when a rule fans out to both', async () => {
