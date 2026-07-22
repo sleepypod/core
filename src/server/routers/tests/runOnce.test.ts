@@ -27,6 +27,10 @@ const broadcastMock = vi.hoisted(() => ({
   broadcastMutationStatus: vi.fn(),
 }))
 
+const pumpStallMock = vi.hoisted(() => ({
+  shouldBlock: vi.fn<(side: 'left' | 'right') => boolean>(() => false),
+}))
+
 const timeUtilsMock = vi.hoisted(() => ({
   // Default: wake time 1 hour from now
   timeToDate: vi.fn((_t: string, _tz: string, now: Date) => new Date(now.getTime() + 60 * 60 * 1000)),
@@ -83,7 +87,23 @@ const dbMock = vi.hoisted(() => {
 })
 
 vi.mock('@/src/scheduler', () => schedulerMock)
-vi.mock('@/src/server/helpers', () => helpersMock)
+vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
+vi.mock('@/src/server/helpers', async () => {
+  const { TRPCError } = await import('@trpc/server')
+  return {
+    ...helpersMock,
+    // Mirrors the real helper but consults this file's pumpStallMock so
+    // tests keep driving the guard through shouldBlock.
+    assertPumpStallNotBlocked: (side: 'left' | 'right') => {
+      if (pumpStallMock.shouldBlock(side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+    },
+  }
+})
 vi.mock('@/src/streaming/broadcastMutationStatus', () => broadcastMock)
 vi.mock('@/src/scheduler/timeUtils', () => timeUtilsMock)
 vi.mock('@/src/db', () => ({
@@ -106,6 +126,7 @@ beforeEach(() => {
   helpersMock.withHardwareClient.mockImplementation(async (cb: (client: unknown) => Promise<unknown>) => cb(helpersMock.client))
   helpersMock.client.setPower.mockReset().mockResolvedValue(undefined)
   broadcastMock.broadcastMutationStatus.mockReset()
+  pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
   timeUtilsMock.timeToDate.mockReset().mockImplementation(
     (_t, _tz, now) => new Date(now.getTime() + 60 * 60 * 1000),
   )
@@ -124,6 +145,45 @@ beforeEach(() => {
 })
 
 describe('runOnce.start', () => {
+  it('throws PRECONDITION_FAILED before touching sessions while pump stall guard blocks the side', async () => {
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toThrow(/Pump stall protection active/)
+
+    // Fails fast: the existing session is not cancelled, no hardware write,
+    // no session row inserted.
+    expect(dbMock.transactionFn).not.toHaveBeenCalled()
+    expect(jobManagerMock.cancelRunOnceSession).not.toHaveBeenCalled()
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(dbMock.insert).not.toHaveBeenCalled()
+  })
+
+  it('re-checks the guard at the hardware write and blocks a trip that lands mid-flight', async () => {
+    // Entry check passes, then the guard trips during the awaited session
+    // cancellation / settings lookup — the write-time re-check must stop the
+    // power-on and the session insert.
+    pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Pump stall protection active — re-enable the side first',
+    })
+
+    expect(dbMock.transactionFn).toHaveBeenCalled()
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(broadcastMock.broadcastMutationStatus).not.toHaveBeenCalled()
+    expect(dbMock.insert).not.toHaveBeenCalled()
+    expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+  })
+
   it('powers on the side with the first set-point temperature, persists session, and schedules the rest', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const expiresAt = new Date(Date.now() + 3_600_123)
@@ -206,6 +266,10 @@ describe('runOnce.start', () => {
     // Hardware must NOT be touched if validation rejects
     expect(helpersMock.withHardwareClient).not.toHaveBeenCalled()
     expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+    // And the existing active session must survive a rejected start —
+    // validation runs before any cancellation.
+    expect(dbMock.transactionFn).not.toHaveBeenCalled()
+    expect(jobManagerMock.cancelRunOnceSession).not.toHaveBeenCalled()
   })
 
   it('accepts a session exactly 14 hours long', async () => {
@@ -234,7 +298,7 @@ describe('runOnce.start', () => {
     })
   })
 
-  it('throws when DB insert returns no row (e.g. constraint violation)', async () => {
+  it('throws when DB insert returns no row and powers the side back off', async () => {
     dbMock.setNextInsertId(null)
 
     await expect(caller.start({
@@ -242,6 +306,52 @@ describe('runOnce.start', () => {
       setPoints: [{ time: '23:00', temperature: 70 }],
       wakeTime: '07:00',
     })).rejects.toThrow(/Failed to create run-once session/)
+
+    // The side was already energized — a failed insert must not leave it
+    // running with no session to drive or expire it.
+    expect(helpersMock.client.setPower).toHaveBeenNthCalledWith(1, 'left', true, 70)
+    expect(helpersMock.client.setPower).toHaveBeenNthCalledWith(2, 'left', false)
+    expect(broadcastMock.broadcastMutationStatus).toHaveBeenLastCalledWith('left', { targetLevel: 0 })
+  })
+
+  it('powers the side back off when the session insert throws', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    dbMock.insert.mockImplementationOnce(() => {
+      throw new Error('db down')
+    })
+
+    await expect(caller.start({
+      side: 'right',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to create run-once session',
+    })
+
+    expect(helpersMock.client.setPower).toHaveBeenNthCalledWith(2, 'right', false)
+    expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('surfaces the insert failure even when the compensating power-off also fails', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    dbMock.setNextInsertId(null)
+    helpersMock.client.setPower
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('off failed'))
+
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toThrow(/Failed to create run-once session/)
+
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to power off left after run-once start failure'),
+      expect.anything(),
+    )
+    errSpy.mockRestore()
   })
 
   it('cancels any prior active session for the same side before starting', async () => {

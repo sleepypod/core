@@ -5,13 +5,13 @@ import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { bedTemp, waterLevelReadings } from '@/src/db/biometrics-schema'
 import { eq, desc } from 'drizzle-orm'
-import { withHardwareClient } from '@/src/server/helpers'
+import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
-import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
+import type { Side } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { withSideLock } from '@/src/hardware/sideLock'
@@ -44,6 +44,37 @@ const COMMAND_MAP: Record<string, HardwareCommand> = {
   DEVICE_STATUS: HardwareCommand.DEVICE_STATUS,
   ALARM_CLEAR: HardwareCommand.ALARM_CLEAR,
   ALARM_SOLO: HardwareCommand.ALARM_SOLO,
+}
+
+// Opcodes that energize a side's pump loop. Raw execution of these respects
+// the pump-stall guard (ADR 0022) whether spelled by name or as a numeric
+// opcode — probing unknown opcodes stays unguarded, but a known energizing
+// write is a known energizing write. Keyed by parsed opcode so '09' can't
+// slip past as a string alias.
+const ENERGIZING_OPCODES: Record<number, Side[]> = {
+  1: ['left', 'right'], // SET_TEMP — legacy, arg format undocumented, so no per-side/off exemption
+  9: ['left'], // LEFT_TEMP_DURATION
+  10: ['right'], // RIGHT_TEMP_DURATION
+  11: ['left'], // TEMP_LEVEL_LEFT
+  12: ['right'], // TEMP_LEVEL_RIGHT
+}
+
+/**
+ * Sides a raw command would energize, or [] when it is free to pass. A
+ * level/duration write of exactly 0 is the power-off direction and is never
+ * blocked (ADR 0022) — firmware atoi() semantics make parseFloat the right
+ * reading of the arg.
+ */
+function energizedSides(opcode: string, args: string | undefined): Side[] {
+  const code = Number.parseInt(opcode, 10)
+  const sides = ENERGIZING_OPCODES[code]
+  if (!sides) {
+    return []
+  }
+  if (code !== Number(HardwareCommand.SET_TEMP) && args !== undefined && Number.parseFloat(args) === 0) {
+    return []
+  }
+  return sides
 }
 
 // ---------------------------------------------------------------------------
@@ -322,12 +353,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
-      if (pumpStallShouldBlock(input.side)) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Pump stall protection active — re-enable the side first',
-        })
-      }
+      assertPumpStallNotBlocked(input.side)
 
       // Server-side debounce: collapse rapid dial-drag calls into one hardware command.
       // Cancel any pending hardware call for this side BEFORE the first await
@@ -338,7 +364,6 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
-      registerManualOverride(input.side)
       markSideMutated(input.side)
 
       // The DB is updated optimistically on every call for responsive UI.
@@ -372,6 +397,13 @@ export const deviceRouter = router({
           pendingTemps.delete(input.side)
           try {
             await withSideLock(input.side, () => withHardwareClient(async (client) => {
+              // Re-check inside the lock: the guard can trip during the
+              // debounce window or while queued behind the side lock, and a
+              // stale queued command must not re-energize a parked side.
+              // The manual override registers only after the check passes —
+              // a rejected command must not suspend autopilot.
+              assertPumpStallNotBlocked(input.side)
+              registerManualOverride(input.side)
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
             }, 'Failed to set temperature'))
@@ -382,6 +414,28 @@ export const deviceRouter = router({
             resolve({ success: true })
           }
           catch (error) {
+            // A late guard rejection means the optimistic isPowered=true
+            // write above contradicts the parked hardware — restore the
+            // off-state mirror trip() wrote so the UI doesn't keep showing
+            // an energized target until the next status poll.
+            if (error instanceof TRPCError && error.code === 'PRECONDITION_FAILED') {
+              try {
+                markSideMutated(input.side)
+                await db
+                  .update(deviceState)
+                  .set({
+                    isPowered: false,
+                    poweredOnAt: null,
+                    targetTemperature: null,
+                    lastUpdated: new Date(),
+                  })
+                  .where(eq(deviceState.side, input.side))
+              }
+              catch (dbError) {
+                console.error('Failed to restore parked state after guard rejection:', dbError)
+              }
+              broadcastMutationStatus(input.side, { targetLevel: 0 })
+            }
             reject(error)
           }
         }, TEMP_DEBOUNCE_MS)
@@ -434,15 +488,19 @@ export const deviceRouter = router({
     .mutation(async ({ input }) => {
       // Only block when raising power. Powering off is always allowed —
       // it's the safe direction, and the guard's own trip uses this path.
-      if (input.powered && pumpStallShouldBlock(input.side)) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Pump stall protection active — re-enable the side first',
-        })
+      if (input.powered) {
+        assertPumpStallNotBlocked(input.side)
       }
 
-      registerManualOverride(input.side)
       return withSideLock(input.side, () => withHardwareClient(async (client) => {
+        // Re-check inside the lock (see setTemperature): a trip while this
+        // command queued must not let it re-energize the side. The manual
+        // override registers only after the check passes — a rejected
+        // command must not suspend autopilot.
+        if (input.powered) {
+          assertPumpStallNotBlocked(input.side)
+        }
+        registerManualOverride(input.side)
         await client.setPower(input.side, input.powered, input.temperature)
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
@@ -709,9 +767,14 @@ export const deviceRouter = router({
   // POWER USER / DEBUG FEATURE — Raw Hardware Command Execution
   //
   // This endpoint is a passthrough to the hardware command protocol. It does
-  // NOT validate arguments, does NOT apply safety/debounce mechanisms, and
-  // does NOT sync state to the database. Misuse can damage hardware or cause
-  // unexpected behavior. Use at your own risk.
+  // NOT validate arguments, does NOT apply debounce, and does NOT sync state
+  // to the database. Misuse can damage hardware or cause unexpected behavior.
+  // Use at your own risk.
+  //
+  // One exception: energizing opcodes respect the pump-stall guard
+  // (ADR 0022). A tripped side must be re-enabled via pumpAlerts.acknowledge
+  // before raw temp/duration writes go through — the guard exists precisely
+  // to stop a faulted pump from being re-engaged, debug tooling included.
   //
   // See ADR 0016 for rationale and consequences.
   // ---------------------------------------------------------------------------
@@ -719,8 +782,10 @@ export const deviceRouter = router({
   /**
    * Execute a raw hardware command by name.
    *
-   * Bypasses all high-level validation, debounce, and DB sync. The command
-   * name is allowlisted but the args string is passed through verbatim.
+   * Bypasses high-level validation, debounce, and DB sync. The command name
+   * is allowlisted but the args string is passed through verbatim. Energizing
+   * opcodes are gated on the pump-stall guard and serialized through the
+   * side lock like every other energizing ingress.
    */
   execute: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/device/execute', protect: false, tags: ['Device'] } })
@@ -746,29 +811,60 @@ export const deviceRouter = router({
         ? COMMAND_MAP[input.command]
         : input.command
 
-      try {
-        // Route through the singleton client so the call binds to the same
-        // `dacTransport` module instance that owns the live transport.
-        // Importing sendCommand directly into the route handler can hit a
-        // separate Next.js bundle whose `transport` is undefined — that
-        // path stomps on dac.sock by spinning up a second listener.
-        const client = getSharedHardwareClient() as unknown as { sendRaw(command: string, args?: string): Promise<string> }
-        const response = await client.sendRaw(opcode, input.args)
+      const guardedSides = energizedSides(opcode, input.args)
+      for (const side of guardedSides) {
+        assertPumpStallNotBlocked(side)
+      }
 
-        return {
-          command: input.command,
-          opcode,
-          args: input.args ?? null,
-          response,
-          disclaimer: 'WARNING: Raw command execution. No validation, no safety checks. Misuse can damage hardware or cause unexpected behavior. Use at your own risk. This feature is unsupported.',
+      const send = async () => {
+        try {
+          // Route through the singleton client so the call binds to the same
+          // `dacTransport` module instance that owns the live transport.
+          // Importing sendCommand directly into the route handler can hit a
+          // separate Next.js bundle whose `transport` is undefined — that
+          // path stomps on dac.sock by spinning up a second listener.
+          const client = getSharedHardwareClient() as unknown as { sendRaw(command: string, args?: string): Promise<string> }
+          const response = await client.sendRaw(opcode, input.args)
+
+          return {
+            command: input.command,
+            opcode,
+            args: input.args ?? null,
+            response,
+            disclaimer: 'WARNING: Raw command execution. No validation, minimal safety checks (pump-stall guard only). Misuse can damage hardware or cause unexpected behavior. Use at your own risk. This feature is unsupported.',
+          }
+        }
+        catch (error) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: `Failed to execute raw command: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            cause: error,
+          })
         }
       }
-      catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: `Failed to execute raw command: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          cause: error,
+
+      if (guardedSides.length === 0) {
+        return send()
+      }
+
+      // Energizing raw writes queue on the side lock like every other
+      // ingress, with the guard re-checked inside so a trip landing while
+      // queued can't re-energize the side.
+      if (guardedSides.length === 1) {
+        const side = guardedSides[0]
+        return withSideLock(side, async () => {
+          assertPumpStallNotBlocked(side)
+          return send()
         })
       }
+
+      // SET_TEMP spans both sides — the only nested lock acquisition in the
+      // codebase. Keep the left-before-right order if another ever appears.
+      return withSideLock('left', () => withSideLock('right', async () => {
+        for (const side of guardedSides) {
+          assertPumpStallNotBlocked(side)
+        }
+        return send()
+      }))
     }),
 })
