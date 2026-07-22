@@ -5,8 +5,7 @@ import { db } from '@/src/db'
 import { runOnceSessions, deviceSettings } from '@/src/db/schema'
 import { eq, and, gt } from 'drizzle-orm'
 import { getJobManager } from '@/src/scheduler'
-import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
-import { withHardwareClient } from '@/src/server/helpers'
+import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/helpers'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { fahrenheitToLevel } from '@/src/hardware/types'
 import { sideSchema, temperatureSchema, timeStringSchema } from '@/src/server/validation-schemas'
@@ -16,6 +15,24 @@ const setPointSchema = z.object({
   time: timeStringSchema,
   temperature: temperatureSchema,
 })
+
+/**
+ * Best-effort power-off after a start that already energized the side fails.
+ * Powering off is the safe direction and is never guard-blocked; failures
+ * here only log — the caller surfaces the original error.
+ */
+async function powerOffAfterFailedStart(side: 'left' | 'right'): Promise<void> {
+  try {
+    await withHardwareClient(async (client) => {
+      await client.setPower(side, false)
+      return { success: true }
+    }, 'Failed to power off after run-once start failure')
+    broadcastMutationStatus(side, { targetLevel: 0 })
+  }
+  catch (err) {
+    console.error(`Failed to power off ${side} after run-once start failure:`, err)
+  }
+}
 
 export const runOnceRouter = router({
   /**
@@ -38,14 +55,25 @@ export const runOnceRouter = router({
     .mutation(async ({ input }) => {
       // Fail fast before cancelling the existing session — starting a session
       // powers the side on, which a tripped pump stall guard must block.
-      if (pumpStallShouldBlock(input.side)) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Pump stall protection active — re-enable the side first',
-        })
-      }
+      assertPumpStallNotBlocked(input.side)
 
       const jobManager = await getJobManager()
+
+      // Compute expiry from wake time and validate it BEFORE cancelling the
+      // existing session — a rejected start must leave that session running.
+      const [settings] = await db.select().from(deviceSettings).limit(1)
+      const timezone = settings?.timezone ?? 'America/Los_Angeles'
+      const now = new Date()
+      const expiresAt = timeToDate(input.wakeTime, timezone, now)
+
+      // Reject sessions longer than 14 hours (guards against wake time = now wrapping to 24h)
+      const MAX_SESSION_MS = 14 * 60 * 60 * 1000
+      if (expiresAt.getTime() - now.getTime() > MAX_SESSION_MS) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Session too long (${Math.round((expiresAt.getTime() - now.getTime()) / 3600000)}h). Wake time may have already passed.`,
+        })
+      }
 
       // Cancel any existing active session for this side
       // (synchronous transaction — better-sqlite3 is sync)
@@ -68,21 +96,6 @@ export const runOnceRouter = router({
       })
       jobManager.cancelRunOnceSession(input.side)
 
-      // Compute expiry from wake time
-      const [settings] = await db.select().from(deviceSettings).limit(1)
-      const timezone = settings?.timezone ?? 'America/Los_Angeles'
-      const now = new Date()
-      const expiresAt = timeToDate(input.wakeTime, timezone, now)
-
-      // Reject sessions longer than 14 hours (guards against wake time = now wrapping to 24h)
-      const MAX_SESSION_MS = 14 * 60 * 60 * 1000
-      if (expiresAt.getTime() - now.getTime() > MAX_SESSION_MS) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Session too long (${Math.round((expiresAt.getTime() - now.getTime()) / 3600000)}h). Wake time may have already passed.`,
-        })
-      }
-
       // Power on + fire first set point immediately (before inserting session,
       // so a hardware failure doesn't leave an orphaned active session)
       const firstTemp = input.setPoints[0].temperature
@@ -90,12 +103,7 @@ export const runOnceRouter = router({
         // Re-check at the write: the guard can trip during the awaited session
         // cancellation and settings lookup above, and a stale start must not
         // re-energize a parked side.
-        if (pumpStallShouldBlock(input.side)) {
-          throw new TRPCError({
-            code: 'PRECONDITION_FAILED',
-            message: 'Pump stall protection active — re-enable the side first',
-          })
-        }
+        assertPumpStallNotBlocked(input.side)
         await client.setPower(input.side, true, firstTemp)
         return { success: true }
       }, 'Failed to start run-once session')
@@ -105,19 +113,34 @@ export const runOnceRouter = router({
         targetLevel: fahrenheitToLevel(firstTemp),
       })
 
-      // Create session in DB (after hardware success)
-      const [session] = await db
-        .insert(runOnceSessions)
-        .values({
-          side: input.side,
-          setPoints: JSON.stringify(input.setPoints),
-          wakeTime: input.wakeTime,
-          expiresAt,
-          status: 'active',
+      // Create session in DB (after hardware success). If the insert fails,
+      // power the side back off — otherwise it stays energized with no
+      // session to run the curve or expire it.
+      let session: { id: number } | undefined
+      try {
+        [session] = await db
+          .insert(runOnceSessions)
+          .values({
+            side: input.side,
+            setPoints: JSON.stringify(input.setPoints),
+            wakeTime: input.wakeTime,
+            expiresAt,
+            status: 'active',
+          })
+          .returning({ id: runOnceSessions.id })
+      }
+      catch (insertError) {
+        console.error('Run-once session insert failed, powering side back off:', insertError)
+        await powerOffAfterFailedStart(input.side)
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to create run-once session',
+          cause: insertError,
         })
-        .returning({ id: runOnceSessions.id })
+      }
 
       if (!session) {
+        await powerOffAfterFailedStart(input.side)
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create run-once session' })
       }
 
