@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react'
 import { normalizeFrame } from '@/src/streaming/normalizeFrame'
+import type { SideStatus } from '@/src/hardware/types'
 
 // ---------------------------------------------------------------------------
 // Sensor frame types (matching piezoStream.ts server output)
@@ -116,24 +117,15 @@ export interface GestureFrame {
   tapType: string
 }
 
-/** Device status frame — pushed by dacMonitor every 2s. */
+/** Device status frame — pushed on DacMonitor's adaptive poll (1s active /
+ * 2s default / 5s idle) and immediately after mutations via
+ * broadcastMutationStatus. Sides carry the full SideStatus payload the
+ * producers spread (nullable temps when a side is off/neutral). */
 export interface DeviceStatusFrame {
   type: 'deviceStatus'
   ts: number
-  leftSide: {
-    currentTemperature: number
-    targetTemperature: number
-    currentLevel: number
-    targetLevel: number
-    isAlarmVibrating: boolean
-  }
-  rightSide: {
-    currentTemperature: number
-    targetTemperature: number
-    currentLevel: number
-    targetLevel: number
-    isAlarmVibrating: boolean
-  }
+  leftSide: SideStatus & { isAlarmVibrating: boolean }
+  rightSide: SideStatus & { isAlarmVibrating: boolean }
   waterLevel: 'low' | 'ok'
   isPriming: boolean
   primeCompletedNotification?: { timestamp: number }
