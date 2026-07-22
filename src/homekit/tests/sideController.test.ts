@@ -433,10 +433,15 @@ describe('sideController', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       shouldBlock.mockReturnValue(true)
 
+      const pending = setSidePowerOn(monitor(offStatus), 'left')
+      // Latch must stay untouched even while the refused call is still
+      // pending — a transient ON here would leak through a concurrent onGet.
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+
       // hapStatus -70412 (NOT_ALLOWED_IN_CURRENT_STATE): hap-nodejs surfaces
       // it to iOS as a refusal instead of mapping a plain Error to the
       // generic SERVICE_COMMUNICATION_FAILURE (-70402) bridge-outage status.
-      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toMatchObject({
+      await expect(pending).rejects.toMatchObject({
         message: 'Pump stall protection active — re-enable the side first',
         hapStatus: -70412,
       })
@@ -449,17 +454,65 @@ describe('sideController', () => {
 
     it('setSidePowerOn re-checks inside the lock and rolls back intent when a trip lands while queued', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      // Guard is clear at the ingress assert, then trips before the locked
-      // section runs — the in-lock re-check must still refuse the write.
-      shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+      let release: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        release = resolve
+      }))
+      await Promise.resolve()
 
-      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('Pump stall protection active')
+      try {
+        // The call passes the ingress assert while the guard is healthy and
+        // queues behind the held lock — the trip below lands strictly after,
+        // so only the in-lock re-check can refuse the write.
+        const pending = setSidePowerOn(monitor(offStatus), 'left')
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0)
+        })
+        shouldBlock.mockReturnValue(true)
+        release()
+        await holder
+        await expect(pending).rejects.toThrow('Pump stall protection active')
 
-      expect(setPower).not.toHaveBeenCalled()
-      expect(warn).toHaveBeenCalledWith('[homekit] refused setPower(left, true) — pump stall protection active on left')
-      // Intent rolled back — iOS Home reads OFF again instead of a phantom ON.
-      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
-      warn.mockRestore()
+        expect(setPower).not.toHaveBeenCalled()
+        expect(registerManualOverride).not.toHaveBeenCalled()
+        expect(warn).toHaveBeenCalledWith('[homekit] refused setPower(left, true) — pump stall protection active on left')
+        // Intent rolled back — iOS Home reads OFF again instead of a phantom ON.
+        expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+      }
+      finally {
+        release()
+        warn.mockRestore()
+      }
+    })
+
+    it('setTargetTemperature refuses when a trip lands while the push is queued on the side lock', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let release: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        release = resolve
+      }))
+      await Promise.resolve()
+
+      try {
+        // Side is powered and the guard is healthy at submission; the trip
+        // lands while the push waits on the lock. The in-lock gate is the
+        // only check on this path and must refuse the write.
+        const pending = setTargetTemperature(monitor(onStatus), 'left', 68)
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0)
+        })
+        shouldBlock.mockReturnValue(true)
+        release()
+        await holder
+        await expect(pending).rejects.toThrow('Pump stall protection active')
+
+        expect(setTemperature).not.toHaveBeenCalled()
+        expect(registerManualOverride).not.toHaveBeenCalled()
+      }
+      finally {
+        release()
+        warn.mockRestore()
+      }
     })
 
     it('concurrent power-ons rejected in-lock cannot resurrect the ON intent latch', async () => {
@@ -502,6 +555,9 @@ describe('sideController', () => {
 
       await expect(setTargetTemperature(monitor(onStatus), 'left', 68)).rejects.toThrow('Pump stall protection active')
       expect(setTemperature).not.toHaveBeenCalled()
+      // A rejected write must not suspend autopilot (same ordering contract
+      // as the REST path: the override registers only after the gate passes).
+      expect(registerManualOverride).not.toHaveBeenCalled()
       expect(getStagedTargetF(monitor(onStatus), 'left')).toBe(68)
       warn.mockRestore()
     })
@@ -538,11 +594,13 @@ describe('sideController', () => {
     })
 
     it('consults the guard for the specific side being written', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       shouldBlock.mockImplementation((side: 'left' | 'right') => side === 'left')
 
       await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('Pump stall protection active')
       await setSidePowerOn(monitor(offStatus), 'right')
       expect(setPower).toHaveBeenCalledWith('right', true, expect.any(Number))
+      warn.mockRestore()
     })
   })
 })
