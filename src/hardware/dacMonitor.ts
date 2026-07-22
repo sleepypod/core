@@ -39,7 +39,8 @@ const IDLE_POLL_INTERVAL_MS = 5000
 const TAP_TYPES = ['doubleTap', 'tripleTap', 'quadTap'] as const
 
 /**
- * Polls the hardware daemon at a fixed interval and emits typed events.
+ * Polls the hardware daemon on an adaptive interval — 1s active / 2s default /
+ * 5s idle, switched via setActive/setIdle — and emits typed events.
  * No database access. No action execution. Observe and publish only.
  *
  * Lifecycle: stopped → starting → running ↔ degraded

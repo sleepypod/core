@@ -17,8 +17,9 @@ const HTTP_IDLE_POLL_MS = 60_000
 /**
  * Device status via WebSocket with tRPC HTTP fallback.
  *
- * Primary: `deviceStatus` frames pushed by dacMonitor every ~2s over the
- * existing piezoStream WebSocket (port 3001).
+ * Primary: `deviceStatus` frames pushed by dacMonitor on its adaptive poll
+ * (1–5s), plus immediate mutation overlays, over the existing piezoStream
+ * WebSocket (port 3001).
  *
  * Fallback: `device.getStatus` tRPC query for initial load and whenever the
  * WS stream is disconnected or has stopped delivering frames. (An earlier

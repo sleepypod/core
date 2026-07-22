@@ -296,3 +296,60 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     }))
   })
 })
+
+describe('DeviceStateSync — stall guard coalescing', () => {
+  let sync: DeviceStateSync
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve()
+  }
+
+  const leftInputs = () => vi.mocked(onFrame).mock.calls
+    .map(([input]) => input)
+    .filter(input => input.side === 'left')
+
+  beforeEach(() => {
+    resetSchema()
+    _resetMutationStamps()
+    vi.mocked(onFrame).mockClear()
+    vi.mocked(onFrame).mockResolvedValue(undefined)
+    sync = new DeviceStateSync()
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+  })
+
+  it('keeps only the newest frame while a guard pass is in flight', async () => {
+    let resolveFirst!: () => void
+    vi.mocked(onFrame).mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveFirst = resolve
+      }),
+    )
+
+    sync.recordFlowData(frame({ rpm: 100 }))
+    await flush()
+    expect(leftInputs()).toHaveLength(1)
+    expect(leftInputs()[0]?.rpm).toBe(100)
+
+    // Two more frames land while the first pass awaits hardware — the
+    // intermediate one must be dropped, not queued.
+    sync.recordFlowData(frame({ rpm: 200 }))
+    sync.recordFlowData(frame({ rpm: 300 }))
+    await flush()
+    expect(leftInputs()).toHaveLength(1)
+
+    resolveFirst()
+    await flush()
+    expect(leftInputs()).toHaveLength(2)
+    expect(leftInputs()[1]?.rpm).toBe(300)
+  })
+
+  it('releases the in-flight slot so later frames run immediately', async () => {
+    sync.recordFlowData(frame({ rpm: 100 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 200 }))
+    await flush()
+    expect(leftInputs()).toHaveLength(2)
+    expect(leftInputs()[1]?.rpm).toBe(200)
+  })
+})

@@ -102,6 +102,8 @@ export class DeviceStateSync {
   private lastSideStatus: Record<Side, { targetLevel: number, heatingDuration: number, at: number } | null> = { left: null, right: null }
   private isPriming = false
   private primeEndedAt = 0
+  private stallGuardInFlight: Record<Side, boolean> = { left: false, right: false }
+  private stallGuardPending: Record<Side, { rpm: number, duty: number | null } | null> = { left: null, right: null }
 
   sync = async (status: DeviceStatus): Promise<void> => {
     const now = Date.now()
@@ -300,6 +302,38 @@ export class DeviceStateSync {
       && remaining >= -SESSION_END_STALE_S
   }
 
+  /**
+   * Feed the stall guard, coalesced to one in-flight call per side. A guard
+   * pass can hold the side lock for a full DAC timeout (cutoff / retry /
+   * recovery); frames keep arriving during that window, and running them
+   * concurrently would stack duplicate transitions on the sequential
+   * transport. Only the newest frame received while busy is kept.
+   */
+  private queueStallGuard(side: Side, rpm: number, duty: number | null): void {
+    if (this.stallGuardInFlight[side]) {
+      this.stallGuardPending[side] = { rpm, duty }
+      return
+    }
+    this.stallGuardInFlight[side] = true
+    void (async () => {
+      // runStallGuard catches internally today; finally guarantees the
+      // in-flight flag is released even if that ever changes — a leaked
+      // flag would silently stop feeding the guard for this side.
+      try {
+        await this.runStallGuard(side, rpm, duty)
+        let next = this.stallGuardPending[side]
+        while (next) {
+          this.stallGuardPending[side] = null
+          await this.runStallGuard(side, next.rpm, next.duty)
+          next = this.stallGuardPending[side]
+        }
+      }
+      finally {
+        this.stallGuardInFlight[side] = false
+      }
+    })()
+  }
+
   /** Look up the side's commanded state and feed the pump stall guard. */
   private async runStallGuard(side: Side, rpm: number, duty: number | null): Promise<void> {
     try {
@@ -348,8 +382,8 @@ export class DeviceStateSync {
     // Feed the per-side stall guard. Reads current device_state to derive
     // expectedActive — a side that's commanded off should not trip on
     // RPM = 0 since that is the correct value.
-    void this.runStallGuard('left', leftRpm, leftPump.duty)
-    void this.runStallGuard('right', rightRpm, rightPump.duty)
+    this.queueStallGuard('left', leftRpm, leftPump.duty)
+    this.queueStallGuard('right', rightRpm, rightPump.duty)
 
     // Pump running but flowrate missing — possible sensor fault
     if (leftRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(leftFlowCd)) {
