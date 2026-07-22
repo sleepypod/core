@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TRPCError } from '@trpc/server'
 import type * as DrizzleOrmModule from 'drizzle-orm'
+import { pumpAlerts } from '@/src/db/biometrics-schema'
 
 const sql = vi.hoisted(() => ({
   and: vi.fn((...conditions: unknown[]) => ({ kind: 'and', conditions })),
@@ -18,12 +19,20 @@ const dbState = vi.hoisted(() => ({
   queue: [] as unknown[],
   rejection: undefined as unknown,
   shouldReject: false,
+  exhausted: false,
   pop(): unknown {
     if (dbState.shouldReject) {
       dbState.shouldReject = false
       return Promise.reject(dbState.rejection)
     }
-    return dbState.queue.shift() ?? []
+    if (dbState.queue.length === 0) {
+      // Loud on purpose: a silently-successful unexpected query hid real
+      // DB traffic behind tolerant catch blocks. Every test enqueues every
+      // expected result; the afterEach flag check catches swallowed throws.
+      dbState.exhausted = true
+      throw new Error('dbState queue exhausted — enqueue a result for every expected DB call')
+    }
+    return dbState.queue.shift()
   },
 }))
 
@@ -43,20 +52,23 @@ const dbMock = vi.hoisted(() => {
 
 const guard = vi.hoisted(() => ({
   acknowledge: vi.fn(),
+  rearm: vi.fn(),
 }))
 
 const notices = vi.hoisted(() => ({
   clearPumpStallNotice: vi.fn(),
+  getPumpStallNotice: vi.fn(),
 }))
 
 const device = vi.hoisted(() => ({
   setPower: vi.fn(),
   setTemperature: vi.fn(),
+  getStatus: vi.fn(),
   createCaller: vi.fn(),
 }))
 
 vi.mock('@/src/db', () => ({ biometricsDb: dbMock }))
-vi.mock('@/src/hardware/pumpStallGuard', () => ({ acknowledge: guard.acknowledge }))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({ acknowledge: guard.acknowledge, rearm: guard.rearm }))
 vi.mock('@/src/hardware/pumpStallNotification', () => notices)
 vi.mock('@/src/server/routers/app', () => ({
   appRouter: {
@@ -91,6 +103,7 @@ beforeEach(() => {
   dbState.queue.length = 0
   dbState.shouldReject = false
   dbState.rejection = undefined
+  dbState.exhausted = false
   dbMock.select.mockClear()
   dbMock.update.mockClear()
   for (const value of Object.values(dbMock.chain)) {
@@ -100,19 +113,27 @@ beforeEach(() => {
   }
   Object.values(sql).forEach(mock => mock.mockClear())
   guard.acknowledge.mockReset().mockReturnValue({ restore: null, alertId: null })
+  guard.rearm.mockReset()
   notices.clearPumpStallNotice.mockReset()
+  notices.getPumpStallNotice.mockReset().mockReturnValue(null)
   device.setPower.mockReset().mockResolvedValue({ success: true })
   device.setTemperature.mockReset().mockResolvedValue({ success: true })
+  device.getStatus.mockReset().mockResolvedValue({
+    leftSide: { targetLevel: 0 },
+    rightSide: { targetLevel: 0 },
+  })
   device.createCaller.mockReset().mockReturnValue({
     device: {
       setPower: device.setPower,
       setTemperature: device.setTemperature,
+      getStatus: device.getStatus,
     },
   })
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  expect(dbState.exhausted, 'a DB call ran without an enqueued result').toBe(false)
 })
 
 describe('pumpAlerts OpenAPI contract', () => {
@@ -227,13 +248,17 @@ describe('pumpAlerts.getCapabilities', () => {
 })
 
 describe('pumpAlerts.acknowledgeAndRestore', () => {
-  it('acknowledges the guard without touching the DB when there is no alert snapshot', async () => {
+  it('acknowledges the guard without a restore or update when no snapshot and no orphan row exist', async () => {
+    dbState.queue.push([]) // orphan lookup finds nothing
+
     await expect(caller.acknowledgeAndRestore({ side: 'right' })).resolves.toEqual({
       success: true,
       restoredTarget: null,
       restoredDuration: null,
+      orphanRecovered: false,
     })
     expect(guard.acknowledge).toHaveBeenCalledWith('right')
+    expect(dbMock.select).toHaveBeenCalledOnce()
     expect(dbMock.update).not.toHaveBeenCalled()
     expect(device.createCaller).not.toHaveBeenCalled()
   })
@@ -247,6 +272,7 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       success: true,
       restoredTarget: 71,
       restoredDuration: 5400,
+      orphanRecovered: false,
     })
     expect(dbMock.chain.set).toHaveBeenCalledWith({ acknowledgedAt: expect.any(Date) })
     expect(sql.eq).toHaveBeenCalledWith(expect.anything(), 42)
@@ -254,6 +280,8 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
     expect(device.setPower).toHaveBeenCalledWith({ side: 'left', powered: true, temperature: 71 })
     expect(device.setTemperature).toHaveBeenCalledWith({ side: 'left', temperature: 71, duration: 5400 })
     expect(device.setPower.mock.invocationCallOrder[0]).toBeLessThan(device.setTemperature.mock.invocationCallOrder[0] ?? 0)
+    // acknowledgedAt is stamped only after both restore calls succeed.
+    expect(dbMock.update.mock.invocationCallOrder[0]).toBeGreaterThan(device.setTemperature.mock.invocationCallOrder[0] ?? Infinity)
   })
 
   it('logs an acknowledgement stamp failure but still restores the side', async () => {
@@ -269,7 +297,7 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
     expect(device.setPower).toHaveBeenCalledOnce()
   })
 
-  it('wraps an Error from the device restore path', async () => {
+  it('wraps an Error from the device restore path and re-arms without trip metadata', async () => {
     guard.acknowledge.mockReturnValue({
       restore: { targetTemperature: 69, durationSeconds: 1200 },
       alertId: null,
@@ -281,6 +309,15 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       message: 'Failed to restore side: hardware offline',
     })
     expect(device.setTemperature).not.toHaveBeenCalled()
+    // Power-on itself failed, so there is nothing to park again.
+    expect(device.setPower).toHaveBeenCalledTimes(1)
+    expect(guard.rearm).toHaveBeenCalledWith('left', {
+      alertId: null,
+      restore: { targetTemperature: 69, durationSeconds: 1200 },
+      trippedAt: undefined,
+      rpm: undefined,
+    })
+    expect(dbMock.update).not.toHaveBeenCalled()
   })
 
   it('uses Unknown error for a non-Error device restore rejection', async () => {
@@ -293,6 +330,266 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
     await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
       code: 'INTERNAL_SERVER_ERROR',
       message: 'Failed to restore side: Unknown error',
+    })
+  })
+
+  it('does not stamp and re-arms with the prior notice metadata when the restore fails', async () => {
+    notices.getPumpStallNotice.mockReturnValue({
+      alertId: 7,
+      trippedAt: 1_720_000_000,
+      rpm: 55,
+      restore: { targetTemperature: 69, durationSeconds: 1200 },
+    })
+    guard.acknowledge.mockReturnValue({
+      restore: { targetTemperature: 69, durationSeconds: 1200 },
+      alertId: 7,
+    })
+    device.setPower.mockRejectedValueOnce(new Error('hardware offline'))
+
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+    })
+    expect(notices.getPumpStallNotice).toHaveBeenCalledWith('left')
+    expect(guard.rearm).toHaveBeenCalledWith('left', {
+      alertId: 7,
+      restore: { targetTemperature: 69, durationSeconds: 1200 },
+      trippedAt: 1_720_000_000_000,
+      rpm: 55,
+    })
+    expect(dbMock.update).not.toHaveBeenCalled()
+  })
+
+  it('parks the side again when the setpoint fails after a successful power-on', async () => {
+    guard.acknowledge.mockReturnValue({
+      restore: { targetTemperature: 71, durationSeconds: 5400 },
+      alertId: 42,
+    })
+    device.setTemperature.mockRejectedValueOnce(new Error('setpoint refused'))
+
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to restore side: setpoint refused',
+    })
+    expect(device.setPower).toHaveBeenCalledTimes(2)
+    expect(device.setPower).toHaveBeenLastCalledWith({ side: 'left', powered: false })
+    expect(guard.rearm).toHaveBeenCalledWith('left', expect.objectContaining({ alertId: 42 }))
+    expect(dbMock.update).not.toHaveBeenCalled()
+  })
+
+  it('still re-arms and warns when the post-failure park also fails', async () => {
+    guard.acknowledge.mockReturnValue({
+      restore: { targetTemperature: 71, durationSeconds: 5400 },
+      alertId: 42,
+    })
+    device.setTemperature.mockRejectedValueOnce(new Error('setpoint refused'))
+    device.setPower
+      .mockResolvedValueOnce({ success: true })
+      .mockRejectedValueOnce(new Error('park failed'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to restore side: setpoint refused',
+    })
+    expect(warn).toHaveBeenCalledWith('[pumpAlerts] failed to park side after partial restore:', 'park failed')
+    expect(guard.rearm).toHaveBeenCalledWith('left', expect.objectContaining({ alertId: 42 }))
+    expect(dbMock.update).not.toHaveBeenCalled()
+  })
+
+  describe('restart-orphaned alerts', () => {
+    it('stamps the newest active power_off row for the side when the guard lost its alert id', async () => {
+      // Simulated restart: the guard's in-memory state is empty, but the
+      // trip's row is still active in the DB.
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      dbState.queue.push([{ id: 38, restoreTargetTemperature: null, restoreDurationSeconds: null }]) // orphan lookup
+      dbState.queue.push([]) // acknowledgedAt update
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toEqual({
+        success: true,
+        restoredTarget: null,
+        restoredDuration: null,
+        orphanRecovered: true,
+      })
+      expect(dbMock.select).toHaveBeenCalledOnce()
+      expect(sql.and).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'eq' }),
+        expect.objectContaining({ kind: 'eq', right: 'power_off' }),
+        expect.objectContaining({ kind: 'isNull' }),
+        expect.objectContaining({ kind: 'isNull' }),
+      )
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.side, 'left')
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.action, 'power_off')
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+      expect(sql.desc).toHaveBeenCalledWith(pumpAlerts.timestamp)
+      expect(sql.desc).toHaveBeenCalledWith(pumpAlerts.id)
+      expect(dbMock.chain.orderBy).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'desc', column: pumpAlerts.timestamp }),
+        expect.objectContaining({ kind: 'desc', column: pumpAlerts.id }),
+      )
+      expect(dbMock.chain.limit).toHaveBeenCalledWith(1)
+      expect(dbMock.chain.set).toHaveBeenCalledWith({ acknowledgedAt: expect.any(Date) })
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 38)
+      // This row persisted no restore columns, so there is nothing to
+      // replay — the side stays off.
+      expect(device.createCaller).not.toHaveBeenCalled()
+    })
+
+    it('replays the persisted restore columns when the side is still parked', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      dbState.queue.push([{ id: 44, restoreTargetTemperature: 74, restoreDurationSeconds: 7200 }]) // orphan lookup
+      dbState.queue.push([]) // acknowledgedAt update
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toEqual({
+        success: true,
+        restoredTarget: 74,
+        restoredDuration: 7200,
+        orphanRecovered: true,
+      })
+      expect(device.getStatus).toHaveBeenCalledWith({})
+      expect(device.setPower).toHaveBeenCalledWith({ side: 'left', powered: true, temperature: 74 })
+      expect(device.setTemperature).toHaveBeenCalledWith({ side: 'left', temperature: 74, duration: 7200 })
+      expect(device.getStatus.mock.invocationCallOrder[0]).toBeLessThan(device.setPower.mock.invocationCallOrder[0] ?? 0)
+    })
+
+    it('skips the replay when the side is already powered', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      device.getStatus.mockResolvedValue({ leftSide: { targetLevel: 0 }, rightSide: { targetLevel: 2 } })
+      dbState.queue.push([{ id: 45, restoreTargetTemperature: 74, restoreDurationSeconds: 7200 }]) // orphan lookup
+      dbState.queue.push([]) // acknowledgedAt update
+
+      await expect(caller.acknowledgeAndRestore({ side: 'right' })).resolves.toEqual({
+        success: true,
+        restoredTarget: null,
+        restoredDuration: null,
+        orphanRecovered: true,
+      })
+      expect(device.setPower).not.toHaveBeenCalled()
+      expect(device.setTemperature).not.toHaveBeenCalled()
+    })
+
+    it('skips the replay and warns when the pre-replay status read fails', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      device.getStatus.mockRejectedValueOnce(new Error('status offline'))
+      dbState.queue.push([{ id: 46, restoreTargetTemperature: 74, restoreDurationSeconds: 7200 }]) // orphan lookup
+      dbState.queue.push([]) // acknowledgedAt update
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toEqual({
+        success: true,
+        restoredTarget: null,
+        restoredDuration: null,
+        orphanRecovered: true,
+      })
+      expect(warn).toHaveBeenCalledWith('[pumpAlerts] status read before orphan replay failed — leaving the side off:', 'status offline')
+      expect(device.setPower).not.toHaveBeenCalled()
+    })
+
+    it('skips the orphan lookup entirely when the guard still holds the alert id', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: 42 })
+      dbState.queue.push([]) // acknowledgedAt update
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toMatchObject({ success: true })
+      expect(dbMock.select).not.toHaveBeenCalled()
+      // The stamp re-checks activity so a concurrently dismissed row is
+      // not also acknowledged (TOCTOU with dismissAlert).
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 42)
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+      expect(sql.and).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'eq' }),
+        expect.objectContaining({ kind: 'isNull' }),
+        expect.objectContaining({ kind: 'isNull' }),
+      )
+    })
+
+    it('skips the fallback when the guard kept its restore snapshot (failed insert, not a restart)', async () => {
+      // A failed alert INSERT at trip time leaves alertId null but keeps
+      // the snapshot — the current trip has no row of its own, so falling
+      // back would stamp an older, unrelated incident.
+      guard.acknowledge.mockReturnValue({
+        restore: { targetTemperature: 70, durationSeconds: 1800 },
+        alertId: null,
+      })
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toEqual({
+        success: true,
+        restoredTarget: 70,
+        restoredDuration: 1800,
+        orphanRecovered: false,
+      })
+      expect(dbMock.select).not.toHaveBeenCalled()
+      expect(dbMock.update).not.toHaveBeenCalled()
+      expect(device.setPower).toHaveBeenCalledWith({ side: 'left', powered: true, temperature: 70 })
+    })
+
+    it('propagates a failed orphan lookup as INTERNAL_SERVER_ERROR', async () => {
+      // The lookup is the mutation's only route to the stranded row —
+      // swallowing the failure would report success with nothing stamped.
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      rejectNext(new Error('sqlite locked'))
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to look up orphaned pump alert: sqlite locked',
+      })
+      expect(dbMock.update).not.toHaveBeenCalled()
+    })
+
+    it('uses Unknown error for a non-Error orphan lookup failure', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      rejectNext('sqlite unavailable')
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to look up orphaned pump alert: Unknown error',
+      })
+      expect(dbMock.update).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('identity correlation', () => {
+    it('stamps exactly the client-provided alert id, constrained to this side\'s active power_off row', async () => {
+      // Post-restart the guard is empty, but the client saw the banner and
+      // still knows which incident it is acknowledging.
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+      dbState.queue.push([]) // acknowledgedAt update
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left', alertId: 38 })).resolves.toEqual({
+        success: true,
+        restoredTarget: null,
+        restoredDuration: null,
+        orphanRecovered: false,
+      })
+      // No newest-row heuristic when the client names the row.
+      expect(dbMock.select).not.toHaveBeenCalled()
+      expect(dbMock.chain.set).toHaveBeenCalledWith({ acknowledgedAt: expect.any(Date) })
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 38)
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.side, 'left')
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.action, 'power_off')
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
+      expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+      expect(sql.and).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'eq' }),
+        expect.objectContaining({ kind: 'isNull' }),
+        expect.objectContaining({ kind: 'isNull' }),
+        expect.objectContaining({ kind: 'eq' }),
+        expect.objectContaining({ kind: 'eq', right: 'power_off' }),
+      )
+    })
+
+    it('prefers the client-provided id over the guard-held one', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: 42 })
+      dbState.queue.push([]) // acknowledgedAt update
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left', alertId: 38 })).resolves.toMatchObject({ success: true })
+      expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 38)
+      expect(sql.eq).not.toHaveBeenCalledWith(pumpAlerts.id, 42)
+    })
+
+    it('rejects a non-positive alert id', async () => {
+      await expect(caller.acknowledgeAndRestore({ side: 'left', alertId: 0 })).rejects.toThrow()
+      expect(dbMock.update).not.toHaveBeenCalled()
     })
   })
 })
@@ -312,8 +609,45 @@ describe('pumpAlerts dismissals', () => {
 
     await expect(caller.dismissNotification({ side: 'right' })).resolves.toEqual({ success: true })
     expect(dbMock.chain.set).toHaveBeenCalledWith({ dismissedAt: expect.any(Date) })
-    expect(sql.eq).toHaveBeenCalledWith(expect.anything(), 12)
+    // Re-checks the row is not already dismissed (TOCTOU with dismissAlert).
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 12)
+    expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+    expect(sql.and).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'eq' }),
+      expect.objectContaining({ kind: 'isNull' }),
+    )
     expect(warn).toHaveBeenCalledWith('[pumpAlerts] failed to stamp dismissedAt:', 'write failed')
+  })
+
+  it('stamps the client-provided id with full identity constraints when the guard is empty', async () => {
+    // Post-restart dismissal: the guard lost the id but the client kept it.
+    guard.acknowledge.mockReturnValue({ restore: null, alertId: null })
+    dbState.queue.push([]) // dismissedAt update
+
+    await expect(caller.dismissNotification({ side: 'left', alertId: 31 })).resolves.toEqual({ success: true })
+    expect(dbMock.select).not.toHaveBeenCalled()
+    expect(dbMock.chain.set).toHaveBeenCalledWith({ dismissedAt: expect.any(Date) })
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 31)
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.side, 'left')
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.action, 'power_off')
+    expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
+    expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
+    expect(sql.and).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'eq' }),
+      expect.objectContaining({ kind: 'isNull' }),
+      expect.objectContaining({ kind: 'eq' }),
+      expect.objectContaining({ kind: 'eq', right: 'power_off' }),
+      expect.objectContaining({ kind: 'isNull' }),
+    )
+  })
+
+  it('prefers the client-provided id over the guard-held one when dismissing', async () => {
+    guard.acknowledge.mockReturnValue({ restore: null, alertId: 12 })
+    dbState.queue.push([]) // dismissedAt update
+
+    await expect(caller.dismissNotification({ side: 'right', alertId: 31 })).resolves.toEqual({ success: true })
+    expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.id, 31)
+    expect(sql.eq).not.toHaveBeenCalledWith(pumpAlerts.id, 12)
   })
 
   it('dismisses a specific active history row', async () => {

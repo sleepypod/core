@@ -41,6 +41,10 @@ vi.mock('@/src/services/autoOffWatcher', () => ({
   cancelAutoOffTimer: (side: 'left' | 'right') => cancelAutoOffTimer(side),
 }))
 
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  shouldBlock: () => false,
+}))
+
 // Mock child_process.exec so executeReboot tests never spawn systemctl.
 const execMock = vi.fn<(cmd: string, cb: (err: Error | null) => void) => void>()
 execMock.mockImplementation((_cmd, cb) => cb(null))

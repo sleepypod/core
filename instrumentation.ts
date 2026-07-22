@@ -306,6 +306,20 @@ export async function initializeScheduler(): Promise<void> {
     // Start DAC monitor (non-blocking — waits for frankenfirmware to connect)
     initializeDacMonitor()
 
+    // Rehydrate the pump stall guard from persisted un-acknowledged alerts
+    // before anything that consults shouldBlock (keepalives, scheduler jobs)
+    // can re-energize a side whose fault predates this boot.
+    try {
+      const { rehydrate } = await import('@/src/hardware/pumpStallGuard')
+      rehydrate()
+    }
+    catch (error) {
+      console.warn(
+        '[pumpStallGuard] rehydration failed:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
     // Initialize temperature keepalive timers for sides with alwaysOn enabled
     initializeKeepalives()
 

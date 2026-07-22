@@ -3,12 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const setTemperature = vi.fn()
 const setPower = vi.fn()
 const registerManualOverride = vi.fn()
+const pumpStallShouldBlock = vi.fn<(side: 'left' | 'right') => boolean>(() => false)
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setTemperature, setPower }),
 }))
 vi.mock('@/src/automation', () => ({
   getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+}))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  shouldBlock: (side: 'left' | 'right') => pumpStallShouldBlock(side),
 }))
 
 import {
@@ -50,6 +54,7 @@ describe('sideController', () => {
     setTemperature.mockReset()
     setPower.mockReset()
     registerManualOverride.mockReset()
+    pumpStallShouldBlock.mockReset().mockReturnValue(false)
     setTemperature.mockResolvedValue(undefined)
     setPower.mockResolvedValue(undefined)
   })
@@ -400,6 +405,43 @@ describe('sideController', () => {
       await setTargetTemperature(monitor(onStatus), 'left', 72)
       expect(setTemperature).toHaveBeenCalledWith('left', 72)
       warn.mockRestore()
+    })
+  })
+
+  describe('pump stall guard', () => {
+    it('stages but never pushes a target while the guard blocks the side', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      pumpStallShouldBlock.mockReturnValue(true)
+
+      await setTargetTemperature(monitor(onStatus), 'left', 78)
+
+      expect(setTemperature).not.toHaveBeenCalled()
+      expect(registerManualOverride).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[homekit] skipped setTemperature(left): pump stall guard blocks left')
+      // The staged value survives so an eventual re-enable powers on to it.
+      expect(getStagedTargetF(monitor(onStatus), 'left')).toBe(78)
+      warn.mockRestore()
+    })
+
+    it('rejects setSidePowerOn and rolls back intent while the guard blocks the side', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      pumpStallShouldBlock.mockReturnValue(true)
+
+      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('pump stall protection active on left')
+
+      expect(setPower).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[homekit] skipped setPower(left, true): pump stall guard blocks left')
+      // Intent rolled back — iOS Home reads OFF again instead of a phantom ON.
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+      warn.mockRestore()
+    })
+
+    it('still allows setSidePowerOff while the guard blocks the side', async () => {
+      pumpStallShouldBlock.mockReturnValue(true)
+
+      await setSidePowerOff(monitor(onStatus), 'left')
+
+      expect(setPower).toHaveBeenCalledWith('left', false)
     })
   })
 })

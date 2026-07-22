@@ -10,6 +10,9 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 vi.mock('@/src/automation', () => ({
   getAutomationEngineIfRunning: () => ({ registerManualOverride }),
 }))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  shouldBlock: () => false,
+}))
 
 import { buildPowerSwitch } from '../accessories/powerSwitch'
 import { __resetSideController } from '../accessories/sideController'
