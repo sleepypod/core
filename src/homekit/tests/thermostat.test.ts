@@ -4,6 +4,7 @@ import { Characteristic } from 'hap-nodejs'
 const setTemperature = vi.fn().mockResolvedValue(undefined)
 const setPower = vi.fn().mockResolvedValue(undefined)
 const registerManualOverride = vi.fn()
+const shouldBlock = vi.fn<() => boolean>().mockReturnValue(false)
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setTemperature, setPower }),
@@ -12,7 +13,7 @@ vi.mock('@/src/automation', () => ({
   getAutomationEngineIfRunning: () => ({ registerManualOverride }),
 }))
 vi.mock('@/src/hardware/pumpStallGuard', () => ({
-  shouldBlock: () => false,
+  shouldBlock: () => shouldBlock(),
 }))
 
 import { buildThermostatService } from '../accessories/thermostat'
@@ -43,6 +44,8 @@ describe('thermostat accessory', () => {
     setTemperature.mockClear()
     setPower.mockClear()
     registerManualOverride.mockClear()
+    shouldBlock.mockReset()
+    shouldBlock.mockReturnValue(false)
   })
 
   it.each(['left', 'right'] as const)('uses stable metadata for the %s side', (side) => {
@@ -149,6 +152,37 @@ describe('thermostat accessory', () => {
     const [, f] = setTemperature.mock.calls[0]
     expect(f).toBeGreaterThan(64)
     expect(f).toBeLessThan(66)
+  })
+
+  it('a guard-rejected TargetTemperature keeps HAP at oldValue but retains the requested intent for the next power-on', async () => {
+    // Requested-intent contract (PR #670 review F1, decided 2026-07-22):
+    // hap-nodejs assigns Characteristic.value only when onSet resolves, so a
+    // gated rejection leaves the visible slider at its old value while the
+    // staged cache advances. The staged value must survive the rejection and
+    // apply on the next explicit power-on after the side is re-enabled.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { service } = buildThermostatService('left', fakeMonitor as DacMonitor)
+    const target = service.getCharacteristic(Characteristic.TargetTemperature)
+    // Seed the visible value the way a live bridge would (status push): 77°F.
+    target.updateValue(f2c(77))
+
+    shouldBlock.mockReturnValue(true)
+    // Left fixture is powered (targetLevel -45), so the push is gated. At the
+    // HAP boundary handleSetRequest rejects with the raw status number: -70412
+    // (NOT_ALLOWED_IN_CURRENT_STATE), not a generic communication failure.
+    await expect(target.handleSetRequest(f2c(95))).rejects.toBe(-70412)
+
+    // Visible characteristic froze at oldValue (tolerance covers hap-nodejs's
+    // minStep grid rounding); nothing reached hardware.
+    expect(Math.abs((target.value as number) - f2c(77))).toBeLessThan(0.5)
+    expect(setTemperature).not.toHaveBeenCalled()
+
+    // Side re-enabled; an explicit power-on heats to the retained 95°F —
+    // the requested intent, not the 77°F the slider visibly reverted to.
+    shouldBlock.mockReturnValue(false)
+    await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).handleSetRequest(3)
+    expect(setPower).toHaveBeenCalledWith('left', true, 95)
+    warn.mockRestore()
   })
 
   it('CurrentHeatingCoolingState reflects targetLevel sign', async () => {
