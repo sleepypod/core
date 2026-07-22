@@ -17,6 +17,8 @@
  * across off-cycles.
  */
 
+import { HapStatusError } from 'hap-nodejs'
+import type { HAPStatus } from 'hap-nodejs'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL } from '@/src/hardware/types'
@@ -24,6 +26,25 @@ import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getAutomationEngineIfRunning } from '@/src/automation'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
+
+/**
+ * Guard denials surface as NOT_ALLOWED_IN_CURRENT_STATE (-70412): hap-nodejs
+ * maps any plain Error to SERVICE_COMMUNICATION_FAILURE (-70402), which iOS
+ * renders as a bridge outage rather than an intentional refusal. Message
+ * wording mirrors the REST path (server/helpers.ts) — the UI action is
+ * literally "Re-enable".
+ */
+// HAPStatus is an ambient const enum in hap-nodejs typings — inaccessible as
+// a value under isolatedModules, so pin the wire constant directly (asserted
+// numerically in sideController.test.ts).
+const NOT_ALLOWED_IN_CURRENT_STATE = -70412 as HAPStatus
+
+class GuardBlockedError extends HapStatusError {
+  constructor() {
+    super(NOT_ALLOWED_IN_CURRENT_STATE)
+    this.message = 'Pump stall protection active — re-enable the side first'
+  }
+}
 
 /**
  * HomeKit must honor the pump stall guard like every other write surface
@@ -35,7 +56,7 @@ import { withSideLock } from '@/src/hardware/sideLock'
 function assertNotGuardBlocked(side: Side, label: string): void {
   if (!pumpStallShouldBlock(side)) return
   console.warn(`[homekit] refused ${label} — pump stall protection active on ${side}`)
-  throw new Error('Pump stall protection active — acknowledge the alert first')
+  throw new GuardBlockedError()
 }
 
 const lastTargetF: Record<Side, number | null> = { left: null, right: null }
@@ -169,12 +190,10 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
   intendedPower[side] = true
   try {
     await withSideLock(side, async () => {
-      // Throw rather than silently skip: the catch below rolls intendedPower
-      // back so iOS Home reverts the toggle instead of showing a phantom ON.
-      if (pumpStallShouldBlock(side)) {
-        console.warn(`[homekit] skipped setPower(${side}, true): pump stall guard blocks ${side}`)
-        throw new Error(`pump stall protection active on ${side}`)
-      }
+      // Re-check inside the lock: a trip can land while this call is queued.
+      // Throw rather than silently skip: the catch below resets intendedPower
+      // so iOS Home reverts the toggle instead of showing a phantom ON.
+      assertNotGuardBlocked(side, `setPower(${side}, true)`)
       const target = clampF(getStagedTargetF(monitor, side))
       lastTargetF[side] = target
       registerManualOverride(side)

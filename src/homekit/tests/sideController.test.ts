@@ -414,7 +414,13 @@ describe('sideController', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       shouldBlock.mockReturnValue(true)
 
-      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('Pump stall protection active')
+      // hapStatus -70412 (NOT_ALLOWED_IN_CURRENT_STATE): hap-nodejs surfaces
+      // it to iOS as a refusal instead of mapping a plain Error to the
+      // generic SERVICE_COMMUNICATION_FAILURE (-70402) bridge-outage status.
+      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toMatchObject({
+        message: 'Pump stall protection active — re-enable the side first',
+        hapStatus: -70412,
+      })
       expect(setPower).not.toHaveBeenCalled()
       expect(registerManualOverride).not.toHaveBeenCalled()
       // Latch must stay untouched so onGet keeps reporting the true (off) state.
@@ -428,10 +434,10 @@ describe('sideController', () => {
       // section runs — the in-lock re-check must still refuse the write.
       shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
 
-      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('pump stall protection active on left')
+      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('Pump stall protection active')
 
       expect(setPower).not.toHaveBeenCalled()
-      expect(warn).toHaveBeenCalledWith('[homekit] skipped setPower(left, true): pump stall guard blocks left')
+      expect(warn).toHaveBeenCalledWith('[homekit] refused setPower(left, true) — pump stall protection active on left')
       // Intent rolled back — iOS Home reads OFF again instead of a phantom ON.
       expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
       warn.mockRestore()
