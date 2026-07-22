@@ -165,6 +165,16 @@ export function getStagedTargetF(monitor: DacMonitor, side: Side): number {
  *   matches iOS Home thermostat-tile semantics. Power resumes through
  *   TargetHeatingCoolingState or the dedicated Power switch.
  *
+ * Requested-intent contract (PR #670 review, F1 — decided 2026-07-22): the
+ * cache retains the requested value even when the pump-stall gate rejects
+ * the firmware push. iOS Home shows the slider reverting (HAP keeps the
+ * characteristic at oldValue on rejection) while the staged value survives
+ * and applies on the next explicit power-on. This is deliberate: lastTargetF
+ * records what the user asked for, not what firmware confirmed, and heating
+ * to it requires a separate deliberate power-on after the side is re-enabled.
+ * The web UI's pump-stall alert card — the only surface that can re-enable
+ * the side — is where the staged/visible mismatch gets surfaced.
+ *
  * f is captured in closure so back-to-back drags of the slider each push
  * their own value, even though the cache only retains the latest.
  */
