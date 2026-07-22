@@ -646,16 +646,21 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
-            // Power off the side
-            try {
-              const client = getSharedHardwareClient()
-              await client.connect()
-              await client.setPower(side, false)
-              broadcastMutationStatus(side, { targetLevel: 0 })
-            }
-            catch (e) {
-              console.warn(`[awayMode] Failed to power off ${side}:`, e)
-            }
+            // Power off the side — under the side lock, marking it off in
+            // the DB first so temp/alarm jobs queued behind this one observe
+            // isPowered=false and skip (same protocol as runPowerOffJob).
+            await withSideLock(side, async () => {
+              await this.markSideOff(side)
+              try {
+                const client = getSharedHardwareClient()
+                await client.connect()
+                await client.setPower(side, false)
+                broadcastMutationStatus(side, { targetLevel: 0 })
+              }
+              catch (e) {
+                console.warn(`[awayMode] Failed to power off ${side}:`, e)
+              }
+            })
           },
           { side },
         )

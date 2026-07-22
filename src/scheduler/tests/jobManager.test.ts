@@ -1537,6 +1537,114 @@ describe('JobManager residual mutation contracts', () => {
     expect(warn).toHaveBeenCalledWith('[jobManager] skipped away-return power-on: pump stall guard blocks left')
   })
 
+  it('away-start powers off under the side lock, marking the side off in the DB first', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
+    const captured = captureOneTimeJobs()
+    vi.spyOn(db, 'transaction').mockImplementation(((callback: any) => callback({
+      update: () => ({ set: () => ({ where: () => ({ run: vi.fn() }) }) }),
+    })) as any)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const order: string[] = []
+    const stateSets: Array<Record<string, unknown>> = []
+    vi.spyOn(db, 'update').mockImplementation((() => ({
+      set: (values: Record<string, unknown>) => {
+        order.push('db-off')
+        stateSets.push(values)
+        return { where: () => ({ run: () => undefined }) }
+      },
+    })) as any)
+    hardwareClient.setPower.mockImplementation(async () => {
+      order.push('hw-off')
+    })
+
+    ;(manager as any).scheduleAwayMode('left', new Date(Date.now() + 60_000).toISOString(), null)
+
+    // Hold the real side lock: the power-off AND its DB mark must queue
+    // behind it rather than running unlocked.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const lockHeld = withSideLock('left', () => gate)
+    const jobRun = required(captured.get('away-start-left'), 'away-start-left').handler()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(order).toHaveLength(0)
+    release()
+    await lockHeld
+    await jobRun
+
+    // Same protocol as runPowerOffJob: DB marked off before the hardware
+    // command so temp/alarm jobs queued behind observe isPowered=false.
+    expect(order).toEqual(['db-off', 'hw-off'])
+    expect(stateSets[0]).toMatchObject({ isPowered: false, poweredOnAt: null, targetTemperature: null })
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+  })
+
+  it('blocks a power-on job whose trip lands while it is queued on the side lock', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(manager, 'hasActiveRunOnceSession').mockResolvedValue(false)
+
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const lockHeld = withSideLock('right', () => gate)
+    const jobRun = manager.runPowerOnJob({
+      ...row,
+      id: 44,
+      side: 'right',
+      dayOfWeek: 'monday',
+      onTime: '22:00',
+      offTime: '07:00',
+      onTemperature: 80,
+    })
+    // Let the job pass its gates and queue on the held lock while the guard
+    // is still healthy — only an in-lock check can observe the flip below.
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+    release()
+    await lockHeld
+    await jobRun
+
+    expect(hardwareClient.setPower).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('[jobManager] skipped power-on power-on-44: pump stall guard blocks right')
+  })
+
+  it('blocks a temperature job whose trip lands while it is queued on the side lock', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(manager, 'hasActiveRunOnceSession').mockResolvedValue(false)
+    vi.spyOn(manager as any, 'isSidePowered').mockResolvedValue(true)
+
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const lockHeld = withSideLock('left', () => gate)
+    const jobRun = manager.runTemperatureJob({
+      ...row,
+      id: 45,
+      side: 'left',
+      dayOfWeek: 'monday',
+      time: '08:00',
+      temperature: 78,
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+    release()
+    await lockHeld
+    await jobRun
+
+    expect(hardwareClient.setTemperature).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('[jobManager] skipped temp job temp-45: pump stall guard blocks left')
+  })
+
   it('skips a run-once set point while the guard blocks the side', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
