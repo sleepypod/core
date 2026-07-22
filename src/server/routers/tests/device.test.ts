@@ -953,6 +953,74 @@ describe('device.execute (raw command)', () => {
     sharedClientMock.sendRaw.mockRejectedValue({ disconnected: true })
     await expect(caller.execute({ command: '14' })).rejects.toThrow('Failed to execute raw command: Unknown error')
   })
+
+  it.each([
+    ['TEMP_LEVEL_LEFT', 'left'],
+    ['TEMP_LEVEL_RIGHT', 'right'],
+    ['LEFT_TEMP_DURATION', 'left'],
+    ['RIGHT_TEMP_DURATION', 'right'],
+  ] as const)('blocks energizing %s when the %s guard is tripped', async (command, side) => {
+    pumpStallMock.shouldBlock.mockImplementation(s => s === side)
+    await expect(caller.execute({ command, args: '50' })).rejects.toThrow(/Pump stall protection active/)
+    expect(sharedClientMock.sendRaw).not.toHaveBeenCalled()
+  })
+
+  it('blocks the numeric alias of an energizing opcode', async () => {
+    pumpStallMock.shouldBlock.mockImplementation(s => s === 'left')
+    await expect(caller.execute({ command: '11', args: '50' })).rejects.toThrow(/Pump stall protection active/)
+    expect(sharedClientMock.sendRaw).not.toHaveBeenCalled()
+  })
+
+  it('blocks SET_TEMP when either side is tripped — legacy arg format claims no exemption', async () => {
+    pumpStallMock.shouldBlock.mockImplementation(s => s === 'right')
+    await expect(caller.execute({ command: 'SET_TEMP', args: '0' })).rejects.toThrow(/Pump stall protection active/)
+    expect(sharedClientMock.sendRaw).not.toHaveBeenCalled()
+  })
+
+  it('lets a level-0 write through on a tripped side — powering off is never blocked', async () => {
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+    sharedClientMock.sendRaw.mockResolvedValue('ok')
+    await caller.execute({ command: 'TEMP_LEVEL_LEFT', args: '0' })
+    expect(sharedClientMock.sendRaw).toHaveBeenCalledWith('11', '0')
+  })
+
+  it('leaves non-energizing and unknown commands unguarded while tripped', async () => {
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+    sharedClientMock.sendRaw.mockResolvedValue('ok')
+    await caller.execute({ command: 'DEVICE_STATUS' })
+    await caller.execute({ command: 'ALARM_LEFT', args: '50,double,30,0' })
+    await caller.execute({ command: '99', args: 'probe' })
+    expect(sharedClientMock.sendRaw).toHaveBeenCalledTimes(3)
+  })
+
+  it('re-checks the guard inside the side lock before an energizing raw write', async () => {
+    // Pre-flight check passes; the trip lands while the command queues.
+    pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+    await expect(caller.execute({ command: 'TEMP_LEVEL_LEFT', args: '50' })).rejects.toThrow(/Pump stall protection active/)
+    expect(sharedClientMock.sendRaw).not.toHaveBeenCalled()
+  })
+
+  it('queues an energizing raw write behind a held side lock', async () => {
+    let releaseLeft!: () => void
+    const holder = withSideLock('left', () => new Promise<void>((resolve) => {
+      releaseLeft = resolve
+    }))
+    try {
+      sharedClientMock.sendRaw.mockResolvedValue('ok')
+      const pending = caller.execute({ command: 'TEMP_LEVEL_LEFT', args: '50' })
+      await Promise.resolve()
+      expect(sharedClientMock.sendRaw).not.toHaveBeenCalled()
+
+      releaseLeft()
+      await holder
+      await pending
+      expect(sharedClientMock.sendRaw).toHaveBeenCalledWith('11', '50')
+    }
+    finally {
+      releaseLeft()
+      await holder.catch(() => {})
+    }
+  })
 })
 
 describe('device best-effort DB sync swallows errors', () => {
