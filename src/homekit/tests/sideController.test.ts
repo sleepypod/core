@@ -360,6 +360,25 @@ describe('sideController', () => {
       expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(true)
     })
 
+    it('drops a stale ON latch when the guard tripped before firmware ever confirmed the power-on', async () => {
+      // Power-on accepted while healthy; the trip lands before any status
+      // frame reports ON, so firmware keeps saying OFF and the ON intent
+      // would otherwise read as "write in flight" forever.
+      await setSidePowerOn(monitor(offStatus), 'left')
+      shouldBlock.mockReturnValue(true)
+
+      reconcileIntendedPower(offStatus, 'left')
+      expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+
+      // Guard clears (user acknowledged). A slider drag on the still-off
+      // side must stage only — the stale latch must not re-energize it.
+      shouldBlock.mockReturnValue(false)
+      setTemperature.mockClear()
+      await setTargetTemperature(monitor(offStatus), 'left', 72)
+      expect(setTemperature).not.toHaveBeenCalled()
+      expect(getStagedTargetF(monitor(offStatus), 'left')).toBe(72)
+    })
+
     it('after reconciliation, setTargetTemperature no longer re-heats a scheduler-stopped side', async () => {
       await setSidePowerOn(monitor(offStatus), 'left')
       reconcileIntendedPower(onStatus, 'left') // firmware confirmed ON
@@ -489,9 +508,10 @@ describe('sideController', () => {
 
     it('setTargetTemperature refuses when the trip left the intent latch stuck ON', async () => {
       // Real-stall scenario: HomeKit powered the side on, the guard tripped
-      // (firmware now off, side blocked). reconcileIntendedPower never clears
-      // the latch because firmware never confirms ON — so the push path
-      // computes powered=true from the latch and must be stopped by the gate.
+      // (firmware now off, side blocked). reconcileIntendedPower only drops
+      // the stale latch on the next status frame — until one arrives, the
+      // push path computes powered=true from the latch and must be stopped
+      // by the gate.
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       await setSidePowerOn(monitor(offStatus), 'left')
       setTemperature.mockClear()

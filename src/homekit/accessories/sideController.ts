@@ -124,7 +124,19 @@ export function isEffectivelyPowered(monitor: DacMonitor, side: Side): boolean {
 export function reconcileIntendedPower(status: DeviceStatus, side: Side): void {
   const intended = intendedPower[side]
   if (intended === null) return
-  if (isPoweredFromStatus(status, side) === intended) {
+  const observed = isPoweredFromStatus(status, side)
+  if (observed === intended) {
+    intendedPower[side] = null
+    return
+  }
+  // A stall trip can land after a power-on was accepted but before any
+  // status frame confirms it: firmware keeps reporting OFF, so the ON latch
+  // would survive forever ("write in flight" never resolves). Once the guard
+  // clears, a mere slider drag would then compute powered=true from the
+  // stale latch and re-energize the side. Drop the latch only when the
+  // guard blocks the side AND firmware observes OFF — a normal in-flight
+  // ON (guard healthy) must keep its latch.
+  if (intended && !observed && pumpStallShouldBlock(side)) {
     intendedPower[side] = null
   }
 }
