@@ -4,6 +4,7 @@ const setTemperature = vi.fn()
 const setPower = vi.fn()
 const registerManualOverride = vi.fn()
 const shouldBlock = vi.fn<(side: 'left' | 'right') => boolean>()
+const broadcastMutationStatus = vi.fn()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: () => ({ setTemperature, setPower }),
@@ -14,9 +15,13 @@ vi.mock('@/src/automation', () => ({
 vi.mock('@/src/hardware/pumpStallGuard', () => ({
   shouldBlock: (side: 'left' | 'right') => shouldBlock(side),
 }))
+vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
+  broadcastMutationStatus: (...args: unknown[]) => broadcastMutationStatus(...args),
+}))
 
 import {
   __resetSideController,
+  getHomekitStagedTargetF,
   getStagedTargetF,
   isCurrentlyPowered,
   isEffectivelyPowered,
@@ -55,6 +60,7 @@ describe('sideController', () => {
     setPower.mockReset()
     registerManualOverride.mockReset()
     shouldBlock.mockReset()
+    broadcastMutationStatus.mockReset()
     setTemperature.mockResolvedValue(undefined)
     setPower.mockResolvedValue(undefined)
     shouldBlock.mockReturnValue(false)
@@ -129,6 +135,75 @@ describe('sideController', () => {
         ...offStatus,
         leftSide: { ...offStatus.leftSide, targetTemperature: 82.5, targetLevel: 0 },
       }), 'left')).toBe(65)
+    })
+  })
+
+  describe('getHomekitStagedTargetF', () => {
+    it('is null until HomeKit stages a target — no firmware-status fallback', () => {
+      // Firmware knows a target (offStatus has 70/75) but HomeKit never wrote
+      // one; the raw accessor must say "nothing hidden" while getStagedTargetF
+      // still resolves its fallback.
+      expect(getHomekitStagedTargetF('left')).toBeNull()
+      expect(getHomekitStagedTargetF('right')).toBeNull()
+    })
+
+    it('tracks the staged value per side', async () => {
+      await setTargetTemperature(monitor(offStatus), 'left', 68)
+      expect(getHomekitStagedTargetF('left')).toBe(68)
+      expect(getHomekitStagedTargetF('right')).toBeNull()
+    })
+
+    it('retains the requested value after the guard rejects the firmware push', async () => {
+      // The F1 scenario this accessor exists for: iOS shows the slider
+      // reverting while the hidden cache advances to the rejected value.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      shouldBlock.mockReturnValue(true)
+      await expect(setTargetTemperature(monitor(onStatus), 'left', 68)).rejects.toThrow('Pump stall protection active')
+      expect(getHomekitStagedTargetF('left')).toBe(68)
+      warn.mockRestore()
+    })
+  })
+
+  describe('guard rejection broadcast', () => {
+    it('broadcasts a transient guardRejection overlay when a power-on is refused', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      shouldBlock.mockReturnValue(true)
+
+      await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('Pump stall protection active')
+      await vi.waitFor(() => {
+        expect(broadcastMutationStatus).toHaveBeenCalledWith('left', {
+          guardRejection: { ts: expect.any(Number), source: 'homekit' },
+        })
+      })
+      warn.mockRestore()
+    })
+
+    it('broadcasts when a temp push on a powered side is refused', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      shouldBlock.mockReturnValue(true)
+
+      await expect(setTargetTemperature(monitor(onStatus), 'right', 68)).rejects.toThrow('Pump stall protection active')
+      await vi.waitFor(() => {
+        expect(broadcastMutationStatus).toHaveBeenCalledWith('right', {
+          guardRejection: { ts: expect.any(Number), source: 'homekit' },
+        })
+      })
+      warn.mockRestore()
+    })
+
+    it('does not broadcast on accepted writes or silent off-side staging', async () => {
+      await setSidePowerOn(monitor(offStatus), 'left')
+      await setTargetTemperature(monitor(onStatus), 'right', 72)
+      // Blocked side that is off with no intent latch → stages silently
+      // (no refusal thrown), so nothing may be broadcast either.
+      shouldBlock.mockImplementation(side => side === 'right')
+      await setTargetTemperature(monitor(offStatus), 'right', 66)
+
+      // Flush the fire-and-forget dynamic import path before asserting.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0)
+      })
+      expect(broadcastMutationStatus).not.toHaveBeenCalled()
     })
   })
 

@@ -94,6 +94,9 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getDacMonitorIfRunning: sharedClientMock.getDacMonitorIfRunning,
 }))
 vi.mock('@/src/hardware/iptablesCheck', () => iptablesMock)
+// Keep hap-nodejs and the HAP bridge out of this suite — only thermal (tested
+// separately) reads the staged target.
+vi.mock('@/src/homekit/accessories/sideController', () => ({ getHomekitStagedTargetF: vi.fn(() => null) }))
 
 const { healthRouter } = await import('@/src/server/routers/health')
 const caller = healthRouter.createCaller({})
