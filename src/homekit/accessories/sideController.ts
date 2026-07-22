@@ -60,10 +60,28 @@ class GuardBlockedError extends HapStatusError {
 function assertNotGuardBlocked(side: Side, label: string): void {
   if (!pumpStallShouldBlock(side)) return
   console.warn(`[homekit] refused ${label} — pump stall protection active on ${side}`)
+  // Surface the refusal to web clients as a transient frame overlay — iOS
+  // only shows the control reverting, and the web UI is the surface that can
+  // actually re-enable the side. Fire-and-forget via dynamic import (same
+  // homekit→streaming decoupling as snoozeManager); a broadcast failure must
+  // never mask the refusal itself.
+  void import('@/src/streaming/broadcastMutationStatus')
+    .then(({ broadcastMutationStatus }) => broadcastMutationStatus(side, {
+      guardRejection: { ts: Date.now(), source: 'homekit' },
+    }))
+    .catch(() => {})
   throw new GuardBlockedError()
 }
 
-const lastTargetF: Record<Side, number | null> = { left: null, right: null }
+// Staged targets live on globalThis: HomeKit writes them from the HAP bridge
+// (instrumentation runtime) while health.thermal reads them from API route
+// handlers — Turbopack chunks those separately, so module-level state would
+// split (same rationale as pumpStallGuard). intendedPower below stays
+// module-level: it is only touched from the HAP runtime.
+const STAGED_KEY = '__sp_homekit_staged_target_f__'
+const G = globalThis as Record<string, unknown>
+if (!G[STAGED_KEY]) G[STAGED_KEY] = { left: null, right: null }
+const lastTargetF = G[STAGED_KEY] as Record<Side, number | null>
 
 // Intended power state as expressed by HomeKit, updated eagerly. Used to
 // resolve the "user dragged the slider mid-power-cycle" race: firmware
@@ -148,6 +166,17 @@ export function reconcileIntendedPower(status: DeviceStatus, side: Side): void {
  * NEUTRAL so a power-on without any prior context lands on a safe value
  * instead of the hardware client's hardcoded 75°F default.
  */
+/**
+ * Raw per-side staged target exactly as HomeKit last requested it — null when
+ * no HomeKit write has staged one. Unlike getStagedTargetF this does NOT fall
+ * back to firmware status: health.thermal needs to know whether a hidden
+ * staged value exists at all, so the pump-stall alert card can surface the
+ * staged/visible mismatch on a guard-blocked side (PR #670 F1).
+ */
+export function getHomekitStagedTargetF(side: Side): number | null {
+  return lastTargetF[side]
+}
+
 export function getStagedTargetF(monitor: DacMonitor, side: Side): number {
   const cached = lastTargetF[side]
   if (cached !== null) return cached
