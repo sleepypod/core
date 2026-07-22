@@ -316,16 +316,21 @@ export class DeviceStateSync {
     }
     this.stallGuardInFlight[side] = true
     void (async () => {
-      // runStallGuard never throws (it catches internally), so this chain
-      // always releases the in-flight flag.
-      await this.runStallGuard(side, rpm, duty)
-      let next = this.stallGuardPending[side]
-      while (next) {
-        this.stallGuardPending[side] = null
-        await this.runStallGuard(side, next.rpm, next.duty)
-        next = this.stallGuardPending[side]
+      // runStallGuard catches internally today; finally guarantees the
+      // in-flight flag is released even if that ever changes — a leaked
+      // flag would silently stop feeding the guard for this side.
+      try {
+        await this.runStallGuard(side, rpm, duty)
+        let next = this.stallGuardPending[side]
+        while (next) {
+          this.stallGuardPending[side] = null
+          await this.runStallGuard(side, next.rpm, next.duty)
+          next = this.stallGuardPending[side]
+        }
       }
-      this.stallGuardInFlight[side] = false
+      finally {
+        this.stallGuardInFlight[side] = false
+      }
     })()
   }
 
