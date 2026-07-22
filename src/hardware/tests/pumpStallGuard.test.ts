@@ -39,6 +39,7 @@ import {
   shouldBlock,
 } from '../pumpStallGuard'
 import { getPumpStallNotice } from '../pumpStallNotification'
+import { withSideLock } from '../sideLock'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   sqlite: BetterSqlite3.Database
@@ -992,5 +993,178 @@ describe('pumpStallGuard', () => {
       expect(shouldBlock('left')).toBe(false)
       warn.mockRestore()
     })
+  })
+})
+
+describe('pumpStallGuard — side-lock serialization and notice timing', () => {
+  const lowFrame = (side: 'left' | 'right') => ({
+    side,
+    rpm: 100,
+    expectedActive: true,
+    preStallTarget: 78,
+    preStallDurationSeconds: 28800,
+  })
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve()
+  }
+
+  beforeEach(() => {
+    resetSchema()
+    invalidateGuardSettingsCache()
+    reset()
+    setPower.mockClear()
+    setTemperature.mockClear()
+  })
+  afterEach(() => {
+    reset()
+    vi.restoreAllMocks()
+  })
+
+  it('queues the trip cutoff behind a same-side writer already holding the lock', async () => {
+    const order: string[] = []
+    let releaseWriter!: () => void
+    const writerGate = new Promise<void>((resolve) => {
+      releaseWriter = resolve
+    })
+    const writerDone = withSideLock('left', async () => {
+      await writerGate
+      order.push('writer:on')
+    })
+
+    await onFrame(lowFrame('left'))
+    const tripping = onFrame(lowFrame('left'))
+    await flush()
+
+    // Trip already latched (block + banner) but the cutoff is still queued
+    // behind the writer — nothing has reached the hardware client yet.
+    expect(shouldBlock('left')).toBe(true)
+    expect(getPumpStallNotice('left')).not.toBeNull()
+    expect(setPower).not.toHaveBeenCalled()
+
+    setPower.mockImplementation(async () => {
+      order.push('guard:cutoff')
+    })
+    releaseWriter()
+    await writerDone
+    await tripping
+
+    // The energizing write landed first, the cutoff after it — never the
+    // reverse — so the side ends up OFF.
+    expect(order).toEqual(['writer:on', 'guard:cutoff'])
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('serializes the cutoff retry through the side lock', async () => {
+    setPower.mockRejectedValueOnce(new Error('socket gone'))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await onFrame(lowFrame('left'))
+    await onFrame(lowFrame('left'))
+    expect(shouldBlock('left')).toBe(true)
+    err.mockRestore()
+
+    const order: string[] = []
+    let releaseWriter!: () => void
+    const writerGate = new Promise<void>((resolve) => {
+      releaseWriter = resolve
+    })
+    const writerDone = withSideLock('left', async () => {
+      await writerGate
+      order.push('writer:on')
+    })
+
+    setPower.mockImplementation(async () => {
+      order.push('guard:retry')
+    })
+    const retrying = onFrame(lowFrame('left'))
+    await flush()
+    expect(order).toEqual([])
+
+    releaseWriter()
+    await writerDone
+    await retrying
+    expect(order).toEqual(['writer:on', 'guard:retry'])
+  })
+
+  it('serializes the auto-recovery restore through the side lock', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 1 })
+    invalidateGuardSettingsCache()
+    await onFrame(lowFrame('left'))
+    await onFrame(lowFrame('left'))
+    expect(shouldBlock('left')).toBe(true)
+    setPower.mockClear()
+
+    const order: string[] = []
+    let releaseWriter!: () => void
+    const writerGate = new Promise<void>((resolve) => {
+      releaseWriter = resolve
+    })
+    const writerDone = withSideLock('left', async () => {
+      await writerGate
+      order.push('writer')
+    })
+
+    setPower.mockImplementation(async () => {
+      order.push('guard:restore-power')
+    })
+    const healthy = { side: 'left' as const, rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 }
+    const recovering = onFrame(healthy)
+    await flush()
+    expect(order).toEqual([])
+
+    releaseWriter()
+    await writerDone
+    await recovering
+    expect(order).toEqual(['writer', 'guard:restore-power'])
+    expect(setTemperature).toHaveBeenCalledWith('left', 78, 28800)
+    expect(shouldBlock('left')).toBe(false)
+  })
+
+  it('publishes the notice, alert row, and DB mirror before the cutoff resolves', async () => {
+    let resolveCutoff!: () => void
+    setPower.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveCutoff = resolve
+      }),
+    )
+
+    await onFrame(lowFrame('left'))
+    const tripping = onFrame(lowFrame('left'))
+    await flush()
+
+    // Cutoff still awaiting hardware — banner, alert row, and device_state
+    // mirror must already be visible so the trip is explained during a slow
+    // or unresponsive firmware window.
+    const notice = getPumpStallNotice('left')
+    expect(notice?.alertId).toBeGreaterThan(0)
+    expect((biometricsSqlite as any).prepare('SELECT action FROM pump_alerts WHERE id = ?').get(notice?.alertId)).toEqual({ action: 'power_off' })
+    expect((sqlite as any).prepare('SELECT is_powered FROM device_state WHERE side = \'left\'').get()).toEqual({ is_powered: 0 })
+
+    resolveCutoff()
+    await tripping
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('an acknowledge during a pending cutoff clears the notice for good', async () => {
+    let resolveCutoff!: () => void
+    setPower.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveCutoff = resolve
+      }),
+    )
+
+    await onFrame(lowFrame('left'))
+    const tripping = onFrame(lowFrame('left'))
+    await flush()
+    expect(getPumpStallNotice('left')).not.toBeNull()
+
+    acknowledge('left')
+    expect(getPumpStallNotice('left')).toBeNull()
+
+    resolveCutoff()
+    await tripping
+    // The completed cutoff must not resurrect the banner or the block.
+    expect(getPumpStallNotice('left')).toBeNull()
+    expect(shouldBlock('left')).toBe(false)
   })
 })

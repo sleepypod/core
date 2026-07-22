@@ -23,6 +23,7 @@ import { pumpAlerts } from '@/src/db/biometrics-schema'
 import { deviceSettings, deviceState } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { clearPumpStallNotice, setPumpStallNotice } from './pumpStallNotification'
+import { withSideLock } from './sideLock'
 import type { Side } from './types'
 
 interface GuardState {
@@ -174,8 +175,10 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
   // the command is confirmed sent; the alert row already says power_off.
   if (state.cutoffPending) {
     try {
-      const client = getSharedHardwareClient()
-      await client.setPower(input.side, false)
+      await withSideLock(input.side, async () => {
+        const client = getSharedHardwareClient()
+        await client.setPower(input.side, false)
+      })
       state.cutoffPending = false
     }
     catch (err) {
@@ -355,18 +358,10 @@ async function trip(side: Side, rpm: number): Promise<void> {
     }
   }
 
-  // Power-off via the shared hardware client, bypassing the router gate
-  // (the gate consults shouldBlock(side), which is already true).
-  try {
-    const client = getSharedHardwareClient()
-    await client.setPower(side, false)
-  }
-  catch (err) {
-    state.cutoffPending = true
-    console.error('[pumpStallGuard] hardware power-off failed:', err instanceof Error ? err.message : err)
-  }
-
-  // Mirror the database state so getStatus / UI reflect the fail-safe.
+  // Mirror the database state before the hardware write — same ordering as
+  // the router power-off path (see sideLock.ts): a queued same-side writer
+  // that acquires the lock after the cutoff observes isPowered=false and
+  // skips.
   try {
     db
       .update(deviceState)
@@ -406,6 +401,10 @@ async function trip(side: Side, rpm: number): Promise<void> {
 
   state.activeAlertId = alertId || null
 
+  // Publish the banner before any await: against unresponsive firmware the
+  // cutoff below can block for the full DAC timeout, and commands rejected
+  // during that window need the notice to explain why. An acknowledge()
+  // racing the cutoff clears the notice after this point, so it always wins.
   setPumpStallNotice(side, {
     alertId,
     trippedAt: Math.floor(state.trippedAt / 1000),
@@ -414,6 +413,23 @@ async function trip(side: Side, rpm: number): Promise<void> {
   })
 
   console.warn(`[pumpStallGuard] tripped ${side} at ${rpm} rpm — powering off until acknowledged`)
+
+  // Power-off via the shared hardware client, bypassing the router gate
+  // (the gate consults shouldBlock(side), which is already true). Serialized
+  // through withSideLock so the cutoff cannot interleave with a queued
+  // same-side writer's command sequence. Deadlock analysis: trip() is only
+  // reachable from the frame path (deviceStateSync.runStallGuard → onFrame),
+  // never from a caller already holding the same-side lock.
+  try {
+    await withSideLock(side, async () => {
+      const client = getSharedHardwareClient()
+      await client.setPower(side, false)
+    })
+  }
+  catch (err) {
+    state.cutoffPending = true
+    console.error('[pumpStallGuard] hardware power-off failed:', err instanceof Error ? err.message : err)
+  }
 }
 
 async function autoRecover(side: Side): Promise<void> {
@@ -426,10 +442,15 @@ async function autoRecover(side: Side): Promise<void> {
     return
   }
 
+  // Same lock + deadlock rationale as the trip() cutoff: only reachable from
+  // the frame path, and the restore sequence must not interleave with a
+  // queued same-side writer.
   try {
-    const client = getSharedHardwareClient()
-    await client.setPower(side, true, restore.targetTemperature)
-    await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+    await withSideLock(side, async () => {
+      const client = getSharedHardwareClient()
+      await client.setPower(side, true, restore.targetTemperature)
+      await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+    })
   }
   catch (err) {
     console.error('[pumpStallGuard] auto-recover hardware call failed:', err instanceof Error ? err.message : err)
