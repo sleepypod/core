@@ -237,6 +237,19 @@ describe('broadcastMutationStatus', () => {
     })
   })
 
+  it('includes pumpStallNotifications when only the left side has an active notice', () => {
+    setLastStatus(baseStatus)
+    stallMock.state.left = { alertId: 43, trippedAt: 1_700_000_000, rpm: 0, restore: null }
+
+    broadcastMutationStatus()
+
+    const frame = piezoMock.broadcastFrame.mock.calls[0]?.[0] as Record<string, any>
+    expect(frame.pumpStallNotifications).toEqual({
+      left: { alertId: 43, trippedAt: 1_700_000_000, rpm: 0, restore: null },
+      right: null,
+    })
+  })
+
   it('omits pumpStallNotifications when both sides are null', () => {
     setLastStatus(baseStatus)
 

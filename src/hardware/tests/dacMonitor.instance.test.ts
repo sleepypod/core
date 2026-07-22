@@ -617,6 +617,23 @@ describe('hardware/dacMonitor.instance', () => {
       expect(lastFrame?.pumpStallNotifications).toEqual({ left: null, right: notice })
     })
 
+    it('status:updated includes pumpStallNotifications when only the left side has an active notice', async () => {
+      const mod = await freshModule()
+      await mod.getDacMonitor()
+      await flushMicrotasks()
+      const monitor = monitorInstances[0]
+      const notice = { alertId: 43, trippedAt: 1_700_000_000, rpm: 0, restore: null }
+      getAllPumpStallNoticesMock.mockReturnValue({ left: notice, right: null })
+
+      const status: DeviceStatus = parseDeviceStatusMock('raw')
+      monitor.emit('status:updated', status)
+      await flushMicrotasks()
+
+      const lastFrame = broadcastFrameMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
+      expect(lastFrame).toBeDefined()
+      expect(lastFrame?.pumpStallNotifications).toEqual({ left: notice, right: null })
+    })
+
     it('status:updated omits pumpStallNotifications when both sides are null', async () => {
       const mod = await freshModule()
       await mod.getDacMonitor()

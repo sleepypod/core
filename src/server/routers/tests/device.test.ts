@@ -253,6 +253,16 @@ describe('device.getStatus', () => {
     expect(result.pumpStallNotifications?.left).toBeNull()
   })
 
+  it('exposes pumpStallNotifications when only the left side has an active notice', async () => {
+    pumpStallNotificationMock.getAllPumpStallNotices.mockReturnValueOnce({
+      left: { alertId: 43, trippedAt: 1700000000, rpm: 50, restore: null },
+      right: null,
+    })
+    const result = await caller.getStatus({})
+    expect(result.pumpStallNotifications?.left?.alertId).toBe(43)
+    expect(result.pumpStallNotifications?.right).toBeNull()
+  })
+
   it('omits pumpStallNotifications when both sides are null', async () => {
     pumpStallNotificationMock.getAllPumpStallNotices.mockReturnValueOnce({ left: null, right: null })
     const result = await caller.getStatus({})
