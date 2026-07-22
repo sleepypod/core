@@ -42,6 +42,10 @@ const NOT_ALLOWED_IN_CURRENT_STATE = -70412 as HAPStatus
 class GuardBlockedError extends HapStatusError {
   constructor() {
     super(NOT_ALLOWED_IN_CURRENT_STATE)
+    // The parent constructor pins the prototype to HapStatusError.prototype
+    // (its Error-subclass workaround), which breaks instanceof for further
+    // subclasses — restore ours so the rollback catch can identify us.
+    Object.setPrototypeOf(this, GuardBlockedError.prototype)
     this.message = 'Pump stall protection active — re-enable the side first'
   }
 }
@@ -204,7 +208,12 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
     })
   }
   catch (e) {
-    intendedPower[side] = prev
+    // A guard rejection means the side is definitively de-energized (the
+    // trip path forces power off), so latch false rather than restoring
+    // `prev`: with two blocked power-ons in flight, `prev` can be the other
+    // call's transient ON, and restoring it would resurrect a phantom ON
+    // with zero hardware writes.
+    intendedPower[side] = e instanceof GuardBlockedError ? false : prev
     throw e
   }
 }

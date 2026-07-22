@@ -443,6 +443,40 @@ describe('sideController', () => {
       warn.mockRestore()
     })
 
+    it('concurrent power-ons rejected in-lock cannot resurrect the ON intent latch', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let release: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        release = resolve
+      }))
+      await Promise.resolve()
+
+      try {
+        // Both calls pass the ingress assert while the guard is healthy and
+        // queue behind the held lock; the second snapshots the first call's
+        // transient ON as its rollback value. The trip lands strictly after.
+        const first = setSidePowerOn(monitor(offStatus), 'left')
+        const second = setSidePowerOn(monitor(offStatus), 'left')
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0)
+        })
+        shouldBlock.mockReturnValue(true)
+        release()
+        await holder
+        await expect(first).rejects.toThrow('Pump stall protection active')
+        await expect(second).rejects.toThrow('Pump stall protection active')
+
+        expect(setPower).not.toHaveBeenCalled()
+        // Neither rollback may restore the other call's transient true —
+        // iOS Home must read OFF, not a phantom ON with zero hardware writes.
+        expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
+      }
+      finally {
+        release()
+        warn.mockRestore()
+      }
+    })
+
     it('setTargetTemperature refuses the firmware push on a blocked powered side but still caches the target', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       shouldBlock.mockReturnValue(true)
