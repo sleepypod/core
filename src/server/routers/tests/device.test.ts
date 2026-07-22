@@ -128,7 +128,22 @@ const wifiMock = vi.hoisted(() => ({
   getWifiInfo: vi.fn<() => { wifiStrength: number, wifiSSID: string }>(() => ({ wifiStrength: -1, wifiSSID: 'unknown' })),
 }))
 
-vi.mock('@/src/server/helpers', () => ({ withHardwareClient: helpersMock.withHardwareClient }))
+vi.mock('@/src/server/helpers', async () => {
+  const { TRPCError } = await import('@trpc/server')
+  return {
+    withHardwareClient: helpersMock.withHardwareClient,
+    // Mirrors the real helper but consults this file's pumpStallMock so
+    // tests keep driving the guard through shouldBlock.
+    assertPumpStallNotBlocked: (side: 'left' | 'right') => {
+      if (pumpStallMock.shouldBlock(side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+    },
+  }
+})
 vi.mock('@/src/hardware/primeNotification', () => primeMock)
 vi.mock('@/src/hardware/snoozeManager', () => snoozeMock)
 vi.mock('@/src/streaming/broadcastMutationStatus', () => broadcastMock)
@@ -524,6 +539,61 @@ describe('device.setTemperature', () => {
       await vi.advanceTimersByTimeAsync(250)
       await assertion
       expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+      // A rejected command must not suspend autopilot.
+      expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('restores the parked DB mirror and broadcasts off when the in-lock recheck rejects', async () => {
+    vi.useFakeTimers()
+    try {
+      pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+      dbState.rowsQueue.push([{ isPowered: true, poweredOnAt: new Date() }])
+      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
+      const assertion = expect(pending).rejects.toThrow(/Pump stall protection active/)
+      await vi.advanceTimersByTimeAsync(250)
+      await assertion
+      // update #0 is the optimistic energized write; update #1 must put the
+      // parked mirror back so the UI doesn't keep an energized target.
+      expect(dbChain('update', 1).set).toHaveBeenCalledWith({
+        isPowered: false,
+        poweredOnAt: null,
+        targetTemperature: null,
+        lastUpdated: expect.any(Date),
+      })
+      expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('blocks a debounced command queued behind a held side lock when the trip lands while queued', async () => {
+    vi.useFakeTimers()
+    try {
+      let tripped = false
+      pumpStallMock.shouldBlock.mockImplementation(() => tripped)
+      let release: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        release = resolve
+      }))
+      await vi.advanceTimersByTimeAsync(0)
+
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
+      const assertion = expect(pending).rejects.toThrow(/Pump stall protection active/)
+      // Debounce fires and the write queues behind the held lock, all while
+      // the guard is still healthy — the flip below happens strictly after.
+      await vi.advanceTimersByTimeAsync(250)
+      tripped = true
+      release()
+      await holder
+      await assertion
+      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+      expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
     }
     finally {
       vi.useRealTimers()
@@ -568,6 +638,10 @@ describe('device.setTemperature', () => {
       const err = await caught
       expect(err).toBeInstanceOf(Error)
       expect((err as Error).message).toMatch(/hw down/)
+      // Only guard rejections compensate the optimistic write — a hardware
+      // failure leaves the single optimistic update in place.
+      expect(dbMock.update).toHaveBeenCalledTimes(1)
+      expect(broadcastMock.broadcastMutationStatus).not.toHaveBeenCalledWith('left', { targetLevel: 0 })
     }
     finally {
       vi.useRealTimers()
@@ -593,7 +667,9 @@ describe('device.setTemperature', () => {
       // Only the second call's value reaches hardware
       expect(helpersMock.client.setTemperature).toHaveBeenCalledTimes(1)
       expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('left', 75, undefined)
-      expect(automationMock.registerManualOverride).toHaveBeenCalledTimes(2)
+      // One executed hardware write → one override registration; the
+      // coalesced first call must not register a second one.
+      expect(automationMock.registerManualOverride).toHaveBeenCalledTimes(1)
       expect(automationMock.registerManualOverride).toHaveBeenLastCalledWith('left')
     }
     finally {
@@ -709,6 +785,35 @@ describe('device.setPower', () => {
     pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
     await expect(caller.setPower({ side: 'left', powered: true, temperature: 72 })).rejects.toThrow(/Pump stall protection active/)
     expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    // A rejected command must not suspend autopilot.
+    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
+  })
+
+  it('blocks a power-on queued behind a held side lock when the trip lands while queued', async () => {
+    let tripped = false
+    pumpStallMock.shouldBlock.mockImplementation(() => tripped)
+    let release: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await Promise.resolve()
+
+    dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+    const pending = caller.setPower({ side: 'left', powered: true, temperature: 72 })
+    const assertion = expect(pending).rejects.toThrow(/Pump stall protection active/)
+    // Let the mutation pass its entry check and queue on the held lock
+    // while the guard is still healthy — the flip below happens strictly
+    // after, so only an in-lock recheck can observe it.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0)
+    })
+    expect(pumpStallMock.shouldBlock).toHaveBeenCalled()
+    tripped = true
+    release()
+    await holder
+    await assertion
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
   })
 
   it('allows powering off even when pump stall guard is active', async () => {

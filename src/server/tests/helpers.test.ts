@@ -13,7 +13,13 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: hardware.getSharedHardwareClient,
 }))
 
-const { withHardwareClient } = await import('@/src/server/helpers')
+const pumpStallMock = vi.hoisted(() => ({
+  shouldBlock: vi.fn<(side: 'left' | 'right') => boolean>(() => false),
+}))
+
+vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
+
+const { assertPumpStallNotBlocked, withHardwareClient } = await import('@/src/server/helpers')
 
 beforeEach(() => {
   hardware.client.connect.mockReset().mockResolvedValue(undefined)
@@ -95,6 +101,22 @@ describe('withHardwareClient', () => {
     })
   })
 
+  it('rethrows a TRPCError from the retry attempt instead of wrapping it as a 500', async () => {
+    // e.g. the pump-stall guard trips during the reconnect window — the
+    // PRECONDITION_FAILED must reach the client, not a masked 500.
+    const precondition = new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Pump stall protection active — re-enable the side first',
+    })
+    const callback = vi.fn()
+      .mockRejectedValueOnce(new Error('socket closed'))
+      .mockRejectedValueOnce(precondition)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(withHardwareClient(callback, 'hardware failed')).rejects.toBe(precondition)
+    expect(callback).toHaveBeenCalledTimes(2)
+  })
+
   it('uses the reconnect fallback for a non-Error retry rejection', async () => {
     const callback = vi.fn()
       .mockRejectedValueOnce(new Error('EPIPE'))
@@ -130,5 +152,29 @@ describe('withHardwareClient', () => {
       cause: { reason: 'bad payload' },
     })
     expect(hardware.client.disconnect).not.toHaveBeenCalled()
+  })
+})
+
+describe('assertPumpStallNotBlocked', () => {
+  it('is a no-op when the guard does not block the side', () => {
+    pumpStallMock.shouldBlock.mockReturnValueOnce(false)
+    expect(() => assertPumpStallNotBlocked('left')).not.toThrow()
+    expect(pumpStallMock.shouldBlock).toHaveBeenCalledWith('left')
+  })
+
+  it('throws PRECONDITION_FAILED with the guard message when blocked', () => {
+    pumpStallMock.shouldBlock.mockReturnValueOnce(true)
+    let caught: unknown
+    try {
+      assertPumpStallNotBlocked('right')
+    }
+    catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(TRPCError)
+    expect(caught).toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Pump stall protection active — re-enable the side first',
+    })
   })
 })

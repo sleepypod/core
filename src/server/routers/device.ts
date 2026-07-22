@@ -5,10 +5,9 @@ import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { bedTemp, waterLevelReadings } from '@/src/db/biometrics-schema'
 import { eq, desc } from 'drizzle-orm'
-import { withHardwareClient } from '@/src/server/helpers'
+import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
-import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
@@ -322,12 +321,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
-      if (pumpStallShouldBlock(input.side)) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Pump stall protection active — re-enable the side first',
-        })
-      }
+      assertPumpStallNotBlocked(input.side)
 
       // Server-side debounce: collapse rapid dial-drag calls into one hardware command.
       // Cancel any pending hardware call for this side BEFORE the first await
@@ -338,7 +332,6 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
-      registerManualOverride(input.side)
       markSideMutated(input.side)
 
       // The DB is updated optimistically on every call for responsive UI.
@@ -375,12 +368,10 @@ export const deviceRouter = router({
               // Re-check inside the lock: the guard can trip during the
               // debounce window or while queued behind the side lock, and a
               // stale queued command must not re-energize a parked side.
-              if (pumpStallShouldBlock(input.side)) {
-                throw new TRPCError({
-                  code: 'PRECONDITION_FAILED',
-                  message: 'Pump stall protection active — re-enable the side first',
-                })
-              }
+              // The manual override registers only after the check passes —
+              // a rejected command must not suspend autopilot.
+              assertPumpStallNotBlocked(input.side)
+              registerManualOverride(input.side)
               await client.setTemperature(input.side, input.temperature, input.duration)
               return { success: true }
             }, 'Failed to set temperature'))
@@ -391,6 +382,28 @@ export const deviceRouter = router({
             resolve({ success: true })
           }
           catch (error) {
+            // A late guard rejection means the optimistic isPowered=true
+            // write above contradicts the parked hardware — restore the
+            // off-state mirror trip() wrote so the UI doesn't keep showing
+            // an energized target until the next status poll.
+            if (error instanceof TRPCError && error.code === 'PRECONDITION_FAILED') {
+              try {
+                markSideMutated(input.side)
+                await db
+                  .update(deviceState)
+                  .set({
+                    isPowered: false,
+                    poweredOnAt: null,
+                    targetTemperature: null,
+                    lastUpdated: new Date(),
+                  })
+                  .where(eq(deviceState.side, input.side))
+              }
+              catch (dbError) {
+                console.error('Failed to restore parked state after guard rejection:', dbError)
+              }
+              broadcastMutationStatus(input.side, { targetLevel: 0 })
+            }
             reject(error)
           }
         }, TEMP_DEBOUNCE_MS)
@@ -443,23 +456,19 @@ export const deviceRouter = router({
     .mutation(async ({ input }) => {
       // Only block when raising power. Powering off is always allowed —
       // it's the safe direction, and the guard's own trip uses this path.
-      if (input.powered && pumpStallShouldBlock(input.side)) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Pump stall protection active — re-enable the side first',
-        })
+      if (input.powered) {
+        assertPumpStallNotBlocked(input.side)
       }
 
-      registerManualOverride(input.side)
       return withSideLock(input.side, () => withHardwareClient(async (client) => {
         // Re-check inside the lock (see setTemperature): a trip while this
-        // command queued must not let it re-energize the side.
-        if (input.powered && pumpStallShouldBlock(input.side)) {
-          throw new TRPCError({
-            code: 'PRECONDITION_FAILED',
-            message: 'Pump stall protection active — re-enable the side first',
-          })
+        // command queued must not let it re-energize the side. The manual
+        // override registers only after the check passes — a rejected
+        // command must not suspend autopilot.
+        if (input.powered) {
+          assertPumpStallNotBlocked(input.side)
         }
+        registerManualOverride(input.side)
         await client.setPower(input.side, input.powered, input.temperature)
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
