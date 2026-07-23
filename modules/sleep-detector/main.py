@@ -65,7 +65,12 @@ from typing import Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
-from common.raw_follower import RawFileFollower
+from common.nats_follower import create_follower
+from common.dialect import (
+    KNOWN_RECORD_TYPES,
+    log_capsense_status_once,
+    warn_unknown_type_once,
+)
 from common.calibration import (
     CalibrationStore,
     is_present_capsense_calibrated,
@@ -518,20 +523,33 @@ class PumpGateCapSense:
                         except (TypeError, ValueError):
                             pass
                         break
+                # NATS Pod 5 frzHealth nests pump state under side.pump.
+                pump = side_data.get("pump")
+                if rpm == 0 and isinstance(pump, dict):
+                    val = pump.get("rpm")
+                    if val is not None:
+                        try:
+                            rpm = float(val)
+                        except (TypeError, ValueError):
+                            pass
                 # Also check pumpDuty as fallback — any duty > 0 means pump is running
                 if rpm == 0:
-                    for key in ("pumpDuty", "pump_duty", "duty"):
-                        val = side_data.get(key)
-                        if val is not None:
-                            try:
-                                rpm = 1.0 if float(val) > 0 else 0.0
-                            except (TypeError, ValueError):
-                                pass
-                            break
+                    duty = next((side_data.get(key) for key in
+                                 ("pumpDuty", "pump_duty", "duty")
+                                 if side_data.get(key) is not None), None)
+                    if duty is None and isinstance(pump, dict):
+                        duty = next((pump.get(key) for key in ("duty", "power")
+                                     if pump.get(key) is not None), None)
+                    if duty is not None:
+                        try:
+                            rpm = 1.0 if float(duty) > 0 else 0.0
+                        except (TypeError, ValueError):
+                            pass
 
             elif rtype == "frzTherm":
                 # frzTherm may carry pump duty cycle
-                for key in ("pumpDuty", "pump_duty", "duty", "pumpRpm", "pump_rpm"):
+                for key in ("pumpDuty", "pump_duty", "duty", "pumpRpm",
+                            "pump_rpm", "power"):
                     val = side_data.get(key)
                     if val is not None:
                         try:
@@ -885,7 +903,9 @@ def main() -> None:
     # side is observed by the other on its next write (no orphaned handles).
     left = SessionTracker(side="left", db=db_holder, calibration=cal_cache, pump_gate=pump_gate)
     right = SessionTracker(side="right", db=db_holder, calibration=cal_cache, pump_gate=pump_gate)
-    follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
+    # Source selected once at startup: NatsFollower on new-firmware pods (NATS
+    # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
+    follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
     report_health("healthy", "sleep-detector started")
     log.info("Calibration profiles will be loaded from biometrics.db (reload every %ds)", CALIBRATION_RELOAD_S)
@@ -898,7 +918,15 @@ def main() -> None:
 
     try:
         for record in follower.read_records():
+            if not isinstance(record, dict):
+                continue
             rtype = record.get("type")
+
+            # Surface genuinely-new firmware types once (blanketReadings, log,
+            # …) instead of dropping them silently.
+            if rtype not in KNOWN_RECORD_TYPES:
+                warn_unknown_type_once(record, "sleep-detector")
+                continue
 
             # Update pump state from freezer health/thermal records
             if rtype in PUMP_STATE_TYPES:
@@ -907,6 +935,9 @@ def main() -> None:
 
             if rtype not in CAPSENSE_TYPES:
                 continue
+
+            # Record (do not gate on) new-firmware capSense per-side status.
+            log_capsense_status_once(record, "sleep-detector")
 
             ts = sanitize_ts(record.get("ts"))
             left.process(ts, record)

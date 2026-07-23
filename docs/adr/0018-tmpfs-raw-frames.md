@@ -54,8 +54,22 @@ Loss of 30 min of upstream waveform is a worthwhile trade for years of eMMC wear
 
 `scripts/bin/sp-uninstall` restores `frank.sh` from `frank.sh.bak-pre-tmpfs-*` (most recent), tears down mount unit + drop-ins + timers, and leaves the cold archive intact for forensics.
 
+## Firmware-variant applicability
+
+The frank.sh-shim assumption holds on a shrinking slice of the fleet. As of 2026-05, three firmware generations coexist:
+
+| Era | `frank.sh` | `nats-server` | `/persistent/jetstream` | RAW write path | Helper behavior |
+|---|---|---|---|---|---|
+| Old (Pod 3, Pod 4, early Pod 5) | present | absent | absent | frankenfirmware via `cd /persistent` shim | Patch shim → cwd `/persistent/biometrics`; mount + archive + prune as designed in this ADR |
+| Mid (~2025 → April 2026) | **absent** | absent | absent | frankenfirmware writes `/persistent/*.RAW` directly (shim removed in firmware ~year ago) | No shim to patch; mount + archive still useful as a cold-storage rotation against the live `/persistent/*.RAW` files |
+| New (April 2026+, e.g. `rat_version ca35aafa`) | absent | active | present | frankenfirmware → NATS JetStream stream `raw` (subject `raw.>`); no `.RAW` files written | Tmpfs + cd-patch workflow inapplicable; skip install entirely. Biometrics ingestion needs a NATS consumer (sleepypod-core-54) — out of scope for this ADR |
+
+`scripts/lib/biometrics-archiver-helpers` gates on the presence of `nats-server.service` via `systemctl cat` and `[ -d /persistent/jetstream ]` (the new-firmware signal) and returns early on that path only. Mid-era pods continue on the existing warn-and-continue path that has carried them for ~year. See PR #594.
+
 ## Refs
 
 - Ticket: sleepypod-core-19
+- Follow-up epic for new firmware: sleepypod-core-54 (NATS JetStream consumer)
 - GH issue: #493 (full design doc)
 - Live validation: Pod 5 fw a35aafa on 2026-05-04 — see PR #499
+- Firmware-variant gating fix: PR #594

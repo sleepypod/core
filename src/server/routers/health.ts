@@ -365,10 +365,10 @@ export const healthRouter = router({
   /**
    * Thermal truth — reconciles what the app *commanded* (device_state) against
    * what the hardware is *delivering* (latest pump RPM + flow). A side can read
-   * `isPowered=1, target=81°F` while its pump is at 0 rpm, in which case
-   * firmware locks the TEC (`tec[<side>] locked (pump)`) and the bed silently
-   * drifts to ambient. That divergence is invisible in the normal status view;
-   * this surfaces it as a per-side `verdict` so a stalled side is obvious.
+   * `isPowered=1, target=81°F` while its pump is at 0 rpm, which may cause
+   * firmware to lock the TEC and let the bed drift to ambient. That divergence
+   * is invisible in the normal status view; this surfaces it as a per-side
+   * `verdict` so a stalled side is obvious.
    *
    * Pump/flow age matters: flow_readings are written ~once/60s only while the
    * monitor sees frzHealth frames, so a stale reading on a powered side is
@@ -394,7 +394,7 @@ export const healthRouter = router({
         waterTempF: z.number().nullable(),
         bedSurfaceTempF: z.number().nullable(),
         guardBlocked: z.boolean(),
-        verdict: z.enum(['off', 'delivering', 'idle', 'stalled']),
+        verdict: z.enum(['off', 'starting', 'delivering', 'idle', 'stalled']),
         note: z.string().nullable(),
       })),
     }))
@@ -408,6 +408,10 @@ export const healthRouter = router({
       // A flow reading older than this on a powered side means the monitor has
       // stopped seeing frames — also a stall (see the overnight gap in the RCA).
       const STALE_SEC = 180
+      // flow_readings are throttled to one row/minute. After power-on, allow one
+      // write interval plus frzHealth cadence/jitter before declaring that a
+      // pre-power zero-RPM row represents the running side.
+      const POST_POWER_FLOW_GRACE_SEC = 90
       // Heating/cooling is only "delivering" when target diverges from current
       // by more than sensor noise; otherwise a powered, on-target side is idle.
       const AT_TARGET_F = 2
@@ -440,7 +444,8 @@ export const healthRouter = router({
         .all()
 
       const now = Date.now()
-      const flowAgeSec = flow?.timestamp ? Math.round((now - flow.timestamp.getTime()) / 1000) : null
+      const flowTimestampMs = flow?.timestamp?.getTime() ?? null
+      const flowAgeSec = flowTimestampMs != null ? Math.round((now - flowTimestampMs) / 1000) : null
 
       const sides = (['left', 'right'] as const).map((side) => {
         const [ds] = db.select().from(deviceState).where(eq(deviceState.side, side)).limit(1).all()
@@ -459,19 +464,39 @@ export const healthRouter = router({
         // view renders "off"/"—" instead of a misleading 83.
         const target = isPowered ? (ds?.targetTemperature ?? null) : null
         const current = isPowered ? (ds?.currentTemperature ?? null) : null
+        const poweredOnAtMs = ds?.poweredOnAt?.getTime() ?? null
+        const powerAgeSec = poweredOnAtMs == null
+          ? null
+          : Math.max(0, Math.round((now - poweredOnAtMs) / 1000))
+        // A flow row has one shared timestamp for both pumps. Treat it as a
+        // post-power reading for this side only once this pump reports motion;
+        // the other side's running pump must not end this side's startup grace.
+        const sideFlowTimestampMs = pumpRpm != null && pumpRpm > 0 ? flowTimestampMs : null
+        const hasPostPowerReading = sideFlowTimestampMs != null
+          && (poweredOnAtMs == null || sideFlowTimestampMs > poweredOnAtMs)
+        const awaitingPostPowerReading = poweredOnAtMs != null
+          && powerAgeSec != null
+          && powerAgeSec <= POST_POWER_FLOW_GRACE_SEC
+          && !hasPostPowerReading
         const stale = flowAgeSec != null && flowAgeSec > STALE_SEC
         const flowing = pumpRpm != null && pumpRpm >= MIN_FLOW_RPM && !stale
 
-        let verdict: 'off' | 'delivering' | 'idle' | 'stalled'
+        let verdict: 'off' | 'starting' | 'delivering' | 'idle' | 'stalled'
         let note: string | null = null
         if (!isPowered) {
           verdict = 'off'
         }
+        else if (awaitingPostPowerReading) {
+          verdict = 'starting'
+          note = 'waiting for the first pump reading after power-on'
+        }
         else if (!flowing) {
           verdict = 'stalled'
-          note = stale
-            ? `powered but no fresh pump reading for ${flowAgeSec}s — pump likely not circulating; TEC locks at zero flow`
-            : 'powered but pump below flow threshold — TEC is locked, bed will drift to ambient'
+          note = !hasPostPowerReading
+            ? 'powered but no pump reading has arrived since power-on — thermal delivery is unconfirmed'
+            : stale
+              ? `powered but no fresh pump reading for ${flowAgeSec}s — pump may not be circulating; thermal delivery is unconfirmed`
+              : 'powered with pump RPM below the delivery threshold — thermal delivery is unconfirmed'
         }
         else if (target != null && current != null && Math.abs(target - current) > AT_TARGET_F) {
           verdict = 'delivering'

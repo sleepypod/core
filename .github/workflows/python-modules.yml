@@ -46,7 +46,9 @@ jobs:
             workdir: modules
             target: common
             cov_source: common
-            deps: ""
+            # cbor2 is needed to decode the real NATS capture fixtures through
+            # NatsFollower's decode path (test_nats_follower).
+            deps: "cbor2"
           - name: cover-buttons
             workdir: modules/cover-buttons
             target: .

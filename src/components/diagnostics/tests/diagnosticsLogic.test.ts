@@ -89,8 +89,9 @@ describe('fmtJobValue', () => {
 })
 
 describe('VERDICT_STYLES', () => {
-  it('covers the four thermal verdicts', () => {
-    expect(Object.keys(VERDICT_STYLES).sort()).toEqual(['delivering', 'idle', 'off', 'stalled'])
+  it('covers all thermal verdicts', () => {
+    expect(Object.keys(VERDICT_STYLES).sort()).toEqual(['delivering', 'idle', 'off', 'stalled', 'starting'])
+    expect(VERDICT_STYLES.starting.label).toBe('STARTING')
   })
 })
 

@@ -43,6 +43,15 @@ fi
 
 COMMAND="$1"
 
+# Installed systems use the transactional root-owned helper. It updates both
+# stock Pod 5 and legacy netfilter-persistent restore files, so the runtime and
+# reboot policy cannot diverge. Keep the implementation below as a bootstrap
+# fallback for source checkouts that have not run scripts/install yet.
+if { [ "$COMMAND" = block ] || [ "$COMMAND" = unblock ]; } \
+  && [ -x /usr/local/bin/sp-internet-control ]; then
+  exec /usr/local/bin/sp-internet-control "$COMMAND"
+fi
+
 # ---------------------------------------------------------------------------
 # Pod OS / iptables detection
 # ---------------------------------------------------------------------------

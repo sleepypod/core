@@ -1,0 +1,133 @@
+#!/bin/bash
+set -euo pipefail
+
+# Boot-time restore for Pod generations that do not ship an iptables restore
+# service. Pod 5 may also run its stock units; the SleepyPod unit is ordered
+# after them so these canonical, validated files win deterministically.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+RULES_DIR="${SLEEPYPOD_IPTABLES_RULES_DIR:-/etc/iptables}"
+IPV4_RULES="$RULES_DIR/iptables.rules"
+IPV6_RULES="$RULES_DIR/ip6tables.rules"
+LEGACY_IPV6_RULES="$RULES_DIR/rules.v6"
+LOCK_FILE="${SLEEPYPOD_FIREWALL_RESTORE_LOCK:-/run/lock/sleepypod-internet-control.lock}"
+IPV6_SYSCTL_ROOT="${SLEEPYPOD_IPV6_SYSCTL_ROOT:-/proc/sys/net/ipv6/conf}"
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: sp-firewall-restore must run as root" >&2
+  exit 1
+fi
+
+resolve_required() {
+  local name="$1" path
+  path="$(command -v "$name" 2>/dev/null || true)"
+  if [ -z "$path" ]; then
+    echo "Error: required command not found: $name" >&2
+    exit 1
+  fi
+  printf '%s' "$path"
+}
+
+IPTABLES="$(resolve_required iptables)"
+FLOCK="$(resolve_required flock)"
+IPTABLES_RESTORE="$(command -v iptables-restore 2>/dev/null || true)"
+IP6TABLES="$(command -v ip6tables 2>/dev/null || true)"
+IP6TABLES_SAVE="$(command -v ip6tables-save 2>/dev/null || true)"
+IP6TABLES_RESTORE="$(command -v ip6tables-restore 2>/dev/null || true)"
+HAS_IPV6=false
+if [ -d "$IPV6_SYSCTL_ROOT" ] \
+  && [ -n "$IP6TABLES" ] && [ -n "$IP6TABLES_SAVE" ] && [ -n "$IP6TABLES_RESTORE" ]; then
+  HAS_IPV6=true
+fi
+
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! "$FLOCK" -w 15 9; then
+  echo "Error: another firewall transition is still running" >&2
+  exit 1
+fi
+
+fail_closed() {
+  local failed=false
+  # Set the DROP policy before flushing OUTPUT so there is no open interval.
+  "$IPTABLES" -P OUTPUT DROP || failed=true
+  "$IPTABLES" -F OUTPUT || failed=true
+  if [ -d "$IPV6_SYSCTL_ROOT" ] && [ -n "$IP6TABLES" ]; then
+    "$IP6TABLES" -P OUTPUT DROP || failed=true
+    "$IP6TABLES" -F OUTPUT || failed=true
+  elif [ -d "$IPV6_SYSCTL_ROOT" ]; then
+    # The installed unit is a hard prerequisite of NetworkManager. Returning
+    # failure here prevents networking from starting when an IPv6 firewall
+    # cannot be applied; a per-interface sysctl is not durable because
+    # NetworkManager may re-enable IPv6 during activation.
+    failed=true
+  fi
+  if [ "$failed" = true ]; then
+    echo "ERROR: firewall restore failed and the emergency Local Only policy was incomplete" >&2
+  else
+    echo "ERROR: firewall restore failed; emergency Local Only policy applied" >&2
+  fi
+  return 0
+}
+
+# Corrupt or missing restore inputs are failures too. Run them through the
+# same locked emergency policy as an apply-time failure instead of returning
+# while a stock open policy may still be active.
+if [ -z "$IPTABLES_RESTORE" ]; then
+  echo "Error: iptables-restore is unavailable" >&2
+  fail_closed
+  exit 1
+fi
+if [ ! -s "$IPV4_RULES" ]; then
+  echo "Error: missing or empty persisted IPv4 policy: $IPV4_RULES" >&2
+  fail_closed
+  exit 1
+fi
+if [ ! -d "$IPV6_SYSCTL_ROOT" ]; then
+  # The running kernel is authoritative. Remove stale userspace restore
+  # inputs so an IPv4-only firmware image is not held offline by inert files.
+  if ! rm -f "$IPV6_RULES" "$LEGACY_IPV6_RULES"; then
+    echo "Error: unable to quarantine stale IPv6 restore inputs" >&2
+    fail_closed
+    exit 1
+  fi
+elif [ "$HAS_IPV6" = true ]; then
+  if [ ! -s "$IPV6_RULES" ]; then
+    echo "Error: missing or empty persisted IPv6 policy: $IPV6_RULES" >&2
+    fail_closed
+    exit 1
+  fi
+else
+  if [ -e "$IPV6_RULES" ]; then
+    echo "Error: persisted IPv6 policy exists but the complete ip6tables toolchain is unavailable" >&2
+    fail_closed
+    exit 1
+  fi
+  echo "Error: IPv6 is enabled but the complete ip6tables toolchain is unavailable" >&2
+  fail_closed
+  exit 1
+fi
+
+# Validate every family before applying either one. If validation or an
+# apply-time restore fails, force both managed families closed; otherwise a
+# v6 failure after a successful v4 apply could leave a privacy-degraded mixed
+# state until the next boot.
+if ! "$IPTABLES_RESTORE" --test < "$IPV4_RULES"; then
+  fail_closed
+  exit 1
+fi
+if [ "$HAS_IPV6" = true ] && ! "$IP6TABLES_RESTORE" --test < "$IPV6_RULES"; then
+  fail_closed
+  exit 1
+fi
+
+if ! "$IPTABLES_RESTORE" < "$IPV4_RULES"; then
+  fail_closed
+  exit 1
+fi
+if [ "$HAS_IPV6" = true ] && ! "$IP6TABLES_RESTORE" < "$IPV6_RULES"; then
+  fail_closed
+  exit 1
+fi
+
+echo "SleepyPod firewall policy restored"

@@ -1,9 +1,9 @@
 /**
  * Tests for health.thermal — the per-side verdict that reconciles commanded
  * state (device_state) against delivered flow (latest pump RPM). The whole
- * point of the endpoint is catching the "powered + target set but pump at 0
- * rpm → TEC locked → bed drifts cold" divergence, so the stalled cases are
- * the ones that matter.
+ * point of the endpoint is catching a sustained "powered + target set but pump
+ * at 0 rpm" divergence without misclassifying the pre-power sample during the
+ * first telemetry interval.
  *
  * db + biometricsDb are mocked with a chain keyed by table reference. The
  * device_state query runs once per side in left→right order, so its mock
@@ -76,6 +76,7 @@ const { healthRouter } = await import('@/src/server/routers/health')
 const caller = healthRouter.createCaller({})
 
 const FRESH = new Date(Date.now() - 30_000) // 30s old → not stale
+const POWERED_BEFORE_FRESH = new Date(FRESH.getTime() - 120_000)
 
 beforeEach(() => {
   guardMock.shouldBlock.mockReset().mockReturnValue(false)
@@ -121,7 +122,7 @@ describe('health.thermal verdicts', () => {
     // yet): target/current must surface as null rather than coercing to a
     // value, while the side still evaluates as on.
     rows.deviceStateQueue = [
-      [{ side: 'left', isPowered: true, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'left', isPowered: true, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: POWERED_BEFORE_FRESH }],
       [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
     ]
     rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
@@ -132,23 +133,88 @@ describe('health.thermal verdicts', () => {
 
   it('stalled when powered with a target but pump rpm is below the flow threshold', async () => {
     rows.deviceStateQueue = [
-      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: POWERED_BEFORE_FRESH }],
       [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
     ]
     rows.flow = [{ timestamp: FRESH, leftPumpRpm: 0, rightPumpRpm: 2000, leftFlowrateCd: 0, rightFlowrateCd: 2600 }]
     const res = await caller.thermal({})
     const left = res.sides[0]
     expect(left.verdict).toBe('stalled')
-    expect(left.note).toContain('TEC')
+    expect(left.note).toContain('thermal delivery is unconfirmed')
+  })
+
+  it('reports starting while the latest pump row still predates power-on', async () => {
+    const now = new Date('2026-07-20T01:00:00Z').getTime()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 74, isAlarmVibrating: false, poweredOnAt: new Date(now - 10_000) }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{ timestamp: new Date(now - 30_000), leftPumpRpm: 0, rightPumpRpm: 0, leftFlowrateCd: 0, rightFlowrateCd: 0 }]
+
+    const left = (await caller.thermal({})).sides[0]
+
+    expect(left.verdict).toBe('starting')
+    expect(left.note).toBe('waiting for the first pump reading after power-on')
+  })
+
+  it('keeps startup grace side-specific when only the other pump is moving', async () => {
+    const now = new Date('2026-07-20T01:00:00Z').getTime()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 74, isAlarmVibrating: false, poweredOnAt: new Date(now - 10_000) }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{
+      timestamp: new Date(now - 5_000),
+      leftPumpRpm: 0,
+      rightPumpRpm: 2000,
+      leftFlowrateCd: 0,
+      rightFlowrateCd: 2600,
+    }]
+
+    const left = (await caller.thermal({})).sides[0]
+
+    expect(left.verdict).toBe('starting')
+    expect(left.note).toBe('waiting for the first pump reading after power-on')
+  })
+
+  it('keeps an equal-second pump row in starting through the 90-second boundary', async () => {
+    const now = new Date('2026-07-20T01:00:00Z').getTime()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const poweredOnAt = new Date(now - 90_000)
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 74, isAlarmVibrating: false, poweredOnAt }],
+      [],
+    ]
+    rows.flow = [{ timestamp: poweredOnAt, leftPumpRpm: 0, rightPumpRpm: 0, leftFlowrateCd: 0, rightFlowrateCd: 0 }]
+
+    expect((await caller.thermal({})).sides[0].verdict).toBe('starting')
+  })
+
+  it('reports no post-power telemetry as stalled after the startup grace expires', async () => {
+    const now = new Date('2026-07-20T01:00:00Z').getTime()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 74, isAlarmVibrating: false, poweredOnAt: new Date(now - 91_000) }],
+      [],
+    ]
+    rows.flow = [{ timestamp: new Date(now - 120_000), leftPumpRpm: 0, rightPumpRpm: 0, leftFlowrateCd: 0, rightFlowrateCd: 0 }]
+
+    const left = (await caller.thermal({})).sides[0]
+
+    expect(left.verdict).toBe('stalled')
+    expect(left.note).toContain('no pump reading has arrived since power-on')
   })
 
   it('stalled when powered but the latest flow reading is stale (no fresh frames)', async () => {
+    const staleTimestamp = new Date(Date.now() - 600_000)
     rows.deviceStateQueue = [
-      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 72, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 72, isAlarmVibrating: false, poweredOnAt: new Date(staleTimestamp.getTime() - 60_000) }],
       [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
     ]
     // Healthy rpm but the reading is 10 minutes old → pump not actually reporting.
-    rows.flow = [{ timestamp: new Date(Date.now() - 600_000), leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
+    rows.flow = [{ timestamp: staleTimestamp, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
     const res = await caller.thermal({})
     const left = res.sides[0]
     expect(left.verdict).toBe('stalled')
@@ -157,7 +223,7 @@ describe('health.thermal verdicts', () => {
 
   it('delivering when powered, flowing, and target diverges from current', async () => {
     rows.deviceStateQueue = [
-      [{ side: 'left', isPowered: true, targetTemperature: 85, currentTemperature: 72, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'left', isPowered: true, targetTemperature: 85, currentTemperature: 72, isAlarmVibrating: false, poweredOnAt: POWERED_BEFORE_FRESH }],
       [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
     ]
     rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
@@ -167,7 +233,7 @@ describe('health.thermal verdicts', () => {
 
   it('idle when powered and flowing but already at target', async () => {
     rows.deviceStateQueue = [
-      [{ side: 'left', isPowered: true, targetTemperature: 80, currentTemperature: 80.5, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'left', isPowered: true, targetTemperature: 80, currentTemperature: 80.5, isAlarmVibrating: false, poweredOnAt: POWERED_BEFORE_FRESH }],
       [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
     ]
     rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
@@ -260,7 +326,7 @@ describe('health.thermal verdicts', () => {
     guardMock.shouldBlock.mockImplementation((side: string) => side === 'left')
     rows.settings = [{ enabled: true }]
     rows.deviceStateQueue = [
-      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 70, isAlarmVibrating: true, poweredOnAt: new Date() }],
+      [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 70, isAlarmVibrating: true, poweredOnAt: POWERED_BEFORE_FRESH }],
       [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
     ]
     rows.flow = [{ timestamp: FRESH, leftPumpRpm: 0, rightPumpRpm: 0, leftFlowrateCd: 0, rightFlowrateCd: 0 }]

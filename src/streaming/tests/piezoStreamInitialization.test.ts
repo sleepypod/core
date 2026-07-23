@@ -113,15 +113,15 @@ type PiezoStreamModule = typeof PiezoStream
 
 const originalWsPort = process.env.PIEZO_WS_PORT
 const originalRawDataDir = process.env.RAW_DATA_DIR
+const originalNatsDisabled = process.env.PIEZO_NATS_DISABLED
 let loadedModule: PiezoStreamModule | null = null
 
-function restoreEnv(name: 'PIEZO_WS_PORT' | 'RAW_DATA_DIR', value: string | undefined): void {
-  if (name === 'PIEZO_WS_PORT') {
-    if (value === undefined) delete process.env.PIEZO_WS_PORT
-    else process.env.PIEZO_WS_PORT = value
-  }
-  else if (value === undefined) delete process.env.RAW_DATA_DIR
-  else process.env.RAW_DATA_DIR = value
+function restoreEnv(
+  name: 'PIEZO_WS_PORT' | 'RAW_DATA_DIR' | 'PIEZO_NATS_DISABLED',
+  value: string | undefined,
+): void {
+  if (value === undefined) Reflect.deleteProperty(process.env, name)
+  else process.env[name] = value
 }
 
 async function loadFreshModule(options: {
@@ -130,6 +130,7 @@ async function loadFreshModule(options: {
 } = {}): Promise<PiezoStreamModule> {
   vi.resetModules()
   process.env.PIEZO_WS_PORT = options.wsPort ?? '0'
+  process.env.PIEZO_NATS_DISABLED = '1'
   if (options.rawDataDir === null) delete process.env.RAW_DATA_DIR
   else process.env.RAW_DATA_DIR = options.rawDataDir ?? '/unused-test-raw-root'
   loadedModule = await import('../piezoStream')
@@ -151,6 +152,7 @@ afterEach(async () => {
   vi.useRealTimers()
   restoreEnv('PIEZO_WS_PORT', originalWsPort)
   restoreEnv('RAW_DATA_DIR', originalRawDataDir)
+  restoreEnv('PIEZO_NATS_DISABLED', originalNatsDisabled)
   vi.restoreAllMocks()
 })
 

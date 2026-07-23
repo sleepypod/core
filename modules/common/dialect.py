@@ -37,8 +37,23 @@ NO_SENSOR_FLOAT = -327.68
 # Integer sentinel some v1 readings use (negative absolute zero).
 NO_SENSOR_INT = -32768
 
+# Record types any biometrics module knows how to handle (or deliberately
+# ignores as another module's concern). Records whose type is outside this set
+# are genuinely new firmware output — surfaced once via warn_unknown_type_once
+# rather than silently dropped. New Pod 5 firmware adds blanketReadings / log
+# (and frzTherm, already consumed by the sleep-detector's pump-state gate),
+# which is exactly what this set exists to flag.
+KNOWN_RECORD_TYPES = frozenset({
+    "capSense", "capSense2", "piezo-dual",
+    "bedTemp", "bedTemp2",
+    "frzTemp", "frzHealth", "frzTherm",
+})
+
 # Track unknown record types seen so we only log each once per process.
 _unknown_types_seen: set[str] = set()
+
+# Track distinct non-"good" capSense side statuses seen, so each is logged once.
+_capsense_status_seen: set[str] = set()
 
 
 def _is_sentinel_float(v) -> bool:
@@ -152,3 +167,31 @@ def warn_unknown_type_once(rec: dict, pod_context: str = "") -> None:
     _unknown_types_seen.add(rtype)
     suffix = f" ({pod_context})" if pod_context else ""
     log.warning("Unknown record type %r — passing through without normalization%s", rtype, suffix)
+
+
+def log_capsense_status_once(rec: dict, pod_context: str = "") -> None:
+    """Record (but do not gate on) capSense per-side ``status``.
+
+    New Pod 5 firmware tags each side of a ``capSense`` record with a
+    ``status`` ("good" observed; the non-good vocabulary is unknown). Design
+    decision (review 2026-07-19): v1 *records but does not gate* — gating on
+    unobserved states risks discarding usable data. This logs the first
+    occurrence of each distinct non-good status with the channel values
+    alongside, so field reports carry the evidence needed to design the future
+    per-side suppression gate. It never mutates the record.
+    """
+    if rec.get("type") != "capSense":
+        return
+    for side in ("left", "right"):
+        data = rec.get(side)
+        if not isinstance(data, dict):
+            continue
+        status = data.get("status")
+        if status is None or status == "good" or status in _capsense_status_seen:
+            continue
+        _capsense_status_seen.add(status)
+        suffix = f" ({pod_context})" if pod_context else ""
+        log.warning(
+            "capSense %s side status=%r (out=%s cen=%s in=%s)%s",
+            side, status, data.get("out"), data.get("cen"), data.get("in"), suffix,
+        )

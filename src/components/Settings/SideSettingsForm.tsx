@@ -18,8 +18,8 @@ interface SideSettingsFormProps {
   side: 'left' | 'right'
   sideData: SideData
   /**
-   * Whether presence can be sensed for this side (calibrated capSense2 + fresh
-   * frame). `null` while the occupancy query is loading. When `false`, auto-off
+   * Whether presence can be sensed for this side (matching capacitance
+   * calibration + fresh frame). `null` while the query loads. When `false`, auto-off
    * can't reliably tell the bed is empty, so the toggle is gated off — enabling
    * it would do nothing (the watcher stands down on unsensable presence).
    */

@@ -1,10 +1,46 @@
 #!/bin/bash
 set -euo pipefail
 
-# Force /usr/local/bin to the front of PATH. Pod 3 ships Volta at
-# ~/.volta/bin ahead of /usr/local/bin; without this its node/npm/pnpm
-# shim shadows ours and fails with "Volta error: Node is not available".
-export PATH="/usr/local/bin:$PATH"
+# Use a fixed root command path. This keeps Pod 3's Volta shims out and makes
+# sbin-only tools such as iptables and visudo available under systemd/sudo.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Serialize full installs, updates, and UI firewall toggles. The installer has
+# historically used this path, so sharing it also protects mixed-version
+# transitions while a pod is being upgraded.
+MAINTENANCE_LOCK="/var/run/sleepypod-install.lock"
+
+# Privileged firewall dispatch for the unprivileged web service. Keep this
+# before every updater side effect: the installed sudoers rule already permits
+# the root-owned sp-update binary, which lets the first OTA bootstrap the new
+# sp-internet-control helper without widening that rule.
+if [ "${1:-}" = "--internet-access" ]; then
+  if [ "$#" -ne 2 ] || { [ "$2" != "block" ] && [ "$2" != "unblock" ]; }; then
+    echo "Usage: sp-update --internet-access {block|unblock}" >&2
+    exit 2
+  fi
+
+  exec 200>"$MAINTENANCE_LOCK"
+  if ! flock -n 200; then
+    echo "Error: an installation or update is already running" >&2
+    exit 1
+  fi
+
+  INTERNET_CONTROL_HELPER="/usr/local/bin/sp-internet-control"
+  HELPER_META="$(stat -c '%u:%a' "$INTERNET_CONTROL_HELPER" 2>/dev/null || true)"
+  if [ ! -f "$INTERNET_CONTROL_HELPER" ] || [ ! -x "$INTERNET_CONTROL_HELPER" ] \
+    || [[ ! "$HELPER_META" =~ ^0:[0-7]*[0145][0145]$ ]]; then
+    echo "Error: firewall helper is missing or has unsafe ownership/mode" >&2
+    exit 1
+  fi
+  exec "$INTERNET_CONTROL_HELPER" "$2"
+fi
+
+exec 200>"$MAINTENANCE_LOCK"
+if ! flock -n 200; then
+  echo "Error: another installation or update is already running" >&2
+  exit 1
+fi
 
 # sp-update — self-update sleepypod-core from GitHub via curl+tarball
 #
@@ -31,106 +67,125 @@ echo "Branch: $BRANCH"
 echo "Repo:   $GITHUB_REPO"
 echo ""
 
-# Source shared iptables helpers (with inline fallback for transitional installs)
-if [ -f "$INSTALL_DIR/scripts/lib/iptables-helpers" ]; then
-  source "$INSTALL_DIR/scripts/lib/iptables-helpers"
-else
-  # Inline fallback — remove once all pods have scripts/lib/
-  SAVED_IPTABLES=""
-  WAN_WAS_BLOCKED=false
-  wan_is_blocked() {
-    iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
-  }
-  unblock_wan() {
-    echo "Opening WAN access..."
-    # Capture state verbatim. `|| true` would mask a failed save and
-    # quietly fall through on restore — silent data loss.
-    if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
-      echo "Error: iptables-save failed — refusing to unblock WAN." >&2
-      echo "$SAVED_IPTABLES" >&2
-      SAVED_IPTABLES=""
-      return 1
-    fi
-    if [ -z "$SAVED_IPTABLES" ]; then
-      echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
-      return 1
-    fi
-    iptables -F && iptables -X && iptables -t nat -F && iptables -t nat -X
-    echo "WAN open."
-  }
-  restore_wan() {
-    if [ -n "$SAVED_IPTABLES" ]; then
-      echo "Restoring iptables rules..."
-      echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || iptables -P OUTPUT DROP
-    else
-      iptables -P OUTPUT DROP
-    fi
-    echo "WAN blocked."
-  }
+PRIVACY_HELPERS="/usr/local/bin/sp-network-privacy"
+FIREWALL_HELPER=/usr/local/bin/sp-internet-control
+if [ ! -r "$PRIVACY_HELPERS" ] || [ ! -x "$FIREWALL_HELPER" ]; then
+  echo "Error: $PRIVACY_HELPERS is missing." >&2
+  echo "       Run the full installer once to migrate this legacy installation." >&2
+  exit 1
+fi
+# shellcheck source=scripts/bin/sp-network-privacy
+source "$PRIVACY_HELPERS"
+
+PRE_UPDATE_FIREWALL_MODE=""
+
+# This is mandatory even when WAN is already open. It protects the two stock
+# cloud clients during updates and refreshes stale managed blocks atomically.
+if ! ensure_telemetry_hosts_block; then
+  echo "Error: refusing to update without the Eight Sleep hosts block" >&2
+  exit 1
 fi
 
-# Cleanup — re-block WAN, rollback code, and restart service on failure
+# Cleanup state is semantic, not tied to whether a particular unblock command
+# happened. A blocked installation must recover Local Only even if failure
+# occurs during final persistence rather than during the download window.
 ROLLBACK_READY=false
+SERVICE_WAS_ACTIVE=false
+SERVICE_QUIESCED=false
+SERVICE_START_ATTEMPTED=false
+FIREWALL_RECOVERY_REQUIRED=false
+
+# Invoked by the EXIT trap below.
+# shellcheck disable=SC2329
 cleanup() {
   local exit_code=$?
-  if [ "$WAN_WAS_BLOCKED" = true ]; then
-    restore_wan
-    WAN_WAS_BLOCKED=false
-  fi
-  if [ "$exit_code" -ne 0 ] && [ "$ROLLBACK_READY" = true ]; then
-    echo "Update failed, rolling back..." >&2
-    if [ -d "$BACKUP_DIR" ]; then
-      find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-        ! -name 'node_modules' \
-        ! -name '.env' \
-        -exec rm -rf {} +
-      cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
-      # Intentionally NOT restoring sp-* tools to /usr/local/bin/.
-      # They were already swapped in atomically (see install(1) below)
-      # before the failure; restoring the pre-update copies can re-pin a
-      # pod on a broken sp-update and create an infinite loop. Concretely:
-      # pre-#494 sp-update used `cp` for self-replace, which truncated the
-      # running file's inode mid-run and made bash parse garbage from the
-      # new bytes (the "/usr/local/bin/sp-update: line N: ...: command not
-      # found" symptom). #494 fixed that with install(1), but if rollback
-      # then restored the pre-#494 copy, the next run would corrupt itself
-      # the same way. App code rolls back; sp-* tools roll forward.
-      echo "Previous code restored."
-    fi
-    if [ -n "${DB_BACKUP:-}" ] && [ -f "$DB_BACKUP" ]; then
-      cp "$DB_BACKUP" "$DATA_DIR/sleepypod.db"
-      # Restore the WAL/SHM sidecars to a state consistent with the .db
-      # backup. If a backup sidecar exists, copy it; otherwise REMOVE any
-      # live sidecar — leaving a newer-than-DB sidecar would let SQLite
-      # replay post-rollback transactions on top of the rolled-back DB.
-      WAL_BAK="$DATA_DIR/sleepypod.db-wal.bak.${BACKUP_TS:-}"
-      SHM_BAK="$DATA_DIR/sleepypod.db-shm.bak.${BACKUP_TS:-}"
-      if [ -f "$WAL_BAK" ]; then
-        cp "$WAL_BAK" "$DATA_DIR/sleepypod.db-wal"
-      else
-        rm -f "$DATA_DIR/sleepypod.db-wal"
+  local firewall_safe=true rollback_ok=true
+  trap - EXIT
+  set +e
+
+  if [ "$exit_code" -ne 0 ]; then
+    if { [ "$SERVICE_QUIESCED" = true ] || [ "$SERVICE_START_ATTEMPTED" = true ]; } \
+      && systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+      systemctl stop sleepypod.service 2>/dev/null || true
+      if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+        echo "ERROR: failed to stop sleepypod.service during rollback" >&2
+        rollback_ok=false
       fi
-      if [ -f "$SHM_BAK" ]; then
-        cp "$SHM_BAK" "$DATA_DIR/sleepypod.db-shm"
-      else
-        rm -f "$DATA_DIR/sleepypod.db-shm"
-      fi
-      # The hardened systemd unit runs as User=sleepypod; ensure the
-      # restored files match the install-time ownership/mode (root:sleepypod
-      # 0660) so the service can read+write them.
-      chown root:sleepypod "$DATA_DIR/sleepypod.db" 2>/dev/null || true
-      chmod 0660 "$DATA_DIR/sleepypod.db" 2>/dev/null || true
-      [ -f "$DATA_DIR/sleepypod.db-wal" ] && chown root:sleepypod "$DATA_DIR/sleepypod.db-wal" 2>/dev/null || true
-      [ -f "$DATA_DIR/sleepypod.db-wal" ] && chmod 0660 "$DATA_DIR/sleepypod.db-wal" 2>/dev/null || true
-      [ -f "$DATA_DIR/sleepypod.db-shm" ] && chown root:sleepypod "$DATA_DIR/sleepypod.db-shm" 2>/dev/null || true
-      [ -f "$DATA_DIR/sleepypod.db-shm" ] && chmod 0660 "$DATA_DIR/sleepypod.db-shm" 2>/dev/null || true
-      echo "Database restored from $DB_BACKUP."
     fi
-    systemctl start sleepypod.service 2>/dev/null || true
-  elif [ "$exit_code" -ne 0 ]; then
-    echo "Update failed before rollback point, starting service with existing code..." >&2
-    systemctl start sleepypod.service 2>/dev/null || true
+
+    if [ "$FIREWALL_RECOVERY_REQUIRED" = true ]; then
+      echo "Restoring Local Only firewall policy..." >&2
+      if ! "$FIREWALL_HELPER" block; then
+        echo "Canonical firewall rebuild failed; trying the persisted policy..." >&2
+        /usr/local/bin/sp-firewall-restore || firewall_safe=false
+      fi
+    fi
+    if [ -n "$PRE_UPDATE_FIREWALL_MODE" ]; then
+      network_privacy_state_matches "$PRE_UPDATE_FIREWALL_MODE" || firewall_safe=false
+    else
+      # No firewall mutation happens before mode capture. If capture itself
+      # fails, only require the hosts defense before restoring the old app.
+      network_privacy_hosts_block_current "$(network_privacy_hosts_file)" || firewall_safe=false
+    fi
+
+    if [ "$ROLLBACK_READY" = true ]; then
+      echo "Update failed, rolling back..." >&2
+      if [ -d "$BACKUP_DIR" ]; then
+        if ! find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+          ! -name 'node_modules' \
+          ! -name '.env' \
+          -exec rm -rf {} + \
+          || ! cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"; then
+          echo "ERROR: failed to restore the previous application code" >&2
+          rollback_ok=false
+        else
+          # sp-* tools intentionally roll forward: they are installed outside
+          # the application tree and contain the updater/repair path itself.
+          echo "Previous code restored."
+        fi
+      else
+        echo "ERROR: update rollback directory is missing" >&2
+        rollback_ok=false
+      fi
+      if [ -n "${DB_BACKUP:-}" ] && [ -f "$DB_BACKUP" ]; then
+        if ! cp "$DB_BACKUP" "$DATA_DIR/sleepypod.db"; then
+          echo "ERROR: failed to restore the database" >&2
+          rollback_ok=false
+        fi
+        # Restore the WAL/SHM sidecars to a state consistent with the .db
+        # backup. A missing backup sidecar means the live sidecar must be
+        # removed, or SQLite could replay post-rollback transactions.
+        WAL_BAK="$DATA_DIR/sleepypod.db-wal.bak.${BACKUP_TS:-}"
+        SHM_BAK="$DATA_DIR/sleepypod.db-shm.bak.${BACKUP_TS:-}"
+        if [ -f "$WAL_BAK" ]; then
+          cp "$WAL_BAK" "$DATA_DIR/sleepypod.db-wal" || rollback_ok=false
+        else
+          rm -f "$DATA_DIR/sleepypod.db-wal"
+        fi
+        if [ -f "$SHM_BAK" ]; then
+          cp "$SHM_BAK" "$DATA_DIR/sleepypod.db-shm" || rollback_ok=false
+        else
+          rm -f "$DATA_DIR/sleepypod.db-shm"
+        fi
+        chown root:sleepypod "$DATA_DIR/sleepypod.db" 2>/dev/null || true
+        chmod 0660 "$DATA_DIR/sleepypod.db" 2>/dev/null || true
+        [ -f "$DATA_DIR/sleepypod.db-wal" ] && chown root:sleepypod "$DATA_DIR/sleepypod.db-wal" 2>/dev/null || true
+        [ -f "$DATA_DIR/sleepypod.db-wal" ] && chmod 0660 "$DATA_DIR/sleepypod.db-wal" 2>/dev/null || true
+        [ -f "$DATA_DIR/sleepypod.db-shm" ] && chown root:sleepypod "$DATA_DIR/sleepypod.db-shm" 2>/dev/null || true
+        [ -f "$DATA_DIR/sleepypod.db-shm" ] && chmod 0660 "$DATA_DIR/sleepypod.db-shm" 2>/dev/null || true
+        echo "Database restored from $DB_BACKUP."
+      fi
+    fi
+
+    if [ "$SERVICE_WAS_ACTIVE" = true ] && [ "$SERVICE_QUIESCED" = true ]; then
+      if [ "$firewall_safe" = true ] && [ "$rollback_ok" = true ]; then
+        systemctl start sleepypod.service 2>/dev/null || true
+      else
+        echo "ERROR: rollback or firewall verification failed; leaving sleepypod.service stopped" >&2
+      fi
+    fi
   fi
+  exit "$exit_code"
 }
 trap cleanup EXIT
 
@@ -141,15 +196,44 @@ if [ "$DISK_AVAIL" -lt 300 ]; then
   exit 1
 fi
 
-# Open WAN if blocked
-if wan_is_blocked; then
-  # Ensure /etc/hosts telemetry block is in place before opening WAN
-  if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
-    echo "Installing /etc/hosts telemetry block before opening WAN..."
-    "$INSTALL_DIR/scripts/internet-control" hosts-block 2>/dev/null || true
-  fi
-  WAN_WAS_BLOCKED=true
-  unblock_wan
+# Stop the web service before opening WAN so a concurrent UI toggle cannot race
+# the updater and have its newer choice overwritten by final convergence.
+if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+  SERVICE_WAS_ACTIVE=true
+fi
+SERVICE_QUIESCED=true
+if ! systemctl stop sleepypod.service; then
+  echo "Error: failed to stop sleepypod.service" >&2
+  exit 1
+fi
+if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+  echo "Error: sleepypod.service did not stop" >&2
+  exit 1
+fi
+
+# Wait for an already-running UI toggle to finish, then capture the user's
+# semantic mode while the API is quiesced. Release this lock before invoking
+# sp-internet-control because that helper acquires the same lock itself.
+FIREWALL_LOCK="/run/lock/sleepypod-internet-control.lock"
+mkdir -p "$(dirname "$FIREWALL_LOCK")"
+exec 8>"$FIREWALL_LOCK"
+if ! flock -w 15 8; then
+  echo "Error: another firewall transition is still running" >&2
+  exit 1
+fi
+if ! PRE_UPDATE_FIREWALL_MODE="$(detect_firewall_mode)"; then
+  flock -u 8
+  exec 8>&-
+  echo "Error: refusing to update without a trustworthy firewall mode" >&2
+  exit 1
+fi
+flock -u 8
+exec 8>&-
+
+# Open WAN only when the captured mode was Local Only.
+if [ "$PRE_UPDATE_FIREWALL_MODE" = block ]; then
+  FIREWALL_RECOVERY_REQUIRED=true
+  "$FIREWALL_HELPER" temporary-unblock
 fi
 
 # Check connectivity
@@ -164,10 +248,7 @@ rm -rf "$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C "$BACKUP_DIR" || true
 
-# Stop service before DB backup (ensures WAL is flushed)
-systemctl stop sleepypod.service
-
-# Backup database (after stop so WAL/SHM are consistent)
+# Backup database (service is stopped, so WAL/SHM are consistent)
 # Timestamped name so two rapid updates don't clobber the previous backup.
 # Matches scripts/install's naming; sp-maintenance prunes to 3 most recent.
 BACKUP_TS=$(date +%s)
@@ -406,6 +487,20 @@ EOF
   systemctl daemon-reload
 fi
 
+# Order the Node sensor streamer after firmware NATS when that unit exists.
+# This is deliberately ordering-only (no Wants=/Requires=): old-firmware pods
+# do not ship nats-server.service and must continue starting normally. The
+# streamer's own 60-second probe remains the race-safe runtime selector.
+NATS_ORDERING_DROPIN=/etc/systemd/system/sleepypod.service.d/nats-ordering.conf
+if [ ! -f "$NATS_ORDERING_DROPIN" ]; then
+  mkdir -p "$(dirname "$NATS_ORDERING_DROPIN")"
+  cat > "$NATS_ORDERING_DROPIN" << 'EOF'
+[Unit]
+After=nats-server.service
+EOF
+  systemctl daemon-reload
+fi
+
 # Install CLI tools from new source.
 #
 # Use `install` (atomic mkstemp + rename) instead of `cp` — sp-update is
@@ -420,17 +515,32 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
   done
 fi
 
-# Re-block WAN before starting service
-if [ "$WAN_WAS_BLOCKED" = true ]; then
-  restore_wan
-  WAN_WAS_BLOCKED=false
-fi
+# Re-source the downloaded version, then converge every privileged artifact.
+# A blocked installation is rebuilt with the canonical v4/v6 policy; an open
+# installation has its current rules persisted without flushing unrelated
+# narrow rules. This replaces verbatim restoration of legacy/broken policies.
+# shellcheck source=scripts/bin/sp-network-privacy
+source /usr/local/bin/sp-network-privacy
+ensure_telemetry_hosts_block
+install_sleepypod_update_sudoers
+# Ensure a failed transition with quarantined persistence also fails closed on
+# reboot before attempting the final runtime/persisted convergence.
+install_firewall_restore_service
+converge_firewall_mode "$PRE_UPDATE_FIREWALL_MODE"
+network_privacy_state_matches "$PRE_UPDATE_FIREWALL_MODE"
+
+# Clear the recovery obligation immediately after the canonical runtime and
+# boot policy verify. Marker failure must not undo the validated firewall.
+FIREWALL_RECOVERY_REQUIRED=false
+mark_network_privacy_migrated
 
 echo "Starting service..."
+SERVICE_START_ATTEMPTED=true
 systemctl start sleepypod.service
 
 sleep 5
 if systemctl is-active --quiet sleepypod.service; then
+  rm -rf "$BACKUP_DIR"
   echo "Update complete! Service is running."
   exit 0
 fi

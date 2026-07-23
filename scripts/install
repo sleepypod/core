@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# Keep root/sbin tools reachable even from curl-pipe, sudo, and su shells with
+# a minimal PATH. Firewall inspection happens well before the later Node PATH
+# normalization, so this must be established at process entry.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 LOG_FILE="/tmp/sleepypod-install.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
@@ -165,20 +170,61 @@ if [ "$RESTORE_MODE" = true ]; then
   exit 0
 fi
 
-# Cleanup handler — re-blocks WAN if we unblocked it
-WAN_WAS_BLOCKED=false
+# Cleanup handler — never restarts an existing app through a privacy-degraded
+# firewall state.
 DOWNLOAD_DIR=""
+SERVICE_WAS_ACTIVE=false
+SERVICE_QUIESCED=false
+SERVICE_START_ATTEMPTED=false
+FAILURE_FIREWALL_MODE=""
+FIREWALL_RECOVERY_REQUIRED=false
+FREE_SLEEP_PURGE_REQUIRED=false
 
+# Invoked by the EXIT trap below.
+# shellcheck disable=SC2329
 cleanup() {
   local exit_code=$?
+  local firewall_safe=true
+  trap - EXIT
+  set +e
 
   # Clean up temp download directory
   [ -n "$DOWNLOAD_DIR" ] && rm -rf "$DOWNLOAD_DIR"
 
-  # Restore iptables if we temporarily unblocked
-  if [ "$WAN_WAS_BLOCKED" = true ]; then
-    echo "Restoring iptables rules..."
-    restore_wan
+  if [ "$exit_code" -ne 0 ]; then
+    # A failed final start may be in systemd's restart loop. Stop it before
+    # repairing the firewall so it cannot use a transient WAN-open interval.
+    if { [ "$SERVICE_QUIESCED" = true ] || [ "$SERVICE_START_ATTEMPTED" = true ]; } \
+      && systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+      systemctl stop sleepypod.service 2>/dev/null || true
+    fi
+
+    if [ "$FIREWALL_RECOVERY_REQUIRED" = true ]; then
+      echo "Restoring Local Only firewall policy..."
+      if [ -x /usr/local/bin/sp-internet-control ]; then
+        if ! /usr/local/bin/sp-internet-control block; then
+          restore_wan || firewall_safe=false
+        fi
+      else
+        restore_wan || firewall_safe=false
+      fi
+    fi
+
+    # A command returning zero is not enough to expose the old app. Verify the
+    # intended semantic mode and the hosts defense before restarting it.
+    if [ -n "$FAILURE_FIREWALL_MODE" ]; then
+      firewall_state_matches "$FAILURE_FIREWALL_MODE" || firewall_safe=false
+      network_privacy_hosts_block_current /etc/hosts || firewall_safe=false
+    fi
+
+    if [ "$SERVICE_WAS_ACTIVE" = true ]; then
+      if [ "$firewall_safe" = true ]; then
+        echo "Restarting the previously active SleepyPod service..."
+        systemctl start sleepypod.service 2>/dev/null || true
+      else
+        echo "ERROR: firewall recovery could not be verified; leaving sleepypod.service stopped" >&2
+      fi
+    fi
   fi
 
   if [ $exit_code -ne 0 ]; then
@@ -205,6 +251,7 @@ cleanup() {
     echo "  GitHub:  https://github.com/sleepypod/core/issues" >&2
     echo "========================================" >&2
   fi
+  exit "$exit_code"
 }
 trap 'cleanup $LINENO' EXIT
 
@@ -297,8 +344,32 @@ wan_is_blocked() {
 
 SAVED_IPTABLES=""
 
+network_privacy_ipv6_supported() {
+  local root=/proc/sys/net/ipv6/conf
+  # Kernel capability is authoritative; firmware images can retain inert
+  # userspace binaries after building IPv6 out of the running kernel.
+  [ -d "$root" ] || return 0
+  if command -v ip6tables >/dev/null 2>&1 \
+    && command -v ip6tables-save >/dev/null 2>&1 \
+    && command -v ip6tables-restore >/dev/null 2>&1; then
+    return 0
+  fi
+  # A missing sysctl tree proves that the kernel has no IPv6 family. Runtime
+  # disable_ipv6 values are not accepted: NetworkManager can re-enable an
+  # interface later during connection activation.
+  if command -v ip6tables >/dev/null 2>&1 \
+    || command -v ip6tables-save >/dev/null 2>&1 \
+    || command -v ip6tables-restore >/dev/null 2>&1; then
+    echo "Error: IPv6 is enabled but the ip6tables toolchain is incomplete" >&2
+  else
+    echo "Error: IPv6 is enabled but the ip6tables toolchain is unavailable" >&2
+  fi
+  return 1
+}
+
 unblock_wan() {
   echo "Temporarily unblocking WAN access..."
+  network_privacy_ipv6_supported
   # Capture state verbatim. `|| true` would mask a failed save and
   # quietly fall through to a minimal block_wan ruleset on restore —
   # silent data loss. Fail loudly instead so the caller can bail.
@@ -330,8 +401,13 @@ restore_wan() {
 
 block_wan() {
   echo "Re-blocking WAN access..."
+  network_privacy_ipv6_supported
 
-  # Flush first to avoid duplicate rules
+  # Put permissive policies in place before flushing so an inherited DROP
+  # policy cannot make the rebuild order-dependent.
+  iptables -P INPUT ACCEPT
+  iptables -P OUTPUT ACCEPT
+  iptables -P FORWARD ACCEPT
   iptables -F 2>/dev/null || true
   iptables -X 2>/dev/null || true
   iptables -t nat -F 2>/dev/null || true
@@ -380,17 +456,28 @@ block_wan() {
     iptables -I INPUT -p tcp -s "$cidr" --dport 51827 -j ACCEPT
   done
 
-  # IPv6: iOS may discover/pair over IPv6 on dual-stack LANs. Mirror the
-  # HAP and mDNS allows so pairing doesn't fail when the controller picks
-  # an IPv6 path. HAP is source-restricted to link-local (fe80::/10) and
-  # ULA (fc00::/7); GUA traffic should never hit pairing. No-op on hosts
-  # without ip6tables.
-  if command -v ip6tables &>/dev/null; then
-    ip6tables -I INPUT  -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
-    ip6tables -I OUTPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+  # IPv6: mirror the Local Only boundary, not just the LAN exceptions. This is
+  # the pre-download emergency fallback; final convergence uses the canonical
+  # transactional helper.
+  if [ -d /proc/sys/net/ipv6/conf ] \
+    && command -v ip6tables >/dev/null 2>&1 \
+    && command -v ip6tables-save >/dev/null 2>&1 \
+    && command -v ip6tables-restore >/dev/null 2>&1; then
+    ip6tables -P INPUT ACCEPT
+    ip6tables -P OUTPUT ACCEPT
+    ip6tables -P FORWARD ACCEPT
+    ip6tables -F
+    ip6tables -X
+    ip6tables -A INPUT -i lo -j ACCEPT
+    ip6tables -A OUTPUT -o lo -j ACCEPT
     for cidr6 in fe80::/10 fc00::/7; do
-      ip6tables -I INPUT -p tcp -s "$cidr6" --dport 51827 -j ACCEPT 2>/dev/null || true
+      ip6tables -A INPUT -s "$cidr6" -j ACCEPT
+      ip6tables -A OUTPUT -d "$cidr6" -j ACCEPT
     done
+    ip6tables -A OUTPUT -p udp -d ff02::fb/128 --dport 5353 -j ACCEPT
+    ip6tables -A INPUT -p udp -d ff02::fb/128 --dport 5353 -j ACCEPT
+    ip6tables -A INPUT -j DROP
+    ip6tables -A OUTPUT -j DROP
   fi
 
   # Allow loopback
@@ -405,6 +492,11 @@ block_wan() {
   if command -v iptables-save &>/dev/null; then
     mkdir -p /etc/iptables
     iptables-save > /etc/iptables/iptables.rules
+    cp -f /etc/iptables/iptables.rules /etc/iptables/rules.v4
+  fi
+  if [ -d /proc/sys/net/ipv6/conf ] && command -v ip6tables-save &>/dev/null; then
+    ip6tables-save > /etc/iptables/ip6tables.rules
+    cp -f /etc/iptables/ip6tables.rules /etc/iptables/rules.v6
   fi
 
   echo "WAN blocked."
@@ -447,6 +539,12 @@ purge_free_sleep() {
   echo "  Purging free-sleep (--purge-free-sleep)"
   echo "========================================"
 
+  # From this point onward a failure must rebuild a canonical Local Only
+  # policy before exposing an existing app. free-sleep's rules and restore
+  # inputs are about to be removed, so their prior mode is not preservable.
+  FIREWALL_RECOVERY_REQUIRED=true
+  FAILURE_FIREWALL_MODE=block
+
   systemctl stop free-sleep free-sleep-stream free-sleep-update 2>/dev/null || true
   systemctl disable free-sleep free-sleep-stream free-sleep-update 2>/dev/null || true
   rm -f /etc/systemd/system/free-sleep.service \
@@ -483,7 +581,9 @@ preflight_free_sleep_conflict() {
     for item in "${FREE_SLEEP_FINDINGS[@]}"; do
       echo "  - $item"
     done
-    purge_free_sleep
+    # Delay the destructive purge until the existing app is stopped and the
+    # telemetry hosts defense is verified.
+    FREE_SLEEP_PURGE_REQUIRED=true
     return 0
   fi
 
@@ -561,7 +661,282 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Serialize full installs, updates, and UI firewall toggles before touching
+# the fresh-install marker, /etc/hosts, firewall state, or the application.
+# Keep the historical path so new code also coordinates with older installers.
+if ! command -v flock >/dev/null 2>&1; then
+  echo "Error: Required command 'flock' not found." >&2
+  exit 1
+fi
+LOCKFILE="/var/run/sleepypod-install.lock"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+  echo "Error: Another installation or update is already running" >&2
+  exit 1
+fi
+
+INSTALL_DIR="/home/dac/sleepypod-core"
+GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+PRIVACY_HELPERS="$INSTALL_DIR/scripts/bin/sp-network-privacy"
+
+# A curl-pipe install has not downloaded the repository yet. Keep this
+# bootstrap copy limited to the two operations needed before the first
+# outbound request: classify the current firewall without guessing, and
+# install/refresh the telemetry hosts block. Do not source a possibly stale
+# prior working tree as root; the downloaded canonical helper replaces these
+# functions before final convergence.
+  NETWORK_PRIVACY_MARKER_BEGIN="# BEGIN sleepypod-telemetry-block"
+  NETWORK_PRIVACY_MARKER_END="# END sleepypod-telemetry-block"
+  NETWORK_PRIVACY_DOMAINS=(
+    "raw-api-upload.8slp.net"
+    "device-api-ws.8slp.net"
+    "api.8slp.net"
+    "app-api.8slp.net"
+    "client-api.8slp.net"
+  )
+
+  detect_family_firewall_mode() {
+    local firewall_bin="$1" family="$2" output policy line target
+    if ! output="$($firewall_bin -S OUTPUT 2>/dev/null)"; then
+      echo "Error: unable to inspect the $family OUTPUT chain" >&2
+      return 1
+    fi
+    policy="$(printf '%s\n' "$output" | awk '$1 == "-P" && $2 == "OUTPUT" { print $3 }')"
+    case "$policy" in
+      DROP|ACCEPT) ;;
+      *) echo "Error: ambiguous $family OUTPUT policy: ${policy:-missing}" >&2; return 1 ;;
+    esac
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^-A[[:space:]]+OUTPUT[[:space:]]+-j[[:space:]]+([^[:space:]]+)([[:space:]].*)?$ ]]; then
+        target="${BASH_REMATCH[1]}"
+        case "$target" in
+          DROP|REJECT|SLEEPYPOD-BLOCK) printf '%s\n' block; return 0 ;;
+          ACCEPT) printf '%s\n' unblock; return 0 ;;
+          LOG|NFLOG) ;;
+          *) echo "Error: ambiguous unconditional $family OUTPUT target: $target" >&2; return 1 ;;
+        esac
+      fi
+    done <<< "$output"
+    [ "$policy" = DROP ] && printf '%s\n' block || printf '%s\n' unblock
+  }
+
+  detect_firewall_mode() {
+    local ipv4_mode ipv6_mode ip6tables_bin ip6tables_save_bin ip6tables_restore_bin
+    if ! ipv4_mode="$(detect_family_firewall_mode iptables IPv4)"; then
+      return 1
+    fi
+    ip6tables_bin="$(command -v ip6tables 2>/dev/null || true)"
+    ip6tables_save_bin="$(command -v ip6tables-save 2>/dev/null || true)"
+    ip6tables_restore_bin="$(command -v ip6tables-restore 2>/dev/null || true)"
+    if [ ! -d /proc/sys/net/ipv6/conf ]; then
+      :
+    elif [ -n "$ip6tables_bin" ] && [ -n "$ip6tables_save_bin" ] && [ -n "$ip6tables_restore_bin" ]; then
+      if ! ipv6_mode="$(detect_family_firewall_mode "$ip6tables_bin" IPv6)"; then
+        return 1
+      fi
+      if [ "$ipv4_mode" = block ] || [ "$ipv6_mode" = block ]; then
+        printf '%s\n' block
+        return 0
+      fi
+    elif ! network_privacy_ipv6_supported; then
+      return 1
+    fi
+    printf '%s\n' "$ipv4_mode"
+  }
+
+  firewall_state_matches() {
+    local expected="$1" ipv4_mode ipv6_mode ip6tables_bin ip6tables_save_bin ip6tables_restore_bin
+    ipv4_mode="$(detect_family_firewall_mode iptables IPv4)" || return 1
+    [ "$ipv4_mode" = "$expected" ] || return 1
+    ip6tables_bin="$(command -v ip6tables 2>/dev/null || true)"
+    ip6tables_save_bin="$(command -v ip6tables-save 2>/dev/null || true)"
+    ip6tables_restore_bin="$(command -v ip6tables-restore 2>/dev/null || true)"
+    if [ ! -d /proc/sys/net/ipv6/conf ]; then
+      :
+    elif [ -n "$ip6tables_bin" ] && [ -n "$ip6tables_save_bin" ] && [ -n "$ip6tables_restore_bin" ]; then
+      ipv6_mode="$(detect_family_firewall_mode "$ip6tables_bin" IPv6)" || return 1
+      [ "$ipv6_mode" = "$expected" ] || return 1
+    else
+      network_privacy_ipv6_supported || return 1
+    fi
+  }
+
+  network_privacy_hosts_block_current() {
+    local hosts_file="$1" begin_count end_count section domain
+    begin_count=$(grep -Fxc "$NETWORK_PRIVACY_MARKER_BEGIN" "$hosts_file" 2>/dev/null || true)
+    end_count=$(grep -Fxc "$NETWORK_PRIVACY_MARKER_END" "$hosts_file" 2>/dev/null || true)
+    [ "$begin_count" -eq 1 ] && [ "$end_count" -eq 1 ] || return 1
+    section="$(awk -v begin="$NETWORK_PRIVACY_MARKER_BEGIN" -v end="$NETWORK_PRIVACY_MARKER_END" '
+      $0 == begin { inside = 1; next }
+      $0 == end { inside = 0; found_end = 1; next }
+      inside { print }
+      END { if (inside || !found_end) exit 1 }
+    ' "$hosts_file")" || return 1
+    for domain in "${NETWORK_PRIVACY_DOMAINS[@]}"; do
+      grep -Fqx "0.0.0.0 $domain" <<< "$section" || return 1
+      grep -Fqx ":: $domain" <<< "$section" || return 1
+    done
+  }
+
+  ensure_telemetry_hosts_block() {
+    local hosts_file=/etc/hosts begin_count end_count tmp mode owner domain
+    if [ ! -f "$hosts_file" ]; then
+      echo "Error: hosts file not found: $hosts_file" >&2
+      return 1
+    fi
+    if network_privacy_hosts_block_current "$hosts_file"; then
+      return 0
+    fi
+    begin_count=$(grep -Fxc "$NETWORK_PRIVACY_MARKER_BEGIN" "$hosts_file" 2>/dev/null || true)
+    end_count=$(grep -Fxc "$NETWORK_PRIVACY_MARKER_END" "$hosts_file" 2>/dev/null || true)
+    if { [ "$begin_count" -ne 0 ] || [ "$end_count" -ne 0 ]; } \
+      && { [ "$begin_count" -ne 1 ] || [ "$end_count" -ne 1 ]; }; then
+      echo "Error: malformed or duplicate SleepyPod markers in $hosts_file" >&2
+      return 1
+    fi
+    if ! tmp="$(mktemp "${hosts_file}.sleepypod.XXXXXX")"; then
+      echo "Error: unable to stage an update beside $hosts_file" >&2
+      return 1
+    fi
+    if [ "$begin_count" -eq 1 ]; then
+      if ! awk -v begin="$NETWORK_PRIVACY_MARKER_BEGIN" -v end="$NETWORK_PRIVACY_MARKER_END" '
+        $0 == begin { if (inside) exit 2; inside = 1; found_begin = 1; next }
+        $0 == end { if (!inside) exit 2; inside = 0; found_end = 1; next }
+        !inside { print }
+        END { if (inside || !found_begin || !found_end) exit 2 }
+      ' "$hosts_file" > "$tmp"; then
+        rm -f "$tmp"
+        echo "Error: malformed SleepyPod block ordering in $hosts_file" >&2
+        return 1
+      fi
+    else
+      if ! cp -p "$hosts_file" "$tmp"; then
+        rm -f "$tmp"
+        echo "Error: unable to stage the current $hosts_file" >&2
+        return 1
+      fi
+    fi
+    if ! {
+      echo ""
+      echo "$NETWORK_PRIVACY_MARKER_BEGIN"
+      echo "# Block stock Eight Sleep cloud clients, including while WAN is"
+      echo "# temporarily open for a SleepyPod install or update."
+      for domain in "${NETWORK_PRIVACY_DOMAINS[@]}"; do
+        echo "0.0.0.0 $domain"
+        echo ":: $domain"
+      done
+      echo "$NETWORK_PRIVACY_MARKER_END"
+    } >> "$tmp"; then
+      rm -f "$tmp"
+      echo "Error: unable to append the SleepyPod block to $hosts_file" >&2
+      return 1
+    fi
+    if ! mode="$(stat -c '%a' "$hosts_file")" \
+      || ! owner="$(stat -c '%u:%g' "$hosts_file")" \
+      || ! chmod "$mode" "$tmp" \
+      || ! chown "$owner" "$tmp"; then
+      rm -f "$tmp"
+      echo "Error: unable to preserve $hosts_file ownership or mode" >&2
+      return 1
+    fi
+    if ! cp -p "$hosts_file" "${hosts_file}.bak.sleepypod"; then
+      rm -f "$tmp"
+      echo "Error: unable to back up $hosts_file" >&2
+      return 1
+    fi
+    if ! mv -f "$tmp" "$hosts_file"; then
+      rm -f "$tmp"
+      echo "Error: unable to atomically replace $hosts_file" >&2
+      return 1
+    fi
+    network_privacy_hosts_block_current "$hosts_file" || {
+      echo "Error: failed to verify the SleepyPod block in $hosts_file" >&2
+      cp -p "${hosts_file}.bak.sleepypod" "$hosts_file" 2>/dev/null || true
+      return 1
+    }
+    echo "Installed Eight Sleep telemetry block in $hosts_file"
+  }
+
+# Reject a conflicting installation before stopping a healthy SleepyPod app.
+# The explicit purge path records a fail-closed recovery obligation above.
 preflight_free_sleep_conflict
+
+# Fresh installs and the explicit free-sleep purge do not inspect an existing
+# firewall mode below. Enforce IPv6 support unconditionally before stopping a
+# healthy app or allowing the purge path to mutate either firewall family.
+if ! network_privacy_ipv6_supported; then
+  echo "Error: refusing to install without a persistent IPv6 firewall boundary" >&2
+  exit 1
+fi
+
+# Quiesce an existing app before reading its firewall mode. The shared
+# operation lock blocks new dispatches, and the firewall lock below waits for
+# a toggle that was already in flight when this installer acquired it.
+if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+  SERVICE_WAS_ACTIVE=true
+  echo "Stopping sleepypod.service before network maintenance..."
+  SERVICE_QUIESCED=true
+  if ! systemctl stop sleepypod.service; then
+    echo "Error: failed to stop sleepypod.service" >&2
+    exit 1
+  fi
+  if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
+    echo "Error: sleepypod.service did not stop" >&2
+    exit 1
+  fi
+fi
+SERVICE_QUIESCED=true
+
+# Full installer reruns preserve an existing user's mode. A genuinely fresh
+# (or previously interrupted fresh) install finishes Local Only by default.
+FRESH_INSTALL=false
+if [ -f /etc/sleepypod/.fresh-install-pending ]; then
+  FRESH_INSTALL=true
+elif [ ! -f /etc/sleepypod/install-complete ] \
+  && [ ! -f /etc/systemd/system/sleepypod.service ] \
+  && ! systemctl list-unit-files sleepypod.service 2>/dev/null | grep -q '^sleepypod.service'; then
+  FRESH_INSTALL=true
+fi
+
+if [ "$FRESH_INSTALL" = true ] || [ "$FREE_SLEEP_PURGE_REQUIRED" = true ]; then
+  FINAL_FIREWALL_MODE=block
+else
+  FIREWALL_LOCK="/run/lock/sleepypod-internet-control.lock"
+  mkdir -p "$(dirname "$FIREWALL_LOCK")"
+  exec 8>"$FIREWALL_LOCK"
+  if ! flock -w 15 8; then
+    echo "Error: another firewall transition is still running" >&2
+    exit 1
+  fi
+  if ! FINAL_FIREWALL_MODE="$(detect_firewall_mode)"; then
+    flock -u 8
+    exec 8>&-
+    echo "Error: refusing to install without a trustworthy current firewall mode" >&2
+    exit 1
+  fi
+  flock -u 8
+  exec 8>&-
+fi
+FAILURE_FIREWALL_MODE="$FINAL_FIREWALL_MODE"
+
+mkdir -p /etc/sleepypod
+if [ "$FRESH_INSTALL" = true ]; then
+  : > /etc/sleepypod/.fresh-install-pending
+  # Once a fresh install is marked pending it owns a fail-closed obligation,
+  # even if the stock runtime began open and a later preflight fails.
+  FIREWALL_RECOVERY_REQUIRED=true
+fi
+
+# This must precede every curl. It protects stock firmware clients during a
+# temporary WAN-open window and is also retained while Internet Enabled.
+if ! ensure_telemetry_hosts_block; then
+  echo "Error: refusing to open WAN without the Eight Sleep hosts block" >&2
+  exit 1
+fi
+
+if [ "$FREE_SLEEP_PURGE_REQUIRED" = true ]; then
+  purge_free_sleep
+fi
 
 # Force /usr/local/bin to the front of PATH and strip Volta entries.
 # Pod 3 stock firmware (and free-sleep installs) ship Volta at
@@ -588,8 +963,6 @@ for bin in node npm npx pnpm; do
   esac
 done
 
-INSTALL_DIR="/home/dac/sleepypod-core"
-GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
 SCRIPT_DEFAULT_BRANCH="__BRANCH__"  # substituted at release time by .github/workflows/{release,dev-release}.yml
 # Guard for users curling the raw source from main: the substitution only
 # happens inside the release tarball, so the file at raw.githubusercontent
@@ -597,16 +970,11 @@ SCRIPT_DEFAULT_BRANCH="__BRANCH__"  # substituted at release time by .github/wor
 # doesn't try to download a branch literally named "__BRANCH__".
 [ "$SCRIPT_DEFAULT_BRANCH" = "__BRANCH__" ] && SCRIPT_DEFAULT_BRANCH="main"
 
-# Lock file to prevent concurrent installs
-LOCKFILE="/var/run/sleepypod-install.lock"
-exec 200>"$LOCKFILE"
-if ! flock -n 200; then
-  echo "Error: Another installation is already running" >&2
-  exit 1
-fi
-
 # Check for required commands
-REQUIRED_CMDS=(curl systemctl ip groupadd useradd userdel usermod visudo install mountpoint mkswap swapon)
+REQUIRED_CMDS=(
+  curl systemctl ip groupadd useradd userdel usermod visudo install mountpoint
+  mkswap swapon flock iptables iptables-save iptables-restore
+)
 if [ "$INSTALL_LOCAL" = true ] && [ -n "$INSTALL_BRANCH" ]; then
   REQUIRED_CMDS+=(git)
 fi
@@ -624,16 +992,21 @@ reclaim_rootfs_caches
 # Handle WAN connectivity — always needed (npm packages, node binary download)
 echo "Checking network connectivity..."
 if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
-  if wan_is_blocked; then
+  CURRENT_FIREWALL_MODE=""
+  if ! CURRENT_FIREWALL_MODE="$(detect_firewall_mode)"; then
+    echo "Error: GitHub is unreachable and the current firewall state is unreadable." >&2
+    echo "       Refusing to mutate iptables; inspect it manually and retry." >&2
+    exit 1
+  fi
+  if [ "$CURRENT_FIREWALL_MODE" = block ]; then
     echo "WAN is blocked by iptables. Temporarily unblocking for install..."
-    # Ensure /etc/hosts telemetry block is in place before opening WAN
-    # This prevents Eight Sleep processes from phoning home during the window
-    if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
-      echo "Installing /etc/hosts telemetry block before opening WAN..."
-      scripts/internet-control hosts-block 2>/dev/null || true
+    FIREWALL_RECOVERY_REQUIRED=true
+    if [ -x /usr/local/bin/sp-internet-control ] \
+      && grep -q 'temporary-unblock' /usr/local/bin/sp-internet-control 2>/dev/null; then
+      /usr/local/bin/sp-internet-control temporary-unblock
+    else
+      unblock_wan
     fi
-    WAN_WAS_BLOCKED=true
-    unblock_wan
     # Re-check after unblock
     if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
       echo "Error: Still cannot reach GitHub after unblocking. Check Wi-Fi." >&2
@@ -729,37 +1102,8 @@ if id dac &>/dev/null; then
   usermod -aG dac sleepypod
 fi
 
-# Allow the sleepypod service user to run sp-update as root without a
-# password. The next-server runs as User=sleepypod and exposes a tRPC
-# system.triggerUpdate mutation that spawns sp-update; without this
-# rule the spawn dies on the first iptables / systemctl call inside the
-# script and the API silently does nothing. Branch input is regex-
-# validated at the tRPC layer (^[a-zA-Z0-9._\-/]+$) and sp-update only
-# uses it as a tag/path component, so the privilege scope is narrow.
-#
-# The Defaults secure_path line re-adds /usr/local/bin to sudo's PATH.
-# The pod ships with the system-wide secure_path commented out in
-# /etc/sudoers, so sudo falls back to a minimal /usr/bin:/bin:/usr/sbin:/sbin
-# and `sudo sp-update dev` (the install snippet on every PR) fails with
-# "sp-update: command not found". Restoring the standard path here keeps
-# the sleepypod tools usable from any sudo shell without re-enabling the
-# system fragment, which might be commented out for a reason on the
-# vendor image.
-SUDOERS_FILE="/etc/sudoers.d/sleepypod-update"
-SUDOERS_CONTENT='Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update'
-SUDOERS_TMP=$(mktemp)
-printf '%s\n' "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
-chmod 0440 "$SUDOERS_TMP"
-if visudo -c -q -f "$SUDOERS_TMP"; then
-  install -m 0440 -o root -g root "$SUDOERS_TMP" "$SUDOERS_FILE"
-  echo "Installed $SUDOERS_FILE"
-else
-  echo "Error: sudoers fragment failed visudo validation — refusing to install" >&2
-  rm -f "$SUDOERS_TMP"
-  exit 1
-fi
-rm -f "$SUDOERS_TMP"
+# The sudoers dispatcher is installed from the downloaded canonical helper
+# immediately before firewall convergence near the end of this script.
 
 mkdir -p "$DATA_DIR"
 chown root:sleepypod "$DATA_DIR"
@@ -1113,14 +1457,8 @@ else
   # Clean old files if updating (preserve node_modules, .env, data)
   if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
-    # Stop the running service first — it has WorkingDirectory=$INSTALL_DIR
-    # and writes into .next/standalone, racing the rm -rf below and
-    # producing ENOTEMPTY when the writer re-creates a file mid-recurse.
-    # Re-enable+restart happens later in the install flow.
-    if systemctl is-active --quiet sleepypod.service 2>/dev/null; then
-      echo "Stopping sleepypod.service before purge..."
-      systemctl stop sleepypod.service
-    fi
+    # The service was quiesced before the first network request, so it cannot
+    # race this purge by recreating files under .next/standalone.
     find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
       ! -name 'node_modules' \
       ! -name '.env' \
@@ -1294,7 +1632,7 @@ fi
 cat > /etc/systemd/system/sleepypod.service << EOF
 [Unit]
 Description=SleepyPod Core Service
-After=network.target
+After=network.target nats-server.service
 
 [Service]
 Type=simple
@@ -1455,27 +1793,6 @@ AVAHI_EOF
   # Reload avahi to pick up the new service file
   kill -HUP "$(pidof avahi-daemon 2>/dev/null)" 2>/dev/null || true
   echo "Avahi mDNS service installed (_sleepypod._tcp on port $TRPC_PORT)"
-fi
-
-systemctl restart sleepypod.service
-
-# Wait for sleepypod to create dac.sock before killing frankenfirmware.
-# frankenfirmware connects on startup and won't retry — if it restarts
-# before the socket exists, it silently fails to connect.
-echo "Waiting for dac.sock..."
-for i in $(seq 1 10); do
-  [ -S "$DAC_SOCK_PATH" ] && break
-  sleep 1
-done
-if [ -S "$DAC_SOCK_PATH" ]; then
-  # Kill frankenfirmware so its supervisor restarts it against the new dac.sock
-  FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
-  if [ -n "$FRANKEN_PID" ]; then
-    echo "Killing frankenfirmware (PID $FRANKEN_PID) so supervisor reconnects to dac.sock..."
-    kill "$FRANKEN_PID" 2>/dev/null || true
-  fi
-else
-  echo "Warning: dac.sock not found after 10s — skipping frankenfirmware restart" >&2
 fi
 
 # ============================================================================
@@ -1760,6 +2077,61 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
   fi
 fi
 
+# Converge privileged network artifacts only after every download has
+# completed. Fresh installs deliberately finish Local Only; full-installer
+# reruns preserve the mode captured before any temporary WAN opening. The
+# canonical helper also writes the stock Pod 5 restore files so reboot state
+# matches runtime state.
+if [ ! -r "$PRIVACY_HELPERS" ]; then
+  echo "Error: network privacy helpers missing from installed release" >&2
+  exit 1
+fi
+# shellcheck source=scripts/bin/sp-network-privacy
+source "$PRIVACY_HELPERS"
+ensure_telemetry_hosts_block
+install_sleepypod_update_sudoers
+[ "$FINAL_FIREWALL_MODE" != block ] || FIREWALL_RECOVERY_REQUIRED=true
+# Enable the NetworkManager prerequisite before the transactional transition.
+# If exact rollback and emergency persistence both fail, quarantined restore
+# inputs will then keep networking down on the next boot.
+install_firewall_restore_service
+converge_firewall_mode "$FINAL_FIREWALL_MODE"
+network_privacy_state_matches "$FINAL_FIREWALL_MODE"
+
+# Runtime state, both compatibility restore files, and boot activation are now
+# verified. Clear recovery before marker I/O: failure to write a marker must
+# not replace this canonical policy with the pre-install snapshot.
+FIREWALL_RECOVERY_REQUIRED=false
+mark_network_privacy_migrated
+printf '%s\n' "complete" > /etc/sleepypod/install-complete
+chmod 0644 /etc/sleepypod/install-complete
+rm -f /etc/sleepypod/.fresh-install-pending
+
+# Start only after privacy convergence. This also means ExecStartPre
+# sp-maintenance sees the migration marker and cannot persist a temporary-open
+# install state.
+echo "Starting sleepypod.service..."
+SERVICE_START_ATTEMPTED=true
+systemctl start sleepypod.service
+
+# Wait for sleepypod to create dac.sock before killing frankenfirmware.
+# frankenfirmware connects on startup and won't retry — if it restarts before
+# the socket exists, it silently fails to connect.
+echo "Waiting for dac.sock..."
+for i in $(seq 1 10); do
+  [ -S "$DAC_SOCK_PATH" ] && break
+  sleep 1
+done
+if [ -S "$DAC_SOCK_PATH" ]; then
+  FRANKEN_PID=$(pgrep frankenfirmware 2>/dev/null || true)
+  if [ -n "$FRANKEN_PID" ]; then
+    echo "Killing frankenfirmware (PID $FRANKEN_PID) so supervisor reconnects to dac.sock..."
+    kill "$FRANKEN_PID" 2>/dev/null || true
+  fi
+else
+  echo "Warning: dac.sock not found after 10s — skipping frankenfirmware restart" >&2
+fi
+
 # Auto-detect network interface and get IP
 # `ip route | awk '…; exit'` closes the pipe before `ip route` finishes
 # writing when there are multiple routes, causing SIGPIPE (exit 141)
@@ -1780,7 +2152,7 @@ for i in $(seq 1 30); do
     break
   fi
   sleep 1
-  if [ $i -eq 30 ]; then
+  if [ "$i" -eq 30 ]; then
     SERVICE_STATUS="Failed (check logs with: sp-logs)"
   fi
 done

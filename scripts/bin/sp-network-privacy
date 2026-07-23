@@ -1,0 +1,430 @@
+#!/bin/bash
+# Shared install/update helpers for SleepyPod's network privacy boundary.
+#
+# scripts/install carries an inline copy of the early /etc/hosts bootstrap
+# because curl-pipe installs need it before the repository exists on disk.
+
+NETWORK_PRIVACY_MARKER_BEGIN="# BEGIN sleepypod-telemetry-block"
+NETWORK_PRIVACY_MARKER_END="# END sleepypod-telemetry-block"
+NETWORK_PRIVACY_DOMAINS=(
+  "raw-api-upload.8slp.net"
+  "device-api-ws.8slp.net"
+  "api.8slp.net"
+  "app-api.8slp.net"
+  "client-api.8slp.net"
+)
+
+network_privacy_hosts_file() {
+  printf '%s' "${SLEEPYPOD_HOSTS_FILE:-/etc/hosts}"
+}
+
+network_privacy_migration_marker() {
+  printf '%s' "${SLEEPYPOD_FIREWALL_MIGRATION_MARKER:-/etc/sleepypod/firewall-policy-v1}"
+}
+
+network_privacy_ipv6_sysctl_root() {
+  printf '%s' "${SLEEPYPOD_IPV6_SYSCTL_ROOT:-/proc/sys/net/ipv6/conf}"
+}
+
+network_privacy_ipv6_supported() {
+  local root ip6tables_bin ip6tables_save_bin ip6tables_restore_bin
+  root="$(network_privacy_ipv6_sysctl_root)"
+  ip6tables_bin="${SLEEPYPOD_IP6TABLES_BIN-$(command -v ip6tables 2>/dev/null || true)}"
+  ip6tables_save_bin="${SLEEPYPOD_IP6TABLES_SAVE_BIN-$(command -v ip6tables-save 2>/dev/null || true)}"
+  ip6tables_restore_bin="${SLEEPYPOD_IP6TABLES_RESTORE_BIN-$(command -v ip6tables-restore 2>/dev/null || true)}"
+  if [ -n "$ip6tables_bin" ] && [ -n "$ip6tables_save_bin" ] && [ -n "$ip6tables_restore_bin" ]; then
+    return 0
+  fi
+  # An absent sysctl tree proves that the kernel has no IPv6 family. A route
+  # snapshot or disable_ipv6=1 does not prove durable safety: NetworkManager
+  # can enable IPv6 later while activating a connection.
+  [ -d "$root" ] || return 0
+  if [ -n "$ip6tables_bin" ] || [ -n "$ip6tables_save_bin" ] || [ -n "$ip6tables_restore_bin" ]; then
+    echo "Error: IPv6 is enabled but the ip6tables toolchain is incomplete" >&2
+  else
+    echo "Error: IPv6 is enabled but the ip6tables toolchain is unavailable" >&2
+  fi
+  return 1
+}
+
+detect_family_firewall_mode() {
+  local firewall_bin="$1" family="$2" output policy line target
+  if ! output="$($firewall_bin -S OUTPUT 2>/dev/null)"; then
+    echo "Error: unable to inspect the $family OUTPUT chain" >&2
+    return 1
+  fi
+
+  policy="$(printf '%s\n' "$output" | awk '$1 == "-P" && $2 == "OUTPUT" { print $3 }')"
+  case "$policy" in
+    DROP|ACCEPT) ;;
+    *)
+      echo "Error: ambiguous $family OUTPUT policy: ${policy:-missing}" >&2
+      return 1
+      ;;
+  esac
+
+  # Follow the base chain in order. LOG/NFLOG continue; the first
+  # unconditional terminal action decides the effective mode. Target-specific
+  # options after -j (for example REJECT --reject-with ...) do not make a rule
+  # conditional. Unknown custom chains are deliberately ambiguous rather than
+  # guessed open.
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^-A[[:space:]]+OUTPUT[[:space:]]+-j[[:space:]]+([^[:space:]]+)([[:space:]].*)?$ ]]; then
+      target="${BASH_REMATCH[1]}"
+      case "$target" in
+        DROP|REJECT|SLEEPYPOD-BLOCK) printf '%s\n' block; return 0 ;;
+        ACCEPT) printf '%s\n' unblock; return 0 ;;
+        LOG|NFLOG) ;;
+        *)
+          echo "Error: ambiguous unconditional $family OUTPUT target: $target" >&2
+          return 1
+          ;;
+      esac
+    fi
+  done <<< "$output"
+
+  [ "$policy" = DROP ] && printf '%s\n' block || printf '%s\n' unblock
+}
+
+detect_firewall_mode() {
+  local ipv6_root iptables_bin ip6tables_bin ip6tables_save_bin ip6tables_restore_bin ipv4_mode ipv6_mode
+  iptables_bin="${SLEEPYPOD_IPTABLES_BIN:-$(command -v iptables 2>/dev/null || true)}"
+  if [ -z "$iptables_bin" ]; then
+    echo "Error: iptables is unavailable; cannot determine internet-access mode" >&2
+    return 1
+  fi
+  if ! ipv4_mode="$(detect_family_firewall_mode "$iptables_bin" IPv4)"; then
+    return 1
+  fi
+
+  ip6tables_bin="${SLEEPYPOD_IP6TABLES_BIN-$(command -v ip6tables 2>/dev/null || true)}"
+  ip6tables_save_bin="${SLEEPYPOD_IP6TABLES_SAVE_BIN-$(command -v ip6tables-save 2>/dev/null || true)}"
+  ip6tables_restore_bin="${SLEEPYPOD_IP6TABLES_RESTORE_BIN-$(command -v ip6tables-restore 2>/dev/null || true)}"
+  ipv6_root="$(network_privacy_ipv6_sysctl_root)"
+  if [ ! -d "$ipv6_root" ]; then
+    :
+  elif [ -n "$ip6tables_bin" ] && [ -n "$ip6tables_save_bin" ] && [ -n "$ip6tables_restore_bin" ]; then
+    if ! ipv6_mode="$(detect_family_firewall_mode "$ip6tables_bin" IPv6)"; then
+      return 1
+    fi
+    # A mixed-family state is privacy-degraded. Converge it to Local Only
+    # instead of silently opening the family that was still blocked.
+    if [ "$ipv4_mode" = block ] || [ "$ipv6_mode" = block ]; then
+      printf '%s\n' block
+      return 0
+    fi
+  elif ! network_privacy_ipv6_supported; then
+    return 1
+  fi
+
+  printf '%s\n' "$ipv4_mode"
+}
+
+firewall_state_matches() {
+  local expected="$1" ipv6_root iptables_bin ip6tables_bin ip6tables_save_bin ip6tables_restore_bin ipv4_mode ipv6_mode
+  case "$expected" in
+    block|unblock) ;;
+    *) echo "Error: invalid expected firewall mode: $expected" >&2; return 1 ;;
+  esac
+
+  iptables_bin="${SLEEPYPOD_IPTABLES_BIN:-$(command -v iptables 2>/dev/null || true)}"
+  [ -n "$iptables_bin" ] || return 1
+  ipv4_mode="$(detect_family_firewall_mode "$iptables_bin" IPv4)" || return 1
+  [ "$ipv4_mode" = "$expected" ] || return 1
+
+  ip6tables_bin="${SLEEPYPOD_IP6TABLES_BIN-$(command -v ip6tables 2>/dev/null || true)}"
+  ip6tables_save_bin="${SLEEPYPOD_IP6TABLES_SAVE_BIN-$(command -v ip6tables-save 2>/dev/null || true)}"
+  ip6tables_restore_bin="${SLEEPYPOD_IP6TABLES_RESTORE_BIN-$(command -v ip6tables-restore 2>/dev/null || true)}"
+  ipv6_root="$(network_privacy_ipv6_sysctl_root)"
+  if [ ! -d "$ipv6_root" ]; then
+    :
+  elif [ -n "$ip6tables_bin" ] && [ -n "$ip6tables_save_bin" ] && [ -n "$ip6tables_restore_bin" ]; then
+    ipv6_mode="$(detect_family_firewall_mode "$ip6tables_bin" IPv6)" || return 1
+    [ "$ipv6_mode" = "$expected" ] || return 1
+  else
+    network_privacy_ipv6_supported || return 1
+  fi
+}
+
+network_privacy_state_matches() {
+  local expected="$1" hosts_file
+  hosts_file="$(network_privacy_hosts_file)"
+  firewall_state_matches "$expected" \
+    && network_privacy_hosts_block_current "$hosts_file"
+}
+
+network_privacy_hosts_block_current() {
+  local hosts_file="$1" begin_count end_count section domain
+  begin_count=$(grep -Fxc "$NETWORK_PRIVACY_MARKER_BEGIN" "$hosts_file" 2>/dev/null || true)
+  end_count=$(grep -Fxc "$NETWORK_PRIVACY_MARKER_END" "$hosts_file" 2>/dev/null || true)
+  [ "$begin_count" -eq 1 ] && [ "$end_count" -eq 1 ] || return 1
+
+  section="$(awk -v begin="$NETWORK_PRIVACY_MARKER_BEGIN" -v end="$NETWORK_PRIVACY_MARKER_END" '
+    $0 == begin { inside = 1; next }
+    $0 == end { inside = 0; found_end = 1; next }
+    inside { print }
+    END { if (inside || !found_end) exit 1 }
+  ' "$hosts_file")" || return 1
+
+  for domain in "${NETWORK_PRIVACY_DOMAINS[@]}"; do
+    grep -Fqx "0.0.0.0 $domain" <<< "$section" || return 1
+    grep -Fqx ":: $domain" <<< "$section" || return 1
+  done
+}
+
+ensure_telemetry_hosts_block() {
+  local hosts_file begin_count end_count tmp mode owner domain
+  hosts_file="$(network_privacy_hosts_file)"
+  if [ ! -f "$hosts_file" ]; then
+    echo "Error: hosts file not found: $hosts_file" >&2
+    return 1
+  fi
+  if network_privacy_hosts_block_current "$hosts_file"; then
+    return 0
+  fi
+
+  begin_count=$(grep -Fxc "$NETWORK_PRIVACY_MARKER_BEGIN" "$hosts_file" 2>/dev/null || true)
+  end_count=$(grep -Fxc "$NETWORK_PRIVACY_MARKER_END" "$hosts_file" 2>/dev/null || true)
+  if { [ "$begin_count" -ne 0 ] || [ "$end_count" -ne 0 ]; } \
+    && { [ "$begin_count" -ne 1 ] || [ "$end_count" -ne 1 ]; }; then
+    echo "Error: malformed or duplicate SleepyPod markers in $hosts_file" >&2
+    return 1
+  fi
+
+  if ! tmp="$(mktemp "${hosts_file}.sleepypod.XXXXXX")"; then
+    echo "Error: unable to stage an update beside $hosts_file" >&2
+    return 1
+  fi
+  if [ "$begin_count" -eq 1 ]; then
+    if ! awk -v begin="$NETWORK_PRIVACY_MARKER_BEGIN" -v end="$NETWORK_PRIVACY_MARKER_END" '
+      $0 == begin { if (inside) exit 2; inside = 1; found_begin = 1; next }
+      $0 == end { if (!inside) exit 2; inside = 0; found_end = 1; next }
+      !inside { print }
+      END { if (inside || !found_begin || !found_end) exit 2 }
+    ' "$hosts_file" > "$tmp"; then
+      rm -f "$tmp"
+      echo "Error: malformed SleepyPod block ordering in $hosts_file" >&2
+      return 1
+    fi
+  else
+    if ! cp -p "$hosts_file" "$tmp"; then
+      rm -f "$tmp"
+      echo "Error: unable to stage the current $hosts_file" >&2
+      return 1
+    fi
+  fi
+
+  if ! {
+    # Always separate the managed block from the stock hosts content. A spare
+    # blank line is harmless and makes subsequent manual inspection clearer.
+    echo ""
+    echo "$NETWORK_PRIVACY_MARKER_BEGIN"
+    echo "# Block stock Eight Sleep cloud clients, including while WAN is"
+    echo "# temporarily open for a SleepyPod install or update."
+    for domain in "${NETWORK_PRIVACY_DOMAINS[@]}"; do
+      echo "0.0.0.0 $domain"
+      echo ":: $domain"
+    done
+    echo "$NETWORK_PRIVACY_MARKER_END"
+  } >> "$tmp"; then
+    rm -f "$tmp"
+    echo "Error: unable to append the SleepyPod block to $hosts_file" >&2
+    return 1
+  fi
+
+  if [ "${SLEEPYPOD_SKIP_OWNERSHIP:-false}" = true ]; then
+    if ! chmod 0644 "$tmp"; then
+      rm -f "$tmp"
+      return 1
+    fi
+  else
+    if ! mode="$(stat -c '%a' "$hosts_file")" \
+      || ! owner="$(stat -c '%u:%g' "$hosts_file")" \
+      || ! chmod "$mode" "$tmp" \
+      || ! chown "$owner" "$tmp"; then
+      rm -f "$tmp"
+      echo "Error: unable to preserve $hosts_file ownership or mode" >&2
+      return 1
+    fi
+  fi
+  if ! cp -p "$hosts_file" "${hosts_file}.bak.sleepypod"; then
+    rm -f "$tmp"
+    echo "Error: unable to back up $hosts_file" >&2
+    return 1
+  fi
+  if ! mv -f "$tmp" "$hosts_file"; then
+    rm -f "$tmp"
+    echo "Error: unable to atomically replace $hosts_file" >&2
+    return 1
+  fi
+
+  if ! network_privacy_hosts_block_current "$hosts_file"; then
+    echo "Error: failed to verify the SleepyPod block in $hosts_file" >&2
+    cp -p "${hosts_file}.bak.sleepypod" "$hosts_file" 2>/dev/null || true
+    return 1
+  fi
+  echo "Installed Eight Sleep telemetry block in $hosts_file"
+}
+
+install_sleepypod_update_sudoers() {
+  local sudoers_file sudoers_dir content tmp backup visudo_bin
+  sudoers_file="${SLEEPYPOD_SUDOERS_FILE:-/etc/sudoers.d/sleepypod-update}"
+  sudoers_dir="$(dirname "$sudoers_file")"
+  content='Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update'
+
+  visudo_bin="${SLEEPYPOD_VISUDO_BIN:-$(command -v visudo 2>/dev/null || true)}"
+  if [ -z "$visudo_bin" ]; then
+    echo "Error: visudo is required to install the SleepyPod updater rule" >&2
+    return 1
+  fi
+
+  if ! mkdir -p "$sudoers_dir" \
+    || ! tmp="$(mktemp "$sudoers_dir/.sleepypod-update.XXXXXX")" \
+    || ! printf '%s\n' "$content" > "$tmp" \
+    || ! chmod 0440 "$tmp"; then
+    [ -z "${tmp:-}" ] || rm -f "$tmp"
+    echo "Error: unable to stage the SleepyPod sudoers fragment" >&2
+    return 1
+  fi
+  if [ "${SLEEPYPOD_SKIP_OWNERSHIP:-false}" != true ] \
+    && ! chown root:root "$tmp"; then
+    rm -f "$tmp"
+    echo "Error: unable to set ownership on the staged sudoers fragment" >&2
+    return 1
+  fi
+  if ! "$visudo_bin" -c -q -f "$tmp"; then
+    rm -f "$tmp"
+    echo "Error: SleepyPod sudoers fragment failed validation" >&2
+    return 1
+  fi
+
+  backup=""
+  if [ -e "$sudoers_file" ]; then
+    if ! backup="$(mktemp "$sudoers_dir/.sleepypod-update.backup.XXXXXX")" \
+      || ! cp -p "$sudoers_file" "$backup"; then
+      rm -f "$tmp" "${backup:-}"
+      echo "Error: unable to back up $sudoers_file" >&2
+      return 1
+    fi
+  fi
+  if ! mv -f "$tmp" "$sudoers_file"; then
+    rm -f "$tmp" "${backup:-}"
+    echo "Error: unable to atomically install $sudoers_file" >&2
+    return 1
+  fi
+  if ! "$visudo_bin" -c -q -f "$sudoers_file"; then
+    echo "Error: installed SleepyPod sudoers fragment failed validation" >&2
+    if [ -n "$backup" ]; then
+      mv -f "$backup" "$sudoers_file" 2>/dev/null || true
+    else
+      rm -f "$sudoers_file"
+    fi
+    return 1
+  fi
+  rm -f "${backup:-}"
+  echo "Installed $sudoers_file"
+}
+
+install_firewall_restore_service() {
+  local unit_file unit_dir restore_tool systemctl_bin tmp
+  unit_file="${SLEEPYPOD_FIREWALL_RESTORE_UNIT:-/etc/systemd/system/sleepypod-firewall-restore.service}"
+  unit_dir="$(dirname "$unit_file")"
+  restore_tool="${SLEEPYPOD_FIREWALL_RESTORE_TOOL:-/usr/local/bin/sp-firewall-restore}"
+  systemctl_bin="${SLEEPYPOD_SYSTEMCTL_BIN:-$(command -v systemctl 2>/dev/null || true)}"
+
+  if [ ! -x "$restore_tool" ]; then
+    echo "Error: firewall restore tool is missing or not executable: $restore_tool" >&2
+    return 1
+  fi
+  if [ -z "$systemctl_bin" ]; then
+    echo "Error: systemctl is required to install firewall persistence" >&2
+    return 1
+  fi
+  if ! mkdir -p "$unit_dir" \
+    || ! tmp="$(mktemp "$unit_dir/.sleepypod-firewall-restore.XXXXXX")" \
+    || ! printf '%s\n' \
+      '[Unit]' \
+      'Description=Restore SleepyPod firewall policy before networking' \
+      'DefaultDependencies=no' \
+      'After=local-fs.target iptables.service ip6tables.service' \
+      'Before=network-pre.target NetworkManager.service' \
+      'Wants=network-pre.target' \
+      '' \
+      '[Service]' \
+      'Type=oneshot' \
+      "ExecStart=$restore_tool" \
+      'RemainAfterExit=yes' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      'RequiredBy=NetworkManager.service' > "$tmp" \
+    || ! chmod 0644 "$tmp"; then
+    rm -f "${tmp:-}"
+    echo "Error: unable to stage the SleepyPod firewall restore unit" >&2
+    return 1
+  fi
+  if [ "${SLEEPYPOD_SKIP_OWNERSHIP:-false}" != true ] \
+    && ! chown root:root "$tmp"; then
+    rm -f "$tmp"
+    echo "Error: unable to set ownership on the firewall restore unit" >&2
+    return 1
+  fi
+  if ! mv -f "$tmp" "$unit_file" \
+    || ! "$systemctl_bin" daemon-reload \
+    || ! "$systemctl_bin" enable "$(basename "$unit_file")"; then
+    rm -f "$tmp"
+    echo "Error: unable to enable SleepyPod firewall persistence" >&2
+    return 1
+  fi
+  echo "Installed $unit_file"
+}
+
+converge_firewall_mode() {
+  local mode="$1" helper
+  helper="${SLEEPYPOD_INTERNET_CONTROL_HELPER:-/usr/local/bin/sp-internet-control}"
+  if [ ! -x "$helper" ]; then
+    echo "Error: firewall helper is missing or not executable: $helper" >&2
+    return 1
+  fi
+  case "$mode" in
+    block) "$helper" block ;;
+    # Internet Enabled can coexist with narrow user/stock rules. Persist the
+    # inspected runtime state without destructively flushing those rules.
+    unblock) "$helper" persist ;;
+    *) echo "Error: invalid firewall mode: $mode" >&2; return 1 ;;
+  esac
+}
+
+mark_network_privacy_migrated() {
+  local marker marker_dir tmp
+  marker="$(network_privacy_migration_marker)"
+  marker_dir="$(dirname "$marker")"
+  if ! mkdir -p "$marker_dir" \
+    || ! tmp="$(mktemp "$marker_dir/.firewall-policy-v1.XXXXXX")" \
+    || ! printf '%s\n' "firewall-policy-v1" > "$tmp" \
+    || ! chmod 0644 "$tmp"; then
+    rm -f "${tmp:-}"
+    echo "Error: unable to write network privacy migration marker" >&2
+    return 1
+  fi
+  if [ "${SLEEPYPOD_SKIP_OWNERSHIP:-false}" != true ] \
+    && ! chown root:root "$tmp"; then
+    rm -f "$tmp"
+    echo "Error: unable to set migration marker ownership" >&2
+    return 1
+  fi
+  if ! mv -f "$tmp" "$marker" || ! network_privacy_migrated; then
+    rm -f "$tmp" "$marker"
+    echo "Error: unable to atomically install network privacy migration marker" >&2
+    return 1
+  fi
+}
+
+network_privacy_migrated() {
+  local marker content
+  marker="$(network_privacy_migration_marker)"
+  [ -f "$marker" ] || return 1
+  content="$(cat "$marker" 2>/dev/null)" || return 1
+  [ "$content" = "firewall-policy-v1" ]
+}

@@ -6,6 +6,10 @@ set -euo pipefail
 # Called by sleepypod.service ExecStartPre so it runs before the app starts.
 # Keeps disk usage in check on the pod's limited storage (~6GB).
 
+# The service unit intentionally gives the app a minimal PATH, but this root
+# pre-start migration needs Pod tools such as visudo and iptables from sbin.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 # DATA_DIR pointer is written by scripts/install (storage-aware picker).
 # Legacy fallback keeps installs without the pointer file working.
 if [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
@@ -17,7 +21,49 @@ INSTALL_DIR="/home/dac/sleepypod-core"
 
 echo "=== SleepyPod Maintenance ==="
 
-# 1. Vacuum systemd journal (cap at 50MB)
+# 1. First-upgrade network privacy migration. sp-update atomically replaces
+# its own executable, so the shell performing the first upgrade continues
+# running the old updater body. It does install this new maintenance binary,
+# and ExecStartPre runs it before the updated app starts. That gives the first
+# OTA a safe place to converge hosts, sudoers, and firewall persistence without
+# requiring users to run sp-update twice.
+PRIVACY_HELPERS=/usr/local/bin/sp-network-privacy
+if [ -r "$PRIVACY_HELPERS" ] && [ -x /usr/local/bin/sp-internet-control ]; then
+  # shellcheck source=scripts/bin/sp-network-privacy
+  source "$PRIVACY_HELPERS"
+  if ! network_privacy_migrated; then
+    # The pre-migration UI persisted an open policy before launching its old
+    # updater and only re-blocked from browser JavaScript after reconnecting.
+    # There is no durable intent signal that distinguishes that temporary
+    # window from a user who intentionally enabled Internet. Fail closed once;
+    # subsequent user toggles are preserved because the marker is then valid.
+    MIGRATION_MODE=block
+    if ensure_telemetry_hosts_block \
+      && install_sleepypod_update_sudoers \
+      && converge_firewall_mode "$MIGRATION_MODE" \
+      && install_firewall_restore_service \
+      && network_privacy_state_matches "$MIGRATION_MODE" \
+      && mark_network_privacy_migrated; then
+      echo "Network privacy migration complete ($MIGRATION_MODE)."
+    else
+      # Do not let the legacy UI's temporary-open update window become the
+      # app's steady state. A canonical block is enough to keep the local UI
+      # available while the missing artifact retries on the next restart.
+      if /usr/local/bin/sp-internet-control block \
+        && network_privacy_state_matches block; then
+        echo "WARNING: network privacy migration incomplete; forced Local Only and will retry on restart" >&2
+      else
+        echo "ERROR: network privacy migration failed and Local Only could not be verified" >&2
+        exit 1
+      fi
+    fi
+  fi
+else
+  echo "ERROR: network privacy migration cannot run; helper files are missing" >&2
+  exit 1
+fi
+
+# 2. Vacuum systemd journal (cap at 50MB)
 if command -v journalctl &>/dev/null; then
   # Guard against two failure modes reported on a fresh Pod 4:
   # (a) /persistent/journal missing → `du` fails, pipefail propagates, the
@@ -34,16 +80,26 @@ if command -v journalctl &>/dev/null; then
   fi
 fi
 
-# 2. Clean stale temp files (leftover from failed updates, builds, etc.)
+# 3. Clean stale temp files (leftover from failed updates, builds, etc.)
 TEMP_CLEANED=0
 for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*; do
   if [ -e "$d" ]; then
+    # sp-update owns these until its EXIT trap completes. Deleting the rollback
+    # tree from ExecStartPre turns an otherwise recoverable failed first OTA
+    # into an unrecoverable partial install.
+    case "$d" in
+      # sp-update owns this fixed path and removes/recreates it itself. Always
+      # preserve it here: relying on pgrep is unsafe on minimal Yocto images
+      # and can destroy the only rollback copy during ExecStartPre.
+      /tmp/sleepypod-rollback) continue ;;
+      /tmp/sleepypod-install.log) continue ;;
+    esac
     rm -rf "$d" 2>/dev/null && TEMP_CLEANED=$((TEMP_CLEANED + 1))
   fi
 done
 [ "$TEMP_CLEANED" -gt 0 ] && echo "Cleaned $TEMP_CLEANED stale temp entries."
 
-# 3. Prune old database backups (keep 3 most recent of each kind).
+# 4. Prune old database backups (keep 3 most recent of each kind).
 # Each backup set is a triplet — sleepypod.db.bak.<ts>, plus the matching
 # sleepypod.db-wal.bak.<ts> and sleepypod.db-shm.bak.<ts> sidecars created
 # by sp-update. Pruning only the .db files would leak WAL/SHM backups for
@@ -70,7 +126,7 @@ if [ -d "$DATA_DIR" ]; then
   prune_bak_pattern 'sleepypod.db-shm.bak.*'
 fi
 
-# 4. Prune pnpm content-addressable store
+# 5. Prune pnpm content-addressable store
 if command -v pnpm &>/dev/null; then
   STORE_SIZE=$(du -sm /home/root/.local/share/pnpm/store 2>/dev/null | awk '{print $1}' || true)
   STORE_SIZE=${STORE_SIZE:-0}
@@ -80,7 +136,7 @@ if command -v pnpm &>/dev/null; then
   fi
 fi
 
-# 5. Self-heal /persistent/deviceinfo perms so next-server can unlink
+# 6. Self-heal /persistent/deviceinfo perms so next-server can unlink
 # stale dac.sock on startup. Older installs created the dir with mkdir's
 # default umask (root:root 0755), which denies write to the sleepypod user
 # (even with SupplementaryGroups=dac) — getStatus then fails with

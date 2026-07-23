@@ -1,0 +1,422 @@
+#!/bin/bash
+set -euo pipefail
+
+# This helper is installed root:root in /usr/local/bin. Keep command lookup
+# independent of the calling service's environment: it is reached through the
+# narrowly dispatched `sp-update --internet-access` sudo path.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+RULES_DIR="/etc/iptables"
+IPV4_RULES="$RULES_DIR/iptables.rules"
+IPV6_RULES="$RULES_DIR/ip6tables.rules"
+LEGACY_IPV4_RULES="$RULES_DIR/rules.v4"
+LEGACY_IPV6_RULES="$RULES_DIR/rules.v6"
+LOCK_FILE="/run/lock/sleepypod-internet-control.lock"
+IPV6_SYSCTL_ROOT="${SLEEPYPOD_IPV6_SYSCTL_ROOT:-/proc/sys/net/ipv6/conf}"
+
+usage() {
+  echo "Usage: $(basename "$0") {block|unblock|persist|temporary-unblock}" >&2
+  exit 2
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
+fi
+
+case "$1" in
+  block|unblock|persist|temporary-unblock) ACTION="$1" ;;
+  *) usage ;;
+esac
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: sp-internet-control must run as root" >&2
+  exit 1
+fi
+
+resolve_required() {
+  local name="$1"
+  local path
+  path="$(command -v "$name" 2>/dev/null || true)"
+  if [ -z "$path" ]; then
+    echo "Error: required command not found: $name" >&2
+    exit 1
+  fi
+  printf '%s' "$path"
+}
+
+IPTABLES="$(resolve_required iptables)"
+IPTABLES_SAVE="$(resolve_required iptables-save)"
+IPTABLES_RESTORE="$(resolve_required iptables-restore)"
+FLOCK="$(resolve_required flock)"
+
+IP6TABLES="$(command -v ip6tables 2>/dev/null || true)"
+IP6TABLES_SAVE="$(command -v ip6tables-save 2>/dev/null || true)"
+IP6TABLES_RESTORE="$(command -v ip6tables-restore 2>/dev/null || true)"
+HAS_IPV6=false
+if [ ! -d "$IPV6_SYSCTL_ROOT" ]; then
+  # Stray userspace binaries do not make an IPv4-only kernel dual-stack.
+  HAS_IPV6=false
+elif [ -n "$IP6TABLES" ] && [ -n "$IP6TABLES_SAVE" ] && [ -n "$IP6TABLES_RESTORE" ]; then
+  HAS_IPV6=true
+else
+  if [ -n "$IP6TABLES" ] || [ -n "$IP6TABLES_SAVE" ] || [ -n "$IP6TABLES_RESTORE" ]; then
+    echo "Error: IPv6 is enabled but the ip6tables toolchain is incomplete" >&2
+  else
+    echo "Error: IPv6 is enabled but the ip6tables toolchain is unavailable" >&2
+  fi
+  echo "       Refusing to change the firewall without a persistent IPv6 boundary" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! "$FLOCK" -w 15 9; then
+  echo "Error: another firewall transition is still running" >&2
+  exit 1
+fi
+
+WORK_DIR="$(mktemp -d /tmp/sp-internet-control.XXXXXX)"
+RUNTIME_V4="$WORK_DIR/runtime-v4.rules"
+RUNTIME_V6="$WORK_DIR/runtime-v6.rules"
+ROLLBACK_NEEDED=false
+
+backup_file() {
+  local path="$1"
+  local key="$2"
+  if [ -e "$path" ]; then
+    cp -p "$path" "$WORK_DIR/$key"
+    : > "$WORK_DIR/$key.present"
+  fi
+}
+
+restore_file() {
+  local path="$1" key="$2" destination_dir staged
+  if [ -f "$WORK_DIR/$key.present" ]; then
+    destination_dir="$(dirname "$path")"
+    mkdir -p "$destination_dir" || return 1
+    staged="$(mktemp "$destination_dir/.sleepypod-restore.XXXXXX")" || return 1
+    if ! cp -p "$WORK_DIR/$key" "$staged" 2>/dev/null \
+      || ! mv -f "$staged" "$path"; then
+      rm -f "$staged"
+      return 1
+    fi
+  else
+    rm -f "$path"
+  fi
+}
+
+file_matches_backup() {
+  local path="$1" key="$2" current expected
+  if [ -f "$WORK_DIR/$key.present" ]; then
+    [ -f "$path" ] || return 1
+    current="$(cat "$path")" || return 1
+    expected="$(cat "$WORK_DIR/$key")" || return 1
+    [ "$current" = "$expected" ]
+  else
+    [ ! -e "$path" ]
+  fi
+}
+
+runtime_matches_snapshot() {
+  local current expected
+  current="$("$IPTABLES_SAVE")" || return 1
+  expected="$(cat "$RUNTIME_V4")" || return 1
+  [ "$current" = "$expected" ] || return 1
+  if [ "$HAS_IPV6" = true ]; then
+    current="$("$IP6TABLES_SAVE")" || return 1
+    expected="$(cat "$RUNTIME_V6")" || return 1
+    [ "$current" = "$expected" ] || return 1
+  fi
+}
+
+persisted_state_matches_backup() {
+  file_matches_backup "$IPV4_RULES" ipv4-persisted \
+    && file_matches_backup "$LEGACY_IPV4_RULES" ipv4-legacy-persisted \
+    && file_matches_backup "$IPV6_RULES" ipv6-persisted \
+    && file_matches_backup "$LEGACY_IPV6_RULES" ipv6-legacy-persisted
+}
+
+rollback() {
+  local failed=false
+  echo "Firewall transition failed; restoring the previous state" >&2
+  "$IPTABLES_RESTORE" < "$RUNTIME_V4" 2>/dev/null || failed=true
+  if [ "$HAS_IPV6" = true ] && [ -s "$RUNTIME_V6" ]; then
+    "$IP6TABLES_RESTORE" < "$RUNTIME_V6" 2>/dev/null || failed=true
+  fi
+  restore_file "$IPV4_RULES" ipv4-persisted || failed=true
+  restore_file "$LEGACY_IPV4_RULES" ipv4-legacy-persisted || failed=true
+  restore_file "$IPV6_RULES" ipv6-persisted || failed=true
+  restore_file "$LEGACY_IPV6_RULES" ipv6-legacy-persisted || failed=true
+  runtime_matches_snapshot || failed=true
+  persisted_state_matches_backup || failed=true
+
+  if [ "$failed" = false ]; then
+    echo "Previous firewall state restored and verified" >&2
+    return 0
+  fi
+
+  echo "Exact firewall rollback failed; forcing emergency Local Only" >&2
+  force_emergency_local_only
+}
+
+finish() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$ROLLBACK_NEEDED" = true ]; then
+    rollback || true
+  fi
+  rm -rf "$WORK_DIR"
+  exit "$status"
+}
+trap finish EXIT
+
+# Snapshot both runtime and persisted state before the first mutation. A bare
+# iptables-save is safe here because this process is root; Pod 5's legacy build
+# only rejects it for the unprivileged Node service.
+"$IPTABLES_SAVE" > "$RUNTIME_V4"
+if [ ! -s "$RUNTIME_V4" ]; then
+  echo "Error: iptables-save produced an empty snapshot" >&2
+  exit 1
+fi
+if ! "$IPTABLES_RESTORE" --test < "$RUNTIME_V4"; then
+  echo "Error: current IPv4 firewall snapshot failed validation" >&2
+  exit 1
+fi
+if [ "$HAS_IPV6" = true ]; then
+  "$IP6TABLES_SAVE" > "$RUNTIME_V6"
+  if [ ! -s "$RUNTIME_V6" ]; then
+    echo "Error: ip6tables-save produced an empty snapshot" >&2
+    exit 1
+  fi
+  if ! "$IP6TABLES_RESTORE" --test < "$RUNTIME_V6"; then
+    echo "Error: current IPv6 firewall snapshot failed validation" >&2
+    exit 1
+  fi
+fi
+backup_file "$IPV4_RULES" ipv4-persisted
+backup_file "$LEGACY_IPV4_RULES" ipv4-legacy-persisted
+backup_file "$IPV6_RULES" ipv6-persisted
+backup_file "$LEGACY_IPV6_RULES" ipv6-legacy-persisted
+ROLLBACK_NEEDED=true
+
+reset_ipv4_filter() {
+  local policy="${1:-ACCEPT}"
+  "$IPTABLES" -P INPUT "$policy" || return 1
+  "$IPTABLES" -P OUTPUT "$policy" || return 1
+  "$IPTABLES" -P FORWARD "$policy" || return 1
+  "$IPTABLES" -F || return 1
+  "$IPTABLES" -X || return 1
+}
+
+reset_ipv6_filter() {
+  local policy="${1:-ACCEPT}"
+  "$IP6TABLES" -P INPUT "$policy" || return 1
+  "$IP6TABLES" -P OUTPUT "$policy" || return 1
+  "$IP6TABLES" -P FORWARD "$policy" || return 1
+  "$IP6TABLES" -F || return 1
+  "$IP6TABLES" -X || return 1
+}
+
+block_ipv4() {
+  # DROP policies precede the flush, so both ordinary transitions and the
+  # emergency fallback remain closed while allow rules are rebuilt.
+  reset_ipv4_filter DROP || return 1
+
+  "$IPTABLES" -A INPUT -i lo -j ACCEPT || return 1
+  "$IPTABLES" -A OUTPUT -o lo -j ACCEPT || return 1
+
+  for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    "$IPTABLES" -A INPUT -s "$cidr" -j ACCEPT || return 1
+    "$IPTABLES" -A OUTPUT -d "$cidr" -j ACCEPT || return 1
+  done
+
+  "$IPTABLES" -A OUTPUT -p udp --dport 123 -j ACCEPT || return 1
+  "$IPTABLES" -A INPUT -p udp --sport 123 -j ACCEPT || return 1
+  "$IPTABLES" -A OUTPUT -p udp -d 224.0.0.251/32 --dport 5353 -j ACCEPT || return 1
+  "$IPTABLES" -A OUTPUT -p udp -d 224.0.0.251/32 --sport 5353 -j ACCEPT || return 1
+  "$IPTABLES" -A INPUT -p udp -d 224.0.0.251/32 --dport 5353 -j ACCEPT || return 1
+
+  # Persisted rules load before Wi-Fi has an address. Permit the DHCP client
+  # exchange so a reboot under Local Only can still reacquire its LAN lease.
+  "$IPTABLES" -A OUTPUT -p udp --sport 68 --dport 67 -d 255.255.255.255/32 -j ACCEPT || return 1
+  "$IPTABLES" -A INPUT -p udp --sport 67 --dport 68 -j ACCEPT || return 1
+
+  # Direct terminal rules keep the runtime/UI status checks compatible with
+  # stock and free-sleep rulesets (both detect DROP in OUTPUT).
+  "$IPTABLES" -A INPUT -j DROP || return 1
+  "$IPTABLES" -A OUTPUT -j DROP || return 1
+}
+
+block_ipv6() {
+  reset_ipv6_filter DROP || return 1
+
+  "$IP6TABLES" -A INPUT -i lo -j ACCEPT || return 1
+  "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT || return 1
+
+  for cidr in fe80::/10 fc00::/7; do
+    "$IP6TABLES" -A INPUT -s "$cidr" -j ACCEPT || return 1
+    "$IP6TABLES" -A OUTPUT -d "$cidr" -j ACCEPT || return 1
+  done
+
+  "$IP6TABLES" -A OUTPUT -p udp --dport 123 -j ACCEPT || return 1
+  "$IP6TABLES" -A INPUT -p udp --sport 123 -j ACCEPT || return 1
+  "$IP6TABLES" -A OUTPUT -p udp -d ff02::fb/128 --dport 5353 -j ACCEPT || return 1
+  "$IP6TABLES" -A OUTPUT -p udp -d ff02::fb/128 --sport 5353 -j ACCEPT || return 1
+  "$IP6TABLES" -A INPUT -p udp -d ff02::fb/128 --dport 5353 -j ACCEPT || return 1
+
+  # DHCPv6 and ICMPv6 router/neighbor discovery use link-local multicast that
+  # is outside fe80::/10 and fc00::/7 destination matches.
+  "$IP6TABLES" -A OUTPUT -p udp -d ff02::1:2/128 --sport 546 --dport 547 -j ACCEPT || return 1
+  "$IP6TABLES" -A INPUT -p udp --sport 547 --dport 546 -j ACCEPT || return 1
+  "$IP6TABLES" -A INPUT -p ipv6-icmp -d ff02::/16 -j ACCEPT || return 1
+  "$IP6TABLES" -A OUTPUT -p ipv6-icmp -d ff02::/16 -j ACCEPT || return 1
+
+  "$IP6TABLES" -A INPUT -j DROP || return 1
+  "$IP6TABLES" -A OUTPUT -j DROP || return 1
+}
+
+persist_family() {
+  local save_bin="$1"
+  local restore_bin="$2"
+  local canonical="$3"
+  local legacy="$4"
+  local prefix="$5"
+  local staged destination staged_copy
+
+  mkdir -p "$RULES_DIR" || return 1
+  staged="$(mktemp "$RULES_DIR/.${prefix}.XXXXXX")" || return 1
+  if ! "$save_bin" > "$staged"; then
+    rm -f "$staged"
+    return 1
+  fi
+  if [ ! -s "$staged" ] || ! "$restore_bin" --test < "$staged"; then
+    rm -f "$staged"
+    return 1
+  fi
+  chmod 0600 "$staged" || return 1
+  chown root:root "$staged" || return 1
+  for destination in "$canonical" "$legacy"; do
+    if ! staged_copy="$(mktemp "$RULES_DIR/.${prefix}.copy.XXXXXX")" \
+      || ! cp -p "$staged" "$staged_copy" \
+      || ! mv -f "$staged_copy" "$destination"; then
+      rm -f "$staged" "${staged_copy:-}"
+      return 1
+    fi
+  done
+  rm -f "$staged"
+}
+
+quarantine_persisted_family() {
+  local canonical="$1" legacy="$2"
+  rm -f "$canonical" "$legacy" || return 1
+  [ ! -e "$canonical" ] && [ ! -e "$legacy" ]
+}
+
+stop_sleepypod_for_unsafe_firewall() {
+  local systemctl_bin
+  systemctl_bin="$(command -v systemctl 2>/dev/null || true)"
+  if [ -z "$systemctl_bin" ]; then
+    echo "ERROR: systemctl is unavailable; stop sleepypod.service manually" >&2
+    return 1
+  fi
+  echo "Stopping sleepypod.service because firewall recovery is unverified" >&2
+  if ! "$systemctl_bin" stop sleepypod.service \
+    || "$systemctl_bin" is-active --quiet sleepypod.service 2>/dev/null; then
+    echo "ERROR: unable to verify that sleepypod.service stopped" >&2
+    return 1
+  fi
+}
+
+force_emergency_local_only() {
+  local failed=false v4_runtime_ok=true v6_runtime_ok=true
+
+  block_ipv4 || v4_runtime_ok=false
+  "$IPTABLES" -C OUTPUT -j DROP || v4_runtime_ok=false
+  if [ "$HAS_IPV6" = true ]; then
+    block_ipv6 || v6_runtime_ok=false
+    "$IP6TABLES" -C OUTPUT -j DROP || v6_runtime_ok=false
+  fi
+
+  if [ "$v4_runtime_ok" = true ]; then
+    if ! persist_family "$IPTABLES_SAVE" "$IPTABLES_RESTORE" \
+      "$IPV4_RULES" "$LEGACY_IPV4_RULES" iptables.rules; then
+      failed=true
+      quarantine_persisted_family "$IPV4_RULES" "$LEGACY_IPV4_RULES" || failed=true
+    fi
+  else
+    failed=true
+    quarantine_persisted_family "$IPV4_RULES" "$LEGACY_IPV4_RULES" || failed=true
+  fi
+
+  if [ "$HAS_IPV6" = true ]; then
+    if [ "$v6_runtime_ok" = true ]; then
+      if ! persist_family "$IP6TABLES_SAVE" "$IP6TABLES_RESTORE" \
+        "$IPV6_RULES" "$LEGACY_IPV6_RULES" ip6tables.rules; then
+        failed=true
+        quarantine_persisted_family "$IPV6_RULES" "$LEGACY_IPV6_RULES" || failed=true
+      fi
+    else
+      failed=true
+      quarantine_persisted_family "$IPV6_RULES" "$LEGACY_IPV6_RULES" || failed=true
+    fi
+  else
+    quarantine_persisted_family "$IPV6_RULES" "$LEGACY_IPV6_RULES" || failed=true
+  fi
+
+  if [ "$failed" = true ]; then
+    echo "ERROR: emergency Local Only recovery was incomplete" >&2
+    stop_sleepypod_for_unsafe_firewall || true
+    return 1
+  fi
+  echo "Emergency Local Only policy applied, persisted, and verified" >&2
+}
+
+if [ "$ACTION" = block ]; then
+  block_ipv4
+  if [ "$HAS_IPV6" = true ]; then
+    block_ipv6
+  fi
+  "$IPTABLES" -C OUTPUT -j DROP
+  if [ "$HAS_IPV6" = true ]; then
+    "$IP6TABLES" -C OUTPUT -j DROP
+  fi
+elif [ "$ACTION" = unblock ] || [ "$ACTION" = temporary-unblock ]; then
+  reset_ipv4_filter
+  if [ "$HAS_IPV6" = true ]; then
+    reset_ipv6_filter
+  fi
+fi
+
+if [ "$ACTION" != temporary-unblock ]; then
+  persist_family "$IPTABLES_SAVE" "$IPTABLES_RESTORE" \
+    "$IPV4_RULES" "$LEGACY_IPV4_RULES" iptables.rules
+  if [ "$HAS_IPV6" = true ]; then
+    persist_family "$IP6TABLES_SAVE" "$IP6TABLES_RESTORE" \
+      "$IPV6_RULES" "$LEGACY_IPV6_RULES" ip6tables.rules
+  else
+    # A missing IPv6 sysctl tree proves that this kernel has no IPv6 family to
+    # restore. Remove stale inputs transactionally so stock restore units do not
+    # fail forever; rollback() restores them if anything later fails.
+    # temporary-unblock deliberately leaves persistence untouched.
+    rm -f "$IPV6_RULES" "$LEGACY_IPV6_RULES"
+  fi
+fi
+
+ROLLBACK_NEEDED=false
+
+# A missing restore file leaves the stock Pod 5 unit failed. The new persisted
+# state is now valid; clear the stale failure without re-applying it in-place.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl reset-failed iptables.service >/dev/null 2>&1 || true
+  systemctl reset-failed sleepypod-firewall-restore.service >/dev/null 2>&1 || true
+  if [ "$HAS_IPV6" = true ]; then
+    systemctl reset-failed ip6tables.service >/dev/null 2>&1 || true
+  fi
+fi
+
+case "$ACTION" in
+  block) echo "WAN access blocked and persisted" ;;
+  unblock) echo "WAN access unblocked and persisted" ;;
+  persist) echo "Current firewall state persisted" ;;
+  temporary-unblock) echo "WAN access temporarily unblocked; persisted policy unchanged" ;;
+esac

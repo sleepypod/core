@@ -169,6 +169,53 @@ describe('capFramePersistence', () => {
     expect(summarizeWindow(window('left')).peakZone).toBe(2)
   })
 
+  describe('capSense status histogram (statusCounts)', () => {
+    it('leaves statusCounts null when every sample is "good"', () => {
+      recordCapFrame('left', A, TS, 'good')
+      recordCapFrame('left', B, TS + 1, 'good')
+      expect(summarizeWindow(window('left')).statusCounts).toBeNull()
+    })
+
+    it('leaves statusCounts null when frames carry no status (legacy .RAW)', () => {
+      recordCapFrame('left', A, TS)
+      recordCapFrame('left', B, TS + 1, null)
+      expect(summarizeWindow(window('left')).statusCounts).toBeNull()
+    })
+
+    it('persists a full histogram (including "good") once any sample is non-good', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      recordCapFrame('left', A, TS, 'good')
+      recordCapFrame('left', A, TS + 1, 'good')
+      recordCapFrame('left', A, TS + 2, 'warmup')
+      expect(summarizeWindow(window('left')).statusCounts).toEqual({ good: 2, warmup: 1 })
+    })
+
+    it('tracks status histograms per side independently', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      recordCapFrame('left', A, TS, 'warmup')
+      recordCapFrame('right', A, TS, 'good')
+      expect(summarizeWindow(window('left')).statusCounts).toEqual({ warmup: 1 })
+      expect(summarizeWindow(window('right')).statusCounts).toBeNull()
+    })
+
+    it('logs each distinct non-good status once, with side and channel values', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      recordCapFrame('left', A, TS, 'warmup')
+      recordCapFrame('left', B, TS + 1, 'warmup')
+      recordCapFrame('right', A, TS + 2, 'fault')
+      const statusLogs = warn.mock.calls.filter(c => String(c[0]).includes('status='))
+      expect(statusLogs).toHaveLength(2)
+      expect(warn).toHaveBeenCalledWith('[capFrames] capSense %s status=%s channels=%j', 'left', 'warmup', A)
+      expect(warn).toHaveBeenCalledWith('[capFrames] capSense %s status=%s channels=%j', 'right', 'fault', A)
+    })
+
+    it('never logs a "good" status', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      recordCapFrame('left', A, TS, 'good')
+      expect(warn).not.toHaveBeenCalled()
+    })
+  })
+
   describe('best-effort persistence', () => {
     it('keeps streaming when a flush write throws', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

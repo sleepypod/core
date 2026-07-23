@@ -24,7 +24,7 @@ function resolveExec(name: string, candidates: string[]): string {
 }
 
 const IPTABLES = resolveExec('iptables', ['/sbin/iptables', '/usr/sbin/iptables'])
-const IPTABLES_SAVE = resolveExec('iptables-save', ['/sbin/iptables-save', '/usr/sbin/iptables-save'])
+const FIREWALL_DISPATCH = '/usr/local/bin/sp-update'
 
 /**
  * Run `df -B1 <path>` and return the parsed totals, or null if the mount
@@ -95,67 +95,19 @@ async function isWanBlocked(): Promise<boolean> {
 }
 
 /**
- * Save current iptables rules, flush to unblock WAN, return saved rules for restore.
+ * Apply and persist a WAN transition through the root-owned firewall helper.
+ *
+ * Pod 5's legacy iptables-save cannot enumerate tables as User=sleepypod even
+ * with CAP_NET_ADMIN because /proc/net/ip_tables_names is root-readable only.
+ * sp-update is already the narrowly sudo-authorized root entrypoint; its early
+ * dispatcher validates the action and the installed helper's ownership/mode.
  */
-async function unblockWan(): Promise<string> {
-  const { stdout: saved } = await execFileAsync(IPTABLES_SAVE)
-  await execFileAsync(IPTABLES, ['-F'])
-  await execFileAsync(IPTABLES, ['-X'])
-  await execFileAsync(IPTABLES, ['-t', 'nat', '-F'])
-  await execFileAsync(IPTABLES, ['-t', 'nat', '-X'])
-  return saved
-}
-
-/**
- * Re-apply LAN-only iptables rules (block WAN).
- * Mirrors the free-sleep block_internet_access.sh logic:
- *   - Allow established connections
- *   - Allow RFC 1918 LAN
- *   - Allow NTP (port 123)
- *   - Allow loopback
- *   - DROP everything else
- */
-async function blockWan(): Promise<void> {
-  // Flush first to avoid duplicate rules
-  await execFileAsync(IPTABLES, ['-F'])
-  await execFileAsync(IPTABLES, ['-X'])
-  await execFileAsync(IPTABLES, ['-t', 'nat', '-F'])
-  await execFileAsync(IPTABLES, ['-t', 'nat', '-X'])
-
-  const run = (args: string[]) => execFileAsync(IPTABLES, args)
-
-  // Allow established/related
-  await run(['-I', 'INPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT'])
-  await run(['-I', 'OUTPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT'])
-
-  // Allow RFC 1918 LAN
-  for (const cidr of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']) {
-    await run(['-A', 'INPUT', '-s', cidr, '-j', 'ACCEPT'])
-    await run(['-A', 'OUTPUT', '-d', cidr, '-j', 'ACCEPT'])
-  }
-
-  // Allow NTP
-  await run(['-I', 'OUTPUT', '-p', 'udp', '--dport', '123', '-j', 'ACCEPT'])
-  await run(['-I', 'INPUT', '-p', 'udp', '--sport', '123', '-j', 'ACCEPT'])
-
-  // Allow loopback
-  await run(['-A', 'INPUT', '-i', 'lo', '-j', 'ACCEPT'])
-  await run(['-A', 'OUTPUT', '-o', 'lo', '-j', 'ACCEPT'])
-
-  // Block everything else
-  await run(['-A', 'INPUT', '-j', 'DROP'])
-  await run(['-A', 'OUTPUT', '-j', 'DROP'])
-
-  // Persist rules
-  try {
-    const { stdout } = await execFileAsync(IPTABLES_SAVE)
-    const { writeFile, mkdir } = await import('node:fs/promises')
-    await mkdir('/etc/iptables', { recursive: true })
-    await writeFile('/etc/iptables/iptables.rules', stdout)
-  }
-  catch {
-    // Best-effort persist — non-fatal
-  }
+async function setWanBlocked(blocked: boolean): Promise<void> {
+  await execFileAsync(
+    'sudo',
+    ['-n', FIREWALL_DISPATCH, '--internet-access', blocked ? 'block' : 'unblock'],
+    { timeout: 30_000 },
+  )
 }
 
 /**
@@ -191,13 +143,13 @@ export const systemRouter = router({
     .mutation(async ({ input }) => {
       return withIptablesLock(async () => {
         try {
-          if (input.blocked) {
-            await blockWan()
-          }
-          else {
-            await unblockWan()
-          }
+          await setWanBlocked(input.blocked)
           const currentState = await isWanBlocked()
+          if (currentState !== input.blocked) {
+            throw new Error(
+              `firewall helper completed but WAN is ${currentState ? 'blocked' : 'open'}`,
+            )
+          }
           return { blocked: currentState }
         }
         catch (error) {

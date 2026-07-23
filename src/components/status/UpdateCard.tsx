@@ -11,73 +11,49 @@ import { CheckCircle, Download, Loader2, RefreshCw, AlertTriangle, Globe } from 
  * - system.getVersion → shows running version/branch
  * - system.triggerUpdate → kicks off sp-update (service will restart)
  * - system.internetStatus → checks if WAN is blocked
- * - system.setInternetAccess → temporarily unblocks WAN for updates
+ * - sp-update → temporarily opens WAN without changing the persisted policy
  *
  * After triggering an update the service restarts, so the UI shows a
  * "reconnecting" state and polls until the server comes back.
  *
- * If internet is blocked when the user initiates an update, the card
- * prompts to temporarily allow internet. After the update completes
- * (or fails), internet is re-blocked automatically.
+ * If internet is blocked when the user initiates an update, the card asks for
+ * confirmation. The updater itself opens WAN only for the download and
+ * restores the captured mode before restarting the app.
  */
 export function UpdateCard() {
   const utils = trpc.useUtils()
   const version = trpc.system.getVersion.useQuery({})
   const triggerUpdate = trpc.system.triggerUpdate.useMutation()
-  const setInternetAccess = trpc.system.setInternetAccess.useMutation()
 
   const [updateState, setUpdateState] = useState<
     'idle' | 'confirming' | 'branch-picker' | 'internet-prompt' | 'unblocking' | 'updating' | 'reconnecting' | 'error'
   >('idle')
   const [selectedBranch, setSelectedBranch] = useState<string | undefined>(undefined)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  /** Tracks whether we temporarily unblocked internet and need to re-block */
-  const didUnblockRef = useRef(false)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancelledRef = useRef(false)
   /**
    * Version snapshot captured right before sp-update runs. Polling uses
    * this to distinguish "service is still the old build" from "service
    * restarted on the new build" — without it, the first poll racily
-   * succeeds against the still-running old service and the UI re-blocks
-   * WAN mid-download, killing the in-progress update.
+   * succeeds against the still-running old service and the UI reports a
+   * completed update while the download is still in progress.
    */
   const baselineVersionRef = useRef<{ commitHash: string, buildDate: string } | null>(null)
   /** Set to true once a poll fails — proves the service actually went down. */
   const sawDownRef = useRef(false)
 
-  // Clean up poll timer on unmount and re-block internet if needed
+  // Clean up the reconnect poll on unmount. Firewall recovery belongs to the
+  // root updater, so navigating away cannot strand the pod in a temporary mode.
   useEffect(() => {
     return () => {
       cancelledRef.current = true
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
-      // Fire-and-forget re-block if we unblocked internet and the user navigates away
-      if (didUnblockRef.current) {
-        didUnblockRef.current = false
-        setInternetAccess.mutate({ blocked: true })
-      }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup-only ref, stable mutation object
   }, [])
 
   const versionData = version.data
   const isStandardBranch = versionData?.branch === 'main' || versionData?.branch === 'dev'
-
-  /**
-   * Re-block internet if we temporarily unblocked it.
-   * Called after update completes, fails, or is cancelled.
-   */
-  const reblockIfNeeded = async () => {
-    if (!didUnblockRef.current) return
-    didUnblockRef.current = false
-    try {
-      await setInternetAccess.mutateAsync({ blocked: true })
-      utils.system.internetStatus.invalidate()
-    }
-    catch {
-      // Best effort — don't let re-block failure obscure the update result
-    }
-  }
 
   const handleUpdate = async () => {
     if (updateState === 'idle') {
@@ -116,21 +92,11 @@ export function UpdateCard() {
     setUpdateState('confirming')
   }
 
-  /** Unblock internet then proceed with the update */
+  /** Confirm that the updater may temporarily open WAN, then proceed. */
   const handleAllowInternet = async () => {
     setUpdateState('unblocking')
     setErrorMessage(null)
-
-    try {
-      await setInternetAccess.mutateAsync({ blocked: false })
-      didUnblockRef.current = true
-      utils.system.internetStatus.invalidate()
-      await startUpdate()
-    }
-    catch {
-      setUpdateState('error')
-      setErrorMessage('Failed to enable internet access. Try again or enable internet manually.')
-    }
+    await startUpdate()
   }
 
   /** Trigger the actual update */
@@ -154,8 +120,8 @@ export function UpdateCard() {
       pollForReconnection()
     }
     catch {
-      // If the request fails immediately it might be because the service
-      // already restarted (which is actually success)
+      // The request can be cut off as the service stops. Polling verifies the
+      // resulting build identity instead of guessing success from disconnect.
       setUpdateState('reconnecting')
       pollForReconnection()
     }
@@ -178,26 +144,29 @@ export function UpdateCard() {
         const versionChanged = baseline !== null
           && (next.commitHash !== baseline.commitHash || next.buildDate !== baseline.buildDate)
 
-        // Only call this "done" once we've proven the service actually
-        // bounced. Otherwise we're talking to the old next-server still
-        // serving the pre-update build — re-blocking WAN here kills
-        // sp-update's still-pending tarball download.
-        if (versionChanged || sawDownRef.current) {
+        // Only call this "done" after the build identity changes. A failed
+        // update also bounces the service while rolling back to the previous
+        // build, so a reconnect by itself is not proof of success.
+        if (versionChanged) {
           // Keep the React-Query cache in sync with what we just fetched
           // so other consumers re-render with the new version.
           utils.system.getVersion.setData({}, next)
-          await reblockIfNeeded()
           setUpdateState('idle')
           return
         }
 
+        if (sawDownRef.current) {
+          setUpdateState('error')
+          setErrorMessage('Service restarted but the version did not change. The update may have rolled back; check logs.')
+          return
+        }
+
         // Old service is still up; sp-update hasn't reached `systemctl
-        // stop` yet. Keep polling without unblocking guarantees.
+        // stop` yet. Keep polling until the updater performs the bounce.
         if (attempts < maxAttempts && !cancelledRef.current) {
           pollTimerRef.current = setTimeout(check, 2000)
         }
         else if (!cancelledRef.current) {
-          await reblockIfNeeded()
           setUpdateState('error')
           setErrorMessage('Service did not restart on a new build. Check pod manually.')
         }
@@ -208,7 +177,6 @@ export function UpdateCard() {
           pollTimerRef.current = setTimeout(check, 2000)
         }
         else if (!cancelledRef.current) {
-          await reblockIfNeeded()
           setUpdateState('error')
           setErrorMessage('Service did not come back after update. Check pod manually.')
         }

@@ -1,0 +1,1 @@
+ALTER TABLE `cap_sense_frames` ADD `status_counts` text;

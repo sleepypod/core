@@ -137,12 +137,19 @@ flowchart TD
 
 After installation (installed from `scripts/bin/`):
 
-- `sp-status` - View service status
+- `sp-status` - Report service + firmware variant + biometrics pipeline (old `.RAW` shim vs mid-era direct `.RAW` vs new NATS JetStream), module health, and firmware-side service rollup. Output is paste-friendly for support threads.
 - `sp-restart` - Restart sleepypod + reconnect frankenfirmware
 - `sp-logs` - View live logs
 - `sp-bundle-logs` - One-shot diagnostic capture (`/tmp/sleepypod-bundle-<ts>.tar.gz`); redacts secrets by default, pass `--no-redact` for raw
 - `sp-update` - Update to latest version from GitHub
 - `sp-uninstall` - Remove sleepypod and all related services
+
+## Discovery / probe scripts (not installed)
+
+Ad-hoc Python probes under `scripts/` (run in place; not copied to `/usr/local/bin/`):
+
+- `probe-nats-capture.py` - Subscribe to a NATS subject filter (default `raw.>`) for a fixed window, dump every message as private NDJSON (subject, headers, payload bytes, CBOR-decoded shape), and print a per-subject histogram on exit. Use on new-firmware pods to discover what frankenfirmware actually publishes before building a consumer. Its uv shebang resolves `nats-py` + `cbor2` on first run, so temporarily enable WAN or pre-warm the uv cache before running it on an internet-blocked pod. See the script header for usage.
+- `probe-cover-side.ts` / `probe-formats.ts` - One-shot TypeScript probes; ad-hoc, see file headers.
 
 ## Internet Control
 
