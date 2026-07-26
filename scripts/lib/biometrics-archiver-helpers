@@ -4,7 +4,8 @@
 # Frankenfirmware writes ~1 GB/day of *.RAW frames. We move them to a
 # 500 MB tmpfs at /persistent/biometrics so wear stays off eMMC; an
 # archiver gzips files older than 15 min into /persistent/biometrics-archive/,
-# a pruner keeps /persistent < 80% full. SEQNO.RAW + persistent state
+# a pruner caps that folder at MAX_ARCHIVE_MB (default 6 GiB) with an 80%
+# whole-disk safety ceiling. SEQNO.RAW + persistent state
 # subdirs are symlinked from tmpfs back to /persistent so the firmware
 # sees its state without code changes. See modules/biometrics-archiver/README.
 #
