@@ -225,6 +225,9 @@ describe('pumpStallGuard', () => {
   it('auto-recovers only when enabled and after recoverySamples healthy frames', async () => {
     setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
     invalidateGuardSettingsCache()
+    // Freeze the clock: the restore duration is now leftover-based, so wall
+    // time between the trip and recovery frames would skew the assertion.
+    vi.spyOn(Date, 'now').mockReturnValue(1_753_000_000_000)
 
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
@@ -250,6 +253,54 @@ describe('pumpStallGuard', () => {
 
     expect(shouldBlock('left')).toBe(false)
     expect(setPower).toHaveBeenCalledWith('left', true, 78)
+  })
+
+  it('auto-recover restores only the un-elapsed remainder of the captured session', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    let now = 1_753_000_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 7200 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 7200 })
+    expect(shouldBlock('left')).toBe(true)
+
+    // The side sits parked for an hour before the pump proves healthy again;
+    // replaying the full captured 7200s here would overshoot the session.
+    now += 3_600_000
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 7200 })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 7200 })
+
+    expect(shouldBlock('left')).toBe(false)
+    expect(setPower).toHaveBeenCalledWith('left', true, 78)
+    expect(setTemperature).toHaveBeenCalledWith('left', 78, 3600)
+  })
+
+  it('auto-recover leaves the side off and stamps the alert once the captured session has expired', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let now = 1_753_000_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 600 })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 600 })
+    setPower.mockClear()
+    setTemperature.mockClear()
+
+    // Exactly the captured window elapses — leftover 0 must not re-energize.
+    now += 600_000
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 600 })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 600 })
+
+    expect(shouldBlock('left')).toBe(false)
+    expect(setPower).not.toHaveBeenCalled()
+    expect(setTemperature).not.toHaveBeenCalled()
+    const alert = (biometricsSqlite as any).prepare('SELECT action, acknowledged_at FROM pump_alerts').get()
+    expect(alert.action).toBe('auto_recovered')
+    expect(alert.acknowledged_at).toBeTypeOf('number')
+    expect(log).toHaveBeenCalledWith('[pumpStallGuard] auto-recovered left — original session expired, leaving off')
+    log.mockRestore()
   })
 
   it('does not auto-recover when auto-recovery is disabled', async () => {
@@ -378,14 +429,42 @@ describe('pumpStallGuard', () => {
     expect(shouldBlock('left')).toBe(false)
   })
 
-  it('falls back to device_state target when frame carries no preStall snapshot', async () => {
-    ;(sqlite as any).exec(`UPDATE device_state SET target_temperature = 82 WHERE side = 'left'`)
+  it('falls back to a device_state snapshot with the default window measured from power-on', async () => {
+    const now = 1_753_000_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    ;(sqlite as any).exec(`UPDATE device_state SET target_temperature = 82, powered_on_at = ${Math.floor(now / 1000) - 3600} WHERE side = 'left'`)
 
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
 
     const notice = getPumpStallNotice('left')
-    expect(notice?.restore).toEqual({ targetTemperature: 82, durationSeconds: 28800 })
+    expect(notice?.restore).toEqual({ targetTemperature: 82, durationSeconds: 25200 })
+  })
+
+  it('captures no fallback snapshot when device_state has no power-on timestamp', async () => {
+    ;(sqlite as any).exec(`UPDATE device_state SET target_temperature = 82, powered_on_at = NULL WHERE side = 'left'`)
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+
+    expect(shouldBlock('left')).toBe(true)
+    expect(getPumpStallNotice('left')?.restore).toBeNull()
+    expect((biometricsSqlite as any).prepare('SELECT restore_target_temperature, restore_duration_seconds FROM pump_alerts').get()).toEqual({
+      restore_target_temperature: null,
+      restore_duration_seconds: null,
+    })
+  })
+
+  it('captures no fallback snapshot when the default session window has already elapsed', async () => {
+    const now = 1_753_000_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    ;(sqlite as any).exec(`UPDATE device_state SET target_temperature = 82, powered_on_at = ${Math.floor(now / 1000) - 28800} WHERE side = 'left'`)
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+
+    expect(shouldBlock('left')).toBe(true)
+    expect(getPumpStallNotice('left')?.restore).toBeNull()
   })
 
   it('does not warn when no device_state snapshot row exists', async () => {
@@ -509,6 +588,7 @@ describe('pumpStallGuard', () => {
   it('auto-recovers from post-trip frames where expectedActive is false', async () => {
     setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
     invalidateGuardSettingsCache()
+    vi.spyOn(Date, 'now').mockReturnValue(1_753_000_000_000)
 
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
     await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
@@ -567,6 +647,7 @@ describe('pumpStallGuard', () => {
   it('auto-recover with no snapshot resets the guard without re-energizing', async () => {
     setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
     invalidateGuardSettingsCache()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     // Clear device_state target so the trip captures no snapshot.
     ;(sqlite as any).exec(`UPDATE device_state SET target_temperature = NULL WHERE side = 'left'`)
 
@@ -582,6 +663,65 @@ describe('pumpStallGuard', () => {
     expect(shouldBlock('left')).toBe(false) // reset() cleared it
     expect(setPower).not.toHaveBeenCalled()
     expect(setTemperature).not.toHaveBeenCalled()
+    // The pump proved itself healthy — the alert must be stamped so a
+    // restart doesn't rehydrate the block from the still-active row.
+    const alert = (biometricsSqlite as any).prepare('SELECT action, acknowledged_at FROM pump_alerts').get()
+    expect(alert.action).toBe('auto_recovered')
+    expect(alert.acknowledged_at).toBeTypeOf('number')
+    // Plain message: the expired-session suffix belongs to the other branch.
+    expect(log).toHaveBeenCalledWith('[pumpStallGuard] auto-recovered left')
+    log.mockRestore()
+  })
+
+  it('does not clear the guard on recovery while the trip cutoff is still unsent', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Trip-time cutoff and every per-frame retry fail — cutoffPending stays
+    // set while the side may still be energized against the pump.
+    setPower.mockRejectedValue(new Error('dac down'))
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    expect(shouldBlock('left')).toBe(true)
+    expect(__test__.getState().left.cutoffPending).toBe(true)
+
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    // Recovery threshold reached, but the guard must stay armed until the
+    // cutoff actually lands.
+    expect(shouldBlock('left')).toBe(true)
+
+    // Hardware comes back: the retry lands the cutoff, then the next healthy
+    // frame's recovery pass clears the guard.
+    setPower.mockResolvedValue(undefined)
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    expect(shouldBlock('left')).toBe(false)
+    err.mockRestore()
+    warn.mockRestore()
+  })
+
+  it('does not restamp an alert the user already acknowledged', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 2 })
+    invalidateGuardSettingsCache()
+    // No snapshot: the recovery takes the leave-off path whose only DB write
+    // is the alert stamp.
+    ;(sqlite as any).exec(`UPDATE device_state SET target_temperature = NULL WHERE side = 'left'`)
+
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    expect(shouldBlock('left')).toBe(true)
+    // User acknowledges through the router while the guard is still armed.
+    ;(biometricsSqlite as any).exec('UPDATE pump_alerts SET acknowledged_at = 1234')
+
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    await onFrame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+
+    expect(shouldBlock('left')).toBe(false)
+    const alert = (biometricsSqlite as any).prepare('SELECT action, acknowledged_at FROM pump_alerts').get()
+    expect(alert.action).toBe('power_off')
+    expect(alert.acknowledged_at).toBe(1234)
   })
 
   it('aborts auto-recover and logs when hardware call throws', async () => {
@@ -1089,6 +1229,7 @@ describe('pumpStallGuard — side-lock serialization and notice timing', () => {
   it('serializes the auto-recovery restore through the side lock', async () => {
     setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 1 })
     invalidateGuardSettingsCache()
+    vi.spyOn(Date, 'now').mockReturnValue(1_753_000_000_000)
     await onFrame(lowFrame('left'))
     await onFrame(lowFrame('left'))
     expect(shouldBlock('left')).toBe(true)

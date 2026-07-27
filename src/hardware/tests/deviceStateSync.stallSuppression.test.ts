@@ -262,6 +262,44 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 
+  it('feeds the guard the projected remaining session seconds, not the 8h default', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 7200 }))
+    vi.setSystemTime(new Date('2026-07-11T08:01:00Z')) // 60s after the poll
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    const input = await lastGuardInput('left')
+    expect(input?.expectedActive).toBe(true)
+    expect(input?.preStallDurationSeconds).toBe(7140)
+  })
+
+  it('feeds a null snapshot duration when firmware reports no countdown', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    const input = await lastGuardInput('left')
+    expect(input?.expectedActive).toBe(true)
+    expect(input?.preStallDurationSeconds).toBeNull()
+  })
+
+  it('feeds a null snapshot duration once the projected countdown reaches zero', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 300 }))
+    vi.setSystemTime(new Date('2026-07-11T08:05:00Z')) // exactly 300s later
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    const input = await lastGuardInput('left')
+    expect(input?.expectedActive).toBe(true) // duty > 0 keeps a real stall visible
+    expect(input?.preStallDurationSeconds).toBeNull()
+  })
+
+  it('feeds a null snapshot duration on suppressed frames', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 7200 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 0 }))
+
+    const input = await lastGuardInput('left')
+    expect(input?.expectedActive).toBe(false)
+    expect(input?.preStallDurationSeconds).toBeNull()
+  })
+
   it('does not treat heatingDuration=0 with a non-neutral target as session end', async () => {
     // A firmware variant reporting no countdown during an active session
     // must stay on the plain device_state path, not be suppressed forever.

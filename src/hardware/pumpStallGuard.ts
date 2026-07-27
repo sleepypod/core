@@ -24,6 +24,7 @@ import { deviceSettings, deviceState } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { clearPumpStallNotice, setPumpStallNotice } from './pumpStallNotification'
 import { withSideLock } from './sideLock'
+import { DEFAULT_HEATING_DURATION } from './types'
 import type { Side } from './types'
 
 interface GuardState {
@@ -333,24 +334,34 @@ export function reset(side?: Side): void {
 
 async function trip(side: Side, rpm: number): Promise<void> {
   const state = getState()[side]
+  const trippedAt = Date.now()
   state.blocked = true
-  state.trippedAt = Date.now()
+  state.trippedAt = trippedAt
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
 
   // Capture a snapshot from device_state if we don't already have one — the
   // preStall field is updated each healthy frame, but covers the case where
-  // the guard starts already stalled.
+  // the guard starts already stalled. No live countdown exists here, so the
+  // best bound is the canonical default window measured from the recorded
+  // power-on; fabricating a fresh 8h re-armed sessions that ended at
+  // arbitrary times. Without a power-on timestamp, capture nothing —
+  // auto-recovery then clears the guard without re-energizing.
   if (!state.preStall) {
     try {
       const [row] = db
-        .select({ target: deviceState.targetTemperature })
+        .select({ target: deviceState.targetTemperature, poweredOnAt: deviceState.poweredOnAt })
         .from(deviceState)
         .where(eq(deviceState.side, side))
         .limit(1)
         .all()
-      if (row?.target != null) {
-        state.preStall = { targetTemperature: row.target, durationSeconds: 28800 }
+      if (row?.target != null && row.poweredOnAt != null) {
+        const remaining = Math.round(
+          DEFAULT_HEATING_DURATION - (trippedAt - row.poweredOnAt.getTime()) / 1000,
+        )
+        if (remaining > 0) {
+          state.preStall = { targetTemperature: row.target, durationSeconds: remaining }
+        }
       }
     }
     catch (err) {
@@ -434,11 +445,27 @@ async function trip(side: Side, rpm: number): Promise<void> {
 
 async function autoRecover(side: Side): Promise<void> {
   const state = getState()[side]
+  // Never clear the guard while the trip-time cutoff is still unsent: the
+  // side may be energized against the pump, and reset() would abandon the
+  // per-frame retry that is the only thing still trying to turn it off.
+  // The retry runs before recovery tracking, so once it lands a later
+  // healthy frame re-enters here with the flag cleared.
+  if (state.cutoffPending) return
   const restore = state.preStall
-  if (!restore) {
-    // No snapshot to restore — leave the side off and clear the guard so
-    // the next user command isn't blocked. This is the conservative path.
+  // The snapshot holds the seconds that remained when the trip landed; the
+  // side then sat parked until recovery, so replaying it verbatim would run
+  // past the end of the session the user actually started. Restore only the
+  // un-elapsed remainder, and once the original window has lapsed treat the
+  // recovery like the no-snapshot case.
+  const elapsedSeconds = state.trippedAt != null ? (Date.now() - state.trippedAt) / 1000 : 0
+  const leftoverSeconds = restore ? Math.round(restore.durationSeconds - elapsedSeconds) : 0
+  if (!restore || leftoverSeconds <= 0) {
+    // Nothing to restore — leave the side off and clear the guard so the
+    // next user command isn't blocked. Stamp the alert so a restart doesn't
+    // rehydrate a block the pump has already proven itself out of.
+    stampAlertAutoRecovered(state.activeAlertId)
     reset(side)
+    console.log(`[pumpStallGuard] auto-recovered ${side}${restore ? ' — original session expired, leaving off' : ''}`)
     return
   }
 
@@ -449,7 +476,7 @@ async function autoRecover(side: Side): Promise<void> {
     await withSideLock(side, async () => {
       const client = getSharedHardwareClient()
       await client.setPower(side, true, restore.targetTemperature)
-      await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+      await client.setTemperature(side, restore.targetTemperature, leftoverSeconds)
     })
   }
   catch (err) {
@@ -473,21 +500,30 @@ async function autoRecover(side: Side): Promise<void> {
     console.warn('[pumpStallGuard] device_state restore failed:', err instanceof Error ? err.message : err)
   }
 
-  if (state.activeAlertId != null) {
-    try {
-      biometricsDb
-        .update(pumpAlerts)
-        .set({ action: 'auto_recovered', acknowledgedAt: new Date() })
-        .where(eq(pumpAlerts.id, state.activeAlertId))
-        .run()
-    }
-    catch (err) {
-      console.warn('[pumpStallGuard] alert update failed:', err instanceof Error ? err.message : err)
-    }
-  }
+  stampAlertAutoRecovered(state.activeAlertId)
 
   reset(side)
   console.log(`[pumpStallGuard] auto-recovered ${side}`)
+}
+
+function stampAlertAutoRecovered(alertId: number | null): void {
+  if (alertId == null) return
+  try {
+    // Guard on the untouched row like the router's acknowledge path — a
+    // user acknowledgement racing this write must not be relabeled.
+    biometricsDb
+      .update(pumpAlerts)
+      .set({ action: 'auto_recovered', acknowledgedAt: new Date() })
+      .where(and(
+        eq(pumpAlerts.id, alertId),
+        isNull(pumpAlerts.acknowledgedAt),
+        isNull(pumpAlerts.dismissedAt),
+      ))
+      .run()
+  }
+  catch (err) {
+    console.warn('[pumpStallGuard] alert update failed:', err instanceof Error ? err.message : err)
+  }
 }
 
 // ── Test introspection ─────────────────────────────────────────────────────

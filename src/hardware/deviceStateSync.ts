@@ -346,14 +346,29 @@ export class DeviceStateSync {
         .where(eq(deviceState.side, side))
         .limit(1)
         .all()
-      const expectedActive = !this.isExpectedPumpStop(side, duty, Date.now())
+      const now = Date.now()
+      const expectedActive = !this.isExpectedPumpStop(side, duty, now)
         && Boolean(row?.isPowered && row.targetTemperature != null)
+      // Real remaining session seconds, projected from the last firmware
+      // poll like isExpectedPumpStop. The guard restores this snapshot on
+      // auto-recovery, and feeding it the literal 8h default re-armed
+      // sessions that ended at arbitrary times (the daily false-trip loop).
+      // Firmware variants with no countdown (heatingDuration 0) project to
+      // <= 0 and fall to the null arm below — auto-recovery then clears the
+      // guard without re-energizing.
+      const last = this.lastSideStatus[side]
+      const remainingSessionSeconds = last
+        ? Math.round(last.heatingDuration - (now - last.at) / 1000)
+        : null
       await pumpStallOnFrame({
         side,
         rpm,
         expectedActive,
         preStallTarget: row?.targetTemperature ?? null,
-        preStallDurationSeconds: expectedActive ? 28800 : null,
+        preStallDurationSeconds:
+          expectedActive && remainingSessionSeconds != null && remainingSessionSeconds > 0
+            ? remainingSessionSeconds
+            : null,
       })
     }
     catch (err) {
