@@ -105,6 +105,8 @@ describe('validation schema mutation boundaries', () => {
 
     expect(automationTriggerSchema.safeParse({ kind: 'tick', everyMin: 1 }).success).toBe(true)
     expect(automationTriggerSchema.safeParse({ kind: 'tick', everyMin: 1440 }).success).toBe(true)
+    expect(automationTriggerSchema.safeParse({ kind: 'tick', everyMin: 0 }).success).toBe(false)
+    expect(automationTriggerSchema.safeParse({ kind: 'tick', everyMin: 1441 }).success).toBe(false)
     expect(automationTriggerSchema.safeParse({
       kind: 'timeOfDay',
       at: '12:00',
@@ -123,6 +125,10 @@ describe('validation schema mutation boundaries', () => {
       message: 'x'.repeat(280),
     }).success).toBe(true)
     expect(automationActionSchema.safeParse({
+      kind: 'notify',
+      message: 'x'.repeat(281),
+    }).success).toBe(false)
+    expect(automationActionSchema.safeParse({
       kind: 'setTemperature',
       temp: { kind: 'literal', value: 70 },
       durationSec: 0,
@@ -132,6 +138,16 @@ describe('validation schema mutation boundaries', () => {
       temp: { kind: 'literal', value: 70 },
       durationSec: 86400,
     }).success).toBe(true)
+    expect(automationActionSchema.safeParse({
+      kind: 'setTemperature',
+      temp: { kind: 'literal', value: 70 },
+      durationSec: -1,
+    }).success).toBe(false)
+    expect(automationActionSchema.safeParse({
+      kind: 'setTemperature',
+      temp: { kind: 'literal', value: 70 },
+      durationSec: 86401,
+    }).success).toBe(false)
   })
 
   it('pins create defaults and every collection/numeric boundary', async () => {
@@ -153,5 +169,30 @@ describe('validation schema mutation boundaries', () => {
       cooldownMin: 1440,
       actions: Array.from({ length: 10 }, () => ({ kind: 'notify', message: 'x' })),
     }).success).toBe(true)
+
+    expect(automationCreateSchema.safeParse({
+      ...baseAutomation,
+      name: 'x'.repeat(121),
+    }).success).toBe(false)
+    expect(automationCreateSchema.safeParse({
+      ...baseAutomation,
+      priority: -1,
+    }).success).toBe(false)
+    expect(automationCreateSchema.safeParse({
+      ...baseAutomation,
+      priority: 1001,
+    }).success).toBe(false)
+    expect(automationCreateSchema.safeParse({
+      ...baseAutomation,
+      cooldownMin: -1,
+    }).success).toBe(false)
+    expect(automationCreateSchema.safeParse({
+      ...baseAutomation,
+      cooldownMin: 1441,
+    }).success).toBe(false)
+    expect(automationCreateSchema.safeParse({
+      ...baseAutomation,
+      actions: Array.from({ length: 11 }, () => ({ kind: 'notify', message: 'x' })),
+    }).success).toBe(false)
   })
 })
