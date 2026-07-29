@@ -1227,3 +1227,169 @@ describe('pumpStallGuard — side-lock serialization and notice timing', () => {
     expect(shouldBlock('left')).toBe(false)
   })
 })
+
+describe('pumpStallGuard — active recovery probe', () => {
+  // A trip powers the pump off, so RPM sits at 0 and passive recovery can never
+  // fire. These pin the active-probe path: re-energize after a backoff, restore
+  // on sustained healthy RPM, else power back off and retry with a longer
+  // backoff, giving up after the last attempt. A single mocked clock backs
+  // both trippedAt (set via Date.now) and the backoff comparison.
+  let clock = 1_700_000_000_000
+  const advance = (ms: number): void => {
+    clock += ms
+  }
+  const low = (side: 'left' | 'right' = 'left'): Promise<void> =>
+    onFrame({ side, rpm: 0, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+  const healthy = (side: 'left' | 'right' = 'left'): Promise<void> =>
+    onFrame({ side, rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+  async function trip(side: 'left' | 'right' = 'left'): Promise<void> {
+    await low(side)
+    advance(__test__.DWELL_MIN_MS)
+    await low(side)
+    expect(shouldBlock(side)).toBe(true)
+    setPower.mockClear()
+    setTemperature.mockClear()
+  }
+
+  beforeEach(() => {
+    resetSchema()
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 3 })
+    invalidateGuardSettingsCache()
+    reset()
+    setPower.mockClear()
+    setTemperature.mockClear()
+    clock = 1_700_000_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+  })
+  afterEach(() => {
+    reset()
+    vi.restoreAllMocks()
+  })
+
+  it('re-energizes after the backoff and restores when the pump spins up', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await trip()
+
+    // Nothing re-energizes before the first backoff elapses.
+    advance(__test__.PROBE_BACKOFFS_MS[0] - 1_000)
+    await low()
+    expect(setPower).not.toHaveBeenCalled()
+    expect(shouldBlock('left')).toBe(true)
+
+    // Backoff elapsed → the probe energizes the side with the captured snapshot.
+    advance(1_000)
+    await low()
+    expect(setPower).toHaveBeenCalledWith('left', true, 78)
+    expect(setTemperature).toHaveBeenCalledWith('left', 78, 28800)
+    expect(shouldBlock('left')).toBe(true) // still blocked until healthy RPM confirms
+
+    // Pump spins up: recoverySamples healthy frames → restored + logged.
+    await healthy()
+    await healthy()
+    await healthy()
+    expect(shouldBlock('left')).toBe(false)
+    expect((biometricsSqlite as any).prepare('SELECT action FROM pump_alerts').get().action).toBe('auto_recovered')
+    log.mockRestore()
+  })
+
+  it('powers back off when a probe fails, then gives up after the last attempt', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await trip()
+
+    const onCount = (): number => (setPower.mock.calls as any[]).filter(c => c[0] === 'left' && c[1] === true).length
+    const offCount = (): number => (setPower.mock.calls as any[]).filter(c => c[0] === 'left' && c[1] === false).length
+
+    for (let i = 0; i < __test__.PROBE_BACKOFFS_MS.length; i += 1) {
+      advance(__test__.PROBE_BACKOFFS_MS[i])
+      await low() // starts probe i+1 → setPower(on)
+      advance(__test__.PROBE_WINDOW_MS)
+      await low() // window elapsed, still stalled → setPower(off)
+      expect(shouldBlock('left')).toBe(true)
+    }
+    expect(onCount()).toBe(3)
+    expect(offCount()).toBe(3)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('still stalled after 3 recovery probes'))
+
+    // After the last failed probe, no further probes ever start.
+    advance(__test__.PROBE_BACKOFFS_MS[__test__.PROBE_BACKOFFS_MS.length - 1] * 10)
+    setPower.mockClear()
+    await low()
+    expect(setPower).not.toHaveBeenCalled()
+    expect(shouldBlock('left')).toBe(true)
+    warn.mockRestore()
+    log.mockRestore()
+  })
+
+  it('gives up and unblocks when a probe has no snapshot to restore', async () => {
+    ;(sqlite as any).exec(`UPDATE device_state SET target_temperature = NULL WHERE side = 'left'`)
+    await onFrame({ side: 'left', rpm: 0, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    advance(__test__.DWELL_MIN_MS)
+    await onFrame({ side: 'left', rpm: 0, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+    expect(shouldBlock('left')).toBe(true)
+    setPower.mockClear()
+
+    advance(__test__.PROBE_BACKOFFS_MS[0])
+    await onFrame({ side: 'left', rpm: 0, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+
+    expect(shouldBlock('left')).toBe(false) // reset() cleared the guard
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('treats a probe energize failure as a failed probe and backs off', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await trip()
+
+    setPower.mockRejectedValueOnce(new Error('socket gone'))
+    advance(__test__.PROBE_BACKOFFS_MS[0])
+    await low()
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('recovery probe energize for left failed'),
+      'socket gone',
+    )
+    expect(shouldBlock('left')).toBe(true)
+    expect(__test__.getState().left.probeStartedAt).toBeNull()
+    expect(__test__.getState().left.recoveryAttempts).toBe(1)
+    warn.mockRestore()
+  })
+
+  it('never probes when auto-recovery is disabled', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 0 })
+    invalidateGuardSettingsCache()
+    await trip()
+
+    advance(__test__.PROBE_BACKOFFS_MS[0] * 2)
+    await low()
+    expect(setPower).not.toHaveBeenCalled()
+    expect(shouldBlock('left')).toBe(true)
+  })
+
+  it('serializes the probe energize through the side lock', async () => {
+    await trip()
+    advance(__test__.PROBE_BACKOFFS_MS[0])
+
+    const order: string[] = []
+    let releaseWriter!: () => void
+    const writerGate = new Promise<void>((resolve) => {
+      releaseWriter = resolve
+    })
+    const writerDone = withSideLock('left', async () => {
+      await writerGate
+      order.push('writer')
+    })
+
+    setPower.mockImplementation(async () => {
+      order.push('probe:energize')
+    })
+    const probing = low()
+    for (let i = 0; i < 5; i += 1) await Promise.resolve()
+    expect(order).toEqual([]) // probe queued behind the writer
+
+    releaseWriter()
+    await writerDone
+    await probing
+    expect(order).toEqual(['writer', 'probe:energize'])
+  })
+})
