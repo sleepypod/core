@@ -395,9 +395,37 @@ bounded to 600s past the projected end so a stale snapshot cannot
 suppress a later session's genuine stall. A zero-RPM frame mid-session
 with the pump still driven trips exactly as before.
 
+## Revisions
+
+**2026-07-29 (field data, PR #670).** Three changes after the guard ran on
+real pods:
+
+1. **Time-based dwell floor.** Frame-based dwell alone (`dwellSamples`, default
+   2 ≈ 2s) powered a side off on ~2s of bad readings. A trip now also requires
+   the pump to stay sub-threshold for `DWELL_MIN_MS` (10s) of wall clock, so a
+   brief dropped/garbled-frame blip cannot end a night. Frame time is threaded
+   through `onFrame` so the floor is driven by frame arrival.
+
+2. **Bilateral-zero de-glitch.** Both pumps dropping from clearly running to
+   exactly 0 RPM in one frame is the dropped-frame signature (loop temp/flow
+   keep moving, both read healthy again next frame), not a real dual stall —
+   which hits one side. `deviceStateSync` drops that single frame; a sustained
+   dual-stall still trips one frame later.
+
+3. **Active-probe auto-recovery.** The passive design here — "watch for
+   `recoverySamples` consecutive frames at `recoveryRpm`" — was unreachable
+   overnight: the trip powers the pump off, so RPM stays 0 and the watcher
+   never advances. Nothing re-energized the pump, so a trip only "recovered"
+   when the daily prime or a manual restart happened to spin it up. The guard
+   now *probes*: a blocked side with auto-recovery enabled is re-energized
+   after a backoff (5m, 15m, 30m); sustained healthy RPM restores it via the
+   path above, otherwise it is powered back off and the next backoff applies,
+   staying off after the last attempt until acknowledged.
+
 ## References
 
 - Incident report: Discord, 2026-05-24, free-sleep user thread.
+- Field revisions: Discord, 2026-07-29, overnight-stall + twitchy-trip thread.
 - Existing detection code: `src/hardware/deviceStateSync.ts:250`.
 - Live `eight-pod` flow data: 240 rows pulled 2026-05-25 17:15 local,
   showing 1940–2010 RPM running, 0 RPM idle, no intermediate values.
