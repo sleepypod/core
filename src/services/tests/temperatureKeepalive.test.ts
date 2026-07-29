@@ -164,16 +164,24 @@ describe('startKeepalive', () => {
     expect(connect).not.toHaveBeenCalled()
   })
 
-  it('skips silently when the pump stall guard is holding the side off', async () => {
+  it('skips with a warning when the pump stall guard is holding the side off', async () => {
     setSideState('left', { isPowered: 1, targetTemperature: 95 })
     setSideSettings('left', { alwaysOn: 1 })
     pumpStallShouldBlock.mockReturnValue(true)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     startKeepalive('left')
     await flushAsync()
 
     expect(setTemperature).not.toHaveBeenCalled()
     expect(connect).not.toHaveBeenCalled()
+    // The warn is the only trace of the withheld keepalive — without it an
+    // alwaysOn session lapsing on the firmware duration timer is
+    // undiagnosable from logs.
+    expect(warn).toHaveBeenCalledWith(
+      '[keepalive] left skipped — pump stall guard active (alert unknown); session will lapse on the firmware duration timer',
+    )
+    warn.mockRestore()
   })
 
   it('serializes the reissue through the side lock — a trip while queued blocks it', async () => {

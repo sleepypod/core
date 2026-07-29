@@ -31,12 +31,16 @@ import * as dbModule from '@/src/db'
 import {
   __test__,
   acknowledge,
+  dismissIfActive,
   invalidateGuardSettingsCache,
+  isCutoffPendingIncident,
   onFrame,
   rearm,
   rehydrate,
   reset,
   shouldBlock,
+  standDown,
+  supersedeAlerts,
 } from '../pumpStallGuard'
 import { getPumpStallNotice } from '../pumpStallNotification'
 import { withSideLock } from '../sideLock'
@@ -1009,6 +1013,10 @@ describe('pumpStallGuard', () => {
   })
 
   describe('rehydrate', () => {
+    // Rows must sit inside the seven-day rehydration window by default —
+    // the age gate treats anything older as stale and dismisses it.
+    const nowSec = Math.floor(Date.now() / 1000)
+
     function insertAlert(row: {
       side: 'left' | 'right'
       timestamp?: number
@@ -1023,7 +1031,7 @@ describe('pumpStallGuard', () => {
         INSERT INTO pump_alerts (timestamp, type, side, rpm, action, restore_target_temperature, restore_duration_seconds, acknowledged_at, dismissed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        row.timestamp ?? 1_720_000_000,
+        row.timestamp ?? nowSec - 3600,
         row.side === 'left' ? 'stall_left' : 'stall_right',
         row.side,
         row.rpm === undefined ? 120 : row.rpm,
@@ -1038,7 +1046,8 @@ describe('pumpStallGuard', () => {
 
     it('restores blocked state, snapshot, and notice from an active power_off row', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const id = insertAlert({ side: 'left', timestamp: 1_720_000_050, rpm: 90, restoreTarget: 81, restoreDuration: 5400 })
+      const ts = nowSec - 600
+      const id = insertAlert({ side: 'left', timestamp: ts, rpm: 90, restoreTarget: 81, restoreDuration: 5400 })
 
       rehydrate()
 
@@ -1046,11 +1055,12 @@ describe('pumpStallGuard', () => {
       expect(shouldBlock('right')).toBe(false)
       const state = __test__.getState().left
       expect(state.activeAlertId).toBe(id)
-      expect(state.trippedAt).toBe(1_720_000_050_000)
+      expect(state.trippedAt).toBe(ts * 1000)
       expect(state.preStall).toEqual({ targetTemperature: 81, durationSeconds: 5400 })
+      expect(state.rehydrated).toBe(true)
       expect(getPumpStallNotice('left')).toEqual({
         alertId: id,
-        trippedAt: 1_720_000_050,
+        trippedAt: ts,
         rpm: 90,
         restore: { targetTemperature: 81, durationSeconds: 5400 },
       })
@@ -1063,16 +1073,21 @@ describe('pumpStallGuard', () => {
       warn.mockRestore()
     })
 
-    it('picks the newest row by timestamp then id for same-second rows', () => {
+    it('picks the newest row by id even when timestamps invert under clock skew', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      insertAlert({ side: 'left', timestamp: 1_720_000_010 })
-      const sameSecondOlder = insertAlert({ side: 'left', timestamp: 1_720_000_099 })
-      const sameSecondNewer = insertAlert({ side: 'left', timestamp: 1_720_000_099 })
-      expect(sameSecondNewer).toBeGreaterThan(sameSecondOlder)
+      // The older incident carries the NEWER wall timestamp — recorded
+      // under a forward-skewed pre-NTP boot clock. id order is incident
+      // order; timestamp order is not.
+      const skewedOlder = insertAlert({ side: 'left', timestamp: nowSec - 300 })
+      const genuineNewest = insertAlert({ side: 'left', timestamp: nowSec - 900 })
+      expect(genuineNewest).toBeGreaterThan(skewedOlder)
 
       rehydrate()
 
-      expect(__test__.getState().left.activeAlertId).toBe(sameSecondNewer)
+      expect(__test__.getState().left.activeAlertId).toBe(genuineNewest)
+      // ...and the supersede reaches the skewed row because both key on id.
+      const skewedRow = (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(skewedOlder)
+      expect(skewedRow.dismissed_at).not.toBeNull()
       warn.mockRestore()
     })
 
@@ -1132,6 +1147,472 @@ describe('pumpStallGuard', () => {
       )
       expect(shouldBlock('left')).toBe(false)
       warn.mockRestore()
+    })
+
+    it('skips and dismisses rows older than the seven-day window', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const eightDaysSec = 8 * 24 * 60 * 60
+      insertAlert({ side: 'left', timestamp: nowSec - eightDaysSec - 3600 })
+      const newest = insertAlert({ side: 'left', timestamp: nowSec - eightDaysSec })
+
+      rehydrate()
+
+      expect(shouldBlock('left')).toBe(false)
+      expect(getPumpStallNotice('left')).toBeNull()
+      const rows = (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts ORDER BY id').all()
+      expect(rows).toHaveLength(2)
+      for (const row of rows) expect(row.dismissed_at).not.toBeNull()
+      expect(warn).toHaveBeenCalledWith(
+        `[pumpStallGuard] skipped rehydration for left: alert ${newest} is 8d old — dismissed 2 stale row(s)`,
+      )
+      warn.mockRestore()
+    })
+
+    it('treats a future-timestamped row as fresh and re-blocks (clock-skew fail-safe)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const id = insertAlert({ side: 'left', timestamp: nowSec + 3600 })
+
+      rehydrate()
+
+      expect(shouldBlock('left')).toBe(true)
+      expect(__test__.getState().left.activeAlertId).toBe(id)
+      warn.mockRestore()
+    })
+
+    it('treats a row more than seven days in the future as fresh (signed age, not absolute)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const id = insertAlert({ side: 'left', timestamp: nowSec + 8 * 24 * 60 * 60 })
+
+      rehydrate()
+
+      expect(shouldBlock('left')).toBe(true)
+      expect(__test__.getState().left.activeAlertId).toBe(id)
+      const row = (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(id)
+      expect(row.dismissed_at).toBeNull()
+      warn.mockRestore()
+    })
+
+    it('treats a near-epoch timestamp as write-time clock skew, not staleness', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // A pod that tripped before its clock ever synced writes ~1970. The
+      // true age is unknowable — the row must re-block, not be dismissed.
+      const id = insertAlert({ side: 'left', timestamp: 100_000 })
+
+      rehydrate()
+
+      expect(shouldBlock('left')).toBe(true)
+      expect(__test__.getState().left.activeAlertId).toBe(id)
+      const row = (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(id)
+      expect(row.dismissed_at).toBeNull()
+      warn.mockRestore()
+    })
+
+    it('supersedes older active rows for the side when re-blocking from the newest', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const older = insertAlert({ side: 'left', timestamp: nowSec - 3200 })
+      const evenNewer = insertAlert({ side: 'left', timestamp: nowSec - 3000 })
+      const otherSide = insertAlert({ side: 'right', timestamp: nowSec - 3000 })
+      // Rows a supersede must never touch, even inside the id range:
+      const acked = insertAlert({ side: 'left', timestamp: nowSec - 2900, acknowledgedAt: nowSec - 2800 })
+      const preDismissed = insertAlert({ side: 'left', timestamp: nowSec - 2900, dismissedAt: 1_720_000_100 })
+      const warned = insertAlert({ side: 'left', timestamp: nowSec - 2900, action: 'warned' })
+      const newest = insertAlert({ side: 'left', timestamp: nowSec - 600 })
+
+      rehydrate()
+
+      expect(__test__.getState().left.activeAlertId).toBe(newest)
+      const rowById = (id: number) => (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(id)
+      expect(rowById(older).dismissed_at).not.toBeNull()
+      expect(rowById(evenNewer).dismissed_at).not.toBeNull()
+      // Acknowledged history keeps its record, an existing dismissal keeps
+      // its original stamp, and non-power_off rows are untouched.
+      expect(rowById(acked).dismissed_at).toBeNull()
+      expect(rowById(preDismissed).dismissed_at).toBe(1_720_000_100)
+      expect(rowById(warned).dismissed_at).toBeNull()
+      // The other side's incident is its own lineage — rehydrated, not stamped.
+      expect(__test__.getState().right.activeAlertId).toBe(otherSide)
+      warn.mockRestore()
+    })
+
+    it('supersedeAlerts without a bound dismisses every active power_off row for the side only', () => {
+      const a = insertAlert({ side: 'left', timestamp: nowSec - 3000 })
+      const b = insertAlert({ side: 'left', timestamp: nowSec - 600 })
+      const acked = insertAlert({ side: 'left', timestamp: nowSec - 600, acknowledgedAt: nowSec - 500 })
+      const other = insertAlert({ side: 'right', timestamp: nowSec - 600 })
+
+      expect(supersedeAlerts('left')).toBe(2)
+
+      const rowById = (id: number) => (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(id)
+      expect(rowById(a).dismissed_at).not.toBeNull()
+      expect(rowById(b).dismissed_at).not.toBeNull()
+      expect(rowById(acked).dismissed_at).toBeNull()
+      expect(rowById(other).dismissed_at).toBeNull()
+    })
+
+    it('a fresh trip supersedes older active rows for the side', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const stale = insertAlert({ side: 'left', timestamp: nowSec - 3000 })
+      const otherSide = insertAlert({ side: 'right', timestamp: nowSec - 3000 })
+
+      await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+      await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+      expect(shouldBlock('left')).toBe(true)
+      const staleRow = (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(stale)
+      expect(staleRow.dismissed_at).not.toBeNull()
+      const otherRow = (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(otherSide)
+      expect(otherRow.dismissed_at).toBeNull()
+      const tripRow = (biometricsSqlite as any)
+        .prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?')
+        .get(__test__.getState().left.activeAlertId)
+      expect(tripRow.dismissed_at).toBeNull()
+      warn.mockRestore()
+    })
+
+    describe('rehydrated block lifecycle', () => {
+      const healthyFrame = (side: 'left' | 'right') =>
+        onFrame({ side, rpm: 1950, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+      const stalledFrame = (side: 'left' | 'right') =>
+        onFrame({ side, rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+
+      it('releases after recoverySamples healthy frames without touching hardware', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+        const id = insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+        expect(shouldBlock('left')).toBe(true)
+
+        await healthyFrame('left')
+        await healthyFrame('left')
+        // Below recoverySamples (3) the block must hold.
+        expect(shouldBlock('left')).toBe(true)
+        await healthyFrame('left')
+
+        expect(shouldBlock('left')).toBe(false)
+        expect(getPumpStallNotice('left')).toBeNull()
+        expect(setPower).not.toHaveBeenCalled()
+        expect(setTemperature).not.toHaveBeenCalled()
+        const row = (biometricsSqlite as any).prepare('SELECT action, acknowledged_at FROM pump_alerts WHERE id = ?').get(id)
+        expect(row.action).toBe('auto_recovered')
+        expect(row.acknowledged_at).not.toBeNull()
+        expect(log).toHaveBeenCalledWith('[pumpStallGuard] released rehydrated block for left — pump verified healthy')
+        warn.mockRestore()
+        log.mockRestore()
+      })
+
+      it('lets opt-in auto-recovery keep precedence over the rehydrated release', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+        setSettings({ pump_stall_auto_recovery_enabled: 1 })
+        invalidateGuardSettingsCache()
+        insertAlert({ side: 'left', timestamp: nowSec - 600, restoreTarget: 78, restoreDuration: 28800 })
+        rehydrate()
+
+        await healthyFrame('left')
+        await healthyFrame('left')
+        await healthyFrame('left')
+
+        // autoRecover re-energized the side instead of the leave-off release.
+        expect(setPower).toHaveBeenCalledWith('left', true, 78)
+        expect(setTemperature).toHaveBeenCalled()
+        expect(shouldBlock('left')).toBe(false)
+        warn.mockRestore()
+        log.mockRestore()
+      })
+
+      it('powers off a rehydrated side observed energized below the stall threshold', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+
+        await stalledFrame('left')
+        // One frame below the dwell window (2) must not cut power.
+        expect(setPower).not.toHaveBeenCalled()
+        await stalledFrame('left')
+
+        expect(setPower).toHaveBeenCalledWith('left', false)
+        expect(shouldBlock('left')).toBe(true)
+        expect(__test__.getState().left.cutoffPending).toBe(false)
+        // The stall was re-confirmed this boot — the block is fresh now.
+        expect(__test__.getState().left.rehydrated).toBe(false)
+        expect(warn).toHaveBeenCalledWith('[pumpStallGuard] rehydrated block for left sees an energized stalled pump — powering off')
+
+        // A further stalled frame must not issue a second cutoff.
+        await stalledFrame('left')
+        expect(setPower).toHaveBeenCalledTimes(1)
+        warn.mockRestore()
+      })
+
+      it('never arms the cutoff from non-consecutive low frames', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+
+        await stalledFrame('left')
+        await healthyFrame('left')
+        await stalledFrame('left')
+
+        // The intervening healthy frame proved circulation — the dwell
+        // requires consecutive sub-threshold frames.
+        expect(setPower).not.toHaveBeenCalled()
+        expect(__test__.getState().left.cutoffPending).toBe(false)
+        expect(shouldBlock('left')).toBe(true)
+        warn.mockRestore()
+      })
+
+      it('never arms the cutoff from frames on a side commanded off', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+
+        for (let i = 0; i < 5; i += 1) {
+          await onFrame({ side: 'left', rpm: 0, expectedActive: false, preStallTarget: null, preStallDurationSeconds: null })
+        }
+
+        expect(setPower).not.toHaveBeenCalled()
+        expect(shouldBlock('left')).toBe(true)
+        warn.mockRestore()
+      })
+
+      it('requires explicit acknowledgement once this boot observed an energized stall', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+
+        setPower.mockImplementation(async () => {
+          throw new Error('hardware offline')
+        })
+        await stalledFrame('left')
+        await stalledFrame('left')
+        expect(__test__.getState().left.cutoffPending).toBe(true)
+
+        await healthyFrame('left')
+        await healthyFrame('left')
+        await healthyFrame('left')
+        // The pump looks healthy, but the unconfirmed cutoff pins the block.
+        expect(shouldBlock('left')).toBe(true)
+
+        setPower.mockImplementation(async () => {})
+        await healthyFrame('left')
+        // The retry landed, but the stall was re-confirmed live this boot —
+        // the block was promoted to fresh at cutoff-arm time and only an
+        // explicit acknowledgement may release it now.
+        expect(__test__.getState().left.cutoffPending).toBe(false)
+        expect(shouldBlock('left')).toBe(true)
+        warn.mockRestore()
+      })
+
+      it('requires explicit acknowledgement again after a failed restore re-arms', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+        const { restore, alertId } = acknowledge('left')
+        rearm('left', { alertId, restore })
+
+        for (let i = 0; i < 5; i += 1) await healthyFrame('left')
+
+        expect(shouldBlock('left')).toBe(true)
+        warn.mockRestore()
+      })
+
+      it('keeps the energized-stall watch scoped to rehydrated blocks — a fresh trip never re-arms', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        await stalledFrame('left')
+        await stalledFrame('left')
+        expect(shouldBlock('left')).toBe(true)
+        expect(__test__.getState().left.rehydrated).toBe(false)
+        expect(__test__.getState().left.cutoffPending).toBe(false)
+        expect(setPower).toHaveBeenCalledTimes(1)
+
+        // >= dwellSamples further energized-stalled frames on the fresh
+        // block must not arm the watch (it belongs to rehydrated blocks).
+        await stalledFrame('left')
+        await stalledFrame('left')
+        await stalledFrame('left')
+        expect(__test__.getState().left.cutoffPending).toBe(false)
+        expect(setPower).toHaveBeenCalledTimes(1)
+
+        // Nor may the fresh block self-release on healthy frames.
+        for (let i = 0; i < 5; i += 1) await healthyFrame('left')
+        expect(shouldBlock('left')).toBe(true)
+        warn.mockRestore()
+      })
+
+      it('the disabled branch drops the rehydrated flag with the block', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+        expect(__test__.getState().left.rehydrated).toBe(true)
+
+        setSettings({ pump_stall_protection_enabled: 0 })
+        invalidateGuardSettingsCache()
+        await healthyFrame('left')
+
+        expect(shouldBlock('left')).toBe(false)
+        expect(__test__.getState().left.rehydrated).toBe(false)
+        warn.mockRestore()
+      })
+
+      it('release-time supersede also drains rows that became active after rehydration', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+        const older = insertAlert({ side: 'left', timestamp: nowSec - 3000 })
+        const id = insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+        // Simulate a row rehydrate never saw (e.g. a silent stamp failure
+        // healed elsewhere): re-activate the superseded older row.
+        ;(biometricsSqlite as any).exec(`UPDATE pump_alerts SET dismissed_at = NULL WHERE id = ${older}`)
+
+        await healthyFrame('left')
+        await healthyFrame('left')
+        await healthyFrame('left')
+
+        expect(shouldBlock('left')).toBe(false)
+        const releasedRow = (biometricsSqlite as any).prepare('SELECT action FROM pump_alerts WHERE id = ?').get(id)
+        expect(releasedRow.action).toBe('auto_recovered')
+        const olderRow = (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(older)
+        expect(olderRow.dismissed_at).not.toBeNull()
+        warn.mockRestore()
+        log.mockRestore()
+      })
+    })
+
+    describe('dismissIfActive', () => {
+      it('releases the matching live incident', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const id = insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+
+        expect(dismissIfActive('left', id)).toBe(true)
+        expect(shouldBlock('left')).toBe(false)
+        expect(getPumpStallNotice('left')).toBeNull()
+        warn.mockRestore()
+      })
+
+      it('refuses a non-matching id and an unblocked side', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const id = insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+
+        expect(dismissIfActive('left', id + 1)).toBe(false)
+        expect(shouldBlock('left')).toBe(true)
+        expect(dismissIfActive('right', id)).toBe(false)
+        warn.mockRestore()
+      })
+
+      it('refuses while the cutoff retry is still pending', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const id = insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+        setPower.mockImplementation(async () => {
+          throw new Error('hardware offline')
+        })
+        await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+        await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+        expect(__test__.getState().left.cutoffPending).toBe(true)
+        expect(isCutoffPendingIncident('left', id)).toBe(true)
+
+        expect(dismissIfActive('left', id)).toBe(false)
+        expect(shouldBlock('left')).toBe(true)
+        setPower.mockImplementation(async () => {})
+        warn.mockRestore()
+      })
+
+      it('refuses while the trip-time cutoff is still in flight', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        let resolveCutoff!: () => void
+        setPower.mockImplementationOnce(
+          () => new Promise<void>((resolve) => {
+            resolveCutoff = resolve
+          }),
+        )
+
+        await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+        const tripping = onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+        for (let i = 0; i < 5; i += 1) await Promise.resolve()
+
+        // The row and banner are already visible, so a dismissal can land
+        // in this window — it must see an unconfirmed cutoff and refuse,
+        // or the awaited power-off would resolve against an orphaned state
+        // and the retry machinery would be lost.
+        const alertId = __test__.getState().left.activeAlertId
+        expect(alertId).not.toBeNull()
+        expect(__test__.getState().left.cutoffPending).toBe(true)
+        expect(dismissIfActive('left', alertId as number)).toBe(false)
+        expect(shouldBlock('left')).toBe(true)
+
+        resolveCutoff()
+        await tripping
+        // Confirmed cutoff resolves the flag on the live state.
+        expect(__test__.getState().left.cutoffPending).toBe(false)
+        expect(dismissIfActive('left', alertId as number)).toBe(true)
+        expect(shouldBlock('left')).toBe(false)
+        warn.mockRestore()
+      })
+    })
+
+    describe('standDown', () => {
+      it('attempts one final cutoff for a side with an unconfirmed power-off, then clears everything', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const id = insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        const other = insertAlert({ side: 'right', timestamp: nowSec - 600 })
+        rehydrate()
+        // Arm an unconfirmed cutoff on left via the energized-stall watch.
+        setPower.mockImplementation(async () => {
+          throw new Error('hardware offline')
+        })
+        await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+        await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+        expect(__test__.getState().left.cutoffPending).toBe(true)
+        setPower.mockImplementation(async () => {})
+        setPower.mockClear()
+
+        await standDown()
+
+        // One final best-effort cutoff for the pending side only.
+        expect(setPower).toHaveBeenCalledTimes(1)
+        expect(setPower).toHaveBeenCalledWith('left', false)
+        expect(warn).toHaveBeenCalledWith('[pumpStallGuard] standing down left with an unconfirmed cutoff — attempting final power-off')
+        expect(shouldBlock('left')).toBe(false)
+        expect(shouldBlock('right')).toBe(false)
+        expect(getPumpStallNotice('left')).toBeNull()
+        expect(getPumpStallNotice('right')).toBeNull()
+        const rowById = (rowId: number) => (biometricsSqlite as any).prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(rowId)
+        expect(rowById(id).dismissed_at).not.toBeNull()
+        expect(rowById(other).dismissed_at).not.toBeNull()
+        warn.mockRestore()
+      })
+
+      it('still resets when the final cutoff fails, and warns', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+        setPower.mockImplementation(async () => {
+          throw new Error('hardware offline')
+        })
+        await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+        await onFrame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: null, preStallDurationSeconds: null })
+        expect(__test__.getState().left.cutoffPending).toBe(true)
+
+        await standDown()
+
+        expect(warn).toHaveBeenCalledWith('[pumpStallGuard] final cutoff for left failed:', 'hardware offline')
+        expect(shouldBlock('left')).toBe(false)
+        setPower.mockImplementation(async () => {})
+        warn.mockRestore()
+      })
+
+      it('issues no hardware writes when nothing is pending', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        insertAlert({ side: 'left', timestamp: nowSec - 600 })
+        rehydrate()
+
+        await standDown()
+
+        expect(setPower).not.toHaveBeenCalled()
+        expect(shouldBlock('left')).toBe(false)
+        warn.mockRestore()
+      })
     })
   })
 })

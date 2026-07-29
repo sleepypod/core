@@ -53,6 +53,9 @@ const dbMock = vi.hoisted(() => {
 const guard = vi.hoisted(() => ({
   acknowledge: vi.fn(),
   rearm: vi.fn(),
+  supersedeAlerts: vi.fn(),
+  dismissIfActive: vi.fn(),
+  isCutoffPendingIncident: vi.fn(),
 }))
 
 const notices = vi.hoisted(() => ({
@@ -68,7 +71,13 @@ const device = vi.hoisted(() => ({
 }))
 
 vi.mock('@/src/db', () => ({ biometricsDb: dbMock }))
-vi.mock('@/src/hardware/pumpStallGuard', () => ({ acknowledge: guard.acknowledge, rearm: guard.rearm }))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  acknowledge: guard.acknowledge,
+  rearm: guard.rearm,
+  supersedeAlerts: guard.supersedeAlerts,
+  dismissIfActive: guard.dismissIfActive,
+  isCutoffPendingIncident: guard.isCutoffPendingIncident,
+}))
 vi.mock('@/src/hardware/pumpStallNotification', () => notices)
 vi.mock('@/src/server/routers/app', () => ({
   appRouter: {
@@ -114,6 +123,9 @@ beforeEach(() => {
   Object.values(sql).forEach(mock => mock.mockClear())
   guard.acknowledge.mockReset().mockReturnValue({ restore: null, alertId: null })
   guard.rearm.mockReset()
+  guard.supersedeAlerts.mockReset().mockReturnValue(0)
+  guard.dismissIfActive.mockReset().mockReturnValue(false)
+  guard.isCutoffPendingIncident.mockReset().mockReturnValue(false)
   notices.clearPumpStallNotice.mockReset()
   notices.getPumpStallNotice.mockReset().mockReturnValue(null)
   device.setPower.mockReset().mockResolvedValue({ success: true })
@@ -421,10 +433,11 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       expect(sql.eq).toHaveBeenCalledWith(pumpAlerts.action, 'power_off')
       expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.acknowledgedAt)
       expect(sql.isNull).toHaveBeenCalledWith(pumpAlerts.dismissedAt)
-      expect(sql.desc).toHaveBeenCalledWith(pumpAlerts.timestamp)
+      // Newest by id, never timestamp — incident order survives the
+      // pre-NTP boot clock skew that inverts wall timestamps.
       expect(sql.desc).toHaveBeenCalledWith(pumpAlerts.id)
+      expect(sql.desc).not.toHaveBeenCalledWith(pumpAlerts.timestamp)
       expect(dbMock.chain.orderBy).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: 'desc', column: pumpAlerts.timestamp }),
         expect.objectContaining({ kind: 'desc', column: pumpAlerts.id }),
       )
       expect(dbMock.chain.limit).toHaveBeenCalledWith(1)
@@ -592,6 +605,26 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
       expect(dbMock.update).not.toHaveBeenCalled()
     })
   })
+
+  describe('backlog supersede', () => {
+    it('supersedes older rows for the side after a proven acknowledgement stamp', async () => {
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: 42 })
+      dbState.queue.push([{ id: 42 }]) // acknowledgedAt update matched the row
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toMatchObject({ success: true })
+      expect(guard.supersedeAlerts).toHaveBeenCalledWith('left', { beforeId: 42 })
+    })
+
+    it('does not supersede when the acknowledgement stamp matched no row', async () => {
+      // A client id that failed the side/action proof (or a row already
+      // resolved elsewhere) must not drive a bulk stamp for the side.
+      guard.acknowledge.mockReturnValue({ restore: null, alertId: 42 })
+      dbState.queue.push([]) // update matched nothing
+
+      await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toMatchObject({ success: true })
+      expect(guard.supersedeAlerts).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('pumpAlerts dismissals', () => {
@@ -650,23 +683,85 @@ describe('pumpAlerts dismissals', () => {
     expect(sql.eq).not.toHaveBeenCalledWith(pumpAlerts.id, 12)
   })
 
+  it('supersedes older rows after a proven dismissal stamp', async () => {
+    guard.acknowledge.mockReturnValue({ restore: null, alertId: 12 })
+    dbState.queue.push([{ id: 12 }]) // dismissedAt update matched the row
+
+    await expect(caller.dismissNotification({ side: 'right' })).resolves.toEqual({ success: true })
+    expect(guard.supersedeAlerts).toHaveBeenCalledWith('right', { beforeId: 12 })
+  })
+
+  it('does not supersede when the dismissal stamp matched no row', async () => {
+    guard.acknowledge.mockReturnValue({ restore: null, alertId: 12 })
+    dbState.queue.push([]) // update matched nothing
+
+    await expect(caller.dismissNotification({ side: 'right' })).resolves.toEqual({ success: true })
+    expect(guard.supersedeAlerts).not.toHaveBeenCalled()
+  })
+
   it('dismisses a specific active history row', async () => {
-    dbState.queue.push([alert])
+    dbState.queue.push([alert]) // pre-stamp row read
+    dbState.queue.push([alert]) // dismissedAt update
     await expect(caller.dismissAlert({ id: 17 })).resolves.toEqual({ success: true })
     expect(dbMock.chain.set).toHaveBeenCalledWith({ dismissedAt: expect.any(Date) })
     expect(sql.eq).toHaveBeenCalledWith(expect.anything(), 17)
-    expect(sql.isNull).toHaveBeenCalledOnce()
+    // The activity re-check appears in both the pre-stamp read and the update.
+    expect(sql.isNull).toHaveBeenCalledTimes(2)
     expect(dbMock.chain.returning).toHaveBeenCalledOnce()
   })
 
-  it('preserves NOT_FOUND when no active history row is updated', async () => {
-    dbState.queue.push([])
+  it('refuses with CONFLICT while the live incident row has an unconfirmed cutoff', async () => {
+    guard.isCutoffPendingIncident.mockReturnValue(true)
+    dbState.queue.push([alert]) // pre-stamp row read
+
+    const error = await caller.dismissAlert({ id: 17 }).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(TRPCError)
+    expect(error).toMatchObject({
+      code: 'CONFLICT',
+      message: 'Pump alert 17 is still being resolved — the side has not confirmed its power-off yet',
+    })
+    expect(guard.isCutoffPendingIncident).toHaveBeenCalledWith('left', 17)
+    // Nothing may be stamped: the row is the only persistent trace of a
+    // side possibly still energized against a stalled pump.
+    expect(dbMock.update).not.toHaveBeenCalled()
+    expect(guard.dismissIfActive).not.toHaveBeenCalled()
+  })
+
+  it('preserves NOT_FOUND when the row is dismissed between the read and the stamp', async () => {
+    dbState.queue.push([alert]) // pre-stamp row read
+    dbState.queue.push([]) // update matched nothing — raced by another dismiss
+    const error = await caller.dismissAlert({ id: 17 }).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(TRPCError)
+    expect(error).toMatchObject({ code: 'NOT_FOUND' })
+    expect(guard.dismissIfActive).not.toHaveBeenCalled()
+  })
+
+  it('releases the live block when the dismissed history row names the current incident', async () => {
+    dbState.queue.push([alert]) // pre-stamp row read
+    dbState.queue.push([alert]) // returning row: side left, id 17
+
+    await expect(caller.dismissAlert({ id: 17 })).resolves.toEqual({ success: true })
+    expect(guard.dismissIfActive).toHaveBeenCalledWith('left', 17)
+  })
+
+  it('skips the guard release and cutoff check for a sideless alert row', async () => {
+    dbState.queue.push([{ ...alert, side: null }]) // pre-stamp row read
+    dbState.queue.push([{ ...alert, side: null }]) // dismissedAt update
+
+    await expect(caller.dismissAlert({ id: 17 })).resolves.toEqual({ success: true })
+    expect(guard.isCutoffPendingIncident).not.toHaveBeenCalled()
+    expect(guard.dismissIfActive).not.toHaveBeenCalled()
+  })
+
+  it('preserves NOT_FOUND when no active history row exists', async () => {
+    dbState.queue.push([]) // pre-stamp row read finds nothing
     const error = await caller.dismissAlert({ id: 99 }).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(TRPCError)
     expect(error).toMatchObject({
       code: 'NOT_FOUND',
       message: 'Pump alert 99 not found or already dismissed',
     })
+    expect(dbMock.update).not.toHaveBeenCalled()
   })
 
   it('wraps an Error while dismissing a history row', async () => {

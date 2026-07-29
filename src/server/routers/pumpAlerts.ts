@@ -4,7 +4,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb } from '@/src/db'
 import { bedTemp, pumpAlerts } from '@/src/db/biometrics-schema'
-import { acknowledge as guardAcknowledge, rearm as guardRearm } from '@/src/hardware/pumpStallGuard'
+import { acknowledge as guardAcknowledge, dismissIfActive, isCutoffPendingIncident, rearm as guardRearm, supersedeAlerts } from '@/src/hardware/pumpStallGuard'
 import { clearPumpStallNotice, getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import { idSchema, sideSchema } from '@/src/server/validation-schemas'
 
@@ -155,7 +155,10 @@ export const pumpAlertsRouter = router({
               isNull(pumpAlerts.acknowledgedAt),
               isNull(pumpAlerts.dismissedAt),
             ))
-            .orderBy(desc(pumpAlerts.timestamp), desc(pumpAlerts.id))
+            // Newest by id — monotonic incident order even under the
+            // pre-NTP boot clock skew that inverts timestamps, and the key
+            // the supersede stamp bounds on.
+            .orderBy(desc(pumpAlerts.id))
             .limit(1)
         }
         catch (err) {
@@ -195,10 +198,16 @@ export const pumpAlertsRouter = router({
           conditions.push(eq(pumpAlerts.side, input.side), eq(pumpAlerts.action, 'power_off'))
         }
         try {
-          await biometricsDb
+          const stamped = await biometricsDb
             .update(pumpAlerts)
             .set({ acknowledgedAt: new Date() })
             .where(and(...conditions))
+            .returning({ id: pumpAlerts.id })
+          // Older active rows are duplicates of the incident just resolved —
+          // stamp them too so the backlog cannot resurrect a block one boot
+          // at a time. Only when the stamp proved out: a client id that
+          // failed the side/action proof must not drive a bulk stamp.
+          if (stamped.length > 0) supersedeAlerts(input.side, { beforeId: stampId })
         }
         catch (err) {
           console.warn('[pumpAlerts] failed to stamp acknowledgedAt:', err instanceof Error ? err.message : err)
@@ -314,10 +323,14 @@ export const pumpAlertsRouter = router({
           )
         }
         try {
-          await biometricsDb
+          const stamped = await biometricsDb
             .update(pumpAlerts)
             .set({ dismissedAt: new Date() })
             .where(and(...conditions))
+            .returning({ id: pumpAlerts.id })
+          // Same supersede rationale and same proof gate as the
+          // acknowledgement stamp above.
+          if (stamped.length > 0) supersedeAlerts(input.side, { beforeId: stampId })
         }
         catch (err) {
           console.warn('[pumpAlerts] failed to stamp dismissedAt:', err instanceof Error ? err.message : err)
@@ -335,6 +348,22 @@ export const pumpAlertsRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
+        // Refuse outright — before any stamp — while this row is the live
+        // incident with an unconfirmed hardware cutoff: stamping it would
+        // erase the only persistent trace of a side possibly energized
+        // against a stalled pump, and a restart would then boot unguarded.
+        const [existing] = await biometricsDb
+          .select({ id: pumpAlerts.id, side: pumpAlerts.side })
+          .from(pumpAlerts)
+          .where(and(eq(pumpAlerts.id, input.id), isNull(pumpAlerts.dismissedAt)))
+          .limit(1)
+        if (!existing) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: `Pump alert ${input.id} not found or already dismissed` })
+        }
+        if (existing.side != null && isCutoffPendingIncident(existing.side, existing.id)) {
+          throw new TRPCError({ code: 'CONFLICT', message: `Pump alert ${input.id} is still being resolved — the side has not confirmed its power-off yet` })
+        }
+
         const [updated] = await biometricsDb
           .update(pumpAlerts)
           .set({ dismissedAt: new Date() })
@@ -342,6 +371,14 @@ export const pumpAlertsRouter = router({
           .returning()
         if (!updated) {
           throw new TRPCError({ code: 'NOT_FOUND', message: `Pump alert ${input.id} not found or already dismissed` })
+        }
+        // If this row is the live incident, dismissing it from history must
+        // also release the side — otherwise the list reads empty while
+        // power-on still fails. dismissIfActive refuses while the trip-time
+        // cutoff is unconfirmed (backstop for a cutoff arming between the
+        // check above and this release), keeping the retry machinery armed.
+        if (updated.side != null) {
+          dismissIfActive(updated.side, updated.id)
         }
         return { success: true }
       }

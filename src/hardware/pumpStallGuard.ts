@@ -17,7 +17,7 @@
  * shouldBlock is read from API route handlers.
  */
 
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull, lt, lte } from 'drizzle-orm'
 import { biometricsDb, db } from '@/src/db'
 import { pumpAlerts } from '@/src/db/biometrics-schema'
 import { deviceSettings, deviceState } from '@/src/db/schema'
@@ -39,6 +39,11 @@ interface GuardState {
   /** true when the trip-time hardware power-off never went out — retried
    *  on every subsequent frame until it succeeds. */
   cutoffPending: boolean
+  /** true when this block was restored from a persisted row at startup
+   *  rather than tripped in this boot. A rehydrated block self-releases on
+   *  live healthy-RPM evidence; a fresh trip requires explicit
+   *  acknowledgement (or opt-in auto-recovery). */
+  rehydrated: boolean
 }
 
 interface GuardSettings {
@@ -74,6 +79,7 @@ function emptyState(): GuardState {
     activeAlertId: null,
     preStall: null,
     cutoffPending: false,
+    rehydrated: false,
   }
 }
 
@@ -136,6 +142,10 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     state.consecutiveLowFrames = 0
     state.consecutiveHealthyFrames = 0
     state.blocked = false
+    // The flag must fall with the block: readSettings() fails toward
+    // disabled on a degraded read, and a leaked flag would let a later
+    // fresh trip inherit the rehydrated self-release.
+    state.rehydrated = false
     return
   }
 
@@ -171,6 +181,31 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     return
   }
 
+  // A rehydrated block carries no cutoff confirmation from this boot: if
+  // the pre-restart cutoff never landed, the side may still be energized
+  // against a stalled pump. Watch for that evidence — commanded active with
+  // sub-threshold RPM for the dwell window — and arm the retry below.
+  // Healthy frames reset the dwell, so a side that is actually running
+  // fine is never touched.
+  if (state.rehydrated && !state.cutoffPending && input.expectedActive) {
+    if (input.rpm < settings.threshold) {
+      state.consecutiveLowFrames += 1
+      if (state.consecutiveLowFrames >= settings.dwellSamples) {
+        state.consecutiveLowFrames = 0
+        state.cutoffPending = true
+        // The stall was just re-confirmed on trip()'s own evidence bar —
+        // the block is a live incident now, not a stale carry-over, so the
+        // rehydrated self-release no longer applies and explicit
+        // acknowledgement is required again.
+        state.rehydrated = false
+        console.warn(`[pumpStallGuard] rehydrated block for ${input.side} sees an energized stalled pump — powering off`)
+      }
+    }
+    else {
+      state.consecutiveLowFrames = 0
+    }
+  }
+
   // Already blocked — if the trip-time cutoff never reached the hardware,
   // the side may still be energized against a stalled pump. Retry until
   // the command is confirmed sent; the alert row already says power_off.
@@ -196,6 +231,14 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
   }
   if (settings.autoRecoveryEnabled && state.consecutiveHealthyFrames >= settings.recoverySamples) {
     await autoRecover(input.side)
+  }
+  else if (state.rehydrated && !state.cutoffPending && state.consecutiveHealthyFrames >= settings.recoverySamples) {
+    // Auto-recovery keeps first claim on the healthy-frame threshold; with
+    // it disabled, a rehydrated block releases on the same evidence bar
+    // without re-energizing — the pump has proven itself at recovery speed,
+    // so the pre-restart fault no longer describes the hardware. Fresh
+    // same-boot trips still require explicit acknowledgement.
+    releaseRehydratedBlock(input.side)
   }
 }
 
@@ -225,6 +268,31 @@ export function acknowledge(side: Side): {
   return { restore, alertId }
 }
 
+/**
+ * Release the in-memory block when a history-row dismissal names the live
+ * incident. Never releases while the trip-time cutoff is unconfirmed — the
+ * per-frame retry is the only thing still trying to de-energize the side,
+ * and an acknowledge-style reset would abandon it.
+ */
+export function dismissIfActive(side: Side, alertId: number): boolean {
+  const state = getState()[side]
+  if (!state.blocked || state.activeAlertId !== alertId || state.cutoffPending) return false
+  getState()[side] = emptyState()
+  clearPumpStallNotice(side)
+  return true
+}
+
+/**
+ * True when this row is the live incident and its hardware cutoff is still
+ * unconfirmed. Dismissing such a row would stamp away the only persistent
+ * trace of a side possibly energized against a stalled pump — callers
+ * should refuse the dismissal outright rather than stamp-then-fail.
+ */
+export function isCutoffPendingIncident(side: Side, alertId: number): boolean {
+  const state = getState()[side]
+  return state.blocked && state.activeAlertId === alertId && state.cutoffPending
+}
+
 // ── Re-arm after a failed acknowledge-and-restore ──────────────────────────
 
 /**
@@ -248,6 +316,10 @@ export function rearm(side: Side, params: {
   state.preStall = params.restore
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
+  // A failed restore leaves the side in an unknown power state — the
+  // re-armed block must require explicit acknowledgement, never the
+  // rehydrated self-release.
+  state.rehydrated = false
   setPumpStallNotice(side, {
     alertId: params.alertId ?? 0,
     trippedAt: Math.floor(state.trippedAt / 1000),
@@ -256,7 +328,83 @@ export function rearm(side: Side, params: {
   })
 }
 
+// ── Alert row supersede ────────────────────────────────────────────────────
+
+/**
+ * Stamp `dismissedAt` on still-active `power_off` rows for a side. The
+ * newest incident supersedes older ones — one physical pump per side means
+ * two active rows can only be duplicates of the same fault lineage, and
+ * rows left active forever resurrect stale blocks at every boot via
+ * rehydrate(). Bounds are keyed on id, never timestamp: ids are monotonic
+ * under the pre-NTP clock skew pod boots routinely see. Best-effort like
+ * every other alert stamp; returns the number of rows stamped.
+ */
+export function supersedeAlerts(side: Side, bound?: { beforeId?: number, throughId?: number }): number {
+  const conditions = [
+    eq(pumpAlerts.side, side),
+    eq(pumpAlerts.action, 'power_off'),
+    isNull(pumpAlerts.acknowledgedAt),
+    isNull(pumpAlerts.dismissedAt),
+  ]
+  if (bound?.beforeId != null) conditions.push(lt(pumpAlerts.id, bound.beforeId))
+  if (bound?.throughId != null) conditions.push(lte(pumpAlerts.id, bound.throughId))
+  try {
+    const result = biometricsDb
+      .update(pumpAlerts)
+      .set({ dismissedAt: new Date() })
+      .where(and(...conditions))
+      .run()
+    return result.changes
+  }
+  catch (err) {
+    console.warn('[pumpStallGuard] alert supersede failed:', err instanceof Error ? err.message : err)
+    return 0
+  }
+}
+
+// ── Feature stand-down (protection disabled) ───────────────────────────────
+
+/**
+ * Stand the guard down entirely when stall protection is switched off.
+ * A plain reset() would abandon an unconfirmed cutoffPending retry — the
+ * only thing still trying to de-energize a side that may sit against a
+ * stalled pump — so each such side gets one final best-effort power-off
+ * first. State and notices are then cleared and all active power_off rows
+ * dismissed, so nothing resurrects a block after a later re-enable.
+ */
+export async function standDown(): Promise<void> {
+  for (const side of ['left', 'right'] as Side[]) {
+    const state = getState()[side]
+    if (state.cutoffPending) {
+      console.warn(`[pumpStallGuard] standing down ${side} with an unconfirmed cutoff — attempting final power-off`)
+      try {
+        await withSideLock(side, async () => {
+          const client = getSharedHardwareClient()
+          await client.setPower(side, false)
+        })
+      }
+      catch (err) {
+        console.warn(`[pumpStallGuard] final cutoff for ${side} failed:`, err instanceof Error ? err.message : err)
+      }
+    }
+    reset(side)
+    supersedeAlerts(side)
+  }
+}
+
 // ── Startup rehydration ────────────────────────────────────────────────────
+
+/**
+ * A fault row older than this no longer describes live hardware — if the
+ * pump is genuinely still stalled, the guard re-trips within dwellSamples
+ * frames of the side energizing, so skipping costs seconds of exposure
+ * while resurrecting costs a wrongly blocked side on every boot.
+ */
+const REHYDRATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+/** Timestamps before this predate the product — evidence of a pre-NTP
+ *  write-time clock, not of staleness. */
+const CLOCK_PLAUSIBILITY_FLOOR_MS = Date.UTC(2024, 0, 1)
 
 /**
  * Restore per-side guard state from the newest still-active `power_off`
@@ -288,7 +436,12 @@ export function rehydrate(): void {
           isNull(pumpAlerts.acknowledgedAt),
           isNull(pumpAlerts.dismissedAt),
         ))
-        .orderBy(desc(pumpAlerts.timestamp), desc(pumpAlerts.id))
+        // Newest by id, not timestamp: ids are AUTOINCREMENT-monotonic in
+        // true incident order, while wall-clock timestamps invert under the
+        // pre-NTP boot skew — and the supersede bounds below key on id, so
+        // selecting by anything else would leave rows the drain never
+        // reaches.
+        .orderBy(desc(pumpAlerts.id))
         .limit(1)
         .all()
     }
@@ -298,6 +451,25 @@ export function rehydrate(): void {
     }
     if (!row) continue
 
+    // Age gate, the last-resort staleness backstop. Signed comparison so a
+    // future-timestamped row (trip recorded under a skewed pre-NTP boot
+    // clock) counts as fresh and fails toward blocking. The plausibility
+    // floor covers the opposite skew: a near-epoch timestamp means the trip
+    // was recorded before the clock ever synced — its true age is
+    // unknowable, so it also counts as fresh rather than bulk-dismissing
+    // what may be a minutes-old fault.
+    const ageMs = Date.now() - row.timestamp.getTime()
+    if (ageMs > REHYDRATE_MAX_AGE_MS && row.timestamp.getTime() >= CLOCK_PLAUSIBILITY_FLOOR_MS) {
+      const stamped = supersedeAlerts(side, { throughId: row.id })
+      console.warn(`[pumpStallGuard] skipped rehydration for ${side}: alert ${row.id} is ${Math.round(ageMs / 86_400_000)}d old — dismissed ${stamped} stale row(s)`)
+      continue
+    }
+
+    // Older active rows can never be the incident this block represents —
+    // stamp them now so resolving this one drains the whole backlog
+    // instead of resurrecting the next-newest row at every boot.
+    supersedeAlerts(side, { beforeId: row.id })
+
     const restore = row.restoreTargetTemperature != null && row.restoreDurationSeconds != null
       ? { targetTemperature: row.restoreTargetTemperature, durationSeconds: row.restoreDurationSeconds }
       : null
@@ -305,6 +477,7 @@ export function rehydrate(): void {
     state.trippedAt = row.timestamp.getTime()
     state.activeAlertId = row.id
     state.preStall = restore
+    state.rehydrated = true
     setPumpStallNotice(side, {
       alertId: row.id,
       trippedAt: Math.floor(row.timestamp.getTime() / 1000),
@@ -339,6 +512,10 @@ async function trip(side: Side, rpm: number): Promise<void> {
   state.trippedAt = trippedAt
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
+  // A fresh trip must never inherit a lingering rehydrated flag (e.g. left
+  // behind by the disabled branch) — it would satisfy the self-release
+  // gate that only stale, restored blocks may use.
+  state.rehydrated = false
 
   // Capture a snapshot from device_state if we don't already have one — the
   // preStall field is updated each healthy frame, but covers the case where
@@ -412,6 +589,11 @@ async function trip(side: Side, rpm: number): Promise<void> {
 
   state.activeAlertId = alertId || null
 
+  // A new incident supersedes any still-active older rows for this side.
+  // Only when this insert landed: on insert failure the older rows are the
+  // surviving persistent trace of the fault.
+  if (alertId) supersedeAlerts(side, { beforeId: alertId })
+
   // Publish the banner before any await: against unresponsive firmware the
   // cutoff below can block for the full DAC timeout, and commands rejected
   // during that window need the notice to explain why. An acknowledge()
@@ -431,14 +613,25 @@ async function trip(side: Side, rpm: number): Promise<void> {
   // same-side writer's command sequence. Deadlock analysis: trip() is only
   // reachable from the frame path (deviceStateSync.runStallGuard → onFrame),
   // never from a caller already holding the same-side lock.
+  //
+  // cutoffPending covers the whole in-flight window, not just the failure:
+  // the awaited write can block for a full DAC timeout, and a dismissal
+  // landing mid-flight must see an unconfirmed cutoff and refuse to
+  // release. Resolution goes through the live state — a mid-flight
+  // acknowledge replaces the state object, and this incident's flag must
+  // not leak onto whatever replaced it.
+  state.cutoffPending = true
   try {
     await withSideLock(side, async () => {
       const client = getSharedHardwareClient()
       await client.setPower(side, false)
     })
+    const live = getState()[side]
+    if (live === state || (live.blocked && live.activeAlertId === state.activeAlertId)) {
+      live.cutoffPending = false
+    }
   }
   catch (err) {
-    state.cutoffPending = true
     console.error('[pumpStallGuard] hardware power-off failed:', err instanceof Error ? err.message : err)
   }
 }
@@ -463,7 +656,7 @@ async function autoRecover(side: Side): Promise<void> {
     // Nothing to restore — leave the side off and clear the guard so the
     // next user command isn't blocked. Stamp the alert so a restart doesn't
     // rehydrate a block the pump has already proven itself out of.
-    stampAlertAutoRecovered(state.activeAlertId)
+    stampAlertAutoRecovered(side, state.activeAlertId)
     reset(side)
     console.log(`[pumpStallGuard] auto-recovered ${side}${restore ? ' — original session expired, leaving off' : ''}`)
     return
@@ -500,13 +693,13 @@ async function autoRecover(side: Side): Promise<void> {
     console.warn('[pumpStallGuard] device_state restore failed:', err instanceof Error ? err.message : err)
   }
 
-  stampAlertAutoRecovered(state.activeAlertId)
+  stampAlertAutoRecovered(side, state.activeAlertId)
 
   reset(side)
   console.log(`[pumpStallGuard] auto-recovered ${side}`)
 }
 
-function stampAlertAutoRecovered(alertId: number | null): void {
+function stampAlertAutoRecovered(side: Side, alertId: number | null): void {
   if (alertId == null) return
   try {
     // Guard on the untouched row like the router's acknowledge path — a
@@ -524,6 +717,19 @@ function stampAlertAutoRecovered(alertId: number | null): void {
   catch (err) {
     console.warn('[pumpStallGuard] alert update failed:', err instanceof Error ? err.message : err)
   }
+  supersedeAlerts(side, { beforeId: alertId })
+}
+
+/**
+ * Clear a rehydrated block whose pump has held recovery speed for the full
+ * healthy-frame window. No hardware call — the side keeps whatever state
+ * the firmware is running; only the stale block and its rows are retired.
+ */
+function releaseRehydratedBlock(side: Side): void {
+  const state = getState()[side]
+  stampAlertAutoRecovered(side, state.activeAlertId)
+  reset(side)
+  console.log(`[pumpStallGuard] released rehydrated block for ${side} — pump verified healthy`)
 }
 
 // ── Test introspection ─────────────────────────────────────────────────────
