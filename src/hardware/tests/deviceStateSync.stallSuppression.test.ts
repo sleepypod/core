@@ -353,3 +353,76 @@ describe('DeviceStateSync — stall guard coalescing', () => {
     expect(leftInputs()[1]?.rpm).toBe(200)
   })
 })
+
+describe('DeviceStateSync — bilateral-zero de-glitch', () => {
+  let sync: DeviceStateSync
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve()
+  }
+  const leftCalls = () => vi.mocked(onFrame).mock.calls
+    .map(([input]) => input)
+    .filter(input => input.side === 'left')
+
+  // Per-side frame: the shared `frame()` helper drives both sides to the same
+  // RPM, which can't express a single-side stall.
+  function asymFrame(leftRpm: number, rightRpm: number): Record<string, unknown> {
+    return {
+      left: { pump: { rpm: leftRpm }, temps: { flowrate: 25.0 } },
+      right: { pump: { rpm: rightRpm }, temps: { flowrate: 25.0 } },
+    }
+  }
+
+  beforeEach(() => {
+    resetSchema()
+    _resetMutationStamps()
+    vi.mocked(onFrame).mockClear()
+    vi.mocked(onFrame).mockResolvedValue(undefined)
+    sync = new DeviceStateSync()
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+  })
+
+  it('drops a both-zero frame that immediately follows a both-running frame', async () => {
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 })) // garble: both pumps drop to 0 at once
+    await flush()
+
+    // Only the healthy frame reached the guard — the garble was suppressed on
+    // both sides, so no dwell counter saw a low frame.
+    expect(leftCalls()).toHaveLength(1)
+    expect(leftCalls()[0]?.rpm).toBe(1900)
+  })
+
+  it('feeds a sustained both-zero once it persists past the single-frame glitch', async () => {
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 })) // suppressed (glitch candidate)
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 })) // still zero next frame → real, fed
+    await flush()
+
+    expect(leftCalls()).toHaveLength(2)
+    expect(leftCalls()[1]?.rpm).toBe(0)
+  })
+
+  it('does not suppress a single-side stall (only one pump at zero)', async () => {
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await flush()
+    sync.recordFlowData(asymFrame(0, 1900)) // left stalls, right healthy
+    await flush()
+
+    expect(leftCalls()).toHaveLength(2)
+    expect(leftCalls()[1]?.rpm).toBe(0)
+  })
+
+  it('does not suppress a both-zero frame with no prior running frame', async () => {
+    // Cold start (e.g. right after a restart): a both-zero frame is fed so the
+    // existing expected-stop suppression path still governs it.
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+    expect(leftCalls()).toHaveLength(1)
+    expect(leftCalls()[0]?.rpm).toBe(0)
+  })
+})

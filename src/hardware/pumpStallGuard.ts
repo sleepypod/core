@@ -38,6 +38,9 @@ interface GuardState {
   /** true when the trip-time hardware power-off never went out — retried
    *  on every subsequent frame until it succeeds. */
   cutoffPending: boolean
+  /** epoch ms of the first frame in the current sub-threshold run, or null
+   *  when the last frame was healthy. Gates the time-based dwell floor. */
+  lowSince: number | null
 }
 
 interface GuardSettings {
@@ -73,8 +76,17 @@ function emptyState(): GuardState {
     activeAlertId: null,
     preStall: null,
     cutoffPending: false,
+    lowSince: null,
   }
 }
+
+// Time-based dwell floor. A trip requires the pump to stay sub-threshold for
+// BOTH dwellSamples consecutive frames AND this much wall-clock — so a burst
+// of frames, or a ~1–2s dropped/garbled-frame blip, can't power a side off
+// mid-night. A genuine stall still trips within ~10s, which is thermally
+// harmless (the bed takes minutes to drift). Frame-based dwell alone tripped
+// on ~2s of bad readings; see ADR 0022.
+const DWELL_MIN_MS = 10_000
 
 // ── Settings cache ─────────────────────────────────────────────────────────
 // `recordFlowData` fires every frame; reading device_settings on each call
@@ -125,16 +137,22 @@ export interface OnFrameInput {
   expectedActive: boolean
   preStallTarget: number | null
   preStallDurationSeconds: number | null
+  /** Frame receipt time (epoch ms) for the dwell floor; defaults to now.
+   *  Threaded so the time-based dwell is driven by frame arrival, not the
+   *  guard's own clock, and stays deterministic under test. */
+  now?: number
 }
 
 export async function onFrame(input: OnFrameInput): Promise<void> {
   const settings = readSettings()
   const state = getState()[input.side]
+  const now = input.now ?? Date.now()
 
   if (!settings.enabled) {
     state.consecutiveLowFrames = 0
     state.consecutiveHealthyFrames = 0
     state.blocked = false
+    state.lowSince = null
     return
   }
 
@@ -144,6 +162,7 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     // expectedActive is false for every post-trip frame and returning here
     // would make the cutoff retry and recovery tracking below unreachable.
     state.consecutiveLowFrames = 0
+    state.lowSince = null
     return
   }
 
@@ -160,12 +179,17 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
   if (!state.blocked) {
     if (input.rpm < settings.threshold) {
       state.consecutiveLowFrames += 1
-      if (state.consecutiveLowFrames >= settings.dwellSamples) {
+      if (state.lowSince == null) state.lowSince = now
+      // Require both the frame-count dwell and the wall-clock floor so a brief
+      // burst of low frames can't trip on its own (see DWELL_MIN_MS).
+      if (state.consecutiveLowFrames >= settings.dwellSamples
+        && now - state.lowSince >= DWELL_MIN_MS) {
         await trip(input.side, input.rpm)
       }
     }
     else {
       state.consecutiveLowFrames = 0
+      state.lowSince = null
     }
     return
   }
@@ -247,6 +271,7 @@ export function rearm(side: Side, params: {
   state.preStall = params.restore
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
+  state.lowSince = null
   setPumpStallNotice(side, {
     alertId: params.alertId ?? 0,
     trippedAt: Math.floor(state.trippedAt / 1000),
@@ -337,6 +362,7 @@ async function trip(side: Side, rpm: number): Promise<void> {
   state.trippedAt = Date.now()
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
+  state.lowSince = null
 
   // Capture a snapshot from device_state if we don't already have one — the
   // preStall field is updated each healthy frame, but covers the case where
@@ -496,4 +522,5 @@ export const __test__ = {
   getState,
   emptyState,
   readSettings,
+  DWELL_MIN_MS,
 }

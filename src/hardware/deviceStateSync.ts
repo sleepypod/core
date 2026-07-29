@@ -104,6 +104,9 @@ export class DeviceStateSync {
   private primeEndedAt = 0
   private stallGuardInFlight: Record<Side, boolean> = { left: false, right: false }
   private stallGuardPending: Record<Side, { rpm: number, duty: number | null } | null> = { left: null, right: null }
+  // Whether the previous frzHealth frame had both pumps clearly running.
+  // Used to de-glitch a single dropped/garbled frame (see checkFlowAnomalies).
+  private prevBothRunning = false
 
   sync = async (status: DeviceStatus): Promise<void> => {
     const now = Date.now()
@@ -382,8 +385,21 @@ export class DeviceStateSync {
     // Feed the per-side stall guard. Reads current device_state to derive
     // expectedActive — a side that's commanded off should not trip on
     // RPM = 0 since that is the correct value.
-    this.queueStallGuard('left', leftRpm, leftPump.duty)
-    this.queueStallGuard('right', rightRpm, rightPump.duty)
+    //
+    // Bilateral-zero de-glitch: both pumps dropping from clearly running to
+    // exactly 0 RPM in a single frame is the dropped/garbled-frame signature,
+    // not a real dual stall — a genuine mechanical stall hits one side (loop
+    // temp/flow keep moving, and both sides read healthy again the next frame).
+    // Suppress that one frame so neither side's dwell counter advances on it.
+    // Bounded: only the frame immediately following a both-running frame is
+    // dropped, so a genuine simultaneous dual-stall still trips, one frame later.
+    const bothZero = leftRpm === 0 && rightRpm === 0
+    const suppressGlitch = bothZero && this.prevBothRunning
+    this.prevBothRunning = leftRpm >= PUMP_FAILURE_RPM_MIN && rightRpm >= PUMP_FAILURE_RPM_MIN
+    if (!suppressGlitch) {
+      this.queueStallGuard('left', leftRpm, leftPump.duty)
+      this.queueStallGuard('right', rightRpm, rightPump.duty)
+    }
 
     // Pump running but flowrate missing — possible sensor fault
     if (leftRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(leftFlowCd)) {
