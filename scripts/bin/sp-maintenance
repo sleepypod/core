@@ -102,5 +102,33 @@ if getent group dac &>/dev/null; then
   fi
 fi
 
+# 6. Self-heal the reboot sudoers rule for pods that updated via sp-update
+# (which does NOT re-run scripts/install). Newer fresh installs write this
+# into /etc/sudoers.d/sleepypod-update; existing pods that only ever run
+# sp-update never get it, so the daily / pre-prime reboot jobs
+# (JobManager.executeReboot → `sudo -n systemctl reboot`) fail auth and the
+# pod never reboots on schedule. Keep the command paths in sync with the
+# sleepypod-update fragment in scripts/install. Best-effort: an ExecStartPre
+# failure would block the app from starting, so every step tolerates failure.
+REBOOT_SUDOERS=/etc/sudoers.d/sleepypod-reboot
+REBOOT_SUDOERS_CONTENT='sleepypod ALL=(root) NOPASSWD: /bin/systemctl reboot, /usr/bin/systemctl reboot'
+if [ ! -f "$REBOOT_SUDOERS" ] || [ "$(cat "$REBOOT_SUDOERS" 2>/dev/null)" != "$REBOOT_SUDOERS_CONTENT" ]; then
+  TMP_SUDOERS=$(mktemp 2>/dev/null || echo "")
+  if [ -n "$TMP_SUDOERS" ]; then
+    printf '%s\n' "$REBOOT_SUDOERS_CONTENT" > "$TMP_SUDOERS"
+    chmod 0440 "$TMP_SUDOERS" 2>/dev/null || true
+    if visudo -c -q -f "$TMP_SUDOERS" 2>/dev/null; then
+      if install -m 0440 -o root -g root "$TMP_SUDOERS" "$REBOOT_SUDOERS" 2>/dev/null; then
+        echo "Installed reboot sudoers rule ($REBOOT_SUDOERS)."
+      else
+        echo "WARNING: could not install $REBOOT_SUDOERS (need root?) — skipping" >&2
+      fi
+    else
+      echo "WARNING: reboot sudoers fragment failed visudo — skipping" >&2
+    fi
+    rm -f "$TMP_SUDOERS" 2>/dev/null || true
+  fi
+fi
+
 DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
 echo "Maintenance complete. ${DISK_AVAIL}MB free."
