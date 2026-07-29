@@ -12,6 +12,7 @@ import { UpdateCard } from './UpdateCard'
 import { WaterModal } from './WaterModal'
 import { CalibrationModal } from './CalibrationModal'
 import { InternetToggleCard } from './InternetToggleCard'
+import { PumpAlertsCard } from './PumpAlertsCard'
 import { SystemLogViewer } from './SystemLogViewer'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 import {
@@ -303,6 +304,9 @@ export function StatusScreen() {
           isPriming={deviceStatus.data?.isPriming ?? false}
           onWaterClick={() => setWaterModalOpen(true)}
         />
+
+        {/* Pump alert history — renders only while active alerts exist */}
+        <PumpAlertsCard />
 
         {/* System info — branch/commit/build date + full disk usage */}
         <SystemInfoCard />
