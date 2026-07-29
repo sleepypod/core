@@ -745,9 +745,16 @@ fi
 # the sleepypod tools usable from any sudo shell without re-enabling the
 # system fragment, which might be commented out for a reason on the
 # vendor image.
+# The reboot rule lets the daily / pre-prime reboot jobs work: next-server
+# runs as User=sleepypod and JobManager.executeReboot shells `sudo -n
+# systemctl reboot`. Without this a bare reboot fails auth and the pod never
+# reboots on schedule (observed: 5-day uptime with reboot_daily on). Scope is
+# exactly `systemctl reboot` — both common systemctl paths so the rule matches
+# whichever the image ships. secure_path (below) lets sudo resolve it.
 SUDOERS_FILE="/etc/sudoers.d/sleepypod-update"
 SUDOERS_CONTENT='Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update'
+sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update
+sleepypod ALL=(root) NOPASSWD: /bin/systemctl reboot, /usr/bin/systemctl reboot'
 SUDOERS_TMP=$(mktemp)
 printf '%s\n' "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
 chmod 0440 "$SUDOERS_TMP"

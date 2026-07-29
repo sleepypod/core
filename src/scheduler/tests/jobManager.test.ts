@@ -1748,9 +1748,15 @@ describe('JobManager residual mutation contracts', () => {
 
     reboot.mockRestore()
     const failure = new Error('permission denied')
-    execMock.mockImplementationOnce((_command: string, callback: (error: Error) => void) => callback(failure))
+    let rebootCommand = ''
+    execMock.mockImplementationOnce((command: string, callback: (error: Error) => void) => {
+      rebootCommand = command
+      callback(failure)
+    })
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     await expect((manager as any).executeReboot()).rejects.toBe(failure)
+    // Must sudo — User=sleepypod cannot reboot directly (see executeReboot).
+    expect(rebootCommand).toBe('sudo -n systemctl reboot')
     expect(error).toHaveBeenCalledWith('Reboot command failed:', 'permission denied')
   })
 
