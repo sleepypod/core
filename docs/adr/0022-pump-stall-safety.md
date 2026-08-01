@@ -84,11 +84,10 @@ Putting recovery behind an explicit setting forces the user to opt in
 to that risk after seeing the alert — same model as a furnace
 high-limit switch requiring a manual reset.
 
-Dwell is measured in consecutive frames, not wall-clock seconds, because
-`recordFlowData` is rate-limited to one write per 60s. Two consecutive
-sub-threshold frames covers a single dropped frame and is ~2 minutes of
-real time, which is well within the safety budget for stagnant heating
-near the hub.
+Dwell requires both the configured consecutive-frame count and a 10-second
+wall-clock floor. The guard receives telemetry more often than the
+rate-limited `recordFlowData` database writer persists it, so treating two
+frames as roughly two minutes was incorrect in the original design.
 
 ### Alerts (new table `pump_alerts`)
 
@@ -197,14 +196,15 @@ duration via the normal command path, and clears the guard's per-side
 stall flag. If RPM is still bad, the guard will simply re-trip on the
 next frame — the user has not bypassed the protection, only retried.
 
-**Auto-recovery path (opt-in via `pumpStallAutoRecoveryEnabled`).** When
-enabled, the guard watches for `pumpStallRecoverySamples` consecutive
-frames at or above `pumpStallRecoveryRpm` (default 3 healthy frames ≈
-3 minutes of stable circulation). On recovery, restore the pre-stall
-target + duration, write `action: 'auto_recovered'` to the alert row,
-and surface a less-prominent "side restored" notification — the user
-should still see that something happened overnight even if they did not
-have to intervene.
+**Auto-recovery path (opt-in via `pumpStallAutoRecoveryEnabled`).** A cutoff
+cannot recover passively because it leaves the pump at 0 RPM. The guard
+therefore starts bounded probes after 5-, 15-, and 30-minute backoffs. Each
+probe energizes the side with a 60-second maximum firmware lease and requires
+`pumpStallRecoverySamples` consecutive frames at or above
+`pumpStallRecoveryRpm`. On recovery, restore only the time remaining in the
+original session, write `action: 'auto_recovered'` to the alert row, and
+surface a less-prominent "side restored" notification. A failed probe powers
+the side back off; after the third failure it stays off until acknowledged.
 
 Hysteresis between trip and recovery thresholds (500 vs 1500 RPM)
 prevents flapping. The 3-frame recovery dwell prevents a single
@@ -395,9 +395,49 @@ bounded to 600s past the projected end so a stale snapshot cannot
 suppress a later session's genuine stall. A zero-RPM frame mid-session
 with the pump still driven trips exactly as before.
 
+## Revisions
+
+**2026-07-29 (field data).** Three changes after the guard ran on real pods:
+
+1. **Time-based dwell floor.** Frame-based dwell alone (`dwellSamples`, default
+   2) powered a side off on roughly two seconds of bad readings. A trip now
+   also requires a continuous 10-second sub-threshold interval.
+2. **Bilateral-zero de-glitch.** Both pumps dropping from clearly running to
+   exactly 0 RPM for one frame is treated as a telemetry glitch. Sustained
+   bilateral zero reaches the guard on the following frame.
+3. **Active-probe auto-recovery.** Opted-in recovery uses the bounded probe
+   schedule described above rather than waiting indefinitely for RPM from a
+   pump the guard itself powered off.
+
+**2026-08-01 (restore-loop field report).** Restore snapshots now describe one
+consistent session:
+
+- a neutral firmware target suppresses the natural spin-down even if the duty
+  field is briefly stale and non-zero;
+- saved duration is the firmware countdown at trip time and is aged while the
+  side is parked, so an expired 91-second session is left off rather than
+  replayed into another trip;
+- manual and automatic restores use one duration-bearing temperature command,
+  not a default 28,800-second power-on immediately followed by a shorter one;
+- when no live countdown exists, the alert persists no restore snapshot rather
+  than inventing an eight-hour remainder from `device_state.poweredOnAt`, and a
+  confirmed stop clears the prior session's cached snapshot;
+- acknowledgement/dismissal is incident-correlated and cannot abandon an
+  unconfirmed cutoff or active probe, including incidents whose alert-row
+  insert failed. A guard-owned reservation keeps ordinary energizing writes,
+  duplicate acknowledgements, and history dismissal blocked until the owning
+  action finishes its one restore write and persistence stamp;
+- a failed restore re-arms through that opaque reservation token, so it cannot
+  overwrite a newer incident, and keeps cutoff retry armed until its
+  compensating power-off succeeds;
+- a failed settings read or a successful read with no singleton settings row
+  preserves an existing safety block and parks any active probe; neither is
+  treated as a deliberate feature disable.
+
 ## References
 
 - Incident report: Discord, 2026-05-24, free-sleep user thread.
+- Field revisions: Discord, 2026-07-29 and 2026-08-01 pump-stall threads.
 - Existing detection code: `src/hardware/deviceStateSync.ts:250`.
 - Live `eight-pod` flow data: 240 rows pulled 2026-05-25 17:15 local,
   showing 1940–2010 RPM running, 0 RPM idle, no intermediate values.

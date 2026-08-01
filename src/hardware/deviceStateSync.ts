@@ -104,6 +104,7 @@ export class DeviceStateSync {
   private primeEndedAt = 0
   private stallGuardInFlight: Record<Side, boolean> = { left: false, right: false }
   private stallGuardPending: Record<Side, { rpm: number, duty: number | null } | null> = { left: null, right: null }
+  private prevBothRunning = false
 
   sync = async (status: DeviceStatus): Promise<void> => {
     const now = Date.now()
@@ -272,6 +273,14 @@ export class DeviceStateSync {
    * session ends on the firmware side.
    */
   private isExpectedPumpStop(side: Side, duty: number | null, now: number): boolean {
+    const last = this.lastSideStatus[side]
+
+    // The firmware's neutral target is the authoritative session-end signal.
+    // Field data shows pump duty can remain non-zero briefly after this
+    // transition, so consulting duty first misclassified normal spin-down as
+    // a fresh stall and created acknowledge/restore loops.
+    if (last?.targetLevel === 0) return true
+
     // Duty is authoritative when the frame carries it: 0 means the firmware
     // isn't driving the pump (commanded stop), while a driven pump (duty > 0)
     // reading 0 RPM is exactly the stall signature — never suppress it, even
@@ -282,12 +291,7 @@ export class DeviceStateSync {
     // the end of the cycle reads as RPM 0 for a few frames.
     if (this.isPriming || (this.primeEndedAt > 0 && now - this.primeEndedAt < PRIME_GRACE_MS)) return true
 
-    const last = this.lastSideStatus[side]
     if (!last) return false
-
-    // Firmware target is neutral — the pump is expected to stop even while
-    // device_state still mirrors the old session.
-    if (last.targetLevel === 0) return true
 
     // Session countdown at or past its natural end. heatingDuration is the
     // remaining seconds at poll time; project it forward so a stalled status
@@ -369,6 +373,7 @@ export class DeviceStateSync {
           expectedActive && remainingSessionSeconds != null && remainingSessionSeconds > 0
             ? remainingSessionSeconds
             : null,
+        now,
       })
     }
     catch (err) {
@@ -397,8 +402,16 @@ export class DeviceStateSync {
     // Feed the per-side stall guard. Reads current device_state to derive
     // expectedActive — a side that's commanded off should not trip on
     // RPM = 0 since that is the correct value.
-    this.queueStallGuard('left', leftRpm, leftPump.duty)
-    this.queueStallGuard('right', rightRpm, rightPump.duty)
+    // A one-frame bilateral 0-RPM drop immediately after both pumps were
+    // clearly running is the field-observed telemetry-glitch signature. Drop
+    // just that frame; sustained bilateral zero reaches the guard next frame.
+    const bothZero = leftRpm === 0 && rightRpm === 0
+    const suppressGlitch = bothZero && this.prevBothRunning
+    this.prevBothRunning = leftRpm >= PUMP_FAILURE_RPM_MIN && rightRpm >= PUMP_FAILURE_RPM_MIN
+    if (!suppressGlitch) {
+      this.queueStallGuard('left', leftRpm, leftPump.duty)
+      this.queueStallGuard('right', rightRpm, rightPump.duty)
+    }
 
     // Pump running but flowrate missing — possible sensor fault
     if (leftRpm >= PUMP_FAILURE_RPM_MIN && Number.isNaN(leftFlowCd)) {

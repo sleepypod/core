@@ -225,6 +225,17 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
   })
 
+  it('treats a neutral firmware target as stopped even while duty is stale and non-zero', async () => {
+    await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+    expect((await lastGuardInput('right'))?.expectedActive).toBe(false)
+  })
+
   it('suppresses inside the session-end grace window (countdown nearly elapsed)', async () => {
     await sync.sync(status({ targetLevel: 5, heatingDuration: 60 }))
     sync.recordFlowData(frame({ rpm: 0 }))
@@ -389,5 +400,65 @@ describe('DeviceStateSync — stall guard coalescing', () => {
     await flush()
     expect(leftInputs()).toHaveLength(2)
     expect(leftInputs()[1]?.rpm).toBe(200)
+  })
+})
+
+describe('DeviceStateSync — bilateral-zero de-glitch', () => {
+  let sync: DeviceStateSync
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve()
+  }
+  const leftCalls = () => vi.mocked(onFrame).mock.calls
+    .map(([input]) => input)
+    .filter(input => input.side === 'left')
+
+  function asymFrame(leftRpm: number, rightRpm: number): Record<string, unknown> {
+    return {
+      left: { pump: { rpm: leftRpm }, temps: { flowrate: 25.0 } },
+      right: { pump: { rpm: rightRpm }, temps: { flowrate: 25.0 } },
+    }
+  }
+
+  beforeEach(() => {
+    resetSchema()
+    _resetMutationStamps()
+    vi.mocked(onFrame).mockClear()
+    vi.mocked(onFrame).mockResolvedValue(undefined)
+    sync = new DeviceStateSync()
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+  })
+
+  it('drops one both-zero frame immediately after both pumps were running', async () => {
+    sync.recordFlowData(frame({ rpm: 1_900 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+
+    expect(leftCalls()).toHaveLength(1)
+    expect(leftCalls()[0]?.rpm).toBe(1_900)
+  })
+
+  it('feeds a bilateral zero once it persists for another frame', async () => {
+    sync.recordFlowData(frame({ rpm: 1_900 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+
+    expect(leftCalls()).toHaveLength(2)
+    expect(leftCalls()[1]?.rpm).toBe(0)
+  })
+
+  it('does not suppress a one-sided zero-RPM frame', async () => {
+    sync.recordFlowData(frame({ rpm: 1_900 }))
+    await flush()
+    sync.recordFlowData(asymFrame(0, 1_900))
+    await flush()
+
+    expect(leftCalls()).toHaveLength(2)
+    expect(leftCalls()[1]?.rpm).toBe(0)
   })
 })
