@@ -34,7 +34,7 @@ describe('rawDeviceDataSchema mutation boundaries', () => {
         ).toBe(true)
       }
 
-      for (const invalid of ['x50', '50x', '--50', '+50', '5.0', 'word']) {
+      for (const invalid of ['', 'x50', '50x', '--50', '+50', '5.0', 'word']) {
         expect(
           schema.safeParse({ ...completeDeviceData, [field]: invalid }).success,
           `${field} accepted ${invalid}`,
@@ -55,7 +55,7 @@ describe('rawDeviceDataSchema mutation boundaries', () => {
         ).toBe(true)
       }
 
-      for (const invalid of ['x1800', '1800x', '-1800', '+1800', '18.00', 'word']) {
+      for (const invalid of ['', 'x1800', '1800x', '-1800', '+1800', '18.00', 'word']) {
         expect(
           schema.safeParse({ ...completeDeviceData, [field]: invalid }).success,
           `${field} accepted ${invalid}`,
