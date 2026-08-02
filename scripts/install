@@ -1367,8 +1367,9 @@ KillMode=process
 # sandboxing protects against threats the API already exposes while
 # blocking the deliberate sudo→sp-update path. The remaining controls
 # — User=sleepypod (no UID 0), narrow ambient caps, the sudoers
-# fragment scoping elevation to /usr/local/bin/sp-update — give the
-# defense-in-depth that actually matters for this device.
+# fragment scoping elevation to /usr/local/bin/sp-update and exact
+# systemctl reboot invocations — give the defense-in-depth that actually
+# matters for this device.
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 RuntimeDirectory=dac
 

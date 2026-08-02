@@ -770,8 +770,10 @@ export class JobManager {
    * the machine directly — a bare `systemctl reboot` fails with "Interactive
    * authentication required" and the daily / pre-prime reboot jobs silently
    * never fire. We sudo via the NOPASSWD rule installed by scripts/install
-   * (/etc/sudoers.d/sleepypod-update), mirroring system.triggerUpdate. `-n`
-   * makes sudo fail loudly rather than prompt when the rule is absent.
+   * (/etc/sudoers.d/sleepypod-update) or self-healed for OTA-only pods by
+   * sp-maintenance (/etc/sudoers.d/sleepypod-reboot), mirroring
+   * system.triggerUpdate. `-n` makes sudo fail loudly rather than prompt when
+   * the rule is absent.
    */
   private async executeReboot(): Promise<void> {
     const { exec } = await import('child_process')

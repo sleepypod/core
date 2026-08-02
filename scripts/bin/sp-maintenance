@@ -113,11 +113,32 @@ fi
 REBOOT_SUDOERS=/etc/sudoers.d/sleepypod-reboot
 REBOOT_SUDOERS_CONTENT='sleepypod ALL=(root) NOPASSWD: /bin/systemctl reboot, /usr/bin/systemctl reboot'
 if [ ! -f "$REBOOT_SUDOERS" ] || [ "$(cat "$REBOOT_SUDOERS" 2>/dev/null)" != "$REBOOT_SUDOERS_CONTENT" ]; then
-  TMP_SUDOERS=$(mktemp 2>/dev/null || echo "")
-  if [ -n "$TMP_SUDOERS" ]; then
-    printf '%s\n' "$REBOOT_SUDOERS_CONTENT" > "$TMP_SUDOERS"
-    chmod 0440 "$TMP_SUDOERS" 2>/dev/null || true
-    if visudo -c -q -f "$TMP_SUDOERS" 2>/dev/null; then
+  # sleepypod.service deliberately restricts PATH to /usr/local/bin:/usr/bin:/bin,
+  # while sudo installs visudo in /usr/sbin on the pod. Resolve it from the
+  # installer's privileged secure_path explicitly so OTA self-healing does not
+  # silently skip validation under ExecStartPre.
+  VISUDO_BIN=""
+  TMP_SUDOERS=""
+  for candidate in \
+    /usr/local/sbin/visudo /usr/local/bin/visudo \
+    /usr/sbin/visudo /usr/bin/visudo /sbin/visudo /bin/visudo; do
+    if [ -x "$candidate" ]; then
+      VISUDO_BIN="$candidate"
+      break
+    fi
+  done
+
+  if [ -z "$VISUDO_BIN" ]; then
+    echo "WARNING: visudo not found — skipping $REBOOT_SUDOERS" >&2
+  else
+    TMP_SUDOERS=$(mktemp 2>/dev/null || echo "")
+  fi
+  if [ -n "${TMP_SUDOERS:-}" ]; then
+    if ! printf '%s\n' "$REBOOT_SUDOERS_CONTENT" > "$TMP_SUDOERS"; then
+      echo "WARNING: could not write temporary reboot sudoers fragment — skipping" >&2
+    elif ! chmod 0440 "$TMP_SUDOERS" 2>/dev/null; then
+      echo "WARNING: could not secure temporary reboot sudoers fragment — skipping" >&2
+    elif "$VISUDO_BIN" -c -q -f "$TMP_SUDOERS" 2>/dev/null; then
       if install -m 0440 -o root -g root "$TMP_SUDOERS" "$REBOOT_SUDOERS" 2>/dev/null; then
         echo "Installed reboot sudoers rule ($REBOOT_SUDOERS)."
       else
