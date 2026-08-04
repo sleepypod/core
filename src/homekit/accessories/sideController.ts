@@ -21,7 +21,7 @@ import { HapStatusError } from 'hap-nodejs'
 import type { HAPStatus } from 'hap-nodejs'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
-import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL } from '@/src/hardware/types'
+import { MAX_TEMP, MIN_TEMP } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getAutomationEngineIfRunning } from '@/src/automation'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
@@ -64,6 +64,11 @@ function assertNotGuardBlocked(side: Side, label: string): void {
 }
 
 const lastTargetF: Record<Side, number | null> = { left: null, right: null }
+
+// Match the web and shared-hardware power-on default. TEMP_NEUTRAL (82.5°F)
+// is hardware level 0 — the pod's OFF state — so it must never be used as
+// the fallback for an explicit HomeKit AUTO/ON request.
+const POWER_ON_FALLBACK_F = 75
 
 // Intended power state as expressed by HomeKit, updated eagerly. Used to
 // resolve the "user dragged the slider mid-power-cycle" race: firmware
@@ -145,16 +150,17 @@ export function reconcileIntendedPower(status: DeviceStatus, side: Side): void {
  * Resolve the target setpoint to use when powering a side back on.
  * Cache wins because firmware may not preserve targetTemperature across
  * a level=0 (off) write. Falls back to the last firmware status, then to
- * NEUTRAL so a power-on without any prior context lands on a safe value
- * instead of the hardware client's hardcoded 75°F default.
+ * the same non-neutral 75°F default as the web and shared-hardware paths.
+ * Falling back to TEMP_NEUTRAL would send level 0 and immediately make
+ * HomeKit's AUTO/ON characteristic read back as OFF.
  */
 export function getStagedTargetF(monitor: DacMonitor, side: Side): number {
   const cached = lastTargetF[side]
   if (cached !== null) return cached
   const status = monitor.getLastStatus()
-  if (!status) return TEMP_NEUTRAL
+  if (!status) return POWER_ON_FALLBACK_F
   const s = side === 'left' ? status.leftSide : status.rightSide
-  return s.targetTemperature ?? TEMP_NEUTRAL
+  return s.targetTemperature ?? POWER_ON_FALLBACK_F
 }
 
 /**

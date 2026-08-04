@@ -29,6 +29,7 @@ import {
 import { withSideLock } from '@/src/hardware/sideLock'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus } from '@/src/hardware/types'
+import { fahrenheitToLevel } from '@/src/hardware/types'
 
 const offStatus: DeviceStatus = {
   leftSide: { currentTemperature: 75, targetTemperature: 70, currentLevel: 0, targetLevel: 0, heatingDuration: 0 },
@@ -100,19 +101,20 @@ describe('sideController', () => {
       expect(getStagedTargetF(monitor(offStatus), 'right')).toBe(75)
     })
 
-    it('falls back to TEMP_NEUTRAL when monitor has no status', () => {
-      // TEMP_NEUTRAL = 82.5
-      expect(getStagedTargetF(monitor(null), 'left')).toBe(82.5)
+    it('falls back to the non-neutral power-on default when monitor has no status', () => {
+      expect(getStagedTargetF(monitor(null), 'left')).toBe(75)
     })
 
-    it('falls back to TEMP_NEUTRAL when firmware reports a null (off) target', () => {
+    it('falls back to the non-neutral power-on default when firmware reports a null target', () => {
       // Status exists but the off side reports a null level-0 target; with no
-      // cache the staged target must land on neutral, not null.
+      // cache the staged target must still energize the side.
       const offNullTarget = monitor({
         ...offStatus,
         leftSide: { ...offStatus.leftSide, targetTemperature: null },
       })
-      expect(getStagedTargetF(offNullTarget, 'left')).toBe(82.5)
+      const target = getStagedTargetF(offNullTarget, 'left')
+      expect(target).toBe(75)
+      expect(fahrenheitToLevel(target)).not.toBe(0)
     })
 
     it('prefers cached target once setTargetTemperature runs', async () => {
@@ -172,9 +174,22 @@ describe('sideController', () => {
       expect(setPower).toHaveBeenCalledWith('right', true, 75)
     })
 
-    it('falls back to TEMP_NEUTRAL when no status and no cache', async () => {
+    it('falls back to 75°F when no status and no cache', async () => {
       await setSidePowerOn(monitor(null), 'left')
-      expect(setPower).toHaveBeenCalledWith('left', true, 82.5)
+      expect(setPower).toHaveBeenCalledWith('left', true, 75)
+    })
+
+    it('powers on with a non-zero level when firmware reports a null off target', async () => {
+      const offNullTarget = monitor({
+        ...offStatus,
+        leftSide: { ...offStatus.leftSide, targetTemperature: null },
+      })
+
+      await setSidePowerOn(offNullTarget, 'left')
+
+      const target = setPower.mock.calls[0]?.[2]
+      expect(setPower).toHaveBeenCalledWith('left', true, 75)
+      expect(fahrenheitToLevel(target)).not.toBe(0)
     })
   })
 
