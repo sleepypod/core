@@ -289,6 +289,18 @@ describe('pumpStallGuard', () => {
     expect(__test__.readSettings().threshold).toBe(777)
   })
 
+  it('shares settings-cache invalidation across duplicated module instances', async () => {
+    expect(__test__.readSettings().threshold).toBe(500)
+    setSettings({ pump_stall_rpm_threshold: 777 })
+
+    vi.resetModules()
+    const duplicate = await import('../pumpStallGuard')
+
+    expect(duplicate.__test__.getSettingsState()).toBe(__test__.getSettingsState())
+    duplicate.invalidateGuardSettingsCache()
+    expect(__test__.readSettings().threshold).toBe(777)
+  })
+
   it('uses the complete fail-safe defaults after a degraded settings read', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     ;(sqlite as any).exec('DELETE FROM device_settings')

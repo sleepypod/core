@@ -434,6 +434,18 @@ consistent session:
   preserves an existing safety block and parks any active probe; neither is
   treated as a deliberate feature disable.
 
+**2026-08-03 (no-countdown session-end field report).** Some firmware reports
+`heatTime=0` throughout an active session and leaves a non-neutral target in
+the final status snapshot. At the normal eight-hour cutoff, `device_state`
+can therefore remain active for 30–40 seconds and falsely trip both guards.
+For this wire shape only, a stop is suppressed when sustained bilateral zero
+immediately follows a recent frame (within 30 seconds) with both pumps healthy
+at ≥1500 RPM and the persisted OFF→ON timestamp is within ±90 seconds of the
+default eight-hour expiry. A positive duty, a live positive countdown, weak or
+stale running evidence, an asymmetric stop, or an older timestamp keeps the
+stall visible. This evidence suppresses the trip only; it never invents a
+duration to restore from `poweredOnAt`.
+
 ## References
 
 - Incident report: Discord, 2026-05-24, free-sleep user thread.

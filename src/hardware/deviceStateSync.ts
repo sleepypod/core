@@ -3,6 +3,7 @@ import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { waterLevelReadings, flowReadings } from '@/src/db/biometrics-schema'
 import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
+import { DEFAULT_HEATING_DURATION } from './types'
 import type { DeviceStatus, Side } from './types'
 
 /**
@@ -88,6 +89,8 @@ const ANOMALY_LOG_COOLDOWN_MS = 300_000 // 5 min between repeated warnings per t
 const PRIME_GRACE_MS = 120_000 // pumps spin down at prime end; RPM 0 is expected
 const SESSION_END_GRACE_S = 90 // remaining session seconds within which a stop is natural
 const SESSION_END_STALE_S = 600 // stop trusting the projected countdown this long past its end
+const SESSION_END_RUNNING_RPM_MIN = 1_500 // strong evidence that both pumps were healthy before stopping
+const SESSION_END_RUNNING_EVIDENCE_MS = 30_000 // the healthy frame must immediately precede the stop
 
 export class DeviceStateSync {
   private lastWaterLevelWrite = 0
@@ -103,8 +106,9 @@ export class DeviceStateSync {
   private isPriming = false
   private primeEndedAt = 0
   private stallGuardInFlight: Record<Side, boolean> = { left: false, right: false }
-  private stallGuardPending: Record<Side, { rpm: number, duty: number | null } | null> = { left: null, right: null }
-  private prevBothRunning = false
+  private stallGuardPending: Record<Side, { rpm: number, duty: number | null, bilateralStopCandidate: boolean } | null> = { left: null, right: null }
+  private lastBothHealthyAt: number | null = null
+  private bilateralStopCandidateUntil = 0
 
   sync = async (status: DeviceStatus): Promise<void> => {
     const now = Date.now()
@@ -272,14 +276,30 @@ export class DeviceStateSync {
    * the durationExpired heuristic and stays "powered" for minutes after a
    * session ends on the firmware side.
    */
-  private isExpectedPumpStop(side: Side, duty: number | null, now: number): boolean {
+  private projectedRemainingSeconds(side: Side, now: number): number | null {
+    const last = this.lastSideStatus[side]
+    return last ? last.heatingDuration - (now - last.at) / 1000 : null
+  }
+
+  private isExpectedPumpStop(
+    side: Side,
+    duty: number | null,
+    poweredOnAt: Date | null | undefined,
+    bilateralStopCandidate: boolean,
+    now: number,
+  ): boolean {
     const last = this.lastSideStatus[side]
 
     // The firmware's neutral target is the authoritative session-end signal.
     // Field data shows pump duty can remain non-zero briefly after this
     // transition, so consulting duty first misclassified normal spin-down as
-    // a fresh stall and created acknowledge/restore loops.
-    if (last?.targetLevel === 0) return true
+    // a fresh stall and created acknowledge/restore loops. Bound the snapshot
+    // age so a stopped status stream cannot mask a later session indefinitely.
+    const snapshotAgeSeconds = last ? (now - last.at) / 1000 : null
+    if (last?.targetLevel === 0
+      && snapshotAgeSeconds != null
+      && snapshotAgeSeconds >= 0
+      && snapshotAgeSeconds <= SESSION_END_GRACE_S) return true
 
     // Duty is authoritative when the frame carries it: 0 means the firmware
     // isn't driving the pump (commanded stop), while a driven pump (duty > 0)
@@ -300,10 +320,24 @@ export class DeviceStateSync {
     // projected end must not suppress a later session's genuine stall.
     // The > 0 gate keeps firmware variants that report 0 during an active
     // session (no countdown) on the plain device_state path.
-    const remaining = last.heatingDuration - (now - last.at) / 1000
-    return last.heatingDuration > 0
+    const remaining = this.projectedRemainingSeconds(side, now)
+    if (last.heatingDuration > 0
+      && remaining != null
       && remaining <= SESSION_END_GRACE_S
-      && remaining >= -SESSION_END_STALE_S
+      && remaining >= -SESSION_END_STALE_S) return true
+
+    // Some firmware reports heatTime=0 for the entire active session and can
+    // leave a non-neutral target in the final status snapshot. In that shape,
+    // neither the countdown nor target can identify the normal eight-hour
+    // firmware stop. Fall back only when both pumps stop together near the
+    // persisted OFF->ON timestamp plus the default duration. Keep this fallback
+    // to a narrow +/-90s window because poweredOnAt does not move when a later
+    // temperature write resets the firmware timer. This is suppression evidence
+    // only: no restore duration is synthesized from poweredOnAt.
+    if (last.heatingDuration !== 0 || !bilateralStopCandidate || !poweredOnAt) return false
+    const defaultRemaining = DEFAULT_HEATING_DURATION - (now - poweredOnAt.getTime()) / 1000
+    return defaultRemaining <= SESSION_END_GRACE_S
+      && defaultRemaining >= -SESSION_END_GRACE_S
   }
 
   /**
@@ -313,9 +347,9 @@ export class DeviceStateSync {
    * concurrently would stack duplicate transitions on the sequential
    * transport. Only the newest frame received while busy is kept.
    */
-  private queueStallGuard(side: Side, rpm: number, duty: number | null): void {
+  private queueStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean): void {
     if (this.stallGuardInFlight[side]) {
-      this.stallGuardPending[side] = { rpm, duty }
+      this.stallGuardPending[side] = { rpm, duty, bilateralStopCandidate }
       return
     }
     this.stallGuardInFlight[side] = true
@@ -324,11 +358,11 @@ export class DeviceStateSync {
       // in-flight flag is released even if that ever changes — a leaked
       // flag would silently stop feeding the guard for this side.
       try {
-        await this.runStallGuard(side, rpm, duty)
+        await this.runStallGuard(side, rpm, duty, bilateralStopCandidate)
         let next = this.stallGuardPending[side]
         while (next) {
           this.stallGuardPending[side] = null
-          await this.runStallGuard(side, next.rpm, next.duty)
+          await this.runStallGuard(side, next.rpm, next.duty, next.bilateralStopCandidate)
           next = this.stallGuardPending[side]
         }
       }
@@ -339,19 +373,20 @@ export class DeviceStateSync {
   }
 
   /** Look up the side's commanded state and feed the pump stall guard. */
-  private async runStallGuard(side: Side, rpm: number, duty: number | null): Promise<void> {
+  private async runStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean): Promise<void> {
     try {
       const [row] = db
         .select({
           isPowered: deviceState.isPowered,
           targetTemperature: deviceState.targetTemperature,
+          poweredOnAt: deviceState.poweredOnAt,
         })
         .from(deviceState)
         .where(eq(deviceState.side, side))
         .limit(1)
         .all()
       const now = Date.now()
-      const expectedActive = !this.isExpectedPumpStop(side, duty, now)
+      const expectedActive = !this.isExpectedPumpStop(side, duty, row?.poweredOnAt, bilateralStopCandidate, now)
         && Boolean(row?.isPowered && row.targetTemperature != null)
       // Real remaining session seconds, projected from the last firmware
       // poll like isExpectedPumpStop. The guard restores this snapshot on
@@ -360,10 +395,10 @@ export class DeviceStateSync {
       // Firmware variants with no countdown (heatingDuration 0) project to
       // <= 0 and fall to the null arm below — auto-recovery then clears the
       // guard without re-energizing.
-      const last = this.lastSideStatus[side]
-      const remainingSessionSeconds = last
-        ? Math.round(last.heatingDuration - (now - last.at) / 1000)
-        : null
+      const projectedRemainingSeconds = this.projectedRemainingSeconds(side, now)
+      const remainingSessionSeconds = projectedRemainingSeconds == null
+        ? null
+        : Math.round(projectedRemainingSeconds)
       await pumpStallOnFrame({
         side,
         rpm,
@@ -406,11 +441,28 @@ export class DeviceStateSync {
     // clearly running is the field-observed telemetry-glitch signature. Drop
     // just that frame; sustained bilateral zero reaches the guard next frame.
     const bothZero = leftRpm === 0 && rightRpm === 0
-    const suppressGlitch = bothZero && this.prevBothRunning
-    this.prevBothRunning = leftRpm >= PUMP_FAILURE_RPM_MIN && rightRpm >= PUMP_FAILURE_RPM_MIN
+    const bothHealthy = leftRpm >= SESSION_END_RUNNING_RPM_MIN
+      && rightRpm >= SESSION_END_RUNNING_RPM_MIN
+    const healthyEvidenceAge = this.lastBothHealthyAt == null
+      ? null
+      : now - this.lastBothHealthyAt
+    const suppressGlitch = bothZero
+      && healthyEvidenceAge != null
+      && healthyEvidenceAge >= 0
+      && healthyEvidenceAge <= SESSION_END_RUNNING_EVIDENCE_MS
+    if (suppressGlitch) {
+      this.bilateralStopCandidateUntil = now + SESSION_END_GRACE_S * 1000
+    }
+    else if (!bothZero) {
+      this.bilateralStopCandidateUntil = 0
+    }
+    const bilateralStopCandidate = bothZero
+      && this.bilateralStopCandidateUntil > 0
+      && now <= this.bilateralStopCandidateUntil
+    this.lastBothHealthyAt = bothHealthy ? now : null
     if (!suppressGlitch) {
-      this.queueStallGuard('left', leftRpm, leftPump.duty)
-      this.queueStallGuard('right', rightRpm, rightPump.duty)
+      this.queueStallGuard('left', leftRpm, leftPump.duty, bilateralStopCandidate)
+      this.queueStallGuard('right', rightRpm, rightPump.duty, bilateralStopCandidate)
     }
 
     // Pump running but flowrate missing — possible sensor fault

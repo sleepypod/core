@@ -66,8 +66,14 @@ interface GuardSettings {
   recoverySamples: number
 }
 
+interface SettingsCacheState {
+  cached: { value: GuardSettings, at: number, available: boolean } | null
+  lastReadAvailable: boolean
+}
+
 const G = globalThis as Record<string, unknown>
 const STATE_KEY = '__sp_pump_stall_guard_state__'
+const SETTINGS_STATE_KEY = '__sp_pump_stall_guard_settings_state__'
 
 function getState(): Record<Side, GuardState> {
   let s = G[STATE_KEY] as Record<Side, GuardState> | undefined
@@ -116,14 +122,22 @@ const PROBE_WINDOW_MS = 60_000
 // would do extra SQL per second. Cache for a few seconds — settings
 // mutations are rare and a short staleness window is fine for safety dwell.
 const SETTINGS_TTL_MS = 5_000
-let cachedSettings: { value: GuardSettings, at: number, available: boolean } | null = null
-let lastSettingsReadAvailable = true
+
+function getSettingsState(): SettingsCacheState {
+  let state = G[SETTINGS_STATE_KEY] as SettingsCacheState | undefined
+  if (!state) {
+    state = { cached: null, lastReadAvailable: true }
+    G[SETTINGS_STATE_KEY] = state
+  }
+  return state
+}
 
 function readSettings(): GuardSettings {
   const now = Date.now()
-  if (cachedSettings && now - cachedSettings.at < SETTINGS_TTL_MS) {
-    lastSettingsReadAvailable = cachedSettings.available
-    return cachedSettings.value
+  const state = getSettingsState()
+  if (state.cached && now - state.cached.at < SETTINGS_TTL_MS) {
+    state.lastReadAvailable = state.cached.available
+    return state.cached.value
   }
 
   let row: typeof deviceSettings.$inferSelect | undefined
@@ -151,14 +165,14 @@ function readSettings(): GuardSettings {
     recoveryRpm: row?.pumpStallRecoveryRpm ?? 1500,
     recoverySamples: row?.pumpStallRecoverySamples ?? 3,
   }
-  cachedSettings = { value, at: now, available }
-  lastSettingsReadAvailable = available
+  state.cached = { value, at: now, available }
+  state.lastReadAvailable = available
   return value
 }
 
 /** Invalidate the settings cache; call after a device_settings mutation. */
 export function invalidateGuardSettingsCache(): void {
-  cachedSettings = null
+  getSettingsState().cached = null
 }
 
 // ── Per-frame entry point ──────────────────────────────────────────────────
@@ -178,7 +192,7 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
   const state = getState()[input.side]
   const now = input.now ?? Date.now()
 
-  if (!lastSettingsReadAvailable) {
+  if (!getSettingsState().lastReadAvailable) {
     // An unavailable settings row is not evidence that the user disabled
     // protection. Do not arm a new incident from unknown configuration, but
     // never abandon hardware-off work that was already armed. An active probe
@@ -669,7 +683,7 @@ const CLOCK_PLAUSIBILITY_FLOOR_MS = Date.UTC(2024, 0, 1)
  */
 export function rehydrate(): void {
   const settings = readSettings()
-  if (!lastSettingsReadAvailable || !settings.enabled) return
+  if (!getSettingsState().lastReadAvailable || !settings.enabled) return
   for (const side of ['left', 'right'] as Side[]) {
     const state = getState()[side]
     if (state.blocked || state.activeAlertId != null) continue
@@ -1068,6 +1082,7 @@ function releaseRehydratedBlock(side: Side): void {
 
 export const __test__ = {
   getState,
+  getSettingsState,
   emptyState,
   readSettings,
   DWELL_MIN_MS,

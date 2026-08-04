@@ -101,6 +101,7 @@ export function StatusScreen() {
       utils.system.getLogSources.invalidate(),
       utils.waterLevel.getLatest.invalidate(),
       utils.waterLevel.getAlerts.invalidate(),
+      utils.pumpAlerts.list.invalidate(),
     ])
   }, [utils])
 

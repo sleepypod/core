@@ -621,7 +621,12 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
     it('skips the replay when the side is already powered', async () => {
       guard.acknowledge.mockReturnValue(acknowledged())
       device.getStatus.mockResolvedValue({ leftSide: { targetLevel: 0 }, rightSide: { targetLevel: 2 } })
-      dbState.queue.push({ id: 45, restoreTargetTemperature: 74, restoreDurationSeconds: 7200 }) // orphan lookup
+      dbState.queue.push({
+        id: 45,
+        timestamp: new Date(Date.now() - 110_000),
+        restoreTargetTemperature: 74,
+        restoreDurationSeconds: 7200,
+      }) // orphan lookup
       dbState.queue.push([]) // acknowledgedAt update
 
       await expect(caller.acknowledgeAndRestore({ side: 'right' })).resolves.toEqual({
@@ -637,7 +642,12 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
     it('skips the replay and warns when the pre-replay status read fails', async () => {
       guard.acknowledge.mockReturnValue(acknowledged())
       device.getStatus.mockRejectedValueOnce(new Error('status offline'))
-      dbState.queue.push({ id: 46, restoreTargetTemperature: 74, restoreDurationSeconds: 7200 }) // orphan lookup
+      dbState.queue.push({
+        id: 46,
+        timestamp: new Date(Date.now() - 110_000),
+        restoreTargetTemperature: 74,
+        restoreDurationSeconds: 7200,
+      }) // orphan lookup
       dbState.queue.push([]) // acknowledgedAt update
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
