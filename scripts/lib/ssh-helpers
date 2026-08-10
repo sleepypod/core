@@ -247,16 +247,24 @@ set_sshd_directive() {
   # are equivalent to sshd, and matching only the first would leave a stale
   # `=`-form directive in place to win over the one we append (sshd takes
   # the first occurrence).
+  #
+  # `Include` is a boundary as well as `Match`: sshd splices the included
+  # file in at that point and keeps the first value it obtains, so a directive
+  # set by an early Include beats anything written further down this file.
+  # Emitting ours above the first Include is what makes it the winning value —
+  # otherwise set_sshd_directive reports success and the installer's
+  # effective-value check then fails and rolls the whole thing back.
   if awk -v key="$key" -v value="$value" '
-    BEGIN { done = 0; in_match = 0 }
+    BEGIN { done = 0; in_match = 0; boundary = 0 }
     {
       probe = $0
       sub(/^[ \t]+/, "", probe)
 
-      if (!in_match && tolower(probe) ~ /^match[ \t]/) {
-        in_match = 1
+      if (!boundary && (tolower(probe) ~ /^match[ \t]/ || tolower(probe) ~ /^include[ \t]/)) {
+        boundary = 1
         if (!done) { print key " " value; done = 1 }
       }
+      if (tolower(probe) ~ /^match[ \t]/) in_match = 1
 
       if (!in_match) {
         candidate = probe

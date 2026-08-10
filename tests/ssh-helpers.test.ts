@@ -10,6 +10,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 // pinned here rather than trusted to review.
 const HELPERS = resolve(process.cwd(), 'scripts/lib/ssh-helpers')
 
+// Permission-based failure tests prove nothing as uid 0 — mode bits don't
+// stop root, so the command succeeds and the assertion fails for the wrong
+// reason. Each has a stub-driven twin that runs everywhere.
+const isRoot = process.getuid?.() === 0
+
 let dir: string
 let keyDir: string
 let realKey: string
@@ -251,6 +256,17 @@ describe('install_authorized_key', () => {
     // never reached disk.
     const home = join(dir, 'home', 'root')
     mkdirSync(home, { recursive: true })
+
+    const snippet = `mkdir() { return 1; }; install_authorized_key root ${JSON.stringify(realKey)} 2>/dev/null || echo REFUSED`
+
+    expect(runBash(snippet, { rootHome: home })).toBe('REFUSED')
+  })
+
+  test.skipIf(isRoot)('fails against a genuinely unwritable home directory', () => {
+    // @ng's original repro, kept as an integration-level check. Skipped as
+    // uid 0, which is not stopped by the mode bits.
+    const home = join(dir, 'home', 'root')
+    mkdirSync(home, { recursive: true })
     chmodSync(home, 0o555)
 
     const snippet = `install_authorized_key root ${JSON.stringify(realKey)} 2>/dev/null || echo REFUSED`
@@ -402,6 +418,24 @@ describe('set_sshd_directive', () => {
       .toBe('# Port forwarding is disabled below\nPort 8822\n')
   })
 
+  test('emits the directive above the first Include so it wins', () => {
+    // sshd splices the included file in at that point and keeps the first
+    // value it obtains, so a directive appended below an Include loses to
+    // anything the Include sets.
+    expect(applied('Include /etc/ssh/sshd_config.d/*.conf\nX11Forwarding yes\n', 'PasswordAuthentication', 'no'))
+      .toBe('PasswordAuthentication no\nInclude /etc/ssh/sshd_config.d/*.conf\nX11Forwarding yes\n')
+  })
+
+  test('keeps an existing directive in place when it already precedes the Include', () => {
+    expect(applied('Port 22\nInclude /etc/ssh/sshd_config.d/*.conf\n', 'Port', '8822'))
+      .toBe('Port 8822\nInclude /etc/ssh/sshd_config.d/*.conf\n')
+  })
+
+  test('drops a stale duplicate that sits below the Include', () => {
+    expect(applied('Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication yes\n', 'PasswordAuthentication', 'no'))
+      .toBe('PasswordAuthentication no\nInclude /etc/ssh/sshd_config.d/*.conf\n')
+  })
+
   test('preserves the config file mode across the rewrite', () => {
     // The rewrite renames a temp file over the target, so the mode has to be
     // carried across explicitly — mktemp would otherwise leave it 0600.
@@ -413,7 +447,22 @@ describe('set_sshd_directive', () => {
     expect(statSync(config).mode & 0o777).toBe(0o644)
   })
 
-  test('reports failure and leaves the config intact when it cannot be replaced', () => {
+  test('reports failure and leaves the config intact when the replace fails', () => {
+    // Stubbing mv rather than using directory permissions: a suite running as
+    // uid 0 walks straight through a 0555 directory and the test would fail
+    // for the wrong reason.
+    const config = writeConfig('Port 22\n')
+
+    const output = runBash(
+      `mv() { return 1; }; set_sshd_directive Port 8822 ${JSON.stringify(config)} 2>/dev/null || echo FAILED`,
+    )
+
+    expect(output).toBe('FAILED')
+    expect(readFileSync(config, 'utf8')).toBe('Port 22\n')
+  })
+
+  test.skipIf(isRoot)('reports failure when the config directory is not writable', () => {
+    // The same guarantee against the real filesystem rather than a stub.
     const configDir = join(dir, 'ro')
     mkdirSync(configDir)
     const config = join(configDir, 'sshd_config')
