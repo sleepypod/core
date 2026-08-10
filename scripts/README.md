@@ -75,10 +75,24 @@ free-sleep's `setup_ssh.sh` pins an absolute
 `AuthorizedKeysFile /home/root/ssh/authorized_keys` that survives the
 installer's edits. Writing to a path sshd doesn't read, while also setting
 `PasswordAuthentication no`, is an unrecoverable lockout — port 8822 is the
-pod's only remote entry point. For the same reason the installer only
-disables password auth **after** a key is verifiably in place, and folds
-any keys stranded in `/root/.ssh/authorized_keys` by an older installer
-into the real file on re-run.
+pod's only remote entry point. For the same reason the installer folds any
+keys stranded in `/root/.ssh/authorized_keys` by an older installer into the
+real file on re-run.
+
+Everything else in that step exists to avoid locking you out against a key
+that can't actually authenticate. Before password auth is disabled, the
+installer:
+
+- parses your key with `ssh-keygen -l` (a format regex accepts
+  `ssh-ed25519 A`, which sshd silently ignores), and declines to harden if
+  `ssh-keygen` is missing;
+- refuses to guess a path when sshd is set to `AuthorizedKeysFile none`,
+  including via a `Match User root` block;
+- adds directives that are absent rather than only rewriting ones that are
+  present — `PasswordAuthentication` defaults to `yes`, so a config that
+  never mentions it stays wide open;
+- re-reads the effective config with `sshd -T` and aborts, restoring the
+  backup, unless port/auth values are what it just asked for.
 
 ## Installation
 
