@@ -1,0 +1,115 @@
+#!/bin/bash
+# Shared helpers for enrolling an SSH public key on the pod.
+# Sourced by scripts/install at runtime (after the source tree is on disk).
+#
+# Getting the authorized_keys path wrong on this firmware is a hard lockout:
+# the installer also sets `PasswordAuthentication no`, and the pod has no
+# other remote entry point — recovery means a serial console and a U-Boot
+# `init=/bin/bash` boot. Two traps make the obvious `/root/.ssh` guess wrong:
+#
+#   1. root's home is /home/root on this Yocto image (poky convention), not
+#      /root, so sshd resolves the default `.ssh/authorized_keys` relative to
+#      /home/root.
+#   2. free-sleep's setup_ssh.sh pins an absolute
+#      `AuthorizedKeysFile /home/root/ssh/authorized_keys`. That directive
+#      survives the installer's sed edits, so it has to be honoured.
+
+# Print the absolute path sshd will read authorized keys from for $1 (a
+# username). Prefers sshd's own view of the effective config, falls back to
+# parsing sshd_config, then to sshd's compiled-in default.
+resolve_authorized_keys_path() {
+  local user="$1"
+  local sshd_config="${2:-/etc/ssh/sshd_config}"
+  local home keyfile
+
+  # The `|| true` guards matter: scripts/install runs under `set -euo
+  # pipefail`, where a missing getent or a non-zero sshd would otherwise
+  # abort the installer mid-hardening.
+  home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
+  [ -n "$home" ] || home="/root"
+
+  # `sshd -T` prints the effective config with defaults filled in, which
+  # catches an AuthorizedKeysFile set anywhere sshd looks — including files
+  # pulled in by an Include directive that a plain grep would miss.
+  keyfile="$(sshd -T -f "$sshd_config" 2>/dev/null |
+    awk 'tolower($1) == "authorizedkeysfile" { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }' \
+    || true)"
+
+  # sshd -T is unavailable when not running as root, and refuses configs it
+  # considers invalid. Read the directive directly before giving up on it.
+  [ -n "$keyfile" ] || keyfile="$(
+    awk 'tolower($1) == "authorizedkeysfile" { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }' \
+      "$sshd_config" 2>/dev/null || true
+  )"
+
+  [ -n "$keyfile" ] || keyfile=".ssh/authorized_keys"
+
+  # The directive takes a list; sshd reads every entry but writing the first
+  # is enough to authenticate.
+  keyfile="${keyfile%%[[:space:]]*}"
+
+  # %% must expand last so a literal %%h stays literal.
+  keyfile="${keyfile//%h/$home}"
+  keyfile="${keyfile//%u/$user}"
+  keyfile="${keyfile//%%/%}"
+
+  case "$keyfile" in
+    /*) printf '%s\n' "$keyfile" ;;
+    *)  printf '%s\n' "${home%/}/$keyfile" ;;
+  esac
+}
+
+# Append $2 (a public key line) to the authorized_keys file for user $1,
+# creating it with the ownership and modes sshd's StrictModes check demands.
+# Idempotent: re-running the installer with the same key is a no-op.
+install_authorized_key() {
+  local user="$1" key="$2"
+  local keyfile keydir
+  keyfile="$(resolve_authorized_keys_path "$user")"
+  keydir="$(dirname "$keyfile")"
+
+  mkdir -p "$keydir"
+  if ! grep -qxF "$key" "$keyfile" 2>/dev/null; then
+    printf '%s\n' "$key" >> "$keyfile"
+  fi
+
+  # StrictModes rejects a key file (or its directory) that is group- or
+  # world-writable, or owned by anyone but the user or root.
+  chown "$user" "$keydir" "$keyfile" 2>/dev/null || true
+  chmod 700 "$keydir"
+  chmod 600 "$keyfile"
+
+  printf '%s\n' "$keyfile"
+}
+
+# Earlier installers wrote to a hardcoded /root/.ssh/authorized_keys, which
+# sshd never reads when root's home is /home/root. Fold any keys stranded
+# there into the real file so re-running the installer repairs the lockout
+# rather than silently re-creating it.
+migrate_stranded_authorized_keys() {
+  local user="$1"
+  local stranded="${2:-/root/.ssh/authorized_keys}"
+  local keyfile
+  keyfile="$(resolve_authorized_keys_path "$user")"
+
+  [ -f "$stranded" ] || return 0
+  [ "$stranded" != "$keyfile" ] || return 0
+
+  local migrated=0 line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in \#*) continue ;; esac
+    if ! grep -qxF "$line" "$keyfile" 2>/dev/null; then
+      mkdir -p "$(dirname "$keyfile")"
+      printf '%s\n' "$line" >> "$keyfile"
+      migrated=$((migrated + 1))
+    fi
+  done < "$stranded"
+
+  if [ "$migrated" -gt 0 ]; then
+    echo "Recovered $migrated SSH key(s) from $stranded -> $keyfile"
+    chown "$user" "$(dirname "$keyfile")" "$keyfile" 2>/dev/null || true
+    chmod 700 "$(dirname "$keyfile")"
+    chmod 600 "$keyfile"
+  fi
+}
