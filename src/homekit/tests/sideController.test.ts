@@ -409,6 +409,30 @@ describe('sideController', () => {
       expect(() => reconcileIntendedPower(onStatus, 'left')).not.toThrow()
       expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
     })
+
+    it('does not read firmware status while no intent is latched', () => {
+      // The null-latch early return must fire before any status inspection:
+      // reconcile runs on every status frame for both sides, so with no
+      // intent to resolve it must not touch the frame at all.
+      const trapped = new Proxy({} as DeviceStatus, {
+        get: (_t, prop) => {
+          throw new Error(`unexpected status read: ${String(prop)}`)
+        },
+      })
+      expect(() => reconcileIntendedPower(trapped, 'left')).not.toThrow()
+    })
+
+    it('keeps an in-flight OFF latch on a guard-blocked side that firmware still reports ON', async () => {
+      // A trip can land while a power-off is in flight: firmware keeps
+      // reporting ON for one more poll. Only a stale *ON* latch may be
+      // dropped on a blocked side — dropping this OFF latch would flip
+      // iOS Home back to a phantom ON until the off-write lands.
+      await setSidePowerOff(monitor(onStatus), 'left')
+      shouldBlock.mockReturnValue(true)
+
+      reconcileIntendedPower(onStatus, 'left')
+      expect(isEffectivelyPowered(monitor(onStatus), 'left')).toBe(false)
+    })
   })
 
   describe('intendedPower rollback', () => {
@@ -462,6 +486,10 @@ describe('sideController', () => {
       })
       expect(setPower).not.toHaveBeenCalled()
       expect(registerManualOverride).not.toHaveBeenCalled()
+      // The ingress assert (not the in-lock re-check) refused this call —
+      // its log must name the exact write so field debugging can tell the
+      // two gates' refusals apart from a silent drop.
+      expect(warn).toHaveBeenCalledWith('[homekit] refused setPower(left, true) — pump stall protection active on left')
       // Latch must stay untouched so onGet keeps reporting the true (off) state.
       expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
       warn.mockRestore()
@@ -570,6 +598,9 @@ describe('sideController', () => {
 
       await expect(setTargetTemperature(monitor(onStatus), 'left', 68)).rejects.toThrow('Pump stall protection active')
       expect(setTemperature).not.toHaveBeenCalled()
+      // The refusal log must name the exact blocked write (side + clamped
+      // value), mirroring the setPower gate's message contract.
+      expect(warn).toHaveBeenCalledWith('[homekit] refused setTemperature(left, 68) — pump stall protection active on left')
       // A rejected write must not suspend autopilot (same ordering contract
       // as the REST path: the override registers only after the gate passes).
       expect(registerManualOverride).not.toHaveBeenCalled()
