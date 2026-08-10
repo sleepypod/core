@@ -77,11 +77,15 @@ resolve_authorized_keys_path() {
     return 0
   fi
 
-  # %% must expand last so a literal %%h stays literal.
+  # Protect a literal %% before the token passes, not after: in `%%h` the %h
+  # pass matches the second % plus the h, so expanding %% last would still
+  # yield `%<home>`. The sentinel is a byte sshd_config cannot contain.
+  local sentinel=$'\x01'
+  keyfile="${keyfile//%%/$sentinel}"
   keyfile="${keyfile//%h/$home}"
   keyfile="${keyfile//%U/$uid}"
   keyfile="${keyfile//%u/$user}"
-  keyfile="${keyfile//%%/%}"
+  keyfile="${keyfile//$sentinel/%}"
 
   case "$keyfile" in
     /*) printf '%s\n' "$keyfile" ;;
@@ -113,6 +117,12 @@ validate_public_key() {
 # creating it with the ownership and modes sshd's StrictModes check demands.
 # Prints the path written. Idempotent: re-running the installer with the same
 # key is a no-op. Fails when sshd reads no key file at all.
+#
+# Every step is checked explicitly. The caller invokes this inside an `if`,
+# which suppresses `set -e` for the whole function body — an unchecked mkdir
+# or append would fall through to the final printf and report success with
+# nothing on disk, and the installer would disable password auth on the
+# strength of that.
 install_authorized_key() {
   local user="$1" key="$2"
   local keyfile keydir
@@ -125,7 +135,7 @@ install_authorized_key() {
   fi
 
   keydir="$(dirname "$keyfile")"
-  mkdir -p "$keydir"
+  mkdir -p "$keydir" || return 1
   if ! grep -qxF "$key" "$keyfile" 2>/dev/null; then
     printf '%s\n' "$key" >> "$keyfile"
   fi
@@ -133,8 +143,12 @@ install_authorized_key() {
   # StrictModes rejects a key file (or its directory) that is group- or
   # world-writable, or owned by anyone but the user or root.
   chown "$user" "$keydir" "$keyfile" 2>/dev/null || true
-  chmod 700 "$keydir"
-  chmod 600 "$keyfile"
+  chmod 700 "$keydir" || return 1
+  chmod 600 "$keyfile" || return 1
+
+  # Don't take the write on faith: a full filesystem can append a partial
+  # line, which sshd silently ignores. Require the exact key line to be back.
+  grep -qxF "$key" "$keyfile" 2>/dev/null || return 1
 
   printf '%s\n' "$keyfile"
 }
@@ -195,7 +209,13 @@ set_sshd_directive() {
   # A commented directive is recognised only as `#Key value`, the form
   # OpenSSH's shipped config uses. `# Key ...` with a space is prose — the
   # unanchored substitution this replaced rewrote `# Port forwarding is
-  # disabled below` into `# Port 8822`.
+  # disabled below` into `# Port 8822`. Falling out of the name extraction
+  # below: prose leaves `name` empty, so it can never match a directive.
+  #
+  # Both separators sshd accepts are handled — `Key value` and `Key=value`
+  # are equivalent to sshd, and matching only the first would leave a stale
+  # `=`-form directive in place to win over the one we append (sshd takes
+  # the first occurrence).
   if awk -v key="$key" -v value="$value" '
     BEGIN { done = 0; in_match = 0 }
     {
@@ -210,8 +230,12 @@ set_sshd_directive() {
       if (!in_match) {
         candidate = probe
         sub(/^#/, "", candidate)
-        split(candidate, parts, /[ \t]+/)
-        if (tolower(parts[1]) == tolower(key) && candidate ~ /^[^ \t]+[ \t]/) {
+
+        name = candidate
+        sub(/[ \t=].*$/, "", name)
+        rest = substr(candidate, length(name) + 1)
+
+        if (name != "" && tolower(name) == tolower(key) && rest ~ /^[ \t]*=?[ \t]*[^ \t]/) {
           # First occurrence becomes the directive; later duplicates go, so
           # nothing downstream can override what we just set.
           if (!done) { print key " " value; done = 1 }

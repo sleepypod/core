@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
@@ -127,6 +127,13 @@ describe('resolve_authorized_keys_path', () => {
       .toBe('/etc/ssh/keys/0/authorized_keys')
   })
 
+  test('keeps a literal %% from being eaten by the %h pass', () => {
+    const config = writeConfig('AuthorizedKeysFile /etc/ssh/%%h/authorized_keys\n')
+
+    expect(runBash(`resolve_authorized_keys_path root ${JSON.stringify(config)}`))
+      .toBe('/etc/ssh/%h/authorized_keys')
+  })
+
   test('expands %h and takes the first file when several are listed', () => {
     const config = writeConfig('AuthorizedKeysFile %h/.ssh/authorized_keys .ssh/authorized_keys2\n')
 
@@ -199,6 +206,22 @@ describe('install_authorized_key', () => {
     const snippet = `install_authorized_key root ${JSON.stringify(realKey)} 2>/dev/null || echo REFUSED`
 
     expect(runBash(snippet, { sshdT: 'authorizedkeysfile none' })).toBe('REFUSED')
+  })
+
+  test('fails rather than reporting success when the key cannot be written', () => {
+    // The call site runs this inside an `if`, which suppresses set -e for the
+    // whole function — an unchecked mkdir would fall through to the final
+    // printf and the installer would disable password auth against a key that
+    // never reached disk.
+    const home = join(dir, 'home', 'root')
+    mkdirSync(home, { recursive: true })
+    chmodSync(home, 0o555)
+
+    const snippet = `install_authorized_key root ${JSON.stringify(realKey)} 2>/dev/null || echo REFUSED`
+    const output = runBash(snippet, { rootHome: home })
+    chmodSync(home, 0o755)
+
+    expect(output).toBe('REFUSED')
   })
 })
 
@@ -307,6 +330,18 @@ describe('set_sshd_directive', () => {
   test('inserts above the first Match block instead of inside it', () => {
     expect(applied('Port 8822\nMatch User dac\n  X11Forwarding no\n', 'PasswordAuthentication', 'no'))
       .toBe('Port 8822\nPasswordAuthentication no\nMatch User dac\n  X11Forwarding no\n')
+  })
+
+  test('replaces the Key=value form sshd also accepts', () => {
+    // Left in place, a stale `=`-form directive earlier in the file would win
+    // over an appended one, since sshd takes the first occurrence.
+    expect(applied('PasswordAuthentication=yes\n', 'PasswordAuthentication', 'no'))
+      .toBe('PasswordAuthentication no\n')
+  })
+
+  test('replaces a commented Key=value directive', () => {
+    expect(applied('#PermitEmptyPasswords=yes\n', 'PermitEmptyPasswords', 'no'))
+      .toBe('PermitEmptyPasswords no\n')
   })
 
   test('leaves the directive name in prose alone', () => {

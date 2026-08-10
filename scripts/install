@@ -1719,16 +1719,20 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
     # Without the helpers we can't tell where sshd reads authorized_keys
     # from, and hardening on a guess locks the pod out for good. Leave sshd
     # exactly as it is.
-    echo "Error: $INSTALL_DIR/scripts/lib/ssh-helpers not found — skipping SSH setup." >&2
+    echo "Error: $INSTALL_DIR/scripts/lib/ssh-helpers not found — aborting install." >&2
     echo "sshd was left unchanged. Re-run the installer once the source tree is complete." >&2
     exit 1
   fi
   source "$INSTALL_DIR/scripts/lib/ssh-helpers"
 
-  # Backup sshd_config
+  # Keep the first-ever config as a historical artifact, but restore from a
+  # fresh per-run snapshot — .backup is frozen at the first run, so restoring
+  # it on a re-run reverts to the stock config (port 22, password auth on)
+  # rather than to the state this run started from.
   if [ ! -f /etc/ssh/sshd_config.backup ]; then
     cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
   fi
+  cp -f /etc/ssh/sshd_config /etc/ssh/sshd_config.pre-install
 
   # Port is safe to set before we know whether a key will land — it doesn't
   # change who can authenticate. The rest of the hardening waits until the
@@ -1782,7 +1786,7 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
   # Validate SSH config before restarting
   if ! sshd -t; then
     echo "Error: sshd_config validation failed. Restoring backup..." >&2
-    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    cp /etc/ssh/sshd_config.pre-install /etc/ssh/sshd_config
     exit 1
   fi
 
@@ -1801,7 +1805,7 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
     if [ "$got" != "$want" ]; then
       echo "Error: sshd reports $directive=${got:-<unset>}, expected $want." >&2
       echo "Restoring backup and leaving sshd untouched..." >&2
-      cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+      cp /etc/ssh/sshd_config.pre-install /etc/ssh/sshd_config
       exit 1
     fi
   done
@@ -1819,7 +1823,7 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
     echo "$SSH_RESULT"
   else
     echo "Error: Failed to restart SSH service" >&2
-    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    cp /etc/ssh/sshd_config.pre-install /etc/ssh/sshd_config
     exit 1
   fi
 fi
