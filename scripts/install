@@ -1791,17 +1791,26 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
   fi
 
   # A directive can be syntactically valid and still not take effect — an
-  # Include or a later duplicate can override it. Confirm what sshd will
-  # actually do before we restart it into that config.
+  # Include, a later duplicate, or a Match block can override it. Confirm
+  # what sshd will actually do before we restart it into that config.
+  #
+  # The auth directives are checked in root's connection context: all three
+  # are Match-able, so a global reading would pass while `Match User root`
+  # re-enabled password auth for exactly the account being hardened. Port
+  # can't appear in a Match block, so it stays global.
   SSH_EXPECTED="port=8822"
   if [ "$SSH_KEY_INSTALLED" = true ]; then
-    SSH_EXPECTED="$SSH_EXPECTED permitrootlogin=prohibit-password"
-    SSH_EXPECTED="$SSH_EXPECTED passwordauthentication=no permitemptypasswords=no"
+    SSH_EXPECTED="$SSH_EXPECTED root:permitrootlogin=prohibit-password"
+    SSH_EXPECTED="$SSH_EXPECTED root:passwordauthentication=no root:permitemptypasswords=no"
   fi
   for expectation in $SSH_EXPECTED; do
+    case "$expectation" in
+      *:*) SSH_CONTEXT="${expectation%%:*}"; expectation="${expectation#*:}" ;;
+      *)   SSH_CONTEXT="" ;;
+    esac
     directive="${expectation%%=*}"
     want="${expectation#*=}"
-    got="$(sshd_effective_value "$directive")"
+    got="$(sshd_effective_value "$directive" /etc/ssh/sshd_config "$SSH_CONTEXT")"
     if [ "$got" != "$want" ]; then
       echo "Error: sshd reports $directive=${got:-<unset>}, expected $want." >&2
       echo "Restoring backup and leaving sshd untouched..." >&2

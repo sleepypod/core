@@ -40,8 +40,20 @@ resolve_authorized_keys_path() {
   # pipefail`, where a missing getent or a non-zero sshd would otherwise
   # abort the installer mid-hardening.
   home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
-  [ -n "$home" ] || home="/root"
+  # getent is glibc's; read the file directly if this image doesn't ship it.
+  [ -n "$home" ] || home="$(awk -F: -v u="$user" '$1 == u { print $6; exit }' /etc/passwd 2>/dev/null || true)"
+
+  # No guess here. Defaulting to /root is what shipped the original bug: on
+  # this firmware root's home is /home/root, so a fallback would write and
+  # verify a key somewhere sshd never reads, and the caller would disable
+  # password auth on the strength of it. Fail and let the caller decline.
+  if [ -z "$home" ]; then
+    echo "Error: cannot resolve the home directory for '$user' — refusing to guess." >&2
+    return 1
+  fi
+
   uid="$(id -u "$user" 2>/dev/null || true)"
+  [ -n "$uid" ] || uid="$(awk -F: -v u="$user" '$1 == u { print $3; exit }' /etc/passwd 2>/dev/null || true)"
   [ -n "$uid" ] || uid="0"
 
   # `sshd -T` prints the effective config with defaults filled in, which
@@ -126,7 +138,7 @@ validate_public_key() {
 install_authorized_key() {
   local user="$1" key="$2"
   local keyfile keydir
-  keyfile="$(resolve_authorized_keys_path "$user")"
+  keyfile="$(resolve_authorized_keys_path "$user")" || return 1
 
   if [ "$keyfile" = "none" ]; then
     echo "Error: sshd is configured with 'AuthorizedKeysFile none' for $user —" >&2
@@ -161,7 +173,16 @@ migrate_stranded_authorized_keys() {
   local user="$1"
   local stranded="${2:-/root/.ssh/authorized_keys}"
   local keyfile
-  keyfile="$(resolve_authorized_keys_path "$user")"
+
+  # Best-effort repair, so an unresolvable home is a skip, not a failure: the
+  # installer calls this bare under `set -e`, and returning non-zero would
+  # abort an otherwise-complete install. Nothing unsafe follows from skipping
+  # — install_authorized_key fails on the same condition, which is what keeps
+  # the hardening from running.
+  if ! keyfile="$(resolve_authorized_keys_path "$user")"; then
+    echo "Skipping stranded-key migration: cannot resolve $user's authorized_keys path." >&2
+    return 0
+  fi
 
   [ "$keyfile" != "none" ] || return 0
   [ -f "$stranded" ] || return 0
@@ -198,8 +219,18 @@ migrate_stranded_authorized_keys() {
 # the pod silently no-ops on a dev machine. awk behaves the same on both.
 set_sshd_directive() {
   local key="$1" value="$2" sshd_config="${3:-/etc/ssh/sshd_config}"
-  local tmp
-  tmp="$(mktemp)" || return 1
+  local target tmp
+
+  # Follow a symlinked sshd_config so the rename replaces the real file
+  # instead of the link.
+  target="$(readlink -f "$sshd_config" 2>/dev/null || true)"
+  [ -n "$target" ] || target="$sshd_config"
+
+  # The temp file lives beside the target: same filesystem, so the rename
+  # below is atomic. `cp -p` seeds it with the original's mode and owner,
+  # which mktemp's 0600 would otherwise drop.
+  tmp="$(mktemp "${target}.XXXXXX")" || return 1
+  cp -p "$target" "$tmp" || { rm -f "$tmp"; return 1; }
 
   # Only the global section is rewritten. A directive inside `Match` applies
   # to that block's connections alone; overwriting it there would change
@@ -246,10 +277,13 @@ set_sshd_directive() {
       print $0
     }
     END { if (!done) print key " " value }
-  ' "$sshd_config" > "$tmp"; then
-    cat "$tmp" > "$sshd_config"
-    rm -f "$tmp"
-    return 0
+  ' "$target" > "$tmp"; then
+    # Rename rather than copy-over-in-place. `cat > "$target"` truncates the
+    # live config before it writes, so an ENOSPC or I/O error mid-copy leaves
+    # a half-written sshd_config; a rename either happens or doesn't.
+    if mv -f "$tmp" "$target"; then
+      return 0
+    fi
   fi
 
   rm -f "$tmp"
@@ -258,10 +292,28 @@ set_sshd_directive() {
 
 # Print sshd's effective value for directive $1, so the installer can confirm
 # what it asked for is what sshd will actually do before restarting it.
+#
+# $3 is an optional username. Pass it for anything a Match block can override
+# — PermitRootLogin, PasswordAuthentication and PermitEmptyPasswords are all
+# Match-able, so a global reading would report the hardening succeeded while
+# `Match User root` quietly re-enabled password auth for the one account that
+# matters. Port is global-only and needs no context.
 sshd_effective_value() {
-  local name="$1" sshd_config="${2:-/etc/ssh/sshd_config}"
-  local lowered
+  local name="$1" sshd_config="${2:-/etc/ssh/sshd_config}" user="${3:-}"
+  local lowered value
   lowered="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+
+  if [ -n "$user" ]; then
+    value="$(sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" -f "$sshd_config" 2>/dev/null |
+      awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' || true)"
+    # Older sshd rejects a partial connection spec. Degrade to the global
+    # reading rather than aborting an install over an unsupported flag —
+    # same fallback resolve_authorized_keys_path uses.
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  fi
 
   sshd -T -f "$sshd_config" 2>/dev/null |
     awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' \

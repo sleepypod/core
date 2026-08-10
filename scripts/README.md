@@ -87,12 +87,17 @@ installer:
   `ssh-ed25519 A`, which sshd silently ignores), and declines to harden if
   `ssh-keygen` is missing;
 - refuses to guess a path when sshd is set to `AuthorizedKeysFile none`,
-  including via a `Match User root` block;
+  including via a `Match User root` block, or when root's home directory
+  can't be resolved at all;
 - adds directives that are absent rather than only rewriting ones that are
   present — `PasswordAuthentication` defaults to `yes`, so a config that
   never mentions it stays wide open;
 - re-reads the effective config with `sshd -T` and aborts, restoring the
-  backup, unless port/auth values are what it just asked for.
+  per-run `/etc/ssh/sshd_config.pre-install` snapshot, unless port/auth
+  values are what it just asked for. The auth directives are read in root's
+  connection context (`sshd -T -C user=root,…`), since all three are
+  Match-able — a global reading would pass while `Match User root` quietly
+  re-enabled password auth for the account being hardened.
 
 ## Installation
 
@@ -216,7 +221,9 @@ If you need to configure SSH later:
 1. Edit `/etc/ssh/sshd_config`
 2. Set `Port 8822` and `PermitRootLogin prohibit-password`
 3. Add your public key to the file sshd reads for root — check with
-   `sshd -T | grep -i authorizedkeysfile`, and remember root's home is
+   `sshd -T -C user=root,host=localhost,addr=127.0.0.1 | grep -i authorizedkeysfile`
+   (the `-C` matters: a plain `sshd -T` reports the global value and misses
+   any `Match User root` override), and remember root's home is
    `/home/root`, so the default resolves to
    `/home/root/.ssh/authorized_keys`, **not** `/root/.ssh/authorized_keys`
 4. Confirm key auth works (`ssh -p 8822 root@<POD_IP>`) *before* setting

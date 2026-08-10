@@ -141,11 +141,37 @@ describe('resolve_authorized_keys_path', () => {
       .toBe('/home/root/.ssh/authorized_keys')
   })
 
-  test('falls back to /root when the user has no passwd entry', () => {
+  test('refuses to guess when the home directory cannot be resolved', () => {
+    // Defaulting to /root is what shipped the original bug — root's home is
+    // /home/root here, so a guess would be verified in a file sshd never
+    // reads and password auth would be disabled against it.
     const config = writeConfig('Port 8822\n')
+    const snippet = [
+      'getent() { return 2; }',
+      // Shadow the /etc/passwd fallback too.
+      'awk() { return 1; }',
+      `resolve_authorized_keys_path root ${JSON.stringify(config)} 2>/dev/null || echo REFUSED`,
+    ].join('; ')
 
-    expect(runBash(`getent() { return 2; }; resolve_authorized_keys_path root ${JSON.stringify(config)}`))
-      .toBe('/root/.ssh/authorized_keys')
+    expect(runBash(snippet)).toBe('REFUSED')
+  })
+
+  test('reads the home directory from /etc/passwd when getent is missing', () => {
+    const config = writeConfig('Port 8822\n')
+    const passwd = join(dir, 'passwd')
+    writeFileSync(passwd, 'dac:x:1000:1000::/home/dac:/sbin/nologin\nroot:x:0:0:root:/home/root:/bin/sh\n')
+    // Redirect only the /etc/passwd read; every other awk call runs normally.
+    const snippet = [
+      'getent() { return 2; }',
+      `awk() {
+         local args=("$@") last=$(( $# - 1 ))
+         [ "\${args[$last]}" != /etc/passwd ] || args[$last]=${JSON.stringify(passwd)}
+         command awk "\${args[@]}"
+       }`,
+      `resolve_authorized_keys_path root ${JSON.stringify(config)}`,
+    ].join('; ')
+
+    expect(runBash(snippet)).toBe('/home/root/.ssh/authorized_keys')
   })
 })
 
@@ -206,6 +232,16 @@ describe('install_authorized_key', () => {
     const snippet = `install_authorized_key root ${JSON.stringify(realKey)} 2>/dev/null || echo REFUSED`
 
     expect(runBash(snippet, { sshdT: 'authorizedkeysfile none' })).toBe('REFUSED')
+  })
+
+  test('propagates a failed path resolution instead of writing somewhere', () => {
+    const snippet = [
+      'getent() { return 2; }',
+      'awk() { return 1; }',
+      `install_authorized_key root ${JSON.stringify(realKey)} 2>/dev/null || echo REFUSED`,
+    ].join('; ')
+
+    expect(runBash(snippet)).toBe('REFUSED')
   })
 
   test('fails rather than reporting success when the key cannot be written', () => {
@@ -290,6 +326,22 @@ describe('migrate_stranded_authorized_keys', () => {
     expect(output).toBe('done')
   })
 
+  test('skips rather than aborting the installer when the path is unresolvable', () => {
+    // Called bare under `set -e`, so a non-zero return would abort an
+    // otherwise-complete install. install_authorized_key fails on the same
+    // condition, which is what actually blocks the hardening.
+    const stranded = strandedPath()
+    writeFileSync(stranded, `${OLD_KEY}\n`)
+    const snippet = [
+      'getent() { return 2; }',
+      'awk() { return 1; }',
+      `migrate_stranded_authorized_keys root ${JSON.stringify(stranded)} 2>/dev/null`,
+      'echo done',
+    ].join('; ')
+
+    expect(runBash(snippet)).toBe('done')
+  })
+
   test('is a no-op when there is nothing stranded', () => {
     const home = join(dir, 'home', 'root')
     mkdirSync(home, { recursive: true })
@@ -349,6 +401,33 @@ describe('set_sshd_directive', () => {
     expect(applied('# Port forwarding is disabled below\nPort 22\n', 'Port', '8822'))
       .toBe('# Port forwarding is disabled below\nPort 8822\n')
   })
+
+  test('preserves the config file mode across the rewrite', () => {
+    // The rewrite renames a temp file over the target, so the mode has to be
+    // carried across explicitly — mktemp would otherwise leave it 0600.
+    const config = writeConfig('Port 22\n')
+    chmodSync(config, 0o644)
+
+    runBash(`set_sshd_directive Port 8822 ${JSON.stringify(config)}`)
+
+    expect(statSync(config).mode & 0o777).toBe(0o644)
+  })
+
+  test('reports failure and leaves the config intact when it cannot be replaced', () => {
+    const configDir = join(dir, 'ro')
+    mkdirSync(configDir)
+    const config = join(configDir, 'sshd_config')
+    writeFileSync(config, 'Port 22\n')
+    chmodSync(configDir, 0o555)
+
+    const output = runBash(
+      `set_sshd_directive Port 8822 ${JSON.stringify(config)} 2>/dev/null || echo FAILED`,
+    )
+    chmodSync(configDir, 0o755)
+
+    expect(output).toBe('FAILED')
+    expect(readFileSync(config, 'utf8')).toBe('Port 22\n')
+  })
 })
 
 describe('sshd_effective_value', () => {
@@ -365,5 +444,26 @@ describe('sshd_effective_value', () => {
 
     expect(runBash(`echo "[$(sshd_effective_value PasswordAuthentication ${JSON.stringify(config)})]"`))
       .toBe('[]')
+  })
+
+  test('sees a Match User root override that the global reading misses', () => {
+    // Global says hardened, root context says password auth is still on.
+    // Without the context the installer would report success over a pod that
+    // still accepts a root password.
+    const config = writeConfig('PasswordAuthentication no\nMatch User root\n  PasswordAuthentication yes\n')
+
+    expect(runBash(`sshd_effective_value PasswordAuthentication ${JSON.stringify(config)} root`, {
+      sshdT: 'passwordauthentication no',
+      sshdTC: 'passwordauthentication yes',
+    })).toBe('yes')
+  })
+
+  test('degrades to the global reading when sshd rejects -C', () => {
+    const config = writeConfig('PasswordAuthentication no\n')
+
+    expect(runBash(`sshd_effective_value PasswordAuthentication ${JSON.stringify(config)} root`, {
+      sshdT: 'passwordauthentication no',
+      sshdTC: false,
+    })).toBe('no')
   })
 })
