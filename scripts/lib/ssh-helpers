@@ -195,8 +195,12 @@ migrate_stranded_authorized_keys() {
     [ -n "$line" ] || continue
     case "$line" in \#*) continue ;; esac
     if ! grep -qxF "$line" "$keyfile" 2>/dev/null; then
-      mkdir -p "$(dirname "$keyfile")"
-      printf '%s\n' "$line" >> "$keyfile"
+      # Best-effort: an ENOSPC append or a failed mkdir is a skip, not an
+      # abort — this runs bare under the installer's `set -e`, and the same
+      # condition also fails install_authorized_key, which is what actually
+      # blocks the hardening.
+      mkdir -p "$(dirname "$keyfile")" || continue
+      printf '%s\n' "$line" >> "$keyfile" || continue
       migrated=$((migrated + 1))
     fi
   done < "$stranded"
@@ -204,8 +208,8 @@ migrate_stranded_authorized_keys() {
   if [ "$migrated" -gt 0 ]; then
     echo "Recovered $migrated SSH key(s) from $stranded -> $keyfile"
     chown "$user" "$(dirname "$keyfile")" "$keyfile" 2>/dev/null || true
-    chmod 700 "$(dirname "$keyfile")"
-    chmod 600 "$keyfile"
+    chmod 700 "$(dirname "$keyfile")" 2>/dev/null || true
+    chmod 600 "$keyfile" 2>/dev/null || true
   fi
 }
 
@@ -254,17 +258,26 @@ set_sshd_directive() {
   # Emitting ours above the first Include is what makes it the winning value —
   # otherwise set_sshd_directive reports success and the installer's
   # effective-value check then fails and rolls the whole thing back.
+  #
+  # The boundary keyword is extracted with the same whitespace-or-`=` rule as
+  # the directive name below: sshd accepts `Include=/path` and `Match=User x`
+  # exactly like their space-separated forms, and matching only whitespace
+  # would miss the `=` form — appending our directive below an `Include=…`
+  # boundary, where it loses to the value sshd already took from the include.
   if awk -v key="$key" -v value="$value" '
     BEGIN { done = 0; in_match = 0; boundary = 0 }
     {
       probe = $0
       sub(/^[ \t]+/, "", probe)
 
-      if (!boundary && (tolower(probe) ~ /^match[ \t]/ || tolower(probe) ~ /^include[ \t]/)) {
+      boundary_name = probe
+      sub(/[ \t=].*$/, "", boundary_name)
+
+      if (!boundary && (tolower(boundary_name) == "match" || tolower(boundary_name) == "include")) {
         boundary = 1
         if (!done) { print key " " value; done = 1 }
       }
-      if (tolower(probe) ~ /^match[ \t]/) in_match = 1
+      if (tolower(boundary_name) == "match") in_match = 1
 
       if (!in_match) {
         candidate = probe
@@ -314,13 +327,20 @@ sshd_effective_value() {
   if [ -n "$user" ]; then
     value="$(sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" -f "$sshd_config" 2>/dev/null |
       awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' || true)"
-    # Older sshd rejects a partial connection spec. Degrade to the global
-    # reading rather than aborting an install over an unsupported flag —
-    # same fallback resolve_authorized_keys_path uses.
     if [ -n "$value" ]; then
       printf '%s\n' "$value"
-      return 0
+    else
+      # Root-context evaluation is unavailable — an older sshd that rejects the
+      # partial connection spec, or a config sshd won't dump. Do NOT degrade to
+      # a plain `sshd -T`: the global reading can't see a `Match User $user`
+      # block re-enabling password auth for exactly the account being hardened,
+      # so accepting it would report a hardened pod we can't actually vouch for.
+      # Emit nothing — the installer reads the empty result as a verification
+      # failure, restores the snapshot, and declines to harden. Fail closed,
+      # per this file's contract.
+      echo "Error: sshd cannot evaluate '$name' in $user's context — refusing to verify." >&2
     fi
+    return 0
   fi
 
   sshd -T -f "$sshd_config" 2>/dev/null |

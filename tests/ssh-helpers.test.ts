@@ -436,6 +436,21 @@ describe('set_sshd_directive', () => {
       .toBe('PasswordAuthentication no\nInclude /etc/ssh/sshd_config.d/*.conf\n')
   })
 
+  test('treats the Include=path form as a boundary too', () => {
+    // sshd accepts `Include=/path` as readily as the space-separated form.
+    // Missing it would append our directive below the include, where it loses
+    // to whatever the included file already set.
+    expect(applied('Include=/etc/ssh/sshd_config.d/*.conf\nX11Forwarding yes\n', 'PasswordAuthentication', 'no'))
+      .toBe('PasswordAuthentication no\nInclude=/etc/ssh/sshd_config.d/*.conf\nX11Forwarding yes\n')
+  })
+
+  test('does not rewrite a directive inside a Match=criteria block', () => {
+    // `Match=User dac` is the equals form of a Match boundary; a directive
+    // scoped to it must stay put, not be hoisted or overwritten.
+    expect(applied('Port 8822\nMatch=User dac\n  PasswordAuthentication yes\n', 'PasswordAuthentication', 'no'))
+      .toBe('Port 8822\nPasswordAuthentication no\nMatch=User dac\n  PasswordAuthentication yes\n')
+  })
+
   test('preserves the config file mode across the rewrite', () => {
     // The rewrite renames a temp file over the target, so the mode has to be
     // carried across explicitly — mktemp would otherwise leave it 0600.
@@ -507,12 +522,16 @@ describe('sshd_effective_value', () => {
     })).toBe('yes')
   })
 
-  test('degrades to the global reading when sshd rejects -C', () => {
+  test('fails closed, not to the global reading, when sshd rejects -C', () => {
+    // A global `sshd -T` can't see a `Match User root` block re-enabling the
+    // password. Reporting its value would let the installer claim a hardened
+    // pod it can't verify, so an unusable root context yields no value — the
+    // installer reads the empty result as a failure and restores the snapshot.
     const config = writeConfig('PasswordAuthentication no\n')
 
-    expect(runBash(`sshd_effective_value PasswordAuthentication ${JSON.stringify(config)} root`, {
+    expect(runBash(`echo "[$(sshd_effective_value PasswordAuthentication ${JSON.stringify(config)} root 2>/dev/null)]"`, {
       sshdT: 'passwordauthentication no',
       sshdTC: false,
-    })).toBe('no')
+    })).toBe('[]')
   })
 })

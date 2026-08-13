@@ -97,7 +97,11 @@ installer:
   values are what it just asked for. The auth directives are read in root's
   connection context (`sshd -T -C user=root,…`), since all three are
   Match-able — a global reading would pass while `Match User root` quietly
-  re-enabled password auth for the account being hardened.
+  re-enabled password auth for the account being hardened. If sshd can't be
+  asked in that context at all (an older sshd that rejects the `-C` spec), the
+  installer treats the auth directives as unverifiable and aborts+restores
+  rather than trusting the global reading — it will not claim a hardened pod
+  it can't confirm.
 
 ## Installation
 
