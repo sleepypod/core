@@ -63,10 +63,45 @@ curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install
 ```
 
 The optional SSH-setup step at the end of the installer writes your public
-key to `/root/.ssh/authorized_keys` and re-hardens sshd (port 8822,
-key-only, no root password login, no empty passwords). After that first
-install Pod 5 behaves like Pod 4 — key-based root ssh on port 8822, no
-`rewt` user needed for updates.
+key to whichever `authorized_keys` file sshd actually reads for root, then
+re-hardens sshd (port 8822, key-only, no root password login, no empty
+passwords). After that first install Pod 5 behaves like Pod 4 — key-based
+root ssh on port 8822, no `rewt` user needed for updates.
+
+The path is resolved at runtime by `scripts/lib/ssh-helpers` rather than
+hardcoded, because **`/root/.ssh/authorized_keys` is the wrong answer on
+this firmware**: root's home is `/home/root` (Yocto/poky convention), and
+free-sleep's `setup_ssh.sh` pins an absolute
+`AuthorizedKeysFile /home/root/ssh/authorized_keys` that survives the
+installer's edits. Writing to a path sshd doesn't read, while also setting
+`PasswordAuthentication no`, is an unrecoverable lockout — port 8822 is the
+pod's only remote entry point. For the same reason the installer folds any
+keys stranded in `/root/.ssh/authorized_keys` by an older installer into the
+real file on re-run.
+
+Everything else in that step exists to avoid locking you out against a key
+that can't actually authenticate. Before password auth is disabled, the
+installer:
+
+- parses your key with `ssh-keygen -l` (a format regex accepts
+  `ssh-ed25519 A`, which sshd silently ignores), and declines to harden if
+  `ssh-keygen` is missing;
+- refuses to guess a path when sshd is set to `AuthorizedKeysFile none`,
+  including via a `Match User root` block, or when root's home directory
+  can't be resolved at all;
+- adds directives that are absent rather than only rewriting ones that are
+  present — `PasswordAuthentication` defaults to `yes`, so a config that
+  never mentions it stays wide open;
+- re-reads the effective config with `sshd -T` and aborts, restoring the
+  per-run `/etc/ssh/sshd_config.pre-install` snapshot, unless port/auth
+  values are what it just asked for. The auth directives are read in root's
+  connection context (`sshd -T -C user=root,…`), since all three are
+  Match-able — a global reading would pass while `Match User root` quietly
+  re-enabled password auth for the account being hardened. If sshd can't be
+  asked in that context at all (an older sshd that rejects the `-C` spec), the
+  installer treats the auth directives as unverifiable and aborts+restores
+  rather than trusting the global reading — it will not claim a hardened pod
+  it can't confirm.
 
 ## Installation
 
@@ -189,8 +224,15 @@ During installation, you'll be prompted to configure SSH on port 8822 with keys-
 If you need to configure SSH later:
 1. Edit `/etc/ssh/sshd_config`
 2. Set `Port 8822` and `PermitRootLogin prohibit-password`
-3. Add your public key to `/root/.ssh/authorized_keys`
-4. Restart: `systemctl restart sshd`
+3. Add your public key to the file sshd reads for root — check with
+   `sshd -T -C user=root,host=localhost,addr=127.0.0.1 | grep -i authorizedkeysfile`
+   (the `-C` matters: a plain `sshd -T` reports the global value and misses
+   any `Match User root` override), and remember root's home is
+   `/home/root`, so the default resolves to
+   `/home/root/.ssh/authorized_keys`, **not** `/root/.ssh/authorized_keys`
+4. Confirm key auth works (`ssh -p 8822 root@<POD_IP>`) *before* setting
+   `PasswordAuthentication no` — there is no other way back in
+5. Restart: `systemctl restart sshd`
 
 Connect with:
 ```bash
