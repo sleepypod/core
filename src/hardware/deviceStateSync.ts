@@ -3,6 +3,7 @@ import { db, biometricsDb } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
 import { waterLevelReadings, flowReadings } from '@/src/db/biometrics-schema'
 import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
+import { getLastSideMutationAt } from './sideMutations'
 import type { DeviceStatus, Side } from './types'
 
 /**
@@ -21,27 +22,17 @@ import type { DeviceStatus, Side } from './types'
 // during which a poll can carry stale data (e.g. setPower(true) writes
 // is_powered=1 but the next 1s-poll still reports targetLevel=0/
 // heatingDuration=0/currentLevel=0 — durationExpired is true → isNowPowered
-// is false → the fresh write gets clobbered). Mutations stamp this map so
-// upsertSide can skip the powered-state portion of the write inside the
-// freshness window. Observation fields (current temperature, water level)
-// still update normally.
+// is false → the fresh write gets clobbered). Mutations stamp the shared
+// per-side store (sideMutations.ts) so upsertSide can skip the powered-state
+// portion of the write inside the freshness window. Observation fields
+// (current temperature, water level) still update normally. The stall
+// guard's auto-recover reads the same stamps for its supersede check.
 const MUTATION_FRESHNESS_MS = 5_000
-const recentMutations: Record<Side, number> = { left: 0, right: 0 }
 
-/** Mark a side as just-mutated; suppresses powered-state overwrite from
- *  the next firmware poll(s) within the freshness window. */
-export function markSideMutated(side: Side): void {
-  recentMutations[side] = Date.now()
-}
+export { _resetMutationStamps, markSideMutated } from './sideMutations'
 
 function isSideRecentlyMutated(side: Side): boolean {
-  return Date.now() - recentMutations[side] < MUTATION_FRESHNESS_MS
-}
-
-/** @internal — for tests only */
-export function _resetMutationStamps(): void {
-  recentMutations.left = 0
-  recentMutations.right = 0
+  return Date.now() - getLastSideMutationAt(side) < MUTATION_FRESHNESS_MS
 }
 /** Read alarm vibration state from DB (set by setAlarm/clearAlarm mutations). */
 export function getAlarmState(): { left: boolean, right: boolean } {

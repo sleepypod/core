@@ -24,6 +24,7 @@ import { deviceSettings, deviceState } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { clearPumpStallNotice, setPumpStallNotice } from './pumpStallNotification'
 import { withSideLock } from './sideLock'
+import { getLastSideMutationAt } from './sideMutations'
 import type { Side } from './types'
 
 interface GuardState {
@@ -512,12 +513,39 @@ async function autoRecover(side: Side): Promise<void> {
 
   // Same lock + deadlock rationale as the trip() cutoff: only reachable from
   // the frame path, and the restore sequence must not interleave with a
-  // queued same-side writer.
+  // queued same-side writer. The powered-state DB mirror rides in the same
+  // callback so a queued same-side OFF cannot land between the hardware
+  // restore and the mirror and then be overwritten by it.
+  let superseded = false
   try {
     await withSideLock(side, async () => {
+      // A command that landed after the trip supersedes auto-recovery:
+      // while a side is blocked the router gate only lets power-off
+      // through, so a newer mutation stamp means someone chose OFF.
+      // Checked inside the lock so an OFF queued ahead of the restore is
+      // seen once it completes.
+      if (getLastSideMutationAt(side) > (state.trippedAt ?? 0)) {
+        superseded = true
+        return
+      }
       const client = getSharedHardwareClient()
       await client.setPower(side, true, restore.targetTemperature)
       await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+      try {
+        db
+          .update(deviceState)
+          .set({
+            isPowered: true,
+            poweredOnAt: new Date(),
+            targetTemperature: restore.targetTemperature,
+            lastUpdated: new Date(),
+          })
+          .where(eq(deviceState.side, side))
+          .run()
+      }
+      catch (err) {
+        console.warn('[pumpStallGuard] device_state restore failed:', err instanceof Error ? err.message : err)
+      }
     })
   }
   catch (err) {
@@ -525,20 +553,25 @@ async function autoRecover(side: Side): Promise<void> {
     return
   }
 
-  try {
-    db
-      .update(deviceState)
-      .set({
-        isPowered: true,
-        poweredOnAt: new Date(),
-        targetTemperature: restore.targetTemperature,
-        lastUpdated: new Date(),
-      })
-      .where(eq(deviceState.side, side))
-      .run()
-  }
-  catch (err) {
-    console.warn('[pumpStallGuard] device_state restore failed:', err instanceof Error ? err.message : err)
+  if (superseded) {
+    // Leave the side exactly as the newer command put it. Stamp the alert
+    // acknowledged — that command is the operator's answer to it — so a
+    // restart doesn't rehydrate a block for a side someone already handled.
+    if (state.activeAlertId != null) {
+      try {
+        biometricsDb
+          .update(pumpAlerts)
+          .set({ acknowledgedAt: new Date() })
+          .where(eq(pumpAlerts.id, state.activeAlertId))
+          .run()
+      }
+      catch (err) {
+        console.warn('[pumpStallGuard] alert update failed:', err instanceof Error ? err.message : err)
+      }
+    }
+    reset(side)
+    console.log(`[pumpStallGuard] auto-recover for ${side} superseded by a newer command — standing down`)
+    return
   }
 
   if (state.activeAlertId != null) {

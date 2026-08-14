@@ -41,6 +41,7 @@ import {
 } from '../pumpStallGuard'
 import { getPumpStallNotice } from '../pumpStallNotification'
 import { withSideLock } from '../sideLock'
+import { _resetMutationStamps, markSideMutated } from '../sideMutations'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   sqlite: BetterSqlite3.Database
@@ -136,6 +137,7 @@ describe('pumpStallGuard', () => {
     resetSchema()
     invalidateGuardSettingsCache()
     reset()
+    _resetMutationStamps()
     setPower.mockClear()
     setTemperature.mockClear()
   })
@@ -398,6 +400,35 @@ describe('pumpStallGuard', () => {
 
     expect(shouldBlock('left')).toBe(false)
     expect(setPower).toHaveBeenCalledWith('left', true, 78)
+  })
+
+  it('stands down instead of restoring when a newer command superseded the trip', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 1 })
+    invalidateGuardSettingsCache()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await frame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    await frame({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+    expect(shouldBlock('left')).toBe(true)
+    const alertId = getPumpStallNotice('left')?.alertId
+    setPower.mockClear()
+    setTemperature.mockClear()
+
+    // A user/scheduler OFF lands while the side is blocked — its stamp is
+    // newer than the trip, so restoring would overwrite that intent.
+    markSideMutated('left')
+
+    await frame({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800 })
+
+    expect(setPower).not.toHaveBeenCalled()
+    expect(setTemperature).not.toHaveBeenCalled()
+    expect(shouldBlock('left')).toBe(false)
+    expect((sqlite as any).prepare('SELECT is_powered FROM device_state WHERE side = \'left\'').get()).toEqual({ is_powered: 0 })
+    // The newer command is the operator's answer to the alert — stamped
+    // acknowledged so a restart doesn't rehydrate the block.
+    expect((biometricsSqlite as any).prepare('SELECT acknowledged_at FROM pump_alerts WHERE id = ?').get(alertId).acknowledged_at).not.toBeNull()
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('superseded'))
+    log.mockRestore()
   })
 
   it('does not auto-recover when auto-recovery is disabled', async () => {
@@ -1160,6 +1191,7 @@ describe('pumpStallGuard — side-lock serialization and notice timing', () => {
     resetSchema()
     invalidateGuardSettingsCache()
     reset()
+    _resetMutationStamps()
     setPower.mockClear()
     setTemperature.mockClear()
   })
@@ -1258,6 +1290,9 @@ describe('pumpStallGuard — side-lock serialization and notice timing', () => {
     const recovering = frame(healthy)
     await flush()
     expect(order).toEqual([])
+    // The powered mirror rides inside the same lock hold as the hardware
+    // restore — while the writer still holds the lock it must not exist yet.
+    expect((sqlite as any).prepare('SELECT is_powered FROM device_state WHERE side = \'left\'').get()).toEqual({ is_powered: 0 })
 
     releaseWriter()
     await writerDone
@@ -1265,6 +1300,7 @@ describe('pumpStallGuard — side-lock serialization and notice timing', () => {
     expect(order).toEqual(['writer', 'guard:restore-power'])
     expect(setTemperature).toHaveBeenCalledWith('left', 78, 28800)
     expect(shouldBlock('left')).toBe(false)
+    expect((sqlite as any).prepare('SELECT is_powered FROM device_state WHERE side = \'left\'').get()).toEqual({ is_powered: 1 })
   })
 
   it('publishes the notice, alert row, and DB mirror before the cutoff resolves', async () => {
