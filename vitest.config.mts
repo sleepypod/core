@@ -42,6 +42,6 @@ export default defineConfig({
       reporter: ['text', 'lcov'],
     },
     name: 'unit',
-    exclude: ['.claude/worktrees/**', '.ygg/worktrees/**', 'node_modules/**', '.next/**'],
+    exclude: ['.claude/worktrees/**', '.codex/**', '.ygg/worktrees/**', 'node_modules/**', '.next/**'],
   },
 })
