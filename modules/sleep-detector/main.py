@@ -644,6 +644,10 @@ class SessionTracker:
     _epoch_scores: deque = field(default_factory=lambda: deque(maxlen=BASELINE_TRAILING_EPOCHS))
     _median_buf: deque = field(default_factory=lambda: deque(maxlen=MEDIAN_FILTER_WINDOW))
     _pump_gated_samples: int = 0  # counter for logging
+    # Sessions closed only by the MAX_SESSION_S cap since the last natural
+    # (absence-timeout) close. Two in a row means the presence signal never
+    # dropped for 32+ hours — a stuck level signal, not a sleeper.
+    _consecutive_cap_closes: int = 0
 
     def process(self, ts: float, record: dict) -> None:
         baselines = self.calibration.get_baselines(self.side)
@@ -764,6 +768,8 @@ class SessionTracker:
                 # avoid emitting absent intervals with end < start
                 close_ts = self._interval_start if self._interval_start is not None else self._last_present_ts
                 self._close_session(close_ts)
+                if self._session_start is None:  # committed — a real exit was seen
+                    self._consecutive_cap_closes = 0
 
         # Safety net: force-close a runaway session that never reaches the
         # absence timeout, capping sleep_duration_seconds at MAX_SESSION_S.
@@ -774,6 +780,16 @@ class SessionTracker:
                 and self._debounced_present
                 and ts - self._session_start.timestamp() >= MAX_SESSION_S):
             self._close_session(self._session_start.timestamp() + MAX_SESSION_S)
+            if self._session_start is None:  # committed — count it, don't spam retries
+                self._consecutive_cap_closes += 1
+                log.warning(
+                    "%s: session force-closed at the %dh cap — presence never dropped (%d consecutive)",
+                    self.side, MAX_SESSION_S // 3600, self._consecutive_cap_closes)
+                if self._consecutive_cap_closes >= 2:
+                    log.warning(
+                        "%s: presence looks stuck-occupied — %d back-to-back sessions closed only at "
+                        "the cap; check capSense2 level deviation vs calibration baseline (/debug)",
+                        self.side, self._consecutive_cap_closes)
 
     def _close_session(self, left_ts: float) -> None:
         if self._session_start is None:
