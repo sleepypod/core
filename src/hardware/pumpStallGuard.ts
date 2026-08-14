@@ -29,6 +29,12 @@ import type { Side } from './types'
 interface GuardState {
   consecutiveLowFrames: number
   consecutiveHealthyFrames: number
+  /** frame-arrival ms of the first sub-threshold frame in the current run,
+   *  null when no run is active. Anchors the wall-clock dwell floor. */
+  lowSince: number | null
+  /** frame-arrival ms of the last frame observed for this side — a gap
+   *  beyond FRAME_GAP_RESET_MS invalidates any accumulated low run. */
+  lastFrameAt: number | null
   blocked: boolean
   trippedAt: number | null
   /** id of the pump_alerts row written at trip — used by auto-recover to
@@ -68,6 +74,8 @@ function emptyState(): GuardState {
   return {
     consecutiveLowFrames: 0,
     consecutiveHealthyFrames: 0,
+    lowSince: null,
+    lastFrameAt: null,
     blocked: false,
     trippedAt: null,
     activeAlertId: null,
@@ -119,21 +127,37 @@ export function invalidateGuardSettingsCache(): void {
 
 // ── Per-frame entry point ──────────────────────────────────────────────────
 
+// frzHealth arrives at a nominal ~10s cadence. Counting sub-threshold frames
+// alone can be satisfied by a burst of queued frames (stream reconnect
+// replay) or by two sparse zeros straddling a stream outage — neither is
+// evidence of a sustained stall. Two wall-clock requirements anchor the
+// count to real elapsed time, both measured on the frame-arrival clock:
+//   - the low run must span at least DWELL_MIN_MS, and
+//   - an inter-frame gap beyond FRAME_GAP_RESET_MS invalidates the run.
+const DWELL_MIN_MS = 10_000
+const FRAME_GAP_RESET_MS = 30_000
+
 export interface OnFrameInput {
   side: Side
   rpm: number
   expectedActive: boolean
   preStallTarget: number | null
   preStallDurationSeconds: number | null
+  /** Frame arrival time, ms epoch. Defaults to Date.now(); callers that
+   *  queue frames pass the arrival stamp so queue latency can't skew the
+   *  dwell clock. */
+  now?: number
 }
 
 export async function onFrame(input: OnFrameInput): Promise<void> {
   const settings = readSettings()
   const state = getState()[input.side]
+  const now = input.now ?? Date.now()
 
   if (!settings.enabled) {
     state.consecutiveLowFrames = 0
     state.consecutiveHealthyFrames = 0
+    state.lowSince = null
     state.blocked = false
     return
   }
@@ -144,8 +168,18 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     // expectedActive is false for every post-trip frame and returning here
     // would make the cutoff retry and recovery tracking below unreachable.
     state.consecutiveLowFrames = 0
+    state.lowSince = null
+    state.lastFrameAt = now
     return
   }
+
+  // A gap in the frame stream breaks run continuity — whatever accumulated
+  // before the gap is stale evidence, so the run restarts from this frame.
+  if (state.lastFrameAt != null && now - state.lastFrameAt > FRAME_GAP_RESET_MS) {
+    state.consecutiveLowFrames = 0
+    state.lowSince = null
+  }
+  state.lastFrameAt = now
 
   // Remember the most recent healthy operating point so a trip can capture
   // a useful snapshot even if firmware briefly under-reports between
@@ -160,12 +194,14 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
   if (!state.blocked) {
     if (input.rpm < settings.threshold) {
       state.consecutiveLowFrames += 1
-      if (state.consecutiveLowFrames >= settings.dwellSamples) {
-        await trip(input.side, input.rpm)
+      state.lowSince ??= now
+      if (state.consecutiveLowFrames >= settings.dwellSamples && now - state.lowSince >= DWELL_MIN_MS) {
+        await trip(input.side, input.rpm, now)
       }
     }
     else {
       state.consecutiveLowFrames = 0
+      state.lowSince = null
     }
     return
   }
@@ -247,6 +283,7 @@ export function rearm(side: Side, params: {
   state.preStall = params.restore
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
+  state.lowSince = null
   setPumpStallNotice(side, {
     alertId: params.alertId ?? 0,
     trippedAt: Math.floor(state.trippedAt / 1000),
@@ -331,12 +368,13 @@ export function reset(side?: Side): void {
 
 // ── Internals ──────────────────────────────────────────────────────────────
 
-async function trip(side: Side, rpm: number): Promise<void> {
+async function trip(side: Side, rpm: number, at?: number): Promise<void> {
   const state = getState()[side]
   state.blocked = true
-  state.trippedAt = Date.now()
+  state.trippedAt = at ?? Date.now()
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
+  state.lowSince = null
 
   // Capture a snapshot from device_state if we don't already have one — the
   // preStall field is updated each healthy frame, but covers the case where

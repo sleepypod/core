@@ -352,4 +352,31 @@ describe('DeviceStateSync — stall guard coalescing', () => {
     expect(leftInputs()).toHaveLength(2)
     expect(leftInputs()[1]?.rpm).toBe(200)
   })
+
+  it('stamps guard inputs with frame arrival time, not queue-drain time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(1_000_000))
+    let resolveFirst!: () => void
+    vi.mocked(onFrame).mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveFirst = resolve
+      }),
+    )
+
+    sync.recordFlowData(frame({ rpm: 100 }))
+    await flush()
+    vi.setSystemTime(new Date(1_030_000))
+    sync.recordFlowData(frame({ rpm: 300 }))
+    await flush()
+
+    // The queued frame drains much later — its dwell-clock stamp must stay
+    // the arrival time, or a lock-hold would fabricate elapsed low time.
+    vi.setSystemTime(new Date(1_090_000))
+    resolveFirst()
+    await flush()
+
+    expect(leftInputs()[0]?.now).toBe(1_000_000)
+    expect(leftInputs()[1]?.now).toBe(1_030_000)
+    vi.useRealTimers()
+  })
 })
