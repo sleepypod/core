@@ -253,6 +253,94 @@ describe('pumpStallGuard', () => {
     })
   })
 
+  describe('bilateral zero-RPM damping', () => {
+    const T0 = 1_700_000_000_000
+    const lowAt = (side: 'left' | 'right', now: number, rpm = 0): OnFrameInput => ({
+      side, rpm, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800, now,
+    })
+    // Both sides read the same frzHealth frame; left is processed first,
+    // matching production ordering in checkFlowAnomalies.
+    const both = async (now: number): Promise<void> => {
+      await onFrame(lowAt('left', now))
+      await onFrame(lowAt('right', now))
+    }
+
+    it('holds a sustained shared zero shorter than the extended floor', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // 60s of lockstep both-zero frames at nominal cadence — well past the
+      // single-side dwell, still inside the bilateral floor.
+      for (let i = 0; i <= 6; i += 1) await both(T0 + i * 10_000)
+
+      expect(shouldBlock('left')).toBe(false)
+      expect(shouldBlock('right')).toBe(false)
+      expect(setPower).not.toHaveBeenCalled()
+
+      // The hold is surfaced once per side per run, not per frame.
+      const holds = warn.mock.calls.filter(c => String(c[0]).includes('bilateral zero-RPM onset'))
+      expect(holds).toHaveLength(2)
+      warn.mockRestore()
+    })
+
+    it('a healthy frame ends the hold and the next shared run starts clean', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      for (let i = 0; i <= 3; i += 1) await both(T0 + i * 10_000)
+      await onFrame(lowAt('left', T0 + 40_000, 1900))
+      await onFrame(lowAt('right', T0 + 40_000, 1900))
+      for (let i = 5; i <= 8; i += 1) await both(T0 + i * 10_000)
+
+      expect(shouldBlock('left')).toBe(false)
+      expect(shouldBlock('right')).toBe(false)
+      // Two runs → two holds per side.
+      const holds = warn.mock.calls.filter(c => String(c[0]).includes('bilateral zero-RPM onset'))
+      expect(holds).toHaveLength(4)
+      warn.mockRestore()
+    })
+
+    it('dual-trips after the extended floor — a real shared failure still fails safe', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      for (let i = 0; i <= 12; i += 1) await both(T0 + i * 10_000) // 120s span
+
+      expect(shouldBlock('left')).toBe(true)
+      expect(shouldBlock('right')).toBe(true)
+      expect(setPower).toHaveBeenCalledWith('left', false)
+      expect(setPower).toHaveBeenCalledWith('right', false)
+      warn.mockRestore()
+    })
+
+    it('holds one frame short of the extended floor', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      for (let i = 0; i <= 11; i += 1) await both(T0 + i * 10_000) // 110s span
+      expect(shouldBlock('left')).toBe(false)
+      expect(shouldBlock('right')).toBe(false)
+      warn.mockRestore()
+    })
+
+    it('a single-side stall keeps the normal dwell while the other side runs healthy', async () => {
+      await onFrame(lowAt('left', T0))
+      await onFrame(lowAt('right', T0, 1900))
+      await onFrame(lowAt('left', T0 + 10_000))
+      await onFrame(lowAt('right', T0 + 10_000, 1900))
+
+      expect(shouldBlock('left')).toBe(true)
+      expect(shouldBlock('right')).toBe(false)
+    })
+
+    it('staggered onsets beyond the window trip at the normal dwell', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // Left stalls alone; right follows 40s later — asymmetric onset is
+      // side-distinguishing evidence, so neither side is damped.
+      await onFrame(lowAt('left', T0))
+      await onFrame(lowAt('right', T0, 1900))
+      await onFrame(lowAt('left', T0 + 10_000))
+      expect(shouldBlock('left')).toBe(true)
+
+      await onFrame(lowAt('right', T0 + 40_000))
+      await onFrame(lowAt('right', T0 + 50_000))
+      expect(shouldBlock('right')).toBe(true)
+      warn.mockRestore()
+    })
+  })
+
   it('refreshes cached settings at the exact five-second TTL boundary', () => {
     let now = 10_000
     vi.spyOn(Date, 'now').mockImplementation(() => now)

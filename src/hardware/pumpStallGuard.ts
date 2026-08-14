@@ -35,6 +35,9 @@ interface GuardState {
   /** frame-arrival ms of the last frame observed for this side — a gap
    *  beyond FRAME_GAP_RESET_MS invalidates any accumulated low run. */
   lastFrameAt: number | null
+  /** lowSince of the run whose bilateral hold was already logged — compared
+   *  by value so a fresh run logs again without extra reset plumbing. */
+  bilateralHoldLoggedFor: number | null
   blocked: boolean
   trippedAt: number | null
   /** id of the pump_alerts row written at trip — used by auto-recover to
@@ -76,6 +79,7 @@ function emptyState(): GuardState {
     consecutiveHealthyFrames: 0,
     lowSince: null,
     lastFrameAt: null,
+    bilateralHoldLoggedFor: null,
     blocked: false,
     trippedAt: null,
     activeAlertId: null,
@@ -137,6 +141,17 @@ export function invalidateGuardSettingsCache(): void {
 const DWELL_MIN_MS = 10_000
 const FRAME_GAP_RESET_MS = 30_000
 
+// Both sides read the same frzHealth frame, so a shared telemetry/firmware
+// glitch reports zero on both sides at once — the 2026-08 field trips were
+// exactly this (journal showed both pumps commanded ~1950 rpm while frames
+// read 0/0). Real mechanical stalls are overwhelmingly single-sided: a low
+// run whose onset lands within BILATERAL_ONSET_WINDOW_MS of the other
+// side's (~1.5 nominal frame intervals, tolerating coalescing skew) must
+// sustain BILATERAL_DWELL_MIN_MS before tripping. A genuine shared failure
+// (common supply fault) still fails safe after the extended dwell.
+const BILATERAL_ONSET_WINDOW_MS = 15_000
+const BILATERAL_DWELL_MIN_MS = 120_000
+
 export interface OnFrameInput {
   side: Side
   rpm: number
@@ -195,8 +210,23 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     if (input.rpm < settings.threshold) {
       state.consecutiveLowFrames += 1
       state.lowSince ??= now
-      if (state.consecutiveLowFrames >= settings.dwellSamples && now - state.lowSince >= DWELL_MIN_MS) {
+
+      const other = getState()[input.side === 'left' ? 'right' : 'left']
+      const bilateralOnset = other.lowSince != null
+        && Math.abs(state.lowSince - other.lowSince) <= BILATERAL_ONSET_WINDOW_MS
+      const dwellFloorMs = bilateralOnset ? BILATERAL_DWELL_MIN_MS : DWELL_MIN_MS
+
+      if (state.consecutiveLowFrames >= settings.dwellSamples && now - state.lowSince >= dwellFloorMs) {
         await trip(input.side, input.rpm, now)
+      }
+      else if (
+        bilateralOnset
+        && state.consecutiveLowFrames >= settings.dwellSamples
+        && now - state.lowSince >= DWELL_MIN_MS
+        && state.bilateralHoldLoggedFor !== state.lowSince
+      ) {
+        state.bilateralHoldLoggedFor = state.lowSince
+        console.warn(`[pumpStallGuard] ${input.side}: bilateral zero-RPM onset — holding trip for sustained evidence (${BILATERAL_DWELL_MIN_MS / 1000}s; shared telemetry glitch suspected)`)
       }
     }
     else {
