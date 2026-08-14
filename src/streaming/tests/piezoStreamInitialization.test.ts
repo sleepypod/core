@@ -104,7 +104,10 @@ vi.mock('ws', () => ({
 }))
 
 vi.mock('../capFramePersistence', () => persistenceMock)
-vi.mock('../normalizeFrame', () => ({ capSideChannels: vi.fn(() => null) }))
+vi.mock('../normalizeFrame', () => ({
+  capSideChannels: vi.fn(() => null),
+  capSideStatus: vi.fn(() => null),
+}))
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getDacMonitorIfRunning: vi.fn(() => null),
 }))
@@ -113,6 +116,7 @@ type PiezoStreamModule = typeof PiezoStream
 
 const originalWsPort = process.env.PIEZO_WS_PORT
 const originalRawDataDir = process.env.RAW_DATA_DIR
+const originalNatsDisabled = process.env.PIEZO_NATS_DISABLED
 let loadedModule: PiezoStreamModule | null = null
 
 function restoreEnv(name: 'PIEZO_WS_PORT' | 'RAW_DATA_DIR', value: string | undefined): void {
@@ -130,6 +134,11 @@ async function loadFreshModule(options: {
 } = {}): Promise<PiezoStreamModule> {
   vi.resetModules()
   process.env.PIEZO_WS_PORT = options.wsPort ?? '0'
+  // These contracts pin the legacy `.RAW` tailer; source selection has its
+  // own suite (piezoStreamSource.test.ts), and leaving NATS enabled would
+  // have startPiezoStreamServer probe a real loopback socket instead of
+  // touching the RAW directories.
+  process.env.PIEZO_NATS_DISABLED = '1'
   if (options.rawDataDir === null) delete process.env.RAW_DATA_DIR
   else process.env.RAW_DATA_DIR = options.rawDataDir ?? '/unused-test-raw-root'
   loadedModule = await import('../piezoStream')
@@ -151,6 +160,8 @@ afterEach(async () => {
   vi.useRealTimers()
   restoreEnv('PIEZO_WS_PORT', originalWsPort)
   restoreEnv('RAW_DATA_DIR', originalRawDataDir)
+  if (originalNatsDisabled === undefined) delete process.env.PIEZO_NATS_DISABLED
+  else process.env.PIEZO_NATS_DISABLED = originalNatsDisabled
   vi.restoreAllMocks()
 })
 
