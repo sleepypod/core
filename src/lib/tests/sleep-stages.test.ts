@@ -423,6 +423,15 @@ describe('filterOutliers — windowed median filter', () => {
 })
 
 describe('classifySleepStages — average HR selection', () => {
+  it('uses the fallback average when every HR reading is unavailable', () => {
+    const result = classifySleepStages([
+      vitalRow(0, null),
+      vitalRow(5, null),
+    ], [], 1.0)
+
+    expect(result.map(epoch => epoch.stage)).toEqual(['light', 'light'])
+  })
+
   it('excludes null readings from the average HR denominator', () => {
     const result = classifySleepStages([
       vitalRow(0, 50),
