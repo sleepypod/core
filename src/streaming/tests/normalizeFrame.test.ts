@@ -48,6 +48,12 @@ describe('capSideChannels', () => {
     expect(capSideChannels(null)).toBeNull()
     expect(capSideChannels('nope')).toBeNull()
   })
+
+  it('rejects callable values even when they carry sensor-like properties', () => {
+    const callable = Object.assign(() => undefined, { values: [1, 2, 3] })
+
+    expect(capSideChannels(callable)).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------
