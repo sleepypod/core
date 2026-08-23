@@ -1135,6 +1135,18 @@ describe('device.execute (raw command)', () => {
       await rightHolder.catch(() => {})
     }
   })
+
+  it('re-checks both sides inside the nested locks before a both-sides raw write', async () => {
+    // Pre-flight passes for both sides (two checks); the trip lands while the
+    // command sits inside the nested locks — the in-lock loop must catch it.
+    pumpStallMock.shouldBlock
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true)
+    sharedClientMock.sendRaw.mockResolvedValue('ok')
+    await expect(caller.execute({ command: 'SET_TEMP', args: '50' })).rejects.toThrow(/Pump stall protection active/)
+    expect(sharedClientMock.sendRaw).not.toHaveBeenCalled()
+  })
 })
 
 describe('device best-effort DB sync swallows errors', () => {
