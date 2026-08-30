@@ -238,6 +238,63 @@ describe('pumpStallGuard', () => {
     expect(setPower).not.toHaveBeenCalled()
   })
 
+  describe('bilateral dwell and frame-arrival continuity', () => {
+    // These drive onFrameImpl with explicit arrival stamps so the dwell clock
+    // is exact — the shared onFrame wrapper's auto-advance would blur it.
+    const low = (side: 'left' | 'right', now: number): Promise<void> =>
+      onFrameImpl({ side, rpm: 0, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 28800, now })
+
+    it('a single-sided low run still trips at the short dwell', async () => {
+      const t0 = 1_000_000
+      await low('left', t0)
+      await low('left', t0 + __test__.DWELL_MIN_MS)
+      expect(shouldBlock('left')).toBe(true)
+    })
+
+    it('holds a simultaneous both-side zero-RPM run to the bilateral dwell before dual-tripping', async () => {
+      const t0 = 1_000_000
+      // Feed both sides low together, a frame every 10s to keep run continuity.
+      // A single-sided run would trip at DWELL_MIN_MS; the shared-onset run must
+      // hold all the way to BILATERAL_DWELL_MIN_MS (the trinity 22:00 window is
+      // longer than this, which is why the targetLevel reorder — not this dwell
+      // — is what actually suppresses a real session-end stop).
+      let t = t0
+      for (; t < t0 + __test__.BILATERAL_DWELL_MIN_MS; t += 10_000) {
+        await low('left', t)
+        await low('right', t)
+        expect(shouldBlock('left')).toBe(false)
+        expect(shouldBlock('right')).toBe(false)
+      }
+      // A genuine shared supply fault still fails safe once the dwell elapses.
+      await low('left', t0 + __test__.BILATERAL_DWELL_MIN_MS)
+      expect(shouldBlock('left')).toBe(true)
+    })
+
+    it('does not extend the dwell when the two low runs began outside the onset window', async () => {
+      const t0 = 1_000_000
+      await low('right', t0)
+      const late = t0 + __test__.BILATERAL_ONSET_WINDOW_MS + 5_000
+      await low('left', late)
+      await low('left', late + __test__.DWELL_MIN_MS)
+      // Onsets > BILATERAL_ONSET_WINDOW_MS apart read as two independent events,
+      // not a shared glitch, so the short single-side floor applies.
+      expect(shouldBlock('left')).toBe(true)
+    })
+
+    it('restarts the low run after a frame-stream gap beyond FRAME_GAP_RESET_MS', async () => {
+      const t0 = 1_000_000
+      await low('left', t0)
+      // This frame would be the second consecutive low frame and trip — but the
+      // gap since the last frame exceeds the reset window, so the run restarts.
+      await low('left', t0 + __test__.FRAME_GAP_RESET_MS + 1_000)
+      expect(shouldBlock('left')).toBe(false)
+      // Proof the run truly restarted: one more contiguous low frame past the
+      // dwell now trips.
+      await low('left', t0 + __test__.FRAME_GAP_RESET_MS + 1_000 + __test__.DWELL_MIN_MS)
+      expect(shouldBlock('left')).toBe(true)
+    })
+  })
+
   describe('time-based dwell floor', () => {
     const low = (now: number) => ({
       side: 'left' as const,

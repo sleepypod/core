@@ -106,7 +106,7 @@ export class DeviceStateSync {
   private isPriming = false
   private primeEndedAt = 0
   private stallGuardInFlight: Record<Side, boolean> = { left: false, right: false }
-  private stallGuardPending: Record<Side, { rpm: number, duty: number | null, bilateralStopCandidate: boolean } | null> = { left: null, right: null }
+  private stallGuardPending: Record<Side, { rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number } | null> = { left: null, right: null }
   private lastBothHealthyAt: number | null = null
   private bilateralStopCandidateUntil = 0
 
@@ -347,9 +347,9 @@ export class DeviceStateSync {
    * concurrently would stack duplicate transitions on the sequential
    * transport. Only the newest frame received while busy is kept.
    */
-  private queueStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean): void {
+  private queueStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number): void {
     if (this.stallGuardInFlight[side]) {
-      this.stallGuardPending[side] = { rpm, duty, bilateralStopCandidate }
+      this.stallGuardPending[side] = { rpm, duty, bilateralStopCandidate, at }
       return
     }
     this.stallGuardInFlight[side] = true
@@ -358,11 +358,11 @@ export class DeviceStateSync {
       // in-flight flag is released even if that ever changes — a leaked
       // flag would silently stop feeding the guard for this side.
       try {
-        await this.runStallGuard(side, rpm, duty, bilateralStopCandidate)
+        await this.runStallGuard(side, rpm, duty, bilateralStopCandidate, at)
         let next = this.stallGuardPending[side]
         while (next) {
           this.stallGuardPending[side] = null
-          await this.runStallGuard(side, next.rpm, next.duty, next.bilateralStopCandidate)
+          await this.runStallGuard(side, next.rpm, next.duty, next.bilateralStopCandidate, next.at)
           next = this.stallGuardPending[side]
         }
       }
@@ -372,8 +372,11 @@ export class DeviceStateSync {
     })()
   }
 
-  /** Look up the side's commanded state and feed the pump stall guard. */
-  private async runStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean): Promise<void> {
+  /** Look up the side's commanded state and feed the pump stall guard.
+   *  `at` is the frame's arrival stamp — the guard's dwell clock runs on
+   *  frame arrival, not processing time, so a queued frame that waited out a
+   *  lock hold can't inflate the low-run span it evidences. */
+  private async runStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number): Promise<void> {
     try {
       const [row] = db
         .select({
@@ -385,7 +388,9 @@ export class DeviceStateSync {
         .where(eq(deviceState.side, side))
         .limit(1)
         .all()
-      const now = Date.now()
+      // Dwell and session-projection clocks run on the frame's arrival stamp,
+      // not drain time — see the doc above.
+      const now = at
       const expectedActive = !this.isExpectedPumpStop(side, duty, row?.poweredOnAt, bilateralStopCandidate, now)
         && Boolean(row?.isPowered && row.targetTemperature != null)
       // Real remaining session seconds, projected from the last firmware
@@ -461,8 +466,8 @@ export class DeviceStateSync {
       && now <= this.bilateralStopCandidateUntil
     this.lastBothHealthyAt = bothHealthy ? now : null
     if (!suppressGlitch) {
-      this.queueStallGuard('left', leftRpm, leftPump.duty, bilateralStopCandidate)
-      this.queueStallGuard('right', rightRpm, rightPump.duty, bilateralStopCandidate)
+      this.queueStallGuard('left', leftRpm, leftPump.duty, bilateralStopCandidate, now)
+      this.queueStallGuard('right', rightRpm, rightPump.duty, bilateralStopCandidate, now)
     }
 
     // Pump running but flowrate missing — possible sensor fault

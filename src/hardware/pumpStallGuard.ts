@@ -42,6 +42,12 @@ interface GuardState {
   cutoffPending: boolean
   /** Epoch ms of the first frame in the current sub-threshold run. */
   lowSince: number | null
+  /** frame-arrival ms of the last frame observed for this side — a gap
+   *  beyond FRAME_GAP_RESET_MS invalidates any accumulated low run. */
+  lastFrameAt: number | null
+  /** lowSince of the run whose bilateral hold was already logged — compared
+   *  by value so a fresh run logs again without extra reset plumbing. */
+  bilateralHoldLoggedFor: number | null
   /** Number of active auto-recovery probes started since this trip. */
   recoveryAttempts: number
   /** Epoch ms when the current recovery probe energized the side. */
@@ -97,6 +103,8 @@ function emptyState(): GuardState {
     preStall: null,
     cutoffPending: false,
     lowSince: null,
+    lastFrameAt: null,
+    bilateralHoldLoggedFor: null,
     recoveryAttempts: 0,
     probeStartedAt: null,
     lastProbeEndedAt: null,
@@ -108,7 +116,23 @@ function emptyState(): GuardState {
 // A trip must satisfy both the configurable frame count and this wall-clock
 // floor. Field frames arrive much faster than the original design assumed, so
 // dwellSamples=2 alone allowed ~2-second telemetry glitches to cut power.
+// Both requirements are measured on the frame-arrival clock (not processing
+// time), and an inter-frame gap beyond FRAME_GAP_RESET_MS invalidates the run
+// so a burst of queued frames (stream reconnect replay) or two sparse zeros
+// straddling an outage cannot satisfy the dwell.
 const DWELL_MIN_MS = 10_000
+const FRAME_GAP_RESET_MS = 30_000
+
+// Both sides read the same frzHealth frame, so a shared telemetry/firmware
+// glitch reports zero on both sides at once — the 2026-08 field trips were
+// exactly this (journal showed both pumps commanded ~1950 rpm while frames
+// read 0/0). Real mechanical stalls are overwhelmingly single-sided: a low
+// run whose onset lands within BILATERAL_ONSET_WINDOW_MS of the other side's
+// (~1.5 nominal frame intervals, tolerating coalescing skew) must sustain
+// BILATERAL_DWELL_MIN_MS before tripping. A genuine shared failure (common
+// supply fault) still fails safe after the extended dwell.
+const BILATERAL_ONSET_WINDOW_MS = 15_000
+const BILATERAL_DWELL_MIN_MS = 120_000
 
 // A cutoff leaves RPM at zero, so passive recovery can never prove that the
 // pump is healthy. Opt-in recovery briefly energizes the side after these
@@ -240,12 +264,21 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     // would make the cutoff retry and recovery tracking below unreachable.
     state.consecutiveLowFrames = 0
     state.lowSince = null
+    state.lastFrameAt = now
     // A confirmed stop is a session boundary. Retaining the previous
     // session's countdown here could make a later no-countdown session
     // restore stale time after a trip.
     state.preStall = null
     return
   }
+
+  // A gap in the frame stream breaks run continuity — whatever accumulated
+  // before the gap is stale evidence, so the run restarts from this frame.
+  if (state.lastFrameAt != null && now - state.lastFrameAt > FRAME_GAP_RESET_MS) {
+    state.consecutiveLowFrames = 0
+    state.lowSince = null
+  }
+  state.lastFrameAt = now
 
   // Remember the most recent healthy operating point so a trip can capture
   // a useful snapshot even if firmware briefly under-reports between
@@ -259,11 +292,28 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
 
   if (!state.blocked) {
     if (input.rpm < settings.threshold) {
+      const other = getState()[input.side === 'left' ? 'right' : 'left']
       state.consecutiveLowFrames += 1
       if (state.lowSince == null) state.lowSince = now
+
+      // A shared telemetry glitch zeros both sides at once; hold such a run to
+      // the longer bilateral dwell before tripping (see the constants above).
+      const bilateralOnset = other.lowSince != null
+        && Math.abs(state.lowSince - other.lowSince) <= BILATERAL_ONSET_WINDOW_MS
+      const dwellFloorMs = bilateralOnset ? BILATERAL_DWELL_MIN_MS : DWELL_MIN_MS
+
       if (state.consecutiveLowFrames >= settings.dwellSamples
-        && now - state.lowSince >= DWELL_MIN_MS) {
+        && now - state.lowSince >= dwellFloorMs) {
         await trip(input.side, input.rpm, now)
+      }
+      else if (
+        bilateralOnset
+        && state.consecutiveLowFrames >= settings.dwellSamples
+        && now - state.lowSince >= DWELL_MIN_MS
+        && state.bilateralHoldLoggedFor !== state.lowSince
+      ) {
+        state.bilateralHoldLoggedFor = state.lowSince
+        console.warn(`[pumpStallGuard] ${input.side}: bilateral zero-RPM onset — holding trip for sustained evidence (${BILATERAL_DWELL_MIN_MS / 1000}s; shared telemetry glitch suspected)`)
       }
     }
     else {
@@ -1086,6 +1136,9 @@ export const __test__ = {
   emptyState,
   readSettings,
   DWELL_MIN_MS,
+  FRAME_GAP_RESET_MS,
+  BILATERAL_ONSET_WINDOW_MS,
+  BILATERAL_DWELL_MIN_MS,
   PROBE_BACKOFFS_MS,
   PROBE_WINDOW_MS,
 }
