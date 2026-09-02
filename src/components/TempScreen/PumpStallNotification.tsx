@@ -2,6 +2,7 @@
 
 import { AlertTriangle, X } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
+import { formatSetpointF, type TempUnit } from '@/src/lib/tempUtils'
 
 interface PumpStallNotificationProps {
   side: 'left' | 'right'
@@ -10,6 +11,9 @@ interface PumpStallNotificationProps {
   trippedAt: number
   /** pump_alerts row id from the notice; 0 when the trip-time insert failed. */
   alertId?: number
+  /** Setpoint Re-enable restores (notice.restore); null when the trip captured none. */
+  restoreTargetF?: number | null
+  unit?: TempUnit
   /** Called after either re-enable or dismiss settles so the parent can refetch. */
   onAction?: () => void
 }
@@ -29,12 +33,22 @@ const formatTime = (unixSeconds: number): string => {
  *     side stays off until the user powers it back on, and any command
  *     path re-triggers the guard if the pump is still bad.
  */
-export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, onAction }: PumpStallNotificationProps) => {
+export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, restoreTargetF = null, unit = 'F', onAction }: PumpStallNotificationProps) => {
   const acknowledge = trpc.pumpAlerts.acknowledgeAndRestore.useMutation()
   const dismiss = trpc.pumpAlerts.dismissNotification.useMutation()
   // Correlate the mutation with the incident shown here — the server then
   // stamps exactly this row even across a restart. 0 means "no row".
   const alertRef = alertId || undefined
+
+  // Guard-rejected HomeKit temp writes keep the requested value staged while
+  // iOS shows the slider reverting; the next power-on heats to the staged
+  // value (PR #670 F1). This card is the only surface that can re-enable the
+  // side, so the mismatch is surfaced here. Polled, not streamed: the staged
+  // value only moves on HomeKit writes and the card is rarely mounted.
+  const { data: thermal } = trpc.health.thermal.useQuery({}, { refetchInterval: 15_000 })
+  const sideHealth = thermal?.sides.find(s => s.side === side)
+  const stagedF = sideHealth?.guardBlocked ? sideHealth.homekitStagedTargetF : null
+  const stagedMismatch = stagedF != null && stagedF !== (restoreTargetF ?? null)
 
   // While either mutation is in flight, both actions stay disabled — the
   // two paths race for the same guard state and alert row.
@@ -59,6 +73,17 @@ export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, onAction 
           {formatTime(trippedAt)}
           . The side is off for safety. Re-enable to retry.
         </p>
+        {stagedMismatch && (
+          <p className="text-xs text-red-200/70">
+            HomeKit has
+            {' '}
+            {formatSetpointF(stagedF, unit)}
+            {' '}
+            staged for the next power-on
+            {restoreTargetF != null && ` — Re-enable restores ${formatSetpointF(restoreTargetF, unit)}`}
+            .
+          </p>
+        )}
       </div>
       <button
         onClick={() => acknowledge.mutate({ side, alertId: alertRef }, { onSettled: onAction })}

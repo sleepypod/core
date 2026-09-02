@@ -38,6 +38,18 @@ interface GuardState {
   /** true when the trip-time hardware power-off never went out — retried
    *  on every subsequent frame until it succeeds. */
   cutoffPending: boolean
+  /** epoch ms of the first frame in the current sub-threshold run, or null
+   *  when the last frame was healthy. Gates the time-based dwell floor. */
+  lowSince: number | null
+  /** number of auto-recovery probes started since the trip. */
+  recoveryAttempts: number
+  /** epoch ms the current probe re-energized the side, or null when not
+   *  probing. While set, the side is physically on but the guard stays blocked
+   *  until sustained healthy RPM confirms recovery. */
+  probeStartedAt: number | null
+  /** epoch ms the last probe was powered back off; backoff is measured from
+   *  here (or the trip, for the first probe). */
+  lastProbeEndedAt: number | null
 }
 
 interface GuardSettings {
@@ -73,8 +85,33 @@ function emptyState(): GuardState {
     activeAlertId: null,
     preStall: null,
     cutoffPending: false,
+    lowSince: null,
+    recoveryAttempts: 0,
+    probeStartedAt: null,
+    lastProbeEndedAt: null,
   }
 }
+
+// Time-based dwell floor. A trip requires the pump to stay sub-threshold for
+// BOTH dwellSamples consecutive frames AND this much wall-clock — so a burst
+// of frames, or a ~1–2s dropped/garbled-frame blip, can't power a side off
+// mid-night. A genuine stall still trips within ~10s, which is thermally
+// harmless (the bed takes minutes to drift). Frame-based dwell alone tripped
+// on ~2s of bad readings; see ADR 0022.
+const DWELL_MIN_MS = 10_000
+
+// Auto-recovery probe schedule. A trip powers the pump off, so RPM stays 0 and
+// recovery can never be observed passively — nothing re-energizes the pump. So
+// a blocked side with auto-recovery enabled is actively re-energized after each
+// backoff to let the pump prove itself; sustained healthy RPM restores it,
+// otherwise it is powered back off and the next (longer) backoff applies. After
+// the last backoff the side stays off until the user acknowledges. Backoffs are
+// spaced so an intermittent fault gets a few chances without thrashing a
+// genuinely dead pump against the loop all night.
+const PROBE_BACKOFFS_MS = [5 * 60_000, 15 * 60_000, 30 * 60_000]
+// How long a probe keeps the pump energized waiting for sustained healthy RPM
+// before concluding the pump is still stalled.
+const PROBE_WINDOW_MS = 60_000
 
 // ── Settings cache ─────────────────────────────────────────────────────────
 // `recordFlowData` fires every frame; reading device_settings on each call
@@ -125,16 +162,22 @@ export interface OnFrameInput {
   expectedActive: boolean
   preStallTarget: number | null
   preStallDurationSeconds: number | null
+  /** Frame receipt time (epoch ms) for the dwell floor; defaults to now.
+   *  Threaded so the time-based dwell is driven by frame arrival, not the
+   *  guard's own clock, and stays deterministic under test. */
+  now?: number
 }
 
 export async function onFrame(input: OnFrameInput): Promise<void> {
   const settings = readSettings()
   const state = getState()[input.side]
+  const now = input.now ?? Date.now()
 
   if (!settings.enabled) {
     state.consecutiveLowFrames = 0
     state.consecutiveHealthyFrames = 0
     state.blocked = false
+    state.lowSince = null
     return
   }
 
@@ -144,6 +187,7 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     // expectedActive is false for every post-trip frame and returning here
     // would make the cutoff retry and recovery tracking below unreachable.
     state.consecutiveLowFrames = 0
+    state.lowSince = null
     return
   }
 
@@ -160,12 +204,17 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
   if (!state.blocked) {
     if (input.rpm < settings.threshold) {
       state.consecutiveLowFrames += 1
-      if (state.consecutiveLowFrames >= settings.dwellSamples) {
+      if (state.lowSince == null) state.lowSince = now
+      // Require both the frame-count dwell and the wall-clock floor so a brief
+      // burst of low frames can't trip on its own (see DWELL_MIN_MS).
+      if (state.consecutiveLowFrames >= settings.dwellSamples
+        && now - state.lowSince >= DWELL_MIN_MS) {
         await trip(input.side, input.rpm)
       }
     }
     else {
       state.consecutiveLowFrames = 0
+      state.lowSince = null
     }
     return
   }
@@ -186,15 +235,42 @@ export async function onFrame(input: OnFrameInput): Promise<void> {
     }
   }
 
-  // Track healthy recovery frames if auto-recovery is on.
+  // Auto-recovery (opt-in). A trip powers the pump off, so RPM sits at 0 and
+  // recovery cannot be observed passively — nothing re-energizes the pump to
+  // let it prove itself. Instead, after a backoff, actively re-energize the
+  // side (a "probe"); the healthy-frame tracking below then sees whether the
+  // pump recovers. See PROBE_BACKOFFS_MS.
+  if (!settings.autoRecoveryEnabled) return
+
   if (input.rpm >= settings.recoveryRpm) {
     state.consecutiveHealthyFrames += 1
   }
   else {
     state.consecutiveHealthyFrames = 0
   }
-  if (settings.autoRecoveryEnabled && state.consecutiveHealthyFrames >= settings.recoverySamples) {
+  if (state.consecutiveHealthyFrames >= settings.recoverySamples) {
     await autoRecover(input.side)
+    return
+  }
+
+  // Don't probe while a failed trip-cutoff is still being retried — the side
+  // must reach a known-off state first.
+  if (state.cutoffPending) return
+
+  if (state.probeStartedAt == null) {
+    // Idle between probes: start one when the backoff has elapsed and attempts
+    // remain. Backoff runs from the last probe's end, or the trip.
+    if (state.recoveryAttempts < PROBE_BACKOFFS_MS.length) {
+      const backoff = PROBE_BACKOFFS_MS[state.recoveryAttempts]
+      const since = state.lastProbeEndedAt ?? state.trippedAt ?? now
+      if (now - since >= backoff) {
+        await startRecoveryProbe(input.side, now)
+      }
+    }
+  }
+  else if (now - state.probeStartedAt >= PROBE_WINDOW_MS) {
+    // Probe window elapsed without sustained healthy RPM — pump still stalled.
+    await endFailedProbe(input.side, now)
   }
 }
 
@@ -247,6 +323,10 @@ export function rearm(side: Side, params: {
   state.preStall = params.restore
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
+  state.lowSince = null
+  state.recoveryAttempts = 0
+  state.probeStartedAt = null
+  state.lastProbeEndedAt = null
   setPumpStallNotice(side, {
     alertId: params.alertId ?? 0,
     trippedAt: Math.floor(state.trippedAt / 1000),
@@ -337,6 +417,7 @@ async function trip(side: Side, rpm: number): Promise<void> {
   state.trippedAt = Date.now()
   state.consecutiveLowFrames = 0
   state.consecutiveHealthyFrames = 0
+  state.lowSince = null
 
   // Capture a snapshot from device_state if we don't already have one — the
   // preStall field is updated each healthy frame, but covers the case where
@@ -490,10 +571,83 @@ async function autoRecover(side: Side): Promise<void> {
   console.log(`[pumpStallGuard] auto-recovered ${side}`)
 }
 
+/**
+ * Re-energize a blocked side so its pump can attempt to spin back up. The guard
+ * stays blocked and device_state keeps mirroring off — only sustained healthy
+ * RPM (observed by onFrame → autoRecover) actually restores the side. If the
+ * pump stays low for the probe window, endFailedProbe powers it back off.
+ */
+async function startRecoveryProbe(side: Side, now: number): Promise<void> {
+  const state = getState()[side]
+  const restore = state.preStall
+  if (!restore) {
+    // No snapshot to restore to — a probe can't lead anywhere. Give up and
+    // clear the guard so a later user command isn't blocked (mirrors the
+    // no-snapshot autoRecover path).
+    reset(side)
+    return
+  }
+
+  state.recoveryAttempts += 1
+  state.probeStartedAt = now
+  state.consecutiveHealthyFrames = 0
+
+  // Same lock + deadlock rationale as trip()/autoRecover: only reachable from
+  // the frame path, and the energize must not interleave with a queued
+  // same-side writer's command sequence.
+  try {
+    await withSideLock(side, async () => {
+      const client = getSharedHardwareClient()
+      await client.setPower(side, true, restore.targetTemperature)
+      await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+    })
+  }
+  catch (err) {
+    // Couldn't energize — count it as a failed probe so the backoff advances.
+    state.probeStartedAt = null
+    state.lastProbeEndedAt = now
+    console.warn(`[pumpStallGuard] recovery probe energize for ${side} failed:`, err instanceof Error ? err.message : err)
+    return
+  }
+  console.log(`[pumpStallGuard] probing ${side} recovery (attempt ${state.recoveryAttempts}/${PROBE_BACKOFFS_MS.length})`)
+}
+
+/**
+ * A recovery probe elapsed without sustained healthy RPM — the pump is still
+ * stalled. Power the side back off and record the end so the next (longer)
+ * backoff applies; after the last attempt the side stays off until acknowledged.
+ */
+async function endFailedProbe(side: Side, now: number): Promise<void> {
+  const state = getState()[side]
+  state.probeStartedAt = null
+  state.lastProbeEndedAt = now
+  state.consecutiveHealthyFrames = 0
+
+  try {
+    await withSideLock(side, async () => {
+      const client = getSharedHardwareClient()
+      await client.setPower(side, false)
+    })
+  }
+  catch (err) {
+    console.warn(`[pumpStallGuard] recovery probe power-off for ${side} failed:`, err instanceof Error ? err.message : err)
+  }
+
+  if (state.recoveryAttempts >= PROBE_BACKOFFS_MS.length) {
+    console.warn(`[pumpStallGuard] ${side} pump still stalled after ${state.recoveryAttempts} recovery probes — staying off until acknowledged`)
+  }
+  else {
+    console.log(`[pumpStallGuard] ${side} recovery probe ${state.recoveryAttempts} did not restore flow — backing off`)
+  }
+}
+
 // ── Test introspection ─────────────────────────────────────────────────────
 
 export const __test__ = {
   getState,
   emptyState,
   readSettings,
+  DWELL_MIN_MS,
+  PROBE_BACKOFFS_MS,
+  PROBE_WINDOW_MS,
 }

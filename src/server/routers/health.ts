@@ -16,6 +16,7 @@ import { desc, eq } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
+import { getHomekitStagedTargetF } from '@/src/homekit/accessories/sideController'
 import { centiDegreesToF } from '@/src/lib/tempUtils'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
@@ -394,6 +395,7 @@ export const healthRouter = router({
         waterTempF: z.number().nullable(),
         bedSurfaceTempF: z.number().nullable(),
         guardBlocked: z.boolean(),
+        homekitStagedTargetF: z.number().nullable(),
         verdict: z.enum(['off', 'delivering', 'idle', 'stalled']),
         note: z.string().nullable(),
       })),
@@ -493,6 +495,10 @@ export const healthRouter = router({
           waterTempF: waterCd != null ? Math.round(centiDegreesToF(waterCd) * 10) / 10 : null,
           bedSurfaceTempF: bedCd != null ? Math.round(centiDegreesToF(bedCd) * 10) / 10 : null,
           guardBlocked: pumpStallShouldBlock(side),
+          // Hidden HomeKit setpoint (PR #670 F1): guard-rejected temp writes
+          // stay staged and apply on the next power-on. The pump-stall alert
+          // card reads this to surface the staged/visible mismatch.
+          homekitStagedTargetF: getHomekitStagedTargetF(side),
           verdict,
           note,
         }

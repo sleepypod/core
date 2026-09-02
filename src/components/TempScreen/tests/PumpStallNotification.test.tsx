@@ -11,17 +11,30 @@ const trpcMock = vi.hoisted(() => {
   const ackMutate = vi.fn()
   const dismissMutate = vi.fn()
   const pending = { acknowledge: false, dismiss: false }
+  const thermal: { data: unknown } = { data: undefined }
   return {
     ackMutate,
     dismissMutate,
     pending,
+    thermal,
     trpc: {
       pumpAlerts: {
         acknowledgeAndRestore: { useMutation: () => ({ mutate: ackMutate, isPending: pending.acknowledge }) },
         dismissNotification: { useMutation: () => ({ mutate: dismissMutate, isPending: pending.dismiss }) },
       },
+      health: {
+        thermal: { useQuery: () => ({ data: thermal.data }) },
+      },
     },
   }
+})
+
+/** Minimal health.thermal payload — only the fields the card reads. */
+const thermalSides = (left: object, right: object = {}) => ({
+  sides: [
+    { side: 'left', guardBlocked: false, homekitStagedTargetF: null, ...left },
+    { side: 'right', guardBlocked: false, homekitStagedTargetF: null, ...right },
+  ],
 })
 
 vi.mock('@/src/utils/trpc', () => ({ trpc: trpcMock.trpc }))
@@ -33,6 +46,7 @@ beforeEach(() => {
   trpcMock.dismissMutate.mockClear()
   trpcMock.pending.acknowledge = false
   trpcMock.pending.dismiss = false
+  trpcMock.thermal.data = undefined
 })
 
 describe('PumpStallNotification', () => {
@@ -87,5 +101,62 @@ describe('PumpStallNotification', () => {
       <PumpStallNotification side="left" rpm={40} trippedAt={1_720_000_000} alertId={38} />,
     )
     expect(getByRole('alert').textContent).toContain('side powered off — pump stall detected')
+  })
+
+  describe('staged HomeKit target mismatch (PR #670 F1)', () => {
+    it('shows the staged target and the restore value when they differ on a guard-blocked side', () => {
+      trpcMock.thermal.data = thermalSides({ guardBlocked: true, homekitStagedTargetF: 78 })
+      const { getByRole } = render(
+        <PumpStallNotification side="left" rpm={40} trippedAt={1_720_000_000} alertId={38} restoreTargetF={72} />,
+      )
+      expect(getByRole('alert').textContent).toContain(
+        'HomeKit has 78°F staged for the next power-on — Re-enable restores 72°F.',
+      )
+    })
+
+    it('omits the restore clause when the trip captured no restore target', () => {
+      trpcMock.thermal.data = thermalSides({ guardBlocked: true, homekitStagedTargetF: 78 })
+      const { getByRole } = render(
+        <PumpStallNotification side="left" rpm={40} trippedAt={1_720_000_000} alertId={38} restoreTargetF={null} />,
+      )
+      const text = getByRole('alert').textContent
+      expect(text).toContain('HomeKit has 78°F staged for the next power-on.')
+      expect(text).not.toContain('Re-enable restores')
+    })
+
+    it('stays hidden when the staged target matches the restore target', () => {
+      trpcMock.thermal.data = thermalSides({ guardBlocked: true, homekitStagedTargetF: 72 })
+      const { getByRole } = render(
+        <PumpStallNotification side="left" rpm={40} trippedAt={1_720_000_000} alertId={38} restoreTargetF={72} />,
+      )
+      expect(getByRole('alert').textContent).not.toContain('staged')
+    })
+
+    it('stays hidden when the guard no longer blocks the side', () => {
+      trpcMock.thermal.data = thermalSides({ guardBlocked: false, homekitStagedTargetF: 78 })
+      const { getByRole } = render(
+        <PumpStallNotification side="left" rpm={40} trippedAt={1_720_000_000} alertId={38} restoreTargetF={72} />,
+      )
+      expect(getByRole('alert').textContent).not.toContain('staged')
+    })
+
+    it('reads its own side from the thermal payload', () => {
+      trpcMock.thermal.data = thermalSides({ guardBlocked: true, homekitStagedTargetF: 78 })
+      const { getByRole } = render(
+        <PumpStallNotification side="right" rpm={40} trippedAt={1_720_000_000} alertId={38} restoreTargetF={72} />,
+      )
+      expect(getByRole('alert').textContent).not.toContain('staged')
+    })
+
+    it('formats staged and restore values in the display unit', () => {
+      // 78°F → 26°C, 72°F → 22°C (rounded display values)
+      trpcMock.thermal.data = thermalSides({ guardBlocked: true, homekitStagedTargetF: 78 })
+      const { getByRole } = render(
+        <PumpStallNotification side="left" rpm={40} trippedAt={1_720_000_000} alertId={38} restoreTargetF={72} unit="C" />,
+      )
+      expect(getByRole('alert').textContent).toContain(
+        'HomeKit has 26°C staged for the next power-on — Re-enable restores 22°C.',
+      )
+    })
   })
 })

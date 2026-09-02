@@ -15,6 +15,7 @@ import { deviceSettings, deviceState } from '@/src/db/schema'
 import { bedTemp, flowReadings, freezerTemp } from '@/src/db/biometrics-schema'
 
 const guardMock = vi.hoisted(() => ({ shouldBlock: vi.fn<(side: string) => boolean>(() => false) }))
+const homekitMock = vi.hoisted(() => ({ getHomekitStagedTargetF: vi.fn<(side: string) => number | null>(() => null) }))
 
 // Rows returned per table. device_state is a left→right queue (one query/side).
 const rows = vi.hoisted(() => ({
@@ -47,6 +48,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 }))
 vi.mock('@/src/hardware/iptablesCheck', () => ({ checkIptables: vi.fn(() => ({ ok: true, rules: [] })) }))
 vi.mock('@/src/hardware/pumpStallGuard', () => ({ shouldBlock: guardMock.shouldBlock }))
+vi.mock('@/src/homekit/accessories/sideController', () => ({ getHomekitStagedTargetF: homekitMock.getHomekitStagedTargetF }))
 
 function resolveFor(table: unknown): unknown[] {
   if (table === deviceSettings) return rows.settings
@@ -79,6 +81,7 @@ const FRESH = new Date(Date.now() - 30_000) // 30s old → not stale
 
 beforeEach(() => {
   guardMock.shouldBlock.mockReset().mockReturnValue(false)
+  homekitMock.getHomekitStagedTargetF.mockReset().mockReturnValue(null)
   rows.settings = [{ enabled: false }]
   rows.deviceStateQueue = []
   rows.deviceStateCursor.i = 0
@@ -277,5 +280,20 @@ describe('health.thermal verdicts', () => {
     expect(left.bedSurfaceTempF).toBeCloseTo(75.2, 1) // 24.00°C
     expect(left.guardBlocked).toBe(true)
     expect(left.isAlarmVibrating).toBe(true)
+  })
+
+  it('surfaces the hidden HomeKit staged target per side', async () => {
+    // PR #670 F1: a guard-rejected HomeKit temp write leaves the requested
+    // value staged for the next power-on. The alert card reads it from here.
+    homekitMock.getHomekitStagedTargetF.mockImplementation(side => (side === 'left' ? 78 : null))
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    const res = await caller.thermal({})
+    expect(res.sides[0].homekitStagedTargetF).toBe(78)
+    expect(res.sides[1].homekitStagedTargetF).toBeNull()
+    expect(homekitMock.getHomekitStagedTargetF).toHaveBeenCalledWith('left')
+    expect(homekitMock.getHomekitStagedTargetF).toHaveBeenCalledWith('right')
   })
 })

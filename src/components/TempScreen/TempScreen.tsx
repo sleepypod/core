@@ -4,6 +4,7 @@ import { useCallback } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
+import { useGuardRejectionNotice } from '@/src/hooks/useGuardRejectionNotice'
 import { useOptimisticValue } from '@/src/hooks/useOptimisticValue'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
@@ -13,6 +14,7 @@ import { PrimingIndicator } from '@/src/components/TempScreen/PrimingIndicator'
 import { PrimeCompleteNotification } from '@/src/components/TempScreen/PrimeCompleteNotification'
 import { PumpStallNotification } from '@/src/components/TempScreen/PumpStallNotification'
 import { AmbientLightChip } from '@/src/components/TempScreen/AmbientLightChip'
+import { SchedulerConfirmation } from '@/src/components/Schedule/SchedulerConfirmation'
 import { displayToSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 import { TEMP } from '@/src/lib/tempColors'
 import { Minus, Plus, Power } from 'lucide-react'
@@ -82,6 +84,16 @@ export const TempScreen = () => {
   const stallNotices = status?.pumpStallNotifications
   const snoozeStatus = status?.snooze
 
+  // Transient snackbar when a guard-blocked HomeKit write was refused —
+  // the overlay rides a single WS frame, the hook latches and auto-dismisses.
+  // Extracted structurally: the HTTP fallback's side type never carries the
+  // overlay, so dotting into the WS/HTTP union does not type-check.
+  const overlayOf = (side?: object) =>
+    side && 'guardRejection' in side
+      ? side.guardRejection as { ts: number, source: string } | undefined
+      : undefined
+  const guardRejectionMessage = useGuardRejectionNotice(overlayOf(status?.leftSide), overlayOf(status?.rightSide))
+
   /** Handle continuous drag updates — visual only, no hardware calls. */
   const handleDialChange = useCallback((tempF: number) => {
     targetOpt.preview(tempF)
@@ -145,6 +157,9 @@ export const TempScreen = () => {
       {/* Side selector — only on the Temp screen */}
       <SideSelector />
 
+      {/* HomeKit write refused by the pump stall guard — transient snackbar */}
+      <SchedulerConfirmation message={guardRejectionMessage} variant="error" />
+
       {/* Pump stall — highest priority, dismissible per-side */}
       {stallNotices?.left && (
         <PumpStallNotification
@@ -152,6 +167,8 @@ export const TempScreen = () => {
           rpm={stallNotices.left.rpm}
           trippedAt={stallNotices.left.trippedAt}
           alertId={stallNotices.left.alertId}
+          restoreTargetF={stallNotices.left.restore?.targetTemperature ?? null}
+          unit={unit}
           onAction={() => refetch()}
         />
       )}
@@ -161,6 +178,8 @@ export const TempScreen = () => {
           rpm={stallNotices.right.rpm}
           trippedAt={stallNotices.right.trippedAt}
           alertId={stallNotices.right.alertId}
+          restoreTargetF={stallNotices.right.restore?.targetTemperature ?? null}
+          unit={unit}
           onAction={() => refetch()}
         />
       )}

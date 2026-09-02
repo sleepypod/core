@@ -117,6 +117,14 @@ export interface GestureFrame {
   tapType: string
 }
 
+/** Extras the producers merge onto a side payload. guardRejection is a
+ * transient overlay broadcast when a guard-blocked write was refused
+ * (sideController) — present on exactly one frame; consumers must latch it. */
+interface DeviceStatusSideExtras {
+  isAlarmVibrating: boolean
+  guardRejection?: { ts: number, source: 'homekit' }
+}
+
 /** Device status frame — pushed on DacMonitor's adaptive poll (1s active /
  * 2s default / 5s idle) and immediately after mutations via
  * broadcastMutationStatus. Sides carry the full SideStatus payload the
@@ -124,8 +132,8 @@ export interface GestureFrame {
 export interface DeviceStatusFrame {
   type: 'deviceStatus'
   ts: number
-  leftSide: SideStatus & { isAlarmVibrating: boolean }
-  rightSide: SideStatus & { isAlarmVibrating: boolean }
+  leftSide: SideStatus & DeviceStatusSideExtras
+  rightSide: SideStatus & DeviceStatusSideExtras
   waterLevel: 'low' | 'ok'
   isPriming: boolean
   primeCompletedNotification?: { timestamp: number }
