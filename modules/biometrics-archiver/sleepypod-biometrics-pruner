@@ -1,11 +1,28 @@
 #!/bin/bash
-# Prune oldest gzipped RAW archives until /persistent disk usage falls
-# below TARGET_USED_PCT. Runs every 15 min after archiver. Never touches
-# files outside /persistent/biometrics-archive/.
+# Prune oldest gzipped RAW archives until BOTH bounds hold:
+#   1. the archive folder is <= MAX_ARCHIVE_MB   (primary cap)
+#   2. /persistent usage is  <  DISK_CEIL_PCT    (safety ceiling)
+# Runs every 15 min after archiver. Never touches files outside
+# /persistent/biometrics-archive/.
+#
+# Why an absolute folder cap, and not disk-percent alone (the original bound):
+#
+#   - archive-push is copy-only and never deletes locally, so this script is
+#     the ONLY thing bounding the cold archive. There is no second line of
+#     defence when it stops working, or stops early.
+#   - A percent-of-disk bound leaves the archive's size dependent on whatever
+#     else lives on /persistent, and `df`'s integer percent steps ~150 MB at a
+#     time on a 15 GB eMMC.
+#   - `-le TARGET` stopped as soon as usage was *at* the target, so the disk sat
+#     pinned at exactly 80% and never regained headroom. The ceiling below uses
+#     `-lt`, and is now only a backstop against growth outside the archive.
 set -euo pipefail
 
 ARCHIVE_DIR="/persistent/biometrics-archive"
-TARGET_USED_PCT="${TARGET_USED_PCT:-80}"
+# Primary cap: maximum size of the archive folder, in MiB.
+MAX_ARCHIVE_MB="${MAX_ARCHIVE_MB:-6144}"
+# Safety ceiling: also prune while whole-disk usage is at or above this percent.
+DISK_CEIL_PCT="${DISK_CEIL_PCT:-80}"
 
 mkdir -p "$ARCHIVE_DIR"
 
@@ -21,27 +38,70 @@ disk_used_pct() {
   echo "${pct:-0}"
 }
 
+max_archive_kb=$((MAX_ARCHIVE_MB * 1024))
+
+# Oldest-first candidate list, materialised once.
+#
+# `ls -1tr` (mtime order, oldest first) is busybox-safe; `find -printf` is
+# GNU-only and silently no-ops on busybox find. The list is written to a file
+# rather than re-derived per deletion for two reasons:
+#
+#   1. Reaching the folder cap can mean ~1300 removals, and re-running
+#      `ls -1tr` over ~2000 entries each time is O(n²) stat+sort work on eMMC.
+#   2. It keeps `head` out of every pipeline. Under `set -o pipefail` a
+#      `… | head -1` aborts the script on SIGPIPE once the upstream command's
+#      output exceeds the 64K pipe buffer — so it breaks only when the archive
+#      is large, i.e. exactly when pruning is needed, while passing every
+#      small-archive test. That is how an earlier revision silently stopped
+#      pruning and let 1983 files / 13 GB fill a 15 GB eMMC to 100%.
+list=$(mktemp) || { echo "pruner: mktemp failed" >&2; exit 1; }
+trap 'rm -f "$list"' EXIT
+ls -1tr "$ARCHIVE_DIR"/*.RAW.gz > "$list" 2>/dev/null || true
+
+# Folder total from du rather than a sum over the list, so stray *.tmp files
+# left behind by an interrupted archiver still count against the cap.
+archive_kb=$(du -sk "$ARCHIVE_DIR" 2>/dev/null | awk '{print $1}')
+archive_kb=${archive_kb:-0}
+
 pruned=0
-while :; do
-  used_pct=$(disk_used_pct)
-  if [ "$used_pct" -le "$TARGET_USED_PCT" ]; then
+used_pct=$(disk_used_pct)
+
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+
+  # Both bounds satisfied — done.
+  if [ "$archive_kb" -le "$max_archive_kb" ] && [ "$used_pct" -lt "$DISK_CEIL_PCT" ]; then
     break
   fi
 
-  # Oldest archive by mtime. `ls -tr` (mtime order, oldest first) is
-  # busybox-safe; the old `find -printf` is GNU-only and silently no-ops on
-  # busybox find. `awk NR==1` rather than `head -1` consumes the whole stream —
-  # `head` closes the pipe early and, under `set -o pipefail`, aborts the
-  # script on SIGPIPE so it never prunes (archive grows unbounded, /persistent
-  # fills past target).
-  oldest=$(ls -1tr "$ARCHIVE_DIR"/*.RAW.gz 2>/dev/null | awk 'NR==1')
-  if [ -z "$oldest" ]; then
-    echo "pruner: $used_pct% used but archive is empty — nothing to prune" >&2
-    break
-  fi
-
-  rm -f "$oldest"
+  # Size before unlinking. One `du` fork per removal, which measured ~19 s for a
+  # 1488-file catch-up run on a Pod and ~0.05 s in steady state (a couple of
+  # files per 15 min) — cheap enough at Nice=10 / IOSchedulingClass=idle to keep
+  # the accounting obvious. `find -printf '%k'` would avoid the fork but is
+  # GNU-only and no-ops on busybox.
+  kb=$(du -k "$path" 2>/dev/null | awk '{print $1}')
+  rm -f "$path" || continue
+  archive_kb=$((archive_kb - ${kb:-0}))
+  [ "$archive_kb" -lt 0 ] && archive_kb=0
   pruned=$((pruned + 1))
-done
 
-echo "pruner: pruned=$pruned used_pct=$(disk_used_pct)%"
+  # Re-read df only once the folder cap is satisfied and the ceiling is the
+  # sole remaining reason to keep going — while over the cap it cannot end the
+  # loop, so polling it would be a wasted fork per removal.
+  if [ "$archive_kb" -le "$max_archive_kb" ]; then
+    used_pct=$(disk_used_pct)
+  fi
+done < "$list"
+
+used_pct=$(disk_used_pct)
+echo "pruner: pruned=$pruned archive_mb=$((archive_kb / 1024)) used_pct=${used_pct}%"
+
+# Over budget with nothing left to remove means /persistent is filling from
+# outside the archive. Exit non-zero so it surfaces in `systemctl --failed`
+# rather than scrolling past inside a success log — the previous revision's
+# silent give-up is why a full disk went unnoticed for a month.
+if [ "$archive_kb" -gt "$max_archive_kb" ] || [ "$used_pct" -ge "$DISK_CEIL_PCT" ]; then
+  echo "pruner: still over budget — archive=$((archive_kb / 1024))MB (cap ${MAX_ARCHIVE_MB}MB)," \
+       "disk=${used_pct}% (ceiling ${DISK_CEIL_PCT}%), no *.RAW.gz left to remove" >&2
+  exit 1
+fi

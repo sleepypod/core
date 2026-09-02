@@ -18,7 +18,7 @@ Mount a **500 MB tmpfs at `/persistent/biometrics`**, redirect frankenfirmware's
 frank → /persistent/biometrics/         (tmpfs, hot live RAW)
            ↓ archiver every 15 min: gzip oldest, atomic rename
         /persistent/biometrics-archive/<seqno>.RAW.gz
-           ↓ pruner every 15 min: drop oldest until df < 80%
+           ↓ pruner every 15 min: drop oldest until folder <= MAX_ARCHIVE_MB (and df < 80%)
 ```
 
 ### Firmware integration without a binary patch
@@ -41,7 +41,19 @@ tmpfs loses contents on reboot. The acceptable loss window is bounded by the arc
 - **Unclean reboot**: up to ~30 min of live waveform lost (one rotation period the archiver hadn't picked up yet, plus the in-progress file the archiver intentionally skips while firmware is still writing it).
 - **`biometrics.db` rows are unaffected** — sidecar processors (piezo-processor, sleep-detector, environment-monitor) consume RAW frames as they stream and persist HR/HRV/BR/session rows to SQLite on the same `/persistent/sleepypod-data/` (eMMC) path. Vitals durability is unchanged.
 
-Loss of 30 min of upstream waveform is a worthwhile trade for years of eMMC wear avoidance plus an indefinitely growable cold archive (capped by the pruner at 80% disk).
+Loss of 30 min of upstream waveform is a worthwhile trade for years of eMMC wear avoidance plus a cold archive bounded by the pruner (folder capped at `MAX_ARCHIVE_MB`, default 6 GiB, with an 80% whole-disk safety ceiling).
+
+## Pruner constraints (learned the hard way)
+
+`archive-push` is copy-only and never deletes locally, so the pruner is the **only** thing bounding the cold archive. It has no second line of defence, and its failures are silent by nature — nothing else notices an archive that stops shrinking. Three constraints follow, each from a bug that reached a live pod:
+
+1. **No `head` in a pipeline.** `find … | sort -n | head -1` looks fine and passes every small-archive test: all of `sort`'s output fits the 64 KB pipe buffer, so `sort` exits 0 before `head` closes the pipe. Once the archive is large enough to overrun that buffer, `sort` takes `EPIPE` and dies with status 141; `pipefail` promotes it and `set -e` aborts the script **before the first file is removed**. The failure therefore appears only when the archive is big — exactly when pruning matters. Observed in the field: `sort: write failed: 'standard output': Broken pipe`, `status=2/INVALIDARGUMENT`, every 15 minutes for a month, while 1983 files / 13 GB filled a 15 GB eMMC to 100%.
+
+2. **GNU-only tools are a trap.** Pods can ship busybox (see the `sha256sum`/busybox fallback in `scripts/install`), where `find -printf` silently no-ops and `df --output=pcent` is rejected outright — the latter yielding an empty read that defaults to `0%`, so the loop concludes there is nothing to do. Use `ls -1tr`, `du -k`, and `df -P`.
+
+3. **Cap the folder, and fail loudly.** A percent-of-disk bound makes the archive's size depend on everything else on `/persistent`, and `df`'s integer percent steps ~150 MB at a time on a 15 GB eMMC. Worse, the original `-le TARGET` stopped as soon as usage was *at* target, pinning the disk at exactly 80% with no headroom ever recovered. `MAX_ARCHIVE_MB` is now the primary bound and the 80% ceiling only a backstop; when the pruner cannot reach its target it exits non-zero so `systemctl --failed` shows it.
+
+The blast radius reached well past lost waveform: `pnpm install` writes to `node_modules`, which is bind-mounted onto `/persistent` (see `scripts/lib/relocation-helpers`), so a full eMMC also broke `sp-update` — whose own pre-flight measured only the rootfs and so reported plenty of space. The archiver meanwhile failed with `gzip: stdout: No space left on device`, dropping live frames.
 
 ## Alternatives considered
 

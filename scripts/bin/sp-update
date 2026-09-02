@@ -135,9 +135,69 @@ cleanup() {
 trap cleanup EXIT
 
 # Pre-flight: disk space
-DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
-if [ "$DISK_AVAIL" -lt 300 ]; then
-  echo "Error: Need 300MB free, only ${DISK_AVAIL}MB available" >&2
+#
+# Measuring only $INSTALL_DIR is not enough — an update writes to three
+# separate filesystems:
+#
+#   $INSTALL_DIR             rootfs (5.9 GB)  source tree + .next
+#   node_modules             eMMC   (15 GB)   bind-mounted onto /persistent
+#                                             (see scripts/lib/relocation-helpers)
+#   $WORK_DIR / $BACKUP_DIR  tmpfs  (/tmp)    release tarball + rollback copy
+#
+# A pod with a healthy rootfs and a 100%-full /persistent sailed through the
+# old single-path check and then died mid-`pnpm install` with ENOSPC: the tree
+# it measured and the node_modules it filled were different volumes. Seen in
+# the field once the biometrics archive filled the eMMC — the 300 MB it found
+# free on rootfs said nothing about the volume pnpm was about to write to.
+#
+# `df -Pk` throughout: -P is POSIX (busybox and GNU) and guarantees a single
+# unwrapped data row, and -k avoids `-m`, which busybox df need not provide.
+# Same portability reason sleepypod-biometrics-pruner uses `df -P`.
+declare -A NEED_MB=()
+declare -A NEED_PATH=()
+
+require_space() {
+  local path="$1" mb="$2" mp
+  # df needs a path that exists — walk up to the nearest existing ancestor.
+  while [ ! -e "$path" ] && [ "$path" != "/" ]; do path=$(dirname "$path"); done
+  mp=$(df -Pk "$path" | awk 'NR==2{print $6}')
+  mp=${mp:-$path}
+  # Keyed by mount point so paths sharing a filesystem sum instead of racing.
+  NEED_MB["$mp"]=$(( ${NEED_MB["$mp"]:-0} + mb ))
+  NEED_PATH["$mp"]="${NEED_PATH["$mp"]:-$path}"
+}
+
+require_space "$INSTALL_DIR" 500            # source tree + .next
+require_space "${TMPDIR:-/tmp}" 700         # WORK_DIR and BACKUP_DIR coexist
+require_space /opt/sleepypod 300            # module venvs + uv cache
+# node_modules (~700 MB) lands on /persistent once relocated, rootfs before.
+if mountpoint -q /persistent 2>/dev/null; then
+  require_space /persistent/sleepypod-core 900
+else
+  require_space "$INSTALL_DIR" 900
+fi
+
+DISK_SHORT=false
+for mp in "${!NEED_MB[@]}"; do
+  need_mb=${NEED_MB["$mp"]}
+  avail_kb=$(df -Pk "${NEED_PATH["$mp"]}" | awk 'NR==2{print $4}')
+  avail_mb=$(( ${avail_kb:-0} / 1024 ))
+  if [ "$avail_mb" -lt "$need_mb" ]; then
+    echo "Error: $mp needs ${need_mb}MB free, only ${avail_mb}MB available" >&2
+    DISK_SHORT=true
+  fi
+done
+
+if [ "$DISK_SHORT" = true ]; then
+  cat >&2 <<HINT
+
+Free space and retry. Usual suspects:
+  /persistent full   du -sh /persistent/biometrics-archive
+                     then run /usr/local/bin/sleepypod-biometrics-pruner
+  stale DB backups   ls -la $DATA_DIR/sleepypod.db.bak.*
+                     (sp-maintenance keeps the 3 most recent)
+  rootfs full        du -shx /opt/sleepypod/* /var/log
+HINT
   exit 1
 fi
 
