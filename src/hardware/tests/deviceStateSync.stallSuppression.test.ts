@@ -264,6 +264,33 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('right'))?.expectedActive).toBe(false)
   })
 
+  it.each([0, 600])('suppresses a firmware timeout through three minutes of stale positive duty (heatTime=%s)', async (heatingDuration) => {
+    // Trinity's timeout report: target becomes neutral before pump duty does.
+    // Fresh status polls must keep suppressing the stop beyond both the 90s
+    // snapshot-age limit and 120s bilateral dwell, even with a lagging DB.
+    for (let elapsed = 0; elapsed <= 200; elapsed += 10) {
+      await sync.sync(status({ targetLevel: 0, heatingDuration }))
+      seedSide('left', true, 75)
+      seedSide('right', true, 75)
+      sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+
+      for (const side of ['left', 'right'] as const) {
+        expect(await lastGuardInput(side)).toMatchObject({
+          expectedActive: false,
+          preStallDurationSeconds: null,
+        })
+      }
+      vi.advanceTimersByTime(10_000)
+    }
+
+    // A subsequent active session must still expose a driven, stopped pump.
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 7200 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    for (const side of ['left', 'right'] as const) {
+      expect((await lastGuardInput(side))?.expectedActive).toBe(true)
+    }
+  })
+
   it('stops trusting a stale neutral-target snapshot', async () => {
     await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
     seedSide('left', true, 75)
