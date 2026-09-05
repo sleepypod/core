@@ -28,7 +28,7 @@ vi.mock('../pumpStallGuard', () => ({
 
 import * as dbModule from '@/src/db'
 import { onFrame } from '../pumpStallGuard'
-import { DeviceStateSync, _resetMutationStamps } from '../deviceStateSync'
+import { DeviceStateSync, markSideMutated, _resetMutationStamps } from '../deviceStateSync'
 import { DEFAULT_HEATING_DURATION } from '../types'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
@@ -401,6 +401,102 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     // must stay on the plain device_state path, not be suppressed forever.
     await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
     sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each([null, 50])('keeps an observed expiry off through fresh zero-countdown polls with a retained target (duty=%s)', async (duty) => {
+    await sync.sync(status({ targetLevel: -20, heatingDuration: 180 }))
+    vi.advanceTimersByTime(175_000)
+    await sync.sync(status({ targetLevel: -20, heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+
+    // Pod 5 J55 live failure: heatTime reaches zero and RPM stops, but the
+    // non-neutral target/current level survive. Keep polling beyond both
+    // the bilateral dwell and the old ten-minute projected-expiry window.
+    for (let elapsed = 0; elapsed <= 660; elapsed += 10) {
+      await sync.sync(status({ targetLevel: -20, heatingDuration: 0 }))
+      for (const side of ['left', 'right'] as const) {
+        expect(sqlite.prepare('SELECT is_powered, target_temperature, powered_on_at FROM device_state WHERE side = ?').get(side)).toEqual({
+          is_powered: 0, target_temperature: null, powered_on_at: null,
+        })
+        // The guard must also handle a lagging/failed powered-state mirror.
+        seedSide(side, true, 75)
+      }
+      sync.recordFlowData(frame({ rpm: 0, duty }))
+      for (const side of ['left', 'right'] as const) {
+        expect(await lastGuardInput(side)).toMatchObject({ expectedActive: false, preStallDurationSeconds: null })
+      }
+      vi.advanceTimersByTime(10_000)
+    }
+  })
+
+  it('does not infer expiry from an early zero countdown', async () => {
+    await sync.sync(status({ heatingDuration: 600 }))
+    vi.advanceTimersByTime(10_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    vi.advanceTimersByTime(590_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('requires recent countdown evidence before confirming expiry', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(600_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('does not use a confirmed expiry after its status stream becomes stale', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.advanceTimersByTime(91_000)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('a new command clears expiry before the next firmware poll, only on that side', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    markSideMutated('left')
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+    expect((await lastGuardInput('right'))?.expectedActive).toBe(false)
+  })
+
+  it('does not adopt a stale countdown during a new command freshness window', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(1_000)
+    markSideMutated('left')
+    await sync.sync(status({ heatingDuration: 4 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each(['countdown', 'target', 'neutral', 'clock rollback'] as const)('invalidates observed expiry on %s', async (change) => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    if (change === 'countdown') await sync.sync(status({ heatingDuration: 600 }))
+    if (change === 'target') await sync.sync(status({ targetLevel: 10, heatingDuration: 0 }))
+    if (change === 'neutral') {
+      await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+      await sync.sync(status({ heatingDuration: 0 }))
+    }
+    if (change === 'clock rollback') {
+      vi.setSystemTime(Date.now() - 10_000)
+      await sync.sync(status({ heatingDuration: 0 }))
+    }
+    seedSide('left', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 

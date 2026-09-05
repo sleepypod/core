@@ -5,6 +5,9 @@ import { waterLevelReadings, flowReadings } from '@/src/db/biometrics-schema'
 import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
 import { DEFAULT_HEATING_DURATION } from './types'
 import type { DeviceStatus, Side } from './types'
+import { getLastSideMutationAt } from './sideMutations'
+
+export { markSideMutated, _resetMutationStamps } from './sideMutations'
 
 /**
  * Consumes status:updated events and writes current device state to the DB.
@@ -27,23 +30,11 @@ import type { DeviceStatus, Side } from './types'
 // freshness window. Observation fields (current temperature, water level)
 // still update normally.
 const MUTATION_FRESHNESS_MS = 5_000
-const recentMutations: Record<Side, number> = { left: 0, right: 0 }
-
-/** Mark a side as just-mutated; suppresses powered-state overwrite from
- *  the next firmware poll(s) within the freshness window. */
-export function markSideMutated(side: Side): void {
-  recentMutations[side] = Date.now()
-}
 
 function isSideRecentlyMutated(side: Side): boolean {
-  return Date.now() - recentMutations[side] < MUTATION_FRESHNESS_MS
+  return Date.now() - getLastSideMutationAt(side) < MUTATION_FRESHNESS_MS
 }
 
-/** @internal — for tests only */
-export function _resetMutationStamps(): void {
-  recentMutations.left = 0
-  recentMutations.right = 0
-}
 /** Read alarm vibration state from DB (set by setAlarm/clearAlarm mutations). */
 export function getAlarmState(): { left: boolean, right: boolean } {
   try {
@@ -91,6 +82,14 @@ const SESSION_END_GRACE_S = 90 // remaining session seconds within which a stop 
 const SESSION_END_STALE_S = 600 // stop trusting the projected countdown this long past its end
 const SESSION_END_RUNNING_RPM_MIN = 1_500 // strong evidence that both pumps were healthy before stopping
 const SESSION_END_RUNNING_EVIDENCE_MS = 30_000 // the healthy frame must immediately precede the stop
+const SESSION_EXPIRY_TOLERANCE_MS = 2_000 // integer countdown plus status-poll latency
+
+interface ObservedSession {
+  deadline: number
+  targetLevel: number
+  mutationAt: number
+  expired: boolean
+}
 
 export class DeviceStateSync {
   private lastWaterLevelWrite = 0
@@ -103,6 +102,7 @@ export class DeviceStateSync {
   // (currentLevel stays non-zero while the water equalizes), which is exactly
   // the lag that false-tripped the stall guard on every session end.
   private lastSideStatus: Record<Side, { targetLevel: number, heatingDuration: number, at: number } | null> = { left: null, right: null }
+  private observedSession: Record<Side, ObservedSession | null> = { left: null, right: null }
   private isPriming = false
   private primeEndedAt = 0
   private stallGuardInFlight: Record<Side, boolean> = { left: false, right: false }
@@ -116,8 +116,8 @@ export class DeviceStateSync {
       this.primeEndedAt = now
     }
     this.isPriming = status.isPriming
-    this.lastSideStatus.left = { targetLevel: status.leftSide.targetLevel, heatingDuration: status.leftSide.heatingDuration, at: now }
-    this.lastSideStatus.right = { targetLevel: status.rightSide.targetLevel, heatingDuration: status.rightSide.heatingDuration, at: now }
+    this.recordSideStatus('left', status.leftSide, now)
+    this.recordSideStatus('right', status.rightSide, now)
 
     this.recordWaterLevel(status)
     try {
@@ -134,6 +134,54 @@ export class DeviceStateSync {
     }
   }
 
+  private recordSideStatus(side: Side, status: DeviceStatus['leftSide'], now: number): void {
+    const previous = this.lastSideStatus[side]
+    const session = this.observedSession[side]
+    const mutationAt = getLastSideMutationAt(side)
+    const pollGap = previous ? now - previous.at : Infinity
+
+    if (status.targetLevel === 0 || isSideRecentlyMutated(side)) {
+      // A neutral target ends this history. Polls just after a command can
+      // still describe the old session, so do not adopt their countdown.
+      this.observedSession[side] = null
+    }
+    else if (status.heatingDuration > 0) {
+      this.observedSession[side] = {
+        deadline: now + status.heatingDuration * 1000,
+        targetLevel: status.targetLevel,
+        mutationAt,
+        expired: false,
+      }
+    }
+    else if (session
+      && session.mutationAt === mutationAt
+      && session.targetLevel === status.targetLevel
+      && pollGap >= 0 && pollGap <= SESSION_END_GRACE_S * 1000
+      && (session.expired || now >= session.deadline - SESSION_EXPIRY_TOLERANCE_MS)) {
+      // A recently observed positive countdown has actually reached zero.
+      // Keep the confirmed end through fresh zero polls even if firmware
+      // retains its target/current level indefinitely. This must not become
+      // another false trip after a fixed grace period runs out.
+      session.expired = true
+    }
+    else {
+      // Zero throughout a session, an early zero, a new target/command, or
+      // a missing/rolled-back status stream is not proof of expiry.
+      this.observedSession[side] = null
+    }
+    this.lastSideStatus[side] = { targetLevel: status.targetLevel, heatingDuration: status.heatingDuration, at: now }
+  }
+
+  private hasConfirmedSessionEnd(side: Side, now: number): boolean {
+    const last = this.lastSideStatus[side]
+    const session = this.observedSession[side]
+    return Boolean(session?.expired && last
+      && session.mutationAt === getLastSideMutationAt(side)
+      && last.heatingDuration === 0
+      && last.targetLevel === session.targetLevel
+      && now >= last.at && now - last.at <= SESSION_END_GRACE_S * 1000)
+  }
+
   /**
    * Upsert one side of device_state from a fresh DeviceStatus.
    * Detects OFF→ON and ON→OFF transitions:
@@ -144,11 +192,11 @@ export class DeviceStateSync {
     const sideStatus = side === 'left' ? status.leftSide : status.rightSide
     const now = new Date()
 
-    // Stale display fix: if firmware reports targetLevel=0 AND heatingDuration=0,
-    // the pod has returned to neutral after its duration expired. Force isPowered
-    // to false regardless of currentLevel (which may still be non-zero while the
-    // water temperature equalizes back to ambient).
-    const durationExpired = sideStatus.targetLevel === 0 && sideStatus.heatingDuration === 0
+    // An observed countdown expiry or an explicit neutral/zero state ends
+    // regulation even while firmware retains the target or current level.
+    // Keep the DB/UI off while the water equalizes back to ambient.
+    const durationExpired = (sideStatus.targetLevel === 0 && sideStatus.heatingDuration === 0)
+      || this.hasConfirmedSessionEnd(side, now.getTime())
     const isNowPowered = durationExpired ? false : sideStatus.currentLevel !== 0
 
     const skipPoweredFields = isSideRecentlyMutated(side)
@@ -300,6 +348,10 @@ export class DeviceStateSync {
       && snapshotAgeSeconds != null
       && snapshotAgeSeconds >= 0
       && snapshotAgeSeconds <= SESSION_END_GRACE_S) return true
+
+    // Some firmware retains the old non-neutral target after heatTime has
+    // counted down to zero. That confirmed expiry also outranks stale duty.
+    if (this.hasConfirmedSessionEnd(side, now)) return true
 
     // Duty is authoritative when the frame carries it: 0 means the firmware
     // isn't driving the pump (commanded stop), while a driven pump (duty > 0)

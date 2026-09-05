@@ -446,6 +446,25 @@ stale running evidence, an asymmetric stop, or an older timestamp keeps the
 stall visible. This evidence suppresses the trip only; it never invents a
 duration to restore from `poweredOnAt`.
 
+**2026-09-04 (live Pod 5 J55 regression).** A 180-second session on both sides
+ran at roughly 1940/2004 RPM, counted down to zero, and stopped both pumps.
+Firmware retained the non-neutral target. The left guard falsely tripped
+about 50 seconds after expiry: each new zero-countdown poll replaced the
+positive countdown, losing the evidence used by expected-stop suppression.
+
+`DeviceStateSync` now remembers a positive countdown's deadline. A zero poll
+confirms expiry only when it follows recent status (at most 90 seconds),
+the same target and command, and reaches that deadline (with two seconds
+of tolerance for integer countdown/poll timing). Confirmed expiry keeps the
+guard and powered-state mirror off while fresh zero polls continue; it does
+not merely postpone a false trip until a grace period ends. A new command,
+positive countdown, target change, neutral target, status gap, or clock
+rollback invalidates that history. An early zero or a firmware variant that
+always reports zero provides no expiry evidence. Command stamps are shared
+across Turbopack module instances so a route mutation invalidates the DAC
+monitor's old session before the next poll. No restore duration is synthesized
+from this history, and the trip/recovery thresholds are unchanged.
+
 ## References
 
 - Incident report: Discord, 2026-05-24, free-sleep user thread.
