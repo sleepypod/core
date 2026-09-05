@@ -317,7 +317,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
       if (cmd.startsWith('/sbin/iptables -L INPUT')) return 'udp dpt:5353' // omits 192.168.0.0/16
       if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
       // Repair invocation
-      if (cmd.includes('-A INPUT -s 192.168.0.0/16')) {
+      if (cmd.includes('-I INPUT 1 -s 192.168.0.0/16')) {
         repaired.push(cmd)
         return ''
       }
@@ -339,7 +339,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     expect(messages.some(m => m.includes('Repaired missing rule'))).toBe(true)
     expect(messages.some(m => m.includes('Saved 1 repaired rules'))).toBe(true)
     expect(execSyncMock).toHaveBeenCalledWith(
-      '/sbin/iptables -A INPUT -s 192.168.0.0/16 -j ACCEPT',
+      '/sbin/iptables -I INPUT 1 -s 192.168.0.0/16 -j ACCEPT',
       { encoding: 'utf-8', timeout: 5000 },
     )
     expect(execSyncMock).toHaveBeenCalledWith(
@@ -358,7 +358,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
       if (cmd.startsWith('/sbin/iptables -L INPUT')) return ''
       if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return ''
       // Every repair fails
-      if (cmd.includes('-I OUTPUT') || cmd.includes('-I INPUT') || cmd.includes('-A INPUT')) {
+      if (cmd.includes('-I OUTPUT') || cmd.includes('-I INPUT')) {
         throw unavailableError('iptables: not permitted', 4)
       }
       // No persist call expected since repaired list is empty
@@ -388,7 +388,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
       if (cmd.startsWith('/sbin/iptables -L INPUT')) return 'udp dpt:5353' // missing LAN
       if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
-      if (cmd.includes('-A INPUT -s 192.168.0.0/16')) return ''
+      if (cmd.includes('-I INPUT 1 -s 192.168.0.0/16')) return ''
       if (cmd.startsWith('/sbin/iptables-save')) {
         throw unavailableError('No such file or directory: /etc/iptables/rules.v4')
       }
@@ -418,7 +418,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
       if (cmd.startsWith('/usr/sbin/iptables -L INPUT')) return ''
       if (cmd.startsWith('/usr/sbin/iptables -L OUTPUT')) return ''
       // Repairs succeed
-      if (cmd.includes('-I ') || cmd.includes('-A ')) return ''
+      if (cmd.includes('-I ')) return ''
       if (cmd.includes('iptables-save')) {
         saveCmd = cmd
         return ''
@@ -448,6 +448,31 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
 
     expect(status.repaired).toEqual(['LAN access (192.168.0.0/16)'])
     expect(commands).toContain('/opt/iptables-tools/iptables-save > /etc/iptables/rules.v4')
+    log.mockRestore()
+  })
+
+  it('repairs every missing allow at rule 1 so empty chains and terminal drops are safe', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const repairs: string[] = []
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -L')) return ''
+      if (cmd.startsWith('/sbin/iptables -I')) {
+        repairs.push(cmd)
+        if (!/ -I (?:INPUT|OUTPUT) 1 /.test(cmd)) {
+          throw unavailableError('iptables: Index of insertion too big', 1)
+        }
+        return ''
+      }
+      return ''
+    })
+
+    const { checkAndRepairIptables } = await import('../iptablesCheck')
+    const status = checkAndRepairIptables()
+
+    expect(status.repaired).toHaveLength(5)
+    expect(repairs).toHaveLength(5)
+    expect(repairs.every(cmd => / -I (?:INPUT|OUTPUT) 1 /.test(cmd))).toBe(true)
     log.mockRestore()
   })
 })

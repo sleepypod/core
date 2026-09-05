@@ -7,6 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { TRPCError } from '@trpc/server'
 
 const helpersMock = vi.hoisted(() => {
   const client = {
@@ -658,6 +659,32 @@ describe('device.setTemperature', () => {
     }
   })
 
+  it('leaves the optimistic write in place when the failure is not a guard rejection', async () => {
+    vi.useFakeTimers()
+    try {
+      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
+      // A wrapped hardware failure is a TRPCError too — only the guard's
+      // PRECONDITION_FAILED code may trigger the parked-mirror restore.
+      helpersMock.withHardwareClient.mockRejectedValueOnce(
+        new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to set temperature' }),
+      )
+
+      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
+      const caught = promise.catch((e: unknown) => e)
+      await vi.advanceTimersByTimeAsync(250)
+      const err = await caught
+
+      expect(err).toBeInstanceOf(TRPCError)
+      expect((err as TRPCError).code).toBe('INTERNAL_SERVER_ERROR')
+      // Single optimistic update, no compensating off-write, no off broadcast.
+      expect(dbMock.update).toHaveBeenCalledTimes(1)
+      expect(broadcastMock.broadcastMutationStatus).not.toHaveBeenCalledWith('left', { targetLevel: 0 })
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('coalesces a second call into one hardware command (last value wins)', async () => {
     vi.useFakeTimers()
     try {
@@ -1030,6 +1057,95 @@ describe('device.execute (raw command)', () => {
       releaseLeft()
       await holder.catch(() => {})
     }
+  })
+
+  it('a non-energizing command never queues behind held side locks', async () => {
+    let releaseLeft!: () => void
+    let releaseRight!: () => void
+    const leftHolder = withSideLock('left', () => new Promise<void>((resolve) => {
+      releaseLeft = resolve
+    }))
+    const rightHolder = withSideLock('right', () => new Promise<void>((resolve) => {
+      releaseRight = resolve
+    }))
+    try {
+      sharedClientMock.sendRaw.mockResolvedValue('ok')
+      // Must complete while BOTH locks are held — routing a guard-free command
+      // through the side locks would serialize reads behind hardware writes.
+      const pending = caller.execute({ command: 'DEVICE_STATUS' })
+      const outcome = await Promise.race([
+        pending.then(() => 'completed'),
+        new Promise<string>(resolve => setTimeout(() => resolve('lock-blocked'), 200)),
+      ])
+      expect(outcome).toBe('completed')
+      expect(sharedClientMock.sendRaw).toHaveBeenCalledWith('14', undefined)
+    }
+    finally {
+      releaseLeft()
+      releaseRight()
+      await leftHolder.catch(() => {})
+      await rightHolder.catch(() => {})
+    }
+  })
+
+  it('a single-side energizing write does not wait on the opposite side lock', async () => {
+    let releaseRight!: () => void
+    const rightHolder = withSideLock('right', () => new Promise<void>((resolve) => {
+      releaseRight = resolve
+    }))
+    try {
+      sharedClientMock.sendRaw.mockResolvedValue('ok')
+      // A left-side write needs only the left lock; taking both would let one
+      // side's slow hardware call stall the other side's commands.
+      const pending = caller.execute({ command: 'TEMP_LEVEL_LEFT', args: '50' })
+      const outcome = await Promise.race([
+        pending.then(() => 'completed'),
+        new Promise<string>(resolve => setTimeout(() => resolve('lock-blocked'), 200)),
+      ])
+      expect(outcome).toBe('completed')
+      expect(sharedClientMock.sendRaw).toHaveBeenCalledWith('11', '50')
+    }
+    finally {
+      releaseRight()
+      await rightHolder.catch(() => {})
+    }
+  })
+
+  it('a both-sides raw write queues behind the right side lock too', async () => {
+    let releaseRight!: () => void
+    const rightHolder = withSideLock('right', () => new Promise<void>((resolve) => {
+      releaseRight = resolve
+    }))
+    try {
+      sharedClientMock.sendRaw.mockResolvedValue('ok')
+      // SET_TEMP energizes both sides, so it must hold both locks — collapsing
+      // to the first side's lock would let it re-energize a right side that a
+      // concurrent holder is parking.
+      const pending = caller.execute({ command: 'SET_TEMP', args: '50' })
+      await new Promise(resolve => setTimeout(resolve, 100))
+      expect(sharedClientMock.sendRaw).not.toHaveBeenCalled()
+
+      releaseRight()
+      await rightHolder
+      await pending
+      expect(sharedClientMock.sendRaw).toHaveBeenCalledWith('1', '50')
+    }
+    finally {
+      releaseRight()
+      await rightHolder.catch(() => {})
+    }
+  })
+
+  it('re-checks both sides inside the nested locks before a both-sides raw write', async () => {
+    // Pre-flight passes for both sides (two checks); the trip lands while the
+    // command sits inside the nested locks — the in-lock loop must catch it.
+    pumpStallMock.shouldBlock
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true)
+    sharedClientMock.sendRaw.mockResolvedValue('ok')
+    await expect(caller.execute({ command: 'SET_TEMP', args: '50' })).rejects.toThrow(/Pump stall protection active/)
+    expect(sharedClientMock.sendRaw).not.toHaveBeenCalled()
   })
 })
 

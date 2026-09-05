@@ -14,6 +14,7 @@ import { db } from '@/src/db'
 import { deviceState, sideSettings } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
+import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import { withSideLock } from '@/src/hardware/sideLock'
 import type { Side } from '@/src/hardware/types'
 
@@ -50,9 +51,13 @@ export function startKeepalive(side: Side): void {
           return
         }
 
-        // Skip silently while the pump stall guard is holding the side off.
+        // Skip while the pump stall guard is holding the side off.
         // Re-issuing the user's last setpoint here would defeat the cutoff.
+        // Warn — this is the only trace: with the keepalive withheld, the
+        // firmware duration timer is never refreshed and an alwaysOn
+        // session lapses when it expires.
         if (pumpStallShouldBlock(side)) {
+          console.warn(`[keepalive] ${side} skipped — pump stall guard active (alert ${getPumpStallNotice(side)?.alertId ?? 'unknown'}); session will lapse on the firmware duration timer`)
           return
         }
 

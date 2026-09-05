@@ -39,13 +39,38 @@ else
   SAVED_IPTABLES=""
   WAN_WAS_BLOCKED=false
   wan_is_blocked() {
-    iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
+    iptables -S OUTPUT 2>/dev/null \
+      | grep -Eq '^-P OUTPUT DROP$|^-A OUTPUT -j (DROP|SLEEPYPOD-BLOCK)$'
+  }
+  sleepypod_chain_is_effectively_blocked() {
+    local rules line
+    rules="$(iptables -S SLEEPYPOD-BLOCK 2>/dev/null)" || return 1
+    while IFS= read -r line; do
+      case "$line" in
+        '-A SLEEPYPOD-BLOCK -j ACCEPT') return 1 ;;
+        '-A SLEEPYPOD-BLOCK -j DROP') return 0 ;;
+      esac
+    done <<< "$rules"
+    return 1
+  }
+  wan_is_effectively_blocked() {
+    local rules line policy_drop=false
+    rules="$(iptables -S OUTPUT 2>/dev/null)" || return 1
+    while IFS= read -r line; do
+      case "$line" in
+        '-P OUTPUT DROP') policy_drop=true ;;
+        '-A OUTPUT -j ACCEPT') return 1 ;;
+        '-A OUTPUT -j DROP') return 0 ;;
+        '-A OUTPUT -j SLEEPYPOD-BLOCK') sleepypod_chain_is_effectively_blocked; return ;;
+      esac
+    done <<< "$rules"
+    [ "$policy_drop" = true ]
   }
   unblock_wan() {
     echo "Opening WAN access..."
-    # Capture state verbatim. `|| true` would mask a failed save and
-    # quietly fall through on restore — silent data loss.
-    if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+    # Capture stdout only: backend warnings on stderr are not valid input to
+    # iptables-restore and must not contaminate the saved ruleset.
+    if ! SAVED_IPTABLES="$(iptables-save)"; then
       echo "Error: iptables-save failed — refusing to unblock WAN." >&2
       echo "$SAVED_IPTABLES" >&2
       SAVED_IPTABLES=""
@@ -55,26 +80,64 @@ else
       echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
       return 1
     fi
-    iptables -F && iptables -X && iptables -t nat -F && iptables -t nat -X
+    iptables -P INPUT ACCEPT || return 1
+    iptables -P OUTPUT ACCEPT || return 1
+    iptables -P FORWARD ACCEPT || return 1
+    iptables -F || return 1
+    iptables -X || return 1
+    iptables -t nat -F || return 1
+    iptables -t nat -X || return 1
     echo "WAN open."
   }
   restore_wan() {
     if [ -n "$SAVED_IPTABLES" ]; then
       echo "Restoring iptables rules..."
-      echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || iptables -P OUTPUT DROP
+      if ! printf '%s\n' "$SAVED_IPTABLES" | iptables-restore || ! wan_is_effectively_blocked; then
+        echo "Error: failed to restore a blocking iptables ruleset; applying a deny policy." >&2
+        iptables -P OUTPUT DROP || return 1
+        iptables -P INPUT DROP || return 1
+        iptables -P FORWARD DROP || return 1
+      fi
     else
-      iptables -P OUTPUT DROP
+      iptables -P OUTPUT DROP || return 1
+      iptables -P INPUT DROP || return 1
+      iptables -P FORWARD DROP || return 1
     fi
     echo "WAN blocked."
   }
 fi
+
+# sp-update replaces its source tree while this process continues running
+# from the old script inode. Reload the newly-installed helper before a final
+# restore (or rollback) so its firewall fixes take effect on this very update,
+# while preserving the snapshot captured by the old helper.
+reload_iptables_helpers() {
+  [ -f "$INSTALL_DIR/scripts/lib/iptables-helpers" ] || return 0
+  local saved_rules="$SAVED_IPTABLES"
+  local was_blocked="$WAN_WAS_BLOCKED"
+  if ! bash -n "$INSTALL_DIR/scripts/lib/iptables-helpers"; then
+    echo "Warning: newly-installed iptables helper is invalid; using the loaded helper." >&2
+    return 0
+  fi
+  if ! source "$INSTALL_DIR/scripts/lib/iptables-helpers"; then
+    echo "Warning: could not reload newly-installed iptables helper; using the loaded helper." >&2
+  fi
+  SAVED_IPTABLES="$saved_rules"
+  WAN_WAS_BLOCKED="$was_blocked"
+}
 
 # Cleanup — re-block WAN, rollback code, and restart service on failure
 ROLLBACK_READY=false
 cleanup() {
   local exit_code=$?
   if [ "$WAN_WAS_BLOCKED" = true ]; then
-    restore_wan
+    reload_iptables_helpers
+    if ! restore_wan; then
+      echo "Critical: firewall restore failed; forcing default policies DROP." >&2
+      iptables -P OUTPUT DROP 2>/dev/null || true
+      iptables -P INPUT DROP 2>/dev/null || true
+      iptables -P FORWARD DROP 2>/dev/null || true
+    fi
     WAN_WAS_BLOCKED=false
   fi
   if [ "$exit_code" -ne 0 ] && [ "$ROLLBACK_READY" = true ]; then
@@ -141,6 +204,12 @@ if [ "$DISK_AVAIL" -lt 300 ]; then
   exit 1
 fi
 
+# Stop the service before temporarily flushing the firewall. Its startup and
+# health checks repair required LAN rules; leaving it running during the open
+# WAN window races those repairs against an empty chain (the observed
+# "Index of insertion too big" failure).
+systemctl stop sleepypod.service
+
 # Open WAN if blocked
 if wan_is_blocked; then
   # Ensure /etc/hosts telemetry block is in place before opening WAN
@@ -164,10 +233,7 @@ rm -rf "$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C "$BACKUP_DIR" || true
 
-# Stop service before DB backup (ensures WAL is flushed)
-systemctl stop sleepypod.service
-
-# Backup database (after stop so WAL/SHM are consistent)
+# Backup database (service is stopped, so WAL/SHM are consistent)
 # Timestamped name so two rapid updates don't clobber the previous backup.
 # Matches scripts/install's naming; sp-maintenance prunes to 3 most recent.
 BACKUP_TS=$(date +%s)
@@ -436,6 +502,7 @@ fi
 
 # Re-block WAN before starting service
 if [ "$WAN_WAS_BLOCKED" = true ]; then
+  reload_iptables_helpers
   restore_wan
   WAN_WAS_BLOCKED=false
 fi

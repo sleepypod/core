@@ -101,6 +101,7 @@ const dbMock = vi.hoisted(() => {
 
 const pumpStallMock = vi.hoisted(() => ({
   invalidateGuardSettingsCache: vi.fn(),
+  standDown: vi.fn(async () => undefined),
 }))
 
 vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
@@ -129,6 +130,7 @@ beforeEach(() => {
   keepaliveMock.stopKeepalive.mockReset()
   autoOffMock.restartAutoOffTimers.mockReset()
   pumpStallMock.invalidateGuardSettingsCache.mockReset()
+  pumpStallMock.standDown.mockReset().mockResolvedValue(undefined)
   homekitMock.enable.mockReset().mockResolvedValue(undefined)
   homekitMock.disable.mockReset().mockResolvedValue(undefined)
   dbState.topRowsQueue.length = 0
@@ -342,6 +344,52 @@ describe('settings.updateDevice', () => {
 
     await caller.updateDevice({ primePodDaily: true, primePodTime: '14:00' })
     expect(pumpStallMock.invalidateGuardSettingsCache).not.toHaveBeenCalled()
+  })
+
+  it('stands down the guard when stall protection is disabled', async () => {
+    // onFrame's disabled branch clears the block but leaves the banner
+    // notice up and the alert rows active-invisible; the mutation must
+    // stand both down or they outlive the feature. The disable edge is
+    // detected from the transaction's own current row — no separate
+    // pre-transaction read.
+    const current = { ...baseDevice }
+    const updated = { ...current, pumpStallProtectionEnabled: false }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ pumpStallProtectionEnabled: false })
+    expect(pumpStallMock.standDown).toHaveBeenCalledTimes(1)
+    expect(pumpStallMock.invalidateGuardSettingsCache).toHaveBeenCalled()
+  })
+
+  it('leaves the guard alone when stall protection was already disabled', async () => {
+    const current = { ...baseDevice, pumpStallProtectionEnabled: false }
+    const updated = { ...current }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ pumpStallProtectionEnabled: false })
+    expect(pumpStallMock.standDown).not.toHaveBeenCalled()
+  })
+
+  it('leaves the guard alone when stall protection is being enabled', async () => {
+    const current = { ...baseDevice, pumpStallProtectionEnabled: false }
+    const updated = { ...current, pumpStallProtectionEnabled: true }
+    dbState.txRowsQueue.push([current], [updated])
+
+    await caller.updateDevice({ pumpStallProtectionEnabled: true })
+    expect(pumpStallMock.standDown).not.toHaveBeenCalled()
+  })
+
+  it('tolerates a stand-down failure without failing the settings mutation', async () => {
+    pumpStallMock.standDown.mockRejectedValueOnce(new Error('DAC offline'))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const current = { ...baseDevice }
+    const updated = { ...current, pumpStallProtectionEnabled: false }
+    dbState.txRowsQueue.push([current], [updated])
+
+    const result = await caller.updateDevice({ pumpStallProtectionEnabled: false })
+    expect(result.pumpStallProtectionEnabled).toBe(false)
+    expect(err).toHaveBeenCalledWith('pump stall guard stand-down failed:', expect.any(Error))
+    err.mockRestore()
   })
 
   it('logs but does not fail when applyCurrentLedBrightness rejects', async () => {

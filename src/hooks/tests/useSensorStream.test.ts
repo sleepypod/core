@@ -961,6 +961,27 @@ describe('useSensorStream — mutation boundaries and lifecycle contracts', () =
 })
 
 describe('useSensorFrame — listener lifecycle and dependencies', () => {
+  it('notifies only the listeners registered for an incoming sensor type', async () => {
+    const stream = renderHook(() => useSensorStream())
+    await waitFor(() => expect(wsMock.sockets.length).toBe(1))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+
+    const capSense = renderHook(() => useSensorFrame('capSense'))
+    const notify = vi.fn()
+    sensorSingleton.sensorListeners.get('capSense')?.add(notify)
+
+    act(() => ws.triggerMessage({ type: 'bedTemp', ts: 1 }))
+    expect(notify).not.toHaveBeenCalled()
+
+    act(() => ws.triggerMessage({ type: 'capSense', ts: 2, left: 1, right: 2 }))
+    expect(notify).toHaveBeenCalledOnce()
+
+    sensorSingleton.sensorListeners.get('capSense')?.delete(notify)
+    capSense.unmount()
+    stream.unmount()
+  })
+
   it('keeps both per-sensor listeners when two consumers use the same type', () => {
     const first = renderHook(() => useSensorFrame('capSense'))
     const second = renderHook(() => useSensorFrame('capSense'))
