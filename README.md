@@ -310,7 +310,7 @@ graph LR
 
 ### Biometrics data flow
 
-The Pod hardware daemon (frankenfirmware) writes raw sensor data continuously as CBOR-encoded binary records into `/persistent/biometrics/*.RAW`, which is a **500 MB tmpfs** to keep ~1 GB/day of writes off the eMMC. An archiver timer gzips files older than 15 minutes into `/persistent/biometrics-archive/` on eMMC (cold storage with a pruner cap of 80% disk usage). See **[ADR 0018](docs/adr/0018-tmpfs-raw-frames.md)** for the firmware-integration rationale, including how `SEQNO.RAW` and state directories are symlinked through so the firmware sees its persistent state unchanged.
+The Pod hardware daemon (frankenfirmware) writes raw sensor data continuously as CBOR-encoded binary records into `/persistent/biometrics/*.RAW`, which is a **500 MB tmpfs** to keep ~1 GB/day of writes off the eMMC. An archiver timer gzips files older than 15 minutes into `/persistent/biometrics-archive/` on eMMC (cold storage; a pruner caps the folder at `MAX_ARCHIVE_MB`, default 6 GiB, with an 80% whole-disk safety ceiling). See **[ADR 0018](docs/adr/0018-tmpfs-raw-frames.md)** for the firmware-integration rationale, including how `SEQNO.RAW` and state directories are symlinked through so the firmware sees its persistent state unchanged.
 
 Independent Python sidecar processes tail the hot tmpfs files, extract signals, and write results to `biometrics.db` (durable on eMMC). The core app never touches raw data — it reads clean rows via tRPC.
 

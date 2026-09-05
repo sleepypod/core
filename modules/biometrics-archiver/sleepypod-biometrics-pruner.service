@@ -1,5 +1,5 @@
 [Unit]
-Description=Sleepypod biometrics archive pruner (keep /persistent < 80%)
+Description=Sleepypod biometrics archive pruner (cap archive folder; 80% disk ceiling)
 Documentation=https://github.com/sleepypod/core/tree/main/modules/biometrics-archiver
 After=sleepypod-biometrics-archiver.service
 
