@@ -12,6 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { Socket } from 'net'
+import { getStatusRevision } from '../statusRevision'
 import { promises as fs } from 'fs'
 import {
   connectDac,
@@ -138,6 +139,31 @@ describe('dacTransport', () => {
     const response = await sendCommand('14')
     expect(response).toContain('tgHeatLevelR=10')
     expect(response).toContain('sensorLabel=H00-test')
+  })
+
+  test('invalidates snapshots for writes but keeps read-only commands reusable', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    handleCommands(mockFranken)
+    await connecting
+    const initial = getStatusRevision()
+    await sendCommand('14')
+    await sendCommand('0')
+    expect(getStatusRevision()).toBe(initial)
+
+    const write = sendCommand('11', '-24')
+    expect(getStatusRevision()).toBeNull()
+    await write
+    expect(getStatusRevision()).not.toBeNull()
+    expect(getStatusRevision()).not.toBe(initial)
+    const written = getStatusRevision()
+    // No-argument commands such as priming also invalidate the cache.
+    await sendCommand('13')
+    expect(getStatusRevision()).not.toBe(written)
+    const beforeDisconnect = getStatusRevision()
+    await disconnectDac()
+    expect(getStatusRevision()).not.toBe(beforeDisconnect)
   })
 
   test('sends command with argument', async () => {
@@ -268,6 +294,19 @@ describe('dacTransport', () => {
         name: 'MessageResponseTimeoutError',
         message: 'Timed out after 150ms waiting for firmware response',
       })
+    })
+
+    test('failed writes invalidate old observations without leaving reads permanently blocked', async () => {
+      const connecting = connectDac(socketPath)
+      await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      await connecting
+      const initial = getStatusRevision()
+      const write = sendCommand('11', '-24')
+      expect(getStatusRevision()).toBeNull()
+      await expect(write).rejects.toBeInstanceOf(MessageResponseTimeoutError)
+      expect(getStatusRevision()).not.toBeNull()
+      expect(getStatusRevision()).not.toBe(initial)
     })
 
     test('queue drains after timeout — next command succeeds (no deadlock)', async () => {

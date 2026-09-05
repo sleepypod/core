@@ -25,6 +25,7 @@ import {
 } from '@/src/server/validation-schemas'
 import { toC, centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { getWifiInfo } from '@/src/hardware/wifi'
+import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 
 // ---------------------------------------------------------------------------
 // Command name → HardwareCommand mapping for the raw execute endpoint
@@ -113,20 +114,11 @@ export const deviceRouter = router({
    * Get current device status directly from hardware.
    *
    * Queries the Pod hardware controller for current temperature, power state,
-   * and alarm status. Use this when you need authoritative real-time data.
-   * For less critical reads, query device_state table instead to avoid
-   * hardware connection overhead.
-   *
-   * Behavior:
-   * - Connects to hardware, reads status, disconnects
-   * - Updates database with current readings
-   * - Connection has ~25s timeout (hardware may be slow to respond)
-   * - Safe to poll every ~5-10 seconds (hardware controller can handle it)
-   *
-   * Database Sync:
-   * - Uses separate updates per side (not bulk insert) to handle primary key
-   *   constraint (side) correctly with onConflictDoUpdate
-   * - If database update fails, hardware read still succeeds but state isn't cached
+   * and alarm status. Reuses a healthy monitor observation younger than 2s,
+   * provided no hardware write has started since that observation began.
+   * Otherwise reads through the shared hardware connection and syncs the DB.
+   * Cached observations are already persisted by DeviceStateSync.
+   * Wi-Fi enrichment is cached separately and refreshes without blocking reads.
    *
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware connection fails
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware doesn't respond within timeout
@@ -200,10 +192,14 @@ export const deviceRouter = router({
       }),
     }))
     .query(async ({ input }) => {
-      return withHardwareClient(async (client) => {
-        const status = await client.getDeviceStatus()
+      const cachedStatus = getDacMonitorIfRunning()?.getFreshStatus(2_000)
+      const status = cachedStatus ?? await withHardwareClient(
+        client => client.getDeviceStatus(), 'Failed to get device status',
+      )
 
-        // Best-effort DB sync — next getStatus() call will re-sync if this fails
+      if (!cachedStatus) {
+        // The monitor already persists cached observations. Preserve the fallback
+        // sync only when a hardware read was necessary.
         try {
           await db
             .insert(deviceState)
@@ -246,66 +242,66 @@ export const deviceRouter = router({
         catch (dbError) {
           console.error('Failed to sync device status to DB:', dbError)
         }
+      }
 
-        const primeCompletedAt = getPrimeCompletedAt()
-        const stallNotices = getAllPumpStallNotices()
-        const leftSnooze = getSnoozeStatus('left')
-        const rightSnooze = getSnoozeStatus('right')
+      const primeCompletedAt = getPrimeCompletedAt()
+      const stallNotices = getAllPumpStallNotices()
+      const leftSnooze = getSnoozeStatus('left')
+      const rightSnooze = getSnoozeStatus('right')
 
-        const convertTemp = (f: number | null) =>
-          f == null ? null : (input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f)
+      const convertTemp = (f: number | null) =>
+        f == null ? null : (input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f)
 
-        // Best-effort enrichment — nulls on failure
-        let wifiStrength: number = -1
-        let wifiSSID: string = 'unknown'
-        let roomClimate: { temperatureC: number | null, humidity: number | null, timestamp: number | null } = { temperatureC: null, humidity: null, timestamp: null }
-        let waterLevelRaw: { raw: number | null, calibratedEmpty: number | null, calibratedFull: number | null, timestamp: number | null } = { raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null }
-        try {
-          const wifi = getWifiInfo()
-          wifiStrength = wifi.wifiStrength
-          wifiSSID = wifi.wifiSSID
+      // Best-effort enrichment — nulls on failure
+      let wifiStrength: number = -1
+      let wifiSSID: string = 'unknown'
+      let roomClimate: { temperatureC: number | null, humidity: number | null, timestamp: number | null } = { temperatureC: null, humidity: null, timestamp: null }
+      let waterLevelRaw: { raw: number | null, calibratedEmpty: number | null, calibratedFull: number | null, timestamp: number | null } = { raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null }
+      try {
+        const wifi = getWifiInfo()
+        wifiStrength = wifi.wifiStrength
+        wifiSSID = wifi.wifiSSID
 
-          const [latestBed] = await biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1)
-          if (latestBed) {
-            roomClimate = {
-              temperatureC: latestBed.ambientTemp !== null ? centiDegreesToC(latestBed.ambientTemp) : null,
-              humidity: latestBed.humidity !== null ? centiPercentToPercent(latestBed.humidity) : null,
-              timestamp: latestBed.timestamp ? latestBed.timestamp.getTime() : null,
-            }
-          }
-          const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
-          if (latestWater) {
-            waterLevelRaw = {
-              raw: latestWater.raw ?? null,
-              calibratedEmpty: latestWater.calibratedEmpty ?? null,
-              calibratedFull: latestWater.calibratedFull ?? null,
-              timestamp: latestWater.timestamp ? latestWater.timestamp.getTime() : null,
-            }
+        const [latestBed] = await biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1)
+        if (latestBed) {
+          roomClimate = {
+            temperatureC: latestBed.ambientTemp !== null ? centiDegreesToC(latestBed.ambientTemp) : null,
+            humidity: latestBed.humidity !== null ? centiPercentToPercent(latestBed.humidity) : null,
+            timestamp: latestBed.timestamp ? latestBed.timestamp.getTime() : null,
           }
         }
-        catch { /* enrichment is best-effort */ }
-
-        return {
-          ...status,
-          leftSide: {
-            ...status.leftSide,
-            currentTemperature: convertTemp(status.leftSide.currentTemperature),
-            targetTemperature: convertTemp(status.leftSide.targetTemperature),
-          },
-          rightSide: {
-            ...status.rightSide,
-            currentTemperature: convertTemp(status.rightSide.currentTemperature),
-            targetTemperature: convertTemp(status.rightSide.targetTemperature),
-          },
-          ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
-          ...((stallNotices.left || stallNotices.right) && { pumpStallNotifications: stallNotices }),
-          snooze: { left: leftSnooze, right: rightSnooze },
-          wifiStrength,
-          wifiSSID,
-          roomClimate,
-          waterLevelRaw,
+        const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
+        if (latestWater) {
+          waterLevelRaw = {
+            raw: latestWater.raw ?? null,
+            calibratedEmpty: latestWater.calibratedEmpty ?? null,
+            calibratedFull: latestWater.calibratedFull ?? null,
+            timestamp: latestWater.timestamp ? latestWater.timestamp.getTime() : null,
+          }
         }
-      }, 'Failed to get device status')
+      }
+      catch { /* enrichment is best-effort */ }
+
+      return {
+        ...status,
+        leftSide: {
+          ...status.leftSide,
+          currentTemperature: convertTemp(status.leftSide.currentTemperature),
+          targetTemperature: convertTemp(status.leftSide.targetTemperature),
+        },
+        rightSide: {
+          ...status.rightSide,
+          currentTemperature: convertTemp(status.rightSide.currentTemperature),
+          targetTemperature: convertTemp(status.rightSide.targetTemperature),
+        },
+        ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+        ...((stallNotices.left || stallNotices.right) && { pumpStallNotifications: stallNotices }),
+        snooze: { left: leftSnooze, right: rightSnooze },
+        wifiStrength,
+        wifiSSID,
+        roomClimate,
+        waterLevelRaw,
+      }
     }),
 
   /**

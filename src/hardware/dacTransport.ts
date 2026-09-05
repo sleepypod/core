@@ -17,6 +17,7 @@ import { unlink } from 'fs/promises'
 import { createServer, type Server, type Socket } from 'net'
 import split from 'binary-split'
 import type { Transform } from 'stream'
+import { beginStatusChange } from './statusRevision'
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -408,6 +409,8 @@ function waitWithTimeout(server: DacServer) {
 }
 
 async function shutdown() {
+  // A snapshot from the old connection must not survive a reconnect.
+  beginStatusChange()()
   transport?.close()
   transport = undefined
   if (dacServer) {
@@ -480,11 +483,17 @@ export async function sendCommand(command: string, arg?: string): Promise<string
     throw new Error('[DAC] not connected — call connectDac() first')
   }
 
-  if (arg === undefined || arg === '') {
-    return transport.sendMessage(command)
+  // HELLO and DEVICE_STATUS are read-only. Invalidate for every other command,
+  // including raw commands and writes from HomeKit, gestures, and the scheduler.
+  const finish = command === '0' || command === '14' ? undefined : beginStatusChange()
+  try {
+    return await (arg === undefined || arg === ''
+      ? transport.sendMessage(command)
+      : transport.callFunction(command, arg))
   }
-
-  return transport.callFunction(command, arg)
+  finally {
+    finish?.()
+  }
 }
 
 /**
