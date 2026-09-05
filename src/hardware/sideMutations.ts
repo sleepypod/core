@@ -1,8 +1,11 @@
 /**
- * Per-side mutation stamps shared by API writers and the DAC-poll mirror.
- * Turbopack can load them in different module instances, so keep the stamps
- * on globalThis. A new command invalidates evidence from the old session.
+ * Per-side mutation stamps, shared between the DAC-poll mirror
+ * (deviceStateSync freshness window) and the pump stall guard (auto-recover
+ * supersede check). Kept on globalThis because writers (API routes,
+ * scheduler, autoOffWatcher) and readers (DAC monitor runtime) can load
+ * separate module instances under Turbopack chunking.
  */
+
 import type { Side } from './types'
 
 const G = globalThis as Record<string, unknown>
@@ -17,10 +20,12 @@ function stamps(): Record<Side, number> {
   return s
 }
 
+/** Mark a side as just-mutated (ms epoch now). */
 export function markSideMutated(side: Side): void {
   stamps()[side] = Date.now()
 }
 
+/** ms epoch of the side's last mutation stamp; 0 when never stamped. */
 export function getLastSideMutationAt(side: Side): number {
   return stamps()[side]
 }

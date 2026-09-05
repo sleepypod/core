@@ -1,7 +1,9 @@
 [Unit]
 Description=SleepyPod Piezo Processor (HR, HRV, Breathing Rate)
 Documentation=https://github.com/sleepypod/core/tree/main/modules/piezo-processor
-After=network.target sleepypod.service
+# Order after nats-server on new-firmware pods; a no-op ordering where that
+# unit is absent (old-shim / mid-era pods keep the .RAW path).
+After=network.target sleepypod.service nats-server.service
 Wants=sleepypod.service
 
 [Service]

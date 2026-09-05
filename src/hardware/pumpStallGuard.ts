@@ -26,6 +26,7 @@ import { clearPumpStallNotice, setPumpStallNotice } from './pumpStallNotificatio
 import { remainingPumpStallRestore } from './pumpStallRestore'
 import type { PumpStallRestore } from './pumpStallRestore'
 import { withSideLock } from './sideLock'
+import { getLastSideMutationAt } from './sideMutations'
 import type { Side } from './types'
 
 interface GuardState {
@@ -935,6 +936,32 @@ async function trip(side: Side, rpm: number, trippedAt: number): Promise<void> {
   }
 }
 
+/** Called under the side lock, after any queued operator OFF has landed. */
+function releaseSupersededRecovery(side: Side, state: GuardState): boolean {
+  if (getLastSideMutationAt(side) <= (state.trippedAt ?? 0)) return false
+  // Ordinary energizing commands are blocked during an incident. A newer
+  // successful mutation therefore supersedes recovery with the operator's OFF.
+  if (state.activeAlertId != null) {
+    try {
+      biometricsDb.update(pumpAlerts)
+        .set({ acknowledgedAt: new Date() })
+        .where(and(
+          eq(pumpAlerts.id, state.activeAlertId),
+          isNull(pumpAlerts.acknowledgedAt),
+          isNull(pumpAlerts.dismissedAt),
+        ))
+        .run()
+    }
+    catch (err) {
+      console.warn('[pumpStallGuard] alert update failed:', err instanceof Error ? err.message : err)
+    }
+    supersedeAlerts(side, { beforeId: state.activeAlertId })
+  }
+  reset(side)
+  console.log(`[pumpStallGuard] auto-recover for ${side} superseded by a newer command — standing down`)
+  return true
+}
+
 async function autoRecover(side: Side, now: number): Promise<void> {
   const state = getState()[side]
   // Never clear the guard while the trip-time cutoff is still unsent: the
@@ -959,15 +986,32 @@ async function autoRecover(side: Side, now: number): Promise<void> {
 
   // Same lock + deadlock rationale as the trip() cutoff: only reachable from
   // the frame path, and the restore sequence must not interleave with a
-  // queued same-side writer.
+  // queued same-side writer. Keep the powered mirror inside that lock too.
   try {
     await withSideLock(side, async () => {
       if (getState()[side] !== state || !state.blocked) return
+      if (releaseSupersededRecovery(side, state)) return
       const client = getSharedHardwareClient()
       // setPower(on) delegates to setTemperature without a duration, emitting
       // a contradictory 28,800-second session before the real duration. One
       // duration-bearing write is sufficient to energize and restore.
       await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+      if (getState()[side] !== state || !state.blocked) return
+      try {
+        db
+          .update(deviceState)
+          .set({
+            isPowered: true,
+            poweredOnAt: new Date(now),
+            targetTemperature: restore.targetTemperature,
+            lastUpdated: new Date(now),
+          })
+          .where(eq(deviceState.side, side))
+          .run()
+      }
+      catch (err) {
+        console.warn('[pumpStallGuard] device_state restore failed:', err instanceof Error ? err.message : err)
+      }
     })
   }
   catch (err) {
@@ -976,22 +1020,6 @@ async function autoRecover(side: Side, now: number): Promise<void> {
   }
 
   if (getState()[side] !== state || !state.blocked) return
-
-  try {
-    db
-      .update(deviceState)
-      .set({
-        isPowered: true,
-        poweredOnAt: new Date(now),
-        targetTemperature: restore.targetTemperature,
-        lastUpdated: new Date(now),
-      })
-      .where(eq(deviceState.side, side))
-      .run()
-  }
-  catch (err) {
-    console.warn('[pumpStallGuard] device_state restore failed:', err instanceof Error ? err.message : err)
-  }
 
   stampAlertAutoRecovered(side, state.activeAlertId)
 
@@ -1029,6 +1057,7 @@ async function startRecoveryProbe(side: Side, now: number): Promise<void> {
   try {
     await withSideLock(side, async () => {
       if (getState()[side] !== state || !state.blocked || state.probeStartedAt !== now) return
+      if (releaseSupersededRecovery(side, state)) return
       const client = getSharedHardwareClient()
       // A short duration is a crash-safe lease: if this process dies during
       // the probe, firmware stops it at the probe-window boundary.

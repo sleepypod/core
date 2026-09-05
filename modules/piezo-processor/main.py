@@ -42,7 +42,8 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
-from common.raw_follower import RawFileFollower
+from common.nats_follower import create_follower
+from common.dialect import KNOWN_RECORD_TYPES, warn_unknown_type_once
 import numpy as np
 from scipy.signal import butter, sosfiltfilt, hilbert, find_peaks
 
@@ -268,15 +269,27 @@ class FrzHealthPumpState:
                     except (TypeError, ValueError):
                         rpm = 0.0
                     break
+            # New NATS firmware nests the same reading at side.pump.rpm.
+            pump = data.get("pump")
+            if rpm == 0 and isinstance(pump, dict):
+                val = pump.get("rpm")
+                if val is not None:
+                    try:
+                        rpm = float(val)
+                    except (TypeError, ValueError):
+                        rpm = 0.0
             if rpm == 0:
-                for key in ("pumpDuty", "pump_duty", "duty"):
-                    val = data.get(key)
-                    if val is not None:
-                        try:
-                            rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(val) > 0 else 0.0
-                        except (TypeError, ValueError):
-                            rpm = 0.0
-                        break
+                duty = next((data.get(key) for key in
+                             ("pumpDuty", "pump_duty", "duty")
+                             if data.get(key) is not None), None)
+                if duty is None and isinstance(pump, dict):
+                    duty = next((pump.get(key) for key in ("duty", "power")
+                                 if pump.get(key) is not None), None)
+                if duty is not None:
+                    try:
+                        rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(duty) > 0 else 0.0
+                    except (TypeError, ValueError):
+                        rpm = 0.0
 
             now_active = rpm >= PUMP_ACTIVE_RPM_MIN
             if self._was_active[side] and not now_active:
@@ -962,13 +975,22 @@ def main() -> None:
     right = SideProcessor("right", db_holder, pump_state=pump_state)
     left._other = right
     right._other = left
-    follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
+    # Source selected once at startup: NatsFollower on new-firmware pods (NATS
+    # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
+    follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
 
     report_health("healthy", "piezo-processor v2 started")
 
     try:
         for record in follower.read_records():
             rtype = record.get("type")
+
+            # Surface genuinely-new firmware types once (blanketReadings, log,
+            # …) instead of dropping them silently; known types this module
+            # doesn't consume fall through to the checks below.
+            if rtype not in KNOWN_RECORD_TYPES:
+                warn_unknown_type_once(record, "piezo-processor")
+                continue
 
             # Track per-side pump state for the asymmetric pump-coupling guard
             if rtype == "frzHealth":

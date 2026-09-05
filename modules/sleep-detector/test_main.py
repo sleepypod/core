@@ -4,6 +4,7 @@ cbor2 / common.raw_follower / common.health are stubbed before importing main.
 Covers ts sanitization (#327) and DB write resilience (#325).
 """
 
+import logging
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -14,10 +15,16 @@ _stubs = {
     "cbor2": type(sys)("cbor2"),
     "common": type(sys)("common"),
     "common.raw_follower": type(sys)("common.raw_follower"),
+    "common.nats_follower": type(sys)("common.nats_follower"),
+    "common.dialect": type(sys)("common.dialect"),
     "common.calibration": type(sys)("common.calibration"),
     "common.health": type(sys)("common.health"),
 }
 _stubs["common.raw_follower"].RawFileFollower = None
+_stubs["common.nats_follower"].create_follower = None
+_stubs["common.dialect"].KNOWN_RECORD_TYPES = frozenset()
+_stubs["common.dialect"].warn_unknown_type_once = lambda *a, **kw: None
+_stubs["common.dialect"].log_capsense_status_once = lambda *a, **kw: None
 _stubs["common.calibration"].CalibrationStore = None
 _stubs["common.calibration"].is_present_capsense_calibrated = lambda *a, **kw: False
 _stubs["common.calibration"].is_present_capsense2_calibrated = lambda *a, **kw: False
@@ -275,6 +282,26 @@ class TestPumpGatePerSide:
         assert gate.is_gated({}, "left") is False
         assert gate.is_gated({}, "right") is False
 
+    def test_captured_nats_nested_health_rpm(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state({
+            "type": "frzHealth",
+            "left": {"pump": {"mode": "pwm", "rpm": 1868, "water": True}},
+            "right": {"pump": {"mode": "pwm", "rpm": 0, "water": True}},
+        })
+        assert gate.is_gated({}, "left") is True
+        assert gate.is_gated({}, "right") is False
+
+    def test_captured_nats_therm_power(self):
+        gate = main.PumpGateCapSense()
+        gate.update_pump_state({
+            "type": "frzTherm",
+            "left": {"power": 0.024},
+            "right": {"power": 0.0},
+        })
+        assert gate.is_gated({}, "left") is True
+        assert gate.is_gated({}, "right") is False
+
 
 def _tracker():
     """A SessionTracker wired to an in-memory DB. calibration/pump_gate are
@@ -361,3 +388,48 @@ class TestPresenceDebounce:
         # No row exceeds the hard cap.
         for duration_s, _exits in rows:
             assert duration_s <= main.MAX_SESSION_S
+
+    def test_consecutive_cap_closes_warn_and_escalate(self, caplog):
+        # Trinity field report 2026-08: back-to-back rows of exactly
+        # MAX_SESSION_S meant a stuck presence signal, silently. The cap
+        # must surface itself, and two in a row must escalate.
+        t = _tracker()
+        base = 1_777_000_000.0
+        samples = [(base, True), (base + 31, True)]
+        ts = base + 31
+        while ts < base + 2 * main.MAX_SESSION_S + 7200:
+            ts += 600
+            samples.append((ts, True))
+        with caplog.at_level(logging.WARNING):
+            _feed(t, samples)
+
+        caps = [r for r in caplog.records if "force-closed" in r.getMessage()]
+        assert len(caps) >= 2
+        stuck = [r for r in caplog.records if "stuck-occupied" in r.getMessage()]
+        assert len(stuck) >= 1
+
+    def test_natural_exit_resets_cap_close_streak(self, caplog):
+        t = _tracker()
+        base = 1_777_000_000.0
+        samples = [(base, True), (base + 31, True)]
+        ts = base + 31
+        while ts < base + main.MAX_SESSION_S + 3600:
+            ts += 600
+            samples.append((ts, True))
+        # Real exit → natural close resets the streak.
+        leave = ts + 60
+        samples += [(leave, False), (leave + 31, False), (leave + 200, False)]
+        # Back in bed and past the cap once more.
+        back = leave + 400
+        samples += [(back, True), (back + 31, True)]
+        ts = back + 31
+        while ts < back + main.MAX_SESSION_S + 3600:
+            ts += 600
+            samples.append((ts, True))
+        with caplog.at_level(logging.WARNING):
+            _feed(t, samples)
+
+        caps = [r for r in caplog.records if "force-closed" in r.getMessage()]
+        assert len(caps) == 2
+        assert all("(1 consecutive)" in r.getMessage() for r in caps)
+        assert [r for r in caplog.records if "stuck-occupied" in r.getMessage()] == []

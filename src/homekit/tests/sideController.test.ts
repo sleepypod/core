@@ -644,6 +644,9 @@ describe('sideController', () => {
       shouldBlock.mockImplementation((side: 'left' | 'right') => side === 'left')
 
       await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('Pump stall protection active')
+      // The refusal names the blocked side — field debugging must be able to
+      // tell which side's guard fired when both surfaces share one log.
+      expect(warn).toHaveBeenCalledWith('[homekit] refused setPower(left, true) — pump stall protection active on left')
       await setSidePowerOn(monitor(offStatus), 'right')
       expect(setPower).toHaveBeenCalledWith('right', true, expect.any(Number))
       warn.mockRestore()

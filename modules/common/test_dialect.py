@@ -1,5 +1,13 @@
 """Tests for the inner-record dialect normalizer."""
-from common.dialect import normalize_bed_temp, is_bed_temp_record
+import logging
+
+import common.dialect as dialect
+from common.dialect import (
+    KNOWN_RECORD_TYPES,
+    is_bed_temp_record,
+    log_capsense_status_once,
+    normalize_bed_temp,
+)
 
 
 # Real fixtures captured from the pods (PR #437 RAW for Pod 3, local pod for v2).
@@ -117,3 +125,59 @@ class TestDispatch:
         assert is_bed_temp_record({"type": "bedTemp2"}) is True
         assert is_bed_temp_record({"type": "frzTemp"}) is False
         assert is_bed_temp_record({}) is False
+
+
+class TestKnownRecordTypes:
+    def test_covers_all_parsed_dialects(self):
+        for t in ("capSense", "capSense2", "piezo-dual", "bedTemp", "bedTemp2",
+                  "frzTemp", "frzHealth", "frzTherm"):
+            assert t in KNOWN_RECORD_TYPES
+
+    def test_excludes_new_unconsumed_types(self):
+        # blanketReadings / log are the genuinely-new firmware types that must
+        # trigger warn_unknown_type_once, not be silently ignored.
+        assert "blanketReadings" not in KNOWN_RECORD_TYPES
+        assert "log" not in KNOWN_RECORD_TYPES
+
+
+# capSense records from the field NATS capture (Pod 3 dialect + new status key).
+CAPSENSE_GOOD = {
+    "type": "capSense", "ts": 1784482449,
+    "left": {"out": 3288, "cen": 3734, "in": 3262, "status": "good"},
+    "right": {"out": 1680, "cen": 1891, "in": 2232, "status": "good"},
+}
+
+
+class TestLogCapsenseStatusOnce:
+    def setup_method(self):
+        dialect._capsense_status_seen.clear()
+
+    def test_all_good_logs_nothing(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="calibration"):
+            log_capsense_status_once(CAPSENSE_GOOD)
+        assert not [r for r in caplog.records if "status" in r.getMessage()]
+
+    def test_non_good_status_logged_once_with_channels(self, caplog):
+        rec = {**CAPSENSE_GOOD,
+               "left": {"out": 5, "cen": 6, "in": 7, "status": "saturated"}}
+        with caplog.at_level(logging.WARNING):
+            log_capsense_status_once(rec, "sleep-detector")
+            log_capsense_status_once(rec, "sleep-detector")  # dedup — no 2nd log
+        hits = [r for r in caplog.records if "saturated" in r.getMessage()]
+        assert len(hits) == 1
+        msg = hits[0].getMessage()
+        assert "out=5" in msg and "cen=6" in msg and "in=7" in msg
+
+    def test_distinct_statuses_each_log_once(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            log_capsense_status_once(
+                {**CAPSENSE_GOOD, "left": {"out": 0, "cen": 0, "in": 0, "status": "warmup"}})
+            log_capsense_status_once(
+                {**CAPSENSE_GOOD, "right": {"out": 0, "cen": 0, "in": 0, "status": "error"}})
+        assert any("warmup" in r.getMessage() for r in caplog.records)
+        assert any("error" in r.getMessage() for r in caplog.records)
+
+    def test_ignores_non_capsense_records(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            log_capsense_status_once({"type": "capSense2", "left": {"status": "bad"}})
+        assert not caplog.records

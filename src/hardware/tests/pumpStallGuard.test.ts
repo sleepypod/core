@@ -48,6 +48,7 @@ import {
 } from '../pumpStallGuard'
 import { getPumpStallNotice } from '../pumpStallNotification'
 import { withSideLock } from '../sideLock'
+import { _resetMutationStamps, markSideMutated } from '../sideMutations'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   sqlite: BetterSqlite3.Database
@@ -142,6 +143,7 @@ function onFrame(input: Parameters<typeof onFrameImpl>[0]): Promise<void> {
 
 describe('pumpStallGuard', () => {
   beforeEach(() => {
+    _resetMutationStamps()
     frameClock = Date.now()
     resetSchema()
     invalidateGuardSettingsCache()
@@ -1894,6 +1896,7 @@ describe('pumpStallGuard — side-lock serialization and notice timing', () => {
   }
 
   beforeEach(() => {
+    _resetMutationStamps()
     frameClock = Date.now()
     resetSchema()
     invalidateGuardSettingsCache()
@@ -1969,6 +1972,77 @@ describe('pumpStallGuard — side-lock serialization and notice timing', () => {
     await writerDone
     await retrying
     expect(order).toEqual(['writer:on', 'guard:retry'])
+  })
+
+  it.each(['healthy recovery', 'recovery probe'] as const)('%s respects an OFF queued before recovery', async (kind) => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 1 })
+    invalidateGuardSettingsCache()
+    await onFrame(lowFrame('left'))
+    await onFrame(lowFrame('left'))
+    const state = __test__.getState().left
+    const alertId = state.activeAlertId
+    const tripAt = state.trippedAt ?? 0
+    setPower.mockClear()
+    setTemperature.mockClear()
+
+    let releaseWriter!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseWriter = resolve
+    })
+    const writer = withSideLock('left', async () => {
+      await gate
+      vi.spyOn(Date, 'now').mockReturnValue(tripAt + 1)
+      markSideMutated('left')
+    })
+    const recovering = onFrameImpl({
+      ...lowFrame('left'),
+      rpm: kind === 'healthy recovery' ? 1900 : 0,
+      now: tripAt + (kind === 'healthy recovery' ? 10_000 : __test__.PROBE_BACKOFFS_MS[0]),
+    })
+    await flush()
+    expect(setTemperature).not.toHaveBeenCalled()
+    releaseWriter()
+    await writer
+    await recovering
+
+    expect(setPower).not.toHaveBeenCalled()
+    expect(setTemperature).not.toHaveBeenCalled()
+    expect(shouldBlock('left')).toBe(false)
+    expect(getPumpStallNotice('left')).toBeNull()
+    expect((sqlite as any).prepare('SELECT is_powered FROM device_state WHERE side = \'left\'').get().is_powered).toBe(0)
+    const row = (biometricsSqlite as any).prepare('SELECT action, acknowledged_at FROM pump_alerts WHERE id = ?').get(alertId)
+    expect(row.action).toBe('power_off')
+    expect(row.acknowledged_at).not.toBeNull()
+  })
+
+  it.each(['older same-side', 'newer other-side'] as const)('allows recovery after an %s command', async (kind) => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 1 })
+    invalidateGuardSettingsCache()
+    await onFrame(lowFrame('left'))
+    await onFrame(lowFrame('left'))
+    const tripAt = __test__.getState().left.trippedAt ?? 0
+    vi.spyOn(Date, 'now').mockReturnValue(tripAt + (kind === 'older same-side' ? -1 : 1))
+    markSideMutated(kind === 'older same-side' ? 'left' : 'right')
+    await onFrameImpl({ ...lowFrame('left'), rpm: 1900, now: tripAt + 10_000 })
+    expect(setTemperature).toHaveBeenCalledWith('left', 78, 28_790)
+    expect(shouldBlock('left')).toBe(false)
+  })
+
+  it('keeps a later OFF after the recovery hardware write and powered mirror', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 1 })
+    invalidateGuardSettingsCache()
+    await onFrame(lowFrame('left'))
+    await onFrame(lowFrame('left'))
+    let offWriter: Promise<void> | undefined
+    setTemperature.mockImplementationOnce(async () => {
+      offWriter = withSideLock('left', async () => {
+        expect((sqlite as any).prepare('SELECT is_powered FROM device_state WHERE side = \'left\'').get().is_powered).toBe(1)
+        ;(sqlite as any).exec('UPDATE device_state SET is_powered = 0 WHERE side = \'left\'')
+      })
+    })
+    await onFrame({ ...lowFrame('left'), rpm: 1900 })
+    await offWriter
+    expect((sqlite as any).prepare('SELECT is_powered FROM device_state WHERE side = \'left\'').get().is_powered).toBe(0)
   })
 
   it('serializes the auto-recovery restore through the side lock', async () => {
