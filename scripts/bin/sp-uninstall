@@ -105,6 +105,12 @@ rm -f /usr/local/bin/sp-logs
 rm -f /usr/local/bin/sp-update
 rm -f /usr/local/bin/sp-uninstall
 
+# Remove the narrow sudo grants installed by scripts/install and the OTA
+# self-heal path. Leaving either fragment behind can reactivate root access if
+# the sleepypod account is recreated after uninstall.
+rm -f /etc/sudoers.d/sleepypod-update \
+      /etc/sudoers.d/sleepypod-reboot
+
 # Remove Python modules
 if [ -d "$MODULES_DIR" ]; then
   echo "Removing Python modules..."

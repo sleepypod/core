@@ -765,11 +765,20 @@ export class JobManager {
   /**
    * Execute a system reboot via systemctl.
    * Returns a Promise so callers can await and the scheduler can surface failures.
+   *
+   * The systemd unit drops next-server to User=sleepypod, which cannot reboot
+   * the machine directly — a bare `systemctl reboot` fails with "Interactive
+   * authentication required" and the daily / pre-prime reboot jobs silently
+   * never fire. We sudo via the NOPASSWD rule installed by scripts/install
+   * (/etc/sudoers.d/sleepypod-update) or self-healed for OTA-only pods by
+   * sp-maintenance (/etc/sudoers.d/sleepypod-reboot), mirroring
+   * system.triggerUpdate. `-n` makes sudo fail loudly rather than prompt when
+   * the rule is absent.
    */
   private async executeReboot(): Promise<void> {
     const { exec } = await import('child_process')
     return new Promise((resolve, reject) => {
-      exec('systemctl reboot', (error) => {
+      exec('sudo -n systemctl reboot', (error) => {
         if (error) {
           console.error('Reboot command failed:', error.message)
           reject(error)

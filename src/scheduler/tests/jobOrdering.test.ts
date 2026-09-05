@@ -1405,7 +1405,7 @@ describe('JobManager handler closures', () => {
 
     await handler!()
 
-    expect(execMock).toHaveBeenCalledWith('systemctl reboot', expect.any(Function))
+    expect(execMock).toHaveBeenCalledWith('sudo -n systemctl reboot', expect.any(Function))
   })
 
   it('daily-reboot handler surfaces exec failure as a rejected promise', async () => {
@@ -1426,7 +1426,7 @@ describe('JobManager handler closures', () => {
     execMock.mockImplementationOnce((_cmd, cb) => cb(null))
 
     await handler()
-    expect(execMock).toHaveBeenCalledWith('systemctl reboot', expect.any(Function))
+    expect(execMock).toHaveBeenCalledWith('sudo -n systemctl reboot', expect.any(Function))
   })
 
   it('pre-prime-calibration handler writes a trigger file', async () => {
