@@ -1,0 +1,60 @@
+2026-05-07T20:35:54 [piezo-processor] INFO vitals right — HR=71.8 HRV=0.0 BR=17.7 q=0.32
+2026-05-07T20:35:54 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=7.3 q=0.01
+2026-05-07T20:35:54 [piezo-processor] INFO vitals right — HR=59.4 HRV=0.0 BR=6.6 q=0.12
+2026-05-07T20:35:54 [piezo-processor] INFO vitals right — HR=73.3 HRV=0.0 BR=18.1 q=0.16
+2026-05-07T20:35:54 [piezo-processor] INFO vitals right — HR=73.7 HRV=0.0 BR=17.3 q=0.11
+2026-05-07T20:35:54 [piezo-processor] INFO vitals right — HR=50.5 HRV=32.8 BR=19.5 q=0.12
+2026-05-07T20:35:54 [piezo-processor] INFO vitals right — HR=50.2 HRV=0.0 BR=19.3 q=0.20
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=6.8 q=0.01
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=51.4 HRV=83.3 BR=6.6 q=0.18
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=50.6 HRV=14.8 BR=21.0 q=0.21
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=0.0 HRV=87.3 BR=21.6 q=0.08
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=70.6 HRV=88.8 BR=18.5 q=0.20
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=0.0 HRV=22.1 BR=6.8 q=0.07
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=76.9 HRV=22.8 BR=6.6 q=0.12
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=60.6 HRV=75.0 BR=17.6 q=0.19
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=75.0 HRV=76.8 BR=19.8 q=0.17
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=50.3 HRV=73.9 BR=16.0 q=0.21
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=0.0 HRV=57.6 BR=20.4 q=0.05
+2026-05-07T20:35:55 [piezo-processor] INFO vitals right — HR=0.0 HRV=21.6 BR=6.7 q=0.08
+Re-running pipeline for /Users/onemec/Documents/GitHub/core/sample_data/raw_data/00381528.RAW...
+Rel Time | Side  | Event   | Heart Rate | Resp Rate | Quality | Flags
+--------------------------------------------------------------------------------
+[00:35:54] right | HR:  71.8 | RR:  17.7 | Qual: 0.32 | Flags: ['no_hrv', 'low_signal']
+[ 5.0m] right | Status  | PRESENT
+[00:35:54] right | HR:   N/A | RR:   7.3 | Qual: 0.01 | Flags: ['no_hr', 'no_hrv', 'low_signal']
+[ 6.0m] right | Status  | PRESENT
+[00:35:54] right | HR:  59.4 | RR:   6.6 | Qual: 0.12 | Flags: ['no_hrv', 'low_signal']
+[ 7.0m] right | Status  | PRESENT
+[00:35:54] right | HR:  73.3 | RR:  18.1 | Qual: 0.16 | Flags: ['no_hrv', 'low_signal']
+[ 8.0m] right | Status  | PRESENT
+[00:35:54] right | HR:  73.7 | RR:  17.3 | Qual: 0.11 | Flags: ['no_hrv', 'low_signal']
+[ 9.0m] right | Status  | PRESENT
+[00:35:54] right | HR:  50.5 | RR:  19.5 | Qual: 0.12 | Flags: ['low_signal']
+[10.0m] right | Status  | PRESENT
+[00:35:54] right | HR:  50.2 | RR:  19.3 | Qual: 0.20 | Flags: ['no_hrv', 'low_signal']
+[11.0m] right | Status  | PRESENT
+[00:35:55] right | HR:   N/A | RR:   6.8 | Qual: 0.01 | Flags: ['no_hr', 'no_hrv', 'low_signal']
+[12.0m] right | Status  | PRESENT
+[00:35:55] right | HR:  51.4 | RR:   6.6 | Qual: 0.18 | Flags: ['low_signal']
+[13.0m] right | Status  | PRESENT
+[00:35:55] right | HR:  50.6 | RR:  21.0 | Qual: 0.21 | Flags: ['low_signal']
+[14.0m] right | Status  | PRESENT
+[00:35:55] right | HR:   N/A | RR:  21.6 | Qual: 0.08 | Flags: ['no_hr', 'low_signal']
+[15.0m] right | Status  | PRESENT
+[00:35:55] right | HR:  70.6 | RR:  18.5 | Qual: 0.20 | Flags: ['low_signal']
+[16.0m] right | Status  | PRESENT
+[00:35:55] right | HR:   N/A | RR:   6.8 | Qual: 0.07 | Flags: ['no_hr', 'low_signal']
+[17.0m] right | Status  | PRESENT
+[00:35:55] right | HR:  76.9 | RR:   6.6 | Qual: 0.12 | Flags: ['low_signal']
+[18.0m] right | Status  | PRESENT
+[00:35:55] right | HR:  60.6 | RR:  17.6 | Qual: 0.19 | Flags: ['low_signal']
+[19.0m] right | Status  | PRESENT
+[00:35:55] right | HR:  75.0 | RR:  19.8 | Qual: 0.17 | Flags: ['low_signal']
+[20.0m] right | Status  | PRESENT
+[00:35:55] right | HR:  50.3 | RR:  16.0 | Qual: 0.21 | Flags: ['low_signal']
+[21.0m] right | Status  | PRESENT
+[00:35:55] right | HR:   N/A | RR:  20.4 | Qual: 0.05 | Flags: ['no_hr', 'low_signal']
+[22.0m] right | Status  | PRESENT
+[00:35:55] right | HR:   N/A | RR:   6.7 | Qual: 0.08 | Flags: ['no_hr', 'low_signal']
+[23.0m] right | Status  | PRESENT

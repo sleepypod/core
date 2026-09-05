@@ -1,0 +1,518 @@
+2026-05-07T20:37:59 [piezo-processor] INFO vitals left — HR=55.4 HRV=0.0 BR=20.1 q=0.21
+2026-05-07T20:37:59 [piezo-processor] INFO vitals left — HR=50.0 HRV=0.0 BR=20.3 q=0.19
+2026-05-07T20:37:59 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=20.5 q=0.10
+2026-05-07T20:37:59 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=20.1 q=0.06
+2026-05-07T20:37:59 [piezo-processor] INFO vitals left — HR=73.0 HRV=0.0 BR=19.8 q=0.24
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=20.5 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=19.2 q=0.17
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=72.1 HRV=0.0 BR=19.6 q=0.15
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=20.2 q=0.09
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=70.8 HRV=0.0 BR=20.2 q=0.16
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=70.9 HRV=0.0 BR=20.4 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=69.8 HRV=0.0 BR=20.2 q=0.12
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=70.1 HRV=0.0 BR=20.2 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=69.9 HRV=0.0 BR=20.2 q=0.17
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=69.6 HRV=0.0 BR=20.2 q=0.15
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=69.3 HRV=0.0 BR=20.2 q=0.12
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=68.5 HRV=0.0 BR=17.1 q=0.31
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.6 HRV=0.0 BR=18.4 q=0.29
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=68.5 HRV=0.0 BR=16.8 q=0.15
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.6 HRV=0.0 BR=17.7 q=0.15
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=68.5 HRV=0.0 BR=16.8 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.6 HRV=0.0 BR=18.4 q=0.15
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=68.5 HRV=0.0 BR=15.1 q=0.16
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.6 HRV=0.0 BR=16.8 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=68.5 HRV=0.0 BR=14.9 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.6 HRV=0.0 BR=18.5 q=0.13
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=68.5 HRV=0.0 BR=15.1 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.6 HRV=0.0 BR=17.0 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=68.5 HRV=0.0 BR=14.6 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.5 HRV=0.0 BR=18.3 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.3 HRV=0.0 BR=17.9 q=0.10
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.6 HRV=0.0 BR=18.5 q=0.13
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=68.8 HRV=0.0 BR=18.6 q=0.16
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=77.7 HRV=0.0 BR=17.1 q=0.16
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=77.1 HRV=0.0 BR=17.9 q=0.19
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=88.0 HRV=0.0 BR=17.4 q=0.20
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=88.0 HRV=0.0 BR=17.3 q=0.19
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=75.9 HRV=0.0 BR=16.0 q=0.20
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=74.8 HRV=0.0 BR=16.5 q=0.25
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=75.4 HRV=0.0 BR=16.8 q=0.15
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=75.8 HRV=0.0 BR=16.3 q=0.20
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.1 HRV=0.0 BR=16.5 q=0.20
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=75.4 HRV=0.0 BR=17.8 q=0.15
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.3 HRV=0.0 BR=18.0 q=0.28
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=75.9 HRV=0.0 BR=18.1 q=0.27
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=74.4 HRV=0.0 BR=14.1 q=0.32
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=73.5 HRV=0.0 BR=18.3 q=0.27
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=15.6 q=0.03
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=18.5 q=0.03
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=15.4 q=0.09
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=77.1 HRV=0.0 BR=18.1 q=0.14
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=16.6 q=0.09
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.3 HRV=0.0 BR=17.1 q=0.17
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=13.9 q=0.05
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=18.0 q=0.05
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=14.4 q=0.07
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.5 HRV=0.0 BR=18.3 q=0.18
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=15.7 q=0.10
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.5 HRV=0.0 BR=17.5 q=0.17
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=16.3 q=0.10
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=18.1 q=0.07
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=18.6 q=0.09
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.9 HRV=0.0 BR=17.9 q=0.18
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=16.1 q=0.08
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.7 HRV=0.0 BR=18.6 q=0.16
+2026-05-07T20:38:00 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=19.8 q=0.08
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.3 HRV=0.0 BR=18.7 q=0.16
+2026-05-07T20:38:00 [piezo-processor] INFO vitals right — HR=76.5 HRV=0.0 BR=19.1 q=0.12
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=71.8 HRV=0.0 BR=15.6 q=0.28
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=71.8 HRV=0.0 BR=18.9 q=0.25
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=71.8 HRV=0.0 BR=16.6 q=0.33
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=71.8 HRV=0.0 BR=19.9 q=0.24
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=71.8 HRV=0.0 BR=17.7 q=0.32
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=71.8 HRV=0.0 BR=19.3 q=0.24
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=71.8 HRV=0.0 BR=17.7 q=0.32
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=71.8 HRV=0.0 BR=18.5 q=0.24
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=71.8 HRV=0.0 BR=19.3 q=0.32
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=71.8 HRV=0.0 BR=20.0 q=0.24
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=71.8 HRV=0.0 BR=16.9 q=0.32
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=71.8 HRV=0.0 BR=20.0 q=0.24
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=71.8 HRV=0.0 BR=16.1 q=0.32
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=71.9 HRV=0.0 BR=21.6 q=0.25
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=71.9 HRV=0.0 BR=20.0 q=0.33
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=47.9 HRV=0.0 BR=20.0 q=0.17
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=71.8 HRV=0.0 BR=17.6 q=0.18
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=51.5 HRV=0.0 BR=19.8 q=0.22
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=78.3 HRV=0.0 BR=18.0 q=0.35
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=49.0 HRV=0.0 BR=18.9 q=0.30
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=50.0 HRV=0.0 BR=17.1 q=0.38
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=6.7 q=0.08
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=6.7 q=0.07
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=13.1 q=0.06
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=15.2 q=0.13
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=10.6 q=0.10
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=10.6 q=0.11
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=7.6 q=0.08
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=11.3 q=0.10
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=11.4 q=0.09
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=11.9 q=0.06
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=10.9 q=0.07
+2026-05-07T20:38:01 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=10.9 q=0.06
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=10.2 q=0.07
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=10.0 q=0.09
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=9.9 q=0.09
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=8.6 q=0.06
+2026-05-07T20:38:01 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=8.3 q=0.05
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=18.9 q=0.17
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=18.9 q=0.15
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=18.7 q=0.17
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=18.3 q=0.11
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=19.5 q=0.15
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=50.2 HRV=0.0 BR=19.0 q=0.17
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=50.2 HRV=0.0 BR=18.8 q=0.14
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=18.9 q=0.06
+2026-05-07T20:38:02 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=21.0 q=0.06
+Re-running pipeline for /Users/onemec/Documents/GitHub/core/sample_data/raw_data/00381528.RAW...
+Rel Time | Side  | Event  | Heart Rate | Resp Rate | Quality
+----------------------------------------------------------------------
+[ 0.65m] left  | STATE  | PRESENT (STD:   0k, ACR: 0.30)
+[ 0.65m] left  | VITALS | HR:  55.4 | RR:  20.1 | Qual: 0.21
+[ 0.67m] left  | VITALS | HR:  50.0 | RR:  20.3 | Qual: 0.19
+[ 0.68m] left  | VITALS | HR:   N/A | RR:  20.5 | Qual: 0.10
+[ 0.70m] left  | VITALS | HR:   N/A | RR:  20.1 | Qual: 0.06
+[ 0.72m] left  | VITALS | HR:  73.0 | RR:  19.8 | Qual: 0.24
+[ 0.73m] left  | VITALS | HR:   N/A | RR:  20.5 | Qual: 0.14
+[ 0.75m] left  | VITALS | HR:   N/A | RR:  19.2 | Qual: 0.17
+[ 0.77m] left  | VITALS | HR:  72.1 | RR:  19.6 | Qual: 0.15
+[ 0.78m] left  | VITALS | HR:   N/A | RR:  20.2 | Qual: 0.09
+[ 0.80m] left  | VITALS | HR:  70.8 | RR:  20.2 | Qual: 0.16
+[ 0.82m] left  | VITALS | HR:  70.9 | RR:  20.4 | Qual: 0.14
+[ 0.83m] left  | VITALS | HR:  69.8 | RR:  20.2 | Qual: 0.12
+[ 0.85m] left  | VITALS | HR:  70.1 | RR:  20.2 | Qual: 0.14
+[ 0.87m] left  | VITALS | HR:  69.9 | RR:  20.2 | Qual: 0.17
+[ 0.88m] left  | VITALS | HR:  69.6 | RR:  20.2 | Qual: 0.15
+[ 0.90m] left  | VITALS | HR:  69.3 | RR:  20.2 | Qual: 0.12
+[ 0.92m] left  | STATE  | ABSENT (STD:   0k, ACR: 0.14)
+[ 1.45m] left  | STATE  | PRESENT (STD:   3k, ACR: 0.45)
+[ 1.45m] left  | VITALS | HR:  68.5 | RR:  17.1 | Qual: 0.31
+[ 1.45m] right | STATE  | PRESENT (STD:   4k, ACR: 0.43)
+[ 1.45m] right | VITALS | HR:  68.6 | RR:  18.4 | Qual: 0.29
+[ 1.47m] left  | VITALS | HR:  68.5 | RR:  16.8 | Qual: 0.15
+[ 1.47m] right | VITALS | HR:  68.6 | RR:  17.7 | Qual: 0.15
+[ 1.48m] left  | VITALS | HR:  68.5 | RR:  16.8 | Qual: 0.14
+[ 1.48m] right | VITALS | HR:  68.6 | RR:  18.4 | Qual: 0.15
+[ 1.50m] left  | VITALS | HR:  68.5 | RR:  15.1 | Qual: 0.16
+[ 1.50m] right | VITALS | HR:  68.6 | RR:  16.8 | Qual: 0.14
+[ 1.52m] left  | VITALS | HR:  68.5 | RR:  14.9 | Qual: 0.14
+[ 1.52m] right | VITALS | HR:  68.6 | RR:  18.5 | Qual: 0.13
+[ 1.53m] left  | VITALS | HR:  68.5 | RR:  15.1 | Qual: 0.14
+[ 1.53m] right | VITALS | HR:  68.6 | RR:  17.0 | Qual: 0.14
+[ 1.55m] left  | VITALS | HR:  68.5 | RR:  14.6 | Qual: 0.14
+[ 1.55m] right | VITALS | HR:  68.5 | RR:  18.3 | Qual: 0.14
+[ 1.57m] left  | STATE  | ABSENT (STD:   3k, ACR: 0.14)
+[ 1.57m] right | VITALS | HR:  68.3 | RR:  17.9 | Qual: 0.10
+[ 1.58m] right | VITALS | HR:  68.6 | RR:  18.5 | Qual: 0.13
+[ 1.60m] right | VITALS | HR:  68.8 | RR:  18.6 | Qual: 0.16
+[ 1.62m] right | VITALS | HR:  77.7 | RR:  17.1 | Qual: 0.16
+[ 1.63m] right | VITALS | HR:  77.1 | RR:  17.9 | Qual: 0.19
+[ 1.65m] right | VITALS | HR:  88.0 | RR:  17.4 | Qual: 0.20
+[ 1.67m] right | VITALS | HR:  88.0 | RR:  17.3 | Qual: 0.19
+[ 1.68m] right | VITALS | HR:  75.9 | RR:  16.0 | Qual: 0.20
+[ 1.70m] right | VITALS | HR:  74.8 | RR:  16.5 | Qual: 0.25
+[ 1.72m] right | VITALS | HR:  75.4 | RR:  16.8 | Qual: 0.15
+[ 1.73m] right | VITALS | HR:  75.8 | RR:  16.3 | Qual: 0.20
+[ 1.75m] right | VITALS | HR:  76.1 | RR:  16.5 | Qual: 0.20
+[ 1.77m] right | VITALS | HR:  75.4 | RR:  17.8 | Qual: 0.15
+[ 1.78m] right | VITALS | HR:  76.3 | RR:  18.0 | Qual: 0.28
+[ 1.80m] right | VITALS | HR:  75.9 | RR:  18.1 | Qual: 0.27
+[ 1.82m] left  | STATE  | PRESENT (STD:   0k, ACR: 0.32)
+[ 1.82m] left  | VITALS | HR:  74.4 | RR:  14.1 | Qual: 0.32
+[ 1.82m] right | VITALS | HR:  73.5 | RR:  18.3 | Qual: 0.27
+[ 1.83m] left  | VITALS | HR:   N/A | RR:  15.6 | Qual: 0.03
+[ 1.83m] right | VITALS | HR:   N/A | RR:  18.5 | Qual: 0.03
+[ 1.85m] left  | VITALS | HR:   N/A | RR:  15.4 | Qual: 0.09
+[ 1.85m] right | VITALS | HR:  77.1 | RR:  18.1 | Qual: 0.14
+[ 1.87m] left  | VITALS | HR:   N/A | RR:  16.6 | Qual: 0.09
+[ 1.87m] right | VITALS | HR:  76.3 | RR:  17.1 | Qual: 0.17
+[ 1.88m] left  | VITALS | HR:   N/A | RR:  13.9 | Qual: 0.05
+[ 1.88m] right | VITALS | HR:   N/A | RR:  18.0 | Qual: 0.05
+[ 1.90m] left  | VITALS | HR:   N/A | RR:  14.4 | Qual: 0.07
+[ 1.90m] right | VITALS | HR:  76.5 | RR:  18.3 | Qual: 0.18
+[ 1.92m] left  | VITALS | HR:   N/A | RR:  15.7 | Qual: 0.10
+[ 1.92m] right | VITALS | HR:  76.5 | RR:  17.5 | Qual: 0.17
+[ 1.93m] left  | VITALS | HR:   N/A | RR:  16.3 | Qual: 0.10
+[ 1.93m] right | VITALS | HR:   N/A | RR:  18.1 | Qual: 0.07
+[ 1.95m] left  | VITALS | HR:   N/A | RR:  18.6 | Qual: 0.09
+[ 1.95m] right | VITALS | HR:  76.9 | RR:  17.9 | Qual: 0.18
+[ 1.97m] left  | VITALS | HR:   N/A | RR:  16.1 | Qual: 0.08
+[ 1.97m] right | VITALS | HR:  76.7 | RR:  18.6 | Qual: 0.16
+[ 1.98m] left  | VITALS | HR:   N/A | RR:  19.8 | Qual: 0.08
+[ 1.98m] right | VITALS | HR:  76.3 | RR:  18.7 | Qual: 0.16
+[ 2.00m] left  | STATE  | ABSENT (STD:   0k, ACR: 0.11)
+[ 2.00m] right | VITALS | HR:  76.5 | RR:  19.1 | Qual: 0.12
+[ 2.02m] right | STATE  | ABSENT (STD:   0k, ACR: 0.13)
+[ 2.47m] left  | STATE  | PRESENT (STD:   0k, ACR: 0.31)
+[ 2.47m] left  | VITALS | HR:  71.8 | RR:  15.6 | Qual: 0.28
+[ 2.48m] left  | VITALS | HR:  71.8 | RR:  18.9 | Qual: 0.25
+[ 2.48m] right | STATE  | PRESENT (STD:   0k, ACR: 0.34)
+[ 2.48m] right | VITALS | HR:  71.8 | RR:  16.6 | Qual: 0.33
+[ 2.50m] left  | VITALS | HR:  71.8 | RR:  19.9 | Qual: 0.24
+[ 2.50m] right | VITALS | HR:  71.8 | RR:  17.7 | Qual: 0.32
+Processed 500 records... (type: capSense)
+[ 2.52m] left  | VITALS | HR:  71.8 | RR:  19.3 | Qual: 0.24
+[ 2.52m] right | VITALS | HR:  71.8 | RR:  17.7 | Qual: 0.32
+[ 2.53m] left  | VITALS | HR:  71.8 | RR:  18.5 | Qual: 0.24
+[ 2.53m] right | VITALS | HR:  71.8 | RR:  19.3 | Qual: 0.32
+[ 2.55m] left  | VITALS | HR:  71.8 | RR:  20.0 | Qual: 0.24
+[ 2.55m] right | VITALS | HR:  71.8 | RR:  16.9 | Qual: 0.32
+[ 2.57m] left  | VITALS | HR:  71.8 | RR:  20.0 | Qual: 0.24
+[ 2.57m] right | VITALS | HR:  71.8 | RR:  16.1 | Qual: 0.32
+[ 2.58m] left  | VITALS | HR:  71.9 | RR:  21.6 | Qual: 0.25
+[ 2.58m] right | VITALS | HR:  71.9 | RR:  20.0 | Qual: 0.33
+[ 2.60m] left  | VITALS | HR:  47.9 | RR:  20.0 | Qual: 0.17
+[ 2.60m] right | VITALS | HR:  71.8 | RR:  17.6 | Qual: 0.18
+[ 2.62m] left  | VITALS | HR:  51.5 | RR:  19.8 | Qual: 0.22
+[ 2.62m] right | VITALS | HR:  78.3 | RR:  18.0 | Qual: 0.35
+[ 2.63m] left  | VITALS | HR:  49.0 | RR:  18.9 | Qual: 0.30
+[ 2.63m] right | VITALS | HR:  50.0 | RR:  17.1 | Qual: 0.38
+[ 2.67m] left  | VITALS | HR:   N/A | RR:   6.7 | Qual: 0.08
+[ 2.67m] right | VITALS | HR:   N/A | RR:   6.7 | Qual: 0.07
+[ 2.68m] left  | VITALS | HR:   N/A | RR:  13.1 | Qual: 0.06
+[ 2.68m] right | VITALS | HR:   N/A | RR:  15.2 | Qual: 0.13
+[ 2.70m] left  | VITALS | HR:   N/A | RR:  10.6 | Qual: 0.10
+[ 2.70m] right | VITALS | HR:   N/A | RR:  10.6 | Qual: 0.11
+[ 2.72m] left  | VITALS | HR:   N/A | RR:   7.6 | Qual: 0.08
+[ 2.72m] right | VITALS | HR:   N/A | RR:  11.3 | Qual: 0.10
+[ 2.73m] left  | VITALS | HR:   N/A | RR:  11.4 | Qual: 0.09
+[ 2.73m] right | VITALS | HR:   N/A | RR:  11.9 | Qual: 0.06
+[ 2.75m] left  | VITALS | HR:   N/A | RR:  10.9 | Qual: 0.07
+[ 2.75m] right | VITALS | HR:   N/A | RR:  10.9 | Qual: 0.06
+[ 2.77m] left  | VITALS | HR:   N/A | RR:  10.2 | Qual: 0.07
+[ 2.77m] right | STATE  | ABSENT (STD:   2k, ACR: 0.08)
+[ 2.78m] left  | VITALS | HR:   N/A | RR:  10.0 | Qual: 0.09
+[ 2.80m] left  | VITALS | HR:   N/A | RR:   9.9 | Qual: 0.09
+[ 2.82m] left  | VITALS | HR:   N/A | RR:   8.6 | Qual: 0.06
+[ 2.83m] left  | VITALS | HR:   N/A | RR:   8.3 | Qual: 0.05
+[ 2.85m] left  | STATE  | ABSENT (STD:   2k, ACR: 0.11)
+[ 4.83m] left  | STATE  | PRESENT (STD:   0k, ACR: 0.31)
+[ 4.83m] left  | VITALS | HR:   N/A | RR:  18.9 | Qual: 0.17
+[ 4.85m] left  | VITALS | HR:   N/A | RR:  18.9 | Qual: 0.15
+[ 4.87m] left  | VITALS | HR:   N/A | RR:  18.7 | Qual: 0.17
+[ 4.88m] left  | VITALS | HR:   N/A | RR:  18.3 | Qual: 0.11
+[ 4.90m] left  | VITALS | HR:   N/A | RR:  19.5 | Qual: 0.15
+[ 4.92m] left  | VITALS | HR:  50.2 | RR:  19.0 | Qual: 0.17
+[ 4.93m] left  | VITALS | HR:  50.2 | RR:  18.8 | Qual: 0.14
+[ 4.95m] left  | VITALS | HR:   N/A | RR:  18.9 | Qual: 0.06
+[ 4.97m] left  | VITALS | HR:   N/A | RR:  21.0 | Qual: 0.06
+[ 4.98m] left  | STATE  | ABSENT (STD:   0k, ACR: 0.14)
+Processed 1000 records... (type: capSense)
+[ 6.07m] right | STATE  | PRESENT (STD:   0k, ACR: 0.33)
+[ 6.07m] right | VITALS | HR:  61.9 | RR:   6.7 | Qual: 0.262026-05-07T20:38:02 [piezo-processor] INFO vitals right — HR=61.9 HRV=61.0 BR=6.7 q=0.26
+2026-05-07T20:38:02 [piezo-processor] INFO vitals right — HR=61.5 HRV=19.7 BR=6.6 q=0.24
+2026-05-07T20:38:02 [piezo-processor] INFO vitals right — HR=61.2 HRV=36.7 BR=6.8 q=0.25
+2026-05-07T20:38:02 [piezo-processor] INFO vitals right — HR=61.1 HRV=69.0 BR=7.1 q=0.23
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=61.6 HRV=0.0 BR=7.1 q=0.16
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=61.2 HRV=55.5 BR=7.0 q=0.21
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=61.9 HRV=85.5 BR=6.9 q=0.14
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=61.9 HRV=35.4 BR=6.8 q=0.12
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=62.4 HRV=28.8 BR=6.8 q=0.12
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=50.8 HRV=36.2 BR=6.7 q=0.13
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=50.5 HRV=33.6 BR=6.7 q=0.14
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=0.0 HRV=19.0 BR=6.6 q=0.04
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=50.7 HRV=36.5 BR=6.8 q=0.17
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=50.5 HRV=29.0 BR=6.8 q=0.18
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=50.4 HRV=41.3 BR=7.1 q=0.16
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=60.9 HRV=38.3 BR=7.0 q=0.11
+2026-05-07T20:38:03 [piezo-processor] INFO vitals right — HR=0.0 HRV=16.1 BR=6.9 q=0.07
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=59.1 HRV=87.6 BR=7.7 q=0.29
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=58.9 HRV=60.6 BR=7.5 q=0.27
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=59.2 HRV=0.0 BR=7.9 q=0.24
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=59.1 HRV=68.3 BR=12.6 q=0.23
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=58.9 HRV=0.0 BR=6.6 q=0.14
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=59.1 HRV=83.9 BR=6.6 q=0.23
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=59.6 HRV=59.6 BR=6.4 q=0.17
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=59.4 HRV=0.0 BR=6.4 q=0.14
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=60.1 HRV=0.0 BR=17.4 q=0.12
+2026-05-07T20:38:03 [piezo-processor] INFO vitals left — HR=60.2 HRV=0.0 BR=16.9 q=0.12
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=70.8 HRV=20.7 BR=18.4 q=0.24
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=70.6 HRV=88.8 BR=18.5 q=0.20
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=70.6 HRV=26.3 BR=18.4 q=0.18
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=70.6 HRV=69.2 BR=19.5 q=0.18
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=70.8 HRV=0.0 BR=20.7 q=0.20
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=70.9 HRV=20.2 BR=19.0 q=0.19
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=0.0 HRV=71.0 BR=18.6 q=0.07
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=70.3 HRV=75.3 BR=20.7 q=0.13
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=70.1 HRV=49.3 BR=19.8 q=0.11
+2026-05-07T20:38:04 [piezo-processor] INFO vitals right — HR=51.5 HRV=0.0 BR=20.7 q=0.12
+2026-05-07T20:38:05 [piezo-processor] INFO vitals right — HR=0.0 HRV=21.7 BR=6.0 q=0.17
+2026-05-07T20:38:05 [piezo-processor] INFO vitals right — HR=0.0 HRV=15.7 BR=6.4 q=0.14
+2026-05-07T20:38:05 [piezo-processor] INFO vitals right — HR=0.0 HRV=57.2 BR=6.8 q=0.10
+2026-05-07T20:38:05 [piezo-processor] INFO vitals right — HR=0.0 HRV=21.6 BR=6.7 q=0.08
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=37.7 BR=6.9 q=0.08
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=24.5 BR=6.7 q=0.08
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=6.8 q=0.08
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=28.7 BR=6.6 q=0.08
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=70.9 BR=6.8 q=0.08
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=99.2 BR=7.2 q=0.12
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=22.2 BR=7.4 q=0.09
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=99.4 BR=6.9 q=0.13
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=61.3 BR=6.8 q=0.06
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=0.0 HRV=18.8 BR=6.8 q=0.07
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=75.6 HRV=41.9 BR=6.7 q=0.38
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=75.6 HRV=16.1 BR=6.7 q=0.37
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=75.6 HRV=0.0 BR=6.6 q=0.38
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=75.6 HRV=64.4 BR=6.6 q=0.37
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=75.6 HRV=74.1 BR=6.8 q=0.38
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=75.6 HRV=50.0 BR=6.8 q=0.38
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=75.4 HRV=0.0 BR=7.1 q=0.39
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=75.4 HRV=97.1 BR=7.1 q=0.39
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=79.8 HRV=23.5 BR=7.1 q=0.13
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=95.8 HRV=63.5 BR=7.1 q=0.15
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=0.0 HRV=40.5 BR=7.0 q=0.09
+2026-05-07T20:38:06 [piezo-processor] INFO vitals right — HR=77.1 HRV=15.4 BR=7.0 q=0.15
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=92.3 HRV=24.6 BR=6.8 q=0.15
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=91.5 HRV=55.5 BR=6.8 q=0.14
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=88.2 HRV=65.4 BR=6.7 q=0.18
+2026-05-07T20:38:06 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=6.7 q=0.10
+2026-05-07T20:38:07 [piezo-processor] INFO vitals left — HR=85.2 HRV=0.0 BR=6.7 q=0.16
+2026-05-07T20:38:07 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=6.6 q=0.07
+2026-05-07T20:38:07 [piezo-processor] INFO vitals left — HR=90.1 HRV=97.8 BR=6.8 q=0.13
+2026-05-07T20:38:07 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=7.1 q=0.09
+2026-05-07T20:38:07 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=7.2 q=0.07
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=76.3 HRV=62.7 BR=7.2 q=0.25
+2026-05-07T20:38:07 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=7.0 q=0.06
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=59.5 HRV=99.1 BR=7.0 q=0.15
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=68.3 BR=6.9 q=0.04
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=75.8 HRV=48.8 BR=6.8 q=0.16
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=75.0 HRV=35.3 BR=6.7 q=0.12
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=75.8 HRV=65.7 BR=6.7 q=0.15
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=59.8 HRV=12.1 BR=6.7 q=0.15
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=59.6 HRV=65.0 BR=6.7 q=0.14
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=59.6 HRV=17.7 BR=6.6 q=0.12
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=59.4 HRV=33.5 BR=6.3 q=0.14
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=59.5 HRV=57.5 BR=6.7 q=0.12
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=59.4 HRV=98.6 BR=6.3 q=0.13
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=61.7 BR=6.6 q=0.06
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=59.3 HRV=19.9 BR=6.6 q=0.16
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=32.5 BR=6.4 q=0.05
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=57.6 BR=6.4 q=0.05
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=20.2 q=0.09
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=24.8 BR=21.1 q=0.09
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=18.6 BR=21.1 q=0.10
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=33.3 BR=21.1 q=0.05
+2026-05-07T20:38:07 [piezo-processor] INFO vitals right — HR=0.0 HRV=65.4 BR=20.6 q=0.07
+2026-05-07T20:38:08 [piezo-processor] INFO vitals right — HR=81.5 HRV=35.3 BR=18.8 q=0.41
+2026-05-07T20:38:08 [piezo-processor] INFO vitals right — HR=81.5 HRV=73.4 BR=17.6 q=0.24
+2026-05-07T20:38:08 [piezo-processor] INFO vitals left — HR=82.2 HRV=0.0 BR=18.0 q=0.47
+2026-05-07T20:38:08 [piezo-processor] INFO vitals right — HR=81.5 HRV=23.9 BR=16.3 q=0.48
+2026-05-07T20:38:08 [piezo-processor] INFO vitals left — HR=82.2 HRV=84.0 BR=17.5 q=0.47
+2026-05-07T20:38:08 [piezo-processor] INFO vitals right — HR=81.5 HRV=20.2 BR=19.0 q=0.48
+2026-05-07T20:38:08 [piezo-processor] INFO vitals left — HR=82.2 HRV=28.4 BR=19.2 q=0.47
+2026-05-07T20:38:08 [piezo-processor] INFO vitals right — HR=81.5 HRV=20.9 BR=18.6 q=0.48
+2026-05-07T20:38:08 [piezo-processor] INFO vitals left — HR=82.2 HRV=0.0 BR=19.1 q=0.47
+2026-05-07T20:38:08 [piezo-processor] INFO vitals right — HR=81.5 HRV=34.4 BR=20.6 q=0.48
+2026-05-07T20:38:08 [piezo-processor] INFO vitals left — HR=82.2 HRV=73.4 BR=20.2 q=0.47
+2026-05-07T20:38:08 [piezo-processor] INFO vitals right — HR=81.5 HRV=71.6 BR=16.5 q=0.48
+2026-05-07T20:38:08 [piezo-processor] INFO vitals left — HR=82.2 HRV=30.8 BR=21.2 q=0.47
+2026-05-07T20:38:08 [piezo-processor] INFO vitals right — HR=81.5 HRV=23.9 BR=22.1 q=0.48
+2026-05-07T20:38:09 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=6.9 q=0.26
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=18.9 BR=6.9 q=0.27
+2026-05-07T20:38:09 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=6.7 q=0.26
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=20.9 BR=6.7 q=0.27
+2026-05-07T20:38:09 [piezo-processor] INFO vitals left — HR=0.0 HRV=0.0 BR=6.6 q=0.26
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=15.0 BR=6.3 q=0.26
+2026-05-07T20:38:09 [piezo-processor] INFO vitals left — HR=0.0 HRV=28.1 BR=6.4 q=0.02
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=12.3 BR=6.4 q=0.03
+2026-05-07T20:38:09 [piezo-processor] INFO vitals left — HR=0.0 HRV=30.0 BR=6.4 q=0.07
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=20.5 BR=6.4 q=0.13
+
+[ 6.08m] right | VITALS | HR:  61.5 | RR:   6.6 | Qual: 0.24
+[ 6.10m] right | VITALS | HR:  61.2 | RR:   6.8 | Qual: 0.25
+[ 6.12m] right | VITALS | HR:  61.1 | RR:   7.1 | Qual: 0.23
+[ 6.13m] right | VITALS | HR:  61.6 | RR:   7.1 | Qual: 0.16
+[ 6.15m] right | VITALS | HR:  61.2 | RR:   7.0 | Qual: 0.21
+[ 6.17m] right | VITALS | HR:  61.9 | RR:   6.9 | Qual: 0.14
+[ 6.18m] right | VITALS | HR:  61.9 | RR:   6.8 | Qual: 0.12
+[ 6.20m] right | VITALS | HR:  62.4 | RR:   6.8 | Qual: 0.12
+[ 6.22m] right | VITALS | HR:  50.8 | RR:   6.7 | Qual: 0.13
+[ 6.23m] right | VITALS | HR:  50.5 | RR:   6.7 | Qual: 0.14
+[ 6.25m] right | VITALS | HR:   N/A | RR:   6.6 | Qual: 0.04
+[ 6.27m] right | VITALS | HR:  50.7 | RR:   6.8 | Qual: 0.17
+[ 6.28m] right | VITALS | HR:  50.5 | RR:   6.8 | Qual: 0.18
+[ 6.30m] right | VITALS | HR:  50.4 | RR:   7.1 | Qual: 0.16
+[ 6.32m] right | VITALS | HR:  60.9 | RR:   7.0 | Qual: 0.11
+[ 6.33m] right | VITALS | HR:   N/A | RR:   6.9 | Qual: 0.07
+[ 6.35m] right | STATE  | ABSENT (STD:   0k, ACR: 0.11)
+[ 6.43m] left  | STATE  | PRESENT (STD:   0k, ACR: 0.35)
+[ 6.43m] left  | VITALS | HR:  59.1 | RR:   7.7 | Qual: 0.29
+[ 6.45m] left  | VITALS | HR:  58.9 | RR:   7.5 | Qual: 0.27
+[ 6.47m] left  | VITALS | HR:  59.2 | RR:   7.9 | Qual: 0.24
+[ 6.48m] left  | VITALS | HR:  59.1 | RR:  12.6 | Qual: 0.23
+[ 6.50m] left  | VITALS | HR:  58.9 | RR:   6.6 | Qual: 0.14
+[ 6.52m] left  | VITALS | HR:  59.1 | RR:   6.6 | Qual: 0.23
+[ 6.53m] left  | VITALS | HR:  59.6 | RR:   6.4 | Qual: 0.17
+[ 6.55m] left  | VITALS | HR:  59.4 | RR:   6.4 | Qual: 0.14
+[ 6.57m] left  | VITALS | HR:  60.1 | RR:  17.4 | Qual: 0.12
+[ 6.58m] left  | VITALS | HR:  60.2 | RR:  16.9 | Qual: 0.12
+[ 6.60m] left  | STATE  | ABSENT (STD:   0k, ACR: 0.09)
+Processed 1500 records... (type: capSense)
+[ 7.98m] right | STATE  | PRESENT (STD:   0k, ACR: 0.32)
+[ 7.98m] right | VITALS | HR:  70.8 | RR:  18.4 | Qual: 0.24
+[ 8.00m] right | VITALS | HR:  70.6 | RR:  18.5 | Qual: 0.20
+[ 8.02m] right | VITALS | HR:  70.6 | RR:  18.4 | Qual: 0.18
+[ 8.03m] right | VITALS | HR:  70.6 | RR:  19.5 | Qual: 0.18
+[ 8.05m] right | VITALS | HR:  70.8 | RR:  20.7 | Qual: 0.20
+[ 8.07m] right | VITALS | HR:  70.9 | RR:  19.0 | Qual: 0.19
+[ 8.08m] right | VITALS | HR:   N/A | RR:  18.6 | Qual: 0.07
+[ 8.10m] right | VITALS | HR:  70.3 | RR:  20.7 | Qual: 0.13
+[ 8.12m] right | VITALS | HR:  70.1 | RR:  19.8 | Qual: 0.11
+[ 8.13m] right | VITALS | HR:  51.5 | RR:  20.7 | Qual: 0.12
+[ 8.15m] right | STATE  | ABSENT (STD:   0k, ACR: 0.09)
+Processed 2000 records... (type: capSense)
+[11.45m] right | STATE  | PRESENT (STD:   3k, ACR: 0.31)
+[11.45m] right | VITALS | HR:   N/A | RR:   6.0 | Qual: 0.17
+[11.47m] right | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.14
+[11.48m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.10
+[11.50m] right | VITALS | HR:   N/A | RR:   6.7 | Qual: 0.08
+[11.52m] right | VITALS | HR:   N/A | RR:   6.9 | Qual: 0.08
+[11.53m] right | VITALS | HR:   N/A | RR:   6.7 | Qual: 0.08
+[11.55m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.08
+[11.57m] right | VITALS | HR:   N/A | RR:   6.6 | Qual: 0.08
+[11.58m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.08
+[11.60m] right | VITALS | HR:   N/A | RR:   7.2 | Qual: 0.12
+[11.62m] right | VITALS | HR:   N/A | RR:   7.4 | Qual: 0.09
+[11.63m] right | VITALS | HR:   N/A | RR:   6.9 | Qual: 0.13
+[11.65m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.06
+[11.67m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.07
+[11.68m] right | STATE  | ABSENT (STD:   2k, ACR: 0.13)
+[11.88m] left  | STATE  | PRESENT (STD:   0k, ACR: 0.38)
+[11.88m] left  | VITALS | HR:  75.6 | RR:   6.7 | Qual: 0.38
+[11.88m] right | STATE  | PRESENT (STD:   0k, ACR: 0.37)
+[11.88m] right | VITALS | HR:  75.6 | RR:   6.7 | Qual: 0.37
+[11.90m] left  | VITALS | HR:  75.6 | RR:   6.6 | Qual: 0.38
+[11.90m] right | VITALS | HR:  75.6 | RR:   6.6 | Qual: 0.37
+[11.92m] left  | VITALS | HR:  75.6 | RR:   6.8 | Qual: 0.38
+[11.92m] right | VITALS | HR:  75.6 | RR:   6.8 | Qual: 0.38
+[11.93m] left  | VITALS | HR:  75.4 | RR:   7.1 | Qual: 0.39
+[11.93m] right | VITALS | HR:  75.4 | RR:   7.1 | Qual: 0.39
+[11.95m] left  | VITALS | HR:  79.8 | RR:   7.1 | Qual: 0.13
+[11.95m] right | VITALS | HR:  95.8 | RR:   7.1 | Qual: 0.15
+[11.97m] left  | VITALS | HR:   N/A | RR:   7.0 | Qual: 0.09
+[11.97m] right | VITALS | HR:  77.1 | RR:   7.0 | Qual: 0.15
+[11.98m] left  | VITALS | HR:  92.3 | RR:   6.8 | Qual: 0.15
+[11.98m] right | STATE  | ABSENT (STD:   0k, ACR: 0.13)
+[12.00m] left  | VITALS | HR:  91.5 | RR:   6.8 | Qual: 0.14
+[12.02m] left  | VITALS | HR:  88.2 | RR:   6.7 | Qual: 0.18
+[12.03m] left  | VITALS | HR:   N/A | RR:   6.7 | Qual: 0.10
+[12.05m] left  | VITALS | HR:  85.2 | RR:   6.7 | Qual: 0.16
+[12.07m] left  | VITALS | HR:   N/A | RR:   6.6 | Qual: 0.07
+[12.08m] left  | VITALS | HR:  90.1 | RR:   6.8 | Qual: 0.13
+[12.10m] left  | VITALS | HR:   N/A | RR:   7.1 | Qual: 0.09
+[12.12m] left  | VITALS | HR:   N/A | RR:   7.2 | Qual: 0.07
+[12.12m] right | STATE  | PRESENT (STD:   0k, ACR: 0.32)
+[12.12m] right | VITALS | HR:  76.3 | RR:   7.2 | Qual: 0.25
+[12.13m] left  | VITALS | HR:   N/A | RR:   7.0 | Qual: 0.06
+[12.13m] right | VITALS | HR:  59.5 | RR:   7.0 | Qual: 0.15
+[12.15m] left  | STATE  | ABSENT (STD:   0k, ACR: 0.14)
+[12.15m] right | VITALS | HR:   N/A | RR:   6.9 | Qual: 0.04
+[12.17m] right | VITALS | HR:  75.8 | RR:   6.8 | Qual: 0.16
+[12.18m] right | VITALS | HR:  75.0 | RR:   6.7 | Qual: 0.12
+[12.20m] right | VITALS | HR:  75.8 | RR:   6.7 | Qual: 0.15
+[12.22m] right | VITALS | HR:  59.8 | RR:   6.7 | Qual: 0.15
+[12.23m] right | VITALS | HR:  59.6 | RR:   6.7 | Qual: 0.14
+[12.25m] right | VITALS | HR:  59.6 | RR:   6.6 | Qual: 0.12
+[12.27m] right | VITALS | HR:  59.4 | RR:   6.3 | Qual: 0.14
+[12.28m] right | VITALS | HR:  59.5 | RR:   6.7 | Qual: 0.12
+[12.30m] right | VITALS | HR:  59.4 | RR:   6.3 | Qual: 0.13
+[12.32m] right | VITALS | HR:   N/A | RR:   6.6 | Qual: 0.06
+[12.33m] right | VITALS | HR:  59.3 | RR:   6.6 | Qual: 0.16
+[12.35m] right | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.05
+[12.37m] right | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.05
+[12.38m] right | VITALS | HR:   N/A | RR:  20.2 | Qual: 0.09
+[12.40m] right | VITALS | HR:   N/A | RR:  21.1 | Qual: 0.09
+[12.42m] right | VITALS | HR:   N/A | RR:  21.1 | Qual: 0.10
+[12.43m] right | VITALS | HR:   N/A | RR:  21.1 | Qual: 0.05
+[12.45m] right | VITALS | HR:   N/A | RR:  20.6 | Qual: 0.07
+[12.47m] right | STATE  | ABSENT (STD:   0k, ACR: 0.09)
+Processed 2500 records... (type: piezo-dual)
+[14.15m] right | STATE  | PRESENT (STD:   0k, ACR: 0.36)
+[14.15m] right | VITALS | HR:  81.5 | RR:  18.8 | Qual: 0.41
+[14.17m] right | VITALS | HR:  81.5 | RR:  17.6 | Qual: 0.24
+[14.18m] left  | STATE  | PRESENT (STD:   0k, ACR: 0.48)
+[14.18m] left  | VITALS | HR:  82.2 | RR:  18.0 | Qual: 0.47
+[14.18m] right | VITALS | HR:  81.5 | RR:  16.3 | Qual: 0.48
+[14.20m] left  | VITALS | HR:  82.2 | RR:  17.5 | Qual: 0.47
+[14.20m] right | VITALS | HR:  81.5 | RR:  19.0 | Qual: 0.48
+[14.22m] left  | VITALS | HR:  82.2 | RR:  19.2 | Qual: 0.47
+[14.22m] right | VITALS | HR:  81.5 | RR:  18.6 | Qual: 0.48
+[14.23m] left  | VITALS | HR:  82.2 | RR:  19.1 | Qual: 0.47
+[14.23m] right | VITALS | HR:  81.5 | RR:  20.6 | Qual: 0.48
+[14.25m] left  | VITALS | HR:  82.2 | RR:  20.2 | Qual: 0.47
+[14.25m] right | VITALS | HR:  81.5 | RR:  16.5 | Qual: 0.48
+[14.27m] left  | VITALS | HR:  82.2 | RR:  21.2 | Qual: 0.47
+[14.27m] right | VITALS | HR:  81.5 | RR:  22.1 | Qual: 0.48
+[14.28m] left  | VITALS | HR:   N/A | RR:   6.9 | Qual: 0.26
+[14.28m] right | VITALS | HR:   N/A | RR:   6.9 | Qual: 0.27
+[14.30m] left  | VITALS | HR:   N/A | RR:   6.7 | Qual: 0.26
+[14.30m] right | VITALS | HR:   N/A | RR:   6.7 | Qual: 0.27
+[14.32m] left  | VITALS | HR:   N/A | RR:   6.6 | Qual: 0.26
+[14.32m] right | VITALS | HR:   N/A | RR:   6.3 | Qual: 0.26
+[14.33m] left  | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.02
+[14.33m] right | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.03
+[14.35m] left  | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.07
+[14.35m] right | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.13
+[14.37m] left  | STATE  | ABSENT (STD:   0k, ACR: 0.13)
+[14.37m] right | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.072026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=19.3 BR=6.4 q=0.07
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=22.2 BR=6.4 q=0.14
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=0.0 BR=6.8 q=0.07
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=12.2 BR=6.8 q=0.12
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=20.5 BR=6.8 q=0.06
+2026-05-07T20:38:09 [piezo-processor] INFO vitals right — HR=0.0 HRV=67.2 BR=6.8 q=0.08
+
+[14.38m] right | VITALS | HR:   N/A | RR:   6.4 | Qual: 0.14
+[14.40m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.07
+[14.42m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.12
+[14.43m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.06
+[14.45m] right | VITALS | HR:   N/A | RR:   6.8 | Qual: 0.08
+[14.47m] right | STATE  | ABSENT (STD:   0k, ACR: 0.14)

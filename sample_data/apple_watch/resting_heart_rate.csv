@@ -1,0 +1,8 @@
+endDate,startDate,type,unit,value
+2026-04-27 23:57:58 -0400,2026-04-27 00:00:32 -0400,HKQuantityTypeIdentifierRestingHeartRate,count/min,78
+2026-04-28 23:53:27 -0400,2026-04-28 00:02:59 -0400,HKQuantityTypeIdentifierRestingHeartRate,count/min,83
+2026-04-29 22:23:52 -0400,2026-04-29 00:02:10 -0400,HKQuantityTypeIdentifierRestingHeartRate,count/min,90
+2026-04-30 23:54:27 -0400,2026-04-30 00:00:52 -0400,HKQuantityTypeIdentifierRestingHeartRate,count/min,79
+2026-05-01 22:40:31 -0400,2026-05-01 00:02:38 -0400,HKQuantityTypeIdentifierRestingHeartRate,count/min,96
+2026-05-03 23:59:58 -0400,2026-05-03 00:56:42 -0400,HKQuantityTypeIdentifierRestingHeartRate,count/min,72
+2026-05-04 16:58:24 -0400,2026-05-04 00:02:25 -0400,HKQuantityTypeIdentifierRestingHeartRate,count/min,76
