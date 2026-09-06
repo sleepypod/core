@@ -56,6 +56,7 @@ const broadcastMock = vi.fn()
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({ getSharedHardwareClient: () => hardwareClient }))
 vi.mock('@/src/hardware/deviceStateSync', () => ({ markSideMutated: markSideMutatedMock }))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({ shouldBlock: () => false }))
 vi.mock('@/src/hardware/sideLock', () => ({ withSideLock: async (_side: any, fn: () => Promise<any>) => fn() }))
 vi.mock('@/src/streaming/broadcastMutationStatus', () => ({ broadcastMutationStatus: broadcastMock }))
 vi.mock('drizzle-orm', () => ({ and: (...a: any[]) => ({ a }), eq: (...a: any[]) => ({ a }), gt: (...a: any[]) => ({ a }) }))

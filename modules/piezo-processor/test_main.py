@@ -21,8 +21,13 @@ _stubs = {
     "cbor2": type(sys)("cbor2"),
     "common": type(sys)("common"),
     "common.raw_follower": type(sys)("common.raw_follower"),
+    "common.nats_follower": type(sys)("common.nats_follower"),
+    "common.dialect": type(sys)("common.dialect"),
 }
 _stubs["common.raw_follower"].RawFileFollower = None
+_stubs["common.nats_follower"].create_follower = None
+_stubs["common.dialect"].KNOWN_RECORD_TYPES = frozenset()
+_stubs["common.dialect"].warn_unknown_type_once = lambda *a, **kw: None
 sys.modules.update(_stubs)
 
 from main import (  # noqa: E402
@@ -1168,6 +1173,17 @@ class TestFrzHealthPumpState:
             "type": "frzHealth",
             "left": {"pumpDuty": 50},
             "right": {"pumpDuty": 0},
+        })
+        assert ps.is_side_pump_active("left") is True
+        assert ps.is_side_pump_active("right") is False
+
+    def test_captured_nats_nested_pump_rpm(self):
+        """Field Pod 5 frzHealth carries side.pump.rpm, not flat pumpRpm."""
+        ps = FrzHealthPumpState()
+        ps.update({
+            "type": "frzHealth",
+            "left": {"pump": {"mode": "pwm", "rpm": 1868, "water": True}},
+            "right": {"pump": {"mode": "pwm", "rpm": 0, "water": True}},
         })
         assert ps.is_side_pump_active("left") is True
         assert ps.is_side_pump_active("right") is False

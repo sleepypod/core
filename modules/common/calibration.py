@@ -731,14 +731,32 @@ def is_present_capsense_calibrated(
     return z_sum > threshold
 
 
+# Nominal capSense2 reference-channel value used when a profile predates the
+# stored `ref` baseline. Must match REF_NOMINAL in src/lib/occupancy.ts.
+CAPSENSE2_REF_NOMINAL = 1.16
+
+
 def is_present_capsense2_calibrated(
     record: dict, side: str, baselines: Optional[dict],
     fallback_threshold: float = 60.0,
 ) -> bool:
-    """Z-score based presence detection for capSense2 (Pod 5).
+    """Presence detection for capSense2 (Pod 4/5).
 
-    Uses the averaged A/B/C channel pairs against calibrated baselines.
-    Falls back to raw sum threshold if no calibration available.
+    Mirrors the Node occupancy sensor (src/lib/occupancy.ts readLevelSignal):
+    summed SIGNED per-channel deviation from the calibrated baseline in RAW
+    units, with reference-channel drift compensation when the frame carries
+    the optional REF pair. `threshold` in the profile is in raw units.
+
+    History: this used to be a z-score check (|val-mean|/std with std floored
+    at 0.05). On firmware whose channel values run in the hundreds, the
+    quietest-window std lands at the floor, so a fraction of a raw unit of
+    thermal drift read as z >> threshold — presence saturated 24/7, sessions
+    only ever closed at the MAX_SESSION_S cap, and a *better* (quieter)
+    calibration made the trigger finer, not coarser. Raw-unit deviation with
+    ref compensation cancels the drift and keeps this check and Node
+    getOccupancy() in agreement on the same stored profile.
+
+    Falls back to a raw sum threshold if no calibration available.
     """
     data = record.get(side, {})
     vals = data.get("values") if data else None
@@ -752,19 +770,22 @@ def is_present_capsense2_calibrated(
         total = sum((vals[i] + vals[i + 1]) / 2.0 for i in (0, 2, 4))
         return total > fallback_threshold
 
-    z_sum = 0.0
+    ref_delta = 0.0
+    if len(vals) >= 8:
+        ref = (vals[6] + vals[7]) / 2.0
+        ref_cal = baselines.get("ref") or {}
+        ref_delta = ref - float(ref_cal.get("mean", CAPSENSE2_REF_NOMINAL))
+
+    deviation = 0.0
     channels = baselines.get("channels", {})
     sense_pairs = (("A", 0, 1), ("B", 2, 3), ("C", 4, 5))
     for name, ia, ib in sense_pairs:
         val = (vals[ia] + vals[ib]) / 2.0
-        ch_cal = channels.get(name, {})
-        std = ch_cal.get("std", 0.05)
-        mean = ch_cal.get("mean", 0)
-        if std > 0:
-            z_sum += abs((val - mean) / std)
+        mean = float(channels.get(name, {}).get("mean", 0))
+        deviation += val - ref_delta - mean
 
-    threshold = baselines.get("threshold", 6.0)
-    return z_sum > threshold
+    threshold = float(baselines.get("threshold", 6.0))
+    return deviation > threshold
 
 
 def is_present_piezo_calibrated(

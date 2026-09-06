@@ -41,6 +41,7 @@
     "@lingui/core": "^5.9.2",
     "@lingui/macro": "^5.9.2",
     "@lingui/react": "^5.9.2",
+    "@nats-io/transport-node": "^3.4.0",
     "@tanstack/react-query": "^5.90.21",
     "@trpc/client": "^11.10.0",
     "@trpc/next": "^11.10.0",
@@ -106,7 +107,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.4",
-    "@vitest/coverage-v8": "4.1.9",
+    "@vitest/coverage-v8": "4.1.11",
     "conventional-changelog-conventionalcommits": "^9.1.0",
     "drizzle-kit": "^0.31.9",
     "eslint": "^9.39.3",
@@ -117,14 +118,14 @@
     "jsdom": "^29.0.0",
     "lint-staged": "^16.4.0",
     "semantic-release": "^25.0.3",
-    "tailwindcss": "4.3.2",
+    "tailwindcss": "4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8.56.1",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.0.18"
   },
-  "packageManager": "pnpm@10.34.4",
+  "packageManager": "pnpm@10.34.5",
   "pnpm": {
     "onlyBuiltDependencies": [
       "cbor-extract",

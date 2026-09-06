@@ -12,6 +12,7 @@ type SupportedLocales = string
 async function loadCatalog(locale: SupportedLocales): Promise<{
   [k: string]: Messages
 }> {
+  // Stryker disable next-line StringLiteral: Vite must statically analyze this import path
   const { messages } = await import(`./locales/${locale}.po`)
   return {
     [locale]: messages,

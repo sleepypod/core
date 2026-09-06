@@ -37,6 +37,7 @@ vi.mock('@/src/db', async () => {
 })
 
 import * as dbModule from '@/src/db'
+import { withSideLock } from '@/src/hardware/sideLock'
 import {
   startKeepalive,
   stopKeepalive,
@@ -124,6 +125,7 @@ async function flushAsync(): Promise<void> {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   setTemperature.mockClear()
   connect.mockClear()
   pumpStallShouldBlock.mockReset().mockReturnValue(false)
@@ -140,12 +142,15 @@ describe('startKeepalive', () => {
     setSideState('left', { isPowered: 1, targetTemperature: 95 })
     setSideSettings('left', { alwaysOn: 1 })
 
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     startKeepalive('left')
     await flushAsync()
 
     expect(connect).toHaveBeenCalledTimes(1)
     expect(setTemperature).toHaveBeenCalledTimes(1)
     expect(setTemperature).toHaveBeenCalledWith('left', 95)
+    expect(log).toHaveBeenCalledWith('[keepalive] Started for left (interval: 6h)')
+    expect(log).toHaveBeenCalledWith('[keepalive] Re-sent temperature 95°F for left')
   })
 
   it('skips setTemperature when the side is not powered', async () => {
@@ -159,16 +164,73 @@ describe('startKeepalive', () => {
     expect(connect).not.toHaveBeenCalled()
   })
 
-  it('skips silently when the pump stall guard is holding the side off', async () => {
+  it('skips with a warning when the pump stall guard is holding the side off', async () => {
     setSideState('left', { isPowered: 1, targetTemperature: 95 })
     setSideSettings('left', { alwaysOn: 1 })
     pumpStallShouldBlock.mockReturnValue(true)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     startKeepalive('left')
     await flushAsync()
 
     expect(setTemperature).not.toHaveBeenCalled()
     expect(connect).not.toHaveBeenCalled()
+    // The warn is the only trace of the withheld keepalive — without it an
+    // alwaysOn session lapsing on the firmware duration timer is
+    // undiagnosable from logs.
+    expect(warn).toHaveBeenCalledWith(
+      '[keepalive] left skipped — pump stall guard active (alert unknown); session will lapse on the firmware duration timer',
+    )
+    warn.mockRestore()
+  })
+
+  it('serializes the reissue through the side lock — a trip while queued blocks it', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 95 })
+    setSideSettings('left', { alwaysOn: 1 })
+
+    let release: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await flushAsync()
+
+    // The immediate tick queues behind the held lock while the guard is
+    // still healthy — the trip below lands strictly after, so only an
+    // in-lock check can observe it.
+    startKeepalive('left')
+    await flushAsync()
+    expect(setTemperature).not.toHaveBeenCalled()
+
+    pumpStallShouldBlock.mockReturnValue(true)
+    release()
+    await holder
+    await flushAsync()
+
+    expect(setTemperature).not.toHaveBeenCalled()
+    expect(connect).not.toHaveBeenCalled()
+  })
+
+  it('observes a power-off that landed while the reissue was queued on the lock', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 95 })
+    setSideSettings('left', { alwaysOn: 1 })
+
+    let release: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await flushAsync()
+
+    startKeepalive('left')
+    await flushAsync()
+
+    // A power-off handler (e.g. markSideOff) serialized ahead of the queued
+    // reissue clears isPowered — the reissue must skip, not re-energize.
+    setSideState('left', { isPowered: 0 })
+    release()
+    await holder
+    await flushAsync()
+
+    expect(setTemperature).not.toHaveBeenCalled()
   })
 
   it('skips setTemperature when targetTemperature is null', async () => {
@@ -183,20 +245,44 @@ describe('startKeepalive', () => {
 
   it('skips and stops the timer when alwaysOn was toggled off between ticks', async () => {
     setSideState('left', { isPowered: 1, targetTemperature: 95 })
-    setSideSettings('left', { alwaysOn: 0 })
-
+    setSideSettings('left', { alwaysOn: 1 })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     startKeepalive('left')
+    await flushAsync()
+    expect(setTemperature).toHaveBeenCalledOnce()
+
+    setTemperature.mockClear()
+    setSideSettings('left', { alwaysOn: 0 })
+    await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS)
     await flushAsync()
 
     expect(setTemperature).not.toHaveBeenCalled()
 
-    // alwaysOn was off → service should have called stopKeepalive itself.
-    // Re-enabling alwaysOn without restarting must NOT cause the next tick
-    // to fire, proving the timer was cleared.
     setSideSettings('left', { alwaysOn: 1 })
-    // No way to advance without the timer existing; just confirm idempotent
-    // stopKeepalive on this side is a no-op (i.e. timer already gone).
-    stopKeepalive('left')
+    await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS * 2)
+    await flushAsync()
+    expect(setTemperature).not.toHaveBeenCalled()
+  })
+
+  it('stops cleanly when side settings disappear between ticks', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 95 })
+    setSideSettings('left', { alwaysOn: 1 })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    startKeepalive('left')
+    await flushAsync()
+    setTemperature.mockClear()
+
+    ;(sqlite as any).prepare('DELETE FROM side_settings WHERE side = ?').run('left')
+    await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS)
+    await flushAsync()
+
+    expect(error).not.toHaveBeenCalled()
+    ;(sqlite as any).prepare(
+      'INSERT INTO side_settings (side, name, always_on) VALUES (?, ?, ?)',
+    ).run('left', 'Left', 1)
+    await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS * 2)
+    await flushAsync()
     expect(setTemperature).not.toHaveBeenCalled()
   })
 
@@ -240,6 +326,21 @@ describe('startKeepalive', () => {
     expect(setTemperature).toHaveBeenCalledTimes(3)
   })
 
+  it('arms the interval at exactly 6 hours in milliseconds', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 88 })
+    setSideSettings('left', { alwaysOn: 1 })
+
+    const interval = vi.spyOn(globalThis, 'setInterval')
+
+    startKeepalive('left')
+    await flushAsync()
+
+    // Pins the unit of KEEPALIVE_INTERVAL_MS — a mis-scaled constant would
+    // still "fire on the interval" under fake timers, but would blow past the
+    // firmware's 8-hour duration limit (or hammer the DAC every 21ms).
+    expect(interval).toHaveBeenCalledWith(expect.any(Function), 21_600_000)
+  })
+
   it('swallows hardware errors so the interval keeps running', async () => {
     setSideState('left', { isPowered: 1, targetTemperature: 92 })
     setSideSettings('left', { alwaysOn: 1 })
@@ -252,7 +353,10 @@ describe('startKeepalive', () => {
     startKeepalive('left')
     await flushAsync()
     expect(setTemperature).toHaveBeenCalledTimes(1)
-    expect(errSpy).toHaveBeenCalled()
+    expect(errSpy).toHaveBeenCalledWith(
+      '[keepalive] Failed to re-send temperature for left:',
+      'boom',
+    )
 
     // The next interval should still fire — error did not kill the timer.
     await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS)
@@ -301,8 +405,21 @@ describe('stopKeepalive', () => {
   })
 
   it('is a no-op when no timer is active', () => {
+    const clear = vi.spyOn(globalThis, 'clearInterval')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(() => stopKeepalive('left')).not.toThrow()
     expect(() => stopKeepalive('right')).not.toThrow()
+    expect(clear).not.toHaveBeenCalled()
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it('logs the exact side when an active timer stops', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    startKeepalive('right')
+
+    stopKeepalive('right')
+
+    expect(log).toHaveBeenCalledWith('[keepalive] Stopped for right')
   })
 })
 
@@ -338,10 +455,21 @@ describe('initializeKeepalives', () => {
     setSideSettings('left', { alwaysOn: 0 })
     setSideSettings('right', { alwaysOn: 0 })
 
+    const interval = vi.spyOn(globalThis, 'setInterval')
     initializeKeepalives()
     await flushAsync()
 
     expect(setTemperature).not.toHaveBeenCalled()
+    expect(interval).not.toHaveBeenCalled()
+  })
+
+  it('treats a missing settings row as disabled without logging an error', () => {
+    ;(sqlite as any).prepare('DELETE FROM side_settings WHERE side = ?').run('right')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    initializeKeepalives()
+
+    expect(error).not.toHaveBeenCalled()
   })
 
   it('catches per-side errors and logs them', async () => {

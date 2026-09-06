@@ -151,6 +151,22 @@ export function capSideChannels(v: unknown): number[] | null {
   return null
 }
 
+/**
+ * Read the per-side quality `status` a capSense / capSense2 record carries.
+ *
+ * The NATS capSense dialect tags each side `{ out, cen, in, status }` (Pod 3
+ * shape); capSense2 tags `{ values, status }`. Legacy `.RAW` frames and scalar
+ * payloads carry none. Returns the status string when present, else null — a
+ * missing status means "no signal", treated as normal, not as a fault.
+ */
+export function capSideStatus(v: unknown): string | null {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const s = (v as Record<string, unknown>).status
+    if (typeof s === 'string') return s
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Normalizer
 // ---------------------------------------------------------------------------

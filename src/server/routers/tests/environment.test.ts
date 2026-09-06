@@ -174,6 +174,40 @@ describe('environment.getSummary', () => {
     expect(out.freezerTemp?.avgAmbientTemp).toBe(10)
   })
 
+  it('keeps nullable aggregate values null when records exist', async () => {
+    dbState.rowsQueue.push([{
+      avgAmbient: null, minAmbient: null, maxAmbient: null,
+      avgHumidity: null, avgLeftCenter: null, avgRightCenter: null,
+      recordCount: 1,
+    }])
+    dbState.rowsQueue.push([{
+      avgAmbient: null, avgHeatsink: null, avgLeftWater: null, avgRightWater: null,
+      recordCount: 1,
+    }])
+
+    expect(await caller.getSummary({
+      startDate: new Date('2025-01-01'),
+      endDate: new Date('2025-01-02'),
+    })).toEqual({
+      bedTemp: {
+        avgAmbientTemp: null,
+        minAmbientTemp: null,
+        maxAmbientTemp: null,
+        avgHumidity: null,
+        avgLeftCenterTemp: null,
+        avgRightCenterTemp: null,
+        recordCount: 1,
+      },
+      freezerTemp: {
+        avgAmbientTemp: null,
+        avgHeatsinkTemp: null,
+        avgLeftWaterTemp: null,
+        avgRightWaterTemp: null,
+        recordCount: 1,
+      },
+    })
+  })
+
   it('rejects inverted date range', async () => {
     await expect(caller.getSummary({
       startDate: new Date('2025-02-01'),
@@ -233,6 +267,14 @@ describe('environment.getAmbientLightSummary', () => {
     expect(out?.recordCount).toBe(144)
   })
 
+  it('keeps a nullable average null when other light records exist', async () => {
+    dbState.rowsQueue.push([{ avgLux: null, minLux: 5, maxLux: 500, recordCount: 2 }])
+    await expect(caller.getAmbientLightSummary({
+      startDate: new Date('2025-01-01'),
+      endDate: new Date('2025-01-02'),
+    })).resolves.toEqual({ avgLux: null, minLux: 5, maxLux: 500, recordCount: 2 })
+  })
+
   it('rejects inverted date range', async () => {
     await expect(caller.getAmbientLightSummary({
       startDate: new Date('2025-02-01'),
@@ -280,5 +322,28 @@ describe('environment error wrappers', () => {
     await expect(caller.getAmbientLightSummary({
       startDate: new Date('2025-01-01'), endDate: new Date('2025-01-02'),
     })).rejects.toThrow(/Failed to calculate ambient light summary/)
+  })
+
+  it('uses Unknown error for non-Error database failures from every procedure', async () => {
+    const unknown = (): never => {
+      throw 'db unavailable'
+    }
+    const startDate = new Date('2025-01-01')
+    const endDate = new Date('2025-01-02')
+    const calls: Array<[() => Promise<unknown>, string]> = [
+      [() => caller.getBedTemp({ startDate, endDate }), 'Failed to fetch bed temp: Unknown error'],
+      [() => caller.getFreezerTemp({ startDate, endDate }), 'Failed to fetch freezer temp: Unknown error'],
+      [() => caller.getLatestBedTemp({}), 'Failed to fetch latest bed temp: Unknown error'],
+      [() => caller.getLatestFreezerTemp({}), 'Failed to fetch latest freezer temp: Unknown error'],
+      [() => caller.getSummary({ startDate, endDate }), 'Failed to calculate environment summary: Unknown error'],
+      [() => caller.getAmbientLight({ startDate, endDate }), 'Failed to fetch ambient light: Unknown error'],
+      [() => caller.getLatestAmbientLight({}), 'Failed to fetch latest ambient light: Unknown error'],
+      [() => caller.getAmbientLightSummary({ startDate, endDate }), 'Failed to calculate ambient light summary: Unknown error'],
+    ]
+
+    for (const [invoke, message] of calls) {
+      dbMock.select.mockImplementationOnce(unknown)
+      await expect(invoke()).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR', message })
+    }
   })
 })

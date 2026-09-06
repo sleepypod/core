@@ -1,0 +1,145 @@
+{
+  "checkedAt": "2026-09-06T04:22:11.912Z",
+  "release": "/persistent/sleepypod-releases/aeb3852",
+  "system/version": {
+    "branch": "perf/startup-api",
+    "commitHash": "aeb3852",
+    "commitTitle": "perf: bound startup work and harden shutdown",
+    "buildDate": "2026-09-06T04:13:47.791Z"
+  },
+  "health/system": {
+    "status": "ok",
+    "timestamp": "2026-09-06T04:22:12.290Z",
+    "database": {
+      "status": "ok",
+      "latencyMs": 0.17,
+      "integrity": {
+        "status": "ok",
+        "checkedAt": "2026-09-06T04:17:18.256Z",
+        "latencyMs": 400
+      }
+    },
+    "scheduler": {
+      "enabled": true,
+      "jobCount": 356,
+      "drift": {
+        "dbScheduleCount": 350,
+        "schedulerJobCount": 350,
+        "drifted": false
+      }
+    },
+    "iptables": {
+      "ok": true,
+      "missing": []
+    }
+  },
+  "health/dac-monitor": {
+    "status": "running",
+    "podVersion": "J00",
+    "gesturesSupported": true
+  },
+  "health/performance": {
+    "uptimeSeconds": 329.21657583,
+    "rssBytes": 202764288,
+    "startup": [
+      {
+        "name": "migrations-ready",
+        "elapsedMs": 94,
+        "durationMs": 92
+      },
+      {
+        "name": "hardware-services-started",
+        "elapsedMs": 306,
+        "durationMs": 0
+      },
+      {
+        "name": "http-initialization-ready",
+        "elapsedMs": 313,
+        "durationMs": 0
+      },
+      {
+        "name": "sensor-source-raw",
+        "elapsedMs": 4205,
+        "durationMs": 0
+      },
+      {
+        "name": "first-sensor-frame",
+        "elapsedMs": 4961,
+        "durationMs": 0
+      },
+      {
+        "name": "scheduler-ready",
+        "elapsedMs": 15299,
+        "durationMs": 14985
+      },
+      {
+        "name": "mqtt-started",
+        "elapsedMs": 15654,
+        "durationMs": 0
+      }
+    ],
+    "sensorSource": "raw",
+    "firstFrameMs": 4961,
+    "eventLoop": {
+      "meanMs": 21.48,
+      "p95Ms": 25.26,
+      "maxMs": 2277.51
+    }
+  },
+  "services": {
+    "sleepypod": {
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "frank": {
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "sleepypod-calibrator": {
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "sleepypod-cover-buttons": {
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "sleepypod-environment-monitor": {
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "sleepypod-piezo-processor": {
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "sleepypod-sleep-detector": {
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    }
+  },
+  "maintenanceTimer": "NextElapseUSecMonotonic=7h 29min 33.513053s\nActiveState=active\nSubState=waiting\nUnitFileState=enabled",
+  "freshSensor": {
+    "type": "capSense2",
+    "ageMs": 790
+  }
+}

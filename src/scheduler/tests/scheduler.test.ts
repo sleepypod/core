@@ -13,6 +13,10 @@ describe('Scheduler', () => {
   })
 
   afterEach(async () => {
+    // Assertions (including mutation-induced failures) must not leave global
+    // timers or console/native-method spies active for the next test.
+    vi.useRealTimers()
+    vi.restoreAllMocks()
     await scheduler.shutdown()
   })
 
@@ -106,6 +110,23 @@ describe('Scheduler', () => {
       scheduler.cancelAllJobs()
 
       expect(scheduler.getJobs()).toHaveLength(0)
+    })
+
+    it('cancels each native job and emits each exact id before clearing the map', () => {
+      const handler = vi.fn(async () => {})
+      const cancelled = vi.fn()
+      scheduler.on('jobCancelled', cancelled)
+      const first = scheduler.scheduleJob('job-1', JobType.TEMPERATURE, '0 0 * * *', handler)
+      const second = scheduler.scheduleJob('job-2', JobType.ALARM, '0 1 * * *', handler)
+      const firstCancel = vi.spyOn(first.job, 'cancel')
+      const secondCancel = vi.spyOn(second.job, 'cancel')
+
+      scheduler.cancelAllJobs()
+
+      expect(firstCancel).toHaveBeenCalledOnce()
+      expect(secondCancel).toHaveBeenCalledOnce()
+      expect(cancelled.mock.calls).toEqual([['job-1'], ['job-2']])
+      expect(scheduler.getJobs()).toEqual([])
     })
   })
 
@@ -205,6 +226,15 @@ describe('Scheduler', () => {
       scheduler.updateConfig({ enabled: true, timezone: 'America/Los_Angeles' })
       expect(scheduler.getJob('tz-keep')).toBeDefined()
     })
+
+    it('does not cancel recurring jobs when an unrelated config field changes', () => {
+      const handler = vi.fn(async () => {})
+      scheduler.scheduleJob('enabled-only', JobType.TEMPERATURE, '0 0 * * *', handler)
+
+      scheduler.updateConfig({ enabled: false })
+
+      expect(scheduler.getJob('enabled-only')).toBeDefined()
+    })
   })
 
   describe('cancelRecurringJobs', () => {
@@ -225,6 +255,35 @@ describe('Scheduler', () => {
   })
 
   describe('job retry for hardware failures', () => {
+    it('uses exact exponential delays and warning text between attempts', async () => {
+      vi.useFakeTimers()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const handler = vi.fn()
+        .mockRejectedValueOnce(new Error('first'))
+        .mockRejectedValueOnce('second')
+        .mockResolvedValueOnce(undefined)
+      const execute = (scheduler as unknown as {
+        executeJob: (
+          id: string,
+          type: JobType,
+          handler: () => Promise<void>,
+        ) => Promise<{ success: boolean }>
+      }).executeJob.bind(scheduler)
+
+      const resultPromise = execute('retry-delays', JobType.TEMPERATURE, handler)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(handler).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      await expect(resultPromise).resolves.toMatchObject({ success: true })
+      expect(handler).toHaveBeenCalledTimes(3)
+      expect(warn.mock.calls).toEqual([
+        ['Job retry-delays attempt 1/3 failed, retrying in 500ms:', 'first'],
+        ['Job retry-delays attempt 2/3 failed, retrying in 1000ms:', 'second'],
+      ])
+      vi.useRealTimers()
+    })
+
     it('retries a failing hardware job up to 3 attempts', async () => {
       const future = new Date(Date.now() + 30)
       let calls = 0
@@ -294,28 +353,33 @@ describe('Scheduler', () => {
       const handler = vi.fn(async () => {})
       expect(() =>
         scheduler.scheduleJob('bad', JobType.TEMPERATURE, 'this is not a cron', handler),
-      ).toThrow(/Failed to schedule job: bad/)
+      ).toThrow('Failed to schedule job: bad')
     })
 
     it('scheduleOneTimeJob throws when the fire date is in the past', () => {
       const handler = vi.fn(async () => {})
+      const past = new Date(Date.now() - 60_000)
       expect(() =>
         scheduler.scheduleOneTimeJob(
           'past-one',
           JobType.TEMPERATURE,
-          new Date(Date.now() - 60_000),
+          past,
           handler,
         ),
-      ).toThrow(/Failed to schedule one-time job: past-one/)
+      ).toThrow(
+        `Failed to schedule one-time job: past-one at ${past.toISOString()}`,
+      )
     })
   })
 
   describe('waitForInFlightJobs', () => {
     it('returns immediately when no jobs are in flight', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       // No in-flight jobs — should resolve without delay
       const start = Date.now()
       await scheduler.waitForInFlightJobs(1000)
       expect(Date.now() - start).toBeLessThan(100)
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Waiting for'))
     })
 
     it('warns when in-flight jobs exceed timeout (force-shutdown path)', async () => {
@@ -331,11 +395,27 @@ describe('Scheduler', () => {
 
       // Wait for the job to actually start (in-flight)
       await new Promise(resolve => setTimeout(resolve, 100))
-      await scheduler.waitForInFlightJobs(150)
+      try {
+        await scheduler.waitForInFlightJobs(150)
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/Force shutdown with/))
-      release()
-      warnSpy.mockRestore()
+        expect(warnSpy).toHaveBeenCalledWith(
+          'Force shutdown with 1 in-flight job(s) still running: hang',
+        )
+      }
+      finally {
+        release()
+      }
+    })
+  })
+
+  describe('shutdown logging', () => {
+    it('logs the exact start and success messages', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      await scheduler.shutdown()
+
+      expect(log).toHaveBeenCalledWith('Shutting down scheduler...')
+      expect(log).toHaveBeenCalledWith('Scheduler shut down successfully')
     })
   })
 

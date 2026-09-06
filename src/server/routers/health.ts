@@ -16,6 +16,8 @@ import { desc, eq } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
+import { getDatabaseIntegrity } from '@/src/db/integrity'
+import { getServerPerformance } from '@/src/lib/serverPerformance'
 import { centiDegreesToF } from '@/src/lib/tempUtils'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
@@ -30,6 +32,19 @@ const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.s
  * - `hardware`  — raw socket connectivity check with latency
  */
 export const healthRouter = router({
+  performance: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/performance', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.object({
+      uptimeSeconds: z.number(),
+      rssBytes: z.number(),
+      startup: z.array(z.object({ name: z.string(), elapsedMs: z.number(), durationMs: z.number() })),
+      sensorSource: z.enum(['pending', 'raw', 'nats']),
+      firstFrameMs: z.number().nullable(),
+      eventLoop: z.object({ meanMs: z.number(), p95Ms: z.number(), maxMs: z.number() }),
+    }))
+    .query(() => getServerPerformance()),
+
   /**
    * Returns job counts, upcoming invocations, and a `healthy` flag.
    * `healthy` is false only when the scheduler is enabled but has zero jobs
@@ -155,6 +170,12 @@ export const healthRouter = router({
         status: z.enum(['ok', 'degraded']),
         latencyMs: z.number(),
         error: z.string().optional(),
+        integrity: z.object({
+          status: z.enum(['pending', 'ok', 'degraded']),
+          checkedAt: z.string().nullable(),
+          latencyMs: z.number(),
+          error: z.string().optional(),
+        }),
       }),
       scheduler: z.object({
         enabled: z.boolean(),
@@ -179,13 +200,20 @@ export const healthRouter = router({
       let dbError: string | undefined
       try {
         const dbStart = performance.now()
-        sqlite.pragma('quick_check(1)')
+        sqlite.prepare('SELECT 1').get()
         dbLatencyMs = Math.round((performance.now() - dbStart) * 100) / 100
       }
       catch (error) {
         dbStatus = 'degraded'
         overallStatus = 'degraded'
         dbError = error instanceof Error ? error.message : 'Unknown error'
+      }
+
+      const integrity = getDatabaseIntegrity()
+      if (integrity.status === 'degraded') {
+        dbStatus = 'degraded'
+        overallStatus = 'degraded'
+        dbError ??= integrity.error
       }
 
       // Scheduler health
@@ -272,8 +300,8 @@ export const healthRouter = router({
       // Iptables health — verify critical firewall rules
       let iptables: { ok: boolean, missing: string[] } = { ok: true, missing: [] }
       try {
-        const { checkIptables } = await import('@/src/hardware/iptablesCheck')
-        const result = checkIptables()
+        const { checkIptablesCached } = await import('@/src/hardware/iptablesCheck')
+        const result = await checkIptablesCached()
         iptables = {
           ok: result.ok,
           missing: result.rules.filter(r => !r.present && r.critical).map(r => r.name),
@@ -290,6 +318,7 @@ export const healthRouter = router({
         database: {
           status: dbStatus,
           latencyMs: dbLatencyMs,
+          integrity,
           ...(dbError && { error: dbError }),
         },
         scheduler: {

@@ -28,7 +28,8 @@ vi.mock('../pumpStallGuard', () => ({
 
 import * as dbModule from '@/src/db'
 import { onFrame } from '../pumpStallGuard'
-import { DeviceStateSync, _resetMutationStamps } from '../deviceStateSync'
+import { DeviceStateSync, markSideMutated, _resetMutationStamps } from '../deviceStateSync'
+import { DEFAULT_HEATING_DURATION } from '../types'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   sqlite: BetterSqlite3.Database
@@ -71,7 +72,12 @@ function resetSchema(): void {
   `)
 }
 
-function seedSide(side: 'left' | 'right', isPowered: boolean, targetTemp: number | null = null): void {
+function seedSide(
+  side: 'left' | 'right',
+  isPowered: boolean,
+  targetTemp: number | null = null,
+  poweredOnAtMs: number | null = Date.now(),
+): void {
   ;(sqlite as any)
     .prepare(
       `INSERT INTO device_state (side, is_powered, target_temperature, powered_on_at, last_updated)
@@ -82,7 +88,12 @@ function seedSide(side: 'left' | 'right', isPowered: boolean, targetTemp: number
          powered_on_at = excluded.powered_on_at,
          last_updated = unixepoch()`
     )
-    .run(side, isPowered ? 1 : 0, targetTemp, isPowered ? Math.floor(Date.now() / 1000) : null)
+    .run(
+      side,
+      isPowered ? 1 : 0,
+      targetTemp,
+      isPowered && poweredOnAtMs != null ? Math.floor(poweredOnAtMs / 1000) : null,
+    )
 }
 
 /** DeviceStatus with both sides mid-session (powered, countdown running). */
@@ -117,6 +128,13 @@ function frame(opts: { rpm?: number, duty?: number | null } = {}): Record<string
   }
 }
 
+function asymmetricFrame(leftRpm: number, rightRpm: number): Record<string, unknown> {
+  return {
+    left: { pump: { rpm: leftRpm }, temps: { flowrate: 25.0 } },
+    right: { pump: { rpm: rightRpm }, temps: { flowrate: 25.0 } },
+  }
+}
+
 async function lastGuardInput(side: 'left' | 'right') {
   // runStallGuard is fire-and-forget; let its microtask settle.
   await Promise.resolve()
@@ -125,6 +143,16 @@ async function lastGuardInput(side: 'left' | 'right') {
     .map(([input]) => input)
     .filter(input => input.side === side)
   return calls[calls.length - 1]
+}
+
+async function recordSustainedBilateralStop(
+  sync: DeviceStateSync,
+  duty: number | null = null,
+): Promise<void> {
+  sync.recordFlowData(frame({ rpm: 1_900, duty }))
+  await lastGuardInput('left')
+  sync.recordFlowData(frame({ rpm: 0, duty })) // one-frame deglitch
+  sync.recordFlowData(frame({ rpm: 0, duty })) // sustained stop reaches guard
 }
 
 describe('DeviceStateSync — stall guard expected-stop suppression', () => {
@@ -145,6 +173,88 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it.each([
+    [2_999, true], [3_000, false], [5_000, false], [90_000, false], [90_001, true],
+  ])('accepts expiry only inside the countdown tolerance and poll-continuity window (%sms)', async (delay, active) => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(delay)
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(active)
+  })
+
+  it('allows a zero-countdown observation at the same instant as a one-second countdown', async () => {
+    await sync.sync(status({ heatingDuration: 1 }))
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+  })
+
+  it.each([89_999, 90_000, 90_001])('expires neutral-target evidence after 90 seconds (%sms)', async (delay) => {
+    await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.advanceTimersByTime(delay)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(delay > 90_000)
+  })
+
+  it.each([-1, 0, 90_000, 90_001])('bounds a confirmed expiry by signed status age (%sms)', async (delay) => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.setSystemTime(Date.now() + delay)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(delay < 0 || delay > 90_000)
+  })
+
+  it('does not reuse countdown evidence after a new command once its freshness window ends', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(1_000)
+    markSideMutated('left')
+    vi.advanceTimersByTime(10_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+    expect((await lastGuardInput('right'))?.expectedActive).toBe(false)
+  })
+
+  it('does not transfer a countdown expiry to a different non-neutral target', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ targetLevel: -20, heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each([89_999, 90_000, 90_001])('bounds bilateral no-countdown stop evidence at 90 seconds (%sms)', async (delay) => {
+    seedSide('left', true, 75, Date.now() - (DEFAULT_HEATING_DURATION - 75) * 1000)
+    seedSide('right', true, 75, Date.now() - (DEFAULT_HEATING_DURATION - 75) * 1000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+    vi.advanceTimersByTime(delay)
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(delay > 90_000)
+  })
+
+  it('discards bilateral stop evidence when one pump starts moving again', async () => {
+    seedSide('left', true, 75, Date.now() - DEFAULT_HEATING_DURATION * 1000)
+    seedSide('right', true, 75, Date.now() - DEFAULT_HEATING_DURATION * 1000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+    sync.recordFlowData(asymmetricFrame(0, 100))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 
   it('mid-session zero RPM still reaches the guard as expectedActive=true (real stall)', async () => {
@@ -198,6 +308,22 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 
+  it('does not suppress at the exact 120-second post-prime boundary', async () => {
+    await sync.sync(status({ isPriming: true }))
+    await sync.sync(status({ isPriming: false }))
+    vi.advanceTimersByTime(120_000)
+
+    sync.recordFlowData(frame({ rpm: 0 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('does not invent a prime grace period when primeEndedAt is still zero', async () => {
+    vi.setSystemTime(new Date(60_000))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
   it('suppresses when firmware targetLevel is 0 while device_state still says powered', async () => {
     // The field-observed failure: firmware commanded neutral, but
     // device_state.isPowered stays true because durationExpired requires
@@ -209,8 +335,89 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
   })
 
+  it('treats a neutral firmware target as stopped even while duty is stale and non-zero', async () => {
+    await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+    expect((await lastGuardInput('right'))?.expectedActive).toBe(false)
+  })
+
+  it.each([0, 600])('suppresses a firmware timeout through three minutes of stale positive duty (heatTime=%s)', async (heatingDuration) => {
+    // Trinity's timeout report: target becomes neutral before pump duty does.
+    // Fresh status polls must keep suppressing the stop beyond both the 90s
+    // snapshot-age limit and 120s bilateral dwell, even with a lagging DB.
+    for (let elapsed = 0; elapsed <= 200; elapsed += 10) {
+      await sync.sync(status({ targetLevel: 0, heatingDuration }))
+      seedSide('left', true, 75)
+      seedSide('right', true, 75)
+      sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+
+      for (const side of ['left', 'right'] as const) {
+        expect(await lastGuardInput(side)).toMatchObject({
+          expectedActive: false,
+          preStallDurationSeconds: null,
+        })
+      }
+      vi.advanceTimersByTime(10_000)
+    }
+
+    // A subsequent active session must still expose a driven, stopped pump.
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 7200 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    for (const side of ['left', 'right'] as const) {
+      expect((await lastGuardInput(side))?.expectedActive).toBe(true)
+    }
+  })
+
+  it('stops trusting a stale neutral-target snapshot', async () => {
+    await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.advanceTimersByTime(601_000)
+
+    sync.recordFlowData(frame({ rpm: 0 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('lets positive duty expose a stall once the neutral snapshot is older than 90 seconds', async () => {
+    await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.advanceTimersByTime(91_000)
+
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('does not trust a neutral snapshot dated in the future after clock rollback', async () => {
+    await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.setSystemTime(new Date('2026-07-11T07:59:59Z'))
+
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
   it('suppresses inside the session-end grace window (countdown nearly elapsed)', async () => {
     await sync.sync(status({ targetLevel: 5, heatingDuration: 60 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+  })
+
+  it('suppresses at exactly the 90-second session-end grace boundary', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 90 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+  })
+
+  it('still suppresses at exactly the 600-second stale boundary', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 300 }))
+    vi.advanceTimersByTime(900_000)
     sync.recordFlowData(frame({ rpm: 0 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
   })
@@ -233,11 +440,478 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 
+  it('feeds the guard the projected remaining session seconds, not the 8h default', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 7200 }))
+    vi.setSystemTime(new Date('2026-07-11T08:01:00Z')) // 60s after the poll
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    const input = await lastGuardInput('left')
+    expect(input?.expectedActive).toBe(true)
+    expect(input?.preStallDurationSeconds).toBe(7140)
+  })
+
+  it('feeds a null snapshot duration when firmware reports no countdown', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    const input = await lastGuardInput('left')
+    expect(input?.expectedActive).toBe(true)
+    expect(input?.preStallDurationSeconds).toBeNull()
+  })
+
+  it('feeds a null snapshot duration once the projected countdown reaches zero', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 300 }))
+    vi.setSystemTime(new Date('2026-07-11T08:05:00Z')) // exactly 300s later
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    const input = await lastGuardInput('left')
+    expect(input?.expectedActive).toBe(true) // duty > 0 keeps a real stall visible
+    expect(input?.preStallDurationSeconds).toBeNull()
+  })
+
+  it('feeds a null snapshot duration on suppressed frames', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 7200 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 0 }))
+
+    const input = await lastGuardInput('left')
+    expect(input?.expectedActive).toBe(false)
+    expect(input?.preStallDurationSeconds).toBeNull()
+  })
+
   it('does not treat heatingDuration=0 with a non-neutral target as session end', async () => {
     // A firmware variant reporting no countdown during an active session
     // must stay on the plain device_state path, not be suppressed forever.
     await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
     sync.recordFlowData(frame({ rpm: 0 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each([null, 50])('keeps an observed expiry off through fresh zero-countdown polls with a retained target (duty=%s)', async (duty) => {
+    await sync.sync(status({ targetLevel: -20, heatingDuration: 180 }))
+    vi.advanceTimersByTime(175_000)
+    await sync.sync(status({ targetLevel: -20, heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+
+    // Pod 5 J55 live failure: heatTime reaches zero and RPM stops, but the
+    // non-neutral target/current level survive. Keep polling beyond both
+    // the bilateral dwell and the old ten-minute projected-expiry window.
+    for (let elapsed = 0; elapsed <= 660; elapsed += 10) {
+      await sync.sync(status({ targetLevel: -20, heatingDuration: 0 }))
+      for (const side of ['left', 'right'] as const) {
+        expect(sqlite.prepare('SELECT is_powered, target_temperature, powered_on_at FROM device_state WHERE side = ?').get(side)).toEqual({
+          is_powered: 0, target_temperature: null, powered_on_at: null,
+        })
+        // The guard must also handle a lagging/failed powered-state mirror.
+        seedSide(side, true, 75)
+      }
+      sync.recordFlowData(frame({ rpm: 0, duty }))
+      for (const side of ['left', 'right'] as const) {
+        expect(await lastGuardInput(side)).toMatchObject({ expectedActive: false, preStallDurationSeconds: null })
+      }
+      vi.advanceTimersByTime(10_000)
+    }
+  })
+
+  it('does not infer expiry from an early zero countdown', async () => {
+    await sync.sync(status({ heatingDuration: 600 }))
+    vi.advanceTimersByTime(10_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    vi.advanceTimersByTime(590_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('requires recent countdown evidence before confirming expiry', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(600_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('does not use a confirmed expiry after its status stream becomes stale', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.advanceTimersByTime(91_000)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('a new command clears expiry before the next firmware poll, only on that side', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    markSideMutated('left')
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+    expect((await lastGuardInput('right'))?.expectedActive).toBe(false)
+  })
+
+  it('does not adopt a stale countdown during a new command freshness window', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(1_000)
+    markSideMutated('left')
+    await sync.sync(status({ heatingDuration: 4 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each(['countdown', 'target', 'neutral', 'clock rollback'] as const)('invalidates observed expiry on %s', async (change) => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    if (change === 'countdown') await sync.sync(status({ heatingDuration: 600 }))
+    if (change === 'target') await sync.sync(status({ targetLevel: 10, heatingDuration: 0 }))
+    if (change === 'neutral') {
+      await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+      await sync.sync(status({ heatingDuration: 0 }))
+    }
+    if (change === 'clock rollback') {
+      vi.setSystemTime(Date.now() - 10_000)
+      await sync.sync(status({ heatingDuration: 0 }))
+    }
+    seedSide('left', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('suppresses a no-countdown firmware stop at the persisted eight-hour boundary', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    const startedAt = Date.now() - DEFAULT_HEATING_DURATION * 1000
+    seedSide('left', true, 75, startedAt)
+    seedSide('right', true, 75, startedAt)
+
+    sync.recordFlowData(frame({ rpm: 1_900 }))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+    vi.advanceTimersByTime(39_000)
+    sync.recordFlowData(frame({ rpm: 0 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+    expect((await lastGuardInput('right'))?.expectedActive).toBe(false)
+    expect((await lastGuardInput('left'))?.preStallDurationSeconds).toBeNull()
+  })
+
+  it('does not suppress a driven no-countdown stall at the eight-hour boundary', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    seedSide('left', true, 75, Date.now() - DEFAULT_HEATING_DURATION * 1000)
+
+    await recordSustainedBilateralStop(sync, 65)
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('does not suppress an asymmetric no-countdown stall at the eight-hour boundary', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    seedSide('left', true, 75, Date.now() - DEFAULT_HEATING_DURATION * 1000)
+
+    sync.recordFlowData(asymmetricFrame(0, 1_900))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('does not infer a session end when only the last running side stops', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    const startedAt = Date.now() - DEFAULT_HEATING_DURATION * 1000
+    seedSide('left', true, 75, startedAt)
+    seedSide('right', true, 75, startedAt)
+
+    sync.recordFlowData(asymmetricFrame(1_900, 0))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each([
+    [1_499, true],
+    [1_500, false],
+  ])('bounds healthy pre-stop evidence at %s RPM', async (rpm, expectedActive) => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    const startedAt = Date.now() - DEFAULT_HEATING_DURATION * 1000
+    seedSide('left', true, 75, startedAt)
+    seedSide('right', true, 75, startedAt)
+
+    sync.recordFlowData(frame({ rpm }))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(expectedActive)
+  })
+
+  it.each([
+    [30_000, false],
+    [30_001, true],
+  ])('bounds healthy pre-stop evidence age at %sms', async (evidenceAgeMs, expectedActive) => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    const startedAt = Date.now() - DEFAULT_HEATING_DURATION * 1000
+    seedSide('left', true, 75, startedAt)
+    seedSide('right', true, 75, startedAt)
+
+    sync.recordFlowData(frame({ rpm: 1_900 }))
+    await lastGuardInput('left')
+    vi.advanceTimersByTime(evidenceAgeMs)
+    sync.recordFlowData(frame({ rpm: 0 }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(expectedActive)
+  })
+
+  it('prefers a live positive countdown over the older powered-on timestamp', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 600 }))
+    seedSide('left', true, 75, Date.now() - DEFAULT_HEATING_DURATION * 1000)
+
+    await recordSustainedBilateralStop(sync)
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('stops trusting a no-countdown session timestamp long past its expected end', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    const startedAt = Date.now() - (DEFAULT_HEATING_DURATION + 601) * 1000
+    seedSide('left', true, 75, startedAt)
+
+    await recordSustainedBilateralStop(sync)
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each([
+    [-91, true],
+    [-90, false],
+    [90, false],
+    [91, true],
+  ])('bounds no-countdown expiry suppression at a signed offset of %ss', async (secondsPastEnd, expectedActive) => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    const startedAt = Date.now() - (DEFAULT_HEATING_DURATION + secondsPastEnd) * 1000
+    seedSide('left', true, 75, startedAt)
+    seedSide('right', true, 75, startedAt)
+
+    await recordSustainedBilateralStop(sync)
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(expectedActive)
+  })
+
+  it('requires a persisted powered-on timestamp for no-countdown suppression', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    seedSide('left', true, 75, null)
+
+    await recordSustainedBilateralStop(sync)
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('does not mistake a one-hour no-countdown stop for the default eight-hour expiry', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 0 }))
+    seedSide('left', true, 75, Date.now() - 3_600_000)
+
+    await recordSustainedBilateralStop(sync)
+
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each([
+    [false, 75, false, 75],
+    [true, null, false, null],
+    [false, null, false, null],
+  ])('requires powered=%s and target=%s together', async (isPowered, target, expectedActive, preStallTarget) => {
+    seedSide('left', isPowered, target)
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    expect(await lastGuardInput('left')).toEqual(expect.objectContaining({
+      expectedActive,
+      preStallTarget,
+      preStallDurationSeconds: null,
+    }))
+  })
+
+  it('passes an absent row to the guard as inactive with a null snapshot', async () => {
+    ;(sqlite as any).exec('DELETE FROM device_state WHERE side = \'left\'')
+    sync.recordFlowData(frame({ rpm: 0, duty: 65 }))
+
+    expect(await lastGuardInput('left')).toEqual(expect.objectContaining({
+      expectedActive: false,
+      preStallTarget: null,
+      preStallDurationSeconds: null,
+    }))
+  })
+})
+
+describe('DeviceStateSync — stall guard coalescing', () => {
+  let sync: DeviceStateSync
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve()
+  }
+
+  const leftInputs = () => vi.mocked(onFrame).mock.calls
+    .map(([input]) => input)
+    .filter(input => input.side === 'left')
+
+  beforeEach(() => {
+    resetSchema()
+    _resetMutationStamps()
+    vi.mocked(onFrame).mockClear()
+    vi.mocked(onFrame).mockResolvedValue(undefined)
+    sync = new DeviceStateSync()
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+  })
+
+  it('keeps only the newest frame while a guard pass is in flight', async () => {
+    let resolveFirst!: () => void
+    vi.mocked(onFrame).mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveFirst = resolve
+      }),
+    )
+
+    sync.recordFlowData(frame({ rpm: 100 }))
+    await flush()
+    expect(leftInputs()).toHaveLength(1)
+    expect(leftInputs()[0]?.rpm).toBe(100)
+
+    // Two more frames land while the first pass awaits hardware — the
+    // intermediate one must be dropped, not queued.
+    sync.recordFlowData(frame({ rpm: 200 }))
+    sync.recordFlowData(frame({ rpm: 300 }))
+    await flush()
+    expect(leftInputs()).toHaveLength(1)
+
+    resolveFirst()
+    await flush()
+    expect(leftInputs()).toHaveLength(2)
+    expect(leftInputs()[1]?.rpm).toBe(300)
+  })
+
+  it('releases the in-flight slot so later frames run immediately', async () => {
+    sync.recordFlowData(frame({ rpm: 100 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 200 }))
+    await flush()
+    expect(leftInputs()).toHaveLength(2)
+    expect(leftInputs()[1]?.rpm).toBe(200)
+  })
+
+  it('stamps guard inputs with frame arrival time, not queue-drain time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(1_000_000))
+    let resolveFirst!: () => void
+    vi.mocked(onFrame).mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveFirst = resolve
+      }),
+    )
+
+    sync.recordFlowData(frame({ rpm: 100 }))
+    await flush()
+    vi.setSystemTime(new Date(1_030_000))
+    sync.recordFlowData(frame({ rpm: 300 }))
+    await flush()
+
+    // The queued frame drains much later — its dwell-clock stamp must stay the
+    // arrival time, or a lock-hold would fabricate elapsed low time.
+    vi.setSystemTime(new Date(1_090_000))
+    resolveFirst()
+    await flush()
+
+    expect(leftInputs()[0]?.now).toBe(1_000_000)
+    expect(leftInputs()[1]?.now).toBe(1_030_000)
+    vi.useRealTimers()
+  })
+})
+
+describe('DeviceStateSync — bilateral-zero de-glitch', () => {
+  let sync: DeviceStateSync
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve()
+  }
+  const leftCalls = () => vi.mocked(onFrame).mock.calls
+    .map(([input]) => input)
+    .filter(input => input.side === 'left')
+
+  beforeEach(() => {
+    resetSchema()
+    _resetMutationStamps()
+    vi.mocked(onFrame).mockClear()
+    vi.mocked(onFrame).mockResolvedValue(undefined)
+    sync = new DeviceStateSync()
+    seedSide('left', true, 75)
+    seedSide('right', true, 75)
+  })
+
+  it.each([[1900, 1499], [1499, 1900], [0, 1900], [1900, 0]])('requires both pumps to have been healthy (%s, %s)', async (left, right) => {
+    sync.recordFlowData(asymmetricFrame(left, right))
+    await flush()
+    vi.mocked(onFrame).mockClear()
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+    expect(leftCalls()).toHaveLength(1)
+    expect(leftCalls()[0]?.rpm).toBe(0)
+  })
+
+  it('does not suppress a bilateral stop using healthy evidence from the future', async () => {
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      sync.recordFlowData(frame({ rpm: 1900 }))
+      await flush()
+      vi.mocked(onFrame).mockClear()
+      clock.mockReturnValue(now - 1)
+      sync.recordFlowData(frame({ rpm: 0 }))
+      await flush()
+      expect(leftCalls()).toHaveLength(1)
+    }
+    finally { clock.mockRestore() }
+  })
+
+  it('drops one both-zero frame immediately after both pumps were running', async () => {
+    sync.recordFlowData(frame({ rpm: 1_900 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+
+    expect(leftCalls()).toHaveLength(1)
+    expect(leftCalls()[0]?.rpm).toBe(1_900)
+  })
+
+  it('feeds a bilateral zero once it persists for another frame', async () => {
+    sync.recordFlowData(frame({ rpm: 1_900 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+
+    expect(leftCalls()).toHaveLength(2)
+    expect(leftCalls()[1]?.rpm).toBe(0)
+  })
+
+  it('does not drop a right-only stall following a healthy bilateral frame', async () => {
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await flush()
+    vi.mocked(onFrame).mockClear()
+    sync.recordFlowData(asymmetricFrame(1900, 0))
+    await flush()
+    expect(vi.mocked(onFrame)).toHaveBeenCalledWith(expect.objectContaining({ side: 'right', rpm: 0 }))
+  })
+
+  it('does not suppress a one-sided zero-RPM frame', async () => {
+    sync.recordFlowData(frame({ rpm: 1_900 }))
+    await flush()
+    sync.recordFlowData(asymmetricFrame(0, 1_900))
+    await flush()
+
+    expect(leftCalls()).toHaveLength(2)
+    expect(leftCalls()[1]?.rpm).toBe(0)
   })
 })

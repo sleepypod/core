@@ -25,6 +25,16 @@ Add a `POST /device/execute` endpoint that accepts a hardware command name and o
 - Can cause unexpected hardware state if misused
 - Not covered by the standard safety/debounce mechanisms
 
+## Amendment (2026-07-21)
+
+Energizing opcodes (`SET_TEMP`, `LEFT_TEMP_DURATION`, `RIGHT_TEMP_DURATION`,
+`TEMP_LEVEL_LEFT`, `TEMP_LEVEL_RIGHT` — by name or numeric opcode) are now
+gated on the pump-stall guard (ADR 0022) and serialized through the side
+lock. A level/duration write of `0` (the power-off direction) is never
+blocked, and unknown opcodes still pass through unguarded for probing. To
+deliberately re-energize a tripped side, acknowledge the alert first
+(`pumpAlerts.acknowledge`).
+
 ## Disclaimer
 
 This is a power user feature. It is unsupported, undocumented beyond this ADR, and carries no guarantees. Misuse can lead to unexpected hardware behavior. The sleepypod project assumes no liability for issues arising from raw command execution.

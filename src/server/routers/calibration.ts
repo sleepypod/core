@@ -92,7 +92,7 @@ export const calibrationRouter = router({
       samplesUsed: z.number().nullable(),
       errorMessage: z.string().nullable(),
       durationMs: z.number().nullable(),
-      triggeredBy: z.enum(['daily', 'manual', 'startup']),
+      triggeredBy: z.enum(['daily', 'manual', 'startup', 'retry']),
       createdAt: z.date(),
     })))
     .query(async ({ input }) => {

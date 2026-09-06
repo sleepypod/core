@@ -1,0 +1,349 @@
+#!/bin/bash
+# Shared helpers for enrolling an SSH public key on the pod.
+# Sourced by scripts/install at runtime (after the source tree is on disk).
+#
+# Getting any of this wrong is a hard lockout: the installer also sets
+# `PasswordAuthentication no`, and the pod has no other remote entry point —
+# recovery means a serial console and a U-Boot `init=/bin/bash` boot, or a
+# hardware firmware reset that wipes the install. Every function here fails
+# closed so the caller can decline to harden.
+#
+# Two traps make the obvious `/root/.ssh` guess wrong:
+#
+#   1. root's home is /home/root on this Yocto image (poky convention), not
+#      /root, so sshd resolves the default `.ssh/authorized_keys` relative to
+#      /home/root.
+#   2. free-sleep's setup_ssh.sh pins an absolute
+#      `AuthorizedKeysFile /home/root/ssh/authorized_keys`. That directive
+#      survives the installer's sed edits, so it has to be honoured.
+
+# Read the effective AuthorizedKeysFile out of `sshd -T`. Extra sshd flags are
+# passed through so the caller can choose whether Match blocks are evaluated.
+_sshd_authorized_keys_directive() {
+  local sshd_config="$1"
+  shift
+  sshd -T "$@" -f "$sshd_config" 2>/dev/null |
+    awk 'tolower($1) == "authorizedkeysfile" { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }' \
+    || true
+}
+
+# Print the absolute path sshd will read authorized keys from for $1 (a
+# username), or the literal `none` when file-based key auth is switched off.
+# Prefers sshd's own view of the effective config, falls back to parsing
+# sshd_config, then to sshd's compiled-in default.
+resolve_authorized_keys_path() {
+  local user="$1"
+  local sshd_config="${2:-/etc/ssh/sshd_config}"
+  local home uid keyfile
+
+  # The `|| true` guards matter: scripts/install runs under `set -euo
+  # pipefail`, where a missing getent or a non-zero sshd would otherwise
+  # abort the installer mid-hardening.
+  home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
+  # getent is glibc's; read the file directly if this image doesn't ship it.
+  [ -n "$home" ] || home="$(awk -F: -v u="$user" '$1 == u { print $6; exit }' /etc/passwd 2>/dev/null || true)"
+
+  # No guess here. Defaulting to /root is what shipped the original bug: on
+  # this firmware root's home is /home/root, so a fallback would write and
+  # verify a key somewhere sshd never reads, and the caller would disable
+  # password auth on the strength of it. Fail and let the caller decline.
+  if [ -z "$home" ]; then
+    echo "Error: cannot resolve the home directory for '$user' — refusing to guess." >&2
+    return 1
+  fi
+
+  uid="$(id -u "$user" 2>/dev/null || true)"
+  [ -n "$uid" ] || uid="$(awk -F: -v u="$user" '$1 == u { print $3; exit }' /etc/passwd 2>/dev/null || true)"
+  [ -n "$uid" ] || uid="0"
+
+  # `sshd -T` prints the effective config with defaults filled in, which
+  # catches an AuthorizedKeysFile set anywhere sshd looks — including files
+  # pulled in by an Include directive that a plain grep would miss.
+  #
+  # -C evaluates Match blocks the way they'd apply to a real login as $user,
+  # so a `Match User root` override (worst case `AuthorizedKeysFile none`)
+  # isn't missed. Older sshd rejects a partial connection spec, hence the
+  # plain `sshd -T` retry.
+  keyfile="$(_sshd_authorized_keys_directive "$sshd_config" \
+    -C "user=$user,host=localhost,addr=127.0.0.1")"
+  [ -n "$keyfile" ] || keyfile="$(_sshd_authorized_keys_directive "$sshd_config")"
+
+  # sshd -T is unavailable when not running as root, and refuses configs it
+  # considers invalid. Read the directive directly before giving up on it.
+  # This fallback can't evaluate Match blocks — it reports the global value.
+  [ -n "$keyfile" ] || keyfile="$(
+    awk 'tolower($1) == "authorizedkeysfile" { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }' \
+      "$sshd_config" 2>/dev/null || true
+  )"
+
+  [ -n "$keyfile" ] || keyfile=".ssh/authorized_keys"
+
+  # The directive takes a list; sshd reads every entry but writing the first
+  # is enough to authenticate.
+  keyfile="${keyfile%%[[:space:]]*}"
+
+  # `none` means sshd consults no authorized_keys file at all. There is no
+  # path to write to — say so rather than inventing one.
+  if [ "$keyfile" = "none" ]; then
+    printf 'none\n'
+    return 0
+  fi
+
+  # Protect a literal %% before the token passes, not after: in `%%h` the %h
+  # pass matches the second % plus the h, so expanding %% last would still
+  # yield `%<home>`. The sentinel is a byte sshd_config cannot contain.
+  local sentinel=$'\x01'
+  keyfile="${keyfile//%%/$sentinel}"
+  keyfile="${keyfile//%h/$home}"
+  keyfile="${keyfile//%U/$uid}"
+  keyfile="${keyfile//%u/$user}"
+  keyfile="${keyfile//$sentinel/%}"
+
+  case "$keyfile" in
+    /*) printf '%s\n' "$keyfile" ;;
+    *)  printf '%s\n' "${home%/}/$keyfile" ;;
+  esac
+}
+
+# Check that $1 is a public key sshd will actually accept. The format regex
+# the installer used before this was happy with `ssh-ed25519 A`, which sshd
+# silently ignores — enough to disable password auth against a key that can
+# never authenticate.
+#
+# Exit codes: 0 valid, 1 rejected, 2 unable to tell (no ssh-keygen). Callers
+# must treat 2 as "do not harden".
+validate_public_key() {
+  local key="$1" tmp status=0
+
+  command -v ssh-keygen >/dev/null 2>&1 || return 2
+  tmp="$(mktemp 2>/dev/null)" || return 2
+
+  printf '%s\n' "$key" > "$tmp"
+  ssh-keygen -l -f "$tmp" >/dev/null 2>&1 || status=1
+  rm -f "$tmp"
+
+  return "$status"
+}
+
+# Append $2 (a public key line) to the authorized_keys file for user $1,
+# creating it with the ownership and modes sshd's StrictModes check demands.
+# Prints the path written. Idempotent: re-running the installer with the same
+# key is a no-op. Fails when sshd reads no key file at all.
+#
+# Every step is checked explicitly. The caller invokes this inside an `if`,
+# which suppresses `set -e` for the whole function body — an unchecked mkdir
+# or append would fall through to the final printf and report success with
+# nothing on disk, and the installer would disable password auth on the
+# strength of that.
+install_authorized_key() {
+  local user="$1" key="$2"
+  local keyfile keydir
+  keyfile="$(resolve_authorized_keys_path "$user")" || return 1
+
+  if [ "$keyfile" = "none" ]; then
+    echo "Error: sshd is configured with 'AuthorizedKeysFile none' for $user —" >&2
+    echo "there is no file to enrol a key in. Fix /etc/ssh/sshd_config first." >&2
+    return 1
+  fi
+
+  keydir="$(dirname "$keyfile")"
+  mkdir -p "$keydir" || return 1
+  if ! grep -qxF "$key" "$keyfile" 2>/dev/null; then
+    printf '%s\n' "$key" >> "$keyfile"
+  fi
+
+  # StrictModes rejects a key file (or its directory) that is group- or
+  # world-writable, or owned by anyone but the user or root.
+  chown "$user" "$keydir" "$keyfile" 2>/dev/null || true
+  chmod 700 "$keydir" || return 1
+  chmod 600 "$keyfile" || return 1
+
+  # Don't take the write on faith: a full filesystem can append a partial
+  # line, which sshd silently ignores. Require the exact key line to be back.
+  grep -qxF "$key" "$keyfile" 2>/dev/null || return 1
+
+  printf '%s\n' "$keyfile"
+}
+
+# Earlier installers wrote to a hardcoded /root/.ssh/authorized_keys, which
+# sshd never reads when root's home is /home/root. Fold any keys stranded
+# there into the real file so re-running the installer repairs the lockout
+# rather than silently re-creating it.
+migrate_stranded_authorized_keys() {
+  local user="$1"
+  local stranded="${2:-/root/.ssh/authorized_keys}"
+  local keyfile
+
+  # Best-effort repair, so an unresolvable home is a skip, not a failure: the
+  # installer calls this bare under `set -e`, and returning non-zero would
+  # abort an otherwise-complete install. Nothing unsafe follows from skipping
+  # — install_authorized_key fails on the same condition, which is what keeps
+  # the hardening from running.
+  if ! keyfile="$(resolve_authorized_keys_path "$user")"; then
+    echo "Skipping stranded-key migration: cannot resolve $user's authorized_keys path." >&2
+    return 0
+  fi
+
+  [ "$keyfile" != "none" ] || return 0
+  [ -f "$stranded" ] || return 0
+  [ "$stranded" != "$keyfile" ] || return 0
+
+  local migrated=0 line
+  # `|| [ -n "$line" ]` keeps the last line when the file has no trailing
+  # newline — a hand-edited authorized_keys often doesn't.
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    case "$line" in \#*) continue ;; esac
+    if ! grep -qxF "$line" "$keyfile" 2>/dev/null; then
+      # Best-effort: an ENOSPC append or a failed mkdir is a skip, not an
+      # abort — this runs bare under the installer's `set -e`, and the same
+      # condition also fails install_authorized_key, which is what actually
+      # blocks the hardening.
+      mkdir -p "$(dirname "$keyfile")" || continue
+      printf '%s\n' "$line" >> "$keyfile" || continue
+      migrated=$((migrated + 1))
+    fi
+  done < "$stranded"
+
+  if [ "$migrated" -gt 0 ]; then
+    echo "Recovered $migrated SSH key(s) from $stranded -> $keyfile"
+    chown "$user" "$(dirname "$keyfile")" "$keyfile" 2>/dev/null || true
+    chmod 700 "$(dirname "$keyfile")" 2>/dev/null || true
+    chmod 600 "$keyfile" 2>/dev/null || true
+  fi
+}
+
+# Force `$1 $2` in sshd_config. Substitution alone isn't enough: a config
+# that never mentions the directive keeps sshd's default (PasswordAuthentication
+# defaults to yes, Port to 22), so the installer would report hardening it
+# hadn't done.
+#
+# awk rather than `sed -i` because the two are not portable together — BSD sed
+# takes the next argument as a backup suffix, so a `sed -i -E …` that works on
+# the pod silently no-ops on a dev machine. awk behaves the same on both.
+set_sshd_directive() {
+  local key="$1" value="$2" sshd_config="${3:-/etc/ssh/sshd_config}"
+  local target tmp
+
+  # Follow a symlinked sshd_config so the rename replaces the real file
+  # instead of the link.
+  target="$(readlink -f "$sshd_config" 2>/dev/null || true)"
+  [ -n "$target" ] || target="$sshd_config"
+
+  # The temp file lives beside the target: same filesystem, so the rename
+  # below is atomic. `cp -p` seeds it with the original's mode and owner,
+  # which mktemp's 0600 would otherwise drop.
+  tmp="$(mktemp "${target}.XXXXXX")" || return 1
+  cp -p "$target" "$tmp" || { rm -f "$tmp"; return 1; }
+
+  # Only the global section is rewritten. A directive inside `Match` applies
+  # to that block's connections alone; overwriting it there would change
+  # semantics we were never asked to touch, and appending after a Match block
+  # would land the new directive inside it.
+  #
+  # A commented directive is recognised only as `#Key value`, the form
+  # OpenSSH's shipped config uses. `# Key ...` with a space is prose — the
+  # unanchored substitution this replaced rewrote `# Port forwarding is
+  # disabled below` into `# Port 8822`. Falling out of the name extraction
+  # below: prose leaves `name` empty, so it can never match a directive.
+  #
+  # Both separators sshd accepts are handled — `Key value` and `Key=value`
+  # are equivalent to sshd, and matching only the first would leave a stale
+  # `=`-form directive in place to win over the one we append (sshd takes
+  # the first occurrence).
+  #
+  # `Include` is a boundary as well as `Match`: sshd splices the included
+  # file in at that point and keeps the first value it obtains, so a directive
+  # set by an early Include beats anything written further down this file.
+  # Emitting ours above the first Include is what makes it the winning value —
+  # otherwise set_sshd_directive reports success and the installer's
+  # effective-value check then fails and rolls the whole thing back.
+  #
+  # The boundary keyword is extracted with the same whitespace-or-`=` rule as
+  # the directive name below: sshd accepts `Include=/path` and `Match=User x`
+  # exactly like their space-separated forms, and matching only whitespace
+  # would miss the `=` form — appending our directive below an `Include=…`
+  # boundary, where it loses to the value sshd already took from the include.
+  if awk -v key="$key" -v value="$value" '
+    BEGIN { done = 0; in_match = 0; boundary = 0 }
+    {
+      probe = $0
+      sub(/^[ \t]+/, "", probe)
+
+      boundary_name = probe
+      sub(/[ \t=].*$/, "", boundary_name)
+
+      if (!boundary && (tolower(boundary_name) == "match" || tolower(boundary_name) == "include")) {
+        boundary = 1
+        if (!done) { print key " " value; done = 1 }
+      }
+      if (tolower(boundary_name) == "match") in_match = 1
+
+      if (!in_match) {
+        candidate = probe
+        sub(/^#/, "", candidate)
+
+        name = candidate
+        sub(/[ \t=].*$/, "", name)
+        rest = substr(candidate, length(name) + 1)
+
+        if (name != "" && tolower(name) == tolower(key) && rest ~ /^[ \t]*=?[ \t]*[^ \t]/) {
+          # First occurrence becomes the directive; later duplicates go, so
+          # nothing downstream can override what we just set.
+          if (!done) { print key " " value; done = 1 }
+          next
+        }
+      }
+
+      print $0
+    }
+    END { if (!done) print key " " value }
+  ' "$target" > "$tmp"; then
+    # Rename rather than copy-over-in-place. `cat > "$target"` truncates the
+    # live config before it writes, so an ENOSPC or I/O error mid-copy leaves
+    # a half-written sshd_config; a rename either happens or doesn't.
+    if mv -f "$tmp" "$target"; then
+      return 0
+    fi
+  fi
+
+  rm -f "$tmp"
+  return 1
+}
+
+# Print sshd's effective value for directive $1, so the installer can confirm
+# what it asked for is what sshd will actually do before restarting it.
+#
+# $3 is an optional username. Pass it for anything a Match block can override
+# — PermitRootLogin, PasswordAuthentication and PermitEmptyPasswords are all
+# Match-able, so a global reading would report the hardening succeeded while
+# `Match User root` quietly re-enabled password auth for the one account that
+# matters. Port is global-only and needs no context.
+sshd_effective_value() {
+  local name="$1" sshd_config="${2:-/etc/ssh/sshd_config}" user="${3:-}"
+  local lowered value
+  lowered="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+
+  if [ -n "$user" ]; then
+    value="$(sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" -f "$sshd_config" 2>/dev/null |
+      awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' || true)"
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+    else
+      # Root-context evaluation is unavailable — an older sshd that rejects the
+      # partial connection spec, or a config sshd won't dump. Do NOT degrade to
+      # a plain `sshd -T`: the global reading can't see a `Match User $user`
+      # block re-enabling password auth for exactly the account being hardened,
+      # so accepting it would report a hardened pod we can't actually vouch for.
+      # Emit nothing — the installer reads the empty result as a verification
+      # failure, restores the snapshot, and declines to harden. Fail closed,
+      # per this file's contract.
+      echo "Error: sshd cannot evaluate '$name' in $user's context — refusing to verify." >&2
+    fi
+    return 0
+  fi
+
+  sshd -T -f "$sshd_config" 2>/dev/null |
+    awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' \
+    || true
+}

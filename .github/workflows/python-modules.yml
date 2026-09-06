@@ -46,7 +46,9 @@ jobs:
             workdir: modules
             target: common
             cov_source: common
-            deps: ""
+            # cbor2 is needed to decode the real NATS capture fixtures through
+            # NatsFollower's decode path (test_nats_follower).
+            deps: "cbor2"
           - name: cover-buttons
             workdir: modules/cover-buttons
             target: .
@@ -82,7 +84,7 @@ jobs:
         with:
           # Pod runtime is pinned to 3.10 by every module's pyproject
           # (`requires-python = ">=3.9,<3.11"`). Match it in CI.
-          python-version: '3.14'
+          python-version: '3.10'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -92,10 +94,15 @@ jobs:
       - name: Install test deps
         working-directory: ${{ matrix.module.workdir }}
         run: |
-          uv venv .venv
+          if [ -f uv.lock ]; then
+            uv sync --locked --no-install-project
+          else
+            uv venv .venv
+            uv pip install --python .venv/bin/python ${{ matrix.module.deps }}
+          fi
           # shellcheck source=/dev/null
           . .venv/bin/activate
-          uv pip install pytest pytest-cov ${{ matrix.module.deps }}
+          uv pip install pytest pytest-cov
 
       - name: Run pytest with coverage
         working-directory: ${{ matrix.module.workdir }}

@@ -7,8 +7,8 @@
 # file + rename.
 set -euo pipefail
 
-TMPFS_DIR="/persistent/biometrics"
-ARCHIVE_DIR="/persistent/biometrics-archive"
+TMPFS_DIR="${TMPFS_DIR:-/persistent/biometrics}"
+ARCHIVE_DIR="${ARCHIVE_DIR:-/persistent/biometrics-archive}"
 KEEP_RECENT_MIN="${KEEP_RECENT_MIN:-15}"
 GZIP_LEVEL="${GZIP_LEVEL:-6}"
 
@@ -46,3 +46,6 @@ while IFS= read -r -d '' src; do
 done < <(find "$TMPFS_DIR" -maxdepth 1 -type f -name '*.RAW' -mmin "+$KEEP_RECENT_MIN" -print0)
 
 echo "archiver: archived=$archived removed=$removed failed=$failed"
+if [ "$failed" -gt 0 ]; then
+  exit 1
+fi

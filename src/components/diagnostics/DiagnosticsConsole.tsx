@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
+import dynamic from 'next/dynamic'
 import { usePathname } from 'next/navigation'
 import {
   Activity,
@@ -27,8 +28,6 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { DataTable, type Column } from '@/src/ui/data-table'
 import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
-import { ThermalTrendChart } from '@/src/components/diagnostics/ThermalTrendChart'
-import { BiometricsTrendChart } from '@/src/components/diagnostics/BiometricsTrendChart'
 import {
   fmtF, fmtAge, fmtMs, fmtNum, fmtRel, fmtClock, fmtDayLabel,
   VERDICT_STYLES, buildWeekLanes, jobTone, fmtJobValue, biometricsFlowStatus, thermalTrendPoints,
@@ -40,7 +39,22 @@ import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemLogViewer } from '@/src/components/status/SystemLogViewer'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
-import { SensorsScreen } from '@/src/components/Sensors/SensorsScreen'
+
+// These panels are hidden on the initial Overview tab. Load their chart and
+// sensor dependencies only when the corresponding section is opened.
+const ThermalTrendChart = dynamic(() => import('./ThermalTrendChart').then(m => m.ThermalTrendChart), {
+  loading: PanelLoading,
+})
+const BiometricsTrendChart = dynamic(() => import('./BiometricsTrendChart').then(m => m.BiometricsTrendChart), {
+  loading: PanelLoading,
+})
+const SensorsScreen = dynamic(() => import('../Sensors/SensorsScreen').then(m => m.SensorsScreen), {
+  loading: PanelLoading,
+})
+
+function PanelLoading() {
+  return <div role="status" className="flex min-h-48 items-center justify-center text-xs text-zinc-500">Loading…</div>
+}
 
 // Formatting, scheduler-lane, and biometrics/thermal derivations live in
 // ./diagnosticsLogic so they can be unit-tested without React/tRPC.

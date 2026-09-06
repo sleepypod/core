@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { HardwareClient } from './client'
 import { type DeviceStatus, type GestureData, type Side } from './types'
+import { getStatusRevision } from './statusRevision'
 
 export type DacMonitorStatus = 'stopped' | 'starting' | 'running' | 'degraded'
 
@@ -39,7 +40,8 @@ const IDLE_POLL_INTERVAL_MS = 5000
 const TAP_TYPES = ['doubleTap', 'tripleTap', 'quadTap'] as const
 
 /**
- * Polls the hardware daemon at a fixed interval and emits typed events.
+ * Polls the hardware daemon on an adaptive interval — 1s active / 2s default /
+ * 5s idle, switched via setActive/setIdle — and emits typed events.
  * No database access. No action execution. Observe and publish only.
  *
  * Lifecycle: stopped → starting → running ↔ degraded
@@ -59,6 +61,8 @@ export class DacMonitor extends EventEmitter {
   private intervalHandle: ReturnType<typeof setInterval> | null = null
   private monitorStatus: DacMonitorStatus = 'stopped'
   private lastStatus: DeviceStatus | null = null
+  private lastPollStartedAt: number | null = null
+  private lastStatusRevision: number | null = null
   private lastGestures: GestureData | null = null
   private isFirstPoll = true
   private isPollInFlight = false
@@ -74,6 +78,15 @@ export class DacMonitor extends EventEmitter {
   getStatus = (): DacMonitorStatus => this.monitorStatus
 
   getLastStatus = (): DeviceStatus | null => this.lastStatus
+
+  /** Only reuse a recent, healthy observation with no intervening hardware writes. */
+  getFreshStatus = (maxAgeMs: number): DeviceStatus | null => {
+    if (this.monitorStatus !== 'running' || !this.client?.isConnected() || this.lastPollStartedAt === null) return null
+    const age = Date.now() - this.lastPollStartedAt
+    if (age < 0 || age >= maxAgeMs) return null
+    if (this.lastStatusRevision === null || this.lastStatusRevision !== getStatusRevision()) return null
+    return this.lastStatus
+  }
 
   /** Change the poll interval while running. Restarts the interval timer. */
   setPollInterval = (ms: number): void => {
@@ -101,6 +114,8 @@ export class DacMonitor extends EventEmitter {
     if (this.monitorStatus !== 'stopped') return
 
     this.monitorStatus = 'starting'
+    this.lastPollStartedAt = null
+    this.lastStatusRevision = null
     this.isFirstPoll = true
     this.lastGestures = null
     this.isPollInFlight = false
@@ -157,6 +172,10 @@ export class DacMonitor extends EventEmitter {
     if (!client || this.monitorStatus === 'stopped') return
 
     try {
+      // Capture before awaiting: a slow read or one overlapping a write must
+      // not be stamped as a fresh post-write observation when it completes.
+      const startedAt = Date.now()
+      const revision = getStatusRevision()
       const status = await client.getDeviceStatus()
 
       // Discard results if stop() ran while we were awaiting.
@@ -171,6 +190,8 @@ export class DacMonitor extends EventEmitter {
       }
 
       this.lastStatus = status
+      this.lastPollStartedAt = startedAt
+      this.lastStatusRevision = revision
       this.emit('status:updated', status)
 
       if (status.gestures) {

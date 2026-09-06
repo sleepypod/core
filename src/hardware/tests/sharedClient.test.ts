@@ -33,6 +33,7 @@ beforeEach(() => {
   sendCommandMock.mockClear()
   isDacConnectedMock.mockReset()
   isDacConnectedMock.mockReturnValue(true)
+  sendCommandMock.mockResolvedValue('OK')
 })
 
 afterEach(() => {
@@ -83,5 +84,66 @@ describe('sharedClient.sendRaw', () => {
 
     expect(connectDacMock).toHaveBeenCalledTimes(1)
     expect(sendCommandMock).toHaveBeenCalledWith('14', undefined)
+  })
+})
+
+describe('sharedClient command boundaries', () => {
+  async function client() {
+    const mod = await freshModule()
+    return mod.getSharedHardwareClient()
+  }
+
+  it('accepts both exact temperature limits and routes both sides', async () => {
+    const c = await client()
+
+    await c.setTemperature('left', 55, 1)
+    await c.setTemperature('right', 110, 2)
+
+    expect(sendCommandMock.mock.calls).toEqual([
+      ['11', '-100'],
+      ['9', '1'],
+      ['12', '100'],
+      ['10', '2'],
+    ])
+  })
+
+  it('rejects values immediately outside both temperature limits', async () => {
+    const c = await client()
+
+    await expect(c.setTemperature('left', 54)).rejects.toThrow('between 55°F and 110°F')
+    await expect(c.setTemperature('right', 111)).rejects.toThrow('between 55°F and 110°F')
+    expect(sendCommandMock).not.toHaveBeenCalled()
+  })
+
+  it('accepts exact alarm limits and preserves the selected side', async () => {
+    const c = await client()
+
+    await c.setAlarm('left', { vibrationIntensity: 1, vibrationPattern: 'rise', duration: 0 })
+    await c.setAlarm('right', { vibrationIntensity: 100, vibrationPattern: 'double', duration: 180 })
+
+    expect(sendCommandMock.mock.calls.map(([command]) => command)).toEqual(['5', '6'])
+  })
+
+  it('rejects every alarm value immediately outside a boundary', async () => {
+    const c = await client()
+    const base = { vibrationIntensity: 50, vibrationPattern: 'rise' as const, duration: 30 }
+
+    await expect(c.setAlarm('left', { ...base, vibrationIntensity: 0 })).rejects.toThrow('between 1 and 100')
+    await expect(c.setAlarm('left', { ...base, vibrationIntensity: 101 })).rejects.toThrow('between 1 and 100')
+    await expect(c.setAlarm('left', { ...base, duration: -1 })).rejects.toThrow('between 0 and 180')
+    await expect(c.setAlarm('left', { ...base, duration: 181 })).rejects.toThrow('between 0 and 180')
+    expect(sendCommandMock).not.toHaveBeenCalled()
+  })
+
+  it('powers off the requested side instead of entering the power-on path', async () => {
+    const c = await client()
+
+    await c.setPower('left', false)
+    await c.setPower('right', false)
+
+    expect(sendCommandMock.mock.calls).toEqual([
+      ['11', '0'],
+      ['12', '0'],
+    ])
   })
 })

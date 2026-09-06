@@ -89,11 +89,22 @@ describe('TEMP constants', () => {
 
 describe('theme palette', () => {
   test('contains the documented colour tokens', () => {
-    // Spot-check a few load-bearing tokens — full equality would just mirror
-    // the implementation, but these names are referenced from components.
-    expect(theme.background).toBe('#0a0a0a')
-    expect(theme.warming).toBe('#dc6646')
-    expect(theme.cooling).toBe('#4a90d9')
-    expect(theme.healthy).toBe('#50c878')
+    expect(theme).toEqual({
+      background: '#0a0a0a',
+      card: '#141414',
+      cardBorder: '#333333',
+      cardElevated: '#1a1a1a',
+      warming: '#dc6646',
+      cooling: '#4a90d9',
+      accent: '#5cb8e0',
+      healthy: '#50c878',
+      error: '#e05050',
+      amber: '#d4a84a',
+      purple: '#a080d0',
+      cyan: '#4ecdc4',
+      textSecondary: '#888888',
+      textTertiary: '#666666',
+      textMuted: '#555555',
+    })
   })
 })

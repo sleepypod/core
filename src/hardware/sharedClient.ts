@@ -140,11 +140,8 @@ class DacHardwareClient {
     return isDacConnected()
   }
 
-  // DEBUG passthrough for device.execute. Lives on the client (not as a
-  // free function) so the call binds to the same `dacTransport` module
-  // instance that owns the live `transport` singleton — importing
-  // sendCommand directly into a route handler can resolve to a separate
-  // Next.js bundle whose `transport` is undefined.
+  // DEBUG passthrough for device.execute. Keep connection setup and raw
+  // commands on the shared client, alongside the typed hardware operations.
   async sendRaw(command: string, args?: string): Promise<string> {
     if (!isDacConnected()) {
       await connectDac(DAC_SOCK_PATH)

@@ -36,6 +36,28 @@ const mocks = vi.hoisted(() => ({
   runMigrations: vi.fn(async () => undefined),
   seedDefaultData: vi.fn(async () => undefined),
   checkAndRepairIptables: vi.fn(() => ({ ok: true, repaired: [] })),
+  rehydratePumpStallGuard: vi.fn(),
+  startDatabaseIntegrityChecks: vi.fn(),
+  stopDatabaseIntegrityChecks: vi.fn(async () => undefined),
+  startPerformanceMonitoring: vi.fn(),
+  stopPerformanceMonitoring: vi.fn(),
+  recordStartupPhase: vi.fn(),
+  getAutomationEngine: vi.fn(async () => ({})),
+  shutdownAutomationEngine: vi.fn(async () => undefined),
+}))
+
+vi.mock('@/src/db/integrity', () => ({
+  startDatabaseIntegrityChecks: mocks.startDatabaseIntegrityChecks,
+  stopDatabaseIntegrityChecks: mocks.stopDatabaseIntegrityChecks,
+}))
+vi.mock('@/src/lib/serverPerformance', () => ({
+  startPerformanceMonitoring: mocks.startPerformanceMonitoring,
+  stopPerformanceMonitoring: mocks.stopPerformanceMonitoring,
+  recordStartupPhase: mocks.recordStartupPhase,
+}))
+vi.mock('@/src/automation', () => ({
+  getAutomationEngine: mocks.getAutomationEngine,
+  shutdownAutomationEngine: mocks.shutdownAutomationEngine,
 }))
 
 vi.mock('@/src/scheduler', () => ({
@@ -86,12 +108,16 @@ vi.mock('@/src/db/migrate', () => ({
 vi.mock('@/src/hardware/iptablesCheck', () => ({
   checkAndRepairIptables: mocks.checkAndRepairIptables,
 }))
+vi.mock('@/src/hardware/pumpStallGuard', () => ({
+  rehydrate: mocks.rehydratePumpStallGuard,
+}))
 
 const scheduler = {
   getJobs: vi.fn(() => [] as { id: string, type: string }[]),
   getNextInvocation: vi.fn<(id: string) => Date | null>(() => null),
 }
 const jobManager = { getScheduler: () => scheduler }
+const signalHandlers = new Map<string, () => Promise<void>>()
 
 beforeEach(() => {
   vi.resetModules()
@@ -100,6 +126,9 @@ beforeEach(() => {
     if (typeof m.mockReset === 'function') m.mockReset()
   }
   mocks.shutdownJobManager.mockResolvedValue(undefined)
+  mocks.stopDatabaseIntegrityChecks.mockResolvedValue(undefined)
+  mocks.getAutomationEngine.mockResolvedValue({})
+  mocks.shutdownAutomationEngine.mockResolvedValue(undefined)
   mocks.shutdownPiezoStreamServer.mockResolvedValue(undefined)
   mocks.shutdownMqttBridge.mockResolvedValue(undefined)
   mocks.shutdownHomeKit.mockResolvedValue(undefined)
@@ -115,11 +144,18 @@ beforeEach(() => {
   mocks.getJobManager.mockResolvedValue(jobManager)
   scheduler.getJobs.mockReturnValue([])
   scheduler.getNextInvocation.mockReturnValue(null)
+  signalHandlers.clear()
+  vi.spyOn(process, 'on').mockImplementation((event, listener) => {
+    signalHandlers.set(String(event), listener as () => Promise<void>)
+    return process
+  })
 })
 
 afterEach(() => {
   delete process.env.CI
   delete process.env.NEXT_RUNTIME
+  vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 async function fresh() {
@@ -142,7 +178,13 @@ describe('initializeScheduler — happy path', () => {
     expect(mocks.getJobManager).toHaveBeenCalled()
     expect(mocks.startDacServer).toHaveBeenCalled()
     expect(mocks.getDacMonitor).toHaveBeenCalled()
+    expect(mocks.rehydratePumpStallGuard).toHaveBeenCalled()
     expect(mocks.initializeKeepalives).toHaveBeenCalled()
+    // The guard must be re-armed before keepalives can consult shouldBlock.
+    expect(mocks.rehydratePumpStallGuard.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.initializeKeepalives.mock.invocationCallOrder[0] ?? 0)
+    expect(mocks.rehydratePumpStallGuard.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.getJobManager.mock.invocationCallOrder[0] ?? 0)
     expect(mocks.startPiezoStreamServer).toHaveBeenCalled()
     expect(mocks.startMqttBridge).toHaveBeenCalled()
     expect(mocks.startAutoOffWatcher).toHaveBeenCalled()
@@ -157,6 +199,39 @@ describe('initializeScheduler — happy path', () => {
     mocks.getJobManager.mockClear()
     await initializeScheduler()
     expect(mocks.getJobManager).not.toHaveBeenCalled()
+  })
+
+  it('coalesces concurrent initialization while hardware startup is pending', async () => {
+    let release!: () => void
+    mocks.startDacServer.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve(undefined)
+    }))
+    const { initializeScheduler } = await fresh()
+    const first = initializeScheduler()
+    const second = initializeScheduler()
+    await vi.waitFor(() => expect(mocks.startDacServer).toHaveBeenCalledOnce())
+    release()
+    await Promise.all([first, second])
+
+    expect(mocks.getJobManager).toHaveBeenCalledOnce()
+    expect(mocks.rehydratePumpStallGuard).toHaveBeenCalledOnce()
+    expect(mocks.startPiezoStreamServer).toHaveBeenCalledOnce()
+    expect(mocks.initializeKeepalives).toHaveBeenCalledOnce()
+  })
+
+  it('starts the remaining services without waiting for MQTT to connect', async () => {
+    let release!: () => void
+    mocks.startMqttBridge.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve(undefined)
+    }))
+    const { initializeScheduler } = await fresh()
+    await initializeScheduler()
+
+    expect(mocks.startAutoOffWatcher).toHaveBeenCalledOnce()
+    expect(mocks.startBonjourAnnouncement).toHaveBeenCalledOnce()
+    expect(mocks.startBiometricsRetention).toHaveBeenCalledOnce()
+    release()
+    await Promise.resolve()
   })
 
   it('skips upcoming-jobs log block when no jobs have a nextRun', async () => {
@@ -206,6 +281,19 @@ describe('initializeScheduler — error swallowing', () => {
     warnSpy.mockRestore()
   })
 
+  it('logs and swallows when pump stall guard rehydration throws', async () => {
+    mocks.rehydratePumpStallGuard.mockImplementationOnce((): never => {
+      throw new Error('bio db locked')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const { initializeScheduler } = await fresh()
+    await initializeScheduler()
+    expect(warnSpy).toHaveBeenCalledWith('[pumpStallGuard] rehydration failed:', 'bio db locked')
+    expect(mocks.initializeKeepalives).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
   it('logs and swallows when MQTT bridge rejects', async () => {
     mocks.startMqttBridge.mockRejectedValueOnce(new Error('mqtt down'))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -248,6 +336,80 @@ describe('initializeScheduler — error swallowing', () => {
 })
 
 describe('register()', () => {
+  it('waits for migrations before publishing hardware readiness', async () => {
+    let release!: () => void
+    mocks.runMigrations.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve(undefined)
+    }))
+    const { register, initializeScheduler } = await fresh()
+    const pending = register()
+    await vi.waitFor(() => expect(mocks.runMigrations).toHaveBeenCalledOnce())
+
+    expect(mocks.seedDefaultData).not.toHaveBeenCalled()
+    expect(mocks.startDacServer).not.toHaveBeenCalled()
+    expect(mocks.startPiezoStreamServer).not.toHaveBeenCalled()
+    release()
+    await pending
+    await initializeScheduler()
+    expect(mocks.startPiezoStreamServer).toHaveBeenCalledOnce()
+  })
+
+  it('allows HTTP and hardware readiness while the scheduler waits for the clock', async () => {
+    let release!: (manager: typeof jobManager) => void
+    mocks.getJobManager.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve
+    }))
+    const { register, initializeScheduler } = await fresh()
+    await register()
+
+    expect(mocks.startDacServer).toHaveBeenCalledOnce()
+    expect(mocks.startPiezoStreamServer).toHaveBeenCalledOnce()
+    expect(mocks.startDatabaseIntegrityChecks).toHaveBeenCalledOnce()
+    expect(mocks.initializeKeepalives).not.toHaveBeenCalled()
+    expect(mocks.recordStartupPhase).toHaveBeenCalledWith('http-initialization-ready')
+    release(jobManager)
+    await initializeScheduler()
+    expect(mocks.initializeKeepalives).toHaveBeenCalledOnce()
+  })
+
+  it('does not start background writers when shutdown occurs during scheduler initialization', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    let release!: (manager: typeof jobManager) => void
+    mocks.getJobManager.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve
+    }))
+    const { register, initializeScheduler } = await fresh()
+    await register()
+    const pending = initializeScheduler()
+    await signalHandlers.get('SIGTERM')?.()
+    release(jobManager)
+    await pending
+
+    expect(mocks.initializeKeepalives).not.toHaveBeenCalled()
+    expect(mocks.startMqttBridge).not.toHaveBeenCalled()
+    expect(mocks.startAutoOffWatcher).not.toHaveBeenCalled()
+    expect(mocks.stopDatabaseIntegrityChecks).toHaveBeenCalledOnce()
+    expect(mocks.shutdownJobManager).toHaveBeenCalledOnce()
+  })
+
+  it('closes a late MQTT connection after shutdown has already run', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    let release!: () => void
+    mocks.startMqttBridge.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve(undefined)
+    }))
+    const { register, initializeScheduler } = await fresh()
+    await register()
+    await initializeScheduler()
+    await signalHandlers.get('SIGTERM')?.()
+    expect(mocks.shutdownMqttBridge).toHaveBeenCalledOnce()
+    release()
+    await Promise.resolve()
+    expect(mocks.shutdownMqttBridge).toHaveBeenCalledTimes(2)
+  })
+
   it('skips body entirely when NEXT_RUNTIME=edge', async () => {
     process.env.NEXT_RUNTIME = 'edge'
     const { register } = await fresh()

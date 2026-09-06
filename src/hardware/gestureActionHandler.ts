@@ -2,6 +2,7 @@ import type { HardwareClient } from './client'
 import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
 import { getAutomationEngineIfRunning } from '@/src/automation'
+import { shouldBlock as pumpStallShouldBlock } from './pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 
 // Re-export for callers that need to build deps
@@ -102,6 +103,10 @@ export class GestureActionHandler {
     const newTemp = Math.min(MAX_TEMP, Math.max(MIN_TEMP, currentTemp + delta))
 
     await withSideLock(event.side, async () => {
+      if (pumpStallShouldBlock(event.side)) {
+        console.warn(`[gestureActionHandler] skipped setTemperature: pump stall guard blocks ${event.side}`)
+        return
+      }
       const client = this.deps.newHardwareClient(this.socketPath)
       try {
         getAutomationEngineIfRunning()?.registerManualOverride(event.side)
@@ -168,6 +173,10 @@ export class GestureActionHandler {
         // fallback in DacHardwareClient.setPower.
         const target = state?.targetTemperature ?? TEMP_NEUTRAL
         await withSideLock(event.side, async () => {
+          if (nextPowered && pumpStallShouldBlock(event.side)) {
+            console.warn(`[gestureActionHandler] skipped power-on: pump stall guard blocks ${event.side}`)
+            return
+          }
           const client = this.deps.newHardwareClient(this.socketPath)
           try {
             getAutomationEngineIfRunning()?.registerManualOverride(event.side)

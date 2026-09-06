@@ -2,11 +2,16 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { GestureActionDeps } from '../gestureActionHandler'
 import type { GestureEvent } from '../dacMonitor'
 import type { HardwareClient } from '../client'
+import { TEMP_NEUTRAL } from '../types'
 
 const registerManualOverride = vi.fn()
+const pumpStallShouldBlock = vi.fn<(side: 'left' | 'right') => boolean>(() => false)
 
 vi.mock('@/src/automation', () => ({
   getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+}))
+vi.mock('../pumpStallGuard', () => ({
+  shouldBlock: (side: 'left' | 'right') => pumpStallShouldBlock(side),
 }))
 
 const { GestureActionHandler } = await import('../gestureActionHandler')
@@ -56,6 +61,7 @@ describe('GestureActionHandler', () => {
   afterEach(() => {
     vi.clearAllTimers()
     registerManualOverride.mockClear()
+    pumpStallShouldBlock.mockReset().mockReturnValue(false)
     vi.useRealTimers()
   })
 
@@ -68,6 +74,16 @@ describe('GestureActionHandler', () => {
     expect((client.setTemperature as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
     expect((client.clearAlarm as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
     expect((client.setPower as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
+  })
+
+  test('ignores an unrecognised actionType defensively', async () => {
+    const { deps, client } = makeDeps({ actionType: 'future-action' })
+
+    await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+    expect(deps.findDeviceState).not.toHaveBeenCalled()
+    expect(deps.newHardwareClient).not.toHaveBeenCalled()
+    expect(client.connect).not.toHaveBeenCalled()
   })
 
   describe('temperature action', () => {
@@ -117,6 +133,7 @@ describe('GestureActionHandler', () => {
 
       expect(client.setTemperature).toHaveBeenCalledWith('left', 75)
       expect(registerManualOverride).toHaveBeenCalledWith('left')
+      expect(client.disconnect).toHaveBeenCalledOnce()
     })
 
     test('decrements temperature', async () => {
@@ -157,6 +174,16 @@ describe('GestureActionHandler', () => {
 
       expect(client.setTemperature).toHaveBeenCalledWith('left', 77)
     })
+
+    test('skips a misconfigured row with no temperature direction', async () => {
+      const gesture = { actionType: 'temperature', temperatureChange: null, temperatureAmount: 5 }
+      const { deps, client } = makeDeps(gesture, { targetTemperature: 70 })
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+      expect(deps.newHardwareClient).not.toHaveBeenCalled()
+      expect(client.setTemperature).not.toHaveBeenCalled()
+    })
   })
 
   describe('alarm action — active alarm', () => {
@@ -168,6 +195,7 @@ describe('GestureActionHandler', () => {
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
       expect(client.clearAlarm).toHaveBeenCalledWith('left')
+      expect(client.disconnect).toHaveBeenCalledOnce()
     })
 
     test('snoozes active alarm — clears immediately', async () => {
@@ -197,12 +225,54 @@ describe('GestureActionHandler', () => {
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
 
-      await vi.advanceTimersByTimeAsync(300_000)
+      await vi.advanceTimersByTimeAsync(299_999)
+      expect(snoozeClient.connect).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await Promise.resolve()
 
       expect(snoozeClient.setAlarm).toHaveBeenCalledWith('left', expect.objectContaining({
         vibrationIntensity: 50,
         vibrationPattern: 'rise',
+        duration: 180,
       }))
+      expect(snoozeClient.disconnect).toHaveBeenCalledOnce()
+    })
+
+    test('does nothing for an active alarm with no configured behavior', async () => {
+      vi.useFakeTimers()
+      const gesture = { actionType: 'alarm', alarmBehavior: null }
+      const { deps, client } = makeDeps(gesture, { isAlarmVibrating: true })
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
+
+      expect(client.connect).toHaveBeenCalledOnce()
+      expect(client.clearAlarm).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+      expect(client.disconnect).toHaveBeenCalledOnce()
+    })
+
+    test('clamps a huge snooze to the signed 32-bit timer ceiling', async () => {
+      vi.useFakeTimers()
+      const maxSeconds = Math.floor((2 ** 31 - 1) / 1000)
+      const restart = makeMockClient()
+      const deps: GestureActionDeps = {
+        findGestureConfig: vi.fn().mockResolvedValue({
+          actionType: 'alarm',
+          alarmBehavior: 'snooze',
+          alarmSnoozeDuration: Number.MAX_SAFE_INTEGER,
+        }),
+        findDeviceState: vi.fn().mockResolvedValue({ isAlarmVibrating: true }),
+        newHardwareClient: vi.fn()
+          .mockReturnValueOnce(makeMockClient())
+          .mockReturnValueOnce(restart),
+      }
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
+      await vi.advanceTimersByTimeAsync(maxSeconds * 1000 - 1)
+      expect(restart.connect).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await Promise.resolve()
+      expect(restart.setAlarm).toHaveBeenCalledOnce()
     })
   })
 
@@ -254,6 +324,17 @@ describe('GestureActionHandler', () => {
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
       expect(client.setPower).toHaveBeenCalledWith('left', true, 82.5)
+    })
+
+    test('treats a missing state row as inactive and powered off', async () => {
+      const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
+      const { deps, client } = makeDeps(gesture, null)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
+
+      expect(client.clearAlarm).not.toHaveBeenCalled()
+      expect(client.setPower).toHaveBeenCalledWith('right', true, TEMP_NEUTRAL)
+      expect(client.disconnect).toHaveBeenCalledOnce()
     })
 
     test('toggles power off when pod is on (alarmInactiveBehavior=power)', async () => {
@@ -332,8 +413,121 @@ describe('GestureActionHandler', () => {
     })
     const { deps } = makeDeps(gesture, { targetTemperature: 70 }, client)
 
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     await expect(
       new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
     ).resolves.not.toThrow()
+    expect(error).toHaveBeenCalledWith(
+      'GestureActionHandler: error executing action for left doubleTap:',
+      'hardware failure',
+    )
+    expect(client.disconnect).toHaveBeenCalledOnce()
+    error.mockRestore()
+  })
+
+  describe('pump stall guard', () => {
+    test('skips a temperature gesture while the guard blocks the side', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      pumpStallShouldBlock.mockReturnValue(true)
+      const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 5 }
+      const { deps, client } = makeDeps(gesture, { targetTemperature: 70 })
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+      expect(deps.newHardwareClient).not.toHaveBeenCalled()
+      expect(client.setTemperature).not.toHaveBeenCalled()
+      expect(registerManualOverride).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped setTemperature: pump stall guard blocks left')
+      warn.mockRestore()
+    })
+
+    test('skips a power-on toggle while the guard blocks the side', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      pumpStallShouldBlock.mockReturnValue(true)
+      const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
+      const state = { isAlarmVibrating: false, isPowered: false, targetTemperature: 70 }
+      const { deps, client } = makeDeps(gesture, state)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
+
+      expect(deps.newHardwareClient).not.toHaveBeenCalled()
+      expect(client.setPower).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped power-on: pump stall guard blocks right')
+      warn.mockRestore()
+    })
+
+    test('still allows a power-off toggle while the guard blocks the side', async () => {
+      pumpStallShouldBlock.mockReturnValue(true)
+      const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
+      const state = { isAlarmVibrating: false, isPowered: true, targetTemperature: 72 }
+      const { deps, client } = makeDeps(gesture, state)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
+
+      expect(client.setPower).toHaveBeenCalledWith('right', false, undefined)
+    })
+
+    test('blocks a temperature gesture whose trip lands while queued on the side lock', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let release: () => void = () => {}
+      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+        release = resolve
+      }))
+      await Promise.resolve()
+
+      try {
+        const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 5 }
+        const { deps, client } = makeDeps(gesture, { targetTemperature: 70 })
+        const pending = new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+        // The gesture queues behind the held lock while the guard is still
+        // healthy — the trip below lands strictly after.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0)
+        })
+        pumpStallShouldBlock.mockReturnValue(true)
+        release()
+        await holder
+        await pending
+
+        expect(client.setTemperature).not.toHaveBeenCalled()
+        expect(registerManualOverride).not.toHaveBeenCalled()
+        expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped setTemperature: pump stall guard blocks left')
+      }
+      finally {
+        release()
+        warn.mockRestore()
+      }
+    })
+
+    test('blocks a power-on toggle whose trip lands while queued on the side lock', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let release: () => void = () => {}
+      const holder = withSideLock('right', async () => new Promise<void>((resolve) => {
+        release = resolve
+      }))
+      await Promise.resolve()
+
+      try {
+        const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
+        const state = { isAlarmVibrating: false, isPowered: false, targetTemperature: 70 }
+        const { deps, client } = makeDeps(gesture, state)
+        const pending = new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0)
+        })
+        pumpStallShouldBlock.mockReturnValue(true)
+        release()
+        await holder
+        await pending
+
+        expect(client.setPower).not.toHaveBeenCalled()
+        expect(registerManualOverride).not.toHaveBeenCalled()
+        expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped power-on: pump stall guard blocks right')
+      }
+      finally {
+        release()
+        warn.mockRestore()
+      }
+    })
   })
 })

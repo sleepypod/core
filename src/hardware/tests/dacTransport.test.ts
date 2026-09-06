@@ -10,8 +10,9 @@
  * 3. Single command channel: sequential execution, no interleaving
  * 4. Reconnection: server recreates on timeout, accepts new connections
  */
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { Socket } from 'net'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { Server, Socket } from 'net'
+import { getStatusRevision } from '../statusRevision'
 import { promises as fs } from 'fs'
 import {
   connectDac,
@@ -90,16 +91,23 @@ describe('dacTransport', () => {
   })
 
   afterEach(async () => {
-    mockFranken?.destroy()
-    mockFranken = undefined
-    await disconnectDac()
     try {
-      await fs.unlink(socketPath)
+      mockFranken?.destroy()
+      await disconnectDac()
     }
-    catch { /* ignore */ }
+    finally {
+      mockFranken = undefined
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+      try {
+        await fs.unlink(socketPath)
+      }
+      catch { /* ignore */ }
+    }
   })
 
   test('creates socket server and accepts frankenfirmware connection', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     // Start connectDac in the background (it blocks waiting for connection)
     const connectPromise = connectDac(socketPath)
 
@@ -110,6 +118,13 @@ describe('dacTransport', () => {
 
     await connectPromise
     expect(isDacConnected()).toBe(true)
+    expect(log.mock.calls.map(([message]) => message)).toEqual(expect.arrayContaining([
+      `[DAC] listening on ${socketPath}`,
+      '[DAC] waiting for frankenfirmware...',
+      '[DAC] frankenfirmware connected',
+      '[DAC] connected',
+    ]))
+    log.mockRestore()
   })
 
   test('sends command and receives response', async () => {
@@ -126,6 +141,31 @@ describe('dacTransport', () => {
     expect(response).toContain('sensorLabel=H00-test')
   })
 
+  test('invalidates snapshots for writes but keeps read-only commands reusable', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    handleCommands(mockFranken)
+    await connecting
+    const initial = getStatusRevision()
+    await sendCommand('14')
+    await sendCommand('0')
+    expect(getStatusRevision()).toBe(initial)
+
+    const write = sendCommand('11', '-24')
+    expect(getStatusRevision()).toBeNull()
+    await write
+    expect(getStatusRevision()).not.toBeNull()
+    expect(getStatusRevision()).not.toBe(initial)
+    const written = getStatusRevision()
+    // No-argument commands such as priming also invalidate the cache.
+    await sendCommand('13')
+    expect(getStatusRevision()).not.toBe(written)
+    const beforeDisconnect = getStatusRevision()
+    await disconnectDac()
+    expect(getStatusRevision()).not.toBe(beforeDisconnect)
+  })
+
   test('sends command with argument', async () => {
     const connectPromise = connectDac(socketPath)
 
@@ -137,6 +177,31 @@ describe('dacTransport', () => {
 
     const response = await sendCommand('11', '-24')
     expect(response).toContain('SET: ok')
+  })
+
+  test('formats undefined, empty, and non-empty arguments on the wire', async () => {
+    const connectPromise = connectDac(socketPath)
+    await vi.waitFor(() => fs.access(socketPath), { timeout: 5_000, interval: 5 })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    const requests: string[] = []
+    let buffer = ''
+    mockFranken.on('data', (chunk) => {
+      buffer += chunk.toString('utf-8')
+      while (buffer.includes('\n\n')) {
+        const index = buffer.indexOf('\n\n')
+        const request = buffer.substring(0, index)
+        buffer = buffer.substring(index + 2)
+        requests.push(request)
+        mockFranken?.write('OK\n\n')
+      }
+    })
+    await connectPromise
+
+    await sendCommand('0')
+    await sendCommand('0', '')
+    await sendCommand('11', '50')
+
+    expect(requests).toEqual(['0', '0', '11\n50'])
   })
 
   test('executes commands sequentially (no interleaving)', async () => {
@@ -225,7 +290,23 @@ describe('dacTransport', () => {
 
       await connectPromise
 
-      await expect(sendCommand('14')).rejects.toBeInstanceOf(MessageResponseTimeoutError)
+      await expect(sendCommand('14')).rejects.toMatchObject({
+        name: 'MessageResponseTimeoutError',
+        message: 'Timed out after 150ms waiting for firmware response',
+      })
+    })
+
+    test('failed writes invalidate old observations without leaving reads permanently blocked', async () => {
+      const connecting = connectDac(socketPath)
+      await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      await connecting
+      const initial = getStatusRevision()
+      const write = sendCommand('11', '-24')
+      expect(getStatusRevision()).toBeNull()
+      await expect(write).rejects.toBeInstanceOf(MessageResponseTimeoutError)
+      expect(getStatusRevision()).not.toBeNull()
+      expect(getStatusRevision()).not.toBe(initial)
     })
 
     test('queue drains after timeout — next command succeeds (no deadlock)', async () => {
@@ -346,6 +427,58 @@ describe('dacTransport', () => {
   })
 
   describe('connectDac re-entry', () => {
+    test('shares the listener, pending connection, and command queue across module instances', async () => {
+      vi.resetModules()
+      const duplicate = await import('../dacTransport')
+      expect(duplicate.connectDac).not.toBe(connectDac)
+      const listen = vi.spyOn(Server.prototype, 'listen')
+
+      const firstConnection = connectDac(socketPath)
+      const secondConnection = duplicate.connectDac(socketPath)
+      await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      const franken = mockFranken
+      const requests: string[] = []
+      let buffer = ''
+      franken.on('data', (chunk) => {
+        buffer += chunk.toString('utf-8')
+        while (buffer.includes('\n\n')) {
+          const index = buffer.indexOf('\n\n')
+          requests.push(buffer.substring(0, index))
+          buffer = buffer.substring(index + 2)
+          // Hold the first response so a competing queue would send the
+          // second command while the first is still waiting for its reply.
+          if (requests.length > 1) franken.write('SECOND\n\n')
+        }
+      })
+      await Promise.all([firstConnection, secondConnection])
+      expect(listen).toHaveBeenCalledOnce()
+      expect(isDacConnected()).toBe(true)
+      expect(duplicate.isDacConnected()).toBe(true)
+      await duplicate.connectDac(socketPath)
+      expect(listen).toHaveBeenCalledOnce()
+
+      const firstWrite = sendCommand('11', '50')
+      await vi.waitFor(() => expect(requests).toEqual(['11\n50']), { interval: 5 })
+      const secondWrite = duplicate.sendCommand('12', '-30')
+      try {
+        // Give socket writes time to arrive while the first response is held.
+        await new Promise(resolve => setTimeout(resolve, 50))
+        expect(requests).toEqual(['11\n50'])
+      }
+      finally {
+        franken.write('FIRST\n\n')
+        await expect(firstWrite).resolves.toBe('FIRST')
+        await expect(secondWrite).resolves.toBe('SECOND')
+      }
+      expect(requests).toEqual(['11\n50', '12\n-30'])
+
+      await duplicate.disconnectDac()
+      expect(duplicate.isDacConnected()).toBe(false)
+      expect(isDacConnected()).toBe(false)
+      await expect(sendCommand('14')).rejects.toThrow('not connected')
+    })
+
     test('returns immediately when already connected', async () => {
       const connectPromise = connectDac(socketPath)
       await new Promise(r => setTimeout(r, 200))
@@ -422,6 +555,7 @@ describe('dacTransport', () => {
       process.env.DAC_RECONNECT_DELAY_MS = '10'
       process.env.DAC_RECONNECT_MAX_ATTEMPTS = '5'
 
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const connectPromise = connectDac(socketPath)
 
       // First attempt: no frankenfirmware shows up before the 100ms timeout,
@@ -434,6 +568,9 @@ describe('dacTransport', () => {
 
       await connectPromise
       expect(isDacConnected()).toBe(true)
+      expect(warning).toHaveBeenCalledWith('[DAC] restarting after 0.1s timeout')
+      expect(warning).toHaveBeenCalledWith('[DAC] reconnect attempt 1 in 10ms')
+      warning.mockRestore()
     })
 
     test('gives up with ConnectionRetriesExhaustedError after max attempts', async () => {
@@ -443,11 +580,15 @@ describe('dacTransport', () => {
 
       // Never connect. All attempts must time out and the loop must exit
       // with ConnectionRetriesExhaustedError carrying the attempt count.
-      await expect(connectDac(socketPath))
-        .rejects
-        .toBeInstanceOf(ConnectionRetriesExhaustedError)
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await expect(connectDac(socketPath)).rejects.toMatchObject({
+        name: 'ConnectionRetriesExhaustedError',
+        message: 'Gave up connecting to frankenfirmware after 3 attempts',
+      })
 
       expect(isDacConnected()).toBe(false)
+      expect(error).toHaveBeenCalledWith('[DAC] giving up after 3 connection timeouts')
+      error.mockRestore()
     })
   })
 })

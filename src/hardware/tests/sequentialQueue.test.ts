@@ -164,5 +164,6 @@ describe('SequentialQueue', () => {
     })
 
     await expect(promise).rejects.toThrow('Immediate error')
+    expect(queue.isPending()).toBe(false)
   })
 })

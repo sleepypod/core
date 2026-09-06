@@ -19,16 +19,16 @@ const schedulerMock = vi.hoisted(() => ({
 }))
 
 const helpersMock = vi.hoisted(() => ({
-  withHardwareClient: vi.fn(async (cb: (client: unknown) => Promise<unknown>) => {
-    const client = {
-      setPower: vi.fn(async () => undefined),
-    }
-    return cb(client)
-  }),
+  client: { setPower: vi.fn(async () => undefined) },
+  withHardwareClient: vi.fn(),
 }))
 
 const broadcastMock = vi.hoisted(() => ({
   broadcastMutationStatus: vi.fn(),
+}))
+
+const pumpStallMock = vi.hoisted(() => ({
+  shouldBlock: vi.fn<(side: 'left' | 'right') => boolean>(() => false),
 }))
 
 const timeUtilsMock = vi.hoisted(() => ({
@@ -82,12 +82,28 @@ const dbMock = vi.hoisted(() => {
       returning.mockResolvedValue(id === null ? [] : [{ id }])
     },
     settingsRow, txExisting,
-    txUpdateRun, transactionFn: transaction,
+    values, updateSet, updateWhere, txUpdateSet, txUpdateWhere, txUpdateRun, transactionFn: transaction,
   }
 })
 
 vi.mock('@/src/scheduler', () => schedulerMock)
-vi.mock('@/src/server/helpers', () => helpersMock)
+vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
+vi.mock('@/src/server/helpers', async () => {
+  const { TRPCError } = await import('@trpc/server')
+  return {
+    ...helpersMock,
+    // Mirrors the real helper but consults this file's pumpStallMock so
+    // tests keep driving the guard through shouldBlock.
+    assertPumpStallNotBlocked: (side: 'left' | 'right') => {
+      if (pumpStallMock.shouldBlock(side)) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Pump stall protection active — re-enable the side first',
+        })
+      }
+    },
+  }
+})
 vi.mock('@/src/streaming/broadcastMutationStatus', () => broadcastMock)
 vi.mock('@/src/scheduler/timeUtils', () => timeUtilsMock)
 vi.mock('@/src/db', () => ({
@@ -107,7 +123,10 @@ beforeEach(() => {
   jobManagerMock.cancelRunOnceSession.mockReset()
   jobManagerMock.scheduleRunOnceSession.mockReset()
   helpersMock.withHardwareClient.mockClear()
+  helpersMock.withHardwareClient.mockImplementation(async (cb: (client: unknown) => Promise<unknown>) => cb(helpersMock.client))
+  helpersMock.client.setPower.mockReset().mockResolvedValue(undefined)
   broadcastMock.broadcastMutationStatus.mockReset()
+  pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
   timeUtilsMock.timeToDate.mockReset().mockImplementation(
     (_t, _tz, now) => new Date(now.getTime() + 60 * 60 * 1000),
   )
@@ -115,13 +134,60 @@ beforeEach(() => {
   dbMock.insert.mockClear()
   dbMock.update.mockClear()
   dbMock.transactionFn.mockClear()
+  dbMock.values.mockClear()
+  dbMock.updateSet.mockClear()
+  dbMock.updateWhere.mockClear()
+  dbMock.txUpdateSet.mockClear()
+  dbMock.txUpdateWhere.mockClear()
   dbMock.txExisting.length = 0
   dbMock.setNextInsertId(42)
   dbMock.settingsRow.timezone = 'America/Los_Angeles'
 })
 
 describe('runOnce.start', () => {
+  it('throws PRECONDITION_FAILED before touching sessions while pump stall guard blocks the side', async () => {
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toThrow(/Pump stall protection active/)
+
+    // Fails fast: the existing session is not cancelled, no hardware write,
+    // no session row inserted.
+    expect(dbMock.transactionFn).not.toHaveBeenCalled()
+    expect(jobManagerMock.cancelRunOnceSession).not.toHaveBeenCalled()
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(dbMock.insert).not.toHaveBeenCalled()
+  })
+
+  it('re-checks the guard at the hardware write and blocks a trip that lands mid-flight', async () => {
+    // Entry check passes, then the guard trips during the awaited session
+    // cancellation / settings lookup — the write-time re-check must stop the
+    // power-on and the session insert.
+    pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Pump stall protection active — re-enable the side first',
+    })
+
+    expect(dbMock.transactionFn).toHaveBeenCalled()
+    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
+    expect(broadcastMock.broadcastMutationStatus).not.toHaveBeenCalled()
+    expect(dbMock.insert).not.toHaveBeenCalled()
+    expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+  })
+
   it('powers on the side with the first set-point temperature, persists session, and schedules the rest', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const expiresAt = new Date(Date.now() + 3_600_123)
+    timeUtilsMock.timeToDate.mockReturnValueOnce(expiresAt)
     const result = await caller.start({
       side: 'left',
       setPoints: [
@@ -133,6 +199,8 @@ describe('runOnce.start', () => {
 
     // Hardware was invoked with the first set-point temp
     expect(helpersMock.withHardwareClient).toHaveBeenCalledTimes(1)
+    expect(helpersMock.withHardwareClient.mock.calls[0]?.[1]).toBe('Failed to start run-once session')
+    expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 70)
 
     // Mutation broadcast for live UI
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', expect.objectContaining({
@@ -149,8 +217,21 @@ describe('runOnce.start', () => {
     expect(args[3]).toBe('07:00')
     expect(args[4]).toBe('America/Los_Angeles')
 
+    expect(dbMock.values).toHaveBeenCalledWith({
+      side: 'left',
+      setPoints: JSON.stringify([
+        { time: '23:00', temperature: 70 },
+        { time: '03:00', temperature: 65 },
+      ]),
+      wakeTime: '07:00',
+      expiresAt,
+      status: 'active',
+    })
+
     expect(result.sessionId).toBe(42)
-    expect(typeof result.expiresAt).toBe('number')
+    expect(result.expiresAt).toBe(Math.floor(expiresAt.getTime() / 1000))
+    expect(log).toHaveBeenCalledWith('Run-once session 42 started for left until 07:00')
+    log.mockRestore()
   })
 
   it('falls back to the default timezone when settings row is missing', async () => {
@@ -185,9 +266,39 @@ describe('runOnce.start', () => {
     // Hardware must NOT be touched if validation rejects
     expect(helpersMock.withHardwareClient).not.toHaveBeenCalled()
     expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+    // And the existing active session must survive a rejected start —
+    // validation runs before any cancellation.
+    expect(dbMock.transactionFn).not.toHaveBeenCalled()
+    expect(jobManagerMock.cancelRunOnceSession).not.toHaveBeenCalled()
   })
 
-  it('throws when DB insert returns no row (e.g. constraint violation)', async () => {
+  it('accepts a session exactly 14 hours long', async () => {
+    timeUtilsMock.timeToDate.mockImplementation(
+      (_t, _tz, now) => new Date(now.getTime() + 14 * 60 * 60 * 1000),
+    )
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).resolves.toMatchObject({ sessionId: 42 })
+    expect(helpersMock.client.setPower).toHaveBeenCalledOnce()
+  })
+
+  it('reports the rounded over-limit duration in hours', async () => {
+    timeUtilsMock.timeToDate.mockImplementation(
+      (_t, _tz, now) => new Date(now.getTime() + 15.4 * 60 * 60 * 1000),
+    )
+    await expect(caller.start({
+      side: 'right',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Session too long (15h). Wake time may have already passed.',
+    })
+  })
+
+  it('throws when DB insert returns no row and powers the side back off', async () => {
     dbMock.setNextInsertId(null)
 
     await expect(caller.start({
@@ -195,6 +306,52 @@ describe('runOnce.start', () => {
       setPoints: [{ time: '23:00', temperature: 70 }],
       wakeTime: '07:00',
     })).rejects.toThrow(/Failed to create run-once session/)
+
+    // The side was already energized — a failed insert must not leave it
+    // running with no session to drive or expire it.
+    expect(helpersMock.client.setPower).toHaveBeenNthCalledWith(1, 'left', true, 70)
+    expect(helpersMock.client.setPower).toHaveBeenNthCalledWith(2, 'left', false)
+    expect(broadcastMock.broadcastMutationStatus).toHaveBeenLastCalledWith('left', { targetLevel: 0 })
+  })
+
+  it('powers the side back off when the session insert throws', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    dbMock.insert.mockImplementationOnce(() => {
+      throw new Error('db down')
+    })
+
+    await expect(caller.start({
+      side: 'right',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to create run-once session',
+    })
+
+    expect(helpersMock.client.setPower).toHaveBeenNthCalledWith(2, 'right', false)
+    expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('surfaces the insert failure even when the compensating power-off also fails', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    dbMock.setNextInsertId(null)
+    helpersMock.client.setPower
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('off failed'))
+
+    await expect(caller.start({
+      side: 'left',
+      setPoints: [{ time: '23:00', temperature: 70 }],
+      wakeTime: '07:00',
+    })).rejects.toThrow(/Failed to create run-once session/)
+
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to power off left after run-once start failure'),
+      expect.anything(),
+    )
+    errSpy.mockRestore()
   })
 
   it('cancels any prior active session for the same side before starting', async () => {
@@ -209,6 +366,8 @@ describe('runOnce.start', () => {
 
     // Both prior rows were updated to cancelled (one .run() per row)
     expect(dbMock.txUpdateRun).toHaveBeenCalledTimes(2)
+    expect(dbMock.txUpdateSet).toHaveBeenNthCalledWith(1, { status: 'cancelled' })
+    expect(dbMock.txUpdateSet).toHaveBeenNthCalledWith(2, { status: 'cancelled' })
     expect(jobManagerMock.cancelRunOnceSession).toHaveBeenCalledWith('left')
   })
 })
@@ -244,6 +403,10 @@ describe('runOnce.getActive', () => {
     expect(result?.id).toBe(99)
     expect(result?.setPoints).toEqual([{ time: '02:00', temperature: 67 }])
     expect(result?.startedAt).toBe(Math.floor(1700000000000 / 1000))
+    expect(result?.expiresAt).toBe(Math.floor(1700100000000 / 1000))
+    expect(result).toMatchObject({
+      side: 'left', wakeTime: '07:00', status: 'active',
+    })
   })
 
   it('returns empty setPoints when persisted JSON is malformed', async () => {
@@ -268,11 +431,34 @@ describe('runOnce.getActive', () => {
 
 describe('runOnce.cancel', () => {
   it('marks active session cancelled, cancels scheduler jobs, broadcasts', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const result = await caller.cancel({ side: 'right' })
 
     expect(dbMock.update).toHaveBeenCalledTimes(1)
+    expect(dbMock.updateSet).toHaveBeenCalledWith({ status: 'cancelled' })
     expect(jobManagerMock.cancelRunOnceSession).toHaveBeenCalledWith('right')
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('right')
     expect(result).toEqual({ success: true })
+    expect(log).toHaveBeenCalledWith('Run-once session cancelled for right')
+    log.mockRestore()
+  })
+})
+
+describe('runOnce insertion rollback mutation regressions', () => {
+  it.each(['left', 'right'] as const)('powers %s back off when the session insert rejects', async (side) => {
+    const failure = new Error('disk full')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    dbMock.insert.mockImplementationOnce(() => {
+      throw failure
+    })
+    try {
+      await expect(caller.start({ side, setPoints: [{ time: '23:00', temperature: 70 }], wakeTime: '07:00' })).rejects.toMatchObject({
+        code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create run-once session',
+      })
+      expect(helpersMock.client.setPower.mock.calls).toEqual([[side, true, 70], [side, false]])
+      expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+      expect(error).toHaveBeenCalledWith('Run-once session insert failed, powering side back off:', failure)
+    }
+    finally { error.mockRestore() }
   })
 })

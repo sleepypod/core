@@ -14,6 +14,8 @@ import { db } from '@/src/db'
 import { deviceState, sideSettings } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
+import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
+import { withSideLock } from '@/src/hardware/sideLock'
 import type { Side } from '@/src/hardware/types'
 
 const KEEPALIVE_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6 hours in milliseconds
@@ -32,42 +34,51 @@ export function startKeepalive(side: Side): void {
 
   const tick = async () => {
     try {
-      // Read current device state to get target temperature
-      const [state] = db
-        .select()
-        .from(deviceState)
-        .where(eq(deviceState.side, side))
-        .limit(1)
-        .all()
+      // The whole tick runs under the side lock so the isPowered and
+      // stall-guard checks stay valid at the write — a power-off job or
+      // guard trip serialized ahead of this reissue is observed, not raced.
+      await withSideLock(side, async () => {
+        // Read current device state to get target temperature
+        const [state] = db
+          .select()
+          .from(deviceState)
+          .where(eq(deviceState.side, side))
+          .limit(1)
+          .all()
 
-      if (!state || !state.isPowered || state.targetTemperature == null) {
-        // Side is off or has no target — nothing to keepalive
-        return
-      }
+        if (!state || !state.isPowered || state.targetTemperature == null) {
+          // Side is off or has no target — nothing to keepalive
+          return
+        }
 
-      // Skip silently while the pump stall guard is holding the side off.
-      // Re-issuing the user's last setpoint here would defeat the cutoff.
-      if (pumpStallShouldBlock(side)) {
-        return
-      }
+        // Skip while the pump stall guard is holding the side off.
+        // Re-issuing the user's last setpoint here would defeat the cutoff.
+        // Warn — this is the only trace: with the keepalive withheld, the
+        // firmware duration timer is never refreshed and an alwaysOn
+        // session lapses when it expires.
+        if (pumpStallShouldBlock(side)) {
+          console.warn(`[keepalive] ${side} skipped — pump stall guard active (alert ${getPumpStallNotice(side)?.alertId ?? 'unknown'}); session will lapse on the firmware duration timer`)
+          return
+        }
 
-      // Verify alwaysOn is still enabled (may have been toggled off between ticks)
-      const [settings] = db
-        .select()
-        .from(sideSettings)
-        .where(eq(sideSettings.side, side))
-        .limit(1)
-        .all()
+        // Verify alwaysOn is still enabled (may have been toggled off between ticks)
+        const [settings] = db
+          .select()
+          .from(sideSettings)
+          .where(eq(sideSettings.side, side))
+          .limit(1)
+          .all()
 
-      if (!settings?.alwaysOn) {
-        stopKeepalive(side)
-        return
-      }
+        if (!settings?.alwaysOn) {
+          stopKeepalive(side)
+          return
+        }
 
-      const client = getSharedHardwareClient()
-      await client.connect()
-      await client.setTemperature(side, state.targetTemperature)
-      console.log(`[keepalive] Re-sent temperature ${state.targetTemperature}°F for ${side}`)
+        const client = getSharedHardwareClient()
+        await client.connect()
+        await client.setTemperature(side, state.targetTemperature)
+        console.log(`[keepalive] Re-sent temperature ${state.targetTemperature}°F for ${side}`)
+      })
     }
     catch (error) {
       console.error(

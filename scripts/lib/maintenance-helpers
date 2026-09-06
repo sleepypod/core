@@ -1,0 +1,10 @@
+# Install on both fresh and OTA updates; no changes to sleepypod.service needed
+# for old installations, whose default sp-maintenance invocation is now cheap.
+install_maintenance_timer() {
+  local unit
+  for unit in sleepypod-maintenance.service sleepypod-maintenance.timer; do
+    install -m 0644 "$INSTALL_DIR/scripts/systemd/$unit" "/etc/systemd/system/$unit"
+  done
+  systemctl daemon-reload
+  systemctl enable --now sleepypod-maintenance.timer
+}

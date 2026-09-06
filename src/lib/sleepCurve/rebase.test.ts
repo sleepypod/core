@@ -8,11 +8,25 @@ describe('rebaseSetPoints', () => {
       { localId: -2, time: '04:00', temperature: 80 },
       { localId: -3, time: '23:45', temperature: 80 },
     ]
-    expect(rebaseSetPoints(points, '00:00', '23:45', '00:00', '23:45')).toEqual(points)
+    const result = rebaseSetPoints(points, '00:00', '23:45', '00:00', '23:45')
+    expect(result).toBe(points)
   })
 
   it('returns empty array unchanged', () => {
-    expect(rebaseSetPoints([], '22:00', '07:00', '23:00', '06:00')).toEqual([])
+    const points: Array<{ time: string }> = []
+    expect(rebaseSetPoints(points, '22:00', '07:00', '23:00', '06:00')).toBe(points)
+  })
+
+  it('rebases when only one endpoint differs', () => {
+    const point = [{ time: '02:00', temperature: 70 }]
+
+    const changedWake = rebaseSetPoints(point, '22:00', '06:00', '22:00', '08:00')
+    expect(changedWake).not.toBe(point)
+    expect(changedWake[0].time).toBe('03:00')
+
+    const changedBedtime = rebaseSetPoints(point, '22:00', '06:00', '23:00', '06:00')
+    expect(changedBedtime).not.toBe(point)
+    expect(changedBedtime[0].time).toBe('02:30')
   })
 
   it('scales points proportionally when window shrinks', () => {

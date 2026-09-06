@@ -35,10 +35,27 @@ interface WindowAccumulator {
   spreadSum: number
   zoneSums: [number, number, number] | null
   peakCounts: [number, number, number]
+  // Per-sample `status` histogram for this side/window. Only the NATS capSense
+  // dialect carries a status; legacy .RAW frames leave this empty.
+  statusCounts: Record<string, number>
+  // Whether any sample in the window was non-"good". Drives whether the
+  // histogram is persisted at all — an all-"good" (or statusless) window keeps
+  // statusCounts null so the common case costs nothing.
+  sawNonGood: boolean
 }
 
-const windows: Record<Side, WindowAccumulator | null> = { left: null, right: null }
-let lastPruneMs = 0
+const capGlobal = globalThis as typeof globalThis & {
+  __sleepypodCapFrames?: {
+    windows: Record<Side, WindowAccumulator | null>
+    lastPruneMs: number
+    loggedNonGoodStatuses: Set<string>
+  }
+}
+const capState = capGlobal.__sleepypodCapFrames ??= {
+  windows: { left: null, right: null },
+  lastPruneMs: 0,
+  loggedNonGoodStatuses: new Set<string>(),
+}
 
 function freshWindow(tsMs: number): WindowAccumulator {
   return {
@@ -50,6 +67,8 @@ function freshWindow(tsMs: number): WindowAccumulator {
     spreadSum: 0,
     zoneSums: null,
     peakCounts: [0, 0, 0],
+    statusCounts: Object.create(null) as Record<string, number>,
+    sawNonGood: false,
   }
 }
 
@@ -61,6 +80,9 @@ export interface CapFrameRow {
   spread: number
   peakZone: number | null
   frameCount: number
+  // Full `{status: sampleCount}` histogram (including "good") when any sample in
+  // the window was non-"good"; null otherwise — see WindowAccumulator.sawNonGood.
+  statusCounts: Record<string, number> | null
 }
 
 /** Collapse a filled window into the row shape written to `cap_sense_frames`. */
@@ -80,6 +102,9 @@ export function summarizeWindow(acc: WindowAccumulator): CapFrameRow {
     spread: acc.spreadSum / acc.n,
     peakZone,
     frameCount: acc.n,
+    // Persist the histogram only when it carries signal — an all-"good" window
+    // is stored as null so the common case adds no bytes.
+    statusCounts: acc.sawNonGood ? acc.statusCounts : null,
   }
 }
 
@@ -99,8 +124,8 @@ function flush(side: Side, acc: WindowAccumulator): void {
 }
 
 function maybePrune(nowMs: number): void {
-  if (nowMs - lastPruneMs < PRUNE_INTERVAL_MS) return
-  lastPruneMs = nowMs
+  if (nowMs - capState.lastPruneMs < PRUNE_INTERVAL_MS) return
+  capState.lastPruneMs = nowMs
   try {
     biometricsDb.delete(capSenseFrames)
       .where(lte(capSenseFrames.timestamp, new Date(nowMs - RETENTION_MS)))
@@ -122,9 +147,16 @@ function isSaneFirmwareTimestamp(tsSeconds: number): boolean {
  * Feed one per-side capacitive reading from the live broadcast loop. `raw` is the
  * frame's `left`/`right` channel value (scalar for Pod 3, the raw 8-channel array
  * for capSense2). `tsSeconds` is the firmware frame timestamp (epoch seconds).
- * Flushes a downsampled row whenever the window rolls over.
+ * `status` is the side's NATS-dialect quality tag ("good"/…); null/undefined on
+ * legacy .RAW frames, which have none. Flushes a downsampled row whenever the
+ * window rolls over.
  */
-export function recordCapFrame(side: Side, raw: number | number[], tsSeconds: number): void {
+export function recordCapFrame(
+  side: Side,
+  raw: number | number[],
+  tsSeconds: number,
+  status?: string | null,
+): void {
   if (!isSaneFirmwareTimestamp(tsSeconds)) return
 
   const tsMs = tsSeconds * 1000
@@ -132,16 +164,16 @@ export function recordCapFrame(side: Side, raw: number | number[], tsSeconds: nu
   const r = reduceCap(values)
   if (!r) return
 
-  let acc = windows[side]
+  let acc = capState.windows[side]
   if (!acc) {
     acc = freshWindow(tsMs)
-    windows[side] = acc
+    capState.windows[side] = acc
   }
   else if (tsMs - acc.startTsMs >= WINDOW_MS) {
     flush(side, acc)
     maybePrune(Date.now())
     acc = freshWindow(tsMs)
-    windows[side] = acc
+    capState.windows[side] = acc
   }
 
   acc.n += 1
@@ -157,38 +189,58 @@ export function recordCapFrame(side: Side, raw: number | number[], tsSeconds: nu
     acc.zoneSums[2] += triple[2]
     if (r.peakZone != null) acc.peakCounts[r.peakZone] += 1
   }
+  if (status != null) recordStatus(side, acc, status, values)
 }
 
-/** Persist any non-empty in-flight windows, then clear them. */
+/**
+ * Fold one sample's per-side `status` into the window histogram. Every observed
+ * status is counted (so a mixed window is a true histogram); the first sight of
+ * each distinct non-"good" value is logged once with its channel values, giving
+ * field reports the evidence to define the future capSense.status gate.
+ */
+function recordStatus(side: Side, acc: WindowAccumulator, status: string, values: number[]): void {
+  acc.statusCounts[status] = (acc.statusCounts[status] ?? 0) + 1
+  if (status === 'good') return
+  acc.sawNonGood = true
+  // Dedup on the status value alone (process-wide): the first sighting of each
+  // distinct non-"good" status logs once with whichever side/channels saw it.
+  if (!capState.loggedNonGoodStatuses.has(status)) {
+    capState.loggedNonGoodStatuses.add(status)
+    console.warn('[capFrames] capSense %s status=%s channels=%j', side, status, values)
+  }
+}
+
+/** Persist any non-empty in-flight capState.windows, then clear them. */
 export function flushCapFrameWindows(): void {
   let flushed = false
   for (const side of ['left', 'right'] as const) {
-    const acc = windows[side]
+    const acc = capState.windows[side]
     if (!acc || acc.n === 0) {
-      windows[side] = null
+      capState.windows[side] = null
       continue
     }
     flush(side, acc)
     flushed = true
-    windows[side] = null
+    capState.windows[side] = null
   }
   if (flushed) maybePrune(Date.now())
 }
 
 /** Reset accumulators — called when the active RAW file switches. */
 export function resetCapFrameWindows(): void {
-  windows.left = null
-  windows.right = null
+  capState.windows.left = null
+  capState.windows.right = null
 }
 
 /** Test-only accessor for the in-flight per-side window state. */
 export function _getCapFrameWindow(side: Side): WindowAccumulator | null {
-  return windows[side]
+  return capState.windows[side]
 }
 
-/** Test-only reset of all module state (windows + prune throttle clock). */
+/** Test-only reset of all module state (capState.windows + prune throttle clock). */
 export function _resetForTest(): void {
-  windows.left = null
-  windows.right = null
-  lastPruneMs = 0
+  capState.windows.left = null
+  capState.windows.right = null
+  capState.lastPruneMs = 0
+  capState.loggedNonGoodStatuses.clear()
 }
