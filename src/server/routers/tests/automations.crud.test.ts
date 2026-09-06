@@ -631,3 +631,64 @@ describe('automations nights and historical series', () => {
     await expect(caller.capZoneReplay({ side: 'left', maxFrames })).rejects.toThrow()
   })
 })
+
+describe('automations public API metadata', () => {
+  it.each([
+    ['list', 'GET', '/automations'],
+    ['get', 'GET', '/automations/get'],
+    ['create', 'POST', '/automations'],
+    ['update', 'PATCH', '/automations'],
+    ['setEnabled', 'POST', '/automations/enable'],
+    ['setDryRun', 'POST', '/automations/dry-run'],
+    ['delete', 'DELETE', '/automations'],
+    ['getKillSwitch', 'GET', '/automations/kill-switch'],
+    ['setKillSwitch', 'POST', '/automations/kill-switch'],
+    ['runs', 'GET', '/automations/runs'],
+    ['status', 'GET', '/automations/status'],
+    ['nights', 'GET', '/automations/nights'],
+    ['backtest', 'POST', '/automations/backtest'],
+    ['capZoneReplay', 'GET', '/automations/cap-zone-replay'],
+  ])('%s exposes its unauthenticated Autopilot endpoint', async (name, method, path) => {
+    vi.resetModules()
+    const { automationsRouter: freshRouter } = await import('../automations')
+    const procedure = freshRouter._def.procedures[name as keyof typeof freshRouter._def.procedures]
+    expect(procedure?._def.meta).toEqual({ openapi: { method, path, protect: false, tags: ['Autopilot'] } })
+  })
+})
+
+describe('automation night display contracts', () => {
+  it.each(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])('labels older nights with %s', async (label) => {
+    vi.resetModules()
+    const { automationsRouter: freshRouter } = await import('../automations')
+    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(label)
+    const enteredBedAt = new Date(2026, 0, 4 + day, 12)
+    states.biometrics.queue.push([
+      { id: 2, enteredBedAt: new Date(2026, 0, 11, 12), leftBedAt: new Date(2026, 0, 12, 12) },
+      { id: 1, enteredBedAt, leftBedAt: new Date(enteredBedAt.getTime() + 3_600_000) },
+    ])
+    const result = await freshRouter.createCaller({}).nights({ side: 'left' })
+    expect(result[0].label).toBe('Last night')
+    expect(result[1].label).toBe(label)
+  })
+
+  it.each([
+    [0, 'Jan'], [1, 'Feb'], [2, 'Mar'], [3, 'Apr'], [4, 'May'], [5, 'Jun'],
+    [6, 'Jul'], [7, 'Aug'], [8, 'Sep'], [9, 'Oct'], [10, 'Nov'], [11, 'Dec'],
+  ] as const)('formats month %s as %s in night history', async (month, label) => {
+    vi.resetModules()
+    const { automationsRouter: freshRouter } = await import('../automations')
+    states.biometrics.queue.push([{
+      id: 1, enteredBedAt: new Date(2026, month, 10, 12), leftBedAt: new Date(2026, month, 11, 12),
+    }])
+    const result = await freshRouter.createCaller({}).nights({ side: 'right' })
+    expect(result[0].date).toBe(`${label} 10`)
+  })
+
+  it('accepts multiple backtest actions up to the ten-action limit', async () => {
+    for (const count of [2, 10]) {
+      await expect(caller.backtest({
+        side: 'left', rule: { side: 'left', cooldownMin: null, trigger, conditions, actions: Array.from({ length: count }, () => actions[0]) },
+      })).resolves.toMatchObject({ ok: false })
+    }
+  })
+})

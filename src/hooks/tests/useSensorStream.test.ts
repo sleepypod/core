@@ -1057,3 +1057,19 @@ describe('useOnSensorFrame — callback updates and cleanup', () => {
     stream.unmount()
   })
 })
+
+describe('intentional WebSocket close callback', () => {
+  it('publishes disconnected without reconnecting when an intentional close event arrives', async () => {
+    const stream = renderHook(() => useSensorStream())
+    try {
+      const ws = wsMock.sockets[0] as FakeWS
+      act(() => ws.triggerOpen())
+      expect(stream.result.current.status).toBe('connected')
+      sensorSingleton.intentionalClose = true
+      act(() => ws.triggerClose())
+      expect(stream.result.current.status).toBe('disconnected')
+      expect(sensorSingleton.reconnectTimeout).toBeNull()
+    }
+    finally { stream.unmount() }
+  })
+})

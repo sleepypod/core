@@ -443,3 +443,22 @@ describe('runOnce.cancel', () => {
     log.mockRestore()
   })
 })
+
+describe('runOnce insertion rollback mutation regressions', () => {
+  it.each(['left', 'right'] as const)('powers %s back off when the session insert rejects', async (side) => {
+    const failure = new Error('disk full')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    dbMock.insert.mockImplementationOnce(() => {
+      throw failure
+    })
+    try {
+      await expect(caller.start({ side, setPoints: [{ time: '23:00', temperature: 70 }], wakeTime: '07:00' })).rejects.toMatchObject({
+        code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create run-once session',
+      })
+      expect(helpersMock.client.setPower.mock.calls).toEqual([[side, true, 70], [side, false]])
+      expect(jobManagerMock.scheduleRunOnceSession).not.toHaveBeenCalled()
+      expect(error).toHaveBeenCalledWith('Run-once session insert failed, powering side back off:', failure)
+    }
+    finally { error.mockRestore() }
+  })
+})

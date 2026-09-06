@@ -601,6 +601,31 @@ describe('device.setTemperature', () => {
     }
   })
 
+  it('preserves a guard rejection when restoring the parked mirror also fails', async () => {
+    vi.useFakeTimers()
+    const failure = new Error('database locked')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
+      dbState.rowsQueue.push([{ isPowered: true, poweredOnAt: new Date() }])
+      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
+      await vi.advanceTimersByTimeAsync(0)
+      dbMock.update.mockImplementationOnce(() => {
+        throw failure
+      })
+      await vi.advanceTimersByTimeAsync(250)
+      await assertion
+      expect(error).toHaveBeenCalledWith('Failed to restore parked state after guard rejection:', failure)
+      expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+    }
+    finally {
+      error.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   it('restores the parked DB mirror and broadcasts off when the in-lock recheck rejects', async () => {
     vi.useFakeTimers()
     try {

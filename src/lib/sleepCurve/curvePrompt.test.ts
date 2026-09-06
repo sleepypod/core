@@ -267,3 +267,21 @@ describe('curve template persistence', () => {
     expect(loadTemplates().map(template => template.name)).toEqual(['Keep', 'Delete Later'])
   })
 })
+
+describe('sleep curve display metadata', () => {
+  it('labels and colors each phase consistently in the curve editor', async () => {
+    vi.resetModules()
+    const { phaseLabels, phaseColors } = await import('./types')
+    expect(phaseLabels).toEqual({ warmUp: 'Wind Down', coolDown: 'Fall Asleep', deepSleep: 'Deep Sleep', maintain: 'Maintain', preWake: 'Pre-Wake', wake: 'Wake' })
+    expect(phaseColors).toEqual({ warmUp: '#f59e0b', coolDown: '#6366f1', deepSleep: '#2563eb', maintain: '#8b5cf6', preWake: '#f97316', wake: '#eab308' })
+  })
+  it('explains the three cooling intensity choices', async () => {
+    vi.resetModules()
+    const { coolingIntensityMeta } = await import('./types')
+    expect(coolingIntensityMeta).toEqual({
+      cool: { label: 'Cool', description: 'Extra cooling for hot sleepers' },
+      balanced: { label: 'Balanced', description: 'Science-backed defaults for most people' },
+      warm: { label: 'Warm', description: 'Gentler cooling, warmer wake-up' },
+    })
+  })
+})

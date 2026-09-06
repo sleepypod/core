@@ -595,6 +595,7 @@ describe('pumpAlerts.acknowledgeAndRestore', () => {
     })
 
     it('replays the aged persisted restore window when the side is still parked', async () => {
+      device.getStatus.mockResolvedValue({ leftSide: { targetLevel: 0 }, rightSide: { targetLevel: 2 } })
       const now = 1_800_000_000_000
       vi.spyOn(Date, 'now').mockReturnValue(now)
       guard.acknowledge.mockReturnValue(acknowledged())
@@ -951,7 +952,7 @@ describe('pumpAlerts dismissals', () => {
     dbState.queue.push(undefined) // update matched nothing — raced by another dismiss
     const error = await caller.dismissAlert({ id: 17 }).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(TRPCError)
-    expect(error).toMatchObject({ code: 'NOT_FOUND' })
+    expect(error).toMatchObject({ code: 'NOT_FOUND', message: 'Pump alert 17 not found or already dismissed' })
     expect(guard.dismissIfActive).not.toHaveBeenCalled()
   })
 
@@ -997,5 +998,78 @@ describe('pumpAlerts dismissals', () => {
       code: 'INTERNAL_SERVER_ERROR',
       message: 'Failed to dismiss pump alert: Unknown error',
     })
+  })
+})
+
+describe('pump alert public API metadata', () => {
+  it.each([
+    ['list', 'GET', '/pump-alerts'],
+    ['getCapabilities', 'GET', '/pump-alerts/capabilities'],
+    ['acknowledgeAndRestore', 'POST', '/pump-alerts/acknowledge'],
+    ['dismissNotification', 'POST', '/pump-alerts/dismiss-notification'],
+    ['dismissAlert', 'POST', '/pump-alerts/dismiss'],
+  ])('%s exposes its unauthenticated Pump Alerts endpoint', async (name, method, path) => {
+    vi.resetModules()
+    const { pumpAlertsRouter: freshRouter } = await import('../pumpAlerts')
+    const procedure = freshRouter._def.procedures[name as keyof typeof freshRouter._def.procedures]
+    expect(procedure?._def.meta).toEqual({ openapi: { method, path, protect: false, tags: ['Pump Alerts'] } })
+  })
+
+  it('releases a dismissal reservation even when its database stamp fails', async () => {
+    guard.acknowledge.mockReturnValueOnce(acknowledged({ alertId: 12 }))
+    rejectNext(new Error('database unavailable'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(caller.dismissNotification({ side: 'left' })).resolves.toEqual({ success: true })
+    expect(guard.completeResolution).toHaveBeenCalledExactlyOnceWith('left', resolutionToken)
+    expect(warn).toHaveBeenCalledWith('[pumpAlerts] failed to stamp dismissedAt:', 'database unavailable')
+  })
+
+  it('restores the prior notice if the restart-orphan lookup fails', async () => {
+    const notice = { alertId: 0, trippedAt: 1_800_000_000, rpm: 42, restore: null }
+    notices.getPumpStallNotice.mockReturnValueOnce(notice)
+    rejectNext(new Error('database unavailable'))
+    await expect(caller.acknowledgeAndRestore({ side: 'right' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR', message: 'Failed to look up orphaned pump alert: database unavailable',
+    })
+    expect(guard.rearm).toHaveBeenCalledExactlyOnceWith('right', {
+      alertId: null, restore: null, trippedAt: undefined, rpm: 42,
+    }, resolutionToken)
+    expect(guard.completeResolution).not.toHaveBeenCalled()
+  })
+})
+
+describe('pump incident identity regressions', () => {
+  it('does not search for an orphan when an id-less live incident retained its trip time', async () => {
+    guard.acknowledge.mockReturnValueOnce(acknowledged({ trippedAt: Date.now() }))
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toEqual({
+      success: true, restoredTarget: null, restoredDuration: null, orphanRecovered: false,
+    })
+    expect(dbMock.select).not.toHaveBeenCalled()
+    expect(guard.completeResolution).toHaveBeenCalledWith('left', resolutionToken)
+  })
+
+  it('restores a live snapshot without applying the restart-orphan status check', async () => {
+    guard.acknowledge.mockReturnValueOnce(acknowledged({ alertId: 42, restore: { targetTemperature: 74, durationSeconds: 900 } }))
+    dbState.queue.push([])
+    device.getStatus.mockResolvedValue({ leftSide: { targetLevel: 2 }, rightSide: { targetLevel: 2 } })
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).resolves.toMatchObject({ restoredTarget: 74, restoredDuration: 900, orphanRecovered: false })
+    expect(device.getStatus).not.toHaveBeenCalled()
+    expect(guard.restoreAcknowledgedSession).toHaveBeenCalledWith('left', { targetTemperature: 74, durationSeconds: 900 }, resolutionToken)
+  })
+
+  it('names an id-less incident when its cutoff is still pending', async () => {
+    guard.acknowledge.mockReturnValueOnce(acknowledged({ conflict: 'hardware_pending', rearmToken: null }))
+    await expect(caller.acknowledgeAndRestore({ side: 'left' })).rejects.toMatchObject({
+      code: 'CONFLICT', message: 'Pump alert incident is still being resolved — the side is not confirmed off',
+    })
+    expect(dbMock.select).not.toHaveBeenCalled()
+  })
+
+  it.each(['acknowledgeAndRestore', 'dismissNotification'] as const)('correlates a stale client id with an id-less live incident in %s', async (method) => {
+    guard.acknowledge.mockReturnValueOnce(acknowledged({ conflict: 'alert_mismatch', rearmToken: null }))
+    await expect(caller[method]({ side: 'left', alertId: 42 })).rejects.toMatchObject({
+      code: 'CONFLICT', message: 'Pump alert 42 is stale — the current incident is unidentified',
+    })
+    expect(dbMock.update).not.toHaveBeenCalled()
   })
 })

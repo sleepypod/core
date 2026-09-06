@@ -175,6 +175,88 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     vi.useRealTimers()
   })
 
+  it.each([
+    [2_999, true], [3_000, false], [5_000, false], [90_000, false], [90_001, true],
+  ])('accepts expiry only inside the countdown tolerance and poll-continuity window (%sms)', async (delay, active) => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(delay)
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(active)
+  })
+
+  it('allows a zero-countdown observation at the same instant as a one-second countdown', async () => {
+    await sync.sync(status({ heatingDuration: 1 }))
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(false)
+  })
+
+  it.each([89_999, 90_000, 90_001])('expires neutral-target evidence after 90 seconds (%sms)', async (delay) => {
+    await sync.sync(status({ targetLevel: 0, heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.advanceTimersByTime(delay)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(delay > 90_000)
+  })
+
+  it.each([-1, 0, 90_000, 90_001])('bounds a confirmed expiry by signed status age (%sms)', async (delay) => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    vi.setSystemTime(Date.now() + delay)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(delay < 0 || delay > 90_000)
+  })
+
+  it('does not reuse countdown evidence after a new command once its freshness window ends', async () => {
+    await sync.sync(status({ heatingDuration: 5 }))
+    vi.advanceTimersByTime(1_000)
+    markSideMutated('left')
+    vi.advanceTimersByTime(10_000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    seedSide('left', true, 75)
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+    expect((await lastGuardInput('right'))?.expectedActive).toBe(false)
+  })
+
+  it('does not transfer a countdown expiry to a different non-neutral target', async () => {
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 5 }))
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ targetLevel: -20, heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 0, duty: 50 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it.each([89_999, 90_000, 90_001])('bounds bilateral no-countdown stop evidence at 90 seconds (%sms)', async (delay) => {
+    seedSide('left', true, 75, Date.now() - (DEFAULT_HEATING_DURATION - 75) * 1000)
+    seedSide('right', true, 75, Date.now() - (DEFAULT_HEATING_DURATION - 75) * 1000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+    vi.advanceTimersByTime(delay)
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(delay > 90_000)
+  })
+
+  it('discards bilateral stop evidence when one pump starts moving again', async () => {
+    seedSide('left', true, 75, Date.now() - DEFAULT_HEATING_DURATION * 1000)
+    seedSide('right', true, 75, Date.now() - DEFAULT_HEATING_DURATION * 1000)
+    await sync.sync(status({ heatingDuration: 0 }))
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+    sync.recordFlowData(asymmetricFrame(0, 100))
+    await lastGuardInput('left')
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
   it('mid-session zero RPM still reaches the guard as expectedActive=true (real stall)', async () => {
     await sync.sync(status({ targetLevel: 5, heatingDuration: 7200 }))
     sync.recordFlowData(frame({ rpm: 0 }))
@@ -767,6 +849,31 @@ describe('DeviceStateSync — bilateral-zero de-glitch', () => {
     seedSide('right', true, 75)
   })
 
+  it.each([[1900, 1499], [1499, 1900], [0, 1900], [1900, 0]])('requires both pumps to have been healthy (%s, %s)', async (left, right) => {
+    sync.recordFlowData(asymmetricFrame(left, right))
+    await flush()
+    vi.mocked(onFrame).mockClear()
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+    expect(leftCalls()).toHaveLength(1)
+    expect(leftCalls()[0]?.rpm).toBe(0)
+  })
+
+  it('does not suppress a bilateral stop using healthy evidence from the future', async () => {
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      sync.recordFlowData(frame({ rpm: 1900 }))
+      await flush()
+      vi.mocked(onFrame).mockClear()
+      clock.mockReturnValue(now - 1)
+      sync.recordFlowData(frame({ rpm: 0 }))
+      await flush()
+      expect(leftCalls()).toHaveLength(1)
+    }
+    finally { clock.mockRestore() }
+  })
+
   it('drops one both-zero frame immediately after both pumps were running', async () => {
     sync.recordFlowData(frame({ rpm: 1_900 }))
     await flush()
@@ -787,6 +894,15 @@ describe('DeviceStateSync — bilateral-zero de-glitch', () => {
 
     expect(leftCalls()).toHaveLength(2)
     expect(leftCalls()[1]?.rpm).toBe(0)
+  })
+
+  it('does not drop a right-only stall following a healthy bilateral frame', async () => {
+    sync.recordFlowData(frame({ rpm: 1900 }))
+    await flush()
+    vi.mocked(onFrame).mockClear()
+    sync.recordFlowData(asymmetricFrame(1900, 0))
+    await flush()
+    expect(vi.mocked(onFrame)).toHaveBeenCalledWith(expect.objectContaining({ side: 'right', rpm: 0 }))
   })
 
   it('does not suppress a one-sided zero-RPM frame', async () => {

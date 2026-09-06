@@ -4,8 +4,7 @@ import {
   SQLiteSyncDialect,
   type SQLiteTable,
 } from 'drizzle-orm/sqlite-core'
-import { describe, expect, it } from 'vitest'
-import * as biometricsSchema from '../biometrics-schema'
+import { describe, expect, it, vi } from 'vitest'
 import * as schema from '../schema'
 
 // These tests pin the drizzle table definitions in schema.ts: table names,
@@ -388,11 +387,13 @@ describe('db schema definitions', () => {
 })
 
 describe('complete Drizzle schema contracts', () => {
-  it('pins every main-database table, column, type, default, and constraint', () => {
-    expect(describeSchema(schema)).toMatchSnapshot()
+  it('pins every main-database table, column, type, default, and constraint', async () => {
+    vi.resetModules()
+    expect(describeSchema(await import('../schema'))).toMatchSnapshot()
   })
 
-  it('pins every biometrics table, column, type, default, and constraint', () => {
-    expect(describeSchema(biometricsSchema)).toMatchSnapshot()
+  it('pins every biometrics table, column, type, default, and constraint', async () => {
+    vi.resetModules()
+    expect(describeSchema(await import('../biometrics-schema'))).toMatchSnapshot()
   })
 })

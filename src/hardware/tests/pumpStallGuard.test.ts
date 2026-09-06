@@ -35,6 +35,7 @@ import {
   dismissIfActive,
   confirmCutoff,
   identifyResolution,
+  hasUnconfirmedHardware,
   invalidateGuardSettingsCache,
   isCutoffPendingIncident,
   onFrame as onFrameImpl,
@@ -1411,6 +1412,55 @@ describe('pumpStallGuard', () => {
       warn.mockRestore()
     })
 
+    it('distinguishes the plausible-clock floor from a pre-NTP timestamp', () => {
+      const floor = Date.UTC(2024, 0, 1) / 1000
+      const stale = insertAlert({ side: 'left', timestamp: floor })
+      const skewed = insertAlert({ side: 'right', timestamp: floor - 1 })
+      rehydrate()
+      expect(shouldBlock('left')).toBe(false)
+      expect(shouldBlock('right')).toBe(true)
+      expect(biometricsSqlite.prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(stale)).toEqual({ dismissed_at: expect.any(Number) })
+      expect(biometricsSqlite.prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(skewed)).toEqual({ dismissed_at: null })
+    })
+
+    it('requires fresh consecutive evidence below the threshold before cutting off a rehydrated side', async () => {
+      insertAlert({ side: 'left' })
+      rehydrate()
+      const low = (rpm: number, now: number) => onFrameImpl({ side: 'left', rpm, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 3600, now })
+      const start = Date.now()
+      await low(100, start)
+      await low(500, start + 10_000)
+      expect(setPower).not.toHaveBeenCalled()
+      await low(100, start + 20_000)
+      expect(setPower).not.toHaveBeenCalled()
+      await low(100, start + 30_000)
+      expect(setPower).toHaveBeenCalledExactlyOnceWith('left', false)
+      expect(__test__.getState().left.rehydrated).toBe(false)
+    })
+
+    it('requires the configured rehydration sample count as well as elapsed dwell', async () => {
+      setSettings({ pump_stall_dwell_samples: 4 })
+      invalidateGuardSettingsCache()
+      insertAlert({ side: 'left' })
+      rehydrate()
+      const start = Date.now()
+      for (const elapsed of [0, 10_000, 20_000]) {
+        await onFrameImpl({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 3600, now: start + elapsed })
+        expect(setPower).not.toHaveBeenCalled()
+      }
+      await onFrameImpl({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 3600, now: start + 30_000 })
+      expect(setPower).toHaveBeenCalledExactlyOnceWith('left', false)
+    })
+
+    it.each([1, 604_800])('rehydrates an alert exactly %s seconds old', (ageSeconds) => {
+      vi.spyOn(Date, 'now').mockReturnValue(nowSec * 1000)
+      const id = insertAlert({ side: 'left', timestamp: nowSec - ageSeconds })
+      rehydrate()
+      expect(shouldBlock('left')).toBe(true)
+      expect(__test__.getState().left.activeAlertId).toBe(id)
+      expect(biometricsSqlite.prepare('SELECT dismissed_at FROM pump_alerts WHERE id = ?').get(id)).toEqual({ dismissed_at: null })
+    })
+
     it('skips and dismisses rows older than the seven-day window', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const eightDaysSec = 8 * 24 * 60 * 60
@@ -2182,6 +2232,190 @@ describe('pumpStallGuard — active recovery probes', () => {
     vi.restoreAllMocks()
   })
 
+  it.each([
+    ['settings unavailable', 'settings-unavailable recovery'],
+    ['recovery disabled', 'disabled recovery-probe'],
+    ['probe expired', 'failed recovery probe'],
+    ['energize failed', 'failed recovery-probe energize'],
+  ])('keeps resolution gated and logs a failed park when %s', async (scenario, context) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await trip()
+    advance(300_000)
+    if (scenario !== 'energize failed') await frame(0)
+    else setTemperature.mockRejectedValueOnce(new Error('partial write'))
+    if (scenario === 'settings unavailable') sqlite.exec('DELETE FROM device_settings')
+    if (scenario === 'recovery disabled') setSettings({ pump_stall_auto_recovery_enabled: 0 })
+    if (scenario === 'probe expired') advance(60_000)
+    invalidateGuardSettingsCache()
+    let release!: () => void
+    let started!: () => void
+    const entered = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    setPower.mockImplementationOnce(async () => {
+      started()
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      throw new Error('park offline')
+    })
+    const parking = frame(0)
+    await entered
+    try {
+      expect(hasUnconfirmedHardware('left')).toBe(true)
+      expect(acknowledge('left').conflict).toBe('hardware_pending')
+    }
+    finally {
+      release()
+      await parking
+    }
+    expect(shouldBlock('left')).toBe(true)
+    expect(__test__.getState().left.cutoffPending).toBe(true)
+    expect(warn).toHaveBeenCalledWith(`[pumpStallGuard] ${context} power-off for left failed:`, 'park offline')
+    expect(biometricsSqlite.prepare('SELECT action FROM pump_alerts').get()).toEqual({ action: 'power_off' })
+  })
+
+  it.each([false, true])('parks a probe whose original session expires (parking failure=%s)', async (failPark) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await trip({ duration: 330 })
+    advance(300_000)
+    await frame(0)
+    expect(setTemperature).toHaveBeenCalledWith('left', 78, 30)
+    if (failPark) setPower.mockRejectedValueOnce(new Error('offline'))
+    advance(31_000)
+    for (let n = 0; n < 3; n++) await frame(1900)
+    expect(setPower).toHaveBeenCalledWith('left', false)
+    expect(setTemperature).toHaveBeenCalledTimes(1)
+    expect(shouldBlock('left')).toBe(failPark)
+    expect(biometricsSqlite.prepare('SELECT action FROM pump_alerts').get()).toEqual({ action: failPark ? 'power_off' : 'auto_recovered' })
+    if (failPark) {
+      expect(__test__.getState().left.cutoffPending).toBe(true)
+      expect(warn).toHaveBeenCalledWith('[pumpStallGuard] expired recovery power-off for left failed:', 'offline')
+    }
+  })
+
+  it.each(['queued probe', 'queued recovery', 'queued park'] as const)('does not let a %s write over a superseding incident', async (transition) => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await trip()
+    if (transition === 'queued park') {
+      advance(300_000)
+      await frame(0)
+      advance(60_000)
+    }
+    if (transition === 'queued recovery') {
+      await frame(1900)
+      await frame(1900)
+    }
+    let unlock!: () => void
+    let locked!: () => void
+    const acquired = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    const holder = withSideLock('left', async () => {
+      locked()
+      await new Promise<void>((resolve) => {
+        unlock = resolve
+      })
+    })
+    await acquired
+    if (transition === 'queued probe') advance(300_000)
+    const pending = frame(transition === 'queued recovery' ? 1900 : 0)
+    for (let n = 0; n < 5; n++) await Promise.resolve()
+    reset('left')
+    rearm('left', { alertId: 999, restore: null, cutoffPending: true })
+    const successor = __test__.getState().left
+    const before = { ...successor }
+    setPower.mockClear()
+    setTemperature.mockClear()
+    log.mockClear()
+    unlock()
+    await holder
+    await pending
+    expect(setPower).not.toHaveBeenCalled()
+    expect(setTemperature).not.toHaveBeenCalled()
+    expect(__test__.getState().left).toBe(successor)
+    expect(__test__.getState().left).toEqual(before)
+    expect(log).not.toHaveBeenCalled()
+    expect(biometricsSqlite.prepare('SELECT action FROM pump_alerts').get()).toEqual({ action: 'power_off' })
+  })
+
+  it.each([false, true])('does not modify a successor when an old probe write finishes (failure=%s)', async (fails) => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await trip()
+    let finish!: () => void
+    let started!: () => void
+    const entered = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    setTemperature.mockImplementationOnce(async () => {
+      started()
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      if (fails) throw new Error('old probe failed')
+    })
+    advance(300_000)
+    const pending = frame(0)
+    await entered
+    reset('left')
+    rearm('left', { alertId: 999, restore: null, cutoffPending: false })
+    const before = { ...__test__.getState().left }
+    finish()
+    await pending
+    expect(setPower).not.toHaveBeenCalled()
+    expect(__test__.getState().left).toEqual(before)
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it('does not stamp or mirror an old passive recovery after the incident changes during the write', async () => {
+    await trip()
+    await frame(1900)
+    await frame(1900)
+    let finish!: () => void
+    let started!: () => void
+    const entered = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    setTemperature.mockImplementationOnce(async () => {
+      started()
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+    })
+    const recovering = frame(1900)
+    await entered
+    reset('left')
+    rearm('left', { alertId: 999, restore: null })
+    finish()
+    await recovering
+    expect(__test__.getState().left.activeAlertId).toBe(999)
+    expect(shouldBlock('left')).toBe(true)
+    expect(sqlite.prepare('SELECT is_powered FROM device_state WHERE side = ?').get('left')).toEqual({ is_powered: 0 })
+    expect(biometricsSqlite.prepare('SELECT action FROM pump_alerts').get()).toEqual({ action: 'power_off' })
+  })
+
+  it('does not start a scheduled probe until the original cutoff is confirmed', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    setPower.mockRejectedValue(new Error('offline'))
+    await trip()
+    advance(300_000)
+    await frame(0)
+    expect(__test__.getState().left.cutoffPending).toBe(true)
+    expect(setTemperature).not.toHaveBeenCalled()
+  })
+
+  it('parks an energized probe when the guard is stood down', async () => {
+    await trip()
+    advance(300_000)
+    await frame(0)
+    await standDown()
+    expect(setPower).toHaveBeenCalledExactlyOnceWith('left', false)
+    expect(shouldBlock('left')).toBe(false)
+    expect(getPumpStallNotice('left')).toBeNull()
+  })
+
   it('starts only after the first backoff, uses a short lease, then restores the aged remainder', async () => {
     const trippedAt = await trip()
 
@@ -2208,10 +2442,11 @@ describe('pumpStallGuard — active recovery probes', () => {
   })
 
   it('powers off failed probes and applies the 5m, 15m, and 30m backoffs', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await trip()
 
-    for (const backoff of __test__.PROBE_BACKOFFS_MS) {
+    for (const backoff of [300_000, 900_000, 1_800_000]) {
       advance(backoff - 1)
       await frame(0)
       const attemptsBefore = __test__.getState().left.recoveryAttempts
@@ -2225,6 +2460,13 @@ describe('pumpStallGuard — active recovery probes', () => {
       expect(shouldBlock('left')).toBe(true)
     }
 
+    expect(log.mock.calls).toEqual([
+      ['[pumpStallGuard] probing left recovery (attempt 1/3)'],
+      ['[pumpStallGuard] left recovery probe 1 did not restore flow — backing off'],
+      ['[pumpStallGuard] probing left recovery (attempt 2/3)'],
+      ['[pumpStallGuard] left recovery probe 2 did not restore flow — backing off'],
+      ['[pumpStallGuard] probing left recovery (attempt 3/3)'],
+    ])
     expect(setTemperature).toHaveBeenCalledTimes(3)
     expect(setPower.mock.calls).toEqual([
       ['left', false],
@@ -2408,5 +2650,156 @@ describe('pumpStallGuard — active recovery probes', () => {
     expect(__test__.getState().left.cutoffPending).toBe(false)
     expect(shouldBlock('left')).toBe(true)
     warn.mockRestore()
+  })
+})
+
+describe('pumpStallGuard mutation regressions — reservation ownership', () => {
+  beforeEach(() => {
+    resetSchema()
+    invalidateGuardSettingsCache()
+    reset()
+    setPower.mockReset().mockResolvedValue(undefined)
+    setTemperature.mockReset().mockResolvedValue(undefined)
+  })
+  afterEach(() => {
+    reset()
+    vi.restoreAllMocks()
+  })
+
+  it('reports no unconfirmed hardware for idle and confirmed-off incidents', () => {
+    expect(hasUnconfirmedHardware('left')).toBe(false)
+    expect(isCutoffPendingIncident('left', 12)).toBe(false)
+    rearm('left', { alertId: 12, restore: null })
+    expect(hasUnconfirmedHardware('left')).toBe(false)
+    expect(isCutoffPendingIncident('left', 12)).toBe(false)
+    const reservation = acknowledge('left', 12)
+    expect(reservation.conflict).toBeNull()
+    expect(hasUnconfirmedHardware('left')).toBe(true)
+    expect(isCutoffPendingIncident('left', 13)).toBe(false)
+    expect(isCutoffPendingIncident('right', 12)).toBe(false)
+    expect(completeResolution('left', reservation.rearmToken as object)).toBe(true)
+    expect(hasUnconfirmedHardware('left')).toBe(false)
+  })
+
+  it.each(['identify', 'complete', 'confirm', 'rearm'] as const)(
+    'refuses a superseded token during %s without changing its successor', (operation) => {
+      const old = acknowledge('left').rearmToken as object
+      reset('left')
+      const current = acknowledge('left', 22).rearmToken as object
+      const before = { ...__test__.getState().left }
+      const result = operation === 'identify'
+        ? identifyResolution('left', old, 11)
+        : operation === 'complete'
+          ? completeResolution('left', old)
+          : operation === 'confirm'
+            ? confirmCutoff('left', old)
+            : rearm('left', { alertId: 11, restore: null }, old)
+      expect(result).toBe(false)
+      expect(__test__.getState().left).toBe(current)
+      expect(__test__.getState().left).toEqual(before)
+    },
+  )
+
+  it('refuses completion and identification after rearming the same token', () => {
+    const token = acknowledge('left').rearmToken as object
+    expect(rearm('left', { alertId: 22, restore: null }, token)).toBe(true)
+    expect(identifyResolution('left', token, 11)).toBe(false)
+    expect(completeResolution('left', token)).toBe(false)
+    expect(rearm('left', { alertId: 11, restore: null }, token)).toBe(false)
+    expect(__test__.getState().left.activeAlertId).toBe(22)
+    expect(shouldBlock('left')).toBe(true)
+  })
+
+  it('does not confirm a cutoff on an idle side', () => {
+    expect(confirmCutoff('left')).toBe(false)
+    expect(confirmCutoff('left', __test__.getState().left)).toBe(false)
+    rearm('left', { alertId: 12, restore: null, cutoffPending: true })
+    expect(confirmCutoff('left')).toBe(true)
+    expect(hasUnconfirmedHardware('left')).toBe(false)
+  })
+
+  it('mirrors a successful manual restore only on the requested side', async () => {
+    const token = acknowledge('left').rearmToken as object
+    sqlite.prepare('UPDATE device_state SET is_powered = 0, target_temperature = 66').run()
+    await restoreAcknowledgedSession('left', { targetTemperature: 74, durationSeconds: 1234 }, token)
+    expect(setTemperature).toHaveBeenCalledWith('left', 74, 1234)
+    expect(sqlite.prepare('SELECT side, is_powered, target_temperature FROM device_state ORDER BY side').all()).toEqual([
+      { side: 'left', is_powered: 1, target_temperature: 74 },
+      { side: 'right', is_powered: 0, target_temperature: 66 },
+    ])
+    expect(sqlite.prepare('SELECT powered_on_at, last_updated FROM device_state WHERE side = ?').get('left')).toEqual({
+      powered_on_at: expect.any(Number), last_updated: expect.any(Number),
+    })
+  })
+
+  it('keeps a successful hardware restore successful when its DB mirror fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const token = acknowledge('right').rearmToken as object
+    sqlite.exec('DROP TABLE device_state')
+    await expect(restoreAcknowledgedSession('right', { targetTemperature: 74, durationSeconds: 1234 }, token)).resolves.toBeUndefined()
+    expect(setTemperature).toHaveBeenCalledWith('right', 74, 1234)
+    expect(warn).toHaveBeenCalledWith('[pumpStallGuard] manual restore device_state update failed:', expect.stringContaining('no such table'))
+  })
+
+  it('does not advance recovery while a manual resolution owns the side', async () => {
+    setSettings({ pump_stall_auto_recovery_enabled: 1, pump_stall_recovery_samples: 1 })
+    invalidateGuardSettingsCache()
+    const token = acknowledge('left', 12).rearmToken as object
+    const before = { ...__test__.getState().left }
+    await onFrameImpl({ side: 'left', rpm: 1900, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 3600 })
+    expect(__test__.getState().left).toEqual(before)
+    expect(__test__.getState().left).toBe(token)
+    expect(setPower).not.toHaveBeenCalled()
+    expect(setTemperature).not.toHaveBeenCalled()
+  })
+
+  it('holds a bilateral onset at the exact window boundary and logs once per run', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const low = (side: 'left' | 'right', now: number) => onFrameImpl({ side, rpm: 0, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 3600, now })
+    const start = 1_000_000
+    await low('right', start)
+    await low('left', start + __test__.BILATERAL_ONSET_WINDOW_MS)
+    expect(warn).not.toHaveBeenCalled()
+    await low('left', start + __test__.BILATERAL_ONSET_WINDOW_MS + 9_999)
+    expect(warn).not.toHaveBeenCalled()
+    await low('left', start + __test__.BILATERAL_ONSET_WINDOW_MS + 10_000)
+    expect(shouldBlock('left')).toBe(false)
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[pumpStallGuard] left: bilateral zero-RPM onset — holding trip for sustained evidence (120s; shared telemetry glitch suspected)')
+    await low('left', start + __test__.BILATERAL_ONSET_WINDOW_MS + 20_000)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires the configured frame count even after the single-sided dwell elapses', async () => {
+    setSettings({ pump_stall_dwell_samples: 4 })
+    invalidateGuardSettingsCache()
+    const low = (now: number) => onFrameImpl({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 3600, now })
+    for (const now of [1_000_000, 1_010_000, 1_020_000]) {
+      await low(now)
+      expect(shouldBlock('left')).toBe(false)
+      expect(setPower).not.toHaveBeenCalled()
+    }
+    await low(1_030_000)
+    expect(shouldBlock('left')).toBe(true)
+  })
+
+  it('preserves continuity at exactly the frame gap limit', async () => {
+    const frame = (now: number) => onFrameImpl({ side: 'left', rpm: 100, expectedActive: true, preStallTarget: 78, preStallDurationSeconds: 3600, now })
+    await frame(1_000_000)
+    await frame(1_000_000 + __test__.FRAME_GAP_RESET_MS)
+    expect(shouldBlock('left')).toBe(true)
+  })
+
+  it('does not schedule a cutoff for idle or already parked sides when settings disappear', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    rearm('right', { alertId: 22, restore: null })
+    sqlite.exec('DELETE FROM device_settings')
+    invalidateGuardSettingsCache()
+    for (const side of ['left', 'right'] as const) {
+      await onFrameImpl({ side, rpm: 0, expectedActive: false, preStallTarget: null, preStallDurationSeconds: null })
+    }
+    expect(setPower).not.toHaveBeenCalled()
+    expect(hasUnconfirmedHardware('left')).toBe(false)
+    expect(hasUnconfirmedHardware('right')).toBe(false)
+    expect(warn).toHaveBeenCalledWith('[pumpStallGuard] device settings row is missing — preserving any armed guard')
   })
 })
