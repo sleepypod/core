@@ -55,6 +55,15 @@ advance by milliseconds while delivery pauses for seconds. Capture journal
 time, embedded firmware counters, RAW `ts`, and local receipt time separately.
 Do not treat receipt time as measured hold duration or chord timing.
 
+A separate full CBOR-sequence decode of all three retained sensor RAW files
+covered record timestamps 08:00:28–08:43:20 UTC. It found no `buttonEvent`
+or gesture record types and no decode errors. The files contained 67, 74,
+and 60 payloads with multiple CBOR items, respectively. The installed
+`RawFileFollower` calls `cbor2.loads` once per payload, so its live output
+can omit trailing items. The separate scan decoded every item; the full
+journal capture is also retained. A production reader must decode the
+entire payload sequence before claiming complete event coverage.
+
 ## Proposed decision
 
 Use a read-only capture of the full `frank` and cover-buttons journals plus
