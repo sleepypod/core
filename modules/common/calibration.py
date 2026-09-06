@@ -800,6 +800,15 @@ def is_present_piezo_calibrated(
 
 # ── CalibrationWatcher ──
 
+def _trigger_sort_key(path: Path) -> tuple:
+    """Order timestamp/PID/counter numerically, including legacy queued files.
+
+    The bare legacy trigger has no numeric suffix and sorts first. Within a
+    writer's same-millisecond requests, counter 9 must precede counter 10.
+    """
+    return tuple(int(part) for part in path.name.split(".")[2:] if part.isdecimal())
+
+
 class CalibrationWatcher:
     """Watch for calibration trigger files written by tRPC.
 
@@ -813,7 +822,7 @@ class CalibrationWatcher:
         try:
             # Check for queued triggers (*.trigger files)
             trigger_dir = TRIGGER_PATH.parent
-            triggers = sorted(trigger_dir.glob(".calibrate-trigger*"))
+            triggers = sorted(trigger_dir.glob(".calibrate-trigger*"), key=_trigger_sort_key)
             triggers = [t for t in triggers if not t.suffix == ".tmp"]
             if not triggers:
                 return None
@@ -836,7 +845,7 @@ class CalibrationWatcher:
         """Delete the oldest trigger file after calibration completes."""
         try:
             trigger_dir = TRIGGER_PATH.parent
-            triggers = sorted(trigger_dir.glob(".calibrate-trigger*"))
+            triggers = sorted(trigger_dir.glob(".calibrate-trigger*"), key=_trigger_sort_key)
             triggers = [t for t in triggers if not t.suffix == ".tmp"]
             if triggers:
                 triggers[0].unlink(missing_ok=True)

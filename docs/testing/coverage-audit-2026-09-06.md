@@ -39,7 +39,7 @@ the mounted SVG ref; the power button's remaining branch is the handler guard
 behind the disabled pending button. No private handlers are exposed to force
 these branches.
 
-**119 Python cases** across three new suites:
+**120 Python cases** across three new suites:
 
 - RAW parser: all supported integer and byte-length widths; every truncated
   prefix; empty markers; exact cursor position between consecutive records;
@@ -48,7 +48,8 @@ these branches.
   The private import explicitly avoids another suite's `sys.modules` stub.
 - Calibration triggers: temporary-file invisibility, non-destructive reads,
   oldest-file consumption, invalid JSON/non-object removal, same-millisecond
-  write uniqueness, and failed-rename isolation using real temporary files.
+  write uniqueness and FIFO across counter 9→10, and failed-rename isolation
+  using real temporary files.
 - Calibration algorithms: minimum usable samples; final quiet-window selection;
   6/8-channel capSense2 and optional reference channels; standard-deviation
   floors; signed piezo lists/bytes/bytearrays and trailing bytes; minimum and
@@ -99,7 +100,7 @@ need targeted failure-path work.
 
 | Python CI scope | Passing tests | Statements | Branches |
 | --- | ---: | ---: | ---: |
-| `common` | 193 | 698/886 | 242/308 |
+| `common` | 194 | 700/888 | 242/308 |
 | `cover-buttons` | 11 | 43/71 | 15/22 |
 | `environment-monitor` | 21 | 71/131 | 15/42 |
 | `calibrator` | 12 | 63/185 | 24/74 |
@@ -116,10 +117,12 @@ compatibility with Pod-specific services.
 ## Validation and reproduction
 
 - Full Vitest run: **3,828 passed, one existing skipped, 162 files passed**.
-- Full six-job Python matrix: **352 passed** under Python 3.10.
+- Full six-job Python matrix: **353 passed** under Python 3.10.
 - TypeScript typecheck and ESLint on all added TS/TSX tests passed.
-- Production runtime code is unchanged. Only tests, coverage configuration,
-  workflow coverage options, generated-artifact ignores, and this report change.
+- CodeRabbit follow-up: the strengthened FIFO assertions failed against the
+  original lexical queue ordering. Queue reads and deletion now share numeric
+  timestamp/PID/counter ordering, preserving existing unpadded filenames.
+  This is the only production runtime change in the audit PR.
 
 ```sh
 pnpm install --frozen-lockfile
