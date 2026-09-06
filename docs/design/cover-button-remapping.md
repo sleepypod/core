@@ -1,6 +1,6 @@
 # Cover button remapping
 
-Status: Proposed product and integration design, 2026-09-07.
+Status: Proposed product and integration design, 2026-09-06.
 
 ## Recommendation
 
