@@ -1,0 +1,160 @@
+{
+  "label": "final-38e0695",
+  "base": "http://127.0.0.1:3000",
+  "startedAt": "2026-09-06T00:35:30.755Z",
+  "node": "v22.17.0",
+  "pid": "3035",
+  "methodology": "15s idle; one deviceStatus WebSocket; 3 warmups; 60 serial status reads spaced at least 500ms start-to-start; 12 bursts of 4 concurrent reads; 10 warm HTML requests per page. /proc CPU uses SC_CLK_TCK=100 and reports percent of one core. HTTP timing includes body; no browser rendering.",
+  "idle": {
+    "durationSec": 15.01,
+    "cpuPercentOneCore": 9.99,
+    "rssMiBStart": 173.54,
+    "rssMiBEnd": 158.91
+  },
+  "status": {
+    "n": 60,
+    "medianMs": 45.05,
+    "p95Ms": 75.05,
+    "maxMs": 723.48,
+    "meanMs": 60.09
+  },
+  "statusSamplesMs": [
+    48.02,
+    60.44,
+    80.28,
+    60.58,
+    54.21,
+    56.62,
+    48.08,
+    46.91,
+    50.36,
+    43.7,
+    39.66,
+    48.29,
+    50.08,
+    50.96,
+    47.99,
+    45.2,
+    49.2,
+    44.62,
+    41.36,
+    44.12,
+    42.02,
+    44.08,
+    43.35,
+    45.05,
+    44.32,
+    43.93,
+    44.14,
+    46.3,
+    44.91,
+    44.45,
+    48.13,
+    44.86,
+    49.15,
+    48.37,
+    43.59,
+    43.19,
+    44.28,
+    47.73,
+    46.91,
+    43.88,
+    45.18,
+    47.49,
+    48.16,
+    43.34,
+    45.98,
+    43.59,
+    47.57,
+    723.48,
+    136.8,
+    37.91,
+    44.32,
+    43.93,
+    44.47,
+    43.61,
+    43.56,
+    43.92,
+    44.49,
+    46.18,
+    43.24,
+    75.05
+  ],
+  "active": {
+    "durationSec": 30.25,
+    "cpuPercentOneCore": 24.03,
+    "rssMiBStart": 158.86,
+    "rssMiBEnd": 173.98
+  },
+  "concurrentStatus": {
+    "n": 48,
+    "medianMs": 88.11,
+    "p95Ms": 137.19,
+    "maxMs": 152.68,
+    "meanMs": 89.04
+  },
+  "concurrentHealth": {
+    "n": 12,
+    "medianMs": 144.66,
+    "p95Ms": 173.17,
+    "maxMs": 173.17,
+    "meanMs": 149.65
+  },
+  "burst": {
+    "durationSec": 5.53,
+    "cpuPercentOneCore": 61.5,
+    "rssMiBStart": 173.98,
+    "rssMiBEnd": 181.15
+  },
+  "pages": {
+    "/en": {
+      "html": {
+        "n": 10,
+        "medianMs": 54.73,
+        "p95Ms": 94.2,
+        "maxMs": 94.2,
+        "meanMs": 61.22
+      },
+      "htmlBytes": 13406,
+      "initialJsFiles": 10,
+      "initialJsDecodedBytes": 732523,
+      "fetchAllInitialJsMs": 282.36
+    },
+    "/en/debug": {
+      "html": {
+        "n": 10,
+        "medianMs": 35.49,
+        "p95Ms": 60.92,
+        "maxMs": 60.92,
+        "meanMs": 38.46
+      },
+      "htmlBytes": 23656,
+      "initialJsFiles": 12,
+      "initialJsDecodedBytes": 783209,
+      "fetchAllInitialJsMs": 228.2
+    }
+  },
+  "settings": {
+    "n": 20,
+    "medianMs": 30.38,
+    "p95Ms": 38.79,
+    "maxMs": 53.28,
+    "meanMs": 32.35
+  },
+  "websocket": {
+    "frames": 40,
+    "gaps": {
+      "n": 39,
+      "medianMs": 1001.2,
+      "p95Ms": 1109.48,
+      "maxMs": 1816.36,
+      "meanMs": 1019
+    }
+  },
+  "health": {
+    "status": "running",
+    "podVersion": "J00",
+    "gesturesSupported": true
+  },
+  "finishedAt": "2026-09-06T00:36:27.549Z"
+}
