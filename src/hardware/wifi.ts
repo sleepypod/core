@@ -32,8 +32,6 @@ export function getWifiInfo(): WifiInfo {
   if (!cache.pending && (age < 0 || age >= CACHE_MS)) {
     cache.pending = readWifiInfo().then((value) => {
       cache.value = value
-    }).catch(() => {
-      cache.value = { wifiStrength: -1, wifiSSID: 'unknown' }
     }).finally(() => {
       cache.updatedAt = Date.now()
       cache.pending = null

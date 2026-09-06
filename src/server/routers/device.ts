@@ -192,12 +192,12 @@ export const deviceRouter = router({
       }),
     }))
     .query(async ({ input }) => {
-      const cachedStatus = getDacMonitorIfRunning()?.getFreshStatus(2_000)
-      const status = cachedStatus ?? await withHardwareClient(
-        client => client.getDeviceStatus(), 'Failed to get device status',
-      )
+      let status = getDacMonitorIfRunning()?.getFreshStatus(2_000)
 
-      if (!cachedStatus) {
+      if (!status) {
+        status = await withHardwareClient(
+          client => client.getDeviceStatus(), 'Failed to get device status',
+        )
         // The monitor already persists cached observations. Preserve the fallback
         // sync only when a hardware read was necessary.
         try {

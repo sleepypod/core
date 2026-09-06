@@ -43,7 +43,10 @@ const broadcastMock = vi.hoisted(() => ({
   broadcastMutationStatus: vi.fn(),
 }))
 
-const monitorMock = vi.hoisted(() => ({ getFreshStatus: vi.fn() }))
+const monitorMock = vi.hoisted(() => ({
+  getFreshStatus: vi.fn(),
+  getDacMonitorIfRunning: vi.fn(),
+}))
 
 const transportMock = vi.hoisted(() => ({
   sendCommand: vi.fn(),
@@ -151,7 +154,7 @@ vi.mock('@/src/hardware/primeNotification', () => primeMock)
 vi.mock('@/src/hardware/snoozeManager', () => snoozeMock)
 vi.mock('@/src/streaming/broadcastMutationStatus', () => broadcastMock)
 vi.mock('@/src/hardware/dacTransport', () => transportMock)
-vi.mock('@/src/hardware/dacMonitor.instance', () => ({ getDacMonitorIfRunning: () => monitorMock }))
+vi.mock('@/src/hardware/dacMonitor.instance', () => ({ getDacMonitorIfRunning: monitorMock.getDacMonitorIfRunning }))
 vi.mock('@/src/hardware/sharedClient', () => ({ getSharedHardwareClient: sharedClientMock.getSharedHardwareClient }))
 vi.mock('@/src/hardware/deviceStateSync', () => stateSyncMock)
 vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
@@ -201,6 +204,7 @@ beforeEach(() => {
   transportMock.sendCommand.mockReset()
   transportMock.isDacConnected.mockReturnValue(true)
   monitorMock.getFreshStatus.mockReset().mockReturnValue(null)
+  monitorMock.getDacMonitorIfRunning.mockReset().mockReturnValue(monitorMock)
   sharedClientMock.sendRaw.mockReset()
   stateSyncMock.markSideMutated.mockReset()
   pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
@@ -237,6 +241,17 @@ describe('device.getStatus', () => {
   it('reads hardware when the monitor has no reusable observation', async () => {
     monitorMock.getFreshStatus.mockReturnValue(null)
     await caller.getStatus({})
+    expect(helpersMock.client.getDeviceStatus).toHaveBeenCalledOnce()
+    expect(dbMock.insert).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads hardware and persists status before the monitor is running', async () => {
+    monitorMock.getDacMonitorIfRunning.mockReturnValue(null)
+
+    const result = await caller.getStatus({})
+
+    expect(result.leftSide.currentTemperature).toBe(80)
+    expect(monitorMock.getFreshStatus).not.toHaveBeenCalled()
     expect(helpersMock.client.getDeviceStatus).toHaveBeenCalledOnce()
     expect(dbMock.insert).toHaveBeenCalledTimes(2)
   })
