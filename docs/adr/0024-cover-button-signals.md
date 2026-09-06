@@ -64,6 +64,17 @@ can omit trailing items. The separate scan decoded every item; the full
 journal capture is also retained. A production reader must decode the
 entire payload sequence before claiming complete event coverage.
 
+At 08:45:14 UTC, an additional read-only observer began decoding every
+CBOR item and retaining the original payload bytes for non-sensor records.
+Its replay recovered 812 log records with no decode errors by 08:45:24.
+For example, in `04F66753.RAW`, byte offsets 3081779–3083450,
+`gpi press 105` is item index 11 (zero-based), and `invalid gpi->row
+105->255` is index 12. Both have RAW timestamp 1788684091 (08:41:31
+UTC), whereas their journal delivery occurred at 08:42:24.269749 UTC.
+This directly demonstrates both the first-item omission and delayed
+journal delivery for candidate button signals. No physical mapping follows
+from these recovery-associated events.
+
 ## Proposed decision
 
 Use a read-only capture of the full `frank` and cover-buttons journals plus
@@ -99,3 +110,11 @@ opened file, and records its file path and end offset. Replayed observations
 must not be counted as new presses. Preserve relevant evidence in the
 repository before removing temporary captures; do not commit unrelated
 biometric data. The journal excerpts above are retained directly in this ADR.
+
+The additional observer and output are `observe-sequences.py`,
+`raw-sequences.ndjson`, and `raw-sequences.stderr` in the same temporary
+directory. It preserves file offsets, item indices, all decoded non-sensor
+records, and base64 payloads. It follows rotation after draining the open
+file, reports decoding failures explicitly, and emits ten-second heartbeats.
+Use this output for signal analysis; the original follower capture remains
+available for comparison. Neither observer changes the installed service.
