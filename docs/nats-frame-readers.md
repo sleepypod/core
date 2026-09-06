@@ -1,6 +1,6 @@
 # NATS Frame Readers
 
-**Status:** implemented — automated validation complete; field validation pending
+**Status:** implemented — automated validation complete; Pod 4 RAW fallback reported; NATS field validation pending
 **Source data:** 1-minute `raw.>` capture from a field Pod 5 on new firmware
 (Discord user report, 2026-07-19), taken with `scripts/probe-nats-capture.py`.
 236 messages across 8 subjects.
@@ -288,11 +288,41 @@ backfill in v1. Revisit once the live path is stable in the field;
    Node tests run captured NATS frames through the same broadcast, snapshot,
    listener, and `cap_sense_frames` persistence path and verify nullable/mixed
    per-side `statusCounts` windows.
-4. **Live validation (pending):** the reporting user's pod (new-firmware Pod 5) +
+4. **Live validation (pending):** a volunteer with a confirmed NATS-enabled Pod 5 +
    `eight-pod` (J55, shim variant) as the regression control. `sp-status`
    must show: NATS pipeline + rows accruing on the former; `.RAW` pipeline
    unchanged on the latter. Calibrator errors should clear once the live
    buffer reaches each sensor's sample minimum.
+
+## Pod 4 RAW field report
+
+Trinity reports a Pod 4 with no listener on port 4222 and no NATS process or
+binary. The supplied startup log shows the 60 s probe window expiring and
+selection of a `.RAW` file. This confirms RAW fallback selection on that pod;
+it does not establish downstream row ingestion or validate the NATS reader.
+NATS field validation still needs a pod actually publishing sensor frames over
+NATS. The Pod 5 capture used for automated fixtures is separate evidence.
+Current `dev` can skip the grace window when installation discovery confirms
+RAW firmware; the reported 60 s delay is the fallback for unknown discovery.
+
+The same report includes:
+
+```text
+[sensorStream] unknown sensor frame type "lps" — broadcasting but not ingesting
+```
+
+`lps` has no ingestion handler or documented payload in this repository. The
+shared RAW/NATS dispatcher warns once per unknown type per process, so the
+warning returns on each process restart. Such frames still pass through to
+unfiltered WebSocket clients (including `subscribe: all`); explicit sensor
+subscriptions only accept supported types. Other sensor frames continue through
+their normal handlers. This warning alone does not indicate a failed reader.
+
+We have evidence of `lps` on this Pod 4, but not that it is exclusive to Pod 4
+or safe to classify as irrelevant telemetry. A decoded `lps` record with field
+names, value types, and units if known is needed before adding a handler; redact
+any device identifiers before sharing. No payload schema is inferred from the
+type name, and the warning remains enabled until the frame is understood.
 
 ## Implementation and rollout
 

@@ -247,6 +247,36 @@ describe('startPiezoStreamServer — source selection', () => {
     expect(natsReachable).toHaveBeenCalled()
   })
 
+  it('passes unknown lps RAW frames through once-per-type diagnostics without blocking capSense', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    __test__.warnedUnknownTypes.delete('lps')
+    const server = startPiezoStreamServer()
+    const client = { readyState: 1, bufferedAmount: 0, send: vi.fn() } as any
+    server.clients.add(client)
+    // Synthetic opaque payload: the field report supplies a type, not a schema.
+    const lps = { type: 'lps', ts: 123, opaque: [1, 2] }
+    try {
+      fs.writeFileSync(path.join(tmpRawDir, 'lps.RAW'), Buffer.concat([
+        buildOuterRecord(1, lps),
+        buildOuterRecord(2, lps),
+        buildOuterRecord(3, { type: 'capSense', ts: 124, left: 45, right: 46 }),
+      ]))
+      await waitFor(() => getLatestCapSenseSnapshot()?.ts === 124)
+      expect(getLatestCapSenseSnapshot()?.left).toEqual([45])
+      expect(startNatsFrameSource).not.toHaveBeenCalled()
+      const frames = client.send.mock.calls.map(([payload]: [string]) => JSON.parse(payload))
+      expect(frames.filter((frame: any) => frame.type === 'lps')).toEqual([lps, lps])
+      const diagnostics = warn.mock.calls.filter(args => args[1] === 'lps')
+      expect(diagnostics).toEqual([[
+        '[sensorStream] unknown sensor frame type "%s" — broadcasting but not ingesting', 'lps',
+      ]])
+    }
+    finally {
+      server.clients.delete(client)
+      __test__.warnedUnknownTypes.delete('lps')
+    }
+  })
+
   it('continues probing after a reachability probe throws, then selects RAW', async () => {
     natsMock.probeErrorOnce = true
     natsMock.reachable = false
