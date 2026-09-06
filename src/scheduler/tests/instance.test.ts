@@ -248,19 +248,39 @@ describe('scheduler/instance', () => {
     expect(ctorMock).toHaveBeenCalledOnce()
   })
 
-  it('discards a manager whose schedule load completes after shutdown', async () => {
+  it('waits for cancelled initialization cleanup and rejects new managers until shutdown completes', async () => {
     const mod = await freshModule()
-    let release!: () => void
+    let releaseLoad!: () => void
+    let releaseCleanup!: () => void
     loadSchedulesMock.mockImplementationOnce(() => new Promise((resolve) => {
-      release = resolve
+      releaseLoad = resolve
+    }))
+    shutdownMock.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseCleanup = resolve
     }))
     const pending = mod.getJobManager()
     const assertion = expect(pending).rejects.toThrow()
     await vi.waitFor(() => expect(loadSchedulesMock).toHaveBeenCalledOnce())
-    await mod.shutdownJobManager()
-    release()
-    await assertion
+    const shutdown = mod.shutdownJobManager()
+    let stopped = false
+    const settled = shutdown.then(() => {
+      stopped = true
+    })
 
+    expect(mod.shutdownJobManager()).toBe(shutdown)
+    await expect(mod.getJobManager()).rejects.toThrow('JobManager is shutting down')
+    expect(ctorMock).toHaveBeenCalledOnce()
+    expect(stopped).toBe(false)
+    releaseLoad()
+    await vi.waitFor(() => expect(shutdownMock).toHaveBeenCalledOnce())
+    expect(stopped).toBe(false)
+    await expect(mod.getJobManager()).rejects.toThrow('JobManager is shutting down')
+    expect(ctorMock).toHaveBeenCalledOnce()
+    releaseCleanup()
+    await assertion
+    await settled
+
+    expect(stopped).toBe(true)
     expect(shutdownMock).toHaveBeenCalledOnce()
     await mod.getJobManager()
     expect(ctorMock).toHaveBeenCalledTimes(2)

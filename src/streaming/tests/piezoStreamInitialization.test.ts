@@ -291,31 +291,35 @@ describe('piezoStream module initialization contracts', () => {
     expect(handle.close).not.toHaveBeenCalled()
   })
 
-  it('yields while draining a RAW backlog with bounded reads and one persistent handle', async () => {
+  it('reaches current RAW data promptly while letting other work run between bounded batches', async () => {
     vi.useFakeTimers()
+    // Isolate the record/read bounds from variations in the host CPU speed.
+    vi.spyOn(performance, 'now').mockReturnValue(0)
     const messages = Array.from({ length: 600 }, (_, index) => `${index}:${'x'.repeat(200)}`)
     const { file, handle } = mockRawFile(Buffer.concat(messages.map(rawLogRecord)))
     const piezoStream = await loadFreshModule()
     piezoStream.startPiezoStreamServer()
     const client = connectFakeClient()
+    let framesWhenOtherWorkRan: number | undefined
+    let readsWhenOtherWorkRan: number | undefined
+    const send = client.send.bind(client)
+    vi.spyOn(client, 'send').mockImplementation((payload: string) => {
+      send(payload)
+      if (client.sent.length === 1) {
+        setTimeout(() => {
+          framesWhenOtherWorkRan = client.sent.length
+          readsWhenOtherWorkRan = handle.read.mock.calls.length
+        }, 0)
+      }
+    })
 
-    await vi.advanceTimersByTimeAsync(25)
-    expect(client.sent.length).toBeGreaterThan(0)
-    expect(client.sent.length).toBeLessThanOrEqual(128)
-    expect(handle.read).toHaveBeenCalledTimes(1)
-    const firstCount = client.sent.length
-    await vi.advanceTimersByTimeAsync(25)
-    expect(client.sent.length - firstCount).toBeGreaterThan(0)
-    expect(client.sent.length - firstCount).toBeLessThanOrEqual(128)
-    // Complete records remain from the first 64 KiB read, so drain them before
-    // allocating another chunk. HTTP/timer work can run between these ticks.
-    expect(handle.read).toHaveBeenCalledTimes(1)
-
-    for (let tick = 0; client.sent.length < messages.length && tick < 40; tick++) {
-      const before = client.sent.length
-      await vi.advanceTimersByTimeAsync(25)
-      expect(client.sent.length - before).toBeLessThanOrEqual(128)
-    }
+    // A backlog must yield for other callbacks without paying the idle poll
+    // interval between every batch. The old loop waiting 25ms per batch cannot
+    // deliver all 600 frames in this window, even with instantaneous disk reads.
+    await vi.advanceTimersByTimeAsync(45)
+    expect(framesWhenOtherWorkRan).toBeGreaterThan(0)
+    expect(framesWhenOtherWorkRan).toBeLessThanOrEqual(128)
+    expect(readsWhenOtherWorkRan).toBe(1)
     expect(client.sent.map(message => JSON.parse(message).msg)).toEqual(messages)
     expect(handle.read.mock.calls.every(([, , length]) => length <= 64 * 1024)).toBe(true)
     expect(fsMock.open).toHaveBeenCalledTimes(1)

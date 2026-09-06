@@ -119,6 +119,7 @@ async function waitFor(pred: () => boolean, timeoutMs = 3000): Promise<void> {
 describe('startPiezoStreamServer — source selection', () => {
   afterEach(async () => {
     await shutdownPiezoStreamServer()
+    vi.useRealTimers()
     natsMock.reachable = false
     natsMock.probeErrorOnce = false
     natsMock.startError = null
@@ -308,6 +309,40 @@ describe('startPiezoStreamServer — source selection', () => {
 
     await waitFor(() => getLatestCapSenseSnapshot()?.ts === 123)
     expect(natsReachable).toHaveBeenCalledTimes(1)
+    expect(startNatsFrameSource).not.toHaveBeenCalled()
+  })
+
+  it('recovers from unknown installation discovery on the next retry and starts RAW before grace expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    vi.mocked(discoverSensorSource).mockResolvedValueOnce('unknown').mockResolvedValue('raw')
+    const readdir = vi.spyOn(fs.promises, 'readdir').mockResolvedValue([])
+    const startedAt = Date.now()
+    startPiezoStreamServer()
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(discoverSensorSource).toHaveBeenCalledTimes(1)
+    expect(natsReachable).toHaveBeenCalledTimes(1)
+    expect(readdir).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(14)
+    expect(discoverSensorSource).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(discoverSensorSource).toHaveBeenCalledTimes(2)
+    expect(natsReachable).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(25)
+    expect(readdir).toHaveBeenCalledWith(tmpRawDir)
+    expect(Date.now() - startedAt).toBe(40)
+    // RAW is already polling after one retry and one poll tick, well before
+    // this suite's 120 ms grace (60 seconds in production).
+    expect(startNatsFrameSource).not.toHaveBeenCalled()
+
+    // Once RAW owns ingestion, later installation changes must not attach a
+    // second source or restart discovery.
+    vi.mocked(discoverSensorSource).mockResolvedValue('nats')
+    natsMock.reachable = true
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(discoverSensorSource).toHaveBeenCalledTimes(2)
+    expect(natsReachable).toHaveBeenCalledTimes(2)
     expect(startNatsFrameSource).not.toHaveBeenCalled()
   })
 

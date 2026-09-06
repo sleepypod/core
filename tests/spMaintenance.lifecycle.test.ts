@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -15,6 +15,17 @@ describe('maintenance startup separation', () => {
     const args = mode === 'default' ? [] : [mode]
     const dir = mkdtempSync(join(tmpdir(), 'maintenance-lifecycle-'))
     dirs.push(dir)
+    const old = new Date(Date.now() - 7 * 86_400_000)
+    const active = join(dir, 'staging-active')
+    const stale = join(dir, 'staging-stale')
+    for (const staging of [active, stale]) {
+      mkdirSync(join(staging, 'nested'), { recursive: true })
+      const child = join(staging, 'nested', 'download')
+      writeFileSync(child, 'in-progress download')
+      if (staging === stale) utimesSync(child, old, old)
+      utimesSync(join(staging, 'nested'), old, old)
+      utimesSync(staging, old, old)
+    }
     const bin = join(dir, 'bin')
     mkdirSync(bin)
     mkdirSync(join(dir, 'data'))
@@ -35,12 +46,14 @@ describe('maintenance startup separation', () => {
       .replaceAll('/persistent/sleepypod-data', join(dir, 'data'))
       .replaceAll('/home/dac/sleepypod-core', dir)
       .replaceAll('/etc/sudoers.d/sleepypod-reboot', sudoers)
-      .replace('for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*;', `for d in ${dir}/absent-*;`)
+      .replace('for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*;', `for d in ${dir}/staging-*;`)
     const filename = join(dir, 'maintenance')
     writeFileSync(filename, isolated)
     execFileSync('bash', [filename, ...args], {
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SP_TEST_CALLS: calls },
     })
+    expect(existsSync(active)).toBe(true)
+    expect(existsSync(stale)).toBe(mode !== '--housekeeping')
     expect(readFileSync(calls, 'utf8')).toBe(args.includes('--housekeeping') ? 'journal\npnpm\n' : '')
   })
 

@@ -767,7 +767,7 @@ async function selectAndStartSource(expectedServer: WebSocketServer): Promise<vo
     startRawTailingLoop()
     return
   }
-  const discovery = override === 'nats' ? 'nats' : await discoverSensorSource()
+  let discovery = override === 'nats' ? 'nats' : await discoverSensorSource()
   if (streamState.wss !== expectedServer) return
   const deadline = Date.now() + NATS_GRACE_MS
   for (;;) {
@@ -787,6 +787,9 @@ async function selectAndStartSource(expectedServer: WebSocketServer): Promise<vo
     if (discovery === 'raw' || (discovery === 'unknown' && remaining <= 0)) break
     await new Promise(resolve => setTimeout(resolve,
       discovery === 'nats' ? NATS_PROBE_INTERVAL_MS : Math.min(NATS_PROBE_INTERVAL_MS, remaining)))
+    // A busy boot can time out systemctl even on RAW firmware. Re-check the
+    // installation while still undecided; never switch an active frame source.
+    if (discovery === 'unknown' && streamState.wss === expectedServer) discovery = await discoverSensorSource()
   }
   if (streamState.wss !== expectedServer) return
   console.log('[sensorStream] selecting RAW source (%s installation)', discovery)
@@ -906,6 +909,8 @@ function startRawTailingLoop(): void {
   let readOffset = 0
   let nextScanAt = 0
   let needsMore = true
+  let catchingUp = false
+  let moreOnDisk = false
   let stopped = false
   let pending: Promise<void> | null = null
   const active = () => !stopped && streamState.wss === expectedServer
@@ -913,6 +918,7 @@ function startRawTailingLoop(): void {
     fileBuffer = Buffer.alloc(0)
     readOffset = 0
     needsMore = true
+    moreOnDisk = false
     streamState.frameIndex.length = 0
     streamState.indexedFilePath = currentPath
     streamState.latestCapSenseSnapshot = null
@@ -920,6 +926,7 @@ function startRawTailingLoop(): void {
     resetCapFrameWindows()
   }
   const tick = async () => {
+    catchingUp = false
     try {
       if (performance.now() >= nextScanAt) {
         const latest = await findLatestRawAsync(RAW_DATA_DIR)
@@ -953,6 +960,7 @@ function startRawTailingLoop(): void {
         if (!active()) return
         fileBuffer = Buffer.concat([fileBuffer, bytes.subarray(0, bytesRead)])
         readOffset += bytesRead
+        moreOnDisk = info.size > readOffset
       }
       const baseOffset = readOffset - fileBuffer.length
       let pos = 0
@@ -983,6 +991,7 @@ function startRawTailingLoop(): void {
       }
       if (pos > 0) fileBuffer = Buffer.from(fileBuffer.subarray(pos))
       if (fileBuffer.length === 0) needsMore = true
+      catchingUp = !needsMore || moreOnDisk
       // If complete records remain, the next tick drains them before reading
       // more. This bounds allocation and leaves time for HTTP and DAC polling.
     }
@@ -998,12 +1007,18 @@ function startRawTailingLoop(): void {
     await handle?.close().catch(() => {})
     handle = null
   }
-  streamState.streamingInterval = setInterval(() => {
-    if (!active() || pending) return
-    pending = tick().finally(() => {
-      pending = null
-    })
-  }, FILE_POLL_INTERVAL_MS)
+  const schedule = () => {
+    // Yield between backlog batches without paying the idle poll interval for
+    // every chunk. A rotated file can otherwise take seconds to reach live data.
+    streamState.streamingInterval = setTimeout(() => {
+      if (!active()) return
+      pending = tick().finally(() => {
+        pending = null
+        if (active()) schedule()
+      })
+    }, catchingUp ? 0 : FILE_POLL_INTERVAL_MS)
+  }
+  schedule()
 }
 
 // Server-side frame listeners — called for every decoded sensor frame.

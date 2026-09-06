@@ -16,7 +16,10 @@ export async function discoverSensorSource(): Promise<'raw' | 'nats' | 'unknown'
       .then(({ stdout }) => {
         const value = stdout.trim()
         return value === 'not-found' ? false : value === 'loaded' || value === 'masked' ? true : null
-      }).catch(() => null),
+      }).catch((error: unknown) => {
+        console.warn('[sensorStream] NATS installation probe unavailable:', error instanceof Error ? error.message : String(error))
+        return null
+      }),
   ])
   if (storage || service) return 'nats'
   if (storage === false && service === false) return 'raw'

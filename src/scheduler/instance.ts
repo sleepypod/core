@@ -18,10 +18,11 @@ const globalState = globalThis as typeof globalThis & {
     pending: Promise<JobManager> | null
     timezone: string | null
     abort: AbortController | null
+    shutdown: Promise<void> | null
   }
 }
 function state() {
-  return globalState.__sp_job_manager__ ??= { instance: null, pending: null, timezone: null, abort: null }
+  return globalState.__sp_job_manager__ ??= { instance: null, pending: null, timezone: null, abort: null, shutdown: null }
 }
 
 /**
@@ -56,6 +57,7 @@ async function loadTimezone(): Promise<string> {
  */
 export async function getJobManager(): Promise<JobManager> {
   const s = state()
+  if (s.shutdown) throw new Error('JobManager is shutting down')
   // If already initialized, return immediately
   if (s.instance) {
     return s.instance
@@ -117,16 +119,27 @@ export async function getJobManager(): Promise<JobManager> {
 /**
  * Shutdown the global JobManager instance
  */
-export async function shutdownJobManager(): Promise<void> {
+export function shutdownJobManager(): Promise<void> {
   const s = state()
-  s.abort?.abort()
-  s.abort = null
-  s.pending = null
+  if (s.shutdown) return s.shutdown
+  const pending = s.pending
   const manager = s.instance
-  s.instance = null
-  s.timezone = null
-  if (manager) {
-    await manager.shutdown()
-    console.log('JobManager shut down')
-  }
+  s.abort?.abort()
+  // Keep the published initialization until its cancellation cleanup finishes;
+  // otherwise a new caller can construct a second manager while the old one is
+  // still registering jobs. Shutdown also precedes closing its database.
+  s.shutdown = (async () => {
+    await pending?.catch(() => {})
+    if (manager) {
+      await manager.shutdown()
+      console.log('JobManager shut down')
+    }
+  })().finally(() => {
+    s.abort = null
+    s.pending = null
+    s.instance = null
+    s.timezone = null
+    s.shutdown = null
+  })
+  return s.shutdown
 }

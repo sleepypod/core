@@ -23,16 +23,19 @@ process-wide DAC singleton correction merged into `dev` after that deployment.
   rehydration. The DAC socket and sensor stream start before schedule loading;
   the clock gate lives in the shared scheduler singleton so early API consumers
   cannot bypass it. Optional integrations and the initial LED write run in the
-  background. Shutdown cancels pending scheduler initialization and prevents
+  background. Cron loading yields after roughly 8 ms or 25 registrations,
+  including between a power schedule's on/off registrations. Shutdown cancels pending scheduler initialization and prevents
   delayed integration starts from reviving services.
 - NATS discovery inspects the individual Pod's installed service and JetStream
   storage, then verifies its greeting. Confirmed RAW-only Pods avoid the grace
   window. Known NATS installations keep retrying through delayed server starts;
-  unknown installations retain the 60-second fallback. Local overrides:
+  unknown installations retain the 60-second fallback and retry installation
+  discovery during that window if the initial probe was inconclusive. Local overrides:
   `PIEZO_SENSOR_SOURCE=raw|nats`, or legacy `PIEZO_NATS_DISABLED=1` for RAW.
 - Live RAW ingestion uses asynchronous file operations, scans for rotation once
   a second, polls every 25 ms, reads at most 64 KiB per batch, and decodes at most
-  128 outer records or approximately 4 ms before yielding. A single record may
+  128 outer records or approximately 4 ms before yielding. Backlogs resume after
+  yielding instead of waiting for the 25 ms idle poll interval. A single record may
   exceed that time budget; incomplete records are bounded to 1 MiB before
   resynchronizing. File offsets, split records, cap persistence, truncation and
   seek indexes are preserved. Shutdown waits for the active read to finish.
@@ -61,9 +64,16 @@ of the current clock. Restart timing includes service shutdown and ExecStartPre.
 
 ## Validation
 
-Production Next build passed. The full suite passed 3,661 tests with one
-skipped; an additional same-name RAW replacement regression subsequently
-passed in the 158-test streaming suite. TypeScript, ESLint, both Drizzle schema
+Production Next build passed. CI passed 3,662 tests with one skipped, including
+the same-name RAW replacement regression. The final follow-up suite passed
+3,668 tests with one skipped. TypeScript, ESLint, both Drizzle schema
 checks, shell syntax and maintenance lifecycle checks passed.
 
-Deployment measurements will be recorded after the final build.
+The first deployment (`8fc0933`) is retained in `initial-startup-after.json`
+and `initial-after.json`. It reduced system-health median latency from 290.47
+ms to 39.38 ms, but fixed-size scheduler batches still delayed local service
+callbacks, causing discovery to report an unknown installation and wait. Its
+first/current cap frames arrived at 68.85/85.74 seconds. These observations
+motivated elapsed-time scheduler yielding, repeated inconclusive installation
+discovery, and prompt resumption of RAW backlog batches. Final measurements
+will be recorded below after deploying that follow-up.

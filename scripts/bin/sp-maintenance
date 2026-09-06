@@ -40,7 +40,9 @@ case "${1:-}" in
     TEMP_CLEANED=0
     for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*; do
       # Never remove fresh update/build staging directories while the app is live.
-      if [ -e "$d" ] && [ -n "$(find "$d" -maxdepth 0 -mtime +1 -print 2>/dev/null)" ]; then
+      if [ -e "$d" ] \
+        && RECENT_ACTIVITY=$(find "$d" -mtime -2 -print -quit 2>/dev/null) \
+        && [ -z "$RECENT_ACTIVITY" ]; then
         rm -rf "$d" 2>/dev/null && TEMP_CLEANED=$((TEMP_CLEANED + 1))
       fi
     done

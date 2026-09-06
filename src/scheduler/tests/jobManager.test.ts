@@ -1279,6 +1279,22 @@ describe('JobManager.applyCurrentLedBrightness', () => {
     expect(sendCommand).not.toHaveBeenCalled()
   })
 
+  it('does not write brightness when a pending settings read finishes after shutdown', async () => {
+    let releaseSettings!: (rows: unknown[]) => void
+    const settings = new Promise<unknown[]>((resolve) => {
+      releaseSettings = resolve
+    })
+    vi.spyOn(db, 'select').mockReturnValueOnce({
+      from: () => ({ limit: () => settings }),
+    } as any)
+    const applying = manager.applyCurrentLedBrightness()
+    await manager.shutdown()
+    releaseSettings([{ ledNightModeEnabled: false, ledDayBrightness: 45 }])
+    await applying
+
+    expect(sendCommand).not.toHaveBeenCalled()
+  })
+
   it('sends day brightness CBOR when night mode is disabled', async () => {
     vi.spyOn(db, 'select').mockReturnValueOnce({
       from: () => ({
@@ -1298,7 +1314,7 @@ describe('JobManager.applyCurrentLedBrightness', () => {
   })
 })
 
-describe('JobManager.loadSchedules YIELD_EVERY yielding', () => {
+describe('JobManager.loadSchedules event-loop yielding', () => {
   let manager: JobManager
 
   beforeEach(() => {
@@ -1311,8 +1327,9 @@ describe('JobManager.loadSchedules YIELD_EVERY yielding', () => {
   })
 
   it('awaits setImmediate every 25 entries so the event loop can service I/O', async () => {
-    // 30 rows per kind exceeds YIELD_EVERY=25, so each of the three loops
-    // (temperature, power, alarm) must take the yield branch at least once.
+    // Keep elapsed time below the budget to isolate the row-count backstop.
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    // Ninety rows across the three loops require three count-based yields.
     const rows = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, enabled: false }))
     vi.spyOn(db, 'select').mockImplementation((() => ({
       from: () => {
@@ -1327,9 +1344,50 @@ describe('JobManager.loadSchedules YIELD_EVERY yielding', () => {
 
     const setImmediateSpy = vi.spyOn(global, 'setImmediate') as unknown as ReturnType<typeof vi.fn>
     await manager.loadSchedules()
-    // Three loops, each yielding at i=24 (1-indexed 25). The system schedules
-    // call also runs but uses .limit, not the looped path.
+    // The system schedules call also runs but uses .limit, not the looped path.
     expect(setImmediateSpy).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    ['temperatureSchedules', 12, 1],
+    ['alarmSchedules', 12, 1],
+    ['powerSchedules', 12, 1],
+    ['temperatureSchedules', 3, 3],
+  ] as const)('services pending I/O during %s with %dms registrations', async (tableName, registrationMs, firstBatchSize) => {
+    let elapsedMs = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsedMs)
+    const rows = Array.from({ length: 12 }, (_, i) => ({
+      id: i + 1, enabled: true, side: 'left', dayOfWeek: 1, time: '22:00', temperature: 75,
+      onTime: '22:00', offTime: '07:00', onTemperature: 75,
+    }))
+    vi.spyOn(db, 'select').mockImplementation((() => ({
+      from: (table: any) => {
+        const query: any = Promise.resolve(table._.name === tableName ? rows : [])
+        query.where = () => query
+        query.limit = () => query
+        return query
+      },
+    })) as any)
+    const register = vi.spyOn(manager.getScheduler(), 'scheduleJob').mockImplementation(() => {
+      // A single synchronous cron registration on the Pod can exceed the 8ms
+      // budget. Advance a monotonic clock without burning host CPU in the test.
+      elapsedMs += registrationMs
+      return {} as any
+    })
+    let registrationsAtIo: number | undefined
+    const ioReady = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        registrationsAtIo = register.mock.calls.length
+        resolve()
+      })
+    })
+
+    await manager.loadSchedules()
+    // A fixed 25-row batch never yields for these 12 rows; this callback would
+    // still be pending until after the entire schedule load completed.
+    expect(registrationsAtIo).toBe(firstBatchSize)
+    await ioReady
+    expect(register).toHaveBeenCalledTimes(tableName === 'powerSchedules' ? 24 : 12)
   })
 })
 

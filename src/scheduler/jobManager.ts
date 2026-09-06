@@ -150,14 +150,19 @@ export class JobManager {
   async loadSchedules(): Promise<void> {
     console.log('Loading schedules from database...')
 
-    // node-schedule's scheduleJob is synchronous and CPU-bound; registering
-    // hundreds of cron jobs in a tight loop blocks the event loop for seconds
-    // and starves the HTTP layer of the chance to flush API responses.
-    // Yielding every YIELD_EVERY iterations lets the response flush while the
-    // remainder of the rebuild continues. Incremental scheduling (issue #612)
-    // is the proper fix.
-    const YIELD_EVERY = 25
-    const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve))
+    // One cron registration can take tens of milliseconds on a Pod. A fixed
+    // batch of 25 starves socket/probe callbacks for seconds, so also cap each
+    // batch by elapsed time (a single registration is the smallest work unit).
+    let batchStartedAt = performance.now()
+    let batchSize = 0
+    const yieldIfNeeded = async () => {
+      batchSize++
+      if (batchSize >= 25 || performance.now() - batchStartedAt >= 8) {
+        await new Promise<void>(resolve => setImmediate(resolve))
+        batchSize = 0
+        batchStartedAt = performance.now()
+      }
+    }
 
     // Load temperature schedules
     const tempSchedules = await db.select().from(temperatureSchedules)
@@ -165,7 +170,7 @@ export class JobManager {
       if (tempSchedules[i].enabled) {
         this.scheduleTemperature(tempSchedules[i])
       }
-      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
+      await yieldIfNeeded()
     }
 
     // Load power schedules
@@ -173,9 +178,10 @@ export class JobManager {
     for (let i = 0; i < powSchedules.length; i++) {
       if (powSchedules[i].enabled) {
         this.schedulePowerOn(powSchedules[i])
+        await yieldIfNeeded()
         this.schedulePowerOff(powSchedules[i])
       }
-      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
+      await yieldIfNeeded()
     }
 
     // Load alarm schedules
@@ -184,7 +190,7 @@ export class JobManager {
       if (almSchedules[i].enabled) {
         this.scheduleAlarm(almSchedules[i])
       }
-      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
+      await yieldIfNeeded()
     }
 
     // Load system schedules (priming, reboot)
@@ -530,7 +536,7 @@ export class JobManager {
    */
   async applyCurrentLedBrightness(): Promise<void> {
     const [settings] = await db.select().from(deviceSettings).limit(1)
-    if (!settings) return
+    if (!settings || this.shutdownRequested) return
 
     const target = this.computeCurrentLedBrightness(
       settings.ledNightModeEnabled,
