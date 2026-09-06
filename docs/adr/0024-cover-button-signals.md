@@ -1,6 +1,6 @@
 # ADR 0024: Validate cover-button signals before dispatching actions
 
-**Status:** Proposed — left single-click mapping verified; holds and combinations under investigation.
+**Status:** Proposed — single/double-click source established; hold edges observed; simultaneous-button capture incomplete.
 
 **Date:** 2026-09-06
 
@@ -23,7 +23,8 @@ expects sparse records shaped like:
 This example comes from source documentation, **not this capture**. The
 module converts positive values into repeated per-button journal entries.
 It does not preserve record grouping in those entries, expose release edges,
-or dispatch actions. Its assumed count semantics need physical validation.
+or dispatch actions. The trials below validate single/double-click counts
+and demonstrate why the original counts must be preserved for bindings.
 
 ## Observations
 
@@ -114,36 +115,89 @@ is decoded and firmware counters are kept separate from arrival time.
 
 The [retained evidence](../hardware/evidence/cover-buttons-20260906.ndjson)
 contains selected decoded signal logs with file offsets and item indices,
-and the exact base64 CBOR payload for each of the three button records.
+and exact base64 CBOR payloads for the single-click and follow-up trial
+button records. It also retains the relevant native haptic log lines.
 No right-side trial or multi-click/hold/chord behavior is established by
 this single-click trial.
 
+## Double-click, hold, and attempted combination trial
+
+The operator reported completing the requested double-top, hold-middle,
+and top+bottom sequence. The corresponding captured sequence is at
+09:18:07–09:18:35 UTC; completion was reported much later. Results:
+
+| Requested input | Observed structured event | Low-level evidence | Interpretation |
+|---|---|---|---|
+| Double-click left top | `{"type":"buttonEvent","ts":1788686287,"left":{"top":2}}` | Two GPI 97 press/release pairs; `enc {id:0,clicks:2}` | One event carrying a double-click count, not two independent single-click events |
+| Hold left middle, then release | `{"type":"buttonEvent","ts":1788686303,"left":{"middle":1}}` | GPI 98 press at cover counter 44271316, release at 44275572 | Hold lasts 4256 ticks (approximately 4.26 s); structured event is indistinguishable from a short single click |
+| Attempt top+bottom together | `{"type":"buttonEvent","ts":1788686315,"left":{"top":1}}` | GPI 97 press at 44286468, release at 44287300; no GPI 99 edge in the trial window | Only top registered in the capture; no validated chord |
+
+For the double-click, the gap from first release to second press is 80
+cover-counter ticks. The encoded click count arrives 501 ticks after the
+second release. The hold is also encoded 501 ticks after release. These
+observations support a release-based click aggregation window around 500
+ms; they do not establish the exact cutoff or all supported click counts.
+The structured hold event arrived locally at 09:18:23.648763 UTC. Both
+of its raw press/release log entries arrived together at 09:18:23.802677,
+so arrival-time subtraction would falsely measure a zero-length hold.
+
+All non-sensor records in the 09:18:00–09:18:45 trial window were inspected.
+No bottom edge, bottom click, or combined button payload appeared. A repeat
+trial that holds top while adding bottom is required to distinguish a
+missed physical actuation from firmware limitations. Do not implement a
+chord by guessing from this top-only event.
+
+The firmware also logged native behavior during this trial: top double-click
+entered `handleGesture`, then `alarm[left] haptic mode--dur 2->1000` and
+`start: power 25, pattern 7, dur 1000 ms`; the middle click logged
+`alarm[left] off`; the final top click logged 500 ms haptic mode. Future
+bindings must account for this existing firmware behavior and avoid adding
+unintended duplicate haptics. No firmware behavior was changed in this session.
+
+Additional unlabeled events occurred later (right middle single, left bottom
+singles, right top double, and left top single). They show the capture
+continued, but are not substitutes for labeled right-side or chord trials.
+
 ## Proposed decision
 
-Use a read-only capture of the full `frank` and cover-buttons journals plus
-unflattened RAW button records to establish the signal contract. Require
-labeled physical trials before implementing dispatch:
+Use the structured RAW `buttonEvent` as the input for single/double-click
+bindings, preserving side, button, **original click count**, timestamp, and
+record identity. A future dispatcher should match `(side, button, clicks)`;
+`left.top:2` should select a double-click binding once. Do not dispatch two
+single-click actions by reusing the observability service's count-expansion
+loop. Do not add a second double-click timer after firmware has already
+aggregated the clicks. Maximum supported counts remain untested.
 
-1. Top, middle, bottom independently on each side, with repetitions.
-2. Hold and release each button; determine whether edges, repeats, or only
-   aggregate counts are emitted.
-3. Double presses and simultaneous two-button combinations, followed by
-   three-button combinations if supported.
-4. An idle baseline and comparison against keypad recovery events.
+For duration-sensitive bindings, the structured event is insufficient.
+Investigate a separate edge source from `tca8418L/R` GPI press/release logs,
+restricted to validated button codes, using the embedded cover counter for
+duration. Preserve every CBOR item and deduplicate by source file/offset/item
+(or an equivalent stable source identity), because file replay must not
+retrigger actions. Treat keypad initialization, FIFO clearing, stream gaps,
+and counter resets as discontinuities: discard pending edge state instead
+of manufacturing releases or holds. Reset artifacts such as GPI 105/127
+must not become button actions.
 
-Prefer a validated structured `buttonEvent` source if it represents the
-required gestures. Preserve the original record, side, button values, and
-timestamps before deriving events. A shared timestamp or multiple keys in
-one record does not by itself prove simultaneous presses. If the source
-provides only aggregated counts, hold durations and chords remain unsupported
-until a suitable lower-level signal is demonstrated.
+Do not yet enable simultaneous-button bindings. Require an observed pair
+of overlapping valid button edges and a labeled repeat trial. Multiple
+keys or matching second-resolution timestamps alone would not prove overlap.
+Any eventual edge-based hold/chord recognizer must define how it suppresses
+the corresponding firmware-generated click event to avoid duplicate actions.
+
+Before enabling bindings beyond the observed inputs, repeat physical trials
+on the other side and validate hold behavior for each relevant button,
+click-count boundaries, overlapping presses, release order, and reconnect
+recovery. This ADR selects the supported click source and identifies the
+additional signal required for holds/chords; it does not claim untested
+combinations work.
 
 ## Consequences and remaining evidence
 
 The tested left single-click mapping is established. No action bindings
 have been implemented, and the observation service remains unchanged.
-The next required evidence is labeled double-click, hold/release, and
-simultaneous-button trials; the other side also remains untested.
+Double-click counts and a held-middle release have now been captured.
+The next required evidence is a repeat simultaneous-button trial with both
+valid edges present; labeled right-side coverage also remains incomplete.
 Record actual payloads and negative results here, and distinguish tested
 behavior from assumptions before accepting this decision.
 
