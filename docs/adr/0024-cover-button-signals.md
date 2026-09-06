@@ -1,6 +1,6 @@
 # ADR 0024: Validate cover-button signals before dispatching actions
 
-**Status:** Proposed — live capture in progress; physical mapping unverified.
+**Status:** Proposed — left single-click mapping verified; holds and combinations under investigation.
 
 **Date:** 2026-09-06
 
@@ -75,6 +75,49 @@ This directly demonstrates both the first-item omission and delayed
 journal delivery for candidate button signals. No physical mapping follows
 from these recovery-associated events.
 
+## Labeled single-click trial
+
+The operator confirmed pressing top, middle, bottom on Jon's side, believed
+left. Firmware independently identifies all three as `left`. The capture
+contains exactly one structured record per click, corroborated by the
+installed service's journal:
+
+```json
+{"type":"buttonEvent","ts":1788684909,"left":{"top":1}}
+{"type":"buttonEvent","ts":1788684911,"left":{"middle":1}}
+{"type":"buttonEvent","ts":1788684914,"left":{"bottom":1}}
+```
+
+These occurred at 08:55:09, 08:55:11, and 08:55:14 UTC, respectively.
+The operator reported completion later; receipt of the chat message is not
+the physical event time. The following mapping is observed on this cover:
+
+| Physical button on tested side | Firmware side | Keypad GPI (press and release) | Encoded button id | Structured field |
+|---|---|---|---|---|
+| Top | left (`tca8418L`) | 97 | 0 | `left.top` |
+| Middle | left (`tca8418L`) | 98 | 1 | `left.middle` |
+| Bottom | left (`tca8418L`) | 99 | 2 | `left.bottom` |
+
+Each chain includes `gpi press`, `gpi release`, `[buttons] enc
+{id:N,clicks:1}`, `handleButtonEvent` with the named side/button, and
+`appendButtonEvent`. The observed embedded cover-counter differences from
+press to release are 352, 208, and 256 ticks. Release to encoded click is
+501, 502, and 501 ticks. This is consistent with a roughly 500 ms click
+aggregation window if these counters tick in milliseconds; it is an
+inference from three single clicks, not a verified debounce specification.
+
+The existing service logged all three presses once, so no service change
+is needed to observe these single-click events. The structured records do
+not contain raw press/release times. The lower-level log edges are available
+for investigating holds and simultaneous presses, provided every CBOR item
+is decoded and firmware counters are kept separate from arrival time.
+
+The [retained evidence](../hardware/evidence/cover-buttons-20260906.ndjson)
+contains selected decoded signal logs with file offsets and item indices,
+and the exact base64 CBOR payload for each of the three button records.
+No right-side trial or multi-click/hold/chord behavior is established by
+this single-click trial.
+
 ## Proposed decision
 
 Use a read-only capture of the full `frank` and cover-buttons journals plus
@@ -97,9 +140,10 @@ until a suitable lower-level signal is demonstrated.
 
 ## Consequences and remaining evidence
 
-No action binding or physical mapping is approved by this ADR yet. The
-observation service remains unchanged. The next required evidence is the
-operator-labeled single-button trial, followed by holds and combinations.
+The tested left single-click mapping is established. No action bindings
+have been implemented, and the observation service remains unchanged.
+The next required evidence is labeled double-click, hold/release, and
+simultaneous-button trials; the other side also remains untested.
 Record actual payloads and negative results here, and distinguish tested
 behavior from assumptions before accepting this decision.
 
