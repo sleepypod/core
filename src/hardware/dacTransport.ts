@@ -445,9 +445,8 @@ export async function connectDac(socketPath: string): Promise<void> {
   state.connectPromise = (async () => {
     let timeoutAttempts = 0
     while (true) {
-      if (!state.dacServer) {
-        state.dacServer = await DacServer.start(socketPath)
-      }
+      // Failed attempts close their listener before retrying.
+      state.dacServer = await DacServer.start(socketPath)
 
       try {
         state.transport = await waitWithTimeout(state.dacServer)
