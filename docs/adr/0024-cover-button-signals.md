@@ -1,6 +1,6 @@
-# ADR 0024: Validate cover-button signals before dispatching actions
+# ADR 0024: Preserve firmware click counts and use raw edges for cover gestures
 
-**Status:** Proposed — single/double-click source established; hold edges observed; simultaneous-button capture incomplete.
+**Status:** Accepted — signal-source decision. Click counts are usable; hold/chord edges require loss-aware handling. This is not approval of a production gesture dispatcher.
 
 **Date:** 2026-09-06
 
@@ -158,7 +158,48 @@ Additional unlabeled events occurred later (right middle single, left bottom
 singles, right top double, and left top single). They show the capture
 continued, but are not substitutes for labeled right-side or chord trials.
 
-## Proposed decision
+## Repeated top + bottom trial
+
+The operator completed the requested repeat: hold top, add bottom while top
+is still held, then release both. At 17:02:59–17:03:05 UTC the capture
+contains both valid press edges:
+
+| Signal | Embedded cover counter | RAW timestamp | Source in `04F8076B.RAW` |
+|---|---:|---:|---|
+| Left top down (`gpi press 97`) | 72152168 | 1788714179 | offset 712072, item 10 |
+| Left bottom down (`gpi press 99`) | 72152296 | 1788714179 | offset 712072, item 11 |
+| Left top up (`gpi release 97`) | 72158136 | 1788714185 | offset 741278, item 4 |
+| Left top click (`enc {id:0,clicks:1}`) | 72158637 | 1788714185 | offset 741278, item 5 |
+
+The second press follows the first by 128 counter ticks (approximately
+128 ms) and precedes the top release by 5840 ticks. Combined with the
+operator's labeled actuation, this establishes a top+bottom overlap at the
+second press. Top's press-to-release duration is 5968 ticks. These values
+are measured counter differences, not configured gesture thresholds.
+
+The only structured result is:
+
+```json
+{"type":"buttonEvent","ts":1788714185,"left":{"top":1}}
+```
+
+There is **no captured bottom release or bottom click** between the bottom
+press and the next left-keypad FIFO clear/init at 17:07:16 UTC
+(`ts=1788714436`, cover counter 72409180). The full CBOR-sequence observer
+reported no decoding errors. The independently captured frank journal
+corroborates both presses and the top release, also without a bottom
+release in that interval. This localizes the omission upstream of the
+single-item RAW reader, but does not identify whether the keypad, cover
+firmware, or upstream logging dropped the release. Do not infer that the
+physical bottom button stayed held until keypad initialization.
+
+All three edge messages share journal arrival time
+17:03:05.790644 UTC, while their embedded counters span nearly six seconds.
+This is another direct reason to use cover counters instead of log arrival
+time. Selected trial records and the subsequent left-keypad reset are
+retained in the linked evidence file.
+
+## Decision
 
 Use the structured RAW `buttonEvent` as the input for single/double-click
 bindings, preserving side, button, **original click count**, timestamp, and
@@ -178,11 +219,22 @@ and counter resets as discontinuities: discard pending edge state instead
 of manufacturing releases or holds. Reset artifacts such as GPI 105/127
 must not become button actions.
 
-Do not yet enable simultaneous-button bindings. Require an observed pair
-of overlapping valid button edges and a labeled repeat trial. Multiple
-keys or matching second-resolution timestamps alone would not prove overlap.
-Any eventual edge-based hold/chord recognizer must define how it suppresses
-the corresponding firmware-generated click event to avoid duplicate actions.
+For top+bottom combo onset, the demonstrated signal is a second valid
+press while the first button remains down in the same cover-counter epoch.
+The repeat trial establishes that this information exists in the raw logs;
+`buttonEvent` alone demonstrably loses it. A future recognizer can latch a
+combo once on that transition, but cannot assume it will receive both
+releases. Keep this path experimental until missing-edge behavior is
+handled and tested: expire/cancel ambiguous state without generating a
+release action, clear it on reset/gaps, and require fresh input before
+rearming. Choose timeout and overlap policies explicitly in the dispatcher;
+this capture does not validate numerical thresholds.
+
+Do not infer complete chord duration or a both-buttons-released event from
+this capture. Multiple structured keys or matching second-resolution
+timestamps alone would not prove overlap. Any eventual edge-based
+hold/chord recognizer must also suppress the corresponding firmware click
+binding for the same physical gesture to avoid duplicate actions.
 
 Before enabling bindings beyond the observed inputs, repeat physical trials
 on the other side and validate hold behavior for each relevant button,
@@ -191,15 +243,17 @@ recovery. This ADR selects the supported click source and identifies the
 additional signal required for holds/chords; it does not claim untested
 combinations work.
 
-## Consequences and remaining evidence
+## Consequences and implementation follow-up
 
 The tested left single-click mapping is established. No action bindings
 have been implemented, and the observation service remains unchanged.
 Double-click counts and a held-middle release have now been captured.
-The next required evidence is a repeat simultaneous-button trial with both
-valid edges present; labeled right-side coverage also remains incomplete.
-Record actual payloads and negative results here, and distinguish tested
-behavior from assumptions before accepting this decision.
+The repeated simultaneous-button trial captured both valid press edges,
+which selects the lower-level signal needed for combos. Its missing bottom
+release is a verified limitation, not a reason to manufacture a complete
+edge sequence. The observation and signal-source decision are complete;
+production bindings, release-loss recovery, exhaustive button combinations,
+and labeled right-side validation are subsequent implementation work.
 
 Session capture files are currently local and temporary:
 `/tmp/pod88-buttons-20260906/{journal.log,baseline-journal.log,raw.ndjson,raw.stderr,observe.py}`.
