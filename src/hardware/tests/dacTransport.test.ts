@@ -11,7 +11,7 @@
  * 4. Reconnection: server recreates on timeout, accepts new connections
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { Socket } from 'net'
+import { Server, Socket } from 'net'
 import { getStatusRevision } from '../statusRevision'
 import { promises as fs } from 'fs'
 import {
@@ -427,6 +427,58 @@ describe('dacTransport', () => {
   })
 
   describe('connectDac re-entry', () => {
+    test('shares the listener, pending connection, and command queue across module instances', async () => {
+      vi.resetModules()
+      const duplicate = await import('../dacTransport')
+      expect(duplicate.connectDac).not.toBe(connectDac)
+      const listen = vi.spyOn(Server.prototype, 'listen')
+
+      const firstConnection = connectDac(socketPath)
+      const secondConnection = duplicate.connectDac(socketPath)
+      await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      const franken = mockFranken
+      const requests: string[] = []
+      let buffer = ''
+      franken.on('data', (chunk) => {
+        buffer += chunk.toString('utf-8')
+        while (buffer.includes('\n\n')) {
+          const index = buffer.indexOf('\n\n')
+          requests.push(buffer.substring(0, index))
+          buffer = buffer.substring(index + 2)
+          // Hold the first response so a competing queue would send the
+          // second command while the first is still waiting for its reply.
+          if (requests.length > 1) franken.write('SECOND\n\n')
+        }
+      })
+      await Promise.all([firstConnection, secondConnection])
+      expect(listen).toHaveBeenCalledOnce()
+      expect(isDacConnected()).toBe(true)
+      expect(duplicate.isDacConnected()).toBe(true)
+      await duplicate.connectDac(socketPath)
+      expect(listen).toHaveBeenCalledOnce()
+
+      const firstWrite = sendCommand('11', '50')
+      await vi.waitFor(() => expect(requests).toEqual(['11\n50']), { interval: 5 })
+      const secondWrite = duplicate.sendCommand('12', '-30')
+      try {
+        // Give socket writes time to arrive while the first response is held.
+        await new Promise(resolve => setTimeout(resolve, 50))
+        expect(requests).toEqual(['11\n50'])
+      }
+      finally {
+        franken.write('FIRST\n\n')
+        await expect(firstWrite).resolves.toBe('FIRST')
+        await expect(secondWrite).resolves.toBe('SECOND')
+      }
+      expect(requests).toEqual(['11\n50', '12\n-30'])
+
+      await duplicate.disconnectDac()
+      expect(duplicate.isDacConnected()).toBe(false)
+      expect(isDacConnected()).toBe(false)
+      await expect(sendCommand('14')).rejects.toThrow('not connected')
+    })
+
     test('returns immediately when already connected', async () => {
       const connectPromise = connectDac(socketPath)
       await new Promise(r => setTimeout(r, 200))
