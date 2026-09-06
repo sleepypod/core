@@ -39,7 +39,11 @@ export default defineConfig({
     },
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'lcov'],
+      reporter: ['text', 'lcov', 'json-summary'],
+      // Count production files even when no test imports them. Otherwise new,
+      // untested components disappear from the coverage denominator entirely.
+      include: ['src/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}', 'instrumentation.ts', 'proxy.ts'],
+      exclude: ['**/tests/**', '**/*.test.{ts,tsx}', '**/*.d.ts'],
     },
     name: 'unit',
     exclude: ['.claude/worktrees/**', '.codex/**', '.ygg/worktrees/**', 'node_modules/**', '.next/**'],
