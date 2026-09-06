@@ -817,6 +817,33 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
     expect(log).toHaveBeenCalledWith('LED night mode: setting brightness to 80')
   })
 
+  it.each(['led-night-start', 'led-night-end'])('skips %s when its settings read finishes after shutdown starts', async (jobId) => {
+    const { sendLed, scheduleJob } = run('2026-01-15T12:00:00Z')
+    await scheduleAndApply('22:00', '06:00', 80, 10)
+    sendLed.mockClear()
+
+    let releaseSettings!: (rows: Array<{ ledDayBrightness: number, ledNightBrightness: number }>) => void
+    const pendingSettings = new Promise<Array<{ ledDayBrightness: number, ledNightBrightness: number }>>((resolve) => {
+      releaseSettings = resolve
+    })
+    const readSettings = vi.fn(() => pendingSettings)
+    vi.spyOn(db, 'select').mockReturnValueOnce({
+      from: () => ({ limit: readSettings }),
+    } as any)
+
+    const calls = scheduleJob.mock.calls as Array<[string, JobType, string, () => Promise<void>]>
+    const callback = calls.find(c => c[0] === jobId)?.[3]
+    if (!callback) throw new Error(`expected ${jobId} callback registered`)
+
+    const running = callback()
+    expect(readSettings).toHaveBeenCalledOnce()
+    const stopping = manager.shutdown()
+    releaseSettings([{ ledDayBrightness: 45, ledNightBrightness: 5 }])
+    await Promise.all([running, stopping])
+
+    expect(sendLed).not.toHaveBeenCalled()
+  })
+
   it('logs the exact initial-brightness failure and keeps both jobs scheduled', async () => {
     const { sendLed, scheduleJob } = run('2026-01-15T12:00:00Z')
     const failure = new Error('DAC offline')

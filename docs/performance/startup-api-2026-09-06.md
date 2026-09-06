@@ -1,7 +1,7 @@
 # Startup and API performance — 2026-09-06
 
 This pass follows PR #693 and is proposed in [PR #694](https://github.com/sleepypod/core/pull/694).
-The final implementation, `aeb3852`, is deployed on the same Pod at 192.168.1.88;
+The measured implementation, `aeb3852`, is deployed on the same Pod at 192.168.1.88;
 the starting deployment is `38e0695`, so the new build also incorporates the
 process-wide DAC singleton correction merged into `dev` after that deployment.
 
@@ -66,11 +66,17 @@ of the current clock. Restart timing includes service shutdown and ExecStartPre.
 
 ## Validation
 
-The final implementation passed the production Next build and CI, including
+The measured implementation passed the production Next build and CI, including
 patch coverage. The full local suite passed 3,668 tests in 158 files with one
 skipped. TypeScript, ESLint, both Drizzle schema checks, shell syntax and
 maintenance lifecycle checks passed. ESLint retains an existing warning in
 `stryker.config.mjs` and reports no errors.
+
+A subsequent CodeRabbit review found that scheduled day/night LED callbacks
+could resume a settings read after shutdown and still write brightness. Both
+callbacks now check shutdown state after that read. Two regression tests fail
+on the measured build and pass with the guards; all 106 JobManager tests pass.
+This follow-up is separate from the deployed build and measurements below.
 
 The first deployment (`8fc0933`) is retained in `initial-startup-after.json`
 and `initial-after.json`. It reduced system-health median latency from 290.47

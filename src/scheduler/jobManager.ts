@@ -593,6 +593,7 @@ export class JobManager {
     // unrelated scheduler reload.
     this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
       const [s] = await db.select().from(deviceSettings).limit(1)
+      if (this.shutdownRequested) return
       const target = s?.ledNightBrightness ?? nightBrightness
       console.log(`LED night mode: setting brightness to ${target}`)
       await this.sendLedBrightness(target)
@@ -603,6 +604,7 @@ export class JobManager {
 
     this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
       const [s] = await db.select().from(deviceSettings).limit(1)
+      if (this.shutdownRequested) return
       const target = s?.ledDayBrightness ?? dayBrightness
       console.log(`LED night mode: setting brightness to ${target}`)
       await this.sendLedBrightness(target)
