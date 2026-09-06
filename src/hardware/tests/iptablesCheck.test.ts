@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('node:child_process', () => {
   const execSync = vi.fn()
-  return { execSync, default: { execSync } }
+  const execFile = vi.fn()
+  return { execSync, execFile, default: { execSync, execFile } }
 })
 
 import { execSync as mockedExecSync } from 'node:child_process'

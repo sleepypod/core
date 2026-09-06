@@ -34,6 +34,7 @@ interface JobManagerOptions {
  * Job manager - orchestrates all scheduled tasks
  */
 export class JobManager {
+  private shutdownRequested = false
   private scheduler: Scheduler
   private reloadInProgress: Promise<void> | null = null
   private reloadPending: boolean = false
@@ -202,7 +203,7 @@ export class JobManager {
       }
 
       if (settings.ledNightModeEnabled && settings.ledNightStartTime && settings.ledNightEndTime) {
-        await this.scheduleLedNightMode(
+        this.scheduleLedNightMode(
           settings.ledNightStartTime,
           settings.ledNightEndTime,
           settings.ledDayBrightness,
@@ -571,12 +572,12 @@ export class JobManager {
    * one at nightStartTime to dim LEDs, one at nightEndTime to restore brightness.
    * Also applies the correct brightness immediately based on current time.
    */
-  private async scheduleLedNightMode(
+  private scheduleLedNightMode(
     nightStartTime: string,
     nightEndTime: string,
     dayBrightness: number,
     nightBrightness: number,
-  ): Promise<void> {
+  ): void {
     const [startHour, startMinute] = this.parseTime(nightStartTime)
     const startCron = `${startMinute} ${startHour} * * *`
 
@@ -604,19 +605,16 @@ export class JobManager {
     // Apply correct brightness immediately based on whether we're in the night window.
     // Delegates to computeCurrentLedBrightness so the window math has one source of
     // truth (it also serves applyCurrentLedBrightness for slider-driven writes).
-    const targetBrightness = this.computeCurrentLedBrightness(
-      true,
-      nightStartTime,
-      nightEndTime,
-      dayBrightness,
-      nightBrightness,
-    )
-    try {
-      await this.sendLedBrightness(targetBrightness)
-    }
-    catch (e) {
-      console.warn('LED night mode: failed to apply initial brightness:', e)
-    }
+    // Yield until schedule registration finishes. The hardware client owns the
+    // connection wait; when it resolves, read current settings so a slider change
+    // made during startup cannot be overwritten by stale boot brightness.
+    const client = getSharedHardwareClient()
+    void client.connect().then(async () => {
+      if (this.shutdownRequested) return
+      await this.applyCurrentLedBrightness()
+    }).catch((error) => {
+      console.warn('LED night mode: failed to apply initial brightness:', error)
+    })
   }
 
   /**
@@ -1244,6 +1242,7 @@ export class JobManager {
    * Gracefully shutdown
    */
   async shutdown(): Promise<void> {
+    this.shutdownRequested = true
     this.stopHeartbeat()
     this.removeEventListeners()
     await this.scheduler.shutdown()

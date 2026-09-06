@@ -628,6 +628,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
 
   beforeEach(() => {
     vi.useFakeTimers()
+    hardwareClient.connect.mockReset().mockResolvedValue(undefined)
     manager = new JobManager('UTC')
   })
 
@@ -649,6 +650,23 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
     return { sendLed, scheduleJob }
   }
 
+  async function scheduleAndApply(start: string, end: string, day: number, night: number): Promise<void> {
+    vi.spyOn(db, 'select').mockReturnValueOnce({
+      from: () => ({
+        limit: async () => [{
+          ledNightModeEnabled: true,
+          ledNightStartTime: start,
+          ledNightEndTime: end,
+          ledDayBrightness: day,
+          ledNightBrightness: night,
+        }],
+      }),
+    } as any)
+    ;(manager as any).scheduleLedNightMode(start, end, day, night)
+    // Initial brightness now applies after the non-blocking hardware connection.
+    await vi.advanceTimersByTimeAsync(0)
+  }
+
   // Same-day window: current time inside, with non-zero minutes on now —
   // kills nowHour * 60 + nowMinute → nowHour * 60 - nowMinute (gives a
   // smaller in-window number that still tests TRUE here) only when end is
@@ -656,7 +674,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // the mutation nowMinutes=22*60-30=1290 < startMinutes=1325 → DAY.
   it('night brightness applied when current minute pushes us inside a tight same-day window (kills + → - on nowMinutes)', async () => {
     const { sendLed } = run('2026-01-15T22:30:00Z')
-    await (manager as any).scheduleLedNightMode('22:05', '23:05', 80, 10)
+    await scheduleAndApply('22:05', '23:05', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(10)
   })
 
@@ -665,14 +683,14 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // + → - mutation on startMinutes (and / 60).
   it('day brightness when current is just before start — kills + → - on startMinutes', async () => {
     const { sendLed } = run('2026-01-15T22:05:00Z')
-    await (manager as any).scheduleLedNightMode('22:10', '23:00', 80, 10)
+    await scheduleAndApply('22:10', '23:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(80)
   })
 
   // Same-day window with a non-zero end minute, observed from inside.
   it('night brightness when current is just inside the end of a tight window', async () => {
     const { sendLed } = run('2026-01-15T22:15:00Z')
-    await (manager as any).scheduleLedNightMode('22:00', '22:30', 80, 10)
+    await scheduleAndApply('22:00', '22:30', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(10)
   })
 
@@ -680,7 +698,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // window, incorrectly keeping 22:45 in night mode.
   it('day brightness after a same-day window with a non-zero end minute', async () => {
     const { sendLed } = run('2026-01-15T22:45:00Z')
-    await (manager as any).scheduleLedNightMode('22:00', '22:30', 80, 10)
+    await scheduleAndApply('22:00', '22:30', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(80)
   })
 
@@ -690,7 +708,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // would flip to NIGHT. Kills `startMinutes <= endMinutes` mutators.
   it('day brightness when start === end (degenerate window) — kills <= → < on the branch selector', async () => {
     const { sendLed } = run('2026-01-15T03:00:00Z')
-    await (manager as any).scheduleLedNightMode('01:00', '01:00', 80, 10)
+    await scheduleAndApply('01:00', '01:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(80)
   })
 
@@ -699,7 +717,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // branch flips it to DAY because the >= startMinutes leg is false.
   it('night when current is in the post-midnight portion of a cross-midnight window — kills || → &&', async () => {
     const { sendLed } = run('2026-01-15T03:00:00Z')
-    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    await scheduleAndApply('22:00', '06:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(10)
   })
 
@@ -708,19 +726,19 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // the < endMinutes leg is false.
   it('night when current is in the pre-midnight portion of a cross-midnight window — kills || → &&', async () => {
     const { sendLed } = run('2026-01-15T23:00:00Z')
-    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    await scheduleAndApply('22:00', '06:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(10)
   })
 
   it('includes the exact start minute of a cross-midnight window', async () => {
     const { sendLed } = run('2026-01-15T22:00:00Z')
-    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    await scheduleAndApply('22:00', '06:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(10)
   })
 
   it('excludes the exact end minute of a cross-midnight window', async () => {
     const { sendLed } = run('2026-01-15T06:00:00Z')
-    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    await scheduleAndApply('22:00', '06:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(80)
   })
 
@@ -728,7 +746,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // flip this to NIGHT because >= startMinutes alone is true.
   it('day when current is past the same-day window — kills && → ||', async () => {
     const { sendLed } = run('2026-01-15T08:00:00Z')
-    await (manager as any).scheduleLedNightMode('01:00', '06:00', 80, 10)
+    await scheduleAndApply('01:00', '06:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(80)
   })
 
@@ -737,7 +755,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // would flip to DAY.
   it('night at the exact start minute — kills >= → > on the start boundary', async () => {
     const { sendLed } = run('2026-01-15T01:00:00Z')
-    await (manager as any).scheduleLedNightMode('01:00', '06:00', 80, 10)
+    await scheduleAndApply('01:00', '06:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(10)
   })
 
@@ -746,7 +764,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // would flip to NIGHT.
   it('day at the exact end minute — kills < → <= on the end boundary', async () => {
     const { sendLed } = run('2026-01-15T06:00:00Z')
-    await (manager as any).scheduleLedNightMode('01:00', '06:00', 80, 10)
+    await scheduleAndApply('01:00', '06:00', 80, 10)
     expect(sendLed).toHaveBeenLastCalledWith(80)
   })
 
@@ -755,7 +773,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   // and 525, plus the scheduleJob BlockStatement mutators.
   it('registers led-night-start and led-night-end with correct cron expressions', async () => {
     const { scheduleJob } = run('2026-01-15T12:00:00Z')
-    await (manager as any).scheduleLedNightMode('22:05', '06:45', 80, 10)
+    await scheduleAndApply('22:05', '06:45', 80, 10)
 
     expect(scheduleJob).toHaveBeenCalledWith(
       'led-night-start',
@@ -779,7 +797,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
   it('scheduled callbacks send the correct brightness for night vs day', async () => {
     const { sendLed, scheduleJob } = run('2026-01-15T12:00:00Z')
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    await (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    await scheduleAndApply('22:00', '06:00', 80, 10)
 
     // Clear the initial-apply call; we want to inspect what the cron
     // handlers do when fired manually.
@@ -806,7 +824,7 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
     sendLed.mockRejectedValueOnce(failure)
 
     await expect(
-      (manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10),
+      scheduleAndApply('22:00', '06:00', 80, 10),
     ).resolves.toBeUndefined()
 
     expect(scheduleJob).toHaveBeenCalledTimes(2)
@@ -814,6 +832,41 @@ describe('JobManager.scheduleLedNightMode initial brightness', () => {
       'LED night mode: failed to apply initial brightness:',
       failure,
     )
+  })
+
+  it('registers LED schedules while disconnected and applies current settings when the connection arrives', async () => {
+    const { sendLed, scheduleJob } = run('2026-01-15T12:00:00Z')
+    let release!: () => void
+    hardwareClient.connect.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve
+    }))
+    ;(manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    expect(scheduleJob).toHaveBeenCalledTimes(2)
+    expect(sendLed).not.toHaveBeenCalled()
+
+    // The user changes brightness before hardware connects. The delayed boot
+    // write must read this value instead of replaying the old value of 80.
+    vi.spyOn(db, 'select').mockReturnValueOnce({
+      from: () => ({ limit: async () => [{ ledNightModeEnabled: false, ledDayBrightness: 45 }] }),
+    } as any)
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sendLed).toHaveBeenCalledExactlyOnceWith(45)
+  })
+
+  it('does not send delayed initial brightness after shutdown', async () => {
+    const { sendLed } = run('2026-01-15T12:00:00Z')
+    let release!: () => void
+    hardwareClient.connect.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve
+    }))
+    const apply = vi.spyOn(manager, 'applyCurrentLedBrightness')
+    ;(manager as any).scheduleLedNightMode('22:00', '06:00', 80, 10)
+    await manager.shutdown()
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(apply).not.toHaveBeenCalled()
+    expect(sendLed).not.toHaveBeenCalled()
   })
 })
 

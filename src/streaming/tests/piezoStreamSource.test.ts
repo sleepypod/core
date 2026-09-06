@@ -25,6 +25,7 @@ const tmpRawDir = vi.hoisted(() => {
   process.env.PIEZO_NATS_GRACE_MS = '120'
   process.env.PIEZO_NATS_PROBE_INTERVAL_MS = '15'
   delete process.env.PIEZO_NATS_DISABLED
+  delete process.env.PIEZO_SENSOR_SOURCE
   return dir
 })
 
@@ -61,6 +62,10 @@ vi.mock('../natsFrameSource', () => ({
   }),
 }))
 
+vi.mock('../sensorSourceDiscovery', () => ({
+  discoverSensorSource: vi.fn(async () => 'unknown'),
+}))
+
 // Keep persistence hermetic — dispatch → recordCapFrame must not touch a real db.
 vi.mock('@/src/db', () => {
   const chain = { values: () => chain, onConflictDoNothing: () => chain, where: () => chain, run: () => {} }
@@ -78,6 +83,7 @@ import {
   startPiezoStreamServer,
 } from '../piezoStream'
 import { natsReachable, startNatsFrameSource } from '../natsFrameSource'
+import { discoverSensorSource } from '../sensorSourceDiscovery'
 
 const innerEncoder = new Encoder({ mapsAsObjects: true, useRecords: false })
 
@@ -122,6 +128,8 @@ describe('startPiezoStreamServer — source selection', () => {
     natsMock.stopCalls = 0
     natsMock.captured = null
     for (const f of fs.readdirSync(tmpRawDir)) fs.rmSync(path.join(tmpRawDir, f), { force: true })
+    delete process.env.PIEZO_SENSOR_SOURCE
+    vi.mocked(discoverSensorSource).mockResolvedValue('unknown')
     vi.clearAllMocks()
     vi.restoreAllMocks()
   })
@@ -132,6 +140,7 @@ describe('startPiezoStreamServer — source selection', () => {
       resolveProbe = resolve
     }))
     startPiezoStreamServer()
+    await waitFor(() => vi.mocked(natsReachable).mock.calls.length === 1)
     await shutdownPiezoStreamServer()
     natsMock.reachable = true
     startPiezoStreamServer()
@@ -261,7 +270,7 @@ describe('startPiezoStreamServer — source selection', () => {
     expect(startNatsFrameSource).not.toHaveBeenCalled()
   })
 
-  it('falls back to RAW when NATS connect fails after a positive probe', async () => {
+  it('retries failed NATS connections through the grace window before selecting RAW on unknown firmware', async () => {
     natsMock.reachable = true
     natsMock.startError = new Error('connect raced')
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -282,12 +291,86 @@ describe('startPiezoStreamServer — source selection', () => {
       const left = getLatestCapSenseSnapshot()?.left
       return Array.isArray(left) && left[0] === 25
     })
-    expect(startNatsFrameSource).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(startNatsFrameSource).mock.calls.length).toBeGreaterThan(1)
     expect(error).toHaveBeenCalledWith(
-      '[sensorStream] NATS connect failed, falling back to .RAW tailing:',
+      '[sensorStream] NATS connect failed; retrying source discovery:',
       natsMock.startError,
     )
     error.mockRestore()
+  })
+
+  it('skips the grace window on confirmed RAW firmware after one failed greeting probe', async () => {
+    vi.mocked(discoverSensorSource).mockResolvedValue('raw')
+    fs.writeFileSync(path.join(tmpRawDir, 'confirmed-raw.RAW'), buildOuterRecord(1, {
+      type: 'capSense', ts: 123, left: 35, right: 36,
+    }))
+    startPiezoStreamServer()
+
+    await waitFor(() => getLatestCapSenseSnapshot()?.ts === 123)
+    expect(natsReachable).toHaveBeenCalledTimes(1)
+    expect(startNatsFrameSource).not.toHaveBeenCalled()
+  })
+
+  it('prefers a live NATS greeting even when installation discovery says RAW', async () => {
+    vi.mocked(discoverSensorSource).mockResolvedValue('raw')
+    natsMock.reachable = true
+    startPiezoStreamServer()
+
+    await waitFor(() => __test__.natsSourceActive)
+    expect(natsReachable).toHaveBeenCalledTimes(1)
+    expect(startNatsFrameSource).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['discovery', 'override'] as const)('waits beyond grace for known NATS via %s without reading RAW', async (selection) => {
+    if (selection === 'override') process.env.PIEZO_SENSOR_SOURCE = 'nats'
+    else vi.mocked(discoverSensorSource).mockResolvedValue('nats')
+    fs.writeFileSync(path.join(tmpRawDir, 'must-not-read.RAW'), buildOuterRecord(1, {
+      type: 'capSense', ts: 456, left: 99, right: 99,
+    }))
+    const before = getLatestCapSenseSnapshot()
+    const readdir = vi.spyOn(fs.promises, 'readdir')
+    startPiezoStreamServer()
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(vi.mocked(natsReachable).mock.calls.length).toBeGreaterThan(1)
+    expect(readdir).not.toHaveBeenCalled()
+    expect(getLatestCapSenseSnapshot()).toBe(before)
+    if (selection === 'override') expect(discoverSensorSource).not.toHaveBeenCalled()
+    natsMock.reachable = true
+    await waitFor(() => __test__.natsSourceActive)
+    expect(startNatsFrameSource).toHaveBeenCalledTimes(1)
+    expect(readdir).not.toHaveBeenCalled()
+  })
+
+  it('retries a connection race on known NATS firmware without selecting RAW', async () => {
+    vi.mocked(discoverSensorSource).mockResolvedValue('nats')
+    natsMock.reachable = true
+    natsMock.startError = new Error('connect raced')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const readdir = vi.spyOn(fs.promises, 'readdir')
+    startPiezoStreamServer()
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(natsMock.startCalls).toBeGreaterThan(1)
+    expect(readdir).not.toHaveBeenCalled()
+    natsMock.startError = null
+    await waitFor(() => __test__.natsSourceActive)
+    expect(readdir).not.toHaveBeenCalled()
+    error.mockRestore()
+  })
+
+  it('honors an explicit RAW override without discovery or a NATS greeting', async () => {
+    process.env.PIEZO_SENSOR_SOURCE = 'raw'
+    natsMock.reachable = true
+    fs.writeFileSync(path.join(tmpRawDir, 'override-raw.RAW'), buildOuterRecord(1, {
+      type: 'capSense', ts: 789, left: 10, right: 11,
+    }))
+    startPiezoStreamServer()
+
+    await waitFor(() => getLatestCapSenseSnapshot()?.ts === 789)
+    expect(discoverSensorSource).not.toHaveBeenCalled()
+    expect(natsReachable).not.toHaveBeenCalled()
+    expect(startNatsFrameSource).not.toHaveBeenCalled()
   })
 
   it('stops source selection when shutdown happens during the retry delay', async () => {

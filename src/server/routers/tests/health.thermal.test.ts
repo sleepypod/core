@@ -45,7 +45,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: vi.fn(),
   getDacMonitorIfRunning: vi.fn(),
 }))
-vi.mock('@/src/hardware/iptablesCheck', () => ({ checkIptables: vi.fn(() => ({ ok: true, rules: [] })) }))
+vi.mock('@/src/hardware/iptablesCheck', () => ({ checkIptablesCached: vi.fn(async () => ({ ok: true, rules: [] })) }))
 vi.mock('@/src/hardware/pumpStallGuard', () => ({ shouldBlock: guardMock.shouldBlock }))
 
 function resolveFor(table: unknown): unknown[] {

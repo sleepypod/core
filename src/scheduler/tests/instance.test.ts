@@ -11,10 +11,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-// Module-scoped state we manipulate per test. Each test resets these via
-// resetMocks() and then re-imports the instance module so its module-level
-// `let` state (cachedTimezone, jobManagerInstance, jobManagerInitPromise) is
-// fresh.
+// Reset both the mocks and cross-bundle singleton between tests.
 const loadSchedulesMock = vi.fn(async () => {})
 const shutdownMock = vi.fn(async () => {})
 const ctorMock = vi.fn()
@@ -78,6 +75,7 @@ async function freshModule(): Promise<InstanceModule> {
 
 describe('scheduler/instance', () => {
   beforeEach(() => {
+    delete (globalThis as Record<string, unknown>).__sp_job_manager__
     loadSchedulesMock.mockClear()
     shutdownMock.mockClear()
     ctorMock.mockClear()
@@ -93,6 +91,7 @@ describe('scheduler/instance', () => {
       await mod.shutdownJobManager().catch(() => {})
     }
     finally {
+      vi.useRealTimers()
       vi.restoreAllMocks()
     }
   })
@@ -212,6 +211,60 @@ describe('scheduler/instance', () => {
     expect(b).toBe(c)
     expect(ctorMock).toHaveBeenCalledTimes(1)
     expect(loadSchedulesMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares a pending initialization and settled manager across module instances', async () => {
+    const firstModule = await freshModule()
+    let release!: () => void
+    loadSchedulesMock.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve
+    }))
+    const first = firstModule.getJobManager()
+    await vi.waitFor(() => expect(loadSchedulesMock).toHaveBeenCalledOnce())
+    const duplicate = await freshModule()
+    const second = duplicate.getJobManager()
+    release()
+
+    const manager = await first
+    expect(await second).toBe(manager)
+    expect(await duplicate.getJobManager()).toBe(manager)
+    expect(ctorMock).toHaveBeenCalledOnce()
+  })
+
+  it('cancels clock-gated startup during shutdown without constructing a manager', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2010-01-01T00:00:00Z'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mod = await freshModule()
+    const pending = mod.getJobManager()
+    const assertion = expect(pending).rejects.toThrow('Scheduler startup cancelled')
+    await mod.shutdownJobManager()
+    await assertion
+
+    expect(ctorMock).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    vi.setSystemTime(new Date('2026-09-05T12:00:00Z'))
+    await mod.getJobManager()
+    expect(ctorMock).toHaveBeenCalledOnce()
+  })
+
+  it('discards a manager whose schedule load completes after shutdown', async () => {
+    const mod = await freshModule()
+    let release!: () => void
+    loadSchedulesMock.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve
+    }))
+    const pending = mod.getJobManager()
+    const assertion = expect(pending).rejects.toThrow()
+    await vi.waitFor(() => expect(loadSchedulesMock).toHaveBeenCalledOnce())
+    await mod.shutdownJobManager()
+    release()
+    await assertion
+
+    expect(shutdownMock).toHaveBeenCalledOnce()
+    await mod.getJobManager()
+    expect(ctorMock).toHaveBeenCalledTimes(2)
+    expect(loadSchedulesMock).toHaveBeenCalledTimes(2)
   })
 
   it('retries timezone load after a failed first attempt (no instance cached)', async () => {

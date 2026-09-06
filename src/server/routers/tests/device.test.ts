@@ -179,6 +179,7 @@ function dbChain(method: 'insert' | 'update', index = 0) {
 }
 
 beforeEach(() => {
+  delete (globalThis as Record<string, unknown>).__sp_device_enrichment__
   helpersMock.withHardwareClient.mockClear()
   Object.values(helpersMock.client).forEach(fn => fn.mockReset())
   helpersMock.client.getDeviceStatus.mockResolvedValue({

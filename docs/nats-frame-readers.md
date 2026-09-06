@@ -133,6 +133,23 @@ but it does not change the source choice. See selection rationale below.
 
 ## Source selection
 
+The Node web service now discovers the firmware installation **on each Pod**
+at startup. It does not infer NATS support from the Pod model. A loaded/masked
+`nats-server.service` unit or `/persistent/jetstream` directory means that a
+server may be starting; Node keeps retrying its greeting and connection without
+falling back to an empty RAW source. When both are confirmed absent, Node makes
+one greeting probe and starts RAW immediately if it fails. If installation
+identity cannot be read, it retains the bounded 60-second discovery window.
+A live NATS greeting always takes precedence over negative installation evidence.
+
+Local overrides are available for custom firmware: `PIEZO_SENSOR_SOURCE=raw`
+or `nats`; unset (or `auto`) uses discovery. `PIEZO_NATS_DISABLED=1` still forces
+RAW for backwards compatibility. Overrides belong in the individual Pod's
+service environment, not a fleet-wide model default. Exactly one source feeds
+broadcasts and persistence; established NATS connections reconnect themselves.
+
+The following grace-loop description remains the Python follower behavior:
+
 Reachability decides; traffic does not. Robustness beats latency here
 (reviewed 2026-07-19: "we don't need data immediately").
 

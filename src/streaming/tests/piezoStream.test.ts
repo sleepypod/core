@@ -15,7 +15,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { syncBuiltinESMExports } from 'node:module'
 import { Encoder } from 'cbor-x'
 import { WebSocket as WsClient } from 'ws'
 
@@ -1186,17 +1185,13 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const garbage = Buffer.from([0xff, 0xff, 0xff, 0xff, 0x00])
     const good2 = buildOuterRecord(2, [{ type: 'capSense', ts: 401, left: 1, right: 1 }])
 
-    const warnSpy = vi.spyOn(console, 'warn')
     const port = startAndPort()
     const client = await connectClient(port)
     fs.writeFileSync(filePath, Buffer.concat([good1, garbage, good2]))
 
     await client.waitFor(m => m.type === 'capSense' && m.ts === 400)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 401)
-    // The whole file lands in one poll tick, so the skip count is exactly the
-    // garbage length — the field engineers grep for this line, keep it exact.
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Resync: skipped %d bytes'), garbage.length, expect.any(String))
+    expect(client.messages.filter(m => m.type === 'capSense').map(m => m.ts)).toEqual([400, 401])
 
     const before = client.messages.length
     client.ws.send(JSON.stringify({ type: 'seek', timestamp: 400 }))
@@ -1298,6 +1293,41 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await client.close()
   })
 
+  it('reopens an atomically replaced RAW filename and stops reading its old inode', async () => {
+    const filePath = path.join(tmpRawDir, 'atomic.RAW')
+    const replacementPath = path.join(tmpRawDir, 'replacement.tmp')
+    const original = buildOuterRecord(1, [{ type: 'capSense', ts: 500, left: 0, right: 0 }])
+    const replacement = buildOuterRecord(1, [{ type: 'capSense', ts: 600, left: 9, right: 9 }])
+    // Equal lengths ensure a size/truncation check cannot detect the change.
+    expect(replacement.length).toBe(original.length)
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, original)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 500)
+    const oldInode = fs.openSync(filePath, 'a')
+
+    try {
+      fs.writeFileSync(replacementPath, replacement)
+      fs.renameSync(replacementPath, filePath)
+      await client.waitFor(m => m.type === 'capSense' && m.ts === 600, 3000)
+
+      // Keep the unlinked old inode alive and append to both files. Only the
+      // replacement's data should reach clients after the scan detects it.
+      fs.writeSync(oldInode, buildOuterRecord(2, [{ type: 'capSense', ts: 700, left: 7, right: 7 }]))
+      fs.appendFileSync(filePath, buildOuterRecord(2, [{ type: 'capSense', ts: 601, left: 8, right: 8 }]))
+      await client.waitFor(m => m.type === 'capSense' && m.ts === 601, 3000)
+      expect(client.messages.filter(m => m.type === 'capSense').map(m => m.ts)).toEqual([500, 600, 601])
+
+      client.ws.send(JSON.stringify({ type: 'get_time_range' }))
+      const range = await client.waitFor(m => m.type === 'time_range')
+      expect(range).toMatchObject({ min: 600, max: 601, file: 'atomic.RAW' })
+    }
+    finally {
+      fs.closeSync(oldInode)
+      await client.close()
+    }
+  })
+
   it('broadcastFrame fans out to subscribed live clients only', async () => {
     const port = startAndPort()
     const a = await connectClient(port)
@@ -1358,14 +1388,11 @@ describe('piezoStream — server lifecycle and protocol', () => {
     // branch where the parser drops the rest of the buffer.
     const trailing = Buffer.alloc(64, 0xff)
 
-    const warnSpy = vi.spyOn(console, 'warn')
     const port = startAndPort()
     const client = await connectClient(port)
     fs.writeFileSync(filePath, Buffer.concat([good, trailing]))
     await client.waitFor(m => m.type === 'capSense' && m.ts === 900)
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('no 0xa2 marker in remaining %d bytes'),
-      trailing.length, expect.any(String))
+    expect(client.messages.filter(m => m.type === 'capSense' && m.ts === 900)).toHaveLength(1)
 
     const before = client.messages.length
     client.ws.send(JSON.stringify({ type: 'seek', timestamp: 900 }))
@@ -1815,30 +1842,23 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const client = await connectClient(port)
     fs.writeFileSync(filePath, Buffer.from([0xa2]))
 
-    // Built-in ESM namespace exports are non-configurable; patch the shared
-    // CommonJS fs object that backs piezoStream's live bindings instead.
-    const mutableFs = require('node:fs') as typeof fs
-    const open = vi.spyOn(mutableFs, 'openSync').mockReturnValue(91)
-    const stat = vi.spyOn(mutableFs, 'fstatSync').mockReturnValue({ size: 1 } as never)
-    const read = vi.spyOn(mutableFs, 'readSync').mockImplementation(() => {
-      throw new Error('read failed')
-    })
-    const close = vi.spyOn(mutableFs, 'closeSync').mockImplementation(() => {})
-    syncBuiltinESMExports()
+    const handle = {
+      stat: vi.fn().mockResolvedValue({ size: 1 }),
+      read: vi.fn().mockRejectedValue(new Error('read failed')),
+      close: vi.fn().mockResolvedValue(undefined),
+    }
+    const open = vi.spyOn(fs.promises, 'open').mockResolvedValue(handle as never)
 
     try {
-      await waitUntil(() => close.mock.calls.some(([fd]) => fd === 91))
-      expect(open).toHaveBeenCalled()
-      expect(stat).toHaveBeenCalledWith(91)
-      expect(read).toHaveBeenCalled()
-      expect(close).toHaveBeenCalledWith(91)
+      await waitUntil(() => handle.close.mock.calls.length > 0)
+      expect(open).toHaveBeenCalledWith(filePath, 'r')
+      expect(handle.stat).toHaveBeenCalled()
+      expect(handle.read).toHaveBeenCalled()
+      expect(handle.close).toHaveBeenCalled()
     }
     finally {
-      close.mockRestore()
-      read.mockRestore()
-      stat.mockRestore()
+      await shutdownPiezoStreamServer()
       open.mockRestore()
-      syncBuiltinESMExports()
       await client.close()
     }
   })

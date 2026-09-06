@@ -54,6 +54,8 @@ echo "=== Uninstalling SleepyPod ==="
 echo "Stopping services..."
 SERVICES=(
   sleepypod.service
+  sleepypod-maintenance.timer
+  sleepypod-maintenance.service
   sleepypod-piezo-processor.service
   sleepypod-sleep-detector.service
   sleepypod-environment-monitor.service

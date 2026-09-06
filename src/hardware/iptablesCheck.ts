@@ -9,7 +9,10 @@
  * Called on startup (instrumentation.ts) and exposed via health.system endpoint.
  */
 
-import { execSync } from 'node:child_process'
+import { execFile, execSync } from 'node:child_process'
+import { constants } from 'node:fs'
+import { access } from 'node:fs/promises'
+import { promisify } from 'node:util'
 
 import { POD_CAPS } from './pods'
 
@@ -28,6 +31,85 @@ interface IptablesRule {
 
 /** Known iptables paths from the pod capabilities manifest, used as fallbacks */
 const KNOWN_IPTABLES_PATHS = [...new Set(Object.values(POD_CAPS).map(c => c.iptablesPath))]
+const runFile = promisify(execFile)
+const globalCache = globalThis as typeof globalThis & {
+  __sp_iptables_health__?: {
+    path: Promise<string> | null
+    value: IptablesStatus | null
+    expiresAt: number
+    pending: Promise<IptablesStatus> | null
+    generation: number
+  }
+}
+
+function healthCache() {
+  return globalCache.__sp_iptables_health__ ??= {
+    path: null, value: null, expiresAt: 0, pending: null, generation: 0,
+  }
+}
+
+async function resolveIptablesPathAsync(): Promise<string> {
+  try {
+    const { stdout } = await runFile('which', ['iptables'], { timeout: 3_000 })
+    if (stdout.trim()) return stdout.trim()
+  }
+  catch { /* Check the Pod manifest paths when PATH omits sbin. */ }
+  for (const candidate of KNOWN_IPTABLES_PATHS) {
+    try {
+      await access(candidate, constants.X_OK)
+      return candidate
+    }
+    catch { /* Try the next path. */ }
+  }
+  return 'iptables'
+}
+
+/** Request-path diagnostics: one asynchronous listing per chain, shared across
+ * concurrent requests and Next bundles, with at most 30 seconds of staleness. */
+export function checkIptablesCached(): Promise<IptablesStatus> {
+  const state = healthCache()
+  if (state.value && performance.now() < state.expiresAt) return Promise.resolve(state.value)
+  if (state.pending) return state.pending
+  const generation = state.generation
+  const pending = (async () => {
+    const iptables = await (state.path ??= resolveIptablesPathAsync())
+    const chains = await Promise.all((['INPUT', 'OUTPUT'] as const).map(async (chain) => {
+      try {
+        const { stdout } = await runFile(iptables, ['-L', chain, '-n'], { timeout: 5_000 })
+        return [chain, stdout] as const
+      }
+      catch (error) {
+        const e = error as Error & { code?: string | number }
+        const unavailable = ['ENOENT', 'EACCES', 127, 3, 4].includes(e.code ?? '')
+          || /not found|No such file|Permission denied|Operation not permitted/.test(e.message)
+        if (!unavailable) console.warn(`[iptables] Failed to check ${chain}: ${e.message}`)
+        return [chain, unavailable ? null : ''] as const
+      }
+    }))
+    const outputs = Object.fromEntries(chains)
+    const rules = buildRequiredRules(iptables).map(rule => ({
+      name: rule.name, chain: rule.chain, critical: rule.critical,
+      present: outputs[rule.chain] === null || !!outputs[rule.chain]?.includes(rule.check),
+    }))
+    const value = { ok: rules.every(rule => !rule.critical || rule.present), rules, repaired: [] }
+    if (state.generation === generation) {
+      state.value = value
+      state.expiresAt = performance.now() + 30_000
+    }
+    return value
+  })().finally(() => {
+    if (state.pending === pending) state.pending = null
+  })
+  state.pending = pending
+  return pending
+}
+
+export function invalidateIptablesHealth(): void {
+  const state = healthCache()
+  state.generation++
+  state.value = null
+  state.pending = null
+}
 
 /**
  * Resolve the absolute path to the iptables binary.
@@ -153,6 +235,7 @@ export function checkIptables(iptablesPath?: string): IptablesStatus {
  * Returns list of rules that were repaired.
  */
 export function checkAndRepairIptables(iptablesPath?: string): IptablesStatus {
+  invalidateIptablesHealth()
   const iptables = resolveIptablesPath(iptablesPath)
   const requiredRules = buildRequiredRules(iptables)
   const status = checkIptables(iptables)

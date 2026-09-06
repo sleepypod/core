@@ -12,6 +12,12 @@ const fsMock = vi.hoisted(() => ({
     return []
   }),
   statSync: vi.fn(() => ({ mtimeMs: 0 })),
+  readdir: vi.fn(async (dir: string): Promise<string[]> => {
+    void dir
+    return []
+  }),
+  stat: vi.fn(),
+  open: vi.fn(),
 }))
 
 const wsMock = vi.hoisted(() => {
@@ -95,6 +101,7 @@ vi.mock('node:fs', async (importOriginal) => {
     ...actual,
     readdirSync: fsMock.readdirSync,
     statSync: fsMock.statSync,
+    promises: { ...actual.promises, readdir: fsMock.readdir, stat: fsMock.stat, open: fsMock.open },
   }
 })
 
@@ -145,9 +152,48 @@ async function loadFreshModule(options: {
   return loadedModule
 }
 
+const rawEncoder = new Encoder({ useRecords: false })
+
+function rawLogRecord(message: string): Buffer {
+  const payload = Buffer.from(rawEncoder.encode({ type: 'log', ts: 100, level: 1, msg: message }))
+  const length = Buffer.alloc(3)
+  length[0] = 0x59
+  length.writeUInt16BE(payload.length, 1)
+  return Buffer.concat([
+    Buffer.from([0xa2, 0x63, 0x73, 0x65, 0x71, 0x01, 0x64, 0x64, 0x61, 0x74, 0x61]),
+    length,
+    payload,
+  ])
+}
+
+function mockRawFile(initial: Buffer) {
+  const file = { bytes: initial }
+  const handle = {
+    stat: vi.fn(async () => ({ size: file.bytes.length })),
+    read: vi.fn(async (buffer: Buffer, offset: number, length: number, position: number) => ({
+      bytesRead: file.bytes.copy(buffer, offset, position, position + length),
+      buffer,
+    })),
+    close: vi.fn(async () => {}),
+  }
+  fsMock.readdir.mockResolvedValue(['capture.RAW'])
+  fsMock.open.mockResolvedValue(handle)
+  return { file, handle }
+}
+
+function connectFakeClient() {
+  const server = wsMock.state.servers.at(-1)
+  if (!server) throw new Error('fake WebSocket server was not created')
+  return server.connect()
+}
+
 beforeEach(() => {
+  delete (globalThis as Record<string, unknown>).__sleepypodSensorStream
   loadedModule = null
   fsMock.readdirSync.mockReset().mockReturnValue([])
+  fsMock.readdir.mockReset().mockResolvedValue([])
+  fsMock.stat.mockReset().mockResolvedValue({ mtimeMs: 0, isFile: () => true })
+  fsMock.open.mockReset()
   fsMock.statSync.mockReset().mockReturnValue({ mtimeMs: 0 })
   wsMock.state.connectionHandler = null
   wsMock.state.options.length = 0
@@ -182,12 +228,161 @@ describe('piezoStream module initialization contracts', () => {
     const piezoStream = await loadFreshModule({ rawDataDir: null })
     piezoStream.startPiezoStreamServer()
 
-    vi.advanceTimersByTime(10)
+    await vi.advanceTimersByTimeAsync(25)
 
-    expect(fsMock.readdirSync.mock.calls.slice(0, 2).map(([dir]) => dir)).toEqual([
+    expect(fsMock.readdir.mock.calls.slice(0, 2).map(([dir]) => dir)).toEqual([
       '/persistent',
       path.join('/persistent', 'biometrics'),
     ])
+  })
+
+  it('scans RAW directories once per second while polling for appended data', async () => {
+    vi.useFakeTimers()
+    const piezoStream = await loadFreshModule()
+    piezoStream.startPiezoStreamServer()
+
+    await vi.advanceTimersByTimeAsync(25)
+    expect(fsMock.readdir).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(975)
+    expect(fsMock.readdir).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(25)
+    expect(fsMock.readdir).toHaveBeenCalledTimes(4)
+    expect(fsMock.readdirSync).not.toHaveBeenCalled()
+    expect(fsMock.statSync).not.toHaveBeenCalled()
+  })
+
+  it('uses the fallback after skipping SEQNO, directories, and captures removed during an async scan', async () => {
+    vi.useFakeTimers()
+    mockRawFile(rawLogRecord('fallback'))
+    fsMock.readdir.mockImplementation(async dir => dir.endsWith('biometrics')
+      ? ['capture.RAW']
+      : ['SEQNO.RAW', 'removed.RAW', 'folder.RAW', 'notes.txt'])
+    fsMock.stat.mockImplementation(async (filePath: string) => {
+      if (filePath.endsWith('removed.RAW')) throw new Error('rotated away')
+      return { mtimeMs: 0, isFile: () => !filePath.endsWith('folder.RAW') }
+    })
+    const piezoStream = await loadFreshModule()
+    piezoStream.startPiezoStreamServer()
+    const client = connectFakeClient()
+
+    await vi.advanceTimersByTimeAsync(25)
+
+    expect(fsMock.open).toHaveBeenCalledWith('/unused-test-raw-root/biometrics/capture.RAW', 'r')
+    expect(fsMock.stat.mock.calls.some(([filePath]) => filePath.endsWith('SEQNO.RAW'))).toBe(false)
+    expect(client.sent.map(message => JSON.parse(message).msg)).toEqual(['fallback'])
+  })
+
+  it('resets the read offset and seek index when an open RAW file is truncated in place', async () => {
+    vi.useFakeTimers()
+    const { file, handle } = mockRawFile(rawLogRecord('old capture with a longer payload'))
+    const piezoStream = await loadFreshModule()
+    piezoStream.startPiezoStreamServer()
+    const client = connectFakeClient()
+    await vi.advanceTimersByTimeAsync(25)
+
+    file.bytes = rawLogRecord('replacement')
+    await vi.advanceTimersByTimeAsync(25)
+
+    expect(client.sent.map(message => JSON.parse(message).msg)).toEqual([
+      'old capture with a longer payload', 'replacement',
+    ])
+    expect(piezoStream.__test__.frameIndex).toEqual([{ ts: 100, offset: 0 }])
+    expect(fsMock.open).toHaveBeenCalledTimes(1)
+    expect(handle.close).not.toHaveBeenCalled()
+  })
+
+  it('yields while draining a RAW backlog with bounded reads and one persistent handle', async () => {
+    vi.useFakeTimers()
+    const messages = Array.from({ length: 600 }, (_, index) => `${index}:${'x'.repeat(200)}`)
+    const { file, handle } = mockRawFile(Buffer.concat(messages.map(rawLogRecord)))
+    const piezoStream = await loadFreshModule()
+    piezoStream.startPiezoStreamServer()
+    const client = connectFakeClient()
+
+    await vi.advanceTimersByTimeAsync(25)
+    expect(client.sent.length).toBeGreaterThan(0)
+    expect(client.sent.length).toBeLessThanOrEqual(128)
+    expect(handle.read).toHaveBeenCalledTimes(1)
+    const firstCount = client.sent.length
+    await vi.advanceTimersByTimeAsync(25)
+    expect(client.sent.length - firstCount).toBeGreaterThan(0)
+    expect(client.sent.length - firstCount).toBeLessThanOrEqual(128)
+    // Complete records remain from the first 64 KiB read, so drain them before
+    // allocating another chunk. HTTP/timer work can run between these ticks.
+    expect(handle.read).toHaveBeenCalledTimes(1)
+
+    for (let tick = 0; client.sent.length < messages.length && tick < 40; tick++) {
+      const before = client.sent.length
+      await vi.advanceTimersByTimeAsync(25)
+      expect(client.sent.length - before).toBeLessThanOrEqual(128)
+    }
+    expect(client.sent.map(message => JSON.parse(message).msg)).toEqual(messages)
+    expect(handle.read.mock.calls.every(([, , length]) => length <= 64 * 1024)).toBe(true)
+    expect(fsMock.open).toHaveBeenCalledTimes(1)
+    expect(handle.close).not.toHaveBeenCalled()
+
+    file.bytes = Buffer.concat([file.bytes, rawLogRecord('appended')])
+    await vi.advanceTimersByTimeAsync(25)
+    expect(JSON.parse(client.sent[client.sent.length - 1]).msg).toBe('appended')
+    expect(fsMock.open).toHaveBeenCalledTimes(1)
+    await piezoStream.shutdownPiezoStreamServer()
+    expect(handle.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers past a corrupt oversized partial record without waiting for its claimed length', async () => {
+    vi.useFakeTimers()
+    // A damaged length claims 2 MiB. Once the partial record reaches the 1 MiB
+    // limit, discard it and continue with the next valid record.
+    const corrupt = Buffer.alloc(1024 * 1024)
+    Buffer.from([0xa2, 0x63, 0x73, 0x65, 0x71, 0x01, 0x64, 0x64, 0x61, 0x74, 0x61,
+      0x5a, 0x00, 0x20, 0x00, 0x00]).copy(corrupt)
+    const { handle } = mockRawFile(Buffer.concat([corrupt, rawLogRecord('recovered')]))
+    const piezoStream = await loadFreshModule()
+    piezoStream.startPiezoStreamServer()
+    const client = connectFakeClient()
+
+    await vi.advanceTimersByTimeAsync(25 * 20)
+
+    expect(client.sent.map(message => JSON.parse(message).msg)).toEqual(['recovered'])
+    expect(handle.read.mock.calls.every(([, , length]) => length <= 64 * 1024)).toBe(true)
+    expect(fsMock.open).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for an in-flight RAW read on shutdown, closes once, and drops its late frames', async () => {
+    vi.useFakeTimers()
+    const { handle } = mockRawFile(rawLogRecord('late'))
+    const readNormally = handle.read.getMockImplementation()
+    if (!readNormally) throw new Error('mock RAW read was not initialized')
+    let releaseRead!: () => void
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    handle.read.mockImplementation(async (...args) => {
+      await readGate
+      return readNormally(...args)
+    })
+    const piezoStream = await loadFreshModule()
+    piezoStream.startPiezoStreamServer()
+    const client = connectFakeClient()
+    await vi.advanceTimersByTimeAsync(25)
+    expect(handle.read).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(handle.read).toHaveBeenCalledTimes(1)
+
+    let stopped = false
+    const shutdown = piezoStream.shutdownPiezoStreamServer().then(() => {
+      stopped = true
+    })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    expect(handle.close).not.toHaveBeenCalled()
+    releaseRead()
+    await shutdown
+
+    expect(handle.close).toHaveBeenCalledTimes(1)
+    expect(client.sent).toEqual([])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(handle.read).toHaveBeenCalledTimes(1)
   })
 
   it('preserves the configured frame-index window and backpressure budget', async () => {

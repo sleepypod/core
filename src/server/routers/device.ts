@@ -1,10 +1,9 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { db, biometricsDb } from '@/src/db'
+import { db } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
-import { bedTemp, waterLevelReadings } from '@/src/db/biometrics-schema'
-import { eq, desc } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
@@ -23,7 +22,8 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
 } from '@/src/server/validation-schemas'
-import { toC, centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
+import { toC } from '@/src/lib/tempUtils'
+import { getDeviceEnrichment } from '@/src/hardware/deviceEnrichment'
 import { getWifiInfo } from '@/src/hardware/wifi'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 
@@ -252,35 +252,13 @@ export const deviceRouter = router({
       const convertTemp = (f: number | null) =>
         f == null ? null : (input.unit === 'C' ? Math.round(toC(f) * 10) / 10 : f)
 
-      // Best-effort enrichment — nulls on failure
-      let wifiStrength: number = -1
-      let wifiSSID: string = 'unknown'
-      let roomClimate: { temperatureC: number | null, humidity: number | null, timestamp: number | null } = { temperatureC: null, humidity: null, timestamp: null }
-      let waterLevelRaw: { raw: number | null, calibratedEmpty: number | null, calibratedFull: number | null, timestamp: number | null } = { raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null }
+      let wifiStrength = -1
+      let wifiSSID = 'unknown'
       try {
-        const wifi = getWifiInfo()
-        wifiStrength = wifi.wifiStrength
-        wifiSSID = wifi.wifiSSID
-
-        const [latestBed] = await biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1)
-        if (latestBed) {
-          roomClimate = {
-            temperatureC: latestBed.ambientTemp !== null ? centiDegreesToC(latestBed.ambientTemp) : null,
-            humidity: latestBed.humidity !== null ? centiPercentToPercent(latestBed.humidity) : null,
-            timestamp: latestBed.timestamp ? latestBed.timestamp.getTime() : null,
-          }
-        }
-        const [latestWater] = await biometricsDb.select().from(waterLevelReadings).orderBy(desc(waterLevelReadings.timestamp)).limit(1)
-        if (latestWater) {
-          waterLevelRaw = {
-            raw: latestWater.raw ?? null,
-            calibratedEmpty: latestWater.calibratedEmpty ?? null,
-            calibratedFull: latestWater.calibratedFull ?? null,
-            timestamp: latestWater.timestamp ? latestWater.timestamp.getTime() : null,
-          }
-        }
+        ({ wifiStrength, wifiSSID } = getWifiInfo())
       }
-      catch { /* enrichment is best-effort */ }
+      catch { /* Wi-Fi diagnostics must not prevent hardware status reads. */ }
+      const { roomClimate, waterLevelRaw } = await getDeviceEnrichment()
 
       return {
         ...status,

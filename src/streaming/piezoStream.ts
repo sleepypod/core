@@ -40,6 +40,8 @@ import * as path from 'node:path'
 import { Decoder } from 'cbor-x'
 import { flushCapFrameWindows, recordCapFrame, resetCapFrameWindows } from './capFramePersistence'
 import { capSideChannels, capSideStatus } from './normalizeFrame'
+import { discoverSensorSource } from './sensorSourceDiscovery'
+import { recordSensorSource, recordFirstSensorFrame } from '@/src/lib/serverPerformance'
 import { natsReachable, startNatsFrameSource } from './natsFrameSource'
 import type { NatsFrameSourceHandle } from './natsFrameSource'
 // ---------------------------------------------------------------------------
@@ -52,7 +54,12 @@ const RAW_DATA_DIR = process.env.RAW_DATA_DIR ?? '/persistent'
 // New firmware writes captures under /persistent/biometrics; older firmware
 // (and the SEQNO.RAW tmpfs symlink) sits at the /persistent root.
 const RAW_DATA_FALLBACK_SUBDIR = 'biometrics'
-const FILE_POLL_INTERVAL_MS = 10 // match Python's 10 ms poll for new data
+const FILE_POLL_INTERVAL_MS = 25
+const RAW_SCAN_INTERVAL_MS = 1_000
+const RAW_READ_BYTES = 64 * 1024
+const RAW_MAX_BUFFER_BYTES = 1024 * 1024
+const RAW_DECODE_BUDGET_MS = 4
+const RAW_RECORDS_PER_TICK = 128
 const SEEK_MAX_DURATION_S = 30 // max seconds of data to replay on seek
 // Keep frame-index entries within the seek window plus a small margin so the
 // index stays bounded on long-running streams (24h at 50fps was ~70MB).
@@ -69,10 +76,10 @@ const WS_MAX_PAYLOAD_BYTES = 1024
 // `.RAW` files. We probe reachability at startup and pick ONE source for the
 // process lifetime — never both (duplicate-row risk). See docs/nats-frame-readers.md.
 //
-// `PIEZO_NATS_DISABLED=1` forces the legacy `.RAW` tailer (escape hatch + test
-// default). The grace window keeps retrying the probe so a module that comes up
-// before nats-server still selects NATS; worst case on a `.RAW`-only pod is
-// GRACE_MS of retries before file tailing starts (accepted per review).
+// Discovery is local to each Pod. An installed NATS unit or JetStream store
+// preserves the startup wait; confirmed RAW-only installations skip it.
+// PIEZO_SENSOR_SOURCE=raw|nats overrides auto detection for custom firmware;
+// PIEZO_NATS_DISABLED=1 remains a backwards-compatible RAW escape hatch.
 const streamGlobal = globalThis as typeof globalThis & { __sleepypodSensorStream?: ReturnType<typeof createStreamState> }
 function createStreamState() {
   return {
@@ -84,6 +91,7 @@ function createStreamState() {
     streamingInterval: null as ReturnType<typeof setInterval> | null,
     // Exactly one live source is owned by this server.
     natsSource: null as NatsFrameSourceHandle | null,
+    rawStop: null as (() => Promise<void>) | null,
     warnedUnknownTypes: new Set<string>(),
     // undefined subscribes the client to every sensor type.
     clientSubscriptions: new Map<WebSocket, Set<SensorType> | undefined>(),
@@ -326,6 +334,31 @@ export function findLatestRaw(dir: string): string | null {
   const direct = findLatestRawIn(dir)
   if (direct) return direct
   return findLatestRawIn(path.join(dir, RAW_DATA_FALLBACK_SUBDIR))
+}
+
+/** Async counterpart for the hot tailing path. Files can rotate while being
+ * inspected; one disappearing entry must not hide all the remaining captures. */
+async function findLatestRawAsync(dir: string): Promise<string | null> {
+  for (const candidate of [dir, path.join(dir, RAW_DATA_FALLBACK_SUBDIR)]) {
+    try {
+      const entries = await fs.promises.readdir(candidate)
+      let latest: { path: string, mtime: number } | null = null
+      for (const entry of entries) {
+        if (!entry.endsWith('.RAW') || entry === 'SEQNO.RAW') continue
+        const filePath = path.join(candidate, entry)
+        try {
+          const info = await fs.promises.stat(filePath)
+          if (info.isFile() && (!latest || info.mtimeMs > latest.mtime)) {
+            latest = { path: filePath, mtime: info.mtimeMs }
+          }
+        }
+        catch { /* Rotated between readdir and stat. */ }
+      }
+      if (latest) return latest.path
+    }
+    catch { /* Try the older firmware location. */ }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -725,42 +758,43 @@ export function startPiezoStreamServer(): WebSocketServer {
   return streamState.wss
 }
 
-/**
- * Choose exactly one frame source for the process lifetime. Reachability
- * decides — a NATS server on loopback means new firmware, so we select NATS and
- * let it wait for frames; otherwise (or when disabled) we tail `.RAW` files. The
- * probe is retried over a grace window so a module that starts before
- * nats-server still lands on NATS. Never runs both sources (duplicate-row risk).
- */
+/** Select once per server lifetime using this Pod's installation and a live
+ * greeting. Unknown installations retain a grace window; known NATS firmware
+ * keeps waiting through delayed starts. Sources never ingest concurrently. */
 async function selectAndStartSource(expectedServer: WebSocketServer): Promise<void> {
-  if (!NATS_SOURCE_DISABLED) {
-    const deadline = Date.now() + NATS_GRACE_MS
-    for (;;) {
-      if (streamState.wss !== expectedServer) return // shut down mid-selection
-      let reachable = false
-      try {
-        reachable = await natsReachable()
-      }
-      catch {
-        reachable = false
-      }
-      if (streamState.wss !== expectedServer) return
-      if (reachable) {
-        await startNatsSource(expectedServer)
-        return
-      }
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) break
-      await new Promise(resolve => setTimeout(resolve, Math.min(NATS_PROBE_INTERVAL_MS, remaining)))
-    }
-    console.log('[sensorStream] no NATS server after %ds — tailing .RAW files',
-      Math.round(NATS_GRACE_MS / 1000))
+  const override = process.env.PIEZO_SENSOR_SOURCE
+  if (NATS_SOURCE_DISABLED || override === 'raw') {
+    startRawTailingLoop()
+    return
   }
+  const discovery = override === 'nats' ? 'nats' : await discoverSensorSource()
+  if (streamState.wss !== expectedServer) return
+  const deadline = Date.now() + NATS_GRACE_MS
+  for (;;) {
+    if (streamState.wss !== expectedServer) return
+    let reachable = false
+    try {
+      reachable = await natsReachable()
+    }
+    catch { /* An unsuccessful probe is not evidence of a different source. */ }
+    if (streamState.wss !== expectedServer) return
+    if (reachable) {
+      if (await startNatsSource(expectedServer)) return
+    }
+    // A live greeting wins even if the installer evidence said RAW. Conversely,
+    // a known NATS installation keeps retrying through delayed firmware starts.
+    const remaining = deadline - Date.now()
+    if (discovery === 'raw' || (discovery === 'unknown' && remaining <= 0)) break
+    await new Promise(resolve => setTimeout(resolve,
+      discovery === 'nats' ? NATS_PROBE_INTERVAL_MS : Math.min(NATS_PROBE_INTERVAL_MS, remaining)))
+  }
+  if (streamState.wss !== expectedServer) return
+  console.log('[sensorStream] selecting RAW source (%s installation)', discovery)
   startRawTailingLoop()
 }
 
 /** Connect the loopback-NATS source, feeding decoded frames into the shared dispatch. */
-async function startNatsSource(expectedServer: WebSocketServer): Promise<void> {
+async function startNatsSource(expectedServer: WebSocketServer): Promise<boolean> {
   try {
     const source = await startNatsFrameSource({
       decode: decodeSensorFrames,
@@ -771,16 +805,15 @@ async function startNatsSource(expectedServer: WebSocketServer): Promise<void> {
     if (streamState.wss !== expectedServer) {
       // Server shut down while we were connecting — don't leak the connection.
       await source.stop()
-      return
+      return true
     }
     streamState.natsSource = source
+    recordSensorSource('nats')
+    return true
   }
   catch (err) {
-    // Reachability said yes but the connect raced/failed. Fall back to the file
-    // tailer — on a NATS-only pod it finds nothing, which is the pre-existing
-    // (safe) empty state, not a regression.
-    console.error('[sensorStream] NATS connect failed, falling back to .RAW tailing:', err)
-    if (streamState.wss === expectedServer) startRawTailingLoop()
+    console.error('[sensorStream] NATS connect failed; retrying source discovery:', err)
+    return false
   }
 }
 
@@ -794,6 +827,7 @@ async function startNatsSource(expectedServer: WebSocketServer): Promise<void> {
  * and stays in its loop.)
  */
 function dispatchSensorFrame(frame: Record<string, unknown>): void {
+  recordFirstSensorFrame()
   const frameType = frame.type as string
 
   // New / out-of-scope firmware types (blanketReadings, …) pass through to
@@ -863,119 +897,112 @@ function dispatchSensorFrame(frame: Record<string, unknown>): void {
  */
 function startRawTailingLoop(): void {
   if (streamState.streamingInterval) return
-
+  const expectedServer = streamState.wss
+  if (!expectedServer) return
+  recordSensorSource('raw')
   let currentPath: string | null = null
+  let handle: FileHandle | null = null
   let fileBuffer = Buffer.alloc(0)
-  let readOffset = 0 // offset into the actual file (not the buffer)
-
-  streamState.streamingInterval = setInterval(() => {
-    if (!streamState.wss) return
-
-    // Find the latest RAW file
-    const latest = findLatestRaw(RAW_DATA_DIR)
-    if (!latest) return
-
-    // Switch files if a newer one appeared
-    if (latest !== currentPath) {
-      console.log(`[sensorStream] Switched to RAW file: ${path.basename(latest)}`)
-      currentPath = latest
-      fileBuffer = Buffer.alloc(0)
-      readOffset = 0
-      // Reset the sidecar frame index for the new file
-      streamState.frameIndex.length = 0
-      streamState.indexedFilePath = latest
-      // Drop the cached capSense snapshot — old file's last frame doesn't
-      // describe the current sensor state.
-      streamState.latestCapSenseSnapshot = null
-      // Persist the previous file's tail windows, then restart the stream.
-      flushCapFrameWindows()
-      resetCapFrameWindows()
-    }
-
-    // Read any new bytes appended since last read
-    let fd: number | null = null
+  let readOffset = 0
+  let nextScanAt = 0
+  let needsMore = true
+  let stopped = false
+  let pending: Promise<void> | null = null
+  const active = () => !stopped && streamState.wss === expectedServer
+  const reset = () => {
+    fileBuffer = Buffer.alloc(0)
+    readOffset = 0
+    needsMore = true
+    streamState.frameIndex.length = 0
+    streamState.indexedFilePath = currentPath
+    streamState.latestCapSenseSnapshot = null
+    flushCapFrameWindows()
+    resetCapFrameWindows()
+  }
+  const tick = async () => {
     try {
-      fd = fs.openSync(currentPath, 'r')
-      const stat = fs.fstatSync(fd)
-      const fileSize = stat.size
-
-      if (fileSize <= readOffset) {
-        fs.closeSync(fd)
-        return // no new data
+      if (performance.now() >= nextScanAt) {
+        const latest = await findLatestRawAsync(RAW_DATA_DIR)
+        if (!active()) return
+        nextScanAt = performance.now() + RAW_SCAN_INTERVAL_MS
+        let replaced = false
+        if (latest && latest === currentPath && handle) {
+          const [openInfo, pathInfo] = await Promise.all([handle.stat(), fs.promises.stat(latest)])
+          if (!active()) return
+          replaced = openInfo.ino !== pathInfo.ino || openInfo.dev !== pathInfo.dev
+        }
+        if (latest && (latest !== currentPath || replaced)) {
+          await handle?.close()
+          handle = null
+          currentPath = latest
+          reset()
+          console.log(`[sensorStream] Switched to RAW file: ${path.basename(latest)}`)
+        }
       }
-
-      const newBytes = Buffer.alloc(fileSize - readOffset)
-      fs.readSync(fd, newBytes, 0, newBytes.length, readOffset)
-      fs.closeSync(fd)
-      fd = null
-
-      // Absolute file offset corresponding to bufferPos=0 in the combined buffer.
-      // The leftover bytes in fileBuffer start at (readOffset - fileBuffer.length)
-      // in the file. Compute BEFORE concat so fileBuffer.length is just leftovers.
-      const bufferBaseFileOffset = readOffset - fileBuffer.length
-      fileBuffer = Buffer.concat([fileBuffer, newBytes])
-      readOffset = fileSize
-
-      // Parse as many complete records as possible
-      let bufferPos = 0
-      while (bufferPos < fileBuffer.length) {
-        // Capture the record's starting byte offset in the file (for the index)
-        const recordFileOffset = bufferBaseFileOffset + bufferPos
+      if (!active() || !currentPath) return
+      if (!handle) handle = await fs.promises.open(currentPath, 'r')
+      if (!active()) return
+      if (needsMore) {
+        const info = await handle.stat()
+        if (!active()) return
+        if (info.size < readOffset) reset() // in-place truncation
+        const length = Math.min(RAW_READ_BYTES, info.size - readOffset)
+        if (length <= 0) return
+        const bytes = Buffer.allocUnsafe(length)
+        const { bytesRead } = await handle.read(bytes, 0, length, readOffset)
+        if (!active()) return
+        fileBuffer = Buffer.concat([fileBuffer, bytes.subarray(0, bytesRead)])
+        readOffset += bytesRead
+      }
+      const baseOffset = readOffset - fileBuffer.length
+      let pos = 0
+      let records = 0
+      const deadline = performance.now() + RAW_DECODE_BUDGET_MS
+      needsMore = false
+      while (pos < fileBuffer.length && records < RAW_RECORDS_PER_TICK && performance.now() < deadline) {
+        records++
+        const recordOffset = baseOffset + pos
         try {
-          const { data, nextOffset } = readRawRecord(fileBuffer, bufferPos)
-          bufferPos = nextOffset
-
-          if (data === null) continue // empty placeholder
-
-          const frames = decodeSensorFrames(data)
-
-          for (const frame of frames) {
-            // Record timestamp→offset mapping in the sidecar index (file-specific,
-            // so it stays here rather than in the shared dispatch).
-            const ts = frame.ts as number | undefined
-            if (ts !== undefined) {
-              appendFrameIndex({ ts, offset: recordFileOffset })
-            }
-
+          const { data, nextOffset } = readRawRecord(fileBuffer, pos)
+          pos = nextOffset
+          if (data === null) continue
+          for (const frame of decodeSensorFrames(data)) {
+            if (typeof frame.ts === 'number') appendFrameIndex({ ts: frame.ts, offset: recordOffset })
             dispatchSensorFrame(frame)
           }
         }
-        catch (e) {
-          if (e instanceof RangeError) {
-            break // incomplete record — wait for more data
-          }
-          // Malformed record — fast-forward to the next 0xa2 marker. Avoids
-          // log-spamming every byte inside a partial piezo payload (the v1
-          // 0x00 nulls that motivated this) and recovers in O(remaining bytes).
-          const next = findNextRecordMarker(fileBuffer, bufferPos + 1)
-          if (next < 0) {
-            // No marker in remaining bytes — drop what we have and wait for
-            // more data on the next poll.
-            console.warn('[sensorStream] Resync: no 0xa2 marker in remaining %d bytes (%s)',
-              fileBuffer.length - bufferPos, (e as Error).message)
-            bufferPos = fileBuffer.length
+        catch (error) {
+          if (error instanceof RangeError && fileBuffer.length - pos < RAW_MAX_BUFFER_BYTES) {
+            needsMore = true
             break
           }
-          console.warn('[sensorStream] Resync: skipped %d bytes to next record (%s)',
-            next - bufferPos, (e as Error).message)
-          bufferPos = next
+          // Bound memory even when a damaged CBOR length claims a huge record.
+          const next = findNextRecordMarker(fileBuffer, pos + 1)
+          pos = next < 0 ? fileBuffer.length : next
         }
       }
-
-      // Keep only unconsumed bytes in the buffer
-      if (bufferPos > 0) {
-        fileBuffer = fileBuffer.subarray(bufferPos)
-      }
+      if (pos > 0) fileBuffer = Buffer.from(fileBuffer.subarray(pos))
+      if (fileBuffer.length === 0) needsMore = true
+      // If complete records remain, the next tick drains them before reading
+      // more. This bounds allocation and leaves time for HTTP and DAC polling.
     }
     catch {
-      if (fd !== null) {
-        try {
-          fs.closeSync(fd)
-        }
-        catch { /* ignore */ }
-      }
-      // Non-fatal — file may be temporarily unavailable
+      await handle?.close().catch(() => {})
+      handle = null
+      nextScanAt = 0
     }
+  }
+  streamState.rawStop = async () => {
+    stopped = true
+    await pending
+    await handle?.close().catch(() => {})
+    handle = null
+  }
+  streamState.streamingInterval = setInterval(() => {
+    if (!active() || pending) return
+    pending = tick().finally(() => {
+      pending = null
+    })
   }, FILE_POLL_INTERVAL_MS)
 }
 
@@ -1067,6 +1094,11 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
   if (streamState.streamingInterval) {
     clearInterval(streamState.streamingInterval)
     streamState.streamingInterval = null
+  }
+  if (streamState.rawStop) {
+    const stop = streamState.rawStop
+    streamState.rawStop = null
+    await stop()
   }
   if (streamState.natsSource) {
     const source = streamState.natsSource

@@ -34,9 +34,11 @@ const schedulerMock = vi.hoisted(() => {
   return { getJobManager, scheduler, jobManager }
 })
 
-// db-related — sqlite.pragma + db.select chain (uses .all())
+// db-related — lightweight sqlite connectivity + db.select chain (uses .all())
 const dbMock = vi.hoisted(() => {
   const sqlitePragma = vi.fn()
+  const sqliteGet = vi.fn()
+  const sqlitePrepare = vi.fn(() => ({ get: sqliteGet }))
   const allSchedules = { temp: [] as unknown[], pow: [] as unknown[], alm: [] as unknown[] }
   let activeTable: 'temp' | 'pow' | 'alm' = 'temp'
 
@@ -62,8 +64,10 @@ const dbMock = vi.hoisted(() => {
 
   return {
     db: { select },
-    sqlite: { pragma: sqlitePragma },
+    sqlite: { pragma: sqlitePragma, prepare: sqlitePrepare },
     sqlitePragma,
+    sqlitePrepare,
+    sqliteGet,
     allSchedules,
     setActive: (t: 'temp' | 'pow' | 'alm') => { activeTable = t },
   }
@@ -79,7 +83,16 @@ const sharedClientMock = vi.hoisted(() => {
 })
 
 const iptablesMock = vi.hoisted(() => ({
-  checkIptables: vi.fn(() => ({ ok: true, rules: [] })),
+  checkIptablesCached: vi.fn(async () => ({ ok: true, rules: [] })),
+}))
+
+const integrityMock = vi.hoisted(() => ({
+  getDatabaseIntegrity: vi.fn<() => {
+    status: 'pending' | 'ok' | 'degraded'
+    checkedAt: string | null
+    latencyMs: number
+    error?: string
+  }>(() => ({ status: 'pending', checkedAt: null, latencyMs: 0 })),
 }))
 
 vi.mock('@/src/scheduler', () => ({ getJobManager: schedulerMock.getJobManager }))
@@ -94,6 +107,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getDacMonitorIfRunning: sharedClientMock.getDacMonitorIfRunning,
 }))
 vi.mock('@/src/hardware/iptablesCheck', () => iptablesMock)
+vi.mock('@/src/db/integrity', () => integrityMock)
 
 const { healthRouter } = await import('@/src/server/routers/health')
 const caller = healthRouter.createCaller({})
@@ -104,13 +118,16 @@ beforeEach(() => {
   schedulerMock.scheduler.getNextInvocation.mockReset().mockReturnValue(null)
   schedulerMock.jobManager.reloadSchedules.mockReset().mockResolvedValue(undefined)
   dbMock.sqlitePragma.mockReset()
+  dbMock.sqlitePrepare.mockClear()
+  dbMock.sqliteGet.mockReset()
   dbMock.allSchedules.temp.length = 0
   dbMock.allSchedules.pow.length = 0
   dbMock.allSchedules.alm.length = 0
   dbMock.db.select.mockClear()
   sharedClientMock.client.connect.mockReset().mockResolvedValue(undefined)
   sharedClientMock.getDacMonitorIfRunning.mockReset()
-  iptablesMock.checkIptables.mockReset().mockReturnValue({ ok: true, rules: [] })
+  iptablesMock.checkIptablesCached.mockReset().mockResolvedValue({ ok: true, rules: [] })
+  integrityMock.getDatabaseIntegrity.mockReset().mockReturnValue({ status: 'pending', checkedAt: null, latencyMs: 0 })
   Object.values(sqlMock).forEach(mock => mock.mockClear())
 })
 
@@ -246,7 +263,10 @@ describe('health.system', () => {
     const result = await caller.system({})
     expect(result.status).toBe('ok')
     expect(result.database.status).toBe('ok')
-    expect(dbMock.sqlitePragma).toHaveBeenCalledWith('quick_check(1)')
+    expect(dbMock.sqlitePrepare).toHaveBeenCalledWith('SELECT 1')
+    expect(dbMock.sqliteGet).toHaveBeenCalledOnce()
+    expect(dbMock.sqlitePragma).not.toHaveBeenCalled()
+    expect(result.database.integrity).toEqual({ status: 'pending', checkedAt: null, latencyMs: 0 })
     expect(result.scheduler.enabled).toBe(true)
     expect(result.scheduler.drift?.drifted).toBe(false)
     expect(result.scheduler.drift).toEqual({ dbScheduleCount: 4, schedulerJobCount: 4, drifted: false })
@@ -261,8 +281,8 @@ describe('health.system', () => {
     expect(result.iptables.ok).toBe(true)
   })
 
-  it('reports degraded when sqlite pragma throws', async () => {
-    dbMock.sqlitePragma.mockImplementation(() => {
+  it('reports degraded when the sqlite connectivity query throws', async () => {
+    dbMock.sqliteGet.mockImplementation(() => {
       throw new Error('db locked')
     })
     schedulerMock.scheduler.getJobs.mockReturnValue([])
@@ -274,7 +294,7 @@ describe('health.system', () => {
   })
 
   it('reports Unknown error when sqlite throws a non-Error value', async () => {
-    dbMock.sqlitePragma.mockImplementation(() => {
+    dbMock.sqliteGet.mockImplementation(() => {
       throw { locked: true }
     })
     const result = await caller.system({})
@@ -286,6 +306,34 @@ describe('health.system', () => {
     vi.spyOn(performance, 'now').mockReturnValueOnce(100).mockReturnValueOnce(101.234)
     const result = await caller.system({})
     expect(result.database.latencyMs).toBe(1.23)
+  })
+
+  it('reports a background integrity failure even when connectivity succeeds', async () => {
+    const integrity = {
+      status: 'degraded' as const, checkedAt: '2026-09-05T12:00:00Z', latencyMs: 810,
+      error: 'database disk image is malformed',
+    }
+    integrityMock.getDatabaseIntegrity.mockReturnValue(integrity)
+
+    const result = await caller.system({})
+
+    expect(result.status).toBe('degraded')
+    expect(result.database).toMatchObject({ status: 'degraded', error: integrity.error, integrity })
+    expect(dbMock.sqlitePragma).not.toHaveBeenCalled()
+  })
+
+  it('preserves the current connectivity error alongside a previous integrity failure', async () => {
+    dbMock.sqliteGet.mockImplementationOnce(() => {
+      throw new Error('database is closed')
+    })
+    integrityMock.getDatabaseIntegrity.mockReturnValue({
+      status: 'degraded', checkedAt: '2026-09-05T12:00:00Z', latencyMs: 800, error: 'previous failure',
+    })
+
+    const result = await caller.system({})
+
+    expect(result.database.error).toBe('database is closed')
+    expect(result.database.integrity.error).toBe('previous failure')
   })
 
   it('excludes PRIME / REBOOT system jobs from drift comparison', async () => {
@@ -348,14 +396,14 @@ describe('health.system', () => {
   })
 
   it('marks system degraded when iptables critical rules are missing', async () => {
-    iptablesMock.checkIptables.mockReturnValueOnce({
+    iptablesMock.checkIptablesCached.mockResolvedValueOnce({
       ok: false,
       rules: [
         { name: 'critical-rule', present: false, critical: true },
         { name: 'optional-rule', present: false, critical: false },
         { name: 'present-rule', present: true, critical: true },
       ],
-    } as unknown as ReturnType<typeof iptablesMock.checkIptables>)
+    } as unknown as Awaited<ReturnType<typeof iptablesMock.checkIptablesCached>>)
     const result = await caller.system({})
     expect(result.iptables.ok).toBe(false)
     expect(result.iptables.missing).toEqual(['critical-rule'])
@@ -371,12 +419,24 @@ describe('health.system', () => {
   })
 
   it('uses permissive empty iptables defaults when the checker is unavailable', async () => {
-    iptablesMock.checkIptables.mockImplementationOnce(() => {
-      throw new Error('iptables unavailable')
-    })
+    iptablesMock.checkIptablesCached.mockRejectedValueOnce(new Error('iptables unavailable'))
 
     const result = await caller.system({})
     expect(result.iptables).toEqual({ ok: true, missing: [] })
+  })
+})
+
+describe('health.performance', () => {
+  it('remains available without any database, firewall, or hardware work', async () => {
+    const result = await caller.performance({})
+
+    expect(result.uptimeSeconds).toBeGreaterThanOrEqual(0)
+    expect(result.rssBytes).toBeGreaterThan(0)
+    expect(result.eventLoop).toEqual({ meanMs: 0, p95Ms: 0, maxMs: 0 })
+    expect(dbMock.sqlitePrepare).not.toHaveBeenCalled()
+    expect(dbMock.db.select).not.toHaveBeenCalled()
+    expect(iptablesMock.checkIptablesCached).not.toHaveBeenCalled()
+    expect(sharedClientMock.client.connect).not.toHaveBeenCalled()
   })
 })
 

@@ -1398,7 +1398,7 @@ Environment="RAW_DATA_DIR=/persistent/biometrics"
 Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
 # The \`+\` prefix runs ExecStartPre as root regardless of User=. Needed
 # for /deviceinfo symlink creation (root-owned) and sp-maintenance
-# (journal vacuum, /tmp cleanup, pnpm store prune).
+# (required DAC directory permissions and reboot authorization).
 ExecStartPre=+/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStartPre=+/usr/local/bin/sp-maintenance
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
@@ -1465,6 +1465,10 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
     chmod 0755 "$target"
   done
 fi
+
+# Housekeeping runs after boot, independently of API readiness.
+source "$INSTALL_DIR/scripts/lib/maintenance-helpers"
+install_maintenance_timer
 
 # Reload systemd and enable service
 echo "Enabling service..."

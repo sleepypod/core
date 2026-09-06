@@ -1,0 +1,9 @@
+[Unit]
+Description=SleepyPod deferred housekeeping
+After=sleepypod.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sp-maintenance --housekeeping
+Nice=19
+IOSchedulingClass=idle
