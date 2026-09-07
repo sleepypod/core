@@ -12,7 +12,7 @@ import { Icon, type IconName } from './icons'
 import { AutomationsList, type ListItem } from './AutomationsList'
 import { RuleEditor } from './RuleEditor'
 import { StatusPanel } from './StatusPanel'
-import { RemotePanel, useRemoteMapping } from './RemotePanel'
+import { useRemoteMapping } from './RemotePanel'
 import { RemoteCapture } from './RemoteCapture'
 import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
 
@@ -48,12 +48,11 @@ function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, labe
   )
 }
 
-/** Share mapping and selected-side state across Automations, Remote, and Diagnostics screens. */
-export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: 'list' | 'remote' | 'status' } = {}) {
+/** Host automation editing and diagnostics, including current remote capture. */
+export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: 'list' | 'status' } = {}) {
   const utils = trpc.useUtils()
-  const [screen, setScreen] = useState<'list' | 'remote' | 'status'>(initialScreen)
+  const [screen, setScreen] = useState<'list' | 'status'>(initialScreen)
   const mapping = useRemoteMapping()
-  const [remoteSide, setRemoteSide] = useState<'left' | 'right'>('left')
   const [editing, setEditing] = useState<BuilderRule | null>(null)
 
   const listQ = trpc.automations.list.useQuery({})
@@ -124,7 +123,6 @@ export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: '
           </div>
           <nav className="flex gap-1 px-3 py-2 md:flex-col">
             <NavItem icon="List" label="Automations" badge={items.length} active={screen === 'list'} onClick={() => setScreen('list')} />
-            <NavItem icon="Remote" label="Remote" active={screen === 'remote'} onClick={() => setScreen('remote')} />
             <NavItem icon="Pulse" label="Diagnostics" active={screen === 'status'} onClick={() => setScreen('status')} />
           </nav>
           <div className="mt-auto hidden p-3 md:block">
@@ -151,7 +149,6 @@ export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: '
               onNew={() => setEditing(blankRule())}
             />
           )}
-          {screen === 'remote' && <RemotePanel automations={listQ.data ?? []} mapping={mapping} side={remoteSide} setSide={setRemoteSide} />}
           {screen === 'status' && (
             <StatusPanel
               remoteCapture={<RemoteCapture config={mapping.config} automations={listQ.data ?? []} />}

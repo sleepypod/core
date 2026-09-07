@@ -21,12 +21,12 @@ vi.mock('@/src/utils/trpc', async () => {
     useUtils: () => ({ remote: { mapping: { setData: vi.fn() } }, automations: { list: cache, status: cache, runs: cache, getKillSwitch: cache } }),
   } }
 })
-import RemotePage from '@/app/[lang]/autopilot/remote/page'
+import RemotePage from '@/app/[lang]/remote/page'
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
 })
-describe('Remote navigation in the Autopilot shell', () => {
+describe('Independent Remote navigation', () => {
   it('opens the direct route and preserves the selected remote and saved mapping across screens', async () => {
     vi.useFakeTimers()
     render(<RemotePage />)
@@ -35,14 +35,11 @@ describe('Remote navigation in the Autopilot shell', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Top · single action' }), { target: { value: 'power.off' } })
     await act(() => vi.advanceTimersByTimeAsync(250))
     expect(screen.getByText('1 remapped')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Live capture' }))
     expect(screen.getByText('Remote capture')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Remote' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mapping' }))
     expect(screen.getByLabelText('right cover remote')).toBeTruthy()
     expect((screen.getByRole('combobox', { name: 'Top · single action' }) as HTMLSelectElement).value).toBe('power.off')
-    fireEvent.click(screen.getByRole('button', { name: /Automations/ }))
-    expect(screen.queryByRole('heading', { name: 'Remote' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Remote' }))
-    expect(screen.getByText('1 remapped')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Automations/ })).toBeNull()
   })
 })

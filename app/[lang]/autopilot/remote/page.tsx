@@ -1,5 +1,7 @@
-import { AutopilotConsole } from '@/src/components/Autopilot/AutopilotConsole'
-/** Open the Autopilot shell directly on its Remote mapping screen. */
-export default function RemotePage() {
-  return <AutopilotConsole initialScreen="remote" />
+import { redirect } from 'next/navigation'
+
+/** Preserve existing bookmarks after promoting Remote to its own destination. */
+export default async function RemotePage({ params }: { params: Promise<{ lang: string }> }) {
+  const { lang } = await params
+  redirect(`/${lang}/remote`)
 }

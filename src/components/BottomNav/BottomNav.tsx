@@ -2,7 +2,7 @@
 
 import { msg } from '@lingui/core/macro'
 import { useLingui } from '@lingui/react'
-import { Activity, BarChart3, Calendar, Gauge, Radio, Thermometer } from 'lucide-react'
+import { Activity, BarChart3, Calendar, Gauge, Radio, SlidersHorizontal, Thermometer } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
@@ -13,6 +13,7 @@ const tabs = [
   { id: 'schedule', icon: Calendar, label: msg`Schedule`, href: '/schedule' },
   { id: 'data', icon: BarChart3, label: msg`Biometrics`, href: '/data' },
   { id: 'sensors', icon: Radio, label: msg`Sensors`, href: '/sensors' },
+  { id: 'remote', icon: SlidersHorizontal, label: msg`Remote`, href: '/remote' },
   { id: 'status', icon: Activity, label: msg`Status`, href: '/status' },
   // Autopilot console — hidden from nav until P2 wires biometric/ambient/enum signals
   // (sleepypod-core-69). The page still lives at /autopilot (deep-link) and the /debug
