@@ -4,6 +4,9 @@
 
 **Date:** 2026-09-06
 
+**Updated:** 2026-09-07 — triple through quintuple clicks, complete two-button
+release sequence, and three-button onset captured.
+
 ## Context
 
 We want to assign logic to physical cover buttons, including combinations.
@@ -23,7 +26,7 @@ expects sparse records shaped like:
 This example comes from source documentation, **not this capture**. The
 module converts positive values into repeated per-button journal entries.
 It does not preserve record grouping in those entries, expose release edges,
-or dispatch actions. The trials below validate single/double-click counts
+or dispatch actions. The trials below validate click counts from one through five on left top
 and demonstrate why the original counts must be preserved for bindings.
 
 ## Observations
@@ -199,15 +202,94 @@ This is another direct reason to use cover counters instead of log arrival
 time. Selected trial records and the subsequent left-keypad reset are
 retained in the linked evidence file.
 
+## September 7: triple, hold, and additional combinations
+
+After the previous SSH observer terminated with a remote connection close,
+a new full-sequence observer and journal capture were started at approximately
+07:22:56 UTC. The live stream was verified before the operator began. This
+is a separate capture epoch; firmware counters must not be subtracted across
+the two sessions. The operator reported completing the planned triple-top,
+held-middle, and hold-top/add-bottom/release-bottom/release-top test, plus
+additional combinations. The following describes **observed** extra sequences;
+it does not assume which gesture the operator intended each one to mean.
+All events in this trial use firmware `left`.
+
+| UTC on September 7 | Decoded input | Structured `left` payload | What this proves |
+|---|---|---|---|
+| 08:11:55–56 | Middle + top briefly overlap; then top is pressed again | `{"middle":1,"top":2}` | Multiple button counts can share a record even when one also has a later, separate click |
+| 08:12:02–03 | Three top press/release pairs | `{"top":3}` | Triple click is directly recognized |
+| 08:12:11–14 | Middle held for 3136 cover ticks (~3.136 s) | `{"middle":1}` | Hold duration still exists only in edges |
+| 08:12:21–26 | Top down, bottom down, bottom up, top up | `{"bottom":1}` | Complete held-top + bottom sequence is available in raw edges; structured output omits top for this gesture |
+| 08:12:32–33 | Four top press/release pairs | `{"top":4}` | Quadruple click is directly recognized |
+| 08:12:43–45 | Five top press/release pairs | `{"top":5}` | Quintuple click is directly recognized; this does not establish the maximum |
+| 08:12:55–58 | Top, bottom, middle go down within 48 ticks; middle and top come up | `{"middle":1,"top":1}` | All-three onset is visible; bottom release and count are absent |
+
+The [September 7 evidence](../hardware/evidence/cover-buttons-20260907.ndjson)
+retains each structured payload as original base64 CBOR alongside selected
+signal logs, offsets, and item indices. The frank journal independently
+corroborates the click encodings and the complete two-button edge sequence.
+The observer reported no decode errors through review at approximately
+09:34 UTC. Additional isolated left-top single clicks at 07:59:13 and
+08:15:57 UTC are outside the concentrated test above.
+
+### Complete held-top + bottom sequence
+
+All four edges are in `04FADE2B.RAW`:
+
+| Edge | Cover counter | Offset / item index |
+|---|---:|---|
+| Top down, GPI 97 | 40314898 | 3332656 / 8 |
+| Bottom down, GPI 99 | 40316098 | 3352184 / 0 |
+| Bottom up, GPI 99 | 40318338 | 3352184 / 1 |
+| Top up, GPI 97 | 40319234 | 3380651 / 1 |
+
+Bottom is added 1200 ticks after top, held for 2240 ticks, and released
+896 ticks before top. Top is held for 4336 ticks. The complete observed
+overlap is 2240 ticks (~2.240 s). Only a bottom click record is emitted at
+`ts=1788768745`; no separate top click or top encoding appears before the
+next top burst starts at 08:12:32. This rules out reconstructing the physical
+sequence solely from structured click counts. It does not establish why
+firmware omits the top click.
+
+### Extra overlap and all-three input
+
+In the initial mixed event, middle goes down at 40288402, top at 40288450,
+middle up at 40288546, and top up at 40288578. Their observed overlap is
+96 ticks. Top then has another down/up pair at 40289010/40289154. The
+firmware emits both button counts together at 40289655, 501 ticks after the
+last top release. Thus `middle:1,top:2` represents both overlap and a later
+click, not a single timeless chord. Preserve per-edge order when interpreting
+it; a multi-key record alone is not an unambiguous combo identifier.
+
+For all three, top goes down at 40348450, bottom at 40348482, and middle
+at 40348498. Middle releases at 40351442 and top at 40351474. No bottom
+release is captured before the next left-keypad FIFO clear/init at
+08:16:28 (`ts=1788768988`, cover counter 40561270). All-three onset is
+detectable, but its full release sequence and total overlap duration cannot
+be verified. The complete two-button trial does **not** remove the missing
+release limitation seen in this and earlier trials.
+
+### Current bindable signal catalog
+
+- Structured counts: left top single, double, triple, quadruple, and quintuple;
+  left middle/bottom single. Do not claim the same count range for every
+  other button/side without testing it.
+- Edge-derived gestures: middle hold, top+middle overlap, complete held-top
+  plus bottom, and all-three onset. These require our own recognizer;
+  firmware does not emit a dedicated hold/chord type in these captures.
+- Reliable universal release delivery, all release orders, top+middle+bottom
+  permutations, and the entire right-side catalog remain unverified.
+
 ## Decision
 
-Use the structured RAW `buttonEvent` as the input for single/double-click
+Use the structured RAW `buttonEvent` as the input for verified click-count
 bindings, preserving side, button, **original click count**, timestamp, and
 record identity. A future dispatcher should match `(side, button, clicks)`;
 `left.top:2` should select a double-click binding once. Do not dispatch two
 single-click actions by reusing the observability service's count-expansion
 loop. Do not add a second double-click timer after firmware has already
-aggregated the clicks. Maximum supported counts remain untested.
+aggregated the clicks. Left top counts 1–5 are observed; the upper limit
+and equivalent counts on other buttons remain untested.
 
 For duration-sensitive bindings, the structured event is insufficient.
 Investigate a separate edge source from `tca8418L/R` GPI press/release logs,
@@ -248,10 +330,9 @@ combinations work.
 The tested left single-click mapping is established. No action bindings
 have been implemented, and the observation service remains unchanged.
 Double-click counts and a held-middle release have now been captured.
-The repeated simultaneous-button trial captured both valid press edges,
-which selects the lower-level signal needed for combos. Its missing bottom
-release is a verified limitation, not a reason to manufacture a complete
-edge sequence. The observation and signal-source decision are complete;
+The September 7 trial additionally captured a complete held-top/add-bottom
+sequence and all-three onset. Missing releases in other trials remain a
+verified limitation, not a reason to manufacture a complete edge sequence. The observation and signal-source decision are complete;
 production bindings, release-loss recovery, exhaustive button combinations,
 and labeled right-side validation are subsequent implementation work.
 
@@ -270,3 +351,8 @@ records, and base64 payloads. It follows rotation after draining the open
 file, reports decoding failures explicitly, and emits ten-second heartbeats.
 Use this output for signal analysis; the original follower capture remains
 available for comparison. Neither observer changes the installed service.
+
+The September 7 continuation uses `raw-sequences-20260907.ndjson`,
+`raw-sequences-20260907.stderr`, `journal-20260907.log`, and
+`journal-20260907.stderr` under the same temporary directory. Relevant
+selected evidence is committed separately for each date.
