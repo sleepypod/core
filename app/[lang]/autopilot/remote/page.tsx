@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 
-/** Preserve existing bookmarks after promoting Remote to its own destination. */
+/** Preserve remote bookmarks at its Diagnostics destination. */
 export default async function RemotePage({ params }: { params: Promise<{ lang: string }> }) {
   const { lang } = await params
-  redirect(`/${lang}/remote`)
+  redirect(`/${lang}/debug/remote`)
 }

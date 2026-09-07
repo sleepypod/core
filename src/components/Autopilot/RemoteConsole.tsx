@@ -14,7 +14,7 @@ export function RemoteConsole() {
   const automations = trpc.automations.list.useQuery({})
 
   return (
-    <div className="mx-[calc(50%-50vw)] w-screen px-3 text-zinc-100 md:px-4" style={{ ['--accent' as string]: '#0c87c2' }}>
+    <div className="w-full min-w-0 text-zinc-100" style={{ ['--accent' as string]: '#0c87c2' }}>
       <div className="mx-auto max-w-[1250px] overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/60">
         <nav aria-label="Remote sections" className="flex gap-2 border-b border-zinc-800 p-3">
           {(['mapping', 'capture'] as const).map(section => (

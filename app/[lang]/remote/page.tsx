@@ -1,6 +1,7 @@
-import { RemoteConsole } from '@/src/components/Autopilot/RemoteConsole'
+import { redirect } from 'next/navigation'
 
-/** Open remote mapping and capture independently of Autopilot. */
-export default function RemotePage() {
-  return <RemoteConsole />
+/** Preserve remote bookmarks at its Diagnostics destination. */
+export default async function RemotePage({ params }: { params: Promise<{ lang: string }> }) {
+  const { lang } = await params
+  redirect(`/${lang}/debug/remote`)
 }

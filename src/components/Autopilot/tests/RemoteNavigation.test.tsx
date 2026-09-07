@@ -21,13 +21,13 @@ vi.mock('@/src/utils/trpc', async () => {
     useUtils: () => ({ remote: { mapping: { setData: vi.fn() } }, automations: { list: cache, status: cache, runs: cache, getKillSwitch: cache } }),
   } }
 })
-import RemotePage from '@/app/[lang]/remote/page'
+import { RemoteConsole as RemotePage } from '../RemoteConsole'
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
 })
-describe('Independent Remote navigation', () => {
-  it('opens the direct route and preserves the selected remote and saved mapping across screens', async () => {
+describe('Remote panel navigation', () => {
+  it('opens the mapping panel and preserves the selected remote and saved mapping across screens', async () => {
     vi.useFakeTimers()
     render(<RemotePage />)
     expect(screen.getByRole('heading', { name: 'Remote' })).toBeTruthy()

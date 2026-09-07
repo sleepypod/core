@@ -38,6 +38,7 @@ import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemLogViewer } from '@/src/components/status/SystemLogViewer'
+import { RemoteConsole } from '@/src/components/Autopilot/RemoteConsole'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 
 // These panels are hidden on the initial Overview tab. Load their chart and
@@ -71,6 +72,7 @@ const SECTIONS = [
   { id: 'sensors', label: 'Sensors', icon: Radio },
   { id: 'health', label: 'Health', icon: ServerCog },
   { id: 'calibration', label: 'Calibration', icon: SlidersHorizontal },
+  { id: 'remote', label: 'Remote', icon: SlidersHorizontal },
   { id: 'autopilot', label: 'Autopilot', icon: Wand2 },
   { id: 'logs', label: 'Logs', icon: ScrollText },
 ] as const
@@ -86,8 +88,8 @@ type SectionId = (typeof SECTIONS)[number]['id']
  * the panels can use the full viewport. Desktop-first: the side-nav also hosts
  * the active side and Settings, which the header drops on wide viewports.
  */
-export function DiagnosticsConsole() {
-  const [section, setSection] = useState<SectionId>('overview')
+export function DiagnosticsConsole({ initialSection = 'overview' }: { initialSection?: SectionId } = {}) {
+  const [section, setSection] = useState<SectionId>(initialSection)
   const { side } = useSide()
   const { sideName } = useSideNames()
   const pathname = usePathname()
@@ -140,6 +142,7 @@ export function DiagnosticsConsole() {
           {section === 'sensors' && <SensorsPanel />}
           {section === 'health' && <HealthPanel />}
           {section === 'calibration' && <CalibrationPanel />}
+          {section === 'remote' && <RemoteConsole />}
           {section === 'autopilot' && <AutopilotPanel />}
           {section === 'logs' && <LogsPanel />}
         </div>
