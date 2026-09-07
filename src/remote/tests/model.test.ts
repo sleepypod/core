@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { defaultBinding, describe as describeBinding, editConfig, emptyConfig, inputHint, inputLabel } from '../model'
+import { bindingSchema, defaultBinding, describe as describeBinding, editConfig, emptyConfig, inputHint, inputLabel } from '../model'
 describe('Remote mapping contract', () => {
   it('uses structured defaults and consistent descriptions for every parameter kind', () => {
     expect(defaultBinding('temp.up')).toEqual({ action: 'temp.up', deltaF: 1 })
     expect(defaultBinding('temp.down')).toEqual({ action: 'temp.down', deltaF: 1 })
     expect(defaultBinding('temp.preset')).toEqual({ action: 'temp.preset', temperatureF: 68 })
     expect(defaultBinding('alarm.snooze')).toEqual({ action: 'alarm.snooze', durationSec: 540 })
-    expect(describeBinding(defaultBinding('temp.preset'))).toBe('Jump to preset temp 68°F')
+    expect(describeBinding(defaultBinding('temp.preset'))).toBe('Set temperature 68°F')
     expect(describeBinding(defaultBinding('alarm.snooze'))).toBe('Snooze alarm 9 min')
     expect(describeBinding(defaultBinding('automation.run', 42), [{ id: 42, name: 'Evening' }])).toBe('Run “Evening”')
     expect(describeBinding(defaultBinding('automation.run', 42))).toBe('Run “Deleted automation”')
@@ -28,5 +28,14 @@ describe('Remote mapping contract', () => {
     expect(inputLabel('top+mid.single')).toBe('Top + Middle')
     expect(inputHint('top+bottom.single')).toBe('T + B · together')
     expect(inputHint('mid.double')).toBe('M×2 · firmware count')
+  })
+})
+
+describe('Direct temperature assignment', () => {
+  it.each([55, 63, 71, 110])('accepts a whole-degree target of %i without an automation', (temperatureF) => {
+    expect(bindingSchema.parse({ action: 'temp.preset', temperatureF })).toEqual({ action: 'temp.preset', temperatureF })
+  })
+  it.each([54, 111, 68.5, NaN])('rejects invalid temperature %s', (temperatureF) => {
+    expect(bindingSchema.safeParse({ action: 'temp.preset', temperatureF }).success).toBe(false)
   })
 })

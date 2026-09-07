@@ -17,7 +17,7 @@ function Harness({ initial = emptyConfig() }: { initial?: RemoteConfig }) {
 }
 describe('Remote mapping interactions', () => {
   it.each([
-    ['temp.down', '1', '2'], ['temp.preset', '68', '76'], ['alarm.snooze', '540', '900'],
+    ['temp.down', '1', '2'], ['temp.preset', '68', '71'], ['alarm.snooze', '540', '900'],
   ])('edits the %s parameter without parsing its display label', (action, initial, changed) => {
     render(<Harness />)
     fireEvent.change(screen.getByRole('combobox', { name: 'Middle · single action' }), { target: { value: action } })

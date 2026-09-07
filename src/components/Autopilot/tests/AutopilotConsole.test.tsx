@@ -24,7 +24,7 @@ describe('Combined Autopilot page', () => {
   it('shows engine state with the list and opens a new automation without navigating away', () => {
     render(<AutopilotConsole />)
     expect(screen.getByRole('heading', { name: 'Autopilot' })).toBeTruthy()
-    expect(screen.getByText('Autopilot running')).toBeTruthy()
+    expect(screen.getByText('Running')).toBeTruthy()
     expect(screen.queryByText('Run log')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Live' }))
     expect(screen.getByRole('region', { name: 'Live rule state' })).toBeTruthy()

@@ -17,7 +17,7 @@ describe('remote action dispatch', () => {
   ]>([
     [{ action: 'temp.up', deltaF: 2 }, 'setTemperature', ['right', 72]],
     [{ action: 'temp.down', deltaF: 3 }, 'setTemperature', ['right', 67]],
-    [{ action: 'temp.preset', temperatureF: 62 }, 'setTemperature', ['right', 62]],
+    [{ action: 'temp.preset', temperatureF: 71 }, 'setTemperature', ['right', 71]],
     [{ action: 'power.toggle' }, 'setPower', ['right', false]],
     [{ action: 'power.off' }, 'setPower', ['right', false]],
     [{ action: 'alarm.off' }, 'clearAlarm', ['right']],

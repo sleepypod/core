@@ -125,3 +125,9 @@ whole rule will fire; other conditions, cooldowns, and hardware gates still
 apply. Missing signals display as unavailable. Unsupported OR/NOT conditions
 are not flattened into a misleading comparison. Last fired and Today use fired
 or clamped outcomes, while Last outcome includes skipped and dry-run evaluations.
+
+Direct button actions do not require a WHEN/IF/THEN automation. Set temperature
+accepts whole-degree targets from 55–110°F; existing `temp.preset` bindings remain
+compatible. Run an automation is a separate binding for conditional behavior.
+The remote illustration has no enclosing card, and Autopilot's running switch
+sits unboxed beside the page title, separate from New automation.

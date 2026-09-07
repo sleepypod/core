@@ -90,7 +90,15 @@ export function AutopilotConsole() {
       <style dangerouslySetInnerHTML={{ __html: SCOPED_CSS }} />
       <header className="flex flex-wrap items-center justify-between gap-4 px-5 py-5">
         <div>
-          <h1 className="text-xl font-semibold">Autopilot</h1>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <h1 className="text-xl font-semibold">Autopilot</h1>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-400">{globalEnabled === undefined ? 'Status unavailable' : globalEnabled ? 'Running' : 'Halted'}</span>
+              <button type="button" role="switch" aria-label="Autopilot running" aria-checked={globalEnabled ?? false} disabled={globalEnabled === undefined || killM.isPending} onClick={() => killM.mutate({ enabled: !globalEnabled })} className="relative h-6 w-11 rounded-full bg-zinc-700 disabled:opacity-50" style={globalEnabled ? { background: 'var(--accent)' } : undefined}>
+                <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${globalEnabled ? 'left-6' : 'left-1'}`} />
+              </button>
+            </div>
+          </div>
           <p className="mt-1 text-xs text-zinc-500">
             {activeCount}
             {' '}
@@ -110,16 +118,6 @@ export function AutopilotConsole() {
             <Icon.Plus size={15} />
             New automation
           </Button>
-          <div className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-2">
-            <Icon.Power size={18} className={globalEnabled === false ? 'text-red-400' : 'text-zinc-400'} />
-            <div className="text-xs">
-              <div>{globalEnabled === undefined ? 'Autopilot status unavailable' : globalEnabled ? 'Autopilot running' : 'Autopilot halted'}</div>
-              <div className="text-[10px] text-zinc-500">global kill-switch</div>
-            </div>
-            <button type="button" role="switch" aria-label="Autopilot running" aria-checked={globalEnabled ?? false} disabled={globalEnabled === undefined || killM.isPending} onClick={() => killM.mutate({ enabled: !globalEnabled })} className="relative h-6 w-11 rounded-full bg-zinc-700 disabled:opacity-50" style={globalEnabled ? { background: 'var(--accent)' } : undefined}>
-              <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${globalEnabled ? 'left-6' : 'left-1'}`} />
-            </button>
-          </div>
         </div>
       </header>
       <nav aria-label="Autopilot views" className="flex gap-6 border-b border-zinc-800 px-5">

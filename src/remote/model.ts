@@ -16,7 +16,7 @@ export const sideSchema = z.enum(SIDES)
 export const bindingSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('none') }).strict(),
   z.object({ action: z.enum(['temp.up', 'temp.down']), deltaF: z.union([z.literal(1), z.literal(2), z.literal(3)]) }).strict(),
-  z.object({ action: z.literal('temp.preset'), temperatureF: z.union([z.literal(62), z.literal(68), z.literal(72), z.literal(76)]) }).strict(),
+  z.object({ action: z.literal('temp.preset'), temperatureF: z.number().int().min(55).max(110) }).strict(),
   z.object({ action: z.enum(['power.toggle', 'power.off', 'alarm.off', 'away.toggle', 'prime.start']) }).strict(),
   z.object({ action: z.literal('alarm.snooze'), durationSec: z.union([z.literal(300), z.literal(540), z.literal(900)]) }).strict(),
   z.object({ action: z.literal('automation.run'), automationId: z.number().int().positive() }).strict(),
@@ -98,7 +98,7 @@ export function inputHint(id: string): string {
 }
 export const ACTIONS = [
   { id: 'none', label: 'Nothing' }, { id: 'temp.up', label: 'Temperature up' },
-  { id: 'temp.down', label: 'Temperature down' }, { id: 'temp.preset', label: 'Jump to preset temp' },
+  { id: 'temp.down', label: 'Temperature down' }, { id: 'temp.preset', label: 'Set temperature' },
   { id: 'power.toggle', label: 'Toggle power' }, { id: 'power.off', label: 'Turn side off' },
   { id: 'alarm.snooze', label: 'Snooze alarm' }, { id: 'alarm.off', label: 'Dismiss alarm' },
   { id: 'elev.preset', label: 'Go to elevation preset', unavailable: 'Elevation control is not implemented on this device' },

@@ -126,7 +126,7 @@ function Param({ binding, automations, change, disabled, label }: {
   if ('temperatureF' in binding) {
     value = binding.temperatureF
 
-    options = [62, 68, 72, 76].map(n => ({ value: n, label: `${n}°F` }))
+    options = Array.from({ length: 56 }, (_, i) => i + 55).map(n => ({ value: n, label: `${n}°F` }))
   }
 
   if ('durationSec' in binding) {
@@ -159,7 +159,7 @@ function Param({ binding, automations, change, disabled, label }: {
         if ('deltaF' in binding)
           change({ ...binding, deltaF: n as 1 | 2 | 3 })
         else if ('temperatureF' in binding)
-          change({ ...binding, temperatureF: n as 62 | 68 | 72 | 76 })
+          change({ ...binding, temperatureF: n })
         else if ('durationSec' in binding)
           change({ ...binding, durationSec: n as 300 | 540 | 900 })
         else if ('automationId' in binding)
@@ -229,7 +229,7 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 px-5 py-4">
         <div className="min-w-[200px] flex-1">
           <h1 className="text-[19px] font-semibold tracking-tight text-zinc-100">Remote</h1>
-          <p className="mt-0.5 text-[12px] text-zinc-500">Reprogram what each button does. Each side’s remote is mapped separately.</p>
+          <p className="mt-0.5 text-[12px] text-zinc-500">Assign a direct action or run an automation. Each side’s remote is mapped separately.</p>
         </div>
         <div className="flex items-center gap-3">
           {count > 0 && (
@@ -260,7 +260,7 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         <div className={styles.layout}>
           <div className="self-start md:sticky md:top-0">
-            <Card className="flex items-center gap-6 p-5 md:block">
+            <div className="flex items-center gap-6 p-5 md:block">
               <RemoteFigure selected={selected} hovered={hovered} config={config} side={side} select={setSelected} />
               <div className="flex flex-1 flex-col gap-2 md:mt-5 md:border-t md:border-zinc-800/60 md:pt-4">
                 <Button variant="ghost" size="sm" disabled={mapping.busy} onClick={() => setConfirm('copy')} className="justify-start">
@@ -274,7 +274,7 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
                   Reset this remote
                 </Button>
               </div>
-            </Card>
+            </div>
           </div>
           <div className="flex min-w-0 flex-col gap-3">
             {confirm && (
