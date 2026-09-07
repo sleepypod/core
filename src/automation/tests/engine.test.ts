@@ -899,3 +899,43 @@ describe('AutomationEngine — pump stall guard gate', () => {
     }
   })
 })
+
+describe('AutomationEngine live readouts', () => {
+  it('reads current values without firing actions or sampling aggregate windows', async () => {
+    const h = makeHarness([rule({ conditions: { kind: 'compare', op: '>', left: sig('left.movement'), right: lit(200) }, actions: [{ kind: 'notify', message: 'test' }] })])
+    await h.engine.reload()
+    h.setSignal('left.movement', 168)
+    expect(h.engine.getLiveReadings().get(1)).toMatchObject({ value: 168, threshold: 200, op: '>', matched: false })
+    h.setSignal('left.movement', 220)
+    expect(h.engine.getLiveReadings().get(1)?.matched).toBe(true)
+    expect(h.runs).toHaveLength(0)
+    expect(h.notifies).toHaveLength(0)
+    expect(h.hwCalls).toHaveLength(0)
+  })
+
+  it('uses the engine window instead of substituting the latest scalar', async () => {
+    const h = makeHarness([rule({ conditions: { kind: 'compare', op: '>', left: { kind: 'window', fn: 'avg', signal: 'left.movement', lastMin: 10 }, right: lit(200) } })])
+    await h.engine.reload()
+    h.setSignal('left.movement', 100)
+    expect(h.engine.getLiveReadings().get(1)?.value).toBeNull()
+    await h.engine.tick()
+    h.advance(60000)
+    h.setSignal('left.movement', 200)
+    await h.engine.tick()
+    h.setSignal('left.movement', 900)
+    expect(h.engine.getLiveReadings().get(1)).toMatchObject({ value: 150, aggregation: 'avg', windowMin: 10, matched: false })
+  })
+
+  it('handles negative below thresholds and unavailable values', async () => {
+    const h = makeHarness([rule({ conditions: { kind: 'compare', op: '<', left: sig('left.hrv'), right: lit(-2) } })])
+    await h.engine.reload()
+    h.setSignal('left.hrv', -0.8)
+    expect(h.engine.getLiveReadings().get(1)?.matched).toBe(false)
+    h.setSignal('left.hrv', -3)
+    expect(h.engine.getLiveReadings().get(1)?.matched).toBe(true)
+    h.setSignal('left.hrv', undefined)
+    expect(h.engine.getLiveReadings().get(1)).toMatchObject({ value: null, matched: null })
+    h.setSignal('left.hrv', NaN)
+    expect(h.engine.getLiveReadings().get(1)).toMatchObject({ value: null, matched: null })
+  })
+})

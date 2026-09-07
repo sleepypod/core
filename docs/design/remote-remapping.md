@@ -65,7 +65,8 @@ through the project's OpenAPI `GET /remote/mapping` route.
 
 Edits save after 250 ms with a visible pending/error state. Saves are serialized;
 leaving the app flushes an unsent edit. Mapping and selected side are held in
-the Autopilot shell so switching screens preserves them.
+the Remote console so switching between Mapping and Live capture preserves them.
+Remote lives at `/{lang}/debug/remote`, separately from Autopilot.
 
 Instrumentation starts the dispatcher before sensor streaming. Runtime state
 and frame subscribers are process-wide so Next.js instrumentation and route
@@ -107,3 +108,20 @@ Local UI testing can use `CI=1 pnpm dev --port 3011`, which migrates and seeds
 local databases while skipping hardware startup. This mode intentionally
 reports that the device listener is unavailable. It does not exercise physical
 hardware commands. Production builds use `pnpm build`.
+
+## Autopilot views
+
+Autopilot at `/{lang}/autopilot` has Rules, Live, and Activity views. The shared
+page header holds rule counts, New automation, and the global kill-switch.
+Rules show compact live readings alongside last outcome, last fired, and Today;
+Live expands the same readings into per-rule cards with dry-run controls.
+Activity gives the run log the page width without a nested vertical scroll area.
+Remote mapping and capture remain in their separate Diagnostics destination.
+
+Live readings come from the engine's existing signal reader and aggregate
+windows. Inspecting status does not sample windows, advance triggers, or run
+actions. A meter shows a primary numeric comparison, not a promise that the
+whole rule will fire; other conditions, cooldowns, and hardware gates still
+apply. Missing signals display as unavailable. Unsupported OR/NOT conditions
+are not flattened into a misleading comparison. Last fired and Today use fired
+or clamped outcomes, while Last outcome includes skipped and dry-run evaluations.

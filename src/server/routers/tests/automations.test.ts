@@ -120,3 +120,16 @@ describe('automations.backtest — capacitive scalar reducers', () => {
     expect(out.result?.primary?.key).toBe('left.cap.max')
   })
 })
+
+describe('automations.status', () => {
+  it('separates last evaluation from last fire and returns unavailable live state without an engine', async () => {
+    const firedAt = new Date('2026-09-07T05:00:00Z')
+    dbState.queue.push([{ on: true }])
+    dbState.queue.push([{ id: 1, name: 'Rule', enabled: true, dryRun: false, side: 'left', cooldownMin: 30 }])
+    dbState.queue.push([{ outcome: 'skipped', firedAt: new Date('2026-09-07T06:00:00Z') }])
+    dbState.queue.push([{ firedAt }])
+    dbState.queue.push([{ firedAt }])
+    const out = await caller.status({})
+    expect(out.rules[0]).toMatchObject({ lastOutcome: 'skipped', lastFiredAt: firedAt, firesToday: 1, live: null })
+  })
+})

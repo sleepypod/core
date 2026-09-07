@@ -41,6 +41,7 @@ import {
   type Side,
 } from './types'
 import { WindowStore } from './windows'
+import { readRuleLive, type LiveReading } from './live'
 
 /** How many minutes after a timeOfDay slot a late tick may still fire it. */
 const TIME_OF_DAY_GRACE_MIN = 10
@@ -179,6 +180,18 @@ export class AutomationEngine {
   /** Whether autopilot is globally enabled (kill-switch not engaged). */
   isGloballyEnabled(): boolean {
     return this.globalEnabled
+  }
+
+  /** Snapshot live readouts without advancing triggers, windows, or hardware state. */
+  getLiveReadings(): Map<number, LiveReading | null> {
+    const snapshot = this.deps.signals.read()
+    const ctx: EvalContext = {
+      signal: key => snapshot[key],
+      windows: this.windows,
+      nowMs: this.deps.now(),
+      ...this.deps.clock(),
+    }
+    return new Map(this.rules.map(rule => [rule.id, readRuleLive(rule, ctx)]))
   }
 
   private getRuntime(id: number): RuleRuntime {

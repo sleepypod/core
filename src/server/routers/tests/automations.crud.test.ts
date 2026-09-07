@@ -46,8 +46,10 @@ const biometricsDb = vi.hoisted(() => makeDbMock(states.biometrics))
 const engine = vi.hoisted(() => ({
   reload: vi.fn(),
   setGlobalEnabled: vi.fn(),
+  getLiveReadings: vi.fn(),
   current: null as null | {
     reload: (...args: unknown[]) => unknown
+    getLiveReadings: (...args: unknown[]) => unknown
     setGlobalEnabled: (...args: unknown[]) => unknown
   },
   get: vi.fn(),
@@ -124,7 +126,8 @@ beforeEach(() => {
   resetDb(biometricsDb)
   engine.reload.mockReset().mockResolvedValue(undefined)
   engine.setGlobalEnabled.mockReset()
-  engine.current = { reload: engine.reload, setGlobalEnabled: engine.setGlobalEnabled }
+  engine.getLiveReadings.mockReset().mockReturnValue(new Map())
+  engine.current = { reload: engine.reload, setGlobalEnabled: engine.setGlobalEnabled, getLiveReadings: engine.getLiveReadings }
   engine.get.mockReset().mockImplementation(() => engine.current)
   backtest.run.mockReset().mockReturnValue({ events: [], primary: null })
 })
@@ -352,8 +355,12 @@ describe('automations kill switch, runs, and status', () => {
     const firedAt = new Date('2026-07-20T00:30:00Z')
     states.primary.queue.push([{ on: false }])
     states.primary.queue.push([automationRow(), second])
+    const live = { signal: 'left.movement', value: 168, threshold: 200, op: '>', aggregation: 'avg', windowMin: 10, matched: false }
+    engine.getLiveReadings.mockReturnValue(new Map([[7, live]]))
     states.primary.queue.push([{ outcome: 'clamped', firedAt }])
+    states.primary.queue.push([{ firedAt }])
     states.primary.queue.push([{ firedAt }, { firedAt }])
+    states.primary.queue.push([])
     states.primary.queue.push([])
     states.primary.queue.push([])
 
@@ -370,6 +377,7 @@ describe('automations kill switch, runs, and status', () => {
           lastOutcome: 'clamped',
           lastFiredAt: firedAt,
           firesToday: 2,
+          live,
         },
         {
           id: 8,
@@ -381,6 +389,7 @@ describe('automations kill switch, runs, and status', () => {
           lastOutcome: null,
           lastFiredAt: null,
           firesToday: 0,
+          live: null,
         },
       ],
     })

@@ -6,7 +6,9 @@
 'use client'
 
 import { Icon } from './icons'
-import { Button, SideBadge, StatusBadge, Toggle } from './primitives'
+import { LiveReadout } from './LiveReadout'
+import type { LiveReading } from '@/src/automation/live'
+import { SideBadge, StatusBadge, Toggle } from './primitives'
 import { type BuilderRule, buildSentence } from './builderModel'
 
 export interface ListItem {
@@ -17,6 +19,8 @@ export interface ListItem {
   side: 'left' | 'right' | 'both'
   builder: BuilderRule
   lastFired: string
+  live?: LiveReading | null
+  lastOutcome?: string | null
   firesToday: number
 }
 
@@ -56,8 +60,14 @@ function Row({ a, onToggle, onOpen }: { a: ListItem, onToggle: (id: number, enab
           <SideBadge side={a.side} />
         </div>
         <RuleSentence b={a.builder} />
+        <div className="mt-2 xl:hidden"><LiveReadout live={a.live} /></div>
+        <div className="mt-1 text-[11px] text-zinc-500">
+          Last outcome:
+          {a.lastOutcome?.replaceAll('_', '-') ?? '—'}
+        </div>
       </div>
       <div className="flex items-center gap-5 text-right">
+        <div className="hidden w-40 text-left xl:block"><LiveReadout live={a.live} /></div>
         <div className="hidden sm:block">
           <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Last fired</div>
           <div className="mono text-[12px] text-zinc-400">{a.lastFired}</div>
@@ -113,47 +123,15 @@ function EmptyState() {
   )
 }
 
-export function AutomationsList({ items, loading, onToggle, onOpen, onNew }: {
+export function AutomationsList({ items, loading, onToggle, onOpen }: {
   items: ListItem[]
   loading: boolean
   onToggle: (id: number, enabled: boolean) => void
   onOpen: (a: ListItem) => void
-  onNew: () => void
 }) {
-  const activeCount = items.filter(a => a.enabled && a.mode === 'active').length
-  const dryCount = items.filter(a => a.enabled && a.mode === 'dryrun').length
   const empty = !loading && items.length === 0
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between gap-4 border-b border-zinc-800 px-5 py-4">
-        <div>
-          <h1 className="text-[19px] font-semibold tracking-tight text-zinc-100">Autopilot</h1>
-          <p className="text-[12px] text-zinc-500 mt-0.5">
-            {empty
-              ? 'Reactive rules that respond to live signals'
-              : (
-                  <>
-                    {activeCount}
-                    {' '}
-                    active ·
-                    {' '}
-                    {dryCount}
-                    {' '}
-                    in dry-run ·
-                    {' '}
-                    {items.length}
-                    {' '}
-                    total
-                  </>
-                )}
-          </p>
-        </div>
-        <Button variant="accent" size="md" onClick={onNew}>
-          <Icon.Plus size={15} />
-          New automation
-        </Button>
-      </div>
-
       {loading
         ? <div className="px-5 py-16 text-center text-[13px] text-zinc-600">Loading automations…</div>
         : empty
