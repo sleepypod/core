@@ -20,6 +20,18 @@ afterEach(() => {
 const detection = (id: string) => ({ id, side: 'left', mask: 4, gesture: 'single', inputId: 'top.single', t: 1788768700000, receivedAt: 1788768701000, latencyMs: null })
 
 describe('live Remote capture', () => {
+  it('shows right-side combos while mapping loads and explains unsupported gestures', () => {
+    render(<RemoteCapture config={undefined} automations={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Arm capture' }))
+    act(() => {
+      FakeSource.latest.message({ ...detection('combo'), side: 'right', mask: 5, gesture: 'combo', inputId: 'top+bottom.single' })
+      FakeSource.latest.message({ ...detection('hold'), gesture: 'unsupported', inputId: 'top.hold', detail: 'Hold is diagnostic only' })
+    })
+    expect(screen.getByText('R')).toBeTruthy()
+    expect(screen.getByText('combo')).toBeTruthy()
+    expect(screen.getByText('Loading mapping…')).toBeTruthy()
+    expect(screen.getByText('Hold is diagnostic only')).toBeTruthy()
+  })
   it('arms a real stream URL, resolves retained events from the latest mapping, and closes on stop', () => {
     const { rerender } = render(<RemoteCapture config={emptyConfig()} automations={[]} />)
     expect(screen.getByText('Arm capture to inspect real button inputs.')).toBeTruthy()

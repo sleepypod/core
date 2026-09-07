@@ -84,6 +84,29 @@ describe('remote recognition from observed signals', () => {
     expect(events[0]).toMatchObject({ side: 'left', inputId: 'top.double', gesture: 'double' })
   })
 
+  it('rejects fresh button counts without a usable source identity', () => {
+    for (const remoteSource of [undefined, '', 42])
+      recognizer.feed({ type: 'buttonEvent', ts: start / 1000, remoteSource, left: { top: 1 } })
+    vi.advanceTimersByTime(1000)
+    expect(events).toEqual([])
+  })
+
+  it('recognizes right-side combos independently and ignores repeated same-counter presses', () => {
+    edge(100, 'press', 97, 'R')
+    edge(100, 'press', 97, 'R')
+    edge(116, 'press', 99, 'R')
+    edge(200, 'release', 97, 'R')
+    edge(220, 'release', 99, 'R')
+    feed({ type: 'buttonEvent', right: { top: 1, bottom: 1 }, left: { top: 1 } })
+    vi.advanceTimersByTime(1000)
+    expect(events.filter(e => e.gesture === 'combo')).toEqual([
+      expect.objectContaining({ side: 'right', inputId: 'top+bottom.single' }),
+    ])
+    expect(events.filter(e => e.gesture === 'single')).toEqual([
+      expect.objectContaining({ side: 'left', inputId: 'top.single' }),
+    ])
+  })
+
   it('waits for both releases, suppresses constituent counts, then permits a later click', () => {
     edge(100, 'press', 98)
 
