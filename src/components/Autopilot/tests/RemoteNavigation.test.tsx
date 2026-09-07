@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-const mocks = vi.hoisted(() => ({ config: undefined as unknown }))
+const mocks = vi.hoisted(() => ({ config: undefined as unknown, status: { running: true, lastDetectionAt: null as number | null } }))
 vi.mock('@/src/utils/trpc', async () => {
   const { editConfig, emptyConfig } = await import('@/src/remote/model')
   mocks.config = emptyConfig()
@@ -8,6 +8,7 @@ vi.mock('@/src/utils/trpc', async () => {
   const cache = { invalidate: vi.fn() }
   return { trpc: {
     remote: {
+      status: { useQuery: () => ({ data: mocks.status }) },
       mapping: { useQuery: () => ({ data: mocks.config, isLoading: false, refetch: vi.fn() }) },
       update: { useMutation: () => ({ isPending: false, mutate: (input: { side: 'left' | 'right', edit: Parameters<typeof editConfig>[2] }, callbacks: { onSuccess: () => void }) => {
         mocks.config = editConfig(mocks.config as ReturnType<typeof emptyConfig>, input.side, input.edit)
@@ -42,4 +43,18 @@ describe('Remote panel navigation', () => {
     expect((screen.getByRole('combobox', { name: 'Top · single action' }) as HTMLSelectElement).value).toBe('power.off')
     expect(screen.queryByRole('button', { name: /Automations/ })).toBeNull()
   })
+})
+
+it('confirms cover availability only after button input and reports offline separately', () => {
+  mocks.status = { running: true, lastDetectionAt: null }
+  const { rerender } = render(<RemotePage />)
+  expect(screen.getByText('Availability unconfirmed — press a cover button to check.')).toBeTruthy()
+  expect(screen.queryByText('Saved on device')).toBeNull()
+  expect(screen.queryByText('built into the cover', { exact: true })).toBeNull()
+  mocks.status = { running: true, lastDetectionAt: 1000 }
+  rerender(<RemotePage />)
+  expect(screen.getByText('Cover button input detected')).toBeTruthy()
+  mocks.status = { running: false, lastDetectionAt: 1000 }
+  rerender(<RemotePage />)
+  expect(screen.getByText('Button detection is offline')).toBeTruthy()
 })

@@ -50,7 +50,7 @@ describe('Remote mapping interactions', () => {
   it('can add all six optional inputs without creating overrides', () => {
     render(<Harness />)
     for (const name of ['Top · double', 'Middle · double', 'Bottom · double', 'Top + Middle', 'Middle + Bottom', 'Top + Bottom']) {
-      fireEvent.click(screen.getByRole('button', { name: /Add another input/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Add double press or combo/ }))
       fireEvent.click(screen.getByRole('button', { name }))
     }
     expect(screen.getAllByRole('combobox')).toHaveLength(9)
@@ -62,7 +62,7 @@ describe('Remote mapping interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy to right' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('button', { name: 'Replace mappings' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: /Add another input/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Add double press or combo/ }))
     fireEvent.mouseDown(document.body)
     expect(screen.queryByRole('button', { name: 'Top · double' })).toBeNull()
   })
@@ -91,7 +91,7 @@ describe('Remote mapping interactions', () => {
   })
   it('adds an input without an override, confirms copy, and removes extras independently', () => {
     render(<Harness />)
-    fireEvent.click(screen.getByRole('button', { name: 'Add another input 6 available' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add double press or combo 6 available' }))
     fireEvent.click(screen.getByRole('button', { name: 'Top · double' }))
     expect(screen.queryByText('1 remapped')).toBeNull()
     fireEvent.change(screen.getByRole('combobox', { name: 'Top · double action' }), { target: { value: 'automation.run' } })
@@ -117,7 +117,7 @@ describe('Remote mapping interactions', () => {
     expect(top.getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(top)
     expect(top.getAttribute('aria-pressed')).toBe('false')
-    fireEvent.click(screen.getByRole('button', { name: 'Add another input 6 available' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add double press or combo 6 available' }))
     const option = screen.getByRole('button', { name: 'Top · double' })
     fireEvent.mouseEnter(option)
     expect(top.className).toContain('lit')

@@ -131,3 +131,11 @@ accepts whole-degree targets from 55–110°F; existing `temp.preset` bindings r
 compatible. Run an automation is a separate binding for conditional behavior.
 The remote illustration has no enclosing card, and Autopilot's running switch
 sits unboxed beside the page title, separate from New automation.
+
+The Remote mapping view uses two equal desktop columns, with the illustration
+and copy/reset actions centered in the first. Press counts are labeled explicitly
+as 1 press or 2 presses; the add control names double presses and button combos.
+Cover-button availability is confirmed from a received button detection during
+the current process lifetime. Pod generation and legacy gesture support do not
+prove built-in button support, so no negative hardware capability is inferred
+from missing detections. The UI reports unconfirmed or detection offline instead.

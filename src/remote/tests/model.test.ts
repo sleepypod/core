@@ -27,7 +27,7 @@ describe('Remote mapping contract', () => {
   it('keeps the explicit handoff combo IDs and avoids an unverified double-click timing claim', () => {
     expect(inputLabel('top+mid.single')).toBe('Top + Middle')
     expect(inputHint('top+bottom.single')).toBe('T + B · together')
-    expect(inputHint('mid.double')).toBe('M×2 · firmware count')
+    expect(inputHint('mid.double')).toBe('M · 2 presses')
   })
 })
 

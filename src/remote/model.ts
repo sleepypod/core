@@ -94,7 +94,7 @@ export function inputLabel(id: string): string {
 }
 /** Describe the physical input without claiming an unverified firmware timing window. */
 export function inputHint(id: string): string {
-  return `${parts(id).map(p => BUTTONS.find(b => b.id === p)?.short ?? p).join(' + ')}${id.endsWith('.double') ? '×2 · firmware count' : parts(id).length > 1 ? ' · together' : ' · press'}`
+  return `${parts(id).map(p => BUTTONS.find(b => b.id === p)?.short ?? p).join(' + ')}${id.endsWith('.double') ? ' · 2 presses' : parts(id).length > 1 ? ' · together' : ' · 1 press'}`
 }
 export const ACTIONS = [
   { id: 'none', label: 'Nothing' }, { id: 'temp.up', label: 'Temperature up' },

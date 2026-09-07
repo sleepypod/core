@@ -98,7 +98,6 @@ export function RemoteFigure({ selected, hovered, config, side, select }: {
           </button>
         ))}
       </div>
-      <p className="mt-4 text-center text-[11px] text-zinc-500">built into the cover</p>
     </div>
   )
 }
@@ -171,7 +170,8 @@ function Param({ binding, automations, change, disabled, label }: {
   )
 }
 /** Edit one side of the persistent mapping with optional inputs and confirmed copy/reset operations. */
-export function RemotePanel({ automations, mapping, side, setSide }: {
+export function RemotePanel({ automations, mapping, side, setSide, availability = 'unconfirmed' }: {
+  availability?: 'detected' | 'unconfirmed' | 'offline'
   automations: Automation[]
   mapping: MappingState
   side: Side
@@ -229,7 +229,8 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 px-5 py-4">
         <div className="min-w-[200px] flex-1">
           <h1 className="text-[19px] font-semibold tracking-tight text-zinc-100">Remote</h1>
-          <p className="mt-0.5 text-[12px] text-zinc-500">Assign a direct action or run an automation. Each side’s remote is mapped separately.</p>
+          <p className="mt-0.5 text-[12px] text-zinc-500">Assign a direct action or run an automation using the buttons built into your cover. Each side is mapped separately.</p>
+          <p role="status" className="mt-1 text-[11px] text-zinc-500">{availability === 'detected' ? 'Cover button input detected' : availability === 'offline' ? 'Button detection is offline' : 'Availability unconfirmed — press a cover button to check.'}</p>
         </div>
         <div className="flex items-center gap-3">
           {count > 0 && (
@@ -259,10 +260,10 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         <div className={styles.layout}>
-          <div className="self-start md:sticky md:top-0">
-            <div className="flex items-center gap-6 p-5 md:block">
+          <div className={styles.remoteColumn}>
+            <div className={styles.remoteContents}>
               <RemoteFigure selected={selected} hovered={hovered} config={config} side={side} select={setSelected} />
-              <div className="flex flex-1 flex-col gap-2 md:mt-5 md:border-t md:border-zinc-800/60 md:pt-4">
+              <div className={styles.remoteActions}>
                 <Button variant="ghost" size="sm" disabled={mapping.busy} onClick={() => setConfirm('copy')} className="justify-start">
                   <Icon.Copy size={13} />
                   Copy to
@@ -304,12 +305,12 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
                 <button type="button" onClick={mapping.reload} className="underline">Reload</button>
               </div>
             )}
-            <div aria-live="polite" className="text-right text-[11px] text-zinc-500">{mapping.busy ? 'Saving to device…' : mapping.error ? 'Changes were not saved' : 'Saved on device'}</div>
+            <div aria-live="polite" className="text-right text-[11px] text-zinc-500">{mapping.busy ? 'Saving…' : mapping.error ? 'Changes were not saved' : ''}</div>
             <Card>
               {rows.map(id => (
                 <div key={id} className={styles.row} style={selected && parts(id).includes(selected) ? { background: 'color-mix(in srgb, var(--accent) 7%, transparent)' } : undefined} onMouseEnter={() => setHovered(parts(id))} onMouseLeave={() => setHovered([])} onFocus={() => setHovered(parts(id))} onBlur={() => setHovered([])}>
                   <div className={styles.label}>
-                    <div title={inputLabel(id)} className="truncate text-[13px] text-zinc-200">{inputLabel(id)}</div>
+                    <div title={inputLabel(id)} className="truncate text-[13px] text-zinc-200">{inputLabel(id).split(' · ')[0]}</div>
                     <div title={inputHint(id)} className="mono truncate text-[10px] text-zinc-400">{inputHint(id)}</div>
                   </div>
                   <div className={styles.controls}>
@@ -354,9 +355,9 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
               >
                 {available.length
                   ? (
-                      <button type="button" disabled={mapping.busy} aria-expanded={menu} aria-label={`Add another input ${available.length} available`} className="flex w-full items-center gap-2 px-4 py-3 text-[12px] text-zinc-400 hover:bg-zinc-900/50" onClick={() => setMenu(!menu)}>
+                      <button type="button" disabled={mapping.busy} aria-expanded={menu} aria-label={`Add double press or combo ${available.length} available`} className="flex w-full items-center gap-2 px-4 py-3 text-[12px] text-zinc-400 hover:bg-zinc-900/50" onClick={() => setMenu(!menu)}>
                         <Icon.Plus size={13} />
-                        Add another input
+                        Add double press or combo
                         <span className="ml-auto whitespace-nowrap text-[11px]">
                           {available.length}
                           {' '}
@@ -385,14 +386,14 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
                         className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] text-zinc-300 hover:bg-zinc-800"
                       >
                         <span className="flex-1">{inputLabel(id)}</span>
-                        <span className="mono text-[10px] text-zinc-400">{parts(id).length > 1 ? 'experimental' : '×2'}</span>
+                        <span className="mono text-[10px] text-zinc-400">{parts(id).length > 1 ? 'together' : '2 presses'}</span>
                       </button>
                     ))}
                   </div>
                 )}
               </div>
             </Card>
-            <p className="px-1 text-[11px] leading-relaxed text-zinc-500">The three presses are always shown. Double-presses and two-button combos are opt-in. Combos use an experimental 200 ms overlap window; missing releases cancel stale state. Firmware counts above two and holds are detected but aren’t bindable in this screen.</p>
+            <p className="px-1 text-[11px] leading-relaxed text-zinc-500">Each button starts with a 1-press action. Use “Add double press or combo” to assign a separate action to 2 presses or to two buttons pressed together. Triple presses and holds cannot be assigned yet. Button combos are experimental.</p>
             <p className="px-1 text-[11px] leading-relaxed text-zinc-500">Unmodified inputs stay with firmware. Factory actions aren’t verified here. “Nothing” disables the custom action only; native haptics and alarm behavior can still occur. Elevation and soundscape control are unavailable.</p>
           </div>
         </div>
