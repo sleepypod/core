@@ -1,19 +1,11 @@
-/**
- * Autopilot console — the full-bleed desktop surface that hosts the Automations
- * list, the Rule editor (modal), and the Diagnostics/status panel behind a
- * left side-nav. Breaks out of the app's mobile `max-w-md` shell the same way
- * the diagnostics console does. Owns all tRPC data + mutations.
- */
+/** Autopilot's automation editor, live engine state, and audit trail. */
 'use client'
 
 import { useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
-import { Icon, type IconName } from './icons'
 import { AutomationsList, type ListItem } from './AutomationsList'
 import { RuleEditor } from './RuleEditor'
 import { StatusPanel } from './StatusPanel'
-import { useRemoteMapping } from './RemotePanel'
-import { RemoteCapture } from './RemoteCapture'
 import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
 
 const ACCENT = '#0c87c2'
@@ -31,28 +23,9 @@ const SCOPED_CSS = `
 @keyframes apFade { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: none; } }
 `
 
-/** Render an accessible section switch that adapts to compact navigation. */
-function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, label: string, active: boolean, badge?: number, onClick: () => void }) {
-  const I = Icon[icon]
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={active ? { background: 'color-mix(in srgb, var(--accent) 14%, transparent)', color: 'var(--accent)' } : undefined}
-      className={`flex min-w-0 flex-1 items-center gap-1 rounded-lg px-2 py-2 text-[12px] font-medium transition-colors md:w-full md:flex-none md:gap-3 md:px-3 md:text-[13px] ${active ? '' : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'}`}
-    >
-      <I size={17} />
-      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-      {badge != null && <span className="mono text-[11px] text-zinc-500">{badge}</span>}
-    </button>
-  )
-}
-
-/** Host automation editing and diagnostics, including current remote capture. */
-export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: 'list' | 'status' } = {}) {
+/** Combine automation editing, live engine state, and the audit trail in one page. */
+export function AutopilotConsole() {
   const utils = trpc.useUtils()
-  const [screen, setScreen] = useState<'list' | 'status'>(initialScreen)
-  const mapping = useRemoteMapping()
   const [editing, setEditing] = useState<BuilderRule | null>(null)
 
   const listQ = trpc.automations.list.useQuery({})
@@ -103,66 +76,28 @@ export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: '
     else createM.mutate(ast, { onSuccess: () => setEditing(null) })
   }
 
-  const killed = statusQ.data ? !statusQ.data.globalEnabled : false
-  const activeCount = items.filter(i => i.enabled && i.mode === 'active').length
-
   return (
-    <div className="ap-console mx-[calc(50%-50vw)] w-screen text-zinc-100 md:px-4" style={{ ['--accent' as string]: ACCENT }}>
+    <div className="ap-console w-full space-y-4 text-zinc-100" style={{ ['--accent' as string]: ACCENT }}>
       <style dangerouslySetInnerHTML={{ __html: SCOPED_CSS }} />
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-4 md:flex-row">
-        {/* side nav */}
-        <aside className="flex w-full shrink-0 flex-col self-start md:w-[212px] rounded-xl border border-zinc-800 bg-zinc-950/80">
-          <div className="hidden items-center gap-2.5 px-4 py-4 md:flex">
-            <span className="grid h-8 w-8 place-items-center rounded-lg" style={{ background: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'var(--accent)' }}>
-              <Icon.Sliders size={17} />
-            </span>
-            <div className="leading-tight">
-              <div className="text-[14px] font-semibold text-zinc-100">Autopilot</div>
-              <div className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">sleepypod</div>
-            </div>
-          </div>
-          <nav className="flex gap-1 px-3 py-2 md:flex-col">
-            <NavItem icon="List" label="Automations" badge={items.length} active={screen === 'list'} onClick={() => setScreen('list')} />
-            <NavItem icon="Pulse" label="Diagnostics" active={screen === 'status'} onClick={() => setScreen('status')} />
-          </nav>
-          <div className="mt-auto hidden p-3 md:block">
-            <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${killed ? 'border-red-500/30 bg-red-500/10 text-red-300' : 'border-zinc-800 bg-zinc-900/40 text-zinc-400'}`}>
-              <span className={`h-2 w-2 rounded-full ${killed ? 'bg-red-400' : 'bg-emerald-400'}`} style={killed ? undefined : { boxShadow: '0 0 0 3px rgba(52,211,153,0.18)' }} />
-              {killed ? 'Halted' : 'Running'}
-              <span className="ml-auto text-zinc-600">
-                {activeCount}
-                {' '}
-                active
-              </span>
-            </div>
-          </div>
-        </aside>
-
-        {/* content */}
-        <main className="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden" style={{ minHeight: 'calc(100dvh - 7rem)' }}>
-          {screen === 'list' && (
-            <AutomationsList
-              items={items}
-              loading={listQ.isLoading}
-              onToggle={(id, enabled) => setEnabledM.mutate({ id, enabled })}
-              onOpen={a => setEditing(a.builder)}
-              onNew={() => setEditing(blankRule())}
-            />
-          )}
-          {screen === 'status' && (
-            <StatusPanel
-              remoteCapture={<RemoteCapture config={mapping.config} automations={listQ.data ?? []} />}
-              globalEnabled={statusQ.data?.globalEnabled ?? true}
-              onKill={enabled => killM.mutate({ enabled })}
-              rules={statusQ.data?.rules ?? []}
-              runs={runsQ.data ?? []}
-              loading={statusQ.isLoading}
-              onDry={(id, dryRun) => setDryRunM.mutate({ id, dryRun })}
-            />
-          )}
-        </main>
+      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/60">
+        <AutomationsList
+          items={items}
+          loading={listQ.isLoading}
+          onToggle={(id, enabled) => setEnabledM.mutate({ id, enabled })}
+          onOpen={a => setEditing(a.builder)}
+          onNew={() => setEditing(blankRule())}
+        />
       </div>
-
+      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/60">
+        <StatusPanel
+          globalEnabled={statusQ.data?.globalEnabled ?? true}
+          onKill={enabled => killM.mutate({ enabled })}
+          rules={statusQ.data?.rules ?? []}
+          runs={runsQ.data ?? []}
+          loading={statusQ.isLoading}
+          onDry={(id, dryRun) => setDryRunM.mutate({ id, dryRun })}
+        />
+      </div>
       {editing && <RuleEditor automation={editing} onClose={() => setEditing(null)} onSave={save} saving={saving} />}
     </div>
   )

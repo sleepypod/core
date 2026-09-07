@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import {
   Activity,
   CalendarClock,
@@ -38,6 +38,7 @@ import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemLogViewer } from '@/src/components/status/SystemLogViewer'
+import { AutopilotConsole } from '@/src/components/Autopilot/AutopilotConsole'
 import { RemoteConsole } from '@/src/components/Autopilot/RemoteConsole'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 
@@ -88,12 +89,14 @@ type SectionId = (typeof SECTIONS)[number]['id']
  * the panels can use the full viewport. Desktop-first: the side-nav also hosts
  * the active side and Settings, which the header drops on wide viewports.
  */
-export function DiagnosticsConsole({ initialSection = 'overview' }: { initialSection?: SectionId } = {}) {
-  const [section, setSection] = useState<SectionId>(initialSection)
+export function DiagnosticsConsole({ initialSection = 'overview' }: { initialSection?: string } = {}) {
+  const section = SECTIONS.find(s => s.id === initialSection)?.id ?? 'overview'
+  const router = useRouter()
   const { side } = useSide()
   const { sideName } = useSideNames()
   const pathname = usePathname()
   const lang = pathname?.split('/')[1] ?? 'en'
+  const sectionHref = (id: SectionId) => id === 'autopilot' ? `/${lang}/autopilot` : id === 'remote' ? `/${lang}/debug/remote` : id === 'overview' ? `/${lang}/debug` : `/${lang}/debug?section=${id}`
 
   return (
     <div className="mx-[calc(50%-50vw)] w-screen px-4">
@@ -103,10 +106,10 @@ export function DiagnosticsConsole({ initialSection = 'overview' }: { initialSec
           {SECTIONS.map((s) => {
             const active = s.id === section
             return (
-              <button
+              <Link
                 key={s.id}
-                type="button"
-                onClick={() => setSection(s.id)}
+                href={sectionHref(s.id)}
+                aria-current={active ? 'page' : undefined}
                 className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
                   active
                     ? 'bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30'
@@ -115,7 +118,7 @@ export function DiagnosticsConsole({ initialSection = 'overview' }: { initialSec
               >
                 <s.icon size={14} className="shrink-0" />
                 {s.label}
-              </button>
+              </Link>
             )
           })}
 
@@ -135,7 +138,7 @@ export function DiagnosticsConsole({ initialSection = 'overview' }: { initialSec
 
         {/* Content pane */}
         <div className="min-w-0 flex-1 pb-6">
-          {section === 'overview' && <OverviewPanel onJump={setSection} />}
+          {section === 'overview' && <OverviewPanel onJump={id => router.push(sectionHref(id))} />}
           {section === 'thermal' && <ThermalPanel />}
           {section === 'scheduler' && <SchedulerPanel />}
           {section === 'biometrics' && <BiometricsPanel />}
@@ -143,7 +146,7 @@ export function DiagnosticsConsole({ initialSection = 'overview' }: { initialSec
           {section === 'health' && <HealthPanel />}
           {section === 'calibration' && <CalibrationPanel />}
           {section === 'remote' && <RemoteConsole />}
-          {section === 'autopilot' && <AutopilotPanel />}
+          {section === 'autopilot' && <AutopilotConsole />}
           {section === 'logs' && <LogsPanel />}
         </div>
       </div>
@@ -779,126 +782,4 @@ function Metric({ label, value, good }: { label: string, value: string, good?: b
 
 function Tag({ children, className }: { children: React.ReactNode, className: string }) {
   return <span className={`rounded px-1.5 py-0.5 ${className}`}>{children}</span>
-}
-
-// ── Autopilot ──────────────────────────────────────────────────────────────
-// Compact mirror of the Autopilot console's diagnostics, in the console's zinc
-// aesthetic. The full builder lives at /autopilot; this surfaces live state and
-// the audit trail alongside the pod's other diagnostics.
-
-function autopilotAgo(d: Date | string | null): string {
-  if (!d) return 'never'
-  const ms = Date.now() - new Date(d).getTime()
-  if (ms < 60_000) return 'now'
-  const m = Math.floor(ms / 60_000)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
-}
-
-function AutopilotPanel() {
-  const pathname = usePathname()
-  const lang = pathname?.split('/')[1] ?? 'en'
-  const status = trpc.automations.status.useQuery({}, { refetchInterval: 15000 })
-  const runs = trpc.automations.runs.useQuery({ limit: 40 }, { refetchInterval: 15000 })
-  const setKill = trpc.automations.setKillSwitch.useMutation({ onSuccess: () => status.refetch() })
-
-  const globalEnabled = status.data?.globalEnabled ?? true
-  const rules = status.data?.rules ?? []
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-zinc-100">Autopilot</h2>
-          <p className="text-xs text-zinc-500">Reactive WHEN/IF/THEN rules · live state &amp; run log</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setKill.mutate({ enabled: !globalEnabled })}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${globalEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/40 bg-red-500/10 text-red-300'}`}
-          >
-            <span className={`h-2 w-2 rounded-full ${globalEnabled ? 'bg-emerald-400' : 'bg-red-400'}`} />
-            {globalEnabled ? 'Running' : 'Halted'}
-          </button>
-          <Link href={`/${lang}/autopilot`} className="rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700/60">
-            Open builder →
-          </Link>
-        </div>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {rules.length === 0 && (
-          <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4 text-xs text-zinc-500">
-            No automations yet. Build one in the Autopilot console.
-          </div>
-        )}
-        {rules.map(r => (
-          <div key={r.id} className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm font-medium text-zinc-100">{r.name}</span>
-              <Tag className={!r.enabled ? 'bg-zinc-800 text-zinc-400' : r.dryRun ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'}>
-                {!r.enabled ? 'paused' : r.dryRun ? 'dry-run' : 'active'}
-              </Tag>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-zinc-400">
-              <div>
-                <span className="text-zinc-600">side</span>
-                {' '}
-                {r.side ?? 'L+R'}
-              </div>
-              <div>
-                <span className="text-zinc-600">today</span>
-                {' '}
-                {r.firesToday}
-              </div>
-              <div>
-                <span className="text-zinc-600">last</span>
-                {' '}
-                {autopilotAgo(r.lastFiredAt)}
-              </div>
-              <div>
-                <span className="text-zinc-600">cooldown</span>
-                {' '}
-                {r.cooldownMin ? `${r.cooldownMin}m` : '—'}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/40">
-        <div className="border-b border-zinc-800/60 px-4 py-2.5 text-xs font-medium text-zinc-300">Run log · audit trail</div>
-        <div className="max-h-[360px] overflow-y-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 bg-zinc-950/90 text-[10px] uppercase tracking-wide text-zinc-600">
-              <tr>
-                <th className="px-4 py-2 font-medium">Time</th>
-                <th className="px-2 py-2 font-medium">Rule</th>
-                <th className="px-2 py-2 font-medium">Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(runs.data ?? []).length === 0 && (
-                <tr><td colSpan={3} className="px-4 py-6 text-center text-zinc-600">No evaluations recorded yet.</td></tr>
-              )}
-              {(runs.data ?? []).map((r) => {
-                const d = new Date(r.firedAt)
-                const tone = r.outcome === 'fired' || r.outcome === 'clamped' ? 'text-red-300' : r.outcome === 'dry_run' ? 'text-amber-300' : 'text-zinc-400'
-                return (
-                  <tr key={r.id} className="border-t border-zinc-800/40">
-                    <td className="px-4 py-2 font-mono text-zinc-400 whitespace-nowrap">{`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`}</td>
-                    <td className="px-2 py-2 text-zinc-200">{r.ruleName ?? `#${r.automationId}`}</td>
-                    <td className={`px-2 py-2 ${tone}`}>{r.outcome.replace('_', '-')}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  )
 }
