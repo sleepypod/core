@@ -91,6 +91,18 @@ describe('remote recognition from observed signals', () => {
     expect(events).toEqual([])
   })
 
+  it.each(['transport', 'fifo', 'counter'] as const)('clears old combo suppression after a %s reset', (reset) => {
+    edge(100, 'press', 97)
+    edge(116, 'press', 98)
+    if (reset === 'transport') recognizer.feed({ type: 'remoteReset' })
+    else if (reset === 'fifo') feed({ type: 'log', msg: '[tca8418L] fifo cleared' })
+    else edge(1, 'press', 97)
+    feed({ type: 'buttonEvent', left: { top: 1 } })
+    vi.advanceTimersByTime(1000)
+    expect(events.at(-1)).toMatchObject({ side: 'left', inputId: 'top.single', gesture: 'single' })
+    expect(events.filter(e => e.gesture === 'combo')).toEqual([])
+  })
+
   it('recognizes right-side combos independently and ignores repeated same-counter presses', () => {
     edge(100, 'press', 97, 'R')
     edge(100, 'press', 97, 'R')

@@ -173,11 +173,13 @@ export class RemoteRecognizer {
 
     if ([...held.values()].some(edge => counter - edge.counter > EDGE_TIMEOUT_MS)) {
       // Cancelling stale edges must also consume their later native click count.
+      const expiredHolds: Suppression[] = []
       for (const active of BUTTONS) {
         const edge = held.get(active.id)
-        if (edge) this.suppression[side].push({ mask: active.bit, from: edge.ts, until: ts * 1000 + 1000 })
+        if (edge) expiredHolds.push({ mask: active.bit, from: edge.ts, until: ts * 1000 + 1000 })
       }
       this.resetSide(side)
+      this.suppression[side].push(...expiredHolds)
     }
 
     this.counters[side] = counter
@@ -271,6 +273,8 @@ export class RemoteRecognizer {
     this.down[side].clear()
 
     this.groups[side] = undefined
+
+    this.suppression[side] = []
 
     this.counters[side] = undefined
   }
