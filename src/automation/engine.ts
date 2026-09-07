@@ -234,6 +234,22 @@ export class AutomationEngine {
     }
   }
 
+  /** Explicit invocation bypasses only WHEN, retaining conditions and safety gates. */
+  async runNow(id: number): Promise<void> {
+    if (!this.globalEnabled) throw new Error('Autopilot is paused')
+    if (this.ticking) throw new Error('Autopilot is busy; try again')
+    const rule = this.rules.find(r => r.id === id)
+    if (!rule || !rule.enabled) throw new Error('Automation is missing or disabled')
+    this.ticking = true
+    try {
+      const now = this.deps.now()
+      const snapshot = this.deps.signals.read()
+      const clock = this.deps.clock()
+      await this.evaluateRule(rule, { signal: key => snapshot[key], windows: this.windows, nowMs: now, ...clock }, now, true)
+    }
+    finally { this.ticking = false }
+  }
+
   private maxWindowMinutes(): number {
     let max = 10
     for (const rule of this.rules) {
@@ -287,9 +303,9 @@ export class AutomationEngine {
     }
   }
 
-  private async evaluateRule(rule: AutomationRule, ctx: EvalContext, now: number): Promise<void> {
+  private async evaluateRule(rule: AutomationRule, ctx: EvalContext, now: number, explicit = false): Promise<void> {
     const rt = this.getRuntime(rule.id)
-    if (!this.triggerActive(rule, ctx, now, rt)) return // not an eval; no audit row
+    if (!explicit && !this.triggerActive(rule, ctx, now, rt)) return // not an eval; no audit row
 
     // IF — three-valued. unknown/false both skip (never fire on missing data).
     const cond = evaluateCondition(rule.conditions, ctx)

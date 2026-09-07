@@ -117,6 +117,36 @@ function rule(overrides: Partial<AutomationRule>): AutomationRule {
 }
 
 describe('AutomationEngine — outcomes & audit log', () => {
+  it('explicit remote invocation bypasses WHEN while retaining cooldown and pause controls', async () => {
+    const h = makeHarness([rule({ trigger: tickEvery(5), cooldownMin: 1, actions: [{ kind: 'notify', message: 'remote' }] })])
+    await h.engine.reload()
+    await h.engine.runNow(1)
+    expect(h.notifies).toHaveLength(1)
+    await h.engine.runNow(1)
+    expect(h.runs.at(-1)?.detail.reason).toBe('cooldown')
+    h.advance(60000)
+    await h.engine.runNow(1)
+    expect(h.notifies).toHaveLength(2)
+    h.engine.setGlobalEnabled(false)
+    await expect(h.engine.runNow(1)).rejects.toThrow('paused')
+    expect(h.notifies).toHaveLength(2)
+  })
+
+  it('explicit invocation respects conditions, disabled rules, and hardware safety', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true }] }), rule({ id: 2, enabled: false })])
+    await h.engine.reload()
+    h.setStallBlocked('left', true)
+    await h.engine.runNow(1)
+    expect(h.hwCalls).toEqual([])
+    await expect(h.engine.runNow(2)).rejects.toThrow('disabled')
+    await expect(h.engine.runNow(999)).rejects.toThrow('missing')
+    const conditional = makeHarness([rule({ conditions: { kind: 'or', conditions: [] }, actions: [{ kind: 'notify', message: 'never' }] })])
+    await conditional.engine.reload()
+    await conditional.engine.runNow(1)
+    expect(conditional.notifies).toEqual([])
+    expect(conditional.runs.at(-1)?.detail.reason).toBe('condition-false')
+  })
+
   it('only evaluates a tick trigger when its interval has elapsed', async () => {
     const h = makeHarness([rule({ trigger: tickEvery(5), actions: [{ kind: 'notify', message: 'hi' }] })])
     await h.engine.reload()

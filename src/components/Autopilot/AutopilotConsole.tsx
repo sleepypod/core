@@ -12,6 +12,8 @@ import { Icon, type IconName } from './icons'
 import { AutomationsList, type ListItem } from './AutomationsList'
 import { RuleEditor } from './RuleEditor'
 import { StatusPanel } from './StatusPanel'
+import { RemotePanel, useRemoteMapping } from './RemotePanel'
+import { RemoteCapture } from './RemoteCapture'
 import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
 
 const ACCENT = '#0c87c2'
@@ -45,9 +47,11 @@ function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, labe
   )
 }
 
-export function AutopilotConsole() {
+export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: 'list' | 'remote' | 'status' } = {}) {
   const utils = trpc.useUtils()
-  const [screen, setScreen] = useState<'list' | 'status'>('list')
+  const [screen, setScreen] = useState<'list' | 'remote' | 'status'>(initialScreen)
+  const mapping = useRemoteMapping()
+  const [remoteSide, setRemoteSide] = useState<'left' | 'right'>('left')
   const [editing, setEditing] = useState<BuilderRule | null>(null)
 
   const listQ = trpc.automations.list.useQuery({})
@@ -104,9 +108,9 @@ export function AutopilotConsole() {
   return (
     <div className="ap-console mx-[calc(50%-50vw)] w-screen px-4 text-zinc-100" style={{ ['--accent' as string]: ACCENT }}>
       <style dangerouslySetInnerHTML={{ __html: SCOPED_CSS }} />
-      <div className="mx-auto flex max-w-[1500px] gap-4">
+      <div className="mx-auto flex max-w-[1500px] flex-col gap-4 md:flex-row">
         {/* side nav */}
-        <aside className="flex w-[212px] shrink-0 flex-col self-start rounded-xl border border-zinc-800 bg-zinc-950/80">
+        <aside className="flex w-full shrink-0 flex-col self-start md:w-[212px] rounded-xl border border-zinc-800 bg-zinc-950/80">
           <div className="flex items-center gap-2.5 px-4 py-4">
             <span className="grid h-8 w-8 place-items-center rounded-lg" style={{ background: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'var(--accent)' }}>
               <Icon.Sliders size={17} />
@@ -118,6 +122,7 @@ export function AutopilotConsole() {
           </div>
           <nav className="flex flex-col gap-1 px-3 py-2">
             <NavItem icon="List" label="Automations" badge={items.length} active={screen === 'list'} onClick={() => setScreen('list')} />
+            <NavItem icon="Remote" label="Remote" active={screen === 'remote'} onClick={() => setScreen('remote')} />
             <NavItem icon="Pulse" label="Diagnostics" active={screen === 'status'} onClick={() => setScreen('status')} />
           </nav>
           <div className="mt-auto p-3">
@@ -144,8 +149,10 @@ export function AutopilotConsole() {
               onNew={() => setEditing(blankRule())}
             />
           )}
+          {screen === 'remote' && <RemotePanel automations={listQ.data ?? []} mapping={mapping} side={remoteSide} setSide={setRemoteSide} />}
           {screen === 'status' && (
             <StatusPanel
+              remoteCapture={<RemoteCapture config={mapping.config} automations={listQ.data ?? []} />}
               globalEnabled={statusQ.data?.globalEnabled ?? true}
               onKill={enabled => killM.mutate({ enabled })}
               rules={statusQ.data?.rules ?? []}

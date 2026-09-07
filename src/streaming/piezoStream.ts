@@ -83,6 +83,7 @@ const WS_MAX_PAYLOAD_BYTES = 1024
 const streamGlobal = globalThis as typeof globalThis & { __sleepypodSensorStream?: ReturnType<typeof createStreamState> }
 function createStreamState() {
   return {
+    serverFrameListeners: new Set<ServerFrameListener>(),
     frameIndex: [] as FrameIndexEntry[],
     // RAW file associated with the seek index.
     indexedFilePath: null as string | null,
@@ -369,7 +370,7 @@ async function findLatestRawAsync(dir: string): Promise<string | null> {
 const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
-  'deviceStatus', 'gesture',
+  'deviceStatus', 'gesture', 'buttonEvent',
 ] as const
 
 /** Valid sensor type string. Used for subscription filtering. */
@@ -802,6 +803,15 @@ async function startNatsSource(expectedServer: WebSocketServer): Promise<boolean
     const source = await startNatsFrameSource({
       decode: decodeSensorFrames,
       onFrame: (frame) => { if (streamState.wss === expectedServer) dispatchSensorFrame(frame) },
+      onDiscontinuity: () => {
+        if (streamState.wss !== expectedServer) return
+        for (const listener of serverFrameListeners) {
+          try {
+            listener({ type: 'remoteReset' })
+          }
+          catch { /* isolate consumers */ }
+        }
+      },
       onReady: () => console.log('[sensorStream] NATS frame source active'),
       onClose: err => console.error('[sensorStream] NATS frame source closed', err ?? ''),
     })
@@ -855,8 +865,8 @@ function dispatchSensorFrame(frame: Record<string, unknown>): void {
     }
   }
 
-  // Notify server-side listeners (only frzHealth currently has consumers).
-  if (frameType === 'frzHealth' && serverFrameListeners.size > 0) {
+  // Notify safety telemetry and the browser-independent remote dispatcher.
+  if (['frzHealth', 'buttonEvent', 'log'].includes(frameType) && serverFrameListeners.size > 0) {
     for (const cb of serverFrameListeners) {
       try {
         cb(frame)
@@ -974,7 +984,8 @@ function startRawTailingLoop(): void {
           const { data, nextOffset } = readRawRecord(fileBuffer, pos)
           pos = nextOffset
           if (data === null) continue
-          for (const frame of decodeSensorFrames(data)) {
+          for (const [item, frame] of decodeSensorFrames(data).entries()) {
+            if (frame.type === 'buttonEvent' || frame.type === 'log') frame.remoteSource = `${currentPath}:${recordOffset}:${item}`
             if (typeof frame.ts === 'number') appendFrameIndex({ ts: frame.ts, offset: recordOffset })
             dispatchSensorFrame(frame)
           }
@@ -1024,7 +1035,7 @@ function startRawTailingLoop(): void {
 // Server-side frame listeners — called for every decoded sensor frame.
 // Used by DeviceStateSync to record flow data without circular imports.
 type ServerFrameListener = (frame: Record<string, unknown>) => void
-const serverFrameListeners = new Set<ServerFrameListener>()
+const serverFrameListeners = streamState.serverFrameListeners
 
 /** Register a callback invoked for every decoded sensor frame. Returns unsubscribe fn. */
 export function onServerFrame(cb: ServerFrameListener): () => void {

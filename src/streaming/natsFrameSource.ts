@@ -20,6 +20,7 @@
  */
 
 import * as net from 'node:net'
+import { randomUUID } from 'node:crypto'
 // Type-only import: the runtime client is loaded lazily in `connectNats` so pods
 // and tests that never select NATS don't pull in the transport.
 import type { NatsConnection } from '@nats-io/transport-node'
@@ -32,12 +33,11 @@ const NATS_HOST = process.env.PIEZO_NATS_HOST ?? '127.0.0.1'
 const NATS_PORT = Number(process.env.PIEZO_NATS_PORT ?? 4222)
 
 /**
- * Subjects the firmware publishes sensor frames on. `raw.log` is intentionally
- * excluded — its payload is multiple concatenated CBOR maps (unlike the single
- * map every sensor subject carries) and it has no live consumer; sp-status reads
- * it as a JetStream point-fetch instead.
+ * Sensor subjects plus raw.log for cover press/release edges. The shared decoder
+ * handles every map in concatenated CBOR payloads. Core subscriptions deliver
+ * live messages only; no retained JetStream history is replayed into actions.
  */
-export const SUBSCRIBE_SUBJECTS = ['raw.sens.>', 'raw.frz.>'] as const
+export const SUBSCRIBE_SUBJECTS = ['raw.sens.>', 'raw.frz.>', 'raw.log'] as const
 
 // Never give up reconnecting. On a NATS-only pod there is no `.RAW` file to fall
 // back to, so a dropped connection must self-heal rather than strand the stream;
@@ -131,6 +131,8 @@ export interface NatsFrameSourceOptions {
   onFrame: (frame: Record<string, unknown>) => void
   /** Invoked once the subscriptions are live (first successful connect). */
   onReady?: () => void
+  /** Invalidate pending cover gestures across a transport gap. */
+  onDiscontinuity?: () => void
   /**
    * Invoked if the connection closes permanently (should not happen under the
    * infinite-reconnect policy, but surfaces an unrecoverable error if it does).
@@ -174,12 +176,14 @@ export async function startNatsFrameSource(
 
   let stopped = false
   let loggedDecodeFailure = false
+  const sourceEpoch = randomUUID()
 
   const nc = await connectNats(host, port)
   console.log('[natsSource] connected to NATS at %s:%d — subscribing %s',
     host, port, SUBSCRIBE_SUBJECTS.join(', '))
 
   const handleMessage = (err: Error | null, data: Uint8Array): void => {
+    if (stopped) return
     if (err) {
       // Per-subscription errors (e.g. permission) — surface, keep the others live.
       console.warn('[natsSource] subscription error:', err.message)
@@ -204,7 +208,10 @@ export async function startNatsFrameSource(
       }
       return
     }
-    for (const frame of frames) {
+    for (const [item, frame] of frames.entries()) {
+      if (frame.type === 'buttonEvent' || frame.type === 'log') {
+        frame.remoteSource = `nats:${sourceEpoch}:${stats.messages}:${item}`
+      }
       stats.framesDecoded += 1
       try {
         opts.onFrame(frame)
@@ -232,6 +239,7 @@ export async function startNatsFrameSource(
     try {
       for await (const status of nc.status()) {
         if (status.type === 'disconnect') {
+          opts.onDiscontinuity?.()
           console.warn('[natsSource] disconnected from NATS — reconnecting')
         }
         else if (status.type === 'reconnect') {
@@ -246,6 +254,7 @@ export async function startNatsFrameSource(
   // unrecoverable error. Report but never exit — the web server stays up.
   void nc.closed().then((err) => {
     if (stopped) return
+    opts.onDiscontinuity?.()
     console.error('[natsSource] NATS connection closed permanently', err ?? '')
     opts.onClose?.(err instanceof Error ? err : undefined)
   })

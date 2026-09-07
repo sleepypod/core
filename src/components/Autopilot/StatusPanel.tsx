@@ -6,6 +6,7 @@
  */
 'use client'
 
+import type { ReactNode } from 'react'
 import { Icon } from './icons'
 import { Badge, Card, SideBadge, StatusBadge, Toggle } from './primitives'
 import { formatSetpointF } from '@/src/lib/tempUtils'
@@ -163,12 +164,13 @@ function RunLog({ runs }: { runs: RunRow[] }) {
   )
 }
 
-export function StatusPanel({ globalEnabled, onKill, rules, runs, loading, onDry }: {
+export function StatusPanel({ globalEnabled, onKill, rules, runs, loading, onDry, remoteCapture }: {
   globalEnabled: boolean
   onKill: (enabled: boolean) => void
   rules: RuleStatus[]
   runs: RunRow[]
   loading: boolean
+  remoteCapture?: ReactNode
   onDry: (id: number, dryRun: boolean) => void
 }) {
   const killed = !globalEnabled
@@ -197,6 +199,7 @@ export function StatusPanel({ globalEnabled, onKill, rules, runs, loading, onDry
               Kill-switch engaged — no rule will command hardware. Manual control only.
             </div>
           )}
+          {remoteCapture}
           {loading
             ? <div className="py-16 text-center text-[13px] text-zinc-600">Loading status…</div>
             : (

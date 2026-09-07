@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   shutdownDacMonitor: vi.fn(async () => undefined),
   startDacServer: vi.fn(async () => undefined),
   startPiezoStreamServer: vi.fn(),
+  startRemoteRuntime: vi.fn(),
+  stopRemoteRuntime: vi.fn(async () => undefined),
   shutdownPiezoStreamServer: vi.fn(async () => undefined),
   startBonjourAnnouncement: vi.fn(),
   stopBonjourAnnouncement: vi.fn(),
@@ -58,6 +60,10 @@ vi.mock('@/src/lib/serverPerformance', () => ({
 vi.mock('@/src/automation', () => ({
   getAutomationEngine: mocks.getAutomationEngine,
   shutdownAutomationEngine: mocks.shutdownAutomationEngine,
+}))
+vi.mock('@/src/remote/runtime', () => ({
+  startRemoteRuntime: mocks.startRemoteRuntime,
+  stopRemoteRuntime: mocks.stopRemoteRuntime,
 }))
 
 vi.mock('@/src/scheduler', () => ({

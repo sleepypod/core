@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as net from 'node:net'
+import { encode } from 'cbor-x'
 import fixtures from './fixtures/natsFrames.json'
 
 // Fake @nats-io/transport-node so the source connects to an in-memory client we
@@ -68,7 +69,7 @@ function fixture(subject: string): Buffer {
 /** Deliver a payload to whichever subscription's wildcard covers `subject`. */
 function deliver(subject: string, payload: Uint8Array): void {
   const prefix = (s: string) => s.endsWith('.>') ? s.slice(0, -1) : `${s}.`
-  const sub = nats.state.subs.find(s => subject.startsWith(prefix(s.subject)))
+  const sub = nats.state.subs.find(s => subject === s.subject || subject.startsWith(prefix(s.subject)))
   if (!sub) throw new Error(`no subscription matches ${subject}`)
   sub.cb(null, { data: payload })
 }
@@ -155,9 +156,34 @@ describe('startNatsFrameSource', () => {
     })
   })
 
-  it('excludes raw.log from the live subscriptions', () => {
-    expect(SUBSCRIBE_SUBJECTS).toEqual(['raw.sens.>', 'raw.frz.>'])
-    expect(SUBSCRIBE_SUBJECTS as readonly string[]).not.toContain('raw.log')
+  it('includes raw.log for cover button edges', () => {
+    expect(SUBSCRIBE_SUBJECTS).toEqual(['raw.sens.>', 'raw.frz.>', 'raw.log'])
+  })
+
+  it('decodes every raw.log map with unique source identities and stops delivery after drain', async () => {
+    const onFrame = vi.fn()
+    const src = await startNatsFrameSource({ decode, onFrame })
+    const first = { type: 'log', ts: 1788768700, msg: '-> FW: 100 [tca8418L] gpi press 97' }
+    const second = { type: 'buttonEvent', ts: 1788768700, left: { top: 2 } }
+    const payload = Buffer.concat([encode(first), encode(second)])
+    deliver('raw.log', payload)
+    expect(onFrame).toHaveBeenCalledTimes(2)
+    expect(onFrame.mock.calls[0][0]).toMatchObject(first)
+    expect(onFrame.mock.calls[1][0]).toMatchObject(second)
+    expect(onFrame.mock.calls[0][0].remoteSource).toMatch(/^nats:/)
+    expect(onFrame.mock.calls[0][0].remoteSource).not.toBe(onFrame.mock.calls[1][0].remoteSource)
+    await src.stop()
+    deliver('raw.log', payload)
+    expect(onFrame).toHaveBeenCalledTimes(2)
+  })
+
+  it('invalidates gestures when the NATS connection disconnects', async () => {
+    nats.state.statusEvents = [{ type: 'disconnect' }]
+    const onDiscontinuity = vi.fn()
+    const src = await startNatsFrameSource({ decode, onFrame: vi.fn(), onDiscontinuity })
+    await Promise.resolve()
+    expect(onDiscontinuity).toHaveBeenCalledTimes(1)
+    await src.stop()
   })
 
   it('decodes a capSense fixture through to onFrame and counts it', async () => {
