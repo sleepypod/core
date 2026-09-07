@@ -135,6 +135,16 @@ describe('remote recognition from observed signals', () => {
 
     expect(events.some(e => e.gesture === 'combo')).toBe(false)
   })
+  it('does not use a later gesture to finish a combo whose release was lost', () => {
+    edge(100, 'press', 97)
+    edge(130, 'press', 99)
+    edge(200, 'release', 97)
+    // Bottom's release was lost. A new bottom press is fresh input, not a
+    // duplicate of the old down edge; its release cannot complete that combo.
+    edge(1500, 'press', 99)
+    edge(1650, 'release', 99)
+    expect(events.some(e => e.gesture === 'combo')).toBe(false)
+  })
 
   it('cancels queued clicks on keypad reset, ignores recovery artifacts and old frames, and stops permanently', () => {
     feed({ type: 'buttonEvent', left: { top: 1 } })
@@ -160,5 +170,44 @@ describe('remote recognition from observed signals', () => {
     vi.advanceTimersByTime(1000)
 
     expect(events).toEqual([])
+  })
+  it('invalidates pending input on transport gaps and firmware counter regression', () => {
+    feed({ type: 'buttonEvent', left: { top: 1 } })
+    recognizer.feed({ type: 'remoteReset' })
+    edge(1000, 'press', 97)
+    edge(10, 'press', 99)
+    edge(50, 'release', 99)
+    edge(100, 'release', 97)
+    vi.advanceTimersByTime(1000)
+    expect(events).toEqual([])
+  })
+  it('ignores malformed edge records and unrelated log payloads', () => {
+    feed({ type: 'log', msg: null })
+    feed({ type: 'log', msg: 'ordinary firmware message' })
+    feed({ type: 'log', msg: '-> FW: 9007199254740993 [tca8418L] gpi press 97' })
+    edge(20, 'release', 97)
+    vi.advanceTimersByTime(1000)
+    expect(events).toEqual([])
+  })
+  it('does not convert a hold longer than the stale-edge limit into a single action', () => {
+    edge(100, 'press', 98)
+    vi.advanceTimersByTime(12000)
+    edge(12100, 'release', 98)
+    feed({ type: 'buttonEvent', left: { middle: 1 } })
+    vi.advanceTimersByTime(1000)
+    expect(events.at(-1)).toMatchObject({ inputId: 'mid.single', gesture: 'unsupported' })
+  })
+  it('does not evict still-actionable identities when deduplication capacity is reached', () => {
+    const frame = { type: 'buttonEvent', ts: start / 1000, remoteSource: 'original', left: { top: 1 } }
+    recognizer.feed(frame)
+    vi.advanceTimersByTime(1000)
+    for (let i = 0; i < 4100; i++) feed({ type: 'log', msg: 'ordinary log' })
+    recognizer.feed(frame)
+    vi.advanceTimersByTime(1000)
+    expect(events).toHaveLength(1)
+    vi.advanceTimersByTime(31000)
+    feed({ type: 'buttonEvent', left: { top: 1 } })
+    vi.advanceTimersByTime(1000)
+    expect(events).toHaveLength(2)
   })
 })

@@ -805,12 +805,7 @@ async function startNatsSource(expectedServer: WebSocketServer): Promise<boolean
       onFrame: (frame) => { if (streamState.wss === expectedServer) dispatchSensorFrame(frame) },
       onDiscontinuity: () => {
         if (streamState.wss !== expectedServer) return
-        for (const listener of serverFrameListeners) {
-          try {
-            listener({ type: 'remoteReset' })
-          }
-          catch { /* isolate consumers */ }
-        }
+        resetRemoteGestures()
       },
       onReady: () => console.log('[sensorStream] NATS frame source active'),
       onClose: err => console.error('[sensorStream] NATS frame source closed', err ?? ''),
@@ -925,6 +920,7 @@ function startRawTailingLoop(): void {
   let pending: Promise<void> | null = null
   const active = () => !stopped && streamState.wss === expectedServer
   const reset = () => {
+    resetRemoteGestures()
     fileBuffer = Buffer.alloc(0)
     readOffset = 0
     needsMore = true
@@ -1036,6 +1032,14 @@ function startRawTailingLoop(): void {
 // Used by DeviceStateSync to record flow data without circular imports.
 type ServerFrameListener = (frame: Record<string, unknown>) => void
 const serverFrameListeners = streamState.serverFrameListeners
+function resetRemoteGestures(): void {
+  for (const listener of serverFrameListeners) {
+    try {
+      listener({ type: 'remoteReset' })
+    }
+    catch { /* isolate consumers */ }
+  }
+}
 
 /** Register a callback invoked for every decoded sensor frame. Returns unsubscribe fn. */
 export function onServerFrame(cb: ServerFrameListener): () => void {

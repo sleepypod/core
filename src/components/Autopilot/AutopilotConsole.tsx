@@ -38,10 +38,10 @@ function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, labe
       type="button"
       onClick={onClick}
       style={active ? { background: 'color-mix(in srgb, var(--accent) 14%, transparent)', color: 'var(--accent)' } : undefined}
-      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors ${active ? '' : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'}`}
+      className={`flex min-w-0 flex-1 items-center gap-1 rounded-lg px-2 py-2 text-[12px] font-medium transition-colors md:w-full md:flex-none md:gap-3 md:px-3 md:text-[13px] ${active ? '' : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'}`}
     >
       <I size={17} />
-      <span className="flex-1 text-left">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       {badge != null && <span className="mono text-[11px] text-zinc-500">{badge}</span>}
     </button>
   )
@@ -106,12 +106,12 @@ export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: '
   const activeCount = items.filter(i => i.enabled && i.mode === 'active').length
 
   return (
-    <div className="ap-console mx-[calc(50%-50vw)] w-screen px-4 text-zinc-100" style={{ ['--accent' as string]: ACCENT }}>
+    <div className="ap-console mx-[calc(50%-50vw)] w-screen text-zinc-100 md:px-4" style={{ ['--accent' as string]: ACCENT }}>
       <style dangerouslySetInnerHTML={{ __html: SCOPED_CSS }} />
       <div className="mx-auto flex max-w-[1500px] flex-col gap-4 md:flex-row">
         {/* side nav */}
         <aside className="flex w-full shrink-0 flex-col self-start md:w-[212px] rounded-xl border border-zinc-800 bg-zinc-950/80">
-          <div className="flex items-center gap-2.5 px-4 py-4">
+          <div className="hidden items-center gap-2.5 px-4 py-4 md:flex">
             <span className="grid h-8 w-8 place-items-center rounded-lg" style={{ background: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'var(--accent)' }}>
               <Icon.Sliders size={17} />
             </span>
@@ -120,12 +120,12 @@ export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: '
               <div className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">sleepypod</div>
             </div>
           </div>
-          <nav className="flex flex-col gap-1 px-3 py-2">
+          <nav className="flex gap-1 px-3 py-2 md:flex-col">
             <NavItem icon="List" label="Automations" badge={items.length} active={screen === 'list'} onClick={() => setScreen('list')} />
             <NavItem icon="Remote" label="Remote" active={screen === 'remote'} onClick={() => setScreen('remote')} />
             <NavItem icon="Pulse" label="Diagnostics" active={screen === 'status'} onClick={() => setScreen('status')} />
           </nav>
-          <div className="mt-auto p-3">
+          <div className="mt-auto hidden p-3 md:block">
             <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${killed ? 'border-red-500/30 bg-red-500/10 text-red-300' : 'border-zinc-800 bg-zinc-900/40 text-zinc-400'}`}>
               <span className={`h-2 w-2 rounded-full ${killed ? 'bg-red-400' : 'bg-emerald-400'}`} style={killed ? undefined : { boxShadow: '0 0 0 3px rgba(52,211,153,0.18)' }} />
               {killed ? 'Halted' : 'Running'}

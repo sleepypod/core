@@ -223,7 +223,7 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 px-5 py-4">
-        <div>
+        <div className="min-w-[200px] flex-1">
           <h1 className="text-[19px] font-semibold tracking-tight text-zinc-100">Remote</h1>
           <p className="mt-0.5 text-[12px] text-zinc-500">Reprogram what each button does. Each side’s remote is mapped separately.</p>
         </div>
@@ -294,6 +294,7 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
             {mapping.error && (
               <div role="alert" className="rounded-lg border border-red-500/30 p-3 text-[12px] text-red-300">
                 Not saved:
+                {' '}
                 {mapping.error}
                 {' '}
                 <button type="button" onClick={mapping.reload} className="underline">Reload</button>
@@ -307,27 +308,29 @@ export function RemotePanel({ automations, mapping, side, setSide }: {
                     <div title={inputLabel(id)} className="truncate text-[13px] text-zinc-200">{inputLabel(id)}</div>
                     <div title={inputHint(id)} className="mono truncate text-[10px] text-zinc-400">{inputHint(id)}</div>
                   </div>
-                  <select
-                    aria-label={`${inputLabel(id)} action`}
-                    disabled={mapping.busy}
-                    value={bindings[id]?.action ?? 'factory'}
-                    className={`${styles.action} ${bindings[id] ? 'text-zinc-100' : 'text-zinc-300'}`}
-                    onChange={(e) => {
-                      if (e.target.value === 'factory')
-                        mapping.save(side, { kind: 'reset', input: id })
-                      else
-                        change(id, defaultBinding(e.target.value, automations[0]?.id))
-                    }}
-                  >
-                    <option value="factory">Firmware default</option>
-                    {ACTIONS.map(a => (
-                      <option key={a.id} value={a.id} disabled={'unavailable' in a || (a.id === 'automation.run' && !automations.length)}>
-                        {a.label}
-                        {'unavailable' in a ? ' (unavailable)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {bindings[id] && <Param label={inputLabel(id)} binding={bindings[id] as Binding} automations={automations} disabled={mapping.busy} change={b => change(id, b)} />}
+                  <div className={styles.controls}>
+                    <select
+                      aria-label={`${inputLabel(id)} action`}
+                      disabled={mapping.busy}
+                      value={bindings[id]?.action ?? 'factory'}
+                      className={`${styles.action} ${bindings[id] ? 'text-zinc-100' : 'text-zinc-300'}`}
+                      onChange={(e) => {
+                        if (e.target.value === 'factory')
+                          mapping.save(side, { kind: 'reset', input: id })
+                        else
+                          change(id, defaultBinding(e.target.value, automations[0]?.id))
+                      }}
+                    >
+                      <option value="factory">Firmware default</option>
+                      {ACTIONS.map(a => (
+                        <option key={a.id} value={a.id} disabled={'unavailable' in a || (a.id === 'automation.run' && !automations.length)}>
+                          {a.label}
+                          {'unavailable' in a ? ' (unavailable)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {bindings[id] && <Param label={inputLabel(id)} binding={bindings[id] as Binding} automations={automations} disabled={mapping.busy} change={b => change(id, b)} />}
+                  </div>
                   <div className="ml-auto flex shrink-0 gap-1">
                     {bindings[id] ? <button type="button" className={styles.iconButton} aria-label={`Reset ${inputLabel(id)}`} title="Reset to firmware default" disabled={mapping.busy} onClick={() => mapping.save(side, { kind: 'reset', input: id })}><Icon.Reset size={13} /></button> : <span className="w-[21px]" />}
                     {!BASE_INPUTS.includes(id) ? <button type="button" className={styles.iconButton} aria-label={`Remove ${inputLabel(id)}`} title="Remove input" disabled={mapping.busy} onClick={() => mapping.save(side, { kind: 'remove', input: id })}>×</button> : <span className="w-[21px]" />}

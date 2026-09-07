@@ -59,5 +59,7 @@ describe('live Remote capture', () => {
     expect(screen.queryByText('top.single')).toBeNull()
     act(() => FakeSource.latest.onerror?.())
     expect(screen.getByText(/Disconnected — reconnecting/)).toBeTruthy()
+    act(() => FakeSource.latest.onmessage?.({ data: '{broken' }))
+    expect(screen.getByText(/Invalid detection received/)).toBeTruthy()
   })
 })

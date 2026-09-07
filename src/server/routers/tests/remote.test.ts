@@ -17,6 +17,20 @@ describe('remote API', () => {
     await expect(caller.mapping({})).resolves.toEqual(emptyConfig())
     await expect(caller.status({})).resolves.toMatchObject({ running: true })
   })
+  it('classifies permanent-input removal as a client validation error', async () => {
+    await expect(caller.update({ side: 'left', revision: 0, edit: { kind: 'remove', input: 'top.single' } })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(mocks.edit).not.toHaveBeenCalled()
+  })
+  it('recognizes a revision conflict thrown by a different module graph', async () => {
+    vi.resetModules()
+    const foreign = await import('@/src/remote/store')
+    const error = new foreign.RemoteConflictError('Concurrent edit')
+    expect(error instanceof RemoteConflictError).toBe(false)
+    mocks.edit.mockImplementation(() => {
+      throw error
+    })
+    await expect(caller.update({ side: 'left', revision: 0, edit: { kind: 'copy' } })).rejects.toMatchObject({ code: 'CONFLICT', message: 'Concurrent edit' })
+  })
   it('validates structured actions before persisting them', async () => {
     const edit = { kind: 'set' as const, input: 'top.single' as const, binding: { action: 'temp.up' as const, deltaF: 2 as const } }
     await caller.update({ side: 'right', revision: 3, edit })

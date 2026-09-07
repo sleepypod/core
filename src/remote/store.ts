@@ -1,6 +1,11 @@
 import type Database from 'better-sqlite3'
 import { configSchema, editConfig, emptyConfig, type Edit, type Side } from './model'
 export class RemoteConflictError extends Error {
+  readonly code = 'REMOTE_MAPPING_CONFLICT'
+}
+/** Error constructors can differ between Next.js module graphs. */
+export function isRemoteConflictError(error: unknown): error is Error {
+  return error instanceof Error && 'code' in error && error.code === 'REMOTE_MAPPING_CONFLICT'
 }
 export class RemoteStore {
   constructor(private sqlite: Database.Database) { }

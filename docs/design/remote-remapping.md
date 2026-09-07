@@ -25,7 +25,8 @@ the prototype's illustrative firmware assumptions:
   shown in capture without dispatching a combo. All-three and held-button
   sequences are observable but not bindable. A later valid edge after 10,000
   ticks invalidates stale held state. Keypad reset, counter regression, NATS
-  disconnection, and shutdown also invalidate pending recognition.
+  disconnection, RAW rotation/truncation/replacement, a fresh press with a
+  missing preceding release, and shutdown also invalidate pending recognition.
 - RAW can write the native click count before the corresponding edge logs.
   Count dispatch waits one second for those logs; observed holds and overlaps
   suppress their constituent native click bindings. Second-resolution source
@@ -72,6 +73,9 @@ handlers see the same stream. No browser or armed capture is required for
 execution. Commands are serialized, bounded to 20 queued detections, and
 discarded after five seconds in the queue. Historical startup frames and
 duplicate RAW file/offset/item identities do not dispatch actions.
+Recent identities are retained for the entire 30-second frame acceptance
+window. When the bounded deduplication cache is full, recognition rejects
+excess input rather than evicting identities that could still be replayed.
 
 Both RAW and live NATS sensor/log frames use the existing complete CBOR decoder.
 NATS uses core subscriptions without replaying retained JetStream messages.
@@ -81,12 +85,15 @@ the connection instance, message number and CBOR item number.
 `automation.run` explicitly evaluates the chosen rule while retaining enabled,
 global pause, conditions, cooldown, dry-run, runaway, and hardware safety gates.
 Only its WHEN trigger is bypassed. See the automation run log for its outcome.
+The engine is also shared across Next.js module graphs so API pause controls,
+rule reloads, scheduled ticks and remote invocation use the same state.
 
 Diagnostics opens `GET /api/remote/detections` as SSE only while armed. It shows
 the newest 12 unique detections and updates outcomes in place. Resolution uses
 the current mapping, while the separate outcome records what execution did.
 Stopping capture closes the subscription and retains the displayed rows.
 There is no production injection control or fabricated detection data.
+Slow SSE clients are disconnected when their queue reaches 16 unread messages.
 
 ## Verification
 

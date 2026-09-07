@@ -13,9 +13,59 @@ function Harness({ initial = emptyConfig() }: { initial?: RemoteConfig }) {
     save: (target, edit) => setConfig(current => editConfig(current, target, edit)),
     reload: vi.fn(),
   }
-  return <RemotePanel mapping={mapping} side={side} setSide={setSide} automations={[{ id: 42, name: 'Evening cooldown' }]} />
+  return <RemotePanel mapping={mapping} side={side} setSide={setSide} automations={[{ id: 42, name: 'Evening cooldown' }, { id: 43, name: 'Morning warmup' }]} />
 }
 describe('Remote mapping interactions', () => {
+  it.each([
+    ['temp.down', '1', '2'], ['temp.preset', '68', '76'], ['alarm.snooze', '540', '900'],
+  ])('edits the %s parameter without parsing its display label', (action, initial, changed) => {
+    render(<Harness />)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Middle · single action' }), { target: { value: action } })
+    const parameter = screen.getByRole('combobox', { name: 'Middle · single parameter' }) as HTMLSelectElement
+    expect(parameter.value).toBe(initial)
+    fireEvent.change(parameter, { target: { value: changed } })
+    expect(parameter.value).toBe(changed)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Middle · single action' }), { target: { value: 'factory' } })
+    expect(screen.queryByRole('combobox', { name: 'Middle · single parameter' })).toBeNull()
+  })
+  it('shows failed loads and failed saves, and permits explicit reload', () => {
+    const reload = vi.fn()
+    const base: MappingState = { config: undefined, loading: true, busy: false, error: undefined, save: vi.fn(), reload }
+    const { rerender } = render(<RemotePanel mapping={base} side="left" setSide={vi.fn()} automations={[]} />)
+    expect(screen.getByText('Loading remote mappings…')).toBeTruthy()
+    rerender(<RemotePanel mapping={{ ...base, loading: false, error: 'Device unavailable' }} side="left" setSide={vi.fn()} automations={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(reload).toHaveBeenCalledTimes(1)
+    rerender(<RemotePanel mapping={{ ...base, config: emptyConfig(), error: 'Save failed' }} side="left" setSide={vi.fn()} automations={[]} />)
+    expect(screen.getByRole('alert').textContent).toContain('Save failed')
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    expect(reload).toHaveBeenCalledTimes(2)
+  })
+  it('materializes server-provided overrides and labels deleted automations', () => {
+    const mapping: MappingState = { config: { ...emptyConfig(), left: { 'top.double': { action: 'automation.run', automationId: 99 } } }, loading: false, error: undefined, busy: false, save: vi.fn(), reload: vi.fn() }
+    render(<RemotePanel mapping={mapping} side="left" setSide={vi.fn()} automations={[]} />)
+    expect(screen.getByRole('combobox', { name: 'Top · double action' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Deleted automation' })).toBeTruthy()
+  })
+  it('can add all six optional inputs without creating overrides', () => {
+    render(<Harness />)
+    for (const name of ['Top · double', 'Middle · double', 'Bottom · double', 'Top + Middle', 'Middle + Bottom', 'Top + Bottom']) {
+      fireEvent.click(screen.getByRole('button', { name: /Add another input/ }))
+      fireEvent.click(screen.getByRole('button', { name }))
+    }
+    expect(screen.getAllByRole('combobox')).toHaveLength(9)
+    expect(screen.getByText('Every supported input is in use.')).toBeTruthy()
+    expect(screen.queryByText('1 remapped')).toBeNull()
+  })
+  it('cancels destructive changes and dismisses the menu when clicking outside', () => {
+    render(<Harness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy to right' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('button', { name: 'Replace mappings' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Add another input/ }))
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByRole('button', { name: 'Top · double' })).toBeNull()
+  })
   it('shows three permanent inputs and disables unsupported hardware actions', () => {
     render(<Harness />)
     expect(screen.getAllByRole('combobox')).toHaveLength(3)
@@ -46,6 +96,8 @@ describe('Remote mapping interactions', () => {
     expect(screen.queryByText('1 remapped')).toBeNull()
     fireEvent.change(screen.getByRole('combobox', { name: 'Top · double action' }), { target: { value: 'automation.run' } })
     expect((screen.getByRole('combobox', { name: 'Top · double parameter' }) as HTMLSelectElement).value).toBe('42')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Top · double parameter' }), { target: { value: '43' } })
+    expect((screen.getByRole('combobox', { name: 'Top · double parameter' }) as HTMLSelectElement).value).toBe('43')
     fireEvent.click(screen.getByRole('button', { name: 'Copy to right' }))
     fireEvent.click(screen.getByRole('button', { name: 'Replace mappings' }))
     fireEvent.click(screen.getByRole('button', { name: 'Right remote' }))
@@ -68,6 +120,10 @@ describe('Remote mapping interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add another input 6 available' }))
     const option = screen.getByRole('button', { name: 'Top · double' })
     fireEvent.mouseEnter(option)
+    expect(top.className).toContain('lit')
+    fireEvent.mouseLeave(option)
+    expect(top.className).not.toContain('lit')
+    fireEvent.focus(option)
     expect(top.className).toContain('lit')
     fireEvent.keyDown(option, { key: 'Escape' })
     expect(screen.queryByRole('button', { name: 'Top · double' })).toBeNull()

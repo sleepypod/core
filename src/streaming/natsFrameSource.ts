@@ -185,6 +185,7 @@ export async function startNatsFrameSource(
   const handleMessage = (err: Error | null, data: Uint8Array): void => {
     if (stopped) return
     if (err) {
+      opts.onDiscontinuity?.()
       // Per-subscription errors (e.g. permission) — surface, keep the others live.
       console.warn('[natsSource] subscription error:', err.message)
       return
@@ -200,6 +201,7 @@ export async function startNatsFrameSource(
       frames = []
     }
     if (frames.length === 0) {
+      opts.onDiscontinuity?.()
       stats.decodeFailures += 1
       if (!loggedDecodeFailure) {
         loggedDecodeFailure = true

@@ -60,7 +60,7 @@ export function RemoteCapture({ config, automations }: {
         <div className="flex items-center gap-3">
           {armed && (
             <span role="status" className="text-[11px]" style={{ color: 'var(--accent)' }}>
-              ●
+              <span aria-hidden="true" className="mr-1 inline-block animate-pulse">●</span>
               {state}
             </span>
           )}

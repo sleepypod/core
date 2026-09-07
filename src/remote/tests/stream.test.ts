@@ -41,4 +41,14 @@ describe('remote detection SSE', () => {
     expect(mocks.unsubscribe).toHaveBeenCalledTimes(2)
     expect(vi.getTimerCount()).toBe(0)
   })
+  it('disconnects a non-reading client before it can accumulate an unbounded queue', async () => {
+    const response = GET(new Request('http://localhost/api/remote/detections'))
+    for (let i = 0; i < 16; i++) mocks.listener?.({ id: `event-${i}` })
+    expect(mocks.unsubscribe).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    const reader = response.body?.getReader()
+    let count = 0
+    while (!(await reader?.read())?.done) count++
+    expect(count).toBe(16)
+  })
 })

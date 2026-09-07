@@ -20,7 +20,7 @@ interface Group {
 }
 /** Count recognition is firmware-owned. Chords require raw edge evidence (ADR 0024). */
 export class RemoteRecognizer {
-  private seen = new Set<string>()
+  private seen = new Map<string, number>()
   private down: Record<Side, Map<Source, Edge>> = { left: new Map(), right: new Map() }
   private counters: Partial<Record<Side, number>> = {}
   private epochs: Record<Side, number> = { left: 0, right: 0 }
@@ -77,13 +77,23 @@ export class RemoteRecognizer {
     if (typeof ts !== 'number' || !Number.isFinite(ts) || ts * 1000 < this.startedAt || ts * 1000 > this.now() + 2000 || this.now() - ts * 1000 > 30000)
       return
 
-    if (typeof source !== 'string' || !source || this.seen.has(source))
+    if (typeof source !== 'string' || !source)
       return
+    const seenUntil = this.seen.get(source)
+    if (seenUntil !== undefined && seenUntil >= this.now()) return
 
-    this.seen.add(source)
-
-    if (this.seen.size > 4096)
-      this.seen.delete(this.seen.values().next().value ?? '')
+    if (this.seen.size >= 4096) {
+      for (const [id, expiresAt] of this.seen) {
+        if (expiresAt < this.now()) this.seen.delete(id)
+      }
+      if (this.seen.size >= 4096) {
+        // Never evict a still-actionable identity and allow its replay to fire.
+        this.resetSide('left')
+        this.resetSide('right')
+        return
+      }
+    }
+    this.seen.set(source, ts * 1000 + 30000)
 
     if (frame.type === 'buttonEvent') {
       for (const side of ['left', 'right'] as const) {
@@ -157,8 +167,14 @@ export class RemoteRecognizer {
 
     const held = this.down[side]
 
-    if ([...held.values()].some(edge => counter - edge.counter > EDGE_TIMEOUT_MS))
+    if ([...held.values()].some(edge => counter - edge.counter > EDGE_TIMEOUT_MS)) {
+      // Cancelling stale edges must also consume their later native click count.
+      for (const active of BUTTONS) {
+        const edge = held.get(active.id)
+        if (edge) this.suppression[side].push({ mask: active.bit, from: edge.ts, until: ts * 1000 + 1000 })
+      }
       this.resetSide(side)
+    }
 
     this.counters[side] = counter
 
@@ -199,8 +215,14 @@ export class RemoteRecognizer {
       return
     }
 
-    if (held.has(button.id))
-      return
+    const previousPress = held.get(button.id)
+    if (previousPress) {
+      if (previousPress.counter === counter) return
+      // A fresh press without its predecessor's release proves an edge gap.
+      // Do not complete the old combo using this new gesture's eventual release.
+      this.resetSide(side)
+      this.counters[side] = counter
+    }
 
     held.set(button.id, { counter, ts: ts * 1000 })
 

@@ -10,17 +10,21 @@ export function GET(request: Request) {
 
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      const send = (data: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+      const send = (data: unknown) => {
+        // A slow diagnostic client must not accumulate an unbounded event queue.
+        if (controller.desiredSize === null) return
+        if ((controller.desiredSize ?? 0) <= 0) {
+          cleanup()
+          controller.close()
+          return
+        }
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+      }
 
       const unsubscribe = subscribeRemote(send)
 
       const heartbeat = setInterval(() => {
-        try {
-          send({ type: 'status', ...remoteStatus() })
-        }
-        catch {
-          cleanup()
-        }
+        send({ type: 'status', ...remoteStatus() })
       }, 15000)
 
       cleanup = () => {
@@ -55,7 +59,7 @@ export function GET(request: Request) {
     cancel() {
       cleanup()
     },
-  })
+  }, { highWaterMark: 16 })
 
   return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' } })
 }

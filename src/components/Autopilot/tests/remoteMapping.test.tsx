@@ -5,11 +5,15 @@ import { emptyConfig } from '@/src/remote/model'
 const mocks = vi.hoisted(() => ({
   data: undefined as unknown,
   mutate: vi.fn(), refetch: vi.fn(), setData: vi.fn(),
+  onSuccess: undefined as ((data: unknown) => void) | undefined,
 }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   remote: {
     mapping: { useQuery: () => ({ data: mocks.data, isLoading: false, error: null, refetch: mocks.refetch }) },
-    update: { useMutation: () => ({ mutate: mocks.mutate, isPending: false }) },
+    update: { useMutation: (options: { onSuccess: (data: unknown) => void }) => {
+      mocks.onSuccess = options.onSuccess
+      return { mutate: mocks.mutate, isPending: false }
+    } },
   },
   useUtils: () => ({ remote: { mapping: { setData: mocks.setData } } }),
 } }))
@@ -34,7 +38,12 @@ describe('device mapping save lifecycle', () => {
     expect(mocks.mutate).not.toHaveBeenCalled()
     act(() => vi.advanceTimersByTime(1))
     expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith({ side: 'left', revision: 7, edit: { kind: 'set', input: 'top.single', binding: { action: 'none' } } }, expect.any(Object))
-    act(() => mocks.mutate.mock.calls[0][1].onSuccess())
+    const saved = { ...emptyConfig(), revision: 8 }
+    act(() => {
+      mocks.onSuccess?.(saved)
+      mocks.mutate.mock.calls[0][1].onSuccess()
+    })
+    expect(mocks.setData).toHaveBeenCalledWith({}, saved)
     expect(result.current.busy).toBe(false)
     expect(result.current.error).toBeUndefined()
   })
