@@ -66,15 +66,15 @@ type ServiceStatus = 'ok' | 'degraded' | 'error' | 'unknown'
 
 const SECTIONS = [
   { id: 'overview', label: 'Overview', icon: Activity },
-  { id: 'thermal', label: 'Thermal', icon: Gauge },
-  { id: 'scheduler', label: 'Scheduler', icon: CalendarClock },
-  { id: 'biometrics', label: 'Biometrics', icon: HeartPulse },
-  { id: 'sensors', label: 'Sensors', icon: Radio },
-  { id: 'health', label: 'Health', icon: ServerCog },
-  { id: 'calibration', label: 'Calibration', icon: SlidersHorizontal },
-  { id: 'remote', label: 'Remote', icon: SlidersHorizontal },
   { id: 'autopilot', label: 'Autopilot', icon: Wand2 },
+  { id: 'biometrics', label: 'Biometrics', icon: HeartPulse },
+  { id: 'calibration', label: 'Calibration', icon: SlidersHorizontal },
+  { id: 'health', label: 'Health', icon: ServerCog },
   { id: 'logs', label: 'Logs', icon: ScrollText },
+  { id: 'remote', label: 'Remote', icon: SlidersHorizontal },
+  { id: 'scheduler', label: 'Scheduler', icon: CalendarClock },
+  { id: 'sensors', label: 'Sensors', icon: Radio },
+  { id: 'thermal', label: 'Thermal', icon: Gauge },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
