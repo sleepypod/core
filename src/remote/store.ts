@@ -8,7 +8,9 @@ export function isRemoteConflictError(error: unknown): error is Error {
   return error instanceof Error && 'code' in error && error.code === 'REMOTE_MAPPING_CONFLICT'
 }
 export class RemoteStore {
+  /** Wrap the supplied SQLite connection; mapping state remains in the database. */
   constructor(private sqlite: Database.Database) { }
+  /** Read and validate the persisted mapping, or return firmware inheritance when absent. */
   read() {
     const row = this.sqlite.prepare('SELECT config FROM remote_configuration WHERE id = 1').get() as {
       config: string
@@ -16,6 +18,7 @@ export class RemoteStore {
     return row ? configSchema.parse(JSON.parse(row.config)) : emptyConfig()
   }
 
+  /** Atomically apply an edit only when the supplied revision matches; otherwise throw a conflict. */
   edit(side: Side, revision: number, edit: Edit) {
     return this.sqlite.transaction(() => {
       const current = this.read()

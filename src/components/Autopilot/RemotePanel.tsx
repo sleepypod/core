@@ -9,6 +9,7 @@ interface Automation {
   id: number
   name: string
 }
+/** Load shared mapping state, serialize revisioned edits, and flush unsent edits on navigation. */
 export function useRemoteMapping() {
   const query = trpc.remote.mapping.useQuery({}, { refetchOnWindowFocus: true })
 
@@ -79,6 +80,7 @@ export function useRemoteMapping() {
   }
 }
 export type MappingState = ReturnType<typeof useRemoteMapping>
+/** Link physical button selection and hover states to the current side mapping. */
 export function RemoteFigure({ selected, hovered, config, side, select }: {
   selected: Source | null
   hovered: Source[]
@@ -100,6 +102,7 @@ export function RemoteFigure({ selected, hovered, config, side, select }: {
     </div>
   )
 }
+/** Render the structured parameter control required by a binding, retaining deleted-rule visibility. */
 function Param({ binding, automations, change, disabled, label }: {
   binding: Binding
   automations: Automation[]
@@ -167,6 +170,7 @@ function Param({ binding, automations, change, disabled, label }: {
     </select>
   )
 }
+/** Edit one side of the persistent mapping with optional inputs and confirmed copy/reset operations. */
 export function RemotePanel({ automations, mapping, side, setSide }: {
   automations: Automation[]
   mapping: MappingState

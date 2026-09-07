@@ -35,6 +35,7 @@ export const configSchema = z.object({
   extras: z.object({ left: z.array(inputSchema).max(6), right: z.array(inputSchema).max(6) }).strict(),
 }).strict()
 export type RemoteConfig = z.infer<typeof configSchema>
+/** Create an empty revision-zero mapping that inherits native firmware behavior. */
 export function emptyConfig(): RemoteConfig {
   return { revision: 0, left: {}, right: {}, extras: { left: [], right: [] } }
 }
@@ -44,6 +45,7 @@ export const editSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.enum(['resetSide', 'copy']) }).strict(),
 ])
 export type Edit = z.infer<typeof editSchema>
+/** Apply one immutable side edit and advance the shared revision; base rows cannot be removed. */
 export function editConfig(current: RemoteConfig, side: Side, edit: Edit): RemoteConfig {
   const next = structuredClone(current)
 
@@ -80,14 +82,17 @@ export function editConfig(current: RemoteConfig, side: Side, edit: Edit): Remot
 
   return next
 }
+/** Extract recognized physical buttons from a single or combination input ID. */
 export function parts(id: string): Source[] {
   return id.split('.')[0].split('+').filter((p): p is Source => BUTTONS.some(b => b.id === p))
 }
+/** Format an input ID for mapping rows and detection capture. */
 export function inputLabel(id: string): string {
   const label = parts(id).map(p => BUTTONS.find(b => b.id === p)?.label ?? p).join(' + ')
 
   return parts(id).length > 1 ? label : `${label} · ${id.split('.')[1]}`
 }
+/** Describe the physical input without claiming an unverified firmware timing window. */
 export function inputHint(id: string): string {
   return `${parts(id).map(p => BUTTONS.find(b => b.id === p)?.short ?? p).join(' + ')}${id.endsWith('.double') ? '×2 · firmware count' : parts(id).length > 1 ? ' · together' : ' · press'}`
 }
@@ -103,6 +108,7 @@ export const ACTIONS = [
   { id: 'away.toggle', label: 'Toggle away mode' }, { id: 'prime.start', label: 'Start priming' },
   { id: 'automation.run', label: 'Run an automation…' },
 ] as const
+/** Build validated initial parameters for an available action; invalid actions or IDs throw. */
 export function defaultBinding(action: string, automationId?: number): Binding {
   switch (action) {
     case 'temp.up':
@@ -113,6 +119,7 @@ export function defaultBinding(action: string, automationId?: number): Binding {
     default: return bindingSchema.parse({ action })
   }
 }
+/** Resolve a binding to display text, including inherited defaults and deleted automations. */
 export function describe(binding: Binding | undefined, automations: {
   id: number
   name: string

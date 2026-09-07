@@ -1032,6 +1032,7 @@ function startRawTailingLoop(): void {
 // Used by DeviceStateSync to record flow data without circular imports.
 type ServerFrameListener = (frame: Record<string, unknown>) => void
 const serverFrameListeners = streamState.serverFrameListeners
+/** Cancel remote edge correlation whenever the underlying sensor stream loses continuity. */
 function resetRemoteGestures(): void {
   for (const listener of serverFrameListeners) {
     try {

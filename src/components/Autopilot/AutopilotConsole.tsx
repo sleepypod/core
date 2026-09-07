@@ -31,6 +31,7 @@ const SCOPED_CSS = `
 @keyframes apFade { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: none; } }
 `
 
+/** Render an accessible section switch that adapts to compact navigation. */
 function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, label: string, active: boolean, badge?: number, onClick: () => void }) {
   const I = Icon[icon]
   return (
@@ -47,6 +48,7 @@ function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, labe
   )
 }
 
+/** Share mapping and selected-side state across Automations, Remote, and Diagnostics screens. */
 export function AutopilotConsole({ initialScreen = 'list' }: { initialScreen?: 'list' | 'remote' | 'status' } = {}) {
   const utils = trpc.useUtils()
   const [screen, setScreen] = useState<'list' | 'remote' | 'status'>(initialScreen)

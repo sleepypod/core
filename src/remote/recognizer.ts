@@ -28,10 +28,12 @@ export class RemoteRecognizer {
   private groups: Partial<Record<Side, Group>> = {}
   private suppression: Record<Side, Suppression[]> = { left: [], right: [] }
   private timers = new Set<ReturnType<typeof setTimeout>>()
+  /** Use receipt time for freshness and reject source frames older than this runtime instance. */
   constructor(private emit: (event: Detection) => void, private now = Date.now, private startedAt = now()) {
 
   }
 
+  /** Permanently stop recognition and cancel pending click callbacks and held-button state. */
   stop() {
     this.stopped = true
 
@@ -47,6 +49,7 @@ export class RemoteRecognizer {
     this.groups = {}
   }
 
+  /** Track a deferred click callback so shutdown can cancel it before it emits. */
   private later(fn: () => void, ms: number) {
     const timer = setTimeout(() => {
       this.timers.delete(timer)
@@ -59,6 +62,7 @@ export class RemoteRecognizer {
     return timer
   }
 
+  /** Consume a fresh, identified sensor frame; combine native counts with complete raw edge evidence. */
   feed(frame: Record<string, unknown>) {
     if (frame.type === 'remoteReset') {
       this.resetSide('left')
@@ -260,6 +264,7 @@ export class RemoteRecognizer {
     this.deliver(`${source}:${side}:onset`, side, mask, 'unsupported', `${active.map(b => b.id).join('+')}.pending`, ts * 1000, 'Overlapping buttons; awaiting complete release sequence')
   }
 
+  /** Invalidate pending callbacks and edge correlation for one side after a discontinuity. */
   private resetSide(side: Side) {
     this.epochs[side]++
 
@@ -270,6 +275,7 @@ export class RemoteRecognizer {
     this.counters[side] = undefined
   }
 
+  /** Emit a normalized detection with receipt time and unavailable subsecond source latency. */
   private deliver(id: string, side: Side, mask: number, gesture: Detection['gesture'], inputId: string, t: number, detail?: string) {
     this.emit({ id, side, mask, gesture, inputId, t, receivedAt: this.now(), latencyMs: null, detail })
   }

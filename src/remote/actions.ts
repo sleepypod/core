@@ -15,6 +15,7 @@ export interface RemoteActionDeps {
   runAutomation(id: number): Promise<unknown>
 }
 /** All device mutations are delegated to the same procedures as manual controls. */
+/** Execute one validated software binding through device dependencies and return its diagnostic outcome. */
 export async function executeRemoteAction(binding: Binding, side: Side, deps: RemoteActionDeps): Promise<string> {
   switch (binding.action) {
     case 'none': return 'No custom action; native firmware remains active'

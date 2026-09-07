@@ -164,6 +164,7 @@ function RunLog({ runs }: { runs: RunRow[] }) {
   )
 }
 
+/** Show automation health and run history alongside optional live remote capture. */
 export function StatusPanel({ globalEnabled, onKill, rules, runs, loading, onDry, remoteCapture }: {
   globalEnabled: boolean
   onKill: (enabled: boolean) => void

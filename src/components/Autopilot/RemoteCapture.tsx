@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { describe, detectionSchema, type Detection, type InputId, type RemoteConfig } from '@/src/remote/model'
 import { Badge, Button, Card } from './primitives'
 import { Icon } from './icons'
+/** Subscribe only while armed and display the latest twelve real detections against the current mapping. */
 export function RemoteCapture({ config, automations }: {
   config?: RemoteConfig
   automations: {

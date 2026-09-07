@@ -1,6 +1,7 @@
 import { remoteStatus, subscribeRemote } from '@/src/remote/runtime'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+/** Stream live detections and heartbeat status, disconnecting slow readers and cleaning up on abort. */
 export function GET(request: Request) {
   const encoder = new TextEncoder()
 

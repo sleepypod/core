@@ -27,6 +27,7 @@ const runtimeState = runtimeGlobal.__sleepypodRemote ??= {
   running: false, latest: null, lastError: null,
 } as RuntimeState
 const deps: RemoteActionDeps = {
+  /** Read current device state for relative actions; reject unavailable state. */
   async state(side) {
     const row = db.select().from(deviceState).where(eq(deviceState.side, side)).get()
 
@@ -35,6 +36,7 @@ const deps: RemoteActionDeps = {
 
     return row
   },
+  /** Read the persisted away mode before toggling it. */
   async away(side) {
     const row = db.select().from(sideSettings).where(eq(sideSettings.side, side)).get()
 
@@ -43,27 +45,34 @@ const deps: RemoteActionDeps = {
 
     return row.awayMode
   },
+  /** Delegate temperature changes to the existing manual-control procedure. */
   async setTemperature(side, temperature) {
     return (await caller()).device.setTemperature({ side, temperature })
   },
+  /** Delegate side power changes to the existing manual-control procedure. */
   async setPower(side, powered) {
     return (await caller()).device.setPower({ side, powered })
   },
+  /** Dismiss the side alarm through the device API. */
   async clearAlarm(side) {
     return (await caller()).device.clearAlarm({ side })
   },
+  /** Snooze the side alarm for the validated duration in seconds. */
   async snoozeAlarm(side, duration) {
     return (await caller()).device.snoozeAlarm({ side, duration })
   },
+  /** Persist the requested side away mode through settings. */
   async setAway(side, awayMode) {
     return (await caller()).settings.updateSide({ side, awayMode })
   },
+  /** Start priming only when neither side is blocked by the pump safety interlock. */
   async prime() {
     if (shouldBlock('left') || shouldBlock('right'))
       throw new Error('Priming blocked by pump safety interlock')
 
     return (await caller()).device.startPriming({})
   },
+  /** Reject deleted rules and evaluate a manual run through the shared automation engine. */
   async runAutomation(id) {
     if (!db.select({ id: automations.id }).from(automations).where(eq(automations.id, id)).get())
       throw new Error('Automation no longer exists')
@@ -72,9 +81,11 @@ const deps: RemoteActionDeps = {
   },
 }
 // Lazy import avoids the appRouter -> remote -> appRouter initialization cycle.
+/** Load the manual-control router lazily to avoid its initialization cycle with the remote runtime. */
 async function caller() {
   return (await import('@/src/server/routers/app')).appRouter.createCaller({})
 }
+/** Store the latest outcome and notify subscribers without letting a failed subscriber interrupt dispatch. */
 function publish(event: Detection) {
   runtimeState.latest = event
 
@@ -87,6 +98,7 @@ function publish(event: Detection) {
     }
   }
 }
+/** Queue a detection with bounded backlog and age, resolving its binding when execution starts. */
 function handle(event: Detection) {
   publish({ ...event, outcome: 'Detected' })
 
@@ -128,6 +140,7 @@ function handle(event: Detection) {
     runtimeState.queued--
   })
 }
+/** Validate persistence and attach one process-wide recognizer to live server frames. */
 export function startRemoteRuntime() {
   if (runtimeState.running)
     return
@@ -142,6 +155,7 @@ export function startRemoteRuntime() {
 
   runtimeState.unsubscribe = onServerFrame(frame => runtimeState.recognizer?.feed(frame))
 }
+/** Detach recognition, skip pending work, drain any active command, and clear subscribers. */
 export async function stopRemoteRuntime() {
   runtimeState.running = false
 
@@ -157,6 +171,7 @@ export async function stopRemoteRuntime() {
 
   runtimeState.listeners.clear()
 }
+/** Subscribe to live detection outcomes and return an idempotent unsubscribe function. */
 export function subscribeRemote(listener: (event: Detection) => void) {
   runtimeState.listeners.add(listener)
 
@@ -164,6 +179,7 @@ export function subscribeRemote(listener: (event: Detection) => void) {
     runtimeState.listeners.delete(listener)
   }
 }
+/** Return the shared runtime health and latest detection receipt time for API consumers. */
 export function remoteStatus() {
   return { running: runtimeState.running, lastDetectionAt: runtimeState.latest?.receivedAt ?? null, lastError: runtimeState.lastError }
 }
