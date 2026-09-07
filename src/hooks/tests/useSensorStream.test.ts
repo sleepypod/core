@@ -264,6 +264,24 @@ describe('useSensorStream', () => {
 })
 
 describe('useSensorFrame', () => {
+  it('exposes lps diagnostic payloads without normalizing bytes or temperatures', async () => {
+    const stream = renderHook(() => useSensorStream({ sensors: ['lps'] }))
+    await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    const frame = renderHook(() => useSensorFrame('lps'))
+    const bytes = { type: 'Buffer', data: [255, 255, 255, 127] }
+    const payload = {
+      type: 'lps', ts: 123,
+      temp: { left1: 0, left2: 0, right1: 0, right2: 0 },
+      pres: { adc: 1, freq: 200, left1: bytes, left2: bytes, right1: bytes, right2: bytes },
+    }
+    act(() => ws.triggerMessage(payload))
+    await waitFor(() => expect(frame.result.current).toEqual(payload))
+    frame.unmount()
+    stream.unmount()
+  })
+
   it('returns the latest frame for a specific sensor only', async () => {
     const stream = renderHook(() => useSensorStream())
     await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))

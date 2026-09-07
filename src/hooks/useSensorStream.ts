@@ -11,7 +11,7 @@ import type { SideStatus } from '@/src/hardware/types'
 export const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
-  'deviceStatus', 'gesture',
+  'deviceStatus', 'gesture', 'lps',
 ] as const
 
 export type SensorType = typeof ALL_SENSOR_TYPES[number]
@@ -25,6 +25,21 @@ export interface PiezoDualFrame {
   right1: number[]
   left2?: number[]
   right2?: number[]
+}
+
+/**
+ * LPS diagnostic frame. Channel bytes remain in their JSON Buffer envelope,
+ * unlike piezo-dual's decoded sample arrays. Units and physical side mapping
+ * are unconfirmed; preserve sentinel samples and temperature placeholders.
+ */
+export interface LpsFrame {
+  type: 'lps'
+  ts: number
+  temp: Record<'left1' | 'left2' | 'right1' | 'right2', number>
+  pres: {
+    adc: number
+    freq: number
+  } & Record<'left1' | 'left2' | 'right1' | 'right2', { type: 'Buffer', data: number[] }>
 }
 
 /** Capacitive presence sensor frame (~2 Hz). */
@@ -152,6 +167,7 @@ export interface DeviceStatusFrame {
 /** Union of all sensor frame types. */
 export type SensorFrame
   = | PiezoDualFrame
+    | LpsFrame
     | CapSenseFrame
     | CapSense2Frame
     | BedTempFrame

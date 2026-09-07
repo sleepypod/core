@@ -365,11 +365,11 @@ async function findLatestRawAsync(dir: string): Promise<string | null> {
 // Sensor types
 // ---------------------------------------------------------------------------
 
-/** All sensor record types the firmware emits. */
+/** Recognized stream types; subscription support does not imply ingestion. */
 const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
-  'deviceStatus', 'gesture',
+  'deviceStatus', 'gesture', 'lps',
 ] as const
 
 /** Valid sensor type string. Used for subscription filtering. */
@@ -833,6 +833,8 @@ function dispatchSensorFrame(frame: Record<string, unknown>): void {
   recordFirstSensorFrame()
   const frameType = frame.type as string
 
+  // lps is recognized for diagnostic subscriptions only. Preserve its nested
+  // payload and channel labels; no biometric consumer is wired for it.
   // New / out-of-scope firmware types (blanketReadings, …) pass through to
   // subscribers but are not ingested — log the first sight of each, once.
   if (!(ALL_SENSOR_TYPES as readonly string[]).includes(frameType)

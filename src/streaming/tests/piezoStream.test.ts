@@ -739,6 +739,41 @@ describe('piezoStream — server lifecycle and protocol', () => {
     await client.close()
   })
 
+  it('supports lps-only diagnostic subscriptions and preserves channel bytes', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    __test__.warnedUnknownTypes.delete('lps')
+    const client = await connectClient(startAndPort())
+    try {
+      client.ws.send(JSON.stringify({ type: 'subscribe', sensors: ['lps'] }))
+      const ack = await client.waitFor(m => m.type === 'subscribed')
+      expect(ack.sensors).toEqual(['lps'])
+      // Synthetic schema fixture, not a field capture. Include the reported
+      // 10-sample sentinel gap and distinct channels to catch swaps/conversion.
+      const channel = (value: number) => {
+        const bytes = Buffer.alloc(800)
+        for (let i = 0; i < 200; i++) bytes.writeInt32LE(i >= 20 && i < 30 ? 0x7fffffff : value, i * 4)
+        return bytes
+      }
+      const frame = {
+        type: 'lps', ts: 123,
+        temp: { left1: 0, left2: 0, right1: 0, right2: 0 },
+        pres: { adc: 1, freq: 200, left1: channel(453), left2: channel(32767), right1: channel(256), right2: channel(32768) },
+      }
+      const encoded = Buffer.from(new Encoder({ useRecords: false }).encode(frame))
+      const before = getLatestCapSenseSnapshot()
+      __test__.dispatchSensorFrame({ type: 'piezo-dual', ts: 123, freq: 500, left1: [], right1: [] })
+      for (const decoded of decodeSensorFrames(encoded)) __test__.dispatchSensorFrame(decoded)
+      const received = await client.waitFor(m => m.type === 'lps')
+      expect(received).toEqual(JSON.parse(JSON.stringify(frame)))
+      expect(getLatestCapSenseSnapshot()).toBe(before)
+      expect(warn.mock.calls.filter(args => args[1] === 'lps')).toEqual([])
+      expect(client.messages.some(m => m.type === 'piezo-dual')).toBe(false)
+    }
+    finally {
+      await client.close()
+    }
+  })
+
   it('subscribe with an empty sensors array → subscribes to all types', async () => {
     const logSpy = vi.spyOn(console, 'log')
     const port = startAndPort()
