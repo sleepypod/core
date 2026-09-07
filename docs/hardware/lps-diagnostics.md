@@ -56,9 +56,10 @@ The 210-second sequence comprises empty (30 s), left occupied (60 s), empty
 
 ## Remaining evidence
 
-The existing JSONL capture and phase metadata are sufficient for the next step;
-no further physical experiment is requested. Verify the sample bytes, compare
-LPS and piezo side responses and timing, and plot unload recovery before adding
+Field JSONL data remains pending. When the capture is available, use it with the
+phase metadata to verify the sample bytes, compare LPS and piezo side responses
+and timing, and plot unload recovery. No further physical experiment is requested.
+Complete this analysis before adding
 sample interpretation or biometric consumers. Do not globally swap channels,
 label channels as disconnected, or assume the format is exclusive to Pod 4
 based on this single-device report.
