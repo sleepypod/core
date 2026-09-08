@@ -18,9 +18,9 @@ const tabs = [
   // (sleepypod-core-69). The page still lives at /autopilot (deep-link) and the /debug
   // Autopilot panel surfaces live engine state for dogfooding. Re-add SlidersHorizontal
   // import + this entry to re-expose:
-  // { id: 'autopilot', icon: SlidersHorizontal, label: msg`Autopilot`, href: '/autopilot', desktopOnly: true },
-  // Diagnostics console — desktop/tablet only; phones reach it via the Status card.
-  { id: 'debug', icon: Gauge, label: msg`Diagnostics`, href: '/debug', desktopOnly: true },
+  // { id: 'autopilot', icon: SlidersHorizontal, label: msg`Autopilot`, href: '/autopilot', tabletUp: true },
+  // Diagnostics console — include narrower tablet windows (640px+); phones use the Status card.
+  { id: 'debug', icon: Gauge, label: msg`Diagnostics`, href: '/debug', tabletUp: true },
 ]
 
 /**
@@ -56,7 +56,7 @@ export const BottomNav = () => {
               href={`/${lang}${tab.href}`}
               className={clsx(
                 'group flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 sm:gap-1',
-                'desktopOnly' in tab && tab.desktopOnly && 'hidden md:flex',
+                'tabletUp' in tab && tab.tabletUp && 'hidden sm:flex',
               )}
             >
               <span className="relative">
