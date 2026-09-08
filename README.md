@@ -50,10 +50,20 @@ After install, these are available system-wide:
 sp-status         # systemctl status sleepypod.service
 sp-restart        # restart the service
 sp-logs           # journalctl -u sleepypod.service -f
-sp-update         # pull latest, rebuild, migrate, restart (with automatic rollback)
+sp-update         # install latest pre-built release, migrate, restart (with rollback)
 sp-maintenance    # one-shot manual prime / reboot / status
 sp-uninstall      # stop services, remove systemd units, optionally wipe data
 ```
+
+Cloned the repo on your computer? Build locally and deploy to an installed Pod:
+
+```bash
+./scripts/deploy POD_IP              # current checkout
+./scripts/deploy POD_IP fix/my-fix   # branch from your clone's origin
+```
+
+See the [deployment guide](docs/DEPLOYMENT.md) for SSH requirements and fork/PR validation.
+
 
 ---
 
