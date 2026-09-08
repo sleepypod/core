@@ -14,6 +14,7 @@ export function RemoteCapture({ config, automations }: {
   const [armed, setArmed] = useState(false)
 
   const [state, setState] = useState('Stopped')
+  const [connection, setConnection] = useState(0)
 
   const [log, setLog] = useState<Detection[]>([])
 
@@ -23,7 +24,12 @@ export function RemoteCapture({ config, automations }: {
 
     const source = new EventSource('/api/remote/detections')
 
+    let active = true
+    source.onopen = () => {
+      if (active) setState('Listening — press a button')
+    }
     source.onmessage = (event) => {
+      if (!active) return
       try {
         const row = JSON.parse(event.data)
 
@@ -38,6 +44,7 @@ export function RemoteCapture({ config, automations }: {
           setState('Invalid detection received')
           return
         }
+        setState('Listening — press another button')
         setLog(previous => [parsed.data, ...previous.filter(r => r.id !== parsed.data.id)].slice(0, 12))
       }
       catch {
@@ -45,10 +52,15 @@ export function RemoteCapture({ config, automations }: {
       }
     }
 
-    source.onerror = () => setState('Disconnected — reconnecting…')
+    source.onerror = () => {
+      if (active) setState('Disconnected — reconnecting…')
+    }
 
-    return () => source.close()
-  }, [armed])
+    return () => {
+      active = false
+      source.close()
+    }
+  }, [armed, connection])
 
   return (
     <Card className="mb-5 overflow-hidden">
@@ -58,7 +70,7 @@ export function RemoteCapture({ config, automations }: {
           <span className="text-[13px] font-medium text-zinc-200">Remote capture</span>
           <span className="text-[11px] text-zinc-500">raw button detections as they arrive</span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {armed && (
             <span role="status" className="text-[11px]" style={{ color: 'var(--accent)' }}>
               <span aria-hidden="true" className="mr-1 inline-block animate-pulse">●</span>
@@ -69,15 +81,25 @@ export function RemoteCapture({ config, automations }: {
             size="sm"
             variant={armed ? 'default' : 'outline'}
             onClick={() => {
-              setState('Connecting…')
+              setState(armed ? 'Stopped' : 'Connecting…')
               setArmed(!armed)
-
-              if (!armed)
-                setLog([])
             }}
           >
-            {armed ? 'Stop' : 'Arm capture'}
+            {armed ? 'Stop capture' : 'Arm capture'}
           </Button>
+          {armed && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setState('Connecting…')
+                setConnection(previous => previous + 1)
+              }}
+            >
+              Reconnect
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" disabled={!log.length} onClick={() => setLog([])}>Clear</Button>
         </div>
       </div>
       <div className="max-h-[210px] overflow-auto">

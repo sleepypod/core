@@ -7,6 +7,7 @@ class FakeSource {
   static latest: FakeSource
   onmessage?: (event: { data: string }) => void
   onerror?: () => void
+  onopen?: () => void
   close = vi.fn()
   constructor(public url: string) { FakeSource.latest = this }
   message(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }) }
@@ -45,9 +46,42 @@ describe('live Remote capture', () => {
     expect(screen.getByText('Firmware default')).toBeTruthy()
     rerender(<RemoteCapture config={{ ...emptyConfig(), left: { 'top.single': { action: 'temp.up', deltaF: 2 } } }} automations={[]} />)
     expect(screen.getByText('Temperature up 2°F')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop capture' }))
     expect(source.close).toHaveBeenCalledTimes(1)
     expect(screen.getByText('Temperature up 2°F')).toBeTruthy()
+  })
+  it('keeps listening for distinct presses, clears without stopping, and can reconnect or re-arm', () => {
+    render(<RemoteCapture config={emptyConfig()} automations={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Arm capture' }))
+    const first = FakeSource.latest
+    act(() => {
+      first.message(detection('one'))
+      first.message({ ...detection('two'), inputId: 'mid.single', mask: 2 })
+      first.message({ ...detection('three'), inputId: 'bottom.single', mask: 1 })
+      first.message(detection('four'))
+    })
+    expect(screen.getAllByRole('row')).toHaveLength(5)
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(first.close).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('row')).toHaveLength(2)
+    act(() => first.message(detection('five')))
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
+    const second = FakeSource.latest
+    expect(second).not.toBe(first)
+    expect(first.close).toHaveBeenCalledOnce()
+    act(() => {
+      first.message(detection('stale'))
+      second.onopen?.()
+      second.message(detection('six'))
+    })
+    expect(screen.getAllByRole('row')).toHaveLength(3)
+    fireEvent.click(screen.getByRole('button', { name: 'Stop capture' }))
+    expect(second.close).toHaveBeenCalledOnce()
+    act(() => second.message(detection('stopped')))
+    expect(screen.getAllByRole('row')).toHaveLength(3)
+    fireEvent.click(screen.getByRole('button', { name: 'Arm capture' }))
+    act(() => FakeSource.latest.message(detection('seven')))
+    expect(screen.getAllByRole('row')).toHaveLength(4)
   })
   it('retains at most 12 unique detections and replaces outcome updates', () => {
     render(<RemoteCapture config={emptyConfig()} automations={[]} />)
