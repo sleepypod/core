@@ -139,3 +139,20 @@ Cover-button availability is confirmed from a received button detection during
 the current process lifetime. Pod generation and legacy gesture support do not
 prove built-in button support, so no negative hardware capability is inferred
 from missing detections. The UI reports unconfirmed or detection offline instead.
+
+## Shareable firmware evidence
+
+Live capture requests `raw=1` on the detection stream and records original decoded
+`buttonEvent` objects, tca8418 controller logs (including unknown GPI codes), i2c3
+recovery logs, and stream resets before recognition. Unrelated logs and sensor
+samples are excluded. Download capture exports versioned NDJSON containing app
+build metadata, optional cover/firmware/test notes, server receipt timestamps,
+browser observation timestamps, raw source identities, interpreted detections,
+and connection/gap markers. These are decoded records, not binary RAW files;
+source timestamps still have second precision. Unknown firmware counts are kept.
+
+Recording is local to the capture view, capped at 2,000 records / 1 MiB, and must
+be downloaded before leaving it. Stop retains evidence, Clear starts a new
+recording, and reconnects are marked as gaps rather than pretending continuity.
+Omitted records are counted in the export; individual firmware records over
+16 KiB become explicit omission markers. No additional eMMC logging is enabled.

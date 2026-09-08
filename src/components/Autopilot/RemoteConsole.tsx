@@ -8,6 +8,7 @@ import { RemoteCapture } from './RemoteCapture'
 /** Keep mapping and selected-side state while switching to live remote capture. */
 export function RemoteConsole() {
   const mapping = useRemoteMapping()
+  const version = trpc.system.getVersion.useQuery({})
   const status = trpc.remote.status.useQuery({}, { refetchInterval: 3000 })
   const availability = !status.data || status.error ? 'unconfirmed' : !status.data.running ? 'offline' : status.data.lastDetectionAt !== null ? 'detected' : 'unconfirmed'
   const [side, setSide] = useState<'left' | 'right'>('left')
@@ -33,7 +34,7 @@ export function RemoteConsole() {
         </nav>
         {screen === 'mapping'
           ? <RemotePanel availability={availability} automations={automations.data ?? []} mapping={mapping} side={side} setSide={setSide} />
-          : <div className="p-4"><RemoteCapture config={mapping.config} automations={automations.data ?? []} /></div>}
+          : <div className="p-4"><RemoteCapture build={version.data} config={mapping.config} automations={automations.data ?? []} /></div>}
       </div>
     </div>
   )

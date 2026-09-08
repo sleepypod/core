@@ -1,10 +1,12 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { describe, detectionSchema, type Detection, type InputId, type RemoteConfig } from '@/src/remote/model'
+import { RemoteRecording } from '@/src/remote/capture'
 import { Badge, Button, Card } from './primitives'
 import { Icon } from './icons'
 /** Subscribe only while armed and display the latest twelve real detections against the current mapping. */
-export function RemoteCapture({ config, automations }: {
+export function RemoteCapture({ config, automations, build }: {
+  build?: { branch: string, commitHash: string, buildDate: string }
   config?: RemoteConfig
   automations: {
     id: number
@@ -16,22 +18,41 @@ export function RemoteCapture({ config, automations }: {
   const [state, setState] = useState('Stopped')
   const [connection, setConnection] = useState(0)
 
+  const recording = useRef(new RemoteRecording())
+  const [recordCount, setRecordCount] = useState(0)
+  const [omitted, setOmitted] = useState(0)
+  const [notes, setNotes] = useState('')
+  const record = useCallback((row: unknown) => {
+    recording.current.append(row)
+    setRecordCount(recording.current.count)
+    setOmitted(recording.current.dropped)
+  }, [])
+
   const [log, setLog] = useState<Detection[]>([])
 
   useEffect(() => {
     if (!armed)
       return
 
-    const source = new EventSource('/api/remote/detections')
+    record({ type: 'connection_start', at: Date.now() })
+    const source = new EventSource('/api/remote/detections?raw=1')
 
     let active = true
     source.onopen = () => {
-      if (active) setState('Listening — press a button')
+      if (active) {
+        record({ type: 'connection_open', at: Date.now() })
+        setState('Listening — press a button')
+      }
     }
     source.onmessage = (event) => {
       if (!active) return
       try {
         const row = JSON.parse(event.data)
+
+        if (row?.type === 'raw' || row?.type === 'raw_omitted') {
+          record({ ...row, observedAt: Date.now() })
+          return
+        }
 
         if (row?.type === 'status') {
           setState(row.running ? 'listening — press a button' : 'Device listener unavailable')
@@ -44,6 +65,7 @@ export function RemoteCapture({ config, automations }: {
           setState('Invalid detection received')
           return
         }
+        record({ type: 'detection', observedAt: Date.now(), detection: parsed.data })
         setState('Listening — press another button')
         setLog(previous => [parsed.data, ...previous.filter(r => r.id !== parsed.data.id)].slice(0, 12))
       }
@@ -53,14 +75,18 @@ export function RemoteCapture({ config, automations }: {
     }
 
     source.onerror = () => {
-      if (active) setState('Disconnected — reconnecting…')
+      if (active) {
+        record({ type: 'connection_gap', at: Date.now() })
+        setState('Disconnected — reconnecting…')
+      }
     }
 
     return () => {
       active = false
       source.close()
+      record({ type: 'connection_stop', at: Date.now() })
     }
-  }, [armed, connection])
+  }, [armed, connection, record])
 
   return (
     <Card className="mb-5 overflow-hidden">
@@ -68,7 +94,7 @@ export function RemoteCapture({ config, automations }: {
         <div className="flex flex-wrap items-center gap-2">
           <Icon.Remote size={14} className="text-zinc-500" />
           <span className="text-[13px] font-medium text-zinc-200">Remote capture</span>
-          <span className="text-[11px] text-zinc-500">raw button detections as they arrive</span>
+          <span className="text-[11px] text-zinc-500">button detections and firmware evidence</span>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {armed && (
@@ -99,8 +125,47 @@ export function RemoteCapture({ config, automations }: {
               Reconnect
             </Button>
           )}
-          <Button size="sm" variant="ghost" disabled={!log.length} onClick={() => setLog([])}>Clear</Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!log.length && !recordCount}
+            onClick={() => {
+              setLog([])
+              recording.current = new RemoteRecording()
+              record({ type: 'cleared', at: Date.now(), listening: armed })
+            }}
+          >
+            Clear
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!recordCount}
+            onClick={() => {
+              const data = recording.current.export({ exportedAt: new Date().toISOString(), notes, build: build ?? null, userAgent: navigator.userAgent, source: 'decoded buttonEvent and controller logs; not binary RAW', listening: armed })
+              const url = URL.createObjectURL(new Blob([data], { type: 'application/x-ndjson' }))
+              const link = document.createElement('a')
+              link.href = url
+              link.download = `remote-capture-${new Date().toISOString().replaceAll(':', '-')}.ndjson`
+              link.click()
+              setTimeout(() => URL.revokeObjectURL(url), 1000)
+            }}
+          >
+            Download capture
+          </Button>
         </div>
+      </div>
+      <div className="space-y-2 border-b border-zinc-800 px-4 py-3">
+        <label className="block text-[12px] text-zinc-400">
+          Cover / firmware and test notes
+          <input value={notes} maxLength={2000} onChange={event => setNotes(event.target.value)} placeholder="Cover model, firmware version if known, buttons pressed in order…" className="mt-1 block w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-zinc-200" />
+        </label>
+        <p className="text-[11px] text-zinc-500">
+          {recordCount}
+          {' '}
+          records retained for download · download before leaving this view.
+          {omitted > 0 && ` Capture limit reached: ${omitted} records omitted. Download and clear to begin another capture.`}
+        </p>
       </div>
       <div className="max-h-[210px] overflow-auto">
         <table className="w-full text-left text-[12px]">

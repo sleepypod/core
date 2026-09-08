@@ -1,4 +1,6 @@
 import { remoteStatus, subscribeRemote } from '@/src/remote/runtime'
+import { onServerFrame } from '@/src/streaming/piezoStream'
+import { isRemoteEvidence } from '@/src/remote/capture'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 /** Stream live detections and heartbeat status, disconnecting slow readers and cleaning up on abort. */
@@ -23,6 +25,16 @@ export function GET(request: Request) {
       }
 
       const unsubscribe = subscribeRemote(send)
+      const unsubscribeRaw = new URL(request.url).searchParams.get('raw') === '1'
+        ? onServerFrame((record) => {
+            if (!isRemoteEvidence(record)) return
+            const receivedAt = Date.now()
+            const bytes = encoder.encode(JSON.stringify(record)).length
+            send(bytes <= 16384
+              ? { type: 'raw', receivedAt, record }
+              : { type: 'raw_omitted', receivedAt, reason: 'Record exceeds 16 KiB', bytes })
+          })
+        : () => {}
 
       const heartbeat = setInterval(() => {
         send({ type: 'status', ...remoteStatus() })
@@ -30,6 +42,7 @@ export function GET(request: Request) {
 
       cleanup = () => {
         unsubscribe()
+        unsubscribeRaw()
 
         clearInterval(heartbeat)
 

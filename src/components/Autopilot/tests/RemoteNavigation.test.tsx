@@ -7,6 +7,7 @@ vi.mock('@/src/utils/trpc', async () => {
   const endpoint = (data: unknown) => ({ useQuery: () => ({ data, isLoading: false }), useMutation: () => ({ mutate: vi.fn(), isPending: false }) })
   const cache = { invalidate: vi.fn() }
   return { trpc: {
+    system: { getVersion: endpoint({ branch: 'test', commitHash: 'abc123', buildDate: 'unknown' }) },
     remote: {
       status: { useQuery: () => ({ data: mocks.status }) },
       mapping: { useQuery: () => ({ data: mocks.config, isLoading: false, refetch: vi.fn() }) },

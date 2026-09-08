@@ -38,7 +38,7 @@ describe('live Remote capture', () => {
     expect(screen.getByText('Arm capture to inspect real button inputs.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Arm capture' }))
     const source = FakeSource.latest
-    expect(source.url).toBe('/api/remote/detections')
+    expect(source.url).toBe('/api/remote/detections?raw=1')
     act(() => {
       source.message({ type: 'status', running: true })
       source.message(detection('one'))
@@ -82,6 +82,30 @@ describe('live Remote capture', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Arm capture' }))
     act(() => FakeSource.latest.message(detection('seven')))
     expect(screen.getAllByRole('row')).toHaveLength(4)
+  })
+  it('downloads original evidence even when no gesture is recognized', async () => {
+    const create = vi.fn<(blob: Blob) => string>().mockReturnValue('blob:capture')
+    vi.stubGlobal('URL', { createObjectURL: create, revokeObjectURL: vi.fn() })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    render(<RemoteCapture config={emptyConfig()} automations={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Arm capture' }))
+    const record = { type: 'log', ts: 123, msg: '[tca8418R] gpi press 105', remoteSource: 'raw:5' }
+    act(() => FakeSource.latest.message({ type: 'raw', receivedAt: 124, record }))
+    expect(screen.queryByText('Invalid detection received')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Cover / firmware and test notes'), { target: { value: 'cover B, top once' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Stop capture' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Download capture' }))
+    expect(click).toHaveBeenCalledOnce()
+    const blob = create.mock.calls[0][0] as Blob
+    const exported = await new Promise<string>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.readAsText(blob)
+    })
+    expect(exported).toContain('cover B, top once')
+    expect(exported).toContain(JSON.stringify(record))
+    expect(exported).toContain('connection_stop')
+    click.mockRestore()
   })
   it('retains at most 12 unique detections and replaces outcome updates', () => {
     render(<RemoteCapture config={emptyConfig()} automations={[]} />)
