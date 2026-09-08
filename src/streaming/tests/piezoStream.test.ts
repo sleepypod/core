@@ -774,6 +774,45 @@ describe('piezoStream — server lifecycle and protocol', () => {
     }
   })
 
+  it('round-trips original LPS field bytes including both sentinel positions', async () => {
+    const lines = fs.readFileSync(new URL('./fixtures/lps-field-excerpt.jsonl', import.meta.url), 'utf8')
+      .trim().split('\n')
+    const channels = ['left1', 'left2', 'right1', 'right2'] as const
+    const client = await connectClient(startAndPort())
+    try {
+      client.ws.send(JSON.stringify({ type: 'subscribe', sensors: ['lps'] }))
+      expect((await client.waitFor(m => m.type === 'subscribed')).sensors).toEqual(['lps'])
+      expect(lines).toHaveLength(2)
+      for (const [index, line] of lines.entries()) {
+        const original = JSON.parse(line).frame
+        const frame = {
+          ...original,
+          pres: {
+            ...original.pres,
+            ...Object.fromEntries(channels.map(channel => [channel, Buffer.from(original.pres[channel].data)])),
+          },
+        }
+        // Reconstruct CBOR from the captured WebSocket bytes; this fixture is
+        // not a capture of the original RAW envelope or CBOR encoding.
+        const encoded = Buffer.from(new Encoder({ useRecords: false }).encode(frame))
+        for (const decoded of decodeSensorFrames(encoded)) __test__.dispatchSensorFrame(decoded)
+        const received = await client.waitFor(m => m.type === 'lps' && m.ts === original.ts)
+        expect(received).toEqual(original)
+        for (const channel of channels) {
+          const bytes = Buffer.from(received.pres[channel].data)
+          expect(bytes).toEqual(frame.pres[channel])
+          expect(bytes).toHaveLength(800)
+          const sentinelIndices = Array.from({ length: 200 }, (_, i) => i)
+            .filter(i => bytes.readInt32LE(i * 4) === 0x7fffffff)
+          expect(sentinelIndices).toEqual(Array.from({ length: 10 }, (_, i) => (index === 0 ? 20 : 100) + i))
+        }
+      }
+    }
+    finally {
+      await client.close()
+    }
+  })
+
   it('subscribe with an empty sensors array → subscribes to all types', async () => {
     const logSpy = vi.spyOn(console, 'log')
     const port = startAndPort()
