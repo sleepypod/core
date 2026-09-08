@@ -17,7 +17,7 @@ export function RemoteConsole() {
 
   return (
     <div className="w-full min-w-0 text-zinc-100" style={{ ['--accent' as string]: '#0c87c2' }}>
-      <div className="mx-auto max-w-[1250px] overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/60">
+      <div className="min-w-0">
         <nav aria-label="Remote sections" className="flex gap-2 border-b border-zinc-800 p-3">
           {(['mapping', 'capture'] as const).map(section => (
             <button
