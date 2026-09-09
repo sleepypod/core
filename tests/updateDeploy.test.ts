@@ -194,7 +194,7 @@ describe('sp-update staged deployment', () => {
   })
 })
 
-function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false) {
+function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false, repository: 'origin' | 'flag' | 'env' | 'override' = 'origin') {
   const dir = temp()
   const project = join(dir, 'project')
   const bin = join(dir, 'bin')
@@ -215,7 +215,20 @@ function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false) 
     git(['init', '-b', 'main'])
     git(['add', '.'])
     git(['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-m', 'fixture'])
-    git(['branch', 'fix/test'])
+    if (repository === 'origin') {
+      git(['branch', 'fix/test'])
+    }
+    else {
+      const fork = join(dir, 'fork')
+      git(['clone', '--quiet', project, fork])
+      git(['-C', fork, 'checkout', '-b', 'fix/test'])
+      put(join(fork, 'source.ts'), 'fork-only source')
+      git(['-C', fork, 'add', 'source.ts'])
+      git(['-C', fork, '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-m', 'fork change'])
+      // Exercise real Git fetching, redirecting only the fixture's GitHub URL
+      // to a local fork. The fork-only branch is absent from origin.
+      git(['config', `url.${fork}.insteadOf`, 'https://github.com/Kovbo/core.git'])
+    }
     git(['remote', 'add', 'origin', project])
     put(join(project, 'source.ts'), 'uncommitted local edits')
   }
@@ -251,14 +264,41 @@ case "$cmd" in
   *) exit 90 ;;
 esac
 `)
-  const result = spawnSync('bash', [join(project, 'scripts/deploy'), 'pod.local', ...(branch ? ['fix/test'] : [])], { encoding: 'utf8',
-    env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TEST_LOG: log, TEST_FAIL: fail,
+  const result = spawnSync('bash', [join(project, 'scripts/deploy'), 'pod.local', ...(branch ? ['fix/test'] : []), ...(['flag', 'override'].includes(repository) ? ['--repo', 'Kovbo/core'] : [])], { encoding: 'utf8',
+    env: { ...testEnv, SLEEPYPOD_GITHUB_REPO: repository === 'env' ? 'Kovbo/core' : repository === 'override' ? 'unused/wrong-repo' : '', PATH: `${bin}:${process.env.PATH}`, TEST_LOG: log, TEST_FAIL: fail,
       TEST_REMOTE: join(dir, 'sleepypod-deploy.abcdef'), TEST_CAPTURE: join(dir, 'captured.tar.gz') },
   })
   return { result, log: existsSync(log) ? readFileSync(log, 'utf8') : '', dir, project }
 }
 
 describe('local deploy', () => {
+  it.each(['flag', 'env', 'override'] as const)('fetches a fork-only branch using %s without changing origin or local edits', (repository) => {
+    const { result, project, dir } = deploy('', true, repository)
+    expect(result.status, result.stderr).toBe(0)
+    expect(readFileSync(join(project, 'source.ts'), 'utf8')).toBe('uncommitted local edits')
+    const git = (args: string[]) => spawnSync('git', ['-C', project, ...args], { encoding: 'utf8', env: testEnv })
+    expect(git(['remote', 'get-url', 'origin']).stdout.trim()).toBe(project)
+    expect(git(['branch', '--show-current']).stdout.trim()).toBe('main')
+    expect(git(['show-ref', '--verify', 'refs/heads/fix/test']).status).not.toBe(0)
+    expect(git(['worktree', 'list', '--porcelain']).stdout.match(/^worktree /gm)).toHaveLength(1)
+    const archived = spawnSync('tar', ['xOf', join(dir, 'captured.tar.gz'), './source.ts'], { encoding: 'utf8' })
+    expect(archived.stdout).toBe('fork-only source')
+  })
+  it.each([
+    ['--repo'],
+    ['--repo', 'Kovbo/core', 'pod.local'],
+    ['--repo', 'https://github.com/Kovbo/core', 'pod.local', 'fix/test'],
+  ])('rejects incomplete or invalid repository arguments before SSH: %j', (...args) => {
+    const dir = temp()
+    put(join(dir, 'ssh'), '#!/bin/bash\necho UNEXPECTED_SSH >&2\nexit 99\n')
+    const result = spawnSync('bash', [join(repo, 'scripts/deploy'), ...args], {
+      encoding: 'utf8', env: { ...testEnv, SLEEPYPOD_GITHUB_REPO: '', PATH: `${dir}:${process.env.PATH}` },
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('OWNER/REPO')
+    expect(result.stderr).not.toContain('UNEXPECTED_SSH')
+  })
+
   it('builds an origin branch in isolation and preserves the current checkout and edits', () => {
     const { result, project, dir } = deploy('', true)
     expect(result.status, result.stderr).toBe(0)

@@ -60,6 +60,7 @@ Cloned the repo on your computer? Build locally and deploy to an installed Pod:
 ```bash
 ./scripts/deploy POD_IP              # current checkout
 ./scripts/deploy POD_IP fix/my-fix   # branch from your clone's origin
+./scripts/deploy --repo Kovbo/core POD_IP fix/pod3-frozen-heartbeat  # fork branch
 ```
 
 See the [deployment guide](docs/DEPLOYMENT.md) for SSH requirements and fork/PR validation.

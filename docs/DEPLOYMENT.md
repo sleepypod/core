@@ -82,10 +82,25 @@ firewall helpers. No GitHub release is required. For first installation, use
 
 ### Validating a fork's PR
 
-Check out the PR in your local clone and run `./scripts/deploy POD_IP`. This
-works even when the fork has not published a branch release. Alternatively,
-enable Actions in the fork and push the branch so its Branch Release workflow
-publishes `sleepypod-core.tar.gz` under `<branch-with-slashes-replaced>-latest`.
+From an up-to-date `sleepypod/core` clone, explicitly select the fork and branch:
+
+```bash
+./scripts/deploy --repo Kovbo/core POD_IP fix/pod3-frozen-heartbeat
+# Equivalent repository selection via the updater's existing environment variable:
+SLEEPYPOD_GITHUB_REPO=Kovbo/core ./scripts/deploy POD_IP fix/pod3-frozen-heartbeat
+```
+
+The fork branch is fetched into a temporary worktree; `origin`, the current
+branch, and local edits stay unchanged. `--repo` takes precedence over the
+environment variable, and either repository selector requires a branch. With
+no selector, branch deployments use your clone's `origin` (which can itself be
+a fork). With neither a selector nor a branch, the current checkout is built.
+
+This works even if the fork's branch predates the new CLI: the local clone's
+updater is uploaded alongside the build. No fork release is required.
+Alternatively, enable Actions in the fork and push the branch so its Branch
+Release workflow publishes `sleepypod-core.tar.gz` under
+`<branch-with-slashes-replaced>-latest`.
 Then run on the Pod:
 
 ```bash
