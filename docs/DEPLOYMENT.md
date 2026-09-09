@@ -67,6 +67,8 @@ Git worktree; your current branch and edits are preserved.
 
 It uploads a complete archive before invoking `sp-update --archive` on the Pod.
 Git metadata, `.env*`, databases, caches, and local `node_modules` are excluded.
+The standalone server and its compiled configuration are retained; native
+modules resolve from the production dependencies installed on the Pod.
 The updater preserves the Pod's `.env`, backs up the installed code/database,
 installs production dependencies for the Pod's architecture, and restarts the
 service. Build-time public environment variables can still be embedded in the

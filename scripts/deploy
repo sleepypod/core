@@ -75,18 +75,23 @@ if [ -n "$BRANCH" ]; then
 else
   DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: pnpm build
 fi
-for required in .next/BUILD_ID .next/required-server-files.json; do
+for required in .next/BUILD_ID .next/required-server-files.json .next/standalone/server.js; do
   if [ ! -s "$required" ]; then
     echo "Error: Build did not produce $required; Pod files have not been changed." >&2
     exit 1
   fi
 done
 
+# The standalone server changes cwd; keep its version endpoint tied to this
+# build even when output-file tracing does not include the root metadata.
+if [ -s .git-info ]; then cp -f .git-info .next/standalone/.git-info; fi
+
 # Flags shared by BSD tar (macOS) and GNU tar (Linux). Never ship local
 # credentials, Git worktrees, or workstation-native modules (including those
-# traced into .next/standalone). The Pod uses next start with its own modules.
+# traced into .next/standalone). Keep the standalone server: it embeds the
+# compiled config and avoids loading build-only plugins at runtime.
 COPYFILE_DISABLE=1 tar czf "$LOCAL_STAGE/sleepypod-core.tar.gz" \
-  --exclude='node_modules' --exclude='.next/standalone' --exclude='.next/cache' \
+  --exclude='node_modules' --exclude='.next/cache' \
   --exclude='.git' --exclude='.env*' --exclude='*.db' --exclude='*.db-*' \
   --exclude='.DS_Store' --exclude='test-results' --exclude='coverage' \
   --exclude='.serena' --exclude='.claude' --exclude='.codex' --exclude='.ygg' \

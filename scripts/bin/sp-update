@@ -190,7 +190,7 @@ cleanup() {
         ! -name 'node_modules' \
         ! -name '.env' \
         -exec rm -rf {} +
-      cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
+      cp -a "$BACKUP_DIR/." "$INSTALL_DIR/"
       # Intentionally NOT restoring sp-* tools to /usr/local/bin/.
       # They were already swapped in atomically (see install(1) below)
       # before the failure; restoring the pre-update copies can re-pin a
@@ -322,7 +322,7 @@ fi
 
 # Validate staged artifacts before touching the installed application. Exclude
 # workstation dependencies and environment files even for hand-made archives.
-for required in .next/BUILD_ID .next/required-server-files.json package.json pnpm-lock.yaml; do
+for required in .next/BUILD_ID .next/required-server-files.json .next/standalone/server.js package.json pnpm-lock.yaml; do
   if [ ! -s "$WORK_DIR/$required" ]; then
     echo "Error: Pre-built archive is missing $required. Build on your computer with ./scripts/deploy POD_IP, or publish a complete CI release." >&2
     exit 1

@@ -50,6 +50,7 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   put(join(bundle, 'package.json'), '{"packageManager":"pnpm@10.34.5"}')
   put(join(bundle, 'pnpm-lock.yaml'), 'lockfileVersion: 9')
   put(join(bundle, '.next/required-server-files.json'), '{}')
+  put(join(bundle, '.next/standalone/server.js'), 'new standalone server')
   if (!options.invalid) put(join(bundle, '.next/BUILD_ID'), 'new-build')
   put(join(bundle, '.git-info'), '{"branch":"fix/test","commitHash":"abc1234"}')
   put(join(bundle, '.env'), 'LOCAL_SECRET=do-not-copy')
@@ -103,7 +104,7 @@ describe('sp-update staged deployment', () => {
   it('cleans a symlinked installation so stale standalone code cannot shadow the new build', () => {
     const { result, app } = updater({ archive: true, symlinkInstall: true })
     expect(result.status, result.stderr).toBe(0)
-    expect(existsSync(join(app, '.next/standalone/server.js'))).toBe(false)
+    expect(readFileSync(join(app, '.next/standalone/server.js'), 'utf8')).toBe('new standalone server')
     expect(existsSync(join(app, 'old.txt'))).toBe(false)
     expect(readFileSync(join(app, '.next/BUILD_ID'), 'utf8')).toBe('new-build')
   })
@@ -205,6 +206,8 @@ if [ "$1" = build ]; then
   mkdir -p .next/standalone/node_modules .next/cache
   echo build > .next/BUILD_ID
   echo '{}' > .next/required-server-files.json
+  echo standalone > .next/standalone/server.js
+  echo '{"commitHash":"new-build"}' > .git-info
   echo native > .next/standalone/node_modules/native.node
   echo cache > .next/cache/item
 fi
@@ -250,8 +253,10 @@ describe('local deploy', () => {
     expect(result.status, result.stderr).toBe(0)
     const archive = spawnSync('tar', ['tzf', join(dir, 'captured.tar.gz')], { encoding: 'utf8' }).stdout
     expect(archive).toContain('./.next/BUILD_ID')
+    expect(archive).toContain('./.next/standalone/server.js')
+    expect(archive).toContain('./.next/standalone/.git-info')
     expect(archive).toContain('./source.ts')
-    for (const excluded of ['.env', '.git/', 'node_modules', '.next/cache', '.next/standalone']) expect(archive).not.toContain(excluded)
+    for (const excluded of ['.env', '.git/', 'node_modules', '.next/cache']) expect(archive).not.toContain(excluded)
     expect(log).toContain('export PATH=/usr/local/bin:$PATH; test -d /home/dac/sleepypod-core')
     expect(log).toContain('--archive')
     expect(log.indexOf('cat >')).toBeLessThan(log.indexOf('ssh bash'))
