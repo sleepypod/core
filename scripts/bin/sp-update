@@ -56,6 +56,10 @@ if [ ! -d "$INSTALL_DIR" ] || ! command -v systemctl >/dev/null; then
   echo "Error: sp-update runs on an installed Pod. On your computer use ./scripts/deploy POD_IP [branch]." >&2
   exit 1
 fi
+# Existing installations may point at a release via a symlink. find does
+# not descend through a command-line symlink by default; resolve it so stale
+# .next/standalone files are removed rather than silently booting old code.
+INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
 export TMPDIR="${TMPDIR:-/persistent}"
 
 echo "=== SleepyPod Update ==="

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -41,6 +41,9 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   mkdirSync(join(dir, 'data'))
   mkdirSync(join(dir, 'stage'))
   put(join(app, 'old.txt'), 'old code')
+  put(join(app, '.next/standalone/server.js'), 'old standalone server')
+  const installPath = options.symlinkInstall ? join(dir, 'install-link') : app
+  if (options.symlinkInstall) symlinkSync(app, installPath)
   put(join(app, '.env'), 'POD_SECRET=keep')
   put(join(app, 'scripts/lib/iptables-helpers'), helper)
   put(join(bundle, 'scripts/lib/iptables-helpers'), helper)
@@ -55,7 +58,7 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   expect(spawnSync('tar', ['czf', archive, '-C', bundle, '.']).status).toBe(0)
   let script = readFileSync(join(repo, 'scripts/bin/sp-update'), 'utf8')
   script = script.replace('export PATH="/usr/local/bin:$PATH"', '')
-    .replaceAll('/home/dac/sleepypod-core', app)
+    .replaceAll('/home/dac/sleepypod-core', installPath)
     .replaceAll('/persistent/sleepypod-data', join(dir, 'data'))
     .replaceAll('/etc/sleepypod/data-dir', join(dir, 'data-dir'))
     .replaceAll('/etc/systemd/system', join(dir, 'systemd'))
@@ -97,6 +100,14 @@ exec '${tar}' "$@"
 }
 
 describe('sp-update staged deployment', () => {
+  it('cleans a symlinked installation so stale standalone code cannot shadow the new build', () => {
+    const { result, app } = updater({ archive: true, symlinkInstall: true })
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(join(app, '.next/standalone/server.js'))).toBe(false)
+    expect(existsSync(join(app, 'old.txt'))).toBe(false)
+    expect(readFileSync(join(app, '.next/BUILD_ID'), 'utf8')).toBe('new-build')
+  })
+
   it.each(['404', '403', '500'])('rejects HTTP %s without touching installed files or dependencies', (status) => {
     const { result, app, log } = updater({ status, blocked: true })
     expect(result.status).not.toBe(0)
