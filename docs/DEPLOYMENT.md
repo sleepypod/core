@@ -61,7 +61,8 @@ SSH_PORT=8822 ./scripts/deploy pod.local
 
 Use the Node.js major in `.node-version` and the pnpm version pinned in
 `package.json`. The script installs locked dependencies, builds locally, and
-checks the bundle before uploading. An optional branch builds in a temporary
+checks the bundle before uploading. Build workers use in-memory databases to
+avoid modifying local data or contending over SQLite files. An optional branch builds in a temporary
 Git worktree; your current branch and edits are preserved.
 
 It uploads a complete archive before invoking `sp-update --archive` on the Pod.

@@ -189,6 +189,7 @@ function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false) 
 if [ "$1" = --version ]; then echo 10.34.5; exit; fi
 echo "pnpm $*" >> "$TEST_LOG"
 if [ "$1" = build ]; then
+  [ "$DATABASE_URL" = :memory: ] && [ "$BIOMETRICS_DATABASE_URL" = :memory: ] || exit 91
   [ "$TEST_FAIL" != build ] || exit 1
   mkdir -p .next/standalone/node_modules .next/cache
   echo build > .next/BUILD_ID
