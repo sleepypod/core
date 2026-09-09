@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -58,15 +58,27 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   const archive = join(dir, 'bundle.tar.gz')
   expect(spawnSync('tar', ['czf', archive, '-C', bundle, '.']).status).toBe(0)
   let script = readFileSync(join(repo, 'scripts/bin/sp-update'), 'utf8')
-  script = script.replace('export PATH="/usr/local/bin:$PATH"', '')
-    .replaceAll('/home/dac/sleepypod-core', installPath)
-    .replaceAll('/persistent/sleepypod-data', join(dir, 'data'))
-    .replaceAll('/etc/sleepypod/data-dir', join(dir, 'data-dir'))
-    .replaceAll('/etc/systemd/system', join(dir, 'systemd'))
-    .replaceAll('/etc/hosts', join(dir, 'hosts'))
+  const rewrites: [string, string][] = [
+    ['export PATH="/usr/local/bin:$PATH"', ''],
+    ['/home/dac/sleepypod-core', installPath],
+    ['/persistent/sleepypod-data', join(dir, 'data')],
+    ['/etc/sleepypod/data-dir', join(dir, 'data-dir')],
+    ['/etc/systemd/system', join(dir, 'systemd')],
+    ['/etc/hosts', join(dir, 'hosts')],
+  ]
+  for (const [from, to] of rewrites) {
+    expect(script).toContain(from)
+    script = script.replaceAll(from, to)
+  }
   put(join(dir, 'hosts'), '# BEGIN sleepypod-telemetry-block')
   put(join(dir, 'update'), script)
   put(join(bin, 'systemctl'), '#!/bin/bash\necho "systemctl $*" >> "$TEST_LOG"\n')
+  put(join(bin, 'df'), `#!/bin/bash
+available=900
+if [ "$2" = "$TMPDIR" ]; then available=$TEST_TEMP_SPACE; fi
+echo 'Filesystem Size Used Available Use% Mounted'
+echo "fixture 1000 100 $available 10% /"
+`)
   put(join(bin, 'sleep'), '#!/bin/bash\nexit 0\n')
   put(join(bin, 'pnpm'), `#!/bin/bash
 if [ "$1" = --version ]; then echo "$TEST_PNPM_VERSION"; exit; fi
@@ -76,7 +88,8 @@ exit "$TEST_PNPM_FAIL"
   put(join(bin, 'curl'), `#!/bin/bash
 echo "curl $*" >> "$TEST_LOG"
 if [[ "$*" == *api.github.com* ]]; then
-  while [ "$1" != -o ]; do shift; done
+  while [ "$#" -gt 0 ] && [ "$1" != -o ]; do shift; done
+  if [ "$#" -lt 2 ]; then echo "curl stub: missing -o" >&2; exit 2; fi
   printf '%s' "$TEST_RELEASE" > "$2"
   printf '%s' "$TEST_HTTP_STATUS"
 else
@@ -94,13 +107,21 @@ exec '${tar}' "$@"
     env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log,
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
-      TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive,
+      TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive,
       TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
   })
   return { result, app, dir, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
 }
 
 describe('sp-update staged deployment', () => {
+  it('checks temporary storage before stopping the service or opening WAN', () => {
+    const { result, app, log } = updater({ archive: true, blocked: true, lowTempSpace: true })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('only 100MB available')
+    expect(existsSync(join(app, 'old.txt'))).toBe(true)
+    expect(log).toBe('')
+  })
+
   it('cleans a symlinked installation so stale standalone code cannot shadow the new build', () => {
     const { result, app } = updater({ archive: true, symlinkInstall: true })
     expect(result.status, result.stderr).toBe(0)
@@ -115,6 +136,7 @@ describe('sp-update staged deployment', () => {
     expect(result.stderr).toContain(status === '404' ? 'No accessible pre-built release' : `HTTP ${status}`)
     expect(readFileSync(join(app, 'old.txt'), 'utf8')).toBe('old code')
     expect(log).not.toContain('pnpm install')
+    for (const marker of ['systemctl stop', 'unblock', 'restore', 'systemctl start']) expect(log).toContain(marker)
     expect(log.indexOf('systemctl stop')).toBeLessThan(log.indexOf('unblock'))
     expect(log.indexOf('restore')).toBeLessThan(log.indexOf('systemctl start'))
     expect(log).not.toContain('archive/refs/heads')
@@ -233,7 +255,7 @@ esac
     env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TEST_LOG: log, TEST_FAIL: fail,
       TEST_REMOTE: join(dir, 'sleepypod-deploy.abcdef'), TEST_CAPTURE: join(dir, 'captured.tar.gz') },
   })
-  return { result, log: readFileSync(log, 'utf8'), dir, project }
+  return { result, log: existsSync(log) ? readFileSync(log, 'utf8') : '', dir, project }
 }
 
 describe('local deploy', () => {
@@ -259,6 +281,7 @@ describe('local deploy', () => {
     for (const excluded of ['.env', '.git/', 'node_modules', '.next/cache']) expect(archive).not.toContain(excluded)
     expect(log).toContain('export PATH=/usr/local/bin:$PATH; test -d /home/dac/sleepypod-core')
     expect(log).toContain('--archive')
+    for (const marker of ['cat >', 'ssh bash']) expect(log).toContain(marker)
     expect(log.indexOf('cat >')).toBeLessThan(log.indexOf('ssh bash'))
     expect(log).not.toContain('find /home/dac')
   })

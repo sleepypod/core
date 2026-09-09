@@ -249,11 +249,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # Pre-flight: disk space
-DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
-if [ "$DISK_AVAIL" -lt 300 ]; then
-  echo "Error: Need 300MB free, only ${DISK_AVAIL}MB available" >&2
-  exit 1
-fi
+for space_dir in "$INSTALL_DIR" "$TMPDIR"; do
+  DISK_AVAIL=$(df -m "$space_dir" | awk 'NR==2{print $4}')
+  if [ "$DISK_AVAIL" -lt 300 ]; then
+    echo "Error: Need 300MB free in $space_dir, only ${DISK_AVAIL}MB available" >&2
+    exit 1
+  fi
+done
 
 # Local archive validation happens before stopping services. GitHub downloads need
 # WAN access, so stop first only when the firewall needs to be opened: the
