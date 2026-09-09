@@ -201,7 +201,7 @@ fi
 cmd="\${!#}"
 echo "ssh $cmd" >> "$TEST_LOG"
 case "$cmd" in
-  'test -d '*) exit 0 ;;
+  'export PATH=/usr/local/bin:'*) exit 0 ;;
   *mktemp*) mkdir -p "$TEST_REMOTE"; echo "$TEST_REMOTE" ;;
   'cat > '*)
     bash -c "$cmd"
@@ -240,6 +240,7 @@ describe('local deploy', () => {
     expect(archive).toContain('./.next/BUILD_ID')
     expect(archive).toContain('./source.ts')
     for (const excluded of ['.env', '.git/', 'node_modules', '.next/cache', '.next/standalone']) expect(archive).not.toContain(excluded)
+    expect(log).toContain('export PATH=/usr/local/bin:$PATH; test -d /home/dac/sleepypod-core')
     expect(log).toContain('--archive')
     expect(log.indexOf('cat >')).toBeLessThan(log.indexOf('ssh bash'))
     expect(log).not.toContain('find /home/dac')

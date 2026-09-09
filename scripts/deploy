@@ -46,7 +46,8 @@ trap 'exit 143' TERM
 
 echo "=== SleepyPod Deploy ==="
 echo "Target: root@$POD_IP:$SSH_PORT"
-"${SSH[@]}" 'test -d /home/dac/sleepypod-core && command -v node >/dev/null && command -v pnpm >/dev/null' || {
+# shellcheck disable=SC2016 # Use the Pod binaries in non-login SSH sessions.
+"${SSH[@]}" 'export PATH=/usr/local/bin:$PATH; test -d /home/dac/sleepypod-core && command -v node >/dev/null && command -v pnpm >/dev/null' || {
   echo "Error: SSH failed or SleepyPod is not installed. Install SleepyPod on the Pod first." >&2
   exit 1
 }
