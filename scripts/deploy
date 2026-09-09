@@ -5,24 +5,93 @@ set -euo pipefail
 # An optional branch is fetched from origin into an isolated checkout.
 usage() {
   cat <<'HELP'
-Usage: ./scripts/deploy POD_IP [branch]
+Usage: ./scripts/deploy POD_IP [branch | artifact_url]
+       ./scripts/deploy POD_IP --artifact-url <url>
 
-Build the current checkout (including local edits), or a branch from origin,
-then transfer a pre-built archive over SSH and update the Pod with rollback.
-Requires Node.js, the project's pinned pnpm, and root SSH key access.
-The Pod still needs WAN access for production/native dependencies.
+Build the current checkout (including local edits), a branch from origin,
+or deploy a pre-built CI workflow artifact archive, then transfer over SSH
+and update the Pod with rollback.
+When building locally, requires Node.js and the project's pinned pnpm.
+Requires root SSH key access. The Pod still needs WAN access for
+production/native dependencies.
 SSH_PORT defaults to 8822; TMPDIR on the Pod defaults to /persistent.
 HELP
 }
-case "${1:-}" in -h|--help) usage; exit 0 ;; esac
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage >&2; exit 1; fi
-POD_IP="$1"
-BRANCH="${2:-}"
+
+POD_IP=""
+BRANCH=""
+ARTIFACT_URL=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --artifact-url)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+        echo "Error: --artifact-url requires a URL." >&2
+        exit 1
+      fi
+      if [ -n "$BRANCH" ] || [ -n "$ARTIFACT_URL" ]; then
+        usage >&2
+        exit 1
+      fi
+      ARTIFACT_URL="$2"
+      shift 2
+      ;;
+    --artifact-url=*)
+      ARTIFACT_URL_VAL="${1#--artifact-url=}"
+      if [ -z "$ARTIFACT_URL_VAL" ]; then
+        echo "Error: --artifact-url requires a URL." >&2
+        exit 1
+      fi
+      if [ -n "$BRANCH" ] || [ -n "$ARTIFACT_URL" ]; then
+        usage >&2
+        exit 1
+      fi
+      ARTIFACT_URL="$ARTIFACT_URL_VAL"
+      shift
+      ;;
+    -*)
+      usage >&2
+      exit 1
+      ;;
+    *)
+      if [ -z "$POD_IP" ] && [[ ! "$1" =~ ^https?:// ]]; then
+        POD_IP="$1"
+      elif [ -z "$BRANCH" ] && [ -z "$ARTIFACT_URL" ]; then
+        if [[ "$1" =~ ^https?:// ]]; then
+          ARTIFACT_URL="$1"
+        else
+          BRANCH="$1"
+        fi
+      else
+        usage >&2
+        exit 1
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$POD_IP" ]; then
+  usage >&2
+  exit 1
+fi
+
 SSH_PORT="${SSH_PORT:-8822}"
 if [[ ! "$POD_IP" =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] || [[ ! "$SSH_PORT" =~ ^[0-9]+$ ]]; then
   echo "Error: Provide a Pod hostname/IP and a numeric SSH_PORT." >&2
   exit 1
 fi
+
+if [ -n "$ARTIFACT_URL" ]; then
+  if [[ "$ARTIFACT_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/actions/runs/([0-9]+) ]]; then
+    ARTIFACT_URL="https://nightly.link/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/actions/runs/${BASH_REMATCH[3]}/sleepypod-core.zip"
+  fi
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SSH=(ssh -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 "root@$POD_IP")
@@ -46,56 +115,103 @@ trap 'exit 143' TERM
 
 echo "=== SleepyPod Deploy ==="
 echo "Target: root@$POD_IP:$SSH_PORT"
+if [ -n "$ARTIFACT_URL" ]; then
+  echo "Artifact: $ARTIFACT_URL"
+elif [ -n "$BRANCH" ]; then
+  echo "Branch: $BRANCH"
+fi
+
 # shellcheck disable=SC2016 # Use the Pod binaries in non-login SSH sessions.
 "${SSH[@]}" 'export PATH=/usr/local/bin:$PATH; test -d /home/dac/sleepypod-core && command -v node >/dev/null && command -v pnpm >/dev/null' || {
   echo "Error: SSH failed or SleepyPod is not installed. Install SleepyPod on the Pod first." >&2
   exit 1
 }
-if [ -n "$BRANCH" ]; then
-  # Fetch only the chosen ref; do not switch branches or pull into user edits.
-  git check-ref-format "refs/heads/$BRANCH"
-  git -C "$PROJECT_DIR" fetch origin "refs/heads/$BRANCH"
-  BUILD_DIR="$LOCAL_STAGE/checkout"
-  git -C "$PROJECT_DIR" worktree add --detach "$BUILD_DIR" FETCH_HEAD
-fi
-cd "$BUILD_DIR"
-EXPECTED_PNPM=$(node -p 'require("./package.json").packageManager')
-ACTUAL_PNPM=$(pnpm --version)
-if [ "pnpm@$ACTUAL_PNPM" != "$EXPECTED_PNPM" ]; then
-  echo "Error: Expected $EXPECTED_PNPM, found pnpm@$ACTUAL_PNPM. Install the pinned pnpm version first." >&2
-  exit 1
-fi
-pnpm install --frozen-lockfile
-# Remove stale output so a failed/incomplete build cannot deploy an old bundle.
-rm -rf .next
-# Route collection imports the database modules in parallel workers. Give
-# each worker an in-memory database rather than locking/altering local data.
-if [ -n "$BRANCH" ]; then
-  DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: SP_BRANCH="$BRANCH" pnpm build
-else
-  DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: pnpm build
-fi
-for required in .next/BUILD_ID .next/required-server-files.json .next/standalone/server.js; do
-  if [ ! -s "$required" ]; then
-    echo "Error: Build did not produce $required; Pod files have not been changed." >&2
+
+if [ -n "$ARTIFACT_URL" ]; then
+  echo "Downloading CI artifact: $ARTIFACT_URL"
+  if ! curl -fSL --connect-timeout 10 --max-time 600 -o "$LOCAL_STAGE/artifact.download" "$ARTIFACT_URL"; then
+    echo "Error: Artifact download failed." >&2
     exit 1
   fi
-done
+  MAGIC=$(head -c 2 "$LOCAL_STAGE/artifact.download" 2>/dev/null || true)
+  if [ "$MAGIC" = "PK" ]; then
+    echo "Unpacking zip artifact..."
+    UNZIP_DIR="$LOCAL_STAGE/unpacked"
+    mkdir -p "$UNZIP_DIR"
+    if command -v unzip >/dev/null 2>&1; then
+      if ! unzip -qo "$LOCAL_STAGE/artifact.download" -d "$UNZIP_DIR"; then
+        echo "Error: Failed to unzip artifact." >&2
+        exit 1
+      fi
+    elif command -v python3 >/dev/null 2>&1; then
+      if ! python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$LOCAL_STAGE/artifact.download" "$UNZIP_DIR"; then
+        echo "Error: Failed to unzip artifact with python3." >&2
+        exit 1
+      fi
+    elif command -v uv >/dev/null 2>&1; then
+      if ! uv run python -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$LOCAL_STAGE/artifact.download" "$UNZIP_DIR"; then
+        echo "Error: Failed to unzip artifact with uv." >&2
+        exit 1
+      fi
+    else
+      echo "Error: Neither unzip, python3, nor uv is available to extract zip artifact." >&2
+      exit 1
+    fi
+    if [ ! -f "$UNZIP_DIR/sleepypod-core.tar.gz" ]; then
+      echo "Error: Artifact zip did not contain sleepypod-core.tar.gz." >&2
+      exit 1
+    fi
+    mv -f "$UNZIP_DIR/sleepypod-core.tar.gz" "$LOCAL_STAGE/sleepypod-core.tar.gz"
+  else
+    mv -f "$LOCAL_STAGE/artifact.download" "$LOCAL_STAGE/sleepypod-core.tar.gz"
+  fi
+else
+  if [ -n "$BRANCH" ]; then
+    # Fetch only the chosen ref; do not switch branches or pull into user edits.
+    git check-ref-format "refs/heads/$BRANCH"
+    git -C "$PROJECT_DIR" fetch origin "refs/heads/$BRANCH"
+    BUILD_DIR="$LOCAL_STAGE/checkout"
+    git -C "$PROJECT_DIR" worktree add --detach "$BUILD_DIR" FETCH_HEAD
+  fi
+  cd "$BUILD_DIR"
+  EXPECTED_PNPM=$(node -p 'require("./package.json").packageManager')
+  ACTUAL_PNPM=$(pnpm --version)
+  if [ "pnpm@$ACTUAL_PNPM" != "$EXPECTED_PNPM" ]; then
+    echo "Error: Expected $EXPECTED_PNPM, found pnpm@$ACTUAL_PNPM. Install the pinned pnpm version first." >&2
+    exit 1
+  fi
+  pnpm install --frozen-lockfile
+  # Remove stale output so a failed/incomplete build cannot deploy an old bundle.
+  rm -rf .next
+  # Route collection imports the database modules in parallel workers. Give
+  # each worker an in-memory database rather than locking/altering local data.
+  if [ -n "$BRANCH" ]; then
+    DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: SP_BRANCH="$BRANCH" pnpm build
+  else
+    DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: pnpm build
+  fi
+  for required in .next/BUILD_ID .next/required-server-files.json .next/standalone/server.js; do
+    if [ ! -s "$required" ]; then
+      echo "Error: Build did not produce $required; Pod files have not been changed." >&2
+      exit 1
+    fi
+  done
 
-# The standalone server changes cwd; keep its version endpoint tied to this
-# build even when output-file tracing does not include the root metadata.
-if [ -s .git-info ]; then cp -f .git-info .next/standalone/.git-info; fi
+  # The standalone server changes cwd; keep its version endpoint tied to this
+  # build even when output-file tracing does not include the root metadata.
+  if [ -s .git-info ]; then cp -f .git-info .next/standalone/.git-info; fi
 
-# Flags shared by BSD tar (macOS) and GNU tar (Linux). Never ship local
-# credentials, Git worktrees, or workstation-native modules (including those
-# traced into .next/standalone). Keep the standalone server: it embeds the
-# compiled config and avoids loading build-only plugins at runtime.
-COPYFILE_DISABLE=1 tar czf "$LOCAL_STAGE/sleepypod-core.tar.gz" \
-  --exclude='node_modules' --exclude='.next/cache' \
-  --exclude='.git' --exclude='.env*' --exclude='*.db' --exclude='*.db-*' \
-  --exclude='.DS_Store' --exclude='test-results' --exclude='coverage' \
-  --exclude='.serena' --exclude='.claude' --exclude='.codex' --exclude='.ygg' \
-  -C "$BUILD_DIR" .
+  # Flags shared by BSD tar (macOS) and GNU tar (Linux). Never ship local
+  # credentials, Git worktrees, or workstation-native modules (including those
+  # traced into .next/standalone). Keep the standalone server: it embeds the
+  # compiled config and avoids loading build-only plugins at runtime.
+  COPYFILE_DISABLE=1 tar czf "$LOCAL_STAGE/sleepypod-core.tar.gz" \
+    --exclude='node_modules' --exclude='.next/cache' \
+    --exclude='.git' --exclude='.env*' --exclude='*.db' --exclude='*.db-*' \
+    --exclude='.DS_Store' --exclude='test-results' --exclude='coverage' \
+    --exclude='.serena' --exclude='.claude' --exclude='.codex' --exclude='.ygg' \
+    -C "$BUILD_DIR" .
+fi
 
 # Upload completely before invoking the updater. Use the deploy script's own
 # updater, so this also works on Pods/target branches with an older sp-update.

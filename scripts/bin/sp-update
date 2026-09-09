@@ -26,12 +26,14 @@ fi
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
 BRANCH=main
 ARCHIVE=""
+ARTIFACT_URL=""
 usage() {
   cat <<'EOF'
-Usage: sp-update [branch]
+Usage: sp-update [branch | artifact_url]
+       sp-update --artifact-url <url>
        sp-update --archive /path/to/sleepypod-core.tar.gz
 
-Downloads a pre-built GitHub release; never builds Next.js on the Pod.
+Downloads a pre-built GitHub release or CI artifact; never builds Next.js on the Pod.
 For a cloned repo on your computer, run: ./scripts/deploy POD_IP [branch]
 SLEEPYPOD_GITHUB_REPO selects the release repository (default: sleepypod/core).
 TMPDIR selects temporary storage (default: /persistent).
@@ -46,12 +48,37 @@ case "${1:-}" in
     fi
     ARCHIVE="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
     ;;
+  --artifact-url)
+    if [ "$#" -ne 2 ] || [ -z "$2" ]; then
+      echo "Error: --artifact-url requires a URL." >&2
+      exit 1
+    fi
+    ARTIFACT_URL="$2"
+    ;;
+  --artifact-url=*)
+    ARTIFACT_URL="${1#--artifact-url=}"
+    if [ -z "$ARTIFACT_URL" ] || [ "$#" -gt 1 ]; then
+      echo "Error: --artifact-url requires a URL." >&2
+      exit 1
+    fi
+    ;;
   -*) usage >&2; exit 1 ;;
   *)
     if [ "$#" -gt 1 ]; then usage >&2; exit 1; fi
-    BRANCH="${1:-main}"
+    if [[ "${1:-}" =~ ^https?:// ]]; then
+      ARTIFACT_URL="$1"
+    else
+      BRANCH="${1:-main}"
+    fi
     ;;
 esac
+
+if [ -n "$ARTIFACT_URL" ]; then
+  if [[ "$ARTIFACT_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/actions/runs/([0-9]+) ]]; then
+    ARTIFACT_URL="https://nightly.link/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/actions/runs/${BASH_REMATCH[3]}/sleepypod-core.zip"
+  fi
+fi
+
 if [ ! -d "$INSTALL_DIR" ] || ! command -v systemctl >/dev/null; then
   echo "Error: sp-update runs on an installed Pod. On your computer use ./scripts/deploy POD_IP [branch]." >&2
   exit 1
@@ -65,6 +92,8 @@ export TMPDIR="${TMPDIR:-/persistent}"
 echo "=== SleepyPod Update ==="
 if [ -n "$ARCHIVE" ]; then
   echo "Archive: $ARCHIVE"
+elif [ -n "$ARTIFACT_URL" ]; then
+  echo "Artifact: $ARTIFACT_URL"
 else
   echo "Branch: $BRANCH"
   echo "Repo:   $GITHUB_REPO"
@@ -278,6 +307,54 @@ open_update_wan() {
 if [ -n "$ARCHIVE" ]; then
   echo "Using local build: $ARCHIVE"
   tar xzf "$ARCHIVE" -C "$WORK_DIR"
+elif [ -n "$ARTIFACT_URL" ]; then
+  open_update_wan
+  echo "Downloading CI artifact: $ARTIFACT_URL"
+  if ! curl -fSL --connect-timeout 10 --max-time 600 -o "$WORK_DIR/artifact.download" "$ARTIFACT_URL"; then
+    echo "Error: Artifact download failed. Installed files have not been replaced; retry the update." >&2
+    exit 1
+  fi
+  MAGIC=$(head -c 2 "$WORK_DIR/artifact.download" 2>/dev/null || true)
+  if [ "$MAGIC" = "PK" ]; then
+    echo "Unpacking zip artifact..."
+    UNZIP_DIR="$WORK_DIR/unpacked"
+    mkdir -p "$UNZIP_DIR"
+    if command -v unzip >/dev/null 2>&1; then
+      if ! unzip -qo "$WORK_DIR/artifact.download" -d "$UNZIP_DIR"; then
+        echo "Error: Failed to unzip artifact." >&2
+        exit 1
+      fi
+    elif command -v python3 >/dev/null 2>&1; then
+      if ! python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$WORK_DIR/artifact.download" "$UNZIP_DIR"; then
+        echo "Error: Failed to unzip artifact with python3." >&2
+        exit 1
+      fi
+    elif command -v uv >/dev/null 2>&1; then
+      if ! uv run python -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$WORK_DIR/artifact.download" "$UNZIP_DIR"; then
+        echo "Error: Failed to unzip artifact with uv." >&2
+        exit 1
+      fi
+    else
+      echo "Error: Neither unzip, python3, nor uv is available to extract zip artifact." >&2
+      exit 1
+    fi
+    if [ ! -f "$UNZIP_DIR/sleepypod-core.tar.gz" ]; then
+      echo "Error: Artifact zip did not contain sleepypod-core.tar.gz." >&2
+      exit 1
+    fi
+    if ! tar xzf "$UNZIP_DIR/sleepypod-core.tar.gz" -C "$WORK_DIR"; then
+      echo "Error: Failed to extract sleepypod-core.tar.gz from artifact." >&2
+      exit 1
+    fi
+    rm -rf "$UNZIP_DIR" "$WORK_DIR/artifact.download"
+  else
+    echo "Extracting tarball artifact..."
+    if ! tar xzf "$WORK_DIR/artifact.download" -C "$WORK_DIR"; then
+      echo "Error: Artifact extraction failed. Installed files have not been replaced; retry the update." >&2
+      exit 1
+    fi
+    rm -f "$WORK_DIR/artifact.download"
+  fi
 else
   open_update_wan
   if [ "$BRANCH" = main ] || [ "$BRANCH" = latest ]; then

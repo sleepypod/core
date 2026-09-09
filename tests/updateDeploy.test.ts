@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, args?: string[], artifactZip?: boolean } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -57,6 +57,15 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   put(join(bundle, 'node_modules/foreign.node'), 'wrong architecture')
   const archive = join(dir, 'bundle.tar.gz')
   expect(spawnSync('tar', ['czf', archive, '-C', bundle, '.']).status).toBe(0)
+  const zipArchive = join(dir, 'artifact.zip')
+  if (options.artifactZip) {
+    const zipScript = 'import zipfile, sys; z = zipfile.ZipFile(sys.argv[1], "w"); z.write(sys.argv[2], "sleepypod-core.tar.gz"); z.close()'
+    let res = spawnSync('uv', ['run', 'python', '-c', zipScript, zipArchive, archive])
+    if (res.status !== 0) {
+      res = spawnSync('python3', ['-c', zipScript, zipArchive, archive])
+    }
+    expect(res.status).toBe(0)
+  }
   let script = readFileSync(join(repo, 'scripts/bin/sp-update'), 'utf8')
   const rewrites: [string, string][] = [
     ['export PATH="/usr/local/bin:$PATH"', ''],
@@ -93,8 +102,23 @@ if [[ "$*" == *api.github.com* ]]; then
   printf '%s' "$TEST_RELEASE" > "$2"
   printf '%s' "$TEST_HTTP_STATUS"
 else
-  if [ "$TEST_DOWNLOAD_FAIL" = 1 ]; then head -c 20 "$TEST_ARCHIVE"; exit 1; fi
-  cat "$TEST_ARCHIVE"
+  out=""
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "-o" ]; then
+      out="$arg"
+      break
+    fi
+    prev="$arg"
+  done
+  src="\${TEST_DOWNLOAD_FILE:-$TEST_ARCHIVE}"
+  if [ -n "$out" ]; then
+    if [ "$TEST_DOWNLOAD_FAIL" = 1 ]; then head -c 20 "$src" > "$out"; exit 1; fi
+    cat "$src" > "$out"
+  else
+    if [ "$TEST_DOWNLOAD_FAIL" = 1 ]; then head -c 20 "$src"; exit 1; fi
+    cat "$src"
+  fi
 fi
 `)
   const tar = spawnSync('which', ['tar'], { encoding: 'utf8' }).stdout.trim()
@@ -102,12 +126,14 @@ fi
 if [ "$TEST_BACKUP_FAIL" = 1 ] && [ "$1" = cf ]; then exit 1; fi
 exec '${tar}' "$@"
 `)
-  const result = spawnSync('bash', [join(dir, 'update'), ...(options.archive ? ['--archive', archive] : ['fix/test'])], {
+  const invocationArgs = options.args ?? (options.archive ? ['--archive', archive] : ['fix/test'])
+  const result = spawnSync('bash', [join(dir, 'update'), ...invocationArgs], {
     encoding: 'utf8',
     env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log,
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
       TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive,
+      TEST_DOWNLOAD_FILE: options.artifactZip ? zipArchive : archive,
       TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
   })
   return { result, app, dir, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
@@ -192,9 +218,95 @@ describe('sp-update staged deployment', () => {
     expect(log).toContain('restore')
     expect(log).toContain('systemctl start sleepypod.service')
   })
+
+  it('updates from CI artifact zip via --artifact-url', () => {
+    const { result, app, log } = updater({
+      args: ['--artifact-url', 'https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip'],
+      artifactZip: true,
+      blocked: true,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(join(app, 'old.txt'))).toBe(false)
+    expect(readFileSync(join(app, '.next/standalone/server.js'), 'utf8')).toBe('new standalone server')
+    expect(existsSync(join(app, 'artifact.download'))).toBe(false)
+    expect(existsSync(join(app, 'sleepypod-core.tar.gz'))).toBe(false)
+    expect(log).toContain('https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip')
+    expect(log).toContain('pnpm install --frozen-lockfile --prod')
+  })
+
+  it('normalizes GitHub Actions run artifact URL to nightly.link and completes update', () => {
+    const { result, app, log } = updater({
+      args: ['https://github.com/sleepypod/core/actions/runs/34162726850/artifacts/10033170463'],
+      artifactZip: true,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(join(app, 'old.txt'))).toBe(false)
+    expect(readFileSync(join(app, '.next/standalone/server.js'), 'utf8')).toBe('new standalone server')
+    expect(log).toContain('https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip')
+    expect(log).not.toContain('https://github.com/sleepypod/core/actions/runs')
+  })
+
+  it('normalizes GitHub Actions run URL without artifact id to nightly.link and completes update', () => {
+    const { result, app, log } = updater({
+      args: ['https://github.com/sleepypod/core/actions/runs/34162726850'],
+      artifactZip: true,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(join(app, 'old.txt'))).toBe(false)
+    expect(readFileSync(join(app, '.next/standalone/server.js'), 'utf8')).toBe('new standalone server')
+    expect(log).toContain('https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip')
+    expect(log).not.toContain('https://github.com/sleepypod/core/actions/runs')
+  })
+
+  it('supports --artifact-url= syntax and extracts tarball artifact if not zip', () => {
+    const { result, app, log } = updater({
+      args: ['--artifact-url=https://example.com/custom/sleepypod-core.tar.gz'],
+      artifactZip: false,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(join(app, 'old.txt'))).toBe(false)
+    expect(readFileSync(join(app, '.next/standalone/server.js'), 'utf8')).toBe('new standalone server')
+    expect(existsSync(join(app, 'artifact.download'))).toBe(false)
+    expect(log).toContain('https://example.com/custom/sleepypod-core.tar.gz')
+  })
+
+  it('normalizes GitHub Actions /job/ URL to nightly.link and completes update', () => {
+    const { result, app, log } = updater({
+      args: ['https://github.com/sleepypod/core/actions/runs/34162726850/job/101867811936?pr=691'],
+      artifactZip: true,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(join(app, 'old.txt'))).toBe(false)
+    expect(readFileSync(join(app, '.next/standalone/server.js'), 'utf8')).toBe('new standalone server')
+    expect(log).toContain('https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip')
+  })
+
+  it('rejects failed artifact download and keeps the installed app', () => {
+    const { result, app, log } = updater({
+      args: ['--artifact-url', 'https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip'],
+      downloadFail: true,
+      blocked: true,
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('Artifact download failed')
+    expect(existsSync(join(app, 'old.txt'))).toBe(true)
+    expect(log).not.toContain('pnpm install')
+  })
 })
 
-function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false) {
+function deploy(options: {
+  fail?: 'build' | 'transfer' | 'apply' | ''
+  branch?: boolean
+  args?: string[]
+  artifactZip?: boolean
+} | 'build' | 'transfer' | 'apply' | '' = '', branchParam = false) {
+  const fail = typeof options === 'object' ? (options.fail ?? '') : options
+  const branch = typeof options === 'object' ? (options.branch ?? false) : branchParam
+  const artifactZip = typeof options === 'object' ? (options.artifactZip ?? false) : false
+  const invocationArgs = typeof options === 'object' && options.args
+    ? (options.args[0] === 'pod.local' ? options.args : ['pod.local', ...options.args])
+    : ['pod.local', ...(branch ? ['fix/test'] : [])]
+
   const dir = temp()
   const project = join(dir, 'project')
   const bin = join(dir, 'bin')
@@ -214,11 +326,44 @@ function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false) 
     }
     git(['init', '-b', 'main'])
     git(['add', '.'])
-    git(['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-m', 'fixture'])
+    git(['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-m', 'fixture'])
     git(['branch', 'fix/test'])
     git(['remote', 'add', 'origin', project])
     put(join(project, 'source.ts'), 'uncommitted local edits')
   }
+  const bundle = join(dir, 'bundle')
+  put(join(bundle, 'source.ts'), 'artifact-source')
+  put(join(bundle, '.next/BUILD_ID'), 'artifact-build')
+  put(join(bundle, '.next/standalone/server.js'), 'artifact standalone server')
+  const archive = join(dir, 'bundle.tar.gz')
+  expect(spawnSync('tar', ['czf', archive, '-C', bundle, '.']).status).toBe(0)
+  const zipArchive = join(dir, 'artifact.zip')
+  if (artifactZip) {
+    const zipScript = 'import zipfile, sys; z = zipfile.ZipFile(sys.argv[1], "w"); z.write(sys.argv[2], "sleepypod-core.tar.gz"); z.close()'
+    let res = spawnSync('uv', ['run', 'python', '-c', zipScript, zipArchive, archive])
+    if (res.status !== 0) {
+      res = spawnSync('python3', ['-c', zipScript, zipArchive, archive])
+    }
+    expect(res.status).toBe(0)
+  }
+  put(join(bin, 'curl'), `#!/bin/bash
+echo "curl $*" >> "$TEST_LOG"
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$arg"
+    break
+  fi
+  prev="$arg"
+done
+src="\${TEST_DOWNLOAD_FILE:-$TEST_ARCHIVE}"
+if [ -n "$out" ]; then
+  cat "$src" > "$out"
+else
+  cat "$src"
+fi
+`)
   put(join(bin, 'pnpm'), `#!/bin/bash
 if [ "$1" = --version ]; then echo 10.34.5; exit; fi
 echo "pnpm $*" >> "$TEST_LOG"
@@ -251,9 +396,10 @@ case "$cmd" in
   *) exit 90 ;;
 esac
 `)
-  const result = spawnSync('bash', [join(project, 'scripts/deploy'), 'pod.local', ...(branch ? ['fix/test'] : [])], { encoding: 'utf8',
+  const result = spawnSync('bash', [join(project, 'scripts/deploy'), ...invocationArgs], { encoding: 'utf8',
     env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TEST_LOG: log, TEST_FAIL: fail,
-      TEST_REMOTE: join(dir, 'sleepypod-deploy.abcdef'), TEST_CAPTURE: join(dir, 'captured.tar.gz') },
+      TEST_REMOTE: join(dir, 'sleepypod-deploy.abcdef'), TEST_CAPTURE: join(dir, 'captured.tar.gz'),
+      TEST_ARCHIVE: archive, TEST_DOWNLOAD_FILE: artifactZip ? zipArchive : archive },
   })
   return { result, log: existsSync(log) ? readFileSync(log, 'utf8') : '', dir, project }
 }
@@ -294,5 +440,50 @@ describe('local deploy', () => {
     const { result } = deploy('apply')
     expect(result.status).not.toBe(0)
     expect(result.stdout).not.toContain('Deploy complete')
+  })
+
+  it('downloads GitHub Actions artifact, normalizes to nightly.link, and deploys without building', () => {
+    const { result, log, dir } = deploy({
+      args: ['https://github.com/sleepypod/core/actions/runs/34162726850/artifacts/10033170463'],
+      artifactZip: true,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Deploy complete')
+    expect(log).toContain('curl -fSL --connect-timeout 10 --max-time 600 -o')
+    expect(log).toContain('https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip')
+    expect(log).not.toContain('https://github.com/sleepypod/core/actions/runs')
+    expect(log).not.toContain('pnpm build')
+    expect(log).not.toContain('pnpm install')
+    expect(log).toContain('--archive')
+    const archived = spawnSync('tar', ['xOf', join(dir, 'captured.tar.gz'), './source.ts'], { encoding: 'utf8' })
+    expect(archived.stdout).toBe('artifact-source')
+  })
+
+  it('deploys from CI artifact zip via --artifact-url', () => {
+    const { result, log, dir } = deploy({
+      args: ['--artifact-url', 'https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip'],
+      artifactZip: true,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Deploy complete')
+    expect(log).toContain('https://nightly.link/sleepypod/core/actions/runs/34162726850/sleepypod-core.zip')
+    expect(log).not.toContain('pnpm build')
+    expect(log).toContain('--archive')
+    const archived = spawnSync('tar', ['xOf', join(dir, 'captured.tar.gz'), './source.ts'], { encoding: 'utf8' })
+    expect(archived.stdout).toBe('artifact-source')
+  })
+
+  it('supports --artifact-url= syntax and direct tarball artifact', () => {
+    const { result, log, dir } = deploy({
+      args: ['--artifact-url=https://example.com/custom/sleepypod-core.tar.gz'],
+      artifactZip: false,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Deploy complete')
+    expect(log).toContain('https://example.com/custom/sleepypod-core.tar.gz')
+    expect(log).not.toContain('pnpm build')
+    expect(log).toContain('--archive')
+    const archived = spawnSync('tar', ['xOf', join(dir, 'captured.tar.gz'), './source.ts'], { encoding: 'utf8' })
+    expect(archived.stdout).toBe('artifact-source')
   })
 })

@@ -82,18 +82,25 @@ firewall helpers. No GitHub release is required. For first installation, use
 
 ### Validating a fork's PR
 
-Check out the PR in your local clone and run `./scripts/deploy POD_IP`. This
-works even when the fork has not published a branch release. Alternatively,
-enable Actions in the fork and push the branch so its Branch Release workflow
-publishes `sleepypod-core.tar.gz` under `<branch-with-slashes-replaced>-latest`.
-Then run on the Pod:
+When testing a pull request submitted from a contributor's fork, no local build or fork GitHub release is necessary. Each pull request run in GitHub Actions builds and uploads a CI artifact (`sleepypod-core`).
 
+**Option A: Deploy from your computer over SSH (no local Node/build required):**
 ```bash
-sudo env SLEEPYPOD_GITHUB_REPO=OWNER/core sp-update fix/my-fix
+./scripts/deploy POD_IP https://github.com/sleepypod/core/actions/runs/RUN_ID
+# Or with explicit artifact URL:
+./scripts/deploy POD_IP --artifact-url https://nightly.link/sleepypod/core/actions/runs/RUN_ID/sleepypod-core.zip
 ```
 
-A Git push alone does not upload a locally built `.next`; use the deployment
-script or let CI build and publish the release.
+**Option B: Update directly on the Pod:**
+```bash
+sp-update https://github.com/sleepypod/core/actions/runs/RUN_ID
+# Or with an explicit artifact link / nightly.link:
+sp-update --artifact-url https://nightly.link/sleepypod/core/actions/runs/RUN_ID/sleepypod-core.zip
+```
+
+GitHub Actions run URLs (including `/artifacts/ID` and `/job/ID` links) are automatically routed through `nightly.link` so downloads succeed anonymously without requiring GitHub web authentication.
+
+Alternatively, you can check out the PR in your local clone and run `./scripts/deploy POD_IP` to build and deploy locally.
 
 ### Path 2: CI Release (Production)
 
