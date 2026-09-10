@@ -41,6 +41,7 @@ import {
   type Side,
 } from './types'
 import { WindowStore } from './windows'
+import { readRuleLive, type LiveReading } from './live'
 
 /** How many minutes after a timeOfDay slot a late tick may still fire it. */
 const TIME_OF_DAY_GRACE_MIN = 10
@@ -181,6 +182,18 @@ export class AutomationEngine {
     return this.globalEnabled
   }
 
+  /** Snapshot live readouts without advancing triggers, windows, or hardware state. */
+  getLiveReadings(): Map<number, LiveReading | null> {
+    const snapshot = this.deps.signals.read()
+    const ctx: EvalContext = {
+      signal: key => snapshot[key],
+      windows: this.windows,
+      nowMs: this.deps.now(),
+      ...this.deps.clock(),
+    }
+    return new Map(this.rules.map(rule => [rule.id, readRuleLive(rule, ctx)]))
+  }
+
   private getRuntime(id: number): RuleRuntime {
     let rt = this.runtime.get(id)
     if (!rt) {
@@ -232,6 +245,22 @@ export class AutomationEngine {
     finally {
       this.ticking = false
     }
+  }
+
+  /** Explicit invocation bypasses only WHEN, retaining conditions and safety gates. */
+  async runNow(id: number): Promise<void> {
+    if (!this.globalEnabled) throw new Error('Autopilot is paused')
+    if (this.ticking) throw new Error('Autopilot is busy; try again')
+    const rule = this.rules.find(r => r.id === id)
+    if (!rule || !rule.enabled) throw new Error('Automation is missing or disabled')
+    this.ticking = true
+    try {
+      const now = this.deps.now()
+      const snapshot = this.deps.signals.read()
+      const clock = this.deps.clock()
+      await this.evaluateRule(rule, { signal: key => snapshot[key], windows: this.windows, nowMs: now, ...clock }, now, true)
+    }
+    finally { this.ticking = false }
   }
 
   private maxWindowMinutes(): number {
@@ -287,9 +316,9 @@ export class AutomationEngine {
     }
   }
 
-  private async evaluateRule(rule: AutomationRule, ctx: EvalContext, now: number): Promise<void> {
+  private async evaluateRule(rule: AutomationRule, ctx: EvalContext, now: number, explicit = false): Promise<void> {
     const rt = this.getRuntime(rule.id)
-    if (!this.triggerActive(rule, ctx, now, rt)) return // not an eval; no audit row
+    if (!explicit && !this.triggerActive(rule, ctx, now, rt)) return // not an eval; no audit row
 
     // IF — three-valued. unknown/false both skip (never fire on missing data).
     const cond = evaluateCondition(rule.conditions, ctx)

@@ -1,0 +1,158 @@
+# Remote remapping implementation
+
+The Remote screen is available at `/{lang}/autopilot/remote`, alongside
+Automations and Diagnostics. It implements the September 7 Remote handoff:
+independent left/right overrides, three permanent single-press rows, six
+optional double/combo rows, linked remote illustration, structured parameters,
+copy/reset confirmation, device persistence, and live capture.
+
+## Findings that change the prototype contract
+
+The [field evidence](../adr/0024-cover-button-signals.md) takes precedence over
+the prototype's illustrative firmware assumptions:
+
+- Firmware natively aggregates click counts. Top counts 1–5 were observed;
+  the UI exposes single and double as requested, and captures higher counts as
+  unsupported without flattening them into single actions. The prototype's
+  400 ms double-click claim is not verified and is not shown.
+- Holds and chords are reconstructed from valid GPI 97/98/99 press/release
+  logs using the embedded cover counter. Native click payloads alone cannot
+  identify overlap. A hold of at least 1,000 counter ticks is observable but
+  has no binding in this screen. This threshold is application policy.
+- Two-button combos require overlapping presses within 200 cover-counter
+  ticks and both releases. The 200 threshold is application policy, consistent
+  with the handoff; it is not a firmware constant. Incomplete sequences are
+  shown in capture without dispatching a combo. All-three and held-button
+  sequences are observable but not bindable. A later valid edge after 10,000
+  ticks invalidates stale held state. Keypad reset, counter regression, NATS
+  disconnection, RAW rotation/truncation/replacement, a fresh press with a
+  missing preceding release, and shutdown also invalidate pending recognition.
+- RAW can write the native click count before the corresponding edge logs.
+  Count dispatch waits one second for those logs; observed holds and overlaps
+  suppress their constituent native click bindings. Second-resolution source
+  timestamps limit this correlation. Missing/delayed logs remain a firmware
+  limitation, so combos are explicitly experimental.
+- Native haptics and alarm behavior remain active. No verified command
+  disables them. Therefore inherited rows say **Firmware default**, and
+  **Nothing** means no custom software action. The prototype's temperature,
+  elevation and power factory map is not executed or presented as verified.
+- Elevation and soundscape controls have no implemented device API. Their
+  catalog entries are visible and disabled; the server rejects those bindings.
+  Supported actions use the same device/settings procedures as manual controls.
+- Source timestamps have one-second precision. Capture displays unavailable
+  latency instead of inventing millisecond delivery measurements.
+- Stable combo IDs follow the explicit physical-order examples in the handoff
+  (`top+mid.single`, etc.), rather than its contradictory alphabetical note.
+
+The later middle+bottom trial also captured both presses and releases: presses
+16 counter ticks apart and 160 ticks of overlap. These selected records are
+included in the September 7 evidence fixture. Physical validation of the full
+right-side catalog and all release permutations remains outstanding.
+
+## Persistence and execution
+
+Migration 0015 adds `remote_configuration`. Only software overrides and visible
+extras are persisted, with a shared revision for optimistic concurrency.
+Copy replaces the opposite side atomically, including extras. Reset removes
+overrides; it does not program guessed native defaults. An outdated writer
+receives a conflict instead of silently replacing another client's edits.
+
+The frontend uses the existing tRPC stack: `remote.mapping`, `remote.update`
+and `remote.status`. The update takes `{side, revision, edit}` with validated
+structured values such as `{action: 'temp.up', deltaF: 2}`. This replaces the
+prototype's assumed whole-map PUT endpoint. Mapping reads are also exposed
+through the project's OpenAPI `GET /remote/mapping` route.
+
+Edits save after 250 ms with a visible pending/error state. Saves are serialized;
+leaving the app flushes an unsent edit. Mapping and selected side are held in
+the Remote console so switching between Mapping and Live capture preserves them.
+Remote lives at `/{lang}/debug/remote`, separately from Autopilot.
+
+Instrumentation starts the dispatcher before sensor streaming. Runtime state
+and frame subscribers are process-wide so Next.js instrumentation and route
+handlers see the same stream. No browser or armed capture is required for
+execution. Commands are serialized, bounded to 20 queued detections, and
+discarded after five seconds in the queue. Historical startup frames and
+duplicate RAW file/offset/item identities do not dispatch actions.
+Recent identities are retained for the entire 30-second frame acceptance
+window. When the bounded deduplication cache is full, recognition rejects
+excess input rather than evicting identities that could still be replayed.
+
+Both RAW and live NATS sensor/log frames use the existing complete CBOR decoder.
+NATS uses core subscriptions without replaying retained JetStream messages.
+Its `raw.log` subscription supplies edge sequences; source identities include
+the connection instance, message number and CBOR item number.
+
+`automation.run` explicitly evaluates the chosen rule while retaining enabled,
+global pause, conditions, cooldown, dry-run, runaway, and hardware safety gates.
+Only its WHEN trigger is bypassed. See the automation run log for its outcome.
+The engine is also shared across Next.js module graphs so API pause controls,
+rule reloads, scheduled ticks and remote invocation use the same state.
+
+Diagnostics opens `GET /api/remote/detections` as SSE only while armed. It shows
+the newest 12 unique detections and updates outcomes in place. Resolution uses
+the current mapping, while the separate outcome records what execution did.
+Stopping capture closes the subscription and retains the displayed rows.
+There is no production injection control or fabricated detection data.
+Slow SSE clients are disconnected when their queue reaches 16 unread messages.
+
+## Verification
+
+Tests replay the selected real September 7 records in receipt order, including
+triples through quintuples, a held middle, the complete held-top/bottom sequence,
+and the incomplete all-three sequence. Additional tests cover replay, reset,
+missing releases, side independence, action dispatch, concurrency conflicts,
+shutdown, SSE cleanup, current-map resolution and UI editing interactions.
+
+Local UI testing can use `CI=1 pnpm dev --port 3011`, which migrates and seeds
+local databases while skipping hardware startup. This mode intentionally
+reports that the device listener is unavailable. It does not exercise physical
+hardware commands. Production builds use `pnpm build`.
+
+## Autopilot views
+
+Autopilot at `/{lang}/autopilot` has Rules, Live, and Activity views. The shared
+page header holds rule counts, New automation, and the global kill-switch.
+Rules show compact live readings alongside last outcome, last fired, and Today;
+Live expands the same readings into per-rule cards with dry-run controls.
+Activity gives the run log the page width without a nested vertical scroll area.
+Remote mapping and capture remain in their separate Diagnostics destination.
+
+Live readings come from the engine's existing signal reader and aggregate
+windows. Inspecting status does not sample windows, advance triggers, or run
+actions. A meter shows a primary numeric comparison, not a promise that the
+whole rule will fire; other conditions, cooldowns, and hardware gates still
+apply. Missing signals display as unavailable. Unsupported OR/NOT conditions
+are not flattened into a misleading comparison. Last fired and Today use fired
+or clamped outcomes, while Last outcome includes skipped and dry-run evaluations.
+
+Direct button actions do not require a WHEN/IF/THEN automation. Set temperature
+accepts whole-degree targets from 55–110°F; existing `temp.preset` bindings remain
+compatible. Run an automation is a separate binding for conditional behavior.
+The remote illustration has no enclosing card, and Autopilot's running switch
+sits unboxed beside the page title, separate from New automation.
+
+The Remote mapping view uses two equal desktop columns, with the illustration
+and copy/reset actions centered in the first. Press counts are labeled explicitly
+as 1 press or 2 presses; the add control names double presses and button combos.
+Cover-button availability is confirmed from a received button detection during
+the current process lifetime. Pod generation and legacy gesture support do not
+prove built-in button support, so no negative hardware capability is inferred
+from missing detections. The UI reports unconfirmed or detection offline instead.
+
+## Shareable firmware evidence
+
+Live capture requests `raw=1` on the detection stream and records original decoded
+`buttonEvent` objects, tca8418 controller logs (including unknown GPI codes), i2c3
+recovery logs, and stream resets before recognition. Unrelated logs and sensor
+samples are excluded. Download capture exports versioned NDJSON containing app
+build metadata, optional cover/firmware/test notes, server receipt timestamps,
+browser observation timestamps, raw source identities, interpreted detections,
+and connection/gap markers. These are decoded records, not binary RAW files;
+source timestamps still have second precision. Unknown firmware counts are kept.
+
+Recording is local to the capture view, capped at 2,000 records / 1 MiB, and must
+be downloaded before leaving it. Stop retains evidence, Clear starts a new
+recording, and reconnects are marked as gaps rather than pretending continuity.
+Omitted records are counted in the export; individual firmware records over
+16 KiB become explicit omission markers. No additional eMMC logging is enabled.

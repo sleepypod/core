@@ -117,6 +117,36 @@ function rule(overrides: Partial<AutomationRule>): AutomationRule {
 }
 
 describe('AutomationEngine — outcomes & audit log', () => {
+  it('explicit remote invocation bypasses WHEN while retaining cooldown and pause controls', async () => {
+    const h = makeHarness([rule({ trigger: tickEvery(5), cooldownMin: 1, actions: [{ kind: 'notify', message: 'remote' }] })])
+    await h.engine.reload()
+    await h.engine.runNow(1)
+    expect(h.notifies).toHaveLength(1)
+    await h.engine.runNow(1)
+    expect(h.runs.at(-1)?.detail.reason).toBe('cooldown')
+    h.advance(60000)
+    await h.engine.runNow(1)
+    expect(h.notifies).toHaveLength(2)
+    h.engine.setGlobalEnabled(false)
+    await expect(h.engine.runNow(1)).rejects.toThrow('paused')
+    expect(h.notifies).toHaveLength(2)
+  })
+
+  it('explicit invocation respects conditions, disabled rules, and hardware safety', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true }] }), rule({ id: 2, enabled: false })])
+    await h.engine.reload()
+    h.setStallBlocked('left', true)
+    await h.engine.runNow(1)
+    expect(h.hwCalls).toEqual([])
+    await expect(h.engine.runNow(2)).rejects.toThrow('disabled')
+    await expect(h.engine.runNow(999)).rejects.toThrow('missing')
+    const conditional = makeHarness([rule({ conditions: { kind: 'or', conditions: [] }, actions: [{ kind: 'notify', message: 'never' }] })])
+    await conditional.engine.reload()
+    await conditional.engine.runNow(1)
+    expect(conditional.notifies).toEqual([])
+    expect(conditional.runs.at(-1)?.detail.reason).toBe('condition-false')
+  })
+
   it('only evaluates a tick trigger when its interval has elapsed', async () => {
     const h = makeHarness([rule({ trigger: tickEvery(5), actions: [{ kind: 'notify', message: 'hi' }] })])
     await h.engine.reload()
@@ -867,5 +897,45 @@ describe('AutomationEngine — pump stall guard gate', () => {
     finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe('AutomationEngine live readouts', () => {
+  it('reads current values without firing actions or sampling aggregate windows', async () => {
+    const h = makeHarness([rule({ conditions: { kind: 'compare', op: '>', left: sig('left.movement'), right: lit(200) }, actions: [{ kind: 'notify', message: 'test' }] })])
+    await h.engine.reload()
+    h.setSignal('left.movement', 168)
+    expect(h.engine.getLiveReadings().get(1)).toMatchObject({ value: 168, threshold: 200, op: '>', matched: false })
+    h.setSignal('left.movement', 220)
+    expect(h.engine.getLiveReadings().get(1)?.matched).toBe(true)
+    expect(h.runs).toHaveLength(0)
+    expect(h.notifies).toHaveLength(0)
+    expect(h.hwCalls).toHaveLength(0)
+  })
+
+  it('uses the engine window instead of substituting the latest scalar', async () => {
+    const h = makeHarness([rule({ conditions: { kind: 'compare', op: '>', left: { kind: 'window', fn: 'avg', signal: 'left.movement', lastMin: 10 }, right: lit(200) } })])
+    await h.engine.reload()
+    h.setSignal('left.movement', 100)
+    expect(h.engine.getLiveReadings().get(1)?.value).toBeNull()
+    await h.engine.tick()
+    h.advance(60000)
+    h.setSignal('left.movement', 200)
+    await h.engine.tick()
+    h.setSignal('left.movement', 900)
+    expect(h.engine.getLiveReadings().get(1)).toMatchObject({ value: 150, aggregation: 'avg', windowMin: 10, matched: false })
+  })
+
+  it('handles negative below thresholds and unavailable values', async () => {
+    const h = makeHarness([rule({ conditions: { kind: 'compare', op: '<', left: sig('left.hrv'), right: lit(-2) } })])
+    await h.engine.reload()
+    h.setSignal('left.hrv', -0.8)
+    expect(h.engine.getLiveReadings().get(1)?.matched).toBe(false)
+    h.setSignal('left.hrv', -3)
+    expect(h.engine.getLiveReadings().get(1)?.matched).toBe(true)
+    h.setSignal('left.hrv', undefined)
+    expect(h.engine.getLiveReadings().get(1)).toMatchObject({ value: null, matched: null })
+    h.setSignal('left.hrv', NaN)
+    expect(h.engine.getLiveReadings().get(1)).toMatchObject({ value: null, matched: null })
   })
 })
