@@ -59,8 +59,8 @@ restore_wan
 
   it('stops the service before opening WAN and reloads the installed helper before restore', () => {
     const mainFlow = updateScript.indexOf('# Pre-flight: disk space')
-    const stopCommand = updateScript.indexOf('\nsystemctl stop sleepypod.service\n', mainFlow)
-    const unblockCommand = updateScript.indexOf('\n  unblock_wan\n', mainFlow)
+    const stopCommand = updateScript.indexOf('systemctl stop sleepypod.service', mainFlow)
+    const unblockCommand = updateScript.indexOf('    unblock_wan\n', mainFlow)
     expect(mainFlow).toBeGreaterThan(-1)
     expect(stopCommand).toBeGreaterThan(mainFlow)
     expect(stopCommand).toBeLessThan(unblockCommand)

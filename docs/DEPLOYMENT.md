@@ -26,7 +26,7 @@ flowchart TB
     end
 
     subgraph trigger["Trigger Sources"]
-        mac["Mac CLI<br/>scripts/deploy"]
+        mac["Local CLI<br/>scripts/deploy"]
         web["Web UI"]
         ios["iOS App"]
     end
@@ -35,7 +35,7 @@ flowchart TB
     repo -->|"push / tag"| build_ci
     build_ci --> release
 
-    mac -->|"1. build locally<br/>2. tar+ssh over LAN"| install
+    mac -->|"1. build locally<br/>2. archive over SSH"| spupdate
     web -->|"tRPC"| spupdate
     ios -->|"tRPC"| spupdate
 
@@ -49,25 +49,66 @@ flowchart TB
 
 ## Three Deployment Paths
 
-### Path 1: Mac Deploy (Development)
+### Path 1: Local Deploy (macOS / Linux)
 
-Builds locally (fast, full RAM), pushes built artifacts to the pod. No WAN needed on the pod.
+From a clone on your computer, build and transfer to an **already-installed** Pod:
 
 ```bash
-./scripts/deploy                           # current branch -> 192.168.1.88
-./scripts/deploy 192.168.1.50              # current branch -> different pod
-./scripts/deploy 192.168.1.88 feat/alarms  # specific branch
+./scripts/deploy 192.168.1.50              # current checkout, including local edits
+./scripts/deploy 192.168.1.50 fix/my-fix   # branch fetched from this clone's origin
+SSH_PORT=8822 ./scripts/deploy pod.local
 ```
 
-**How it works:**
-1. Checks out the requested branch locally (if specified)
-2. Runs `pnpm build` on the Mac
-3. Cleans stale files on the pod (preserves `node_modules`, `.env`)
-4. Tars source + `.next` build, pipes over SSH
-5. Runs `scripts/install --local --no-ssh` on the pod
-6. Install script: installs prod deps (with prebuilt native modules), restarts service (DB migrations run automatically on startup via `instrumentation.ts`)
+Use the Node.js major in `.node-version` and the pnpm version pinned in
+`package.json`. The script installs locked dependencies, builds locally, and
+checks the bundle before uploading. Build workers use in-memory databases to
+avoid modifying local data or contending over SQLite files. An optional branch builds in a temporary
+Git worktree; your current branch and edits are preserved.
 
-**Requirements:** SSH access to pod on port 8822 with key auth.
+It uploads a complete archive before invoking `sp-update --archive` on the Pod.
+Git metadata, `.env*`, databases, caches, and local `node_modules` are excluded.
+The standalone server and its compiled configuration are retained; native
+modules resolve from the production dependencies installed on the Pod.
+The updater preserves the Pod's `.env`, backs up the installed code/database,
+installs production dependencies for the Pod's architecture, and restarts the
+service. Build-time public environment variables can still be embedded in the
+Next.js output; build with the intended deployment configuration.
+
+**Requirements:** root SSH key access (default port 8822), an existing SleepyPod
+installation, and WAN access on the Pod for production/native dependencies.
+The updater temporarily opens/restores a blocked WAN using the existing
+firewall helpers. No GitHub release is required. For first installation, use
+`scripts/install` instead.
+
+### Validating a fork's PR
+
+From an up-to-date `sleepypod/core` clone, explicitly select the fork and branch:
+
+```bash
+./scripts/deploy --repo Kovbo/core POD_IP fix/pod3-frozen-heartbeat
+# Equivalent repository selection via the updater's existing environment variable:
+SLEEPYPOD_GITHUB_REPO=Kovbo/core ./scripts/deploy POD_IP fix/pod3-frozen-heartbeat
+```
+
+The fork branch is fetched into a temporary worktree; `origin`, the current
+branch, and local edits stay unchanged. `--repo` takes precedence over the
+environment variable, and either repository selector requires a branch. With
+no selector, branch deployments use your clone's `origin` (which can itself be
+a fork). With neither a selector nor a branch, the current checkout is built.
+
+This works even if the fork's branch predates the new CLI: the local clone's
+updater is uploaded alongside the build. No fork release is required.
+Alternatively, enable Actions in the fork and push the branch so its Branch
+Release workflow publishes `sleepypod-core.tar.gz` under
+`<branch-with-slashes-replaced>-latest`.
+Then run on the Pod:
+
+```bash
+sudo env SLEEPYPOD_GITHUB_REPO=OWNER/core sp-update fix/my-fix
+```
+
+A Git push alone does not upload a locally built `.next`; use the deployment
+script or let CI build and publish the release.
 
 ### Path 2: CI Release (Production)
 
@@ -88,7 +129,8 @@ The pod self-updates by downloading from GitHub. Triggered via the `system.trigg
 ```bash
 # From SSH on the pod:
 sp-update              # latest release (pre-built)
-sp-update feat/alarms  # specific branch (source only, needs build)
+sp-update feat/alarms  # pre-built feat-alarms-latest release
+sp-update --archive /persistent/sleepypod-core.tar.gz  # uploaded pre-built archive
 
 # From web UI or iOS app (tRPC):
 # system.triggerUpdate({ branch: "main" })
@@ -96,14 +138,25 @@ sp-update feat/alarms  # specific branch (source only, needs build)
 ```
 
 **How it works:**
-1. Opens iptables (temporarily allows WAN)
-2. Tries to download latest CI release tarball (includes `.next` — no build needed)
-3. Falls back to GitHub source tarball if no release or if requesting a non-main branch
-4. Installs prod dependencies (prebuild-install fetches linux-arm64 native modules)
-5. Closes iptables (re-blocks WAN)
-6. Restarts service (DB migrations run automatically on startup via `instrumentation.ts`)
+1. Resolves `main`/`latest` to the latest stable release, `dev` to `dev-latest`, and other branches to `<slug>-latest`.
+2. Downloads and validates the pre-built archive before replacing installed files.
+3. Backs up the installed code and database, then installs the new code and production dependencies.
+4. Restores the firewall and starts the service (database migrations run at startup).
 
-**If the update fails:** iptables are restored and the service restarts with existing code. Database is restored from backup.
+There is no source-tarball fallback or on-Pod Next.js build. Missing releases,
+API errors, failed downloads, and incomplete builds fail with actionable errors.
+For a local archive, bundle validation happens before stopping the service.
+When WAN is blocked, the service stops before opening the firewall to avoid
+racing its firewall self-heal; preparation failures restart it with existing code.
+
+`TMPDIR` defaults to `/persistent` for staging and rollback backups. It can be
+overridden with an existing writable directory. The updater requires the
+archive's pinned pnpm version and reports how to correct a mismatch.
+
+**If the update fails:** the updater attempts to restore the firewall and,
+after replacement has begun, the backed-up code and database. A failed update's
+code backup remains at `$TMPDIR/sleepypod-rollback.*` for recovery. Dependency
+changes in `node_modules` and module/systemd changes are not rolled back.
 
 ## Why Build Off-Device
 
@@ -117,7 +170,7 @@ The `.next` output is platform-independent JavaScript — only `better-sqlite3` 
 The pod runs "Eight Layer" (Yocto kirkstone) — a minimal embedded Linux with no package manager. Instead of git, we use GitHub's tarball API and release assets. No commit history is needed on a deployment target.
 
 ### No rsync on the pod
-The deploy script uses `tar | ssh` — creates a tar archive locally, pipes over SSH, extracts on the pod. Stale files are cleaned before extraction (mimics `rsync --delete`).
+The deploy script creates a tar archive locally and transfers it over SSH. The updater stages and validates it before replacing the installed application.
 
 ### prebuild-install for native modules
 `better-sqlite3` ships with `prebuild-install`, which downloads precompiled binaries for `linux-arm64`. No C compiler needed on the pod.
