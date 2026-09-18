@@ -1,17 +1,13 @@
-/**
- * Autopilot console — the full-bleed desktop surface that hosts the Automations
- * list, the Rule editor (modal), and the Diagnostics/status panel behind a
- * left side-nav. Breaks out of the app's mobile `max-w-md` shell the same way
- * the diagnostics console does. Owns all tRPC data + mutations.
- */
+/** Autopilot's automation editor, live engine state, and audit trail. */
 'use client'
 
 import { useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
-import { Icon, type IconName } from './icons'
 import { AutomationsList, type ListItem } from './AutomationsList'
 import { RuleEditor } from './RuleEditor'
-import { StatusPanel } from './StatusPanel'
+import { RuleStatusCard, RunLog } from './StatusPanel'
+import { Button } from './primitives'
+import { Icon } from './icons'
 import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
 
 const ACCENT = '#0c87c2'
@@ -29,25 +25,10 @@ const SCOPED_CSS = `
 @keyframes apFade { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: none; } }
 `
 
-function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, label: string, active: boolean, badge?: number, onClick: () => void }) {
-  const I = Icon[icon]
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={active ? { background: 'color-mix(in srgb, var(--accent) 14%, transparent)', color: 'var(--accent)' } : undefined}
-      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors ${active ? '' : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'}`}
-    >
-      <I size={17} />
-      <span className="flex-1 text-left">{label}</span>
-      {badge != null && <span className="mono text-[11px] text-zinc-500">{badge}</span>}
-    </button>
-  )
-}
-
+/** Combine automation editing, live engine state, and the audit trail in one page. */
 export function AutopilotConsole() {
   const utils = trpc.useUtils()
-  const [screen, setScreen] = useState<'list' | 'status'>('list')
+  const [tab, setTab] = useState<'Rules' | 'Live' | 'Activity'>('Rules')
   const [editing, setEditing] = useState<BuilderRule | null>(null)
 
   const listQ = trpc.automations.list.useQuery({})
@@ -86,6 +67,8 @@ export function AutopilotConsole() {
         builder,
         lastFired,
         firesToday: s?.firesToday ?? 0,
+        live: s?.live,
+        lastOutcome: s?.lastOutcome,
       }
     })
   }, [listQ.data, statusQ.data])
@@ -98,65 +81,69 @@ export function AutopilotConsole() {
     else createM.mutate(ast, { onSuccess: () => setEditing(null) })
   }
 
-  const killed = statusQ.data ? !statusQ.data.globalEnabled : false
-  const activeCount = items.filter(i => i.enabled && i.mode === 'active').length
+  const globalEnabled = statusQ.data?.globalEnabled
+  const activeCount = items.filter(a => a.enabled && a.mode === 'active').length
+  const dryCount = items.filter(a => a.enabled && a.mode === 'dryrun').length
 
   return (
-    <div className="ap-console mx-[calc(50%-50vw)] w-screen px-4 text-zinc-100" style={{ ['--accent' as string]: ACCENT }}>
+    <div className="ap-console w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/60 text-zinc-100" style={{ ['--accent' as string]: ACCENT }}>
       <style dangerouslySetInnerHTML={{ __html: SCOPED_CSS }} />
-      <div className="mx-auto flex max-w-[1500px] gap-4">
-        {/* side nav */}
-        <aside className="flex w-[212px] shrink-0 flex-col self-start rounded-xl border border-zinc-800 bg-zinc-950/80">
-          <div className="flex items-center gap-2.5 px-4 py-4">
-            <span className="grid h-8 w-8 place-items-center rounded-lg" style={{ background: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'var(--accent)' }}>
-              <Icon.Sliders size={17} />
-            </span>
-            <div className="leading-tight">
-              <div className="text-[14px] font-semibold text-zinc-100">Autopilot</div>
-              <div className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">sleepypod</div>
+      <header className="flex flex-wrap items-center justify-between gap-4 px-5 py-5">
+        <div>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <h1 className="text-xl font-semibold">Autopilot</h1>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-400">{globalEnabled === undefined ? 'Status unavailable' : globalEnabled ? 'Running' : 'Halted'}</span>
+              <button type="button" role="switch" aria-label="Autopilot running" aria-checked={globalEnabled ?? false} disabled={globalEnabled === undefined || killM.isPending} onClick={() => killM.mutate({ enabled: !globalEnabled })} className="relative h-6 w-11 rounded-full bg-zinc-700 disabled:opacity-50" style={globalEnabled ? { background: 'var(--accent)' } : undefined}>
+                <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${globalEnabled ? 'left-6' : 'left-1'}`} />
+              </button>
             </div>
           </div>
-          <nav className="flex flex-col gap-1 px-3 py-2">
-            <NavItem icon="List" label="Automations" badge={items.length} active={screen === 'list'} onClick={() => setScreen('list')} />
-            <NavItem icon="Pulse" label="Diagnostics" active={screen === 'status'} onClick={() => setScreen('status')} />
-          </nav>
-          <div className="mt-auto p-3">
-            <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${killed ? 'border-red-500/30 bg-red-500/10 text-red-300' : 'border-zinc-800 bg-zinc-900/40 text-zinc-400'}`}>
-              <span className={`h-2 w-2 rounded-full ${killed ? 'bg-red-400' : 'bg-emerald-400'}`} style={killed ? undefined : { boxShadow: '0 0 0 3px rgba(52,211,153,0.18)' }} />
-              {killed ? 'Halted' : 'Running'}
-              <span className="ml-auto text-zinc-600">
-                {activeCount}
-                {' '}
-                active
-              </span>
-            </div>
-          </div>
-        </aside>
-
-        {/* content */}
-        <main className="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden" style={{ minHeight: 'calc(100dvh - 7rem)' }}>
-          {screen === 'list' && (
-            <AutomationsList
-              items={items}
-              loading={listQ.isLoading}
-              onToggle={(id, enabled) => setEnabledM.mutate({ id, enabled })}
-              onOpen={a => setEditing(a.builder)}
-              onNew={() => setEditing(blankRule())}
-            />
-          )}
-          {screen === 'status' && (
-            <StatusPanel
-              globalEnabled={statusQ.data?.globalEnabled ?? true}
-              onKill={enabled => killM.mutate({ enabled })}
-              rules={statusQ.data?.rules ?? []}
-              runs={runsQ.data ?? []}
-              loading={statusQ.isLoading}
-              onDry={(id, dryRun) => setDryRunM.mutate({ id, dryRun })}
-            />
-          )}
-        </main>
-      </div>
-
+          <p className="mt-1 text-xs text-zinc-500">
+            {activeCount}
+            {' '}
+            active ·
+            {' '}
+            {dryCount}
+            {' '}
+            in dry-run ·
+            {' '}
+            {items.length}
+            {' '}
+            total
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="accent" size="md" onClick={() => setEditing(blankRule())}>
+            <Icon.Plus size={15} />
+            New automation
+          </Button>
+        </div>
+      </header>
+      <nav aria-label="Autopilot views" className="flex gap-6 border-b border-zinc-800 px-5">
+        {(['Rules', 'Live', 'Activity'] as const).map(view => (
+          <button key={view} type="button" aria-pressed={tab === view} onClick={() => setTab(view)} className={`border-b-2 py-3 text-sm ${tab === view ? 'border-sky-500 text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+            {view}
+            {view === 'Rules' && <span className="ml-2 text-xs text-zinc-500">{items.length}</span>}
+          </button>
+        ))}
+      </nav>
+      {globalEnabled === false && <p role="status" className="m-5 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">Autopilot halted — all rules are suspended. Manual controls remain available.</p>}
+      {tab === 'Rules' && <AutomationsList items={items} loading={listQ.isLoading} onToggle={(id, enabled) => setEnabledM.mutate({ id, enabled })} onOpen={a => setEditing(a.builder)} />}
+      {tab === 'Live' && (
+        <section aria-label="Live rule state" className="p-5">
+          {statusQ.isLoading
+            ? <p>Loading status…</p>
+            : !statusQ.data
+                ? <p>Status unavailable.</p>
+                : statusQ.data.rules.length === 0
+                  ? <p className="text-sm text-zinc-500">No automations yet.</p>
+                  : (
+                      <div className="grid gap-4 lg:grid-cols-2">{statusQ.data.rules.map(a => <RuleStatusCard key={a.id} a={a} onDry={(id, dryRun) => setDryRunM.mutate({ id, dryRun })} />)}</div>
+                    )}
+        </section>
+      )}
+      {tab === 'Activity' && <section aria-label="Automation activity" className="p-5">{runsQ.isLoading ? <p>Loading activity…</p> : !runsQ.data ? <p>Activity unavailable.</p> : <RunLog runs={runsQ.data} />}</section>}
       {editing && <RuleEditor automation={editing} onClose={() => setEditing(null)} onSave={save} saving={saving} />}
     </div>
   )

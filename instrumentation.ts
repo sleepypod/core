@@ -15,6 +15,7 @@
  * - `initializeScheduler()` — idempotent, safe to call from app code as a fallback.
  */
 
+import { startRemoteRuntime, stopRemoteRuntime } from '@/src/remote/runtime'
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
 import { getAutomationEngine, shutdownAutomationEngine } from '@/src/automation'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
@@ -62,6 +63,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
   }
   catch (error) {
     console.error('Error shutting down keepalives:', error)
+  }
+
+  // Drain remote commands before stopping the engine and hardware they use.
+  try {
+    await stopRemoteRuntime()
+  }
+  catch (error) {
+    console.error('Error shutting down remote runtime:', error)
   }
 
   // Step 1: Shutdown scheduler (waits for in-flight jobs internally)
@@ -277,6 +286,12 @@ async function prepareHardware(): Promise<void> {
 
   if (isShuttingDown) return
   hardwareReady = true
+  try {
+    startRemoteRuntime()
+  }
+  catch (error) {
+    console.warn('WARNING: Remote runtime failed to start:', error instanceof Error ? error.message : error)
+  }
   try {
     startPiezoStreamServer()
   }

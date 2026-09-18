@@ -13,6 +13,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Encoder } from 'cbor-x'
+import { RemoteRecognizer } from '@/src/remote/recognizer'
+import type { Detection } from '@/src/remote/model'
 
 const tmpRawDir = vi.hoisted(() => {
   const fsh = require('node:fs') as typeof import('node:fs')
@@ -79,6 +81,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 import {
   __test__,
   getLatestCapSenseSnapshot,
+  onServerFrame,
   shutdownPiezoStreamServer,
   startPiezoStreamServer,
 } from '../piezoStream'
@@ -117,6 +120,46 @@ async function waitFor(pred: () => boolean, timeoutMs = 3000): Promise<void> {
 }
 
 describe('startPiezoStreamServer — source selection', () => {
+  it.each(['rotation', 'truncation'])('invalidates remote edges across RAW %s', async (change) => {
+    process.env.PIEZO_SENSOR_SOURCE = 'raw'
+    const ts = Math.floor(Date.now() / 1000)
+    const record = (counter: number, operation: string, code: number) => ({ type: 'log', ts, msg: `-> FW: ${counter} [tca8418L] gpi ${operation} ${code}` })
+    const file = path.join(tmpRawDir, 'before.RAW')
+    fs.writeFileSync(file, Buffer.concat([
+      buildOuterRecord(1, record(100, 'press', 97)),
+      buildOuterRecord(2, record(120, 'press', 99)),
+    ]))
+    const detections: Detection[] = []
+    const frames: Record<string, unknown>[] = []
+    const recognizer = new RemoteRecognizer(event => detections.push(event), Date.now, 0)
+    const unsubscribe = onServerFrame((frame) => {
+      frames.push(frame)
+      recognizer.feed(frame)
+    })
+    try {
+      startPiezoStreamServer()
+      await waitFor(() => frames.filter(f => f.type === 'log').length === 2)
+      expect(detections.some(e => e.inputId === 'top+bottom.pending')).toBe(true)
+      frames.length = 0
+      const releases = Buffer.concat([
+        buildOuterRecord(1, record(200, 'release', 97)),
+        buildOuterRecord(2, record(220, 'release', 99)),
+      ])
+      if (change === 'rotation') fs.writeFileSync(path.join(tmpRawDir, 'after.RAW'), releases)
+      else {
+        fs.truncateSync(file, 0)
+        await waitFor(() => frames.some(f => f.type === 'remoteReset'))
+        fs.appendFileSync(file, releases)
+      }
+      await waitFor(() => frames.filter(f => f.type === 'log').length === 2)
+      expect(frames.some(f => f.type === 'remoteReset')).toBe(true)
+      expect(detections.some(e => e.gesture === 'combo')).toBe(false)
+    }
+    finally {
+      unsubscribe()
+      recognizer.stop()
+    }
+  })
   afterEach(async () => {
     await shutdownPiezoStreamServer()
     vi.useRealTimers()
@@ -182,6 +225,19 @@ describe('startPiezoStreamServer — source selection', () => {
     expect(duplicate.startPiezoStreamServer()).toBe(server)
     expect(startNatsFrameSource).toHaveBeenCalledTimes(1)
     expect(duplicate.getLatestCapSenseSnapshot()).toBe(getLatestCapSenseSnapshot())
+    const seen = vi.fn()
+    const unsubscribe = duplicate.onServerFrame(seen)
+    const throwing = onServerFrame(() => {
+      throw new Error('subscriber failure')
+    })
+    natsMock.captured.onDiscontinuity()
+    expect(seen).toHaveBeenCalledWith({ type: 'remoteReset' })
+    const source = natsMock.captured
+    await shutdownPiezoStreamServer()
+    source.onDiscontinuity()
+    expect(seen).toHaveBeenCalledTimes(1)
+    unsubscribe()
+    throwing()
   })
 
   it.each(['NaN', 'Infinity', '-1'])('defaults invalid NATS timing %s', (value) => {

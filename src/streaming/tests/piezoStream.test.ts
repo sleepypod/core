@@ -1461,7 +1461,7 @@ describe('piezoStream — server lifecycle and protocol', () => {
       fs.writeFileSync(filePath, rec)
       await client.waitFor(m => m.type === 'frzHealth')
       expect(cb).toHaveBeenCalled()
-      const arg = cb.mock.calls[0][0] as Record<string, unknown>
+      const arg = cb.mock.calls.find(([frame]) => frame.type === 'frzHealth')?.[0] as Record<string, unknown>
       expect(arg.type).toBe('frzHealth')
       expect(arg.ts).toBe(1000)
       await client.close()
@@ -1898,7 +1898,7 @@ describe('piezoStream — server lifecycle and protocol', () => {
     }
   })
 
-  it('does not fan non-frzHealth file frames out to server-side listeners', async () => {
+  it('does not fan capacitance file frames out to server-side listeners', async () => {
     const filePath = path.join(tmpRawDir, 'not-health.RAW')
     const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 2300, left: 0, right: 0 }])
 
@@ -1909,11 +1909,30 @@ describe('piezoStream — server lifecycle and protocol', () => {
       const client = await connectClient(port)
       fs.writeFileSync(filePath, rec)
       await client.waitFor(m => m.type === 'capSense' && m.ts === 2300)
-      expect(cb).not.toHaveBeenCalled()
+      expect(cb).toHaveBeenCalledExactlyOnceWith({ type: 'remoteReset' })
       await client.close()
     }
     finally {
       unsub()
+    }
+  })
+
+  it.each(['buttonEvent', 'log'])('delivers %s frames and stable RAW identities to the remote listener', async (type) => {
+    const filePath = path.join(tmpRawDir, 'buttons.RAW')
+    const frame = type === 'buttonEvent'
+      ? { type, ts: 2301, left: { top: 2 } }
+      : { type, ts: 2301, msg: '-> FW: 100 [tca8418L] gpi press 97' }
+    const callback = vi.fn()
+    const unsubscribe = onServerFrame(callback)
+    const client = await connectClient(startAndPort())
+    try {
+      fs.writeFileSync(filePath, buildOuterRecord(1, [frame]))
+      await client.waitFor(m => m.type === type && m.ts === 2301)
+      expect(callback).toHaveBeenCalledWith({ ...frame, remoteSource: `${filePath}:0:0` })
+    }
+    finally {
+      unsubscribe()
+      await client.close()
     }
   })
 

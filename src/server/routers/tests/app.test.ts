@@ -36,6 +36,7 @@ describe('appRouter public surface', () => {
       'homekit',
       'archivePush',
       'automations',
+      'remote',
     ])
   })
 })

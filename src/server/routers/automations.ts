@@ -13,7 +13,7 @@
 
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
-import { and, desc, eq, gte, isNotNull, lte } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull, lte } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { automationRuns, automations, deviceSettings } from '@/src/db/schema'
@@ -239,6 +239,11 @@ export const automationsRouter = router({
         lastOutcome: z.string().nullable(),
         lastFiredAt: z.date().nullable(),
         firesToday: z.number(),
+        live: z.object({
+          signal: z.string(), aggregation: z.string().nullable(), windowMin: z.number().nullable(),
+          value: z.number().nullable(), op: z.enum(['>', '>=', '<', '<=', '==', '!=']).nullable(),
+          threshold: z.number().nullable(), matched: z.boolean().nullable(),
+        }).nullable(),
       })),
     }))
     .query(() => {
@@ -246,6 +251,7 @@ export const automationsRouter = router({
       const rows = db.select().from(automations).orderBy(desc(automations.priority), automations.id).all()
       const startOfDay = new Date()
       startOfDay.setHours(0, 0, 0, 0)
+      const live = getAutomationEngineIfRunning()?.getLiveReadings()
       const rules = rows.map((r) => {
         const [last] = db
           .select({ outcome: automationRuns.outcome, firedAt: automationRuns.firedAt })
@@ -254,12 +260,19 @@ export const automationsRouter = router({
           .orderBy(desc(automationRuns.firedAt))
           .limit(1)
           .all()
+        const [lastFire] = db
+          .select({ firedAt: automationRuns.firedAt })
+          .from(automationRuns)
+          .where(and(eq(automationRuns.automationId, r.id), inArray(automationRuns.outcome, ['fired', 'clamped'])))
+          .orderBy(desc(automationRuns.firedAt))
+          .limit(1)
+          .all()
         const today = db
           .select({ firedAt: automationRuns.firedAt })
           .from(automationRuns)
           .where(and(
             eq(automationRuns.automationId, r.id),
-            eq(automationRuns.outcome, 'fired'),
+            inArray(automationRuns.outcome, ['fired', 'clamped']),
             gte(automationRuns.firedAt, startOfDay),
           ))
           .all()
@@ -271,8 +284,9 @@ export const automationsRouter = router({
           side: r.side,
           cooldownMin: r.cooldownMin,
           lastOutcome: last?.outcome ?? null,
-          lastFiredAt: last?.firedAt ?? null,
+          lastFiredAt: lastFire?.firedAt ?? null,
           firesToday: today.length,
+          live: live?.get(r.id) ?? null,
         }
       })
       return { globalEnabled: settings?.on ?? true, rules }
