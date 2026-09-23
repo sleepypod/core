@@ -123,11 +123,23 @@ class DacHardwareClient {
       await this.setTemperature(side, temp)
     }
     else {
-      const command = side === 'left'
+      // Clear the firmware timer before setting the neutral level. Pod 5
+      // retains the previous duration when only the level is reset.
+      const durationCommand = side === 'left'
+        ? HardwareCommand.LEFT_TEMP_DURATION
+        : HardwareCommand.RIGHT_TEMP_DURATION
+      const durationResponse = await sendCommand(durationCommand, '0')
+      const durationParsed = parseSimpleResponse(durationResponse)
+
+      if (!durationParsed.success) {
+        throw new HardwareError(`Failed to power off: ${durationParsed.message}`)
+      }
+
+      const levelCommand = side === 'left'
         ? HardwareCommand.TEMP_LEVEL_LEFT
         : HardwareCommand.TEMP_LEVEL_RIGHT
 
-      const response = await sendCommand(command, '0')
+      const response = await sendCommand(levelCommand, '0')
       const parsed = parseSimpleResponse(response)
 
       if (!parsed.success) {

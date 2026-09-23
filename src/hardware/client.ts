@@ -302,10 +302,13 @@ export class HardwareClient {
    *
    * Power State Behavior:
    * - ON: Sets temperature (default 75°F) and activates heating/cooling
-   * - OFF: Sets temperature level to 0 (neutral/82.5°F), stops active heating/cooling
+   * - OFF: Clears the side's duration timer, then sets temperature level to 0
+   *   (neutral/82.5°F), stopping active heating/cooling
    *
    * Note: There is no true "off" state in the hardware. Setting level to 0
-   * achieves the same effect by stopping thermal regulation.
+   * achieves the same effect by stopping thermal regulation. The timer must
+   * be cleared first because Pod 5 firmware keeps the previous duration
+   * counting down when only the level is reset.
    *
    * @param side - Which side to control ('left' or 'right')
    * @param powered - true to power on, false to power off
@@ -327,11 +330,21 @@ export class HardwareClient {
       await this.setTemperature(side, temp)
     }
     else {
-      // Power off by setting level to 0 (neutral, no heating/cooling)
+      // Clear the firmware timer before setting the neutral level. Pod 5
+      // retains the previous duration when only the level is reset.
       const client = await this.ensureConnected()
-      const command
+      const durationCommand
+        = side === 'left' ? HardwareCommand.LEFT_TEMP_DURATION : HardwareCommand.RIGHT_TEMP_DURATION
+      const durationResponse = await client.executeCommand(durationCommand, '0')
+      const durationParsed = parseSimpleResponse(durationResponse)
+
+      if (!durationParsed.success) {
+        throw new HardwareError(`Failed to power off: ${durationParsed.message}`)
+      }
+
+      const levelCommand
         = side === 'left' ? HardwareCommand.TEMP_LEVEL_LEFT : HardwareCommand.TEMP_LEVEL_RIGHT
-      const response = await client.executeCommand(command, '0')
+      const response = await client.executeCommand(levelCommand, '0')
       const parsed = parseSimpleResponse(response)
 
       if (!parsed.success) {

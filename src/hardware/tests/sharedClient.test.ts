@@ -142,8 +142,19 @@ describe('sharedClient command boundaries', () => {
     await c.setPower('right', false)
 
     expect(sendCommandMock.mock.calls).toEqual([
+      ['9', '0'],
       ['11', '0'],
+      ['10', '0'],
       ['12', '0'],
     ])
+  })
+
+  it('does not set the neutral level when clearing the timer fails', async () => {
+    const c = await client()
+    sendCommandMock.mockResolvedValueOnce('ERROR timer')
+
+    await expect(c.setPower('left', false)).rejects.toThrow('Failed to power off')
+    expect(sendCommandMock).toHaveBeenCalledTimes(1)
+    expect(sendCommandMock).toHaveBeenCalledWith('9', '0')
   })
 })
