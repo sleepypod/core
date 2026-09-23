@@ -325,9 +325,10 @@ describe('HardwareClient', () => {
       await expect(ctx.hardwareClient!.setPower('right', true, 70)).resolves.not.toThrow()
     })
 
-    test('powers off by setting level to 0', async () => {
+    test('powers off by clearing duration and setting level to 0', async () => {
       await expect(ctx.hardwareClient!.setPower('right', false)).resolves.not.toThrow()
       expect(ctx.server.getReceivedCommands()).toEqual([
+        { command: HardwareCommand.RIGHT_TEMP_DURATION, argument: '0' },
         { command: HardwareCommand.TEMP_LEVEL_RIGHT, argument: '0' },
       ])
     })
@@ -344,6 +345,17 @@ describe('HardwareClient', () => {
       await expect(ctx.hardwareClient!.setPower('left', false)).rejects.toThrow(
         'Failed to power off'
       )
+    })
+
+    test('does not set the level when clearing duration fails', async () => {
+      ctx.server.setCommandResponse(HardwareCommand.LEFT_TEMP_DURATION, ERROR_RESPONSE)
+
+      await expect(ctx.hardwareClient!.setPower('left', false)).rejects.toThrow(
+        'Failed to power off'
+      )
+      expect(ctx.server.getReceivedCommands()).toEqual([
+        { command: HardwareCommand.LEFT_TEMP_DURATION, argument: '0' },
+      ])
     })
   })
 

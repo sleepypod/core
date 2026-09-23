@@ -444,17 +444,22 @@ describe('hardware/dacMonitor.instance', () => {
         expect(sendCommandMock).toHaveBeenNthCalledWith(1, '12', expect.any(String))
       })
 
-      it('setPower(false, left) sends TEMP_LEVEL_LEFT "0"', async () => {
+      it('setPower(false, left) clears duration before TEMP_LEVEL_LEFT', async () => {
         const mod = await freshModule()
         await mod.getSharedHardwareClient().setPower('left', false)
-        expect(sendCommandMock).toHaveBeenCalledWith('11', '0')
+        expect(sendCommandMock.mock.calls).toEqual([
+          ['9', '0'],
+          ['11', '0'],
+        ])
       })
 
-      it('setPower(false, right) throws when the firmware reports failure', async () => {
+      it('setPower(false, right) throws when clearing duration fails', async () => {
         const mod = await freshModule()
         parseSimpleResponseMock.mockReturnValue({ success: false, message: 'fail' })
         await expect(mod.getSharedHardwareClient().setPower('right', false))
           .rejects.toThrow(/power off/i)
+        expect(sendCommandMock).toHaveBeenCalledWith('10', '0')
+        expect(sendCommandMock).toHaveBeenCalledTimes(1)
       })
 
       it('isConnected delegates to isDacConnected', async () => {
