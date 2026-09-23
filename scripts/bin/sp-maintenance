@@ -92,6 +92,13 @@ case "${1:-}" in
   *) echo "Usage: sp-maintenance [--startup|--housekeeping]" >&2; exit 2 ;;
 esac
 
+# Repair journal membership before systemd launches the unprivileged app.
+# Missing helpers are tolerated when rolling back to an older source bundle.
+if [ -f "$INSTALL_DIR/scripts/lib/service-group-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/service-group-helpers"
+  repair_sleepypod_journal_access || echo "WARNING: journal access repair failed" >&2
+fi
+
 # 5. Self-heal /persistent/deviceinfo perms so next-server can unlink
 # stale dac.sock on startup. Older installs created the dir with mkdir's
 # default umask (root:root 0755), which denies write to the sleepypod user

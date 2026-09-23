@@ -1341,13 +1341,14 @@ mkdir -p /etc/iptables
 # without it the log viewer fails with "No journal files were opened due
 # to insufficient permissions" on pods where the journal isn't
 # world-readable.
+source "$INSTALL_DIR/scripts/lib/service-group-helpers"
 SUPP_GROUPS=()
-if getent group dac &>/dev/null; then
+if sleepypod_group_exists dac; then
   SUPP_GROUPS+=(dac)
 fi
-if getent group systemd-journal &>/dev/null; then
+if sleepypod_group_exists systemd-journal; then
   SUPP_GROUPS+=(systemd-journal)
-elif getent group adm &>/dev/null; then
+elif sleepypod_group_exists adm; then
   SUPP_GROUPS+=(adm)
 fi
 SUPP_GROUPS_LINE=""
