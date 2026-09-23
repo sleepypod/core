@@ -62,6 +62,7 @@ vi.mock('@/src/db', async () => {
 })
 
 import * as dbModule from '@/src/db'
+import { withSideLock } from '@/src/hardware/sideLock'
 import {
   startAutoOffWatcher,
   stopAutoOffWatcher,
@@ -215,6 +216,28 @@ describe('autoOffWatcher — live presence', () => {
     startAutoOffWatcher()
 
     await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('queues the power-off behind a held side lock', async () => {
+    setSideSettings('left', { autoOffMinutes: 1 })
+
+    let release: () => void = () => {}
+    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    // The timeout fired, but the write must wait for the lock holder.
+    expect(setPower).not.toHaveBeenCalled()
+
+    release()
+    await holder
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(setPower).toHaveBeenCalledWith('left', false)
   })
@@ -390,7 +413,7 @@ describe('autoOffWatcher — unreadable state falls back to standing down', () =
     setSideOn('left', Date.now() - 2 * 3600_000)
 
     startAutoOffWatcher()
-    await vi.runAllTicks()
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(setPower).toHaveBeenCalledWith('left', false)
   })
@@ -468,7 +491,7 @@ describe('autoOffWatcher — global wall-clock cap', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
 
     startAutoOffWatcher()
-    await vi.runAllTicks()
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(setPower).toHaveBeenCalledWith('left', false)
     expect(log).toHaveBeenCalledWith(
@@ -515,7 +538,7 @@ describe('autoOffWatcher — global wall-clock cap', () => {
     setSideOn('left', Date.now() - 7 * 86_400_000)
 
     startAutoOffWatcher()
-    await vi.runAllTicks()
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(setPower).toHaveBeenCalledWith('left', false)
   })
