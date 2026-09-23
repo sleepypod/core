@@ -98,7 +98,8 @@ async function freshModule(): Promise<InstanceModule> {
   return await import('../instance')
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await (await import('../instance')).shutdownAutomationEngine()
   ctorMock.mockClear()
   startMock.mockClear()
   stopMock.mockClear()
@@ -111,6 +112,17 @@ beforeEach(() => {
 })
 
 describe('automation/instance — init & caching', () => {
+  it('shares an engine and its pause controls across separate module loads', async () => {
+    const first = await freshModule()
+    const engine = await first.getAutomationEngine()
+    vi.resetModules()
+    const routeModule = await import('../instance')
+    expect(routeModule.getAutomationEngineIfRunning()).toBe(engine)
+    expect(await routeModule.getAutomationEngine()).toBe(engine)
+    expect(ctorMock).toHaveBeenCalledTimes(1)
+    await routeModule.shutdownAutomationEngine()
+    expect(first.getAutomationEngineIfRunning()).toBeNull()
+  })
   it('constructs the engine, starts it, and caches the instance', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     selectImpl = async () => [{ timezone: 'UTC', on: true }]

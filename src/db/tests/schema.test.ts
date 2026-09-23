@@ -325,6 +325,14 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'idx_run_once_side_status', unique: false, columns: ['side', 'status'] },
     ],
   },
+  remoteConfiguration: {
+    name: 'remote_configuration',
+    columns: [
+      { name: 'id', notNull: true, default: 'fn' },
+      { name: 'config', notNull: true, default: undefined },
+    ],
+    indexes: [],
+  },
   automations: {
     name: 'automations',
     columns: [

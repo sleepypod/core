@@ -30,6 +30,19 @@ function mk(paths: ReactNode, vb = '0 0 24 24') {
 }
 
 export const Icon = {
+  Copy: mk(
+    <>
+      <rect x="8" y="8" width="13" height="13" rx="2" />
+      <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+    </>
+  ),
+  Remote: mk(
+    <>
+      <rect x="7" y="2" width="10" height="20" rx="5" />
+      <path d="M7 9h10M7 15h10" />
+    </>
+  ),
+  Reset: mk(<><path d="M3 10a9 9 0 1 1 2 8M3 3v7h7" /></>),
   Zap: mk(<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="currentColor" stroke="none" />),
   Activity: mk(<polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />),
   Thermo: mk(<path d="M14 4a2 2 0 0 0-4 0v10.5a4 4 0 1 0 4 0z" />),

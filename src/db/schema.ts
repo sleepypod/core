@@ -325,3 +325,9 @@ export const automationRuns = sqliteTable('automation_runs', {
 
 // Indexes are now defined inline within each table definition above using index()
 // This ensures Drizzle Kit generates them in migrations
+
+// User overrides only; native firmware remains responsible for unbound inputs.
+export const remoteConfiguration = sqliteTable('remote_configuration', {
+  id: integer('id').primaryKey(),
+  config: text('config').notNull(),
+})

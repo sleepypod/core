@@ -1,12 +1,14 @@
 /**
- * Diagnostics / status panel — live Autopilot state and the audit trail. Global
- * kill-switch, a per-rule card (status, last fire, fires today, dry-run toggle),
+ * Autopilot live state and audit trail views. A per-rule card
+ * (status, live reading, last fire, fires today, dry-run toggle),
  * and the run log: every evaluation that mattered, which is the transparency
  * Eight Sleep's black box lacks.
  */
 'use client'
 
 import { Icon } from './icons'
+import { LiveReadout } from './LiveReadout'
+import type { LiveReading } from '@/src/automation/live'
 import { Badge, Card, SideBadge, StatusBadge, Toggle } from './primitives'
 import { formatSetpointF } from '@/src/lib/tempUtils'
 
@@ -19,6 +21,7 @@ export interface RuleStatus {
   cooldownMin: number | null
   lastOutcome: string | null
   lastFiredAt: Date | string | null
+  live?: LiveReading | null
   firesToday: number
 }
 
@@ -79,7 +82,7 @@ function actionText(detail: unknown): string {
   return a.kind ?? ''
 }
 
-function RuleStatusCard({ a, onDry }: { a: RuleStatus, onDry: (id: number, dryRun: boolean) => void }) {
+export function RuleStatusCard({ a, onDry }: { a: RuleStatus, onDry: (id: number, dryRun: boolean) => void }) {
   return (
     <Card className="p-4">
       <div className="flex items-start justify-between gap-3 mb-3">
@@ -97,6 +100,7 @@ function RuleStatusCard({ a, onDry }: { a: RuleStatus, onDry: (id: number, dryRu
       </div>
 
       <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/50 p-3">
+        <div className="mb-3"><LiveReadout live={a.live} /></div>
         <div className="flex items-baseline justify-between">
           <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-500">Last outcome</span>
           <span className="mono text-[13px] text-zinc-300">{a.lastOutcome ?? '—'}</span>
@@ -123,7 +127,7 @@ function RuleStatusCard({ a, onDry }: { a: RuleStatus, onDry: (id: number, dryRu
   )
 }
 
-function RunLog({ runs }: { runs: RunRow[] }) {
+export function RunLog({ runs }: { runs: RunRow[] }) {
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
@@ -134,7 +138,7 @@ function RunLog({ runs }: { runs: RunRow[] }) {
         </div>
         <Badge tone="zinc">audit trail</Badge>
       </div>
-      <div className="max-h-[420px] overflow-y-auto">
+      <div className="overflow-x-auto">
         <table className="w-full text-left">
           <thead className="sticky top-0 bg-zinc-950/90 backdrop-blur">
             <tr className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">
@@ -160,55 +164,5 @@ function RunLog({ runs }: { runs: RunRow[] }) {
         </table>
       </div>
     </Card>
-  )
-}
-
-export function StatusPanel({ globalEnabled, onKill, rules, runs, loading, onDry }: {
-  globalEnabled: boolean
-  onKill: (enabled: boolean) => void
-  rules: RuleStatus[]
-  runs: RunRow[]
-  loading: boolean
-  onDry: (id: number, dryRun: boolean) => void
-}) {
-  const killed = !globalEnabled
-  return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-4 border-b border-zinc-800 px-5 py-4">
-        <div>
-          <h1 className="text-[19px] font-semibold tracking-tight text-zinc-100">Diagnostics</h1>
-          <p className="text-[12px] text-zinc-500 mt-0.5">Live Autopilot state &amp; audit trail</p>
-        </div>
-        <div className={`flex items-center gap-3 rounded-xl border px-3.5 py-2 ${killed ? 'border-red-500/40 bg-red-500/10' : 'border-zinc-800 bg-zinc-900/50'}`}>
-          <Icon.Power size={16} className={killed ? 'text-red-400' : 'text-zinc-400'} />
-          <div className="leading-tight">
-            <div className="text-[12px] font-medium text-zinc-200">{killed ? 'Autopilot halted' : 'Autopilot running'}</div>
-            <div className="text-[10px] text-zinc-500">{killed ? 'all rules suspended' : 'global kill-switch'}</div>
-          </div>
-          <Toggle checked={!killed} onChange={() => onKill(killed)} tone={killed ? 'red' : 'accent'} />
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className="mx-auto max-w-6xl">
-          {killed && (
-            <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-[13px] text-red-300">
-              <Icon.AlertTri size={15} />
-              Kill-switch engaged — no rule will command hardware. Manual control only.
-            </div>
-          )}
-          {loading
-            ? <div className="py-16 text-center text-[13px] text-zinc-600">Loading status…</div>
-            : (
-                <>
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 mb-5">
-                    {rules.map(a => <RuleStatusCard key={a.id} a={a} onDry={onDry} />)}
-                  </div>
-                  <RunLog runs={runs} />
-                </>
-              )}
-        </div>
-      </div>
-    </div>
   )
 }

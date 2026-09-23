@@ -1,5 +1,5 @@
-import { AutopilotConsole } from '@/src/components/Autopilot/AutopilotConsole'
+import { DiagnosticsConsole } from '@/src/components/diagnostics/DiagnosticsConsole'
 
 export default function AutopilotPage() {
-  return <AutopilotConsole />
+  return <DiagnosticsConsole initialSection="autopilot" />
 }
