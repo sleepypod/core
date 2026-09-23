@@ -302,10 +302,13 @@ export class HardwareClient {
    *
    * Power State Behavior:
    * - ON: Sets temperature (default 75°F) and activates heating/cooling
-   * - OFF: Sets temperature level to 0 (neutral/82.5°F), stops active heating/cooling
+   * - OFF: Clears the side's duration timer, then sets temperature level to 0
+   *   (neutral/82.5°F), stopping active heating/cooling
    *
    * Note: There is no true "off" state in the hardware. Setting level to 0
-   * achieves the same effect by stopping thermal regulation.
+   * achieves the same effect by stopping thermal regulation. The timer must
+   * be cleared first because Pod 5 firmware keeps the previous duration
+   * counting down when only the level is reset.
    *
    * @param side - Which side to control ('left' or 'right')
    * @param powered - true to power on, false to power off
