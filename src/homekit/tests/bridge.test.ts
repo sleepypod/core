@@ -434,6 +434,21 @@ describe('homekit bridge', () => {
     expect(getStatus().running).toBe(false)
   })
 
+  it('retries cleanup for an advertiser without EventEmitter helpers', async () => {
+    const { startBridge, stopBridge, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    if (!m.bridgeInstance) throw new Error('bridge instance missing')
+    const advertiser = { destroy: vi.fn().mockResolvedValue(undefined) }
+    Object.assign(m.bridgeInstance, { _server: undefined, _advertiser: advertiser })
+    m.bridgeInstance.unpublish.mockRejectedValueOnce(new Error('cleanup interrupted'))
+
+    await expect(stopBridge()).rejects.toThrow('cleanup interrupted')
+    expect(getStatus().running).toBe(false)
+    await startBridge(fakeMonitor)
+    expect(advertiser.destroy).toHaveBeenCalledOnce()
+    expect(getStatus().running).toBe(true)
+  })
+
   it('stopBridge never destroys persisted accessory data', async () => {
     const { startBridge, stopBridge } = await import('../bridge')
     await startBridge(fakeMonitor)
