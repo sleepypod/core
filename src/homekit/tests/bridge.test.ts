@@ -417,6 +417,21 @@ describe('homekit bridge', () => {
     warnSpy.mockRestore()
   })
 
+  it('continues teardown when an accessory stopper throws a non-Error value', async () => {
+    const { startBridge, stopBridge, getStatus } = await import('../bridge')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    m.thermostatStop.mockImplementationOnce(() => {
+      throw 'stopper failure'
+    })
+    await startBridge(fakeMonitor)
+
+    await stopBridge()
+
+    expect(warn).toHaveBeenCalledWith('[homekit] stopper failed:', 'stopper failure')
+    expect(m.ambientStop).toHaveBeenCalledOnce()
+    expect(getStatus().running).toBe(false)
+  })
+
   it('stopBridge never destroys persisted accessory data', async () => {
     const { startBridge, stopBridge } = await import('../bridge')
     await startBridge(fakeMonitor)

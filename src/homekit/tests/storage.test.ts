@@ -87,6 +87,12 @@ describe('homekit storage', () => {
     expect(existsSync(join(dir, 'identity.json'))).toBe(true)
   })
 
+  it('treats an AccessoryInfo file without pairedClients as unpaired', () => {
+    const file = join(getStorageDir(), 'AccessoryInfo.AABBCCDDEEFF.json')
+    writeFileSync(file, JSON.stringify({ displayName: 'sleepypod' }))
+    expect(readPairedControllers('AA:BB:CC:DD:EE:FF')).toEqual([])
+  })
+
   it('readPairedControllers returns [] when AccessoryInfo missing', () => {
     expect(readPairedControllers('AA:BB:CC:11:22:33')).toEqual([])
   })

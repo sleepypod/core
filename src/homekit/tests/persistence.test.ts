@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
@@ -23,11 +23,13 @@ import { loadOrCreateIdentity, readPairedControllers } from '../storage'
 const g = globalThis as Record<string, unknown>
 const dir = mkdtempSync(join(tmpdir(), 'sleepypod-hap-persistence-'))
 const controller = 'synthetic-controller'
+let mountedBridge: Bridge
 
 function mountBridge(info: AccessoryInfo, cache: IdentifierCache): void {
   const bridge = new Bridge('Persistence test', uuid.generate(`sleepypod:${info.username}`))
   // Same real HAP models that publish() attaches, without opening LAN ports.
   Object.assign(bridge, { _accessoryInfo: info, _identifierCache: cache })
+  mountedBridge = bridge
   g.__sp_homekit_bridge__ = bridge
   g.__sp_homekit_stoppers__ = []
 }
@@ -57,8 +59,12 @@ beforeEach(() => {
   mountBridge(info, cache)
 })
 
-afterAll(async () => {
+afterEach(async () => {
+  vi.restoreAllMocks()
   await stopBridge()
+})
+
+afterAll(() => {
   for (const key of Object.keys(g)) {
     if (key.startsWith('__sp_homekit_')) Reflect.deleteProperty(g, key)
   }
@@ -85,6 +91,36 @@ describe('HomeKit persistence with real hap-nodejs', () => {
       mountBridge(info, cache)
     }
     await stopBridge()
+  })
+
+  it('preserves every file on failed shutdown and permits a non-destructive retry', async () => {
+    const before = snapshot()
+    vi.spyOn(mountedBridge, 'unpublish').mockRejectedValueOnce(new Error('advertiser unavailable'))
+
+    await expect(stopBridge()).rejects.toThrow('advertiser unavailable')
+    expect(getStatus().running).toBe(true)
+    expect(snapshot()).toEqual(before)
+    expect(getStatus().pairedControllers).toEqual([controller])
+
+    await stopBridge()
+    expect(getStatus().running).toBe(false)
+    expect(snapshot()).toEqual(before)
+  })
+
+  it('does not erase pairings or rotate identity when reset teardown fails', async () => {
+    const before = snapshot()
+    const username = getStatus().username
+    vi.spyOn(mountedBridge, 'unpublish').mockRejectedValueOnce(new Error('advertiser unavailable'))
+
+    await expect(unpairAll()).rejects.toThrow('advertiser unavailable')
+    expect(getStatus().running).toBe(true)
+    expect(getStatus().username).toBe(username)
+    expect(snapshot()).toEqual(before)
+
+    await unpairAll()
+    expect(getStatus().running).toBe(false)
+    expect(getStatus().username).not.toBe(username)
+    expect(readdirSync(dir)).toEqual(['identity.json'])
   })
 
   it('still clears old HAP state and rotates identity on explicit unpair', async () => {

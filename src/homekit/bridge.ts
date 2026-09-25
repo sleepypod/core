@@ -328,15 +328,8 @@ export async function unpairAll(): Promise<void> {
   // Homebridge rotates the MAC for the same reason (homebridge-config-ui-x
   // resetHomebridgeAccessory).
   const oldUsername = getIdentity()?.username ?? loadOrCreateIdentity().username
+  // A failed unpublish throws before any pairing data or identity changes.
   await stopBridge()
-  // stopBridge intentionally keeps the singleton live when unpublish() fails
-  // (port-safety on next enable). Rotating identity in that state would
-  // desync getStatus (new MAC) from the live HAP server (still old MAC).
-  // Abort instead — operator can retry once the underlying unpublish issue
-  // clears.
-  if (getBridge() !== null) {
-    throw new Error('homekit unpair aborted: bridge teardown incomplete (unpublish() failed)')
-  }
   clearPairings(oldUsername)
   const id = regenerateIdentity()
   setIdentity(id)
