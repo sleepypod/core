@@ -161,6 +161,21 @@ describe('homekit lifecycle', () => {
     expect(m.stopBridge).toHaveBeenCalledTimes(2)
   })
 
+  it('re-enables after partial teardown closes the server but rejects mDNS cleanup', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.stopBridge.mockImplementationOnce(async () => {
+      m.status.running = false
+      throw new Error('advertiser unavailable')
+    })
+
+    await expect(mod.disable()).rejects.toThrow('advertiser unavailable')
+    expect(mod.status().running).toBe(false)
+    await mod.enable()
+    expect(m.startBridge).toHaveBeenCalledTimes(2)
+    expect(mod.status().running).toBe(true)
+  })
+
   it('shutdownHomeKit is a thin wrapper for disable()', async () => {
     const mod = await import('../index')
     await mod.enable()

@@ -13,6 +13,7 @@
  */
 
 import { existsSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
 import {
   Accessory,
   Bridge,
@@ -59,6 +60,7 @@ const KEYS = {
   identity: '__sp_homekit_identity__',
   setupURI: '__sp_homekit_setupURI__',
   transitioning: '__sp_homekit_transitioning__',
+  retiredAdvertisers: '__sp_homekit_retiredAdvertisers__',
 } as const
 
 const getBridge = (): Bridge | null => (G[KEYS.bridge] as Bridge | null) ?? null
@@ -102,8 +104,28 @@ export interface BridgeStatus {
   pairedControllers: string[]
 }
 
+// Failed mDNS cleanup must not strand an already-closed HAP listener. Retain
+// only the advertiser for best-effort cleanup on later lifecycle transitions.
+type AdvertiserHandle = NonNullable<Bridge['_advertiser']>
+function retiredAdvertisers(): Set<AdvertiserHandle> {
+  return (G[KEYS.retiredAdvertisers] ??= new Set<AdvertiserHandle>()) as Set<AdvertiserHandle>
+}
+
+async function retryAdvertiserCleanup(): Promise<void> {
+  for (const advertiser of retiredAdvertisers()) {
+    try {
+      await advertiser.destroy()
+      retiredAdvertisers().delete(advertiser)
+    }
+    catch (e) {
+      console.warn('[homekit] retired advertiser cleanup failed:', e instanceof Error ? e.message : e)
+    }
+  }
+}
+
 export async function startBridge(monitor: DacMonitor): Promise<void> {
   if (getBridge()) return
+  await retryAdvertiserCleanup()
   initHapStorage()
 
   let identity = loadOrCreateIdentity()
@@ -276,6 +298,7 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
 }
 
 export async function stopBridge(): Promise<void> {
+  await retryAdvertiserCleanup()
   for (const stop of getStoppers()) {
     try {
       stop()
@@ -291,9 +314,28 @@ export async function stopBridge(): Promise<void> {
     // destroy() is a factory reset in hap-nodejs: it deletes AccessoryInfo,
     // IdentifierCache, and controller storage. Ordinary shutdown must only
     // unpublish so paired controllers and accessory IDs survive restarts.
-    // Keep the singleton (and propagate the error) if teardown fails, so a
-    // retry can finish without starting a second listener or rotating identity.
-    await b.unpublish()
+    try {
+      await b.unpublish()
+    }
+    catch (e) {
+      // hap-nodejs 1.2.0 clears _server before awaiting advertiser.destroy().
+      // If only mDNS failed, the HAP server is already stopped: release the
+      // singleton so enable can publish again, while preserving pairing data.
+      // A failure before server destruction keeps the live bridge in place.
+      if (!b._server) {
+        const advertiser = b._advertiser
+        if (advertiser) {
+          // A retired advertiser must not rename/save the old accessory after
+          // a later reset. All HAP advertisers inherit from EventEmitter.
+          if (advertiser instanceof EventEmitter) advertiser.removeAllListeners('updated-name')
+          retiredAdvertisers().add(advertiser)
+          b._advertiser = undefined
+        }
+        setBridge(null)
+        setSetupURI(null)
+      }
+      throw e
+    }
     setBridge(null)
     setSetupURI(null)
   }

@@ -30,6 +30,7 @@ const m = vi.hoisted(() => {
   }
   const fakeAccessory = (name: string) => ({
     name,
+    _server: {},
     addService: vi.fn(),
     getService: vi.fn().mockReturnValue(infoService),
     addBridgedAccessory: vi.fn(),
@@ -306,6 +307,7 @@ describe('homekit bridge', () => {
     m.BridgeCtor.mockImplementationOnce(function BridgeFail(this: unknown, name: string) {
       const inst = {
         name,
+        _server: {},
         addService: vi.fn(),
         getService: vi.fn().mockReturnValue({ setCharacteristic: vi.fn().mockReturnThis() }),
         addBridgedAccessory: vi.fn(),

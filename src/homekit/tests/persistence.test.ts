@@ -98,7 +98,7 @@ describe('HomeKit persistence with real hap-nodejs', () => {
     vi.spyOn(mountedBridge, 'unpublish').mockRejectedValueOnce(new Error('advertiser unavailable'))
 
     await expect(stopBridge()).rejects.toThrow('advertiser unavailable')
-    expect(getStatus().running).toBe(true)
+    expect(getStatus().running).toBe(false)
     expect(snapshot()).toEqual(before)
     expect(getStatus().pairedControllers).toEqual([controller])
 
@@ -113,7 +113,7 @@ describe('HomeKit persistence with real hap-nodejs', () => {
     vi.spyOn(mountedBridge, 'unpublish').mockRejectedValueOnce(new Error('advertiser unavailable'))
 
     await expect(unpairAll()).rejects.toThrow('advertiser unavailable')
-    expect(getStatus().running).toBe(true)
+    expect(getStatus().running).toBe(false)
     expect(getStatus().username).toBe(username)
     expect(snapshot()).toEqual(before)
 
