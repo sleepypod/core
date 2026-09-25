@@ -315,12 +315,13 @@ export function readPairedControllers(username: string): string[] {
  * with the same accessory identity but no controller pairings.
  *
  * File naming matches hap-nodejs: AccessoryInfo.<USERNAME>.json and
- * IdentifierCache.<USERNAME>.json with colons stripped, uppercase.
+ * IdentifierCache.<USERNAME>.json / ControllerStorage.<USERNAME>.json,
+ * with colons stripped, uppercase.
  */
 export function clearPairings(username: string): void {
   const dir = getStorageDir()
   const key = username.replace(/:/g, '').toUpperCase()
-  for (const name of [`AccessoryInfo.${key}.json`, `IdentifierCache.${key}.json`]) {
+  for (const name of [`AccessoryInfo.${key}.json`, `IdentifierCache.${key}.json`, `ControllerStorage.${key}.json`]) {
     rmSync(join(dir, name), { force: true })
   }
 }

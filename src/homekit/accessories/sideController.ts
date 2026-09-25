@@ -1,7 +1,7 @@
 /**
  * Per-side hardware-write coordinator for HomeKit accessories.
  *
- * The Thermostat and PowerSwitch surfaces both write to the same pod side.
+ * Thermostat power and temperature characteristics write to the same pod side.
  * iOS can dispatch parallel onSet callbacks (batched writes from scenes,
  * automations, or near-simultaneous user gestures), so any non-serialized
  * caller can race another and stomp the user's setpoint:

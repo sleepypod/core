@@ -2,7 +2,7 @@
  * HAP Bridge orchestrator.
  *
  * Builds a single Bridge accessory (one HomeKit device) that owns
- * Thermostat x2, PowerSwitch x2, OccupancySensor x2, prime Switch, snooze Switch x2.
+ * Thermostat x2, OccupancySensor x2, prime Switch, snooze Switch x2.
  *
  * State updates are driven by the existing DacMonitor event bus.
  * Pairing data is persisted under /persistent/sleepypod-data/homekit/.
@@ -33,7 +33,6 @@ import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import { buildAmbientSensor } from './accessories/ambientSensor'
 import { buildPumpHealthSensor } from './accessories/pumpHealthSensor'
 import { buildOccupancySensor } from './accessories/occupancySensor'
-import { buildPowerSwitch } from './accessories/powerSwitch'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
 import { buildSnoozeSwitch } from './accessories/snoozeSwitch'
 import { buildThermostatService } from './accessories/thermostat'
@@ -178,12 +177,6 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
     snoozeAcc.addService(snooze.service)
     accessory.addBridgedAccessory(snoozeAcc)
     localStoppers.push(snooze.stop)
-
-    const power = buildPowerSwitch(side, monitor)
-    const powerAcc = wrapAccessory(`Bed ${side} power`, `power-${side}`, identity.username)
-    powerAcc.addService(power.service)
-    accessory.addBridgedAccessory(powerAcc)
-    localStoppers.push(power.stop)
   }
 
   const prime = buildPrimeSwitch()
@@ -295,28 +288,14 @@ export async function stopBridge(): Promise<void> {
 
   const b = getBridge()
   if (b) {
-    // Split unpublish/destroy: if unpublish throws but destroy still runs to
-    // completion the bridge is safely torn down. Clearing the singleton when
-    // destroy did NOT complete masks a still-live bridge and causes
-    // port-conflict / restart confusion on the next enable().
-    try {
-      await b.unpublish()
-    }
-    catch (e) {
-      console.warn('[homekit] unpublish failed:', e instanceof Error ? e.message : e)
-    }
-    let destroyed = false
-    try {
-      await b.destroy()
-      destroyed = true
-    }
-    catch (e) {
-      console.warn('[homekit] destroy failed:', e instanceof Error ? e.message : e)
-    }
-    if (destroyed) {
-      setBridge(null)
-      setSetupURI(null)
-    }
+    // destroy() is a factory reset in hap-nodejs: it deletes AccessoryInfo,
+    // IdentifierCache, and controller storage. Ordinary shutdown must only
+    // unpublish so paired controllers and accessory IDs survive restarts.
+    // Keep the singleton (and propagate the error) if teardown fails, so a
+    // retry can finish without starting a second listener or rotating identity.
+    await b.unpublish()
+    setBridge(null)
+    setSetupURI(null)
   }
   else {
     setSetupURI(null)
@@ -350,13 +329,13 @@ export async function unpairAll(): Promise<void> {
   // resetHomebridgeAccessory).
   const oldUsername = getIdentity()?.username ?? loadOrCreateIdentity().username
   await stopBridge()
-  // stopBridge intentionally keeps the singleton live when destroy() fails
+  // stopBridge intentionally keeps the singleton live when unpublish() fails
   // (port-safety on next enable). Rotating identity in that state would
   // desync getStatus (new MAC) from the live HAP server (still old MAC).
-  // Abort instead — operator can retry once the underlying destroy issue
+  // Abort instead — operator can retry once the underlying unpublish issue
   // clears.
   if (getBridge() !== null) {
-    throw new Error('homekit unpair aborted: bridge teardown incomplete (destroy() failed)')
+    throw new Error('homekit unpair aborted: bridge teardown incomplete (unpublish() failed)')
   }
   clearPairings(oldUsername)
   const id = regenerateIdentity()

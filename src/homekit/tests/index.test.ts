@@ -150,6 +150,17 @@ describe('homekit lifecycle', () => {
     expect(m.stopBridge).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a failed shutdown retryable without starting another bridge', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.stopBridge.mockRejectedValueOnce(new Error('unpublish failed'))
+    await expect(mod.disable()).rejects.toThrow('unpublish failed')
+    await mod.enable()
+    expect(m.startBridge).toHaveBeenCalledTimes(1)
+    await mod.disable()
+    expect(m.stopBridge).toHaveBeenCalledTimes(2)
+  })
+
   it('shutdownHomeKit is a thin wrapper for disable()', async () => {
     const mod = await import('../index')
     await mod.enable()
