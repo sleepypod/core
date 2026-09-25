@@ -757,9 +757,13 @@ export class JobManager {
       const ts = Date.now()
       const target = join(triggerDir, `.calibrate-trigger.${ts}`)
       const tmp = `${target}.tmp`
+      // `source: 'scheduled'` makes the calibrator skip capacitance: the
+      // sleep-detector keeps a self-adjusting presence baseline, and a
+      // scheduled snapshot can capture a sleeper as the "empty" bed.
       const payload = JSON.stringify({
         side: 'all',
         sensor_type: 'all',
+        source: 'scheduled',
         ts: Math.floor(ts / 1000),
       })
       await writeFile(tmp, payload)

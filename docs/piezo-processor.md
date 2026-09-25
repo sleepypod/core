@@ -186,6 +186,10 @@ The thresholds `enter=400,000`, `exit=150,000`, and `acr=0.45` were derived from
 - **Occupied right side:** Median std ranged 300k-900k, autocorrelation quality 0.50-0.85 during normal sleep.
 - **The gap between 150k and 400k** provides a comfortable margin that accommodates deep sleep (low amplitude) without triggering on empty-bed coupling.
 
+### Single-sleeper mode
+
+When exactly one side is in away mode, both sides' vitals go through `SingleSleeperVitals`: each cycle's two candidates are paired and only the higher-quality one is written, under the home side; an away-side candidate whose partner doesn't arrive within `VITALS_INTERVAL_S` is written alone as the home side. A solo sleeper who rolls onto the empty side keeps one heart-rate series instead of spilling rows onto the away side. See `docs/sleep-detector.md` § Single-Sleeper Mode.
+
 ## 6. Heart Rate Extraction
 
 ### Bandpass: 0.8-8.5 Hz

@@ -28,6 +28,13 @@ _stubs["common.raw_follower"].RawFileFollower = None
 _stubs["common.nats_follower"].create_follower = None
 _stubs["common.dialect"].KNOWN_RECORD_TYPES = frozenset()
 _stubs["common.dialect"].warn_unknown_type_once = lambda *a, **kw: None
+# common.side_mode is stdlib-only: load the real module for the merge tests.
+import importlib.util  # noqa: E402
+from pathlib import Path  # noqa: E402
+_spec = importlib.util.spec_from_file_location(
+    "common.side_mode", Path(__file__).resolve().parent.parent / "common" / "side_mode.py")
+_stubs["common.side_mode"] = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_stubs["common.side_mode"])
 sys.modules.update(_stubs)
 
 from main import (  # noqa: E402
@@ -1293,3 +1300,180 @@ class TestFrzHealthPumpState:
         ps.update({"type": "frzHealth", "left": {"pumpRpm": "abc"}, "right": {"pumpRpm": None}})
         assert ps.is_side_pump_active("left") is False
         assert ps.is_side_pump_active("right") is False
+
+
+
+# ===================================================================
+# Single-sleeper vitals merge
+# ===================================================================
+
+
+class _Mode:
+    def __init__(self, home):
+        self.home = home
+
+    def home_side(self):
+        return self.home
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+class TestSingleSleeperVitals:
+    """A solo left sleeper who rolls onto the empty right side shows up on
+    the right piezo with the same heartbeat, and those rows used to be
+    filed under the right side. With the right side in away mode they
+    belong to the left sleeper's series."""
+
+    def _router(self, home="left"):
+        import main
+        conn = TestWriteVitalsResilience()._make_db()
+        clock = _Clock()
+        router = main.SingleSleeperVitals(main.DBHolder(conn), _Mode(home), clock=clock)
+        return router, conn, clock
+
+    @staticmethod
+    def _cand(side, hr, q, minute=0):
+        from datetime import datetime, timezone
+        import main
+        ts = datetime.fromtimestamp(1_777_000_000 + minute * 60, tz=timezone.utc)
+        return main.VitalsCandidate(side, ts, hr, 40.0, 15.0, q, None, hr)
+
+    @staticmethod
+    def _rows(conn):
+        return conn.execute(
+            "SELECT v.side, v.heart_rate, q.quality_score FROM vitals v "
+            "JOIN vitals_quality q ON q.vitals_id = v.id ORDER BY v.id").fetchall()
+
+    def test_pair_writes_best_quality_under_home(self):
+        router, conn, clock = self._router()
+        assert router.submit(self._cand("left", 63.0, 0.3)) is True
+        clock.t += 20
+        assert router.submit(self._cand("right", 62.0, 0.7)) is True
+        assert self._rows(conn) == [("left", 62.0, 0.7)]
+
+    def test_higher_quality_wins_and_tie_keeps_earlier(self):
+        router, conn, clock = self._router()
+        router.submit(self._cand("right", 62.0, 0.5))
+        router.submit(self._cand("left", 63.0, 0.5))
+        assert self._rows(conn) == [("left", 62.0, 0.5)]  # pending kept on tie
+        router.submit(self._cand("right", 60.0, 0.2))
+        router.submit(self._cand("left", 61.0, 0.9))
+        assert self._rows(conn)[-1] == ("left", 61.0, 0.9)
+
+    def test_away_side_alone_is_written_as_home(self):
+        # Fully rolled over: only the away side sees a heartbeat.
+        router, conn, clock = self._router()
+        router.submit(self._cand("right", 58.0, 0.6, minute=0))
+        clock.t += 60
+        router.submit(self._cand("right", 59.0, 0.6, minute=1))
+        assert self._rows(conn) == [("left", 58.0, 0.6)]
+        clock.t += 60
+        router.tick()
+        assert self._rows(conn) == [("left", 58.0, 0.6), ("left", 59.0, 0.6)]
+
+    def test_tick_waits_for_partner_window(self):
+        router, conn, clock = self._router()
+        router.submit(self._cand("left", 63.0, 0.4))
+        clock.t += 59
+        router.tick()
+        assert self._rows(conn) == []
+        clock.t += 1
+        router.tick()
+        assert self._rows(conn) == [("left", 63.0, 0.4)]
+
+    def test_right_home_mirrors(self):
+        router, conn, clock = self._router(home="right")
+        router.submit(self._cand("left", 70.0, 0.9))
+        router.submit(self._cand("right", 71.0, 0.1))
+        assert self._rows(conn) == [("right", 70.0, 0.9)]
+
+    def test_per_side_mode_writes_each_side(self):
+        router, conn, clock = self._router(home=None)
+        router.submit(self._cand("left", 63.0, 0.4))
+        router.submit(self._cand("right", 58.0, 0.6))
+        assert self._rows(conn) == [("left", 63.0, 0.4), ("right", 58.0, 0.6)]
+
+    def test_mode_switch_flushes_held_candidate_to_its_home(self):
+        router, conn, clock = self._router()
+        router.submit(self._cand("right", 58.0, 0.6))
+        router._mode.home = None
+        router.submit(self._cand("right", 59.0, 0.6))
+        assert self._rows(conn) == [("left", 58.0, 0.6), ("right", 59.0, 0.6)]
+
+    def test_flush_on_shutdown(self):
+        router, conn, clock = self._router()
+        router.submit(self._cand("left", 63.0, 0.4))
+        router.flush()
+        assert self._rows(conn) == [("left", 63.0, 0.4)]
+        router.flush()
+        assert len(self._rows(conn)) == 1
+
+    def test_side_processor_routes_through_sink(self):
+        import main
+        conn = TestWriteVitalsResilience()._make_db()
+        proc = main.SideProcessor("right", main.DBHolder(conn))
+        seen = []
+        proc.sink = lambda cand: seen.append(cand) or True
+        signal = make_bcg_signal(60, 70)
+        with patch("main.time.time", return_value=1_000_000.0):
+            proc._presence.update = lambda *a, **kw: True
+            proc.ingest(signal)
+        assert len(seen) == 1 and seen[0].side == "right"
+        assert self._rows(conn) == []
+
+
+class TestSingleSleeperVitalsRetry:
+    """A held (accepted) candidate must survive a failed write and be
+    retried, not dropped."""
+
+    def _flaky(self, monkeypatch, fails):
+        import main
+        real = main.write_vitals
+        state = {"fails": fails}
+
+        def flaky(*a, **kw):
+            if state["fails"] > 0:
+                state["fails"] -= 1
+                return False
+            return real(*a, **kw)
+        monkeypatch.setattr(main, "write_vitals", flaky)
+
+    def test_flush_failure_keeps_candidate_for_retry(self, monkeypatch):
+        t = TestSingleSleeperVitals()
+        router, conn, clock = t._router()
+        self._flaky(monkeypatch, fails=1)
+        router.submit(t._cand("right", 58.0, 0.6))
+        clock.t += 60
+        router.tick()                                   # write fails
+        assert t._rows(conn) == []
+        clock.t += 60
+        router.tick()                                   # retried
+        assert t._rows(conn) == [("left", 58.0, 0.6)]
+
+    def test_paired_write_failure_keeps_best_for_retry(self, monkeypatch):
+        t = TestSingleSleeperVitals()
+        router, conn, clock = t._router()
+        self._flaky(monkeypatch, fails=1)
+        router.submit(t._cand("left", 63.0, 0.3))
+        assert router.submit(t._cand("right", 62.0, 0.7)) is True   # accepted, held
+        assert t._rows(conn) == []
+        clock.t += 60
+        router.tick()
+        assert t._rows(conn) == [("left", 62.0, 0.7)]
+
+    def test_same_side_repeat_is_refused_while_older_is_unwritten(self, monkeypatch):
+        t = TestSingleSleeperVitals()
+        router, conn, clock = t._router()
+        self._flaky(monkeypatch, fails=1)
+        router.submit(t._cand("right", 58.0, 0.6, minute=0))
+        # Flushing the older held row fails: refuse the new one so the
+        # side keeps it and resubmits, instead of dropping the older row.
+        assert router.submit(t._cand("right", 59.0, 0.6, minute=1)) is False
+        assert router.submit(t._cand("right", 59.0, 0.6, minute=1)) is True
+        assert t._rows(conn) == [("left", 58.0, 0.6)]

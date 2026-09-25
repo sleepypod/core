@@ -13,6 +13,9 @@ sides, and recalibrating (quality 0.99+) made the trigger finer, not coarser.
 """
 from common.calibration import (
     CAPSENSE2_REF_NOMINAL,
+    CAPSENSE_PRESENCE_THRESHOLD,
+    capsense_deviation,
+    is_present_capsense_calibrated,
     is_present_capsense2_calibrated,
 )
 
@@ -99,3 +102,69 @@ class TestCapSense2FallbackPath:
             {"left": {"values": [1.0, 2.0, 3.0]}}, "left", PROFILE) is False
         assert is_present_capsense2_calibrated({"left": {}}, "left", PROFILE) is False
         assert is_present_capsense2_calibrated({}, "left", PROFILE) is False
+
+
+# Pod 3/4 capSense. Channel means are representative Pod 4 empty-bed levels.
+# Legacy profiles carried a z-score
+# `threshold: 6.0` with std floored at 5 — ~30 raw units of drift read as
+# occupied, holding sessions open for 13-16h after the sleeper got up.
+CAP_PROFILE = {
+    "format": "capSense",
+    "threshold": CAPSENSE_PRESENCE_THRESHOLD,
+    "channels": {
+        "out": {"mean": 1142.0, "std": 5.0},
+        "cen": {"mean": 1582.0, "std": 5.0},
+        "in": {"mean": 1673.0, "std": 5.0},
+    },
+}
+LEGACY_CAP_PROFILE = {"threshold": 6.0, "channels": CAP_PROFILE["channels"]}
+
+
+def _cap(out, cen, inner):
+    return {"left": {"out": out, "cen": cen, "in": inner, "status": "good"}}
+
+
+class TestCapSenseRawUnitPath:
+    def test_occupant_reads_present(self):
+        # Asleep on the left: ~+600/channel over the empty level.
+        assert is_present_capsense_calibrated(_cap(1742, 2182, 2273), "left", CAP_PROFILE) is True
+
+    def test_smallest_observed_occupant_reads_present(self):
+        # A weak but real occupancy (edge of the bed): +150/channel (+450).
+        assert is_present_capsense_calibrated(_cap(1292, 1732, 1823), "left", CAP_PROFILE) is True
+
+    def test_empty_bed_drift_reads_absent(self):
+        # The regression: slow empty-bed drift of a few tens of units per
+        # channel must not count as a person.
+        assert is_present_capsense_calibrated(_cap(1175, 1615, 1706), "left", CAP_PROFILE) is False
+
+    def test_drop_below_baseline_reads_absent(self):
+        # A body only adds capacitance. A baseline taken while someone was in
+        # bed leaves the empty bed far BELOW it — the old |z| check read that
+        # as occupied and stuck present all day.
+        assert is_present_capsense_calibrated(_cap(542, 982, 1073), "left", CAP_PROFILE) is False
+
+    def test_threshold_boundary_is_exclusive(self):
+        assert is_present_capsense_calibrated(_cap(1242, 1682, 1773), "left", CAP_PROFILE) is False  # 300
+        assert is_present_capsense_calibrated(_cap(1242, 1682, 1774), "left", CAP_PROFILE) is True   # 301
+
+    def test_legacy_z_score_threshold_is_not_read_as_raw_units(self):
+        # 6.0 was a z-score; as raw units it would flag +3/channel drift.
+        assert is_present_capsense_calibrated(_cap(1145, 1585, 1676), "left", LEGACY_CAP_PROFILE) is False
+        assert is_present_capsense_calibrated(_cap(1292, 1732, 1823), "left", LEGACY_CAP_PROFILE) is True
+
+    def test_profile_threshold_is_respected(self):
+        profile = dict(CAP_PROFILE, threshold=500.0)
+        assert is_present_capsense_calibrated(_cap(1292, 1732, 1823), "left", profile) is False
+        assert is_present_capsense_calibrated(_cap(1342, 1782, 1873), "left", profile) is True
+
+    def test_deviation_is_signed_sum(self):
+        assert capsense_deviation(_cap(1152, 1572, 1675), "left", CAP_PROFILE) == 2.0
+        assert capsense_deviation({"right": {}}, "left", CAP_PROFILE) is None
+
+    def test_missing_side_reads_absent(self):
+        assert is_present_capsense_calibrated({"right": {"out": 9999}}, "left", CAP_PROFILE) is False
+
+    def test_no_profile_falls_back_to_raw_sum(self):
+        assert is_present_capsense_calibrated(_cap(600, 500, 401), "left", None) is True
+        assert is_present_capsense_calibrated(_cap(500, 500, 500), "left", None) is False

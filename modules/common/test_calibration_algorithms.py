@@ -35,7 +35,7 @@ def test_cap_baseline_scans_final_window_and_floors_std():
     result = CapCalibrator().calibrate(records, "left")
     assert (result.window_start, result.window_end, result.samples_used) == (1001, 1300, 300)
     assert result.quality_score == 1
-    assert result.params == {"threshold": 6.0, "channels": {
+    assert result.params == {"threshold": 300.0, "format": "capSense", "channels": {
         "out": {"mean": 100, "std": 5}, "cen": {"mean": 200, "std": 5}, "in": {"mean": 300, "std": 5},
     }}
 

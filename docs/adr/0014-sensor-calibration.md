@@ -98,6 +98,16 @@ Use gRPC for structured communication between the Node.js core app and Python mo
 
 - Calibration is primarily scheduled 30 minutes before the pod's configured prime time. The bed should be empty after the pre-prime reboot (1h before). Users who disable priming fall back to the calibrator's internal 25-hour timer. The calibrator reads RAW data read-only, so running during sleep does not affect processing — the algorithm selects the quietest 5-minute window from the available data.
 
+## Amendment: capacitance baseline is self-adjusting
+
+Scheduled capacitance calibration is retired. The 25-hour fallback runs at a fixed UTC hour (06:00 by default), which is the middle of the night in many timezones; when priming is disabled it is the only scheduled calibration, and its "quietest window" can be a sleeper's still stretch. With the z-score presence check of the time, a baseline captured that way made the empty bed read occupied until the next recalibration or the 16 h cap. The "quietest window" heuristic cannot tell an empty bed from a motionless sleeper.
+
+- The **sleep-detector owns the presence baseline** (`AdaptiveBaseline` in `modules/sleep-detector/main.py`): it follows slow empty-bed drift, drops quickly whenever the reading falls below baseline (a body only adds capacitance), resets after a session capped at 16 h (a load that isn't a sleeper), and persists across restarts. It publishes the baseline to `calibration_profiles` every 15 min with `source: "adaptive"` so Node (`src/lib/occupancy.ts`, capSense2) and the UI read the same level.
+- The **calibrator runs capacitance only on a manual request**. Startup, retry, the daily fallback, and the pre-prime trigger (now tagged `source: "scheduled"`) calibrate piezo and temperature only. A manual capacitance calibration is adopted by the sleep-detector as a reseed.
+- **Presence is a raw-unit rise over baseline** for both capSense (default 300, summed over out/cen/in) and capSense2 (profile threshold, default 6.0), exiting at half the threshold.
+
+Piezo and temperature scheduled calibration are unchanged; the piezo "quietest window" has the same blind spot and may deserve the same treatment.
+
 ## Medical Threshold Rationale
 
 The following table documents every threshold change from free-sleep's values, with the medical or engineering rationale for each.

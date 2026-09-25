@@ -13,7 +13,7 @@ flowchart TD
     TypeFilter -->|"frzHealth/frzTherm"| PumpState["Update PumpGateCapSense\n(track pump RPM per side)"]
     TypeFilter -->|"capSense/capSense2"| Extract["Extract channel values\n(sentinel filter, ref compensation)"]
     TypeFilter -->|Other| Skip[Skip]
-    Extract --> Presence["Presence detection\n(calibrated z-score or fallback)"]
+    Extract --> Presence["Presence detection\n(raw-unit rise over baseline or fallback)"]
     Extract --> PumpGate{"Pump gate active?\n(RPM > 0 OR guard OR ref anomaly)"}
     PumpGate -->|Yes| ZeroDelta["delta = 0\n(suppress artifact)"]
     PumpGate -->|No| Delta["Movement delta\n(|current - previous| per channel)"]
@@ -127,11 +127,49 @@ The median filter output is clamped to [0, 1000] before writing to the database.
 
 ## Presence Detection
 
-Presence uses calibrated z-score thresholds from `calibration_profiles` when available, falling back to a fixed sum threshold (`PRESENCE_THRESHOLD = 1500` for capSense, `60.0` for capSense2). Calibration profiles are reloaded every 60 seconds.
+Presence is the summed **signed** raw-unit rise of the sensing channels over a per-side empty-bed baseline. A body only adds capacitance, so only a rise counts. Occupancy enters above the threshold (`CAPSENSE_PRESENCE_THRESHOLD = 300` summed over out/cen/in for capSense, the profile threshold, default `6.0`, for capSense2) and exits below `PRESENCE_EXIT_FRACTION` (half) of it, so a reading hovering at the threshold can't flap. capSense2 values are reference-compensated before comparison.
+
+The former z-score check (sum of `|val - mean| / std`, std floored at 5) flagged ~30 raw units of thermal drift in either direction as occupied, holding sessions open until the 16 h cap or the next recalibration.
+
+### Self-adjusting baseline
+
+The baseline is maintained by the detector itself (`AdaptiveBaseline`), not by scheduled calibration — a scheduled snapshot could not tell a motionless sleeper from an empty bed (ADR-0014 amendment).
+
+- **Drift:** while the bed is empty and the reading is within the exit threshold, the baseline follows it with time constant `BASELINE_UP_TAU_S` (30 min). A load between the exit and enter thresholds is never learned as empty.
+- **Contamination:** any reading below baseline pulls it down with `BASELINE_DOWN_TAU_S` (2 min), so a baseline captured with someone in bed recovers minutes after they get up.
+- **Stuck load:** after a session force-closed at `MAX_SESSION_S`, the current level becomes the new empty level.
+- **Seeding:** the saved state file, else the active calibration profile — including this detector's own published baseline when the state file is lost (legacy capSense profiles with a z-score threshold get the raw-unit default) — else the first frame. A calibration profile newer than any seen — a manual recalibration — is adopted as a reseed.
+- **Publishing:** every `BASELINE_PUBLISH_S` (15 min) the baseline is upserted to `calibration_profiles` with `source: "adaptive"`, in the calibrators' shape, so Node's occupancy check and the UI see the same level. Profiles marked adaptive never replace a live baseline; they only seed one when there is none.
+- Per-sample tracking time is capped at `BASELINE_MAX_STEP_S`, so a gap or restart can't move the baseline in one step. Frames with a missing side or capSense2 sentinels are ignored.
+
+Replaying recorded capSense data starting from a baseline captured with the sleeper in bed, the baseline recovers within minutes of them getting up, sessions end at the real wake time rather than at the next recalibration, and a bedding shift of a few tens of units per channel produces no session.
+
+## Single-Sleeper Mode
+
+Exactly one side in **away mode** (`side_settings.away_mode`) means one person sleeps in the bed, on the other ("home") side. A solo sleeper who rolls over or puts a leg on the empty side loads that side's sensors too — its capSense level rises and its piezo reports the same heartbeat — which used to open phantom sessions there. `common/side_mode.py` reads the flag read-only every 60 s; both sides away, or neither, is ordinary per-side operation.
+
+In this mode (`process_single_sleeper`):
+
+- The sleeper is in bed while **either** side reads occupied, so migrating across the bed stays one home-side session with no extra bed-exits; a session can also start on the away side.
+- Movement deltas from both sides are summed into the home side's epochs. The away side writes no sessions or movement.
+- The away side still tracks its own baseline. A session capped at `MAX_SESSION_S` resets both sides' baselines, since either side's load could be holding it open.
+- If away mode is switched on while the away side has an open session, that session is closed at its last presence.
+
+The piezo-processor applies the same mode to vitals (`SingleSleeperVitals`): each cycle's candidates from the two sides are paired, only the higher-quality one is written, under the home side, and an away-side reading with no partner (fully rolled over) is written as the home side.
+
+A night where the sleeper rolls onto the away side yields one home-side session with a single morning exit, instead of several short sessions on the away side.
 
 ## Sleep Sessions
 
 A session starts on the first present sample and ends after `ABSENCE_TIMEOUT_S` (120s) of consecutive absence. Sessions shorter than `MIN_SESSION_S` (300s = 5 min) are discarded as false positives.
+
+### Surviving restarts
+
+An open session lives in memory, so it is checkpointed to `sleep-detector-state.json` next to `biometrics.db` (override with `SLEEP_DETECTOR_STATE_PATH`) every `STATE_SAVE_INTERVAL_S` and immediately on session start, bed-exit, and close. The write is tmp + fsync + rename. On startup the detector:
+
+- **resumes** the session when the last saved sample is recent. If the occupant is still in bed the downtime counts as sleep; if absence is committed before any presence is seen, the exit is dated at the last pre-restart presence (they left while the detector was down).
+- **closes** it at the last presence when the gap exceeds `STATE_MAX_GAP_S` (30 min), since the downtime can't be attributed to sleep.
+- **skips replayed samples**: the RAW follower re-reads the current file from offset 0, so samples at or before the saved `last_ts` are ignored — for every side, with or without an open session. The presence hysteresis latch is restored too, so a reading between the exit and enter thresholds keeps its state.
 
 Session records include:
 - Entry/exit timestamps
@@ -182,8 +220,14 @@ This filters phantom-session flicker (1-3 scattered non-still epochs per bucket)
 | `ABSENCE_TIMEOUT_S` | 120 s | Bathroom trips < 2 min don't split sessions |
 | `MIN_SESSION_S` | 300 s | Shorter periods are likely false positives |
 | `MOVEMENT_INTERVAL_S` | 60 s | One movement score per minute; matches AASM epoch length |
-| `PRESENCE_THRESHOLD` | 1500 | Fallback for uncalibrated capSense (Pod 3) |
+| `CAPSENSE_PRESENCE_THRESHOLD` | 300 | Raw-unit rise (summed) that means occupied, capSense |
+| `PRESENCE_EXIT_FRACTION` | 0.5 | Exit threshold as a fraction of the enter threshold |
+| `BASELINE_UP_TAU_S` | 30 min | Empty-bed drift tracking time constant |
+| `BASELINE_DOWN_TAU_S` | 2 min | Recovery when the reading falls below baseline |
+| `BASELINE_PUBLISH_S` | 15 min | Baseline written back to calibration_profiles |
 | `CALIBRATION_RELOAD_S` | 60 s | Poll calibration_profiles for updates |
+| `STATE_SAVE_INTERVAL_S` | 60 s | Checkpoint an open session to the state file |
+| `STATE_MAX_GAP_S` | 30 min | Longer downtime closes a restored session instead of resuming it |
 | Movement scale (capSense2) | 10x | Pod 5 float channels, deltas ~0.05-5.0 |
 | Movement scale (capSense) | 0.5x | Pod 3 int ADC channels, deltas ~1-50 |
 | Movement cap | 1000 | Prevents outlier scores from sensor glitches |
@@ -224,4 +268,4 @@ This filters phantom-session flicker (1-3 scattered non-still epochs per bucket)
 
 8. **Median filter smoothing behavior.** The 3-epoch median filter is causal (trailing window), so it does not depend on future epochs. It may still soften abrupt transitions, which is acceptable since movement data is not used for real-time alerting.
 
-9. **Calibrator RAW path coupling (Pod 5).** The calibrator reads RAW files from `RAW_DATA_DIR`, which must match the tmpfs path created by `sleepypod-tmpfs-prep` (`/persistent/biometrics`, per ADR-0018). A mismatch causes every daily run to fail with "No capSense records available" and the detector silently falls back to `PRESENCE_THRESHOLD = 60.0`, producing severe presence chatter (`times_exited_bed` > 100 per session). The calibrator unit file declares `RequiresMountsFor=/persistent/biometrics` to surface this as a startup failure rather than a silent runtime degradation.
+9. **Calibrator RAW path coupling (Pod 5).** The calibrator reads RAW files from `RAW_DATA_DIR`, which must match the tmpfs path created by `sleepypod-tmpfs-prep` (`/persistent/biometrics`, per ADR-0018). A mismatch makes every reader see an empty directory, so the detector (and piezo/temperature calibration) receives no frames at all. The calibrator unit file declares `RequiresMountsFor=/persistent/biometrics` to surface this as a startup failure rather than a silent runtime degradation.
