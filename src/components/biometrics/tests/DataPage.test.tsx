@@ -1,8 +1,10 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DataPage from '@/app/[lang]/data/page'
+import { VitalsPanel } from '@/src/components/VitalsPanel/VitalsPanel'
 
 const state = vi.hoisted(() => ({
+  primarySide: 'left' as 'left' | 'right',
   singleSleeperSide: null as 'left' | 'right' | null,
   selectSide: vi.fn(),
   sleep: vi.fn(),
@@ -11,7 +13,7 @@ const state = vi.hoisted(() => ({
 }))
 vi.mock('@/src/providers/SideProvider', () => ({
   useSide: () => ({
-    selectedSide: 'both', primarySide: 'left', activeSides: ['left', 'right'],
+    selectedSide: 'both', primarySide: state.primarySide, activeSides: ['left', 'right'],
     singleSleeperSide: state.singleSleeperSide, selectSide: state.selectSide,
   }),
 }))
@@ -45,6 +47,7 @@ vi.mock('@/src/components/VitalsChart/VitalsChart', () => ({ VitalsChart: () => 
 beforeEach(() => {
   vi.clearAllMocks()
   state.singleSleeperSide = null
+  state.primarySide = 'left'
   // Disabled queries can still expose cached data. The away side must not leak
   // into summaries even when that cache contains an older session.
   state.sleep.mockImplementation(({ side, limit }) => ({
@@ -71,13 +74,31 @@ describe('DataPage single-sleeper routing', () => {
     expect(state.vitals).toHaveBeenCalledWith(expect.objectContaining({ side: away }), { enabled: false })
   })
 
-  it('keeps both summaries and comparison vitals when neither side is away', () => {
+  it.each(['left', 'right'] as const)('keeps both summaries with %s selected when neither side is away', (side) => {
+    state.primarySide = side
+    const other = side === 'left' ? 'right' : 'left'
     render(<DataPage />)
     expect(screen.getAllByTestId('sleep-summary').map(el => el.textContent)).toEqual(['left', 'right'])
     expect(state.sleep).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', limit: 7 }), { enabled: true })
     expect(state.sleep).toHaveBeenCalledWith(expect.objectContaining({ side: 'right', limit: 7 }), { enabled: true })
-    expect(state.vitals).toHaveBeenCalledWith(expect.objectContaining({ side: 'right' }), { enabled: true })
+    expect(state.vitals).toHaveBeenCalledWith(expect.objectContaining({ side: other }), { enabled: true })
     fireEvent.click(screen.getByRole('button', { name: /tap to switch/ }))
-    expect(state.selectSide).toHaveBeenCalledWith('right')
+    expect(state.selectSide).toHaveBeenCalledWith(other)
+  })
+})
+
+describe('VitalsPanel side navigation', () => {
+  it.each(['left', 'right'] as const)('switches from %s when shown outside the data page', (side) => {
+    state.primarySide = side
+    render(<VitalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: side === 'left' ? 'leftL' : 'rightR' }))
+    expect(state.selectSide).toHaveBeenCalledWith(side === 'left' ? 'right' : 'left')
+  })
+
+  it.each(['left', 'right'] as const)('hides side switching for the %s single sleeper', (home) => {
+    state.singleSleeperSide = home
+    render(<VitalsPanel />)
+    expect(screen.queryByRole('button', { name: /^(leftL|rightR)$/ })).toBeNull()
+    expect(state.baseline).toHaveBeenCalledWith({ side: home, days: 30 })
   })
 })
