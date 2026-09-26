@@ -251,7 +251,9 @@ graph LR
     subgraph RAWFS ["RAW frames — ADR 0018"]
         TMPFS["/persistent/biometrics/*.RAW<br/>tmpfs · 500 MB · hot"]
         ARCH["/persistent/biometrics-archive/<br/>eMMC · gzip cold"]
-        TMPFS -. "archiver timer 15m" .-> ARCH
+        PEND["/persistent/biometrics/.pending/<br/>tmpfs · hard links · pinned"]
+        TMPFS -. "linker timer 1m: hard-link" .-> PEND
+        PEND -. "archiver timer 15m: gzip" .-> ARCH
     end
 
     subgraph TRANSPORT ["Hardware Transport"]
@@ -321,7 +323,7 @@ graph LR
 
 ### Biometrics data flow
 
-The Pod hardware daemon (frankenfirmware) writes raw sensor data continuously as CBOR-encoded binary records into `/persistent/biometrics/*.RAW`, which is a **500 MB tmpfs** to keep ~1 GB/day of writes off the eMMC. An archiver timer gzips files older than 15 minutes into `/persistent/biometrics-archive/` on eMMC (cold storage with a pruner cap of 80% disk usage). See **[ADR 0018](docs/adr/0018-tmpfs-raw-frames.md)** for the firmware-integration rationale, including how `SEQNO.RAW` and state directories are symlinked through so the firmware sees its persistent state unchanged.
+The Pod hardware daemon (frankenfirmware) writes raw sensor data continuously as CBOR-encoded binary records into `/persistent/biometrics/*.RAW`, which is a **500 MB tmpfs** to keep ~1 GB/day of writes off the eMMC. The firmware rotates and then *deletes* each finished frame within a second, so a linker timer hard-links every live frame into `.pending/` on the same tmpfs (same inode, no copy) to outlive that unlink; an archiver timer then gzips the released frames into `/persistent/biometrics-archive/` on eMMC (cold storage with a pruner cap of 80% disk usage). See **[ADR 0018](docs/adr/0018-tmpfs-raw-frames.md)** for the firmware-integration rationale, including how `SEQNO.RAW` and state directories are symlinked through so the firmware sees its persistent state unchanged.
 
 Independent Python sidecar processes tail the hot tmpfs files, extract signals, and write results to `biometrics.db` (durable on eMMC). The core app never touches raw data — it reads clean rows via tRPC.
 

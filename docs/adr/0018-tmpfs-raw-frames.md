@@ -16,10 +16,15 @@ Mount a **500 MB tmpfs at `/persistent/biometrics`**, redirect frankenfirmware's
 
 ```
 frank → /persistent/biometrics/         (tmpfs, hot live RAW)
-           ↓ archiver every 15 min: gzip oldest, atomic rename
+           ↓ linker every 1 min: hard-link the live frame (same tmpfs, same inode)
+        /persistent/biometrics/.pending/<seqno>.RAW
+           ↓ archiver every 15 min: gzip released frames, atomic rename
         /persistent/biometrics-archive/<seqno>.RAW.gz
            ↓ pruner every 15 min: drop oldest until df < 80%
 ```
+
+The linker exists because the firmware deletes a finished frame before any
+periodic archiver can see it — see "Rotation deletes the finished frame" below.
 
 ### Firmware integration without a binary patch
 
@@ -43,11 +48,82 @@ tmpfs loses contents on reboot. The acceptable loss window is bounded by the arc
 
 Loss of 30 min of upstream waveform is a worthwhile trade for years of eMMC wear avoidance plus an indefinitely growable cold archive (capped by the pruner at 80% disk).
 
+## Rotation deletes the finished frame (the linker)
+
+The archiver as first designed selected `find "$TMPFS_DIR" -name '*.RAW' -mmin
+"+$KEEP_RECENT_MIN"` — everything except the frame the firmware might still be
+writing. On current firmware that set is *always* empty: every run logged
+`archiver: archived=0 removed=0 failed=0` and the cold archive stayed at
+whatever the one-time install migration put there.
+
+Measured on a Pod 4 (read-only observation of a live rotation):
+
+- The logger rotates every **~15 min**, ~10 MB per frame (≈1 GB/day).
+- At rotation the previous name is **already gone** from the directory — within
+  a second of the successor appearing. The firmware's file descriptors have both
+  moved to the new frame and tmpfs usage drops straight back to the size of the
+  fresh file, so the inode is fully released: there is no deleted-but-open
+  grace period to exploit either.
+- Journal order per rotation: `raw_logger.h startNewLogFile|[logger] writing to
+  <new>.RAW` → `[Upload] Ending Batch` → `[seq] save - checkpoint: <previous>`
+  → `[cloud] [Upload] File complete/File to upload -> <new>.RAW` → `[Upload]
+  Starting Batch`.
+- Nothing in this repo removes `*.RAW` on a schedule: the archiver only after a
+  successful gzip, the pruner only inside `biometrics-archive/`, and
+  `POST /raw/files/delete` only when asked. The firmware also ships
+  `/opt/eight/bin/defibrillator.sh`, whose `cleanup_raw_if_out_of_space` sweeps
+  `find /persistent/ -name '*.RAW'` when free space runs low — an emergency path,
+  not the per-rotation delete, and it spares the `*.RAW.gz` archive.
+
+So the deleter is frankenfirmware itself, at rotation, and the deletion window
+is effectively zero. No cadence and no mtime/newest-file threshold can win that
+race — the old design also happened to pair a 15-minute `KEEP_RECENT_MIN` with a
+15-minute rotation, which would have made it marginal even against a firmware
+that left the file behind.
+
+**Decision: pin frames with a second hard link while the firmware still holds
+them.** `sleepypod-biometrics-linker.timer` runs every minute and hard-links each
+live `*.RAW` into `/persistent/biometrics/.pending/`. While both names exist they
+are one inode — no extra tmpfs, no copy, and everything the firmware appends
+after the link still lands in the pinned frame. When the firmware unlinks its
+own name, ours keeps the inode alive; the archiver's second pass gzips a pinned
+frame to eMMC once the live name is gone, then drops the link.
+
+Properties that matter:
+
+- **eMMC wear unchanged in kind.** Linking is tmpfs-only. The gzip pass keeps its
+  15-minute batch cadence, so eMMC still sees one sequential compressed write
+  per frame instead of a continuous append stream. What does change is that the
+  archive now actually grows (≈gzip of ~1 GB/day), and the pruner's 80% cap turns
+  that into a disk-bounded window — days to a couple of weeks of replayable raw
+  frames depending on free space, which is the outcome this ADR wanted.
+- **Live writes are protected.** If the archiver cannot drain (eMMC full, gzip
+  failing), pinned links would otherwise accumulate in the 500 MB tmpfs and
+  starve the firmware. The linker caps the pending set at `PENDING_MAX_PCT`
+  (default 50%) of the tmpfs and drops oldest-first, mirroring the pruner:
+  recent nights are the ones worth replaying.
+- **Invisible to every other reader.** `.pending/` is a dot-prefixed
+  subdirectory; the sidecars (`modules/common/raw_follower.py`), `piezoStream`,
+  the calibrator, `/raw/files`, the export route, `sp-status` and the NATS
+  transition helper all scan one directory level for names ending in `.RAW`, so
+  none of them see pinned links — and the firmware's logger never looks there.
+- **Frames pinned but not yet gzipped are still volatile.** They live in tmpfs
+  (lost on reboot) and are named `*.RAW` under `/persistent`, so the firmware's
+  low-space sweep can drop them too. The gzipped archive is the durable copy.
+- **The NATS transition still cannot lose data.** `remove_biometrics_archiver_for_nats`
+  archives with `KEEP_RECENT_MIN=-1` and now refuses to unmount the tmpfs while
+  any unarchived pinned link remains, exactly as it already did for live frames.
+
 ## Alternatives considered
 
 - **Overlayfs** with tmpfs upper layer over `/persistent`: would route ALL writes (DBs, settings, etc.) through tmpfs upper, breaking durability of everything else. Per-file routing isn't supported by overlayfs.
 - **LD_PRELOAD shim**: intercept `open()` for `*.RAW` and redirect. Hacky, fragile under firmware updates.
 - **inotify-watch + post-write move**: doesn't reduce eMMC writes (writes happen first, then move).
+- **Shorter archiver cadence / "archive everything but the newest file"** instead of pinning: still loses a sub-second race, and would have to gzip a frame the firmware may still be appending to.
+- **systemd `.path` unit on `PathExistsGlob=/persistent/biometrics/*.RAW`**: path units fire on a false→true transition of the condition. The glob is *always* true (there is always a live frame), so a new frame arriving while the previous one exists never triggers it.
+- **inotify watcher daemon** (`IN_CREATE` on the tmpfs): the right shape, but the pods ship no `inotifywait`, and it means a long-running daemon where a one-minute timer over a 15-minute rotation already pins every frame minutes early.
+- **Tailing the journal for `startNewLogFile`**: parses firmware log text, and the rotation line is logged *after* the previous frame is already unlinked — too late.
+- **Copying rather than hard-linking**: needs 2× tmpfs for the frame plus a full read every rotation, and a copy that starts after the unlink still gets nothing.
 - **Archiver-only, no tmpfs**: hits the cold-archive and disk-cap goals but doesn't reduce eMMC wear. Considered as a fallback if the firmware patch had been unsafe; not needed once `SEQNO.RAW` write-through was verified.
 
 ## Rollback
@@ -72,4 +148,5 @@ The frank.sh-shim assumption holds on a shrinking slice of the fleet. As of 2026
 - Follow-up epic for new firmware: sleepypod-core-54 (NATS JetStream consumer)
 - GH issue: #493 (full design doc)
 - Live validation: Pod 5 fw ca35aafa on 2026-05-04 — see PR #499
+- Rotation-delete diagnosis (`archived=0` forever) + pinning linker: observed on Pod 4 firmware, 2026-09
 - Firmware-variant gating fix: PR #594

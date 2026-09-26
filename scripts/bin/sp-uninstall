@@ -81,12 +81,15 @@ if ls /opt/eight/bin/frank.sh.bak-pre-tmpfs-* >/dev/null 2>&1; then
 fi
 
 # Tear down biometrics-archiver: timers, prep service, mount unit.
-for u in sleepypod-biometrics-archiver.timer sleepypod-biometrics-pruner.timer \
-         sleepypod-tmpfs-prep.service persistent-biometrics.mount; do
+for u in sleepypod-biometrics-linker.timer sleepypod-biometrics-archiver.timer \
+         sleepypod-biometrics-pruner.timer sleepypod-tmpfs-prep.service \
+         persistent-biometrics.mount; do
   systemctl stop "$u" 2>/dev/null || true
   systemctl disable "$u" 2>/dev/null || true
 done
-rm -f /etc/systemd/system/sleepypod-biometrics-archiver.service \
+rm -f /etc/systemd/system/sleepypod-biometrics-linker.service \
+      /etc/systemd/system/sleepypod-biometrics-linker.timer \
+      /etc/systemd/system/sleepypod-biometrics-archiver.service \
       /etc/systemd/system/sleepypod-biometrics-archiver.timer \
       /etc/systemd/system/sleepypod-biometrics-pruner.service \
       /etc/systemd/system/sleepypod-biometrics-pruner.timer \
@@ -94,6 +97,7 @@ rm -f /etc/systemd/system/sleepypod-biometrics-archiver.service \
       /etc/systemd/system/persistent-biometrics.mount
 rm -rf /etc/systemd/system/frank.service.d
 rm -f /usr/local/bin/sleepypod-tmpfs-prep \
+      /usr/local/bin/sleepypod-biometrics-linker \
       /usr/local/bin/sleepypod-biometrics-archiver \
       /usr/local/bin/sleepypod-biometrics-pruner
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=Run sleepypod biometrics RAW linker every minute
+
+[Timer]
+# The firmware rotates every ~15 min, so a 1-minute cadence pins each frame
+# minutes before it can be unlinked — and a hard link made mid-write still
+# preserves the whole file, first byte included. Only a rotation faster than
+# the cadence could lose a frame.
+OnBootSec=30s
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=sleepypod-biometrics-linker.service
+
+[Install]
+WantedBy=timers.target

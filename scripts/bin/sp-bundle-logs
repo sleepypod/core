@@ -67,6 +67,7 @@ SERVICES=(
   sleepypod-environment-monitor.service
   sleepypod-cover-buttons.service
   sleepypod-calibrator.service
+  sleepypod-biometrics-linker.service
   sleepypod-biometrics-archiver.service
   sleepypod-biometrics-pruner.service
   sleepypod-tmpfs-prep.service

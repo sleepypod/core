@@ -1,0 +1,97 @@
+#!/bin/bash
+# Pin live RAW frames with a second hard link so they survive the firmware's
+# unlink, then let the archiver gzip them to eMMC at its own cadence.
+#
+# Why this exists: frankenfirmware rotates RAW every ~15 min and unlinks the
+# finished file within a second of opening its successor — verified on a Pod 4:
+# at rotation the previous name is already gone from the directory, the
+# firmware's fd for it is gone, and tmpfs usage drops straight back to the size
+# of the fresh file. So a finished file is never on disk long enough for a
+# periodic archiver to see it, whatever cadence or mtime threshold it uses
+# (`archiver: archived=0` on every run, forever).
+#
+# A second hard link into a subdirectory of the same tmpfs fixes that: while
+# the firmware is still appending, both names share one inode and the link
+# costs no extra memory; once the firmware unlinks its name, our link keeps the
+# inode (and the frames) alive for the archiver. The firmware never sees the
+# extra name — it lives in a dot-prefixed subdir that every `*.RAW` scan in
+# this repo (and the firmware's own logger) walks straight past.
+#
+# Runs every minute: link + stat on tmpfs only, no eMMC writes.
+set -euo pipefail
+
+TMPFS_DIR="${TMPFS_DIR:-/persistent/biometrics}"
+PENDING_DIR="${PENDING_DIR:-$TMPFS_DIR/.pending}"
+# Backstop for a stuck archiver (eMMC full, gzip failing): pinned frames must
+# never crowd out the firmware's live writes. Oldest links go first — the newest
+# frames are the ones worth replaying.
+PENDING_MAX_PCT="${PENDING_MAX_PCT:-50}"
+
+if ! mountpoint -q "$TMPFS_DIR"; then
+  echo "linker: $TMPFS_DIR is not a tmpfs mount — skipping" >&2
+  exit 0
+fi
+
+mkdir -p "$PENDING_DIR"
+
+linked=0
+dropped=0
+failed=0
+
+# Drop oldest pinned frames until the pending set fits under its share of the
+# tmpfs. Removing a link never touches the firmware's own name for that inode.
+enforce_pending_cap() {
+  local total_kb max_kb used_kb oldest entries
+  # `df -Pk` (POSIX, 1024-byte units on GNU *and* busybox) matches `du -ks`.
+  # Every `|| true` keeps a failed probe from aborting the run under pipefail:
+  # an unreadable capacity means "skip enforcement", never "drop everything".
+  total_kb=$(df -Pk "$TMPFS_DIR" 2>/dev/null | awk 'NR==2 {print $2}' || true)
+  max_kb=$(( ${total_kb:-0} * PENDING_MAX_PCT / 100 ))
+  [ "$max_kb" -gt 0 ] || return 0
+
+  while :; do
+    used_kb=$(du -ks "$PENDING_DIR" 2>/dev/null | awk '{print $1}' || true)
+    [ "${used_kb:-0}" -gt "$max_kb" ] || return 0
+    shopt -s nullglob
+    entries=( "$PENDING_DIR"/*.RAW )
+    shopt -u nullglob
+    [ "${#entries[@]}" -gt 0 ] || return 0
+    # `awk NR==1` rather than `head -1`: head closes the pipe early and, under
+    # pipefail, SIGPIPE would abort the script (see the pruner).
+    oldest=$(ls -1tr "${entries[@]}" | awk 'NR==1' || true)
+    [ -n "$oldest" ] || return 0
+    rm -f "$oldest"
+    dropped=$((dropped + 1))
+    echo "linker: dropped unarchived $(basename "$oldest") — pending over ${PENDING_MAX_PCT}% of tmpfs" >&2
+  done
+}
+
+while IFS= read -r -d '' src; do
+  base=$(basename "$src")
+  # SEQNO.RAW is firmware metadata, not sensor data (and once tmpfs-prep has
+  # staged it, a symlink onto eMMC that `-type f` already skips).
+  [ "$base" = "SEQNO.RAW" ] && continue
+  dst="$PENDING_DIR/$base"
+  [ -e "$dst" ] && continue
+  if ln "$src" "$dst" 2>/dev/null; then
+    linked=$((linked + 1))
+  else
+    failed=$((failed + 1))
+    echo "linker: failed to link $base" >&2
+  fi
+done < <(find "$TMPFS_DIR" -maxdepth 1 -type f -name '*.RAW' -print0)
+
+enforce_pending_cap
+
+shopt -s nullglob
+pending=( "$PENDING_DIR"/*.RAW )
+shopt -u nullglob
+
+# Quiet on the common no-op run (the live frame is already pinned) so a
+# once-a-minute timer stays readable in the journal.
+if [ "$linked" -gt 0 ] || [ "$dropped" -gt 0 ] || [ "$failed" -gt 0 ]; then
+  echo "linker: linked=$linked dropped=$dropped failed=$failed pending=${#pending[@]}"
+fi
+if [ "$failed" -gt 0 ]; then
+  exit 1
+fi
