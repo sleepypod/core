@@ -84,6 +84,7 @@ export class DeviceSignalReader implements SignalReader {
         snapshot[`${side}.currentTemperature`] = s.currentTemperature ?? undefined
         snapshot[`${side}.targetTemperature`] = s.targetTemperature ?? undefined
         snapshot[`${side}.currentLevel`] = s.currentLevel
+        snapshot[`${side}.targetLevel`] = s.targetLevel
       }
       if (status.waterLevel === 'low' || status.waterLevel === 'ok') {
         snapshot['water.low'] = status.waterLevel === 'low' ? 1 : 0

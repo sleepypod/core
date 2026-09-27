@@ -59,7 +59,7 @@ describe('DeviceSignalReader', () => {
 
   it('maps both sides plus a low water flag', () => {
     getFreshStatusMock = () => ({
-      leftSide: { currentTemperature: 75, targetTemperature: 80, currentLevel: 10 },
+      leftSide: { currentTemperature: 75, targetTemperature: 80, currentLevel: 10, targetLevel: -9 },
       rightSide: { currentTemperature: 70, targetTemperature: 68, currentLevel: -5 },
       waterLevel: 'low',
     })
@@ -67,6 +67,7 @@ describe('DeviceSignalReader', () => {
       'left.currentTemperature': 75,
       'left.targetTemperature': 80,
       'left.currentLevel': 10,
+      'left.targetLevel': -9,
       'right.currentTemperature': 70,
       'right.targetTemperature': 68,
       'right.currentLevel': -5,
@@ -76,7 +77,7 @@ describe('DeviceSignalReader', () => {
 
   it('omits temperature signals for an off side reporting null level-0 temps', () => {
     getFreshStatusMock = () => ({
-      leftSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0 },
+      leftSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0, targetLevel: 0 },
       rightSide: { currentTemperature: 70, targetTemperature: 68, currentLevel: -5 },
       waterLevel: 'ok',
     })
@@ -85,6 +86,7 @@ describe('DeviceSignalReader', () => {
     expect(snap['left.currentTemperature']).toBeUndefined()
     expect(snap['left.targetTemperature']).toBeUndefined()
     expect(snap['left.currentLevel']).toBe(0)
+    expect(snap['left.targetLevel']).toBe(0)
     // Powered side still maps its temps through.
     expect(snap['right.currentTemperature']).toBe(70)
     expect(snap['right.targetTemperature']).toBe(68)

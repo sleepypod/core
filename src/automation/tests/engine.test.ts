@@ -1,3 +1,4 @@
+import { fahrenheitToLevel, levelToFahrenheit } from '@/src/hardware/types'
 import { describe, expect, it, vi } from 'vitest'
 import { AutomationEngine, type AutomationEngineDeps } from '../engine'
 import type { SignalSnapshot } from '../signals'
@@ -1005,5 +1006,38 @@ describe('away mode', () => {
     await h.engine.tick()
     expect(h.hwCalls).toEqual([{ op: 'power', side: 'left', on: false, temp: undefined }])
     expect(h.runs[0].detail.actions?.filter(a => a.skipped === 'away-mode')).toHaveLength(2)
+  })
+})
+
+describe('hardware target quantization', () => {
+  it('does not exhaust the write budget when a fractional target reads back rounded', async () => {
+    let observedLevel = fahrenheitToLevel(80)
+    let writes = 0
+    const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(75.5) }] })], {
+      signals: { read: () => ({
+        'left.targetLevel': observedLevel,
+        'left.targetTemperature': levelToFahrenheit(observedLevel),
+      }) },
+      getHardware: () => ({
+        connect: async () => {},
+        setTemperature: async (_side, temp) => {
+          writes++
+          observedLevel = fahrenheitToLevel(temp)
+        },
+        setPower: async () => {},
+      }),
+    })
+    await h.engine.reload()
+    for (let minute = 0; minute < 14; minute++) {
+      await h.engine.tick()
+      h.advance(60_000)
+    }
+    expect(levelToFahrenheit(observedLevel)).toBe(76)
+    expect(writes).toBe(1)
+    expect(h.disabled).toEqual([])
+    // A schedule changing the wire target must still be corrected.
+    observedLevel = fahrenheitToLevel(80)
+    await h.engine.tick()
+    expect(writes).toBe(2)
   })
 })

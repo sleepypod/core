@@ -21,7 +21,7 @@
  * the DB, or timers. `src/automation/instance.ts` wires the production deps.
  */
 
-import { MAX_TEMP, MIN_TEMP, fahrenheitToLevel } from '@/src/hardware/types'
+import { MAX_TEMP, MIN_TEMP, TEMP_RANGE, fahrenheitToLevel } from '@/src/hardware/types'
 import { evaluateCondition } from './evaluator'
 import type { EvalContext } from './expressions'
 import { evaluateExpr } from './expressions'
@@ -444,9 +444,16 @@ export class AutomationEngine {
       // Read the target under the side lock: a scheduler/manual writer may
       // have changed it while this action was queued.
       if (action.kind === 'setTemperature' && temp !== undefined) {
-        const observed = this.deps.signals.read()[`${side}.targetTemperature`]
-        const last = observed ?? this.lastAsserted[side]
-        if (last !== undefined && Math.abs(temp - last) < AUTOMATION_ANTI_THRASH_F) {
+        const snapshot = this.deps.signals.read()
+        const observedLevel = snapshot[`${side}.targetLevel`]
+        const last = snapshot[`${side}.targetTemperature`] ?? this.lastAsserted[side]
+        // DAC temperatures are rounded to whole Fahrenheit degrees. Compare
+        // wire levels when available so fractional targets do not repeatedly
+        // reassert themselves and exhaust the hourly action budget.
+        const difference = observedLevel !== undefined && Number.isFinite(observedLevel)
+          ? Math.abs(fahrenheitToLevel(temp) - observedLevel) * TEMP_RANGE / 100
+          : last === undefined ? Infinity : Math.abs(temp - last)
+        if (difference < AUTOMATION_ANTI_THRASH_F) {
           blocked = 'anti-thrash'
           this.claimedSides.set(side, rule.id)
           return
