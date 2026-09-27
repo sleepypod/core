@@ -1041,3 +1041,32 @@ describe('hardware target quantization', () => {
     expect(writes).toBe(2)
   })
 })
+
+it.each([82.25, 82.75])('restarts an off side at near-neutral %s despite a cached matching target', async (temp) => {
+  let observedLevel = 0
+  let writes = 0
+  const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(temp) }] })], {
+    signals: { read: () => ({
+      'left.targetLevel': observedLevel,
+      'left.targetTemperature': observedLevel === 0 ? undefined : levelToFahrenheit(observedLevel),
+    }) },
+    getHardware: () => ({
+      connect: async () => {},
+      setTemperature: async (_side, requested) => {
+        writes++
+        observedLevel = fahrenheitToLevel(requested)
+      },
+      setPower: async () => {},
+    }),
+  })
+  await h.engine.reload()
+  await h.engine.tick()
+  expect(writes).toBe(1)
+  h.advance(60_000)
+  await h.engine.tick()
+  expect(writes).toBe(1) // powered, identical wire target remains suppressed
+  observedLevel = 0 // external power-off, leaving lastAsserted cached
+  h.advance(60_000)
+  await h.engine.tick()
+  expect(writes).toBe(2)
+})

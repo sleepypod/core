@@ -450,9 +450,14 @@ export class AutomationEngine {
         // DAC temperatures are rounded to whole Fahrenheit degrees. Compare
         // wire levels when available so fractional targets do not repeatedly
         // reassert themselves and exhaust the hourly action budget.
-        const difference = observedLevel !== undefined && Number.isFinite(observedLevel)
-          ? Math.abs(fahrenheitToLevel(temp) - observedLevel) * TEMP_RANGE / 100
-          : last === undefined ? Infinity : Math.abs(temp - last)
+        const requestedLevel = fahrenheitToLevel(temp)
+        // Off/neutral is a state transition, not a small setpoint adjustment.
+        // A stale lastAsserted must not suppress restarting at level ±1.
+        const difference = observedLevel === 0 && requestedLevel !== 0
+          ? Infinity
+          : observedLevel !== undefined && Number.isFinite(observedLevel)
+            ? Math.abs(requestedLevel - observedLevel) * TEMP_RANGE / 100
+            : last === undefined ? Infinity : Math.abs(temp - last)
         if (difference < AUTOMATION_ANTI_THRASH_F) {
           blocked = 'anti-thrash'
           this.claimedSides.set(side, rule.id)
