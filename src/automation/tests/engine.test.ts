@@ -1,3 +1,4 @@
+import { fahrenheitToLevel, levelToFahrenheit } from '@/src/hardware/types'
 import { describe, expect, it, vi } from 'vitest'
 import { AutomationEngine, type AutomationEngineDeps } from '../engine'
 import type { SignalSnapshot } from '../signals'
@@ -40,7 +41,7 @@ interface Harness {
   disabled: number[]
 }
 
-function makeHarness(rules: AutomationRule[]): Harness {
+function makeHarness(rules: AutomationRule[], overrides: Partial<AutomationEngineDeps> = {}): Harness {
   // Base clock is a realistic epoch so a `tick` trigger's first evaluation is
   // due (production `now` is always >> any everyMin window from epoch 0).
   let nowMs = 1_700_000_000_000
@@ -72,7 +73,9 @@ function makeHarness(rules: AutomationRule[]): Harness {
     recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
     disableRule: async (id) => { disabled.push(id) },
     hasActiveRunOnceSession: async () => runOnce,
+    isAwayMode: async () => false,
     notify: (id, message) => notifies.push({ id, message }),
+    ...overrides,
   }
 
   const engine = new AutomationEngine(deps)
@@ -559,6 +562,7 @@ describe('AutomationEngine — action error', () => {
       recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
       disableRule: async () => {},
       hasActiveRunOnceSession: async () => false,
+      isAwayMode: async () => false,
       notify: () => {},
     }
     const engine = new AutomationEngine(deps)
@@ -584,6 +588,7 @@ describe('AutomationEngine — action error', () => {
       disableRule: async () => {},
       // A non-Error rejection inside the per-rule try → caught and String()'d.
       hasActiveRunOnceSession: async () => { throw 'gate exploded' },
+      isAwayMode: async () => false,
       notify: () => {},
     }
     const engine = new AutomationEngine(deps)
@@ -657,6 +662,7 @@ describe('AutomationEngine — branch coverage corners', () => {
       recordRun: async () => {},
       disableRule: async () => {},
       hasActiveRunOnceSession: async () => false,
+      isAwayMode: async () => false,
       notify: () => {},
       log: msg => logs.push(msg),
     }
@@ -833,6 +839,7 @@ describe('AutomationEngine — pump stall guard gate', () => {
         recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
         disableRule: async () => {},
         hasActiveRunOnceSession: async () => false,
+        isAwayMode: async () => false,
         notify: () => {},
       }
       const engine = new AutomationEngine(deps)
@@ -868,4 +875,198 @@ describe('AutomationEngine — pump stall guard gate', () => {
       warn.mockRestore()
     }
   })
+})
+
+describe('AutomationEngine — write boundary safety', () => {
+  it.each(['halt', 'manual', 'run-once', 'stop'] as const)('rechecks %s after waiting for the side lock', async (change) => {
+    let release!: () => void
+    let queued!: () => void
+    const reached = new Promise<void>((resolve) => {
+      queued = resolve
+    })
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true }] })], {
+      withSideLock: async (_side, fn) => {
+        queued()
+        await waiting
+        return fn()
+      },
+    })
+    await h.engine.reload()
+    const ticking = h.engine.tick()
+    await reached
+    if (change === 'halt') h.engine.setGlobalEnabled(false)
+    if (change === 'manual') h.engine.registerManualOverride('left')
+    if (change === 'run-once') h.setRunOnce(true)
+    if (change === 'stop') h.engine.stop()
+    release()
+    await ticking
+    expect(h.hwCalls).toHaveLength(0)
+    expect(h.runs[0].outcome).toBe('skipped')
+  })
+
+  it('rechecks a kill switch changed during connect', async () => {
+    const write = vi.fn()
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true }] })], {
+      getHardware: () => ({ connect: async () => { h.engine.setGlobalEnabled(false) }, setTemperature: write, setPower: write }),
+    })
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('enforces the action cap inside a multi-action both-side rule', async () => {
+    const h = makeHarness([rule({ side: null, actions: Array.from({ length: 7 }, () => ({ kind: 'setPower', on: true })) })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(12)
+    expect(h.disabled).toEqual([1])
+    expect(h.runs[0].outcome).toBe('error')
+  })
+
+  it('reasserts its target when a scheduler changes the observed setpoint', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    h.setSignal('left.targetTemperature', 80)
+    h.advance(60_000)
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(2)
+  })
+
+  it('only writes the highest-priority eligible rule on a side', async () => {
+    const h = makeHarness([
+      rule({ id: 1, priority: 10, actions: [{ kind: 'setTemperature', temp: lit(72) }] }),
+      rule({ id: 2, priority: 0, actions: [{ kind: 'setTemperature', temp: lit(80) }] }),
+    ])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toEqual([{ op: 'temp', side: 'left', temp: 72, duration: undefined }])
+    expect(h.runs.find(r => r.id === 2)?.detail.actions?.[0].skipped).toBe('priority')
+  })
+})
+
+it('arbitrates equal priority by most recently updated rule', async () => {
+  const h = makeHarness([
+    rule({ id: 1, updatedAt: new Date('2026-09-02'), actions: [{ kind: 'setPower', on: false }] }),
+    rule({ id: 2, updatedAt: new Date('2026-09-01'), actions: [{ kind: 'setPower', on: true }] }),
+  ])
+  await h.engine.reload()
+  await h.engine.tick()
+  expect(h.hwCalls).toHaveLength(1)
+  expect(h.hwCalls[0].on).toBe(false)
+})
+
+it('does not let a dry-run rule claim a side over a live rule', async () => {
+  const h = makeHarness([
+    rule({ id: 1, priority: 10, dryRun: true, actions: [{ kind: 'setPower', on: false }] }),
+    rule({ id: 2, actions: [{ kind: 'setPower', on: true }] }),
+  ])
+  await h.engine.reload()
+  await h.engine.tick()
+  expect(h.hwCalls).toHaveLength(1)
+  expect(h.hwCalls[0].on).toBe(true)
+})
+
+it('cancels a queued action when its rule is reloaded', async () => {
+  let release!: () => void
+  let queued!: () => void
+  const reached = new Promise<void>((resolve) => {
+    queued = resolve
+  })
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const rules = [rule({ actions: [{ kind: 'setPower', on: true }] })]
+  const h = makeHarness(rules, { withSideLock: async (_side, fn) => {
+    queued()
+    await waiting
+    return fn()
+  } })
+  await h.engine.reload()
+  const ticking = h.engine.tick()
+  await reached
+  rules.splice(0)
+  await h.engine.reload()
+  release()
+  await ticking
+  expect(h.hwCalls).toHaveLength(0)
+})
+
+describe('away mode', () => {
+  it('blocks heating and power-on but still permits power-off', async () => {
+    const h = makeHarness([rule({ actions: [
+      { kind: 'setTemperature', temp: { kind: 'literal', value: 72 } },
+      { kind: 'setPower', on: true },
+      { kind: 'setPower', on: false },
+    ] })], { isAwayMode: async () => true })
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toEqual([{ op: 'power', side: 'left', on: false, temp: undefined }])
+    expect(h.runs[0].detail.actions?.filter(a => a.skipped === 'away-mode')).toHaveLength(2)
+  })
+})
+
+describe('hardware target quantization', () => {
+  it('does not exhaust the write budget when a fractional target reads back rounded', async () => {
+    let observedLevel = fahrenheitToLevel(80)
+    let writes = 0
+    const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(75.5) }] })], {
+      signals: { read: () => ({
+        'left.targetLevel': observedLevel,
+        'left.targetTemperature': levelToFahrenheit(observedLevel),
+      }) },
+      getHardware: () => ({
+        connect: async () => {},
+        setTemperature: async (_side, temp) => {
+          writes++
+          observedLevel = fahrenheitToLevel(temp)
+        },
+        setPower: async () => {},
+      }),
+    })
+    await h.engine.reload()
+    for (let minute = 0; minute < 14; minute++) {
+      await h.engine.tick()
+      h.advance(60_000)
+    }
+    expect(levelToFahrenheit(observedLevel)).toBe(76)
+    expect(writes).toBe(1)
+    expect(h.disabled).toEqual([])
+    // A schedule changing the wire target must still be corrected.
+    observedLevel = fahrenheitToLevel(80)
+    await h.engine.tick()
+    expect(writes).toBe(2)
+  })
+})
+
+it.each([82.25, 82.75])('restarts an off side at near-neutral %s despite a cached matching target', async (temp) => {
+  let observedLevel = 0
+  let writes = 0
+  const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(temp) }] })], {
+    signals: { read: () => ({
+      'left.targetLevel': observedLevel,
+      'left.targetTemperature': observedLevel === 0 ? undefined : levelToFahrenheit(observedLevel),
+    }) },
+    getHardware: () => ({
+      connect: async () => {},
+      setTemperature: async (_side, requested) => {
+        writes++
+        observedLevel = fahrenheitToLevel(requested)
+      },
+      setPower: async () => {},
+    }),
+  })
+  await h.engine.reload()
+  await h.engine.tick()
+  expect(writes).toBe(1)
+  h.advance(60_000)
+  await h.engine.tick()
+  expect(writes).toBe(1) // powered, identical wire target remains suppressed
+  observedLevel = 0 // external power-off, leaving lastAsserted cached
+  h.advance(60_000)
+  await h.engine.tick()
+  expect(writes).toBe(2)
 })

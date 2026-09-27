@@ -114,3 +114,24 @@ describe('evaluateExpr', () => {
     expect(evaluateExpr({ kind: 'window', fn: 'avg', signal: 'left.movement', lastMin: 10 }, c)).toBe(200)
   })
 })
+
+describe('invalid numeric data', () => {
+  it.each([NaN, Infinity, -Infinity])('treats %s literals and signals as unknown', (value) => {
+    expect(evaluateExpr({ kind: 'literal', value }, ctx({}))).toBeUndefined()
+    expect(evaluateExpr({ kind: 'signal', signal: 'bad' }, ctx({ bad: value }))).toBeUndefined()
+  })
+
+  it('propagates arithmetic overflow instead of commanding infinite/NaN temperatures', () => {
+    const overflow: Expr = { kind: 'binary', op: '*', left: { kind: 'literal', value: 1e308 }, right: { kind: 'literal', value: 1e308 } }
+    expect(evaluateExpr(overflow, ctx({}))).toBeUndefined()
+    expect(evaluateExpr({ kind: 'binary', op: '-', left: overflow, right: overflow }, ctx({}))).toBeUndefined()
+  })
+
+  it('requires both clamp bounds to be known and ordered', () => {
+    const expr: Expr = { kind: 'clamp', value: { kind: 'literal', value: 80 }, min: { kind: 'signal', signal: 'lo' }, max: { kind: 'signal', signal: 'hi' } }
+    expect(evaluateExpr(expr, ctx({ hi: 100 }))).toBeUndefined()
+    expect(evaluateExpr(expr, ctx({ lo: 60 }))).toBeUndefined()
+    expect(evaluateExpr(expr, ctx({ lo: 100, hi: 60 }))).toBeUndefined()
+    expect(evaluateExpr(expr, ctx({ lo: 60, hi: 100 }))).toBe(80)
+  })
+})

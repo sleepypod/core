@@ -13,7 +13,7 @@
 
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
-import { and, desc, eq, gte, isNotNull, lte } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull, lte } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { automationRuns, automations, deviceSettings } from '@/src/db/schema'
@@ -21,6 +21,7 @@ import { ambientLight, bedTemp, capSenseFrames, freezerTemp, movement, sleepReco
 import { centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
 import {
   automationActionSchema,
+  automationBacktestRuleSchema,
   automationConditionSchema,
   automationCreateSchema,
   automationTriggerSchema,
@@ -223,7 +224,8 @@ export const automationsRouter = router({
       return rows
     }),
 
-  /** Live status: each rule + its last outcome + fires-today, plus kill-switch. */
+  /** Live status: latest attempt, latest successful evaluation, and successes today.
+   * Success includes fired, clamped, and dry-run outcomes. */
   status: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/automations/status', protect: false, tags: ['Autopilot'] } })
     .input(z.object({}).strict())
@@ -242,10 +244,18 @@ export const automationsRouter = router({
       })),
     }))
     .query(() => {
-      const [settings] = db.select({ on: deviceSettings.autopilotEnabled }).from(deviceSettings).limit(1).all()
+      const [settings] = db.select({ on: deviceSettings.autopilotEnabled, timezone: deviceSettings.timezone }).from(deviceSettings).limit(1).all()
       const rows = db.select().from(automations).orderBy(desc(automations.priority), automations.id).all()
-      const startOfDay = new Date()
-      startOfDay.setHours(0, 0, 0, 0)
+      const now = new Date()
+      const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: settings?.timezone || 'America/Los_Angeles',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      })
+      const todayKey = dateFormatter.format(now)
+      // Bound the query, then compare local calendar dates. This also covers
+      // DST days without assuming that a local day is exactly 24 hours.
+      const recentStart = new Date(now.getTime() - 48 * 60 * 60_000)
+      const successful = inArray(automationRuns.outcome, ['fired', 'clamped', 'dry_run'])
       const rules = rows.map((r) => {
         const [last] = db
           .select({ outcome: automationRuns.outcome, firedAt: automationRuns.firedAt })
@@ -254,13 +264,21 @@ export const automationsRouter = router({
           .orderBy(desc(automationRuns.firedAt))
           .limit(1)
           .all()
+        const [lastSuccess] = db
+          .select({ firedAt: automationRuns.firedAt })
+          .from(automationRuns)
+          .where(and(eq(automationRuns.automationId, r.id), successful))
+          .orderBy(desc(automationRuns.firedAt))
+          .limit(1)
+          .all()
         const today = db
           .select({ firedAt: automationRuns.firedAt })
           .from(automationRuns)
           .where(and(
             eq(automationRuns.automationId, r.id),
-            eq(automationRuns.outcome, 'fired'),
-            gte(automationRuns.firedAt, startOfDay),
+            successful,
+            gte(automationRuns.firedAt, recentStart),
+            lte(automationRuns.firedAt, now),
           ))
           .all()
         return {
@@ -271,8 +289,8 @@ export const automationsRouter = router({
           side: r.side,
           cooldownMin: r.cooldownMin,
           lastOutcome: last?.outcome ?? null,
-          lastFiredAt: last?.firedAt ?? null,
-          firesToday: today.length,
+          lastFiredAt: lastSuccess?.firedAt ?? null,
+          firesToday: today.filter(run => dateFormatter.format(run.firedAt) === todayKey).length,
         }
       })
       return { globalEnabled: settings?.on ?? true, rules }
@@ -317,13 +335,7 @@ export const automationsRouter = router({
       side: sideSchema,
       sleepRecordId: idSchema.optional(),
       stepMin: z.number().int().min(1).max(30).default(2),
-      rule: z.object({
-        side: sideSchema.nullable().default(null),
-        cooldownMin: z.number().int().min(0).max(1440).nullable().default(null),
-        trigger: automationTriggerSchema,
-        conditions: automationConditionSchema,
-        actions: z.array(automationActionSchema).min(1).max(10),
-      }),
+      rule: automationBacktestRuleSchema,
     }).strict())
     .output(z.object({
       ok: z.boolean(),

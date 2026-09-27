@@ -49,22 +49,26 @@ export function AutopilotConsole() {
   const utils = trpc.useUtils()
   const [screen, setScreen] = useState<'list' | 'status'>('list')
   const [editing, setEditing] = useState<BuilderRule | null>(null)
+  const [mutationError, setMutationError] = useState<string | null>(null)
+  const showError = (error: { message: string }) => setMutationError(error.message)
 
   const listQ = trpc.automations.list.useQuery({})
   const statusQ = trpc.automations.status.useQuery({}, { refetchInterval: 15000 })
   const runsQ = trpc.automations.runs.useQuery({ limit: 100 }, { refetchInterval: 15000 })
 
   const invalidate = () => {
+    setMutationError(null)
     void utils.automations.list.invalidate()
     void utils.automations.status.invalidate()
     void utils.automations.runs.invalidate()
   }
 
-  const createM = trpc.automations.create.useMutation({ onSuccess: invalidate })
-  const updateM = trpc.automations.update.useMutation({ onSuccess: invalidate })
-  const setEnabledM = trpc.automations.setEnabled.useMutation({ onSuccess: invalidate })
-  const setDryRunM = trpc.automations.setDryRun.useMutation({ onSuccess: invalidate })
-  const killM = trpc.automations.setKillSwitch.useMutation({ onSuccess: () => {
+  const createM = trpc.automations.create.useMutation({ onSuccess: invalidate, onError: showError })
+  const updateM = trpc.automations.update.useMutation({ onSuccess: invalidate, onError: showError })
+  const setEnabledM = trpc.automations.setEnabled.useMutation({ onSuccess: invalidate, onError: showError })
+  const setDryRunM = trpc.automations.setDryRun.useMutation({ onSuccess: invalidate, onError: showError })
+  const killM = trpc.automations.setKillSwitch.useMutation({ onError: showError, onSuccess: () => {
+    setMutationError(null)
     void utils.automations.status.invalidate()
     void utils.automations.getKillSwitch.invalidate()
   } })
@@ -135,13 +139,20 @@ export function AutopilotConsole() {
 
         {/* content */}
         <main className="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden" style={{ minHeight: 'calc(100dvh - 7rem)' }}>
+          {(mutationError || listQ.error || statusQ.error || runsQ.error) && <div role="alert" className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{mutationError ?? listQ.error?.message ?? statusQ.error?.message ?? runsQ.error?.message}</div>}
           {screen === 'list' && (
             <AutomationsList
               items={items}
               loading={listQ.isLoading}
               onToggle={(id, enabled) => setEnabledM.mutate({ id, enabled })}
-              onOpen={a => setEditing(a.builder)}
-              onNew={() => setEditing(blankRule())}
+              onOpen={(a) => {
+                setMutationError(null)
+                setEditing(a.builder)
+              }}
+              onNew={() => {
+                setMutationError(null)
+                setEditing(blankRule())
+              }}
             />
           )}
           {screen === 'status' && (
@@ -157,7 +168,7 @@ export function AutopilotConsole() {
         </main>
       </div>
 
-      {editing && <RuleEditor automation={editing} onClose={() => setEditing(null)} onSave={save} saving={saving} />}
+      {editing && <RuleEditor automation={editing} onClose={() => setEditing(null)} onSave={save} saving={saving} error={mutationError} />}
     </div>
   )
 }

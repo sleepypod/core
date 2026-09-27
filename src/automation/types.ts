@@ -80,6 +80,8 @@ export interface AutomationRule {
   enabled: boolean
   side: Side | null
   priority: number
+  /** Latest edit breaks equal-priority ties; id is the fallback. */
+  updatedAt?: Date
   dryRun: boolean
   cooldownMin: number | null
   trigger: Trigger

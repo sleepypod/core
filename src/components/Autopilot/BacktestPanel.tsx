@@ -274,6 +274,7 @@ export function BacktestPanel({
   onNight: (id: number) => void
 }) {
   const r = result
+  const limitations = (result as (BacktestResult & { limitations?: string[] }) | null)?.limitations ?? []
   return (
     <div>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -291,6 +292,12 @@ export function BacktestPanel({
       {!loading && message && <div className="rounded-lg border border-zinc-800/70 bg-zinc-900/40 p-4 text-[12px] text-zinc-500">{message}</div>}
       {!loading && !message && r && (
         <>
+          {limitations.length > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-xs text-amber-200">
+              <p className="font-medium">Replay limitations</p>
+              <ul className="mt-1 list-disc space-y-1 pl-4">{limitations.map(limit => <li key={limit}>{limit}</li>)}</ul>
+            </div>
+          )}
           <Chart r={r} />
           <div className="mt-3 flex items-center gap-3 flex-wrap text-[11px] text-zinc-400">
             {r.avg && <Legend swatch={r.mode === 'edge' ? '#fafafa' : '#d4d4d8'}>{r.avg.label}</Legend>}
