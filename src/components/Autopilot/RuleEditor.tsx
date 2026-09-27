@@ -15,6 +15,8 @@ import {
   AGGS,
   type BuilderRule,
   buildSentence,
+  builderValidationError,
+  blankRule,
   DEFAULT_CLAMP,
   fmtClock,
   type IfSpec,
@@ -216,7 +218,7 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
               <NumberField value={Math.abs(a.delta ?? 2)} step={1} suffix="°F" onChange={v => setA({ delta: ((a.delta ?? -2) < 0 ? -1 : 1) * Math.max(0, v) })} width={84} />
               <label className="ml-1 inline-flex items-center gap-2 text-[12px] text-zinc-400">
                 <Toggle size="sm" checked={!!a.revert} onChange={v => setA({ revert: v ? 20 : undefined })} />
-                revert after
+                return to neutral (82.5°F) after
               </label>
               {a.revert ? <NumberField value={a.revert} step={5} suffix="minutes" onChange={v => setA({ revert: Math.max(1, v) })} width={78} /> : null}
             </div>
@@ -286,7 +288,7 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
 }
 
 // ---------- modal ----------
-export function RuleEditor({ automation, onClose, onSave, saving }: { automation: BuilderRule, onClose: () => void, onSave: (r: BuilderRule) => void, saving?: boolean }) {
+export function RuleEditor({ automation, onClose, onSave, saving, error }: { automation: BuilderRule, onClose: () => void, onSave: (r: BuilderRule) => void, saving?: boolean, error?: string | null }) {
   const [rule, setRule] = useState<BuilderRule>(() => clone(automation))
   const backtestSide = rule.side === 'right' ? 'right' : 'left'
 
@@ -318,14 +320,17 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
     return sigs.some(s => s.startsWith('{side}.cap.'))
   }, [rule])
 
-  const ast = useMemo(() => toAST(debounced), [debounced])
+  const validationError = builderValidationError(rule)
+  const previewError = builderValidationError(debounced)
+  // Hooks still receive a valid input while an incomplete expression is typed.
+  const ast = useMemo(() => toAST(builderValidationError(debounced) ? blankRule() : debounced), [debounced])
   const backtestQ = trpc.automations.backtest.useQuery(
     {
       side: backtestSide,
       sleepRecordId: nightId ?? undefined,
       rule: { side: ast.side, cooldownMin: ast.cooldownMin, trigger: ast.trigger, conditions: ast.conditions, actions: ast.actions },
     },
-    { enabled: nights.length > 0, placeholderData: prev => prev },
+    { enabled: nights.length > 0 && !previewError && !validationError, placeholderData: prev => prev },
   )
 
   return (
@@ -338,13 +343,20 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
           <div className="h-5 w-px bg-zinc-800" />
           <Segmented size="sm" value={rule.mode} options={[{ value: 'dryrun', label: 'Dry-run' }, { value: 'active', label: 'Active' }]} onChange={v => setRule({ ...rule, mode: v, enabled: true })} />
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="accent" size="md" onClick={() => onSave(rule)} disabled={saving}>
+          <Button variant="accent" size="md" onClick={() => { if (!validationError) onSave(rule) }} disabled={saving || !!validationError}>
             <Icon.Check size={15} />
             {saving ? 'Saving…' : 'Save'}
           </Button>
         </div>
       </div>
 
+      {rule.side === 'both' && <div className="border-b border-zinc-800 px-5 py-2 text-xs text-zinc-400">Both: left-side signals drive the same action on both sides. Create separate left and right rules for independent responses.</div>}
+      {error && (
+        <div role="alert" className="border-b border-red-500/30 bg-red-500/10 px-5 py-3 text-sm text-red-300">
+          {`Save failed: ${error}. Your edits are kept; retry when ready.`}
+        </div>
+      )}
+      {validationError && <div role="alert" className="border-b border-amber-500/30 bg-amber-500/10 px-5 py-3 text-sm text-amber-300">{validationError}</div>}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="w-[44%] min-w-[420px] overflow-y-auto border-r border-zinc-800 p-5">
           <div className="mx-auto flex max-w-xl flex-col gap-3">
@@ -364,13 +376,13 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
                 Dry-run: Autopilot logs what it would do but never touches hardware.
               </div>
             )}
-            <SentencePreview rule={rule} />
+            {!rule.readOnlyReason && <SentencePreview rule={rule} />}
             {usesCapSignal && <CapZoneViz side={rule.side} backtestSide={backtestSide} nightId={nightId} />}
             <Card className="p-4">
               <BacktestPanel
-                result={backtestQ.data?.ok ? (backtestQ.data.result as Parameters<typeof BacktestPanel>[0]['result']) : null}
-                loading={backtestQ.isLoading || backtestQ.isFetching}
-                message={nights.length === 0 ? (nightsQ.isLoading ? undefined : 'No recorded nights for this side yet — backtest needs sleep history.') : (backtestQ.data && !backtestQ.data.ok ? backtestQ.data.message : undefined)}
+                result={!validationError && !previewError && backtestQ.data?.ok ? (backtestQ.data.result as Parameters<typeof BacktestPanel>[0]['result']) : null}
+                loading={!validationError && !previewError && (backtestQ.isLoading || backtestQ.isFetching)}
+                message={validationError ?? previewError ?? backtestQ.error?.message ?? (nights.length === 0 ? (nightsQ.isLoading ? undefined : 'No recorded nights for this side yet — backtest needs sleep history.') : (backtestQ.data && !backtestQ.data.ok ? backtestQ.data.message : undefined))}
                 nights={nights}
                 nightId={nightId}
                 onNight={setPicked}

@@ -103,6 +103,8 @@ export type ThenSpec
 
 export interface BuilderRule {
   id?: number
+  /** Set when the friendly editor cannot preserve the stored rule. */
+  readOnlyReason?: string
   name: string
   enabled: boolean
   mode: 'dryrun' | 'active'
@@ -170,7 +172,7 @@ export function parseExpr(input: string, side: BuilderRule['side']): Expr | null
   const s = input.trim()
   if (!s) return null
   // bare number
-  if (/^-?\d+(\.\d+)?$/.test(s)) return { kind: 'literal', value: Number(s) }
+  if (/^-?\d+(\.\d+)?$/.test(s)) return Number.isFinite(Number(s)) ? { kind: 'literal', value: Number(s) } : null
   const m = /^([a-z]+)\s*(?:([+\-*/])\s*(-?\d+(?:\.\d+)?))?$/i.exec(s)
   if (!m) return null
   const varName = m[1].toLowerCase()
@@ -178,6 +180,7 @@ export function parseExpr(input: string, side: BuilderRule['side']): Expr | null
   if (!tmpl) return null
   const signal: Expr = { kind: 'signal', signal: resolveSignal(tmpl, side) }
   if (!m[2]) return signal
+  if (!Number.isFinite(Number(m[3])) || (m[2] === '/' && Number(m[3]) === 0)) return null
   return { kind: 'binary', op: m[2] as '+' | '-' | '*' | '/', left: signal, right: { kind: 'literal', value: Number(m[3]) } }
 }
 
@@ -261,7 +264,9 @@ function thenToAction(t: ThenSpec, side: BuilderRule['side']): Action {
   // setTemperature — amount (delta) or expression
   let temp: Expr
   if (t.expr != null) {
-    temp = parseExpr(t.expr, side) ?? { kind: 'literal', value: 72 }
+    const parsed = parseExpr(t.expr, side)
+    if (!parsed) throw new Error('Invalid temperature expression. Use a number, ambient, current, or target with one arithmetic operation; division by zero is not allowed.')
+    temp = parsed
   }
   else {
     const delta = t.delta ?? 0
@@ -283,7 +288,17 @@ function thenToAction(t: ThenSpec, side: BuilderRule['side']): Action {
   return action
 }
 
+export function builderValidationError(b: BuilderRule): string | null {
+  if (b.readOnlyReason) return b.readOnlyReason
+  if (b.then.some(a => a.action === 'setTemperature' && a.expr != null && !parseExpr(a.expr, b.side))) {
+    return 'Invalid temperature expression. Use a number, ambient, current, or target with one arithmetic operation; division by zero is not allowed.'
+  }
+  return null
+}
+
 export function toAST(b: BuilderRule): RuleAST {
+  const error = builderValidationError(b)
+  if (error) throw new Error(error)
   const conds: Condition[] = []
   const whenCond = whenToCondition(b.when, b.side)
   if (whenCond) conds.push(whenCond)
@@ -396,7 +411,7 @@ export function fromAST(row: RuleAST & { id?: number }): BuilderRule {
     return { action: 'setTemperature', expr: printExpr(t, side), clamp }
   })
 
-  return {
+  const builder: BuilderRule = {
     id: row.id,
     name: row.name,
     enabled: row.enabled,
@@ -408,6 +423,33 @@ export function fromAST(row: RuleAST & { id?: number }): BuilderRule {
     then: then.length ? then : [{ action: 'notify', message: '' }],
     cooldown: row.cooldownMin ?? 0,
   }
+  // Do not silently widen conditions, targets, or timing when loading API rules.
+  // Normalize object-key order only; preserve all arrays and semantic fields.
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize)
+    if (!value || typeof value !== 'object') return value
+    const obj = Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, v]) => [key, normalize(v)]))
+    if ((obj.kind === 'and' || obj.kind === 'or') && Array.isArray(obj.conditions)) {
+      obj.conditions.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+    }
+    return obj
+  }
+  const canonical = (value: unknown): string => JSON.stringify(normalize(value))
+  try {
+    const rebuilt = toAST(builder)
+    const original: RuleAST = {
+      name: row.name, enabled: row.enabled, side: row.side, priority: row.priority,
+      dryRun: row.dryRun, cooldownMin: row.cooldownMin,
+      trigger: row.trigger, conditions: row.conditions, actions: row.actions,
+    }
+    if (canonical(rebuilt) !== canonical(original)) {
+      builder.readOnlyReason = 'This rule uses settings the friendly editor cannot preserve. Edit it through the API; enabling and disabling it remain available in the list.'
+    }
+  }
+  catch {
+    builder.readOnlyReason = 'This rule uses an expression the friendly editor cannot preserve. Edit it through the API; enabling and disabling it remain available in the list.'
+  }
+  return builder
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +523,7 @@ export function buildSentence(r: BuilderRule): SentenceChunk[] {
         const delta = a.delta ?? 0
         out.push({ text: `${delta < 0 ? 'lower' : 'raise'} temperature by ` })
         out.push({ text: `${Math.abs(delta)}°F`, hot: true })
-        if (a.revert) out.push({ text: ` for ${a.revert} min then revert` })
+        if (a.revert) out.push({ text: ` for ${a.revert} min then return to neutral` })
       }
     }
     else if (a.action === 'notify') {

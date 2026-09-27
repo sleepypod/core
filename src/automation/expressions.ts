@@ -30,6 +30,11 @@ export function clamp(value: number, min: number | undefined, max: number | unde
 }
 
 export function evaluateExpr(expr: Expr, ctx: EvalContext): number | undefined {
+  const value = evaluateExprValue(expr, ctx)
+  return value !== undefined && Number.isFinite(value) ? value : undefined
+}
+
+function evaluateExprValue(expr: Expr, ctx: EvalContext): number | undefined {
   switch (expr.kind) {
     case 'literal':
       return expr.value
@@ -62,6 +67,7 @@ export function evaluateExpr(expr: Expr, ctx: EvalContext): number | undefined {
       if (v === undefined) return undefined
       const lo = evaluateExpr(expr.min, ctx)
       const hi = evaluateExpr(expr.max, ctx)
+      if (lo === undefined || hi === undefined || lo > hi) return undefined
       return clamp(v, lo, hi)
     }
   }

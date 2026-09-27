@@ -72,6 +72,7 @@ export interface AutomationEngineDeps {
   /** Persist enabled=false when the runaway guard trips. */
   disableRule: (automationId: number) => Promise<void>
   hasActiveRunOnceSession: (side: Side) => Promise<boolean>
+  isAwayMode: (side: Side) => Promise<boolean>
   /** Side-effect for notify actions (e.g. push/log); never touches hardware. */
   notify: (automationId: number, message: string) => void
   log?: (msg: string) => void
@@ -99,6 +100,8 @@ export class AutomationEngine {
   private windowSignals = new Set<string>()
   private timer: ReturnType<typeof setInterval> | null = null
   private ticking = false
+  private stopped = false
+  private claimedSides = new Map<Side, number>()
 
   // Global kill-switch. When false, ticks short-circuit and no rule is
   // evaluated or commanded — per-rule enabled/dryRun state is left untouched, so
@@ -117,6 +120,7 @@ export class AutomationEngine {
   /** Load rules and start the periodic tick. */
   async start(): Promise<void> {
     await this.reload()
+    this.stopped = false
     if (!this.timer) {
       this.timer = setInterval(() => {
         void this.tick()
@@ -152,6 +156,7 @@ export class AutomationEngine {
   }
 
   stop(): void {
+    this.stopped = true
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
@@ -192,10 +197,11 @@ export class AutomationEngine {
 
   /** One evaluation pass over all enabled rules. */
   async tick(): Promise<void> {
-    if (!this.globalEnabled) return // kill-switch engaged — evaluate nothing
+    if (!this.globalEnabled || this.stopped) return // kill-switch engaged — evaluate nothing
     if (this.ticking) return // never overlap ticks
     this.ticking = true
     try {
+      this.claimedSides.clear()
       const now = this.deps.now()
       const snapshot = this.deps.signals.read()
       const { nowMinutes, dayOfWeek, dateKey } = this.deps.clock()
@@ -216,7 +222,8 @@ export class AutomationEngine {
         dateKey,
       }
 
-      for (const rule of this.rules) {
+      for (const rule of [...this.rules].sort((a, b) => b.priority - a.priority || (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0) || b.id - a.id)) {
+        if (!this.globalEnabled || this.stopped) break
         if (!rule.enabled) continue
         try {
           await this.evaluateRule(rule, ctx, now)
@@ -340,6 +347,7 @@ export class AutomationEngine {
     now: number,
     rt: RuleRuntime,
   ): Promise<ActionResult[]> {
+    if (!this.globalEnabled || this.stopped) return [{ kind: action.kind, skipped: 'halted' }]
     if (action.kind === 'notify') {
       this.deps.notify(rule.id, action.message)
       return [{ kind: 'notify', notified: true }]
@@ -393,20 +401,23 @@ export class AutomationEngine {
     temp: number | undefined,
     clamped: boolean,
   ): Promise<ActionResult> {
+    const skip = (reason: string): ActionResult => ({ kind: action.kind, side, skipped: reason, raw, temp, clamped })
+    const syncGate = (): string | undefined => {
+      if (!this.globalEnabled || this.stopped) return 'halted'
+      if (!rule.enabled || !this.rules.includes(rule)) return 'rule-changed'
+      if (this.manualOverrideUntil[side] > this.deps.now()) return 'manual-override'
+      const owner = this.claimedSides.get(side)
+      if (owner !== undefined && owner !== rule.id) return 'priority'
+      return undefined
+    }
+    const initialGate = syncGate()
+    if (initialGate) return skip(initialGate)
     // Side gates apply only to real hardware writes.
     if (this.manualOverrideUntil[side] > now) {
       return { kind: action.kind, side, skipped: 'manual-override', raw, temp, clamped }
     }
     if (await this.deps.hasActiveRunOnceSession(side)) {
       return { kind: action.kind, side, skipped: 'run-once', raw, temp, clamped }
-    }
-
-    // Anti-thrash: skip a sub-threshold re-assertion of the same setpoint.
-    if (action.kind === 'setTemperature' && temp !== undefined) {
-      const last = this.lastAsserted[side]
-      if (last !== undefined && Math.abs(temp - last) < AUTOMATION_ANTI_THRASH_F) {
-        return { kind: action.kind, side, antiThrash: true, raw, temp, clamped }
-      }
     }
 
     // Dry-run: log the would-be command but never touch hardware.
@@ -418,36 +429,71 @@ export class AutomationEngine {
     // check runs inside the lock so a trip while this write is queued still
     // blocks it; power-off is the safe direction and is never blocked.
     const energizing = action.kind === 'setTemperature' || action.on
-    let stallBlocked = false
+    let blocked: string | undefined
     await this.deps.withSideLock(side, async () => {
-      if (energizing && this.deps.pumpStallShouldBlock(side)) {
-        stallBlocked = true
-        return
+      const gate = async (): Promise<string | undefined> => {
+        if (await this.deps.hasActiveRunOnceSession(side)) return 'run-once'
+        if (energizing && await this.deps.isAwayMode(side)) return 'away-mode'
+        const reason = syncGate()
+        if (reason) return reason
+        if (energizing && this.deps.pumpStallShouldBlock(side)) return 'pump-stall'
+        return undefined
+      }
+      blocked = await gate()
+      if (blocked) return
+      // Read the target under the side lock: a scheduler/manual writer may
+      // have changed it while this action was queued.
+      if (action.kind === 'setTemperature' && temp !== undefined) {
+        const observed = this.deps.signals.read()[`${side}.targetTemperature`]
+        const last = observed ?? this.lastAsserted[side]
+        if (last !== undefined && Math.abs(temp - last) < AUTOMATION_ANTI_THRASH_F) {
+          blocked = 'anti-thrash'
+          this.claimedSides.set(side, rule.id)
+          return
+        }
       }
       const hw = this.deps.getHardware()
       await hw.connect()
+      blocked = await gate()
+      if (blocked) return
+      blocked = syncGate()
+      if (blocked) return
+      rt.actionTimes = rt.actionTimes.filter(ts => this.deps.now() - ts < 3_600_000)
+      if (rt.actionTimes.length >= AUTOMATION_MAX_ACTIONS_PER_HOUR) {
+        rule.enabled = false
+        blocked = 'runaway-disabled'
+        await this.deps.disableRule(rule.id)
+        return
+      }
       if (action.kind === 'setTemperature') {
         if (temp === undefined) return // unreachable: setTemperature always resolves a temp
         await hw.setTemperature(side, temp, action.durationSec)
+        rt.actionTimes.push(this.deps.now())
+        this.claimedSides.set(side, rule.id)
         this.deps.markMutated(side)
         this.deps.broadcast(side, { targetTemperature: temp, targetLevel: fahrenheitToLevel(temp) })
         this.lastAsserted[side] = temp
       }
       else {
         await hw.setPower(side, action.on, temp)
+        rt.actionTimes.push(this.deps.now())
+        this.claimedSides.set(side, rule.id)
         this.deps.markMutated(side)
         this.deps.broadcast(side, action.on
           ? { targetTemperature: temp ?? 75, targetLevel: fahrenheitToLevel(temp ?? 75) }
           : { targetLevel: 0 })
-        if (action.on && temp !== undefined) this.lastAsserted[side] = temp
+        if (action.on) this.lastAsserted[side] = temp ?? 75
         else if (!action.on) this.lastAsserted[side] = undefined
       }
     })
-    if (stallBlocked) {
-      console.warn(`[automation] skipped ${action.kind}: pump stall guard blocks ${side}`)
-      return { kind: action.kind, side, skipped: 'pump-stall', raw, temp, clamped }
+    if (blocked) {
+      if (blocked === 'anti-thrash') return { kind: action.kind, side, antiThrash: true, raw, temp, clamped }
+      if (blocked === 'pump-stall') console.warn(`[automation] skipped ${action.kind}: pump stall guard blocks ${side}`)
+      const result = skip(blocked)
+      if (blocked === 'runaway-disabled') result.error = blocked
+      return result
     }
-    rt.actionTimes.push(now)
+    this.claimedSides.set(side, rule.id)
     return { kind: action.kind, side, sent: true, raw, temp, clamped, on: action.kind === 'setPower' ? action.on : undefined }
   }
 }

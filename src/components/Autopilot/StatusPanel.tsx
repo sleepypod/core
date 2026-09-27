@@ -106,16 +106,16 @@ function RuleStatusCard({ a, onDry }: { a: RuleStatus, onDry: (id: number, dryRu
 
       <div className="mt-3 grid grid-cols-2 gap-3 text-[12px]">
         <div>
-          <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Last fired</div>
+          <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Last success</div>
           <div className="mono text-zinc-300">{ago(a.lastFiredAt)}</div>
         </div>
         <div>
-          <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Today</div>
+          <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Today (incl. dry-run)</div>
           <div className="mono text-zinc-300">
             {a.firesToday}
             {' '}
-            fire
-            {a.firesToday === 1 ? '' : 's'}
+            success
+            {a.firesToday === 1 ? '' : 'es'}
           </div>
         </div>
       </div>

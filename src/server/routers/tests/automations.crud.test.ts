@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SQL } from 'drizzle-orm'
+import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core'
 import { bedTemp, freezerTemp } from '@/src/db/biometrics-schema'
 
 function queuedChainState() {
@@ -131,6 +133,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 describe('automations CRUD', () => {
@@ -348,12 +351,15 @@ describe('automations kill switch, runs, and status', () => {
   })
 
   it('builds live status with last outcomes, null fallbacks, and today counts', async () => {
+    vi.useFakeTimers().setSystemTime(new Date('2026-07-20T02:00:00Z'))
     const second = automationRow({ id: 8, name: 'Second', side: null, cooldownMin: null })
     const firedAt = new Date('2026-07-20T00:30:00Z')
     states.primary.queue.push([{ on: false }])
     states.primary.queue.push([automationRow(), second])
-    states.primary.queue.push([{ outcome: 'clamped', firedAt }])
+    states.primary.queue.push([{ outcome: 'skipped', firedAt: new Date('2026-07-20T01:00:00Z') }])
+    states.primary.queue.push([{ firedAt }])
     states.primary.queue.push([{ firedAt }, { firedAt }])
+    states.primary.queue.push([])
     states.primary.queue.push([])
     states.primary.queue.push([])
 
@@ -367,7 +373,7 @@ describe('automations kill switch, runs, and status', () => {
           dryRun: false,
           side: 'left',
           cooldownMin: 30,
-          lastOutcome: 'clamped',
+          lastOutcome: 'skipped',
           lastFiredAt: firedAt,
           firesToday: 2,
         },
@@ -385,6 +391,28 @@ describe('automations kill switch, runs, and status', () => {
       ],
     })
     expect(selectionWith(primaryDb, ['firedAt'], true)).toEqual({ firedAt: expect.anything() })
+  })
+
+  it.each([
+    ['Asia/Tokyo', '2026-07-20T15:01:00Z', '2026-07-20T15:00:00Z', '2026-07-20T14:59:59Z'],
+    ['America/Los_Angeles', '2026-11-02T07:59:00Z', '2026-11-01T07:00:00Z', '2026-11-01T06:59:59Z'],
+  ])('counts successful evaluations by device date in %s', async (timezone, now, midnight, previousDay) => {
+    vi.useFakeTimers().setSystemTime(new Date(now))
+    const firedAt = new Date(midnight)
+    states.primary.queue.push([{ on: true, timezone }], [automationRow()])
+    states.primary.queue.push([{ outcome: 'error', firedAt: new Date(now) }])
+    states.primary.queue.push([{ firedAt }])
+    states.primary.queue.push([{ firedAt }, { firedAt: new Date(previousDay) }])
+
+    const result = await caller.status({})
+    expect(result.rules[0]).toMatchObject({ lastOutcome: 'error', lastFiredAt: firedAt, firesToday: 1 })
+    const calls = (primaryDb.chain.where as ReturnType<typeof vi.fn>).mock.calls
+    const dialect = new SQLiteSyncDialect()
+    const queries = calls.map(([fragment]) => dialect.sqlToQuery(fragment as SQL))
+    // Both successful-history queries include actual writes, clamped writes,
+    // and dry-run evaluations; skipped/error rows only affect lastOutcome.
+    expect(queries[1].params).toEqual([7, 'fired', 'clamped', 'dry_run'])
+    expect(queries[2].params.slice(0, 4)).toEqual([7, 'fired', 'clamped', 'dry_run'])
   })
 
   it('defaults live status to globally enabled when device settings have no row', async () => {

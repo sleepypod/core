@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   automationActionSchema,
+  automationBacktestRuleSchema,
   automationConditionSchema,
   automationCreateSchema,
   automationExprSchema,
@@ -381,5 +382,18 @@ describe('validateDateRange', () => {
 describe('automationClampSchema band', () => {
   it('accepts a clamp whose min equals its max', () => {
     expect(automationActionSchema.safeParse({ kind: 'setTemperature', temp: lit(72), clamp: { min: 70, max: 70 } }).success).toBe(true)
+  })
+})
+
+describe('inline backtest AST bounds', () => {
+  const replay = (conditions: Condition) => automationBacktestRuleSchema.safeParse({
+    trigger: { kind: 'tick', everyMin: 1 }, conditions,
+    actions: [{ kind: 'notify', message: 'test' }],
+  })
+  it('rejects deep conditions just like persisted rules', () => {
+    expectRejected(replay(nestNot(17, cmp(lit(1), lit(1)))), 'too deep')
+  })
+  it('rejects excessive nodes just like persisted rules', () => {
+    expectRejected(replay(cmp(balancedExpr(399), lit(1))), 'too large')
   })
 })

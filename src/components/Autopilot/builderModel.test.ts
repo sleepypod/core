@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   blankRule,
   buildSentence,
+  builderValidationError,
   type BuilderRule,
   fmtClock,
   fromAST,
@@ -166,7 +167,7 @@ describe('buildSentence', () => {
     })
     expect(s).toContain('left-side movement averages rises above 200 over the last 10 min')
     expect(s).toContain('it\'s between 11pm–6am')
-    expect(s).toContain('lower temperature by 2°F for 20 min then revert')
+    expect(s).toContain('lower temperature by 2°F for 20 min then return to neutral')
     expect(s).toContain('wait 30 min before firing again')
   })
   it('reads the policy example with the clamp', () => {
@@ -230,9 +231,8 @@ describe('toAST — action branch corners', () => {
     const ast = toAST(base([{ action: 'notify', message: '' }]))
     expect(ast.actions[0]).toEqual({ kind: 'notify', message: 'Autopilot notification' })
   })
-  it('falls back to 72°F when an expression cannot be parsed', () => {
-    const ast = toAST(base([{ action: 'setTemperature', expr: 'not valid!!', clamp: [60, 75] }]))
-    expect(ast.actions[0]).toMatchObject({ kind: 'setTemperature', temp: { kind: 'literal', value: 72 } })
+  it('rejects an invalid expression instead of inventing a setpoint', () => {
+    expect(() => toAST(base([{ action: 'setTemperature', expr: 'not valid!!', clamp: [60, 75] }]))).toThrow('Invalid temperature expression')
   })
   it('treats a missing delta as a zero-delta currentTemperature hold', () => {
     const ast = toAST(base([{ action: 'setTemperature', clamp: [60, 75] }]))
@@ -402,5 +402,35 @@ describe('fromAST — edge cases', () => {
     expect(b.when.type).toBe('agg')
     expect(b.ifs).toContainEqual({ type: 'time', between: ['23:00', '06:00'] })
     expect(b.ifs).toContainEqual({ type: 'cond', signal: '{side}.heartRate', op: '<', value: 50 })
+  })
+})
+
+describe('safe friendly editing', () => {
+  it.each(['ambient +', 'ambient / 0', 'target / -0', '9'.repeat(400)])('blocks invalid expression %s at validation and conversion', (expr) => {
+    const b = blankRule()
+    b.then = [{ action: 'setTemperature', expr, clamp: [60, 75] }]
+    expect(builderValidationError(b)).toContain('Invalid temperature expression')
+    expect(() => toAST(b)).toThrow()
+  })
+
+  it('keeps builder-created rules editable, including time plus extra threshold', () => {
+    const b = blankRule()
+    expect(builderValidationError(fromAST(toAST(b)))).toBeNull()
+    b.when = { type: 'time', between: ['23:00', '06:00'] }
+    b.ifs = [{ type: 'cond', signal: '{side}.movement', op: '>', value: 100 }]
+    expect(builderValidationError(fromAST(toAST(b)))).toBeNull()
+  })
+
+  it.each(['days', 'target', 'trigger', 'expression', 'duration'])('prevents a lossy %s API rule save', (variant) => {
+    const ast = toAST(blankRule())
+    if (variant === 'days') ast.conditions = { kind: 'onDays', days: ['monday'] }
+    if (variant === 'target') ast.actions = [{ kind: 'setPower', side: 'right', on: false }]
+    if (variant === 'trigger') ast.trigger = { kind: 'timeOfDay', at: '23:00' }
+    if (variant === 'expression') ast.actions = [{ kind: 'setTemperature', temp: { kind: 'clamp', value: { kind: 'signal', signal: 'ambient.temperature' }, min: { kind: 'literal', value: 66 }, max: { kind: 'literal', value: 70 } } }]
+    if (variant === 'duration') ast.actions = [{ kind: 'setTemperature', temp: { kind: 'literal', value: 70 }, durationSec: 600 }]
+    const b = fromAST(ast)
+    expect(builderValidationError(b)).toContain('friendly editor cannot preserve')
+    b.name = 'Renamed'
+    expect(() => toAST(b)).toThrow('friendly editor cannot preserve')
   })
 })

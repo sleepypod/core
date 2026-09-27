@@ -62,6 +62,7 @@ vi.mock('@/src/streaming/broadcastMutationStatus', () => ({ broadcastMutationSta
 vi.mock('drizzle-orm', () => ({ and: (...a: any[]) => ({ a }), eq: (...a: any[]) => ({ a }), gt: (...a: any[]) => ({ a }) }))
 vi.mock('@/src/db/schema', () => ({
   automationRuns: {},
+  sideSettings: { side: 'side', awayMode: 'awayMode' },
   automations: { id: 'id' },
   deviceSettings: { autopilotEnabled: 'autopilotEnabled', timezone: 'timezone' },
   runOnceSessions: { id: 'id', side: 'side', status: 'status', expiresAt: 'expiresAt' },
@@ -98,7 +99,8 @@ async function freshModule(): Promise<InstanceModule> {
   return await import('../instance')
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await (await import('../instance')).shutdownAutomationEngine()
   ctorMock.mockClear()
   startMock.mockClear()
   stopMock.mockClear()
@@ -169,7 +171,7 @@ describe('automation/instance — kill-switch restore', () => {
     expect(setGlobalEnabledMock).toHaveBeenCalledWith(false)
   })
 
-  it('leaves autopilot enabled when the kill-switch read throws', async () => {
+  it('halts autopilot when the kill-switch read throws', async () => {
     // First select (timezone) succeeds; second (kill-switch) throws.
     let calls = 0
     selectImpl = async () => {
@@ -179,7 +181,7 @@ describe('automation/instance — kill-switch restore', () => {
     }
     const mod = await freshModule()
     await mod.getAutomationEngine()
-    expect(setGlobalEnabledMock).not.toHaveBeenCalled()
+    expect(setGlobalEnabledMock).toHaveBeenCalledWith(false)
   })
 })
 
@@ -238,6 +240,7 @@ describe('automation/instance — injected dependency closures', () => {
       enabled: true,
       side: 'left',
       priority: 0,
+      updatedAt: new Date(0),
       dryRun: false,
       cooldownMin: 30,
       trigger: { kind: 'tick', everyMin: 1 },
@@ -251,6 +254,7 @@ describe('automation/instance — injected dependency closures', () => {
       enabled: true,
       side: 'left',
       priority: 0,
+      updatedAt: new Date(0),
       dryRun: false,
       cooldownMin: 30,
       trigger: { kind: 'tick', everyMin: 1 },
@@ -289,6 +293,11 @@ describe('automation/instance — injected dependency closures', () => {
     selectImpl = async () => []
     expect(await capturedDeps.hasActiveRunOnceSession('right')).toBe(false)
 
+    selectImpl = async () => [{ awayMode: true }]
+    expect(await capturedDeps.isAwayMode('left')).toBe(true)
+    selectImpl = async () => []
+    expect(await capturedDeps.isAwayMode('right')).toBe(false)
+
     // Remaining wiring closures.
     expect(typeof capturedDeps.now()).toBe('number')
     expect(capturedDeps.clock()).toEqual({ nowMinutes: 123, dayOfWeek: 'monday' })
@@ -305,5 +314,51 @@ describe('automation/instance — injected dependency closures', () => {
     capturedDeps.log('a message')
     expect(log).toHaveBeenCalled()
     log.mockRestore()
+  })
+})
+
+describe('automation/instance — cross-module lifecycle', () => {
+  it('shares initialization and controls across independently loaded modules', async () => {
+    selectImpl = async () => [{ timezone: 'UTC', on: true }]
+    const first = await freshModule()
+    const second = await freshModule()
+    const [a, b] = await Promise.all([first.getAutomationEngine(), second.getAutomationEngine()])
+    expect(a).toBe(b)
+    expect(ctorMock).toHaveBeenCalledTimes(1)
+    second.updateAutomationTimezone('Australia/Sydney')
+    capturedDeps.clock()
+    const { clockInTimezone } = await import('../signals')
+    expect(clockInTimezone).toHaveBeenLastCalledWith('Australia/Sydney', expect.any(Date))
+    await second.shutdownAutomationEngine()
+    expect(first.getAutomationEngineIfRunning()).toBeNull()
+    expect(stopMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores the kill switch before starting the timer', async () => {
+    selectImpl = async () => [{ timezone: 'UTC', on: false }]
+    const mod = await freshModule()
+    await mod.getAutomationEngine()
+    expect(setGlobalEnabledMock.mock.invocationCallOrder[0]).toBeLessThan(startMock.mock.invocationCallOrder[0])
+  })
+
+  it('cancels pending initialization on shutdown and permits a clean retry', async () => {
+    let release!: (value: any[]) => void
+    selectImpl = () => new Promise((resolve) => {
+      release = resolve
+    })
+    const mod = await freshModule()
+    const pending = mod.getAutomationEngine()
+    const rejected = expect(pending).rejects.toThrow()
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    const stopping = mod.shutdownAutomationEngine()
+    await expect(mod.getAutomationEngine()).rejects.toThrow('shutting down')
+    release([{ timezone: 'UTC' }])
+    await stopping
+    await rejected
+    expect(mod.getAutomationEngineIfRunning()).toBeNull()
+    expect(startMock).not.toHaveBeenCalled()
+    selectImpl = async () => []
+    await mod.getAutomationEngine()
+    expect(startMock).toHaveBeenCalledTimes(1)
   })
 })

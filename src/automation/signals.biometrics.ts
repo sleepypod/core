@@ -30,13 +30,7 @@ import { getLatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
 import { mean, reduceCap } from './capReduce'
 import type { SignalReader, SignalSnapshot } from './signals'
 
-// Freshness windows (ms). A latest row older than its window is treated as
-// absent. Vitals/movement land ~once a minute while in bed; environment frames
-// are slower; the cap matrix arrives ~2 Hz on the live stream (see piezoStream).
-const VITALS_FRESH_MS = 5 * 60_000
-const MOVEMENT_FRESH_MS = 5 * 60_000
-const ENV_FRESH_MS = 15 * 60_000
-const CAP_FRESH_MS = 30_000
+import { VITALS_FRESH_MS, MOVEMENT_FRESH_MS, ENV_FRESH_MS, CAP_FRESH_MS } from './freshness'
 
 const SIDES = ['left', 'right'] as const
 
@@ -45,7 +39,8 @@ export class BiometricsSignalReader implements SignalReader {
     const out: SignalSnapshot = {}
     const now = Date.now()
     const fresh = (ts: Date | number, maxAgeMs: number): boolean =>
-      now - (ts instanceof Date ? ts.getTime() : ts) <= maxAgeMs
+      now >= (ts instanceof Date ? ts.getTime() : ts)
+      && now - (ts instanceof Date ? ts.getTime() : ts) <= maxAgeMs
 
     try {
       for (const side of SIDES) {

@@ -12,6 +12,7 @@
  * a later phase — the engine degrades to "skip", which is the safe default.
  */
 
+import { DEVICE_FRESH_MS } from './freshness'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import type { AutomationRule, DayOfWeek, Expr } from './types'
 
@@ -73,7 +74,7 @@ export class DeviceSignalReader implements SignalReader {
   read(): SignalSnapshot {
     const snapshot: SignalSnapshot = {}
     try {
-      const status = getDacMonitorIfRunning()?.getLastStatus()
+      const status = getDacMonitorIfRunning()?.getFreshStatus(DEVICE_FRESH_MS)
       if (!status) return snapshot
       for (const side of ['left', 'right'] as const) {
         const s = side === 'left' ? status.leftSide : status.rightSide

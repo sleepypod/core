@@ -273,3 +273,34 @@ the engine — so shipping it in P0 is premature surface.
 - Vitals baseline (z-score source): `getVitalsBaseline`.
 - UI: `app/[lang]/autopilot/`, `src/components/Autopilot/`,
   `src/components/diagnostics/DiagnosticsConsole.tsx`.
+
+
+### Review hardening (2026-09-27)
+
+- Engine initialization, timezone and controls share a process-wide singleton
+  across bundled module copies. Restore the kill switch before the timer starts;
+  an unreadable persisted switch leaves the engine halted.
+- Recheck kill switch, manual hold, run-once, away mode and pump guard under the
+  side lock and after connecting. Reloaded/deleted rules and stopped engines
+  cancel queued writes. The hourly cap counts each actual side write.
+- Within a tick, higher priority wins per side; equal priorities use most recent
+  update, then highest ID. Dry runs and gated/failed writes do not claim a side.
+  Anti-thrash compares fresh observed targets so a policy can recover after a
+  recurring schedule changes its setpoint.
+- Invalid/nonfinite expressions and unknown clamp bounds are unknown values.
+  Device signals require a recent connected monitor observation.
+- The friendly editor rejects invalid expressions and refuses to save ASTs it
+  cannot represent losslessly. “Both” retains existing semantics: left-side
+  signals drive the same action on both sides; separate rules provide independent
+  sleeper behavior.
+- Hardware `durationSec` returns to neutral (82.5°F), not the previous target.
+  The editor calls this heating duration. Omitted duration is eight hours.
+- Historical replay evaluates triggers, full conditions and cooldowns every
+  minute, independently of plot sampling. It estimates eligible actions rather
+  than actual hardware writes: manual holds, run-once, competing rules,
+  anti-thrash and runaway state cannot be reconstructed. Missing target history
+  uses an explicitly disclosed nominal baseline; measured current temperature is
+  never invented. Multi-action/power chart limitations are shown in the UI.
+- Diagnostics distinguish the latest attempt from the latest successful
+  evaluation (including clamped and dry-run outcomes), with daily counts in the
+  configured device timezone.

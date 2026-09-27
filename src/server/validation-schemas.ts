@@ -292,6 +292,11 @@ const automationCreateObject = z.object({
   actions: z.array(automationActionSchema).min(1).max(10),
 }).strict()
 
+/** Inline replay accepts the same bounded rule language as persisted automations. */
+export const automationBacktestRuleSchema = automationCreateObject.pick({
+  side: true, cooldownMin: true, trigger: true, conditions: true, actions: true,
+}).superRefine(enforceAstBounds)
+
 export const automationCreateSchema = automationCreateObject.superRefine(enforceAstBounds)
 
 /** Update payload — all fields optional, keyed by id. */

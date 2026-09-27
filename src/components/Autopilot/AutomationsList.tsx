@@ -21,6 +21,7 @@ export interface ListItem {
 }
 
 function RuleSentence({ b }: { b: BuilderRule }) {
+  if (b.readOnlyReason) return <span className="text-[13px] text-zinc-400">Advanced rule · edit through the API</span>
   const chunks = buildSentence(b)
   return (
     <span className="text-[13px] leading-snug text-zinc-400" style={{ textWrap: 'pretty' }}>
@@ -59,16 +60,16 @@ function Row({ a, onToggle, onOpen }: { a: ListItem, onToggle: (id: number, enab
       </div>
       <div className="flex items-center gap-5 text-right">
         <div className="hidden sm:block">
-          <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Last fired</div>
+          <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Last success</div>
           <div className="mono text-[12px] text-zinc-400">{a.lastFired}</div>
         </div>
         <div className="hidden md:block w-14">
-          <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Today</div>
+          <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-600">Today (incl. dry-run)</div>
           <div className="mono text-[12px] text-zinc-400">
             {a.firesToday}
             {' '}
-            fire
-            {a.firesToday === 1 ? '' : 's'}
+            success
+            {a.firesToday === 1 ? '' : 'es'}
           </div>
         </div>
         <Icon.ChevRight size={16} className="text-zinc-700 group-hover:text-zinc-400 transition-colors" />
