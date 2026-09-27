@@ -1,7 +1,7 @@
 'use client'
 
 import { trpc } from '@/src/utils/trpc'
-import { useSide } from '@/src/hooks/useSide'
+import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/ui/card'
 import { WeekNavigator } from '@/src/components/WeekNavigator/WeekNavigator'
@@ -215,7 +215,7 @@ interface MovementChartProps {
  * server-side bucketed sums so a week view fits in one query.
  */
 export function MovementChart({ dualSide = false, hideNav = false }: MovementChartProps) {
-  const { side } = useSide()
+  const { side } = useBiometricsSide()
   const otherSide: 'left' | 'right' = side === 'left' ? 'right' : 'left'
   const {
     weekStart,

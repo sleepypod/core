@@ -20,6 +20,13 @@ interface TimeInputProps {
 /**
  * Touch-friendly time input with HH:MM format.
  * Uses native time input for mobile pickers.
+ *
+ * The native picker indicator is stretched over the whole field (invisible)
+ * so a tap anywhere opens the picker. Browsers give that indicator its own
+ * margin/padding, which pushed it ~14px past the field and made the
+ * surrounding scroll container (the alarm editor) scroll sideways on
+ * mobile — so it's zeroed, the wrapper clips, and appearance-none keeps iOS
+ * Safari from sizing the input by its native width.
  */
 export function TimeInput({ label, value, onChange, disabled = false, icon, accentClass }: TimeInputProps) {
   return (
@@ -28,13 +35,13 @@ export function TimeInput({ label, value, onChange, disabled = false, icon, acce
         {icon && <span className={accentClass}>{icon}</span>}
         {label}
       </label>
-      <div className="relative min-w-0">
+      <div className="relative min-w-0 overflow-hidden rounded-lg">
         <input
           type="time"
           value={value}
           onChange={e => onChange(e.target.value)}
           disabled={disabled}
-          className="h-11 w-full min-w-0 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 pr-9 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+          className="block h-11 w-full min-w-0 appearance-none rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 pr-9 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-calendar-picker-indicator]:p-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
         />
         <Clock size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500" />
       </div>

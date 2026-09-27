@@ -2,22 +2,30 @@
 
 import { spawnSync } from 'node:child_process'
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 const helperPath = resolve('scripts/lib/biometrics-archiver-helpers')
 const archiverScript = resolve('modules/biometrics-archiver/sleepypod-biometrics-archiver')
+const linkerScript = resolve('modules/biometrics-archiver/sleepypod-biometrics-linker')
 
 let root: string
 let tmpfsDir: string
+let pendingDir: string
 let archiveDir: string
 let systemdDir: string
 let localBinDir: string
@@ -28,22 +36,58 @@ let mountUnit: string
 let callsFile: string
 let unmountedFile: string
 
+/** Write a runnable shell stub in the isolated test directory. */
 function writeExecutable(path: string, lines: string[]): void {
   writeFileSync(path, lines.join(String.fromCharCode(10)), { mode: 0o755 })
 }
 
-function writeRaw(name = '00001.RAW'): string {
+/** Create a live firmware frame with controllable contents. */
+function writeRaw(name = '00001.RAW', body = 'sensor frame'): string {
   const path = join(tmpfsDir, name)
-  writeFileSync(path, 'sensor frame')
+  writeFileSync(path, body)
   return path
 }
 
+/** Read recorded systemctl calls in execution order. */
 function calls(): string {
   return existsSync(callsFile) ? readFileSync(callsFile, 'utf8') : ''
 }
 
+/** Env shared by direct script runs: stub PATH plus the tmpfs/archive paths. */
+function scriptEnv(extraEnv: Partial<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: [stubBinDir, process.env.PATH ?? ''].join(':'),
+    UNMOUNTED_FILE: unmountedFile,
+    TMPFS_DIR: tmpfsDir,
+    ARCHIVE_DIR: archiveDir,
+    ...extraEnv,
+  }
+}
+
+/** Run the real linker with stubbed mount detection. */
+function runLinker(extraEnv: Partial<NodeJS.ProcessEnv> = {}) {
+  return spawnSync('/bin/bash', [linkerScript], { encoding: 'utf8', env: scriptEnv(extraEnv) })
+}
+
+/** Run the real archiver against isolated RAW and archive directories. */
+function runArchiver(extraEnv: Partial<NodeJS.ProcessEnv> = {}) {
+  // KEEP_RECENT_MIN defaults high so the live-frame pass stays out of the way
+  // of tests about pinned links; the firmware-left-behind path passes its own.
+  return spawnSync('/bin/bash', [archiverScript], {
+    encoding: 'utf8',
+    env: scriptEnv({ KEEP_RECENT_MIN: '15', ...extraEnv }),
+  })
+}
+
+/** List retained pins deterministically. */
+function pendingEntries(): string[] {
+  return existsSync(pendingDir) ? readdirSync(pendingDir).sort() : []
+}
+
+/** Run either cleanup entry point against isolated paths and systemctl stubs. */
 function runHelper(extraEnv: Partial<NodeJS.ProcessEnv> = {}) {
-  return spawnSync('/bin/bash', ['-c', '. "$HELPER_PATH"; remove_biometrics_archiver_for_nats'], {
+  return spawnSync('/bin/bash', ['-c', '. "$HELPER_PATH"; ${CLEANUP_FUNCTION:-remove_biometrics_archiver_for_nats}'], {
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -66,6 +110,7 @@ function runHelper(extraEnv: Partial<NodeJS.ProcessEnv> = {}) {
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'sleepypod-archiver-'))
   tmpfsDir = join(root, 'biometrics')
+  pendingDir = join(tmpfsDir, '.pending')
   archiveDir = join(root, 'biometrics-archive')
   systemdDir = join(root, 'systemd')
   localBinDir = join(root, 'local-bin')
@@ -107,7 +152,177 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
+describe('sleepypod-biometrics-linker', () => {
+  it.each(['', '0', '-1', '100', '101', '08', 'abc', '1+1', '50.5', '999999999999999999999'])('rejects invalid cap %j before creating pins', (cap) => {
+    const live = writeRaw()
+    const result = runLinker({ PENDING_MAX_PCT: cap })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('PENDING_MAX_PCT must be an integer from 1 to 99')
+    expect(existsSync(pendingDir)).toBe(false)
+    expect(readFileSync(live, 'utf8')).toBe('sensor frame')
+  })
+
+  it.each(['1', '50', '99'])('accepts cap %s', (cap) => {
+    writeRaw()
+    expect(runLinker({ PENDING_MAX_PCT: cap }).status).toBe(0)
+  })
+
+  it('pins a live frame so it survives the firmware unlinking it at rotation', () => {
+    const live = writeRaw('0016B64E.RAW')
+
+    const result = runLinker()
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('linked=1')
+    const pinned = join(pendingDir, '0016B64E.RAW')
+    // Same inode: no extra tmpfs while the firmware is still appending.
+    expect(statSync(pinned).ino).toBe(statSync(live).ino)
+
+    rmSync(live) // what the firmware does within a second of rotating
+    expect(readFileSync(pinned, 'utf8')).toBe('sensor frame')
+  })
+
+  it('keeps the frames the firmware appends after the link exists', () => {
+    // The pin is a second name for one inode, not a snapshot: everything the
+    // firmware writes between the link and the rotation has to be in there.
+    const live = writeRaw('0016B64E.RAW', 'first half ')
+
+    runLinker()
+    appendFileSync(live, 'second half')
+    rmSync(live)
+
+    expect(readFileSync(join(pendingDir, '0016B64E.RAW'), 'utf8')).toBe('first half second half')
+  })
+
+  it('skips SEQNO.RAW and the tmpfs-prep symlinks', () => {
+    writeRaw('SEQNO.RAW')
+    const emmcFile = join(root, 'state.RAW')
+    writeFileSync(emmcFile, 'firmware state')
+    symlinkSync(emmcFile, join(tmpfsDir, 'staged.RAW'))
+
+    const result = runLinker()
+
+    expect(result.status).toBe(0)
+    expect(pendingEntries()).toEqual([])
+  })
+
+  it('stays quiet and pins nothing on a repeat run', () => {
+    writeRaw()
+    runLinker()
+
+    const result = runLinker()
+
+    expect(result.status).toBe(0)
+    expect(result.stdout.trim()).toBe('')
+    expect(pendingEntries()).toEqual(['00001.RAW'])
+  })
+
+  it('skips without touching anything when the tmpfs is not mounted', () => {
+    writeFileSync(unmountedFile, '')
+    writeRaw()
+
+    const result = runLinker()
+
+    expect(result.status).toBe(0)
+    expect(result.stderr).toContain('not a tmpfs mount')
+    expect(existsSync(pendingDir)).toBe(false)
+  })
+
+  it('drops the oldest pinned frame when pending outgrows its tmpfs share', () => {
+    // A stuck archiver must not let pinned frames crowd out live writes.
+    const body = 'x'.repeat(256 * 1024)
+    const older = writeRaw('00001.RAW', body)
+    const newer = writeRaw('00002.RAW', body)
+    utimesSync(older, new Date(1000), new Date(1000))
+    utimesSync(newer, new Date(2000), new Date(2000))
+    // Stub df so the cap lands between one and two pinned frames.
+    writeExecutable(join(stubBinDir, 'df'), [
+      '#!/usr/bin/env bash',
+      'echo "Filesystem 1024-blocks Used Available Capacity Mounted-on"',
+      'echo "tmpfs 800 0 800 0% /persistent/biometrics"',
+    ])
+
+    const result = runLinker({ PENDING_MAX_PCT: '50' })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('dropped=1')
+    expect(pendingEntries()).toEqual(['00002.RAW'])
+    // Live frames belong to the firmware — the linker never removes those.
+    expect(existsSync(older)).toBe(true)
+    expect(existsSync(newer)).toBe(true)
+  })
+
+  it('keeps every pinned frame when df reports no usable capacity', () => {
+    writeRaw()
+    writeExecutable(join(stubBinDir, 'df'), ['#!/usr/bin/env bash', 'exit 1'])
+
+    const result = runLinker()
+
+    expect(result.status).toBe(0)
+    expect(pendingEntries()).toEqual(['00001.RAW'])
+  })
+})
+
 describe('sleepypod-biometrics-archiver', () => {
+  it('archives a pinned frame once the firmware has released the live file', () => {
+    const live = writeRaw('0016B64E.RAW', 'waveform bytes')
+    runLinker()
+    rmSync(live)
+
+    const result = runArchiver()
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('archived=1')
+    expect(result.stdout).toContain('pending=0')
+    const gz = join(archiveDir, '0016B64E.RAW.gz')
+    expect(gunzipSync(readFileSync(gz)).toString()).toBe('waveform bytes')
+    expect(pendingEntries()).toEqual([])
+  })
+
+  it('leaves a pinned frame alone while the firmware still holds the live file', () => {
+    writeRaw()
+    runLinker()
+
+    const result = runArchiver()
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('archived=0')
+    expect(result.stdout).toContain('pending=1')
+    expect(existsSync(join(archiveDir, '00001.RAW.gz'))).toBe(false)
+    expect(pendingEntries()).toEqual(['00001.RAW'])
+  })
+
+  it('drops a pinned frame that is already in the archive', () => {
+    const live = writeRaw()
+    runLinker()
+    rmSync(live)
+    mkdirSync(archiveDir, { recursive: true })
+    const gz = join(archiveDir, '00001.RAW.gz')
+    writeFileSync(gz, gzipSync(Buffer.from('archived earlier')))
+
+    const result = runArchiver()
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('removed=1')
+    expect(pendingEntries()).toEqual([])
+    expect(gunzipSync(readFileSync(gz)).toString()).toBe('archived earlier')
+  })
+
+  it('archives a live frame the firmware left behind and clears its pin', () => {
+    writeRaw()
+    runLinker()
+
+    const result = runArchiver({ KEEP_RECENT_MIN: '-1' })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('archived=1')
+    expect(result.stdout).toContain('removed=1')
+    expect(result.stdout).toContain('pending=0')
+    expect(existsSync(join(tmpfsDir, '00001.RAW'))).toBe(false)
+    expect(pendingEntries()).toEqual([])
+  })
+
   it('returns nonzero and preserves the source when gzip fails', () => {
     const raw = writeRaw()
     writeExecutable(join(stubBinDir, 'gzip'), ['#!/usr/bin/env bash', 'exit 1'])
@@ -129,12 +344,17 @@ describe('sleepypod-biometrics-archiver', () => {
   })
 })
 
-describe('remove_biometrics_archiver_for_nats', () => {
+describe.each(['remove_biometrics_archiver_for_nats', 'remove_biometrics_archiver'])('%s', (cleanupFunction) => {
+  /** Exercise the same preservation guarantees for NATS migration and uninstall. */
+  function runCleanup(extraEnv: Partial<NodeJS.ProcessEnv> = {}) {
+    return runHelper({ CLEANUP_FUNCTION: cleanupFunction, ...extraEnv })
+  }
+
   it('does not unmount or remove recovery tools when the archiver fails', () => {
     const raw = writeRaw()
     writeExecutable(archiverBin, ['#!/usr/bin/env bash', 'exit 1'])
 
-    const result = runHelper()
+    const result = runCleanup()
 
     expect(result.status).toBe(1)
     expect(calls()).not.toContain('stop persistent-biometrics.mount')
@@ -147,7 +367,7 @@ describe('remove_biometrics_archiver_for_nats', () => {
     const raw = writeRaw()
     writeExecutable(archiverBin, ['#!/usr/bin/env bash', 'exit 0'])
 
-    const result = runHelper()
+    const result = runCleanup()
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('unarchived RAW frame remains')
@@ -155,11 +375,26 @@ describe('remove_biometrics_archiver_for_nats', () => {
     expect(existsSync(raw)).toBe(true)
   })
 
+  it('rejects a successful archiver exit when a pinned frame remains', () => {
+    // A pinned link can be the only surviving copy of an unlinked frame, so it
+    // blocks the unmount exactly like a live frame would.
+    mkdirSync(pendingDir, { recursive: true })
+    const pinned = join(pendingDir, '00001.RAW')
+    writeFileSync(pinned, 'sensor frame')
+
+    const result = runCleanup()
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('unarchived RAW frame remains')
+    expect(calls()).not.toContain('stop persistent-biometrics.mount')
+    expect(existsSync(pinned)).toBe(true)
+  })
+
   it('rejects missing archival tooling when a RAW frame remains', () => {
     const raw = writeRaw()
     rmSync(archiverBin)
 
-    const result = runHelper()
+    const result = runCleanup()
 
     expect(result.status).toBe(1)
     expect(calls()).not.toContain('stop persistent-biometrics.mount')
@@ -170,14 +405,19 @@ describe('remove_biometrics_archiver_for_nats', () => {
     const seqno = writeRaw('SEQNO.RAW')
     rmSync(archiverBin)
 
-    const result = runHelper()
+    const result = runCleanup()
 
     expect(result.status).toBe(0)
     expect(calls()).toContain('stop persistent-biometrics.mount')
     expect(existsSync(seqno)).toBe(true)
     for (const unit of ['sleepypod', 'sleepypod-cover-buttons', 'sleepypod-sleep-detector', 'sleepypod-piezo-processor', 'sleepypod-calibrator', 'sleepypod-environment-monitor']) {
-      expect(readFileSync(join(systemdDir, `${unit}.service.d/zz-nats-raw-fallback.conf`), 'utf8'))
-        .toContain('Environment="RAW_DATA_DIR=/persistent"')
+      const fallback = join(systemdDir, `${unit}.service.d/zz-nats-raw-fallback.conf`)
+      if (cleanupFunction === 'remove_biometrics_archiver_for_nats') {
+        expect(readFileSync(fallback, 'utf8')).toContain('Environment="RAW_DATA_DIR=/persistent"')
+      }
+      else {
+        expect(existsSync(fallback)).toBe(false)
+      }
     }
     expect(calls().indexOf('daemon-reload')).toBeLessThan(calls().indexOf('stop persistent-biometrics.mount'))
     expect(existsSync(mountUnit)).toBe(false)
@@ -186,8 +426,11 @@ describe('remove_biometrics_archiver_for_nats', () => {
 
   it('archives all frames before unmounting and removing recovery tools', () => {
     const raw = writeRaw()
+    runLinker()
+    rmSync(raw) // the pending link is now the only copy
+    const live = writeRaw('00002.RAW', 'final live frame')
 
-    const result = runHelper({
+    const result = runCleanup({
       BIOMETRICS_ARCHIVER_BIN: archiverScript,
       TMPFS_DIR: tmpfsDir,
       ARCHIVE_DIR: archiveDir,
@@ -196,13 +439,17 @@ describe('remove_biometrics_archiver_for_nats', () => {
     expect(result.status).toBe(0)
     expect(calls()).toContain('stop persistent-biometrics.mount')
     expect(existsSync(raw)).toBe(false)
-    expect(existsSync(join(archiveDir, '00001.RAW.gz'))).toBe(true)
+    expect(gunzipSync(readFileSync(join(archiveDir, '00001.RAW.gz'))).toString()).toBe('sensor frame')
+    expect(pendingEntries()).toEqual([])
+    expect(existsSync(live)).toBe(false)
+    expect(gunzipSync(readFileSync(join(archiveDir, '00002.RAW.gz'))).toString()).toBe('final live frame')
+    expect(calls().indexOf('stop sleepypod-biometrics-linker.service')).toBeLessThan(calls().indexOf('restart frank.service'))
     expect(existsSync(mountUnit)).toBe(false)
     expect(existsSync(recoveryTool)).toBe(false)
   })
 
   it('preserves the mount and recovery tools when frank cannot restart', () => {
-    const result = runHelper({ FAIL_RESTART: '1' })
+    const result = runCleanup({ FAIL_RESTART: '1' })
 
     expect(result.status).toBe(1)
     expect(calls()).toContain('restart frank.service')
@@ -212,7 +459,7 @@ describe('remove_biometrics_archiver_for_nats', () => {
   })
 
   it('preserves recovery tools when the mount remains active after stop', () => {
-    const result = runHelper({ STOP_LEAVES_MOUNTED: '1' })
+    const result = runCleanup({ STOP_LEAVES_MOUNTED: '1' })
 
     expect(result.status).toBe(1)
     expect(calls()).toContain('stop persistent-biometrics.mount')

@@ -168,7 +168,7 @@ function OverviewPanel({ onJump }: { onJump: (s: SectionId) => void }) {
         {/* armed = green; the inverted flag painted the armed guard amber */}
         <Metric label="Pump-stall" value={t?.pumpStallProtectionEnabled ? 'armed' : 'opt-in off'} good={t?.pumpStallProtectionEnabled} />
         <Metric label="Heatsink" value={fmtF(t?.heatsinkTempF)} />
-        <Metric label="Ambient" value={fmtF(t?.ambientTempF)} />
+        <Metric label="Hub ambient" value={fmtF(t?.ambientTempF)} />
       </div>
 
       <div className="grid gap-2 lg:grid-cols-2">
@@ -241,7 +241,7 @@ function ThermalPanel() {
           <div className="grid grid-cols-3 gap-2 rounded-xl bg-zinc-900/80 p-3 text-sm xl:max-w-2xl">
             <Stat label="Pump-stall protection" value={data.pumpStallProtectionEnabled ? 'ENABLED' : 'disabled'} />
             <Stat label="Heatsink" value={fmtF(data.heatsinkTempF)} />
-            <Stat label="Ambient" value={fmtF(data.ambientTempF)} />
+            <Stat label="Hub ambient" value={fmtF(data.ambientTempF)} />
           </div>
 
           <div className="grid gap-2 lg:grid-cols-2">

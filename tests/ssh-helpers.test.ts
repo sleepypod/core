@@ -522,6 +522,28 @@ describe('sshd_effective_value', () => {
     })).toBe('yes')
   })
 
+  test('reports the pod\'s without-password spelling as prohibit-password', () => {
+    // OpenSSH 8.9 on the pod prints the legacy name for the value the
+    // installer writes. Comparing the raw string failed every install and
+    // rolled the hardening back.
+    const config = writeConfig('PermitRootLogin prohibit-password\n')
+
+    expect(runBash(`sshd_effective_value PermitRootLogin ${JSON.stringify(config)} root`, {
+      sshdT: 'permitrootlogin without-password',
+    })).toBe('prohibit-password')
+    expect(runBash(`sshd_effective_value PermitRootLogin ${JSON.stringify(config)}`, {
+      sshdT: 'permitrootlogin without-password',
+    })).toBe('prohibit-password')
+  })
+
+  test('leaves other values alone', () => {
+    const config = writeConfig('PermitRootLogin no\n')
+
+    expect(runBash(`sshd_effective_value PermitRootLogin ${JSON.stringify(config)} root`, {
+      sshdT: 'permitrootlogin no',
+    })).toBe('no')
+  })
+
   test('fails closed, not to the global reading, when sshd rejects -C', () => {
     // A global `sshd -T` can't see a `Match User root` block re-enabling the
     // password. Reporting its value would let the installer claim a hardened
@@ -533,5 +555,143 @@ describe('sshd_effective_value', () => {
       sshdT: 'passwordauthentication no',
       sshdTC: false,
     })).toBe('[]')
+  })
+})
+
+describe('sshd_allows_user', () => {
+  function status(opts: RunOptions): string {
+    const config = writeConfig('Port 8822\n')
+    return runBash(
+      `s=0; sshd_allows_user root ${JSON.stringify(config)} 2>/dev/null || s=$?; echo "$s"`,
+      opts,
+    )
+  }
+
+  test('admits root when no access list is set', () => {
+    expect(status({ sshdT: 'port 8822\npermitrootlogin without-password' })).toBe('0')
+  })
+
+  test('reports a stock Pod 4 AllowUsers rewt as fixable', () => {
+    expect(status({ sshdT: 'port 8822\nallowusers rewt' })).toBe('1')
+  })
+
+  test('admits root when AllowUsers names it, by name or wildcard', () => {
+    expect(status({ sshdT: 'allowusers rewt\nallowusers root' })).toBe('0')
+    expect(status({ sshdT: 'allowusers r*' })).toBe('0')
+  })
+
+  test('respects a host-restricted root entry instead of widening it', () => {
+    expect(status({ sshdT: 'allowusers root@192.168.*' })).toBe('0')
+  })
+
+  test('refuses outright when DenyUsers matches root', () => {
+    expect(status({ sshdT: 'denyusers root' })).toBe('2')
+  })
+
+  test('ignores a DenyUsers entry for someone else', () => {
+    expect(status({ sshdT: 'denyusers guest' })).toBe('0')
+  })
+
+  test('refuses to guess about group-based rules', () => {
+    expect(status({ sshdT: 'allowgroups wheel' })).toBe('2')
+    expect(status({ sshdT: 'denygroups nogroup' })).toBe('2')
+  })
+
+  test('fails closed when sshd cannot evaluate root\'s context', () => {
+    // An empty dump would otherwise read as "no restrictions".
+    expect(status({ sshdT: 'port 8822', sshdTC: false })).toBe('2')
+  })
+})
+
+describe('ensure_sshd_allows_user', () => {
+  // An sshd that dumps AllowUsers/DenyUsers from the config file it's
+  // pointed at, so the recheck after the edit sees the new file.
+  const FILE_BACKED_SSHD = `sshd() {
+    local f=""
+    while [ $# -gt 0 ]; do [ "$1" = -f ] && f="$2"; shift; done
+    echo "port 8822"
+    awk 'tolower($1) == "allowusers" || tolower($1) == "denyusers" { $1 = tolower($1); print }' "$f"
+  }`
+
+  function ensure(contents: string): { output: string, config: string } {
+    const path = writeConfig(contents)
+    const output = runBash(
+      `${FILE_BACKED_SSHD}; ensure_sshd_allows_user root ${JSON.stringify(path)} 2>/dev/null && echo OK || echo REFUSED`,
+    )
+    return { output, config: readFileSync(path, 'utf8') }
+  }
+
+  test('adds root to a stock AllowUsers rewt and keeps rewt', () => {
+    const { output, config } = ensure('Port 8822\nAllowUsers rewt\nPasswordAuthentication yes\n')
+
+    expect(output).toContain('OK')
+    expect(config).toBe('Port 8822\nAllowUsers rewt root\nPasswordAuthentication yes\n')
+  })
+
+  test('carries every global AllowUsers line into the one it writes', () => {
+    const { output, config } = ensure('AllowUsers rewt\nAllowUsers dac\n')
+
+    expect(output).toContain('OK')
+    expect(config).toBe('AllowUsers rewt dac root\n')
+  })
+
+  test('leaves the config alone when root is already admitted', () => {
+    const { output, config } = ensure('Port 8822\n')
+
+    expect(output).toBe('OK')
+    expect(config).toBe('Port 8822\n')
+  })
+
+  test('does not override a DenyUsers root', () => {
+    const { output, config } = ensure('AllowUsers rewt\nDenyUsers root\n')
+
+    expect(output).toBe('REFUSED')
+    expect(config).toBe('AllowUsers rewt\nDenyUsers root\n')
+  })
+
+  test('refuses when the restriction only shows up in root\'s context', () => {
+    // A Match block's AllowUsers isn't in the global list, so there's nothing
+    // safe to extend — hoisting it would widen access for every connection.
+    const path = writeConfig('Match Address 10.0.0.0/8\n  AllowUsers rewt\n')
+
+    const output = runBash(
+      `ensure_sshd_allows_user root ${JSON.stringify(path)} 2>/dev/null && echo OK || echo REFUSED`,
+      { sshdT: 'port 8822', sshdTC: 'port 8822\nallowusers rewt' },
+    )
+
+    expect(output).toBe('REFUSED')
+    expect(readFileSync(path, 'utf8')).toBe('Match Address 10.0.0.0/8\n  AllowUsers rewt\n')
+  })
+})
+
+describe('restart_sshd', () => {
+  function restart(units: { service?: boolean, socket?: boolean, accept?: string }): string {
+    const stub = `systemctl() {
+      case "$*" in
+        "restart sshd"|"restart ssh") ${units.service ? 'return 0' : 'return 1'} ;;
+        "is-active --quiet sshd.socket") ${units.socket ? 'return 0' : 'return 3'} ;;
+        "show -p Accept sshd.socket") echo "Accept=${units.accept ?? 'no'}" ;;
+        *) return 1 ;;
+      esac
+    }`
+    return runBash(`${stub}; restart_sshd && echo OK || echo FAILED`)
+  }
+
+  test('restarts a standalone sshd', () => {
+    expect(restart({ service: true })).toBe('OK')
+  })
+
+  test('needs no restart for the pod\'s per-connection sshd.socket', () => {
+    // The pod has no sshd.service or ssh.service; treating the failed restart
+    // as fatal rolled back every hardening.
+    expect(restart({ socket: true, accept: 'yes' })).toBe('OK')
+  })
+
+  test('fails when a socket hands off to a service that is missing', () => {
+    expect(restart({ socket: true, accept: 'no' })).toBe('FAILED')
+  })
+
+  test('fails when there is no sshd unit at all', () => {
+    expect(restart({})).toBe('FAILED')
   })
 })

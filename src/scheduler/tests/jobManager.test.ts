@@ -1881,6 +1881,7 @@ describe('JobManager residual mutation contracts', () => {
     expect(JSON.parse(payload as string)).toEqual({
       side: 'all',
       sensor_type: 'all',
+      source: 'scheduled',
       ts: Math.floor(now.getTime() / 1000),
     })
 

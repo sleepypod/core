@@ -26,6 +26,7 @@ import { trackPrimingState, resetPrimingState, getPrimeCompletedAt } from './pri
 import { getAllPumpStallNotices } from './pumpStallNotification'
 import { cancelSnooze, getSnoozeStatus } from './snoozeManager'
 import { clearSharedHardwareClient, getSharedHardwareClient } from './sharedClient'
+import { applyMutationOverlay } from '../streaming/mutationOverlay'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
 
@@ -103,8 +104,10 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
           broadcastFrame({
             type: 'deviceStatus',
             ts: Date.now(),
-            leftSide: { ...status.leftSide, isAlarmVibrating: alarmState.left },
-            rightSide: { ...status.rightSide, isAlarmVibrating: alarmState.right },
+            // A poll can still report the pre-command target right after a
+            // mutation; keep the mutation's target until the firmware agrees.
+            leftSide: { ...applyMutationOverlay('left', { ...status.leftSide }), isAlarmVibrating: alarmState.left },
+            rightSide: { ...applyMutationOverlay('right', { ...status.rightSide }), isAlarmVibrating: alarmState.right },
             waterLevel: status.waterLevel,
             isPriming: status.isPriming,
             ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),

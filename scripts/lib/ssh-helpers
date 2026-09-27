@@ -328,7 +328,7 @@ sshd_effective_value() {
     value="$(sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" -f "$sshd_config" 2>/dev/null |
       awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' || true)"
     if [ -n "$value" ]; then
-      printf '%s\n' "$value"
+      _sshd_canonical_value "$lowered" "$value"
     else
       # Root-context evaluation is unavailable — an older sshd that rejects the
       # partial connection spec, or a config sshd won't dump. Do NOT degrade to
@@ -343,7 +343,117 @@ sshd_effective_value() {
     return 0
   fi
 
-  sshd -T -f "$sshd_config" 2>/dev/null |
-    awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' \
+  value="$(sshd -T -f "$sshd_config" 2>/dev/null |
+    awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' || true)"
+  [ -z "$value" ] || _sshd_canonical_value "$lowered" "$value"
+}
+
+# `prohibit-password` is the newer spelling of PermitRootLogin's
+# `without-password`. Older `sshd -T` prints the old one — the pod's OpenSSH
+# 8.9 does, 10.x doesn't. Without this, comparing the effective value against
+# the directive we wrote fails on every pod and the installer rolls back.
+_sshd_canonical_value() {
+  case "$1:$2" in
+    permitrootlogin:without-password) printf 'prohibit-password\n' ;;
+    *) printf '%s\n' "$2" ;;
+  esac
+}
+
+# Print each entry of the list directive $1 (allowusers, denygroups, …) from
+# an `sshd -T` dump in $2, one per line.
+_sshd_list_entries() {
+  printf '%s\n' "$2" |
+    awk -v want="$1" 'tolower($1) == want { for (i = 2; i <= NF; i++) print $i }' \
     || true
+}
+
+# AllowUsers/DenyUsers entries are USER or USER@HOST, with * and ? wildcards.
+# Only the user half is matched: a host-restricted root entry is the admin's
+# decision about where root may log in from, not the installer's to widen.
+_sshd_user_pattern_matches() {
+  local user_part="${1%%@*}"
+  # shellcheck disable=SC2254 # the pattern is meant to glob
+  case "$2" in $user_part) return 0 ;; esac
+  return 1
+}
+
+# Whether sshd's user access lists let $1 log in at all. They're consulted
+# before any key: a stock Pod 4 ships `AllowUsers rewt`, which refuses root no
+# matter what authorized_keys holds — and once password auth is off, rewt
+# can't log in either.
+#
+# Exit codes: 0 admitted; 1 refused only because AllowUsers doesn't name $1
+# (ensure_sshd_allows_user can fix that); 2 anything else — a DenyUsers
+# match, group-based rules, or an sshd that can't evaluate $1's context.
+# Callers must not harden on anything but 0.
+sshd_allows_user() {
+  local user="$1" sshd_config="${2:-/etc/ssh/sshd_config}"
+  local dump pattern restricted=false
+
+  dump="$(sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" -f "$sshd_config" 2>/dev/null || true)"
+  if [ -z "$dump" ]; then
+    echo "Error: sshd cannot evaluate its access lists for '$user' — refusing to verify." >&2
+    return 2
+  fi
+
+  while IFS= read -r pattern; do
+    if _sshd_user_pattern_matches "$pattern" "$user"; then
+      echo "Error: sshd's DenyUsers entry '$pattern' refuses $user." >&2
+      return 2
+    fi
+  done < <(_sshd_list_entries denyusers "$dump")
+
+  # Group rules need group membership resolved the way sshd does it. Rather
+  # than approximate that, stop and let a human look.
+  if [ -n "$(_sshd_list_entries allowgroups "$dump")$(_sshd_list_entries denygroups "$dump")" ]; then
+    echo "Error: sshd restricts logins by group (AllowGroups/DenyGroups) — check that $user is admitted by hand." >&2
+    return 2
+  fi
+
+  while IFS= read -r pattern; do
+    restricted=true
+    _sshd_user_pattern_matches "$pattern" "$user" && return 0
+  done < <(_sshd_list_entries allowusers "$dump")
+
+  [ "$restricted" = false ] || return 1
+  return 0
+}
+
+# Make sshd's access lists admit $1, adding them to AllowUsers when that list
+# is the only obstacle. Existing entries are kept, so rewt stays allowed.
+# Anything sshd_allows_user can't fix is reported as failure and the config
+# is left alone, so the caller declines to harden.
+ensure_sshd_allows_user() {
+  local user="$1" sshd_config="${2:-/etc/ssh/sshd_config}" status=0 entries
+  sshd_allows_user "$user" "$sshd_config" || status=$?
+  case "$status" in
+    0) return 0 ;;
+    1) ;;
+    *) return 1 ;;
+  esac
+
+  # Read the global list without -C, so entries a Match block grants only to
+  # some connections aren't promoted to everyone. set_sshd_directive collapses
+  # the global AllowUsers lines into one, so every entry is carried into it.
+  entries="$(_sshd_list_entries allowusers "$(sshd -T -f "$sshd_config" 2>/dev/null || true)")"
+  if [ -z "$entries" ]; then
+    echo "Error: AllowUsers refuses $user but isn't set globally — not editing it." >&2
+    return 1
+  fi
+  entries="$(printf '%s' "$entries" | tr '\n' ' ')"
+
+  echo "Adding $user to sshd's AllowUsers (was: $entries)"
+  set_sshd_directive AllowUsers "$entries $user" "$sshd_config" || return 1
+  sshd_allows_user "$user" "$sshd_config" || return 1
+}
+
+# Apply an edited sshd_config. A standalone daemon is restarted. The pod's
+# Yocto image has no sshd.service or ssh.service: sshd.socket (Accept=yes)
+# starts a fresh sshd per connection, which reads the config as it starts, so
+# there is nothing to restart.
+restart_sshd() {
+  systemctl restart sshd 2>/dev/null && return 0
+  systemctl restart ssh 2>/dev/null && return 0
+  systemctl is-active --quiet sshd.socket 2>/dev/null &&
+    [ "$(systemctl show -p Accept sshd.socket 2>/dev/null)" = "Accept=yes" ]
 }

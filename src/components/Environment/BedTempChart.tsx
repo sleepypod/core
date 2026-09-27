@@ -151,7 +151,7 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
             <Line
               type="monotone"
               dataKey="ambient"
-              name="Ambient"
+              name="Bed Ambient"
               stroke="#d4a84a"
               strokeWidth={1}
               strokeDasharray="4 2"

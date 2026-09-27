@@ -1,0 +1,13 @@
+[Unit]
+Description=Sleepypod biometrics RAW linker (pin live frames before the firmware unlinks them)
+Documentation=https://github.com/sleepypod/core/tree/main/modules/biometrics-archiver
+Requires=persistent-biometrics.mount
+After=persistent-biometrics.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sleepypod-biometrics-linker
+# tmpfs-only work (one link per rotation): cheap enough to run every minute,
+# and deliberately not IOSchedulingClass=idle — it must not queue behind the
+# archiver's eMMC writes, or a frame can be unlinked before it is pinned.
+Nice=10

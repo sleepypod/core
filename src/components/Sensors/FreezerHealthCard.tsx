@@ -195,7 +195,7 @@ export function FreezerHealthCard() {
                     />
                     <MetricItem
                       icon={<Gauge size={16} className="text-zinc-400" />}
-                      label="Ambient"
+                      label="Hub Ambient"
                       value={freezerTempData.ambient}
                     />
                   </>

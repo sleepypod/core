@@ -17,12 +17,15 @@ import { getPrimeCompletedAt } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
 import { getAlarmState } from '@/src/hardware/deviceStateSync'
 import { getSnoozeStatus } from '@/src/hardware/snoozeManager'
+import { recordMutationOverlay } from './mutationOverlay'
 
 export function broadcastMutationStatus(
   side?: 'left' | 'right',
   sideOverlay?: Record<string, unknown>,
 ): void {
   try {
+    // Hold the new target over polls that still report the old one.
+    if (side) recordMutationOverlay(side, sideOverlay)
     const monitor = getDacMonitorIfRunning()
     const lastStatus = monitor?.getLastStatus()
     if (!lastStatus) return

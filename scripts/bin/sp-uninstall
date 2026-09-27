@@ -48,6 +48,9 @@ if [ "$FORCE" != true ]; then
   fi
 fi
 
+# Load the shared archive-and-check barrier before deleting any recovery tools.
+. "$INSTALL_DIR/scripts/lib/biometrics-archiver-helpers"
+
 echo "=== Uninstalling SleepyPod ==="
 
 # Stop and disable services
@@ -71,31 +74,12 @@ done
 # Drop-ins installed by sp-update (e.g. iptables-lockfile.conf for older pods).
 rm -rf /etc/systemd/system/sleepypod.service.d
 
-# Restore frank.sh from the most recent pre-tmpfs backup BEFORE the mount
-# is torn down — otherwise frank's cwd disappears mid-restart.
-if ls /opt/eight/bin/frank.sh.bak-pre-tmpfs-* >/dev/null 2>&1; then
-  newest_backup=$(ls -1t /opt/eight/bin/frank.sh.bak-pre-tmpfs-* | head -1)
-  echo "Restoring frank.sh from $newest_backup"
-  cp -p "$newest_backup" /opt/eight/bin/frank.sh
-  systemctl restart frank.service 2>/dev/null || true
+# Restore firmware's cwd, stop timers AND active jobs, archive every live/pinned
+# frame, and refuse to unmount or remove recovery tools if anything remains.
+if ! remove_biometrics_archiver; then
+  echo "Error: uninstall stopped to preserve unarchived RAW data and recovery tools" >&2
+  exit 1
 fi
-
-# Tear down biometrics-archiver: timers, prep service, mount unit.
-for u in sleepypod-biometrics-archiver.timer sleepypod-biometrics-pruner.timer \
-         sleepypod-tmpfs-prep.service persistent-biometrics.mount; do
-  systemctl stop "$u" 2>/dev/null || true
-  systemctl disable "$u" 2>/dev/null || true
-done
-rm -f /etc/systemd/system/sleepypod-biometrics-archiver.service \
-      /etc/systemd/system/sleepypod-biometrics-archiver.timer \
-      /etc/systemd/system/sleepypod-biometrics-pruner.service \
-      /etc/systemd/system/sleepypod-biometrics-pruner.timer \
-      /etc/systemd/system/sleepypod-tmpfs-prep.service \
-      /etc/systemd/system/persistent-biometrics.mount
-rm -rf /etc/systemd/system/frank.service.d
-rm -f /usr/local/bin/sleepypod-tmpfs-prep \
-      /usr/local/bin/sleepypod-biometrics-archiver \
-      /usr/local/bin/sleepypod-biometrics-pruner
 
 systemctl daemon-reload
 

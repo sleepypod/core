@@ -237,15 +237,20 @@ class NatsFollower:
             target=self._run, name="nats-follower", daemon=True)
         self._thread.start()
 
-    def read_records(self):
+    def read_records(self, on_poll=None):
         """Yield decoded CBOR records as they arrive from NATS.
 
-        Blocks on the internal queue. Raises NatsFollowerError if the client
-        exhausts its reconnect budget, so the caller exits and systemd
+        Calls optional on_poll on the reader thread before each queue poll,
+        including while idle. Blocks on the internal queue. Raises
+        NatsFollowerError if the client exhausts its reconnect budget, so the caller exits and systemd
         restarts the module (re-running source selection).
         """
         self._ensure_started()
         while not self._shutdown.is_set():
+            if on_poll is not None:
+                on_poll()
+                if self._shutdown.is_set():
+                    break
             try:
                 item = self._queue.get(timeout=0.5)
             except queue.Empty:

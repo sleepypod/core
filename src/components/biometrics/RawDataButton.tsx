@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo } from 'react'
 import { Download, X, FileText, HardDrive, Trash2, Database, Package } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { useSide } from '@/src/hooks/useSide'
+import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 
 function formatCSVDate(date: Date): string {
@@ -82,7 +82,7 @@ export function RawDataButton() {
   const [isOpen, setIsOpen] = useState(false)
   const [showFiles, setShowFiles] = useState(false)
   const [deletingFile, setDeletingFile] = useState<string | null>(null)
-  const { side } = useSide()
+  const { side } = useBiometricsSide()
   const { weekStart, weekEnd } = useWeekNavigator()
   const utils = trpc.useUtils()
 

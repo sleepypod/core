@@ -1,6 +1,6 @@
 'use client'
 
-import { useSide } from '@/src/hooks/useSide'
+import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { trpc } from '@/src/utils/trpc'
 import {
@@ -236,7 +236,7 @@ interface VitalsPanelProps {
  *    and a personal-baseline band behind the rows (Whoop/Oura convention).
  */
 export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = false }: VitalsPanelProps) {
-  const { side, toggleSide } = useSide()
+  const { side, toggleSide } = useBiometricsSide()
   const week = useWeekNavigator()
   const [view, setView] = useState<'night' | 'week'>('night')
   // Track the user's explicit pick by session ID so the selection survives
@@ -418,15 +418,17 @@ export function VitalsPanel({ dualSide = false, hideNav = false, hideSummary = f
           <div className="flex items-center gap-2">
             <ViewToggle view={view} onChange={setView} />
 
-            <button
-              onClick={toggleSide}
-              className="flex items-center gap-1.5 rounded-full bg-sky-400/10 px-3 py-1.5"
-            >
-              <span className="text-xs font-semibold text-sky-400 capitalize">{side}</span>
-              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-400/50 text-[9px] font-bold text-white">
-                {side === 'left' ? 'L' : 'R'}
-              </span>
-            </button>
+            {toggleSide && (
+              <button
+                onClick={toggleSide}
+                className="flex items-center gap-1.5 rounded-full bg-sky-400/10 px-3 py-1.5"
+              >
+                <span className="text-xs font-semibold text-sky-400 capitalize">{side}</span>
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-400/50 text-[9px] font-bold text-white">
+                  {side === 'left' ? 'L' : 'R'}
+                </span>
+              </button>
+            )}
           </div>
         </div>
       )}

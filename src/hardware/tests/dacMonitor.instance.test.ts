@@ -584,6 +584,27 @@ describe('hardware/dacMonitor.instance', () => {
       vi.restoreAllMocks()
     })
 
+    it('holds a just-set target over a poll that still reports the old one', async () => {
+      const { recordMutationOverlay, _resetMutationOverlays } = await import('@/src/streaming/mutationOverlay')
+      _resetMutationOverlays()
+      const mod = await freshModule()
+      await mod.getDacMonitor()
+      await flushMicrotasks()
+      broadcastFrameMock.mockClear()
+      const status: DeviceStatus = parseDeviceStatusMock('raw')
+      const newTarget = (status.leftSide.targetTemperature ?? 80) === 70 ? 71 : 70
+      recordMutationOverlay('left', { targetTemperature: newTarget, targetLevel: -45 })
+
+      monitorInstances[0].emit('status:updated', status)
+      await flushMicrotasks()
+
+      const frame = broadcastFrameMock.mock.calls.at(-1)?.[0] as { leftSide: Record<string, unknown>, rightSide: Record<string, unknown> }
+      expect(frame.leftSide.targetTemperature).toBe(newTarget)
+      expect(frame.leftSide.targetLevel).toBe(-45)
+      expect(frame.rightSide.targetTemperature).toBe(status.rightSide.targetTemperature)
+      _resetMutationOverlays()
+    })
+
     it('status:updated includes primeCompletedNotification when getPrimeCompletedAt returns a value', async () => {
       const mod = await freshModule()
       await mod.getDacMonitor()

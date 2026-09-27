@@ -209,7 +209,7 @@ export function BedTempMatrix() {
               {/* Environment row */}
               <div className="flex gap-1.5 sm:gap-2">
                 <div className="flex flex-1 flex-col items-center rounded-lg bg-zinc-900 p-1.5 sm:p-2">
-                  <span className="text-[8px] font-medium uppercase text-zinc-500 sm:text-[9px]">Ambient</span>
+                  <span className="text-[8px] font-medium uppercase text-zinc-500 sm:text-[9px]">Bed Ambient</span>
                   <span className="text-[13px] font-semibold text-zinc-200 sm:text-sm">
                     {data.ambientTemp}
                   </span>

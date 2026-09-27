@@ -1,7 +1,17 @@
 #!/bin/bash
 # Archive RAW files from the /persistent/biometrics tmpfs into a gzipped
-# cold archive on eMMC. Runs every 15 min via timer. Files newer than
-# KEEP_RECENT_MIN are left alone (firmware may still be writing them).
+# cold archive on eMMC. Runs every 15 min via timer.
+#
+# Two sources, in order:
+#   1. Live frames older than KEEP_RECENT_MIN — only reachable on firmware
+#      variants that leave a finished file behind (the firmware this module
+#      normally runs against unlinks it within a second of rotating, which is
+#      what the linker exists for).
+#   2. Frames pinned by sleepypod-biometrics-linker under $PENDING_DIR. A
+#      pinned frame is archived once the firmware has dropped its own name for
+#      the inode; while both names exist the firmware may still be appending,
+#      so the link is left in place (it shares the live frame's blocks and
+#      costs no extra tmpfs).
 #
 # Output: /persistent/biometrics-archive/<seqno>.RAW.gz, atomic via tmp
 # file + rename.
@@ -9,6 +19,7 @@ set -euo pipefail
 
 TMPFS_DIR="${TMPFS_DIR:-/persistent/biometrics}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/persistent/biometrics-archive}"
+PENDING_DIR="${PENDING_DIR:-$TMPFS_DIR/.pending}"
 KEEP_RECENT_MIN="${KEEP_RECENT_MIN:-15}"
 GZIP_LEVEL="${GZIP_LEVEL:-6}"
 
@@ -23,14 +34,18 @@ archived=0
 removed=0
 failed=0
 
-while IFS= read -r -d '' src; do
+# gzip one source path into the archive and drop the source. For a pinned link
+# the source is only that extra name — the firmware's own name, if it still
+# holds one, is untouched.
+archive_one() {
+  local src=$1 base dst tmp
   base=$(basename "$src")
   dst="$ARCHIVE_DIR/$base.gz"
 
   if [ -f "$dst" ]; then
     rm -f "$src"
     removed=$((removed + 1))
-    continue
+    return 0
   fi
 
   tmp="$dst.tmp.$$"
@@ -43,9 +58,30 @@ while IFS= read -r -d '' src; do
     failed=$((failed + 1))
     echo "archiver: failed to gzip $base" >&2
   fi
+}
+
+# Pass 1: live frames the firmware has stopped touching.
+while IFS= read -r -d '' src; do
+  archive_one "$src"
 done < <(find "$TMPFS_DIR" -maxdepth 1 -type f -name '*.RAW' -mmin "+$KEEP_RECENT_MIN" -print0)
 
-echo "archiver: archived=$archived removed=$removed failed=$failed"
+# Pass 2: pinned frames the firmware has released. Runs after pass 1 so a link
+# whose live twin was just archived is cleaned up in the same run.
+if [ -d "$PENDING_DIR" ]; then
+  while IFS= read -r -d '' src; do
+    base=$(basename "$src")
+    if [ -e "$TMPFS_DIR/$base" ] && [ ! -f "$ARCHIVE_DIR/$base.gz" ]; then
+      continue
+    fi
+    archive_one "$src"
+  done < <(find "$PENDING_DIR" -maxdepth 1 -type f -name '*.RAW' -print0)
+fi
+
+shopt -s nullglob
+pending=( "$PENDING_DIR"/*.RAW )
+shopt -u nullglob
+
+echo "archiver: archived=$archived removed=$removed failed=$failed pending=${#pending[@]}"
 if [ "$failed" -gt 0 ]; then
   exit 1
 fi

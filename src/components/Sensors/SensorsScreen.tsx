@@ -203,7 +203,7 @@ export function SensorsScreen() {
                       value={summary.avgRightCenterTemp != null ? `${Math.round(summary.avgRightCenterTemp)}°` : '--'}
                     />
                     <SummaryItem
-                      label="Avg Ambient"
+                      label="Avg Bed Ambient"
                       value={summary.avgAmbientTemp != null ? `${Math.round(summary.avgAmbientTemp)}°` : '--'}
                     />
                     <SummaryItem

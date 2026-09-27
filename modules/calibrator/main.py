@@ -4,7 +4,8 @@ SleepyPod calibrator module.
 
 Runs sensor calibration either on a daily schedule or on-demand (triggered
 by the iOS app via tRPC → trigger file IPC). Computes baselines for:
-  - Capacitance sensors (per-channel mean+std for presence detection)
+  - Capacitance sensors (per-channel mean+std for presence detection) —
+    manual requests only; see SCHEDULED_SENSOR_TYPES
   - Piezo sensors (noise floor RMS for presence threshold)
   - Temperature sensors (per-thermistor offsets vs ambient reference)
 
@@ -48,6 +49,13 @@ DAILY_HOUR = int(os.environ.get("CALIBRATION_HOUR", "6"))  # 06:00 UTC
 
 CAL_SIDES = ("left", "right")
 CAL_SENSOR_TYPES = ("capacitance", "piezo", "temperature")
+# Sensor types calibrated without a user asking (startup, retry, daily,
+# pre-prime). Capacitance is excluded: the sleep-detector keeps a
+# self-adjusting empty-bed baseline, and a scheduled snapshot kept capturing
+# a sleeper as "empty" (the fixed-UTC-hour fallback can land mid-night),
+# making the empty bed read occupied all day. A manual recalibration still runs it, and the
+# sleep-detector adopts the result.
+SCHEDULED_SENSOR_TYPES = ("piezo", "temperature")
 # How often to re-attempt still-missing/failed profiles. On a NATS-only pod
 # the live buffer starts empty, so the first capacitance/piezo attempt fails
 # ("No capSense records available"); it must retry as samples accrue rather
@@ -223,7 +231,7 @@ def compute_pending(store: CalibrationStore, now: float) -> set:
     expired and therefore still needs (re)calibration."""
     pending = set()
     for side in CAL_SIDES:
-        for sensor_type in CAL_SENSOR_TYPES:
+        for sensor_type in SCHEDULED_SENSOR_TYPES:
             profile = store.get_active(side, sensor_type)
             needs = profile is None
             if profile and profile.get("expires_at"):
@@ -248,6 +256,16 @@ def run_pending_calibrations(store: CalibrationStore, now: float,
     return compute_pending(store, time.time())
 
 
+def trigger_sensor_types(trigger: dict) -> tuple:
+    """Sensor types a trigger file asks for. Triggers the scheduler writes
+    (source "scheduled", e.g. pre-prime) never recalibrate capacitance."""
+    t_type = trigger.get("sensor_type", "all")
+    types = CAL_SENSOR_TYPES if t_type == "all" else (t_type,)
+    if trigger.get("source") == "scheduled":
+        types = tuple(t for t in types if t in SCHEDULED_SENSOR_TYPES)
+    return types
+
+
 def should_run_daily(store: CalibrationStore, now: float, last_run: float) -> bool:
     """Fallback daily calibration if scheduler trigger didn't fire.
 
@@ -265,8 +283,8 @@ def should_run_daily(store: CalibrationStore, now: float, last_run: float) -> bo
         return False
     if time.gmtime(now).tm_hour != DAILY_HOUR:
         return False
-    for side in ("left", "right"):
-        for sensor_type in ("capacitance", "piezo", "temperature"):
+    for side in CAL_SIDES:
+        for sensor_type in SCHEDULED_SENSOR_TYPES:
             age = store.get_profile_age_hours(side, sensor_type)
             if age is None or age >= 25:
                 return True
@@ -314,14 +332,14 @@ def main() -> None:
             trigger = watcher.check_trigger()
             if trigger:
                 t_side = trigger.get("side", "all")
-                t_type = trigger.get("sensor_type", "all")
 
                 sides = CAL_SIDES if t_side == "all" else (t_side,)
-                types = CAL_SENSOR_TYPES if t_type == "all" else (t_type,)
+                types = trigger_sensor_types(trigger)
 
+                source = "scheduled" if trigger.get("source") == "scheduled" else "manual"
                 for s in sides:
                     for st in types:
-                        run_calibration(store, s, st, triggered_by="manual",
+                        run_calibration(store, s, st, triggered_by=source,
                                         buffer=nats_buffer)
 
                 watcher.clear_trigger()
@@ -332,7 +350,7 @@ def main() -> None:
             if should_run_daily(store, now, daily_last_run):
                 log.info("Running daily calibration")
                 for side in CAL_SIDES:
-                    for st in CAL_SENSOR_TYPES:
+                    for st in SCHEDULED_SENSOR_TYPES:
                         run_calibration(store, side, st, triggered_by="daily",
                                         buffer=nats_buffer)
                 daily_last_run = now

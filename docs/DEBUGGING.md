@@ -23,6 +23,7 @@ SSH setup and hardening: `scripts/README.md`, `docs/DEPLOYMENT.md`.
 | --- | --- | --- |
 | App database | `/persistent/sleepypod-data/` | `docs/DEPLOYMENT.md` |
 | RAW frames (hot, tmpfs) | `/persistent/biometrics/*.RAW` | `docs/adr/0018-tmpfs-raw-frames.md` |
+| RAW frames pinned for archiving | `/persistent/biometrics/.pending/*.RAW` (hard links) | `docs/adr/0018-tmpfs-raw-frames.md` |
 | RAW archive (cold, eMMC) | `/persistent/biometrics-archive/*.RAW.gz` | `docs/adr/0012-biometrics-module-system.md` |
 | DAC socket | `/persistent/deviceinfo/dac.sock` (Pod 5) · `/deviceinfo/dac.sock` (Pod 3/4) | `docs/DEPLOYMENT.md` |
 
@@ -41,6 +42,30 @@ reads red/amber while the bed is occupied, the ingest pipeline has stalled.
 3. `journalctl -u frank` — is the firmware writing at all?
 
 Deep detail: `docs/adr/0012-biometrics-module-system.md`, `docs/adr/0018-tmpfs-raw-frames.md`.
+
+## RAW archive is empty / `archived=0` on every run
+
+Past nights can only be replayed (e.g. against the piezo-processor beat
+detector) if frames reached `/persistent/biometrics-archive/`. The firmware
+rotates `*.RAW` every ~15 min and unlinks the finished frame within a second, so
+the archive depends on the **linker** pinning each frame with a hard link first
+(ADR-0018).
+
+1. `sp-status` — `biometrics-archiver units` must show
+   `sleepypod-biometrics-linker.timer` active, and `.RAW pinned (.pending)`
+   should be 1 while the firmware is writing.
+2. `journalctl -u sleepypod-biometrics-linker -n 50 --no-pager` — the linker is
+   quiet on a no-op run; `linked=` lines appear once per rotation. `dropped=`
+   means pinned frames were discarded because the archiver is not draining.
+3. `journalctl -u sleepypod-biometrics-archiver -n 50 --no-pager` — expect
+   `archived=1` roughly once per rotation. `failed=` means gzip could not write
+   to eMMC (check `df -P /persistent`); a stuck `pending=` with `archived=0`
+   means frames are pinned but not being released.
+4. `ls -la /persistent/biometrics /persistent/biometrics/.pending` — one live
+   frame with a moving mtime, plus its pin.
+
+Deep detail: `docs/adr/0018-tmpfs-raw-frames.md` ("Rotation deletes the finished
+frame").
 
 ## Pump stalled but the side reads as "powered"
 

@@ -167,7 +167,7 @@ export function EnvironmentPanel({ unit = 'F', dualSide = false }: EnvironmentPa
               />
               <EnvironmentStatCard
                 icon={<ThermometerSun size={14} />}
-                label="Ambient"
+                label="Bed Ambient"
                 value={currentAmbient}
                 subValue={ambientTrend === 'warming' ? '↑ warming' : ambientTrend === 'cooling' ? '↓ cooling' : undefined}
                 colorClass="text-[#d4a84a]"
@@ -190,7 +190,7 @@ export function EnvironmentPanel({ unit = 'F', dualSide = false }: EnvironmentPa
               />
               <EnvironmentStatCard
                 icon={<ThermometerSun size={14} />}
-                label="Ambient"
+                label="Bed Ambient"
                 value={currentAmbient}
                 subValue={ambientTrend === 'warming' ? '↑ warming' : ambientTrend === 'cooling' ? '↓ cooling' : undefined}
                 colorClass="text-[#d4a84a]"
@@ -251,7 +251,7 @@ export function EnvironmentPanel({ unit = 'F', dualSide = false }: EnvironmentPa
               : (
                   <SummaryItem label={`Avg Bed ${side === 'left' ? 'L' : 'R'}`} value={avgBedTempStr} />
                 )}
-            <SummaryItem label="Avg Ambient" value={avgAmbient} />
+            <SummaryItem label="Avg Bed Ambient" value={avgAmbient} />
             <SummaryItem label="Min" value={minAmbient} />
             <SummaryItem label="Max" value={maxAmbient} />
             <SummaryItem label="Humidity" value={avgHumidity} />

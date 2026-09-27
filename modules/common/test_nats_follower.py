@@ -321,3 +321,23 @@ class TestCollectorFailures:
         assert [r['i'] for r in snap['capSense']] == [2, 3]
         assert snap['piezo-dual'] == [{'type': 'piezo-dual'}]
         assert buf.total() == 3
+
+
+def test_poll_callback_runs_while_nats_queue_idle(monkeypatch):
+    import queue
+    ev = threading.Event()
+    follower = NatsFollower(ev)
+    follower._started = True
+    calls = []
+
+    def poll():
+        calls.append(threading.get_ident())
+        if len(calls) == 2:
+            ev.set()
+
+    def empty(**kwargs):
+        raise queue.Empty
+
+    monkeypatch.setattr(follower._queue, "get", empty)
+    assert list(follower.read_records(on_poll=poll)) == []
+    assert calls == [threading.get_ident()] * 2

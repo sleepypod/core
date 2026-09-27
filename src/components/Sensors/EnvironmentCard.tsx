@@ -100,7 +100,7 @@ export function EnvironmentCard() {
         <EnvItem
           icon={<Thermometer size={11} className="text-amber-400" />}
           value={leftAmbient}
-          label="Ambient L"
+          label="Bed Ambient L"
         />
         <EnvItem
           icon={<Droplets size={11} className="text-sky-400" />}
@@ -110,7 +110,7 @@ export function EnvironmentCard() {
         <EnvItem
           icon={<Thermometer size={11} className="text-amber-400" />}
           value={rightAmbient ?? leftAmbient}
-          label="Ambient R"
+          label="Bed Ambient R"
         />
       </div>
 
@@ -122,7 +122,7 @@ export function EnvironmentCard() {
           </div>
           <div className="grid grid-cols-3 gap-1">
             <SummaryItem
-              label="Avg Ambient"
+              label="Avg Bed Ambient"
               value={summaryData.avgAmbientTemp != null ? `${summaryData.avgAmbientTemp.toFixed(1)}${suffix}` : '--'}
             />
             <SummaryItem
@@ -130,7 +130,7 @@ export function EnvironmentCard() {
               value={summaryData.avgHumidity != null ? `${summaryData.avgHumidity.toFixed(0)}%` : '--'}
             />
             <SummaryItem
-              label="Ambient Range"
+              label="Bed Ambient Range"
               value={
                 summaryData.minAmbientTemp != null && summaryData.maxAmbientTemp != null
                   ? `${summaryData.minAmbientTemp.toFixed(0)}–${summaryData.maxAmbientTemp.toFixed(0)}${suffix}`

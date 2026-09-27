@@ -2,7 +2,7 @@
 
 import { Activity, Heart, Wind } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { useSide } from '@/src/hooks/useSide'
+import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 
 /**
@@ -10,7 +10,7 @@ import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
  * Self-contained: fetches summary from tRPC for the shared week/side context.
  */
 export function VitalsGrid() {
-  const { side } = useSide()
+  const { side } = useBiometricsSide()
   const { weekStart, weekEnd } = useWeekNavigator()
 
   const summaryQuery = trpc.biometrics.getVitalsSummary.useQuery({

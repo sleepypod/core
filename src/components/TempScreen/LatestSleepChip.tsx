@@ -2,7 +2,7 @@
 
 import { Moon } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { useSide } from '@/src/providers/SideProvider'
+import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
@@ -19,7 +19,7 @@ function formatDuration(seconds: number): string {
  * - biometrics.getLatestSleep → most recent sleep record for active side
  */
 export function LatestSleepChip() {
-  const { primarySide } = useSide()
+  const { side: primarySide } = useBiometricsSide()
 
   const { data: latest } = trpc.biometrics.getLatestSleep.useQuery(
     { side: primarySide },

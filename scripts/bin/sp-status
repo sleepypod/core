@@ -150,6 +150,7 @@ count_archive_gz() {
 }
 printf ".RAW @ /persistent:            %s\n" "$(count_raw_excluding_seqno /persistent)"
 printf ".RAW @ /persistent/biometrics: %s\n" "$(count_raw_excluding_seqno /persistent/biometrics)"
+printf ".RAW pinned (.pending):        %s\n" "$(count_raw_excluding_seqno /persistent/biometrics/.pending)"
 printf ".RAW.gz in archive:            %s\n" "$(count_archive_gz /persistent/biometrics-archive)"
 
 # ----- sleepypod modules ---------------------------------------------------
@@ -163,7 +164,8 @@ done
 # ----- biometrics-archiver units -------------------------------------------
 probe_section "biometrics-archiver units"
 for u in persistent-biometrics.mount sleepypod-tmpfs-prep.service \
-         sleepypod-biometrics-archiver.timer sleepypod-biometrics-pruner.timer; do
+         sleepypod-biometrics-linker.timer sleepypod-biometrics-archiver.timer \
+         sleepypod-biometrics-pruner.timer; do
   printf "%-40s %s\n" "$u" "$(active_or "$u")"
 done
 

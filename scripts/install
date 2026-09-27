@@ -24,6 +24,8 @@ echo ""
 # Mode flags
 #   --local            Skip download (code already on disk, e.g. via scp/deploy)
 #   --no-ssh           Skip interactive SSH setup prompt
+#   --ssh-key KEY      Configure SSH with this public key, no prompts. For runs
+#                      with no terminal at all (CI, `ssh pod 'bash install'`).
 #   --branch X         Install a specific branch (default: main). For branches
 #                      outside main/dev/latest, the latest successful build
 #                      artifact is fetched via nightly.link.
@@ -37,6 +39,7 @@ echo ""
 #                      rootfs vs /persistent by total partition size.
 INSTALL_LOCAL=false
 SKIP_SSH=false
+SSH_KEY_ARG=""
 INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
 PURGE_FREE_SLEEP=false
@@ -50,6 +53,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --local)              INSTALL_LOCAL=true ;;
     --no-ssh)             SKIP_SSH=true ;;
+    --ssh-key)            shift; SSH_KEY_ARG="${1:-}" ;;
     --branch)             shift; INSTALL_BRANCH="${1:-}" ;;
     --artifact-url)       shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
     --purge-free-sleep)   PURGE_FREE_SLEEP=true ;;
@@ -1766,20 +1770,29 @@ fi
 fix_db_permissions
 
 # Optional SSH configuration
+#
+# The documented `curl … | sudo bash` install hands bash the script on stdin,
+# so stdin is never a terminal — the prompts read the controlling terminal
+# instead. Only a run with no terminal at all skips them, and --ssh-key covers
+# that case without prompting.
+SETUP_SSH=""
+SSH_KEY="$SSH_KEY_ARG"
 if [ "$SKIP_SSH" = true ]; then
   echo "Skipping SSH setup (--no-ssh)"
-elif [ ! -t 0 ]; then
-  echo "Skipping SSH setup (non-interactive)"
-else
+elif [ -n "$SSH_KEY" ]; then
+  SETUP_SSH=y
+elif { : </dev/tty; } 2>/dev/null; then
   echo ""
   echo "========================================"
   echo "  Optional SSH Configuration"
   echo "========================================"
   echo ""
-  read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH
+  read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH </dev/tty || true
+else
+  echo "Skipping SSH setup (no terminal to prompt on — re-run with --ssh-key \"<public key>\" to configure it)"
 fi
 
-if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; then
+if [[ "$SETUP_SSH" =~ ^[Yy]$ ]]; then
   echo "Configuring SSH..."
 
   if [ ! -f "$INSTALL_DIR/scripts/lib/ssh-helpers" ]; then
@@ -1810,9 +1823,11 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
   # went to /root/.ssh and sshd (root home = /home/root) never read it.
   migrate_stranded_authorized_keys root
 
-  echo ""
-  echo "Enter your SSH public key:"
-  read -r SSH_KEY
+  if [ -z "$SSH_KEY" ]; then
+    echo ""
+    echo "Enter your SSH public key:"
+    read -r SSH_KEY </dev/tty || true
+  fi
 
   SSH_KEY_INSTALLED=false
   if [ -n "$SSH_KEY" ]; then
@@ -1837,17 +1852,25 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
     esac
   fi
 
-  # Only disable password auth once root has a key sshd can actually read.
-  # Hardening without one is an unrecoverable lockout — port 8822 is the
-  # pod's only remote entry point, and getting back in means opening the
-  # case for a serial console.
-  if [ "$SSH_KEY_INSTALLED" = true ]; then
+  # Only disable password auth once root has a key sshd can actually read,
+  # and sshd's AllowUsers/DenyUsers rules let root log in at all. Hardening
+  # without both is an unrecoverable lockout — port 8822 is the pod's only
+  # remote entry point, and getting back in means opening the case for a
+  # serial console.
+  SSH_HARDEN=false
+  if [ "$SSH_KEY_INSTALLED" != true ]; then
+    echo "No SSH key installed — leaving password authentication as-is." >&2
+    echo "Re-run the installer with a valid public key to harden sshd." >&2
+  elif ensure_sshd_allows_user root; then
+    SSH_HARDEN=true
+  else
+    echo "sshd's user access rules would refuse root — leaving password authentication as-is." >&2
+  fi
+
+  if [ "$SSH_HARDEN" = true ]; then
     set_sshd_directive PermitRootLogin prohibit-password
     set_sshd_directive PasswordAuthentication no
     set_sshd_directive PermitEmptyPasswords no
-  else
-    echo "No SSH key installed — leaving password authentication as-is." >&2
-    echo "Re-run the installer with a valid public key to harden sshd." >&2
   fi
 
   # Validate SSH config before restarting
@@ -1866,7 +1889,7 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
   # re-enabled password auth for exactly the account being hardened. Port
   # can't appear in a Match block, so it stays global.
   SSH_EXPECTED="port=8822"
-  if [ "$SSH_KEY_INSTALLED" = true ]; then
+  if [ "$SSH_HARDEN" = true ]; then
     SSH_EXPECTED="$SSH_EXPECTED root:permitrootlogin=prohibit-password"
     SSH_EXPECTED="$SSH_EXPECTED root:passwordauthentication=no root:permitemptypasswords=no"
   fi
@@ -1886,16 +1909,20 @@ if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; 
     fi
   done
 
-  if [ "$SSH_KEY_INSTALLED" = true ]; then
+  if [ "$SSH_HARDEN" = true ] && ! sshd_allows_user root; then
+    echo "Error: sshd's user access rules refuse root after the edit." >&2
+    echo "Restoring backup and leaving sshd untouched..." >&2
+    cp /etc/ssh/sshd_config.pre-install /etc/ssh/sshd_config
+    exit 1
+  fi
+
+  if [ "$SSH_HARDEN" = true ]; then
     SSH_RESULT="SSH configured on port 8822 (keys only)"
   else
     SSH_RESULT="SSH configured on port 8822 (existing auth methods unchanged)"
   fi
 
-  # Restart SSH (try both service names for compatibility)
-  if systemctl restart sshd 2>/dev/null; then
-    echo "$SSH_RESULT"
-  elif systemctl restart ssh 2>/dev/null; then
+  if restart_sshd; then
     echo "$SSH_RESULT"
   else
     echo "Error: Failed to restart SSH service" >&2

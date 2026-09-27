@@ -245,3 +245,26 @@ class TestRotationRace:
         assert follower._path == real_path
         if follower._file:
             follower._file.close()
+
+
+@pytest.mark.parametrize("existing_file", [False, True])
+def test_poll_callback_runs_while_raw_input_idle(tmp_path, monkeypatch, existing_file):
+    from common import raw_follower
+    if existing_file:
+        (tmp_path / "empty.RAW").touch()
+    follower = _make_follower(tmp_path)
+    calls = []
+
+    def poll():
+        calls.append(threading.get_ident())
+        if len(calls) == 2:
+            follower._shutdown.set()
+
+    def eof(_):
+        raise EOFError
+
+    monkeypatch.setattr(raw_follower, "read_raw_record", eof)
+    monkeypatch.setattr(raw_follower.time, "sleep", lambda _: None)
+    assert list(follower.read_records(on_poll=poll)) == []
+    assert calls == [threading.get_ident()] * 2
+    assert follower._file is None

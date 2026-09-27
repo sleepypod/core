@@ -2,7 +2,7 @@
 
 import { useRef, useCallback } from 'react'
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
-import { useSide } from '@/src/providers/SideProvider'
+import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { trpc } from '@/src/utils/trpc'
 
@@ -31,15 +31,10 @@ const SECTIONS = [
  *   Sleep Sessions → Movement → Raw Data
  */
 export default function DataPage() {
-  const { selectedSide, activeSides, primarySide, selectSide } = useSide()
+  // Biometrics show one side when a single sleeper is set (one side away).
+  const { side: primarySide, sides: activeSides, showBothSides, toggleSide } = useBiometricsSide()
   const week = useWeekNavigator()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
-
-  const showBothSides = selectedSide === 'both'
-
-  const handleSideToggle = useCallback(() => {
-    selectSide(primarySide === 'left' ? 'right' : 'left')
-  }, [primarySide, selectSide])
 
   // Fetch sleep records for each active side
   const leftSleepQuery = trpc.biometrics.getSleepRecords.useQuery(
@@ -113,25 +108,27 @@ export default function DataPage() {
           <ChevronRight size={16} />
         </button>
 
-        {/* Side toggle — tap to swap L ↔ R */}
-        <button
-          onClick={handleSideToggle}
-          className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-zinc-800/80 px-3 active:bg-zinc-700"
-          aria-label={`Showing ${primarySide} side, tap to switch`}
-        >
-          <span
-            className={`flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-bold ${
-              primarySide === 'left'
-                ? 'bg-sky-500/20 text-sky-400'
-                : 'bg-teal-500/20 text-teal-400'
-            }`}
+        {/* Side toggle — tap to swap L ↔ R. Hidden for a single sleeper. */}
+        {toggleSide && (
+          <button
+            onClick={toggleSide}
+            className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-zinc-800/80 px-3 active:bg-zinc-700"
+            aria-label={`Showing ${primarySide} side, tap to switch`}
           >
-            {primarySide === 'left' ? 'L' : 'R'}
-          </span>
-          <span className="text-[11px] font-medium text-zinc-400">
-            {primarySide === 'left' ? 'Left' : 'Right'}
-          </span>
-        </button>
+            <span
+              className={`flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-bold ${
+                primarySide === 'left'
+                  ? 'bg-sky-500/20 text-sky-400'
+                  : 'bg-teal-500/20 text-teal-400'
+              }`}
+            >
+              {primarySide === 'left' ? 'L' : 'R'}
+            </span>
+            <span className="text-[11px] font-medium text-zinc-400">
+              {primarySide === 'left' ? 'Left' : 'Right'}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Section Navigation Pills */}
