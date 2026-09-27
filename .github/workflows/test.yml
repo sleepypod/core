@@ -67,14 +67,17 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           use_oidc: true
+          fail_ci_if_error: false
           slug: sleepypod/core
           flags: javascript
 
       - name: Upload test results to Codecov
         if: matrix.task.name == 'Unit Tests' && !cancelled()
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v5
         with:
+          report_type: test_results
           use_oidc: true
+          fail_ci_if_error: false
           slug: sleepypod/core
           files: test-results/junit.xml
           flags: javascript
