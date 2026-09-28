@@ -63,6 +63,8 @@ export const runOnceRouter = router({
         const previous = db.select().from(runOnceSessions).where(and(
           eq(runOnceSessions.side, input.side), eq(runOnceSessions.status, 'active'),
         )).all()
+        const controller = getTemperatureController()
+        const wasPowered = controller.status(input.side).blocked === null
         // Commit the session before resolving its target. Cancellation and
         // insertion are atomic; a failed insert leaves the old session intact.
         const session = db.transaction((tx) => {
@@ -80,10 +82,18 @@ export const runOnceRouter = router({
           if (!row) throw new Error('Failed to create run-once session')
           return row
         })
+        let attemptedPower = false
         try {
-          await getTemperatureController().powerOnLocked(input.side, input.setPoints[0].temperature)
+          // Register the new jobs before energizing. Old jobs remain registered
+          // until success so a failed replacement can retain its original clock.
+          jobManager.scheduleRunOnceSession(
+            session.id, input.side, input.setPoints.slice(1), input.wakeTime, timezone,
+          )
+          attemptedPower = true
+          await controller.powerOnLocked(input.side, input.setPoints[0].temperature)
         }
         catch (error) {
+          jobManager.cancelRunOnceSession(input.side, session.id)
           db.transaction((tx) => {
             tx.update(runOnceSessions).set({ status: 'cancelled' }).where(eq(runOnceSessions.id, session.id)).run()
             for (const old of previous) {
@@ -93,13 +103,19 @@ export const runOnceRouter = router({
             }
           })
           // Never leave an untracked, partially energized start running.
-          if (!previous.length) await getTemperatureController().powerOffLocked(input.side)
+          try {
+            if (attemptedPower) {
+              controller.invalidate(input.side)
+              if (wasPowered) await controller.reconcileLocked(input.side, true)
+              else await controller.powerOffLocked(input.side)
+            }
+          }
+          catch (cleanupError) {
+            console.warn('[runOnce] Failed to restore hardware after rejected start:', cleanupError)
+          }
           throw error
         }
-        jobManager.cancelRunOnceSession(input.side)
-        jobManager.scheduleRunOnceSession(
-          session.id, input.side, input.setPoints.slice(1), input.wakeTime, timezone,
-        )
+        for (const old of previous) jobManager.cancelRunOnceSession(input.side, old.id)
         return { sessionId: session.id, expiresAt: Math.floor(expiresAt.getTime() / 1000) }
       })
     }),

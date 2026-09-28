@@ -42,6 +42,8 @@ const mocks = vi.hoisted(() => ({
   startPerformanceMonitoring: vi.fn(),
   stopPerformanceMonitoring: vi.fn(),
   recordStartupPhase: vi.fn(),
+  startTemperatureController: vi.fn(async () => undefined),
+  stopTemperatureController: vi.fn(),
   getAutomationEngine: vi.fn(async () => ({})),
   shutdownAutomationEngine: vi.fn(async () => undefined),
 }))
@@ -55,6 +57,11 @@ vi.mock('@/src/lib/serverPerformance', () => ({
   stopPerformanceMonitoring: mocks.stopPerformanceMonitoring,
   recordStartupPhase: mocks.recordStartupPhase,
 }))
+vi.mock('@/src/temperature/instance', () => ({
+  startTemperatureController: mocks.startTemperatureController,
+  stopTemperatureController: mocks.stopTemperatureController,
+}))
+
 vi.mock('@/src/automation', () => ({
   getAutomationEngine: mocks.getAutomationEngine,
   shutdownAutomationEngine: mocks.shutdownAutomationEngine,
@@ -336,6 +343,16 @@ describe('initializeScheduler — error swallowing', () => {
 })
 
 describe('register()', () => {
+  it('starts the shared controller and keepalives even when Autopilot fails', async () => {
+    mocks.getAutomationEngine.mockRejectedValueOnce(new Error('automation table unavailable'))
+    const { register } = await import('../instrumentation')
+    await register()
+    await vi.waitFor(() => {
+      expect(mocks.startTemperatureController).toHaveBeenCalledTimes(1)
+      expect(mocks.initializeKeepalives).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('waits for migrations before publishing hardware readiness', async () => {
     let release!: () => void
     mocks.runMigrations.mockImplementationOnce(() => new Promise((resolve) => {

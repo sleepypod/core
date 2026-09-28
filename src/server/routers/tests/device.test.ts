@@ -7,7 +7,6 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { TRPCError } from '@trpc/server'
 
 const helpersMock = vi.hoisted(() => {
   const client = {
@@ -74,9 +73,11 @@ const pumpStallNotificationMock = vi.hoisted(() => ({
   getAllPumpStallNotices: vi.fn<() => { left: unknown, right: unknown }>(() => ({ left: null, right: null })),
 }))
 
-const automationMock = vi.hoisted(() => ({
-  registerManualOverride: vi.fn(),
-  getAutomationEngineIfRunning: vi.fn(() => ({ registerManualOverride: automationMock.registerManualOverride })),
+const controllerMock = vi.hoisted(() => ({
+  setManualLocked: vi.fn(),
+  powerOffLocked: vi.fn(),
+  resume: vi.fn(),
+  status: vi.fn(),
 }))
 
 const dbState = vi.hoisted(() => ({
@@ -159,7 +160,10 @@ vi.mock('@/src/hardware/sharedClient', () => ({ getSharedHardwareClient: sharedC
 vi.mock('@/src/hardware/deviceStateSync', () => stateSyncMock)
 vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/hardware/pumpStallNotification', () => pumpStallNotificationMock)
-vi.mock('@/src/automation', () => ({ getAutomationEngineIfRunning: automationMock.getAutomationEngineIfRunning }))
+vi.mock('@/src/temperature/instance', () => ({
+  getTemperatureController: () => controllerMock,
+  getTemperatureControlStatus: () => undefined,
+}))
 vi.mock('@/src/db', () => ({
   db: dbMock,
   biometricsDb: biometricsDbMock,
@@ -210,8 +214,12 @@ beforeEach(() => {
   stateSyncMock.markSideMutated.mockReset()
   pumpStallMock.shouldBlock.mockReset().mockReturnValue(false)
   pumpStallNotificationMock.getAllPumpStallNotices.mockReset().mockReturnValue({ left: null, right: null })
-  automationMock.registerManualOverride.mockReset()
-  automationMock.getAutomationEngineIfRunning.mockClear()
+  Object.values(controllerMock).forEach(fn => fn.mockReset())
+  controllerMock.setManualLocked.mockResolvedValue(undefined)
+  controllerMock.powerOffLocked.mockResolvedValue(undefined)
+  const controlStatus = { source: 'schedule', requestId: 'schedule:1', targetTemperature: 70, holdUntil: null, blocked: null }
+  controllerMock.status.mockReturnValue(controlStatus)
+  controllerMock.resume.mockResolvedValue(controlStatus)
   dbState.rowsQueue.length = 0
   dbMock.select.mockClear()
   dbMock.update.mockClear()
@@ -476,474 +484,163 @@ describe('device.getStatus', () => {
   })
 })
 
-describe('device.setTemperature', () => {
-  it('waits behind an existing shared side lock before writing hardware', async () => {
-    vi.useFakeTimers()
-    let releaseLock: () => void = () => {}
-    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
-      releaseLock = resolve
-    }))
-    await Promise.resolve()
-
-    try {
-      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
-      await vi.advanceTimersByTimeAsync(250)
-      await Promise.resolve()
-
-      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
-
-      releaseLock()
-      await holder
-      await promise
-
-      expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('left', 70, undefined)
-    }
-    finally {
-      releaseLock()
-      await holder.catch(() => {})
-      vi.useRealTimers()
-    }
-  })
-
-  it('debounces and resolves after timer fires', async () => {
+describe('temperature controller API', () => {
+  it('debounces legacy dial payloads and delegates a default hold without optimistic state writes', async () => {
     vi.useFakeTimers()
     try {
-      // Provide a prior deviceState row for the prev lookup
-      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-
-      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
-      await vi.advanceTimersByTimeAsync(250)
-      const result = await promise
-
-      expect(result).toEqual({ success: true })
-      expect(helpersMock.client.setTemperature).toHaveBeenCalledTimes(1)
-      expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalled()
-      expect(stateSyncMock.markSideMutated).toHaveBeenCalledWith('left')
-      expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
-      expect(dbChain('update').set).toHaveBeenCalledWith({
-        targetTemperature: 70,
-        isPowered: true,
-        poweredOnAt: expect.any(Date),
-        lastUpdated: expect.any(Date),
-      })
-      expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', {
-        targetTemperature: 70,
-        targetLevel: expect.any(Number),
-      })
+      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
+      expect(dbMock.update).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(150)
+      expect(await pending).toEqual({ success: true })
+      expect(controllerMock.setManualLocked).toHaveBeenCalledExactlyOnceWith('left', 70, undefined, undefined)
       expect(helpersMock.withHardwareClient.mock.calls.at(-1)?.[1]).toBe('Failed to set temperature')
     }
-    finally {
-      vi.useRealTimers()
-    }
+    finally { vi.useRealTimers() }
   })
 
-  it('preserves poweredOnAt when changing temperature on an already-powered side', async () => {
+  it('forwards hold minutes independently from hardware duration', async () => {
     vi.useFakeTimers()
-    const poweredOnAt = new Date('2026-07-19T20:00:00Z')
     try {
-      dbState.rowsQueue.push([{ isPowered: true, poweredOnAt }])
-      const pending = caller.setTemperature({ side: 'right', temperature: 69, duration: 600 })
+      const pending = caller.setTemperature({ side: 'right', temperature: 69, duration: 600, holdMinutes: 60 })
       await vi.advanceTimersByTimeAsync(250)
       await pending
-      expect(dbChain('update').set).toHaveBeenCalledWith(expect.objectContaining({
-        targetTemperature: 69,
-        isPowered: true,
-        poweredOnAt,
-      }))
-      expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('right', 69, 600)
+      expect(controllerMock.setManualLocked).toHaveBeenCalledExactlyOnceWith('right', 69, 3_600_000, 600)
     }
-    finally {
-      vi.useRealTimers()
-    }
+    finally { vi.useRealTimers() }
   })
 
-  it('stamps poweredOnAt when changing temperature without a prior device-state row', async () => {
+  it.each([0, 1441, 1.5])('rejects invalid hold minutes %s', async (holdMinutes) => {
+    await expect(caller.setTemperature({ side: 'left', temperature: 70, holdMinutes })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
+  })
+
+  it('coalesces adjustments into one hold with the last target and duration', async () => {
     vi.useFakeTimers()
     try {
-      const pending = caller.setTemperature({ side: 'left', temperature: 71 })
-      await vi.advanceTimersByTimeAsync(250)
-      await pending
-
-      expect(dbChain('update').set).toHaveBeenCalledWith({
-        targetTemperature: 71,
-        isPowered: true,
-        poweredOnAt: expect.any(Date),
-        lastUpdated: expect.any(Date),
-      })
-    }
-    finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('throws PRECONDITION_FAILED when pump stall guard blocks the side', async () => {
-    pumpStallMock.shouldBlock.mockReturnValueOnce(true)
-    await expect(caller.setTemperature({ side: 'left', temperature: 70 })).rejects.toThrow(/Pump stall protection active/)
-    expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
-    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
-  })
-
-  it('re-checks the guard inside the side lock — a trip during the debounce window blocks the queued command', async () => {
-    vi.useFakeTimers()
-    try {
-      // Early check passes, then the guard trips while the command is debounced.
-      pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
-      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
-      const assertion = expect(pending).rejects.toThrow(/Pump stall protection active/)
-      await vi.advanceTimersByTimeAsync(250)
-      await assertion
-      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
-      // A rejected command must not suspend autopilot.
-      expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
-    }
-    finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('preserves a guard rejection when restoring the parked mirror also fails', async () => {
-    vi.useFakeTimers()
-    const failure = new Error('database locked')
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
-      dbState.rowsQueue.push([{ isPowered: true, poweredOnAt: new Date() }])
-      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
-      const assertion = expect(pending).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
+      const first = caller.setTemperature({ side: 'left', temperature: 70, holdMinutes: 15 })
       await vi.advanceTimersByTimeAsync(0)
-      dbMock.update.mockImplementationOnce(() => {
-        throw failure
-      })
+      const last = caller.setTemperature({ side: 'left', temperature: 75, holdMinutes: 60 })
       await vi.advanceTimersByTimeAsync(250)
-      await assertion
-      expect(error).toHaveBeenCalledWith('Failed to restore parked state after guard rejection:', failure)
-      expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
-      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
+      expect(await Promise.all([first, last])).toEqual([{ success: true }, { success: true }])
+      expect(controllerMock.setManualLocked).toHaveBeenCalledExactlyOnceWith('left', 75, 3_600_000, undefined)
     }
-    finally {
-      error.mockRestore()
-      vi.useRealTimers()
-    }
+    finally { vi.useRealTimers() }
   })
 
-  it('restores the parked DB mirror and broadcasts off when the in-lock recheck rejects', async () => {
+  it('rejects immediately when the guard blocks the side', async () => {
+    pumpStallMock.shouldBlock.mockReturnValue(true)
+    await expect(caller.setTemperature({ side: 'left', temperature: 70 })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
+    expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
+  })
+
+  it('rechecks the guard after the debounce without overwriting controller state', async () => {
     vi.useFakeTimers()
     try {
       pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
-      dbState.rowsQueue.push([{ isPowered: true, poweredOnAt: new Date() }])
-      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
-      const assertion = expect(pending).rejects.toThrow(/Pump stall protection active/)
+      const assertion = expect(caller.setTemperature({ side: 'left', temperature: 70 })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
       await vi.advanceTimersByTimeAsync(250)
       await assertion
-      // update #0 is the optimistic energized write; update #1 must put the
-      // parked mirror back so the UI doesn't keep an energized target.
-      expect(dbChain('update', 1).set).toHaveBeenCalledWith({
-        isPowered: false,
-        poweredOnAt: null,
-        targetTemperature: null,
-        lastUpdated: expect.any(Date),
-      })
-      expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
+      expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
+      expect(dbMock.update).not.toHaveBeenCalled()
+      expect(broadcastMock.broadcastMutationStatus).not.toHaveBeenCalled()
     }
-    finally {
-      vi.useRealTimers()
-    }
+    finally { vi.useRealTimers() }
   })
 
-  it('blocks a debounced command queued behind a held side lock when the trip lands while queued', async () => {
+  it('waits for the shared lock and refuses a trip that lands while queued', async () => {
     vi.useFakeTimers()
-    try {
-      let tripped = false
-      pumpStallMock.shouldBlock.mockImplementation(() => tripped)
-      let release: () => void = () => {}
-      const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
-        release = resolve
-      }))
-      await vi.advanceTimersByTimeAsync(0)
-
-      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
-      const assertion = expect(pending).rejects.toThrow(/Pump stall protection active/)
-      // Debounce fires and the write queues behind the held lock, all while
-      // the guard is still healthy — the flip below happens strictly after.
-      await vi.advanceTimersByTimeAsync(250)
-      tripped = true
-      release()
-      await holder
-      await assertion
-      expect(helpersMock.client.setTemperature).not.toHaveBeenCalled()
-      expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
-    }
-    finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('swallows DB sync errors so the timer still fires', async () => {
-    vi.useFakeTimers()
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      dbMock.select.mockImplementationOnce(() => {
-        throw new Error('db down')
-      })
-
-      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
-      await vi.advanceTimersByTimeAsync(250)
-      const result = await promise
-
-      expect(result).toEqual({ success: true })
-      expect(errSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to sync temperature state to DB'),
-        expect.any(Error),
-      )
-    }
-    finally {
-      vi.useRealTimers()
-      errSpy.mockRestore()
-    }
-  })
-
-  it('rejects the debounced promise when the deferred hardware call fails', async () => {
-    vi.useFakeTimers()
-    try {
-      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-      helpersMock.withHardwareClient.mockRejectedValueOnce(new Error('hw down'))
-
-      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
-      // Swallow synchronously so vitest does not flag an unhandled rejection
-      // when the timer fires before the assertion below awaits the promise.
-      const caught = promise.catch((e: unknown) => e)
-      await vi.advanceTimersByTimeAsync(250)
-      const err = await caught
-      expect(err).toBeInstanceOf(Error)
-      expect((err as Error).message).toMatch(/hw down/)
-      // Only guard rejections compensate the optimistic write — a hardware
-      // failure leaves the single optimistic update in place.
-      expect(dbMock.update).toHaveBeenCalledTimes(1)
-      expect(broadcastMock.broadcastMutationStatus).not.toHaveBeenCalledWith('left', { targetLevel: 0 })
-    }
-    finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('leaves the optimistic write in place when the failure is not a guard rejection', async () => {
-    vi.useFakeTimers()
-    try {
-      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-      // A wrapped hardware failure is a TRPCError too — only the guard's
-      // PRECONDITION_FAILED code may trigger the parked-mirror restore.
-      helpersMock.withHardwareClient.mockRejectedValueOnce(
-        new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to set temperature' }),
-      )
-
-      const promise = caller.setTemperature({ side: 'left', temperature: 70 })
-      const caught = promise.catch((e: unknown) => e)
-      await vi.advanceTimersByTimeAsync(250)
-      const err = await caught
-
-      expect(err).toBeInstanceOf(TRPCError)
-      expect((err as TRPCError).code).toBe('INTERNAL_SERVER_ERROR')
-      // Single optimistic update, no compensating off-write, no off broadcast.
-      expect(dbMock.update).toHaveBeenCalledTimes(1)
-      expect(broadcastMock.broadcastMutationStatus).not.toHaveBeenCalledWith('left', { targetLevel: 0 })
-    }
-    finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('coalesces a second call into one hardware command (last value wins)', async () => {
-    vi.useFakeTimers()
-    try {
-      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-      dbState.rowsQueue.push([{ isPowered: true, poweredOnAt: new Date() }])
-
-      // Start call 1 and let it register its pending entry (await microtasks
-      // so the async DB lookup before pendingTemps.set has a chance to settle).
-      const p1 = caller.setTemperature({ side: 'left', temperature: 70 })
-      await vi.advanceTimersByTimeAsync(0)
-      // Call 2 now sees the pending entry and cancels the first timer.
-      const p2 = caller.setTemperature({ side: 'left', temperature: 75 })
-      await vi.advanceTimersByTimeAsync(250)
-      const [r1, r2] = await Promise.all([p1, p2])
-      expect(r1).toEqual({ success: true })
-      expect(r2).toEqual({ success: true })
-      // Only the second call's value reaches hardware
-      expect(helpersMock.client.setTemperature).toHaveBeenCalledTimes(1)
-      expect(helpersMock.client.setTemperature).toHaveBeenCalledWith('left', 75, undefined)
-      // One executed hardware write → one override registration; the
-      // coalesced first call must not register a second one.
-      expect(automationMock.registerManualOverride).toHaveBeenCalledTimes(1)
-      expect(automationMock.registerManualOverride).toHaveBeenLastCalledWith('left')
-    }
-    finally {
-      vi.useRealTimers()
-    }
-  })
-})
-
-describe('device.setPower', () => {
-  it('waits behind an existing shared side lock without blocking the opposite side', async () => {
-    let releaseLeft: () => void = () => {}
-    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
-      releaseLeft = resolve
-    }))
-    await Promise.resolve()
-
-    try {
-      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-      const left = caller.setPower({ side: 'left', powered: true, temperature: 72 })
-      await Promise.resolve()
-      expect(helpersMock.client.setPower).not.toHaveBeenCalled()
-
-      dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-      await caller.setPower({ side: 'right', powered: true, temperature: 73 })
-      expect(helpersMock.client.setPower).toHaveBeenCalledWith('right', true, 73)
-      expect(helpersMock.client.setPower).not.toHaveBeenCalledWith('left', true, 72)
-
-      releaseLeft()
-      await holder
-      await left
-
-      expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 72)
-    }
-    finally {
-      releaseLeft()
-      await holder.catch(() => {})
-    }
-  })
-
-  it('powers on with the provided temperature, broadcasts, syncs DB', async () => {
-    dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-
-    const result = await caller.setPower({ side: 'left', powered: true, temperature: 72 })
-    expect(result).toEqual({ success: true })
-    expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 72)
-    expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
-    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', expect.objectContaining({
-      targetTemperature: 72,
-    }))
-    expect(dbChain('update').set).toHaveBeenCalledWith({
-      isPowered: true,
-      poweredOnAt: expect.any(Date),
-      targetTemperature: 72,
-      lastUpdated: expect.any(Date),
-    })
-    expect(stateSyncMock.markSideMutated).toHaveBeenCalledWith('left')
-    expect(helpersMock.withHardwareClient.mock.calls[0]?.[1]).toBe('Failed to set power')
-  })
-
-  it('persists an OFF-to-ON transition without a prior device-state row', async () => {
-    await caller.setPower({ side: 'right', powered: true, temperature: 72 })
-
-    expect(dbChain('update').set).toHaveBeenCalledWith({
-      isPowered: true,
-      poweredOnAt: expect.any(Date),
-      targetTemperature: 72,
-      lastUpdated: expect.any(Date),
-    })
-    expect(stateSyncMock.markSideMutated).toHaveBeenCalledWith('right')
-  })
-
-  it('powers off and broadcasts targetLevel: 0', async () => {
-    dbState.rowsQueue.push([{ isPowered: true, poweredOnAt: new Date() }])
-
-    await caller.setPower({ side: 'left', powered: false })
-    expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', false, undefined)
-    expect(automationMock.registerManualOverride).toHaveBeenCalledWith('left')
-    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
-    expect(dbChain('update').set).toHaveBeenCalledWith({
-      isPowered: false,
-      poweredOnAt: null,
-      targetTemperature: null,
-      lastUpdated: expect.any(Date),
-    })
-  })
-
-  it('defaults an omitted on-temperature to 75 in both DB state and broadcast', async () => {
-    dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-    await caller.setPower({ side: 'right', powered: true })
-    expect(dbChain('update').set).toHaveBeenCalledWith(expect.objectContaining({ targetTemperature: 75 }))
-    expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('right', {
-      targetTemperature: 75,
-      targetLevel: expect.any(Number),
-    })
-  })
-
-  it('preserves the original poweredOnAt on an ON→ON mutation', async () => {
-    const poweredOnAt = new Date('2026-07-18T12:00:00Z')
-    dbState.rowsQueue.push([{ isPowered: true, poweredOnAt }])
-    await caller.setPower({ side: 'left', powered: true, temperature: 68 })
-    expect(dbChain('update').set).toHaveBeenCalledWith(expect.objectContaining({ poweredOnAt, targetTemperature: 68 }))
-  })
-
-  it('throws PRECONDITION_FAILED when powering on while pump stall guard is active', async () => {
-    pumpStallMock.shouldBlock.mockReturnValueOnce(true)
-    await expect(caller.setPower({ side: 'left', powered: true, temperature: 72 })).rejects.toThrow(/Pump stall protection active/)
-    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
-    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
-  })
-
-  it('re-checks the guard inside the side lock before sending power-on', async () => {
-    // Early check passes; the trip lands while the command queues on the lock.
-    pumpStallMock.shouldBlock.mockReturnValueOnce(false).mockReturnValue(true)
-    await expect(caller.setPower({ side: 'left', powered: true, temperature: 72 })).rejects.toThrow(/Pump stall protection active/)
-    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
-    // A rejected command must not suspend autopilot.
-    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
-  })
-
-  it('blocks a power-on queued behind a held side lock when the trip lands while queued', async () => {
-    let tripped = false
-    pumpStallMock.shouldBlock.mockImplementation(() => tripped)
-    let release: () => void = () => {}
-    const holder = withSideLock('left', async () => new Promise<void>((resolve) => {
+    let release = () => {}
+    const holder = withSideLock('left', () => new Promise<void>((resolve) => {
       release = resolve
     }))
     await Promise.resolve()
-
-    dbState.rowsQueue.push([{ isPowered: false, poweredOnAt: null }])
-    const pending = caller.setPower({ side: 'left', powered: true, temperature: 72 })
-    const assertion = expect(pending).rejects.toThrow(/Pump stall protection active/)
-    // Let the mutation pass its entry check and queue on the held lock
-    // while the guard is still healthy — the flip below happens strictly
-    // after, so only an in-lock recheck can observe it.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0)
-    })
-    expect(pumpStallMock.shouldBlock).toHaveBeenCalled()
-    tripped = true
-    release()
-    await holder
-    await assertion
-    expect(helpersMock.client.setPower).not.toHaveBeenCalled()
-    expect(automationMock.registerManualOverride).not.toHaveBeenCalled()
+    try {
+      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
+      await vi.advanceTimersByTimeAsync(250)
+      expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
+      pumpStallMock.shouldBlock.mockReturnValue(true)
+      release()
+      await holder
+      await assertion
+    }
+    finally {
+      release()
+      await holder
+      vi.useRealTimers()
+    }
   })
 
-  it('allows powering off even when pump stall guard is active', async () => {
-    pumpStallMock.shouldBlock.mockReturnValueOnce(true)
-    dbState.rowsQueue.push([{ isPowered: true, poweredOnAt: new Date() }])
+  it('propagates controller persistence or hardware failure without acknowledging the adjustment', async () => {
+    vi.useFakeTimers()
+    try {
+      controllerMock.setManualLocked.mockRejectedValueOnce(new Error('storage unavailable'))
+      const assertion = expect(caller.setTemperature({ side: 'left', temperature: 70 })).rejects.toThrow('storage unavailable')
+      await vi.advanceTimersByTimeAsync(250)
+      await assertion
+      expect(dbMock.update).not.toHaveBeenCalled()
+    }
+    finally { vi.useRealTimers() }
+  })
+
+  it('reads ownership for the requested side', async () => {
+    expect(await caller.getTemperatureControl({ side: 'right' })).toMatchObject({ source: 'schedule', holdUntil: null })
+    expect(controllerMock.status).toHaveBeenCalledWith('right')
+  })
+
+  it.each(['resume', 'off'] as const)('%s cancels a pending dial adjustment', async (action) => {
+    vi.useFakeTimers()
+    try {
+      const pending = caller.setTemperature({ side: 'left', temperature: 70 })
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'CONFLICT' })
+      await vi.advanceTimersByTimeAsync(0)
+      if (action === 'resume') await caller.resumeTemperature({ side: 'left' })
+      else await caller.setPower({ side: 'left', powered: false })
+      await assertion
+      await vi.advanceTimersByTimeAsync(250)
+      expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
+      expect(action === 'resume' ? controllerMock.resume : controllerMock.powerOffLocked).toHaveBeenCalledWith('left')
+    }
+    finally { vi.useRealTimers() }
+  })
+
+  it('powers on through a manual hold, using the explicit temperature or 75°F default', async () => {
+    expect(await caller.setPower({ side: 'left', powered: true, temperature: 72 })).toEqual({ success: true })
+    await caller.setPower({ side: 'right', powered: true })
+    expect(controllerMock.setManualLocked.mock.calls).toEqual([['left', 72], ['right', 75]])
+    expect(dbMock.update).not.toHaveBeenCalled()
+  })
+
+  it('never gates shutdown behind pump protection', async () => {
+    pumpStallMock.shouldBlock.mockReturnValue(true)
     await caller.setPower({ side: 'left', powered: false })
-    expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', false, undefined)
+    expect(controllerMock.powerOffLocked).toHaveBeenCalledExactlyOnceWith('left')
+    expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
   })
 
-  it('swallows DB sync errors but still completes the hardware call', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // First select() throws — DB sync block fails, but withHardwareClient already
-    // ran setPower before that point so the result still succeeds.
-    dbMock.select.mockImplementationOnce(() => {
-      throw new Error('db down')
-    })
-    const result = await caller.setPower({ side: 'left', powered: true, temperature: 72 })
-    expect(result).toEqual({ success: true })
-    expect(helpersMock.client.setPower).toHaveBeenCalledWith('left', true, 72)
-    expect(errSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to sync power state to DB'),
-      expect.any(Error),
-    )
-    errSpy.mockRestore()
+  it('serializes power by side and rechecks protection inside the lock', async () => {
+    let release = () => {}
+    const holder = withSideLock('left', () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await Promise.resolve()
+    const pending = caller.setPower({ side: 'left', powered: true, temperature: 72 })
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
+    try {
+      await caller.setPower({ side: 'right', powered: true, temperature: 73 })
+      expect(controllerMock.setManualLocked).toHaveBeenCalledExactlyOnceWith('right', 73)
+      pumpStallMock.shouldBlock.mockImplementation(side => side === 'left')
+      release()
+      await holder
+      await assertion
+      expect(controllerMock.setManualLocked).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      release()
+      await holder
+    }
   })
 })
 

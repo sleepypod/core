@@ -3,12 +3,20 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 const hardwareClient = vi.hoisted(() => ({
   connect: vi.fn(async () => {}),
-  setTemperature: vi.fn(async () => {}),
-  setPower: vi.fn(async () => {}),
+  setTemperature: vi.fn<(side: string, temperature: number) => Promise<void>>(async () => {}),
+  setPower: vi.fn<(side: string, powered: boolean) => Promise<void>>(async () => {}),
   setAlarm: vi.fn(async () => {}),
   startPriming: vi.fn(async () => {}),
   sendRaw: vi.fn<(command: string, arg?: string) => Promise<string>>(),
 }))
+const control = vi.hoisted(() => ({
+  reconcileLocked: vi.fn<(side: string) => Promise<void>>(async () => {}),
+  reconcile: vi.fn<(side: string) => Promise<{ source: string, blocked: null }>>(async () => ({ source: 'schedule', blocked: null })),
+  powerOnLocked: vi.fn(async (side: string, temperature = 75) => hardwareClient.setTemperature(side, temperature)),
+  powerOffLocked: vi.fn(async (side: string) => hardwareClient.setPower(side, false)),
+}))
+vi.mock('@/src/temperature/instance', () => ({ getTemperatureController: () => control }))
+
 const pumpStallMock = vi.hoisted(() => ({
   shouldBlock: vi.fn<(side: 'left' | 'right') => boolean>(() => false),
 }))
@@ -97,7 +105,7 @@ vi.mock('child_process', () => ({ exec: execMock }))
 import { decode as cborDecode } from 'cbor-x'
 import { db } from '@/src/db'
 import { sendCommand } from '@/src/hardware/dacTransport'
-import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
+import { HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { JobManager } from '../jobManager'
@@ -1474,6 +1482,7 @@ describe('JobManager residual mutation contracts', () => {
       heartbeatStaleMs: 90_000,
     })
     for (const mock of Object.values(hardwareClient)) mock.mockClear()
+    for (const mock of Object.values(control)) mock.mockClear()
     hardwareClient.connect.mockResolvedValue(undefined)
     hardwareClient.setTemperature.mockResolvedValue(undefined)
     hardwareClient.setPower.mockResolvedValue(undefined)
@@ -1494,7 +1503,6 @@ describe('JobManager residual mutation contracts', () => {
   it('logs every recurring-job skip and the alarm vibration-only branch exactly', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(manager, 'hasActiveRunOnceSession')
-      .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
       .mockResolvedValue(false)
@@ -1545,16 +1553,14 @@ describe('JobManager residual mutation contracts', () => {
       duration: 30,
     })
 
-    expect(log).toHaveBeenCalledWith(
-      'Skipping recurring temp job temp-11 — run-once session active for left',
-    )
+    expect(control.reconcile).toHaveBeenCalledWith('left')
     expect(log).toHaveBeenCalledWith(
       'Skipping recurring power-on job — run-once session active for right',
     )
     expect(log).toHaveBeenCalledWith(
       'Skipping recurring power-off job — run-once session active for left',
     )
-    expect(log).toHaveBeenCalledWith('Skipping temp job temp-14 — right is not powered')
+    expect(control.reconcile).toHaveBeenCalledWith('right')
     expect(log).toHaveBeenCalledWith(
       'Alarm job alarm-15 — right not powered; skipping temperature, firing vibration only',
     )
@@ -1587,7 +1593,7 @@ describe('JobManager residual mutation contracts', () => {
     expect(hardwareClient.setTemperature).not.toHaveBeenCalled()
     expect(hardwareClient.setPower).not.toHaveBeenCalled()
     expect(broadcastMutationStatus).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledWith('[jobManager] skipped temp job temp-41: pump stall guard blocks left')
+    expect(control.reconcile).toHaveBeenCalledWith('left')
     expect(warn).toHaveBeenCalledWith('[jobManager] skipped power-on power-on-42: pump stall guard blocks right')
   })
 
@@ -1754,7 +1760,6 @@ describe('JobManager residual mutation contracts', () => {
   })
 
   it('blocks a temperature job whose trip lands while it is queued on the side lock', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(manager, 'hasActiveRunOnceSession').mockResolvedValue(false)
     vi.spyOn(manager as any, 'isSidePowered').mockResolvedValue(true)
 
@@ -1780,14 +1785,13 @@ describe('JobManager residual mutation contracts', () => {
     await jobRun
 
     expect(hardwareClient.setTemperature).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledWith('[jobManager] skipped temp job temp-45: pump stall guard blocks left')
+    expect(control.reconcile).toHaveBeenCalledWith('left')
   })
 
   it('skips a run-once set point while the guard blocks the side', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T12:00:00.000Z'))
     const captured = captureOneTimeJobs()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     pumpStallMock.shouldBlock.mockReturnValue(true)
 
     manager.scheduleRunOnceSession(78, 'left', [{ time: '12:10', temperature: 78 }], '13:00', 'UTC')
@@ -1795,7 +1799,7 @@ describe('JobManager residual mutation contracts', () => {
 
     expect(hardwareClient.setTemperature).not.toHaveBeenCalled()
     expect(broadcastMutationStatus).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledWith('[jobManager] skipped run-once set point: pump stall guard blocks left')
+    expect(control.reconcile).toHaveBeenCalledWith('left')
   })
 
   it('pins away-mode state writes, payloads, metadata, logs, and failure warnings', async () => {
@@ -1829,7 +1833,7 @@ describe('JobManager residual mutation contracts', () => {
     await required(captured.get('away-return-left'), 'away-return-left').handler()
     expect(updates[1]).toMatchObject({ awayMode: false })
     expect(log).toHaveBeenCalledWith('Away mode: deactivating for left')
-    expect(hardwareClient.setPower).toHaveBeenCalledWith('left', true)
+    expect(control.powerOnLocked).toHaveBeenCalledWith('left')
 
     const startFailure = new Error('off failed')
     hardwareClient.setPower.mockRejectedValueOnce(startFailure)
@@ -1837,7 +1841,7 @@ describe('JobManager residual mutation contracts', () => {
     expect(warn).toHaveBeenCalledWith('[awayMode] Failed to power off left:', startFailure)
 
     const returnFailure = new Error('on failed')
-    hardwareClient.setPower.mockRejectedValueOnce(returnFailure)
+    hardwareClient.setTemperature.mockRejectedValueOnce(returnFailure)
     await required(captured.get('away-return-left'), 'away-return-left').handler()
     expect(warn).toHaveBeenCalledWith('[awayMode] Failed to power on left:', returnFailure)
   })
@@ -1918,11 +1922,7 @@ describe('JobManager residual mutation contracts', () => {
       cleanup: true,
     })
     await required(captured.get('runonce-77-0'), 'runonce-77-0').handler()
-    expect(hardwareClient.setTemperature).toHaveBeenCalledWith('left', 78)
-    expect(broadcastMutationStatus).toHaveBeenCalledWith('left', {
-      targetTemperature: 78,
-      targetLevel: fahrenheitToLevel(78),
-    })
+    expect(control.reconcile).toHaveBeenCalledWith('left')
   })
 
   it('logs exact cancelled and missing cleanup statuses without powering off', async () => {

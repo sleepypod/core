@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { resetControlDatabase } from './databaseFixture'
 
 const hardware = vi.hoisted(() => ({
   connect: vi.fn(async () => {}),
-  setTemperature: vi.fn<(side: string, temperature: number) => Promise<void>>(async () => {}),
+  setTemperature: vi.fn<(side: string, temperature: number, duration?: number) => Promise<void>>(async () => {}),
   setPower: vi.fn<(side: string, on: boolean) => Promise<void>>(async () => {}),
 }))
 const safety = vi.hoisted(() => ({ blocked: false }))
@@ -16,14 +16,36 @@ vi.mock('@/src/db', async () => {
   const Database = (await import('better-sqlite3')).default
   const { drizzle } = await import('drizzle-orm/better-sqlite3')
   const schema = await import('@/src/db/schema')
-  const sqlite = new Database(':memory:')
-  return { sqlite, db: drizzle(sqlite, { schema }) }
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sleepypod-control-'))
+  const filename = path.join(directory, 'control.db')
+  let sqlite = new Database(filename)
+  let currentDb = drizzle(sqlite, { schema })
+  return {
+    get sqlite() { return sqlite },
+    get db() { return currentDb },
+    reopenForTest() {
+      sqlite.close()
+      sqlite = new Database(filename)
+      currentDb = drizzle(sqlite, { schema })
+    },
+    cleanupForTest() {
+      sqlite.close()
+      fs.rmSync(directory, { recursive: true, force: true })
+    },
+  }
 })
 
 import { db, sqlite } from '@/src/db'
+import * as databaseModule from '@/src/db'
 import { deviceSettings, deviceState, runOnceSessions, sideSettings, temperatureHolds, temperatureSchedules } from '@/src/db/schema'
 import { getTemperatureController, startTemperatureController, stopTemperatureController } from '../instance'
 import { withSideLock } from '@/src/hardware/sideLock'
+
+const fileDatabase = databaseModule as typeof databaseModule & { reopenForTest: () => void, cleanupForTest: () => void }
+afterAll(() => fileDatabase.cleanupForTest())
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -73,6 +95,28 @@ describe('production controller with migrated SQLite', () => {
     expect(db.select().from(temperatureHolds).get()).toEqual(persisted)
   })
 
+  it('reopens the actual SQLite file and restores only the remaining hardware duration', async () => {
+    await getTemperatureController().setManual('left', 76, 30 * 60_000, 600)
+    const expiry = getTemperatureController().status('left').holdUntil
+    const cutoff = Date.now() + 600_000
+    fileDatabase.reopenForTest()
+    delete (globalThis as Record<string, unknown>).__sp_temperatureController
+    vi.setSystemTime(new Date('2026-09-28T22:05:00Z'))
+    await getTemperatureController().reconcile('left')
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 76, 300)
+    expect(getTemperatureController().status('left').holdUntil).toBe(expiry)
+    expect(db.select().from(deviceState).where(eq(deviceState.side, 'left')).get()?.hardwareDeadline).toBe(cutoff)
+    fileDatabase.reopenForTest()
+    delete (globalThis as Record<string, unknown>).__sp_temperatureController
+    vi.setSystemTime(new Date('2026-09-28T22:11:00Z'))
+    hardware.setTemperature.mockClear()
+    await getTemperatureController().reconcile('left')
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+    expect(hardware.setPower).toHaveBeenLastCalledWith('left', false)
+    expect(db.select().from(temperatureHolds).all()).toHaveLength(0)
+    expect(db.select().from(deviceState).where(eq(deviceState.side, 'left')).get()?.isPowered).toBe(false)
+  })
+
   it('resolves an advancing run-once session ahead of Autopilot after Resume', async () => {
     const controller = getTemperatureController()
     db.insert(runOnceSessions).values({
@@ -118,6 +162,25 @@ describe('production controller with migrated SQLite', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(getTemperatureController().status('left').source).toBe('schedule')
     expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 72)
+  })
+
+  it('expires the right hold while the left side lock is occupied', async () => {
+    await getTemperatureController().setManual('right', 76, 1_000)
+    let release = () => {}
+    const holder = withSideLock('left', () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await Promise.resolve()
+    const starting = startTemperatureController()
+    try {
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(db.select().from(temperatureHolds).where(eq(temperatureHolds.side, 'right')).get()).toBeUndefined()
+    }
+    finally {
+      release()
+      await holder
+      await starting
+    }
   })
 
   it('blocks both manual and scheduled energizing commands during a safety cutoff', async () => {

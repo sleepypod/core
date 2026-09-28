@@ -2,14 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const setTemperature = vi.fn()
 const setPower = vi.fn()
-const registerManualOverride = vi.fn()
 const shouldBlock = vi.fn<(side: 'left' | 'right') => boolean>()
 
-vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getSharedHardwareClient: () => ({ setTemperature, setPower }),
-}))
-vi.mock('@/src/automation', () => ({
-  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+// Test HomeKit's staging, serialization, and error mapping at the shared
+// controller boundary. Controller/hardware integration has its own real-DB tests.
+vi.mock('@/src/temperature/instance', () => ({
+  getTemperatureController: () => ({
+    setManualLocked: setTemperature,
+    powerOffLocked: (side: 'left' | 'right') => setPower(side, false),
+  }),
 }))
 vi.mock('@/src/hardware/pumpStallGuard', () => ({
   shouldBlock: (side: 'left' | 'right') => shouldBlock(side),
@@ -54,7 +55,6 @@ describe('sideController', () => {
     __resetSideController()
     setTemperature.mockReset()
     setPower.mockReset()
-    registerManualOverride.mockReset()
     shouldBlock.mockReset()
     setTemperature.mockResolvedValue(undefined)
     setPower.mockResolvedValue(undefined)
@@ -148,14 +148,12 @@ describe('sideController', () => {
     it('caches the requested target even when the side is off (no firmware write)', async () => {
       await setTargetTemperature(monitor(offStatus), 'left', 68)
       expect(setTemperature).not.toHaveBeenCalled()
-      expect(registerManualOverride).not.toHaveBeenCalled()
       expect(getStagedTargetF(monitor(offStatus), 'left')).toBe(68)
     })
 
     it('caches AND writes when the side is on', async () => {
       await setTargetTemperature(monitor(onStatus), 'left', 72)
       expect(setTemperature).toHaveBeenCalledWith('left', 72)
-      expect(registerManualOverride).toHaveBeenCalledWith('left')
       expect(getStagedTargetF(monitor(onStatus), 'left')).toBe(72)
     })
   })
@@ -165,18 +163,17 @@ describe('sideController', () => {
       const m = monitor(offStatus)
       await setTargetTemperature(m, 'left', 68)
       await setSidePowerOn(m, 'left')
-      expect(setPower).toHaveBeenCalledWith('left', true, 68)
-      expect(registerManualOverride).toHaveBeenCalledWith('left')
+      expect(setTemperature).toHaveBeenCalledWith('left', 68)
     })
 
     it('falls back to firmware status target when no cache exists', async () => {
       await setSidePowerOn(monitor(offStatus), 'right')
-      expect(setPower).toHaveBeenCalledWith('right', true, 75)
+      expect(setTemperature).toHaveBeenCalledWith('right', 75)
     })
 
     it('falls back to 75°F when no status and no cache', async () => {
       await setSidePowerOn(monitor(null), 'left')
-      expect(setPower).toHaveBeenCalledWith('left', true, 75)
+      expect(setTemperature).toHaveBeenCalledWith('left', 75)
     })
 
     it('powers on with a non-zero level when firmware reports a null off target', async () => {
@@ -187,8 +184,8 @@ describe('sideController', () => {
 
       await setSidePowerOn(offNullTarget, 'left')
 
-      const target = setPower.mock.calls[0]?.[2]
-      expect(setPower).toHaveBeenCalledWith('left', true, 75)
+      const target = setTemperature.mock.calls[0]?.[1]
+      expect(setTemperature).toHaveBeenCalledWith('left', 75)
       expect(fahrenheitToLevel(target)).not.toBe(0)
     })
   })
@@ -197,7 +194,6 @@ describe('sideController', () => {
     it('routes to setPower(side, false)', async () => {
       await setSidePowerOff(monitor(onStatus), 'left')
       expect(setPower).toHaveBeenCalledWith('left', false)
-      expect(registerManualOverride).toHaveBeenCalledWith('left')
     })
   })
 
@@ -235,7 +231,7 @@ describe('sideController', () => {
       let resolveTemp: () => void = () => {}
       setTemperature.mockImplementation(async (_s, f) => {
         order.push(`setTemp(${f})`)
-        if (f === 78) {
+        if (f === 78 && order.length === 1) {
           await new Promise<void>((r) => {
             resolveTemp = r
           })
@@ -260,7 +256,7 @@ describe('sideController', () => {
       await Promise.all([p1, p2])
 
       // p2 reads cache populated by p1 (78), so power-on uses the latest target.
-      expect(order).toEqual(['setTemp(78)', 'setPower(true,78)'])
+      expect(order).toEqual(['setTemp(78)', 'setTemp(78)'])
     })
 
     it('does not block a different side', async () => {
@@ -311,7 +307,7 @@ describe('sideController', () => {
       // depends on microtask interleaving (cache may already hold 78 by the
       // time setSidePowerOn's fn runs); what matters is setTemperature(78)
       // was NOT silently dropped.
-      expect(setPower).toHaveBeenCalledWith('left', true, expect.any(Number))
+      expect(setTemperature).toHaveBeenCalledWith('left', expect.any(Number))
       expect(setTemperature).toHaveBeenCalledWith('left', 78)
     })
   })
@@ -339,9 +335,9 @@ describe('sideController', () => {
       warn.mockRestore()
     })
 
-    it('logs the exact powered-on target when setPower rejects', async () => {
+    it('logs the exact powered-on target when the controller rejects', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      setPower.mockRejectedValueOnce(new Error('comms'))
+      setTemperature.mockRejectedValueOnce(new Error('comms'))
 
       await expect(setSidePowerOn(monitor(offStatus), 'left')).rejects.toThrow('comms')
 
@@ -440,11 +436,12 @@ describe('sideController', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       // Side starts off (intendedPower=null, firmware=off).
       const m = monitor(offStatus)
-      setPower.mockRejectedValueOnce(new Error('hardware down'))
+      setTemperature.mockRejectedValueOnce(new Error('hardware down'))
       await expect(setSidePowerOn(m, 'left')).rejects.toThrow('hardware down')
 
       // intendedPower must have rolled back to null/false. Adjusting target
       // now should NOT push to firmware (side is genuinely off).
+      setTemperature.mockClear()
       await setTargetTemperature(m, 'left', 68)
       expect(setTemperature).not.toHaveBeenCalled()
       warn.mockRestore()
@@ -454,7 +451,7 @@ describe('sideController', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       // Side is on (intendedPower=true after a successful power-on).
       await setSidePowerOn(monitor(onStatus), 'left')
-      expect(setPower).toHaveBeenCalledWith('left', true, expect.any(Number))
+      expect(setTemperature).toHaveBeenCalledWith('left', expect.any(Number))
       setPower.mockClear()
 
       setPower.mockRejectedValueOnce(new Error('hardware down'))
@@ -485,7 +482,6 @@ describe('sideController', () => {
         hapStatus: -70412,
       })
       expect(setPower).not.toHaveBeenCalled()
-      expect(registerManualOverride).not.toHaveBeenCalled()
       // The ingress assert (not the in-lock re-check) refused this call —
       // its log must name the exact write so field debugging can tell the
       // two gates' refusals apart from a silent drop.
@@ -517,7 +513,6 @@ describe('sideController', () => {
         await expect(pending).rejects.toThrow('Pump stall protection active')
 
         expect(setPower).not.toHaveBeenCalled()
-        expect(registerManualOverride).not.toHaveBeenCalled()
         expect(warn).toHaveBeenCalledWith('[homekit] refused setPower(left, true) — pump stall protection active on left')
         // Intent rolled back — iOS Home reads OFF again instead of a phantom ON.
         expect(isEffectivelyPowered(monitor(offStatus), 'left')).toBe(false)
@@ -550,7 +545,6 @@ describe('sideController', () => {
         await expect(pending).rejects.toThrow('Pump stall protection active')
 
         expect(setTemperature).not.toHaveBeenCalled()
-        expect(registerManualOverride).not.toHaveBeenCalled()
       }
       finally {
         release()
@@ -603,7 +597,6 @@ describe('sideController', () => {
       expect(warn).toHaveBeenCalledWith('[homekit] refused setTemperature(left, 68) — pump stall protection active on left')
       // A rejected write must not suspend autopilot (same ordering contract
       // as the REST path: the override registers only after the gate passes).
-      expect(registerManualOverride).not.toHaveBeenCalled()
       expect(getStagedTargetF(monitor(onStatus), 'left')).toBe(68)
       warn.mockRestore()
     })
@@ -648,7 +641,7 @@ describe('sideController', () => {
       // tell which side's guard fired when both surfaces share one log.
       expect(warn).toHaveBeenCalledWith('[homekit] refused setPower(left, true) — pump stall protection active on left')
       await setSidePowerOn(monitor(offStatus), 'right')
-      expect(setPower).toHaveBeenCalledWith('right', true, expect.any(Number))
+      expect(setTemperature).toHaveBeenCalledWith('right', expect.any(Number))
       warn.mockRestore()
     })
   })

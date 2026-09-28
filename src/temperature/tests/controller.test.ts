@@ -10,6 +10,7 @@ function request(source: TemperatureSource, temperature: number, overrides: Part
 
 function harness() {
   let now = 1_000
+  const deadlines: Record<Side, number | null> = { left: null, right: null }
   const holds: Record<Side, TemperatureRequest | null> = { left: null, right: null }
   const baselines: Record<Side, TemperatureRequest[]> = { left: [request('schedule', 72)], right: [request('schedule', 68)] }
   const powered = { left: true, right: true }
@@ -26,6 +27,8 @@ function harness() {
     readBaseline: side => baselines[side],
     isPowered: side => powered[side],
     readCurrentTarget: () => 75,
+    readHardwareDeadline: side => deadlines[side],
+    writeHardwareDeadline: (side, deadline) => { deadlines[side] = deadline },
     isBlocked: side => blocked[side],
     connect: vi.fn(async () => {}),
     apply,
@@ -95,6 +98,66 @@ describe('temperature arbitration', () => {
     await restarted.reconcile('left')
     expect(h.apply).toHaveBeenLastCalledWith('left', 75)
     expect(restarted.status('left').holdUntil).toBe(expiry)
+  })
+
+  it('preserves a custom hardware cutoff across restart, Resume, and forced keepalive', async () => {
+    const h = harness()
+    await h.controller.setManual('left', 75, DEFAULT_HOLD_MS, 600)
+    h.advance(300_000)
+    const restarted = new TemperatureController(h.deps)
+    await restarted.reconcile('left')
+    expect(h.apply).toHaveBeenLastCalledWith('left', 75, 300)
+    await restarted.resume('left')
+    expect(h.apply).toHaveBeenLastCalledWith('left', 72, 300)
+    h.advance(60_000)
+    await restarted.reconcile('left', true)
+    expect(h.apply).toHaveBeenLastCalledWith('left', 72, 240)
+    expect(restarted.recoveryDurationLocked('left', 28_800)).toBe(240)
+    h.advance(240_000)
+    h.apply.mockClear()
+    await restarted.reconcile('left')
+    expect(h.powered.left).toBe(false)
+    expect(h.apply).not.toHaveBeenCalled()
+    expect(restarted.status('left').blocked).toBe('off')
+  })
+
+  it('does not extend a live bounded hold for a scheduled power-on', async () => {
+    const h = harness()
+    await h.controller.setManual('left', 75, DEFAULT_HOLD_MS, 600)
+    h.advance(300_000)
+    await withSideLock('left', () => h.controller.powerOnLocked('left'))
+    expect(h.apply).toHaveBeenLastCalledWith('left', 75, 300)
+  })
+
+  it('persists a cutoff beyond hold expiry and permits a new explicit manual session', async () => {
+    const h = harness()
+    await h.controller.setManual('left', 75, 60_000, 600)
+    h.advance(60_000)
+    await h.controller.reconcile('left')
+    expect(h.apply).toHaveBeenLastCalledWith('left', 72, 540)
+    await h.controller.setManual('left', 75)
+    expect(h.deps.readHardwareDeadline('left')).toBeNull()
+  })
+
+  it('treats duration zero as shutdown, never a hold that can restart heating', async () => {
+    const h = harness()
+    await h.controller.setManual('left', 75, DEFAULT_HOLD_MS, 0)
+    await h.controller.reconcile('left')
+    expect(h.apply).not.toHaveBeenCalled()
+    expect(h.holds.left).toBeNull()
+    expect(h.powered.left).toBe(false)
+  })
+
+  it('applies a changed request deadline even when the new temperature is identical', async () => {
+    const h = harness()
+    await h.controller.submit('left', request('autopilot', 72, { createdAt: 1_000, durationSec: 600 }))
+    expect(h.apply).toHaveBeenLastCalledWith('left', 72, 600)
+    h.advance(60_000)
+    await h.controller.submit('left', request('autopilot', 72, { createdAt: 61_000, durationSec: 120 }))
+    expect(h.apply).toHaveBeenLastCalledWith('left', 72, 120)
+    h.advance(120_000)
+    await h.controller.reconcile('left')
+    expect(h.powered.left).toBe(false)
   })
 
   it('resumes the current schedule without replaying missed events', async () => {

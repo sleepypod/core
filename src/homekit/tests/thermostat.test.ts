@@ -3,14 +3,15 @@ import { Characteristic } from 'hap-nodejs'
 
 const setTemperature = vi.fn().mockResolvedValue(undefined)
 const setPower = vi.fn().mockResolvedValue(undefined)
-const registerManualOverride = vi.fn()
 const shouldBlock = vi.fn<() => boolean>().mockReturnValue(false)
 
-vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getSharedHardwareClient: () => ({ setTemperature, setPower }),
-}))
-vi.mock('@/src/automation', () => ({
-  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+// Test HomeKit's staging, serialization, and error mapping at the shared
+// controller boundary. Controller/hardware integration has its own real-DB tests.
+vi.mock('@/src/temperature/instance', () => ({
+  getTemperatureController: () => ({
+    setManualLocked: setTemperature,
+    powerOffLocked: (side: 'left' | 'right') => setPower(side, false),
+  }),
 }))
 vi.mock('@/src/hardware/pumpStallGuard', () => ({
   shouldBlock: () => shouldBlock(),
@@ -43,7 +44,6 @@ describe('thermostat accessory', () => {
     __resetSideController()
     setTemperature.mockClear()
     setPower.mockClear()
-    registerManualOverride.mockClear()
     shouldBlock.mockReset()
     shouldBlock.mockReturnValue(false)
   })
@@ -134,7 +134,7 @@ describe('thermostat accessory', () => {
     await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).handleSetRequest(3)
     // Right fixture targetTemperature is 80°F — must pass through so the
     // hardware client doesn't silently fall back to its 75°F default.
-    expect(setPower).toHaveBeenCalledWith('right', true, 80)
+    expect(setTemperature).toHaveBeenCalledWith('right', 80)
 
     setPower.mockClear()
     await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).handleSetRequest(0)
@@ -181,7 +181,7 @@ describe('thermostat accessory', () => {
     // the requested intent, not the 77°F the slider visibly reverted to.
     shouldBlock.mockReturnValue(false)
     await service.getCharacteristic(Characteristic.TargetHeatingCoolingState).handleSetRequest(3)
-    expect(setPower).toHaveBeenCalledWith('left', true, 95)
+    expect(setTemperature).toHaveBeenCalledWith('left', 95)
     warn.mockRestore()
   })
 

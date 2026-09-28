@@ -297,6 +297,7 @@ const expectedTables: Record<string, TableSpec> = {
   deviceState: {
     name: 'device_state',
     columns: [
+      { name: 'hardware_deadline', notNull: false, default: undefined },
       { name: 'side', notNull: true, default: undefined },
       { name: 'current_temperature', notNull: false, default: undefined },
       { name: 'target_temperature', notNull: false, default: undefined },

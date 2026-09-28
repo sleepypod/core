@@ -373,7 +373,9 @@ async function initializeBackgroundServices(): Promise<void> {
 
     // Boot the Autopilot rules engine beside the scheduler (non-blocking).
     // Shares the same hardware path; no-op until automations are created.
-    getAutomationEngine().then(async () => {
+    getAutomationEngine().catch((error) => {
+      console.warn('[automation] engine failed to start:', error instanceof Error ? error.message : error)
+    }).then(async () => {
       if (isShuttingDown) return shutdownAutomationEngine()
       await startTemperatureController()
       if (isShuttingDown) {
@@ -383,7 +385,7 @@ async function initializeBackgroundServices(): Promise<void> {
       initializeKeepalives()
     }).catch((error) => {
       console.warn(
-        '[automation] engine failed to start:',
+        '[temperature] controller failed to start:',
         error instanceof Error ? error.message : error,
       )
     })

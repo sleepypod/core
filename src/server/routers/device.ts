@@ -9,7 +9,7 @@ import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/pr
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
-import { HardwareCommand, fahrenheitToLevel } from '@/src/hardware/types'
+import { HardwareCommand } from '@/src/hardware/types'
 import type { Side } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
@@ -320,9 +320,8 @@ export const deviceRouter = router({
    * - Hardware handles timing automatically (no background jobs needed)
    *
    * Database State:
-   * - Updates target temperature immediately (optimistic)
-   * - Race condition: getStatus() called immediately after may show old current temp
-   *   but new target temp while hardware is still heating/cooling
+   * - The controller persists the hold before commanding hardware.
+   * - Device state and status are published after the command succeeds.
    *
    * Concurrent Operations:
    * - Commands are queued and executed sequentially at hardware level
@@ -367,8 +366,7 @@ export const deviceRouter = router({
               // Re-check inside the lock: the guard can trip during the
               // debounce window or while queued behind the side lock, and a
               // stale queued command must not re-energize a parked side.
-              // The manual override registers only after the check passes —
-              // a rejected command must not suspend autopilot.
+              // The controller persists a hold only after the check passes.
               assertPumpStallNotBlocked(input.side)
               await getTemperatureController().setManualLocked(
                 input.side, input.temperature,
@@ -377,35 +375,9 @@ export const deviceRouter = router({
               )
               return { success: true }
             }, 'Failed to set temperature'))
-            broadcastMutationStatus(input.side, {
-              targetTemperature: input.temperature,
-              targetLevel: fahrenheitToLevel(input.temperature),
-            })
             resolve({ success: true })
           }
           catch (error) {
-            // A late guard rejection means the optimistic isPowered=true
-            // write above contradicts the parked hardware — restore the
-            // off-state mirror trip() wrote so the UI doesn't keep showing
-            // an energized target until the next status poll.
-            if (error instanceof TRPCError && error.code === 'PRECONDITION_FAILED') {
-              try {
-                markSideMutated(input.side)
-                await db
-                  .update(deviceState)
-                  .set({
-                    isPowered: false,
-                    poweredOnAt: null,
-                    targetTemperature: null,
-                    lastUpdated: new Date(),
-                  })
-                  .where(eq(deviceState.side, input.side))
-              }
-              catch (dbError) {
-                console.error('Failed to restore parked state after guard rejection:', dbError)
-              }
-              broadcastMutationStatus(input.side, { targetLevel: 0 })
-            }
             reject(error)
           }
         }, TEMP_DEBOUNCE_MS)
@@ -484,47 +456,6 @@ export const deviceRouter = router({
           await getTemperatureController().powerOffLocked(input.side)
         }
 
-        // Best-effort DB sync — next getStatus() call will re-sync if this fails
-        try {
-          const now = new Date()
-          const [prev] = await db
-            .select({ isPowered: deviceState.isPowered, poweredOnAt: deviceState.poweredOnAt })
-            .from(deviceState)
-            .where(eq(deviceState.side, input.side))
-            .limit(1)
-          // OFF→ON stamps poweredOnAt; ON→OFF clears it; same-state preserves.
-          const poweredOnAt = input.powered
-            ? (prev?.isPowered ? prev.poweredOnAt : now)
-            : null
-          // Always write the effective target (default 75°F when powering on
-          // without an explicit temperature; null when powering off). Without
-          // this, markSideMutated's freshness preservation could leave a stale
-          // setpoint visible past the mutation.
-          const targetTemperature = input.powered
-            ? (input.temperature ?? 75)
-            : null
-          // Stamp freshness immediately before the DB write so the 5s guard
-          // covers this mutation. Stamping before the hardware roundtrip
-          // risks the window expiring while connect/setPower run.
-          markSideMutated(input.side)
-          await db
-            .update(deviceState)
-            .set({
-              isPowered: input.powered,
-              poweredOnAt,
-              targetTemperature,
-              lastUpdated: now,
-            })
-            .where(eq(deviceState.side, input.side))
-        }
-        catch (dbError) {
-          console.error('Failed to sync power state to DB:', dbError)
-        }
-
-        broadcastMutationStatus(input.side, input.powered
-          ? { targetTemperature: input.temperature ?? 75, targetLevel: fahrenheitToLevel(input.temperature ?? 75) }
-          : { targetLevel: 0 },
-        )
         return { success: true }
       }, 'Failed to set power'))
     }),

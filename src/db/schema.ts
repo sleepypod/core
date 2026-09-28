@@ -229,6 +229,8 @@ export const temperatureHolds = sqliteTable('temperature_holds', {
 })
 
 export const deviceState = sqliteTable('device_state', {
+  // Explicit manual hardware cutoff, independent of temperature ownership (epoch ms).
+  hardwareDeadline: integer('hardware_deadline'),
   side: text('side', { enum: ['left', 'right'] }).primaryKey(),
   currentTemperature: real('current_temperature'), // Current temp in °F
   targetTemperature: real('target_temperature'), // Target temp in °F

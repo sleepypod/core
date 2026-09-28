@@ -23,6 +23,24 @@ describe('current recurring target', () => {
     expect(recurringTarget([], 'UTC', Date.now())).toBeNull()
   })
 
+  it('matches forward cron execution for a schedule inside the missing spring hour', () => {
+    const gap: WeeklyTarget[] = [
+      { id: 'before', dayOfWeek: 'sunday', time: '01:00', temperature: 75 },
+      { id: 'gap', dayOfWeek: 'sunday', time: '02:30', temperature: 68 },
+    ]
+    expect(recurringTarget(gap, 'America/New_York', Date.parse('2026-03-08T07:29Z'))?.temperature).toBe(75)
+    const shifted = recurringTarget(gap, 'America/New_York', Date.parse('2026-03-08T07:30Z'))
+    expect(shifted?.temperature).toBe(68)
+    expect(shifted?.startsAt).toBe(Date.parse('2026-03-08T07:30Z'))
+  })
+
+  it('does not replay the repeated fall hour as a second occurrence', () => {
+    const fall: WeeklyTarget[] = [{ id: 'fall', dayOfWeek: 'sunday', time: '01:30', temperature: 68 }]
+    for (const time of ['2026-11-01T05:30Z', '2026-11-01T06:30Z']) {
+      expect(recurringTarget(fall, 'America/New_York', Date.parse(time))?.startsAt).toBe(Date.parse('2026-11-01T05:30Z'))
+    }
+  })
+
   it('resolves spring-forward using the scheduler cron semantics', () => {
     const spring: WeeklyTarget[] = [{ id: 'spring', dayOfWeek: 'sunday', time: '03:30', temperature: 68 }]
     const target = recurringTarget(spring, 'America/New_York', Date.parse('2026-03-08T07:30Z'))

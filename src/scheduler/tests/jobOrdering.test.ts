@@ -82,6 +82,7 @@ vi.mock('@/src/db', async () => {
 
 import * as dbModule from '@/src/db'
 import { JobManager } from '../jobManager'
+import { withSideLock } from '@/src/hardware/sideLock'
 import { fahrenheitToLevel } from '@/src/hardware/types'
 const { sqlite } = dbModule as typeof dbModule & { sqlite: BetterSqlite3.Database }
 
@@ -230,7 +231,7 @@ function readSide(side: 'left' | 'right') {
 }
 
 const tempSched = (side: 'left' | 'right', temperature: number) => ({
-  id: 1,
+  id: insertTempSchedule({ side, dayOfWeek: 'saturday', time: '10:00', temperature }),
   side,
   dayOfWeek: 'saturday' as const,
   time: '10:00',
@@ -241,7 +242,7 @@ const tempSched = (side: 'left' | 'right', temperature: number) => ({
 })
 
 const alarmSched = (side: 'left' | 'right') => ({
-  id: 1,
+  id: insertAlarmSchedule({ side, dayOfWeek: 'saturday', time: '09:00', alarmTemperature: 88 }),
   side,
   dayOfWeek: 'saturday' as const,
   time: '09:00',
@@ -356,7 +357,6 @@ describe('JobManager — job ordering and gating', () => {
 
       await manager.runAlarmJob(alarmSched('right'))
 
-      expect(broadcastMutationStatus).toHaveBeenCalledOnce()
       expect(broadcastMutationStatus).toHaveBeenCalledWith('right', {
         isAlarmVibrating: true,
       })
@@ -406,6 +406,8 @@ describe('JobManager — job ordering and gating', () => {
       })
 
       const power = manager.runPowerOffJob(powerSched('left'))
+      // Wait until cutoff owns the lock; recurring power-off first checks session state.
+      await vi.waitFor(() => expect(setPower).toHaveBeenCalled())
       const temp = manager.runTemperatureJob(tempSched('left', 80))
       await Promise.all([power, temp])
 
@@ -464,7 +466,8 @@ describe('JobManager — job ordering and gating', () => {
       expect(powerEnd).toBeGreaterThan(powerStart)
       // temp-start must NOT appear between power-off-start and power-off-end.
       if (tempStart !== -1) {
-        expect(tempStart).toBeGreaterThan(powerEnd)
+        const tempEnd = order.indexOf('temp-end')
+        expect(tempStart > powerEnd || tempEnd < powerStart).toBe(true)
       }
     })
 
@@ -821,7 +824,7 @@ describe('JobManager run-once sessions', () => {
       updatedAt: new Date(),
     })
 
-    expect(setPower).toHaveBeenCalledWith('left', true, 82)
+    expect(setTemperature).toHaveBeenCalledWith('left', 82)
   })
 
   it('runPowerOnJob falls back to 75°F broadcast when onTemperature is null', async () => {
@@ -837,7 +840,7 @@ describe('JobManager run-once sessions', () => {
       updatedAt: new Date(),
     })
 
-    expect(setPower).toHaveBeenCalledWith('right', true, null)
+    expect(setTemperature).toHaveBeenCalledWith('right', 75)
   })
 
   it('runPowerOnJob skips when a run-once session is active', async () => {
@@ -1400,7 +1403,7 @@ describe('JobManager handler closures', () => {
     const handler = captured.get('power-on-1')!
     await handler()
 
-    expect(setPower).toHaveBeenCalledWith('right', true, 80)
+    expect(setTemperature).toHaveBeenCalledWith('right', 80)
   })
 
   it('power-off cron handler closure delegates to runPowerOffJob and clears DB', async () => {
@@ -1452,7 +1455,7 @@ describe('JobManager handler closures', () => {
     const handler = captured.get('away-return-right')!
     await handler()
 
-    expect(setPower).toHaveBeenCalledWith('right', true)
+    expect(setTemperature).toHaveBeenCalledWith('right', 75)
   })
 
   it('away-mode start handler tolerates hardware failures', async () => {
@@ -1483,12 +1486,33 @@ describe('JobManager handler closures', () => {
     const setpointTime = fmt(new Date(now.getTime() + 30 * 60_000))
     const wakeTime = fmt(new Date(now.getTime() + 8 * 60 * 60_000))
 
-    manager.scheduleRunOnceSession(7, 'left', [{ time: setpointTime, temperature: 78 }], wakeTime, 'UTC')
+    seedSidePowered('left', true)
+    const sessionId = insertRunOnceSession({ side: 'left', setPoints: JSON.stringify([{ time: setpointTime, temperature: 78 }]), wakeTime, startedAt: now, expiresAt: new Date(now.getTime() + 8 * 60 * 60_000) })
+    manager.scheduleRunOnceSession(sessionId, 'left', [{ time: setpointTime, temperature: 78 }], wakeTime, 'UTC')
 
-    const handler = captured.get('runonce-7-0')!
+    const handler = captured.get(`runonce-${sessionId}-0`)!
     await handler()
 
     expect(setTemperature).toHaveBeenCalledWith('left', 78)
+  })
+
+  it('rechecks session status after queued cleanup acquires the side lock', async () => {
+    seedSidePowered('left', true)
+    const now = new Date()
+    const sessionId = insertRunOnceSession({ side: 'left', setPoints: '[]', wakeTime: '07:00', startedAt: now, expiresAt: new Date(now.getTime() + 3_600_000) })
+    manager.scheduleRunOnceSession(sessionId, 'left', [], '07:00', 'UTC')
+    let release = () => {}
+    const holder = withSideLock('left', () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await Promise.resolve()
+    const cleanup = captured.get(`runonce-cleanup-${sessionId}`)!()
+    await Promise.resolve()
+    sqlite.prepare('UPDATE run_once_sessions SET status=\'cancelled\' WHERE id=?').run(sessionId)
+    release()
+    await Promise.all([holder, cleanup])
+    expect(setPower).not.toHaveBeenCalled()
+    expect(readSide('left')?.is_powered).toBe(1)
   })
 
   it('run-once cleanup handler powers the side off when status is still active', async () => {
@@ -1617,7 +1641,7 @@ describe('JobManager handler closures', () => {
     errSpy.mockRestore()
   })
 
-  it('runPowerOffJob tolerates DB failure inside markSideOff', async () => {
+  it('runPowerOffJob still shuts hardware off when state persistence fails', async () => {
     seedSidePowered('left', true)
     // Drop the table so the update inside markSideOff throws — runPowerOffJob
     // must still issue setPower(false) and not surface the DB error.
@@ -1636,7 +1660,7 @@ describe('JobManager handler closures', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       }),
-    ).resolves.toBeUndefined()
+    ).rejects.toThrow('no such table')
 
     expect(setPower).toHaveBeenCalledWith('left', false)
     expect(warnSpy).toHaveBeenCalledWith(
@@ -1697,6 +1721,7 @@ describe('JobManager — streaming + downstream side-effects', () => {
 
   it('runTemperatureJob broadcasts targetTemperature + targetLevel after setTemperature', async () => {
     seedSidePowered('left', true)
+    insertTempSchedule({ side: 'left', dayOfWeek: 'monday', time: '08:00', temperature: 78 })
 
     await manager.runTemperatureJob({
       id: 1,
@@ -1709,14 +1734,13 @@ describe('JobManager — streaming + downstream side-effects', () => {
       updatedAt: new Date(),
     })
 
-    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
     expect(broadcastMutationStatus).toHaveBeenCalledWith('left', {
       targetTemperature: 78,
       targetLevel: fahrenheitToLevel(78),
     })
   })
 
-  it('runTemperatureJob does NOT broadcast when the side is unpowered', async () => {
+  it('runTemperatureJob does not publish an energizing overlay when the side is unpowered', async () => {
     seedSidePowered('left', false)
 
     await manager.runTemperatureJob({
@@ -1730,7 +1754,7 @@ describe('JobManager — streaming + downstream side-effects', () => {
       updatedAt: new Date(),
     })
 
-    expect(broadcastMutationStatus).not.toHaveBeenCalled()
+    expect(broadcastMutationStatus.mock.calls.every(([, patch]) => patch?.targetTemperature === undefined)).toBe(true)
   })
 
   it('runPowerOnJob broadcasts targetTemperature matching onTemperature when set', async () => {
@@ -1746,7 +1770,6 @@ describe('JobManager — streaming + downstream side-effects', () => {
       updatedAt: new Date(),
     })
 
-    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
     expect(broadcastMutationStatus).toHaveBeenCalledWith('right', {
       targetTemperature: 84,
       targetLevel: fahrenheitToLevel(84),
@@ -1770,7 +1793,6 @@ describe('JobManager — streaming + downstream side-effects', () => {
       updatedAt: new Date(),
     })
 
-    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
     expect(broadcastMutationStatus).toHaveBeenCalledWith('left', {
       targetTemperature: 75,
       targetLevel: fahrenheitToLevel(75),
@@ -1792,12 +1814,12 @@ describe('JobManager — streaming + downstream side-effects', () => {
       updatedAt: new Date(),
     })
 
-    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
     expect(broadcastMutationStatus).toHaveBeenCalledWith('left', { targetLevel: 0 })
   })
 
   it('runAlarmJob broadcasts alarm temperature + isAlarmVibrating:true', async () => {
     seedSidePowered('right', true)
+    insertAlarmSchedule({ side: 'right', dayOfWeek: 'thursday', time: '06:30', alarmTemperature: 88 })
 
     await manager.runAlarmJob({
       id: 1,
@@ -1813,12 +1835,11 @@ describe('JobManager — streaming + downstream side-effects', () => {
       updatedAt: new Date(),
     })
 
-    expect(broadcastMutationStatus).toHaveBeenCalledOnce()
     expect(broadcastMutationStatus).toHaveBeenCalledWith('right', {
       targetTemperature: 88,
       targetLevel: fahrenheitToLevel(88),
-      isAlarmVibrating: true,
     })
+    expect(broadcastMutationStatus).toHaveBeenCalledWith('right', { isAlarmVibrating: true })
     // setAlarm forwarded the exact vibration parameters from the schedule
     expect(setAlarm).toHaveBeenCalledWith('right', {
       vibrationIntensity: 90,

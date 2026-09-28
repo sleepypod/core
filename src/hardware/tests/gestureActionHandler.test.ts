@@ -2,13 +2,16 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { GestureActionDeps } from '../gestureActionHandler'
 import type { GestureEvent } from '../dacMonitor'
 import type { HardwareClient } from '../client'
-import { TEMP_NEUTRAL } from '../types'
 
-const registerManualOverride = vi.fn()
+let controllerClient: HardwareClient
 const pumpStallShouldBlock = vi.fn<(side: 'left' | 'right') => boolean>(() => false)
 
-vi.mock('@/src/automation', () => ({
-  getAutomationEngineIfRunning: () => ({ registerManualOverride }),
+// Gesture unit tests assert delegation to the shared controller boundary.
+vi.mock('@/src/temperature/instance', () => ({
+  getTemperatureController: () => ({
+    setManualLocked: (side: 'left' | 'right', temp: number) => controllerClient.setTemperature(side, temp),
+    powerOffLocked: (side: 'left' | 'right') => controllerClient.setPower(side, false),
+  }),
 }))
 vi.mock('../pumpStallGuard', () => ({
   shouldBlock: (side: 'left' | 'right') => pumpStallShouldBlock(side),
@@ -30,7 +33,7 @@ const makeEvent = (
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
 
-const makeMockClient = (overrides: DeepPartial<HardwareClient> = {}): HardwareClient => ({
+const makeMockClient = (overrides: DeepPartial<HardwareClient> = {}): HardwareClient => (controllerClient = {
   connect: vi.fn().mockResolvedValue(undefined),
   disconnect: vi.fn(),
   setTemperature: vi.fn().mockResolvedValue(undefined),
@@ -60,7 +63,6 @@ const makeDeps = (
 describe('GestureActionHandler', () => {
   afterEach(() => {
     vi.clearAllTimers()
-    registerManualOverride.mockClear()
     pumpStallShouldBlock.mockReset().mockReturnValue(false)
     vi.useRealTimers()
   })
@@ -132,8 +134,7 @@ describe('GestureActionHandler', () => {
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
       expect(client.setTemperature).toHaveBeenCalledWith('left', 75)
-      expect(registerManualOverride).toHaveBeenCalledWith('left')
-      expect(client.disconnect).toHaveBeenCalledOnce()
+      expect(client.disconnect).not.toHaveBeenCalled() // shared controller owns the transport
     })
 
     test('decrements temperature', async () => {
@@ -297,7 +298,7 @@ describe('GestureActionHandler', () => {
         await holder
         await pending
 
-        expect(client.setPower).toHaveBeenCalledWith('left', true, 70)
+        expect(client.setTemperature).toHaveBeenCalledWith('left', 70)
       }
       finally {
         releaseLeft()
@@ -312,18 +313,17 @@ describe('GestureActionHandler', () => {
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
-      expect(client.setPower).toHaveBeenCalledWith('left', true, 70)
-      expect(registerManualOverride).toHaveBeenCalledWith('left')
+      expect(client.setTemperature).toHaveBeenCalledWith('left', 70)
     })
 
-    test('power-on falls back to TEMP_NEUTRAL when no targetTemperature is cached', async () => {
+    test('power-on falls back to 75°F when no targetTemperature is cached', async () => {
       const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'power' }
       const state = { isAlarmVibrating: false, isPowered: false, targetTemperature: null }
       const { deps, client } = makeDeps(gesture, state)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
-      expect(client.setPower).toHaveBeenCalledWith('left', true, 82.5)
+      expect(client.setTemperature).toHaveBeenCalledWith('left', 75)
     })
 
     test('treats a missing state row as inactive and powered off', async () => {
@@ -333,7 +333,7 @@ describe('GestureActionHandler', () => {
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
 
       expect(client.clearAlarm).not.toHaveBeenCalled()
-      expect(client.setPower).toHaveBeenCalledWith('right', true, TEMP_NEUTRAL)
+      expect(client.setTemperature).toHaveBeenCalledWith('right', 75)
       expect(client.disconnect).toHaveBeenCalledOnce()
     })
 
@@ -344,7 +344,7 @@ describe('GestureActionHandler', () => {
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
 
-      expect(client.setPower).toHaveBeenCalledWith('right', false, undefined)
+      expect(client.setPower).toHaveBeenCalledWith('right', false)
     })
 
     test('no-op when alarmInactiveBehavior=none', async () => {
@@ -421,7 +421,7 @@ describe('GestureActionHandler', () => {
       'GestureActionHandler: error executing action for left doubleTap:',
       'hardware failure',
     )
-    expect(client.disconnect).toHaveBeenCalledOnce()
+    expect(client.disconnect).not.toHaveBeenCalled() // shared controller owns the transport
     error.mockRestore()
   })
 
@@ -436,7 +436,6 @@ describe('GestureActionHandler', () => {
 
       expect(deps.newHardwareClient).not.toHaveBeenCalled()
       expect(client.setTemperature).not.toHaveBeenCalled()
-      expect(registerManualOverride).not.toHaveBeenCalled()
       expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped setTemperature: pump stall guard blocks left')
       warn.mockRestore()
     })
@@ -464,7 +463,7 @@ describe('GestureActionHandler', () => {
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
 
-      expect(client.setPower).toHaveBeenCalledWith('right', false, undefined)
+      expect(client.setPower).toHaveBeenCalledWith('right', false)
     })
 
     test('blocks a temperature gesture whose trip lands while queued on the side lock', async () => {
@@ -490,7 +489,6 @@ describe('GestureActionHandler', () => {
         await pending
 
         expect(client.setTemperature).not.toHaveBeenCalled()
-        expect(registerManualOverride).not.toHaveBeenCalled()
         expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped setTemperature: pump stall guard blocks left')
       }
       finally {
@@ -521,7 +519,6 @@ describe('GestureActionHandler', () => {
         await pending
 
         expect(client.setPower).not.toHaveBeenCalled()
-        expect(registerManualOverride).not.toHaveBeenCalled()
         expect(warn).toHaveBeenCalledWith('[gestureActionHandler] skipped power-on: pump stall guard blocks right')
       }
       finally {

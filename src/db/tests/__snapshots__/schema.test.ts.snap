@@ -422,6 +422,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
   {
     "checks": 0,
     "columns": [
+      "hardware_deadline | sql:integer | logical:number/SQLiteInteger | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "side | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:left,right",
       "current_temperature | sql:real | logical:number/SQLiteReal | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "target_temperature | sql:real | logical:number/SQLiteReal | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",

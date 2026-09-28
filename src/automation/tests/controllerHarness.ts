@@ -17,6 +17,7 @@ export interface EngineFixtureDeps extends Omit<AutomationEngineDeps, 'control'>
 }
 
 export function engineFixture(deps: EngineFixtureDeps) {
+  const deadlines: Record<Side, number | null> = { left: null, right: null }
   const holds: Record<Side, TemperatureRequest | null> = { left: null, right: null }
   const runOnce: Record<Side, boolean> = { left: false, right: false }
   const powered: Record<Side, boolean> = { left: true, right: true }
@@ -33,6 +34,8 @@ export function engineFixture(deps: EngineFixtureDeps) {
       : [],
     isPowered: side => powered[side],
     readCurrentTarget: () => 75,
+    readHardwareDeadline: side => deadlines[side],
+    writeHardwareDeadline: (side, deadline) => { deadlines[side] = deadline },
     isBlocked: deps.pumpStallShouldBlock,
     connect: () => deps.getHardware().connect(),
     apply: async (side, temp, duration) => {

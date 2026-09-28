@@ -16,8 +16,15 @@ export function recurringTarget(rows: WeeklyTarget[], timezone: string, now: num
   for (const row of rows) {
     const [hour, minute] = row.time.split(':').map(Number)
     const cron = `${minute} ${hour} * * ${DAYS_OF_WEEK.indexOf(row.dayOfWeek)}`
-    const startsAt = parseExpression(cron, { currentDate: new Date(now + 1), tz: timezone }).prev().getTime()
-    const expiresAt = parseExpression(cron, { currentDate: new Date(now), tz: timezone }).next().getTime()
+    // Forward iteration matches node-schedule through missing/repeated DST
+    // hours. cron-parser.prev() is not the inverse of next() in a spring gap.
+    const occurrences = parseExpression(cron, { currentDate: new Date(now - 15 * 86_400_000), tz: timezone })
+    let startsAt = occurrences.next().getTime()
+    let expiresAt = occurrences.next().getTime()
+    while (expiresAt <= now) {
+      startsAt = expiresAt
+      expiresAt = occurrences.next().getTime()
+    }
     const candidate: TemperatureRequest = {
       id: row.id, source: 'schedule', temperature: row.temperature,
       startsAt, expiresAt, createdAt: startsAt, priority: 0,

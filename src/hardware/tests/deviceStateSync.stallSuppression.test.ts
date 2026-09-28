@@ -40,6 +40,7 @@ function resetSchema(): void {
   ;(sqlite as any).exec(`
     DROP TABLE IF EXISTS device_state;
     CREATE TABLE device_state (
+      hardware_deadline INTEGER,
       side TEXT PRIMARY KEY,
       current_temperature REAL,
       target_temperature REAL,

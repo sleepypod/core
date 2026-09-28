@@ -7,6 +7,7 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { _resetMutationOverlays } from '../mutationOverlay'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const dacMock = vi.hoisted(() => {
@@ -88,6 +89,7 @@ const baseStatus = {
 let warnSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
+  _resetMutationOverlays()
   dacMock.state.monitor = null
   primeMock.state.primeCompletedAt = null
   alarmMock.state.left = false
@@ -287,4 +289,14 @@ describe('broadcastMutationStatus', () => {
       expect.any(Error),
     )
   })
+})
+
+it('retains a just-written target in control-only publications and opposite-side mutations', () => {
+  setLastStatus({ ...baseStatus, leftSide: { targetTemperature: 70, targetLevel: -50 }, rightSide: { targetTemperature: 72, targetLevel: -40 } })
+  broadcastMutationStatus('left', { targetTemperature: 75, targetLevel: -30 })
+  broadcastMutationStatus()
+  broadcastMutationStatus('right', { targetTemperature: 74 })
+  for (const [frame] of piezoMock.broadcastFrame.mock.calls) {
+    expect(frame.leftSide).toMatchObject({ targetTemperature: 75, targetLevel: -30 })
+  }
 })

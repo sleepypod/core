@@ -78,6 +78,10 @@ export function getTemperatureController(): TemperatureController {
       readBaseline,
       isPowered: side => db.select().from(deviceState).where(eq(deviceState.side, side)).get()?.isPowered ?? false,
       readCurrentTarget: side => db.select().from(deviceState).where(eq(deviceState.side, side)).get()?.targetTemperature ?? null,
+      readHardwareDeadline: side => db.select({ deadline: deviceState.hardwareDeadline }).from(deviceState).where(eq(deviceState.side, side)).get()?.deadline ?? null,
+      writeHardwareDeadline: (side, hardwareDeadline) => {
+        db.insert(deviceState).values({ side, hardwareDeadline }).onConflictDoUpdate({ target: deviceState.side, set: { hardwareDeadline } }).run()
+      },
       isBlocked: shouldBlock,
       connect: () => getSharedHardwareClient().connect(),
       apply: async (side, temperature, durationSec) => {
@@ -126,23 +130,21 @@ export function getTemperatureControllerIfRunning(): TemperatureController | und
 /** Start after migrations/state restoration. The non-overlapping loop also retries failed writes. */
 export async function startTemperatureController(): Promise<void> {
   if (globalState.__sp_temperatureTimer) return
-  let ticking = false
+  const ticking = new Set<Side>()
   const tick = async () => {
-    if (ticking) return
-    ticking = true
-    try {
-      for (const side of ['left', 'right'] as const) {
-        try {
-          await getTemperatureController().reconcile(side)
-        }
-        catch (error) {
-          console.warn(`[temperature] ${side} reconciliation failed:`, error)
-        }
+    await Promise.all((['left', 'right'] as const).map(async (side) => {
+      if (ticking.has(side)) return
+      ticking.add(side)
+      try {
+        await getTemperatureController().reconcile(side)
       }
-    }
-    finally {
-      ticking = false
-    }
+      catch (error) {
+        console.warn(`[temperature] ${side} reconciliation failed:`, error)
+      }
+      finally {
+        ticking.delete(side)
+      }
+    }))
   }
   globalState.__sp_temperatureTimer = setInterval(() => {
     void tick()

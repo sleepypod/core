@@ -620,6 +620,8 @@ export async function restoreAcknowledgedSession(
     const client = getSharedHardwareClient()
     const controller = getTemperatureControllerIfRunning()
     restore.targetTemperature = controller?.recoveryTargetLocked(side, restore.targetTemperature) ?? restore.targetTemperature
+    restore.durationSeconds = controller?.recoveryDurationLocked(side, restore.durationSeconds) ?? restore.durationSeconds
+    if (restore.durationSeconds <= 0) throw new Error('Hardware heating deadline expired during recovery')
     await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
     controller?.recoveredLocked(side, restore.targetTemperature)
     wrote = true
@@ -1001,6 +1003,8 @@ async function autoRecover(side: Side, now: number): Promise<void> {
       // duration-bearing write is sufficient to energize and restore.
       const controller = getTemperatureControllerIfRunning()
       restore.targetTemperature = controller?.recoveryTargetLocked(side, restore.targetTemperature) ?? restore.targetTemperature
+      restore.durationSeconds = controller?.recoveryDurationLocked(side, restore.durationSeconds) ?? restore.durationSeconds
+      if (restore.durationSeconds <= 0) throw new Error('Hardware heating deadline expired during recovery')
       await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
       if (getState()[side] !== state || !state.blocked) return
       controller?.recoveredLocked(side, restore.targetTemperature)

@@ -26,6 +26,11 @@ Content-Type: application/json
 An optional `holdMinutes` chooses 1–1440 minutes. Each accepted adjustment
 restarts that side's timer. `temperature` is Fahrenheit. `duration` retains its
 separate hardware heating-duration meaning in seconds; it is not the hold timer.
+An explicit duration becomes a persisted absolute cutoff. Resume, hold expiry,
+keepalive, restart, and safety recovery cannot extend it. A new manual adjustment
+without a duration starts a normal session again; a scheduled power-on during a
+live hold preserves its cutoff. Duration zero shuts the side off without creating
+a hold.
 
 ```json
 {"side":"left","temperature":75,"holdMinutes":60}
@@ -118,7 +123,8 @@ rule does.
 In action expressions, per-side `targetTemperature` and legacy
 `currentTemperature` references use that referenced side's current
 schedule/session baseline, with 75°F as the fallback when neither exists.
-They never use the rule's own output. Conditions continue reading the actual
+Windowed action references use a separate history sampled from these baselines;
+condition windows still use live observations. They never use the rule's own output. Conditions continue reading the actual
 live signals. This defines relative adjustments independently of transient
 manual holds and prevents repeated evaluation from ratcheting the target.
 
@@ -126,3 +132,15 @@ Recovery probes remain the pump guard's bounded diagnostic operation. Final
 guard-authorized recovery resolves the current temperature request while
 preserving the guard's remaining heating duration; it does not issue a second,
 default-duration power-on command.
+
+## Diagnostic and recovery writers
+
+Ordinary API, HomeKit, gesture, schedule, run-once, and Autopilot temperature
+commands use the shared controller. The raw `/api/device/execute` diagnostic
+endpoint remains a low-level bypass, still subject to its existing side locks
+and pump-protection checks. It neither acquires nor releases a hold and should
+not be used by consumer controls. Subsequent controller reconciliation or
+keepalive can replace a diagnostic target with the current owner’s target.
+Pump-protection probes and emergency cutoffs remain guard-owned operations;
+final recovery uses the current owner and the smaller of the guard’s remaining
+duration and the persisted manual hardware cutoff.

@@ -94,6 +94,7 @@ function resetSchema(): void {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
     CREATE TABLE device_state (
+      hardware_deadline INTEGER,
       side TEXT PRIMARY KEY,
       current_temperature REAL,
       target_temperature REAL,

@@ -1092,7 +1092,7 @@ export class JobManager {
       `runonce-cleanup-${sessionId}`,
       JobType.RUN_ONCE,
       cleanupDate,
-      async () => {
+      async () => withSideLock(side, async () => {
         // Check if session is still active — if cancelled or replaced, bail out
         // to avoid powering off a side that a replacement session is using
         const [current] = await db
@@ -1111,21 +1111,19 @@ export class JobManager {
           .set({ status: 'completed' })
           .where(eq(runOnceSessions.id, sessionId))
 
-        await withSideLock(side, async () => {
-          await this.markSideOff(side)
-          try {
-            const client = getSharedHardwareClient()
-            await client.connect()
-            await getTemperatureController().powerOffLocked(side)
-            broadcastMutationStatus(side, { targetLevel: 0 })
-          }
-          catch (e) {
-            console.warn(`[runOnce] Failed to power off ${side} at wake:`, e)
-          }
-        })
+        await this.markSideOff(side)
+        try {
+          const client = getSharedHardwareClient()
+          await client.connect()
+          await getTemperatureController().powerOffLocked(side)
+          broadcastMutationStatus(side, { targetLevel: 0 })
+        }
+        catch (e) {
+          console.warn(`[runOnce] Failed to power off ${side} at wake:`, e)
+        }
 
         console.log(`Run-once session ${sessionId} completed — ${side} powered off`)
-      },
+      }),
       { sessionId, side, cleanup: true },
     )
   }
@@ -1133,9 +1131,10 @@ export class JobManager {
   /**
    * Cancel an active run-once session for a side.
    */
-  cancelRunOnceSession(side: 'left' | 'right'): void {
+  cancelRunOnceSession(side: 'left' | 'right', sessionId?: number): void {
     for (const job of this.scheduler.getJobs()) {
-      if (job.type === JobType.RUN_ONCE && job.metadata?.side === side) {
+      if (job.type === JobType.RUN_ONCE && job.metadata?.side === side
+        && (sessionId === undefined || job.metadata.sessionId === sessionId)) {
         this.scheduler.cancelJob(job.id)
       }
     }

@@ -255,6 +255,17 @@ describe('AutomationEngine — anti-thrash', () => {
 })
 
 describe('AutomationEngine — runaway guard', () => {
+  it('counts coalesced shutdowns against each originating rule budget', async () => {
+    const h = makeHarness([1, 2].map(id => rule({ id, actions: [{ kind: 'setPower', on: false }] })))
+    await h.engine.reload()
+    for (let i = 0; i < 20; i++) {
+      await h.engine.tick()
+      h.advance(60_000)
+    }
+    expect(h.hwCalls.filter(call => call.on === false)).toHaveLength(12)
+    expect(h.disabled).toEqual([1, 2])
+  })
+
   it('auto-disables a rule that exceeds the hourly action budget', async () => {
     const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: sig('target') }] })])
     await h.engine.reload()
@@ -911,6 +922,25 @@ describe('AutomationEngine — shared control requests', () => {
     rules[0] = { ...rules[0], enabled: false }
     await h.engine.reload()
     expect(h.control.status('left').source).toBeNull()
+  })
+
+  it('uses baseline history for action windows while condition windows still observe live targets', async () => {
+    const relative: Expr = {
+      kind: 'binary', op: '+',
+      left: { kind: 'window', fn: 'max', signal: 'left.targetTemperature', lastMin: 1 }, right: lit(1),
+    }
+    const h = makeHarness([
+      rule({ actions: [{ kind: 'setTemperature', mode: 'policy', temp: relative }] }),
+      rule({ id: 2, conditions: { kind: 'compare', op: '>', left: { kind: 'window', fn: 'max', signal: 'left.targetTemperature', lastMin: 1 }, right: lit(76) }, actions: [{ kind: 'notify', message: 'live target above 76' }] }),
+    ])
+    await h.engine.reload()
+    for (let i = 0; i < 4; i++) {
+      h.setSignal('left.targetTemperature', 75 + i)
+      await h.engine.tick()
+      h.advance(60_000)
+    }
+    expect(h.hwCalls.map(call => call.temp)).toEqual([76])
+    expect(h.notifies).toHaveLength(2)
   })
 
   it('freezes a relative one-shot target and never uses its own output as the next baseline', async () => {

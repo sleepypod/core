@@ -43,6 +43,8 @@ export interface TemperatureControllerDeps {
   readBaseline: (side: Side, now: number) => TemperatureRequest[]
   isPowered: (side: Side) => boolean
   readCurrentTarget: (side: Side) => number | null
+  readHardwareDeadline: (side: Side) => number | null
+  writeHardwareDeadline: (side: Side, deadline: number | null) => void
   isBlocked: (side: Side) => boolean
   /** Must connect before returning; selection and safety are rechecked afterward. */
   connect: () => Promise<void>
@@ -88,10 +90,14 @@ export class TemperatureController {
 
   private applied: Record<Side, number | null> = { left: null, right: null }
 
+  private appliedDeadline: Record<Side, number | null> = { left: null, right: null }
+
   constructor(private deps: TemperatureControllerDeps) {}
 
   private isPowered(side: Side): boolean {
+    const deadline = this.deps.readHardwareDeadline(side)
     return !this.poweredOff[side] && this.deps.isPowered(side)
+      && (deadline === null || deadline > this.deps.now())
   }
 
   status(side: Side): TemperatureControlStatus {
@@ -126,23 +132,34 @@ export class TemperatureController {
     if (!Number.isInteger(holdMs) || holdMs <= 0 || holdMs > MAX_HOLD_MS) {
       throw new Error('Hold must be between 1 millisecond and 24 hours')
     }
+    if (durationSec !== undefined && (!Number.isSafeInteger(durationSec) || durationSec < 0)) {
+      throw new Error('Hardware duration must be a nonnegative integer')
+    }
+    if (durationSec === 0) {
+      await this.powerOffLocked(side)
+      return this.status(side)
+    }
     await this.deps.connect()
     if (this.deps.isBlocked(side)) throw new TemperatureBlockedError()
     const now = this.deps.now()
     const previous = this.deps.readHold(side)
+    const previousDeadline = this.deps.readHardwareDeadline(side)
     // Save first: a persistence failure must not acknowledge a non-durable hold.
     this.deps.writeHold(side, {
       id: 'manual', source: 'manual', temperature, startsAt: now,
       expiresAt: now + holdMs, createdAt: now, priority: 0,
     })
     try {
+      this.deps.writeHardwareDeadline(side, durationSec === undefined ? null : now + durationSec * 1_000)
       await this.deps.apply(side, temperature, durationSec)
       this.applied[side] = temperature
+      this.appliedDeadline[side] = this.deps.readHardwareDeadline(side)
       this.poweredOff[side] = false
     }
     catch (error) {
       this.applied[side] = null // an ambiguous hardware error needs reconciliation
       this.deps.writeHold(side, previous)
+      this.deps.writeHardwareDeadline(side, previousDeadline)
       throw error
     }
     const status = this.status(side)
@@ -173,8 +190,26 @@ export class TemperatureController {
     if (!Number.isFinite(temperature) || temperature < MIN_TEMP || temperature > MAX_TEMP) {
       throw new Error('Temperature outside hardware bounds')
     }
-    await this.deps.apply(side, temperature)
+    // A scheduled ON during a manual hold must not extend its bounded session.
+    // A new explicit ON with no hold starts a new hardware session.
+    const previousDeadline = this.deps.readHardwareDeadline(side)
+    if (selected?.source !== 'manual') this.deps.writeHardwareDeadline(side, null)
+    const duration = this.remainingDuration(side, selected)
+    if (duration !== undefined && duration <= 0) {
+      await this.powerOffLocked(side)
+      return this.status(side)
+    }
+    try {
+      if (duration === undefined) await this.deps.apply(side, temperature)
+      else await this.deps.apply(side, temperature, duration)
+    }
+    catch (error) {
+      this.invalidate(side)
+      this.deps.writeHardwareDeadline(side, previousDeadline)
+      throw error
+    }
     this.applied[side] = temperature
+    this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
     this.poweredOff[side] = false
     const status = this.status(side)
     this.deps.publish(side, status)
@@ -186,6 +221,7 @@ export class TemperatureController {
     this.invalidate(side)
     await this.deps.powerOff(side)
     this.deps.writeHold(side, null)
+    this.deps.writeHardwareDeadline(side, null)
     this.deps.publish(side, this.status(side))
   }
 
@@ -242,6 +278,7 @@ export class TemperatureController {
   /** Call after power-off, safety cutoff, or an independently observed target change. */
   invalidate(side: Side): void {
     this.applied[side] = null
+    this.appliedDeadline[side] = null
   }
 
   /** Guard recovery owns the bounded hardware duration; it resolves only the target here. */
@@ -253,16 +290,43 @@ export class TemperatureController {
   recoveredLocked(side: Side, temperature: number): void {
     this.poweredOff[side] = false
     this.applied[side] = temperature
+    this.appliedDeadline[side] = this.hardwareDeadline(side, this.select(side, this.deps.now()))
+  }
+
+  /** An explicit hardware deadline survives hold expiry/Resume and producer changes. */
+  private hardwareDeadline(side: Side, request: TemperatureRequest | null): number | null {
+    const manualDeadline = this.deps.readHardwareDeadline(side)
+    const requestDeadline = request?.durationSec === undefined ? null : request.createdAt + request.durationSec * 1_000
+    const deadlines = [manualDeadline, requestDeadline].filter((d): d is number => d !== null)
+    return deadlines.length ? Math.min(...deadlines) : null
+  }
+
+  private remainingDuration(side: Side, request: TemperatureRequest | null): number | undefined {
+    const deadline = this.hardwareDeadline(side, request)
+    return deadline === null ? undefined : Math.floor((deadline - this.deps.now()) / 1_000)
+  }
+
+  recoveryDurationLocked(side: Side, duration: number): number {
+    return Math.max(0, Math.min(duration, this.remainingDuration(side, null) ?? duration))
   }
 
   async reconcileLocked(side: Side, force = false, isCurrent: () => boolean = () => true): Promise<TemperatureControlStatus> {
     const now = this.deps.now()
+    const deadline = this.deps.readHardwareDeadline(side)
+    if (deadline !== null && deadline <= now) {
+      await this.powerOffLocked(side)
+      return this.status(side)
+    }
     const hold = this.deps.readHold(side)
     if (hold && !isLiveRequest(hold, now)) this.deps.writeHold(side, null)
     for (const [id, request] of this.requests[side]) {
       if (request.expiresAt <= now) this.requests[side].delete(id)
     }
     let selected = this.select(side, now)
+    if (selected && (this.remainingDuration(side, selected) ?? 1) <= 0 && this.deps.isPowered(side)) {
+      await this.powerOffLocked(side)
+      return this.status(side)
+    }
     // With no configured owner, releasing a hold leaves the current target in
     // place. Always-on keepalive may refresh that target without inventing an
     // owner or extending a hold. The off/safety gates still apply.
@@ -272,23 +336,37 @@ export class TemperatureController {
       const target = selected?.temperature ?? this.deps.readCurrentTarget(side)
       if (target !== null && Number.isFinite(target) && target >= MIN_TEMP && target <= MAX_TEMP
         && this.isPowered(side) && !this.deps.isBlocked(side)) {
-        await this.deps.apply(side, target)
+        const duration = this.remainingDuration(side, selected)
+        if (duration !== undefined && duration <= 0) {
+          await this.powerOffLocked(side)
+          return this.status(side)
+        }
+        if (duration === undefined) await this.deps.apply(side, target)
+        else await this.deps.apply(side, target, duration)
         this.applied[side] = target
+        this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
       }
       const status = this.status(side)
       this.deps.publish(side, status)
       return status
     }
     if (selected && !this.deps.isBlocked(side) && this.isPowered(side)
-      && (force || selected.temperature !== this.applied[side])) {
+      && (force || selected.temperature !== this.applied[side]
+        || this.hardwareDeadline(side, selected) !== this.appliedDeadline[side])) {
       await this.deps.connect()
       // Connecting can wait for transport recovery. Do not issue an expired
       // request or undo a guard trip that happened while connecting.
       selected = this.select(side, this.deps.now())
       if (isCurrent() && selected && !this.deps.isBlocked(side) && this.isPowered(side)) {
-        if (selected.durationSec === undefined) await this.deps.apply(side, selected.temperature)
-        else await this.deps.apply(side, selected.temperature, selected.durationSec)
+        const duration = this.remainingDuration(side, selected)
+        if (duration !== undefined && duration <= 0) {
+          await this.powerOffLocked(side)
+          return this.status(side)
+        }
+        if (duration === undefined) await this.deps.apply(side, selected.temperature)
+        else await this.deps.apply(side, selected.temperature, duration)
         this.applied[side] = selected.temperature
+        this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
       }
     }
     if (this.deps.isBlocked(side) || !this.isPowered(side)) this.applied[side] = null

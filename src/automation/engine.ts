@@ -81,6 +81,7 @@ export class AutomationEngine {
   private runtime = new Map<number, RuleRuntime>()
   private triggerFingerprints = new Map<number, string>()
   private windows = new WindowStore()
+  private actionWindows = new WindowStore()
   private windowSignals = new Set<string>()
   private timer: ReturnType<typeof setInterval> | null = null
   private ticking = false
@@ -225,8 +226,12 @@ export class AutomationEngine {
       for (const key of this.windowSignals) {
         const v = snapshot[key]
         if (typeof v === 'number') this.windows.record(key, v, now)
+        const target = /^(left|right)\.(targetTemperature|currentTemperature)$/.exec(key)
+        const actionValue = target ? this.deps.control.automationBaseline(target[1] as Side) : v
+        if (typeof actionValue === 'number') this.actionWindows.record(key, actionValue, now)
       }
       this.windows.prune(now, this.maxWindowMinutes())
+      this.actionWindows.prune(now, this.maxWindowMinutes())
 
       const ctx: EvalContext = {
         signal: key => snapshot[key],
@@ -268,6 +273,11 @@ export class AutomationEngine {
       if (generation !== this.generation) return
       for (const { rule, results } of this.pendingRuns) {
         for (const result of results) {
+          if (result.kind === 'setPower' && result.on === false && result.sent && !result.error && !result.dryRun) {
+            // Coalesced shutdowns count for each rule that requested a successful
+            // side cutoff. Failed/dry-run commands consume no runaway budget.
+            this.getRuntime(rule.id).actionTimes.push(now)
+          }
           if (!result.requestId || !result.side || result.dryRun) continue
           if (this.publishErrors[result.side] !== undefined) {
             result.error = String(this.publishErrors[result.side])
@@ -441,6 +451,7 @@ export class AutomationEngine {
       }
       const actionContext: EvalContext = {
         ...ctx,
+        windows: this.actionWindows,
         signal: (key) => {
           const target = /^(left|right)\.(targetTemperature|currentTemperature)$/.exec(key)
           return target ? this.deps.control.automationBaseline(target[1] as Side) : ctx.signal(key)
@@ -543,6 +554,7 @@ function aggregateOutcome(dryRun: boolean, results: ActionResult[]): RunOutcome 
 /** Feedback-based actions are one-shot unless explicitly configured as policies. */
 function referencesTarget(expr: Expr): boolean {
   switch (expr.kind) {
+    case 'window':
     case 'signal': return /\.(targetTemperature|currentTemperature)$/.test(expr.signal)
     case 'binary': return referencesTarget(expr.left) || referencesTarget(expr.right)
     case 'clamp': return referencesTarget(expr.value) || referencesTarget(expr.min) || referencesTarget(expr.max)

@@ -157,13 +157,11 @@ export class GestureActionHandler {
     }
     else {
       if (gesture.alarmInactiveBehavior === 'power') {
-        const currentlyPowered = state?.isPowered ?? false
-        const nextPowered = !currentlyPowered
-        // Pass the polled target so a power-on preserves the user's setpoint
-        // across off-cycles instead of landing on the firmware-default
-        // fallback in DacHardwareClient.setPower.
-        const target = state?.targetTemperature ?? 75
         await withSideLock(event.side, async () => {
+          // Resolve the toggle after older queued commands have updated state.
+          const current = await this.deps.findDeviceState(event.side)
+          const nextPowered = !(current?.isPowered ?? false)
+          const target = current?.targetTemperature ?? 75
           if (nextPowered && pumpStallShouldBlock(event.side)) {
             console.warn(`[gestureActionHandler] skipped power-on: pump stall guard blocks ${event.side}`)
             return
