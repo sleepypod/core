@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { resetControlDatabase } from '@/src/temperature/tests/databaseFixture'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type BetterSqlite3 from 'better-sqlite3'
 
@@ -51,36 +52,9 @@ const { sqlite } = dbModule as typeof dbModule & {
 const KEEPALIVE_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 function resetSchema(): void {
-  ;(sqlite as any).exec(`
-    DROP TABLE IF EXISTS side_settings;
-    DROP TABLE IF EXISTS device_state;
-
-    CREATE TABLE side_settings (
-      side TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      away_mode INTEGER NOT NULL DEFAULT 0,
-      always_on INTEGER NOT NULL DEFAULT 0,
-      auto_off_enabled INTEGER NOT NULL DEFAULT 0,
-      auto_off_minutes INTEGER NOT NULL DEFAULT 30,
-      away_start TEXT,
-      away_return TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE device_state (
-      side TEXT PRIMARY KEY,
-      current_temperature REAL,
-      target_temperature REAL,
-      is_powered INTEGER NOT NULL DEFAULT 0,
-      is_alarm_vibrating INTEGER NOT NULL DEFAULT 0,
-      water_level TEXT DEFAULT 'unknown',
-      powered_on_at INTEGER,
-      last_updated INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-
-    INSERT INTO side_settings (side, name) VALUES ('left', 'Left'), ('right', 'Right');
-    INSERT INTO device_state (side, is_powered) VALUES ('left', 0), ('right', 0);
-  `)
+  resetControlDatabase(sqlite)
+  sqlite.exec(`INSERT INTO side_settings (side, name) VALUES ('left', 'Left'), ('right', 'Right');
+    INSERT INTO device_state (side, is_powered) VALUES ('left', 0), ('right', 0);`)
 }
 
 function setSideState(

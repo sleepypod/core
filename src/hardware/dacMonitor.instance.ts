@@ -17,6 +17,7 @@
  * monitors competing for the same socket.
  */
 
+import { getTemperatureControlStatus } from '@/src/temperature/instance'
 import { connectDac, disconnectDac } from './dacTransport'
 import { DacMonitor } from './dacMonitor'
 import { GestureActionHandler } from './gestureActionHandler'
@@ -103,6 +104,7 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
           const stallNotices = getAllPumpStallNotices()
           broadcastFrame({
             type: 'deviceStatus',
+            temperatureControl: getTemperatureControlStatus(),
             ts: Date.now(),
             // A poll can still report the pre-command target right after a
             // mutation; keep the mutation's target until the firmware agrees.

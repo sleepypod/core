@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { resetControlDatabase } from '@/src/temperature/tests/databaseFixture'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type BetterSqlite3 from 'better-sqlite3'
 import type { OccupancyResult } from '@/src/lib/occupancy'
@@ -74,67 +75,11 @@ const { sqlite } = dbModule as typeof dbModule & { sqlite: BetterSqlite3.Databas
 const POLL_MS = 30_000
 
 function resetSchema(): void {
-  ;(sqlite as any).exec(`
-    DROP TABLE IF EXISTS device_settings;
-    DROP TABLE IF EXISTS side_settings;
-    DROP TABLE IF EXISTS device_state;
-    DROP TABLE IF EXISTS run_once_sessions;
-
-    CREATE TABLE device_settings (
-      id INTEGER PRIMARY KEY,
-      timezone TEXT NOT NULL DEFAULT 'UTC',
-      temperature_unit TEXT NOT NULL DEFAULT 'F',
-      reboot_daily INTEGER NOT NULL DEFAULT 0,
-      reboot_time TEXT,
-      prime_pod_daily INTEGER NOT NULL DEFAULT 0,
-      prime_pod_time TEXT,
-      led_night_mode_enabled INTEGER NOT NULL DEFAULT 0,
-      led_day_brightness INTEGER NOT NULL DEFAULT 100,
-      led_night_brightness INTEGER NOT NULL DEFAULT 0,
-      led_night_start_time TEXT,
-      led_night_end_time TEXT,
-      global_max_on_hours INTEGER,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE side_settings (
-      side TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      away_mode INTEGER NOT NULL DEFAULT 0,
-      always_on INTEGER NOT NULL DEFAULT 0,
-      auto_off_enabled INTEGER NOT NULL DEFAULT 0,
-      auto_off_minutes INTEGER NOT NULL DEFAULT 30,
-      away_start TEXT,
-      away_return TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE device_state (
-      side TEXT PRIMARY KEY,
-      current_temperature REAL,
-      target_temperature REAL,
-      is_powered INTEGER NOT NULL DEFAULT 0,
-      is_alarm_vibrating INTEGER NOT NULL DEFAULT 0,
-      water_level TEXT DEFAULT 'unknown',
-      powered_on_at INTEGER,
-      last_updated INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE run_once_sessions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      side TEXT NOT NULL,
-      set_points TEXT NOT NULL,
-      wake_time TEXT NOT NULL,
-      started_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      expires_at INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-
-    INSERT INTO device_settings (id) VALUES (1);
+  resetControlDatabase(sqlite)
+  sqlite.exec(`INSERT INTO device_settings (id) VALUES (1);
     INSERT INTO side_settings (side, name, auto_off_enabled, auto_off_minutes)
       VALUES ('left', 'Left', 1, 30), ('right', 'Right', 1, 30);
-    INSERT INTO device_state (side, is_powered) VALUES ('left', 0), ('right', 0);
-  `)
+    INSERT INTO device_state (side, is_powered) VALUES ('left', 0), ('right', 0);`)
 }
 
 function setSideOn(side: 'left' | 'right', poweredOnAtMs: number): void {
@@ -260,7 +205,7 @@ describe('autoOffWatcher — live presence', () => {
 
     expect(error).toHaveBeenCalledWith('[auto-off] Failed to power off left:', 'offline')
     expect(broadcastMutationStatus).not.toHaveBeenCalled()
-    expect(markSideMutated).not.toHaveBeenCalled()
+    expect(markSideMutated).toHaveBeenCalledWith('left')
   })
 
   it('logs the countdown start with the configured timeout', () => {
@@ -390,7 +335,7 @@ describe('autoOffWatcher — unreadable state falls back to standing down', () =
     setSideOn('left', Date.now() - 2 * 3600_000)
 
     startAutoOffWatcher()
-    await vi.runAllTicks()
+    await stopAutoOffWatcher()
 
     expect(setPower).toHaveBeenCalledWith('left', false)
   })
@@ -468,7 +413,7 @@ describe('autoOffWatcher — global wall-clock cap', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
 
     startAutoOffWatcher()
-    await vi.runAllTicks()
+    await stopAutoOffWatcher()
 
     expect(setPower).toHaveBeenCalledWith('left', false)
     expect(log).toHaveBeenCalledWith(
@@ -515,7 +460,7 @@ describe('autoOffWatcher — global wall-clock cap', () => {
     setSideOn('left', Date.now() - 7 * 86_400_000)
 
     startAutoOffWatcher()
-    await vi.runAllTicks()
+    await stopAutoOffWatcher()
 
     expect(setPower).toHaveBeenCalledWith('left', false)
   })

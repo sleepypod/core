@@ -17,6 +17,7 @@
 
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
 import { getAutomationEngine, shutdownAutomationEngine } from '@/src/automation'
+import { startTemperatureController, stopTemperatureController } from '@/src/temperature/instance'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
 import { startBiometricsRetention, stopBiometricsRetention } from '@/src/db/retention'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
@@ -58,6 +59,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   // Step 0: Stop keepalive timers
   try {
+    stopTemperatureController()
     shutdownKeepalives()
   }
   catch (error) {
@@ -342,9 +344,6 @@ async function initializeBackgroundServices(): Promise<void> {
 
     isInitialized = true
 
-    // Initialize temperature keepalive timers for sides with alwaysOn enabled
-    initializeKeepalives()
-
     // Optional integrations do not hold up HTTP or the remaining services.
     void startMqttBridge().then(() => {
       if (isShuttingDown) return shutdownMqttBridge()
@@ -374,8 +373,14 @@ async function initializeBackgroundServices(): Promise<void> {
 
     // Boot the Autopilot rules engine beside the scheduler (non-blocking).
     // Shares the same hardware path; no-op until automations are created.
-    getAutomationEngine().then(() => {
+    getAutomationEngine().then(async () => {
       if (isShuttingDown) return shutdownAutomationEngine()
+      await startTemperatureController()
+      if (isShuttingDown) {
+        stopTemperatureController()
+        return
+      }
+      initializeKeepalives()
     }).catch((error) => {
       console.warn(
         '[automation] engine failed to start:',

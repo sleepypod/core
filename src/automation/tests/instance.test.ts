@@ -14,6 +14,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const ctorMock = vi.fn()
+const tickMock = vi.fn(async () => {})
+const controlMock = {}
+vi.mock('@/src/temperature/instance', () => ({ getTemperatureController: () => controlMock }))
+
 const startMock = vi.fn(async () => {})
 const stopMock = vi.fn()
 const setGlobalEnabledMock = vi.fn()
@@ -26,6 +30,7 @@ vi.mock('../engine', () => {
       ctorMock(deps)
     }
 
+    tick = tickMock
     start = startMock
     stop = stopMock
     setGlobalEnabled = setGlobalEnabledMock
@@ -99,6 +104,8 @@ async function freshModule(): Promise<InstanceModule> {
 }
 
 beforeEach(() => {
+  delete (globalThis as Record<string, unknown>).__sp_automationState
+  tickMock.mockClear()
   ctorMock.mockClear()
   startMock.mockClear()
   stopMock.mockClear()
@@ -283,22 +290,12 @@ describe('automation/instance — injected dependency closures', () => {
     // disableRule resolves through the mocked update chain.
     await expect(capturedDeps.disableRule(9)).resolves.toBeUndefined()
 
-    // hasActiveRunOnceSession reflects whether a row was found.
-    selectImpl = async () => [{ id: 1 }]
-    expect(await capturedDeps.hasActiveRunOnceSession('left')).toBe(true)
-    selectImpl = async () => []
-    expect(await capturedDeps.hasActiveRunOnceSession('right')).toBe(false)
-
-    // Remaining wiring closures.
+    // Arbitration, hardware serialization and run-once precedence belong to
+    // the injected shared controller, not a second set of engine gates.
+    expect(capturedDeps.control).toBe(controlMock)
     expect(typeof capturedDeps.now()).toBe('number')
     expect(capturedDeps.clock()).toEqual({ nowMinutes: 123, dayOfWeek: 'monday' })
-    expect(capturedDeps.getHardware()).toBe(hardwareClient)
-    expect(await capturedDeps.withSideLock('left', async () => 42)).toBe(42)
-
-    capturedDeps.broadcast('left', { targetLevel: 0 })
-    expect(broadcastMock).toHaveBeenCalledWith('left', { targetLevel: 0 })
-    capturedDeps.markMutated('left')
-    expect(markSideMutatedMock).toHaveBeenCalledWith('left')
+    expect(tickMock).toHaveBeenCalledTimes(1)
 
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     capturedDeps.notify(9, 'hello')

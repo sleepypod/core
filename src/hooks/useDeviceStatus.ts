@@ -72,6 +72,7 @@ export function useDeviceStatus() {
   }
 
   const wsToStatus = (frame: DeviceStatusFrame) => ({
+    temperatureControl: frame.temperatureControl,
     leftSide: frame.leftSide,
     rightSide: frame.rightSide,
     waterLevel: frame.waterLevel,

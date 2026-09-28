@@ -12,7 +12,7 @@
 import { eq } from 'drizzle-orm'
 import { db } from '@/src/db'
 import { deviceState, sideSettings } from '@/src/db/schema'
-import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { getTemperatureController } from '@/src/temperature/instance'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import { withSideLock } from '@/src/hardware/sideLock'
@@ -74,9 +74,7 @@ export function startKeepalive(side: Side): void {
           return
         }
 
-        const client = getSharedHardwareClient()
-        await client.connect()
-        await client.setTemperature(side, state.targetTemperature)
+        await getTemperatureController().reconcileLocked(side, true)
         console.log(`[keepalive] Re-sent temperature ${state.targetTemperature}°F for ${side}`)
       })
     }

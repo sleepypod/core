@@ -68,8 +68,10 @@ export type Action
       temp: Expr
       clamp?: { min: number, max: number }
       durationSec?: number
+      mode?: 'policy' | 'one-shot'
+      holdMinutes?: number
     }
-    | { kind: 'setPower', side?: Side, on: boolean, temp?: Expr }
+    | { kind: 'setPower', side?: Side, on: boolean, temp?: Expr, mode?: 'policy' | 'one-shot', holdMinutes?: number }
 
 /**
  * A fully-resolved automation as the engine consumes it (JSON columns parsed).

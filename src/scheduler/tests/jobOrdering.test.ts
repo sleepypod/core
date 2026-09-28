@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
+import { resetControlDatabase } from '@/src/temperature/tests/databaseFixture'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type BetterSqlite3 from 'better-sqlite3'
 
@@ -85,115 +86,7 @@ import { fahrenheitToLevel } from '@/src/hardware/types'
 const { sqlite } = dbModule as typeof dbModule & { sqlite: BetterSqlite3.Database }
 
 function resetSchema(): void {
-  ;(sqlite as any).exec(`
-    DROP TABLE IF EXISTS device_state;
-    DROP TABLE IF EXISTS run_once_sessions;
-    DROP TABLE IF EXISTS temperature_schedules;
-    DROP TABLE IF EXISTS power_schedules;
-    DROP TABLE IF EXISTS alarm_schedules;
-    DROP TABLE IF EXISTS device_settings;
-    DROP TABLE IF EXISTS side_settings;
-
-    CREATE TABLE device_state (
-      side TEXT PRIMARY KEY,
-      current_temperature REAL,
-      target_temperature REAL,
-      is_powered INTEGER NOT NULL DEFAULT 0,
-      is_alarm_vibrating INTEGER NOT NULL DEFAULT 0,
-      water_level TEXT DEFAULT 'unknown',
-      powered_on_at INTEGER,
-      last_updated INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE run_once_sessions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      side TEXT NOT NULL,
-      set_points TEXT NOT NULL,
-      wake_time TEXT NOT NULL,
-      started_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      expires_at INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE temperature_schedules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      side TEXT NOT NULL,
-      day_of_week TEXT NOT NULL,
-      time TEXT NOT NULL,
-      temperature REAL NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE power_schedules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      side TEXT NOT NULL,
-      day_of_week TEXT NOT NULL,
-      on_time TEXT NOT NULL,
-      off_time TEXT NOT NULL,
-      on_temperature REAL NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE alarm_schedules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      side TEXT NOT NULL,
-      day_of_week TEXT NOT NULL,
-      time TEXT NOT NULL,
-      vibration_intensity INTEGER NOT NULL,
-      vibration_pattern TEXT NOT NULL DEFAULT 'rise',
-      duration INTEGER NOT NULL,
-      alarm_temperature REAL NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE device_settings (
-      id INTEGER PRIMARY KEY,
-      timezone TEXT NOT NULL DEFAULT 'America/Los_Angeles',
-      temperature_unit TEXT NOT NULL DEFAULT 'F',
-      reboot_daily INTEGER NOT NULL DEFAULT 0,
-      reboot_time TEXT DEFAULT '03:00',
-      prime_pod_daily INTEGER NOT NULL DEFAULT 0,
-      prime_pod_time TEXT DEFAULT '14:00',
-      led_night_mode_enabled INTEGER NOT NULL DEFAULT 0,
-      led_day_brightness INTEGER NOT NULL DEFAULT 100,
-      led_night_brightness INTEGER NOT NULL DEFAULT 0,
-      led_night_start_time TEXT DEFAULT '22:00',
-      led_night_end_time TEXT DEFAULT '07:00',
-      global_max_on_hours INTEGER,
-      mqtt_enabled INTEGER,
-      mqtt_url TEXT,
-      mqtt_username TEXT,
-      mqtt_password TEXT,
-      mqtt_topic_prefix TEXT,
-      mqtt_ha_discovery INTEGER,
-      mqtt_tls_enabled INTEGER,
-      mqtt_tls_insecure INTEGER,
-      homekit_enabled INTEGER NOT NULL DEFAULT 0,
-      pump_stall_protection_enabled INTEGER NOT NULL DEFAULT 1,
-      pump_stall_rpm_threshold INTEGER NOT NULL DEFAULT 500,
-      pump_stall_dwell_samples INTEGER NOT NULL DEFAULT 2,
-      pump_stall_auto_recovery_enabled INTEGER NOT NULL DEFAULT 0,
-      pump_stall_recovery_rpm INTEGER NOT NULL DEFAULT 1500,
-      pump_stall_recovery_samples INTEGER NOT NULL DEFAULT 3,
-      autopilot_enabled INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE TABLE side_settings (
-      side TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      away_mode INTEGER NOT NULL DEFAULT 0,
-      always_on INTEGER NOT NULL DEFAULT 0,
-      auto_off_enabled INTEGER NOT NULL DEFAULT 0,
-      auto_off_minutes INTEGER NOT NULL DEFAULT 30,
-      away_start TEXT,
-      away_return TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-  `)
+  resetControlDatabase(sqlite)
 }
 
 function insertTempSchedule(opts: {

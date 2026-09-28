@@ -1,5 +1,6 @@
 'use client'
 
+import type { TemperatureControlStatus } from '@/src/temperature/controller'
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react'
 import { normalizeFrame } from '@/src/streaming/normalizeFrame'
 import type { SideStatus } from '@/src/hardware/types'
@@ -137,6 +138,7 @@ export interface GestureFrame {
  * broadcastMutationStatus. Sides carry the full SideStatus payload the
  * producers spread (nullable temps when a side is off/neutral). */
 export interface DeviceStatusFrame {
+  temperatureControl?: { left: TemperatureControlStatus, right: TemperatureControlStatus }
   type: 'deviceStatus'
   ts: number
   leftSide: SideStatus & { isAlarmVibrating: boolean }

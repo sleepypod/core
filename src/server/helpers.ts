@@ -1,6 +1,7 @@
 /**
  * Shared helper functions for tRPC routers
  */
+import { TemperatureBlockedError } from '@/src/temperature/controller'
 import { TRPCError } from '@trpc/server'
 import type { HardwareClient } from '@/src/hardware/client'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
@@ -44,6 +45,9 @@ export async function withHardwareClient<T>(
     return await callback(client)
   }
   catch (error) {
+    if (error instanceof TemperatureBlockedError) {
+      throw new TRPCError({ code: 'PRECONDITION_FAILED', message: error.message, cause: error })
+    }
     if (error instanceof TRPCError) {
       throw error
     }
@@ -61,6 +65,9 @@ export async function withHardwareClient<T>(
         // A TRPCError from the retried callback (e.g. the pump-stall guard's
         // PRECONDITION_FAILED) is an intentional rejection, not a hardware
         // failure — surface it instead of masking it as a 500.
+        if (retryError instanceof TemperatureBlockedError) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: retryError.message, cause: retryError })
+        }
         if (retryError instanceof TRPCError) {
           throw retryError
         }

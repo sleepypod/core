@@ -182,12 +182,12 @@ export const automationsRouter = router({
     .meta({ openapi: { method: 'POST', path: '/automations/kill-switch', protect: false, tags: ['Autopilot'] } })
     .input(z.object({ enabled: z.boolean() }).strict())
     .output(z.object({ enabled: z.boolean() }))
-    .mutation(({ input }) => {
+    .mutation(async ({ input }) => {
       db.insert(deviceSettings)
         .values({ id: 1, autopilotEnabled: input.enabled })
         .onConflictDoUpdate({ target: deviceSettings.id, set: { autopilotEnabled: input.enabled, updatedAt: new Date() } })
         .run()
-      getAutomationEngineIfRunning()?.setGlobalEnabled(input.enabled)
+      await getAutomationEngineIfRunning()?.setGlobalEnabled(input.enabled)
       return { enabled: input.enabled }
     }),
 

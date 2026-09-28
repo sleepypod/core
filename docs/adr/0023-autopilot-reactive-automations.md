@@ -1,6 +1,6 @@
 # ADR 0023: Reactive automations engine (Autopilot)
 
-**Status:** Accepted
+**Status:** Accepted; temperature arbitration revised September 2026
 **Date:** 2026-06-07
 
 ## Context
@@ -123,18 +123,23 @@ effect without a restart (the `schedules.ts → JobManager` pattern).
 4. Recurring temperature/power schedules *(existing)*
 5. Neutral default
 
-Autopilot sits **above recurring schedules, below run-once and manual.** It is
-realized without an explicit coordinator: the engine refuses to write a side
-while `hasActiveRunOnceSession(side)` is true or a manual-override hold is
-active (both log `skipped`); against recurring schedules it is last-writer-wins
-on the shared `withSideLock(side)`, and because a continuous-policy rule
-re-asserts its setpoint every tick, it wins the steady state. Constant-policy
-rules are therefore the supported way to override a schedule.
+Autopilot sits **above recurring schedules, below run-once and manual**.
+The shared per-side `TemperatureController` now enforces this order. The
+scheduler supplies its current point; the engine publishes bounded numeric
+requests as a batch, and manual commands create persisted holds. Only the
+controller resolves ordinary temperature writes. Schedule/session clocks
+continue while masked, so resume resolves the current target without replay.
+
+This supersedes P0's last-writer-wins behavior, which allowed a recurring
+schedule to overwrite a manual adjustment and briefly fight Autopilot. See
+[Temperature ownership and manual holds](../temperature-control.md) for the
+request lifetimes, relative-expression baseline, power rules, and consumer API.
 
 ### Resolved tunables (P0, 2026-06-07)
 
-- **Manual-override hold** — `AUTOMATION_MANUAL_OVERRIDE_MS = 30 min`, in-memory
-  per side. Cleared on reboot (safe default: autopilot resumes).
+- **Manual-override hold** — 30 minutes by default, configurable per command,
+  persisted per side in `temperature_holds`. Restart preserves the original
+  expiry; Resume releases it explicitly. Both engines respect the same hold.
 - **Evaluator cadence** — a single global 60s tick (`AUTOMATION_TICK_MS`) that
   also samples signals into the windowed-aggregate ring buffers. 60s matches
   the ambient/movement cadence and sits well under the thermal slew, so a
@@ -202,11 +207,10 @@ existing lock.
 
 Have the engine read the schedule table and negotiate who owns a side.
 
-**Rejected for P0.** Last-writer-wins on the shared side lock already produces
-the desired "autopilot above schedules" behavior, because a continuous-policy
-rule re-asserts every tick. Explicit negotiation adds a stateful coupling
-between two subsystems for a case the lock already resolves. Revisit only if a
-concrete conflict appears that last-writer-wins gets wrong.
+**Originally rejected for P0; superseded.** External manual controls exposed
+concrete conflicts between recurring schedules and reactive rules. A shared
+controller now owns arbitration. The engines remain independent producers;
+they do not negotiate through direct references to one another.
 
 ### 6. A global per-user temperature band setting in P0
 

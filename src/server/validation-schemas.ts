@@ -184,12 +184,16 @@ export const automationActionSchema = z.union([
     temp: automationExprSchema,
     clamp: automationClampSchema.optional(),
     durationSec: z.number().int().min(0).max(86400).optional(),
+    mode: z.enum(['policy', 'one-shot']).optional(),
+    holdMinutes: z.number().int().min(1).max(1440).optional(),
   }).strict(),
   z.object({
     kind: z.literal('setPower'),
     side: sideSchema.optional(),
     on: z.boolean(),
     temp: automationExprSchema.optional(),
+    mode: z.enum(['policy', 'one-shot']).optional(),
+    holdMinutes: z.number().int().min(1).max(1440).optional(),
   }).strict(),
 ])
 

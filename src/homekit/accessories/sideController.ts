@@ -22,8 +22,8 @@ import type { HAPStatus } from 'hap-nodejs'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus, Side } from '@/src/hardware/types'
 import { MAX_TEMP, MIN_TEMP } from '@/src/hardware/types'
-import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
-import { getAutomationEngineIfRunning } from '@/src/automation'
+import { getTemperatureController } from '@/src/temperature/instance'
+import { TemperatureBlockedError } from '@/src/temperature/controller'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 
@@ -76,16 +76,13 @@ const POWER_ON_FALLBACK_F = 75
 // the pre-toggle value and silently swallow the queued setTemperature.
 const intendedPower: Record<Side, boolean | null> = { left: null, right: null }
 
-function registerManualOverride(side: Side): void {
-  getAutomationEngineIfRunning()?.registerManualOverride(side)
-}
-
 async function logged<T>(label: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn()
   }
   catch (e) {
     console.warn(`[homekit] ${label} failed:`, e instanceof Error ? e.message : e)
+    if (e instanceof TemperatureBlockedError) throw new GuardBlockedError()
     throw e
   }
 }
@@ -199,10 +196,9 @@ export async function setTargetTemperature(
     // harmless, and the guard trip leaves the intent latch stuck ON
     // (firmware never confirms), so `powered` alone can't be trusted here.
     assertNotGuardBlocked(side, `setTemperature(${side}, ${f})`)
-    registerManualOverride(side)
     await logged(
       `setTemperature(${side}, ${f})`,
-      () => getSharedHardwareClient().setTemperature(side, f),
+      () => getTemperatureController().setManualLocked(side, f),
     )
   })
 }
@@ -228,10 +224,9 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
       assertNotGuardBlocked(side, `setPower(${side}, true)`)
       const target = clampF(getStagedTargetF(monitor, side))
       lastTargetF[side] = target
-      registerManualOverride(side)
       await logged(
         `setPower(${side}, true, ${target})`,
-        () => getSharedHardwareClient().setPower(side, true, target),
+        () => getTemperatureController().setManualLocked(side, target),
       )
     })
   }
@@ -253,8 +248,7 @@ export async function setSidePowerOff(monitor: DacMonitor, side: Side): Promise<
     await withSideLock(side, () => logged(
       `setPower(${side}, false)`,
       () => {
-        registerManualOverride(side)
-        return getSharedHardwareClient().setPower(side, false)
+        return getTemperatureController().powerOffLocked(side)
       },
     ))
   }

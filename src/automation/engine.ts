@@ -21,16 +21,16 @@
  * the DB, or timers. `src/automation/instance.ts` wires the production deps.
  */
 
-import { MAX_TEMP, MIN_TEMP, fahrenheitToLevel } from '@/src/hardware/types'
+import { MAX_TEMP, MIN_TEMP } from '@/src/hardware/types'
+import type { TemperatureController, TemperatureRequest } from '@/src/temperature/controller'
+import { DEFAULT_HOLD_MS } from '@/src/temperature/controller'
 import { evaluateCondition } from './evaluator'
 import type { EvalContext } from './expressions'
 import { evaluateExpr } from './expressions'
 import { collectWindowSignals, type SignalReader } from './signals'
 import {
-  AUTOMATION_ANTI_THRASH_F,
   AUTOMATION_DEFAULT_USER_MAX,
   AUTOMATION_DEFAULT_USER_MIN,
-  AUTOMATION_MANUAL_OVERRIDE_MS,
   AUTOMATION_MAX_ACTIONS_PER_HOUR,
   AUTOMATION_TICK_MS,
   type Action,
@@ -45,13 +45,6 @@ import { WindowStore } from './windows'
 /** How many minutes after a timeOfDay slot a late tick may still fire it. */
 const TIME_OF_DAY_GRACE_MIN = 10
 
-/** Minimal hardware surface the engine writes through (shared client shape). */
-export interface HardwareWriter {
-  connect: () => Promise<void>
-  setTemperature: (side: Side, temperature: number, duration?: number) => Promise<void>
-  setPower: (side: Side, powered: boolean, temperature?: number) => Promise<void>
-}
-
 export interface AutomationEngineDeps {
   signals: SignalReader
   /** Epoch ms — injectable for deterministic tests. */
@@ -59,19 +52,11 @@ export interface AutomationEngineDeps {
   /** Timezone-aware wall clock. dateKey (local yyyy-mm-dd) keys timeOfDay
    * "already fired today"; when absent, dayOfWeek is used as a fallback. */
   clock: () => { nowMinutes: number, dayOfWeek: DayOfWeek, dateKey?: string }
-  getHardware: () => HardwareWriter
-  withSideLock: <T>(side: Side, fn: () => Promise<T>) => Promise<T>
-  /** Pump stall guard gate — energizing writes are skipped while it blocks
-   * the side (ADR 0022: a tripped side stays parked until acknowledgment
-   * or successful opt-in auto-recovery). */
-  pumpStallShouldBlock: (side: Side) => boolean
-  broadcast: (side: Side, overlay: Record<string, unknown>) => void
-  markMutated: (side: Side) => void
+  control: Pick<TemperatureController, 'replaceAutopilot' | 'automationBaseline' | 'powerOff'>
   loadRules: () => Promise<AutomationRule[]>
   recordRun: (automationId: number, outcome: RunOutcome, detail: unknown) => Promise<void>
   /** Persist enabled=false when the runaway guard trips. */
   disableRule: (automationId: number) => Promise<void>
-  hasActiveRunOnceSession: (side: Side) => Promise<boolean>
   /** Side-effect for notify actions (e.g. push/log); never touches hardware. */
   notify: (automationId: number, message: string) => void
   log?: (msg: string) => void
@@ -106,9 +91,15 @@ export class AutomationEngine {
   // deviceSettings.autopilotEnabled; the instance restores it at boot.
   private globalEnabled = true
 
-  // Per-side runtime state shared across rules.
-  private lastAsserted: Record<Side, number | undefined> = { left: undefined, right: undefined }
-  private manualOverrideUntil: Record<Side, number> = { left: 0, right: 0 }
+  private publishErrors: Partial<Record<Side, unknown>> = {}
+  private generation = 0
+  private leases: Record<Side, Map<string, TemperatureRequest & { policy: boolean }>> = {
+    left: new Map(), right: new Map(),
+  }
+
+  private pendingRuns: Array<{ rule: AutomationRule, results: ActionResult[] }> = []
+  private pendingOff = new Set<Side>()
+  private pendingOn: Record<Side, string[]> = { left: [], right: [] }
 
   constructor(deps: AutomationEngineDeps) {
     this.deps = deps
@@ -129,6 +120,7 @@ export class AutomationEngine {
 
   /** Reload automations from the source (call after CRUD mutations). */
   async reload(): Promise<void> {
+    const hadLeases = this.leases.left.size + this.leases.right.size > 0
     const nextRules = await this.deps.loadRules()
     const nextIds = new Set<number>()
     for (const rule of nextRules) {
@@ -140,6 +132,14 @@ export class AutomationEngine {
       this.triggerFingerprints.set(rule.id, nextTrigger)
     }
 
+    this.generation++
+    const unchanged = new Set(nextRules.filter(next => next.enabled && !next.dryRun
+      && this.rules.some(old => old.id === next.id && JSON.stringify(old) === JSON.stringify(next))).map(r => r.id))
+    for (const side of ['left', 'right'] as const) {
+      for (const id of this.leases[side].keys()) {
+        if (!unchanged.has(Number(id.split(':')[1]))) this.leases[side].delete(id)
+      }
+    }
     this.rules = nextRules
     this.windowSignals = collectWindowSignals(this.rules)
     // Drop runtime for rules that no longer exist.
@@ -149,31 +149,43 @@ export class AutomationEngine {
     for (const id of [...this.triggerFingerprints.keys()]) {
       if (!nextIds.has(id)) this.triggerFingerprints.delete(id)
     }
+    if (hadLeases) await this.publishLeases(this.generation)
   }
 
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
-    }
+  async stop(): Promise<void> {
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+    await this.setGlobalEnabled(false)
   }
 
-  /**
-   * Suspend autopilot on a side for the manual-override hold window. A router or
-   * gesture handler calls this when the user changes the dial directly.
-   */
-  registerManualOverride(side: Side): void {
-    this.manualOverrideUntil[side] = this.deps.now() + AUTOMATION_MANUAL_OVERRIDE_MS
-    // The user changed the setpoint out from under us — the anti-thrash
-    // baseline no longer reflects hardware, and keeping it would suppress
-    // the first re-assertion after the override window expires.
-    this.lastAsserted[side] = undefined
-  }
-
-  /** Flip the global kill-switch. `false` suspends all evaluation immediately. */
-  setGlobalEnabled(on: boolean): void {
+  /** Flip the persisted kill-switch and immediately revoke every outstanding lease. */
+  async setGlobalEnabled(on: boolean): Promise<void> {
     this.globalEnabled = on
+    this.generation++
+    if (!on) {
+      this.leases = { left: new Map(), right: new Map() }
+      await this.publishLeases(this.generation)
+    }
     this.deps.log?.(`AutomationEngine global kill-switch ${on ? 'ON (running)' : 'OFF (halted)'}`)
+  }
+
+  private async publishLeases(generation: number, allowPowerOn = false) {
+    const statuses = {} as Record<Side, Awaited<ReturnType<TemperatureController['replaceAutopilot']>>>
+    this.publishErrors = {}
+    for (const side of ['left', 'right'] as const) {
+      try {
+        statuses[side] = await this.deps.control.replaceAutopilot(
+          side, [...this.leases[side].values()], allowPowerOn ? this.pendingOn[side] : [],
+          () => generation === this.generation,
+        )
+      }
+      catch (error) {
+        this.publishErrors[side] = error
+        statuses[side] = { source: null, requestId: null, targetTemperature: null, holdUntil: null, blocked: null }
+        this.deps.log?.(`Temperature controller failed on ${side}: ${String(error)}`)
+      }
+    }
+    return statuses
   }
 
   /** Whether autopilot is globally enabled (kill-switch not engaged). */
@@ -196,7 +208,16 @@ export class AutomationEngine {
     if (this.ticking) return // never overlap ticks
     this.ticking = true
     try {
+      const generation = this.generation
+      this.pendingRuns = []
+      this.pendingOff.clear()
+      this.pendingOn = { left: [], right: [] }
       const now = this.deps.now()
+      for (const side of ['left', 'right'] as const) {
+        for (const [id, lease] of this.leases[side]) {
+          if (lease.expiresAt <= now) this.leases[side].delete(id)
+        }
+      }
       const snapshot = this.deps.signals.read()
       const { nowMinutes, dayOfWeek, dateKey } = this.deps.clock()
 
@@ -217,6 +238,7 @@ export class AutomationEngine {
       }
 
       for (const rule of this.rules) {
+        if (generation !== this.generation) return
         if (!rule.enabled) continue
         try {
           await this.evaluateRule(rule, ctx, now)
@@ -227,6 +249,41 @@ export class AutomationEngine {
             message: err instanceof Error ? err.message : String(err),
           })
         }
+      }
+      if (generation !== this.generation) return
+      for (const side of this.pendingOff) {
+        try {
+          await this.deps.control.powerOff(side)
+        }
+        catch (error) {
+          for (const { results } of this.pendingRuns) {
+            for (const result of results) {
+              if (result.side === side && result.on === false) result.error = String(error)
+            }
+          }
+        }
+        this.pendingOn[side] = [] // shutdown wins over temperature actions this tick
+      }
+      const statuses = await this.publishLeases(generation, true)
+      if (generation !== this.generation) return
+      for (const { rule, results } of this.pendingRuns) {
+        for (const result of results) {
+          if (!result.requestId || !result.side || result.dryRun) continue
+          if (this.publishErrors[result.side] !== undefined) {
+            result.error = String(this.publishErrors[result.side])
+            continue
+          }
+          const status = statuses[result.side]
+          if (!status.blocked && status.requestId === result.requestId) {
+            result.sent = !result.antiThrash
+            if (result.sent) this.getRuntime(rule.id).actionTimes.push(now)
+          }
+          else {
+            result.antiThrash = false
+            result.skipped = status.blocked ?? (status.source === 'manual' ? 'manual-hold' : status.source ?? 'superseded')
+          }
+        }
+        await this.deps.recordRun(rule.id, aggregateOutcome(rule.dryRun, results), { actions: results })
       }
     }
     finally {
@@ -259,7 +316,7 @@ export class AutomationEngine {
       case 'signalChange': {
         const v = ctx.signal(t.signal)
         if (v === undefined) return false
-        const changed = rt.lastTriggerSeen && v !== rt.lastTriggerValue
+        const changed = rt.lastTriggerSeen ? v !== rt.lastTriggerValue : rule.actions.some(a => isPolicyAction(rule, a))
         rt.lastTriggerValue = v
         rt.lastTriggerSeen = true
         return changed
@@ -288,17 +345,29 @@ export class AutomationEngine {
   }
 
   private async evaluateRule(rule: AutomationRule, ctx: EvalContext, now: number): Promise<void> {
+    const generation = this.generation
     const rt = this.getRuntime(rule.id)
-    if (!this.triggerActive(rule, ctx, now, rt)) return // not an eval; no audit row
+    const triggered = this.triggerActive(rule, ctx, now, rt)
 
     // IF — three-valued. unknown/false both skip (never fire on missing data).
     const cond = evaluateCondition(rule.conditions, ctx)
     if (cond !== true) {
+      this.removeLeases(rule.id, true)
+      if (!triggered) return
       await this.deps.recordRun(rule.id, 'skipped', {
         reason: cond === undefined ? 'condition-unknown' : 'condition-false',
       })
       return
     }
+
+    // Policies remain valid between triggers, but a stopped engine cannot keep
+    // owning a side forever. Conditions are checked on every evaluator tick.
+    for (const side of ['left', 'right'] as const) {
+      for (const [id, lease] of this.leases[side]) {
+        if (id.startsWith(`rule:${rule.id}:`) && lease.policy) lease.expiresAt = now + 2 * AUTOMATION_TICK_MS
+      }
+    }
+    if (!triggered) return
 
     // Cooldown gate.
     if (rule.cooldownMin != null && rt.lastFiredMs != null
@@ -311,7 +380,9 @@ export class AutomationEngine {
     rt.actionTimes = rt.actionTimes.filter(ts => now - ts < 3_600_000)
     if (rt.actionTimes.length >= AUTOMATION_MAX_ACTIONS_PER_HOUR) {
       await this.deps.disableRule(rule.id)
+      if (generation !== this.generation) return
       rule.enabled = false
+      this.removeLeases(rule.id)
       await this.deps.recordRun(rule.id, 'error', {
         reason: 'runaway-disabled',
         actionsLastHour: rt.actionTimes.length,
@@ -322,137 +393,94 @@ export class AutomationEngine {
 
     // THEN — run actions, tracking the aggregate outcome.
     const results: ActionResult[] = []
-    for (const action of rule.actions) {
-      results.push(...(await this.runAction(rule, action, ctx, now, rt)))
+    for (const [index, action] of rule.actions.entries()) {
+      if (generation !== this.generation) return
+      results.push(...(await this.runAction(rule, action, index, ctx, now)))
     }
 
-    const outcome = aggregateOutcome(rule.dryRun, results)
-    if (outcome === 'fired' || outcome === 'clamped' || outcome === 'dry_run') {
-      rt.lastFiredMs = now
+    if (results.some(r => r.requestId || r.notified || r.sent || r.dryRun)) rt.lastFiredMs = now
+    this.pendingRuns.push({ rule, results })
+  }
+
+  private removeLeases(ruleId: number, policiesOnly = false): void {
+    for (const side of ['left', 'right'] as const) {
+      for (const [id, lease] of this.leases[side]) {
+        if (id.startsWith(`rule:${ruleId}:`) && (!policiesOnly || lease.policy)) this.leases[side].delete(id)
+      }
     }
-    await this.deps.recordRun(rule.id, outcome, { actions: results })
   }
 
   private async runAction(
     rule: AutomationRule,
     action: Action,
+    index: number,
     ctx: EvalContext,
     now: number,
-    rt: RuleRuntime,
   ): Promise<ActionResult[]> {
     if (action.kind === 'notify') {
       this.deps.notify(rule.id, action.message)
       return [{ kind: 'notify', notified: true }]
     }
-
-    // A null rule side (the builder's "both") fans a hardware action out to both
-    // sides. The temp expression's signal keys are already side-resolved at build
-    // time — a "both" rule reads the left side (builderModel.toAST) — so the
-    // resolved setpoint is shared; only the write target differs per side.
     const sides: Side[] = action.side ? [action.side] : (rule.side ? [rule.side] : ['left', 'right'])
-
-    // Resolve the target temperature (setPower may have none → hardware default).
-    let raw: number | undefined
-    if (action.kind === 'setTemperature') raw = evaluateExpr(action.temp, ctx)
-    else if (action.temp) raw = evaluateExpr(action.temp, ctx)
-
-    if (action.kind === 'setTemperature' && raw === undefined) {
-      return sides.map(side => ({ kind: action.kind, side, skipped: 'temp-unknown' }))
-    }
-    if (action.kind === 'setPower' && action.on && action.temp && raw === undefined) {
-      return sides.map(side => ({ kind: action.kind, side, skipped: 'temp-unknown' }))
-    }
-
-    // Two-layer clamp (only when a temperature is involved).
-    let temp: number | undefined
-    let clamped = false
-    if (raw !== undefined) {
+    const results: ActionResult[] = []
+    for (const side of sides) {
+      const id = `rule:${rule.id}:${index}`
+      if (action.kind === 'setPower' && !action.on) {
+        if (!rule.dryRun) this.pendingOff.add(side)
+        results.push({ kind: action.kind, side, on: false, sent: !rule.dryRun, dryRun: rule.dryRun })
+        continue
+      }
+      const expr = action.temp
+      const policy = isPolicyAction(rule, action)
+      const previous = this.leases[side].get(id)
+      // One-shot targets are resolved once, including while masked by a manual
+      // hold. Reconciliation and repeated trigger ticks cannot compound them.
+      if (!policy && previous && previous.expiresAt > now) {
+        results.push({ kind: action.kind, side, requestId: id, temp: previous.temperature, antiThrash: true })
+        continue
+      }
+      const actionContext: EvalContext = {
+        ...ctx,
+        signal: (key) => {
+          const target = /^(left|right)\.(targetTemperature|currentTemperature)$/.exec(key)
+          return target ? this.deps.control.automationBaseline(target[1] as Side) : ctx.signal(key)
+        },
+      }
+      const raw = expr ? evaluateExpr(expr, actionContext) : 75
+      if (raw === undefined) {
+        this.leases[side].delete(id)
+        results.push({ kind: action.kind, side, skipped: 'temp-unknown' })
+        continue
+      }
       const userMin = action.kind === 'setTemperature' ? action.clamp?.min ?? AUTOMATION_DEFAULT_USER_MIN : AUTOMATION_DEFAULT_USER_MIN
       const userMax = action.kind === 'setTemperature' ? action.clamp?.max ?? AUTOMATION_DEFAULT_USER_MAX : AUTOMATION_DEFAULT_USER_MAX
-      const layer1 = Math.min(Math.max(raw, userMin), userMax)
-      const layer2 = Math.min(Math.max(layer1, MIN_TEMP), MAX_TEMP)
-      temp = layer2
-      clamped = layer2 !== raw
-    }
-
-    const out: ActionResult[] = []
-    for (const side of sides) {
-      out.push(await this.writeSide(rule, action, side, now, rt, raw, temp, clamped))
-    }
-    return out
-  }
-
-  /** Apply one resolved hardware action to a single side (gates + write). */
-  private async writeSide(
-    rule: AutomationRule,
-    action: Exclude<Action, { kind: 'notify' }>,
-    side: Side,
-    now: number,
-    rt: RuleRuntime,
-    raw: number | undefined,
-    temp: number | undefined,
-    clamped: boolean,
-  ): Promise<ActionResult> {
-    // Side gates apply only to real hardware writes.
-    if (this.manualOverrideUntil[side] > now) {
-      return { kind: action.kind, side, skipped: 'manual-override', raw, temp, clamped }
-    }
-    if (await this.deps.hasActiveRunOnceSession(side)) {
-      return { kind: action.kind, side, skipped: 'run-once', raw, temp, clamped }
-    }
-
-    // Anti-thrash: skip a sub-threshold re-assertion of the same setpoint.
-    if (action.kind === 'setTemperature' && temp !== undefined) {
-      const last = this.lastAsserted[side]
-      if (last !== undefined && Math.abs(temp - last) < AUTOMATION_ANTI_THRASH_F) {
-        return { kind: action.kind, side, antiThrash: true, raw, temp, clamped }
+      const temp = Math.min(MAX_TEMP, Math.max(MIN_TEMP, Math.min(userMax, Math.max(userMin, raw))))
+      const clamped = temp !== raw
+      if (rule.dryRun) {
+        results.push({ kind: action.kind, side, dryRun: true, raw, temp, clamped })
+        continue
       }
-    }
-
-    // Dry-run: log the would-be command but never touch hardware.
-    if (rule.dryRun) {
-      return { kind: action.kind, side, dryRun: true, raw, temp, clamped, on: action.kind === 'setPower' ? action.on : undefined }
-    }
-
-    // Real write through the shared, serialized hardware path. The stall-guard
-    // check runs inside the lock so a trip while this write is queued still
-    // blocks it; power-off is the safe direction and is never blocked.
-    const energizing = action.kind === 'setTemperature' || action.on
-    let stallBlocked = false
-    await this.deps.withSideLock(side, async () => {
-      if (energizing && this.deps.pumpStallShouldBlock(side)) {
-        stallBlocked = true
-        return
+      const effectiveTemp = previous && Math.abs(previous.temperature - temp) < 0.5 ? previous.temperature : temp
+      const lease = {
+        id, source: 'autopilot' as const, temperature: effectiveTemp, priority: rule.priority,
+        startsAt: previous?.startsAt ?? now, createdAt: previous?.createdAt ?? now,
+        expiresAt: now + (policy ? 2 * AUTOMATION_TICK_MS : (action.holdMinutes ?? DEFAULT_HOLD_MS / 60_000) * 60_000),
+        durationSec: action.kind === 'setTemperature' ? action.durationSec : undefined,
+        policy,
       }
-      const hw = this.deps.getHardware()
-      await hw.connect()
-      if (action.kind === 'setTemperature') {
-        if (temp === undefined) return // unreachable: setTemperature always resolves a temp
-        await hw.setTemperature(side, temp, action.durationSec)
-        this.deps.markMutated(side)
-        this.deps.broadcast(side, { targetTemperature: temp, targetLevel: fahrenheitToLevel(temp) })
-        this.lastAsserted[side] = temp
-      }
-      else {
-        await hw.setPower(side, action.on, temp)
-        this.deps.markMutated(side)
-        this.deps.broadcast(side, action.on
-          ? { targetTemperature: temp ?? 75, targetLevel: fahrenheitToLevel(temp ?? 75) }
-          : { targetLevel: 0 })
-        if (action.on && temp !== undefined) this.lastAsserted[side] = temp
-        else if (!action.on) this.lastAsserted[side] = undefined
-      }
-    })
-    if (stallBlocked) {
-      console.warn(`[automation] skipped ${action.kind}: pump stall guard blocks ${side}`)
-      return { kind: action.kind, side, skipped: 'pump-stall', raw, temp, clamped }
+      this.leases[side].set(id, lease)
+      if (action.kind === 'setPower' && action.on && !previous) this.pendingOn[side].push(id)
+      results.push({
+        kind: action.kind, side, requestId: id, raw, temp, clamped,
+        antiThrash: previous !== undefined && Math.abs(previous.temperature - temp) < 0.5,
+      })
     }
-    rt.actionTimes.push(now)
-    return { kind: action.kind, side, sent: true, raw, temp, clamped, on: action.kind === 'setPower' ? action.on : undefined }
+    return results
   }
 }
 
 interface ActionResult {
+  requestId?: string
   kind: Action['kind']
   side?: Side
   notified?: boolean
@@ -510,4 +538,21 @@ function aggregateOutcome(dryRun: boolean, results: ActionResult[]): RunOutcome 
   if (dryRun && results.some(r => r.dryRun)) return 'dry_run'
   if (results.some(r => r.clamped && (r.sent || r.antiThrash))) return 'clamped'
   return 'fired'
+}
+
+/** Feedback-based actions are one-shot unless explicitly configured as policies. */
+function referencesTarget(expr: Expr): boolean {
+  switch (expr.kind) {
+    case 'signal': return /\.(targetTemperature|currentTemperature)$/.test(expr.signal)
+    case 'binary': return referencesTarget(expr.left) || referencesTarget(expr.right)
+    case 'clamp': return referencesTarget(expr.value) || referencesTarget(expr.min) || referencesTarget(expr.max)
+    default: return false
+  }
+}
+
+function isPolicyAction(rule: AutomationRule, action: Action): boolean {
+  if (action.kind === 'notify' || (action.kind === 'setPower' && !action.on)) return false
+  return action.mode
+    ? action.mode === 'policy'
+    : rule.trigger.kind !== 'timeOfDay' && (!action.temp || !referencesTarget(action.temp))
 }

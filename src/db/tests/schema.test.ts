@@ -160,6 +160,16 @@ function describeSchema(module: Record<string, unknown>) {
 }
 
 const expectedTables: Record<string, TableSpec> = {
+  temperatureHolds: {
+    name: 'temperature_holds',
+    columns: [
+      { name: 'side', notNull: true, default: undefined },
+      { name: 'temperature', notNull: true, default: undefined },
+      { name: 'started_at', notNull: true, default: undefined },
+      { name: 'expires_at', notNull: true, default: undefined },
+    ],
+    indexes: [],
+  },
   deviceSettings: {
     name: 'device_settings',
     columns: [

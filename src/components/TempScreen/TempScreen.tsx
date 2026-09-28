@@ -1,12 +1,13 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { useOptimisticValue } from '@/src/hooks/useOptimisticValue'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
+import { TemperatureHoldControls } from './TemperatureHoldControls'
 import { TemperatureDial } from '@/src/components/TemperatureDial/TemperatureDial'
 import { AlarmBanner } from '@/src/components/TempScreen/AlarmBanner'
 import { PrimingIndicator } from '@/src/components/TempScreen/PrimingIndicator'
@@ -56,6 +57,7 @@ export const TempScreen = () => {
   const { data: settings } = trpc.settings.getAll.useQuery({})
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
 
+  const [holdMinutes, setHoldMinutes] = useState(30)
   const setTempMutation = trpc.device.setTemperature.useMutation()
   const setPowerMutation = trpc.device.setPower.useMutation()
 
@@ -93,14 +95,14 @@ export const TempScreen = () => {
     targetOpt.commit(tempF)
     for (const side of activeSides) {
       setTempMutation.mutate(
-        { side, temperature: tempF },
+        { side, temperature: tempF, ...(holdMinutes === 30 ? {} : { holdMinutes }) },
         {
           onSettled: () => refetch(),
           onError: () => targetOpt.discard(),
         },
       )
     }
-  }, [activeSides, setTempMutation, refetch, targetOpt])
+  }, [activeSides, setTempMutation, refetch, targetOpt, holdMinutes])
 
   const handleTempAdjust = (delta: number) => {
     const displayValue = setpointFToDisplay(targetTemp, unit) ?? targetTemp
@@ -109,7 +111,7 @@ export const TempScreen = () => {
     targetOpt.commit(newTemp)
     for (const side of activeSides) {
       setTempMutation.mutate(
-        { side, temperature: newTemp },
+        { side, temperature: newTemp, ...(holdMinutes === 30 ? {} : { holdMinutes }) },
         {
           onSettled: () => refetch(),
           onError: () => targetOpt.discard(),
@@ -194,6 +196,16 @@ export const TempScreen = () => {
         onTemperatureChange={handleDialChange}
         onTemperatureCommit={handleDialCommit}
       />
+
+      {status?.temperatureControl && (
+        <TemperatureHoldControls
+          sides={activeSides}
+          status={status.temperatureControl}
+          holdMinutes={holdMinutes}
+          onDurationChange={setHoldMinutes}
+          onResumed={() => { void refetch() }}
+        />
+      )}
 
       {/* Temperature controls: −/power/+ (tight gap to dial to avoid mobile scroll) */}
       <div className="-mt-2 flex items-center justify-center gap-4 sm:mt-0 sm:gap-6">

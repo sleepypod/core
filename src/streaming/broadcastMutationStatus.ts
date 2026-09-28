@@ -11,6 +11,7 @@
  * HomeKit and gesture writes rely on the poll to surface their changes.
  */
 
+import { getTemperatureControlStatus } from '@/src/temperature/instance'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import { broadcastFrame } from './piezoStream'
 import { getPrimeCompletedAt } from '@/src/hardware/primeNotification'
@@ -43,6 +44,7 @@ export function broadcastMutationStatus(
 
     broadcastFrame({
       type: 'deviceStatus',
+      temperatureControl: getTemperatureControlStatus(),
       ts: Date.now(),
       leftSide,
       rightSide,

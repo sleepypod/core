@@ -14,7 +14,8 @@ import type { Side } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { withSideLock } from '@/src/hardware/sideLock'
-import { getAutomationEngineIfRunning } from '@/src/automation'
+import { getTemperatureController, getTemperatureControlStatus } from '@/src/temperature/instance'
+import { holdMinutesSchema, temperatureControlStatusSchema } from '@/src/temperature/schema'
 import {
   sideSchema,
   temperatureSchema,
@@ -96,10 +97,6 @@ interface PendingTemp {
 
 const pendingTemps = new Map<string, PendingTemp>()
 
-function registerManualOverride(side: 'left' | 'right'): void {
-  getAutomationEngineIfRunning()?.registerManualOverride(side)
-}
-
 /**
  * Device control router - direct hardware control for immediate operations.
  *
@@ -127,6 +124,7 @@ export const deviceRouter = router({
     .meta({ openapi: { method: 'GET', path: '/device/status', protect: false, tags: ['Device'] } })
     .input(z.object({ unit: z.enum(['F', 'C']).default('F') }).strict())
     .output(z.object({
+      temperatureControl: z.object({ left: temperatureControlStatusSchema, right: temperatureControlStatusSchema }).optional(),
       leftSide: z.object({
         currentTemperature: z.number().nullable(),
         targetTemperature: z.number().nullable(),
@@ -262,6 +260,7 @@ export const deviceRouter = router({
 
       return {
         ...status,
+        temperatureControl: getTemperatureControlStatus(),
         leftSide: {
           ...status.leftSide,
           currentTemperature: convertTemp(status.leftSide.currentTemperature),
@@ -280,6 +279,26 @@ export const deviceRouter = router({
         roomClimate,
         waterLevelRaw,
       }
+    }),
+
+  getTemperatureControl: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/device/temperature/control', protect: false, tags: ['Device'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(temperatureControlStatusSchema)
+    .query(({ input }) => getTemperatureController().status(input.side)),
+
+  resumeTemperature: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/device/temperature/resume', protect: false, tags: ['Device'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(temperatureControlStatusSchema)
+    .mutation(async ({ input }) => {
+      const pending = pendingTemps.get(input.side)
+      if (pending) {
+        clearTimeout(pending.timer)
+        pendingTemps.delete(input.side)
+        pending.reject(new TRPCError({ code: 'CONFLICT', message: 'Temperature adjustment superseded by Resume' }))
+      }
+      return getTemperatureController().resume(input.side)
     }),
 
   /**
@@ -322,6 +341,7 @@ export const deviceRouter = router({
           side: sideSchema,
           temperature: temperatureSchema,
           duration: z.number().int().min(0).optional(),
+          holdMinutes: holdMinutesSchema.optional(),
         })
         .strict()
     )
@@ -338,47 +358,23 @@ export const deviceRouter = router({
         existing.resolve({ success: true }) // resolve the earlier promise immediately
       }
 
-      markSideMutated(input.side)
-
-      // The DB is updated optimistically on every call for responsive UI.
-      try {
-        const now = new Date()
-        // Only stamp poweredOnAt on OFF→ON transitions (preserve the existing
-        // timestamp if this is a temperature change while already on).
-        const [prev] = await db
-          .select({ isPowered: deviceState.isPowered, poweredOnAt: deviceState.poweredOnAt })
-          .from(deviceState)
-          .where(eq(deviceState.side, input.side))
-          .limit(1)
-        const poweredOnAt = prev?.isPowered ? prev.poweredOnAt : now
-        await db
-          .update(deviceState)
-          .set({
-            targetTemperature: input.temperature,
-            isPowered: true,
-            poweredOnAt,
-            lastUpdated: now,
-          })
-          .where(eq(deviceState.side, input.side))
-      }
-      catch (dbError) {
-        console.error('Failed to sync temperature state to DB:', dbError)
-      }
-
       return new Promise<{ success: boolean }>((resolve, reject) => {
         // Register the pending entry synchronously so later calls can cancel it
         const timer = setTimeout(async () => {
           pendingTemps.delete(input.side)
           try {
-            await withSideLock(input.side, () => withHardwareClient(async (client) => {
+            await withSideLock(input.side, () => withHardwareClient(async () => {
               // Re-check inside the lock: the guard can trip during the
               // debounce window or while queued behind the side lock, and a
               // stale queued command must not re-energize a parked side.
               // The manual override registers only after the check passes —
               // a rejected command must not suspend autopilot.
               assertPumpStallNotBlocked(input.side)
-              registerManualOverride(input.side)
-              await client.setTemperature(input.side, input.temperature, input.duration)
+              await getTemperatureController().setManualLocked(
+                input.side, input.temperature,
+                input.holdMinutes === undefined ? undefined : input.holdMinutes * 60_000,
+                input.duration,
+              )
               return { success: true }
             }, 'Failed to set temperature'))
             broadcastMutationStatus(input.side, {
@@ -466,7 +462,14 @@ export const deviceRouter = router({
         assertPumpStallNotBlocked(input.side)
       }
 
-      return withSideLock(input.side, () => withHardwareClient(async (client) => {
+      const pending = pendingTemps.get(input.side)
+      if (pending) {
+        clearTimeout(pending.timer)
+        pendingTemps.delete(input.side)
+        pending.reject(new TRPCError({ code: 'CONFLICT', message: 'Temperature adjustment superseded by power command' }))
+      }
+
+      return withSideLock(input.side, () => withHardwareClient(async () => {
         // Re-check inside the lock (see setTemperature): a trip while this
         // command queued must not let it re-energize the side. The manual
         // override registers only after the check passes — a rejected
@@ -474,8 +477,12 @@ export const deviceRouter = router({
         if (input.powered) {
           assertPumpStallNotBlocked(input.side)
         }
-        registerManualOverride(input.side)
-        await client.setPower(input.side, input.powered, input.temperature)
+        if (input.powered) {
+          await getTemperatureController().setManualLocked(input.side, input.temperature ?? 75)
+        }
+        else {
+          await getTemperatureController().powerOffLocked(input.side)
+        }
 
         // Best-effort DB sync — next getStatus() call will re-sync if this fails
         try {

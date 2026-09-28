@@ -17,6 +17,7 @@
  * shouldBlock is read from API route handlers.
  */
 
+import { getTemperatureControllerIfRunning } from '@/src/temperature/instance'
 import { and, desc, eq, isNull, lt, lte } from 'drizzle-orm'
 import { biometricsDb, db } from '@/src/db'
 import { pumpAlerts } from '@/src/db/biometrics-schema'
@@ -617,7 +618,10 @@ export async function restoreAcknowledgedSession(
       throw new Error('pump-stall resolution was superseded before restore')
     }
     const client = getSharedHardwareClient()
+    const controller = getTemperatureControllerIfRunning()
+    restore.targetTemperature = controller?.recoveryTargetLocked(side, restore.targetTemperature) ?? restore.targetTemperature
     await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+    controller?.recoveredLocked(side, restore.targetTemperature)
     wrote = true
   })
   if (!wrote) throw new Error('pump-stall restore did not reach hardware')
@@ -995,8 +999,11 @@ async function autoRecover(side: Side, now: number): Promise<void> {
       // setPower(on) delegates to setTemperature without a duration, emitting
       // a contradictory 28,800-second session before the real duration. One
       // duration-bearing write is sufficient to energize and restore.
+      const controller = getTemperatureControllerIfRunning()
+      restore.targetTemperature = controller?.recoveryTargetLocked(side, restore.targetTemperature) ?? restore.targetTemperature
       await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
       if (getState()[side] !== state || !state.blocked) return
+      controller?.recoveredLocked(side, restore.targetTemperature)
       try {
         db
           .update(deviceState)
