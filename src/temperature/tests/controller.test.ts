@@ -65,6 +65,40 @@ describe('temperature arbitration', () => {
     }
   })
 
+  it('publishes ownership changes without repeating unchanged periodic status', async () => {
+    const h = harness()
+    await h.controller.reconcile('left')
+    await h.controller.reconcile('right')
+    expect(h.deps.publish).toHaveBeenCalledTimes(2)
+    h.advance(1_000)
+    await h.controller.reconcile('left')
+    await h.controller.reconcile('right')
+    expect(h.deps.publish).toHaveBeenCalledTimes(2)
+    await h.controller.setManual('left', 75)
+    expect(h.deps.publish).toHaveBeenCalledTimes(3)
+    h.advance(1_000)
+    await h.controller.setManual('left', 75)
+    expect(h.deps.publish).toHaveBeenCalledTimes(4) // hold expiry changed
+    h.blocked.left = true
+    await h.controller.reconcile('left')
+    expect(h.deps.publish).toHaveBeenCalledTimes(5)
+    await h.controller.resume('left')
+    expect(h.deps.publish).toHaveBeenLastCalledWith('left', expect.objectContaining({ source: 'schedule', blocked: 'safety' }))
+    expect(h.deps.publish).toHaveBeenCalledTimes(6)
+  })
+
+  it('power-on without a requested temperature honors the current owner without a hold', async () => {
+    const h = harness()
+    h.powered.left = false
+    h.baselines.left.push(request('run-once', 69))
+    await withSideLock('left', () => h.controller.powerOnLocked('left'))
+    expect(h.apply).toHaveBeenLastCalledWith('left', 69)
+    expect(h.holds.left).toBeNull()
+    h.baselines.left = [request('schedule', 66)]
+    await h.controller.reconcile('left')
+    expect(h.apply).toHaveBeenLastCalledWith('left', 66)
+  })
+
   it('retains evolving lower-priority targets throughout a manual hold', async () => {
     const h = harness()
     await h.controller.setManual('left', 75)

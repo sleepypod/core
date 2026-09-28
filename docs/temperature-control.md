@@ -87,6 +87,10 @@ source has a target, it leaves the current temperature unchanged and releases
 ownership. Always-on keepalive can refresh that ownerless target without
 creating a new hold.
 
+A power-on API request without a temperature uses the current owner (or 75°F
+when none exists) without creating a hold. An explicit power-on temperature
+starts a manual hold.
+
 Explicit shutdown ends the hold. Scheduled shutdown, auto-off, and safety
 cutoffs remain independent of temperature ownership. Alarm vibration still
 fires; an alarm's temperature participates at recurring-schedule priority.

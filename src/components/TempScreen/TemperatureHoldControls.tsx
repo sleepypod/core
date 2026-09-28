@@ -64,6 +64,7 @@ export function TemperatureHoldControls({ sides, status, holdMinutes, onDuration
       {resume.error && (
         <p role="alert" className="text-red-400">
           Could not resume:
+          {' '}
           {resume.error.message}
         </p>
       )}

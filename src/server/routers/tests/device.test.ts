@@ -76,6 +76,7 @@ const pumpStallNotificationMock = vi.hoisted(() => ({
 const controllerMock = vi.hoisted(() => ({
   setManualLocked: vi.fn(),
   powerOffLocked: vi.fn(),
+  powerOnLocked: vi.fn(),
   resume: vi.fn(),
   status: vi.fn(),
 }))
@@ -620,10 +621,11 @@ describe('temperature controller API', () => {
     finally { vi.useRealTimers() }
   })
 
-  it('powers on through a manual hold, using the explicit temperature or 75°F default', async () => {
+  it('creates a hold only for an explicit power-on temperature', async () => {
     expect(await caller.setPower({ side: 'left', powered: true, temperature: 72 })).toEqual({ success: true })
     await caller.setPower({ side: 'right', powered: true })
-    expect(controllerMock.setManualLocked.mock.calls).toEqual([['left', 72], ['right', 75]])
+    expect(controllerMock.setManualLocked.mock.calls).toEqual([['left', 72]])
+    expect(controllerMock.powerOnLocked).toHaveBeenCalledExactlyOnceWith('right')
     expect(dbMock.update).not.toHaveBeenCalled()
   })
 

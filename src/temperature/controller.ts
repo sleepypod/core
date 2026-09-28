@@ -92,6 +92,15 @@ export class TemperatureController {
 
   private appliedDeadline: Record<Side, number | null> = { left: null, right: null }
 
+  private published: Partial<Record<Side, string>> = {}
+
+  private publishStatus(side: Side, status: TemperatureControlStatus): void {
+    const key = JSON.stringify(status)
+    if (this.published[side] === key) return
+    this.deps.publish(side, status)
+    this.published[side] = key
+  }
+
   constructor(private deps: TemperatureControllerDeps) {}
 
   private isPowered(side: Side): boolean {
@@ -163,7 +172,7 @@ export class TemperatureController {
       throw error
     }
     const status = this.status(side)
-    this.deps.publish(side, status)
+    this.publishStatus(side, status)
     return status
   }
 
@@ -212,7 +221,7 @@ export class TemperatureController {
     this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
     this.poweredOff[side] = false
     const status = this.status(side)
-    this.deps.publish(side, status)
+    this.publishStatus(side, status)
     return status
   }
 
@@ -222,7 +231,7 @@ export class TemperatureController {
     await this.deps.powerOff(side)
     this.deps.writeHold(side, null)
     this.deps.writeHardwareDeadline(side, null)
-    this.deps.publish(side, this.status(side))
+    this.publishStatus(side, this.status(side))
   }
 
   /** Replacing a lease does not apply it when a higher-priority source owns the side. */
@@ -350,7 +359,7 @@ export class TemperatureController {
         this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
       }
       const status = this.status(side)
-      this.deps.publish(side, status)
+      this.publishStatus(side, status)
       return status
     }
     if (selected && !this.deps.isBlocked(side) && this.isPowered(side)
@@ -374,7 +383,7 @@ export class TemperatureController {
     }
     if (this.deps.isBlocked(side) || !this.isPowered(side)) this.applied[side] = null
     const status = this.status(side)
-    this.deps.publish(side, status)
+    this.publishStatus(side, status)
     return status
   }
 }

@@ -396,14 +396,15 @@ export const deviceRouter = router({
    * Control power state for a pod side.
    *
    * Hardware Behavior:
-   * - ON (powered=true): Sets temperature (default 75°F) and activates heating/cooling
-   *   75°F chosen as comfortable neutral temperature for most users
+   * - ON (powered=true): Applies the current owner or the supplied temperature
+   *   and activates heating/cooling; 75°F is the fallback when no owner exists
    * - OFF (powered=false): Sets temperature level to 0 (neutral/82.5°F), stops regulation
    *   Note: Hardware has no true "off" state - level 0 achieves same effect
    *
    * Temperature Parameter:
    * - Only used when powering ON
-   * - If omitted when powering on, defaults to 75°F
+   * - If omitted, preserves the current owner without acquiring a manual hold
+   * - An explicit temperature acquires the default manual hold
    * - Ignored when powering OFF
    *
    * Relationship to Schedules:
@@ -412,7 +413,7 @@ export const deviceRouter = router({
    *
    * @param side - Which side to control
    * @param powered - true to power on, false to set to neutral
-   * @param temperature - Target temp when powering on (default: 75°F, range: 55-110°F)
+   * @param temperature - Optional manual target when powering on (range: 55-110°F)
    * @throws {TRPCError} INTERNAL_SERVER_ERROR if hardware connection fails
    */
   setPower: publicProcedure
@@ -450,7 +451,8 @@ export const deviceRouter = router({
           assertPumpStallNotBlocked(input.side)
         }
         if (input.powered) {
-          await getTemperatureController().setManualLocked(input.side, input.temperature ?? 75)
+          if (input.temperature === undefined) await getTemperatureController().powerOnLocked(input.side)
+          else await getTemperatureController().setManualLocked(input.side, input.temperature)
         }
         else {
           await getTemperatureController().powerOffLocked(input.side)

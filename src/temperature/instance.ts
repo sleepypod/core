@@ -5,10 +5,12 @@ import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { shouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
-import { fahrenheitToLevel, type Side } from '@/src/hardware/types'
+import { fahrenheitToLevel, MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { recurringTarget, sessionTarget } from './baseline'
 import { TemperatureController, type TemperatureRequest } from './controller'
+
+const invalidSessions: Record<Side, Map<number, string>> = { left: new Map(), right: new Map() }
 
 const recurringCache: Partial<Record<Side, { key: string, target: TemperatureRequest | null }>> = {}
 
@@ -37,13 +39,30 @@ function readBaseline(side: Side, now: number): TemperatureRequest[] {
   }
   const sessions = db.select().from(runOnceSessions)
     .where(and(eq(runOnceSessions.side, side), eq(runOnceSessions.status, 'active'))).all()
+  const activeIds = new Set(sessions.map(session => session.id))
+  for (const id of invalidSessions[side].keys()) {
+    if (!activeIds.has(id)) invalidSessions[side].delete(id)
+  }
   for (const session of sessions) {
-    const setPoints: unknown = JSON.parse(session.setPoints)
-    if (!Array.isArray(setPoints) || setPoints.some(p => typeof p?.time !== 'string' || !Number.isFinite(p?.temperature))) {
-      throw new Error(`Invalid set points in run-once session ${session.id}`)
+    try {
+      const setPoints: unknown = JSON.parse(session.setPoints)
+      if (!Array.isArray(setPoints) || setPoints.some(p => typeof p?.time !== 'string'
+        || !/^([01]\d|2[0-3]):[0-5]\d$/.test(p.time) || !Number.isFinite(p?.temperature)
+        || p.temperature < MIN_TEMP || p.temperature > MAX_TEMP)) {
+        throw new Error('Invalid set points')
+      }
+      const target = sessionTarget({ ...session, setPoints }, timezone, now)
+      if (target) requests.push(target)
+      invalidSessions[side].delete(session.id)
     }
-    const target = sessionTarget({ ...session, setPoints }, timezone, now)
-    if (target) requests.push(target)
+    catch (error) {
+      // Corrupt legacy rows must not break manual commands or status for either
+      // side. Warn once per bad payload; a corrected row is retried immediately.
+      if (invalidSessions[side].get(session.id) !== session.setPoints) {
+        console.warn(`[temperature] ignoring invalid run-once session ${session.id}:`, error)
+        invalidSessions[side].set(session.id, session.setPoints)
+      }
+    }
   }
   return requests
 }

@@ -41,7 +41,7 @@ vi.mock('@/src/db', async () => {
 import { db, sqlite } from '@/src/db'
 import * as databaseModule from '@/src/db'
 import { deviceSettings, deviceState, runOnceSessions, sideSettings, temperatureHolds, temperatureSchedules } from '@/src/db/schema'
-import { getTemperatureController, startTemperatureController, stopTemperatureController } from '../instance'
+import { getTemperatureController, getTemperatureControlStatus, startTemperatureController, stopTemperatureController } from '../instance'
 import { withSideLock } from '@/src/hardware/sideLock'
 
 const fileDatabase = databaseModule as typeof databaseModule & { reopenForTest: () => void, cleanupForTest: () => void }
@@ -132,6 +132,29 @@ describe('production controller with migrated SQLite', () => {
     const status = await controller.resume('left')
     expect(status.source).toBe('run-once')
     expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 69)
+  })
+
+  it.each([
+    '{broken',
+    '{}',
+    '[{"time":"22:00","temperature":74},{"time":"invalid","temperature":70}]',
+    '[{"time":"22:00","temperature":999}]',
+  ])('isolates a corrupt session and immediately uses its repaired payload: %s', async (setPoints) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const session = db.insert(runOnceSessions).values({
+        side: 'left', startedAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000), wakeTime: '23:00', setPoints,
+      }).returning().get()
+      expect(getTemperatureController().status('left').source).toBe('schedule')
+      expect(getTemperatureControlStatus()?.right).toBeDefined()
+      await expect(getTemperatureController().setManual('left', 77)).resolves.toMatchObject({ source: 'manual' })
+      expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 77)
+      expect(warn).toHaveBeenCalledTimes(1)
+      db.update(runOnceSessions).set({ setPoints: '[{"time":"22:00","temperature":69}]' }).where(eq(runOnceSessions.id, session.id)).run()
+      await expect(getTemperatureController().resume('left')).resolves.toMatchObject({ source: 'run-once', targetTemperature: 69 })
+      expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 69)
+    }
+    finally { warn.mockRestore() }
   })
 
   it('keeps an explicit shutdown off through expiry and restart', async () => {
