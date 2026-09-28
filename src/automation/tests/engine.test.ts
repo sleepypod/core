@@ -44,7 +44,7 @@ interface Harness {
   disabled: number[]
 }
 
-function makeHarness(rules: AutomationRule[]): Harness {
+function makeHarness(rules: AutomationRule[], lock: AutomationEngineDeps['withSideLock'] = async (_side, fn) => fn()): Harness {
   // Base clock is a realistic epoch so a `tick` trigger's first evaluation is
   // due (production `now` is always >> any everyMin window from epoch 0).
   let nowMs = 1_700_000_000_000
@@ -68,11 +68,11 @@ function makeHarness(rules: AutomationRule[]): Harness {
       setTemperature: async (side, temp, duration) => { hwCalls.push({ op: 'temp', side, temp, duration }) },
       setPower: async (side, on, temp) => { hwCalls.push({ op: 'power', side, on, temp }) },
     }),
-    withSideLock: async (_side, fn) => fn(),
+    withSideLock: lock,
     pumpStallShouldBlock: side => stallBlocked[side],
     broadcast: () => {},
     markMutated: () => {},
-    loadRules: async () => rules,
+    loadRules: async () => structuredClone(rules),
     recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
     disableRule: async (id) => { disabled.push(id) },
     hasActiveRunOnceSession: async () => runOnce,
@@ -814,6 +814,30 @@ describe('AutomationEngine — pump stall guard gate', () => {
     expect(h.runs[0].outcome).toBe('fired')
   })
 
+  it('cancels an automation shutdown disabled while waiting for the side lock', async () => {
+    let release!: () => void
+    let entered!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const queued = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: false }] })], async (_side, fn) => {
+      entered()
+      await gate
+      return fn()
+    })
+    await h.engine.reload()
+    const tick = h.engine.tick()
+    await queued
+    const disabled = h.engine.setGlobalEnabled(false)
+    release()
+    await Promise.all([tick, disabled])
+    expect(h.hwCalls).toEqual([])
+    expect(h.runs.filter(run => run.outcome === 'fired')).toEqual([])
+  })
+
   it('blocks a write whose trip lands while it is queued on the side lock', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
@@ -922,6 +946,63 @@ describe('AutomationEngine — shared control requests', () => {
     rules[0] = { ...rules[0], enabled: false }
     await h.engine.reload()
     expect(h.control.status('left').source).toBeNull()
+  })
+
+  it('reactivates edited and re-enabled signal policies without replaying sibling side effects', async () => {
+    const rules = [rule({
+      trigger: { kind: 'signalChange', signal: 'room' },
+      actions: [
+        { kind: 'setTemperature', mode: 'policy', temp: lit(68) },
+        { kind: 'notify', message: 'real change' },
+        { kind: 'setTemperature', mode: 'one-shot', side: 'right', temp: lit(79) },
+      ],
+    })]
+    const h = makeHarness(rules)
+    h.setSignal('room', 70)
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+    expect(h.control.status('right').source).toBeNull()
+    expect(h.notifies).toHaveLength(0)
+    rules[0] = { ...rules[0], name: 'renamed' }
+    await h.engine.reload()
+    expect(h.control.status('left').source).toBeNull()
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+    await h.engine.setGlobalEnabled(false)
+    await h.engine.setGlobalEnabled(true)
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+    rules[0] = { ...rules[0], enabled: false }
+    await h.engine.reload()
+    rules[0] = { ...rules[0], enabled: true }
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+    expect(h.notifies).toHaveLength(0)
+    expect(h.control.status('right').source).toBeNull()
+    h.setSignal('room', 71)
+    await h.engine.tick()
+    expect(h.notifies).toHaveLength(1)
+    expect(h.control.status('right').targetTemperature).toBe(79)
+  })
+
+  it('reacquires a signal policy when conditions recover without a trigger-signal edge', async () => {
+    const h = makeHarness([rule({
+      trigger: { kind: 'signalChange', signal: 'room' },
+      conditions: { kind: 'compare', op: '>', left: sig('occupancy'), right: lit(0) },
+      actions: [{ kind: 'setTemperature', mode: 'policy', temp: lit(68) }],
+    })])
+    h.setSignal('room', 70)
+    h.setSignal('occupancy', 1)
+    await h.engine.reload()
+    await h.engine.tick()
+    h.setSignal('occupancy', 0)
+    await h.engine.tick()
+    expect(h.control.status('left').source).toBeNull()
+    h.setSignal('occupancy', 1)
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
   })
 
   it('uses baseline history for action windows while condition windows still observe live targets', async () => {

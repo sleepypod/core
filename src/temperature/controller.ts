@@ -267,12 +267,14 @@ export class TemperatureController {
       ?? 75
   }
 
-  async powerOff(side: Side): Promise<void> {
-    return this.deps.withSideLock(side, () => this.powerOffLocked(side))
+  async powerOff(side: Side, isCurrent: () => boolean = () => true): Promise<void> {
+    return this.deps.withSideLock(side, async () => {
+      if (isCurrent()) await this.powerOffLocked(side)
+    })
   }
 
-  async reconcile(side: Side, force = false): Promise<TemperatureControlStatus> {
-    return this.deps.withSideLock(side, () => this.reconcileLocked(side, force))
+  async reconcile(side: Side, force = false, isCurrent: () => boolean = () => true): Promise<TemperatureControlStatus> {
+    return this.deps.withSideLock(side, () => this.reconcileLocked(side, force, isCurrent))
   }
 
   /** Call after power-off, safety cutoff, or an independently observed target change. */
@@ -311,6 +313,7 @@ export class TemperatureController {
   }
 
   async reconcileLocked(side: Side, force = false, isCurrent: () => boolean = () => true): Promise<TemperatureControlStatus> {
+    if (!isCurrent()) return this.status(side)
     const now = this.deps.now()
     const deadline = this.deps.readHardwareDeadline(side)
     if (deadline !== null && deadline <= now) {
@@ -334,7 +337,7 @@ export class TemperatureController {
       await this.deps.connect()
       selected = this.select(side, this.deps.now())
       const target = selected?.temperature ?? this.deps.readCurrentTarget(side)
-      if (target !== null && Number.isFinite(target) && target >= MIN_TEMP && target <= MAX_TEMP
+      if (isCurrent() && target !== null && Number.isFinite(target) && target >= MIN_TEMP && target <= MAX_TEMP
         && this.isPowered(side) && !this.deps.isBlocked(side)) {
         const duration = this.remainingDuration(side, selected)
         if (duration !== undefined && duration <= 0) {

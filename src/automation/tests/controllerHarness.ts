@@ -53,7 +53,7 @@ export function engineFixture(deps: EngineFixtureDeps) {
     ...deps,
     control: {
       automationBaseline: side => control.automationBaseline(side),
-      powerOff: side => control.powerOff(side),
+      powerOff: (side, isCurrent) => control.powerOff(side, isCurrent),
       replaceAutopilot: async (side, requests, powerOnIds, isCurrent) => {
         runOnce[side] = await deps.hasActiveRunOnceSession(side)
         return control.replaceAutopilot(side, requests, powerOnIds, isCurrent)

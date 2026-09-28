@@ -258,7 +258,7 @@ export class AutomationEngine {
       if (generation !== this.generation) return
       for (const side of this.pendingOff) {
         try {
-          await this.deps.control.powerOff(side)
+          await this.deps.control.powerOff(side, () => generation === this.generation)
         }
         catch (error) {
           for (const { results } of this.pendingRuns) {
@@ -326,7 +326,7 @@ export class AutomationEngine {
       case 'signalChange': {
         const v = ctx.signal(t.signal)
         if (v === undefined) return false
-        const changed = rt.lastTriggerSeen ? v !== rt.lastTriggerValue : rule.actions.some(a => isPolicyAction(rule, a))
+        const changed = rt.lastTriggerSeen && v !== rt.lastTriggerValue
         rt.lastTriggerValue = v
         rt.lastTriggerSeen = true
         return changed
@@ -357,7 +357,20 @@ export class AutomationEngine {
   private async evaluateRule(rule: AutomationRule, ctx: EvalContext, now: number): Promise<void> {
     const generation = this.generation
     const rt = this.getRuntime(rule.id)
+    const firstSignalSample = !rt.lastTriggerSeen
     const triggered = this.triggerActive(rule, ctx, now, rt)
+    // A live signal policy can reacquire ownership after edits, enable/disable,
+    // condition recovery, or lease expiry without inventing a signal edge.
+    // Synthetic activation must never replay a sibling notify/one-shot action.
+    const unownedPolicies = new Set<number>()
+    if (rule.trigger.kind === 'signalChange' && ctx.signal(rule.trigger.signal) !== undefined
+      && (!rule.dryRun || firstSignalSample)) {
+      rule.actions.forEach((action, index) => {
+        if (!isPolicyAction(rule, action)) return
+        const sides: Side[] = action.kind !== 'notify' && action.side ? [action.side] : rule.side ? [rule.side] : ['left', 'right']
+        if (sides.some(side => !this.leases[side].has(`rule:${rule.id}:${index}`))) unownedPolicies.add(index)
+      })
+    }
 
     // IF — three-valued. unknown/false both skip (never fire on missing data).
     const cond = evaluateCondition(rule.conditions, ctx)
@@ -377,7 +390,7 @@ export class AutomationEngine {
         if (id.startsWith(`rule:${rule.id}:`) && lease.policy) lease.expiresAt = now + 2 * AUTOMATION_TICK_MS
       }
     }
-    if (!triggered) return
+    if (!triggered && !unownedPolicies.size) return
 
     // Cooldown gate.
     if (rule.cooldownMin != null && rt.lastFiredMs != null
@@ -404,6 +417,7 @@ export class AutomationEngine {
     // THEN — run actions, tracking the aggregate outcome.
     const results: ActionResult[] = []
     for (const [index, action] of rule.actions.entries()) {
+      if (!triggered && !unownedPolicies.has(index)) continue
       if (generation !== this.generation) return
       results.push(...(await this.runAction(rule, action, index, ctx, now)))
     }

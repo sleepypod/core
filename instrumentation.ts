@@ -59,7 +59,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   // Step 0: Stop keepalive timers
   try {
-    stopTemperatureController()
+    await stopTemperatureController()
     shutdownKeepalives()
   }
   catch (error) {
@@ -379,7 +379,7 @@ async function initializeBackgroundServices(): Promise<void> {
       if (isShuttingDown) return shutdownAutomationEngine()
       await startTemperatureController()
       if (isShuttingDown) {
-        stopTemperatureController()
+        await stopTemperatureController()
         return
       }
       initializeKeepalives()

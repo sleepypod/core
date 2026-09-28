@@ -65,8 +65,8 @@ beforeEach(() => {
   ]).run()
 })
 
-afterEach(() => {
-  stopTemperatureController()
+afterEach(async () => {
+  await stopTemperatureController()
   vi.useRealTimers()
 })
 
@@ -181,6 +181,61 @@ describe('production controller with migrated SQLite', () => {
       await holder
       await starting
     }
+  })
+
+  it('cancels queued reconciliation and drains it before stopping', async () => {
+    let release!: () => void
+    const holder = withSideLock('left', () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await Promise.resolve()
+    const starting = startTemperatureController()
+    let stopped = false
+    const stopping = stopTemperatureController().then(() => {
+      stopped = true
+    })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    release()
+    await Promise.all([holder, starting, stopping])
+    expect(hardware.setTemperature.mock.calls.filter(([side]) => side === 'left')).toEqual([])
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(hardware.setTemperature.mock.calls.filter(([side]) => side === 'left')).toEqual([])
+    await startTemperatureController()
+    expect(hardware.setTemperature.mock.calls.some(([side]) => side === 'left')).toBe(true)
+  })
+
+  it('cancels a reconciliation waiting for connection before it writes', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    hardware.connect.mockImplementationOnce(() => gate)
+    const starting = startTemperatureController()
+    await vi.waitFor(() => expect(hardware.connect).toHaveBeenCalled())
+    const stopping = stopTemperatureController()
+    release()
+    await Promise.all([starting, stopping])
+    expect(hardware.setTemperature.mock.calls.filter(([side]) => side === 'left')).toEqual([])
+  })
+
+  it('waits for an admitted hardware write before completing shutdown', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    hardware.setTemperature.mockImplementationOnce(() => gate)
+    const starting = startTemperatureController()
+    await vi.waitFor(() => expect(hardware.setTemperature).toHaveBeenCalled())
+    let stopped = false
+    const stopping = stopTemperatureController().then(() => {
+      stopped = true
+    })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    release()
+    await Promise.all([starting, stopping])
+    expect(stopped).toBe(true)
   })
 
   it('blocks both manual and scheduled energizing commands during a safety cutoff', async () => {

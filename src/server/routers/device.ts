@@ -346,7 +346,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
-      assertPumpStallNotBlocked(input.side)
+      if (input.duration !== 0) assertPumpStallNotBlocked(input.side)
 
       // Server-side debounce: collapse rapid dial-drag calls into one hardware command.
       // Cancel any pending hardware call for this side BEFORE the first await
@@ -367,7 +367,7 @@ export const deviceRouter = router({
               // debounce window or while queued behind the side lock, and a
               // stale queued command must not re-energize a parked side.
               // The controller persists a hold only after the check passes.
-              assertPumpStallNotBlocked(input.side)
+              if (input.duration !== 0) assertPumpStallNotBlocked(input.side)
               await getTemperatureController().setManualLocked(
                 input.side, input.temperature,
                 input.holdMinutes === undefined ? undefined : input.holdMinutes * 60_000,

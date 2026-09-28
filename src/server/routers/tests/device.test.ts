@@ -535,6 +535,20 @@ describe('temperature controller API', () => {
     expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
   })
 
+  it.each([true, false])('permits duration-zero shutdown when protection was initially %s', async (initiallyBlocked) => {
+    vi.useFakeTimers()
+    try {
+      pumpStallMock.shouldBlock.mockReturnValue(initiallyBlocked)
+      const pending = caller.setTemperature({ side: 'left', temperature: 70, duration: 0 })
+      await vi.advanceTimersByTimeAsync(0)
+      pumpStallMock.shouldBlock.mockReturnValue(true)
+      await vi.advanceTimersByTimeAsync(250)
+      expect(await pending).toEqual({ success: true })
+      expect(controllerMock.setManualLocked).toHaveBeenCalledExactlyOnceWith('left', 70, undefined, 0)
+    }
+    finally { vi.useRealTimers() }
+  })
+
   it('rechecks the guard after the debounce without overwriting controller state', async () => {
     vi.useFakeTimers()
     try {

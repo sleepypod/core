@@ -476,24 +476,28 @@ describe('JobManager — job ordering and gating', () => {
       seedSidePowered('right', true)
 
       const order: string[] = []
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
       setTemperature.mockImplementation(async (side: string) => {
         order.push(`${side}-start`)
-        await new Promise(r => setTimeout(r, 25))
+        await gate
         order.push(`${side}-end`)
       })
-
-      const start = Date.now()
-      await Promise.all([
+      const jobs = Promise.all([
         manager.runTemperatureJob(tempSched('left', 80)),
         manager.runTemperatureJob(tempSched('right', 80)),
       ])
-      const elapsed = Date.now() - start
-
-      // Both ran in parallel — total time should be ~25ms not ~50ms.
-      expect(elapsed).toBeLessThan(45)
-      // Interleaved starts confirm parallelism.
-      expect(order[0]).toMatch(/-start$/)
-      expect(order[1]).toMatch(/-start$/)
+      try {
+        // Both must enter hardware while neither side has completed.
+        await vi.waitFor(() => expect(order).toEqual(expect.arrayContaining(['left-start', 'right-start'])))
+        expect(order).toHaveLength(2)
+      }
+      finally {
+        release()
+        await jobs
+      }
     })
   })
 })

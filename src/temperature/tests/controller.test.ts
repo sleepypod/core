@@ -211,6 +211,23 @@ describe('temperature arbitration', () => {
     expect(h.apply).toHaveBeenCalledExactlyOnceWith('left', 72)
   })
 
+  it('discards an obsolete queued automation shutdown while allowing operator shutdown', async () => {
+    const h = harness()
+    let release!: () => void
+    const holder = withSideLock('left', () => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    await Promise.resolve()
+    let current = true
+    const pending = h.controller.powerOff('left', () => current)
+    current = false
+    release()
+    await Promise.all([holder, pending])
+    expect(h.powered.left).toBe(true)
+    await h.controller.powerOff('left')
+    expect(h.powered.left).toBe(false)
+  })
+
   it('serializes a queued automation behind a newer manual adjustment', async () => {
     const h = harness()
     let release!: () => void

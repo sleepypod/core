@@ -96,7 +96,9 @@ a conflict instead of executing later and undoing that command.
 Manual holds are stored in SQLite with their original start and expiry times.
 Recreating the controller does not renew the hold. The controller singleton and
 periodic reconciler live on `globalThis` so separate server bundles share one
-authority.
+authority. Service shutdown cancels queued reconciliation and drains admitted
+writes before hardware/database teardown. Disabling an automation also cancels
+its shutdown commands that are still waiting for the side lock.
 
 ## Autopilot request lifetime
 
@@ -112,7 +114,10 @@ policies are continuous. Continuous policy conditions are checked on every
 engine tick, including between trigger times. False or unknown conditions
 withdraw the policy; enabled policies refresh a two-tick lease so a stopped
 engine cannot own a side indefinitely. Edits, deletion, disabling a rule, and
-the global kill-switch revoke its requests.
+the global kill-switch revoke its requests. A signal-change policy can reacquire
+its request after an edit, re-enable, or condition recovery without waiting for
+a new signal edge. This does not replay sibling notifications or one-shot
+actions; those still require an actual trigger.
 
 One-shot actions resolve a numeric target once and keep it for 30 minutes by
 default. Repeated ticks do not compound or extend that active request. A new

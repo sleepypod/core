@@ -50,7 +50,11 @@ function readBaseline(side: Side, now: number): TemperatureRequest[] {
 
 const globalState = globalThis as typeof globalThis & {
   __sp_temperatureController?: TemperatureController
-  __sp_temperatureTimer?: ReturnType<typeof setInterval>
+  __sp_temperatureService?: {
+    running: boolean
+    timer?: ReturnType<typeof setInterval>
+    pending: Set<Promise<void>>
+  }
 }
 
 export function getTemperatureController(): TemperatureController {
@@ -129,31 +133,42 @@ export function getTemperatureControllerIfRunning(): TemperatureController | und
 
 /** Start after migrations/state restoration. The non-overlapping loop also retries failed writes. */
 export async function startTemperatureController(): Promise<void> {
-  if (globalState.__sp_temperatureTimer) return
-  const ticking = new Set<Side>()
-  const tick = async () => {
-    await Promise.all((['left', 'right'] as const).map(async (side) => {
-      if (ticking.has(side)) return
-      ticking.add(side)
-      try {
-        await getTemperatureController().reconcile(side)
-      }
-      catch (error) {
-        console.warn(`[temperature] ${side} reconciliation failed:`, error)
-      }
-      finally {
-        ticking.delete(side)
-      }
-    }))
+  if (globalState.__sp_temperatureService?.running) return
+  if (globalState.__sp_temperatureService) {
+    await stopTemperatureController()
+    return startTemperatureController()
   }
-  globalState.__sp_temperatureTimer = setInterval(() => {
+  const service = { running: true, pending: new Set<Promise<void>>(), timer: undefined as ReturnType<typeof setInterval> | undefined }
+  globalState.__sp_temperatureService = service
+  const ticking = new Set<Side>()
+  const tick = () => {
+    for (const side of ['left', 'right'] as const) {
+      if (!service.running || ticking.has(side)) continue
+      ticking.add(side)
+      const work = getTemperatureController().reconcile(side, false, () => service.running)
+        .then(() => {}, (error) => {
+          console.warn(`[temperature] ${side} reconciliation failed:`, error)
+        }).finally(() => {
+          ticking.delete(side)
+          service.pending.delete(work)
+        })
+      service.pending.add(work)
+    }
+    return Promise.all([...service.pending])
+  }
+  service.timer = setInterval(() => {
     void tick()
   }, 1_000)
-  globalState.__sp_temperatureTimer.unref()
+  service.timer.unref()
   await tick()
 }
 
-export function stopTemperatureController(): void {
-  clearInterval(globalState.__sp_temperatureTimer)
-  globalState.__sp_temperatureTimer = undefined
+/** Cancel queued writes and drain admitted work before hardware/database teardown. */
+export async function stopTemperatureController(): Promise<void> {
+  const service = globalState.__sp_temperatureService
+  if (!service) return
+  service.running = false
+  clearInterval(service.timer)
+  await Promise.all([...service.pending])
+  if (globalState.__sp_temperatureService === service) globalState.__sp_temperatureService = undefined
 }
