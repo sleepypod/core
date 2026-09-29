@@ -4,7 +4,8 @@ import { getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { initLingui } from '@/src/lib/i18n/initLingui'
 import { setI18n } from '@lingui/react/server'
 
-export const metadata: Metadata = { title: 'Temp' }
+// The layout's title template only applies to child segments, not this page.
+export const metadata: Metadata = { title: { absolute: 'Temp · sleepypod' } }
 
 export default async function Page({
   params,
