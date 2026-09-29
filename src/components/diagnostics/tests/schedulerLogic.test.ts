@@ -77,8 +77,10 @@ describe('nights', () => {
   it('shows 5 PM to 9 AM, widened for earlier or later jobs', () => {
     const start = new Date(2026, 8, 28, 12, 0).getTime()
     expect(nightAxis({ start, occurrences: [] })).toEqual({ from: start + 5 * HOUR, to: start + 21 * HOUR })
-    const wide = nightAxis({ start, occurrences: [occ({ at: start + 2.5 * HOUR }), occ({ at: start + 22.5 * HOUR })] })
+    const wide = nightAxis({ start, occurrences: [occ({ side: 'left', at: start + 2.5 * HOUR }), occ({ side: 'right', at: start + 22.5 * HOUR })] })
     expect(wide).toEqual({ from: start + 2 * HOUR, to: start + 23 * HOUR })
+    // A midday reboot doesn't stretch the night.
+    expect(nightAxis({ start, occurrences: [occ({ type: 'reboot', at: start + 1 * HOUR })] })).toEqual({ from: start + 5 * HOUR, to: start + 21 * HOUR })
   })
 
   it('splits lanes by side and pod', () => {

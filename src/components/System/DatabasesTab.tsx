@@ -10,7 +10,7 @@ import { formatBytes } from '@/src/components/status/SystemInfoCard'
 import { cn } from '@/lib/utils'
 import {
   fmtAgo, fmtLastWrite, fmtRetention, fmtRowTime, growthKind, isStalled, migrationNote, outlookSentence, projectOutlook,
-  stripCells, toCsv, dailyGrowth, type GrowthKind, type Outlook,
+  stripCells, toCsv, dailyGrowth, isUnprunedGrowth, type GrowthKind, type Outlook,
 } from './databasesLogic'
 
 type Overview = inferRouterOutputs<AppRouter>['databases']['overview']
@@ -192,7 +192,8 @@ function OutlookChart({ outlook, now }: { outlook: Outlook, now: number }) {
   const all = (i: number) => totals[i]
 
   // Y ticks at round byte values.
-  const step = [1, 2, 5].flatMap(m => [1e6, 1e7, 1e8, 1e9, 1e10].map(e => m * e)).sort((a, b) => a - b).find(s => yMax / s <= 4) ?? 1e10
+  const MiB = 1024 * 1024
+  const step = [1, 2, 5].flatMap(m => [1, 10, 100, 1000, 10_000].map(e => m * e * MiB)).sort((a, b) => a - b).find(s => yMax / s <= 4) ?? 10_000 * MiB
   const yTicks: number[] = []
   for (let v = 0; v <= yMax; v += step) yTicks.push(v)
 
@@ -319,7 +320,7 @@ function DatabaseCard({ db, data }: { db: Db, data: Overview }) {
 function TableRow({ table: t, occupied, now, color }: { table: Table, occupied: ReadonlySet<number>, now: number, color: string }) {
   const cells = stripCells(t, occupied)
   const stalled = isStalled(cells)
-  const unpruned = !t.retention && t.rows24h > 0
+  const unpruned = isUnprunedGrowth(t)
   const meta = [
     `${t.rows.toLocaleString()} rows`,
     t.lastWriteAt ? `last ${fmtLastWrite(t.lastWriteAt, now)}` : t.timeColumn ? 'empty' : 'no time column',
@@ -397,6 +398,8 @@ function RowBrowser({ databases }: { databases: Db[] }) {
   const renderCell = (col: string, v: string | number | null) => {
     if (v == null) return <span className="text-fg-3">null</span>
     if (col === r?.timeColumn && typeof v === 'number') return fmtRowTime(v, v > 1e11)
+    // Display only; Copy CSV keeps full precision.
+    if (typeof v === 'number' && !Number.isInteger(v)) return String(Math.round(v * 100) / 100)
     return String(v)
   }
 

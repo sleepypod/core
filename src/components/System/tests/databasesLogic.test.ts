@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  dailyGrowth, daysToSteady, fmtRetention, fmtRowTime, growthKind, isStalled, migrationNote, outlookSentence, projectOutlook,
+  dailyGrowth, daysToSteady, isUnprunedGrowth, fmtRetention, fmtRowTime, growthKind, isStalled, migrationNote, outlookSentence, projectOutlook,
   sizeAfter, stripCells, toCsv, type TableLike,
 } from '../databasesLogic'
 
@@ -13,6 +13,13 @@ describe('growth', () => {
   it('derives bytes per day from the last 24 h of rows', () => {
     expect(dailyGrowth(table({}))).toBe(MB)
     expect(dailyGrowth(table({ rows: 0 }))).toBe(0)
+  })
+
+  it('ignores tables whose time column only records updates', () => {
+    expect(dailyGrowth(table({ timeColumn: 'last_updated' }))).toBe(0)
+    expect(isUnprunedGrowth(table({ timeColumn: 'last_updated' }))).toBe(false)
+    expect(isUnprunedGrowth(table({ timeColumn: 'fired_at' }))).toBe(true)
+    expect(isUnprunedGrowth(table({ rows24h: 0 }))).toBe(false)
   })
 
   it('grows an unpruned table forever and levels a retained one off', () => {

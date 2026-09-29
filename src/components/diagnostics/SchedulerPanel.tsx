@@ -244,7 +244,9 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
                 next={next?.side === side && next.at >= from && next.at <= to ? next : undefined}
               />
             ))}
-            <PodMarkers jobs={pod} y={TOP + SIDE_H * 2 + POD_H / 2} X={X} />
+            <PodMarkers jobs={pod.filter(j => j.at >= from && j.at <= to)} y={TOP + SIDE_H * 2 + POD_H / 2} X={X} />
+            <OffAxisNote jobs={pod.filter(j => j.at < from)} x={0} anchor="start" y={TOP + SIDE_H * 2 + POD_H / 2 + 18} />
+            <OffAxisNote jobs={pod.filter(j => j.at > to)} x={width} anchor="end" y={TOP + SIDE_H * 2 + POD_H / 2 + 18} />
             {nowX != null && (
               <g data-testid="timeline-now">
                 <line x1={nowX} x2={nowX} y1={12} y2={height - 22} stroke="var(--text-1)" strokeOpacity="0.6" />
@@ -330,7 +332,7 @@ function SideCurve({ lane, top, width, X, next }: {
       {nextP && (
         <g data-testid="timeline-next">
           <circle cx={nextP.x} cy={nextP.y} r={6.5} fill="none" stroke="var(--text-1)" strokeWidth="1.5" />
-          <text x={nextP.x - 11} y={nextP.y + 4} textAnchor="end" fill="var(--text-1)" fontSize="10" className="font-mono">{`next · ${nextP.tempF}°`}</text>
+          <text x={nextP.x} y={nextP.y - 12} textAnchor="middle" fill="var(--text-1)" fontSize="10" className="font-mono">{`next · ${nextP.tempF}°`}</text>
         </g>
       )}
     </g>
@@ -367,6 +369,16 @@ function PodMarkers({ jobs, y, X }: { jobs: TimelineOccurrence[], y: number, X: 
         </g>
       ))}
     </g>
+  )
+}
+
+/** Pod jobs outside the night's hours, in words: "also Reboot 1:00 PM · Prime 2:00 PM". */
+function OffAxisNote({ jobs, x, y, anchor }: { jobs: TimelineOccurrence[], x: number, y: number, anchor: 'start' | 'end' }) {
+  if (jobs.length === 0) return null
+  return (
+    <text x={x} y={y} textAnchor={anchor} fill="var(--text-3)" fontSize="10" className="font-mono">
+      {`${anchor === 'start' ? 'earlier' : 'later'}: ${jobs.map(j => `${podJobLabel(j)} ${fmtTime(j.at)}`).join(' · ')}`}
+    </text>
   )
 }
 

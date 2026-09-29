@@ -11,6 +11,7 @@ export interface TableLike {
   rows: number
   bytes: number
   rows24h: number
+  timeColumn?: string | null
   lastWriteAt: number | null
   hourly: number[]
   retention: { days: number, by: string } | null
@@ -18,9 +19,18 @@ export interface TableLike {
 
 export type GrowthKind = 'retained' | 'growing' | 'static'
 
-/** Bytes a table adds per day at the last 24 h's write rate. */
-export function dailyGrowth(t: Pick<TableLike, 'rows' | 'bytes' | 'rows24h'>): number {
+/** Time columns that move when a row is updated, so they count touches, not new rows. */
+const UPDATE_COLUMNS = new Set(['updated_at', 'last_updated', 'last_checked'])
+
+/** Bytes a table adds per day at the last 24 h's insert rate. */
+export function dailyGrowth(t: Pick<TableLike, 'rows' | 'bytes' | 'rows24h' | 'timeColumn'>): number {
+  if (t.timeColumn && UPDATE_COLUMNS.has(t.timeColumn)) return 0
   return t.rows > 0 ? (t.rows24h * t.bytes) / t.rows : 0
+}
+
+/** Unpruned and growing by at least 4 KB a day: worth a "not pruned" flag. */
+export function isUnprunedGrowth(t: TableLike): boolean {
+  return !t.retention && dailyGrowth(t) >= 4096
 }
 
 export function growthKind(t: TableLike): GrowthKind {

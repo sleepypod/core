@@ -212,12 +212,14 @@ export function buildNights(occurrences: TimelineOccurrence[], now: number, coun
 
 /**
  * The hours the timeline shows: 5 PM to 9 AM, widened to whole hours around
- * any job outside that span.
+ * any side's job outside that span. Pod jobs (a midday prime or reboot) don't
+ * widen it, so they can't squash the night; the chart notes them instead.
  */
 export function nightAxis(night: Pick<Night, 'start' | 'occurrences'>): { from: number, to: number } {
   let from = night.start + 5 * HOUR
   let to = night.start + 21 * HOUR
   for (const o of night.occurrences) {
+    if (!o.side) continue
     if (o.at < from) from = night.start + Math.floor((o.at - night.start) / HOUR) * HOUR
     if (o.at > to) to = night.start + Math.min(24, Math.ceil((o.at - night.start) / HOUR + 0.01)) * HOUR
   }
