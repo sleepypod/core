@@ -20,6 +20,7 @@ import { getAutomationEngine, shutdownAutomationEngine } from '@/src/automation'
 import { startTemperatureController, stopTemperatureController } from '@/src/temperature/instance'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
 import { startBiometricsRetention, stopBiometricsRetention } from '@/src/db/retention'
+import { startAutomationRunsRetention, stopAutomationRunsRetention } from '@/src/db/automationRunsRetention'
 import { startHealthSampler, stopHealthSampler } from '@/src/lib/healthSampler'
 import { getDacMonitor, shutdownDacMonitor } from '@/src/hardware/dacMonitor.instance'
 import { startPiezoStreamServer, shutdownPiezoStreamServer } from '@/src/streaming/piezoStream'
@@ -134,6 +135,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Step 6: Stop biometrics retention and health sampling before closing DB
   try {
     stopBiometricsRetention()
+    stopAutomationRunsRetention()
     stopHealthSampler()
   }
   catch (error) {
@@ -378,6 +380,7 @@ async function initializeBackgroundServices(): Promise<void> {
 
     // Start biometrics time-series retention loop (non-blocking)
     startBiometricsRetention()
+    startAutomationRunsRetention()
 
     // Boot the Autopilot rules engine beside the scheduler (non-blocking).
     // Shares the same hardware path; no-op until automations are created.
