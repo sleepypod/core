@@ -92,6 +92,18 @@ describe('responsive navigation', () => {
     rerender(<TabBar />)
     expect(screen.getAllByRole('link')).toHaveLength(6)
   })
+  it('puts the pod health dot on the phone System tab', () => {
+    const { rerender } = render(<TabBar />)
+    // No dot until the first health read.
+    expect(screen.queryByTestId('system-health-dot')).toBeNull()
+    state.health = { status: 'ok', database: { status: 'ok' }, scheduler: {}, iptables: { ok: true } }
+    rerender(<TabBar />)
+    expect(screen.getByTestId('system-health-dot').getAttribute('data-tone')).toBe('ok')
+    state.water = { level: 'low' }
+    rerender(<TabBar />)
+    expect(screen.getByTestId('system-health-dot').getAttribute('data-tone')).toBe('warn')
+    expect(screen.getByRole('link', { name: /SYSTEM, 1 issue/ })).toBeTruthy()
+  })
   it('renders page content and forwards swipe gestures', () => {
     render(<AppShell><h1>Temperature</h1></AppShell>)
     fireEvent.touchStart(screen.getByRole('main'))

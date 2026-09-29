@@ -10,10 +10,9 @@ import { resolveSection, SECTIONS } from '@/src/components/Settings/sections'
 import { resolveSystemTab, SYSTEM_TABS } from '@/src/components/System/systemTabs'
 import { AUTOPILOT_VIEWS, resolveAutopilotView } from '@/src/components/Autopilot/autopilotViews'
 import { resolveSleepSection, SLEEP_SECTIONS } from '@/src/components/Sleep/sleepViews'
-import { attentionItems } from '@/src/components/diagnostics/dashboardLogic'
-import { useNowMinute } from '@/src/components/Schedule/CurveChart'
 import { trpc } from '@/src/utils/trpc'
-import { buildLine, footerStatus } from './footerStatus'
+import { buildLine } from './footerStatus'
+import { usePodHealth } from './usePodHealth'
 import { activeNavId, DOCS_URL, langFromPath, NAV_ITEMS, type NavId } from './navItems'
 
 const noopSubscribe = () => () => {}
@@ -26,18 +25,10 @@ export function Sidebar({ className }: { className?: string }) {
   const lang = langFromPath(pathname)
   const active = activeNavId(pathname)
 
-  const status = trpc.device.getStatus.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
-  const health = trpc.health.system.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
   const version = trpc.system.getVersion.useQuery({}, { staleTime: 60_000 })
-  const maintenance = trpc.health.maintenance.useQuery({}, { staleTime: 30_000, refetchInterval: 60_000 })
-  const water = trpc.waterLevel.getLatest.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
-  const nowMinute = useNowMinute()
+  const { footer, podVersion } = usePodHealth()
 
-  const podName = status.data?.podVersion ? POD_NAMES[status.data.podVersion] ?? status.data.podVersion : 'Pod'
-  const attention = nowMinute == null
-    ? []
-    : attentionItems(maintenance.data, water.data?.level ?? status.data?.waterLevel, nowMinute * 60_000)
-  const footer = footerStatus(health.data, attention)
+  const podName = podVersion ? POD_NAMES[podVersion] ?? podVersion : 'Pod'
   const statusDot = footer.tone === 'muted' ? undefined : footer.tone
   const host = useSyncExternalStore(noopSubscribe, () => window.location.hostname, () => '')
   const build = buildLine(version.data)

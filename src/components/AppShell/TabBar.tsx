@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useScheduleActive } from '@/src/hooks/useScheduleActive'
 import { activeNavId, langFromPath, NAV_ITEMS } from './navItems'
+import { usePodHealth } from './usePodHealth'
 
 /** Phone bottom tab bar (< 900px). Respects the safe-area inset. */
 export function TabBar({ className }: { className?: string }) {
@@ -12,6 +13,7 @@ export function TabBar({ className }: { className?: string }) {
   const lang = langFromPath(pathname)
   const active = activeNavId(pathname)
   const { isActive: scheduleActive } = useScheduleActive()
+  const { footer } = usePodHealth()
 
   return (
     <nav
@@ -38,8 +40,17 @@ export function TabBar({ className }: { className?: string }) {
               {n.id === 'schedule' && scheduleActive && (
                 <span className="absolute -right-1 -top-0.5 size-1.5 rounded-full bg-ok" />
               )}
+              {/* Pod health, as the sidebar footer shows it on wider screens. */}
+              {n.id === 'system' && footer.tone !== 'muted' && (
+                <span
+                  className={cn('absolute -right-1 -top-0.5 size-1.5 rounded-full', footer.tone === 'warn' ? 'bg-warn' : 'bg-ok')}
+                  data-testid="system-health-dot"
+                  data-tone={footer.tone}
+                />
+              )}
             </span>
             {n.label.toUpperCase()}
+            {n.id === 'system' && footer.tone === 'warn' && <span className="sr-only">{`, ${footer.summary}`}</span>}
           </Link>
         )
       })}

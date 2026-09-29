@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button, PageHeader, Skeleton, StatusDot } from '@/src/components/ds'
+import { Button, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
@@ -27,7 +27,6 @@ import { TonightCard, useNow } from './TonightCard'
 import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
 
-const POD_NAMES: Record<string, string> = { H00: 'Pod 3', I00: 'Pod 4', J00: 'Pod 5' }
 const SIDES: Side[] = ['left', 'right']
 
 /*
@@ -69,8 +68,6 @@ export const TempScreen = () => {
 
   // Device status via WebSocket (2s push) with HTTP fallback
   const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
-  // HTTP-only fields (pod model) share the same query cache as useDeviceStatus.
-  const { data: httpStatus } = trpc.device.getStatus.useQuery({}, { staleTime: 60_000 })
 
   const { data: settings } = trpc.settings.getAll.useQuery({})
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
@@ -135,8 +132,6 @@ export const TempScreen = () => {
     return occ.available ? 'out' : null
   }
 
-  const podName = httpStatus?.podVersion ? POD_NAMES[httpStatus.podVersion] ?? httpStatus.podVersion : null
-
   const header = (
     <PageHeader
       title="Temperature"
@@ -154,14 +149,6 @@ export const TempScreen = () => {
           <Button icon={Power} onClick={handleAllOff} disabled={!anyOn}>
             All off
           </Button>
-          {podName && (
-            <StatusDot
-              tone={status ? 'ok' : 'muted'}
-              label={podName.toUpperCase()}
-              mono
-              className="text-fg-2 min-[900px]:hidden"
-            />
-          )}
         </>
       )}
     />
