@@ -159,6 +159,7 @@ export function useStatusSummary() {
     version: version.data,
     wifi: wifi.data,
     internetBlocked: internet.data?.blocked,
+    firewall: system.data?.iptables,
     waterLevel: waterLatest.data?.level ?? deviceStatus.data?.waterLevel,
     diskPercent: storage.data && storage.data.emmc.totalBytes > 0 ? storage.data.emmc.usedPercent : undefined,
     uptimeSeconds: performance.data?.uptimeSeconds,

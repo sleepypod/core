@@ -107,6 +107,15 @@ function StatusLine() {
         : <StatusDot tone={s.internetBlocked ? 'muted' : 'ok'} label={s.internetBlocked ? 'Blocked' : 'Allowed'} className="text-[13px] text-fg" />,
     },
     {
+      label: 'Firewall',
+      value: !s.firewall
+        ? '—'
+        : s.firewall.ok
+          ? <StatusDot tone="ok" label="In place" className="text-[13px] text-fg" />
+          : <StatusDot tone="warn" label={`Missing ${s.firewall.missing.length === 1 ? s.firewall.missing[0] : `${s.firewall.missing.length} rules`}`} className="text-[13px]" />,
+      title: s.firewall && !s.firewall.ok ? `Missing firewall rules: ${s.firewall.missing.join(', ')}` : undefined,
+    },
+    {
       label: 'Disk',
       value: s.diskPercent !== undefined
         ? (
@@ -143,7 +152,7 @@ function StatusLine() {
       </div>
       <div className="grid min-w-0 flex-1 grid-cols-2 gap-x-6 gap-y-2 @min-[560px]:flex @min-[560px]:flex-wrap @min-[900px]:justify-end">
         {facts.map(f => (
-          <div key={f.label} className="min-w-0">
+          <div key={f.label} className="min-w-0" title={'title' in f ? f.title : undefined}>
             <div className="text-xs text-fg-2">{f.label}</div>
             <div className={cn('flex min-w-0 items-center gap-1.5 font-mono text-[13px]', f.className)}>{f.value}</div>
           </div>

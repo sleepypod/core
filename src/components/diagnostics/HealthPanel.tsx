@@ -6,7 +6,7 @@ import { ArrowDown, ArrowRight, CircleCheck, RotateCw, ScrollText, TriangleAlert
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
-import { Button, Card, CardHeader, InlineError, KeyValue, SectionLabel, Skeleton, StatusDot } from '@/src/components/ds'
+import { Button, Card, CardHeader, InlineError, SectionLabel, Skeleton, StatusDot } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import { langFromPath } from '@/src/components/AppShell/navItems'
 import { STAGES, type NodeId } from '@/src/lib/dataPath'
@@ -52,7 +52,6 @@ export function HealthPanel({ onJump }: { onJump: (s: DiagSection) => void }) {
       </Card>
 
       <HistoryCard history={history.data} error={history.error?.message} loading={history.isLoading} />
-      <NetworkCard />
 
       <SectionTitle title="Hardware checks" />
       <HapticsTestCard />
@@ -404,39 +403,5 @@ function IncidentList({ history }: { history: History }) {
             </div>
           ))}
     </div>
-  )
-}
-
-// ── Network ─────────────────────────────────────────────────────────────────
-
-/** Checks outside the data path: they don't carry sensor data, but break remote use. */
-function NetworkCard() {
-  const wifi = trpc.system.wifiStatus.useQuery({}, { refetchInterval: 30_000 })
-  const internet = trpc.system.internetStatus.useQuery({}, { refetchInterval: 30_000 })
-  const system = trpc.health.system.useQuery({}, { refetchInterval: 30_000 })
-  const firewall = system.data?.iptables
-  const integrity = system.data?.database?.integrity.status
-  return (
-    <Card className="flex-row flex-wrap gap-x-8 gap-y-3 py-3">
-      <KeyValue
-        label="Wi-Fi"
-        size={13}
-        value={wifi.data ? (wifi.data.connected ? `${wifi.data.ssid ?? 'connected'} · ${wifi.data.signal ?? 0}%` : 'not connected') : '—'}
-        valueClassName={wifi.data && !wifi.data.connected ? 'text-warn' : undefined}
-      />
-      <KeyValue label="Internet" size={13} value={internet.data ? (internet.data.blocked ? 'blocked (local only)' : 'allowed') : '—'} />
-      <KeyValue
-        label="Firewall rules"
-        size={13}
-        value={firewall ? (firewall.ok ? 'in place' : `missing ${firewall.missing.join(', ')}`) : '—'}
-        valueClassName={firewall && !firewall.ok ? 'text-warn' : undefined}
-      />
-      <KeyValue
-        label="Database integrity"
-        size={13}
-        value={integrity ?? '—'}
-        valueClassName={integrity === 'degraded' ? 'text-danger' : undefined}
-      />
-    </Card>
   )
 }

@@ -117,6 +117,7 @@ const summary = (over: Record<string, unknown> = {}) => ({
   version: { branch: 'dev', commitHash: 'da5b3c1aaaa' },
   wifi: { connected: true, ssid: 'home', signal: 80 },
   internetBlocked: true,
+  firewall: { ok: true, missing: [] },
   diskPercent: 80.4,
   uptimeSeconds: 7200,
   ...over,
@@ -158,6 +159,16 @@ describe('DiagnosticsConsole dashboard', () => {
     expect(within(line).getByText('da5b3c1')).toBeTruthy()
     expect(within(line).getByText('Blocked')).toBeTruthy()
     expect(within(line).getByText('80% used')).toBeTruthy()
+  })
+
+  it('shows the firewall status, naming a missing rule', () => {
+    const { unmount } = render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    expect(within(screen.getByTestId('status-line')).getByText('In place')).toBeTruthy()
+    unmount()
+    mocks.summary = summary({ firewall: { ok: false, missing: ['block-wan'] } })
+    render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    const fact = within(screen.getByTestId('status-line')).getByText('Missing block-wan')
+    expect(fact.closest('[title]')?.getAttribute('title')).toBe('Missing firewall rules: block-wan')
   })
 
   it('counts failing checks and names them', () => {
