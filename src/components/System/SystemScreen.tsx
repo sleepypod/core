@@ -96,7 +96,7 @@ export function SystemScreen() {
               fps={stream.fps}
               lastError={stream.lastError}
               sensorCount={sensorCount}
-              lastFrameTime={stream.lastFrameTime}
+              lastFrameTime={stream.lastSensorTime}
               paused={!streamEnabled}
               onToggle={() => setStreamEnabled(v => !v)}
             />

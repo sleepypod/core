@@ -155,7 +155,11 @@ async function loadFreshModule(options: {
 const rawEncoder = new Encoder({ useRecords: false })
 
 function rawLogRecord(message: string): Buffer {
-  const payload = Buffer.from(rawEncoder.encode({ type: 'log', ts: 100, level: 1, msg: message }))
+  return rawFrameRecord({ type: 'log', ts: 100, level: 1, msg: message })
+}
+
+function rawFrameRecord(frame: Record<string, unknown>): Buffer {
+  const payload = Buffer.from(rawEncoder.encode(frame))
   const length = Buffer.alloc(3)
   length[0] = 0x59
   length.writeUInt16BE(payload.length, 1)
@@ -212,6 +216,44 @@ afterEach(async () => {
 })
 
 describe('piezoStream module initialization contracts', () => {
+  it('ingests backlog without streaming it to snapshot clients, then hands off to live without gaps', async () => {
+    vi.useFakeTimers()
+    const now = Math.floor(Date.now() / 1000)
+    const cap = (ts: number) => ({ type: 'capSense', ts, left: 1, right: 2 })
+    const piezo = (ts: number) => ({ type: 'piezo-dual', ts, freq: 500, left1: Buffer.from([1, 0, 0, 0]), right1: Buffer.from([2, 0, 0, 0]) })
+    const { file } = mockRawFile(Buffer.concat([
+      rawFrameRecord(cap(now - 100)), rawFrameRecord(piezo(now - 20)),
+      rawFrameRecord(cap(now - 1)), rawFrameRecord(piezo(now - 1)),
+    ]))
+    const stream = await loadFreshModule()
+    const { capSideChannels } = await import('../normalizeFrame')
+    for (let i = 0; i < 4; i++) vi.mocked(capSideChannels).mockImplementationOnce(v => [Number(v)])
+    stream.startPiezoStreamServer()
+    const modern = connectFakeClient()
+    const legacy = connectFakeClient()
+    modern.emitMessage(JSON.stringify({ type: 'subscribe', snapshot: true, sensors: [] }))
+    await vi.advanceTimersByTimeAsync(100)
+    const messages = modern.sent.map(s => JSON.parse(s))
+    expect(messages.filter(m => m.type === 'capSense' || m.type === 'piezo-dual')).toEqual([])
+    const snapshot = messages.filter(m => m.type === 'snapshot').at(-1)
+    expect(snapshot.latest).toEqual([cap(now - 1)])
+    expect(snapshot.waveform.map((f: { ts: number }) => f.ts)).toEqual([now - 1])
+    expect(legacy.sent.map(s => JSON.parse(s)).filter(m => m.type === 'capSense')).toHaveLength(2)
+    expect(persistenceMock.recordCapFrame).toHaveBeenCalledWith('left', [1], now - 100, null)
+    file.bytes = Buffer.concat([file.bytes, rawFrameRecord(piezo(now))])
+    await vi.advanceTimersByTimeAsync(25)
+    expect(modern.sent.map(s => JSON.parse(s)).filter(m => m.type === 'piezo-dual').map(m => m.ts)).toEqual([now])
+    // Replay is one isolated response and cannot feed other clients or cards.
+    const beforeLegacy = legacy.sent.length
+    modern.emitMessage(JSON.stringify({ type: 'get_waveform', timestamp: now - 20, requestId: 7 }))
+    expect(JSON.parse(modern.sent.at(-1) ?? '{}')).toMatchObject({ type: 'waveform', requestId: 7, frames: [{ ts: now - 20 }] })
+    expect(legacy.sent).toHaveLength(beforeLegacy)
+    // New visitors receive the same bounded window, immediately.
+    const visitor = connectFakeClient()
+    visitor.emitMessage(JSON.stringify({ type: 'subscribe', snapshot: true, sensors: ['piezo-dual'] }))
+    expect(JSON.parse(visitor.sent.at(-1) ?? '{}')).toMatchObject({ type: 'snapshot', latest: [], waveform: [{ ts: now - 1 }, { ts: now }] })
+  })
+
   it('passes the configured WebSocket port to the server constructor', async () => {
     const piezoStream = await loadFreshModule({ wsPort: '4311' })
 

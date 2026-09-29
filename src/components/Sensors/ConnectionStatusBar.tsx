@@ -32,20 +32,19 @@ const STATUS_TONE: Record<ConnectionStatus, { text: string, dot: string }> = {
 }
 
 /** Seconds since the last frame, re-rendered every second. */
-function useFrameAge(timestamp: number | null): string {
-  const [text, setText] = useState('')
+function useFrameAge(timestamp: number | null) {
+  const [age, setAge] = useState({ text: '', fresh: false })
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
     if (!timestamp) {
-      setText('')
+      setAge({ text: '', fresh: false })
       return
     }
 
     function update() {
-      const diff = (Date.now() - (timestamp ?? 0)) / 1000
-      if (diff < 60) setText(`${diff.toFixed(1)}s`)
-      else setText(`${Math.floor(diff / 60)}m`)
+      const diff = Math.max(0, (Date.now() - (timestamp ?? 0)) / 1000)
+      setAge({ text: diff < 60 ? `${diff.toFixed(1)}s` : `${Math.floor(diff / 60)}m`, fresh: diff <= 10 })
     }
 
     update()
@@ -54,7 +53,7 @@ function useFrameAge(timestamp: number | null): string {
     return () => clearInterval(interval)
   }, [timestamp])
 
-  return text
+  return age
 }
 
 /**
@@ -72,10 +71,10 @@ export function ConnectionStatusBar({
   onToggle,
   className,
 }: ConnectionStatusBarProps) {
-  const age = useFrameAge(paused ? null : lastFrameTime)
+  const { text: age, fresh } = useFrameAge(paused ? null : lastFrameTime)
   const connected = !paused && status === 'connected'
-  const label = paused ? 'PAUSED' : STATUS_LABEL[status]
-  const tone = paused ? { text: 'text-fg-3', dot: 'bg-fg-3' } : STATUS_TONE[status]
+  const label = paused ? 'PAUSED' : connected && !fresh ? (lastFrameTime ? 'STALE' : 'WAITING') : STATUS_LABEL[status]
+  const tone = connected && !fresh ? { text: 'text-warn', dot: 'bg-warn' } : paused ? { text: 'text-fg-3', dot: 'bg-fg-3' } : STATUS_TONE[status]
   const title = !paused && status !== 'connected' && lastError ? lastError : undefined
 
   return (
@@ -97,7 +96,7 @@ export function ConnectionStatusBar({
         <>
           <span className="hidden whitespace-nowrap min-[900px]:inline">{`${fps} fps`}</span>
           <span className="hidden whitespace-nowrap min-[900px]:inline">{`${sensorCount} sensors`}</span>
-          {age && <span className="hidden whitespace-nowrap @min-[900px]:inline">{`last frame ${age}`}</span>}
+          {age && <span className="hidden whitespace-nowrap @min-[900px]:inline">{`sensor age ${age}`}</span>}
         </>
       )}
       <button

@@ -1,5 +1,7 @@
 'use client'
 
+import { SensorAge } from './SensorAge'
+
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import type { FrzHealthFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
@@ -108,6 +110,7 @@ export function FreezerHealthCard() {
         <SectionLabel right={<StatusDot tone={status.tone} label={status.label} mono className="tracking-normal" />}>
           Freezer health
           {temps?.source === 'stored' && <span className="normal-case tracking-normal text-fg-3">stored</span>}
+          <SensorAge timestamp={frzHealth?.ts} />
         </SectionLabel>
         <div className="grid grid-cols-2 gap-2.5">
           <BigStat value={temps ? `${t(temps.heatsink)}` : '--'} label="Heatsink" warn={false} />

@@ -26,6 +26,7 @@ vi.mock('@/src/hooks/useSensorStream', () => ({
       lastError: null,
       latestFrames: { capSense2: {}, bedTemp2: {}, frzHealth: {} },
       lastFrameTime: null,
+      lastSensorTime: Date.now(),
     }
   },
 }))

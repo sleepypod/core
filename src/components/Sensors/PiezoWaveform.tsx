@@ -1,12 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useOnSensorFrame, useSensorStream, type PiezoDualFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
+import { useSensorStream } from '@/src/hooks/useSensorStream'
 import { Card, SectionLabel, Slider } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 
 /** Maximum samples to keep in the waveform buffer per channel. */
-const MAX_SAMPLES = 1500
+const MAX_SAMPLES = 10_000
 /** Downsampled point target for rendering (~200 points, matching iOS). */
 const RENDER_TARGET_POINTS = 200
 /** Minimum samples before rendering a trace (matching iOS guard). */
@@ -244,17 +244,21 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
 
   // Seek / timeline scrubber state. `enabled` follows the System Stop toggle
   // so this consumer doesn't hold the shared socket open while paused.
-  const { seek, getTimeRange, isSeeking, timeRange } = useSensorStream({ sensors: ['piezo-dual'], enabled })
+  const { seekWaveform: seek, goLive, waveform, replayWaveform, getTimeRange, isSeeking, timeRange } = useSensorStream({ sensors: ['piezo-dual'], enabled })
   const [scrubValue, setScrubValue] = useState<number | null>(null) // null = live
   const timeRangeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Fetch time range on mount and every 30 seconds
+  useEffect(() => {
+    goLive()
+  }, [goLive])
+
+  // Fetch time range on mount and every 5 seconds
   useEffect(() => {
     if (!enabled) return
     getTimeRange()
     timeRangeIntervalRef.current = setInterval(() => {
       getTimeRange()
-    }, 30_000)
+    }, 5_000)
     return () => {
       if (timeRangeIntervalRef.current) {
         clearInterval(timeRangeIntervalRef.current)
@@ -262,7 +266,7 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
     }
   }, [getTimeRange, enabled])
 
-  const isLive = scrubValue === null || (timeRange !== null && scrubValue >= timeRange.max)
+  const isLive = replayWaveform === null
 
   const handleScrub = useCallback((val: number) => {
     setScrubValue(val)
@@ -271,36 +275,22 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
 
   const handleGoLive = useCallback(() => {
     setScrubValue(null)
-  }, [])
+    goLive()
+  }, [goLive])
 
-  // Receive piezo frames and append to buffers
-  useOnSensorFrame(useCallback((frame: SensorFrame) => {
-    if (frame.type !== 'piezo-dual') return
-    const piezo = frame as PiezoDualFrame
+  // A snapshot/replay is installed as one window; live data continues to collect
+  // separately while scrubbing, so Go live immediately restores the newest view.
+  useEffect(() => {
+    if (!enabled) return
+    const frames = replayWaveform ?? waveform
+    leftBufferRef.current = frames.flatMap(f => f.left1).slice(-MAX_SAMPLES)
+    rightBufferRef.current = frames.flatMap(f => f.right1).slice(-MAX_SAMPLES)
+    hasDataRef.current = frames.length > 0
+    freqRef.current = frames.at(-1)?.freq ?? freqRef.current
 
-    hasDataRef.current = true
-    freqRef.current = piezo.freq ?? freqRef.current
-
-    // Append and trim left
-    const left = leftBufferRef.current
-    left.push(...piezo.left1)
-    if (left.length > MAX_SAMPLES) {
-      leftBufferRef.current = left.slice(-MAX_SAMPLES)
-    }
-
-    // Append and trim right
-    const right = rightBufferRef.current
-    right.push(...piezo.right1)
-    if (right.length > MAX_SAMPLES) {
-      rightBufferRef.current = right.slice(-MAX_SAMPLES)
-    }
-
-    setSampleCounts({
-      left: leftBufferRef.current.length,
-      right: rightBufferRef.current.length,
-    })
+    setSampleCounts({ left: leftBufferRef.current.length, right: rightBufferRef.current.length })
     setFreq(freqRef.current)
-  }, []))
+  }, [enabled, waveform, replayWaveform])
 
   // Canvas rendering loop
   useEffect(() => {
@@ -418,6 +408,11 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
         />
       </div>
 
+      {!timeRange && !isLive && (
+        <button type="button" onClick={handleGoLive} className="self-end text-xs text-ok hover:underline">
+          Go live
+        </button>
+      )}
       {/* Timeline scrubber */}
       {timeRange && (
         <div className="flex items-center gap-2.5 font-mono text-[11px] text-fg-3">
@@ -426,12 +421,12 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
             label="Piezo replay position"
             min={timeRange.min}
             max={timeRange.max}
-            value={scrubValue ?? timeRange.max}
+            value={isLive ? timeRange.max : Math.max(timeRange.min, Math.min(scrubValue ?? timeRange.max, timeRange.max))}
             onChange={handleScrub}
           />
           <span className="shrink-0">{formatTime(timeRange.max)}</span>
           {isLive
-            ? <span className="shrink-0 text-ok">LIVE</span>
+            ? <span className="shrink-0 text-fg-3">{enabled ? 'Latest' : 'Paused'}</span>
             : (
                 <button type="button" onClick={handleGoLive} className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-ok hover:underline">
                   {isSeeking ? 'seeking' : 'Go live'}

@@ -1,5 +1,7 @@
 'use client'
 
+import { SensorAge } from './SensorAge'
+
 import { useCallback, useState } from 'react'
 import { useSensorFrame, useOnSensorFrame } from '@/src/hooks/useSensorStream'
 import type { CapSenseFrame, CapSense2Frame, SensorFrame } from '@/src/hooks/useSensorStream'
@@ -94,7 +96,7 @@ export function PresenceCard() {
 
   return (
     <Card className="gap-2.5 px-4 py-3.5">
-      <SectionLabel>Presence</SectionLabel>
+      <SectionLabel right={<SensorAge timestamp={frame?.ts} />}>Presence</SectionLabel>
       <div className="grid grid-cols-2 gap-3">
         {(['left', 'right'] as const).map((side) => {
           const occ = occupancyQuery.data?.[side]

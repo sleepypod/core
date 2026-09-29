@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Encoder } from 'cbor-x'
+import { WebSocket } from 'ws'
 
 const tmpRawDir = vi.hoisted(() => {
   const fsh = require('node:fs') as typeof import('node:fs')
@@ -133,6 +134,43 @@ describe('startPiezoStreamServer — source selection', () => {
     vi.mocked(discoverSensorSource).mockResolvedValue('unknown')
     vi.clearAllMocks()
     vi.restoreAllMocks()
+  })
+
+  it('serves an atomic snapshot and isolated replay from NATS over the browser protocol', async () => {
+    natsMock.reachable = true
+    const server = startPiezoStreamServer()
+    await waitFor(() => __test__.natsSourceActive)
+    const now = Math.floor(Date.now() / 1000)
+    const piezo = (ts: number) => ({ type: 'piezo-dual', ts, freq: 500, left1: [1], right1: [2] })
+    for (const ts of [now - 20, now - 2, now - 1]) natsMock.captured.onFrame(piezo(ts))
+    natsMock.captured.onFrame({ type: 'capSense', ts: now - 1, left: 1, right: 2 })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Missing WS address')
+    const client = new WebSocket(`ws://127.0.0.1:${address.port}`, 'sensor-snapshot-v1')
+    const messages: any[] = []
+    client.on('message', data => messages.push(JSON.parse(String(data))))
+    await new Promise<void>((resolve, reject) => {
+      client.once('open', resolve)
+      client.once('error', reject)
+    })
+    try {
+      expect(client.protocol).toBe('sensor-snapshot-v1')
+      // Stale frames are suppressed even before subscribe arrives.
+      natsMock.captured.onFrame(piezo(now - 100))
+      client.send(JSON.stringify({ type: 'subscribe', snapshot: true, sensors: [] }))
+      await waitFor(() => messages.some(m => m.type === 'snapshot'))
+      const snapshot = messages.find(m => m.type === 'snapshot')
+      expect(snapshot.waveform).toEqual([piezo(now - 2), piezo(now - 1)])
+      expect(snapshot.range).toEqual({ min: now - 20, max: now - 1 })
+      natsMock.captured.onFrame(piezo(now))
+      client.send(JSON.stringify({ type: 'get_waveform', requestId: 5, timestamp: now - 20 }))
+      await waitFor(() => messages.some(m => m.type === 'waveform'))
+      expect(messages.filter(m => m.type === 'piezo-dual')).toEqual([piezo(now)])
+      expect(messages.find(m => m.type === 'waveform')).toEqual({ type: 'waveform', requestId: 5, frames: [piezo(now - 20)] })
+    }
+    finally {
+      client.terminate()
+    }
   })
 
   it('discards a probe from a server that was shut down and restarted', async () => {

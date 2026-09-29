@@ -1,5 +1,7 @@
 'use client'
 
+import { SensorAge } from './SensorAge'
+
 import { useMemo } from 'react'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import type { BedTempFrame, BedTemp2Frame } from '@/src/hooks/useSensorStream'
@@ -87,7 +89,14 @@ export function BedTempMatrix() {
 
   return (
     <Card className="gap-2.5 px-4 py-3.5">
-      <SectionLabel right={`°${unit}`}>
+      <SectionLabel right={(
+        <span className="flex items-center gap-2">
+          <SensorAge timestamp={liveFrame?.ts} />
+          °
+          {unit}
+        </span>
+      )}
+      >
         Bed temp matrix
         {data?.source === 'stored' && <span className="normal-case tracking-normal text-fg-3">stored</span>}
       </SectionLabel>

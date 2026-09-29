@@ -141,6 +141,72 @@ afterEach(() => {
 })
 
 describe('useSensorStream', () => {
+  it('installs a snapshot once, then appends live samples without duplicating the snapshot', async () => {
+    const stream = renderHook(() => useSensorStream())
+    const callback = vi.fn()
+    const observer = renderHook(() => useOnSensorFrame(callback))
+    await waitFor(() => expect(wsMock.sockets.length).toBe(1))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    expect(ws.sent.map(s => JSON.parse(s))).toContainEqual({ type: 'subscribe', snapshot: true, sensors: [] })
+    const piezo = (ts: number) => ({ type: 'piezo-dual', ts, freq: 500, left1: [ts], right1: [ts] })
+    act(() => ws.triggerMessage({ type: 'snapshot', latest: [{ type: 'capSense', ts: 98, left: 1, right: 2 }], waveform: [piezo(99), piezo(100)] }))
+    expect(stream.result.current.waveform.map(f => f.ts)).toEqual([99, 100])
+    expect(stream.result.current.latestFrames.capSense?.ts).toBe(98)
+    expect(callback).not.toHaveBeenCalled()
+    act(() => ws.triggerMessage(piezo(101)))
+    expect(stream.result.current.waveform.map(f => f.ts)).toEqual([99, 100, 101])
+    expect(callback).toHaveBeenCalledTimes(1)
+    // Re-subscribing replaces the window; it must not append a second copy.
+    act(() => ws.triggerMessage({ type: 'snapshot', latest: [], waveform: [piezo(99), piezo(100), piezo(101)] }))
+    expect(stream.result.current.waveform).toHaveLength(3)
+    observer.unmount()
+    stream.unmount()
+  })
+
+  it('keeps replay out of live cards and callbacks, discards superseded replies, and goes live immediately', async () => {
+    const stream = renderHook(() => useSensorStream())
+    const callback = vi.fn()
+    const observer = renderHook(() => useOnSensorFrame(callback))
+    await waitFor(() => expect(wsMock.sockets.length).toBe(1))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    const piezo = (ts: number) => ({ type: 'piezo-dual', ts, freq: 500, left1: [ts], right1: [ts] })
+    act(() => ws.triggerMessage(piezo(100)))
+    act(() => stream.result.current.seekWaveform(70))
+    const first = JSON.parse(ws.sent.at(-1) ?? '{}')
+    act(() => stream.result.current.seekWaveform(80))
+    const second = JSON.parse(ws.sent.at(-1) ?? '{}')
+    act(() => ws.triggerMessage({ type: 'waveform', requestId: first.requestId, frames: [piezo(70)] }))
+    expect(stream.result.current.replayWaveform).toEqual([])
+    act(() => ws.triggerMessage({ type: 'waveform', requestId: second.requestId, frames: [piezo(80)] }))
+    expect(stream.result.current.replayWaveform?.[0].ts).toBe(80)
+    expect(stream.result.current.latestFrames['piezo-dual']?.ts).toBe(100)
+    expect(callback).toHaveBeenCalledTimes(1)
+    act(() => ws.triggerMessage(piezo(101)))
+    expect(stream.result.current.replayWaveform?.[0].ts).toBe(80)
+    act(() => stream.result.current.goLive())
+    expect(stream.result.current.replayWaveform).toBeNull()
+    expect(stream.result.current.waveform.at(-1)?.ts).toBe(101)
+    act(() => ws.triggerMessage({ type: 'waveform', requestId: second.requestId, frames: [piezo(80)] }))
+    expect(stream.result.current.replayWaveform).toBeNull()
+    observer.unmount()
+    stream.unmount()
+  })
+
+  it('uses measurement timestamps for sensor freshness and never lets device status hide stale sensors', async () => {
+    const stream = renderHook(() => useSensorStream())
+    await waitFor(() => expect(wsMock.sockets.length).toBe(1))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    act(() => ws.triggerMessage({ type: 'capSense', ts: 100, left: 1, right: 2 }))
+    act(() => ws.triggerMessage({ type: 'deviceStatus', ts: 200, left: {}, right: {} }))
+    expect(stream.result.current.lastSensorTime).toBe(100_000)
+    act(() => ws.triggerMessage({ type: 'capSense', ts: 90, left: 9, right: 9 }))
+    expect(stream.result.current.latestFrames.capSense?.ts).toBe(100)
+    stream.unmount()
+  })
+
   it('opens a WebSocket on mount and reports connecting status', async () => {
     const { result, unmount } = renderHook(() => useSensorStream({ sensors: ['capSense'] }))
     await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))

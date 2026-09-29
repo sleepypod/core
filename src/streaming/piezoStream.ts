@@ -15,7 +15,15 @@
  *     { type: "subscribe", sensors: [...] }  — subscribe to sensor types
  *                                              (default: all types)
  *     { type: "get_time_range" }             — request available scrub range
- *     { type: "seek", timestamp: <ms> }      — seek to a timestamp in the RAW file
+ *     { type: "seek", timestamp: <seconds> }      — seek to a timestamp in the RAW file
+ *
+ *   Browser clients negotiate the sensor-snapshot-v1 WebSocket subprotocol and
+ *   send subscribe with snapshot:true. They receive one {type:"snapshot",
+ *   latest, waveform, range} batch followed by current frames. RAW startup and
+ *   rotation backlogs are ingested silently, then published as another snapshot.
+ *   {type:"get_waveform", timestamp:<seconds>, requestId} returns a separate
+ *   {type:"waveform", requestId, frames} batch (up to 10s from the recent cache).
+ *   Legacy clients retain the original file-based seek protocol.
  *
  *   Server → Client (sensor frames, filtered by subscription):
  *     { type: "piezo-dual", ts, left1, right1, ... }   — piezo BCG (~1 Hz)
@@ -33,6 +41,7 @@
  *     { type: "seek_complete" }      — seek replay finished
  */
 
+import { RecentSensorFrames } from './recentSensorFrames'
 import { WebSocketServer, WebSocket } from 'ws'
 import * as fs from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
@@ -83,6 +92,8 @@ const WS_MAX_PAYLOAD_BYTES = 1024
 const streamGlobal = globalThis as typeof globalThis & { __sleepypodSensorStream?: ReturnType<typeof createStreamState> }
 function createStreamState() {
   return {
+    recentFrames: new RecentSensorFrames(),
+    snapshotClients: new Set<WebSocket>(),
     frameIndex: [] as FrameIndexEntry[],
     // RAW file associated with the seek index.
     indexedFilePath: null as string | null,
@@ -448,6 +459,7 @@ function decodeSensorFrames(innerBytes: Buffer): Record<string, unknown>[] {
  * disconnected clients do not pin memory until the next GC cycle.
  */
 function cleanupClient(ws: WebSocket): void {
+  streamState.snapshotClients.delete(ws)
   streamState.clientSubscriptions.delete(ws)
   streamState.clientDroppedFrames.delete(ws)
 }
@@ -476,11 +488,20 @@ function sendWithBackpressure(client: WebSocket, payload: string): boolean {
   }
 }
 
+function sendSnapshot(ws: WebSocket): void {
+  sendWithBackpressure(ws, JSON.stringify({
+    type: 'snapshot',
+    ...streamState.recentFrames.snapshot(streamState.clientSubscriptions.get(ws)),
+    range: streamState.recentFrames.range(),
+  }))
+}
+
 function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
   try {
     const msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf-8'))
 
     if (msg.type === 'subscribe') {
+      if (msg.snapshot === true) streamState.snapshotClients.add(ws)
       // Client specifies which sensor types it wants
       const requested = msg.sensors as string[] | undefined
       if (!Array.isArray(requested) || requested.length === 0) {
@@ -497,6 +518,7 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
             type: 'error',
             message: `No valid sensor types in request. Valid types: ${ALL_SENSOR_TYPES.join(', ')}`,
           }))
+          return
         }
         else {
           streamState.clientSubscriptions.set(ws, new Set(valid))
@@ -504,8 +526,22 @@ function handleClientMessage(ws: WebSocket, raw: Buffer | string): void {
           console.log('[sensorStream] Client subscribed to: %s', valid.join(', '))
         }
       }
+      if (msg.snapshot === true) {
+        // Synchronous cache capture + send: subsequent live frames follow this
+        // batch on the same ordered socket, without a fetch/subscribe gap.
+        sendSnapshot(ws)
+      }
+    }
+    else if (msg.type === 'get_waveform') {
+      if (typeof msg.timestamp !== 'number' || !Number.isFinite(msg.timestamp) || typeof msg.requestId !== 'number') return
+      const frames = streamState.recentFrames.window(msg.timestamp)
+      sendWithBackpressure(ws, JSON.stringify({ type: 'waveform', requestId: msg.requestId, frames }))
     }
     else if (msg.type === 'get_time_range') {
+      if (streamState.snapshotClients.has(ws)) {
+        ws.send(JSON.stringify({ type: 'time_range', ...streamState.recentFrames.range(), file: null }))
+        return
+      }
       if (streamState.frameIndex.length === 0) {
         ws.send(JSON.stringify({ type: 'time_range', min: 0, max: 0, file: null }))
       }
@@ -728,6 +764,8 @@ export function startPiezoStreamServer(): WebSocketServer {
   console.log(`[sensorStream] WebSocket server listening on port ${WS_PORT}`)
 
   streamState.wss.on('connection', (ws) => {
+    // Negotiate before the first subscription message can race a RAW tick.
+    if (ws.protocol === 'sensor-snapshot-v1') streamState.snapshotClients.add(ws)
     console.log('[sensorStream] Client connected')
     updatePollRate()
 
@@ -829,7 +867,8 @@ async function startNatsSource(expectedServer: WebSocketServer): Promise<boolean
  * tailer additionally maintains the seek index, which is file-offset-specific
  * and stays in its loop.)
  */
-function dispatchSensorFrame(frame: Record<string, unknown>): void {
+function dispatchSensorFrame(frame: Record<string, unknown>, backlog = false): void {
+  streamState.recentFrames.add(frame)
   recordFirstSensorFrame()
   const frameType = frame.type as string
 
@@ -850,6 +889,10 @@ function dispatchSensorFrame(frame: Record<string, unknown>): void {
     let payload: string | null = null
     for (const client of server.clients) {
       if (client.readyState !== WebSocket.OPEN) continue
+      // Browser live displays must never play through an ingestion backlog.
+      if (streamState.snapshotClients.has(client) && backlog) continue
+      if (streamState.snapshotClients.has(client) && typeof frame.ts === 'number'
+        && (frame.ts < Date.now() / 1000 - 10 || frame.ts > Date.now() / 1000 + 5)) continue
       const subs = streamState.clientSubscriptions.get(client)
       if (subs && !subs.has(frameType as SensorType)) continue
       if (payload === null) payload = JSON.stringify(frame)
@@ -909,6 +952,7 @@ function startRawTailingLoop(): void {
   let handle: FileHandle | null = null
   let fileBuffer = Buffer.alloc(0)
   let readOffset = 0
+  let catchupEnd: number | null = null
   let nextScanAt = 0
   let needsMore = true
   let catchingUp = false
@@ -919,6 +963,7 @@ function startRawTailingLoop(): void {
   const reset = () => {
     fileBuffer = Buffer.alloc(0)
     readOffset = 0
+    catchupEnd = null
     needsMore = true
     moreOnDisk = false
     streamState.frameIndex.length = 0
@@ -955,6 +1000,7 @@ function startRawTailingLoop(): void {
         const info = await handle.stat()
         if (!active()) return
         if (info.size < readOffset) reset() // in-place truncation
+        catchupEnd ??= info.size
         const length = Math.min(RAW_READ_BYTES, info.size - readOffset)
         if (length <= 0) return
         const bytes = Buffer.allocUnsafe(length)
@@ -978,7 +1024,7 @@ function startRawTailingLoop(): void {
           if (data === null) continue
           for (const frame of decodeSensorFrames(data)) {
             if (typeof frame.ts === 'number') appendFrameIndex({ ts: frame.ts, offset: recordOffset })
-            dispatchSensorFrame(frame)
+            dispatchSensorFrame(frame, catchupEnd !== null && recordOffset < catchupEnd)
           }
         }
         catch (error) {
@@ -992,6 +1038,10 @@ function startRawTailingLoop(): void {
         }
       }
       if (pos > 0) fileBuffer = Buffer.from(fileBuffer.subarray(pos))
+      if (catchupEnd !== null && catchupEnd >= 0 && readOffset - fileBuffer.length >= catchupEnd) {
+        catchupEnd = -1
+        for (const client of streamState.snapshotClients) sendSnapshot(client)
+      }
       if (fileBuffer.length === 0) needsMore = true
       catchingUp = !needsMore || moreOnDisk
       // If complete records remain, the next tick drains them before reading
@@ -1126,6 +1176,8 @@ export async function shutdownPiezoStreamServer(): Promise<void> {
     catch { /* already closing */ }
   }
   flushCapFrameWindows()
+  streamState.recentFrames = new RecentSensorFrames()
+  streamState.snapshotClients.clear()
 
   if (server) {
     // `server.close()` only fires its callback once every client has
