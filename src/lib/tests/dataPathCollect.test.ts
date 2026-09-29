@@ -13,7 +13,7 @@ vi.mock('@/src/db', () => ({ sqlite: { prepare: () => ({ get: mock.get }) }, bio
 vi.mock('@/src/db/integrity', () => ({ getDatabaseIntegrity: mock.integrity }))
 vi.mock('@/src/scheduler', () => ({ getJobManager: mock.manager }))
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({ getSharedHardwareClient: () => ({ connect: mock.connect }), getDacMonitorIfRunning: () => mock.monitor }))
-vi.mock('@/src/streaming/piezoStream', () => ({ getSensorFrameTimes: () => ({}), getStreamClientCount: () => 2 }))
+vi.mock('@/src/streaming/piezoStream', () => ({ getSensorFrameTimes: () => ({}), getStreamClientCount: () => 2, getStreamPort: () => 3001 }))
 vi.mock('@/src/lib/serverPerformance', () => ({ getServerPerformance: () => ({ sensorSource: 'raw' }) }))
 vi.mock('@/src/lib/occupancy', () => ({ getOccupancy: () => ({ occupied: false }) }))
 vi.mock('@/src/lib/thermalTruth', () => ({ readThermalTruth: mock.thermal }))
@@ -25,7 +25,7 @@ beforeEach(() => {
   mock.manager.mockResolvedValue({ getScheduler: () => ({ getJobs: () => [1], isEnabled: () => true }) })
   mock.thermal.mockReturnValue({ sides: [{ side: 'left', verdict: 'delivering' }] })
   mock.select.mockReturnValue([{ at: new Date(1000), rows: 3, top: 2 }])
-  mock.monitor = { getStatus: () => 'running', getLastPollAt: () => 1000 }
+  mock.monitor = { getStatus: () => 'running', getLastPollAt: () => 1000, getPollIntervalMs: () => 2000 }
 })
 
 it('collects timestamps and health inputs once per cache window', async () => {

@@ -52,9 +52,13 @@ describe('resolveSystemTab', () => {
   })
 
   it('resolves every tab', () => {
-    for (const t of ['calibration', 'health', 'logs', 'pipeline', 'scheduler', 'sensors', 'storage', 'thermal']) {
+    for (const t of ['calibration', 'health', 'logs', 'scheduler', 'sensors', 'storage', 'thermal']) {
       expect(resolveSystemTab(t)).toBe(t)
     }
+  })
+
+  it('opens Health for old Pipeline links', () => {
+    expect(resolveSystemTab('pipeline')).toBe('health')
   })
 
   it('maps legacy ?tab=diagnostics&section= links onto the flat tabs', () => {
@@ -68,7 +72,7 @@ describe('resolveSystemTab', () => {
 describe('SystemScreen', () => {
   it('lists Dashboard first then the rest A–Z, with Dashboard selected by default', () => {
     render(<SystemScreen />)
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Calibration', 'Databases', 'Hardware', 'Health', 'Logs', 'Pipeline', 'Scheduler', 'Sensors', 'Storage', 'Thermal'])
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Calibration', 'Databases', 'Hardware', 'Health', 'Logs', 'Scheduler', 'Sensors', 'Storage', 'Thermal'])
     expect(screen.getByRole('tab', { name: 'Dashboard' }).getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('dynamic-tab')).toBeTruthy()
     expect(document.title).toBe('Dashboard · System · sleepypod')
@@ -90,6 +94,14 @@ describe('SystemScreen', () => {
     mocks.params = new URLSearchParams('tab=diagnostics&section=biometrics')
     render(<SystemScreen />)
     expect(mocks.replace).toHaveBeenCalledWith('/en/sleep?view=biometrics')
+  })
+
+  it('sends old Pipeline links to Health with the Live stream stage open', () => {
+    mocks.params = new URLSearchParams('tab=pipeline')
+    render(<SystemScreen />)
+    expect(screen.queryByRole('tab', { name: 'Pipeline' })).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Health' }).getAttribute('aria-selected')).toBe('true')
+    expect(mocks.replace).toHaveBeenCalledWith('/en/system?tab=health&node=live-stream', { scroll: false })
   })
 
   it('reads legacy diagnostics links and writes flat tab changes to the URL', () => {

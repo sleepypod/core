@@ -6,8 +6,8 @@ import { zoneActivity } from '../PresenceCard'
 import type { FrzHealthFrame } from '@/src/hooks/useSensorStream'
 
 describe('streamGroups', () => {
-  it('has the six timeline lanes in order', () => {
-    expect(STREAM_GROUPS.map(g => g.lane)).toEqual(['STS', 'PZO', 'CAP', 'TMP', 'FRZ', 'LOG'])
+  it('names the six streams as Health does, in order', () => {
+    expect(STREAM_GROUPS.map(g => g.label)).toEqual(['Device', 'Piezo', 'Presence', 'Bed temp', 'Freezer', 'Log'])
   })
 
   it('maps frame types to their group', () => {

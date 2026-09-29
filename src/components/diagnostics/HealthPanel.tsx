@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { usePathname, useRouter } from 'next/navigation'
-import { ArrowDown, ArrowRight, CircleCheck, RotateCw, ScrollText, TriangleAlert } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { ArrowDown, ArrowRight, CircleCheck, RotateCw, ScrollText, TriangleAlert, X } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
@@ -10,10 +10,12 @@ import { Button, Card, CardHeader, InlineError, SectionLabel, Skeleton, StatusDo
 import { cn } from '@/lib/utils'
 import { langFromPath } from '@/src/components/AppShell/navItems'
 import { STAGES, type NodeId } from '@/src/lib/dataPath'
+import { LiveStreamTable } from '@/src/components/Sensors/LiveStreamTable'
+import { RawFrameDrawer } from '@/src/components/Sensors/RawFrameDrawer'
 import { OccupancyCheck } from './OccupancyCheck'
 import {
   MAP, STATUS_FILL, STATUS_TONE, STATUS_WORD,
-  edgePath, fmtClockMs, incidentLines, layoutMap,
+  condenseChecks, edgePath, fitMetric, fmtClockMs, incidentLines, layoutMap, nodeFromSlug, nodeSlug,
 } from './healthLogic'
 import type { DiagSection } from './DiagnosticsConsole'
 
@@ -30,9 +32,10 @@ type History = inferRouterOutputs<AppRouter>['health']['history']
 export function HealthPanel({ onJump }: { onJump: (s: DiagSection) => void }) {
   const dataPath = trpc.health.dataPath.useQuery({}, { refetchInterval: 10_000 })
   const history = trpc.health.history.useQuery({}, { refetchInterval: 60_000 })
-  const [selected, setSelected] = useState<NodeId | null>(null)
+  const [selected, setSelected] = useSelectedNode()
   const data = dataPath.data
-  const focus = selected ?? data?.verdict.nodeId ?? null
+  const cause = data?.verdict.nodeId ?? null
+  const inspected = selected && data?.nodes.find(n => n.id === selected)
 
   return (
     <>
@@ -42,16 +45,36 @@ export function HealthPanel({ onJump }: { onJump: (s: DiagSection) => void }) {
       <Card>
         <CardHeader
           title="Data path"
-          subtitle="Sensors to outputs. A moving link means data passed through it in the last few minutes."
+          subtitle="Sensors to outputs. Select a stage to see what passes through it."
           right={data && <span className="font-mono text-[11px] text-fg-3">{`checked ${fmtClockMs(data.at)}`}</span>}
         />
-        {data ? <DataPathMap data={data} focus={focus} onSelect={setSelected} /> : <Skeleton className="h-[300px] border-0" />}
-        {data && focus && <NodeDetail node={data.nodes.find(n => n.id === focus)} isCause={focus === data.verdict.nodeId} />}
+        {data
+          ? <DataPathMap data={data} selected={selected} onSelect={id => setSelected(id === selected ? null : id)} />
+          : <Skeleton className="h-[300px] border-0" />}
+        {inspected
+          ? <NodeInspector node={inspected} isCause={inspected.id === cause} onClose={() => setSelected(null)} />
+          : data && cause && <NodeDetail node={data.nodes.find(n => n.id === cause)} isCause />}
       </Card>
 
       <HistoryCard history={history.data} error={history.error?.message} loading={history.isLoading} />
     </>
   )
+}
+
+/** The inspected stage lives in the URL (`node=live-stream`) so links can open it. */
+function useSelectedNode() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const selected = nodeFromSlug(searchParams.get('node'))
+  const setSelected = useCallback((id: NodeId | null) => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (id) params.set('node', nodeSlug(id))
+    else params.delete('node')
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }, [pathname, router, searchParams])
+  return [selected, setSelected] as const
 }
 
 // ── Verdict ─────────────────────────────────────────────────────────────────
@@ -152,16 +175,18 @@ const EDGE_STROKE = { flowing: 'var(--status-ok)', idle: 'var(--border-2)', stal
 const NODE_STROKE = { ok: 'var(--border-2)', idle: 'var(--border-2)', unknown: 'var(--border-2)', stale: 'var(--status-warn)', down: 'var(--status-danger)' } as const
 const DOT_FILL = { ok: 'var(--status-ok)', idle: 'var(--text-3)', unknown: 'var(--text-3)', stale: 'var(--status-warn)', down: 'var(--status-danger)' } as const
 
-function DataPathMap({ data, focus, onSelect }: { data: DataPath, focus: NodeId | null, onSelect: (id: NodeId) => void }) {
+interface MapProps { data: DataPath, selected: NodeId | null, onSelect: (id: NodeId) => void }
+
+function DataPathMap(props: MapProps) {
   const [ref, width] = useWidth<HTMLDivElement>()
   return (
     <div ref={ref} className="min-w-0">
-      {width === 0 ? null : width >= 720 ? <MapSvg data={data} focus={focus} onSelect={onSelect} /> : <StackedPath data={data} focus={focus} onSelect={onSelect} />}
+      {width === 0 ? null : width >= 720 ? <MapSvg {...props} /> : <StackedPath {...props} />}
     </div>
   )
 }
 
-function MapSvg({ data, focus, onSelect }: { data: DataPath, focus: NodeId | null, onSelect: (id: NodeId) => void }) {
+function MapSvg({ data, selected, onSelect }: MapProps) {
   const reduced = useReducedMotion()
   const layout = useMemo(() => layoutMap(data.nodes), [data.nodes])
   const at = new Map(layout.placed.map(p => [p.id, p]))
@@ -176,6 +201,11 @@ function MapSvg({ data, focus, onSelect }: { data: DataPath, focus: NodeId | nul
       aria-label={`Data path. ${data.verdict.headline}`}
       data-testid="data-path-map"
     >
+      <defs>
+        <clipPath id="node-text">
+          <rect x={0} y={0} width={MAP.nodeW - 4} height={MAP.nodeH} />
+        </clipPath>
+      </defs>
       {layout.stageX.map(s => (
         <text key={s.id} x={s.x + 2} y={12} className="fill-fg-2 font-mono text-[10px] uppercase" style={{ letterSpacing: '0.06em' }}>
           {s.label}
@@ -188,14 +218,15 @@ function MapSvg({ data, focus, onSelect }: { data: DataPath, focus: NodeId | nul
         if (!a || !b) return null
         const d = edgePath(a, b, layout.laneY)
         const key = `${e.from}-${e.to}`
+        const into = selected != null && e.to === selected
         return (
-          <g key={key} data-edge={key} data-state={e.state}>
+          <g key={key} data-edge={key} data-state={e.state} data-into-selected={into || undefined} opacity={selected && !into ? 0.6 : undefined}>
             <path
               d={d}
               fill="none"
               stroke={EDGE_STROKE[e.state]}
-              strokeOpacity={e.state === 'flowing' ? 0.45 : e.state === 'stalled' ? 0.9 : 1}
-              strokeWidth={e.state === 'idle' ? 1 : 1.5}
+              strokeOpacity={into ? 1 : e.state === 'flowing' ? 0.45 : e.state === 'stalled' ? 0.9 : 1}
+              strokeWidth={into ? 2.2 : e.state === 'idle' ? 1 : 1.5}
               strokeDasharray={e.state === 'stalled' ? '4 4' : undefined}
             />
             {e.state === 'flowing' && !reduced && [0, 1].map(k => (
@@ -210,7 +241,7 @@ function MapSvg({ data, focus, onSelect }: { data: DataPath, focus: NodeId | nul
       {layout.placed.map((p) => {
         const n = byId.get(p.id)
         if (!n) return null
-        const isFocus = p.id === focus
+        const isSelected = p.id === selected
         const isCause = p.id === cause
         return (
           <g
@@ -220,7 +251,7 @@ function MapSvg({ data, focus, onSelect }: { data: DataPath, focus: NodeId | nul
             role="button"
             tabIndex={0}
             aria-label={`${n.label}: ${STATUS_WORD[n.status]}, ${n.metric}`}
-            aria-pressed={isFocus}
+            aria-pressed={isSelected}
             onClick={() => onSelect(p.id)}
             onKeyDown={(ev) => {
               if (ev.key === 'Enter' || ev.key === ' ') {
@@ -237,14 +268,16 @@ function MapSvg({ data, focus, onSelect }: { data: DataPath, focus: NodeId | nul
               height={MAP.nodeH}
               rx={8}
               fill="var(--surface-app)"
-              stroke={isFocus && !isCause ? 'var(--text-2)' : NODE_STROKE[n.status]}
-              strokeWidth={isCause || isFocus ? 1.75 : 1}
+              stroke={isSelected ? 'var(--text-1)' : NODE_STROKE[n.status]}
+              strokeWidth={isSelected ? 1.5 : isCause ? 1.75 : 1}
             />
-            <circle cx={14} cy={18} r={3.5} fill={DOT_FILL[n.status]} />
-            <text x={25} y={22} className="fill-fg text-[13px]">{n.label}</text>
-            <text x={12} y={39} className={cn('font-mono text-[11px]', n.status === 'stale' ? 'fill-warn' : n.status === 'down' ? 'fill-danger' : 'fill-fg-2')}>
-              {n.metric.length > 22 ? `${n.metric.slice(0, 21)}…` : n.metric}
-            </text>
+            <circle cx={13} cy={18} r={3.5} fill={DOT_FILL[n.status]} />
+            <g clipPath="url(#node-text)">
+              <text x={MAP.textX} y={22} className="fill-fg text-[13px]">{n.label}</text>
+              <text x={MAP.textX} y={39} className={cn('font-mono text-[11px]', n.status === 'stale' ? 'fill-warn' : n.status === 'down' ? 'fill-danger' : 'fill-fg-2')}>
+                {fitMetric(n.metric)}
+              </text>
+            </g>
             {p.id === lastGoodId && (
               <text x={MAP.nodeW} y={-5} textAnchor="end" className="fill-fg-3 font-mono text-[9px] uppercase" style={{ letterSpacing: '0.06em' }}>
                 last with data
@@ -258,7 +291,7 @@ function MapSvg({ data, focus, onSelect }: { data: DataPath, focus: NodeId | nul
 }
 
 /** Phones: the same stages top to bottom. */
-function StackedPath({ data, focus, onSelect }: { data: DataPath, focus: NodeId | null, onSelect: (id: NodeId) => void }) {
+function StackedPath({ data, selected, onSelect }: MapProps) {
   return (
     <div className="flex flex-col gap-1.5" data-testid="data-path-list">
       {STAGES.map((s, i) => (
@@ -269,10 +302,10 @@ function StackedPath({ data, focus, onSelect }: { data: DataPath, focus: NodeId 
               key={n.id}
               type="button"
               onClick={() => onSelect(n.id)}
-              aria-pressed={n.id === focus}
+              aria-pressed={n.id === selected}
               className={cn(
                 'flex min-w-0 cursor-pointer items-center gap-2.5 rounded-ctl border bg-app px-3 py-2 text-left',
-                n.status === 'stale' ? 'border-warn-line' : n.status === 'down' ? 'border-danger-line' : n.id === focus ? 'border-fg-3' : 'border-line-2',
+                n.status === 'stale' ? 'border-warn-line' : n.status === 'down' ? 'border-danger-line' : n.id === selected ? 'border-fg' : 'border-line-2',
               )}
             >
               <StatusDot tone={STATUS_TONE[n.status]} />
@@ -299,6 +332,48 @@ function NodeDetail({ node, isCause }: { node: DataNode | undefined, isCause: bo
   )
 }
 
+/** The selected stage, under the map in place of the "where the chain breaks" line. */
+function NodeInspector({ node, isCause, onClose }: { node: DataNode, isCause: boolean, onClose: () => void }) {
+  const lang = langFromPath(usePathname())
+  const router = useRouter()
+  const live = node.id === 'out-live'
+  const path = node.path && !node.metric.includes(node.path) ? node.path : null
+  const meta = live ? node.path : [STATUS_WORD[node.status], node.metric, path].filter(Boolean).join(' · ')
+  return (
+    <div className="flex flex-col gap-3 border-t border-line pt-4" data-testid="node-inspector" data-node={node.id}>
+      <div className="flex items-center gap-2.5">
+        <StatusDot tone={STATUS_TONE[node.status]} />
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <span className="text-[15px] font-medium">{node.label}</span>
+          {meta && <span className="min-w-0 truncate font-mono text-xs text-fg-2">{meta}</span>}
+        </div>
+        {live && <RawFrameDrawer />}
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-ctl border border-line-2 bg-transparent p-0 text-icon hover:bg-active"
+        >
+          <X size={15} />
+        </button>
+      </div>
+      <p className="text-[13px] text-icon">
+        {live ? 'Frames sent to open pages. Changes made on a page go back through tRPC :3000 to the DAC socket.' : node.detail}
+      </p>
+      {live
+        ? <LiveStreamTable />
+        : (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button size="sm" variant="ghost" icon={ScrollText} onClick={() => router.push(`/${lang}/system?tab=logs&unit=${encodeURIComponent(node.unit ?? 'sleepypod.service')}`)}>
+                Logs
+              </Button>
+              {isCause && <span className="ml-auto font-mono text-[11px] text-fg-3">where the chain breaks</span>}
+            </div>
+          )}
+    </div>
+  )
+}
+
 // ── History ─────────────────────────────────────────────────────────────────
 
 const LEGEND = [
@@ -311,44 +386,53 @@ const LEGEND = [
 
 function HistoryCard({ history, error, loading }: { history: History | undefined, error?: string, loading: boolean }) {
   const [hover, setHover] = useState<string | null>(null)
+  const [all, setAll] = useState(false)
   if (loading) return <Skeleton className="h-[420px]" />
   return (
     <Card data-testid="health-history">
-      <CardHeader
-        title="Last 24 hours"
-        subtitle="Each check sampled once a minute. A short blip and a problem that keeps coming back look different here."
-      />
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="text-[15px] font-medium">Last 24 hours</span>
+        <span className="text-[13px] text-fg-2">
+          {`Each check sampled once a minute.${history?.recordedSince != null ? ` Recording started ${fmtClockMs(history.recordedSince)}.` : ''}`}
+        </span>
+      </div>
       {error && <InlineError>{error}</InlineError>}
-      {history && <HistoryStrips history={history} onHover={setHover} />}
+      {history && <HistoryStrips history={history} all={all} onHover={setHover} />}
       <p className="min-h-[18px] font-mono text-[11px] text-fg-2" aria-live="polite">{hover ?? ''}</p>
-      <div className="flex flex-wrap gap-x-4 gap-y-1.5 font-mono text-[11px] text-fg-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[11px] text-fg-2">
         {LEGEND.map(l => (
           <span key={l.label} className="flex items-center gap-1.5">
             <span className={cn('block h-2 w-3.5 rounded-[2px]', l.fill)} />
             {l.label}
           </span>
         ))}
+        {history && history.checks.length > 1 && (
+          <LinkButton className="ml-auto" onClick={() => setAll(v => !v)}>
+            {all ? 'Show fewer' : `Show all ${history.checks.length} checks`}
+          </LinkButton>
+        )}
       </div>
       {history && <IncidentList history={history} />}
     </Card>
   )
 }
 
-function HistoryStrips({ history, onHover }: { history: History, onHover: (s: string | null) => void }) {
+function LinkButton({ className, ...props }: React.ComponentProps<'button'>) {
+  return <button type="button" className={cn('cursor-pointer border-0 bg-transparent p-0 font-sans text-[13px] text-link hover:underline', className)} {...props} />
+}
+
+function HistoryStrips({ history, all, onHover }: { history: History, all: boolean, onHover: (s: string | null) => void }) {
   const span = history.to - history.from
   const pct = (t: number) => `${((t - history.from) / span) * 100}%`
   const ticks = [0, 6, 12, 18].map(h => history.from + h * 3_600_000)
-  const late = history.recordedSince != null && history.recordedSince > history.from + 10 * 60_000
+  const rows = condenseChecks(history.checks, all)
 
   return (
     <div className="flex flex-col gap-1.5">
-      {late && (
-        <p className="text-xs text-fg-2">{`Recording started ${fmtClockMs(history.recordedSince as number)}; earlier hours have no history yet.`}</p>
-      )}
-      {history.checks.map(c => (
-        <div key={c.id} className="grid grid-cols-[minmax(0,128px)_minmax(0,1fr)_52px] items-center gap-3" data-testid={`history-${c.id}`}>
-          <span className="truncate text-xs text-fg-2">{c.label}</span>
-          <div className="relative h-2.5 overflow-hidden rounded-[3px] bg-active" onMouseLeave={() => onHover(null)}>
+      {rows.map(c => (
+        <div key={c.key} className="grid grid-cols-[minmax(0,104px)_minmax(0,1fr)_32px] @min-[640px]:grid-cols-[minmax(0,168px)_minmax(0,1fr)_40px] items-center gap-3" data-testid={`history-${c.key}`}>
+          <span className={cn('truncate text-xs', c.rest ? 'text-fg-3' : 'text-fg-2')} title={c.label}>{c.label}</span>
+          <div className={cn('relative h-2.5 overflow-hidden rounded-[3px] bg-active', c.rest && 'opacity-55')} onMouseLeave={() => onHover(null)}>
             {c.runs.map(r => (
               <span
                 key={r.start}
@@ -359,11 +443,11 @@ function HistoryStrips({ history, onHover }: { history: History, onHover: (s: st
             ))}
           </div>
           <span className={cn('text-right font-mono text-[11px]', c.incidents > 0 ? 'text-warn' : 'text-fg-3')}>
-            {c.healthyShare == null ? '—' : c.incidents > 0 ? `${c.incidents}×` : `${Math.floor(c.healthyShare * 100)}%`}
+            {c.rest ? '0×' : c.healthyShare == null ? '—' : c.incidents > 0 ? `${c.incidents}×` : `${Math.floor(c.healthyShare * 100)}%`}
           </span>
         </div>
       ))}
-      <div className="grid grid-cols-[minmax(0,128px)_minmax(0,1fr)_52px] gap-3">
+      <div className="grid grid-cols-[minmax(0,104px)_minmax(0,1fr)_32px] @min-[640px]:grid-cols-[minmax(0,168px)_minmax(0,1fr)_40px] gap-3">
         <span />
         <div className="relative h-4 font-mono text-[10px] text-fg-3">
           {ticks.map((t, i) => (
@@ -377,14 +461,24 @@ function HistoryStrips({ history, onHover }: { history: History, onHover: (s: st
   )
 }
 
+const RECENT_INCIDENTS = 3
+
 function IncidentList({ history }: { history: History }) {
+  const [all, setAll] = useState(false)
   const lines = incidentLines(history, history.to)
+  const earlier = lines.length - RECENT_INCIDENTS
+  const shown = all ? lines : lines.slice(0, RECENT_INCIDENTS)
   return (
     <div className="flex flex-col border-t border-line pt-3" data-testid="incidents">
-      <SectionLabel className="pb-1.5">Incidents</SectionLabel>
+      <SectionLabel
+        className="pb-1.5"
+        right={earlier > 0 && <LinkButton onClick={() => setAll(v => !v)}>{all ? 'Show fewer' : `Show ${earlier} earlier`}</LinkButton>}
+      >
+        Incidents
+      </SectionLabel>
       {lines.length === 0
         ? <p className="text-[13px] text-fg-2">No incidents in the last 24 hours.</p>
-        : lines.map(l => (
+        : shown.map(l => (
             <div key={l.key} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t border-line py-2 first-of-type:border-t-0">
               <StatusDot tone={l.tone} className="self-center" />
               <span className="text-[13px] font-medium">{l.title}</span>

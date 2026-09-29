@@ -20,10 +20,6 @@ const DiagnosticsConsole = dynamic(
   () => import('@/src/components/diagnostics/DiagnosticsConsole').then(m => m.DiagnosticsConsole),
   { ssr: false, loading: TabLoading },
 )
-const PipelineTab = dynamic(
-  () => import('@/src/components/Sensors/PipelineTab').then(m => m.PipelineTab),
-  { ssr: false, loading: TabLoading },
-)
 const StorageTab = dynamic(
   () => import('./StorageTab').then(m => m.StorageTab),
   { ssr: false, loading: TabLoading },
@@ -45,7 +41,7 @@ export { resolveSystemTab, type SystemTab } from './systemTabs'
 
 const DIAGNOSTIC_TABS = new Set<SystemTab>(['dashboard', 'calibration', 'health', 'scheduler', 'thermal'])
 
-/** System: Dashboard plus the pod's sensor, pipeline, log and diagnostic pages. */
+/** System: Dashboard plus the pod's sensor, log and diagnostic pages. */
 export function SystemScreen() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -58,6 +54,12 @@ export function SystemScreen() {
   useEffect(() => {
     if (legacyBiometrics) router.replace(`/${pathname.split('/')[1] || 'en'}/sleep?view=biometrics`)
   }, [legacyBiometrics, pathname, router])
+
+  // Pipeline moved into Health as the Live stream stage.
+  const legacyPipeline = searchParams.get('tab') === 'pipeline'
+  useEffect(() => {
+    if (legacyPipeline) router.replace(`${pathname}?tab=health&node=live-stream`, { scroll: false })
+  }, [legacyPipeline, pathname, router])
 
   const [streamEnabled, setStreamEnabled] = useState(true)
   const stream = useSensorStream({ enabled: streamEnabled })
@@ -121,7 +123,6 @@ export function SystemScreen() {
 
         {tab === 'sensors' && <SensorsScreen streamEnabled={streamEnabled} />}
         {DIAGNOSTIC_TABS.has(tab) && <DiagnosticsConsole section={tab as DiagSection} onJump={selectTab} />}
-        {tab === 'pipeline' && <PipelineTab />}
         {tab === 'logs' && <SystemLogViewer />}
         {tab === 'storage' && <StorageTab />}
         {tab === 'databases' && <DatabasesTab />}

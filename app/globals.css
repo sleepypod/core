@@ -337,15 +337,6 @@ html.dark {
   color-scheme: dark;
 }
 
-/* ─── ReactFlow pipeline node overrides ──────────────────────────────── */
-
-.react-flow__node-pipeline {
-  background: transparent !important;
-  border: none !important;
-  padding: 0 !important;
-  box-shadow: none !important;
-}
-
 /* ─── Sleepypod helpers ──────────────────────────────────────────────── */
 
 /* Mono uppercase eyebrow label (11px, +0.06em). */

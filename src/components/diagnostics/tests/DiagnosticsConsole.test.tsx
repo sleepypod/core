@@ -29,7 +29,7 @@ vi.mock('@/src/components/Schedule/CurveChart', async (importOriginal) => {
   }
 })
 
-vi.mock('next/navigation', () => ({ usePathname: () => '/en/system' }))
+vi.mock('next/navigation', () => ({ usePathname: () => '/en/system', useRouter: () => ({ push: vi.fn(), replace: vi.fn() }), useSearchParams: () => new URLSearchParams() }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F', convert: (c: number) => c, formatTemp: String, suffix: '°F' }) }))
 
 vi.mock('next/dynamic', () => ({

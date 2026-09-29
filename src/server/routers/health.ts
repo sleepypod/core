@@ -535,6 +535,7 @@ export const healthRouter = router({
         detail: z.string(),
         lastOutputAt: z.number().nullable(),
         unit: unitEnum.optional(),
+        path: z.string().optional(),
       })),
       edges: z.array(z.object({ from: nodeId, to: nodeId, state: z.enum(['flowing', 'idle', 'stalled']) })),
       verdict: z.object({

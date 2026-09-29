@@ -12,10 +12,12 @@ const mocks = vi.hoisted(() => ({
   recalibrate: vi.fn(),
   restartAsync: vi.fn(async () => ({ ok: true, message: 'ok' })),
   push: vi.fn(),
+  replace: vi.fn(),
+  params: new URLSearchParams('tab=health'),
   width: 900,
 }))
 
-vi.mock('next/navigation', () => ({ usePathname: () => '/en/system', useRouter: () => ({ push: mocks.push }) }))
+vi.mock('next/navigation', () => ({ usePathname: () => '/en/system', useRouter: () => ({ push: mocks.push, replace: mocks.replace }), useSearchParams: () => mocks.params }))
 vi.mock('@/src/hooks/useSide', () => ({ useSide: () => ({ side: 'left' }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Left', rightName: 'Right', sideName: (s: string) => (s === 'left' ? 'Left' : 'Right') }) }))
 vi.mock('@/src/utils/trpc', () => {
@@ -53,6 +55,7 @@ function inputs(over: Partial<DataPathInputs> = {}): DataPathInputs {
     lastEnvAt: NOW - MIN,
     thermal: [{ side: 'left', verdict: 'holding' }, { side: 'right', verdict: 'off' }],
     streamClients: 1,
+    streamPort: 3001,
     ...over,
   }
 }
@@ -73,6 +76,7 @@ beforeEach(() => {
   } as unknown as typeof ResizeObserver
   window.matchMedia = vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })) as unknown as typeof window.matchMedia
   mocks.width = 900
+  mocks.params = new URLSearchParams('tab=health')
   mocks.dataPath = evaluateDataPath(inputs())
   mocks.history = {
     from: NOW - 24 * 60 * MIN,
@@ -115,10 +119,49 @@ describe('HealthPanel', () => {
     expect(screen.getByTestId('node-detail').textContent).toContain('where the chain breaks')
   })
 
-  it('shows a node’s detail when it is picked on the map', () => {
+  it('puts a picked stage in the URL, and picking it again clears it', () => {
+    const { unmount } = render(<HealthPanel onJump={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /^DAC socket:/ }))
+    expect(mocks.replace).toHaveBeenLastCalledWith('/en/system?tab=health&node=dac-socket', { scroll: false })
+    unmount()
+
+    mocks.params = new URLSearchParams('tab=health&node=dac-socket')
     render(<HealthPanel onJump={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: /^DAC socket:/ }))
-    expect(screen.getByTestId('node-detail').textContent).toContain('Firmware control socket answers')
+    expect(mocks.replace).toHaveBeenLastCalledWith('/en/system?tab=health', { scroll: false })
+  })
+
+  it('inspects the stage named in the URL in place of the chain-break line', () => {
+    mocks.params = new URLSearchParams('tab=health&node=dac-socket')
+    const { container } = render(<HealthPanel onJump={vi.fn()} />)
+    expect(screen.queryByTestId('node-detail')).toBeNull()
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector.textContent).toContain('DAC socket')
+    expect(inspector.textContent).toContain('flowing · dac.sock · 2 ms')
+    expect(inspector.textContent).not.toContain('2 ms · dac.sock')
+    expect(inspector.textContent).toContain('Firmware control socket answers')
+    expect(within(inspector).queryByRole('button', { name: /Raw frames/ })).toBeNull()
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Logs' }))
+    expect(mocks.push).toHaveBeenCalledWith('/en/system?tab=logs&unit=sleepypod.service')
+    // Links into the selected stage stand out; the rest recede.
+    expect(container.querySelector('[data-edge="dac-dac-monitor"]')?.getAttribute('opacity')).toBe('0.6')
+    expect(container.querySelector('[data-edge="sensor-piezo-frames"]')?.getAttribute('opacity')).toBe('0.6')
+    expect(container.querySelector('[data-node="dac"] rect')?.getAttribute('stroke')).toBe('var(--text-1)')
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Close' }))
+    expect(mocks.replace).toHaveBeenLastCalledWith('/en/system?tab=health', { scroll: false })
+  })
+
+  it('shows what the Live stream sends to this page, with raw frames', () => {
+    mocks.params = new URLSearchParams('tab=health&node=live-stream')
+    const { container } = render(<HealthPanel onJump={vi.fn()} />)
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector.textContent).toContain('broadcastFrame() → WebSocket :3001 → 1 browser')
+    expect(inspector.textContent).toContain('Changes made on a page go back through tRPC :3000 to the DAC socket.')
+    expect(within(inspector).getByRole('button', { name: /Raw frames/ })).toBeTruthy()
+    expect(within(inspector).getByTestId('stream-bedTemp').textContent).toContain('nothing in the last 60 s')
+    expect(container.querySelector('[data-edge="frames-out-live"]')?.getAttribute('data-into-selected')).toBe('true')
+    expect(container.querySelector('[data-edge="frames-out-live"] path')?.getAttribute('stroke-width')).toBe('2.2')
+    expect(screen.getByTestId('data-path-map').textContent).toContain('WS :3001 · 1 viewer')
   })
 
   it('lists stages top to bottom on narrow screens', () => {
@@ -153,6 +196,52 @@ describe('HealthPanel', () => {
     expect(list.textContent).toContain('ongoing')
     expect(list.textContent).toContain('Not recorded')
     expect(screen.getByTestId('history-piezo-processor').textContent).toContain('1×')
+    expect(screen.getByTestId('health-history').textContent).toContain('Each check sampled once a minute. Recording started')
+  })
+
+  it('condenses the day: identical checks share a row, quiet ones fold away, incidents merge', () => {
+    const day = NOW - 24 * 60 * MIN
+    const stalled = [{ status: 'ok', start: day, end: NOW - 60 * MIN }, { status: 'stale', start: NOW - 60 * MIN, end: NOW - 30 * MIN }, { status: 'ok', start: NOW - 30 * MIN, end: NOW }]
+    const clean = [{ status: 'ok', start: day, end: NOW }]
+    const incident = (checkId: string, label: string, start: number, detail: string | null) => ({ checkId, label, status: 'stale', start, end: start + 10 * MIN, detail })
+    mocks.history = {
+      from: day,
+      to: NOW,
+      recordedSince: day,
+      checks: [
+        { id: 'sleep-detector', label: 'Sleep detector', runs: stalled, healthyShare: 0.9, incidents: 4 },
+        { id: 'out-sleep', label: 'Sessions', runs: stalled, healthyShare: 0.9, incidents: 4 },
+        { id: 'dac', label: 'DAC socket', runs: clean, healthyShare: 1, incidents: 0 },
+        { id: 'database', label: 'Database', runs: clean, healthyShare: 1, incidents: 0 },
+        { id: 'scheduler', label: 'Scheduler', runs: [{ status: 'idle', start: day, end: NOW }], healthyShare: 1, incidents: 0 },
+      ],
+      incidents: [
+        incident('sleep-detector', 'Sleep detector', NOW - 60 * MIN, 'Left side reads occupied'),
+        incident('out-sleep', 'Sleep sessions', NOW - 60 * MIN, 'Holding a session open'),
+        incident('sleep-detector', 'Sleep detector', NOW - 120 * MIN, null),
+        incident('sleep-detector', 'Sleep detector', NOW - 180 * MIN, null),
+        incident('sleep-detector', 'Sleep detector', NOW - 240 * MIN, null),
+        incident('sleep-detector', 'Sleep detector', NOW - 300 * MIN, null),
+      ],
+      gaps: [],
+    }
+    render(<HealthPanel onJump={vi.fn()} />)
+    expect(screen.getByTestId('history-sleep-detector+out-sleep').textContent).toContain('Sleep detector · Sessions')
+    const rest = screen.getByTestId('history-rest')
+    expect(rest.textContent).toContain('3 other checks')
+    expect(screen.queryByTestId('history-dac')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 5 checks' }))
+    expect(screen.getByTestId('history-dac')).toBeTruthy()
+    expect(screen.queryByTestId('history-rest')).toBeNull()
+
+    const list = screen.getByTestId('incidents')
+    expect(list.textContent).toContain('Sleep detector and Sleep sessions stalled')
+    expect(list.textContent).toContain('Left side reads occupied')
+    expect(list.textContent).not.toContain('Holding a session open')
+    expect(within(list).getAllByText(/stalled$/)).toHaveLength(3)
+    fireEvent.click(within(list).getByRole('button', { name: 'Show 2 earlier' }))
+    expect(within(list).getAllByText(/stalled$/)).toHaveLength(5)
   })
 
   it('leaves the vibration test to System → Hardware', () => {

@@ -110,7 +110,7 @@ export interface DataPathInputs {
   /** How long the core has been up; frames get a grace period after start. */
   coreUptimeMs: number
   dacSocket: { ok: boolean, latencyMs: number, error?: string }
-  dacMonitor: { status: string, lastPollAt: number | null }
+  dacMonitor: { status: string, lastPollAt: number | null, pollIntervalMs?: number | null }
   database: { ok: boolean, latencyMs: number, error?: string }
   scheduler: { enabled: boolean, jobs: number, healthy: boolean }
   occupied: Record<Side, boolean>
@@ -125,6 +125,8 @@ export interface DataPathInputs {
   lastEnvAt: number | null
   thermal: Array<{ side: Side, verdict: 'off' | 'delivering' | 'holding' | 'stalled' }>
   streamClients: number | null
+  /** Port of the browser WebSocket stream. */
+  streamPort?: number
 }
 
 export interface NodeState {
@@ -139,6 +141,8 @@ export interface NodeState {
   /** Epoch ms of the newest output this stage produced, when it has one. */
   lastOutputAt: number | null
   unit?: RestartableUnit
+  /** Where the stage lives, for the inspector: a unit, socket or port. */
+  path?: string
 }
 
 export type EdgeState = 'flowing' | 'idle' | 'stalled'
@@ -207,6 +211,11 @@ export function fmtAgo(ms: number): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
+/** Poll cadence: "1s", "2s", "500ms". */
+function fmtInterval(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${Math.round(ms / 100) / 10}s`
+}
+
 function latest(...ts: Array<number | null | undefined>): number | null {
   const vals = ts.filter((t): t is number => t != null)
   return vals.length ? Math.max(...vals) : null
@@ -256,9 +265,10 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
   const ago = (t: number | null) => (t == null ? 'no data yet' : fmtAgo(now - t))
   const nodes = new Map<NodeId, NodeState>()
   const node = (id: NodeId) => mustGet(nodes, id)
-  const put = (id: NodeId, status: CheckStatus, metric: string, detail: string, lastOutputAt: number | null = null) => {
+  const put = (id: NodeId, status: CheckStatus, metric: string, detail: string, lastOutputAt: number | null = null, path?: string) => {
     const def = mustGet(NODE_DEFS, id)
-    nodes.set(id, { id, stage: def.stage, label: def.label, status, metric, detail, lastOutputAt, ...(def.unit && { unit: def.unit }) })
+    const where = path ?? nodes.get(id)?.path ?? def.unit
+    nodes.set(id, { id, stage: def.stage, label: def.label, status, metric, detail, lastOutputAt, ...(def.unit && { unit: def.unit }), ...(where && { path: where }) })
   }
 
   // ── Sensors: judged by live frames reaching the core ──
@@ -299,8 +309,10 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
   put(
     'dac',
     i.dacSocket.ok ? 'ok' : 'down',
-    i.dacSocket.ok ? `${Math.max(1, Math.round(i.dacSocket.latencyMs))} ms` : 'unreachable',
+    i.dacSocket.ok ? `dac.sock · ${Math.max(1, Math.round(i.dacSocket.latencyMs))} ms` : 'unreachable',
     i.dacSocket.ok ? 'Firmware control socket answers' : `Can’t connect to dac.sock${i.dacSocket.error ? `: ${i.dacSocket.error}` : ''}`,
+    null,
+    'dac.sock',
   )
 
   // ── Services ──
@@ -350,13 +362,16 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
   put(
     'dac-monitor',
     monitorStatus,
-    i.dacMonitor.lastPollAt == null ? i.dacMonitor.status.replace('_', ' ') : `polled ${ago(i.dacMonitor.lastPollAt)}`,
+    i.dacMonitor.lastPollAt == null
+      ? i.dacMonitor.status.replace('_', ' ')
+      : i.dacMonitor.pollIntervalMs ? `polls ${fmtInterval(i.dacMonitor.pollIntervalMs)} · ${ago(i.dacMonitor.lastPollAt)}` : `polled ${ago(i.dacMonitor.lastPollAt)}`,
     monitorStatus === 'ok'
       ? 'Polling device status'
       : monitorStatus === 'down'
         ? `Monitor ${i.dacMonitor.status.replace('_', ' ')}`
         : monitorStatus === 'unknown' ? 'Waiting for the first poll' : 'Running, but polls have stopped succeeding',
     i.dacMonitor.lastPollAt,
+    i.dacMonitor.pollIntervalMs ? `DacMonitor · polls every ${fmtInterval(i.dacMonitor.pollIntervalMs)}` : 'DacMonitor',
   )
 
   // ── Core ──
@@ -406,11 +421,14 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
   )
 
   const liveStatus: CheckStatus = i.streamClients == null ? 'down' : node('frames').status === 'ok' ? (i.streamClients > 0 ? 'ok' : 'idle') : 'stale'
+  const wsPort = i.streamPort == null ? 'WS' : `WS :${i.streamPort}`
   put(
     'out-live',
     liveStatus,
-    i.streamClients == null ? 'stopped' : `${i.streamClients} ${i.streamClients === 1 ? 'viewer' : 'viewers'}`,
+    i.streamClients == null ? 'stopped' : `${wsPort} · ${i.streamClients} ${i.streamClients === 1 ? 'viewer' : 'viewers'}`,
     liveStatus === 'down' ? 'WebSocket server isn’t running' : liveStatus === 'stale' ? 'No frames to stream' : liveStatus === 'idle' ? 'Ready, nobody watching' : 'Streaming to browsers',
+    null,
+    `broadcastFrame() → WebSocket${i.streamPort == null ? '' : ` :${i.streamPort}`} → ${i.streamClients ?? 0} ${i.streamClients === 1 ? 'browser' : 'browsers'}`,
   )
 
   const ordered = NODES.map(n => node(n.id))

@@ -82,7 +82,7 @@ describe('BiometricsPage', () => {
     render(<BiometricsPage />)
     const banner = screen.getByTestId('stale-banner')
     expect(banner.textContent).toContain('Jon’s side is occupied, but the last vital arrived 3h 56m ago. The pipeline may be stalled.')
-    expect(within(banner).getByRole('link', { name: /Health/ }).getAttribute('href')).toBe('/en/system?tab=health')
+    expect(within(banner).getByRole('link', { name: /Health/ }).getAttribute('href')).toBe('/en/system?tab=health&node=piezo-processor')
   })
 
   it('asks whether anyone is there instead of blaming the pipeline when the side looks empty', async () => {

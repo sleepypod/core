@@ -41,6 +41,18 @@ describe('evaluateDataPath', () => {
     expect(s.edges.find(e => e.from === 'database' && e.to === 'out-vitals')?.state).toBe('flowing')
   })
 
+  it('says where each stage lives and how it is doing in its subtitle', () => {
+    const s = evaluateDataPath(healthy({ dacSocket: { ok: true, latencyMs: 0.4 }, dacMonitor: { status: 'running', lastPollAt: NOW - 1000, pollIntervalMs: 2000 }, streamClients: 2, streamPort: 3001 }))
+    expect(node(s, 'dac')).toMatchObject({ metric: 'dac.sock · 1 ms', path: 'dac.sock' })
+    expect(node(s, 'dac-monitor')).toMatchObject({ metric: 'polls 2s · 1s ago', path: 'DacMonitor · polls every 2s' })
+    expect(node(s, 'out-live')).toMatchObject({ metric: 'WS :3001 · 2 viewers', path: 'broadcastFrame() → WebSocket :3001 → 2 browsers' })
+    expect(node(s, 'piezo-processor')?.path).toBe('sleepypod-piezo-processor.service')
+    // Without an interval or port it falls back to what it knows.
+    const bare = evaluateDataPath(healthy())
+    expect(node(bare, 'dac-monitor')?.metric).toBe('polled 2s ago')
+    expect(node(bare, 'out-live')?.metric).toBe('WS · 1 viewer')
+  })
+
   it('flags a running piezo processor that stopped writing while the bed is occupied', () => {
     const s = evaluateDataPath(healthy({ lastVitalAt: { left: NOW - (3 * 60 + 56) * MIN, right: null } }))
     expect(node(s, 'piezo-processor')?.status).toBe('stale')

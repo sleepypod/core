@@ -6,7 +6,7 @@ import { bedTemp, freezerTemp, movement, vitals } from '@/src/db/biometrics-sche
 import { getDatabaseIntegrity } from '@/src/db/integrity'
 import { getJobManager } from '@/src/scheduler'
 import { getSharedHardwareClient, getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
-import { getSensorFrameTimes, getStreamClientCount } from '@/src/streaming/piezoStream'
+import { getSensorFrameTimes, getStreamClientCount, getStreamPort } from '@/src/streaming/piezoStream'
 import { getServerPerformance } from '@/src/lib/serverPerformance'
 import { getOccupancy } from '@/src/lib/occupancy'
 import { readThermalTruth } from '@/src/lib/thermalTruth'
@@ -111,7 +111,7 @@ async function collect(now: number): Promise<DataPathInputs> {
     sensorSource: getServerPerformance().sensorSource,
     coreUptimeMs: process.uptime() * 1000,
     dacSocket,
-    dacMonitor: { status: monitor ? monitor.getStatus() : 'not_initialized', lastPollAt: monitor?.getLastPollAt() ?? null },
+    dacMonitor: { status: monitor ? monitor.getStatus() : 'not_initialized', lastPollAt: monitor?.getLastPollAt() ?? null, pollIntervalMs: monitor?.getPollIntervalMs() ?? null },
     database,
     scheduler,
     occupied: { left: getOccupancy('left').occupied, right: getOccupancy('right').occupied },
@@ -121,6 +121,7 @@ async function collect(now: number): Promise<DataPathInputs> {
     lastEnvAt: envTimes.length ? Math.max(...envTimes) : null,
     thermal,
     streamClients: getStreamClientCount(),
+    streamPort: getStreamPort(),
   }
 }
 

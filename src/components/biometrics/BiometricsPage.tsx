@@ -142,7 +142,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
               ? `${sideName(side)}’s side is occupied, but no vitals have arrived. The pipeline may be stalled.`
               : `${sideName(side)}’s side is occupied, but the last vital arrived ${fmtDuration(now - lastVitalAt)} ago. The pipeline may be stalled.`}
           </span>
-          <Link href={`/${lang}/system?tab=health`} className="flex shrink-0 items-center gap-1 text-warn no-underline hover:underline">
+          <Link href={`/${lang}/system?tab=health&node=piezo-processor`} className="flex shrink-0 items-center gap-1 text-warn no-underline hover:underline">
             Health
             <ArrowRight size={15} />
           </Link>

@@ -174,6 +174,11 @@ export function getSensorFrameTimes(): Record<string, number> {
   return Object.fromEntries(frameSeenAt)
 }
 
+/** Port the browser WebSocket stream listens on. */
+export function getStreamPort(): number {
+  return WS_PORT
+}
+
 /** Connected WebSocket clients, or null when the stream server isn't running. */
 export function getStreamClientCount(): number | null {
   return streamState.wss ? streamState.wss.clients.size : null
