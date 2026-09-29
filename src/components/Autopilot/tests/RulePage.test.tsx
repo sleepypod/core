@@ -1,5 +1,8 @@
+import { requiredTemplate } from './builderFixtures'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { RulePage } from '../RulePage'
+import { toAST } from '../builderModel'
 
 const m = vi.hoisted(() => ({
   push: vi.fn(),
@@ -44,8 +47,6 @@ vi.mock('../RuleEditor', () => ({
   ),
 }))
 
-import { RulePage } from '../RulePage'
-
 beforeEach(() => {
   m.push.mockReset()
   m.create.mockReset()
@@ -79,4 +80,24 @@ describe('RulePage', () => {
     render(<RulePage id="7" />)
     expect(screen.getByText('Automation 7 not found')).toBeTruthy()
   })
+})
+
+it('loads an existing rule, updates it and returns to the list', () => {
+  m.get.isLoading = true
+  const { rerender } = render(<RulePage id="7" />)
+  expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
+  m.get.isLoading = false
+  m.get.data = { ...toAST(requiredTemplate('water-low')), id: 7 }
+  rerender(<RulePage id="7" />)
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(m.update).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }))
+  expect(m.create).not.toHaveBeenCalled()
+  expect(m.push).toHaveBeenCalledWith('/en/autopilot')
+})
+
+it('prefills a new rule from its template and handles absent server rows', () => {
+  const { rerender } = render(<RulePage id="new" template="water-low" />)
+  expect(screen.getByTestId('rule-name').textContent).toBe(requiredTemplate('water-low').name)
+  rerender(<RulePage id="7" />)
+  expect(screen.getByText('Automation 7 not found')).toBeTruthy()
 })

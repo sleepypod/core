@@ -135,3 +135,30 @@ describe('activity copy', () => {
     expect(matchesFilter('error', 'all')).toBe(true)
   })
 })
+
+it('explains run-once, missing control details and safety blocks', () => {
+  expect(ownerView(side({ control: { source: 'run-once', targetTemperature: 78, blocked: null }, runOnceUntil: t(29, 7) }), [], t(28, 23), fmt).detail).toBe('78° from a run-once session until 7:00 AM.')
+  expect(ownerView(side({ control: { source: 'run-once', targetTemperature: null, blocked: null } }), [], t(28, 23), fmt).detail).toBe('Run-once session.')
+  expect(ownerView(side({ control: { source: 'autopilot', targetTemperature: null, blocked: null } }), [], t(28, 23), fmt).detail).toBe('An automation holds this side.')
+  expect(ownerView(side({ control: { source: 'schedule', targetTemperature: null, blocked: null } }), [], t(28, 23), fmt).detail).toBe('Following the schedule.')
+  expect(ownerView(side({ control: { source: null, targetTemperature: null, blocked: 'safety' } }), [], t(28, 23), fmt).detail).toBe('Paused by pump stall protection.')
+  expect(ownerView(side({ hold: { temperature: 80, startedAt: t(28, 22), expiresAt: t(29, 1) } }), [], t(28, 23), fmt).detail).toContain('Hold ends')
+  expect(scheduleBlocks(curve, t(29, 8), t(29, 9))).toEqual([])
+  expect(ruleWindow({ kind: 'timeBetween', start: '12:00', end: '13:00' }, new Date(2026, 8, 28), t(28, 18), t(29, 9))).toBeNull()
+})
+
+it.each([
+  ['condition-false', 'condition not met'], ['cooldown', 'cooling down'], ['manual-hold', 'manual hold'],
+  ['side-off', 'side is off'], ['superseded', 'another source owns the side'], ['runaway', 'fired too often · rule disabled'],
+  ['eval-error', 'evaluation failed'], ['action-error', 'command failed'], ['set-temperature', 'set temperature'],
+  ['notify', 'sent a notification'], ['power-on', 'turned power on'], ['power-off', 'turned power off'],
+  ['unknown', 'no reason recorded'], ['outside-window', 'outside its window'], ['signal-unavailable', 'signal unavailable'],
+])('explains %s without a rule', (code, expected) => {
+  expect(reasonText({ code, temp: null, sides: [] }, undefined, [], fmt)).toBe(expected)
+})
+
+it('formats minute precision and noon/midnight window boundaries', () => {
+  expect(reasonText({ code: 'outside-window', temp: null, sides: [] }, { conditions: { kind: 'timeBetween', start: '00:05', end: '12:30' } }, [], fmt)).toBe('outside 12:05 AM–12:30 PM')
+  expect(matchesFilter('skipped', 'skipped')).toBe(true)
+  expect(matchesFilter('fired', 'skipped')).toBe(false)
+})

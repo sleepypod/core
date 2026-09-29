@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as ScheduleTime from '@/src/lib/scheduleTime'
+import { SchedulePage } from '../SchedulePage'
 
 const m = vi.hoisted(() => ({
   side: { primarySide: 'left', selectedSide: 'left', selectSide: vi.fn() },
@@ -45,8 +46,6 @@ vi.mock('../CurveEditor', () => ({
     </div>
   ),
 }))
-
-import { SchedulePage } from '../SchedulePage'
 
 const temp = (dayOfWeek: string, time: string, temperature: number, enabled = true) => ({ dayOfWeek, time, temperature, enabled })
 const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
@@ -187,4 +186,27 @@ describe('SchedulePage', () => {
     expect(failed.getByText(/Failed to load schedules:.*db down/)).toBeTruthy()
     expect(failed.queryByText('No schedule yet')).toBeNull()
   })
+})
+
+it('deletes from Both view, or cancels and restores the combined selection', async () => {
+  m.side.selectedSide = 'both'
+  const s = render(<SchedulePage />)
+  fireEvent.click(s.getByRole('button', { name: 'Delete Heidi Sat, Sun' }))
+  expect(m.side.selectSide).toHaveBeenLastCalledWith('right')
+  fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+  expect(m.side.selectSide).toHaveBeenLastCalledWith('both')
+  expect(m.schedule.deleteCurve).not.toHaveBeenCalled()
+  fireEvent.click(s.getByRole('button', { name: 'Delete Jon Mon–Fri' }))
+  fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+  await waitFor(() => expect(m.schedule.deleteCurve).toHaveBeenCalledWith(WEEKDAYS))
+  expect(m.side.selectSide).toHaveBeenLastCalledWith('both')
+})
+
+it('deletes a nonfeatured curve and opens the featured curve for editing', () => {
+  const s = render(<SchedulePage />)
+  fireEvent.click(s.getByRole('button', { name: 'Delete Sat, Sun' }))
+  expect(s.getByRole('dialog')).toBeTruthy()
+  fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(s.getByRole('button', { name: 'Edit Mon–Fri' }))
+  expect(s.getByTestId('editor')).toBeTruthy()
 })

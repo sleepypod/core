@@ -1,5 +1,7 @@
-import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
+import { renderToString } from 'react-dom/server'
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CurveEditor } from '../CurveEditor'
 
 const m = vi.hoisted(() => ({
   saveCurve: vi.fn(),
@@ -18,8 +20,6 @@ vi.mock('@/src/hooks/useSchedule', () => ({
 vi.mock('@/src/providers/SideProvider', () => ({ useSide: () => ({ selectedSide: 'left' }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Jon', rightName: 'Heidi' }) }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
-
-import { CurveEditor } from '../CurveEditor'
 
 const INITIAL = [
   { time: '07:00', temperature: 84 },
@@ -149,4 +149,61 @@ describe('CurveEditor', () => {
     fireEvent.click(s.getByRole('button', { name: 'Decrease warmest temperature' }))
     expect(s.getByRole('group', { name: 'warmest temperature' }).textContent).toContain('82°')
   })
+})
+
+it('updates a point from its dialog and keyboard chart, and can cancel a day conflict', () => {
+  const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+  fireEvent.click(s.getByRole('button', { name: 'Edit set point 11:15 PM' }))
+  const dialog = s.getByRole('dialog')
+  fireEvent.change(within(dialog).getByLabelText('Time'), { target: { value: '22:00' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  expect(s.getByRole('button', { name: 'Edit set point 10:00 PM' })).toBeTruthy()
+  fireEvent.keyDown(s.getAllByRole('slider')[0], { key: 'ArrowUp' })
+  m.detectCurveConflicts.mockReturnValue(['tuesday'])
+  fireEvent.click(s.getByRole('button', { name: 'Tue' }))
+  fireEvent.click(saveCurveButton(s))
+  fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+  expect(s.queryByRole('dialog')).toBeNull()
+  expect(m.saveCurve).not.toHaveBeenCalled()
+})
+
+it('loads an AI template into the local editor and saves only after review', async () => {
+  const { saveTemplate } = await import('@/src/lib/sleepCurve/curvePrompt')
+  saveTemplate({ reasoning: '', name: 'Test AI curve', bedtime: '22:00', wake: '07:00', points: { '22:00': 80, '02:00': 75, '07:00': 82 } })
+  const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+  fireEvent.click(s.getByRole('button', { name: 'Custom AI curve' }))
+  fireEvent.click(s.getByRole('button', { name: /^Test AI curve/ }))
+  fireEvent.click(s.getByRole('button', { name: 'Use curve' }))
+  expect(s.queryByRole('dialog')).toBeNull()
+  expect(m.saveCurve).not.toHaveBeenCalled()
+  expect(rows(s)).toHaveLength(3)
+  fireEvent.click(saveCurveButton(s))
+  await waitFor(() => expect(m.saveCurve).toHaveBeenCalledWith(expect.objectContaining({ setPoints: expect.arrayContaining([{ time: '02:00', temperature: 75 }]) })))
+  localStorage.clear()
+})
+
+it('subscribes to desktop layout changes and removes the listener on unmount', () => {
+  let matches = true
+  let change = () => {}
+  const remove = vi.fn()
+  vi.stubGlobal('matchMedia', () => ({ get matches() {
+    return matches
+  }, addEventListener: (_event: string, cb: () => void) => {
+    change = cb
+  }, removeEventListener: remove }))
+  const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+  act(() => {
+    matches = false
+    change()
+  })
+  expect(s.getByRole('button', { name: 'Save curve' })).toBeTruthy()
+  s.unmount()
+  expect(remove).toHaveBeenCalledWith('change', change)
+  vi.unstubAllGlobals()
+})
+
+it('renders the desktop editor during server rendering before media queries are available', () => {
+  const html = renderToString(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+  expect(html).toContain('Save curve')
+  expect(html).toContain('Edit set point 11:15 PM')
 })
