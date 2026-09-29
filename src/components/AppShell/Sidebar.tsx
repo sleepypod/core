@@ -1,9 +1,9 @@
 'use client'
 
-import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { Suspense, useSyncExternalStore } from 'react'
+import { Suspense, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
 import { Badge, StatusDot } from '@/src/components/ds/core'
 import { resolveSection, SECTIONS } from '@/src/components/Settings/sections'
@@ -41,20 +41,19 @@ export function Sidebar({ className }: { className?: string }) {
   const statusDot = footer.tone === 'muted' ? undefined : footer.tone
   const host = useSyncExternalStore(noopSubscribe, () => window.location.hostname, () => '')
   const build = buildLine(version.data)
-  const commit = version.data?.commitHash && version.data.commitHash !== 'unknown' ? version.data.commitHash.slice(0, 7) : null
 
   return (
     <nav
       aria-label="Main"
       className={cn('sticky top-0 flex h-dvh w-[224px] shrink-0 flex-col gap-7 border-r border-line px-3.5 py-6', className)}
     >
-      <div className="flex items-center gap-2.5 px-2.5">
+      <div className="relative flex items-center gap-2.5 px-2.5">
         <Link href={`/${lang}`} className="flex min-w-0 items-center gap-2 font-mono text-sm text-fg no-underline hover:no-underline">
           {/* eslint-disable-next-line @next/next/no-img-element -- static 128px asset, no optimizer needed on the pod */}
           <img src="/logo.png" alt="" width={22} height={22} className="size-[22px] rounded-[6px]" />
           sleepypod
         </Link>
-        <BuildTag version={version.data?.version ?? null} dev={!!commit} branch={version.data?.branch} />
+        <BuildTag version={version.data?.version ?? null} host={host} branch={build?.branch ?? null} commit={build?.commit ?? null} />
       </div>
       <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
         {NAV_ITEMS.map((n) => {
@@ -98,24 +97,25 @@ export function Sidebar({ className }: { className?: string }) {
         </a>
         <Link
           href={`/${lang}/system`}
-          title={footer.issues.length > 0 ? footer.issues.join('\n') : undefined}
-          className="group flex flex-col gap-1 rounded-ctl px-2.5 py-2 font-mono text-xs text-fg-2 no-underline transition-colors hover:bg-active hover:no-underline"
+          className="group flex flex-col gap-2 rounded-ctl px-2.5 py-2 text-sm no-underline transition-colors hover:bg-active hover:no-underline"
         >
-          <div className="flex items-center gap-2 text-fg">
+          <div className="flex items-center gap-2">
             <StatusDot tone={footer.tone} />
-            {podName}
-            <span className={cn('truncate', footer.tone === 'warn' ? 'text-warn' : 'text-fg-2')}>
-              {'· '}
-              {footer.summary}
-            </span>
+            <span className="text-fg">{podName}</span>
+            <span className={footer.tone === 'warn' ? 'text-warn' : 'text-fg-3'}>{footer.summary}</span>
             <ChevronRight size={14} className="ml-auto shrink-0 text-fg-3 group-hover:text-fg-2" />
           </div>
           {footer.issues.length > 0 && (
-            <div className="truncate pl-3.5 text-warn">{footer.issues[0]}</div>
+            <ul className="flex flex-col gap-1.5" data-testid="footer-issues">
+              {footer.issues.map(issue => (
+                <li key={issue} className="flex gap-2 text-[13px] leading-snug text-fg-2">
+                  <TriangleAlert size={13} className="mt-[3px] shrink-0 text-warn" aria-hidden />
+                  {issue}
+                </li>
+              ))}
+            </ul>
           )}
           <span className="sr-only">Open System dashboard</span>
-          <div className="truncate pl-3.5">{[host, build?.commit].filter(Boolean).join(' · ')}</div>
-          {build?.branch && <div className="truncate pl-3.5" title={build.branch} data-testid="footer-branch">{build.branch}</div>}
         </Link>
       </div>
     </nav>
@@ -193,15 +193,63 @@ function SubTree({ group, lang, statusDot }: {
 
 /**
  * Tagged release → the version in a neutral chip. Anything else (dev, feature
- * branches, local builds) → an amber DEV chip, with the branch on hover; the
- * footer spells out branch and commit.
+ * branches, local builds) → an amber DEV chip. Either one opens the build
+ * details (host, branch, commit) so they stay out of the footer.
  */
-function BuildTag({ version, dev, branch }: { version: string | null, dev: boolean, branch?: string }) {
-  if (version) return <Badge className="ml-auto shrink-0 text-[10px]">{version}</Badge>
-  if (!dev) return null
+function BuildTag({ version, host, branch, commit }: {
+  version: string | null
+  host: string
+  branch: string | null
+  commit: string | null
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  if (!version && !branch && !commit) return null
+  const rows = ([['Version', version], ['Host', host], ['Branch', branch], ['Commit', commit]] as Array<[string, string | null]>)
+    .filter((r): r is [string, string] => !!r[1])
   return (
-    <span className="ml-auto flex shrink-0" title={branch && branch !== 'unknown' ? branch : undefined}>
-      <Badge className="border-warn-line bg-warn-bg text-[10px] tracking-[0.06em] text-warn">DEV</Badge>
-    </span>
+    <div ref={ref} className="ml-auto flex shrink-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label="Build details"
+        onClick={() => setOpen(o => !o)}
+        className="flex rounded-tag"
+      >
+        {version
+          ? <Badge className="text-[10px]">{version}</Badge>
+          : <Badge className="border-warn-line bg-warn-bg text-[10px] tracking-[0.06em] text-warn">DEV</Badge>}
+      </button>
+      {open && (
+        <dl
+          data-testid="build-details"
+          className="absolute inset-x-0 top-full z-20 mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-ctl border border-line bg-surface p-3 text-xs shadow-dialog"
+        >
+          {rows.map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-fg-3">{k}</dt>
+              <dd className="font-mono break-words text-fg-2">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
   )
 }

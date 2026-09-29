@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppShell } from '../AppShell'
 import { Sidebar } from '../Sidebar'
@@ -50,21 +50,36 @@ describe('responsive navigation', () => {
     expect(link.getAttribute('aria-current')).toBe('page')
     expect(screen.getByRole('link', { name: 'Docs' }).getAttribute('rel')).toBe('noopener noreferrer')
   })
-  it('shows pod model, development branch and actionable water warning', () => {
+  it('shows pod model and every issue in full, with build info behind the DEV chip', () => {
     Object.assign(state, { path: '/en/system', status: { podVersion: 'J00' }, water: { level: 'low' }, version: { commitHash: 'abcdef1234', branch: 'feat/ui-redesign' } })
-    state.health = { status: 'ok', database: { status: 'ok' }, scheduler: {}, iptables: { ok: true } }
+    state.health = { status: 'ok', database: { status: 'ok' }, scheduler: { drift: { drifted: true } }, iptables: { ok: true } }
     render(<Sidebar />)
-    expect(screen.getByText('Water level is low')).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Open System dashboard/ }).getAttribute('title')).toBe('Water level is low')
-    expect(screen.getByText('DEV')).toBeTruthy()
-    expect(screen.getByTestId('footer-branch').textContent).toBe('feat/ui-redesign')
-    expect(screen.getByRole('link', { name: /Open System dashboard/ }).textContent).toContain('Pod 5')
+    const footer = screen.getByRole('link', { name: /Open System dashboard/ })
+    expect(footer.textContent).toContain('Pod 5')
+    expect(footer.textContent).toContain('2 issues')
+    expect(within(screen.getByTestId('footer-issues')).getAllByRole('listitem').map(li => li.textContent)).toEqual(['Scheduler drifted', 'Water level is low'])
+    expect(footer.textContent).not.toContain('feat/ui-redesign')
+
+    const chip = screen.getByRole('button', { name: 'Build details' })
+    expect(chip.textContent).toBe('DEV')
+    expect(screen.queryByTestId('build-details')).toBeNull()
+    fireEvent.click(chip)
+    const details = screen.getByTestId('build-details').textContent
+    expect(details).toContain('feat/ui-redesign')
+    expect(details).toContain('abcdef1')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('build-details')).toBeNull()
+    fireEvent.click(chip)
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByTestId('build-details')).toBeNull()
   })
   it('shows release versions and preserves an unknown model name', () => {
     state.status = { podVersion: 'Future pod' }
     state.version = { version: 'v1.2.3', commitHash: 'unknown' }
     render(<Sidebar />)
-    expect(screen.getByText('v1.2.3')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Build details' }))
+    expect(screen.getByTestId('build-details').textContent).toContain('v1.2.3')
+    expect(screen.queryByTestId('footer-issues')).toBeNull()
     expect(screen.getByRole('link', { name: /Open System dashboard/ }).textContent).toContain('Future pod')
     expect(screen.queryByText('DEV')).toBeNull()
   })
