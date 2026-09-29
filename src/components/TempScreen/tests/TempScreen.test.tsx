@@ -1,6 +1,7 @@
 /**
  * TempScreen behavior: per-side ± / power wiring, clamp, Link sides mirroring,
- * hold-duration forwarding, away / presence lines and the loading state.
+ * hold-duration forwarding, away / presence lines, the loading state and the
+ * Now / Night / Dawn stepper variant.
  * Context cards and the phone switcher are stubbed — they have their own data.
  */
 
@@ -17,6 +18,9 @@ const m = vi.hoisted(() => ({
   status: undefined as unknown,
   settings: undefined as unknown,
   occupancy: undefined as unknown,
+  control: 'dial' as 'dial' | 'slider' | 'stepper',
+  display: 'degrees' as 'degrees' | 'offset' | 'level',
+  nudge: { left: vi.fn(), right: vi.fn() },
 }))
 
 vi.mock('@/src/utils/trpc', () => ({
@@ -37,13 +41,28 @@ vi.mock('@/src/hooks/useDeviceStatus', () => ({
 vi.mock('@/src/providers/SideProvider', () => ({
   useSide: () => ({ ...m.side, toggleLink: m.toggleLink, selectedSide: m.side.isLinked ? 'both' : m.side.primarySide }),
 }))
-vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: 'dial', tempDisplay: 'degrees' }) }))
+vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: m.control, tempDisplay: m.display }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({
   useSideNames: () => ({ sideName: (s: string) => (s === 'left' ? 'Jon' : 'Heidi') }),
 }))
 vi.mock('@/src/components/SideSelector/SideSelector', () => ({ SideSelector: () => null }))
 vi.mock('@/src/components/EnvironmentInfo/EnvironmentInfoPanel', () => ({ EnvironmentInfoPanel: () => null }))
-vi.mock('../TonightCard', () => ({ TonightCard: () => null }))
+vi.mock('../TonightCard', () => ({ TonightCard: () => null, useNow: () => new Date(2026, 8, 28, 14, 0) }))
+vi.mock('../useNightPhases', () => ({
+  useNightPhases: (side: 'left' | 'right') => ({
+    phases: {
+      day: 'monday',
+      days: ['monday'],
+      night: { temperatureF: 74, start: '22:00', end: '06:00', minutes: 480, times: ['22:00'] },
+      dawn: { temperatureF: 84, start: '06:00', end: '06:30', minutes: 30, times: ['06:00'] },
+    },
+    isLoading: false,
+    error: null,
+    saving: false,
+    valueF: (p: 'night' | 'dawn') => (p === 'night' ? 74 : 84),
+    nudge: m.nudge[side],
+  }),
+}))
 vi.mock('../ScheduleTimeline', () => ({ ScheduleTimeline: () => null }))
 vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
@@ -65,6 +84,10 @@ beforeEach(() => {
   m.setPower.mockReset()
   m.side = { isLinked: false, primarySide: 'left' }
   m.statusLoading = false
+  m.control = 'dial'
+  m.display = 'degrees'
+  m.nudge.left.mockReset()
+  m.nudge.right.mockReset()
   m.status = {
     leftSide: sideStatus(76),
     rightSide: sideStatus(82),
@@ -194,5 +217,41 @@ describe('TempScreen', () => {
     const screen = render(<TempScreen />)
     expect(screen.getByText('Connecting…')).toBeTruthy()
     expect(screen.queryByRole('slider')).toBeNull()
+  })
+
+  describe('stepper variant', () => {
+    beforeEach(() => {
+      m.control = 'stepper'
+    })
+
+    it('steps Now through the pod like the dial', () => {
+      const screen = render(<TempScreen />)
+      const left = card(screen, 'Jon (left)')
+      expect(left.getByTestId('stepper-value').textContent).toBe('76°F')
+      fireEvent.click(left.getByRole('button', { name: 'Warmer now' }))
+      expect(m.setTemp).toHaveBeenCalledExactlyOnceWith({ side: 'left', temperature: 77 }, expect.anything())
+    })
+
+    it('edits Night on the schedule, mirrored to both sides when linked', () => {
+      m.side = { isLinked: true, primarySide: 'left' }
+      const screen = render(<TempScreen />)
+      const left = card(screen, 'Jon (left)')
+      fireEvent.click(left.getByRole('tab', { name: /Night/ }))
+      expect(left.getByTestId('stepper-value').textContent).toBe('74°F')
+      fireEvent.click(left.getByRole('button', { name: 'Cooler night' }))
+      expect(m.nudge.left).toHaveBeenCalledExactlyOnceWith('night', -1)
+      expect(m.nudge.right).toHaveBeenCalledExactlyOnceWith('night', -1)
+      expect(m.setTemp).not.toHaveBeenCalled()
+    })
+
+    it('steps Now by an Eight Sleep level in level display', () => {
+      m.display = 'level'
+      const screen = render(<TempScreen />)
+      const left = card(screen, 'Jon (left)')
+      // 76°F = level −2 → −1 = 79.75 → 80°F
+      expect(left.getByTestId('stepper-value').textContent).toBe('−2')
+      fireEvent.click(left.getByRole('button', { name: 'Warmer now' }))
+      expect(m.setTemp).toHaveBeenCalledExactlyOnceWith({ side: 'left', temperature: 80 }, expect.anything())
+    })
   })
 })

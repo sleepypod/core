@@ -2,10 +2,13 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from 'react'
 
-export type ControlVariant = 'dial' | 'slider'
+export type ControlVariant = 'dial' | 'slider' | 'stepper'
 export type ThemePref = 'auto' | 'dark' | 'light'
-/** Degrees, or the ± offset from 80°F (0) that the old dial and Eight Sleep use. */
-export type TempDisplay = 'degrees' | 'offset'
+/**
+ * Degrees; the ± offset from 80°F (0) that the old dial uses; or the Eight
+ * Sleep −10…+10 level (0 = 82.5°F, 2.75°F a step).
+ */
+export type TempDisplay = 'degrees' | 'offset' | 'level'
 
 interface PrefsContextValue {
   /** Temperature control variant on the Temp screen. Stored per device. */
@@ -95,8 +98,8 @@ function store(key: string, value: string) {
 }
 
 export function PrefsProvider({ children }: { children: React.ReactNode }) {
-  const control = useStoredPref<ControlVariant>(PREFS_STORAGE_KEYS.control, ['dial', 'slider'], 'dial')
-  const tempDisplay = useStoredPref<TempDisplay>(PREFS_STORAGE_KEYS.tempDisplay, ['degrees', 'offset'], 'degrees')
+  const control = useStoredPref<ControlVariant>(PREFS_STORAGE_KEYS.control, ['dial', 'slider', 'stepper'], 'dial')
+  const tempDisplay = useStoredPref<TempDisplay>(PREFS_STORAGE_KEYS.tempDisplay, ['degrees', 'offset', 'level'], 'degrees')
   const theme = useStoredPref<ThemePref>(PREFS_STORAGE_KEYS.theme, ['auto', 'dark', 'light'], 'auto')
   const system = useSyncExternalStore(subscribeScheme, systemTheme, () => 'dark' as const)
 

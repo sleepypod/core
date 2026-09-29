@@ -353,6 +353,34 @@ html.dark {
   text-transform: uppercase;
 }
 
+/* TempBackdrop / stepper ink: --h (hue) is set inline per temperature or time
+   of day. Colors fill a masked layer so a hue change can transition. */
+.sp-temp-sky {
+  background-color: hsl(var(--h, 235) 45% 32% / 0.4);
+  mask-image: linear-gradient(to bottom, #000, transparent 65%);
+}
+
+.sp-temp-glow {
+  background-color: hsl(var(--h, 268) 55% 56% / 0.5);
+  mask-image: radial-gradient(ellipse 90% 65% at 50% 80%, #000, transparent);
+}
+
+.sp-temp-ink {
+  color: hsl(var(--h, 268) 62% 74%);
+}
+
+[data-theme="light"] .sp-temp-sky {
+  background-color: hsl(var(--h, 235) 70% 86% / 0.55);
+}
+
+[data-theme="light"] .sp-temp-glow {
+  background-color: hsl(var(--h, 268) 70% 72% / 0.45);
+}
+
+[data-theme="light"] .sp-temp-ink {
+  color: hsl(var(--h, 268) 50% 42%);
+}
+
 .sp-fade-in {
   animation: sp-fade-in 150ms var(--ease-standard);
 }

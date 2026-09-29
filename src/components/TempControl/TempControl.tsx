@@ -4,7 +4,8 @@ import { useCallback, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { TEMP, tempFToOffset } from '@/src/lib/tempColors'
 import { setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
-import type { ControlVariant, TempDisplay } from '@/src/providers/PrefsProvider'
+import { formatLevel } from '@/src/components/TempScreen/nightPhases'
+import type { TempDisplay } from '@/src/providers/PrefsProvider'
 
 const W = 280
 const H = 250
@@ -52,7 +53,7 @@ export function formatOffset(f: number): string {
 }
 
 export interface TempControlProps {
-  variant?: ControlVariant
+  variant?: 'dial' | 'slider'
   /** Big number as degrees, or as the ± offset from 80°F. */
   display?: TempDisplay
   /** Target set point in °F (canonical). */
@@ -98,7 +99,8 @@ export function TempControl({
   const display = Math.round(setpointFToDisplay(shownF, unit) ?? shownF)
   const bedDisplay = bedF != null && Number.isFinite(bedF) ? Math.round(setpointFToDisplay(bedF, unit) ?? bedF) : null
   const delta = bedDisplay != null ? display - bedDisplay : null
-  const offsetMode = displayMode === 'offset'
+  const offsetMode = displayMode !== 'degrees'
+  const relative = displayMode === 'level' ? formatLevel : formatOffset
   const sub = offsetMode
     ? `${display}°${unit} · bed ${bedDisplay == null ? '—' : `${bedDisplay}°${unit}`}`
     : delta == null
@@ -106,11 +108,11 @@ export function TempControl({
       : `${delta > 0 ? '+' : delta < 0 ? '−' : '±'}${Math.abs(delta)} · bed ${bedDisplay}°${unit}`
   const status = statusOverride ?? STATUS_WORD[dir]
   // Scale marks read in the same terms as the big number.
-  const mark = (f: number) => (offsetMode ? formatOffset(f) : `${Math.round(setpointFToDisplay(f, unit) ?? f)}°`)
+  const mark = (f: number) => (offsetMode ? relative(f) : `${Math.round(setpointFToDisplay(f, unit) ?? f)}°`)
 
   const numeral = (
     <div className="font-mono text-[64px] font-light leading-none" aria-live="polite" data-testid="temp-numeral">
-      {offsetMode ? formatOffset(shownF) : `${display}°`}
+      {offsetMode ? relative(shownF) : `${display}°`}
     </div>
   )
   const subEl = <div className="font-mono text-[13px] text-fg-2">{sub}</div>
@@ -151,7 +153,7 @@ export function TempControl({
     'aria-valuemax': Math.round(setpointFToDisplay(TEMP.MAX_F, unit) ?? TEMP.MAX_F),
     'aria-valuenow': display,
     'aria-valuetext': offsetMode
-      ? `${formatOffset(shownF)} (${display}°${unit}), ${status.toLowerCase()}`
+      ? `${relative(shownF)} (${display}°${unit}), ${status.toLowerCase()}`
       : `${display}°${unit}, ${status.toLowerCase()}`,
     'aria-disabled': !interactive,
     'onKeyDown': onKeyDown,

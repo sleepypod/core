@@ -2,13 +2,16 @@
 
 import { Minus, Plane, Plus, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Card, IconButton, StatusDot } from '@/src/components/ds'
+import { Card, IconButton, StatusDot, TempBackdrop } from '@/src/components/ds'
 import { ACCENT_VAR, TempControl, directionFor } from '@/src/components/TempControl/TempControl'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import type { ControlVariant, TempDisplay } from '@/src/providers/PrefsProvider'
 import type { Side } from '@/src/providers/SideProvider'
 import type { TemperatureControlStatus } from '@/src/temperature/controller'
+import type { NightPhaseKey } from './nightPhases'
 import { HoldDurationRow, HoldStatus } from './TemperatureHoldControls'
+import { TempStepper, stepperBackdrop, type StepperTab } from './TempStepper'
+import type { SideNightPhases } from './useNightPhases'
 
 /** 'in' / 'out' when occupancy can be sensed; null = unknown (claim omitted). */
 export type Presence = 'in' | 'out' | null
@@ -36,6 +39,14 @@ export interface SideCardProps {
   onResumed: () => void
   /** Phones show one side at a time; the other card is hidden below 900px. */
   hiddenOnPhone?: boolean
+  /** Stepper variant only: Now / Night / Dawn selection and tonight's schedule. */
+  stepper?: {
+    tab: StepperTab
+    onTabChange: (tab: StepperTab) => void
+    schedule: SideNightPhases
+    onStepPhase: (phase: NightPhaseKey, delta: number) => void
+    now: Date
+  }
 }
 
 function sideLine(side: Side, presence: Presence, away: boolean) {
@@ -72,7 +83,9 @@ export function SideCard({
   onPower,
   onResumed,
   hiddenOnPhone,
+  stepper,
 }: SideCardProps) {
+  const isStepper = variant === 'stepper' && stepper != null
   const accent = ACCENT_VAR[directionFor(targetF, bedF)]
   const line = sideLine(side, presence, away)
 
@@ -81,6 +94,7 @@ export function SideCard({
       role="group"
       aria-label={`${name} (${side})`}
       className={cn('gap-3.5 p-[18px] min-[900px]:p-5', hiddenOnPhone && 'max-[899px]:hidden')}
+      backdrop={isStepper ? <TempBackdrop {...stepperBackdrop({ ...stepper, targetF, isOn })} /> : undefined}
     >
       <div className="hidden items-center gap-2 min-[900px]:flex">
         <span className="truncate text-[15px] font-medium">{name}</span>
@@ -99,28 +113,48 @@ export function SideCard({
       />
 
       <div className="flex justify-center min-[900px]:mt-3">
-        <TempControl
-          variant={variant}
-          display={display}
-          targetF={targetF}
-          bedF={bedF}
-          unit={unit}
-          power={isOn}
-          onChange={onPreview}
-          onCommit={onCommit}
-          statusOverride={isOn ? undefined : 'OFF'}
-        />
+        {isStepper
+          ? (
+              <TempStepper
+                tab={stepper.tab}
+                onTabChange={stepper.onTabChange}
+                schedule={stepper.schedule}
+                onStepPhase={stepper.onStepPhase}
+                unit={unit}
+                display={display}
+                targetF={targetF}
+                bedF={bedF}
+                isOn={isOn}
+                nowDisabled={stepDisabled}
+                onStepNow={onStep}
+              />
+            )
+          : (
+              <TempControl
+                variant={variant === 'stepper' ? 'dial' : variant}
+                display={display}
+                targetF={targetF}
+                bedF={bedF}
+                unit={unit}
+                power={isOn}
+                onChange={onPreview}
+                onCommit={onCommit}
+                statusOverride={isOn ? undefined : 'OFF'}
+              />
+            )}
       </div>
 
       <div className="flex items-center justify-center gap-5 min-[900px]:gap-4">
-        <IconButton
-          icon={Minus}
-          size={52}
-          label="Cooler"
-          className="min-[900px]:!size-12"
-          disabled={stepDisabled}
-          onClick={() => onStep(-1)}
-        />
+        {!isStepper && (
+          <IconButton
+            icon={Minus}
+            size={52}
+            label="Cooler"
+            className="min-[900px]:!size-12"
+            disabled={stepDisabled}
+            onClick={() => onStep(-1)}
+          />
+        )}
         <IconButton
           icon={Power}
           size={60}
@@ -131,14 +165,16 @@ export function SideCard({
           disabled={powerDisabled}
           onClick={onPower}
         />
-        <IconButton
-          icon={Plus}
-          size={52}
-          label="Warmer"
-          className="min-[900px]:!size-12"
-          disabled={stepDisabled}
-          onClick={() => onStep(1)}
-        />
+        {!isStepper && (
+          <IconButton
+            icon={Plus}
+            size={52}
+            label="Warmer"
+            className="min-[900px]:!size-12"
+            disabled={stepDisabled}
+            onClick={() => onStep(1)}
+          />
+        )}
       </div>
 
       <HoldDurationRow holdMinutes={holdMinutes} onDurationChange={onHoldChange} />

@@ -21,8 +21,10 @@ import { PrimingIndicator } from './PrimingIndicator'
 import { PumpStallNotification } from './PumpStallNotification'
 import { ScheduleTimeline } from './ScheduleTimeline'
 import { SideCard, type Presence } from './SideCard'
-import { stepTargetF } from './tempScreenUtils'
-import { TonightCard } from './TonightCard'
+import { stepForDisplay, type NightPhaseKey } from './nightPhases'
+import type { StepperTab } from './TempStepper'
+import { TonightCard, useNow } from './TonightCard'
+import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
 
 const POD_NAMES: Record<string, string> = { H00: 'Pod 3', I00: 'Pod 4', J00: 'Pod 5' }
@@ -44,6 +46,8 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  * - device.getStatus (WS-preferred via useDeviceStatus) → per-side current/target
  *   temp, power, temperature ownership, alarm, priming, pump stall, snooze
  * - device.setTemperature / device.setPower → SideCard −/+/drag/power (optimistic)
+ * - schedules.getAll / schedules.batchUpdate → stepper variant's Night / Dawn
+ *   (shifts tonight's set points; see useNightPhases)
  * - device.resumeTemperature → Resume on an active manual hold
  * - device.clearAlarm / device.snoozeAlarm → AlarmBanner
  * - device.dismissPrimeNotification → PrimeCompleteNotification
@@ -78,7 +82,20 @@ export const TempScreen = () => {
     right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch),
   }
 
+  // Stepper variant: Night / Dawn read and edit tonight's schedule per side.
+  const isStepper = variant === 'stepper'
+  const now = useNow()
+  const [stepperTab, setStepperTab] = useState<StepperTab>('now')
+  const nightPhases = {
+    left: useNightPhases('left', now, unit, tempDisplay, isStepper),
+    right: useNightPhases('right', now, unit, tempDisplay, isStepper),
+  }
+
   const targetsFor = (side: Side): Side[] => (isLinked ? SIDES : [side])
+
+  const handleStepPhase = (side: Side, phase: NightPhaseKey, delta: number) => {
+    for (const s of targetsFor(side)) nightPhases[s].nudge(phase, delta)
+  }
 
   /** Continuous drag — visual only, no hardware calls. */
   const handlePreview = (side: Side, f: number) => {
@@ -91,7 +108,7 @@ export const TempScreen = () => {
   }
 
   const handleStep = (side: Side, delta: number) => {
-    handleCommit(side, stepTargetF(controls[side].targetF, delta, unit))
+    handleCommit(side, stepForDisplay(controls[side].targetF, delta, unit, tempDisplay))
   }
 
   const handlePower = (side: Side) => {
@@ -229,6 +246,15 @@ export const TempScreen = () => {
               onPower={() => handlePower(side)}
               onResumed={() => { void refetch() }}
               hiddenOnPhone={side !== primarySide}
+              stepper={isStepper
+                ? {
+                    tab: stepperTab,
+                    onTabChange: setStepperTab,
+                    schedule: nightPhases[side],
+                    onStepPhase: (phase, delta) => handleStepPhase(side, phase, delta),
+                    now,
+                  }
+                : undefined}
             />
           )
         })}

@@ -4,8 +4,11 @@ import { Circle, CircleCheck } from 'lucide-react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { trpc } from '@/src/utils/trpc'
-import { Card, CardHeader, InlineError, SegmentedControl, SettingRow } from '@/src/components/ds'
+import { Card, CardHeader, InlineError, SegmentedControl, SettingRow, TempBackdrop } from '@/src/components/ds'
 import { TempControl } from '@/src/components/TempControl/TempControl'
+import { nightPhases, type NightPhaseKey, type ScheduleTempRow } from '@/src/components/TempScreen/nightPhases'
+import { TempStepper, stepperBackdrop } from '@/src/components/TempScreen/TempStepper'
+import { DAYS_OF_WEEK } from '@/src/lib/scheduleTime'
 import { usePrefs, type ControlVariant, type TempDisplay, type ThemePref } from '@/src/providers/PrefsProvider'
 
 const THEME_OPTIONS: { value: ThemePref, label: string }[] = [
@@ -37,9 +40,10 @@ export function UnitsControl({ unit }: { unit: string }) {
 const TEMP_DISPLAY_OPTIONS: { value: TempDisplay, label: string }[] = [
   { value: 'degrees', label: 'Degrees' },
   { value: 'offset', label: 'Offset ±' },
+  { value: 'level', label: 'Eight Sleep' },
 ]
 
-/** Big number on the Temp screen: degrees, or ± from 80°F like the old dial and Eight Sleep. */
+/** Big number on the Temp screen: degrees, ± from 80°F like the old dial, or Eight Sleep's −10…+10 levels. */
 export function TempDisplayControl() {
   const { tempDisplay, setTempDisplay } = usePrefs()
   return (
@@ -69,6 +73,53 @@ function MiniSlider() {
     <div className="relative h-11 w-[18px] overflow-hidden rounded-[9px] bg-line-2" aria-hidden>
       <span className="absolute inset-x-0 bottom-0 h-2/5 bg-cool" />
     </div>
+  )
+}
+
+function MiniStepper() {
+  return (
+    <div className="flex h-11 items-center gap-1.5" aria-hidden>
+      <span className="flex size-4 items-center justify-center rounded-full bg-line-2 text-[11px] leading-none text-fg-2">−</span>
+      <span className="font-mono text-[15px] leading-none">+2</span>
+      <span className="flex size-4 items-center justify-center rounded-full bg-line-2 text-[11px] leading-none text-fg-2">+</span>
+    </div>
+  )
+}
+
+const PREVIEW_ROWS: ScheduleTempRow[] = DAYS_OF_WEEK.flatMap((dayOfWeek, i) => [
+  { id: i * 3 + 1, dayOfWeek, time: '22:30', temperature: 76, enabled: true },
+  { id: i * 3 + 2, dayOfWeek, time: '01:30', temperature: 74, enabled: true },
+  { id: i * 3 + 3, dayOfWeek, time: '05:00', temperature: 85, enabled: true },
+])
+
+/** Static Now / Night / Dawn module for the picker preview. */
+function StepperPreview({ display }: { display: TempDisplay }) {
+  const now = new Date()
+  const phases = nightPhases(PREVIEW_ROWS, now)
+  const schedule = {
+    phases,
+    isLoading: false,
+    error: null,
+    saving: false,
+    valueF: (p: NightPhaseKey) => (phases?.[p] ? Math.round(phases[p].temperatureF) : null),
+    nudge: () => {},
+  }
+  return (
+    <Card className="w-[280px] p-0" backdrop={<TempBackdrop {...stepperBackdrop({ tab: 'now', targetF: 81, isOn: true, schedule, now })} />}>
+      <TempStepper
+        tab="now"
+        onTabChange={() => {}}
+        unit="F"
+        display={display}
+        targetF={81}
+        bedF={80}
+        isOn
+        nowDisabled
+        onStepNow={() => {}}
+        schedule={schedule}
+        onStepPhase={() => {}}
+      />
+    </Card>
   )
 }
 
@@ -115,9 +166,10 @@ export function TempControlPicker() {
   const options: { value: ControlVariant, label: string, mini: ReactNode }[] = [
     { value: 'dial', label: 'Dial', mini: <MiniDial /> },
     { value: 'slider', label: 'Slider', mini: <MiniSlider /> },
+    { value: 'stepper', label: 'Now · Night · Dawn', mini: <MiniStepper /> },
   ]
   return (
-    <div role="radiogroup" aria-label="Temperature control" className="grid grid-cols-2 gap-2 @min-[800px]:gap-3">
+    <div role="radiogroup" aria-label="Temperature control" className="grid grid-cols-3 gap-2 @min-[800px]:gap-3 @max-[1100px]:@min-[800px]:grid-cols-2">
       {options.map(o => (
         <OptionCard
           key={o.value}
@@ -125,7 +177,9 @@ export function TempControlPicker() {
           onSelect={() => setControl(o.value)}
           label={o.label}
           mini={o.mini}
-          preview={<TempControl variant={o.value} display={tempDisplay} targetF={76} bedF={80} />}
+          preview={o.value === 'stepper'
+            ? <StepperPreview display={tempDisplay} />
+            : <TempControl variant={o.value} display={tempDisplay} targetF={76} bedF={80} />}
         />
       ))}
     </div>
@@ -142,7 +196,7 @@ export function AppearanceSettings({ temperatureUnit }: { temperatureUnit: strin
       <Card>
         <CardHeader title="Temperature control" subtitle="Used on the Temp screen of this device" />
         <TempControlPicker />
-        <SettingRow label="Show as" sub="Offset counts whole degrees from 80°F (0), like the old dial">
+        <SettingRow label="Show as" sub="Offset counts whole degrees from 80°F (0), like the old dial. Eight Sleep uses its −10…+10 levels.">
           <TempDisplayControl />
         </SettingRow>
       </Card>
