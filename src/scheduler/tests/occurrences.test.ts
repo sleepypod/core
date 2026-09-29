@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
+import { parseExpression } from 'cron-parser'
 import { expandOccurrences } from '../occurrences'
 
 const TZ = 'America/Los_Angeles'
@@ -37,5 +38,32 @@ describe('expandOccurrences', () => {
     expect(occ.map(o => o.id)).toEqual(['led', 'reboot'])
     expect(occ[0].brightness).toBe(2)
     expect(occ[1].side).toBeUndefined()
+  })
+
+  it('matches cron-parser for simple crons, across a DST change and in other zones', () => {
+    const crons = ['15 23 * * 1,3,5', '30 1 * * *', '0 2 * * 0', '45 6 * * 6,0', '0 0 * * 7']
+    for (const tz of [TZ, 'Europe/London', 'Asia/Kolkata', 'UTC']) {
+      // US DST ends Nov 1 2026, UK Oct 25 2026.
+      const a = new Date('2026-10-20T00:00:00Z')
+      const b = new Date('2026-11-05T00:00:00Z')
+      for (const schedule of crons) {
+        const expected: number[] = []
+        const it = parseExpression(schedule, { currentDate: new Date(a.getTime() - 1), endDate: b, tz })
+        while (it.hasNext()) {
+          const t = it.next().getTime()
+          if (t >= b.getTime()) break
+          expected.push(t)
+        }
+        expect(expandOccurrences([{ id: 'j', type: 'temperature', schedule }], a, b, tz).map(o => o.at), `${tz} ${schedule}`).toEqual(expected)
+      }
+    }
+  })
+
+  it('expands a full schedule quickly', () => {
+    const jobs = Array.from({ length: 400 }, (_, i) => ({ id: `t${i}`, type: 'temperature', schedule: `${i % 60} ${i % 24} * * ${i % 7}` }))
+    const started = performance.now()
+    const occ = expandOccurrences(jobs, from, new Date(from.getTime() + 9 * 86_400_000), TZ)
+    expect(occ.length).toBeGreaterThan(400)
+    expect(performance.now() - started).toBeLessThan(200)
   })
 })
