@@ -173,6 +173,9 @@ describe('evaluateDataPath', () => {
     const fresh = evaluateDataPath(healthy({ coreUptimeMs: 20_000, dacMonitor: { status: 'running', lastPollAt: null } }))
     expect(fresh.nodes.find(n => n.id === 'dac-monitor')?.status).toBe('unknown')
     expect(fresh.verdict.also).toEqual([])
+    // Nothing downstream is called stalled while it waits either.
+    expect(fresh.nodes.find(n => n.id === 'out-temp')?.status).toBe('unknown')
+    expect(fresh.verdict.tone).toBe('ok')
     const later = evaluateDataPath(healthy({ coreUptimeMs: 10 * MIN, dacMonitor: { status: 'running', lastPollAt: null } }))
     expect(later.nodes.find(n => n.id === 'dac-monitor')?.status).toBe('stale')
   })

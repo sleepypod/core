@@ -391,7 +391,9 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
   const stalledSides = i.thermal.filter(t => t.verdict === 'stalled').map(t => t.side)
   const env = node('environment-monitor')
   const mon = node('dac-monitor')
-  const tempStatus: CheckStatus = stalledSides.length > 0 || mon.status !== 'ok' ? 'stale' : env.status === 'ok' ? 'ok' : env.status === 'unknown' ? 'unknown' : 'stale'
+  const tempStatus: CheckStatus = stalledSides.length > 0 || BROKEN.has(mon.status)
+    ? 'stale'
+    : mon.status === 'unknown' || env.status === 'unknown' ? 'unknown' : env.status === 'ok' ? 'ok' : 'stale'
   const sideWord = (t: DataPathInputs['thermal'][number]) => `${t.side === 'left' ? 'L' : 'R'} ${t.verdict}`
   put(
     'out-temp',
