@@ -138,10 +138,8 @@ export const TempScreen = () => {
   const podName = httpStatus?.podVersion ? POD_NAMES[httpStatus.podVersion] ?? httpStatus.podVersion : null
 
   const header = (
-    // Phones: the bottom bar names the page and the side cards carry power, so the header goes.
     <PageHeader
       title="Temperature"
-      className="max-[899px]:hidden"
       right={(
         <>
           <AutopilotStatusChip className="no-underline" />

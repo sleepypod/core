@@ -104,7 +104,6 @@ export function SleepScreen({ sectionSwitch }: { sectionSwitch?: ReactNode } = {
     <>
       {sectionSwitch && <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Sleep /</span>}
       <PageHeader
-        mobileTitle={false}
         title={sectionSwitch
           ? (
               <>

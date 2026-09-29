@@ -170,7 +170,6 @@ export function SchedulePage() {
     <>
       <PageHeader
         title="Schedule"
-        mobileTitle={false}
         middle={(
           <div className="hidden min-[900px]:block">
             <SegmentedControl ariaLabel="Side" options={sideOptions} value={selectedSide} onChange={selectSide} />

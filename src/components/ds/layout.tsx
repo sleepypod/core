@@ -26,10 +26,8 @@ export function SettingRow({ label, sub, children, divider = true, className }: 
 }
 
 /* ─── PageHeader ─────────────────────────────────────────────────────── */
-export function PageHeader({ title, back, onBack, middle, right, mobileTitle = true, className }: {
+export function PageHeader({ title, back, onBack, middle, right, className }: {
   title: ReactNode
-  /** false on bottom-bar pages: the tab already names the page, so phones skip the title (still read by screen readers). */
-  mobileTitle?: boolean
   back?: ReactNode
   onBack?: () => void
   middle?: ReactNode
@@ -48,7 +46,7 @@ export function PageHeader({ title, back, onBack, middle, right, mobileTitle = t
           {back}
         </button>
       )}
-      <h1 className={cn('whitespace-nowrap text-xl font-medium min-[900px]:text-[22px]', !mobileTitle && 'max-[899px]:sr-only')}>{title}</h1>
+      <h1 className="whitespace-nowrap text-xl font-medium min-[900px]:text-[22px]">{title}</h1>
       {middle}
       {right && <div className="ml-auto flex flex-wrap items-center gap-2.5">{right}</div>}
     </div>
