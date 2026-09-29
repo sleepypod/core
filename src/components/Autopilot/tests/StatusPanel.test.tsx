@@ -1,9 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { StatusPanel, type DiagRule, type Diagnostics } from '../StatusPanel'
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/en/autopilot' }))
-
-import { StatusPanel, type DiagRule, type Diagnostics } from '../StatusPanel'
 
 const now = new Date('2026-09-28T18:00:30')
 const startOfDay = new Date('2026-09-28T00:00:00')
@@ -69,4 +68,43 @@ describe('StatusPanel diagnostics card', () => {
     render(<StatusPanel data={data({ ...rule, enabled: false })} loading={false} onKill={vi.fn()} onMode={vi.fn()} />)
     expect(screen.queryByText('MISSING')).toBeNull()
   })
+})
+
+it('handles loading, empty and globally halted diagnostics', () => {
+  const onKill = vi.fn()
+  const { rerender } = render(<StatusPanel data={undefined} loading onKill={onKill} onMode={vi.fn()} />)
+  expect(screen.getByText('Loading status…')).toBeTruthy()
+  rerender(<StatusPanel data={{ ...data(), rules: [], globalEnabled: false }} loading={false} onKill={onKill} onMode={vi.fn()} />)
+  expect(screen.getByText('No automations yet.')).toBeTruthy()
+  expect(screen.getByText('Autopilot halted')).toBeTruthy()
+  fireEvent.click(screen.getByRole('switch', { name: 'Autopilot enabled' }))
+  expect(onKill).toHaveBeenCalledWith(true)
+})
+
+it.each([5, 120, 2880])('shows older evaluations (%s minutes) and live, cooldown and error outcomes', (minutes) => {
+  const stamp = new Date(now.getTime() - minutes * 60000)
+  const r: DiagRule = { ...rule, dryRun: false, side: 'right', cooldownMin: null, conditions: { kind: 'and', conditions: [] }, runs: [
+    { t: stamp, outcome: 'fired', reason: null, sent: true },
+    { t: stamp, outcome: 'error', reason: 'action-error', sent: false },
+  ] }
+  render(<StatusPanel data={data(r)} loading={false} onKill={vi.fn()} onMode={vi.fn()} />)
+  expect(screen.getByText('no threshold')).toBeTruthy()
+  expect(screen.getAllByText(minutes === 5 ? '5 min ago' : minutes === 120 ? '2 h ago' : '2 d ago').length).toBeGreaterThan(0)
+})
+
+it('explains cooldown bands, grouped pairs and missing live signals', () => {
+  const r: DiagRule = { ...rule, dryRun: false, signals: {}, runs: [
+    { t: at(17, 55), outcome: 'fired', reason: null, sent: false },
+    { t: at(17, 56), outcome: 'skipped', reason: 'cooldown', sent: false },
+    { t: at(17, 57), outcome: 'skipped', reason: 'cooldown', sent: false },
+    { t: at(17, 58), outcome: 'error', reason: null, sent: false },
+    { t: at(17, 59), outcome: 'fired', reason: null, sent: true },
+  ] }
+  render(<StatusPanel data={data(r)} loading={false} onKill={vi.fn()} onMode={vi.fn()} />)
+  expect(screen.getByText('17:56, 17:57')).toBeTruthy()
+  expect(screen.getByText('condition true, held by the 30 min cooldown')).toBeTruthy()
+  expect(screen.getByText('fired · no command needed')).toBeTruthy()
+  expect(screen.getByText(/ambient temp unavailable/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /Fired/ }))
+  expect(screen.queryByText('COOLDOWN')).toBeNull()
 })

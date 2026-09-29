@@ -1,9 +1,8 @@
-import { cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { assert, afterEach, describe, expect, it, vi } from 'vitest'
+import { buildTimeline, chartDomain, CurveChart, dropHolds, formatHourLabel, gridTemps, MiniCurve, minutesToTime } from '../CurveChart'
 
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
-
-import { buildTimeline, chartDomain, CurveChart, dropHolds, formatHourLabel, gridTemps, MiniCurve, minutesToTime } from '../CurveChart'
 
 afterEach(cleanup)
 
@@ -172,4 +171,34 @@ describe('CurveChart axis on narrow widths', () => {
       if (el) Object.defineProperty(HTMLElement.prototype, 'clientWidth', el)
     }
   })
+})
+
+it('measures and drags a point within a frozen domain, then cancels and disconnects', () => {
+  let resize: ResizeObserverCallback = () => {}
+  const disconnect = vi.fn()
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(cb: ResizeObserverCallback) {
+      resize = cb
+    }
+
+    observe() {}
+    disconnect = disconnect
+  })
+  const onChange = vi.fn()
+  const pts = [{ time: '22:00', temperature: 80 }, { time: '07:00', temperature: 78 }]
+  const { container, getAllByRole, unmount } = render(<CurveChart setPoints={pts} onChangePoint={onChange} />)
+  act(() => resize([{ contentRect: { width: 600 } }] as ResizeObserverEntry[], {} as ResizeObserver))
+  const svg = container.querySelector('svg')
+  assert(svg)
+  Object.defineProperty(svg, 'setPointerCapture', { value: vi.fn() })
+  vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 600, height: 120, right: 600, bottom: 120, toJSON: () => ({}) })
+  fireEvent.pointerDown(getAllByRole('slider')[0], { pointerId: 1 })
+  fireEvent(svg, new MouseEvent('pointermove', { bubbles: true, clientX: 300, clientY: 50 }))
+  expect(onChange).toHaveBeenCalledWith(pts[0], { time: expect.stringMatching(/^\d\d:\d\d$/), temperature: expect.any(Number) })
+  fireEvent.pointerUp(svg)
+  fireEvent.pointerDown(getAllByRole('slider')[1], { pointerId: 2 })
+  fireEvent.pointerCancel(svg)
+  unmount()
+  expect(disconnect).toHaveBeenCalledOnce()
+  vi.unstubAllGlobals()
 })

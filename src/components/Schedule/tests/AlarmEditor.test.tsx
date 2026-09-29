@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AlarmGroup } from '../AlarmCard'
+import { AlarmEditor } from '../AlarmEditor'
 
 const m = vi.hoisted(() => ({
   batch: { mutateAsync: vi.fn(), isPending: false },
@@ -17,8 +18,6 @@ vi.mock('@/src/utils/trpc', () => ({
 }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Jon', rightName: 'Heidi' }) }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
-
-import { AlarmEditor } from '../AlarmEditor'
 
 const group: AlarmGroup = {
   ids: [11, 12],
@@ -154,4 +153,12 @@ describe('AlarmEditor', () => {
     const s = render(<AlarmEditor open={false} onClose={vi.fn()} side="left" />)
     expect(s.queryByRole('dialog')).toBeNull()
   })
+})
+
+it('selects individual repeat days and saves precisely that selection', async () => {
+  const s = render(<AlarmEditor open onClose={vi.fn()} side="left" />)
+  fireEvent.click(s.getByRole('button', { name: 'Mon' }))
+  fireEvent.click(saveButton(s))
+  await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
+  expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm).toEqual([expect.objectContaining({ dayOfWeek: 'monday' })])
 })
