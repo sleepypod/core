@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="https://sleepypod.github.io/"><img src="public/logo.png" width="80" height="80" alt="sleepypod" /></a>
+</p>
+
 # sleepypod — local-first Pod mattress controller
 
 [![CI](https://github.com/sleepypod/core/actions/workflows/test.yml/badge.svg?branch=dev)](https://github.com/sleepypod/core/actions/workflows/test.yml)
@@ -11,15 +15,18 @@ Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Li
 **User docs:** [sleepypod.github.io](https://sleepypod.github.io/)
 
 <p align="center">
-  <img src="docs/images/temperature-control.png" width="280" alt="Temperature control" />
-  <img src="docs/images/schedule.png" width="280" alt="Sleep schedule" />
+  <a href="https://sleepypod.github.io/core/"><img src="docs/images/core-temperature.png" width="1000" alt="sleepypod core web UI with per-side temperature controls, sidebar navigation, and the schedule and sleep timeline" /></a>
 </p>
 
+The redesigned web UI brings temperature, schedules, Autopilot, sleep, and system health into one place. Control the same Pod from the [iOS app](https://sleepypod.github.io/ios/) or a bedside [M5 rotary dial](https://sleepypod.github.io/dial/).
+
 <p align="center">
-  <img src="docs/images/ux-walkthrough-1.gif" width="280" alt="UX walkthrough 1" />
-  <img src="docs/images/ux-walkthrough-2.gif" width="280" alt="UX walkthrough 2" />
-  <img src="docs/images/ux-walkthrough-3.gif" width="280" alt="UX walkthrough 3" />
+  <a href="https://sleepypod.github.io/ios/"><img src="docs/images/ios-temperature.png" width="220" alt="sleepypod iOS app temperature control" /></a>
+  &nbsp;&nbsp;
+  <a href="https://sleepypod.github.io/dial/"><img src="docs/images/dial-cooling.png" width="220" alt="sleepypod rotary dial showing a cooling target" /></a>
 </p>
+
+<sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/7eef5490ef26b1c2f3ac22d073a06f9f52303712/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
 
 <p align="center">
   <a href="https://sleepypod.github.io/">Docs</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
