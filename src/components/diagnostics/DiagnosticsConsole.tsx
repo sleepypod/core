@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type { inferRouterOutputs } from '@trpc/server'
@@ -9,23 +9,19 @@ import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
 import {
-  Badge, Card, CardHeader, InlineError, KeyValue, Metric, SegmentedControl, Skeleton, StatusDot,
+  Badge, Card, CardHeader, InlineError, KeyValue, SegmentedControl, Skeleton,
 } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
-import {
-  fmtF, fmtAge, fmtRel, fmtClock, fmtDayLabel,
-  buildWeekLanes, jobTone, fmtJobValue, thermalDirection,
-  type SchedJob, type ThermalSideSnapshot,
-} from '@/src/components/diagnostics/diagnosticsLogic'
-import { DiagTable, type DiagColumn } from './DiagTable'
+import { fmtF, fmtAge, thermalDirection, type ThermalSideSnapshot } from '@/src/components/diagnostics/diagnosticsLogic'
 import { DashboardPanel } from './DashboardPanel'
 import { ThermalHistoryChart, type ThermalChartData } from './ThermalHistoryChart'
 import { availabilityOf, liveToPoints, type LiveThermalSample, type PanelDef } from './thermalHistoryLogic'
 import { langFromPath } from '@/src/components/AppShell/navItems'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { CalibrationPanel } from './CalibrationPanel'
-import { SectionTitle, sideTitle } from './parts'
+import { sideTitle } from './parts'
 import { HealthPanel } from './HealthPanel'
+import { SchedulerPanel } from './SchedulerPanel'
 
 // Formatting, scheduler-lane, and biometrics/thermal derivations live in
 // ./diagnosticsLogic so they can be unit-tested without React/tRPC.
@@ -238,106 +234,6 @@ function ThermalPanel({ thermal, history }: { thermal: ThermalQuery, history: Th
           ))}
         </div>
       )}
-    </>
-  )
-}
-
-// ── Scheduler ────────────────────────────────────────────────────────────────
-
-/** 7-day lane view: one row per day, jobs as time-ordered chips. Detail lives in the table below. */
-function SchedulerWeek({ jobs }: { jobs: SchedJob[] }) {
-  const lanes = useMemo(() => buildWeekLanes(jobs), [jobs])
-  return (
-    <Card className="gap-0 py-1.5">
-      {lanes.map((lane) => {
-        const { weekday, day } = fmtDayLabel(lane.date)
-        return (
-          <div key={lane.date} className="flex items-stretch gap-3 border-t border-line py-2 first:border-t-0">
-            <div className="w-16 shrink-0 pt-0.5">
-              <p className={cn('text-[13px]', lane.isToday ? 'font-medium text-fg' : 'text-fg-2')}>{lane.isToday ? 'Today' : weekday}</p>
-              <p className="font-mono text-[11px] text-fg-3">{day}</p>
-            </div>
-            <div className="flex min-h-6 flex-1 flex-wrap items-center gap-1.5">
-              {lane.jobs.length === 0
-                ? <span className="text-xs text-fg-3">—</span>
-                : lane.jobs.map((j) => {
-                    const value = fmtJobValue(j)
-                    return (
-                      <span
-                        key={j.id}
-                        className={cn('rounded-tag border px-1.5 py-0.5 font-mono text-[11px]', jobTone(j.type))}
-                        title={`${j.type}${j.side ? ` · ${j.side}` : ''}${value === '—' ? '' : ` · ${value}`}`}
-                      >
-                        {`${fmtClock(j.nextRun)} ${j.type}${j.side ? ` · ${j.side[0].toUpperCase()}` : ''}${value === '—' ? '' : ` ${value}`}`}
-                      </span>
-                    )
-                  })}
-            </div>
-          </div>
-        )
-      })}
-    </Card>
-  )
-}
-
-function SchedulerPanel() {
-  const scheduler = trpc.health.scheduler.useQuery({}, { refetchInterval: 15000 })
-  const system = trpc.health.system.useQuery({}, { refetchInterval: 15000 })
-  const counts = scheduler.data?.jobCounts
-  const drift = system.data?.scheduler?.drift
-  const jobs = (scheduler.data?.upcomingJobs ?? []) as SchedJob[]
-
-  const countEntries: Array<[string, number | undefined]> = [
-    ['Total', counts?.total],
-    ['Temp', counts?.temperature],
-    ['On', counts?.powerOn],
-    ['Off', counts?.powerOff],
-    ['Alarm', counts?.alarm],
-    ['Prime', counts?.prime],
-    ['Reboot', counts?.reboot],
-  ]
-
-  const columns: Array<DiagColumn<SchedJob>> = [
-    { key: 'type', header: 'Type', render: r => r.type, sortValue: r => r.type },
-    { key: 'side', header: 'Side', render: r => <span className="capitalize text-fg-2">{r.side ?? '—'}</span>, sortValue: r => r.side ?? '' },
-    { key: 'value', header: 'Value', align: 'right', render: r => fmtJobValue(r), sortValue: r => r.targetTempF ?? r.brightness ?? -1 },
-    { key: 'nextRun', header: 'Next run', render: r => <span className="font-mono text-xs">{r.nextRun ? new Date(r.nextRun).toLocaleString() : '—'}</span>, sortValue: r => r.nextRun ?? '' },
-    { key: 'in', header: 'In', align: 'right', render: r => <span className="text-fg-2">{fmtRel(r.nextRun)}</span>, sortValue: r => (r.nextRun ? new Date(r.nextRun).getTime() : Number.MAX_SAFE_INTEGER) },
-    { key: 'id', header: 'Job ID', render: r => <span className="font-mono text-[11px] text-fg-3">{r.id}</span>, sortValue: r => r.id },
-  ]
-
-  return (
-    <>
-      <SectionTitle title="Scheduler" hint={scheduler.data ? (scheduler.data.enabled ? 'enabled' : 'disabled') : ''} />
-
-      <div className="grid grid-cols-4 gap-2.5 @min-[900px]:grid-cols-7">
-        {countEntries.map(([label, value]) => (
-          <Metric key={label} label={label} value={value == null ? '—' : String(value)} />
-        ))}
-      </div>
-
-      {drift && (
-        <Card tone={drift.drifted ? 'warn' : undefined} className="flex-row items-center gap-2.5 py-3">
-          <StatusDot tone={drift.drifted ? 'warn' : 'ok'} />
-          <span className="text-[13px]">
-            {drift.drifted
-              ? `Drifted: ${drift.dbScheduleCount} DB schedules vs ${drift.schedulerJobCount} active jobs`
-              : `In sync · ${drift.dbScheduleCount} schedules`}
-          </span>
-        </Card>
-      )}
-
-      <SchedulerWeek jobs={jobs} />
-
-      <Card>
-        <CardHeader title="Upcoming jobs" right={<span className="font-mono text-xs text-fg-2">{jobs.length}</span>} />
-        <DiagTable
-          columns={columns}
-          rows={jobs}
-          getRowKey={r => r.id}
-          empty={scheduler.isLoading ? 'Loading…' : 'No upcoming jobs'}
-        />
-      </Card>
     </>
   )
 }

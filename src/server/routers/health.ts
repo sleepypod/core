@@ -5,6 +5,7 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { getJobManager } from '@/src/scheduler'
 import { JobType } from '@/src/scheduler/types'
+import { expandOccurrences } from '@/src/scheduler/occurrences'
 import { db, biometricsDb, sqlite } from '@/src/db'
 import {
   temperatureSchedules,
@@ -166,6 +167,77 @@ export const healthRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to get scheduler health: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Every loaded job with its cron, plus each time the jobs fire from 24 h ago
+   * to `days` ahead. Feeds the System → Scheduler nightly timeline, which needs
+   * the whole week rather than the next 10 invocations `scheduler` returns.
+   */
+  schedulerTimeline: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/scheduler-timeline', protect: false, tags: ['Health'] } })
+    .input(z.object({ days: z.number().int().min(1).max(8).default(8) }))
+    .output(z.object({
+      enabled: z.boolean(),
+      timezone: z.string(),
+      now: z.number(),
+      jobs: z.array(z.object({
+        id: z.string(),
+        type: z.string(),
+        side: z.enum(['left', 'right']).optional(),
+        schedule: z.string(),
+        oneTime: z.boolean(),
+        nextRun: z.number().nullable(),
+        targetTempF: z.number().nullable(),
+        brightness: z.number().nullable(),
+      })),
+      occurrences: z.array(z.object({
+        id: z.string(),
+        type: z.string(),
+        side: z.enum(['left', 'right']).optional(),
+        at: z.number(),
+        targetTempF: z.number().nullable(),
+        brightness: z.number().nullable(),
+      })),
+    }))
+    .query(async ({ input }) => {
+      try {
+        const scheduler = (await getJobManager()).getScheduler()
+        const now = Date.now()
+        const jobs = scheduler.getJobs()
+        const occurrences = expandOccurrences(
+          jobs,
+          new Date(now - 24 * 3_600_000),
+          new Date(now + input.days * 24 * 3_600_000),
+          scheduler.getTimezone(),
+        )
+        return {
+          enabled: scheduler.isEnabled(),
+          timezone: scheduler.getTimezone(),
+          now,
+          jobs: jobs.map((job) => {
+            const md = job.metadata ?? {}
+            return {
+              id: job.id,
+              type: job.type,
+              side: md.side === 'left' || md.side === 'right' ? md.side : undefined,
+              schedule: job.schedule,
+              oneTime: !!job.oneTime,
+              nextRun: scheduler.getNextInvocation(job.id)?.getTime() ?? null,
+              targetTempF: typeof md.targetTemperature === 'number' ? md.targetTemperature : null,
+              brightness: typeof md.brightness === 'number' ? md.brightness : null,
+            }
+          }),
+          occurrences,
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to read scheduler timeline: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

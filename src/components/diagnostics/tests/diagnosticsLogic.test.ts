@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  fmtF, fmtAge, fmtMs, fmtNum, minutesSince, fmtRel, fmtClock, fmtDayLabel,
-  VERDICT_STYLES, buildWeekLanes, jobTone, thermalDirection, fmtJobValue, biometricsFlowStatus,
-  type SchedJob,
+  fmtF, fmtAge, fmtMs, fmtNum, minutesSince, fmtClock,
+  VERDICT_STYLES, thermalDirection, biometricsFlowStatus,
 } from '../diagnosticsLogic'
 
 describe('formatters', () => {
@@ -35,12 +34,6 @@ describe('formatters', () => {
     expect(fmtClock(null)).toBe('—')
     expect(fmtClock('2026-05-31T13:05:00Z')).toMatch(/\d/)
   })
-
-  it('fmtDayLabel returns weekday + day strings', () => {
-    const { weekday, day } = fmtDayLabel(new Date('2026-05-31T12:00:00Z').getTime())
-    expect(weekday.length).toBeGreaterThan(0)
-    expect(day.length).toBeGreaterThan(0)
-  })
 })
 
 describe('time-relative formatters', () => {
@@ -54,37 +47,6 @@ describe('time-relative formatters', () => {
     expect(minutesSince(Date.now())).toBe(0)
     expect(minutesSince(Date.now() + 60_000)).toBe(0) // future → clamped
     expect(minutesSince(Date.now() - 5 * 60_000)).toBe(5)
-  })
-
-  it('fmtRel', () => {
-    expect(fmtRel(null)).toBe('—')
-    expect(fmtRel(new Date(Date.now() - 1000).toISOString())).toBe('past')
-    expect(fmtRel(new Date(Date.now() + 30_000).toISOString())).toBe('<1m')
-    expect(fmtRel(new Date(Date.now() + 5 * 60_000).toISOString())).toBe('5m')
-    expect(fmtRel(new Date(Date.now() + 2 * 3_600_000 + 3 * 60_000).toISOString())).toBe('2h 3m')
-    expect(fmtRel(new Date(Date.now() + 2 * 86_400_000 + 3 * 3_600_000).toISOString())).toBe('2d 3h')
-  })
-})
-
-describe('jobTone', () => {
-  it('maps by keyword', () => {
-    expect(jobTone('temperature')).toContain('text-warm')
-    expect(jobTone('powerOff')).toContain('text-fg-3')
-    expect(jobTone('powerOn')).toContain('text-ok')
-    expect(jobTone('alarm')).toContain('text-warn')
-    expect(jobTone('prime')).toContain('text-cool')
-    expect(jobTone('reboot')).toContain('text-stage-rem')
-    expect(jobTone('mystery')).toContain('text-fg-2')
-  })
-})
-
-describe('fmtJobValue', () => {
-  it('prefers temperature, then brightness, else dash', () => {
-    expect(fmtJobValue({ targetTempF: 82.4 })).toBe('82°F')
-    expect(fmtJobValue({ brightness: 40 })).toBe('40%')
-    expect(fmtJobValue({ targetTempF: 80, brightness: 40 })).toBe('80°F')
-    expect(fmtJobValue({})).toBe('—')
-    expect(fmtJobValue({ targetTempF: null, brightness: null })).toBe('—')
   })
 })
 
@@ -115,53 +77,6 @@ describe('thermalDirection', () => {
     expect(thermalDirection({ ...base, isPowered: false })).toEqual(VERDICT_STYLES.delivering)
     expect(thermalDirection({ ...base, currentTempF: null })).toEqual(VERDICT_STYLES.delivering)
     expect(thermalDirection({ ...base, verdict: 'weird' })).toEqual({ label: 'WEIRD', className: 'text-fg-2' })
-  })
-})
-
-describe('buildWeekLanes', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-05-31T12:00:00'))
-  })
-  afterEach(() => vi.useRealTimers())
-
-  function midnightToday(): number {
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    return d.getTime()
-  }
-
-  it('buckets jobs into 7 lanes, marks today, sorts, drops out-of-range and null', () => {
-    const start = midnightToday()
-    const job = (id: string, offsetMs: number | null): SchedJob => ({
-      id, type: 'temperature', nextRun: offsetMs == null ? null : new Date(start + offsetMs).toISOString(),
-    })
-    const jobs: SchedJob[] = [
-      job('today-late', 20 * 3_600_000), // today 20:00
-      job('today-early', 8 * 3_600_000), // today 08:00
-      job('day3', 3 * 86_400_000 + 3_600_000),
-      job('too-far', 8 * 86_400_000), // dropped
-      job('past', -86_400_000), // dropped
-      job('null', null), // skipped
-    ]
-
-    const lanes = buildWeekLanes(jobs)
-    expect(lanes).toHaveLength(7)
-    expect(lanes[0].isToday).toBe(true)
-    expect(lanes[1].isToday).toBe(false)
-    // today lane sorted ascending by time
-    expect(lanes[0].jobs.map(j => j.id)).toEqual(['today-early', 'today-late'])
-    expect(lanes[3].jobs.map(j => j.id)).toEqual(['day3'])
-    // out-of-range and null never placed
-    const allIds = lanes.flatMap(l => l.jobs.map(j => j.id))
-    expect(allIds).not.toContain('too-far')
-    expect(allIds).not.toContain('past')
-    expect(allIds).not.toContain('null')
-  })
-
-  it('handles no jobs', () => {
-    const lanes = buildWeekLanes([])
-    expect(lanes.every(l => l.jobs.length === 0)).toBe(true)
   })
 })
 
