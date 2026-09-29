@@ -294,14 +294,20 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
 
   // degraded = lost the socket; stopped / not_initialized = never polling.
   const monitorAlive = i.dacMonitor.status === 'running' || i.dacMonitor.status === 'starting'
-  const monitorStatus = freshness({ alive: monitorAlive, lastOutputAt: i.dacMonitor.lastPollAt, expecting: true, staleAfterMs: STALE_AFTER_MS['dac-monitor'], now })
+  // Before its first poll lands, a freshly started monitor isn't stalled yet.
+  const firstPollPending = monitorAlive && i.dacMonitor.lastPollAt == null && i.coreUptimeMs <= FRAME_GRACE_MS
+  const monitorStatus = firstPollPending
+    ? 'unknown'
+    : freshness({ alive: monitorAlive, lastOutputAt: i.dacMonitor.lastPollAt, expecting: true, staleAfterMs: STALE_AFTER_MS['dac-monitor'], now })
   put(
     'dac-monitor',
     monitorStatus,
     i.dacMonitor.lastPollAt == null ? i.dacMonitor.status.replace('_', ' ') : `polled ${ago(i.dacMonitor.lastPollAt)}`,
     monitorStatus === 'ok'
       ? 'Polling device status'
-      : monitorStatus === 'down' ? `Monitor ${i.dacMonitor.status.replace('_', ' ')}` : 'Running, but polls have stopped succeeding',
+      : monitorStatus === 'down'
+        ? `Monitor ${i.dacMonitor.status.replace('_', ' ')}`
+        : monitorStatus === 'unknown' ? 'Waiting for the first poll' : 'Running, but polls have stopped succeeding',
     i.dacMonitor.lastPollAt,
   )
 

@@ -130,6 +130,14 @@ describe('evaluateDataPath', () => {
     expect(later.verdict.nodeId).toBe('sensor-piezo')
   })
 
+  it('gives a just-started DAC monitor until its first poll', () => {
+    const fresh = evaluateDataPath(healthy({ coreUptimeMs: 20_000, dacMonitor: { status: 'running', lastPollAt: null } }))
+    expect(fresh.nodes.find(n => n.id === 'dac-monitor')?.status).toBe('unknown')
+    expect(fresh.verdict.also).toEqual([])
+    const later = evaluateDataPath(healthy({ coreUptimeMs: 10 * MIN, dacMonitor: { status: 'running', lastPollAt: null } }))
+    expect(later.nodes.find(n => n.id === 'dac-monitor')?.status).toBe('stale')
+  })
+
   it('marks bed temperature stale when a powered side’s pump is stalled', () => {
     const s = evaluateDataPath(healthy({ thermal: [{ side: 'left', verdict: 'stalled' }, { side: 'right', verdict: 'off' }] }))
     expect(node(s, 'out-temp')?.status).toBe('stale')
