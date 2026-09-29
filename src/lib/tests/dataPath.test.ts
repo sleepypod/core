@@ -20,7 +20,7 @@ function healthy(overrides: Partial<DataPathInputs> = {}): DataPathInputs {
     database: { ok: true, latencyMs: 0.4 },
     scheduler: { enabled: true, jobs: 12, healthy: true },
     occupied: { left: true, right: false },
-    stillness: { left: { rows: 120, maxScore: 40, lastMovedAt: NOW - 5 * MIN }, right: { rows: 0, maxScore: 0, lastMovedAt: null } },
+    stillness: { left: { rows: 120, maxScore: 120 }, right: { rows: 0, maxScore: 0 } },
     lastVitalAt: { left: NOW - MIN, right: NOW - 20 * 3_600_000 },
     lastMovementAt: { left: NOW - MIN, right: null },
     lastEnvAt: NOW - MIN,
@@ -122,30 +122,40 @@ describe('evaluateDataPath', () => {
     expect(s.verdict.also).toEqual(['DAC socket down'])
   })
 
-  it('reads a side that never moves and has no vitals as suspect, and blames the occupancy reading', () => {
+  it('asks whether anyone is there when a side reads occupied with no vitals or restless movement', () => {
     const s = evaluateDataPath(healthy({
-      stillness: { left: { rows: 118, maxScore: 0, lastMovedAt: NOW - 8 * 60 * MIN }, right: { rows: 0, maxScore: 0, lastMovedAt: null } },
-      lastVitalAt: { left: NOW - (7 * 60 + 25) * MIN, right: null },
+      // Small scores are restart noise, not a body turning over.
+      stillness: { left: { rows: 119, maxScore: 2 }, right: { rows: 0, maxScore: 0 } },
+      lastVitalAt: { left: NOW - (7 * 60 + 56) * MIN, right: null },
     }))
     expect(s.occupancy).toEqual({ left: 'suspect', right: 'empty' })
-    // The piezo processor isn't blamed for an empty bed.
-    expect(node(s, 'piezo-processor')?.status).toBe('idle')
+    // Neither blamed nor cleared until someone answers.
+    expect(node(s, 'piezo-processor')?.status).toBe('unknown')
     expect(node(s, 'sleep-detector')?.status).toBe('stale')
     expect(s.verdict.nodeId).toBe('sleep-detector')
-    expect(s.verdict.headline).toBe('Left side reads occupied but hasn’t moved in 8h 00m and has no vitals. The empty-bed reading is probably off.')
-    expect(s.verdict.fix).toEqual({ kind: 'recalibrate', sides: ['left'], label: 'Bed is empty — recalibrate left' })
+    expect(s.verdict.headline).toBe('Left side reads occupied, but no vitals or movement for 7h 56m. Is anyone there?')
+    expect(s.verdict.fix).toEqual({ kind: 'occupancy', sides: ['left'], unit: 'sleepypod-piezo-processor.service', label: 'Is anyone there?' })
+  })
+
+  it('keeps a restless side with no vitals as occupied, so the piezo processor is blamed', () => {
+    const s = evaluateDataPath(healthy({
+      stillness: { left: { rows: 120, maxScore: 180 }, right: { rows: 0, maxScore: 0 } },
+      lastVitalAt: { left: NOW - 3 * 60 * MIN, right: null },
+    }))
+    expect(s.occupancy.left).toBe('occupied')
+    expect(s.verdict.nodeId).toBe('piezo-processor')
   })
 
   it('doesn’t judge a session that only just started', () => {
     const s = evaluateDataPath(healthy({
-      stillness: { left: { rows: 20, maxScore: 0, lastMovedAt: null }, right: { rows: 0, maxScore: 0, lastMovedAt: null } },
+      stillness: { left: { rows: 20, maxScore: 0 }, right: { rows: 0, maxScore: 0 } },
       lastVitalAt: { left: null, right: null },
     }))
     expect(s.occupancy.left).toBe('occupied')
   })
 
   it('keeps a still sleeper with vitals as occupied', () => {
-    const s = evaluateDataPath(healthy({ stillness: { left: { rows: 120, maxScore: 0, lastMovedAt: null }, right: { rows: 0, maxScore: 0, lastMovedAt: null } } }))
+    const s = evaluateDataPath(healthy({ stillness: { left: { rows: 120, maxScore: 0 }, right: { rows: 0, maxScore: 0 } } }))
     expect(s.occupancy.left).toBe('occupied')
     expect(s.verdict.tone).toBe('ok')
   })

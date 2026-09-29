@@ -45,8 +45,11 @@ vi.mock('@/src/utils/trpc', () => ({
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
     },
     settings: { getAll: { useQuery: () => ({ data: { sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } } }) } },
-    health: { dataPath: { useQuery: () => ({ data: state.dataPath }) } },
-    calibration: { triggerCalibration: { useMutation: () => ({ mutateAsync: state.recalibrate, isPending: false, error: null }) } },
+    health: {
+      dataPath: { useQuery: () => ({ data: state.dataPath }) },
+      restartService: { useMutation: () => ({ mutateAsync: vi.fn(), isPending: false, data: undefined, error: null }) },
+    },
+    calibration: { triggerCalibration: { useMutation: () => ({ mutateAsync: state.recalibrate, isPending: false, isSuccess: false, error: null }) } },
     useUtils: () => ({}),
   },
 }))
@@ -82,14 +85,13 @@ describe('BiometricsPage', () => {
     expect(within(banner).getByRole('link', { name: /Health/ }).getAttribute('href')).toBe('/en/system?tab=health')
   })
 
-  it('blames the occupancy reading, not the pipeline, when the side looks empty', async () => {
+  it('asks whether anyone is there instead of blaming the pipeline when the side looks empty', async () => {
     state.dataPath = { occupancy: { left: 'suspect', right: 'empty' } }
     render(<BiometricsPage />)
     expect(screen.queryByTestId('stale-banner')).toBeNull()
     const banner = screen.getByTestId('suspect-banner')
-    expect(banner.textContent).toContain('empty-bed reading is probably off')
-    fireEvent.click(within(banner).getByRole('button', { name: 'Bed is empty — recalibrate Jon' }))
-    fireEvent.click(within(banner).getByRole('button', { name: 'Recalibrate' }))
+    expect(banner.textContent).toContain('Jon’s side reads occupied, but the last vital arrived 3h 56m ago and nobody has moved since.')
+    fireEvent.click(within(banner).getByRole('button', { name: 'No — recalibrate empty bed' }))
     await waitFor(() => expect(state.recalibrate).toHaveBeenCalledWith({ side: 'left', sensorType: 'capacitance' }))
   })
 

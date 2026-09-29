@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { and, eq, gt, gte, max, sql } from 'drizzle-orm'
+import { and, eq, gte, max, sql } from 'drizzle-orm'
 import { sqlite, biometricsDb } from '@/src/db'
 import { bedTemp, freezerTemp, movement, vitals } from '@/src/db/biometrics-schema'
 import { getDatabaseIntegrity } from '@/src/db/integrity'
@@ -40,10 +40,9 @@ function lastPerSide(table: typeof vitals | typeof movement): Record<Side, numbe
   return out
 }
 
-/** Movement rows, top score and last real movement per side, over the stillness window. */
+/** Movement rows and top score per side, over the stillness window. */
 function stillnessPerSide(now: number): DataPathInputs['stillness'] {
   const since = new Date(now - STILL_WINDOW_MS)
-  const day = new Date(now - 24 * 3_600_000)
   const out = {} as DataPathInputs['stillness']
   for (const side of SIDES) {
     const [w] = biometricsDb
@@ -51,12 +50,7 @@ function stillnessPerSide(now: number): DataPathInputs['stillness'] {
       .from(movement)
       .where(and(eq(movement.side, side), gte(movement.timestamp, since)))
       .all()
-    const [moved] = biometricsDb
-      .select({ at: max(movement.timestamp) })
-      .from(movement)
-      .where(and(eq(movement.side, side), gte(movement.timestamp, day), gt(movement.totalMovement, 0)))
-      .all()
-    out[side] = { rows: Number(w?.rows ?? 0), maxScore: w?.top ?? 0, lastMovedAt: toMs(moved?.at) }
+    out[side] = { rows: Number(w?.rows ?? 0), maxScore: w?.top ?? 0 }
   }
   return out
 }

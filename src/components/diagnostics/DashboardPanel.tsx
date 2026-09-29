@@ -21,7 +21,7 @@ import { fmtClock, fmtF, thermalDirection, type SchedJob } from './diagnosticsLo
 import { attentionItems, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow, TONIGHT_END_H, TONIGHT_START_H } from './dashboardLogic'
 import { panelDomain, seriesPath, THERMAL_PANELS } from './thermalHistoryLogic'
 import type { DiagSection } from './DiagnosticsConsole'
-import { RecalibrateEmptyBed } from './RecalibrateEmptyBed'
+import { OccupancyCheck } from './OccupancyCheck'
 
 type ThermalData = inferRouterOutputs<AppRouter>['health']['thermal']
 type ThermalSide = ThermalData['sides'][number]
@@ -219,7 +219,7 @@ function AttentionCard() {
               </Button>
             </div>
           )}
-          {it.id === 'occupancy' && <RecalibrateEmptyBed sides={suspectSides} size="sm" />}
+          {it.id === 'occupancy' && <OccupancyCheck sides={suspectSides} size="sm" />}
           {it.id === 'prime' && (
             <Button size="sm" onClick={() => prime.mutate({})} disabled={prime.isPending || priming}>
               {priming ? 'Priming…' : prime.isPending ? 'Starting…' : 'Start prime'}

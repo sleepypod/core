@@ -86,8 +86,8 @@ export function attentionItems(
   if (suspectSides.length > 0) {
     out.push({
       id: 'occupancy',
-      title: `${suspectSides.length === 2 ? 'Both sides read' : `The ${suspectSides[0]} side reads`} occupied, but nobody seems to be there`,
-      detail: 'No movement and no vitals for 2 hours. If the bed is empty, take a fresh empty-bed reading.',
+      title: `${suspectSides.length === 2 ? 'Both sides read' : `The ${suspectSides[0]} side reads`} occupied, but there are no vitals`,
+      detail: 'No vitals or movement for over 2 hours. Either nobody is there and the empty-bed reading is off, or vitals are stuck.',
     })
   }
   if (m && !m.pumpStallProtectionEnabled) {

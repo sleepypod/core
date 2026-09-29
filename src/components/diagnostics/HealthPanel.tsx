@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import { langFromPath } from '@/src/components/AppShell/navItems'
 import { STAGES, type NodeId } from '@/src/lib/dataPath'
 import { HapticsTestCard } from './HapticsTestCard'
-import { RecalibrateEmptyBed } from './RecalibrateEmptyBed'
+import { OccupancyCheck } from './OccupancyCheck'
 import { SectionTitle } from './parts'
 import {
   MAP, STATUS_FILL, STATUS_TONE, STATUS_WORD,
@@ -97,8 +97,8 @@ function FixAction({ fix, onJump }: { fix: Fix, onJump: (s: DiagSection) => void
   if (fix.kind === 'link') {
     return <Button icon={ArrowRight} onClick={() => onJump(fix.tab)}>{fix.label}</Button>
   }
-  if (fix.kind === 'recalibrate') {
-    return <RecalibrateEmptyBed sides={fix.sides} />
+  if (fix.kind === 'occupancy') {
+    return <OccupancyCheck sides={fix.sides} unit={fix.unit} />
   }
   if (fix.kind === 'logs') {
     return (

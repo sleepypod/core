@@ -20,7 +20,7 @@ import { DiagTable, type DiagColumn } from '@/src/components/diagnostics/DiagTab
 import { fmtNum } from '@/src/components/diagnostics/diagnosticsLogic'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
-import { RecalibrateEmptyBed } from '@/src/components/diagnostics/RecalibrateEmptyBed'
+import { OccupancyCheck } from '@/src/components/diagnostics/OccupancyCheck'
 import { RawDataButton } from './RawDataButton'
 import { VitalsChart, VitalsLegend } from './VitalsChart'
 import {
@@ -126,9 +126,11 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
         <div className="flex flex-wrap items-center gap-3 rounded-[10px] border border-warn-line bg-warn-bg/50 px-4 py-3 text-[14px] text-warn" role="status" data-testid="suspect-banner">
           <HeartPulse size={18} className="shrink-0" />
           <span className="min-w-0 flex-1 basis-[240px]">
-            {`${sideName(side)}’s side reads occupied, but hasn’t moved or produced vitals in over 2 hours. The empty-bed reading is probably off, not the vitals pipeline.`}
+            {lastVitalAt == null
+              ? `${sideName(side)}’s side reads occupied, but no vitals have arrived and nobody has moved in over 2 hours.`
+              : `${sideName(side)}’s side reads occupied, but the last vital arrived ${fmtDuration(now - lastVitalAt)} ago and nobody has moved since.`}
           </span>
-          <RecalibrateEmptyBed sides={[side]} size="sm" />
+          <OccupancyCheck sides={[side]} size="sm" />
         </div>
       )}
 

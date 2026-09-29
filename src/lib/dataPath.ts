@@ -116,10 +116,10 @@ export interface DataPathInputs {
   occupied: Record<Side, boolean>
   /**
    * Sleep-detector output over the last STILL_WINDOW_MS per side: how many
-   * movement rows it wrote (one a minute while it holds a session open), the
-   * largest score among them, and when the side last moved at all.
+   * movement rows it wrote (one a minute while it holds a session open) and
+   * the largest score among them.
    */
-  stillness: Record<Side, { rows: number, maxScore: number, lastMovedAt: number | null }>
+  stillness: Record<Side, { rows: number, maxScore: number }>
   lastVitalAt: Record<Side, number | null>
   lastMovementAt: Record<Side, number | null>
   lastEnvAt: number | null
@@ -157,11 +157,12 @@ export interface Verdict {
 
 export type Fix
   = | { kind: 'restart', unit: RestartableUnit, label: string }
-    | { kind: 'recalibrate', sides: Side[], label: string }
+    // Only a person can tell an empty bed with a drifted reading from a sleeper whose vitals stopped.
+    | { kind: 'occupancy', sides: Side[], unit: RestartableUnit, label: string }
     | { kind: 'logs', unit: string, label: string, hint?: string }
     | { kind: 'link', tab: 'scheduler' | 'thermal', label: string }
 
-/** empty · occupied · suspect (reads occupied, but nothing a body does shows up). */
+/** empty · occupied · suspect (reads occupied, but no vitals or restless movement for hours). */
 export type OccupancyRead = 'empty' | 'occupied' | 'suspect'
 
 export interface DataPathState {
@@ -172,8 +173,14 @@ export interface DataPathState {
   verdict: Verdict
 }
 
-/** How long a side may read occupied with no movement and no vitals before it's suspect. */
+/** How long a side may read occupied with no vitals or restless movement before it's suspect. */
 export const STILL_WINDOW_MS = 2 * 3_600_000
+/**
+ * Movement below this is noise, not a body turning over: the sleep detector
+ * writes small scores for a still sleeper and for ~10 min after it restarts.
+ * Matches RESTLESS_SCORE_MIN in src/lib/movement.
+ */
+const RESTLESS_SCORE = 50
 /**
  * Movement rows the sleep detector must have written in the window — one a
  * minute during a session — so a session opened minutes ago isn't judged.
@@ -233,14 +240,14 @@ function unitWord(alive: boolean | null): string {
 export function evaluateDataPath(i: DataPathInputs): DataPathState {
   const { now } = i
   // A capacitance level stuck above a drifted empty-bed baseline reads as a
-  // sleeper who never moves and never produces a heartbeat. A real sleeper
-  // moves or yields vitals within two hours, so such a side is suspect and
-  // doesn't count as "in bed" for judging the piezo and sleep modules.
+  // sleeper who never produces a heartbeat — and so does a real sleeper whose
+  // vitals pipeline stopped. Hours of "occupied" with no vitals and no
+  // restless movement is suspect: only someone at the bed can say which.
   const occupancy = Object.fromEntries(SIDES.map((s) => {
     if (!i.occupied[s]) return [s, 'empty']
     const still = i.stillness[s]
     const vitalsQuiet = i.lastVitalAt[s] == null || now - (i.lastVitalAt[s] as number) > STILL_WINDOW_MS
-    const suspect = still.rows >= STILL_MIN_ROWS && still.maxScore === 0 && vitalsQuiet
+    const suspect = still.rows >= STILL_MIN_ROWS && still.maxScore < RESTLESS_SCORE && vitalsQuiet
     return [s, suspect ? 'suspect' : 'occupied']
   })) as Record<Side, OccupancyRead>
   const suspectSides = SIDES.filter(s => occupancy[s] === 'suspect')
@@ -323,10 +330,13 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
   moduleNode('sleep-detector', 'sleepypod-sleep-detector.service', inBedWorst(i.lastMovementAt), anyOccupied, 'movement')
   if (suspectSides.length > 0 && node('sleep-detector').status !== 'down') {
     const who = suspectSides.length === 2 ? 'Both sides read' : `${suspectSides[0] === 'left' ? 'Left' : 'Right'} side reads`
-    const moved = latest(...suspectSides.map(s => i.stillness[s].lastMovedAt))
-    const since = moved == null ? 'in over 2 hours' : `in ${fmtAgo(now - moved).replace(' ago', '')}`
+    const quietSince = suspectSides.map(s => i.lastVitalAt[s]).some(t => t == null) ? null : Math.min(...suspectSides.map(s => i.lastVitalAt[s] as number))
+    const span = quietSince == null ? 'over 2 hours' : fmtAgo(now - quietSince).replace(' ago', '')
     const sd = node('sleep-detector')
-    put('sleep-detector', 'stale', sd.metric, `${who} occupied but hasn’t moved ${since} and has no vitals — the empty-bed reading is probably off`, sd.lastOutputAt)
+    put('sleep-detector', 'stale', sd.metric, `${who} occupied, but no vitals or movement for ${span} — either nobody is there and the empty-bed reading is off, or vitals are stuck`, sd.lastOutputAt)
+    // Vitals can't be judged until someone says whether the side is empty.
+    const pz = node('piezo-processor')
+    if (pz.status === 'idle') put('piezo-processor', 'unknown', pz.metric, `No vitals from a side that reads occupied — can’t tell yet whether anyone is there`, pz.lastOutputAt)
   }
   moduleNode('environment-monitor', 'sleepypod-environment-monitor.service', i.lastEnvAt, true, 'bed temperature')
 
@@ -454,13 +464,14 @@ export function verdictOf(nodes: NodeState[], now: number, suspectSides: Side[] 
   // The sleep detector is "stale" here because its occupancy reading is
   // wrong, not because it stopped: the fix is a fresh empty-bed reading.
   const phantom = cause.id === 'sleep-detector' && cause.status === 'stale' && suspectSides.length > 0
-  const who = suspectSides.length === 2 ? 'both sides' : suspectSides[0]
   return {
     tone: cause.status === 'down' || cause.stage === 'sensors' ? 'danger' : 'warn',
-    headline: phantom ? `${cause.detail.replace(' — the ', '. The ')}.` : headlineFor(cause, outputs, now),
+    headline: phantom ? `${cause.detail.split(' — ')[0]}. Is anyone there?` : headlineFor(cause, outputs, now),
     nodeId: cause.id,
     lastGoodId: lastGood?.id ?? null,
-    fix: phantom ? { kind: 'recalibrate', sides: suspectSides, label: `Bed is empty — recalibrate ${who}` } : fixFor(cause),
+    fix: phantom
+      ? { kind: 'occupancy', sides: suspectSides, unit: 'sleepypod-piezo-processor.service', label: 'Is anyone there?' }
+      : fixFor(cause),
     also,
   }
 }
