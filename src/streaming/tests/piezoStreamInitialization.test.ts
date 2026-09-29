@@ -254,6 +254,25 @@ describe('piezoStream module initialization contracts', () => {
     expect(JSON.parse(visitor.sent.at(-1) ?? '{}')).toMatchObject({ type: 'snapshot', latest: [], waveform: [{ ts: now - 1 }, { ts: now }] })
   })
 
+  it('validates waveform requests and exposes the bounded cache range to snapshot clients', async () => {
+    const stream = await loadFreshModule()
+    stream.startPiezoStreamServer()
+    const client = connectFakeClient()
+    client.emitMessage(JSON.stringify({ type: 'subscribe', snapshot: true, sensors: ['not-a-sensor'] }))
+    expect(client.sent.map(s => JSON.parse(s).type)).toEqual(['error'])
+    client.emitMessage(JSON.stringify({ type: 'subscribe', snapshot: true, sensors: ['piezo-dual'] }))
+    client.emitMessage(JSON.stringify({ type: 'get_time_range' }))
+    expect(JSON.parse(client.sent.at(-1) ?? '{}')).toEqual({ type: 'time_range', min: 0, max: 0, file: null })
+    const before = client.sent.length
+    for (const msg of [
+      { type: 'get_waveform', timestamp: '100', requestId: 1 },
+      { type: 'get_waveform', timestamp: 100, requestId: '1' },
+      { type: 'get_waveform', timestamp: 100 },
+    ]) client.emitMessage(JSON.stringify(msg))
+    client.emitMessage('{"type":"get_waveform","timestamp":1e999,"requestId":1}')
+    expect(client.sent).toHaveLength(before)
+  })
+
   it('passes the configured WebSocket port to the server constructor', async () => {
     const piezoStream = await loadFreshModule({ wsPort: '4311' })
 

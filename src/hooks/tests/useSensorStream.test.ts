@@ -207,6 +207,48 @@ describe('useSensorStream', () => {
     stream.unmount()
   })
 
+  it('times out replay requests, ignores disconnected requests, and cancels timeout effects after Go live', async () => {
+    vi.useFakeTimers()
+    const stream = renderHook(() => useSensorStream())
+    await vi.advanceTimersByTimeAsync(0)
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => stream.result.current.seekWaveform(50))
+    expect(ws.sent).toEqual([])
+    act(() => ws.triggerOpen())
+    act(() => stream.result.current.seekWaveform(50))
+    expect(stream.result.current.isSeeking).toBe(true)
+    act(() => vi.advanceTimersByTime(5000))
+    expect(stream.result.current.isSeeking).toBe(false)
+    expect(stream.result.current.lastError).toBe('Waveform request timed out')
+    // A reply that arrives before its deadline must not become a timeout later.
+    act(() => ws.triggerOpen())
+    act(() => stream.result.current.seekWaveform(60))
+    const request = JSON.parse(ws.sent.at(-1) ?? '{}')
+    act(() => ws.triggerMessage({ type: 'waveform', requestId: request.requestId, frames: [] }))
+    act(() => vi.advanceTimersByTime(5000))
+    expect(stream.result.current.lastError).toBeNull()
+    act(() => stream.result.current.seekWaveform(70))
+    act(() => stream.result.current.goLive())
+    act(() => vi.advanceTimersByTime(5000))
+    expect(stream.result.current.lastError).toBeNull()
+    stream.unmount()
+  })
+
+  it('hydrates range metadata and prevents an older snapshot from overwriting current values', async () => {
+    const stream = renderHook(() => useSensorStream())
+    await waitFor(() => expect(wsMock.sockets.length).toBe(1))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    act(() => ws.triggerMessage({ type: 'snapshot', latest: [], waveform: [], range: { min: 0, max: 0 } }))
+    expect(stream.result.current.timeRange).toBeNull()
+    expect(stream.result.current.lastSensorTime).toBeNull()
+    act(() => ws.triggerMessage({ type: 'capSense', ts: 100, left: 1, right: 2 }))
+    act(() => ws.triggerMessage({ type: 'snapshot', latest: [{ type: 'capSense', ts: 90, left: 9, right: 9 }], waveform: [], range: { min: 60, max: 100 } }))
+    expect(stream.result.current.timeRange).toEqual({ min: 60, max: 100 })
+    expect(stream.result.current.latestFrames.capSense?.ts).toBe(100)
+    stream.unmount()
+  })
+
   it('opens a WebSocket on mount and reports connecting status', async () => {
     const { result, unmount } = renderHook(() => useSensorStream({ sensors: ['capSense'] }))
     await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))

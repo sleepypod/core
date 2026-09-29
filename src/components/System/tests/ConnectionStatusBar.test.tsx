@@ -27,6 +27,21 @@ describe('ConnectionStatusBar', () => {
     finally { vi.useRealTimers() }
   })
 
+  it('shows elapsed minutes for a stale measurement and clamps small clock skew', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(200_000)
+      const { rerender, unmount } = render(<ConnectionStatusBar {...base} lastFrameTime={100_000} />)
+      expect(screen.getByText('sensor age 1m')).toBeTruthy()
+      expect(screen.getByTestId('stream-status').textContent).toContain('STALE')
+      rerender(<ConnectionStatusBar {...base} lastFrameTime={201_000} />)
+      expect(screen.getByText('sensor age 0.0s')).toBeTruthy()
+      expect(screen.getByTestId('stream-status').textContent).toContain('LIVE')
+      unmount()
+    }
+    finally { vi.useRealTimers() }
+  })
+
   it('labels each connection state', () => {
     const { rerender } = render(<ConnectionStatusBar {...base} />)
     expect(screen.getByTestId('stream-status').textContent).toContain('LIVE')

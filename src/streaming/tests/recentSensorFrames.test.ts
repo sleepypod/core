@@ -31,6 +31,32 @@ describe('recent sensor display cache', () => {
     expect(cache.range(141)).toEqual({ min: 0, max: 0 })
   })
 
+  it('keeps the newest sensor value and bounds both sensor count and total snapshot size', () => {
+    const cache = new RecentSensorFrames()
+    for (let i = 0; i < 35; i++) cache.add({ type: `sensor-${i}`, ts: 100, reading: i }, 100)
+    expect(cache.snapshot(undefined, 100).latest).toHaveLength(32)
+    expect(cache.snapshot(undefined, 100).latest[0].type).toBe('sensor-3')
+    cache.add({ type: 'sensor-3', ts: 101, reading: 999 }, 101)
+    expect(cache.snapshot(new Set(['sensor-3']), 101).latest).toEqual([{ type: 'sensor-3', ts: 101, reading: 999 }])
+    for (let i = 0; i < 10; i++) cache.add({ type: `large-${i}`, ts: 101, data: 'x'.repeat(9_000) }, 101)
+    const latest = cache.snapshot(undefined, 101).latest
+    expect(latest.length).toBeLessThan(5)
+    expect(latest.at(-1)?.type).toBe('large-9')
+    expect(JSON.stringify(latest).length).toBeLessThan(256 * 1024)
+  })
+
+  it('accepts ordinary nested metadata but rejects malformed and excessively deep records', () => {
+    const cache = new RecentSensorFrames()
+    const valid = { type: 'bedTemp', ts: 100, metadata: { calibrated: true, missing: null, values: [1, 2] } }
+    cache.add(valid, 100)
+    cache.add({ ts: 100 }, 100)
+    cache.add({ type: 'bad', ts: '100' }, 100)
+    let nested: Record<string, unknown> = { leaf: 1 }
+    for (let i = 0; i < 15; i++) nested = { nested }
+    cache.add({ type: 'too-deep', ts: 100, nested }, 100)
+    expect(cache.snapshot(undefined, 100).latest).toEqual([valid])
+  })
+
   it('bounds retained waveform bytes even with repeated timestamps', () => {
     const cache = new RecentSensorFrames()
     for (let i = 0; i < 100; i++) cache.add({ ...piezo(100), extra: 'x'.repeat(9_000) }, 100)
