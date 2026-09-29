@@ -169,7 +169,7 @@ function NightTimeline({ occurrences, now, next }: { occurrences: TimelineOccurr
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5">
         <span className="text-[15px] font-medium">{night.label}</span>
         <span className="font-mono text-xs text-fg-2">{`${night.dates} · ${night.occurrences.length} jobs`}</span>
-        <div role="tablist" aria-label="Night" className="flex gap-0.5 rounded-ctl border border-line p-0.5 @min-[760px]:ml-auto">
+        <div role="tablist" aria-label="Night" className="no-scrollbar flex max-w-full gap-0.5 overflow-x-auto rounded-ctl border border-line p-0.5 @min-[760px]:ml-auto">
           {nights.map((n, i) => (
             <button
               key={n.start}
@@ -179,7 +179,7 @@ function NightTimeline({ occurrences, now, next }: { occurrences: TimelineOccurr
               title={n.occurrences.length === 0 ? 'No jobs this night' : `${n.occurrences.length} jobs`}
               onClick={() => setPicked(i)}
               className={cn(
-                'cursor-pointer rounded-[6px] px-2.5 py-1 text-[13px] transition-colors',
+                'shrink-0 cursor-pointer rounded-[6px] px-2.5 py-1 text-[13px] transition-colors',
                 i === picked ? 'bg-active text-fg' : n.occurrences.length === 0 ? 'text-fg-3 hover:bg-active' : 'text-fg-2 hover:bg-active',
               )}
             >

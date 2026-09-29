@@ -303,7 +303,7 @@ function DatabaseCard({ db, data }: { db: Db, data: Overview }) {
         <Fact label="Migrations" value={`${db.migrations.applied} / ${db.migrations.known}`} sub={mig.text} tone={mig.warn ? 'warn' : undefined} />
       </div>
       <div className="flex flex-col">
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(96px,140px)_64px] items-center gap-3 pb-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-fg-3">
+        <div className="grid grid-cols-[minmax(0,1fr)_60px_52px] @min-[480px]:grid-cols-[minmax(0,1fr)_minmax(96px,140px)_64px] items-center gap-3 pb-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-fg-3">
           <span>{`Table · ${tables.length}`}</span>
           <span className="flex justify-between">
             <span>Writes</span>
@@ -330,7 +330,7 @@ function TableRow({ table: t, occupied, now, color }: { table: Table, occupied: 
   return (
     <div
       data-testid={`table-${t.name}`}
-      className={cn('-mx-2 grid grid-cols-[minmax(0,1fr)_minmax(96px,140px)_64px] items-center gap-3 rounded-[8px] px-2 py-1.5', stalled && 'bg-active')}
+      className={cn('-mx-2 grid grid-cols-[minmax(0,1fr)_60px_52px] @min-[480px]:grid-cols-[minmax(0,1fr)_minmax(96px,140px)_64px] items-center gap-3 rounded-[8px] px-2 py-1.5', stalled && 'bg-active')}
     >
       <div className="flex min-w-0 flex-col">
         <span className="flex min-w-0 items-center gap-1.5">
