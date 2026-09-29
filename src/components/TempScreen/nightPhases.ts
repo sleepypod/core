@@ -1,4 +1,5 @@
 import { TEMP_NEUTRAL, TEMP_RANGE } from '@/src/hardware/types'
+import { curveToScheduleTemperatures, generateSleepCurve } from '@/src/lib/sleepCurve/generate'
 import { DAYS_OF_WEEK, getCurrentDay, hhmmToMinutes, type DayOfWeek } from '@/src/lib/scheduleTime'
 import { TEMP } from '@/src/lib/tempColors'
 import { setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
@@ -185,3 +186,80 @@ export function phaseShiftUpdates(
   return updates
 }
 
+// ── Template ────────────────────────────────────────────────────────────────
+// A side with no schedule tonight gets Night / Dawn from the balanced sleep
+// curve (the Schedule page's default preset). Nothing is written until the
+// first − / +; then the whole curve lands on every night without a schedule.
+
+export const TEMPLATE_BEDTIME = '22:00'
+export const TEMPLATE_WAKE = '07:00'
+
+/** Template set points (negative ids) for each day with no enabled set points. */
+export function templateRows(rows: ScheduleTempRow[]): ScheduleTempRow[] {
+  const bedtimeMinutes = hhmmToMinutes(TEMPLATE_BEDTIME)
+  const curve = curveToScheduleTemperatures(
+    generateSleepCurve({ bedtimeMinutes, wakeMinutes: hhmmToMinutes(TEMPLATE_WAKE) }),
+    bedtimeMinutes,
+  )
+  const open = DAYS_OF_WEEK.filter(d => !rows.some(r => r.enabled && r.dayOfWeek === d))
+  let id = 0
+  return open.flatMap(dayOfWeek => Object.entries(curve).map(([time, temperature]) => ({
+    id: --id,
+    dayOfWeek,
+    time,
+    temperature: Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, Math.round(temperature))),
+    enabled: true,
+  })))
+}
+
+interface PowerRowRef {
+  id: number
+  dayOfWeek: DayOfWeek
+}
+
+/**
+ * batchUpdate input that creates the template on its days with Night / Dawn
+ * shifted to the chosen values, plus a power window from the first to the
+ * last set point (as the Schedule page's curve save does). Leftover disabled
+ * set points and power rows on those days are replaced.
+ */
+export function templateBatch(
+  side: 'left' | 'right',
+  existing: { temperature: ScheduleTempRow[], power: PowerRowRef[] },
+  template: ScheduleTempRow[],
+  phases: NightPhases,
+  targets: Partial<Record<NightPhaseKey, number>>,
+) {
+  const temps = new Map(template.map(r => [r.id, r.temperature]))
+  for (const phase of ['night', 'dawn'] as const) {
+    const want = targets[phase]
+    const p = phases[phase]
+    if (want == null || !p) continue
+    for (const u of phaseShiftUpdates(template, phases, phase, want - Math.round(p.temperatureF))) temps.set(u.id, u.temperature)
+  }
+  const days = new Set(template.map(r => r.dayOfWeek))
+  const byDay = new Map<DayOfWeek, ScheduleTempRow[]>()
+  for (const r of template) byDay.set(r.dayOfWeek, [...(byDay.get(r.dayOfWeek) ?? []), r])
+
+  const power = [...byDay.entries()].flatMap(([dayOfWeek, dayRows]) => {
+    const ordered = nightOrdered(dayRows)
+    const first = ordered[0]
+    const last = ordered[ordered.length - 1]
+    if (!first || first.time === last.time) return []
+    const onTemperature = temps.get(dayRows.find(r => r.time === first.time)?.id ?? 0) ?? first.temperature
+    return [{ side, dayOfWeek, onTime: first.time, offTime: last.time, onTemperature, enabled: true }]
+  })
+
+  return {
+    deletes: {
+      temperature: existing.temperature.filter(r => days.has(r.dayOfWeek)).map(r => r.id),
+      power: existing.power.filter(r => days.has(r.dayOfWeek)).map(r => r.id),
+      alarm: [],
+    },
+    creates: {
+      temperature: template.map(r => ({ side, dayOfWeek: r.dayOfWeek, time: r.time, temperature: temps.get(r.id) ?? r.temperature, enabled: true })),
+      power,
+      alarm: [],
+    },
+  }
+}

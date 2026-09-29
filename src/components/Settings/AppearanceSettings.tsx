@@ -98,6 +98,7 @@ function StepperPreview({ display }: { display: TempDisplay }) {
   const phases = nightPhases(PREVIEW_ROWS, now)
   const schedule = {
     phases,
+    draft: false,
     isLoading: false,
     error: null,
     saving: false,

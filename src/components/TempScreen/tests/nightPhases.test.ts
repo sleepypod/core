@@ -6,6 +6,8 @@ import {
   nightPhases,
   phaseShiftUpdates,
   stepForDisplay,
+  templateBatch,
+  templateRows,
   type ScheduleTempRow,
 } from '../nightPhases'
 import { skyHue, tempHue } from '@/src/lib/tempColors'
@@ -123,5 +125,32 @@ describe('colors', () => {
     expect(skyHue(0)).toBe(235)
     expect(skyHue(390)).toBe(15)
     expect(skyHue(12 * 60)).toBe(205)
+  })
+})
+
+describe('template', () => {
+  it('fills only the nights without a schedule and splits into Night / Dawn', () => {
+    const t = templateRows(curve('monday', 1))
+    expect(new Set(t.map(r => r.dayOfWeek)).has('monday')).toBe(false)
+    expect(new Set(t.map(r => r.dayOfWeek)).size).toBe(6)
+    const p = phasesOf(t, new Date(2026, 8, 29, 14, 0)) // Tuesday
+    expect(p.days).toHaveLength(6)
+    expect(p.dawn).not.toBeNull()
+  })
+
+  it('writes the template with the chosen Night, a power window, and replaces leftovers', () => {
+    const existing = {
+      temperature: [{ id: 50, dayOfWeek: 'tuesday' as const, time: '23:00', temperature: 70, enabled: false }],
+      power: [{ id: 7, dayOfWeek: 'tuesday' as const }, { id: 8, dayOfWeek: 'monday' as const }],
+    }
+    const t = templateRows([...curve('monday', 1), ...existing.temperature])
+    const p = phasesOf(t, new Date(2026, 8, 29, 14, 0))
+    const night = Math.round(p.night.temperatureF)
+    const batch = templateBatch('left', existing, t, p, { night: night - 3 })
+    expect(batch.deletes).toEqual({ temperature: [50], power: [7], alarm: [] })
+    expect(batch.creates.temperature).toHaveLength(t.length)
+    expect(batch.creates.power).toHaveLength(6)
+    const created = batch.creates.temperature.map((r, i) => ({ ...r, id: i + 1000 }))
+    expect(Math.round(phasesOf(created, new Date(2026, 8, 29, 14, 0)).night.temperatureF)).toBe(night - 3)
   })
 })

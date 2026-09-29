@@ -45,7 +45,8 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  * Device router wiring:
  * - device.getStatus (WS-preferred via useDeviceStatus) → per-side current/target
  *   temp, power, temperature ownership, alarm, priming, pump stall, snooze
- * - device.setTemperature / device.setPower → SideCard −/+/drag/power (optimistic)
+ * - device.setTemperature / device.setPower → SideCard −/+/drag/power (optimistic;
+ *   −/+ bursts pool into one write)
  * - schedules.getAll / schedules.batchUpdate → stepper variant's Night / Dawn
  *   (shifts tonight's set points; see useNightPhases)
  * - device.resumeTemperature → Resume on an active manual hold
@@ -85,7 +86,11 @@ export const TempScreen = () => {
   // Stepper variant: Night / Dawn read and edit tonight's schedule per side.
   const isStepper = variant === 'stepper'
   const now = useNow()
-  const [stepperTab, setStepperTab] = useState<StepperTab>('now')
+  // Per side, so choosing Night on one card doesn't switch the other — unless linked.
+  const [stepperTab, setStepperTab] = useState<Record<Side, StepperTab>>({ left: 'now', right: 'now' })
+  const handleTabChange = (side: Side, tab: StepperTab) => {
+    setStepperTab(prev => ({ ...prev, ...Object.fromEntries(targetsFor(side).map(s => [s, tab])) }))
+  }
   const nightPhases = {
     left: useNightPhases('left', now, unit, tempDisplay, isStepper),
     right: useNightPhases('right', now, unit, tempDisplay, isStepper),
@@ -102,13 +107,15 @@ export const TempScreen = () => {
     for (const s of targetsFor(side)) controls[s].preview(f)
   }
 
-  /** Drag end / keyboard / ± — send to hardware, hold until status confirms. */
+  /** Drag end / keyboard — send to hardware, hold until status confirms. */
   const handleCommit = (side: Side, f: number) => {
     for (const s of targetsFor(side)) controls[s].commitTemp(f)
   }
 
+  /** ± — shown immediately, sent once taps pause (one hardware write per burst). */
   const handleStep = (side: Side, delta: number) => {
-    handleCommit(side, stepForDisplay(controls[side].targetF, delta, unit, tempDisplay))
+    const f = stepForDisplay(controls[side].targetF, delta, unit, tempDisplay)
+    for (const s of targetsFor(side)) controls[s].stepTemp(f)
   }
 
   const handlePower = (side: Side) => {
@@ -248,8 +255,8 @@ export const TempScreen = () => {
               hiddenOnPhone={side !== primarySide}
               stepper={isStepper
                 ? {
-                    tab: stepperTab,
-                    onTabChange: setStepperTab,
+                    tab: stepperTab[side],
+                    onTabChange: tab => handleTabChange(side, tab),
                     schedule: nightPhases[side],
                     onStepPhase: (phase, delta) => handleStepPhase(side, phase, delta),
                     now,

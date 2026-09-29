@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useOptimisticValue } from '@/src/hooks/useOptimisticValue'
 import { TEMP } from '@/src/lib/tempColors'
@@ -25,8 +25,13 @@ export interface SideTemperature {
   preview: (f: number) => void
   /** Send a set point, holding it on screen until the status stream confirms it. */
   commitTemp: (f: number) => void
+  /** −/+ taps: show the value now, send one set point once taps pause. */
+  stepTemp: (f: number) => void
   commitPower: (on: boolean) => void
 }
+
+/** −/+ taps within this window pool into one setTemperature. */
+const STEP_COMMIT_DELAY_MS = 500
 
 /**
  * One side's target/power with optimistic overrides. The visible status is
@@ -62,6 +67,20 @@ export function useSideTemperature(
     )
   }, [side, holdMinutes, refetch, commitTarget, discardTarget, mutateTemp])
 
+  const stepTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (stepTimer.current) clearTimeout(stepTimer.current)
+  }, [])
+
+  const stepTemp = useCallback((f: number) => {
+    previewTarget(f)
+    if (stepTimer.current) clearTimeout(stepTimer.current)
+    stepTimer.current = setTimeout(() => {
+      stepTimer.current = null
+      commitTemp(f)
+    }, STEP_COMMIT_DELAY_MS)
+  }, [previewTarget, commitTemp])
+
   const commitPower = useCallback((on: boolean) => {
     commitPowerOpt(on)
     mutatePower(
@@ -82,6 +101,7 @@ export function useSideTemperature(
     powerPending: setPowerMutation.isPending,
     preview: previewTarget,
     commitTemp,
+    stepTemp,
     commitPower,
   }
 }

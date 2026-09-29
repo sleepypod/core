@@ -19,6 +19,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
     } },
   },
 } }))
+vi.mock('@/src/components/Schedule/AlarmEditor', () => ({ AlarmEditor: ({ open }: { open: boolean }) => (open ? <div>alarm editor</div> : null) }))
 beforeEach(() => {
   vi.clearAllMocks()
   Object.assign(mock, { schedule: undefined, latest: undefined, vitals: undefined, loading: false, error: null, mutationError: null })
@@ -58,6 +59,8 @@ it('shows loading, empty and error states for each card', () => {
   // Give each mocked query a fresh render after its response changes.
   rerender(<div>{cards}</div>)
   expect(screen.getByText('No alarm set')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+  expect(screen.getByText('alarm editor')).toBeTruthy()
   expect(screen.getByText('No schedule tonight')).toBeTruthy()
   expect(screen.getByText('No sleep recorded yet')).toBeTruthy()
   mock.error = new Error('Offline')

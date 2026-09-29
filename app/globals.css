@@ -28,6 +28,9 @@
   --color-warm: var(--accent-warm);
   --color-hold: var(--accent-neutral);
   --color-track: var(--dial-track);
+  --color-status: var(--text-status);
+  --color-side-left: var(--side-left);
+  --color-side-right: var(--side-right);
   --color-ok: var(--status-ok);
   --color-warn: var(--status-warn);
   --color-danger: var(--status-danger);
@@ -134,6 +137,10 @@
   --accent-warm: var(--sp-warm);
   --accent-neutral: var(--sp-neutral);
   --dial-track: #1f1f23;
+  --side-left: #a99cf2;
+  --side-right: #f08cc4;
+  --text-status: #c4c4d0;
+  --temp-off-bg: linear-gradient(180deg, #17181d, #121216);
 
   --status-ok: var(--sp-green);
   --status-warn: var(--sp-amber);
@@ -184,6 +191,10 @@
   --sp-indigo: #34509e;
   --sp-humidity: #2f6fb5;
   --dial-track: #e8e8e5;
+  --side-left: #6a58d6;
+  --side-right: #c2438c;
+  --text-status: #4a4a55;
+  --temp-off-bg: linear-gradient(180deg, #f3f3f5, #ececef);
   --status-ok-border: #bfe0cb;
   --status-warn-border: #ead9b0;
   --status-warn-bg: #fbf1dc;
@@ -363,6 +374,10 @@ html.dark {
 .sp-temp-glow {
   background-color: hsl(var(--h, 268) 55% 56% / 0.5);
   mask-image: radial-gradient(ellipse 90% 65% at 50% 80%, #000, transparent);
+}
+
+.sp-temp-off {
+  background: var(--temp-off-bg);
 }
 
 .sp-temp-ink {

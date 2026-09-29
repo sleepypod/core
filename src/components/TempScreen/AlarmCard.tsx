@@ -1,9 +1,11 @@
 'use client'
 
-import { Bell } from 'lucide-react'
+import { Bell, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { Card, InlineError, Skeleton, Toggle } from '@/src/components/ds'
+import { Button, Card, InlineError, Skeleton, Toggle } from '@/src/components/ds'
+import { AlarmEditor } from '@/src/components/Schedule/AlarmEditor'
+import { groupAlarms } from '@/src/components/Schedule/AlarmSection'
 import { formatTime12h } from '@/src/lib/scheduleTime'
 import type { Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
@@ -13,8 +15,11 @@ import { useNow } from './TonightCard'
 /**
  * Next alarm for the side with an on/off toggle. Alarms sharing a time are one
  * group ("Weekdays · 10s buzz"); the toggle flips every day in the group.
+ * Tapping the alarm edits it, and with none set, Add opens the same editor
+ * as the Schedule page (deleting stays there).
  *
- * Wires into schedules.getAll (alarm rows) and schedules.updateAlarmSchedule.
+ * Wires into schedules.getAll (alarm rows), schedules.updateAlarmSchedule and
+ * AlarmEditor (schedules.batchUpdate).
  */
 export function AlarmCard({ side }: { side: Side }) {
   const utils = trpc.useUtils()
@@ -25,11 +30,16 @@ export function AlarmCard({ side }: { side: Side }) {
   // would jump to the next enabled alarm).
   const [pinnedTime, setPinnedTime] = useState<string | null>(null)
   const [pendingOn, setPendingOn] = useState<boolean | null>(null)
+  const [editorOpen, setEditorOpen] = useState(false)
 
   if (isLoading) return <Skeleton className="h-[70px]" />
 
   const group = pickAlarmGroup(data?.alarm ?? [], now, pinnedTime)
   const on = pendingOn ?? group?.enabled ?? false
+  // The editor works on Schedule-page groups (rows alike in every field).
+  const editGroup = group
+    ? groupAlarms(data?.alarm ?? []).find(g => g.ids.includes((group.rows.find(r => r.enabled) ?? group.rows[0]).id)) ?? null
+    : null
 
   const handleToggle = async (next: boolean) => {
     if (!group) return
@@ -56,25 +66,43 @@ export function AlarmCard({ side }: { side: Side }) {
           ? <InlineError>{`Could not load alarms: ${error.message}`}</InlineError>
           : group
             ? (
-                <>
+                <button
+                  type="button"
+                  aria-label={`Edit ${formatTime12h(group.time)} alarm`}
+                  onClick={() => setEditorOpen(true)}
+                  className="flex min-w-0 cursor-pointer flex-col items-start bg-transparent p-0 text-left"
+                >
                   <span className="font-mono text-sm">{formatTime12h(group.time)}</span>
                   <span className="truncate text-xs text-fg-2">
                     {`${summarizeDays(group.days)} · ${group.duration}s buzz`}
                   </span>
-                </>
+                </button>
               )
             : <span className="text-sm text-fg-2">No alarm set</span>}
         {update.error && <InlineError>{`Could not update alarm: ${update.error.message}`}</InlineError>}
       </div>
-      {group && (
-        <Toggle
-          className="ml-auto"
-          on={on}
-          label="Alarm enabled"
-          disabled={update.isPending}
-          onChange={next => void handleToggle(next)}
-        />
-      )}
+      {group
+        ? (
+            <Toggle
+              className="ml-auto"
+              on={on}
+              label="Alarm enabled"
+              disabled={update.isPending}
+              onChange={next => void handleToggle(next)}
+            />
+          )
+        : !error && (
+            <Button icon={Plus} className="ml-auto" onClick={() => setEditorOpen(true)}>
+              Add
+            </Button>
+          )}
+      <AlarmEditor
+        open={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        side={side}
+        existingGroup={editGroup}
+        onSaved={() => { void utils.schedules.getAll.invalidate() }}
+      />
     </Card>
   )
 }
