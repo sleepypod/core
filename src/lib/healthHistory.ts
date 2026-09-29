@@ -111,11 +111,14 @@ export function readHistory(db: Db, now: number, windowMs = HISTORY_WINDOW_MS): 
   const incidents: Incident[] = []
   const checks = NODES.map((n) => {
     const own = byCheck.get(n.id) ?? []
-    const runs = own.map(r => ({
+    // Only the newest run can still be open; an older one ended when the
+    // status changed, even if that was moments ago.
+    const isOpen = (idx: number) => idx === own.length - 1 && own[idx].lastSeenAt.getTime() >= now - CONTINUE_WITHIN_MS
+    const runs = own.map((r, idx) => ({
       status: r.status,
       start: Math.max(from, r.startedAt.getTime()),
       // The open run reaches "now" — the next sample is under a minute away.
-      end: Math.min(now, r.lastSeenAt.getTime() >= now - CONTINUE_WITHIN_MS ? now : r.lastSeenAt.getTime()),
+      end: Math.min(now, isOpen(idx) ? now : r.lastSeenAt.getTime()),
     }))
     let recorded = 0
     let healthy = 0
@@ -130,7 +133,7 @@ export function readHistory(db: Db, now: number, windowMs = HISTORY_WINDOW_MS): 
     own.forEach((r, idx) => {
       if (r.status !== 'stale' && r.status !== 'down') return
       const run = runs[idx]
-      const ongoing = r.lastSeenAt.getTime() >= now - CONTINUE_WITHIN_MS
+      const ongoing = isOpen(idx)
       const last = ownIncidents[ownIncidents.length - 1]
       if (last && last.status === r.status && last.end != null && run.start - last.end <= MERGE_GAP_MS) {
         last.end = ongoing ? null : run.end

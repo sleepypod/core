@@ -80,6 +80,19 @@ describe('health history', () => {
     expect(check?.healthyShare).toBeCloseTo(50 / 120, 1)
   })
 
+  it('ends a run that was replaced moments ago instead of stretching it to now', () => {
+    const open = new Map<string, OpenRun>()
+    for (let m = 0; m <= 10; m++) sample(open, T0 + m * MIN, 'stale')
+    sample(open, T0 + 11 * MIN, 'ok')
+    const h = readHistory(db, T0 + 11 * MIN)
+    const runs = h.checks.find(c => c.id === 'piezo-processor')?.runs
+    expect(runs).toEqual([
+      { status: 'stale', start: T0, end: T0 + 10 * MIN },
+      { status: 'ok', start: T0 + 10 * MIN, end: T0 + 11 * MIN },
+    ])
+    expect(h.incidents[0]).toMatchObject({ status: 'stale', end: T0 + 10 * MIN })
+  })
+
   it('clips runs to the 24-hour window', () => {
     const open = new Map<string, OpenRun>()
     sample(open, T0, 'ok')

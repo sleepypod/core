@@ -23,10 +23,11 @@ export function HapticsTestCard({ filterSide }: { filterSide?: Side } = {}) {
   const side = filterSide ?? pickedSide ?? contextSide
   const [preset, setPreset] = useState(VIBRATION_PRESETS[0].name)
   const [customDuration, setCustomDuration] = useState(10)
-  const [playing, setPlaying] = useState<number | null>(null)
+  // A fresh object per play, so replaying the same preset restarts the timer and sweep.
+  const [playing, setPlaying] = useState<{ duration: number, startedAt: number } | null>(null)
 
   const setAlarm = trpc.device.setAlarm.useMutation({
-    onSuccess: (_data, vars) => setPlaying(vars.duration ?? null),
+    onSuccess: (_data, vars) => setPlaying(vars.duration == null ? null : { duration: vars.duration, startedAt: Date.now() }),
   })
   const clearAlarm = trpc.device.clearAlarm.useMutation({
     onSuccess: () => setPlaying(null),
@@ -35,7 +36,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: Side } = {}) {
   // The cover stops on its own once the duration runs out.
   useEffect(() => {
     if (playing == null) return
-    const t = setTimeout(() => setPlaying(null), playing * 1000)
+    const t = setTimeout(() => setPlaying(null), playing.duration * 1000)
     return () => clearTimeout(t)
   }, [playing])
 
@@ -95,7 +96,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: Side } = {}) {
           </div>
         </SettingRow>
       )}
-      <VibrationPreview duration={playing ?? selected.duration} playing={playing != null} />
+      <VibrationPreview duration={playing?.duration ?? selected.duration} playing={playing != null} playKey={playing?.startedAt} />
       <p className="text-xs text-fg-2">
         {selected.description}
         {' · '}
@@ -117,7 +118,7 @@ const PREVIEW_MAX_S = 60
  * What the selected pattern will do: one pulse a second for its duration, on
  * a fixed 0–60 s track, with a sweep while it plays.
  */
-export function VibrationPreview({ duration, playing }: { duration: number, playing: boolean }) {
+export function VibrationPreview({ duration, playing, playKey }: { duration: number, playing: boolean, playKey?: number }) {
   const share = Math.min(1, duration / PREVIEW_MAX_S)
   return (
     <div className="flex flex-col gap-1" data-testid="vibration-preview">
@@ -129,7 +130,7 @@ export function VibrationPreview({ duration, playing }: { duration: number, play
         </div>
         {playing && (
           <div
-            key={duration}
+            key={playKey ?? duration}
             className="sp-sweep absolute inset-y-0 left-0 origin-left bg-cool/25"
             style={{ width: `${share * 100}%`, animationDuration: `${duration}s` }}
           />

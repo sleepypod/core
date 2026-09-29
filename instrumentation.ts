@@ -307,6 +307,12 @@ async function initializeBackgroundServices(): Promise<void> {
   try {
     await initializeHardware()
     if (isShuttingDown) return
+
+    // Record System → Health's data-path history once a minute (non-blocking).
+    // Started before the scheduler so a scheduler that fails to load still
+    // leaves a history of the failure.
+    startHealthSampler()
+
     const schedulerStartedAt = performance.now()
     console.log('Initializing job scheduler...')
     const jobManager = await withRetry(
@@ -372,9 +378,6 @@ async function initializeBackgroundServices(): Promise<void> {
 
     // Start biometrics time-series retention loop (non-blocking)
     startBiometricsRetention()
-
-    // Record System → Health's data-path history once a minute (non-blocking)
-    startHealthSampler()
 
     // Boot the Autopilot rules engine beside the scheduler (non-blocking).
     // Shares the same hardware path; no-op until automations are created.
