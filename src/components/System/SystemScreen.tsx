@@ -86,6 +86,7 @@ export function SystemScreen() {
       <div className="flex flex-col gap-3.5 min-[900px]:gap-[18px]">
         <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">System /</span>
         <PageHeader
+          mobileTitle={false}
           title={(
             <>
               <span className="min-[900px]:hidden">System</span>

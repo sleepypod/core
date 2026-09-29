@@ -147,13 +147,13 @@ function OptionCard({ selected, onSelect, label, preview, mini }: {
       onClick={onSelect}
       onKeyDown={onKeyDown}
       className={cn(
-        'flex min-w-0 flex-1 cursor-pointer flex-col items-center gap-2 rounded-[10px] border p-3 outline-none focus-visible:border-fg-3 @min-[800px]:gap-3.5 @min-[800px]:rounded-card @min-[800px]:px-3 @min-[800px]:pb-4 @min-[800px]:pt-5',
+        'flex min-w-0 flex-1 cursor-pointer flex-col items-center gap-2 rounded-[10px] border px-1.5 py-3 outline-none focus-visible:border-fg-3 @min-[800px]:gap-3.5 @min-[800px]:rounded-card @min-[800px]:px-3 @min-[800px]:pb-4 @min-[800px]:pt-5',
         selected ? 'border-fg' : 'border-line-2 hover:bg-active',
       )}
     >
       <div className="pointer-events-none hidden @min-[800px]:block">{preview}</div>
       <div className="@min-[800px]:hidden">{mini}</div>
-      <span className={cn('flex items-center gap-2 text-[13px] @min-[800px]:text-sm', !selected && 'text-fg-2')}>
+      <span className={cn('flex items-center gap-2 text-[11px] whitespace-nowrap @min-[800px]:text-sm', !selected && 'text-fg-2')}>
         <Icon size={15} className="hidden @min-[800px]:block" />
         {label}
       </span>

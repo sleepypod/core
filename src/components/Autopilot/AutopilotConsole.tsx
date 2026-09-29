@@ -127,6 +127,7 @@ export function AutopilotConsole() {
     <>
       <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Autopilot /</span>
       <PageHeader
+        mobileTitle={false}
         title={(
           <span className="flex items-baseline gap-3">
             <span className="min-[900px]:hidden">Autopilot</span>

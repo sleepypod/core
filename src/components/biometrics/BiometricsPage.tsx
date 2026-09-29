@@ -94,6 +94,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
     <>
       <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Sleep /</span>
       <PageHeader
+        mobileTitle={false}
         title={(
           <>
             <span className="min-[900px]:hidden">Sleep</span>

@@ -221,7 +221,7 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
 
   return (
     <div className={cn('flex flex-col gap-3.5', className)}>
-      <PageHeader title="Settings" />
+      <PageHeader title="Settings" mobileTitle={false} className="max-[899px]:hidden" />
 
       <SectionLabel className="mt-1">APPEARANCE</SectionLabel>
       <div className="flex flex-col gap-3 rounded-card border border-line bg-surface px-4 py-3.5">
