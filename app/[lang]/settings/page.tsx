@@ -1,8 +1,11 @@
+import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { SettingsScreen } from '@/src/components/Settings/SettingsScreen'
 import { getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { initLingui } from '@/src/lib/i18n/initLingui'
 import { setI18n } from '@lingui/react/server'
+
+export const metadata: Metadata = { title: 'Settings' }
 
 export default async function Page({
   params,

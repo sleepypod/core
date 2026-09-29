@@ -1,4 +1,7 @@
+import type { Metadata } from 'next'
 import { RulePage } from '@/src/components/Autopilot/RulePage'
+
+export const metadata: Metadata = { title: 'Automation · Autopilot' }
 
 export default async function AutomationPage({ params, searchParams }: {
   params: Promise<{ id: string }>

@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { SegmentedControl, Skeleton } from '@/src/components/ds'
 import { SleepScreen } from './SleepScreen'
+import { useDocumentTitle } from '@/src/hooks/useDocumentTitle'
 import { resolveSleepSection, SLEEP_SECTIONS, type SleepSection } from './sleepViews'
 
 const BiometricsPage = dynamic(
@@ -22,6 +23,7 @@ export function SleepSections() {
   const router = useRouter()
   const pathname = usePathname()
   const section = resolveSleepSection(searchParams.get('view'))
+  useDocumentTitle(SLEEP_SECTIONS.find(s => s.id === section)?.label, 'Sleep')
 
   const select = useCallback((next: SleepSection) => {
     const params = new URLSearchParams(searchParams.toString())

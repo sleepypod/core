@@ -1,7 +1,10 @@
+import type { Metadata } from 'next'
 import { TempScreen } from '@/src/components/TempScreen/TempScreen'
 import { getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { initLingui } from '@/src/lib/i18n/initLingui'
 import { setI18n } from '@lingui/react/server'
+
+export const metadata: Metadata = { title: 'Temp' }
 
 export default async function Page({
   params,

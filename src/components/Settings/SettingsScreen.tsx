@@ -6,6 +6,7 @@ import { ArrowUpRight, BookOpen, ChevronLeft } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import { trpc } from '@/src/utils/trpc'
 import type { AppRouter } from '@/src/server/routers/app'
+import { useDocumentTitle } from '@/src/hooks/useDocumentTitle'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { cn } from '@/lib/utils'
 import { Card, IndexRow, InlineError, PageHeader, SectionLabel, SegmentedControl, SettingRow, Skeleton } from '@/src/components/ds'
@@ -36,6 +37,7 @@ export function SettingsScreen() {
   const chosen = resolveSection(searchParams.get('section'), searchParams.get('tab'))
   const active: SectionId = chosen ?? SECTIONS[0].id
   const meta = SECTIONS.find(s => s.id === active) ?? SECTIONS[0]
+  useDocumentTitle(chosen && meta.label, 'Settings')
 
   // Status moved to System → Dashboard; old links follow it there.
   const pathname = usePathname()

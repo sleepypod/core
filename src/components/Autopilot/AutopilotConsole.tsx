@@ -14,6 +14,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, PageHeader, SegmentedControl, Toggle } from '@/src/components/ds'
+import { useDocumentTitle } from '@/src/hooks/useDocumentTitle'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatSetpointF } from '@/src/lib/tempUtils'
 import type { Condition } from '@/src/automation/types'
@@ -32,6 +33,7 @@ export function AutopilotConsole() {
   const searchParams = useSearchParams()
   const { unit } = useTemperatureUnit()
   const view = resolveAutopilotView(searchParams.get('view'))
+  useDocumentTitle(AUTOPILOT_VIEWS.find(v => v.id === view)?.label, 'Autopilot')
   const setView = useCallback((next: AutopilotView) => {
     const params = new URLSearchParams(searchParams.toString())
     if (next === 'automations') params.delete('view')

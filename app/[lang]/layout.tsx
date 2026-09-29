@@ -1,4 +1,5 @@
 import '@/app/globals.css'
+import type { Metadata } from 'next'
 import { IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google'
 import Script from 'next/script'
 import { AppShell } from '@/src/components/AppShell/AppShell'
@@ -29,6 +30,10 @@ const plexMono = IBM_Plex_Mono({
 const LOCALES = ['en', 'es', 'pseudo']
 
 export const dynamicParams = false
+
+export const metadata: Metadata = {
+  title: { template: '%s · sleepypod', default: 'sleepypod' },
+}
 
 export function generateStaticParams() {
   return LOCALES.map(lang => ({ lang }))
