@@ -120,6 +120,12 @@ describe('formatters', () => {
     expect(summarizeDays(['friday', 'monday', 'tuesday', 'wednesday', 'thursday'])).toBe('Weekdays')
     expect(summarizeDays(['sunday', 'saturday'])).toBe('Weekends')
     expect(summarizeDays(['sunday', 'wednesday', 'monday'])).toBe('Mon, Wed, Sun')
+    expect(summarizeDays(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'])).toBe('Mon–Sat')
+    expect(summarizeDays(['sunday', 'monday', 'tuesday', 'wednesday', 'thursday'])).toBe('Sun–Thu')
+    expect(summarizeDays(['monday', 'tuesday', 'wednesday', 'friday'])).toBe('Mon–Wed, Fri')
+    expect(summarizeDays(['tuesday', 'thursday', 'saturday'])).toBe('Tue, Thu, Sat')
+    expect(summarizeDays(['saturday', 'sunday', 'monday'])).toBe('Sat–Mon')
+    expect(summarizeDays(['saturday', 'sunday', 'monday', 'wednesday'])).toBe('Sat–Mon, Wed')
   })
 })
 

@@ -125,8 +125,9 @@ export function TempStepper({
 
   const bed = bedF == null ? '—' : `${Math.round(setpointFToDisplay(bedF, unit) ?? bedF)}°${unit}`
   const caption = phase && phases && !off
-    ? `${formatTime12h(phase.start)} – ${formatTime12h(phase.end)} · ${summarizeDays(phases.days)}`
+    ? `${formatTime12h(phase.start)} – ${formatTime12h(phase.end)}`
     : `${off ? 'Off' : heatState(targetF, bedF, unit)} · bed ${bed}`
+  const days = phase && phases && !off && !schedule.error ? summarizeDays(phases.days) : null
   const hint = !draft
     ? null
     : selected === 'now'
@@ -201,7 +202,7 @@ export function TempStepper({
         <span className="max-w-full truncate" data-testid="stepper-status">
           {schedule.error && selected !== 'now' ? schedule.error : caption}
         </span>
-        {!off && hint}
+        {!off && (hint ?? (days && <span className="max-w-full truncate text-fg-2" data-testid="stepper-days">{days}</span>))}
       </div>
     </div>
   )

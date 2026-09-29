@@ -265,6 +265,8 @@ describe('TempScreen', () => {
       const left = card(screen, 'Jon (left)')
       fireEvent.click(left.getByRole('tab', { name: /Night/ }))
       expect(left.getByTestId('stepper-value').textContent).toBe('74°F')
+      expect(left.getByTestId('stepper-status').textContent).toBe('10:00 PM – 6:00 AM')
+      expect(left.getByTestId('stepper-days').textContent).toBe('Mon')
       fireEvent.click(left.getByRole('button', { name: 'Cooler night' }))
       expect(m.nudge.left).toHaveBeenCalledExactlyOnceWith('night', -1)
       expect(m.nudge.right).toHaveBeenCalledExactlyOnceWith('night', -1)

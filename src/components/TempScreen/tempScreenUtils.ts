@@ -111,14 +111,32 @@ const SHORT_DAY: Record<DayOfWeek, string> = {
 const WEEKDAYS: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
 const WEEKEND: DayOfWeek[] = ['saturday', 'sunday']
 
-/** "Daily", "Weekdays", "Weekends", else "Mon, Wed, Fri" (Mon-first). */
+/**
+ * "Daily", "Weekdays", "Weekends", else Mon-first runs: three or more
+ * consecutive days collapse to a range ("Mon–Sat", "Sun–Thu"), the rest are
+ * listed ("Mon, Wed, Fri"). A range may wrap Sunday → Monday ("Sat–Mon").
+ */
 export function summarizeDays(days: DayOfWeek[]): string {
   const set = new Set(days)
   if (set.size === 7) return 'Daily'
   if (set.size === 5 && WEEKDAYS.every(d => set.has(d))) return 'Weekdays'
   if (set.size === 2 && WEEKEND.every(d => set.has(d))) return 'Weekends'
   const monFirst: DayOfWeek[] = [...WEEKDAYS, ...WEEKEND]
-  return monFirst.filter(d => set.has(d)).map(d => SHORT_DAY[d]).join(', ')
+  let runs: DayOfWeek[][] = []
+  monFirst.forEach((d, i) => {
+    if (!set.has(d)) return
+    if (i > 0 && set.has(monFirst[i - 1])) runs[runs.length - 1].push(d)
+    else runs.push([d])
+  })
+  // A run ending Sunday continues into Monday; join them when that makes a range.
+  const first = runs[0]
+  const last = runs[runs.length - 1]
+  if (runs.length > 1 && first[0] === 'monday' && last[last.length - 1] === 'sunday' && first.length + last.length >= 3) {
+    runs = [[...last, ...first], ...runs.slice(1, -1)]
+  }
+  return runs
+    .map(r => (r.length >= 3 ? `${SHORT_DAY[r[0]]}–${SHORT_DAY[r[r.length - 1]]}` : r.map(d => SHORT_DAY[d]).join(', ')))
+    .join(', ')
 }
 
 export interface AlarmGroup {
