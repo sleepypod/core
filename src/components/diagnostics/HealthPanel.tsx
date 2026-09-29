@@ -10,9 +10,7 @@ import { Button, Card, CardHeader, InlineError, SectionLabel, Skeleton, StatusDo
 import { cn } from '@/lib/utils'
 import { langFromPath } from '@/src/components/AppShell/navItems'
 import { STAGES, type NodeId } from '@/src/lib/dataPath'
-import { HapticsTestCard } from './HapticsTestCard'
 import { OccupancyCheck } from './OccupancyCheck'
-import { SectionTitle } from './parts'
 import {
   MAP, STATUS_FILL, STATUS_TONE, STATUS_WORD,
   edgePath, fmtClockMs, incidentLines, layoutMap,
@@ -27,7 +25,7 @@ type History = inferRouterOutputs<AppRouter>['health']['history']
 /**
  * System → Health: does data actually move from the sensors to what you see?
  * A one-line verdict with its fix, the data-path map, 24 hours of history per
- * check with incidents in words, and the vibration test.
+ * check with incidents in words.
  */
 export function HealthPanel({ onJump }: { onJump: (s: DiagSection) => void }) {
   const dataPath = trpc.health.dataPath.useQuery({}, { refetchInterval: 10_000 })
@@ -52,9 +50,6 @@ export function HealthPanel({ onJump }: { onJump: (s: DiagSection) => void }) {
       </Card>
 
       <HistoryCard history={history.data} error={history.error?.message} loading={history.isLoading} />
-
-      <SectionTitle title="Hardware checks" />
-      <HapticsTestCard />
     </>
   )
 }

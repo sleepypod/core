@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { useDocumentTitle } from '@/src/hooks/useDocumentTitle'
 import { useSensorStream } from '@/src/hooks/useSensorStream'
 import { PageHeader, Pill } from '@/src/components/ds'
 import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
@@ -27,6 +28,14 @@ const StorageTab = dynamic(
   () => import('./StorageTab').then(m => m.StorageTab),
   { ssr: false, loading: TabLoading },
 )
+const DatabasesTab = dynamic(
+  () => import('./DatabasesTab').then(m => m.DatabasesTab),
+  { ssr: false, loading: TabLoading },
+)
+const HapticsTestCard = dynamic(
+  () => import('@/src/components/diagnostics/HapticsTestCard').then(m => m.HapticsTestCard),
+  { ssr: false, loading: TabLoading },
+)
 const SystemLogViewer = dynamic(
   () => import('@/src/components/status/SystemLogViewer').then(m => m.SystemLogViewer),
   { loading: TabLoading },
@@ -42,6 +51,7 @@ export function SystemScreen() {
   const router = useRouter()
   const pathname = usePathname()
   const tab = resolveSystemTab(searchParams.get('tab'), searchParams.get('section'))
+  useDocumentTitle(SYSTEM_TABS.find(t => t.id === tab)?.label, 'System')
 
   // Biometrics moved to Sleep; old System/Diagnostics links follow it there.
   const legacyBiometrics = searchParams.get('tab') === 'biometrics' || searchParams.get('section') === 'biometrics'
@@ -59,6 +69,7 @@ export function SystemScreen() {
     else params.set('tab', next)
     params.delete('section')
     params.delete('unit')
+    params.delete('view')
     const qs = params.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }, [pathname, router, searchParams])
@@ -113,6 +124,8 @@ export function SystemScreen() {
         {tab === 'pipeline' && <PipelineTab />}
         {tab === 'logs' && <SystemLogViewer />}
         {tab === 'storage' && <StorageTab />}
+        {tab === 'databases' && <DatabasesTab />}
+        {tab === 'hardware' && <HapticsTestCard />}
       </div>
     </PullToRefresh>
   )

@@ -52,6 +52,15 @@ const RETENTION_TABLES = [
   { table: healthRuns, column: healthRuns.lastSeenAt, name: 'health_runs' },
 ] as const
 
+/** Tables the daily retention pass prunes, for System → Databases. */
+export const RETAINED_TABLE_NAMES: readonly string[] = RETENTION_TABLES.map(t => t.name)
+
+/** The retention window the loop uses when started without options. */
+export function configuredRetentionDays(): number {
+  const days = Number(process.env.BIOMETRICS_RETENTION_DAYS ?? 90)
+  return Number.isFinite(days) && days > 0 ? days : 90
+}
+
 export interface RetentionResult {
   /** Total rows deleted across all tables. */
   rowsDeleted: number

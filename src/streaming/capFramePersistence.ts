@@ -19,7 +19,7 @@ import { capSenseFrames } from '@/src/db/biometrics-schema'
 import { reduceCap, zoneTriple } from '@/src/automation/capReduce'
 
 const WINDOW_MS = 5_000
-const RETENTION_MS = 48 * 60 * 60_000
+export const CAP_FRAMES_RETENTION_MS = 48 * 60 * 60_000
 const PRUNE_INTERVAL_MS = 10 * 60_000
 const MIN_VALID_WALL_CLOCK_TS_SECONDS = 1_577_836_800 // 2020-01-01 00:00:00 UTC
 const MAX_FUTURE_SKEW_SECONDS = 60
@@ -128,7 +128,7 @@ function maybePrune(nowMs: number): void {
   capState.lastPruneMs = nowMs
   try {
     biometricsDb.delete(capSenseFrames)
-      .where(lte(capSenseFrames.timestamp, new Date(nowMs - RETENTION_MS)))
+      .where(lte(capSenseFrames.timestamp, new Date(nowMs - CAP_FRAMES_RETENTION_MS)))
       .run()
   }
   catch (err) {

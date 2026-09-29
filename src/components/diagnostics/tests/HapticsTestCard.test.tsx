@@ -31,4 +31,12 @@ describe('HapticsTestCard', () => {
     act(() => vi.advanceTimersByTime(7_100))
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
   })
+
+  it('previews the selected vibration pattern', () => {
+    render(<HapticsTestCard />)
+    expect(screen.getByText('Test vibration')).toBeTruthy()
+    expect(screen.getByTestId('vibration-preview').textContent).toContain('10s of 60s')
+    fireEvent.click(screen.getByRole('tab', { name: 'Long' }))
+    expect(screen.getByTestId('vibration-preview').textContent).toContain('60s of 60s')
+  })
 })

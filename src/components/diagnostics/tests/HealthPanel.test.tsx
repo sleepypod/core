@@ -155,12 +155,8 @@ describe('HealthPanel', () => {
     expect(screen.getByTestId('history-piezo-processor').textContent).toContain('1×')
   })
 
-  it('previews the selected vibration pattern', () => {
+  it('leaves the vibration test to System → Hardware', () => {
     render(<HealthPanel onJump={vi.fn()} />)
-    expect(screen.getByText('Test vibration')).toBeTruthy()
-    const preview = screen.getByTestId('vibration-preview')
-    expect(preview.textContent).toContain('10s of 60s')
-    fireEvent.click(screen.getByRole('tab', { name: 'Long' }))
-    expect(screen.getByTestId('vibration-preview').textContent).toContain('60s of 60s')
+    expect(screen.queryByText('Test vibration')).toBeNull()
   })
 })

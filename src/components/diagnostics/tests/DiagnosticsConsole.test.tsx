@@ -239,9 +239,9 @@ describe('DiagnosticsConsole calibration', () => {
     expect(screen.getByText('waiting for left piezo…')).toBeTruthy()
   })
 
-  it('puts the vibration test under Health', () => {
+  it('leaves the vibration test off Health (it lives on System → Hardware)', () => {
     render(<DiagnosticsConsole section="health" onJump={vi.fn()} />)
-    expect(screen.getByText('Test vibration')).toBeTruthy()
+    expect(screen.queryByText('Test vibration')).toBeNull()
   })
 })
 

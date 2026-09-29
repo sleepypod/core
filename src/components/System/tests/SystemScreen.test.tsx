@@ -68,9 +68,22 @@ describe('resolveSystemTab', () => {
 describe('SystemScreen', () => {
   it('lists Dashboard first then the rest A–Z, with Dashboard selected by default', () => {
     render(<SystemScreen />)
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Calibration', 'Health', 'Logs', 'Pipeline', 'Scheduler', 'Sensors', 'Storage', 'Thermal'])
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Calibration', 'Databases', 'Hardware', 'Health', 'Logs', 'Pipeline', 'Scheduler', 'Sensors', 'Storage', 'Thermal'])
     expect(screen.getByRole('tab', { name: 'Dashboard' }).getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('dynamic-tab')).toBeTruthy()
+    expect(document.title).toBe('Dashboard · System · sleepypod')
+  })
+
+  it('gives Hardware and Databases their own pages and titles', () => {
+    mocks.params = new URLSearchParams('tab=hardware')
+    const { unmount } = render(<SystemScreen />)
+    expect(screen.getByRole('tab', { name: 'Hardware' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('dynamic-tab')).toBeTruthy()
+    expect(document.title).toBe('Hardware · System · sleepypod')
+    unmount()
+    mocks.params = new URLSearchParams('tab=databases')
+    render(<SystemScreen />)
+    expect(document.title).toBe('Databases · System · sleepypod')
   })
 
   it('sends old biometrics links to Sleep → Biometrics', () => {

@@ -16,6 +16,7 @@ import { mqttRouter } from './mqtt'
 import { homekitRouter } from './homekit'
 import { archivePushRouter } from './archivePush'
 import { automationsRouter } from './automations'
+import { databasesRouter } from './databases'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -43,6 +44,7 @@ export const appRouter = router({
   homekit: homekitRouter,
   archivePush: archivePushRouter,
   automations: automationsRouter,
+  databases: databasesRouter,
 })
 
 export type AppRouter = typeof appRouter
