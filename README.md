@@ -18,7 +18,7 @@ Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Li
   <a href="https://sleepypod.github.io/core/"><img src="docs/images/core-temperature.png" width="1000" alt="sleepypod core web UI with per-side temperature controls, sidebar navigation, and the schedule and sleep timeline" /></a>
 </p>
 
-The redesigned web UI brings temperature, schedules, Autopilot, sleep, and system health into one place. Control the same Pod from the [iOS app](https://sleepypod.github.io/ios/) or a bedside [M5 rotary dial](https://sleepypod.github.io/dial/).
+The web UI brings temperature, schedules, Autopilot, sleep, and system diagnostics into one place. The optional Now / Night / Dawn stepper separates immediate manual holds from saved schedule edits. Choose it in **Settings → Appearance**. Control the same Pod from the [iOS app](https://sleepypod.github.io/ios/) or a bedside [M5 rotary dial](https://sleepypod.github.io/dial/).
 
 <p align="center">
   <a href="https://sleepypod.github.io/ios/"><img src="docs/images/ios-temperature.png" width="220" alt="sleepypod iOS app temperature control" /></a>
@@ -26,13 +26,21 @@ The redesigned web UI brings temperature, schedules, Autopilot, sleep, and syste
   <a href="https://sleepypod.github.io/dial/"><img src="docs/images/dial-cooling.png" width="220" alt="sleepypod rotary dial showing a cooling target" /></a>
 </p>
 
-<sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/7eef5490ef26b1c2f3ac22d073a06f9f52303712/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
+<sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/d3b4e86e0153944fba3c92fe96f04aca34db7165/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
 
 <p align="center">
   <a href="https://sleepypod.github.io/">Docs</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
 </p>
 
 ---
+
+## Guides
+
+- [Temperature controls and manual holds](https://sleepypod.github.io/core/temperature/)
+- [Schedules and alarms](https://sleepypod.github.io/core/schedules/) · [Autopilot](https://sleepypod.github.io/core/autopilot/)
+- [System diagnostics](https://sleepypod.github.io/core/system/) · [Settings, backup, and maintenance](https://sleepypod.github.io/core/settings/)
+- [Build, test, and release workflows](https://sleepypod.github.io/developers/workflows/)
+- [Sensor pipeline and calibration](https://sleepypod.github.io/developers/sensor-pipeline/) · [Technical source library](https://sleepypod.github.io/developers/source-library/)
 
 ## Installation
 
