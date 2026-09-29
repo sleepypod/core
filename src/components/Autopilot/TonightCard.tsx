@@ -19,7 +19,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { formatSetpointF, type TempUnit } from '@/src/lib/tempUtils'
 import type { Condition } from '@/src/automation/types'
 import { trpc } from '@/src/utils/trpc'
-import { clock, ownerView, ruleWindow, scheduleBlocks, type Owner, type RuleMode, type SideTonight } from './automationsLogic'
+import { clock, ownerView, ruleWindow, scheduleBands, scheduleBlocks, type Owner, type RuleMode, type SideTonight } from './automationsLogic'
 
 type Side = 'left' | 'right'
 const SIDES: Side[] = ['left', 'right']
@@ -120,7 +120,7 @@ export function TonightCard({ rules, tonight, fires, unit }: {
               key={side}
               side={side}
               name={sideName(side)}
-              blocks={scheduleBlocks(curves[side], start, end)}
+              blocks={scheduleBlocks(curves[side], start, end, fmt)}
               hold={tonight?.sides[side].hold ?? null}
               rules={rules.filter(r => r.mode !== 'off' && (r.side == null || r.side === side))}
               fires={fires.filter(f => f.sides.length === 0 || f.sides.includes(side))}
@@ -179,14 +179,27 @@ function SideLanes({ side, name, blocks, hold, rules, fires, midnight, start, en
       </div>
       <span className="text-right font-mono text-[10px] text-fg-2">SCHED</span>
       <div className="relative rounded-[2px] bg-active/60" style={{ height: LANE_H }} data-testid={`lane-${side}-sched`}>
+        {scheduleBands(blocks, tempTone).map((band) => {
+          const lo = fmt(band.lo)
+          const hi = fmt(band.hi)
+          return (
+            <span
+              key={band.start}
+              className="@container absolute inset-y-0 overflow-hidden border-l border-app px-1 font-mono text-[10px] leading-4 whitespace-nowrap text-fg"
+              style={{ ...span(band.start, band.end), background: `color-mix(in srgb, ${TONE_VAR[band.tone]} 70%, transparent)` }}
+            >
+              {/* Too narrow for the number: the colour and each step's tooltip carry it. */}
+              <span className="@max-[24px]:invisible">{lo === hi ? lo : `${lo.replace('°', '')}–${hi}`}</span>
+            </span>
+          )
+        })}
         {blocks.map(b => (
           <span
             key={b.start}
-            className="absolute inset-y-0 overflow-hidden border-l border-app px-1 font-mono text-[10px] leading-4 whitespace-nowrap text-fg"
-            style={{ ...span(b.start, b.end), background: `color-mix(in srgb, ${TONE_VAR[tempTone(b.temperature)]} 70%, transparent)` }}
-          >
-            {fmt(b.temperature)}
-          </span>
+            className="absolute inset-y-0"
+            style={span(b.start, b.end)}
+            title={`${fmt(b.temperature)} · ${clock(b.start)} – ${clock(b.end)}`}
+          />
         ))}
         {holdSpan && (
           <span

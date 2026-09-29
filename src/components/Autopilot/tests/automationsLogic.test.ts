@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   backtestLine, currentNightStart, entryTime, matchesFilter, nightHeader, nightStarts, ownerView,
-  reasonText, ruleMode, ruleWindow, scheduleBlocks, statusLine, type SideTonight,
+  reasonText, ruleMode, ruleWindow, scheduleBands, scheduleBlocks, statusLine, type SideTonight,
 } from '../automationsLogic'
 import { missingLiveSignals, templateRule, TEMPLATES } from '../builderModel'
 
@@ -41,6 +41,19 @@ describe('ownerView', () => {
     expect(ownerView(side({}), curve, t(28, 23), fmt)).toMatchObject({ owner: 'schedule', detail: '80° until 11:15 PM, then 76°.' })
   })
 
+  it('skips set points that read the same when saying what comes next', () => {
+    const steps = [
+      { at: t(28, 22), temperature: 80 },
+      { at: t(28, 22, 30), temperature: 80.2 },
+      { at: t(28, 23), temperature: 81 },
+      { at: t(29, 7), temperature: 81 },
+    ]
+    const whole = (f: number) => `${Math.round(f)}°`
+    expect(ownerView(side({}), steps, t(28, 22, 10), whole).detail).toBe('80° until 11:00 PM, then 81°.')
+    // Nothing changes before power off: say when it ends, not a repeat.
+    expect(ownerView(side({}), steps, t(28, 23, 10), whole).detail).toBe('81° until 7:00 AM.')
+  })
+
   it('falls back to Off with when the schedule starts', () => {
     expect(ownerView(side({}), curve, t(28, 19), fmt)).toMatchObject({ owner: 'off', detail: 'Schedule starts at 10:30 PM.' })
     expect(ownerView(side({}), [], t(28, 19), fmt).detail).toBe('No schedule tonight.')
@@ -53,6 +66,42 @@ describe('timeline lanes', () => {
     expect(scheduleBlocks(curve, t(28, 18), t(29, 9))).toEqual([
       { start: t(28, 22, 30), end: t(28, 23, 15), temperature: 80 },
       { start: t(28, 23, 15), end: t(29, 7), temperature: 76 },
+    ])
+  })
+
+  it('merges neighbouring set points that read the same', () => {
+    const steps = [
+      { at: t(28, 23), temperature: 79.2 },
+      { at: t(28, 23, 10), temperature: 79.4 },
+      { at: t(28, 23, 20), temperature: 80 },
+      { at: t(28, 23, 30), temperature: 79.1 },
+      { at: t(29, 7), temperature: 79.1 },
+    ]
+    const whole = (f: number) => `${Math.round(f)}°`
+    expect(scheduleBlocks(steps, t(28, 18), t(29, 9), whole)).toEqual([
+      { start: t(28, 23), end: t(28, 23, 20), temperature: 79.2 },
+      { start: t(28, 23, 20), end: t(28, 23, 30), temperature: 80 },
+      { start: t(28, 23, 30), end: t(29, 7), temperature: 79.1 },
+    ])
+    // Without a label, every distinct value keeps its own block.
+    expect(scheduleBlocks(steps, t(28, 18), t(29, 9))).toHaveLength(4)
+  })
+
+  it('joins touching blocks of one colour into a band with its range', () => {
+    const tone = (f: number) => (f < 80 ? 'cool' : f > 80 ? 'warm' : 'neutral')
+    const blocks = [
+      { start: 0, end: 10, temperature: 80 },
+      { start: 10, end: 20, temperature: 81 },
+      { start: 20, end: 30, temperature: 83 },
+      { start: 30, end: 40, temperature: 74 },
+      { start: 50, end: 60, temperature: 70 },
+    ]
+    expect(scheduleBands(blocks, tone)).toEqual([
+      { start: 0, end: 10, lo: 80, hi: 80, tone: 'neutral' },
+      { start: 10, end: 30, lo: 81, hi: 83, tone: 'warm' },
+      { start: 30, end: 40, lo: 74, hi: 74, tone: 'cool' },
+      // A gap starts a new band even in the same colour.
+      { start: 50, end: 60, lo: 70, hi: 70, tone: 'cool' },
     ])
   })
 

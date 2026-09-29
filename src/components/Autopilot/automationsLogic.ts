@@ -83,8 +83,10 @@ export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: 
   if (source === 'schedule') {
     const target = s?.control?.targetTemperature
     const current = target ?? [...curve].reverse().find(p => p.at <= now)?.temperature ?? null
-    const then = next && next !== curve[curve.length - 1] ? `, then ${fmt(next.temperature)}` : ''
-    const until = next ? ` until ${clock(next.at)}` : ''
+    // Skip steps that read the same ("80° until 10:30 PM, then 80°").
+    const change = current == null ? next : curve.find(p => p.at > now && (p === curve[curve.length - 1] || fmt(p.temperature) !== fmt(current)))
+    const then = change && change !== curve[curve.length - 1] ? `, then ${fmt(change.temperature)}` : ''
+    const until = change ? ` until ${clock(change.at)}` : ''
     return {
       owner: 'schedule',
       label: OWNER_LABEL.schedule,
@@ -105,13 +107,41 @@ export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: 
 
 export interface Block { start: number, end: number, temperature: number }
 
-/** Set points as blocks: each point holds until the next (the last is power off). */
-export function scheduleBlocks(curve: CurvePoint[], from: number, to: number): Block[] {
+/**
+ * Set points as blocks: each point holds until the next (the last is power
+ * off). A curve steps every few minutes, so neighbours that `label` shows the
+ * same (79.2 and 79.4 both read "79°") merge into one block.
+ */
+export function scheduleBlocks(curve: CurvePoint[], from: number, to: number, label: (f: number) => string = String): Block[] {
   const out: Block[] = []
   for (let i = 0; i < curve.length - 1; i++) {
     const start = Math.max(curve[i].at, from)
     const end = Math.min(curve[i + 1].at, to)
-    if (end > start) out.push({ start, end, temperature: curve[i].temperature })
+    if (end <= start) continue
+    const last = out[out.length - 1]
+    if (last && last.end === start && label(last.temperature) === label(curve[i].temperature)) last.end = end
+    else out.push({ start, end, temperature: curve[i].temperature })
+  }
+  return out
+}
+
+export interface Band<T extends string = string> { start: number, end: number, lo: number, hi: number, tone: T }
+
+/**
+ * Touching blocks of one colour as a single band, with the temperature range
+ * it spans, so a curve stepping a degree at a time reads as one stretch.
+ */
+export function scheduleBands<T extends string>(blocks: Block[], tone: (f: number) => T): Array<Band<T>> {
+  const out: Array<Band<T>> = []
+  for (const b of blocks) {
+    const t = tone(b.temperature)
+    const last = out[out.length - 1]
+    if (last && last.end === b.start && last.tone === t) {
+      last.end = b.end
+      last.lo = Math.min(last.lo, b.temperature)
+      last.hi = Math.max(last.hi, b.temperature)
+    }
+    else out.push({ start: b.start, end: b.end, lo: b.temperature, hi: b.temperature, tone: t })
   }
   return out
 }
