@@ -60,6 +60,12 @@ describe('attentionItems', () => {
     expect(attentionItems(ok, 'ok', now)).toEqual([])
     expect(attentionItems(undefined, undefined, now)).toEqual([])
   })
+
+  it('leads with a side that reads occupied but looks empty', () => {
+    const items = attentionItems(ok, 'ok', now, ['left'])
+    expect(items.map(i => i.id)).toEqual(['occupancy'])
+    expect(items[0].title).toBe('The left side reads occupied, but nobody seems to be there')
+  })
   it('flags the pump-stall guard being off', () => {
     expect(attentionItems({ ...ok, pumpStallProtectionEnabled: false }, 'ok', now).map(i => i.id)).toEqual(['pump-stall'])
   })

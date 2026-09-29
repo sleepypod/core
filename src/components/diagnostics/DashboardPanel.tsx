@@ -21,6 +21,7 @@ import { fmtClock, fmtF, thermalDirection, type SchedJob } from './diagnosticsLo
 import { attentionItems, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow, TONIGHT_END_H, TONIGHT_START_H } from './dashboardLogic'
 import { panelDomain, seriesPath, THERMAL_PANELS } from './thermalHistoryLogic'
 import type { DiagSection } from './DiagnosticsConsole'
+import { RecalibrateEmptyBed } from './RecalibrateEmptyBed'
 
 type ThermalData = inferRouterOutputs<AppRouter>['health']['thermal']
 type ThermalSide = ThermalData['sides'][number]
@@ -182,6 +183,7 @@ function AttentionCard() {
   const maintenance = trpc.health.maintenance.useQuery({}, { refetchInterval: 60_000 })
   const water = trpc.waterLevel.getLatest.useQuery({}, { refetchInterval: 30_000 })
   const device = trpc.device.getStatus.useQuery({}, { refetchInterval: 10_000 })
+  const dataPath = trpc.health.dataPath.useQuery({}, { refetchInterval: 60_000 })
   const enableGuard = trpc.settings.updateDevice.useMutation({
     onSuccess: () => {
       void utils.health.maintenance.invalidate()
@@ -194,7 +196,9 @@ function AttentionCard() {
 
   const nowMinute = useNowMinute()
   if (nowMinute == null) return null
-  const items = attentionItems(maintenance.data, water.data?.level ?? device.data?.waterLevel, nowMinute * 60_000)
+  const occupancy = dataPath.data?.occupancy
+  const suspectSides = occupancy ? (['left', 'right'] as const).filter(s => occupancy[s] === 'suspect') : []
+  const items = attentionItems(maintenance.data, water.data?.level ?? device.data?.waterLevel, nowMinute * 60_000, suspectSides)
   if (items.length === 0) return null
   const priming = device.data?.isPriming ?? false
 
@@ -215,6 +219,7 @@ function AttentionCard() {
               </Button>
             </div>
           )}
+          {it.id === 'occupancy' && <RecalibrateEmptyBed sides={suspectSides} size="sm" />}
           {it.id === 'prime' && (
             <Button size="sm" onClick={() => prime.mutate({})} disabled={prime.isPending || priming}>
               {priming ? 'Priming…' : prime.isPending ? 'Starting…' : 'Start prime'}

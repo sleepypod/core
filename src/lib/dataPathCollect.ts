@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { max, eq } from 'drizzle-orm'
+import { and, eq, gt, gte, max, sql } from 'drizzle-orm'
 import { sqlite, biometricsDb } from '@/src/db'
 import { bedTemp, freezerTemp, movement, vitals } from '@/src/db/biometrics-schema'
 import { getDatabaseIntegrity } from '@/src/db/integrity'
@@ -10,7 +10,7 @@ import { getSensorFrameTimes, getStreamClientCount } from '@/src/streaming/piezo
 import { getServerPerformance } from '@/src/lib/serverPerformance'
 import { getOccupancy } from '@/src/lib/occupancy'
 import { readThermalTruth } from '@/src/lib/thermalTruth'
-import { evaluateDataPath, RESTARTABLE_UNITS, type DataPathInputs, type DataPathState, type RestartableUnit, type Side } from '@/src/lib/dataPath'
+import { evaluateDataPath, RESTARTABLE_UNITS, STILL_WINDOW_MS, type DataPathInputs, type DataPathState, type RestartableUnit, type Side } from '@/src/lib/dataPath'
 
 const execFileAsync = promisify(execFile)
 const SIDES: Side[] = ['left', 'right']
@@ -36,6 +36,27 @@ function lastPerSide(table: typeof vitals | typeof movement): Record<Side, numbe
   for (const side of SIDES) {
     const [row] = biometricsDb.select({ at: max(table.timestamp) }).from(table).where(eq(table.side, side)).all()
     out[side] = toMs(row?.at)
+  }
+  return out
+}
+
+/** Movement rows, top score and last real movement per side, over the stillness window. */
+function stillnessPerSide(now: number): DataPathInputs['stillness'] {
+  const since = new Date(now - STILL_WINDOW_MS)
+  const day = new Date(now - 24 * 3_600_000)
+  const out = {} as DataPathInputs['stillness']
+  for (const side of SIDES) {
+    const [w] = biometricsDb
+      .select({ rows: sql<number>`count(*)`, top: max(movement.totalMovement) })
+      .from(movement)
+      .where(and(eq(movement.side, side), gte(movement.timestamp, since)))
+      .all()
+    const [moved] = biometricsDb
+      .select({ at: max(movement.timestamp) })
+      .from(movement)
+      .where(and(eq(movement.side, side), gte(movement.timestamp, day), gt(movement.totalMovement, 0)))
+      .all()
+    out[side] = { rows: Number(w?.rows ?? 0), maxScore: w?.top ?? 0, lastMovedAt: toMs(moved?.at) }
   }
   return out
 }
@@ -100,6 +121,7 @@ async function collect(now: number): Promise<DataPathInputs> {
     database,
     scheduler,
     occupied: { left: getOccupancy('left').occupied, right: getOccupancy('right').occupied },
+    stillness: stillnessPerSide(now),
     lastVitalAt: lastPerSide(vitals),
     lastMovementAt: lastPerSide(movement),
     lastEnvAt: envTimes.length ? Math.max(...envTimes) : null,

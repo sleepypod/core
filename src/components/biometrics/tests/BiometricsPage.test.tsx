@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiometricsPage } from '../BiometricsPage'
 
@@ -7,6 +7,8 @@ const LAST_VITAL = new Date(2026, 8, 28, 15, 5).getTime()
 
 const state = vi.hoisted(() => ({
   occupied: true,
+  dataPath: undefined as unknown,
+  recalibrate: vi.fn(),
   vitals: vi.fn(),
   latest: [] as Array<{ timestamp: Date }>,
 }))
@@ -43,6 +45,9 @@ vi.mock('@/src/utils/trpc', () => ({
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
     },
     settings: { getAll: { useQuery: () => ({ data: { sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } } }) } },
+    health: { dataPath: { useQuery: () => ({ data: state.dataPath }) } },
+    calibration: { triggerCalibration: { useMutation: () => ({ mutateAsync: state.recalibrate, isPending: false, error: null }) } },
+    useUtils: () => ({}),
   },
 }))
 
@@ -57,6 +62,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
   state.occupied = true
+  state.dataPath = { occupancy: { left: 'occupied', right: 'empty' } }
   state.latest = [{ timestamp: new Date(LAST_VITAL) }]
   state.vitals.mockReturnValue({
     data: [...session(new Date(2026, 8, 27, 4, 5).getTime(), 258), ...session(new Date(2026, 8, 28, 12, 52).getTime(), 134)],
@@ -73,7 +79,18 @@ describe('BiometricsPage', () => {
     render(<BiometricsPage />)
     const banner = screen.getByTestId('stale-banner')
     expect(banner.textContent).toContain('Jon’s side is occupied, but the last vital arrived 3h 56m ago. The pipeline may be stalled.')
-    expect(within(banner).getByRole('link', { name: /Pipeline/ }).getAttribute('href')).toBe('/en/system?tab=pipeline')
+    expect(within(banner).getByRole('link', { name: /Health/ }).getAttribute('href')).toBe('/en/system?tab=health')
+  })
+
+  it('blames the occupancy reading, not the pipeline, when the side looks empty', async () => {
+    state.dataPath = { occupancy: { left: 'suspect', right: 'empty' } }
+    render(<BiometricsPage />)
+    expect(screen.queryByTestId('stale-banner')).toBeNull()
+    const banner = screen.getByTestId('suspect-banner')
+    expect(banner.textContent).toContain('empty-bed reading is probably off')
+    fireEvent.click(within(banner).getByRole('button', { name: 'Bed is empty — recalibrate Jon' }))
+    fireEvent.click(within(banner).getByRole('button', { name: 'Recalibrate' }))
+    await waitFor(() => expect(state.recalibrate).toHaveBeenCalledWith({ side: 'left', sensorType: 'capacitance' }))
   })
 
   it('hides the banner when the side is empty', () => {

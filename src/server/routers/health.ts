@@ -453,6 +453,7 @@ export const healthRouter = router({
     .input(z.object({}))
     .output(z.object({
       at: z.number(),
+      occupancy: z.object({ left: z.enum(['empty', 'occupied', 'suspect']), right: z.enum(['empty', 'occupied', 'suspect']) }),
       nodes: z.array(z.object({
         id: nodeId,
         stage,
@@ -471,6 +472,7 @@ export const healthRouter = router({
         lastGoodId: nodeId.nullable(),
         fix: z.discriminatedUnion('kind', [
           z.object({ kind: z.literal('restart'), unit: unitEnum, label: z.string() }),
+          z.object({ kind: z.literal('recalibrate'), sides: z.array(z.enum(['left', 'right'])), label: z.string() }),
           z.object({ kind: z.literal('logs'), unit: z.string(), label: z.string(), hint: z.string().optional() }),
           z.object({ kind: z.literal('link'), tab: z.enum(['scheduler', 'thermal']), label: z.string() }),
         ]).nullable(),

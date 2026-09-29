@@ -114,6 +114,12 @@ export interface DataPathInputs {
   database: { ok: boolean, latencyMs: number, error?: string }
   scheduler: { enabled: boolean, jobs: number, healthy: boolean }
   occupied: Record<Side, boolean>
+  /**
+   * Sleep-detector output over the last STILL_WINDOW_MS per side: how many
+   * movement rows it wrote (one a minute while it holds a session open), the
+   * largest score among them, and when the side last moved at all.
+   */
+  stillness: Record<Side, { rows: number, maxScore: number, lastMovedAt: number | null }>
   lastVitalAt: Record<Side, number | null>
   lastMovementAt: Record<Side, number | null>
   lastEnvAt: number | null
@@ -151,15 +157,28 @@ export interface Verdict {
 
 export type Fix
   = | { kind: 'restart', unit: RestartableUnit, label: string }
+    | { kind: 'recalibrate', sides: Side[], label: string }
     | { kind: 'logs', unit: string, label: string, hint?: string }
     | { kind: 'link', tab: 'scheduler' | 'thermal', label: string }
 
+/** empty · occupied · suspect (reads occupied, but nothing a body does shows up). */
+export type OccupancyRead = 'empty' | 'occupied' | 'suspect'
+
 export interface DataPathState {
   at: number
+  occupancy: Record<Side, OccupancyRead>
   nodes: NodeState[]
   edges: Array<{ from: NodeId, to: NodeId, state: EdgeState }>
   verdict: Verdict
 }
+
+/** How long a side may read occupied with no movement and no vitals before it's suspect. */
+export const STILL_WINDOW_MS = 2 * 3_600_000
+/**
+ * Movement rows the sleep detector must have written in the window — one a
+ * minute during a session — so a session opened minutes ago isn't judged.
+ */
+const STILL_MIN_ROWS = 100
 
 const SIDES: Side[] = ['left', 'right']
 const NODE_DEFS = new Map(NODES.map(n => [n.id, n]))
@@ -213,7 +232,19 @@ function unitWord(alive: boolean | null): string {
 
 export function evaluateDataPath(i: DataPathInputs): DataPathState {
   const { now } = i
-  const occupiedSides = SIDES.filter(s => i.occupied[s])
+  // A capacitance level stuck above a drifted empty-bed baseline reads as a
+  // sleeper who never moves and never produces a heartbeat. A real sleeper
+  // moves or yields vitals within two hours, so such a side is suspect and
+  // doesn't count as "in bed" for judging the piezo and sleep modules.
+  const occupancy = Object.fromEntries(SIDES.map((s) => {
+    if (!i.occupied[s]) return [s, 'empty']
+    const still = i.stillness[s]
+    const vitalsQuiet = i.lastVitalAt[s] == null || now - (i.lastVitalAt[s] as number) > STILL_WINDOW_MS
+    const suspect = still.rows >= STILL_MIN_ROWS && still.maxScore === 0 && vitalsQuiet
+    return [s, suspect ? 'suspect' : 'occupied']
+  })) as Record<Side, OccupancyRead>
+  const suspectSides = SIDES.filter(s => occupancy[s] === 'suspect')
+  const occupiedSides = SIDES.filter(s => occupancy[s] === 'occupied')
   const anyOccupied = occupiedSides.length > 0
   const ago = (t: number | null) => (t == null ? 'no data yet' : fmtAgo(now - t))
   const nodes = new Map<NodeId, NodeState>()
@@ -290,6 +321,13 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
   }
   moduleNode('piezo-processor', 'sleepypod-piezo-processor.service', inBedWorst(i.lastVitalAt), anyOccupied, 'vitals')
   moduleNode('sleep-detector', 'sleepypod-sleep-detector.service', inBedWorst(i.lastMovementAt), anyOccupied, 'movement')
+  if (suspectSides.length > 0 && node('sleep-detector').status !== 'down') {
+    const who = suspectSides.length === 2 ? 'Both sides read' : `${suspectSides[0] === 'left' ? 'Left' : 'Right'} side reads`
+    const moved = latest(...suspectSides.map(s => i.stillness[s].lastMovedAt))
+    const since = moved == null ? 'in over 2 hours' : `in ${fmtAgo(now - moved).replace(' ago', '')}`
+    const sd = node('sleep-detector')
+    put('sleep-detector', 'stale', sd.metric, `${who} occupied but hasn’t moved ${since} and has no vitals — the empty-bed reading is probably off`, sd.lastOutputAt)
+  }
   moduleNode('environment-monitor', 'sleepypod-environment-monitor.service', i.lastEnvAt, true, 'bed temperature')
 
   // degraded = lost the socket; stopped / not_initialized = never polling.
@@ -335,6 +373,10 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
   }
   mirror('out-vitals', 'piezo-processor', 'Waiting for someone to get in bed')
   mirror('out-sleep', 'sleep-detector', 'Waiting for someone to get in bed')
+  if (suspectSides.length > 0 && node('out-sleep').status === 'stale' && node('sleep-detector').status !== 'down') {
+    const o = node('out-sleep')
+    put('out-sleep', 'stale', o.metric, 'Holding a session open for a side that looks empty', o.lastOutputAt)
+  }
 
   const stalledSides = i.thermal.filter(t => t.verdict === 'stalled').map(t => t.side)
   const env = node('environment-monitor')
@@ -361,7 +403,7 @@ export function evaluateDataPath(i: DataPathInputs): DataPathState {
 
   const ordered = NODES.map(n => node(n.id))
   const edges = EDGES.map(e => ({ from: e.from, to: e.to, state: edgeState(node(e.carries).status) }))
-  return { at: now, nodes: ordered, edges, verdict: verdictOf(ordered, now) }
+  return { at: now, occupancy, nodes: ordered, edges, verdict: verdictOf(ordered, now, suspectSides) }
 }
 
 function edgeState(s: CheckStatus): EdgeState {
@@ -380,7 +422,7 @@ function upstreamOf(id: NodeId): NodeId[] {
  * Where the chain breaks: the most upstream broken stage whose own inputs are
  * healthy. Downstream stages that are stale only because of it are symptoms.
  */
-export function verdictOf(nodes: NodeState[], now: number): Verdict {
+export function verdictOf(nodes: NodeState[], now: number, suspectSides: Side[] = []): Verdict {
   const byId = new Map(nodes.map(n => [n.id, n]))
   const broken = nodes.filter(n => BROKEN.has(n.status))
   if (broken.length === 0) {
@@ -409,12 +451,16 @@ export function verdictOf(nodes: NodeState[], now: number): Verdict {
   // doesn't read as "all clear".
   const also = causes.slice(1).filter(n => !affected.has(n.id)).map(n => `${n.label} ${n.status === 'down' ? 'down' : 'stalled'}`)
 
+  // The sleep detector is "stale" here because its occupancy reading is
+  // wrong, not because it stopped: the fix is a fresh empty-bed reading.
+  const phantom = cause.id === 'sleep-detector' && cause.status === 'stale' && suspectSides.length > 0
+  const who = suspectSides.length === 2 ? 'both sides' : suspectSides[0]
   return {
     tone: cause.status === 'down' || cause.stage === 'sensors' ? 'danger' : 'warn',
-    headline: headlineFor(cause, outputs, now),
+    headline: phantom ? `${cause.detail.replace(' — the ', '. The ')}.` : headlineFor(cause, outputs, now),
     nodeId: cause.id,
     lastGoodId: lastGood?.id ?? null,
-    fix: fixFor(cause),
+    fix: phantom ? { kind: 'recalibrate', sides: suspectSides, label: `Bed is empty — recalibrate ${who}` } : fixFor(cause),
     also,
   }
 }

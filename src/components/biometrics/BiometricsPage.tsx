@@ -20,6 +20,7 @@ import { DiagTable, type DiagColumn } from '@/src/components/diagnostics/DiagTab
 import { fmtNum } from '@/src/components/diagnostics/diagnosticsLogic'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
+import { RecalibrateEmptyBed } from '@/src/components/diagnostics/RecalibrateEmptyBed'
 import { RawDataButton } from './RawDataButton'
 import { VitalsChart, VitalsLegend } from './VitalsChart'
 import {
@@ -61,6 +62,8 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   const summaryQ = trpc.biometrics.getVitalsSummary.useQuery({ side, startDate, endDate }, { refetchInterval: 60_000 })
   const latestQ = trpc.biometrics.getVitals.useQuery({ side, limit: 1 }, { refetchInterval: 30_000 })
   const occupancyQ = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 10_000 })
+  // Health's read of whether "occupied" is believable (no movement, no vitals for hours → suspect).
+  const dataPathQ = trpc.health.dataPath.useQuery({}, { refetchInterval: 60_000 })
   const fileCountQ = trpc.biometrics.getFileCount.useQuery({}, { refetchInterval: 60_000 })
   const movementQ = trpc.biometrics.getMovementBuckets.useQuery({ side, startDate, endDate, bucketSeconds: 300, limit: 10000 }, { refetchInterval: 5 * 60_000 })
 
@@ -71,7 +74,8 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
 
   const lastVitalAt = latestQ.data?.[0] ? new Date(latestQ.data[0].timestamp).getTime() : null
   const occupied = occupancyQ.data?.[side].occupied ?? false
-  const stale = occupied && (lastVitalAt == null || now - lastVitalAt > STALE_MS)
+  const suspect = dataPathQ.data?.occupancy[side] === 'suspect'
+  const stale = occupied && !suspect && (lastVitalAt == null || now - lastVitalAt > STALE_MS)
   const includesNow = win.start <= now && now <= win.end
   const stall = stale && includesNow && lastVitalAt != null && lastVitalAt >= win.start ? { start: lastVitalAt, end: now } : null
   const rangeLabel = formatRangeLabel(win)
@@ -118,6 +122,16 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
         <SegmentedControl ariaLabel="Range" full options={RANGES} value={range} onChange={pickRange} />
       </div>
 
+      {occupied && suspect && (
+        <div className="flex flex-wrap items-center gap-3 rounded-[10px] border border-warn-line bg-warn-bg/50 px-4 py-3 text-[14px] text-warn" role="status" data-testid="suspect-banner">
+          <HeartPulse size={18} className="shrink-0" />
+          <span className="min-w-0 flex-1 basis-[240px]">
+            {`${sideName(side)}’s side reads occupied, but hasn’t moved or produced vitals in over 2 hours. The empty-bed reading is probably off, not the vitals pipeline.`}
+          </span>
+          <RecalibrateEmptyBed sides={[side]} size="sm" />
+        </div>
+      )}
+
       {stale && (
         <div className="flex items-center gap-3 rounded-[10px] border border-warn-line bg-warn-bg/50 px-4 py-3 text-[14px] text-warn" role="status" data-testid="stale-banner">
           <HeartPulse size={18} className="shrink-0" />
@@ -126,8 +140,8 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
               ? `${sideName(side)}’s side is occupied, but no vitals have arrived. The pipeline may be stalled.`
               : `${sideName(side)}’s side is occupied, but the last vital arrived ${fmtDuration(now - lastVitalAt)} ago. The pipeline may be stalled.`}
           </span>
-          <Link href={`/${lang}/system?tab=pipeline`} className="flex shrink-0 items-center gap-1 text-warn no-underline hover:underline">
-            Pipeline
+          <Link href={`/${lang}/system?tab=health`} className="flex shrink-0 items-center gap-1 text-warn no-underline hover:underline">
+            Health
             <ArrowRight size={15} />
           </Link>
         </div>
