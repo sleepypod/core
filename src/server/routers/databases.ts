@@ -4,8 +4,9 @@ import { TRPCError } from '@trpc/server'
 import type Database from 'better-sqlite3'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, sqlite } from '@/src/db'
-import { getDatabaseIntegrity } from '@/src/db/integrity'
+import { getDatabaseIntegrityByDb } from '@/src/db/integrity'
 import { configuredRetentionDays, RETAINED_TABLE_NAMES } from '@/src/db/retention'
+import { AUTOMATION_RUNS_TABLE_NAME, configuredAutomationRunsRetentionDays } from '@/src/db/automationRunsRetention'
 import { CAP_FRAMES_RETENTION_MS } from '@/src/streaming/capFramePersistence'
 import { dfPosix } from '@/src/lib/podStorage'
 import {
@@ -24,7 +25,9 @@ const integrityRun = z.object({
 
 /** Who prunes each table, and to how long. Anything missing here is kept forever. */
 function retentionFor(key: DbKey, table: string): { days: number, by: string } | null {
-  if (key !== 'biometrics') return null
+  if (key === 'sleepypod') {
+    return table === AUTOMATION_RUNS_TABLE_NAME ? { days: configuredAutomationRunsRetentionDays(), by: 'automation runs retention pass' } : null
+  }
   if (RETAINED_TABLE_NAMES.includes(table)) return { days: configuredRetentionDays(), by: 'daily retention pass' }
   if (table === 'cap_sense_frames') return { days: CAP_FRAMES_RETENTION_MS / 86_400_000, by: 'cap frame writer' }
   return null
@@ -74,7 +77,7 @@ export const databasesRouter = router({
         walAutocheckpoint: z.number(),
         error: z.string().optional(),
         integrity: z.object({
-          /** The hourly background check (sleepypod.db only). */
+          /** The hourly background check. */
           scheduled: integrityRun.nullable(),
           /** The last on-demand check from this page, since the server started. */
           manual: integrityRun.nullable(),
@@ -105,6 +108,7 @@ export const databasesRouter = router({
         const dataDir = dirname(DB_FILES.sleepypod.path)
         const [disk, backupAt] = await Promise.all([dfPosix(dataDir), lastBackupAt()])
         const manual = manualIntegrity()
+        const scheduled = getDatabaseIntegrityByDb()
         const databases = await Promise.all(scan.databases.map(async (d) => {
           const mig = await migrationInfo(d.key, d.lastMigrationAt)
           return {
@@ -117,7 +121,7 @@ export const databasesRouter = router({
             walAutocheckpoint: d.walAutocheckpoint,
             ...(d.error && { error: d.error }),
             integrity: {
-              scheduled: d.key === 'sleepypod' ? getDatabaseIntegrity() : null,
+              scheduled: scheduled[d.key],
               manual: manual[d.key] ?? null,
             },
             migrations: { applied: d.appliedMigrations, ...mig },
@@ -143,7 +147,7 @@ export const databasesRouter = router({
       }
     }),
 
-  /** quick_check both databases now (the hourly check only covers sleepypod.db). */
+  /** quick_check both databases now, without waiting for the hourly check. */
   checkIntegrity: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/system/databases/integrity', protect: false, tags: ['System'] } })
     .input(z.object({}))

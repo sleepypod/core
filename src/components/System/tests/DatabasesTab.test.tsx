@@ -56,7 +56,7 @@ beforeEach(() => {
       },
       {
         key: 'biometrics', path: '/persistent/sleepypod-data/biometrics.db', fileBytes: 60 * MB, walBytes: 6 * MB, pageSize: 4096, freePages: 324, walAutocheckpoint: 1000,
-        integrity: { scheduled: null, manual: null },
+        integrity: { scheduled: { status: 'pending', checkedAt: null, latencyMs: 0 }, manual: null },
         migrations: { applied: 17, known: 17, latestTag: '0016_x', appliedTag: '0016_x' },
         tables: [
           table({ name: 'vitals', bytes: 7 * MB, hourly: hourly(h => (h < 20 ? 4 : 0)), retention: { days: 90, by: 'daily retention pass' } }),
@@ -83,8 +83,8 @@ describe('DatabasesTab', () => {
     expect(main.textContent).toContain('2 applied by another build')
 
     const bio = screen.getByTestId('db-biometrics')
-    expect(bio.textContent).toContain('Never checked')
-    expect(bio.textContent).toContain('hourly check covers sleepypod.db only')
+    expect(bio.textContent).toContain('Pending')
+    expect(bio.textContent).toContain('hourly check runs 30 s after start')
     expect(within(bio).getByTestId('table-cap_sense_frames').textContent).toContain('48 h')
   })
 

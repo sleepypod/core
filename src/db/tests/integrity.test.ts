@@ -24,7 +24,10 @@ vi.mock('node:worker_threads', async () => {
   }
 })
 
-import { getDatabaseIntegrity, startDatabaseIntegrityChecks, stopDatabaseIntegrityChecks } from '../integrity'
+import { getDatabaseIntegrity, getDatabaseIntegrityByDb, startDatabaseIntegrityChecks, stopDatabaseIntegrityChecks } from '../integrity'
+
+const report = (worker: TestWorker, key: 'sleepypod' | 'biometrics', error: string | null = null, latencyMs = 60) =>
+  worker.emit('message', { key, error, latencyMs })
 
 beforeEach(() => {
   delete (globalThis as Record<string, unknown>).__sp_database_integrity__
@@ -53,11 +56,18 @@ describe('background database integrity lifecycle', () => {
     expect(mocks.workers).toHaveLength(1)
     startDatabaseIntegrityChecks()
     expect(mocks.workers).toHaveLength(1)
-    await vi.advanceTimersByTimeAsync(120)
-    mocks.workers[0].emit('message', null)
+    expect(mocks.workers[0].options.workerData.databases.map((d: { key: string }) => d.key)).toEqual(['sleepypod', 'biometrics'])
+    await vi.advanceTimersByTimeAsync(50)
+    report(mocks.workers[0], 'sleepypod', null, 50)
+    await vi.advanceTimersByTimeAsync(70)
+    report(mocks.workers[0], 'biometrics', null, 70)
     expect(getDatabaseIntegrity().status).toBe('pending')
     mocks.workers[0].emit('exit', 0)
-    expect(getDatabaseIntegrity()).toEqual({ status: 'ok', checkedAt: '2026-09-05T12:00:30.120Z', latencyMs: 120 })
+    expect(getDatabaseIntegrityByDb()).toEqual({
+      sleepypod: { status: 'ok', checkedAt: '2026-09-05T12:00:30.050Z', latencyMs: 50 },
+      biometrics: { status: 'ok', checkedAt: '2026-09-05T12:00:30.120Z', latencyMs: 70 },
+    })
+    expect(getDatabaseIntegrity()).toEqual({ status: 'ok', checkedAt: '2026-09-05T12:00:30.050Z', latencyMs: 120 })
     await vi.advanceTimersByTimeAsync(60 * 60_000 - 1)
     expect(mocks.workers).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(1)
@@ -68,21 +78,51 @@ describe('background database integrity lifecycle', () => {
     startDatabaseIntegrityChecks()
     await vi.advanceTimersByTimeAsync(30_000)
     const worker = mocks.workers[0]
-    if (failure === 'result') worker.emit('message', 'database disk image is malformed')
+    report(worker, 'sleepypod')
+    if (failure === 'result') report(worker, 'biometrics', 'database disk image is malformed')
     if (failure === 'error') worker.emit('error', new Error('worker crashed'))
     worker.emit('exit', 1)
 
-    expect(getDatabaseIntegrity()).toMatchObject({ status: 'degraded', error: expect.any(String) })
+    const expected = { 'result': 'database disk image is malformed', 'error': 'worker crashed', 'no-result': 'Integrity worker exited without a result' }[failure]
+    expect(getDatabaseIntegrityByDb().sleepypod.status).toBe('ok')
+    expect(getDatabaseIntegrityByDb().biometrics).toMatchObject({ status: 'degraded', error: expected })
+    expect(getDatabaseIntegrity()).toMatchObject({ status: 'degraded', error: `biometrics.db: ${expected}` })
     expect(getDatabaseIntegrity().checkedAt).not.toBeNull()
+  })
+
+  it('names every degraded file in the combined error', async () => {
+    startDatabaseIntegrityChecks()
+    await vi.advanceTimersByTimeAsync(30_000)
+    report(mocks.workers[0], 'sleepypod', 'row 3 missing from index')
+    report(mocks.workers[0], 'biometrics', 'unable to open database file')
+    mocks.workers[0].emit('exit', 0)
+
+    expect(getDatabaseIntegrity()).toMatchObject({
+      status: 'degraded',
+      error: 'sleepypod.db: row 3 missing from index; biometrics.db: unable to open database file',
+    })
+  })
+
+  it('stays pending until both databases have a result', () => {
+    startDatabaseIntegrityChecks()
+    const results = ((globalThis as Record<string, unknown>).__sp_database_integrity__ as { results: Record<string, unknown> }).results
+    results.sleepypod = { status: 'ok', checkedAt: '2026-09-05T11:00:00.000Z', latencyMs: 5 }
+    expect(getDatabaseIntegrity()).toEqual({ status: 'pending', checkedAt: null, latencyMs: 5 })
+    results.biometrics = { status: 'ok', checkedAt: '2026-09-05T10:00:00.000Z', latencyMs: 7 }
+    expect(getDatabaseIntegrity()).toEqual({ status: 'ok', checkedAt: '2026-09-05T10:00:00.000Z', latencyMs: 12 })
   })
 
   it('terminates a stalled scan and reports the timeout', async () => {
     startDatabaseIntegrityChecks()
     await vi.advanceTimersByTimeAsync(30_000)
-    await vi.advanceTimersByTimeAsync(30_000)
+    report(mocks.workers[0], 'sleepypod')
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(mocks.workers[0].terminate).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
 
     expect(mocks.workers[0].terminate).toHaveBeenCalledOnce()
-    expect(getDatabaseIntegrity()).toMatchObject({ status: 'degraded', error: 'Integrity check timed out after 30s' })
+    expect(getDatabaseIntegrityByDb().sleepypod.status).toBe('ok')
+    expect(getDatabaseIntegrity()).toMatchObject({ status: 'degraded', error: 'biometrics.db: Integrity check timed out after 60s' })
     await vi.advanceTimersByTimeAsync(60 * 60_000)
     expect(mocks.workers).toHaveLength(2)
   })
@@ -90,7 +130,7 @@ describe('background database integrity lifecycle', () => {
   it('does not publish or reschedule a scan terminated during shutdown', async () => {
     startDatabaseIntegrityChecks()
     await vi.advanceTimersByTimeAsync(30_000)
-    mocks.workers[0].emit('message', null)
+    report(mocks.workers[0], 'sleepypod')
     await stopDatabaseIntegrityChecks()
     await vi.advanceTimersByTimeAsync(2 * 60 * 60_000)
 
@@ -113,7 +153,11 @@ describe('background database integrity lifecycle', () => {
     mocks.constructionError = new Error('worker unavailable')
     startDatabaseIntegrityChecks()
     await vi.advanceTimersByTimeAsync(30_000)
-    expect(getDatabaseIntegrity()).toMatchObject({ status: 'degraded', error: 'worker unavailable' })
+    expect(getDatabaseIntegrityByDb()).toMatchObject({
+      sleepypod: { status: 'degraded', error: 'worker unavailable' },
+      biometrics: { status: 'degraded', error: 'worker unavailable' },
+    })
+    expect(getDatabaseIntegrity()).toMatchObject({ status: 'degraded', error: 'sleepypod.db: worker unavailable; biometrics.db: worker unavailable' })
     mocks.constructionError = null
     await vi.advanceTimersByTimeAsync(60 * 60_000)
     expect(mocks.workers).toHaveLength(1)

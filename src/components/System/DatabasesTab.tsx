@@ -272,8 +272,7 @@ function integrityFact(db: Db, now: number): { value: string, sub: string, tone:
       ? { value: 'OK', sub: `quick_check · ${how} · ${fmtAgo(Date.parse(latest.checkedAt as string), now)} · ${latest.latencyMs} ms`, tone: 'ok' }
       : { value: 'Failed', sub: latest.error ?? 'quick_check reported errors', tone: 'danger' }
   }
-  if (scheduled) return { value: 'Pending', sub: 'hourly check runs 30 s after start', tone: 'warn' }
-  return { value: 'Never checked', sub: 'hourly check covers sleepypod.db only', tone: 'warn' }
+  return { value: 'Pending', sub: 'hourly check runs 30 s after start', tone: 'warn' }
 }
 
 function DatabaseCard({ db, data }: { db: Db, data: Overview }) {

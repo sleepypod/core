@@ -133,8 +133,8 @@ export function outlookSentence(o: Outlook, now: number, fmt: (bytes: number) =>
   else parts.push('Nothing grows without bound; the databases stay about this size.')
   if (o.retainedCount > 0) {
     parts.push(o.steadyDays != null
-      ? `Retention holds ${o.retainedCount} biometrics tables flat after ${shortDay(now + o.steadyDays * DAY)}.`
-      : `Retention already holds ${o.retainedCount} biometrics tables flat.`)
+      ? `Retention holds ${o.retainedCount} tables flat after ${shortDay(now + o.steadyDays * DAY)}.`
+      : `Retention already holds ${o.retainedCount} tables flat.`)
   }
   const top = o.growers.filter(g => g.perDay >= 1024)
   if (top.length === 1) parts.push(`${top[0].name} isn’t pruned and keeps growing.`)
