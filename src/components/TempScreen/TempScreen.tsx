@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, PageHeader, Skeleton, StatusDot } from '@/src/components/ds'
+import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
@@ -117,6 +118,7 @@ export const TempScreen = () => {
       title="Temperature"
       right={(
         <>
+          <AutopilotStatusChip className="no-underline" />
           <Button
             icon={Link2}
             aria-pressed={isLinked}

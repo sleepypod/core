@@ -48,6 +48,7 @@ vi.mock('../ScheduleTimeline', () => ({ ScheduleTimeline: () => null }))
 vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
 vi.mock('../AlarmBanner', () => ({ AlarmBanner: () => null }))
+vi.mock('@/src/components/Autopilot/AutopilotStatusChip', () => ({ AutopilotStatusChip: () => null }))
 
 import { TempScreen } from '../TempScreen'
 

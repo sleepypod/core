@@ -2,13 +2,13 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Clock, GitBranch, WifiOff } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import { Button, Card, InlineError, KeyValue, Skeleton } from '@/src/components/ds'
+import { Button, Card, InlineError, KeyValue, Skeleton, StatusDot } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import { formatSetpointF } from '@/src/lib/tempUtils'
 import { langFromPath } from '@/src/components/AppShell/navItems'
@@ -67,17 +67,72 @@ function StatusLine() {
   const title = checks.map(c => `${c.status === 'ok' ? '✓' : '✗'} ${c.name}: ${c.value}`).join('\n')
 
   const facts = [
-    { label: 'Build', value: [branch, commit].filter(Boolean).join(' · ') || '—' },
-    { label: 'Wi-Fi', value: s.wifi ? (s.wifi.connected ? `${s.wifi.ssid ?? 'connected'} · ${s.wifi.signal ?? 0}%` : 'offline') : '—' },
-    { label: 'Internet', value: s.internetBlocked === undefined ? '—' : s.internetBlocked ? 'Blocked' : 'Allowed' },
-    { label: 'Disk', value: s.diskPercent !== undefined ? `${Math.round(s.diskPercent)}% used` : '—' },
-    { label: 'Uptime', value: s.uptimeSeconds !== undefined ? formatUptime(s.uptimeSeconds) : '—' },
+    {
+      label: 'Build',
+      value: branch || commit
+        ? (
+            <>
+              {branch && <GitBranch size={12} className="shrink-0 text-icon" />}
+              {branch && <span className="truncate">{branch}</span>}
+              {commit && <span className="shrink-0 rounded-tag border border-line-2 px-1 text-[11px] leading-4 text-fg-2">{commit}</span>}
+            </>
+          )
+        : '—',
+    },
+    {
+      label: 'Wi-Fi',
+      value: !s.wifi
+        ? '—'
+        : s.wifi.connected
+          ? (
+              <>
+                <SignalBars percent={s.wifi.signal ?? 0} />
+                <span className="truncate">{s.wifi.ssid ?? 'connected'}</span>
+                <span className="shrink-0 text-fg-2">{`${s.wifi.signal ?? 0}%`}</span>
+              </>
+            )
+          : (
+              <>
+                <WifiOff size={12} className="shrink-0" />
+                offline
+              </>
+            ),
+      className: s.wifi && !s.wifi.connected ? 'text-warn' : undefined,
+    },
+    {
+      label: 'Internet',
+      value: s.internetBlocked === undefined
+        ? '—'
+        : <StatusDot tone={s.internetBlocked ? 'muted' : 'ok'} label={s.internetBlocked ? 'Blocked' : 'Allowed'} className="text-[13px] text-fg" />,
+    },
+    {
+      label: 'Disk',
+      value: s.diskPercent !== undefined
+        ? (
+            <>
+              <UsageBar percent={s.diskPercent} />
+              {`${Math.round(s.diskPercent)}% used`}
+            </>
+          )
+        : '—',
+    },
+    {
+      label: 'Uptime',
+      value: s.uptimeSeconds !== undefined
+        ? (
+            <>
+              <Clock size={12} className="shrink-0 text-icon" />
+              {formatUptime(s.uptimeSeconds)}
+            </>
+          )
+        : '—',
+    },
   ]
 
   return (
     <Card className="flex-row flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3" data-testid="status-line">
       <div className="flex min-w-0 items-center gap-3" title={title}>
-        <HealthRing healthy={s.healthy} total={s.total} size={40} caption={false} />
+        <HealthRing healthy={s.healthy} total={s.total} size={44} caption={false} />
         <div className="flex min-w-0 flex-col">
           <span className="text-sm font-medium">{headline}</span>
           {failing.length > 0 && (
@@ -85,10 +140,37 @@ function StatusLine() {
           )}
         </div>
       </div>
-      <div className="flex min-w-0 flex-1 flex-wrap gap-x-6 gap-y-2 @min-[900px]:justify-end">
-        {facts.map(f => <KeyValue key={f.label} label={f.label} value={f.value} size={13} />)}
+      <div className="grid min-w-0 flex-1 grid-cols-2 gap-x-6 gap-y-2 @min-[560px]:flex @min-[560px]:flex-wrap @min-[900px]:justify-end">
+        {facts.map(f => (
+          <div key={f.label} className="min-w-0">
+            <div className="text-xs text-fg-2">{f.label}</div>
+            <div className={cn('flex min-w-0 items-center gap-1.5 font-mono text-[13px]', f.className)}>{f.value}</div>
+          </div>
+        ))}
       </div>
     </Card>
+  )
+}
+
+/** Four rising bars, lit by Wi-Fi signal strength (0–100%). */
+function SignalBars({ percent }: { percent: number }) {
+  const lit = percent >= 75 ? 4 : percent >= 50 ? 3 : percent >= 25 ? 2 : percent > 0 ? 1 : 0
+  return (
+    <span className="flex h-3 shrink-0 items-end gap-px" role="img" aria-label={`Signal ${lit} of 4`}>
+      {[1, 2, 3, 4].map(i => (
+        <span key={i} className={cn('w-[3px] rounded-[1px]', i <= lit ? (lit <= 1 ? 'bg-warn' : 'bg-ok') : 'bg-active')} style={{ height: `${i * 25}%` }} />
+      ))}
+    </span>
+  )
+}
+
+/** Thin usage meter; amber from 80%, red from 90%. */
+function UsageBar({ percent }: { percent: number }) {
+  const p = Math.min(100, Math.max(0, percent))
+  return (
+    <span className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-active" aria-hidden>
+      <span className={cn('block h-full rounded-full', p >= 90 ? 'bg-danger' : p >= 80 ? 'bg-warn' : 'bg-fg-2')} style={{ width: `${p}%` }} />
+    </span>
   )
 }
 

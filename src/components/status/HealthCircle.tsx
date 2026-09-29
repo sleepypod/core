@@ -2,7 +2,6 @@
 
 import type { ReactNode } from 'react'
 import { Card, KeyValue } from '@/src/components/ds'
-import { cn } from '@/lib/utils'
 import { POD_CAPS } from '@/src/hardware/pods'
 import type { PodVersion } from '@/src/hardware/types'
 
@@ -24,6 +23,10 @@ export function HealthRing({ healthy, total, size = 84, caption = true }: {
   const r = 42
   const c = 2 * Math.PI * r
   const stroke = size < 60 ? 7 : 5
+  const label = `${healthy}/${total}`
+  // Shrink the count to fit inside the stroke: mono glyphs are ~0.6em wide, 85% of the inner diameter.
+  const inner = (2 * (r - stroke / 2) * size) / 96
+  const fontSize = Math.min(size < 60 ? 12 : 16, (inner * 0.85) / (label.length * 0.6))
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }} role="img" aria-label={`${healthy} of ${total} checks healthy`}>
       <svg width={size} height={size} viewBox="0 0 96 96" className="-rotate-90">
@@ -40,8 +43,8 @@ export function HealthRing({ healthy, total, size = 84, caption = true }: {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={cn('font-mono font-light leading-none', size < 60 ? 'text-xs' : 'text-base')}>
-          {`${healthy}/${total}`}
+        <span className="font-mono font-light leading-none tabular-nums" style={{ fontSize }}>
+          {label}
         </span>
         {caption && size >= 60 && <span className="text-[10px] text-fg-2">healthy</span>}
       </div>
