@@ -9,6 +9,7 @@
 # - settings/heat/vector/system-connections/free-sleep-data/deviceinfo/
 #   sleepypod-data: state directories the firmware reads (and rarely
 #   writes); symlinks transparently expose the on-disk content.
+# - frozen.heartbeat: persistent watchdog state used by frankenfirmware.
 # - alarm.cbr/uptime.log: misc small state files.
 #
 # Idempotent: safe to run on every frank.service start. Tmpfs is empty
@@ -34,7 +35,7 @@ done
 
 # State files that firmware reads/writes through cwd. Symlinks pass
 # writes through to eMMC.
-for name in SEQNO.RAW alarm.cbr uptime.log; do
+for name in SEQNO.RAW frozen.heartbeat alarm.cbr uptime.log; do
   src="$SOURCE_DIR/$name"
   dst="$TMPFS_DIR/$name"
   if [ -f "$src" ] && [ ! -L "$dst" ]; then
