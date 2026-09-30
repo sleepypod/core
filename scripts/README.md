@@ -13,6 +13,8 @@ See main [installation guide](../docs/INSTALLATION.md) for hardware setup.
 
 ## Getting root on Pod 5
 
+For the full illustrated procedure, start with **[Open your Pod and get root access](https://sleepypod.github.io/core/root-access/)**. It covers hardware, wiring, the slot-A check, every shell command, and installation directly from serial. The notes below are implementation background; they are not a substitute for that first-time walkthrough.
+
 Initial root access on a Pod 5 is a JTAG bootstrap — there is no
 software-only escalation. At a high level: tear down to the circuit board,
 connect a TC2070-IDC + FTDI FT232RL to the JTAG header, open a 921600-baud

@@ -44,10 +44,14 @@ The web UI brings temperature, schedules, Autopilot, sleep, and system diagnosti
 
 ## Installation
 
-Requires a Pod running its stock embedded Linux. Run as root on the device:
+Starting with a stock Pod? Follow **[Open your Pod and get root access](https://sleepypod.github.io/core/root-access/)** first: parts list, enclosure photos, Tag-Connect wiring, serial login, and the handoff to installation. See [first-time installation](docs/INSTALLATION.md) for the model-specific starting points. You do not need to install free-sleep first.
+
+Once you have a root shell on the Pod, run the installer **on the device**, not on your computer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install | sudo bash
+curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install -o /tmp/sleepypod-install
+less /tmp/sleepypod-install
+bash /tmp/sleepypod-install
 ```
 
 The script:
