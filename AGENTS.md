@@ -63,6 +63,15 @@ Every PR to `main` is a release promotion. Its title must start with `feat:`,
 PR title gate enforces these prefixes so the promotion triggers a release.
 Complete requested publishing work by pushing and verifying the remote state.
 
+The `main` merge queue squashes, so each release leaves `main` with a commit
+`dev` lacks. `.github/workflows/back-merge.yml` runs after "Analyze & Release"
+succeeds and pushes a real `--no-ff` merge of `main` into `dev` (never through
+dev's merge queue, which would squash it). It needs the `BACKMERGE_TOKEN`
+secret: an org-admin fine-grained PAT or a GitHub App installation token with
+`contents: write`, whose actor is on the Dev ruleset bypass list. Without the
+secret it skips; on conflict it pushes nothing and opens a "Back-merge main →
+dev needs a hand" issue with the manual steps.
+
 ## Pod debugging
 
 Use `docs/DEBUGGING.md` for SSH access, data paths, biometrics failures, and
