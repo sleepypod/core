@@ -7,7 +7,7 @@ import { useSensorFrame, useOnSensorFrame } from '@/src/hooks/useSensorStream'
 import type { CapSenseFrame, CapSense2Frame, SensorFrame } from '@/src/hooks/useSensorStream'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { trpc } from '@/src/utils/trpc'
-import { Card, SectionLabel, StatusDot } from '@/src/components/ds'
+import { Card, SectionLabel, Skeleton, StatusDot } from '@/src/components/ds'
 
 /**
  * Bed presence card.
@@ -97,23 +97,32 @@ export function PresenceCard() {
   return (
     <Card className="gap-2.5 px-4 py-3.5">
       <SectionLabel right={<SensorAge timestamp={frame?.ts} />}>Presence</SectionLabel>
-      <div className="grid grid-cols-2 gap-3">
-        {(['left', 'right'] as const).map((side) => {
-          const occ = occupancyQuery.data?.[side]
-          return (
-            <PresenceSide
-              key={side}
-              name={sideName(side)}
-              side={side}
-              occupied={occ?.occupied ?? false}
-              known={occ !== undefined}
-              sub={occ ? (occ.available ? (occ.movement.active ? 'moving' : 'still') : 'sensor n/a') : '--'}
-              variance={side === 'left' ? variance.leftVariance : variance.rightVariance}
-              hasFrames={!!frame}
-            />
+      {occupancyQuery.isLoading
+        ? (
+            <div className="grid grid-cols-2 gap-3" data-testid="presence-loading">
+              <Skeleton className="h-[92px]" />
+              <Skeleton className="h-[92px]" />
+            </div>
           )
-        })}
-      </div>
+        : (
+            <div className="grid grid-cols-2 gap-3">
+              {(['left', 'right'] as const).map((side) => {
+                const occ = occupancyQuery.data?.[side]
+                return (
+                  <PresenceSide
+                    key={side}
+                    name={sideName(side)}
+                    side={side}
+                    occupied={occ?.occupied ?? false}
+                    known={occ !== undefined}
+                    sub={occ ? (occ.available ? (occ.movement.active ? 'moving' : 'still') : 'sensor n/a') : '--'}
+                    variance={side === 'left' ? variance.leftVariance : variance.rightVariance}
+                    hasFrames={!!frame}
+                  />
+                )
+              })}
+            </div>
+          )}
     </Card>
   )
 }

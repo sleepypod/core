@@ -6,7 +6,7 @@ import type { SensorFrame } from '@/src/hooks/useSensorStream'
 const mock = vi.hoisted(() => ({
   frame: (_f: SensorFrame) => {
     void _f
-  }, data: undefined as unknown,
+  }, data: undefined as unknown, loading: false,
   single: vi.fn(), full: vi.fn(), invalidate: vi.fn(), side: vi.fn(),
   singleSuccess: () => {}, singleError: () => {}, fullSuccess: () => {}, error: null as null | Error,
 }))
@@ -19,7 +19,7 @@ vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ 
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   useUtils: () => ({ calibration: { getStatus: { invalidate: mock.invalidate } } }),
   calibration: {
-    getStatus: { useQuery: () => ({ data: mock.data }) },
+    getStatus: { useQuery: () => ({ data: mock.data, isLoading: mock.loading }) },
     triggerCalibration: { useMutation: (opts: { onSuccess: () => void, onError: () => void }) => {
       mock.singleSuccess = opts.onSuccess
       mock.singleError = opts.onError
@@ -36,6 +36,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-09-29T00:00:00Z'))
   mock.data = undefined
+  mock.loading = false
   mock.error = null
   vi.clearAllMocks()
 })
@@ -110,4 +111,17 @@ it('plots uncalibrated legacy signals and disables active calibration', () => {
   expect(screen.getByRole('button', { name: 'Pending' }).hasAttribute('disabled')).toBe(true)
   expect(screen.getByRole('button', { name: 'Calibrate all' }).hasAttribute('disabled')).toBe(true)
   expect(screen.getByText('No samples')).toBeTruthy()
+})
+
+it('shows one skeleton per sensor while calibration status is loading', () => {
+  mock.loading = true
+  const { rerender } = render(<CalibrationPanel />)
+  expect(screen.getByTestId('cal-piezo-loading')).toBeTruthy()
+  expect(screen.getByTestId('cal-capacitance-loading')).toBeTruthy()
+  expect(screen.getByTestId('cal-temperature-loading')).toBeTruthy()
+  expect(screen.queryByTestId('cal-piezo')).toBeNull()
+  mock.loading = false
+  rerender(<CalibrationPanel />)
+  expect(screen.queryByTestId('cal-piezo-loading')).toBeNull()
+  expect(screen.getByTestId('cal-piezo')).toBeTruthy()
 })

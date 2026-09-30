@@ -165,3 +165,37 @@ it('shows firmware logs and gestures, filters raw frames, pauses and clears each
   fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
   expect(screen.getByText('Waiting for firmware logs')).toBeTruthy()
 })
+
+it('holds presence and freezer slots with skeletons until the first query resolves', () => {
+  mock.loading = true
+  const { rerender } = render(
+    <>
+      <PresenceCard />
+      <FreezerHealthCard />
+    </>,
+  )
+  expect(screen.getByTestId('presence-loading')).toBeTruthy()
+  expect(screen.queryByTestId('presence-left')).toBeNull()
+  expect(screen.getByTestId('freezer-loading')).toBeTruthy()
+  expect(screen.queryByText('No data')).toBeNull()
+
+  // Live frames beat the stored fallback: no skeleton while the DB query is still pending.
+  mock.frames.frzHealth = { left: { tecCurrent: 1, pumpRpm: 100, flowrate: null }, right: { tecCurrent: 1, pumpRpm: 100, flowrate: null }, fan: { rpm: 200 } }
+  rerender(
+    <>
+      <PresenceCard />
+      <FreezerHealthCard />
+    </>,
+  )
+  expect(screen.queryByTestId('freezer-loading')).toBeNull()
+
+  mock.loading = false
+  rerender(
+    <>
+      <PresenceCard />
+      <FreezerHealthCard />
+    </>,
+  )
+  expect(screen.queryByTestId('presence-loading')).toBeNull()
+  expect(screen.getByTestId('presence-left')).toBeTruthy()
+})

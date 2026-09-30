@@ -1,7 +1,7 @@
 'use client'
 
 import type { LucideIcon } from 'lucide-react'
-import type { ComponentProps, CSSProperties, ReactNode } from 'react'
+import type { ComponentProps, CSSProperties, HTMLAttributes, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { skyHue, tempHue } from '@/src/lib/tempColors'
 
@@ -294,8 +294,8 @@ export function GhostIcon({ icon: Icon, label, size = 16, className, type = 'but
 }
 
 /** Skeleton block at card radius (keeps the existing animate-pulse loading pattern). */
-export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn('animate-pulse rounded-card border border-line bg-surface', className)} />
+export function Skeleton({ className, ...rest }: { className?: string } & HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('animate-pulse rounded-card border border-line bg-surface', className)} {...rest} />
 }
 
 /** Inline red error in a card slot. */

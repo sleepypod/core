@@ -7,7 +7,7 @@ import type { FrzHealthFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatDisplayTemp, sensorCToDisplay } from '@/src/lib/tempUtils'
-import { Card, SectionLabel, StatusDot, type Tone } from '@/src/components/ds'
+import { Card, SectionLabel, Skeleton, StatusDot, type Tone } from '@/src/components/ds'
 
 /** Overall freezer verdict from live health + water level. */
 export function freezerStatus(
@@ -76,6 +76,16 @@ export function FreezerHealthCard() {
 
   const waterLevel = waterLevelLatest.data?.level as 'low' | 'ok' | undefined
   const hasData = !!(temps || frzHealth || frzTherm)
+
+  // First paint with no live frames yet: hold the slot while the stored fallback loads.
+  if (!hasData && latestFreezerTemp.isLoading) {
+    return (
+      <>
+        <Skeleton className="h-[46px] min-[900px]:hidden" data-testid="freezer-loading" />
+        <Skeleton className="hidden h-[168px] min-[900px]:block" />
+      </>
+    )
+  }
   const status = freezerStatus(frzHealth, waterLevel, hasData)
 
   const t = (v: number | null | undefined, decimals = 1) =>

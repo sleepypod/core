@@ -7,7 +7,7 @@ import { useSide } from '@/src/hooks/useSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { useOnSensorFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
-import { Button, Card, InlineError, SegmentedControl, StatusDot, type Tone } from '@/src/components/ds'
+import { Button, Card, InlineError, SegmentedControl, Skeleton, StatusDot, type Tone } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
   capDeviation, capSumBand, channelsInBaseline, fmtCompact, fmtTimeLeft, parseCapParams, parsePiezoParams,
@@ -173,7 +173,9 @@ export function CalibrationPanel() {
         </Card>
       )}
 
-      {CAL_SENSORS.map((type) => {
+      {status.isLoading && CAL_SENSORS.map(type => <Skeleton key={type} className="h-[180px]" data-testid={`cal-${type}-loading`} />)}
+
+      {!status.isLoading && CAL_SENSORS.map((type) => {
         const p = data?.[type]
         const st = p?.status ?? 'unknown'
         const active = st === 'running' || st === 'pending'
