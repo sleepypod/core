@@ -7,7 +7,7 @@ import { useSide } from '@/src/hooks/useSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { useOnSensorFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
-import { Button, Card, InlineError, SegmentedControl, Skeleton, StatusDot, type Tone } from '@/src/components/ds'
+import { Button, Card, HoverMark, InlineError, SegmentedControl, Skeleton, StatusDot, useHoverFraction, type Tone } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
   capDeviation, capSumBand, channelsInBaseline, fmtCompact, fmtTimeLeft, parseCapParams, parsePiezoParams,
@@ -266,24 +266,40 @@ interface PlotProps {
   band?: { lo: number, hi: number }
   line?: { y: number, label: string }
   caption: ReactNode
+  /** Value under the pointer at time `t`, for the hover readout; null when nothing is there. */
+  readout?: (t: number) => string | null
   children: (x: (t: number) => number, y: (v: number) => number) => ReactNode
 }
 
-function SignalPlot({ now, windowMs, window, yMin, yMax, band, line, caption, children }: PlotProps) {
+/** Seconds before now, "-12s" or "-3m 05s". */
+function ago(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  return s >= 60 ? `-${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s` : `-${s}s`
+}
+
+function SignalPlot({ now, windowMs, window, yMin, yMax, band, line, caption, readout, children }: PlotProps) {
   const x = (t: number) => ((t - (now - windowMs)) / windowMs) * W
   const span = yMax - yMin || 1
   const y = (v: number) => H - ((v - yMin) / span) * H
+  const hover = useHoverFraction()
+  const hoverT = hover.frac === null ? null : now - windowMs + hover.frac * windowMs
+  const value = hoverT === null ? null : readout?.(hoverT) ?? null
   return (
     <div className="flex flex-col gap-1.5">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-[96px] w-full overflow-hidden rounded-[6px] bg-app">
-        {band && (
-          <rect x={0} width={W} y={y(band.hi)} height={Math.max(1, y(band.lo) - y(band.hi))} fill="var(--surface-active)" />
+      <div className="relative" onPointerMove={hover.onPointerMove} onPointerLeave={hover.onPointerLeave}>
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-[96px] w-full overflow-hidden rounded-[6px] bg-app">
+          {band && (
+            <rect x={0} width={W} y={y(band.hi)} height={Math.max(1, y(band.lo) - y(band.hi))} fill="var(--surface-active)" />
+          )}
+          {line && (
+            <line x1={0} x2={W} y1={y(line.y)} y2={y(line.y)} stroke="var(--text-3)" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
+          )}
+          {children(x, y)}
+        </svg>
+        {hoverT !== null && hover.frac !== null && (
+          <HoverMark pct={hover.frac * 100} label={`${ago(now - hoverT)}${value ? ` · ${value}` : ''}`} />
         )}
-        {line && (
-          <line x1={0} x2={W} y1={y(line.y)} y2={y(line.y)} stroke="var(--text-3)" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
-        )}
-        {children(x, y)}
-      </svg>
+      </div>
       <div className="grid grid-cols-[auto_1fr_auto] gap-2 font-mono text-[11px] text-fg-3">
         <span>{window}</span>
         <span className="truncate text-center text-fg-2">{caption}</span>
@@ -297,6 +313,13 @@ function Waiting({ label }: { label: string }) {
   return (
     <div className="flex h-[96px] items-center justify-center rounded-[6px] bg-app font-mono text-xs text-fg-3">{label}</div>
   )
+}
+
+/** The sample stamped closest to `t`, or null when the list is empty. */
+function nearestBy<T extends { t: number }>(list: ReadonlyArray<T>, t: number): T | null {
+  let best: T | null = null
+  for (const s of list) if (!best || Math.abs(s.t - t) < Math.abs(best.t - t)) best = s
+  return best
 }
 
 function polyline(points: Array<[number, number]>) {
@@ -322,6 +345,10 @@ function PiezoSignal({ side, samples, params, now }: { side: Side, samples: Piez
       caption={cal && latest != null
         ? `${occupied ? 'occupied' : 'empty'} · range ${fmtCompact(latest)} of ${fmtCompact(cal.threshold)}`
         : latest != null ? `range ${fmtCompact(latest)} · not calibrated` : '—'}
+      readout={(t) => {
+        const p = nearestBy(env, t)
+        return p ? `range ${fmtCompact(p.hi - p.lo)}` : null
+      }}
     >
       {(x, y) => {
         const zig = env.flatMap((p): Array<[number, number]> => [[x(p.t), y(p.hi)], [x(p.t), y(p.lo)]])
@@ -352,7 +379,18 @@ function CapSignal({ samples, params, now }: { samples: CapSample[], params: unk
     const hi = Math.max(...vals)
     const pad = (hi - lo) * 0.2 || 1
     return (
-      <SignalPlot now={now} windowMs={META.capacitance.windowMs} window={META.capacitance.window} yMin={lo - pad} yMax={hi + pad} caption="raw reading · no capSense2 baseline">
+      <SignalPlot
+        now={now}
+        windowMs={META.capacitance.windowMs}
+        window={META.capacitance.window}
+        yMin={lo - pad}
+        yMax={hi + pad}
+        caption="raw reading · no capSense2 baseline"
+        readout={(t) => {
+          const s = nearestBy(samples, t)
+          return s ? fmtCompact(s.values[0]) : null
+        }}
+      >
         {(x, y) => (
           <polyline points={polyline(samples.map(s => [x(s.t), y(s.values[0])]))} fill="none" stroke={META.capacitance.color} strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
         )}
@@ -380,6 +418,10 @@ function CapSignal({ samples, params, now }: { samples: CapSample[], params: unk
       band={{ lo: -band, hi: band }}
       line={{ y: cal.threshold, label: 'occupied ↑' }}
       caption={`${occupied ? 'occupied' : 'empty'} · ${channelsInBaseline(last, cal)} of 3 channels in baseline`}
+      readout={(t) => {
+        const s = nearestBy(devs, t)
+        return s ? `${fmtCompact(s.d.sum)} of ${fmtCompact(cal.threshold)}` : null
+      }}
     >
       {(x, y) => (
         <>
@@ -417,6 +459,10 @@ function TempSignal({ side, samples, params, now }: { side: Side, samples: TempS
       caption={means?.center != null
         ? `${formatTemp(latest)} · calibrated ${formatTemp(means.center)}${spread != null ? ` · ${spread.toFixed(1)}° band` : ''}`
         : `${formatTemp(latest)} · not calibrated`}
+      readout={(t) => {
+        const s = nearestBy(pts, t)
+        return s ? formatTemp(s.zones.center as number) : null
+      }}
     >
       {(x, y) => (
         <>

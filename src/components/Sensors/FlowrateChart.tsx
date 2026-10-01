@@ -129,6 +129,8 @@ export function FlowrateChart() {
                     { data: chartData.map(d => d[leftKey] ?? Number.NaN), color: 'var(--accent-cool)', width: 1.5 },
                     { data: chartData.map(d => d[rightKey] ?? Number.NaN), color: 'var(--accent-warm)', width: 1.5 },
                   ]}
+                  xLabel={i => new Date(chartData[i].time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  format={v => (viewMode === 'flowrate' ? v.toFixed(2) : Math.round(v).toLocaleString())}
                 />
               )}
     </Card>

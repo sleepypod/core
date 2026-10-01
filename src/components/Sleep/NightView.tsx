@@ -92,6 +92,8 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       distribution: stages?.distribution,
       date: key && record ? keyToDate(key) : start != null ? keyToDate(toNightKey(new Date(start))) : key ? keyToDate(key) : null,
       hr: downsample(epochs.map(e => e.heartRate)),
+      // Same chunking as `hr`, over the epochs that have a reading, so each point knows its time.
+      hrTimes: downsample(epochs.filter(e => e.heartRate != null).map(e => e.start)),
       avgHr: average(epochs.map(e => e.heartRate)),
       avgHrv: average(epochs.map(e => e.hrv)),
       avgBr: average(epochs.map(e => e.breathingRate)),
@@ -128,7 +130,14 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
           {loading
             ? <div className="h-24 animate-pulse rounded-ctl bg-active" />
             : hrValues.length > 1
-              ? <LineChart series={[{ data: night.hr, color: 'var(--chart-hr)', fill: true, width: 1.5 }]} height={96} />
+              ? (
+                  <LineChart
+                    series={[{ data: night.hr, color: 'var(--chart-hr)', fill: true, width: 1.5 }]}
+                    height={96}
+                    xLabel={i => (night.hrTimes[i] != null ? new Date(night.hrTimes[i]).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '')}
+                    format={v => `${Math.round(v)} bpm`}
+                  />
+                )
               : <EmptyNote className="h-24 py-0">No heart-rate data for this night</EmptyNote>}
         </Card>
       </div>

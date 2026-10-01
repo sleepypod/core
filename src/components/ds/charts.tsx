@@ -1,9 +1,48 @@
 'use client'
 
+import { useState, type PointerEvent, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 /* Lightweight SVG charts from the design system. Use recharts where
    interaction (tooltips, zoom) matters; these are for compact cards. */
+
+/**
+ * Where the pointer is across a chart box, as a 0..1 fraction of its width
+ * (minus any padding), or null when outside. Every chart's hover readout is
+ * built on this so they all behave alike.
+ */
+export function useHoverFraction(padLeft = 0, padRight = 0) {
+  const [frac, setFrac] = useState<number | null>(null)
+  const onPointerMove = (e: PointerEvent<Element>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const w = rect.width - padLeft - padRight
+    if (w <= 0) return
+    const x = e.clientX - rect.left - padLeft
+    setFrac(x < 0 || x > w ? null : x / w)
+  }
+  const onPointerLeave = () => setFrac(null)
+  return { frac, onPointerMove, onPointerLeave }
+}
+
+/** Vertical hover line with a readout, laid over a `relative` chart box at `pct` percent across. */
+export function HoverMark({ pct, label, className, labelClassName }: { pct: number, label: ReactNode, className?: string, labelClassName?: string }) {
+  const flip = pct > 55
+  return (
+    <div
+      aria-hidden
+      data-testid="chart-hover"
+      className={cn('pointer-events-none absolute inset-y-0 border-l border-fg/35', className)}
+      style={{ left: `${pct}%` }}
+    >
+      <span
+        className={cn('absolute top-0 rounded-tag px-1 font-mono text-[10px] leading-4 whitespace-nowrap text-fg', flip ? 'right-1' : 'left-1', labelClassName)}
+        style={{ background: 'color-mix(in srgb, var(--surface-card) 85%, transparent)' }}
+      >
+        {label}
+      </span>
+    </div>
+  )
+}
 
 export interface LineSeries {
   data: number[]
@@ -14,17 +53,26 @@ export interface LineSeries {
   width?: number
 }
 
-/** Fluid-width sparkline/line chart. Non-finite points are skipped. */
-export function LineChart({ series, min, max, height = 80, className }: {
+/**
+ * Fluid-width sparkline/line chart. Non-finite points are skipped. Passing
+ * `xLabel` turns on the hover readout: the label for the point under the
+ * pointer and each series' value there (through `format`, default 1 decimal).
+ */
+export function LineChart({ series, min, max, height = 80, className, xLabel, format = v => v.toFixed(1) }: {
   series: LineSeries[]
   min?: number
   max?: number
   height?: number
   className?: string
+  xLabel?: (index: number) => string
+  format?: (value: number, series: number) => string
 }) {
   const width = 300
+  const hover = useHoverFraction()
   const all = series.flatMap(s => s.data).filter(Number.isFinite)
   if (all.length === 0) return <div className={className} style={{ height }} />
+  const n = Math.max(...series.map(s => s.data.length))
+  const idx = xLabel && hover.frac !== null && n > 0 ? Math.round(hover.frac * (n - 1)) : null
   const lo = min ?? Math.min(...all)
   const hi = max ?? Math.max(...all)
   const path = (d: number[]) => {
@@ -42,8 +90,8 @@ export function LineChart({ series, min, max, height = 80, className }: {
     })
     return out.trim()
   }
-  return (
-    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className={cn('block', className)}>
+  const svg = (
+    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className={cn('block', !xLabel && className)}>
       {series.map((s, i) => {
         const d = path(s.data)
         if (!d) return null
@@ -62,6 +110,16 @@ export function LineChart({ series, min, max, height = 80, className }: {
         )
       })}
     </svg>
+  )
+  if (!xLabel) return svg
+  const values = idx === null ? [] : series.map((s, i) => (Number.isFinite(s.data[idx]) ? format(s.data[idx], i) : null)).filter((v): v is string => v !== null)
+  return (
+    <div className={cn('relative', className)} onPointerMove={hover.onPointerMove} onPointerLeave={hover.onPointerLeave}>
+      {svg}
+      {idx !== null && (
+        <HoverMark pct={(idx / Math.max(1, n - 1)) * 100} label={`${xLabel(idx)}${values.length ? ` · ${values.join(' / ')}` : ''}`} />
+      )}
+    </div>
   )
 }
 

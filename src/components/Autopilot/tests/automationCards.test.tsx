@@ -123,6 +123,15 @@ it('renders side ownership, schedule blocks, holds, rule windows and filtered fi
   expect(screen.getAllByTitle('1:00 AM · fired')).toHaveLength(2)
   expect(screen.getByTitle('11:00 PM · would fire')).toBeTruthy()
   expect(screen.getByTestId('tonight-now')).toBeTruthy()
+
+  // Hover: one line across the lanes reading each side's setting at that moment (a hold wins).
+  const lanes = screen.getByTestId('tonight-lanes')
+  vi.spyOn(lanes, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 1120, height: 100, right: 1120, bottom: 100, toJSON: () => ({}) })
+  // 6 PM \u2192 9 AM is 15 h; 11 PM is 5 h in, past the 120px label columns.
+  fireEvent.pointerMove(lanes, { clientX: 120 + 1000 * 5 / 15, clientY: 20 })
+  expect(screen.getByTestId('chart-hover').textContent).toMatch(/^11:00\sPM \u00b7 Alex 81\u00b0 hold \u00b7 Sam 78\u00b0$/)
+  fireEvent.pointerLeave(lanes)
+  expect(screen.queryByTestId('chart-hover')).toBeNull()
 })
 
 it('waits for the client clock and shows owner loading placeholders', () => {

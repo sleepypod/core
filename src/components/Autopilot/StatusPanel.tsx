@@ -11,7 +11,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useMemo, useState } from 'react'
 import type { Action, Condition, Trigger } from '@/src/automation/types'
-import { SegmentedControl } from '@/src/components/ds'
+import { HoverMark, SegmentedControl, useHoverFraction } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import { Icon } from './icons'
 import { Card, SideBadge, Toggle } from './primitives'
@@ -109,10 +109,22 @@ const TICK_CLASS: Record<TickKind, string> = {
   missing: 'border border-danger',
 }
 
+const TICK_LABEL: Record<TickKind, string> = {
+  none: 'no tick',
+  skipped: 'skipped',
+  cooldown: 'cooldown',
+  would: 'would fire (dry-run)',
+  fired: 'fired',
+  error: 'error',
+  missing: 'no evaluation logged',
+}
+
 function EvaluationStrip({ strip, nowMs, cooldownMin }: { strip: Strip, nowMs: number, cooldownMin: number | null }) {
   const span = strip.endMs - strip.startMs
   const pct = (ms: number) => `${((ms - strip.startMs) / span) * 100}%`
   const n = strip.ticks.length
+  const hover = useHoverFraction()
+  const hoverIdx = hover.frac === null || n === 0 ? null : Math.min(n - 1, Math.floor(hover.frac * n))
 
   const hours: number[] = []
   const first = new Date(strip.startMs)
@@ -144,7 +156,14 @@ function EvaluationStrip({ strip, nowMs, cooldownMin }: { strip: Strip, nowMs: n
         )}
         <span className="absolute right-0 bottom-0 text-fg-2">now</span>
       </div>
-      <div className="relative h-7" role="img" aria-label={`Evaluations over the last ${STRIP_HOURS} hours`}>
+      <div
+        className="relative h-7"
+        role="img"
+        aria-label={`Evaluations over the last ${STRIP_HOURS} hours`}
+        data-testid="evaluation-strip"
+        onPointerMove={hover.onPointerMove}
+        onPointerLeave={hover.onPointerLeave}
+      >
         <div className="absolute inset-0 flex">
           {strip.ticks.map((k, i) => (
             <div key={i} className="flex h-full min-w-0 flex-1 justify-center">
@@ -168,6 +187,13 @@ function EvaluationStrip({ strip, nowMs, cooldownMin }: { strip: Strip, nowMs: n
           )
         })}
         <div className="absolute -top-1 -bottom-1 w-px bg-fg-2" style={{ left: pct(nowMs) }} />
+        {hoverIdx !== null && (
+          <HoverMark
+            pct={((hoverIdx + 0.5) / n) * 100}
+            label={`${clock(strip.startMs + hoverIdx * 60_000)} · ${TICK_LABEL[strip.ticks[hoverIdx]]}`}
+            className="-top-1 -bottom-1"
+          />
+        )}
       </div>
       <div className="relative h-4 font-mono text-[11px] text-fg-3">
         {hours.map(t => (

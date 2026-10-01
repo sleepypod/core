@@ -16,6 +16,7 @@ const stream = vi.hoisted(() => ({
 vi.mock('@/src/hooks/useSensorStream', () => ({ useSensorStream: () => stream }))
 vi.mock('@/src/components/ds', () => ({
   Card: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  HoverMark: ({ label }: { label: ReactNode }) => <span data-testid="chart-hover">{label}</span>,
   SectionLabel: ({ children, right }: { children: ReactNode, right: ReactNode }) => (
     <div>
       {children}

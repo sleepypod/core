@@ -9,7 +9,7 @@ import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import { Button, Card, InlineError, KeyValue, Skeleton, StatusDot } from '@/src/components/ds'
+import { Button, Card, HoverMark, InlineError, KeyValue, Skeleton, StatusDot, useHoverFraction } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import { formatSetpointF } from '@/src/lib/tempUtils'
 import { langFromPath } from '@/src/components/AppShell/navItems'
@@ -21,7 +21,7 @@ import { bedTrace } from '@/src/components/Schedule/bedTrace'
 import { formatCountdown, nightSetPoints } from '@/src/components/Schedule/bothNight'
 import { fmtClock, fmtF, thermalDirection, type SchedJob } from './diagnosticsLogic'
 import { attentionItems, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow, TONIGHT_END_H, TONIGHT_START_H } from './dashboardLogic'
-import { panelDomain, seriesPath, THERMAL_PANELS } from './thermalHistoryLogic'
+import { nearestPoint, panelDomain, seriesPath, THERMAL_PANELS } from './thermalHistoryLogic'
 import type { DiagSection } from './DiagnosticsConsole'
 import { OccupancyCheck } from './OccupancyCheck'
 
@@ -450,6 +450,14 @@ function SideSummaryCard({ side: s, onClick }: { side: ThermalSide, onClick: () 
   const panel = THERMAL_PANELS[0]
   const domain = h ? panelDomain({ ...panel, series: [{ key, label: '' }] }, h.points) : null
   const onAt = s.isPowered && s.poweredOnAt ? new Date(s.poweredOnAt) : null
+  const hover = useHoverFraction()
+  let readout: { pct: number, label: string } | null = null
+  if (h && hover.frac !== null) {
+    const t = h.from + hover.frac * (h.to - h.from)
+    const p = nearestPoint(h.points, t)
+    const v = p && Math.abs(p.t - t) <= h.bucketSec * 3000 ? p[key] : null
+    readout = { pct: hover.frac * 100, label: `${fmtClock(new Date(t).toISOString())} · ${fmtF(v)}` }
+  }
 
   return (
     <Card onClick={onClick} className="cursor-pointer gap-2.5 hover:bg-active" data-testid={`side-${side}`}>
@@ -466,16 +474,19 @@ function SideSummaryCard({ side: s, onClick }: { side: ThermalSide, onClick: () 
       </div>
       {h && domain
         ? (
-            <svg viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} preserveAspectRatio="none" className="h-10 w-full" aria-label={`${sideName(side)} last 12 hours`}>
-              <path
-                transform={`scale(1 ${SPARK_H / 100})`}
-                d={seriesPath(h.points, key, h.from, h.to - h.from, SPARK_W, domain, h.bucketSec * 3000)}
-                fill="none"
-                stroke={side === 'left' ? 'var(--text-1)' : 'var(--stage-rem)'}
-                strokeWidth={1.5}
-                vectorEffect="non-scaling-stroke"
-              />
-            </svg>
+            <div className="relative h-10" onPointerMove={hover.onPointerMove} onPointerLeave={hover.onPointerLeave}>
+              <svg viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} preserveAspectRatio="none" className="h-10 w-full" aria-label={`${sideName(side)} last 12 hours`}>
+                <path
+                  transform={`scale(1 ${SPARK_H / 100})`}
+                  d={seriesPath(h.points, key, h.from, h.to - h.from, SPARK_W, domain, h.bucketSec * 3000)}
+                  fill="none"
+                  stroke={side === 'left' ? 'var(--text-1)' : 'var(--stage-rem)'}
+                  strokeWidth={1.5}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </svg>
+              {readout && <HoverMark pct={readout.pct} label={readout.label} />}
+            </div>
           )
         : <div className="h-10" />}
       <span className="font-mono text-[10px] text-fg-3">

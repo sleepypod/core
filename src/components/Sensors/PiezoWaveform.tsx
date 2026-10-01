@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSensorStream } from '@/src/hooks/useSensorStream'
-import { Card, SectionLabel, Slider } from '@/src/components/ds'
+import { Card, HoverMark, SectionLabel, Slider } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 
 /** Maximum samples to keep in the waveform buffer per channel. */
@@ -241,6 +241,26 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
   // Reactive sample counts + rate (updated on each frame for display)
   const [sampleCounts, setSampleCounts] = useState({ left: 0, right: 0 })
   const [freq, setFreq] = useState(0)
+  // Hover readout over the canvas: the sample under the pointer on each
+  // channel. Read from the buffers in the handler (they are refs, not state).
+  const [readout, setReadout] = useState<{ pct: number, label: string } | null>(null)
+  const onHover = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const frac = rect.width > 0 ? (e.clientX - rect.left) / rect.width : -1
+    const n = Math.max(leftBufferRef.current.length, rightBufferRef.current.length)
+    if (frac < 0 || frac > 1 || n < 2) {
+      setReadout(null)
+      return
+    }
+    const i = Math.round(frac * (n - 1))
+    const back = freqRef.current > 0 ? `-${((n - 1 - i) / freqRef.current).toFixed(2)}s` : `#${i}`
+    const l = leftBufferRef.current[i]
+    const r = rightBufferRef.current[i]
+    setReadout({
+      pct: (i / (n - 1)) * 100,
+      label: [back, showLeft && l != null ? `L ${Math.round(l)}` : null, showRight && r != null ? `R ${Math.round(r)}` : null].filter(Boolean).join(' · '),
+    })
+  }
 
   // Seek / timeline scrubber state. `enabled` follows the System Stop toggle
   // so this consumer doesn't hold the shared socket open while paused.
@@ -401,11 +421,12 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
         <ChannelChip label="Right" on={showRight} color="var(--accent-warm)" onClick={() => setShowRight(v => !v)} />
       </SectionLabel>
 
-      <div ref={containerRef} className="overflow-hidden">
+      <div ref={containerRef} className="relative overflow-hidden" onPointerMove={onHover} onPointerLeave={() => setReadout(null)}>
         <canvas
           ref={canvasRef}
           style={{ width: '100%', height: `${CANVAS_HEIGHT}px`, display: 'block' }}
         />
+        {readout && <HoverMark pct={readout.pct} label={readout.label} />}
       </div>
 
       {!timeRange && !isLive && (

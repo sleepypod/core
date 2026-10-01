@@ -43,7 +43,26 @@ export function StorageTab() {
     },
   })
 
-  if (storage.isLoading) return <Skeleton className="h-64" />
+  // isPending (not isLoading) so the error card never flashes before the first fetch starts.
+  if (storage.isPending) {
+    return (
+      <>
+        <Card data-testid="storage-skeleton">
+          <Skeleton className="h-5 w-1/3" />
+          <Skeleton className="h-3 rounded-full" />
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2 @min-[640px]:grid-cols-3">
+            {[0, 1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-4" />)}
+          </div>
+          <Skeleton className="h-8" />
+        </Card>
+        <Card>
+          <Skeleton className="h-5 w-1/4" />
+          <Skeleton className="h-10" />
+          <Skeleton className="h-10" />
+        </Card>
+      </>
+    )
+  }
   if (storage.error || !storage.data) {
     return <Card tone="danger"><InlineError>{storage.error?.message ?? 'Storage info unavailable'}</InlineError></Card>
   }

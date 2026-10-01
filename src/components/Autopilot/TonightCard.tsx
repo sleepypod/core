@@ -8,9 +8,9 @@
  */
 'use client'
 
-import type { CSSProperties } from 'react'
+import { useState, type CSSProperties, type PointerEvent } from 'react'
 import { cn } from '@/lib/utils'
-import { Skeleton } from '@/src/components/ds'
+import { HoverMark, Skeleton } from '@/src/components/ds'
 import { useNowMinute } from '@/src/components/Schedule/CurveChart'
 import { tempTone, TONE_VAR } from '@/src/components/Schedule/scheduleFormat'
 import { tonightWindow } from '@/src/components/diagnostics/dashboardLogic'
@@ -59,6 +59,8 @@ export function TonightCard({ rules, tonight, fires, unit }: {
   const { sideName } = useSideNames()
   const left = trpc.schedules.getAll.useQuery({ side: 'left' }, { staleTime: 60_000 })
   const right = trpc.schedules.getAll.useQuery({ side: 'right' }, { staleTime: 60_000 })
+  // One hover across every lane: the moment under the pointer (epoch ms).
+  const [hoverT, setHoverT] = useState<number | null>(null)
 
   if (nowMinute == null) return <Skeleton className="h-[420px]" />
   const now = nowMinute * 60_000
@@ -74,6 +76,26 @@ export function TonightCard({ rules, tonight, fires, unit }: {
   const ticks: number[] = []
   for (let t = start; t <= end; t += 3 * HOUR) ticks.push(t)
   const nowIn = now >= start && now <= end
+  const blocks: Record<Side, ReturnType<typeof scheduleBlocks>> = {
+    left: scheduleBlocks(curves.left, start, end, fmt),
+    right: scheduleBlocks(curves.right, start, end, fmt),
+  }
+
+  // Lanes start after the 64px name and 40px lane-label columns plus two 8px gaps.
+  const LANE_LEFT = 120
+  const onLanesPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - rect.left - LANE_LEFT
+    const w = rect.width - LANE_LEFT
+    setHoverT(x < 0 || w <= 0 ? null : start + Math.min(1, x / w) * (end - start))
+  }
+  // What each side is set to at the hovered moment: a manual hold wins over the schedule.
+  const readoutAt = (side: Side, t: number) => {
+    const hold = tonight?.sides[side].hold
+    if (hold && t >= hold.startedAt && t <= hold.expiresAt) return `${fmt(hold.temperature)} hold`
+    const b = blocks[side].find(x => t >= x.start && t < x.end)
+    return b ? fmt(b.temperature) : '—'
+  }
 
   return (
     <div className="@container flex min-w-0 flex-col gap-4 rounded-card border border-line bg-surface px-[18px] py-4" data-testid="tonight-card">
@@ -114,13 +136,18 @@ export function TonightCard({ rules, tonight, fires, unit }: {
       </div>
 
       <div className="-mx-[18px] overflow-x-auto px-[18px]">
-        <div className="relative grid min-w-[560px] grid-cols-[64px_40px_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
+        <div
+          className="relative grid min-w-[560px] grid-cols-[64px_40px_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5"
+          data-testid="tonight-lanes"
+          onPointerMove={onLanesPointerMove}
+          onPointerLeave={() => setHoverT(null)}
+        >
           {SIDES.map(side => (
             <SideLanes
               key={side}
               side={side}
               name={sideName(side)}
-              blocks={scheduleBlocks(curves[side], start, end, fmt)}
+              blocks={blocks[side]}
               hold={tonight?.sides[side].hold ?? null}
               rules={rules.filter(r => r.mode !== 'off' && (r.side == null || r.side === side))}
               fires={fires.filter(f => f.sides.length === 0 || f.sides.includes(side))}
@@ -149,6 +176,13 @@ export function TonightCard({ rules, tonight, fires, unit }: {
           <div aria-hidden className="pointer-events-none absolute top-0 right-0 bottom-5 left-[120px]">
             {ticks.map(t => <span key={t} className="absolute inset-y-0 w-px bg-grid" style={{ left: `${pct(t)}%` }} />)}
             {nowIn && <span className="absolute inset-y-0 w-px bg-fg" style={{ left: `${pct(now)}%` }} data-testid="tonight-now" />}
+            {hoverT != null && (
+              <HoverMark
+                pct={pct(hoverT)}
+                label={`${clock(hoverT)} · ${SIDES.map(s => `${sideName(s)} ${readoutAt(s, hoverT)}`).join(' · ')}`}
+                className="-top-5"
+              />
+            )}
           </div>
         </div>
       </div>

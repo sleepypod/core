@@ -48,7 +48,7 @@ export function DatabasesTab() {
     onSettled: () => void utils.databases.overview.invalidate(),
   })
 
-  if (overview.isLoading) {
+  if (overview.isPending) {
     return (
       <>
         <Skeleton className="h-5 w-1/2" />
@@ -170,6 +170,7 @@ function StorageOutlook({ data }: { data: Overview }) {
 
 function OutlookChart({ outlook, now }: { outlook: Outlook, now: number }) {
   const [ref, width] = useWidth<HTMLDivElement>()
+  const [hoverX, setHoverX] = useState<number | null>(null)
   const height = 220
   const left = 52
   const bottom = 20
@@ -214,10 +215,31 @@ function OutlookChart({ outlook, now }: { outlook: Outlook, now: number }) {
     return dt.getMonth() === 0 ? String(dt.getFullYear()) : dt.toLocaleDateString([], { month: 'short' })
   }
 
+  // Hover: the nearest projected day and what it adds up to.
+  let hover: { x: number, label: string } | null = null
+  if (hoverX !== null && plotW > 0 && samples.length > 0) {
+    const day = Math.max(0, Math.min(horizonDays, ((hoverX - left) / plotW) * horizonDays))
+    let i = 0
+    for (let k = 1; k < samples.length; k++) if (Math.abs(samples[k].day - day) < Math.abs(samples[i].day - day)) i = k
+    const date = new Date(now + samples[i].day * 86_400_000).toLocaleDateString([], { month: 'short', day: 'numeric' })
+    hover = { x: X(samples[i].day), label: `${date} · ${formatBytes(totals[i])}` }
+  }
+
   return (
     <div ref={ref} style={{ height }}>
       {width > 0 && (
-        <svg width={width} height={height} className="block overflow-visible" role="img" aria-label="Projected database size">
+        <svg
+          width={width}
+          height={height}
+          className="block overflow-visible"
+          role="img"
+          aria-label="Projected database size"
+          onPointerMove={(e) => {
+            const x = e.clientX - e.currentTarget.getBoundingClientRect().left
+            setHoverX(x < left || x > left + plotW ? null : x)
+          }}
+          onPointerLeave={() => setHoverX(null)}
+        >
           {yTicks.map(v => (
             <g key={v}>
               <line x1={left} x2={width - 8} y1={Y(v)} y2={Y(v)} stroke="var(--border-grid)" />
@@ -238,6 +260,21 @@ function OutlookChart({ outlook, now }: { outlook: Outlook, now: number }) {
               <line x1={left} x2={width - 8} y1={Y(limit as number)} y2={Y(limit as number)} stroke="var(--status-danger)" strokeDasharray="2 3" />
               <text x={width - 8} y={Y(limit as number) - 5} textAnchor="end" fill="var(--status-danger)" fontSize="10" className="font-mono">{`disk full · ${formatBytes(limit as number)}`}</text>
               <line x1={X(fillDays as number)} x2={X(fillDays as number)} y1={Y(limit as number)} y2={16 + plotH} stroke="var(--status-danger)" strokeOpacity="0.6" />
+            </g>
+          )}
+          {hover && (
+            <g data-testid="outlook-hover" pointerEvents="none">
+              <line x1={hover.x} x2={hover.x} y1={12} y2={16 + plotH} stroke="var(--text-1)" strokeOpacity="0.35" />
+              <text
+                x={hover.x > width / 2 ? hover.x - 6 : hover.x + 6}
+                y={16 + plotH - 8}
+                textAnchor={hover.x > width / 2 ? 'end' : 'start'}
+                fill="var(--text-1)"
+                fontSize="10"
+                className="font-mono"
+              >
+                {hover.label}
+              </text>
             </g>
           )}
         </svg>

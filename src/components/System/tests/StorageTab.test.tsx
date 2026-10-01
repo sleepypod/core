@@ -7,13 +7,14 @@ const mocks = vi.hoisted(() => ({
   data: undefined as unknown,
   mutate: vi.fn(),
   result: undefined as unknown,
+  pending: false,
 }))
 
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     useUtils: () => ({ system: { getStorage: { invalidate: vi.fn() } } }),
     system: {
-      getStorage: { useQuery: () => ({ data: mocks.data, isLoading: false, error: null }) },
+      getStorage: { useQuery: () => ({ data: mocks.pending ? undefined : mocks.data, isPending: mocks.pending, isLoading: false, error: null }) },
       freeStorage: { useMutation: () => ({ mutate: mocks.mutate, isPending: false, error: null, data: mocks.result }) },
     },
   },
@@ -24,6 +25,7 @@ import { StorageTab } from '../StorageTab'
 beforeEach(() => {
   mocks.mutate.mockReset()
   mocks.result = undefined
+  mocks.pending = false
   mocks.data = {
     persistent: { totalBytes: 15 * GB, usedBytes: 12 * GB, availableBytes: 3 * GB, usedPercent: 80 },
     prunerTargetPercent: 80,
@@ -49,6 +51,13 @@ beforeEach(() => {
 })
 
 describe('StorageTab', () => {
+  it('shows a skeleton while the first fetch is pending instead of the error card', () => {
+    mocks.pending = true
+    render(<StorageTab />)
+    expect(screen.getByTestId('storage-skeleton')).toBeTruthy()
+    expect(screen.queryByText('Storage info unavailable')).toBeNull()
+  })
+
   it('shows usage, the legend and days of raw history', () => {
     render(<StorageTab />)
     expect(screen.getByText('12.0 GB of 15.0 GB used · 3.0 GB free')).toBeTruthy()
