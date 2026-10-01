@@ -255,6 +255,54 @@ describe('device.getStatus', () => {
     expect(dbMock.insert).toHaveBeenCalledTimes(2)
   })
 
+  it('fallback persistence keeps a freshly mutated side\'s powered state', async () => {
+    // setPower(left, true) just wrote is_powered=1; the firmware's status
+    // still reports the old neutral target for ~1–3 s. The fallback write
+    // must not undo the mutation (the monitor's DeviceStateSync already
+    // skips powered-state fields inside this window).
+    const { markSideMutated: stamp, _resetMutationStamps } = await import('@/src/hardware/sideMutations')
+    stamp('left')
+    try {
+      helpersMock.client.getDeviceStatus.mockResolvedValueOnce({
+        leftSide: { currentTemperature: 81, targetTemperature: null, currentLevel: 0, targetLevel: 0, heatingDuration: 0 },
+        rightSide: { currentTemperature: 80, targetTemperature: 75, currentLevel: 5, targetLevel: 5, heatingDuration: 100 },
+        waterLevel: 'ok',
+        isPriming: false,
+        podVersion: 'I00',
+        sensorLabel: 'pod-test',
+      })
+
+      await caller.getStatus({})
+
+      const left = dbChain('insert', 0)
+      expect(left.values).toHaveBeenCalledWith({ side: 'left', currentTemperature: 81, lastUpdated: expect.any(Date) })
+      expect(left.onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        set: { currentTemperature: 81, lastUpdated: expect.any(Date) },
+      }))
+      const right = dbChain('insert', 1)
+      expect(right.values).toHaveBeenCalledWith(expect.objectContaining({ side: 'right', isPowered: true, targetTemperature: 75 }))
+    }
+    finally {
+      _resetMutationStamps()
+    }
+  })
+
+  it('fallback persistence derives powered state from the target level outside the window', async () => {
+    helpersMock.client.getDeviceStatus.mockResolvedValueOnce({
+      leftSide: { currentTemperature: 81, targetTemperature: null, currentLevel: 3, targetLevel: 0, heatingDuration: 600 },
+      rightSide: { currentTemperature: 80, targetTemperature: 75, currentLevel: 5, targetLevel: 5, heatingDuration: 100 },
+      waterLevel: 'ok',
+      isPriming: false,
+      podVersion: 'I00',
+      sensorLabel: 'pod-test',
+    })
+
+    await caller.getStatus({})
+
+    expect(dbChain('insert', 0).values).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', isPowered: false, targetTemperature: null }))
+    expect(dbChain('insert', 1).values).toHaveBeenCalledWith(expect.objectContaining({ side: 'right', isPowered: true }))
+  })
+
   it('reads hardware and persists status before the monitor is running', async () => {
     monitorMock.getDacMonitorIfRunning.mockReturnValue(null)
 

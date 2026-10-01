@@ -13,6 +13,7 @@ import { HardwareCommand } from '@/src/hardware/types'
 import type { Side } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { getLastSideMutationAt } from '@/src/hardware/sideMutations'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { getTemperatureController, getTemperatureControlStatus } from '@/src/temperature/instance'
 import { holdMinutesSchema, temperatureControlStatusSchema } from '@/src/temperature/schema'
@@ -86,6 +87,11 @@ function energizedSides(opcode: string, args: string | undefined): Side[] {
 // ---------------------------------------------------------------------------
 
 const TEMP_DEBOUNCE_MS = 200
+
+// Same window as DeviceStateSync's MUTATION_FRESHNESS_MS: a fallback hardware
+// read this soon after setPower/setTemperature must not clobber the mutation's
+// powered state.
+const MUTATION_FRESHNESS_MS = 5_000
 
 interface PendingTemp {
   temperature: number
@@ -197,45 +203,25 @@ export const deviceRouter = router({
           client => client.getDeviceStatus(), 'Failed to get device status',
         )
         // The monitor already persists cached observations. Preserve the fallback
-        // sync only when a hardware read was necessary.
+        // sync only when a hardware read was necessary. Like the monitor's
+        // DeviceStateSync, a read landing inside the mutation-freshness window
+        // still describes the pre-command session (firmware needs ~1–3 s to
+        // reflect it), so only observation fields are written for that side.
         try {
-          await db
-            .insert(deviceState)
-            .values({
-              side: 'left',
-              currentTemperature: status.leftSide.currentTemperature,
-              targetTemperature: status.leftSide.targetTemperature,
-              isPowered: status.leftSide.targetLevel !== 0,
-              lastUpdated: new Date(),
-            })
-            .onConflictDoUpdate({
-              target: deviceState.side,
-              set: {
-                currentTemperature: status.leftSide.currentTemperature,
-                targetTemperature: status.leftSide.targetTemperature,
-                isPowered: status.leftSide.targetLevel !== 0,
-                lastUpdated: new Date(),
-              },
-            })
-
-          await db
-            .insert(deviceState)
-            .values({
-              side: 'right',
-              currentTemperature: status.rightSide.currentTemperature,
-              targetTemperature: status.rightSide.targetTemperature,
-              isPowered: status.rightSide.targetLevel !== 0,
-              lastUpdated: new Date(),
-            })
-            .onConflictDoUpdate({
-              target: deviceState.side,
-              set: {
-                currentTemperature: status.rightSide.currentTemperature,
-                targetTemperature: status.rightSide.targetTemperature,
-                isPowered: status.rightSide.targetLevel !== 0,
-                lastUpdated: new Date(),
-              },
-            })
+          for (const side of ['left', 'right'] as const) {
+            const sideStatus = side === 'left' ? status.leftSide : status.rightSide
+            const observed = { currentTemperature: sideStatus.currentTemperature, lastUpdated: new Date() }
+            const powered = Date.now() - getLastSideMutationAt(side) < MUTATION_FRESHNESS_MS
+              ? {}
+              : { targetTemperature: sideStatus.targetTemperature, isPowered: sideStatus.targetLevel !== 0 }
+            await db
+              .insert(deviceState)
+              .values({ side, ...observed, ...powered })
+              .onConflictDoUpdate({
+                target: deviceState.side,
+                set: { ...observed, ...powered },
+              })
+          }
         }
         catch (dbError) {
           console.error('Failed to sync device status to DB:', dbError)
