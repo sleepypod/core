@@ -211,6 +211,24 @@ describe('production controller with migrated SQLite', () => {
     finally { log.mockRestore() }
   })
 
+  it('does not energize from a stale powered row through replaceAutopilot before the firmware has reported in', async () => {
+    // Pod 88, 2026-10-01 03:05 UTC: getAutomationEngine() ticks at startup
+    // before the passive loop exists; its replaceAutopilot(side, []) reached
+    // reconcileLocked, read a leftover is_powered=1 row, and applied the
+    // schedule target the moment frank connected. The loop gate did not
+    // cover that path; the controller's own power read must.
+    _resetFirmwareSynced()
+    try {
+      await getTemperatureController().replaceAutopilot('left', [])
+      expect(hardware.setTemperature).not.toHaveBeenCalled()
+      expect(getTemperatureController().status('left').blocked).toBe('off')
+      markFirmwareSynced()
+      await getTemperatureController().replaceAutopilot('left', [])
+      expect(hardware.setTemperature).toHaveBeenCalledWith('left', 72)
+    }
+    finally { markFirmwareSynced() }
+  })
+
   it('expires the right hold while the left side lock is occupied', async () => {
     await getTemperatureController().setManual('right', 76, 1_000)
     let release = () => {}

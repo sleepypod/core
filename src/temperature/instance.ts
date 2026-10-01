@@ -102,7 +102,15 @@ export function getTemperatureController(): TemperatureController {
         db.insert(temperatureHolds).values(values).onConflictDoUpdate({ target: temperatureHolds.side, set: values }).run()
       },
       readBaseline,
-      isPowered: side => db.select().from(deviceState).where(eq(deviceState.side, side)).get()?.isPowered ?? false,
+      // A device_state row left over from before a restart is not evidence of
+      // a live session until the firmware has reported in. Gating here covers
+      // every reconcile path (the automation engine's startup tick, scheduler
+      // temperature jobs, resume/submit/withdraw), not just the passive loop:
+      // on Pod 88 the engine's first tick read a stale is_powered=1 row and
+      // energized a side the moment frank connected. Explicit power-on and
+      // manual commands do not consult this.
+      isPowered: side => hasFirmwareSynced()
+        && (db.select().from(deviceState).where(eq(deviceState.side, side)).get()?.isPowered ?? false),
       readCurrentTarget: side => db.select().from(deviceState).where(eq(deviceState.side, side)).get()?.targetTemperature ?? null,
       readHardwareDeadline: side => db.select({ deadline: deviceState.hardwareDeadline }).from(deviceState).where(eq(deviceState.side, side)).get()?.deadline ?? null,
       writeHardwareDeadline: (side, hardwareDeadline) => {
