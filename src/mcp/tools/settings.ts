@@ -26,8 +26,9 @@ export function registerSettingsTools(server: McpServer) {
   server.registerTool('set_side_settings', {
     title: 'Change side settings',
     description:
-      'Update one side. awayMode pauses all schedules and automations for that side ("I am travelling until '
-      + 'Friday": set awayMode with awayReturn). alwaysOn keeps the side running past the firmware 8-hour timeout. '
+      'Update one side. awayMode pauses the recurring schedules for that side ("I am travelling until Friday": '
+      + 'set awayMode with awayReturn). It does not pause automations; use manage_automation for those. '
+      + 'alwaysOn keeps the side running past the firmware 8-hour timeout. '
       + 'autoOff turns the side off after autoOffMinutes once the bed is empty. Only the provided fields change.',
     inputSchema: {
       side,

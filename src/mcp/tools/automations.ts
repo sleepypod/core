@@ -34,9 +34,10 @@ export function registerAutomationTools(server: McpServer) {
       + '"create" or "update" with a rule object. A rule has name, optional side, priority, cooldownMin, '
       + 'trigger ({kind:"tick",everyMin} | {kind:"signalChange",signal} | {kind:"timeOfDay",at}), conditions '
       + '(comparisons over dotted signals like "left.heartRate", "ambient.temperature", combinable with '
-      + 'all/any/not) and actions (e.g. setTemperature with side and a value expression). New rules default '
-      + 'to dryRun so nothing fires until the user switches it live. Read get_automations with includeRules '
-      + 'first to copy the shape of an existing rule.',
+      + 'and/or/not) and actions (e.g. setTemperature with side and a value expression). Every temperature '
+      + 'in a rule (signal thresholds, action values, clamps) is in °F regardless of the device unit; convert '
+      + 'Celsius first (20°C = 68°F). New rules default to dryRun so nothing fires until the user switches it '
+      + 'live. Read get_automations with includeRules first to copy the shape of an existing rule.',
     inputSchema: {
       action: z.enum(['enable', 'disable', 'dry_run', 'live', 'kill_switch_on', 'kill_switch_off', 'create', 'update', 'delete']),
       id: z.number().int().positive().optional().describe('Rule id for everything except create and kill switch.'),

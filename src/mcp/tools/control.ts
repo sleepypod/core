@@ -23,8 +23,10 @@ export function registerControlTools(server: McpServer) {
     title: 'Set bed temperature',
     description:
       'Set the target temperature for one side and power it on. Takes a manual hold that overrides schedules '
-      + 'and automations until it expires (holdMinutes, default is the firmware 8-hour timeout) or '
-      + 'resume_schedule is called. The bed moves about 1-2°F per minute, so a 7°F change takes 4-7 minutes. '
+      + 'and automations until it expires or resume_schedule is called. The hold lasts holdMinutes, default 30 '
+      + 'minutes; when it expires, schedules and automations may take over again, but the side keeps running '
+      + 'at the last target until the firmware\'s separate 8-hour runtime ends. Pass holdMinutes for "keep it '
+      + 'at 68 all night". The bed moves about 1-2°F per minute, so a 7°F change takes 4-7 minutes. '
       + 'Temperature is in the given unit, defaulting to the device setting; it is converted to the 55-110°F '
       + 'hardware range.',
     inputSchema: {
@@ -110,9 +112,11 @@ export function registerControlTools(server: McpServer) {
     title: 'One-night temperature curve',
     description:
       'Start, inspect or cancel a one-night temperature curve for a side: a list of HH:MM set points applied '
-      + 'from now until wakeTime, then the side returns to normal control. Good for "tonight only" requests like '
-      + '"68 now, 72 at 3am, warm to 78 at 6:30 and wake me at 7". Max 14 hours. Replaces any active curve '
-      + 'on that side. Temperatures use the given unit or the device default.',
+      + 'from now until wakeTime, when the side is powered OFF. It does not vibrate or sound an alarm at '
+      + 'wakeTime, and it does not hand control back to a schedule until the next scheduled event. Good for '
+      + '"tonight only" requests like "68 now, 72 at 3am, warm to 78 at 6:30". There is no one-off alarm tool: '
+      + 'a recurring wake-up alarm is manage_schedule kind "alarm", and manage_alarm only vibrates immediately. '
+      + 'Max 14 hours. Replaces any active curve on that side. Temperatures use the given unit or the device default.',
     inputSchema: {
       side,
       action: z.enum(['start', 'status', 'cancel']),

@@ -13,7 +13,29 @@ import { createSleepypodMcpServer } from '@/src/mcp/server'
 
 export const dynamic = 'force-dynamic'
 
+/**
+ * Browsers always attach an Origin header to cross-site requests, so a
+ * DNS-rebinding page cannot reach this endpoint if a present Origin must
+ * match the Host it was sent to. Native MCP clients send no Origin and pass.
+ */
+export function isOriginAllowed(req: Request): boolean {
+  const origin = req.headers.get('origin')
+  if (origin === null) return true
+  try {
+    return new URL(origin).host === req.headers.get('host')
+  }
+  catch {
+    return false
+  }
+}
+
 async function handler(req: Request): Promise<Response> {
+  if (!isOriginAllowed(req)) {
+    return Response.json(
+      { jsonrpc: '2.0', error: { code: -32000, message: 'Forbidden: cross-origin request' }, id: null },
+      { status: 403 },
+    )
+  }
   const server = createSleepypodMcpServer()
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,

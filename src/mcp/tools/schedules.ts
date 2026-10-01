@@ -50,7 +50,8 @@ export function registerScheduleTools(server: McpServer) {
     title: 'Create, update or delete a schedule',
     description:
       'Write one recurring schedule. action "create" needs side, dayOfWeek and the fields for its kind; '
-      + '"update" and "delete" need the id from get_schedules. Kinds: "temperature" (time + temperature), '
+      + '"update" and "delete" need the id from get_schedules. An update cannot change side or dayOfWeek: '
+      + 'delete and recreate instead. Kinds: "temperature" (time + temperature), '
       + '"power" (onTime, offTime, temperature) and "alarm" (time, intensity, pattern, duration, temperature to '
       + 'warm to at wake). A schedule covers one day; call once per day for "every weekday". Temperatures use '
       + 'the given unit or the device default.',
@@ -116,6 +117,9 @@ export function registerScheduleTools(server: McpServer) {
     }
 
     const target = need(id, 'id')
+    if (input.side !== undefined || input.dayOfWeek !== undefined) {
+      throw new Error('side and dayOfWeek cannot be changed on update; delete the schedule and create a new one')
+    }
     if (kind === 'temperature') {
       return jsonResult(await caller.schedules.updateTemperatureSchedule({
         id: target, time: input.time, temperature: temp, enabled: input.enabled,
