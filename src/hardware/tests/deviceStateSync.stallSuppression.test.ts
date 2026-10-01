@@ -469,6 +469,15 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect(await lastGuardInput('left')).toMatchObject({ expectedActive: true, preStallDurationSeconds: null })
   })
 
+  it('keeps expectedActive=true while the measured level crosses zero mid-session', async () => {
+    const mid = status({ targetLevel: 5, heatingDuration: 7200 })
+    mid.leftSide.currentLevel = 0
+    mid.rightSide.currentLevel = 0
+    await sync.sync(mid)
+    sync.recordFlowData(frame({ rpm: 0 }))
+    expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
   it('feeds the guard the projected remaining session seconds, not the 8h default', async () => {
     await sync.sync(status({ targetLevel: 5, heatingDuration: 7200 }))
     vi.setSystemTime(new Date('2026-07-11T08:01:00Z')) // 60s after the poll

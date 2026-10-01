@@ -914,7 +914,9 @@ describe('DeviceStateSync — sync targetTemperature behaviour without mutation'
     }))
   })
 
-  it('keeps a side off when its current level is zero during an active target', async () => {
+  it('reads a side on from its target while the measured level crosses zero', async () => {
+    // currentLevel is measured, not commanded: it passes through 0 on the
+    // way to a target across neutral. That is still an active session.
     await sync.sync(status({
       side: 'right',
       targetTemperature: 78,
@@ -924,10 +926,10 @@ describe('DeviceStateSync — sync targetTemperature behaviour without mutation'
     }))
 
     expect(readSide('right')).toEqual(expect.objectContaining({
-      is_powered: 0,
-      powered_on_at: null,
+      is_powered: 1,
       target_temperature: 78,
     }))
+    expect(readSide('right')?.powered_on_at).not.toBeNull()
   })
 
   it('podVersion field on status payload is irrelevant to upsert', async () => {

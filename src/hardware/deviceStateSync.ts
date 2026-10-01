@@ -213,9 +213,14 @@ export class DeviceStateSync {
     //  - A confirmed countdown expiry while firmware retains a non-neutral
     //    target (hasConfirmedSessionEnd only applies when targetLevel != 0).
     // Keep the DB/UI off while the water equalizes back to ambient.
+    // Otherwise the side is regulating: power follows the commanded target,
+    // not the measured currentLevel, which passes through 0 on its way to
+    // a target on the other side of neutral and would otherwise read as a
+    // momentary off (clearing poweredOnAt and dropping the stall guard's
+    // expectedActive mid-session).
     const durationExpired = sideStatus.targetLevel === 0
       || this.hasConfirmedSessionEnd(side, now.getTime())
-    const isNowPowered = durationExpired ? false : sideStatus.currentLevel !== 0
+    const isNowPowered = !durationExpired
 
     const skipPoweredFields = isSideRecentlyMutated(side)
     // When duration has expired, clear the target temperature so the UI
