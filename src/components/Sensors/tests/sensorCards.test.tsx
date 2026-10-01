@@ -90,8 +90,17 @@ it('switches flow units and ranges with live readings and downsampled history', 
   mock.data.flow = Array.from({ length: 241 }, (_, i) => ({ timestamp: new Date(i * 60000), leftFlowrateCd: i % 2 ? null : 123, rightFlowrateCd: 100, leftPumpRpm: 2300, rightPumpRpm: null }))
   rerender(<FlowrateChart />)
   expect(screen.getByText('1.23')).toBeTruthy()
+  // Hover reads the time and both sides' values; a missing left sample drops just that value.
+  const box = screen.getByText('Left · flow').closest('.grid')?.nextElementSibling as HTMLElement
+  vi.spyOn(box, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 300, height: 56, right: 300, bottom: 56, toJSON: () => ({}) })
+  fireEvent.pointerMove(box, { clientX: 0, clientY: 10 })
+  expect(screen.getByTestId('chart-hover').textContent).toMatch(/^\d{1,2}:\d\d [AP]M · 1\.23 \/ 1\.00$/)
+  fireEvent.pointerLeave(box)
   fireEvent.click(screen.getByRole('tab', { name: 'RPM' }))
   expect(screen.getByText('2,300')).toBeTruthy()
+  fireEvent.pointerMove(box, { clientX: 0, clientY: 10 })
+  expect(screen.getByTestId('chart-hover').textContent).toMatch(/^\d{1,2}:\d\d [AP]M · 2,300$/)
+  fireEvent.pointerLeave(box)
   fireEvent.change(screen.getByLabelText('Flow history range'), { target: { value: '24' } })
   expect(mock.query).toHaveBeenLastCalledWith('flow', { hours: 24 })
   mock.error = new Error('Offline')

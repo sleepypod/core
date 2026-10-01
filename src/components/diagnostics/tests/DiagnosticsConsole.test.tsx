@@ -257,6 +257,29 @@ describe('DiagnosticsConsole dashboard', () => {
     fireEvent.click(left)
     expect(onJump).toHaveBeenCalledWith('thermal')
   })
+
+  it('reads out the bed temperature under the pointer on a side card sparkline', () => {
+    const now = mocks.nowMinute * 60_000
+    const point = (t: number, leftBed: number | null) => ({
+      t, leftBed, rightBed: null, leftTarget: 80, rightTarget: null, leftWater: null, rightWater: null,
+      leftSurface: null, rightSurface: null, leftRpm: null, rightRpm: null, heatsink: null, ambient: null,
+    })
+    mocks.thermalHistory = {
+      range: '12h', from: now - 12 * 3_600_000, to: now, bucketSec: 120,
+      points: [point(now - 6 * 3_600_000, 78.4), point(now - 60_000, 80.1)],
+      powerOn: [], available: { bedTarget: true, water: false, surface: false, pump: false, hub: false }, bedTargetSince: null,
+    }
+    render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    const box = within(screen.getByTestId('side-left')).getByLabelText('Jon last 12 hours').parentElement as HTMLElement
+    vi.spyOn(box, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 600, height: 40, right: 600, bottom: 40, toJSON: () => ({}) })
+    // Halfway across 12 h is 6 h ago, where a sample sits; the far left has none within reach.
+    fireEvent.pointerMove(box, { clientX: 300, clientY: 10 })
+    expect(screen.getByTestId('chart-hover').textContent).toMatch(/· 78\.4/)
+    fireEvent.pointerMove(box, { clientX: 30, clientY: 10 })
+    expect(screen.getByTestId('chart-hover').textContent).toMatch(/· —$/)
+    fireEvent.pointerLeave(box)
+    expect(screen.queryByTestId('chart-hover')).toBeNull()
+  })
 })
 
 describe('DiagnosticsConsole calibration', () => {

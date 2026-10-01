@@ -82,6 +82,20 @@ it('plots live piezo, capacitance and temperature against calibration bands, the
   expect(screen.getByLabelText('center zone °C').getAttribute('points')).not.toBe('')
   expect(container.querySelectorAll('polyline').length).toBeGreaterThanOrEqual(8)
   expect(screen.getAllByText('95%')).toHaveLength(3)
+
+  // Hover at the right edge of each plot reads out the newest sample and how long ago it was.
+  const boxes = ['cal-piezo', 'cal-capacitance', 'cal-temperature'].map(id => within(screen.getByTestId(id)).getByText(/^-(30s|10m)$/).parentElement?.previousElementSibling as HTMLElement)
+  for (const box of boxes) vi.spyOn(box, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 400, height: 96, right: 400, bottom: 96, toJSON: () => ({}) })
+  fireEvent.pointerMove(boxes[0], { clientX: 399, clientY: 10 })
+  expect(screen.getByTestId('chart-hover').textContent).toMatch(/^-\d+s · range 40$/)
+  fireEvent.pointerLeave(boxes[0])
+  fireEvent.pointerMove(boxes[1], { clientX: 399, clientY: 10 })
+  expect(screen.getByTestId('chart-hover').textContent).toMatch(/^-\d+s · [\d.]+ of 100$/)
+  fireEvent.pointerLeave(boxes[1])
+  fireEvent.pointerMove(boxes[2], { clientX: 399, clientY: 10 })
+  expect(screen.getByTestId('chart-hover').textContent).toMatch(/^-\d+s · 25/)
+  fireEvent.pointerLeave(boxes[2])
+  expect(screen.queryByTestId('chart-hover')).toBeNull()
   act(() => {
     vi.advanceTimersByTime(610000)
     emit({ type: 'piezo-dual', left1: [0, 1], right1: [0, 1] })
@@ -103,6 +117,10 @@ it('plots uncalibrated legacy signals and disables active calibration', () => {
     }
   })
   expect(screen.getByText('raw reading · no capSense2 baseline')).toBeTruthy()
+  const rawBox = within(screen.getByTestId('cal-capacitance')).getByText('-30s').parentElement?.previousElementSibling as HTMLElement
+  vi.spyOn(rawBox, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 400, height: 96, right: 400, bottom: 96, toJSON: () => ({}) })
+  fireEvent.pointerMove(rawBox, { clientX: 399, clientY: 10 })
+  expect(screen.getByTestId('chart-hover').textContent).toMatch(/^-\d+s · (100|200)$/)
   expect(screen.getByText('range 10 · not calibrated')).toBeTruthy()
   expect(screen.getByText('24°C · not calibrated')).toBeTruthy()
   mock.data = { piezo: { status: 'running' }, capacitance: { status: 'pending' }, temperature: { status: 'failed', errorMessage: 'No samples' } }

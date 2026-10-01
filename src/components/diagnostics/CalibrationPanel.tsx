@@ -346,8 +346,8 @@ function PiezoSignal({ side, samples, params, now }: { side: Side, samples: Piez
         ? `${occupied ? 'occupied' : 'empty'} · range ${fmtCompact(latest)} of ${fmtCompact(cal.threshold)}`
         : latest != null ? `range ${fmtCompact(latest)} · not calibrated` : '—'}
       readout={(t) => {
-        const p = nearestBy(env, t)
-        return p ? `range ${fmtCompact(p.hi - p.lo)}` : null
+        const range = peakToPeak(nearestBy(samples, t)?.samples ?? [])
+        return range == null ? null : `range ${fmtCompact(range)}`
       }}
     >
       {(x, y) => {

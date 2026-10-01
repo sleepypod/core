@@ -248,7 +248,7 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
     const rect = e.currentTarget.getBoundingClientRect()
     const frac = rect.width > 0 ? (e.clientX - rect.left) / rect.width : -1
     const n = Math.max(leftBufferRef.current.length, rightBufferRef.current.length)
-    if (frac < 0 || frac > 1 || n < 2) {
+    if (!Number.isFinite(frac) || frac < 0 || frac > 1 || n < 2) {
       setReadout(null)
       return
     }

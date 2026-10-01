@@ -96,6 +96,20 @@ describe('DatabasesTab', () => {
     expect(screen.getByTestId('storage-outlook').textContent).toContain('automation_runs isn’t pruned')
   })
 
+  it('reads out the projected size under the pointer on the outlook chart', () => {
+    render(<DatabasesTab />)
+    const svg = screen.getByRole('img', { name: 'Projected database size' })
+    // Without ResizeObserver the chart falls back to 640px: a 52px axis gutter, then 580px of plot.
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 640, height: 220, right: 640, bottom: 220, toJSON: () => ({}) })
+    fireEvent.pointerMove(svg, { clientX: 52 + 290, clientY: 50 })
+    expect(screen.getByTestId('outlook-hover').textContent).toMatch(/^[A-Z][a-z]{2} \d{1,2} · [\d.]+ [KMG]?B$/)
+    fireEvent.pointerMove(svg, { clientX: 10, clientY: 50 })
+    expect(screen.queryByTestId('outlook-hover')).toBeNull()
+    fireEvent.pointerMove(svg, { clientX: 52 + 290, clientY: 50 })
+    fireEvent.pointerLeave(svg)
+    expect(screen.queryByTestId('outlook-hover')).toBeNull()
+  })
+
   it('runs an integrity check on demand and links the backup', () => {
     render(<DatabasesTab />)
     fireEvent.click(screen.getByRole('button', { name: 'Run integrity check' }))
