@@ -9,7 +9,7 @@ import { sortChronological } from '@/src/lib/scheduleGrouping'
 import { formatTime12h } from '@/src/lib/scheduleTime'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
-import { buildTimeline, CurveChart, dropHolds, MiniCurve } from './CurveChart'
+import { buildTimeline, CurveChart, CurveLegend, dropHolds, MiniCurve, type BedSample } from './CurveChart'
 import { TONE_TEXT, formatDayRange, tempTone } from './scheduleFormat'
 
 interface CurveCardProps {
@@ -22,6 +22,8 @@ interface CurveCardProps {
   nextEvent?: { time: string, temperature: number } | null
   /** Large chart card (the curve running today) vs. compact list card. */
   featured?: boolean
+  /** Featured only: measured bed temperature on the chart's minute axis, with its legend label ("last night"). */
+  bed?: { samples: BedSample[], label: string }
 }
 
 /** "79–84°F" / "79–84°" — set-point range in the user's unit. */
@@ -137,7 +139,7 @@ function stop(fn: () => void) {
   }
 }
 
-export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null, featured = false }: CurveCardProps) {
+export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null, featured = false, bed }: CurveCardProps) {
   const { unit } = useTemperatureUnit()
   const hasSetPoints = group.setPoints.length > 0
   const paused = !!group.allDisabled
@@ -169,12 +171,13 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
             </>
           )}
           <span className="hidden font-mono text-xs text-fg-2 min-[900px]:inline">{meta}</span>
+          {bed && bed.samples.length > 0 && <CurveLegend bedLabel={`Bed · ${bed.label}`} className="ml-auto hidden min-[900px]:flex" />}
           {actions}
         </div>
 
         {/* Desktop: full chart + set-point strip */}
         <div className="hidden flex-col gap-3.5 min-[900px]:flex">
-          <CurveChart setPoints={group.setPoints} height={220} showNow={active} />
+          <CurveChart setPoints={group.setPoints} height={220} showNow={active} bed={bed?.samples} />
           <PhaseStrip setPoints={group.setPoints} className="border-t border-line pt-3.5" />
         </div>
 

@@ -6,7 +6,7 @@ import { ArrowLeft } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { Button, Card, CardHeader, InlineError, Skeleton, StatusDot } from '@/src/components/ds'
-import { easedPath } from '@/src/components/Schedule/CurveChart'
+import { stepPath } from '@/src/components/Schedule/CurveChart'
 import { NEUTRAL_TEMP_F, TONE_TEXT, TONE_VAR, tempTone } from '@/src/components/Schedule/scheduleFormat'
 import { cn } from '@/lib/utils'
 import {
@@ -15,7 +15,6 @@ import {
 } from './schedulerLogic'
 
 const HOUR = 3_600_000
-const RAMP_MINUTES = 20
 
 /**
  * System → Scheduler: what the pod will do tonight, drawn per side as the
@@ -282,7 +281,7 @@ function SideCurve({ lane, top, width, X, next }: {
   // Hold the last set point until the side powers off.
   const lastOff = lane.off.filter(t => pts.length && t > lane.points[lane.points.length - 1].at)[0]
   const path = pts.length
-    ? easedPath([...pts, ...(lastOff != null ? [{ x: X(lastOff), y: pts[pts.length - 1].y }] : [])], X(RAMP_MINUTES * 60_000) - X(0))
+    ? stepPath([...pts, ...(lastOff != null ? [{ x: X(lastOff), y: pts[pts.length - 1].y }] : [])])
     : ''
   const endX = lastOff != null ? X(lastOff) : pts[pts.length - 1]?.x ?? 0
   const maxP = pts.length ? pts.reduce((a, b) => (b.tempF > a.tempF ? b : a)) : null

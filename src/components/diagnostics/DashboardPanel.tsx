@@ -15,7 +15,8 @@ import { langFromPath } from '@/src/components/AppShell/navItems'
 import { HealthRing } from '@/src/components/status/HealthCircle'
 import { PumpAlertsCard } from '@/src/components/status/PumpAlertsCard'
 import { formatUptime, useStatusSummary } from '@/src/components/status/StatusScreen'
-import { CurveChart, buildTimeline, useNowMinute } from '@/src/components/Schedule/CurveChart'
+import { CurveChart, CurveLegend, buildTimeline, useNowMinute } from '@/src/components/Schedule/CurveChart'
+import { bedTrace } from '@/src/components/Schedule/bedTrace'
 import { formatCountdown, nightSetPoints } from '@/src/components/Schedule/bothNight'
 import { fmtClock, fmtF, thermalDirection, type SchedJob } from './diagnosticsLogic'
 import { attentionItems, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow, TONIGHT_END_H, TONIGHT_START_H } from './dashboardLogic'
@@ -255,6 +256,8 @@ function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
   const scheduler = trpc.health.scheduler.useQuery({ withinHours: 24 }, { refetchInterval: 60_000 })
   const left = trpc.schedules.getAll.useQuery({ side: 'left' }, { staleTime: 60_000 })
   const right = trpc.schedules.getAll.useQuery({ side: 'right' }, { staleTime: 60_000 })
+  // Measured bed temperature so far tonight; the window opens at 5 PM, so 24 h always reaches it.
+  const history = trpc.health.thermalHistory.useQuery({ range: '24h' }, { staleTime: 60_000, refetchInterval: 60_000 })
   const temps = { left: left.data?.temperature, right: right.data?.temperature }
 
   const nowMinute = useNowMinute()
@@ -283,6 +286,7 @@ function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
             : 'no temperature changes scheduled'}
         </span>
         <span className="ml-auto flex items-center gap-3 font-mono text-[11px] text-fg-2">
+          {history.data?.available.bedTarget && <CurveLegend />}
           {scheduler.data && (
             <span className={cn(drift?.drifted && 'text-warn')}>
               {`${scheduler.data.enabled ? (drift ? (drift.drifted ? 'drifted' : 'in sync') : 'running') : 'off'} · ${scheduler.data.jobCounts.total} jobs`}
@@ -319,7 +323,9 @@ function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
                   height={LANE_H}
                   showAxis={false}
                   grid="neutral"
+                  endLabels={false}
                   timeDomain={{ start: TONIGHT_START_H * HOUR_MIN + shift, end: TONIGHT_END_H * HOUR_MIN + shift, step: 4 * HOUR_MIN }}
+                  bed={bedTrace(history.data?.points, side, win.midnight, shift)}
                 />
               )}
               {powerJobs.map(j => (

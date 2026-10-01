@@ -15,6 +15,7 @@ import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import { formatTime12h, getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
 import { BothNightView, PersonCurveList } from './BothNightView'
+import { bedTrace, lastNightLabel, lastNightMidnight, lastNightRange } from './bedTrace'
 import { nextSetPoint, type TempRow } from './bothNight'
 import { CurveCard } from './CurveCard'
 import { useNowMinute } from './CurveChart'
@@ -57,6 +58,16 @@ export function SchedulePage() {
   const bothTemps = { [side]: data?.temperature, [otherSide]: other.data?.temperature } as Record<Side, TempRow[] | undefined>
   const names: Record<Side, string> = { left: leftName, right: rightName }
   const nowMinute = useNowMinute()
+
+  // Last night's measured bed temperature for the featured chart.
+  const now = nowMinute === null ? null : new Date(nowMinute * 60_000)
+  const history = trpc.health.thermalHistory.useQuery(
+    { range: now ? lastNightRange(now) : '24h' },
+    { enabled: !both && now !== null, staleTime: 60_000, refetchInterval: 5 * 60_000 },
+  )
+  const bed = now
+    ? { samples: bedTrace(history.data?.points, side, lastNightMidnight(now)), label: lastNightLabel(now) }
+    : undefined
 
   const [editor, setEditor] = useState<EditingCurve | null>(null)
   const [pendingDelete, setPendingDelete] = useState<{ days: DayOfWeek[], label: string } | null>(null)
@@ -158,8 +169,7 @@ export function SchedulePage() {
 
   // Both view: the soonest set point across the two sides, and whose it is.
   let next: { name: string, at: Date, time: string, temperature: number } | null = null
-  if (both && nowMinute !== null) {
-    const now = new Date(nowMinute * 60_000)
+  if (both && now) {
     for (const s of ['left', 'right'] as const) {
       const n = nextSetPoint(bothTemps[s], now)
       if (n && (!next || n.at < next.at)) next = { name: names[s], ...n }
@@ -247,6 +257,7 @@ export function SchedulePage() {
               onDelete={() => handleDelete(featured)}
               isActive={featured.key === activeCurveKey}
               nextEvent={featured.key === activeCurveKey ? nextEvent : null}
+              bed={bed}
             />
           )}
 

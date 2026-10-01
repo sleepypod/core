@@ -27,12 +27,18 @@ export interface ChartDomain {
   hi: number
 }
 
+/** A measured bed temperature on the chart's minute axis. */
+export interface BedSample {
+  minutes: number
+  temperature: number
+}
+
 const DAY = 24 * 60
 const HALF_DAY = 12 * 60
 const TEMP_MIN_F = 55
 const TEMP_MAX_F = 110
-/** Longest eased ramp into a new set point; shorter when points are close. */
-const RAMP_MINUTES = 20
+/** Bed samples further apart than this break the measured line (missing data shows as a gap). */
+const BED_GAP_MINUTES = 15
 
 function toMinutes(time: string): number {
   const [h, m] = time.split(':').map(Number)
@@ -77,18 +83,18 @@ export function dropHolds<P extends { temperature: number }>(timeline: P[]): P[]
 
 /**
  * Time window (padded ≥30 min and aligned to the tick step) and temperature
- * range: the curve plus `pad`°, snapped out to even degrees and at least 8°
- * tall. The editor passes a bigger pad so points can be dragged past the
- * current extremes.
+ * range: the curve (and any `extraTemps`, e.g. measured bed temperatures)
+ * plus `pad`°, snapped out to even degrees and at least 8° tall. The editor
+ * passes a bigger pad so points can be dragged past the current extremes.
  */
-export function chartDomain(timeline: Array<{ minutes: number, temperature: number }>, pad = 1): ChartDomain {
+export function chartDomain(timeline: Array<{ minutes: number, temperature: number }>, pad = 1, extraTemps: number[] = []): ChartDomain {
   const first = timeline[0]?.minutes ?? 22 * 60
   const last = timeline[timeline.length - 1]?.minutes ?? first
   const span = last - first + 60
   const step = span <= 12 * 60 ? 120 : span <= 18 * 60 ? 180 : 240
   const start = Math.floor((first - 30) / step) * step
   const end = Math.max(Math.ceil((last + 30) / step) * step, start + 2 * step)
-  const temps = timeline.length > 0 ? timeline.map(p => p.temperature) : [80]
+  const temps = timeline.length > 0 ? [...timeline.map(p => p.temperature), ...extraTemps] : [80]
   let lo = Math.floor((Math.min(...temps) - pad) / 2) * 2
   let hi = Math.ceil((Math.max(...temps) + pad) / 2) * 2
   if (hi - lo < 8) {
@@ -116,25 +122,47 @@ export function gridTemps(lo: number, hi: number): number[] {
 }
 
 /**
- * Eased hold-then-ramp path: the pod holds each set point until the next one,
- * then an S-curve (flat at both ends) arrives at the new value by its set
- * time. Equal neighbours draw as one straight hold.
+ * Step path, which is what the scheduler sends: the pod holds each set point
+ * until the next one fires, then jumps to the new value.
  */
-export function easedPath(pts: Array<{ x: number, y: number }>, rampPx: number): string {
+export function stepPath(pts: Array<{ x: number, y: number }>): string {
   if (pts.length === 0) return ''
   let d = `M${pts[0].x},${pts[0].y}`
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1]
     const b = pts[i]
-    if (a.y === b.y) {
-      d += ` L${b.x},${b.y}`
-      continue
-    }
-    const r = Math.min(rampPx, (b.x - a.x) / 2)
-    const s = b.x - r
-    d += ` L${s},${a.y} C${s + r / 2},${a.y} ${s + r / 2},${b.y} ${b.x},${b.y}`
+    d += a.y === b.y ? ` L${b.x},${b.y}` : ` L${b.x},${a.y} L${b.x},${b.y}`
   }
   return d
+}
+
+/**
+ * Polyline through measured samples, broken wherever neighbours are further
+ * apart than `gap` minutes so missing data shows as a gap.
+ */
+export function measuredPath(samples: BedSample[], X: (m: number) => number, Y: (v: number) => number, gap = BED_GAP_MINUTES): string {
+  let d = ''
+  let prev: number | null = null
+  for (const s of samples) {
+    d += `${prev === null || s.minutes - prev > gap ? 'M' : 'L'}${X(s.minutes).toFixed(1)},${Y(s.temperature).toFixed(1)}`
+    prev = s.minutes
+  }
+  return d
+}
+
+/** The set point the schedule holds at `minutes`; null outside the curve. */
+export function heldTemperature(timeline: Array<{ minutes: number, temperature: number }>, minutes: number): number | null {
+  if (timeline.length === 0 || minutes < timeline[0].minutes || minutes > timeline[timeline.length - 1].minutes) return null
+  let held = timeline[0].temperature
+  for (const p of timeline) if (p.minutes <= minutes) held = p.temperature
+  return held
+}
+
+/** The bed sample nearest `minutes`, if one lies within `gap` minutes. */
+export function nearestSample(samples: BedSample[], minutes: number, gap = BED_GAP_MINUTES): BedSample | null {
+  let best: BedSample | null = null
+  for (const s of samples) if (!best || Math.abs(s.minutes - minutes) < Math.abs(best.minutes - minutes)) best = s
+  return best && Math.abs(best.minutes - minutes) <= gap ? best : null
 }
 
 /** Smooth path through the points: horizontal tangents at each set point. */
@@ -168,9 +196,9 @@ interface CurveChartProps<T extends CurveSetPoint> {
   height?: number
   /** Dashed NOW marker when the current time falls inside the window. */
   showNow?: boolean
-  /** Draw the chronologically-last point hollow (the Pod powers off there). */
+  /** Editor only: draw the chronologically-last handle hollow (the Pod powers off there). */
   markOff?: boolean
-  /** Larger dots for the editor. */
+  /** Larger drag handles for the editor. */
   large?: boolean
   /** Enables dragging (and arrow keys on) a point to change its time/temperature. */
   onChangePoint?: (item: T, next: CurveSetPoint) => void
@@ -181,15 +209,21 @@ interface CurveChartProps<T extends CurveSetPoint> {
   grid?: 'temps' | 'neutral'
   /** Hour labels under the chart. */
   showAxis?: boolean
+  /** Measured bed temperature (°F) on the chart's minute axis, drawn as a thin grey line under the target steps. */
+  bed?: BedSample[]
+  /** "on" / "off" labels at the first and last set point (read-only charts). */
+  endLabels?: boolean
   className?: string
 }
 
 /**
- * Schedule curve: eased hold-then-ramp line stroked with a cool/neutral/warm
- * gradient (per set point vs 80°F), an even-degree grid that always covers
- * the peak, and an optional NOW line. Read-only charts put dots only where
- * the temperature changes; the editor (onChangePoint) shows every point so
- * each one stays draggable. Fluid width, measured so dots stay round.
+ * Schedule curve drawn as sharp steps (what the scheduler sends), stroked
+ * with a cool/neutral/warm colour per set point vs 80°F, over an even-degree
+ * grid that always covers the peak, with an optional NOW line and the
+ * measured bed temperature as a thin grey line. Read-only charts have no
+ * dots: hovering reads out the target and bed at that time. The editor
+ * (onChangePoint) shows every point as a drag handle. Fluid width, measured
+ * so handles stay round.
  */
 export function CurveChart<T extends CurveSetPoint>({
   setPoints,
@@ -202,6 +236,8 @@ export function CurveChart<T extends CurveSetPoint>({
   timeDomain,
   grid = 'temps',
   showAxis = true,
+  bed,
+  endLabels = !onChangePoint,
   className,
 }: CurveChartProps<T>) {
   const { unit } = useTemperatureUnit()
@@ -213,6 +249,8 @@ export function CurveChart<T extends CurveSetPoint>({
 
   // Dragging freezes the domain so the axis doesn't rescale under the pointer.
   const [drag, setDrag] = useState<{ key: string | number, domain: ChartDomain } | null>(null)
+  // Read-only charts: the minute under the pointer.
+  const [hover, setHover] = useState<number | null>(null)
 
   useEffect(() => {
     const el = wrapRef.current
@@ -231,7 +269,9 @@ export function CurveChart<T extends CurveSetPoint>({
 
   const allPoints = buildTimeline(setPoints)
   const timeline = onChangePoint ? allPoints : dropHolds(allPoints)
-  const domain = drag?.domain ?? { ...chartDomain(allPoints, onChangePoint ? 4 : 1), ...timeDomain }
+  const win = { ...chartDomain(allPoints), ...timeDomain }
+  const samples = (bed ?? []).filter(s => s.minutes >= win.start && s.minutes <= win.end)
+  const domain = drag?.domain ?? { ...chartDomain(allPoints, onChangePoint ? 4 : 1, samples.map(s => s.temperature)), ...timeDomain }
   const { start, end, step, lo, hi } = domain
   const padY = large ? 18 : 14
   const X = (m: number) => ((m - start) / (end - start)) * width
@@ -240,9 +280,27 @@ export function CurveChart<T extends CurveSetPoint>({
   const invY = (y: number) => lo + ((height - padY - y) / (height - padY * 2)) * (hi - lo)
 
   const coords = timeline.map(p => ({ x: X(p.minutes), y: Y(p.temperature) }))
-  const path = easedPath(coords, width > 0 ? (RAMP_MINUTES / (end - start)) * width : 0)
+  const path = stepPath(coords)
+  const bedPath = measuredPath(samples, X, Y)
   const x0 = coords[0]?.x ?? 0
   const x1 = coords[coords.length - 1]?.x ?? width
+  // Hard colour stops: each hold keeps its own tone right up to the step.
+  const stops = timeline.flatMap((p, i) => {
+    const offset = ((coords[i].x - x0) / (x1 - x0 || 1)).toFixed(3)
+    const color = TONE_VAR[tempTone(p.temperature)]
+    return i === 0 ? [{ offset, color }] : [{ offset, color: TONE_VAR[tempTone(timeline[i - 1].temperature)] }, { offset, color }]
+  })
+
+  let readout: { x: number, label: string } | null = null
+  if (hover !== null && !onChangePoint) {
+    const target = heldTemperature(allPoints, hover)
+    const sample = nearestSample(samples, hover)
+    const fmt = (v: number | null, decimals = 0) => (v === null ? '—' : formatSetpointF(v, unit, { includeUnit: false, decimals }))
+    readout = {
+      x: X(hover),
+      label: `${formatTime12h(minutesToTime(hover))} · ${fmt(target)}${samples.length > 0 ? ` / ${fmt(sample?.temperature ?? null, 1)}` : ''}`,
+    }
+  }
 
   let nowX: number | null = null
   let nowLabel = ''
@@ -273,11 +331,16 @@ export function CurveChart<T extends CurveSetPoint>({
   }, [onChangePoint])
 
   const onPointerMove = (e: PointerEvent<SVGSVGElement>) => {
-    if (!drag || !svgRef.current) return
-    const target = timeline.find(p => keyOf(p) === drag.key)
-    if (!target) return
+    if (!svgRef.current) return
     const rect = svgRef.current.getBoundingClientRect()
     const x = Math.max(0, Math.min(width, e.clientX - rect.left))
+    if (!onChangePoint) {
+      setHover(Math.round(invX(x)))
+      return
+    }
+    if (!drag) return
+    const target = timeline.find(p => keyOf(p) === drag.key)
+    if (!target) return
     const y = Math.max(0, Math.min(height, e.clientY - rect.top))
     emit(target.item, invX(x), invY(y))
   }
@@ -307,19 +370,14 @@ export function CurveChart<T extends CurveSetPoint>({
             className="block overflow-visible"
             role="img"
             aria-label="Temperature curve"
-            onPointerMove={drag ? onPointerMove : undefined}
+            onPointerMove={drag || !onChangePoint ? onPointerMove : undefined}
+            onPointerLeave={onChangePoint ? undefined : () => setHover(null)}
             onPointerUp={() => setDrag(null)}
             onPointerCancel={() => setDrag(null)}
           >
             <defs>
               <linearGradient id={gradientId} x1={x0} y1="0" x2={x1 === x0 ? x0 + 1 : x1} y2="0" gradientUnits="userSpaceOnUse">
-                {timeline.map((p, i) => (
-                  <stop
-                    key={i}
-                    offset={((coords[i].x - x0) / (x1 - x0 || 1)).toFixed(3)}
-                    stopColor={TONE_VAR[tempTone(p.temperature)]}
-                  />
-                ))}
+                {stops.map((s, i) => <stop key={i} offset={s.offset} stopColor={s.color} />)}
               </linearGradient>
             </defs>
             {(grid === 'neutral' ? [NEUTRAL_TEMP_F].filter(v => v >= lo && v <= hi) : gridTemps(lo, hi)).map(v => (
@@ -331,45 +389,63 @@ export function CurveChart<T extends CurveSetPoint>({
               </g>
             ))}
             <path d={`${path} L${x1},${height} L${x0},${height} Z`} fill="var(--text-1)" fillOpacity="0.04" />
-            <path d={path} fill="none" stroke={`url(#${gradientId})`} strokeWidth="2.5" />
+            {bedPath && (
+              <path data-testid="curve-bed" d={bedPath} fill="none" stroke="var(--text-3)" strokeWidth="1.25" strokeLinejoin="round" />
+            )}
+            <path d={path} fill="none" stroke={`url(#${gradientId})`} strokeWidth="2.5" strokeLinejoin="round" />
+            {endLabels && coords.length > 1 && (
+              <g className="font-mono" fontSize="10" fill="var(--text-3)" data-testid="curve-ends">
+                <text x={x0 - 4} y={coords[0].y - 6} textAnchor="end">on</text>
+                <text x={x1 + 5} y={coords[coords.length - 1].y + 4}>off</text>
+              </g>
+            )}
             {nowX !== null && (
               <g data-testid="curve-now">
                 <line x1={nowX} x2={nowX} y1="18" y2={height} stroke="var(--text-1)" strokeOpacity="0.5" strokeDasharray="3 4" />
                 <text x={nowX + 6} y="28" fill="var(--text-1)" className="font-mono" fontSize="10">{nowLabel}</text>
               </g>
             )}
-            {timeline.map((p, i) => {
+            {readout && (
+              <g data-testid="curve-hover" pointerEvents="none">
+                <line x1={readout.x} x2={readout.x} y1="0" y2={height} stroke="var(--text-1)" strokeOpacity="0.35" />
+                <text
+                  x={readout.x > width / 2 ? readout.x - 6 : readout.x + 6}
+                  y="12"
+                  textAnchor={readout.x > width / 2 ? 'end' : 'start'}
+                  fill="var(--text-1)"
+                  className="font-mono"
+                  fontSize="10"
+                >
+                  {readout.label}
+                </text>
+              </g>
+            )}
+            {onChangePoint && timeline.map((p, i) => {
               const key = keyOf(p)
               const off = markOff && timeline.length > 1 && i === timeline.length - 1
-              const r = large ? (off ? 6 : 7) : 5
-              const interactive = !!onChangePoint
               return (
                 <circle
                   key={String(key)}
                   cx={coords[i].x}
                   cy={coords[i].y}
-                  r={r}
+                  r={large ? (off ? 6 : 7) : 5}
                   fill={off ? 'var(--surface-card)' : TONE_VAR[tempTone(p.temperature)]}
                   stroke={off ? 'var(--text-2)' : 'var(--surface-card)'}
                   strokeWidth={off || !large ? 2 : 3}
-                  {...(interactive
-                    ? {
-                        'tabIndex': 0,
-                        'role': 'slider',
-                        'aria-label': `Set point ${formatTime12h(p.item.time)}`,
-                        'aria-valuenow': p.temperature,
-                        'aria-valuemin': TEMP_MIN_F,
-                        'aria-valuemax': TEMP_MAX_F,
-                        'aria-valuetext': `${formatTime12h(p.item.time)}, ${formatSetpointF(p.temperature, unit)}`,
-                        'style': { cursor: drag ? 'grabbing' : 'grab', touchAction: 'none', outline: 'none' },
-                        'onPointerDown': (e: PointerEvent<SVGCircleElement>) => {
-                          e.preventDefault()
-                          svgRef.current?.setPointerCapture?.(e.pointerId)
-                          setDrag({ key, domain })
-                        },
-                        'onKeyDown': (e: KeyboardEvent<SVGCircleElement>) => onKeyDown(e, p),
-                      }
-                    : null)}
+                  tabIndex={0}
+                  role="slider"
+                  aria-label={`Set point ${formatTime12h(p.item.time)}`}
+                  aria-valuenow={p.temperature}
+                  aria-valuemin={TEMP_MIN_F}
+                  aria-valuemax={TEMP_MAX_F}
+                  aria-valuetext={`${formatTime12h(p.item.time)}, ${formatSetpointF(p.temperature, unit)}`}
+                  style={{ cursor: drag ? 'grabbing' : 'grab', touchAction: 'none', outline: 'none' }}
+                  onPointerDown={(e: PointerEvent<SVGCircleElement>) => {
+                    e.preventDefault()
+                    svgRef.current?.setPointerCapture?.(e.pointerId)
+                    setDrag({ key, domain })
+                  }}
+                  onKeyDown={(e: KeyboardEvent<SVGCircleElement>) => onKeyDown(e, p)}
                 />
               )
             })}
@@ -393,6 +469,22 @@ export function CurveChart<T extends CurveSetPoint>({
         </div>
       )}
     </div>
+  )
+}
+
+/** "— Target  — Bed · last night" key for charts that overlay the measured bed temperature. */
+export function CurveLegend({ bedLabel = 'Bed', className }: { bedLabel?: string, className?: string }) {
+  return (
+    <span className={cn('flex items-center gap-x-3 font-mono text-[11px] text-fg-2', className)} data-testid="curve-legend">
+      <span className="flex items-center gap-1.5">
+        <span className="h-0.5 w-3 rounded bg-warm" />
+        Target
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="h-px w-3 bg-fg-3" />
+        {bedLabel}
+      </span>
+    </span>
   )
 }
 

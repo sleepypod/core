@@ -1,6 +1,8 @@
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { assert, afterEach, describe, expect, it, vi } from 'vitest'
-import { buildTimeline, chartDomain, CurveChart, dropHolds, formatHourLabel, gridTemps, MiniCurve, minutesToTime } from '../CurveChart'
+import {
+  buildTimeline, chartDomain, CurveChart, dropHolds, formatHourLabel, gridTemps, heldTemperature, measuredPath, MiniCurve, minutesToTime, nearestSample, stepPath,
+} from '../CurveChart'
 
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
 
@@ -48,6 +50,49 @@ describe('chartDomain', () => {
     expect(chartDomain([{ minutes: 0, temperature: 80 }])).toMatchObject({ lo: 76, hi: 84 })
     expect(chartDomain([{ minutes: 0, temperature: 80 }, { minutes: 60, temperature: 84 }], 4)).toMatchObject({ lo: 76, hi: 88 })
   })
+
+  it('grows the temperature range to cover measured bed temperatures', () => {
+    const curve = [{ minutes: 0, temperature: 80 }, { minutes: 60, temperature: 84 }]
+    expect(chartDomain(curve, 1, [77.4, 85.2])).toMatchObject({ lo: 76, hi: 88 })
+    // The time window is the curve's alone.
+    expect(chartDomain(curve, 1, [77.4]).start).toBe(chartDomain(curve).start)
+  })
+})
+
+describe('stepPath', () => {
+  it('holds each value until the next point, then jumps', () => {
+    expect(stepPath([{ x: 0, y: 10 }, { x: 50, y: 10 }, { x: 100, y: 30 }])).toBe('M0,10 L50,10 L100,10 L100,30')
+    expect(stepPath([])).toBe('')
+  })
+})
+
+describe('measured samples', () => {
+  const X = (m: number) => m
+  const Y = (v: number) => 100 - v
+  const samples = [
+    { minutes: 0, temperature: 78 },
+    { minutes: 5, temperature: 79 },
+    { minutes: 60, temperature: 80 },
+  ]
+
+  it('breaks the measured line across gaps in the data', () => {
+    expect(measuredPath(samples, X, Y)).toBe('M0.0,22.0L5.0,21.0M60.0,20.0')
+  })
+
+  it('reads the held set point inside the curve and nothing outside it', () => {
+    const tl = buildTimeline(OVERNIGHT)
+    expect(heldTemperature(tl, 23 * 60)).toBeNull()
+    expect(heldTemperature(tl, 23 * 60 + 15)).toBe(83)
+    expect(heldTemperature(tl, 26 * 60)).toBe(79)
+    expect(heldTemperature(tl, 31 * 60)).toBe(84)
+    expect(heldTemperature(tl, 31 * 60 + 1)).toBeNull()
+  })
+
+  it('finds the nearest sample only when one is close enough', () => {
+    expect(nearestSample(samples, 7)).toEqual({ minutes: 5, temperature: 79 })
+    expect(nearestSample(samples, 30)).toBeNull()
+    expect(nearestSample([], 0)).toBeNull()
+  })
 })
 
 describe('gridTemps', () => {
@@ -86,22 +131,28 @@ describe('time labels', () => {
 })
 
 describe('CurveChart', () => {
-  it('draws a dot per set point with the last one hollow (power off) and the axis labels', () => {
-    const { container, getByText } = render(<CurveChart setPoints={OVERNIGHT} />)
-    const circles = container.querySelectorAll('circle')
-    expect(circles).toHaveLength(4)
-    expect(circles[3].getAttribute('fill')).toBe('var(--surface-card)')
-    expect(circles[0].getAttribute('fill')).toBe('var(--accent-warm)')
-    expect(circles[1].getAttribute('fill')).toBe('var(--accent-cool)')
-    expect(circles[2].getAttribute('fill')).toBe('var(--accent-neutral)')
+  it('draws the schedule as steps with on/off labels, hard colour stops and the axis, but no dots', () => {
+    const { container, getByText, getByTestId } = render(<CurveChart setPoints={OVERNIGHT} />)
+    expect(container.querySelectorAll('circle')).toHaveLength(0)
+    expect(container.querySelector('[role="slider"]')).toBeNull()
+    const line = container.querySelector('path[stroke^="url("]')
+    assert(line)
+    // Hold, then a vertical jump: every segment is axis-aligned.
+    expect(line.getAttribute('d')?.split(' ').slice(1)).toHaveLength(6)
+    const stops = [...container.querySelectorAll('stop')].map(s => [s.getAttribute('offset'), s.getAttribute('stop-color')])
+    expect(stops).toHaveLength(7)
+    expect(stops[0][1]).toBe('var(--accent-warm)')
+    expect(stops[1][1]).toBe('var(--accent-warm)')
+    expect(stops[2][1]).toBe('var(--accent-cool)')
+    expect(stops[1][0]).toBe(stops[2][0])
+    expect(within(getByTestId('curve-ends')).getByText('on')).toBeTruthy()
+    expect(within(getByTestId('curve-ends')).getByText('off')).toBeTruthy()
     expect(getByText('10 PM')).toBeTruthy()
     expect(getByText('8 AM')).toBeTruthy()
     expect(getByText('84°')).toBeTruthy()
-    // Not interactive without onChangePoint
-    expect(container.querySelector('[role="slider"]')).toBeNull()
   })
 
-  it('draws dots only where the temperature changes, but every point in the editor', () => {
+  it('shows every point as a drag handle in the editor, the last one hollow, and no end labels', () => {
     const pts = [
       { time: '23:00', temperature: 80 },
       { time: '00:30', temperature: 79 },
@@ -109,16 +160,56 @@ describe('CurveChart', () => {
       { time: '05:50', temperature: 79 },
       { time: '07:00', temperature: 80 },
     ]
-    const view = render(<CurveChart setPoints={pts} />)
-    expect(view.container.querySelectorAll('circle')).toHaveLength(3)
-    view.unmount()
-    const edit = render(<CurveChart setPoints={pts} onChangePoint={vi.fn()} />)
-    expect(edit.container.querySelectorAll('circle')).toHaveLength(5)
+    const { container, queryByTestId } = render(<CurveChart setPoints={pts} onChangePoint={vi.fn()} />)
+    const circles = container.querySelectorAll('circle')
+    expect(circles).toHaveLength(5)
+    expect(circles[0].getAttribute('fill')).toBe('var(--accent-neutral)')
+    expect(circles[4].getAttribute('fill')).toBe('var(--surface-card)')
+    expect(container.querySelectorAll('[role="slider"]')).toHaveLength(5)
+    expect(queryByTestId('curve-ends')).toBeNull()
   })
 
-  it('does not mark a lone point as off', () => {
-    const { container } = render(<CurveChart setPoints={[{ time: '22:00', temperature: 70 }]} />)
+  it('does not mark a lone editor point as off', () => {
+    const { container } = render(<CurveChart setPoints={[{ time: '22:00', temperature: 70 }]} onChangePoint={vi.fn()} />)
     expect(container.querySelector('circle')?.getAttribute('fill')).toBe('var(--accent-cool)')
+  })
+
+  it('draws the measured bed temperature under the steps and widens the range to fit it', () => {
+    const bed = [
+      { minutes: 23 * 60 + 15, temperature: 77 },
+      { minutes: 23 * 60 + 20, temperature: 78.5 },
+      // Outside the window: dropped, so it neither draws nor stretches the range.
+      { minutes: 40 * 60, temperature: 60 },
+    ]
+    const { container, getByTestId, getByText } = render(<CurveChart setPoints={OVERNIGHT} bed={bed} />)
+    const line = getByTestId('curve-bed')
+    expect(line.getAttribute('d')).toMatch(/^M[\d.]+,[\d.]+L[\d.]+,[\d.]+$/)
+    expect(getByText('76°')).toBeTruthy()
+    // The bed line sits under the target line.
+    const paths = [...container.querySelectorAll('path')] as Element[]
+    expect(paths.indexOf(line)).toBeLessThan(paths.findIndex(p => p.getAttribute('stroke')?.startsWith('url(')))
+  })
+
+  it('reads out the target and bed under the pointer on read-only charts', () => {
+    const bed = [{ minutes: 24 * 60 + 60, temperature: 78.9 }]
+    const { container, getByTestId, queryByTestId } = render(<CurveChart setPoints={OVERNIGHT} bed={bed} />)
+    const svg = container.querySelector('svg')
+    assert(svg)
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 636, height: 220, right: 636, bottom: 220, toJSON: () => ({}) })
+    // Window is 10 PM → 8 AM (600 min): 1 AM is 30% across.
+    fireEvent(svg, new MouseEvent('pointermove', { bubbles: true, clientX: 636 * 0.3, clientY: 50 }))
+    expect(getByTestId('curve-hover').textContent).toBe('1:00 AM · 79° / 78.9°')
+    fireEvent.pointerLeave(svg)
+    expect(queryByTestId('curve-hover')).toBeNull()
+  })
+
+  it('reads "—" outside the curve and omits the bed when there is none', () => {
+    const { container, getByTestId } = render(<CurveChart setPoints={OVERNIGHT} />)
+    const svg = container.querySelector('svg')
+    assert(svg)
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 636, height: 220, right: 636, bottom: 220, toJSON: () => ({}) })
+    fireEvent(svg, new MouseEvent('pointermove', { bubbles: true, clientX: 0, clientY: 50 }))
+    expect(getByTestId('curve-hover').textContent).toBe('10:00 PM · —')
   })
 
   it('moves a point with the arrow keys, snapping time to 15 min and clamping temperature', () => {

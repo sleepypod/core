@@ -7,7 +7,7 @@ import { useId } from 'react'
 import { cn } from '@/lib/utils'
 import { Card, Skeleton } from '@/src/components/ds'
 import { langFromPath } from '@/src/components/AppShell/navItems'
-import { dropHolds, easedPath, useNowMinute } from '@/src/components/Schedule/CurveChart'
+import { dropHolds, stepPath, useNowMinute } from '@/src/components/Schedule/CurveChart'
 import { formatCountdown } from '@/src/components/Schedule/bothNight'
 import { NEUTRAL_TEMP_F, TONE_VAR, tempTone } from '@/src/components/Schedule/scheduleFormat'
 import { useSideNames } from '@/src/hooks/useSideNames'
@@ -24,7 +24,6 @@ const HOUR = 3_600_000
 const CURVE_H = 56
 /** SVG user-space width; the curve stretches to the lane (strokes stay 1.5px). */
 const VB_W = 1000
-const RAMP_MIN = 20
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 const nightDate = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).replace(',', '')
@@ -238,7 +237,7 @@ function CurveLane({ curves, range, win }: { curves: CurvePoint[][], range: { lo
         const coords = pts.map(p => ({ x: X(p.at), y: Y(p.temperature) }))
         const x0 = coords[0].x
         const x1 = coords[coords.length - 1].x
-        const path = easedPath(coords, (RAMP_MIN * 60_000 / span) * VB_W)
+        const path = stepPath(coords)
         return (
           <g key={i}>
             <defs>

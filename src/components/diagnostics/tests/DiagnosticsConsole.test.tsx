@@ -25,7 +25,7 @@ vi.mock('@/src/components/Schedule/CurveChart', async (importOriginal) => {
   return {
     ...actual,
     useNowMinute: () => mocks.nowMinute,
-    CurveChart: ({ setPoints }: { setPoints: unknown[] }) => <div data-testid="curve" data-points={setPoints.length} />,
+    CurveChart: ({ setPoints, bed }: { setPoints: unknown[], bed?: unknown[] }) => <div data-testid="curve" data-points={setPoints.length} data-bed={bed?.length ?? 0} />,
   }
 })
 
@@ -196,14 +196,33 @@ describe('DiagnosticsConsole dashboard', () => {
     expect(mocks.mutations['device.startPriming']).toHaveBeenCalledWith({})
   })
 
-  it('plans tonight with curves per side, pod job markers and a now line', () => {
+  it('plans tonight with curves per side, the bed so far, pod job markers and a now line', () => {
+    const now = mocks.nowMinute * 60_000
+    mocks.thermalHistory = {
+      range: '24h',
+      from: now - 86_400_000,
+      to: now,
+      bucketSec: 240,
+      // One sample inside tonight's window, one from yesterday afternoon that is not.
+      points: [
+        { t: now - 20 * 3_600_000, leftBed: 79, rightBed: null, leftTarget: 80, rightTarget: null, leftWater: null, rightWater: null, leftSurface: null, rightSurface: null, leftRpm: null, rightRpm: null, heatsink: null, ambient: null },
+        { t: now - 60_000, leftBed: 78.9, rightBed: null, leftTarget: 80, rightTarget: null, leftWater: null, rightWater: null, leftSurface: null, rightSurface: null, leftRpm: null, rightRpm: null, heatsink: null, ambient: null },
+      ],
+      powerOn: [],
+      available: { bedTarget: true, water: false, surface: false, pump: false, hub: false },
+      bedTargetSince: now - 86_400_000,
+    }
     const onJump = vi.fn()
     render(<DiagnosticsConsole section="dashboard" onJump={onJump} />)
     const tonight = screen.getByTestId('tonight')
     expect(within(tonight).getByText(/next: Jon → 80°F at/)).toBeTruthy()
     expect(within(tonight).getByText(/in 3h 15m/)).toBeTruthy()
     expect(within(tonight).getByText('in sync · 42 jobs')).toBeTruthy()
-    expect(within(screen.getByTestId('tonight-left')).getByTestId('curve').getAttribute('data-points')).toBe('2')
+    expect(within(tonight).getByTestId('curve-legend')).toBeTruthy()
+    const leftCurve = within(screen.getByTestId('tonight-left')).getByTestId('curve')
+    expect(leftCurve.getAttribute('data-points')).toBe('2')
+    // Both samples are handed over; the chart clips to its window.
+    expect(leftCurve.getAttribute('data-bed')).toBe('2')
     expect(within(screen.getByTestId('tonight-right')).queryByTestId('curve')).toBeNull()
     const pod = screen.getByTestId('tonight-pod')
     expect(within(pod).getByText('LED 2%')).toBeTruthy()

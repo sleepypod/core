@@ -19,6 +19,8 @@ const m = vi.hoisted(() => ({
   },
   query: { data: undefined as unknown, isLoading: false, error: null as Error | null },
   health: { data: undefined as unknown },
+  thermalHistory: { data: undefined as unknown },
+  thermalHistoryInput: [] as unknown[],
 }))
 vi.mock('@/src/providers/SideProvider', () => ({ useSide: () => m.side }))
 vi.mock('@/src/hooks/useSchedule', () => ({ useSchedule: () => m.schedule }))
@@ -28,7 +30,13 @@ vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ 
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     schedules: { getAll: { useQuery: () => m.query } },
-    health: { system: { useQuery: () => m.health } },
+    health: {
+      system: { useQuery: () => m.health },
+      thermalHistory: { useQuery: (input: unknown, opts: unknown) => {
+        m.thermalHistoryInput.push({ input, opts })
+        return m.thermalHistory
+      } },
+    },
   },
 }))
 vi.mock('@/src/lib/scheduleTime', async orig => ({
@@ -68,6 +76,8 @@ beforeEach(() => {
   m.schedule.setSelectedDays.mockReset()
   m.query = { data: DATA, isLoading: false, error: null }
   m.health = { data: { scheduler: { enabled: true, jobCount: 42, drift: { drifted: false } } } }
+  m.thermalHistory = { data: undefined }
+  m.thermalHistoryInput = []
 })
 afterEach(cleanup)
 
@@ -82,6 +92,22 @@ describe('SchedulePage', () => {
     expect(s.getByText('Scheduler in sync · 42 jobs')).toBeTruthy()
     expect(s.getByText('Applies to Jon · edits apply on save')).toBeTruthy()
     expect(s.getByTestId('alarms').textContent).toBe('left/left')
+  })
+
+  it('overlays last night’s bed temperature on the featured chart with a legend', () => {
+    // 1 AM this morning falls inside the featured 11:15 PM → 7 AM curve.
+    const now = new Date()
+    const t = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 1).getTime()
+    const point = (ms: number, leftBed: number) => ({
+      t: ms, leftBed, rightBed: null, leftTarget: 80, rightTarget: null, leftWater: null, rightWater: null,
+      leftSurface: null, rightSurface: null, leftRpm: null, rightRpm: null, heatsink: null, ambient: null,
+    })
+    m.thermalHistory = { data: { points: [point(t, 78.6), point(t + 240_000, 78.9)], available: { bedTarget: true } } }
+    const s = render(<SchedulePage />)
+    const featured = s.getByTestId('curve-card-featured')
+    expect(within(featured).getByTestId('curve-legend').textContent).toMatch(/^Target\s*Bed · (last night|tonight)$/)
+    expect(within(featured).getByTestId('curve-bed')).toBeTruthy()
+    expect(m.thermalHistoryInput.at(-1)).toMatchObject({ input: { range: expect.stringMatching(/^(24|48)h$/) }, opts: { enabled: true } })
   })
 
   it('still features a curve without the active badge when the schedule is off', () => {

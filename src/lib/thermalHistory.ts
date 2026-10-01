@@ -9,7 +9,7 @@ import { centiDegreesToF } from '@/src/lib/tempUtils'
  * pod. Nothing is interpolated or invented — a bucket with no rows is absent.
  */
 
-export const THERMAL_RANGES = { '1h': 3_600, '12h': 43_200, '24h': 86_400, '7d': 604_800 } as const
+export const THERMAL_RANGES = { '1h': 3_600, '12h': 43_200, '24h': 86_400, '48h': 172_800, '7d': 604_800 } as const
 export type ThermalRange = keyof typeof THERMAL_RANGES
 
 const MAX_BUCKETS = 360
