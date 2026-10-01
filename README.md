@@ -10,15 +10,15 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/discord/1450213183653679205?logo=discord&logoColor=white&label=discord)](https://discord.gg/UMmv5R6MXa)
 
-Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Linux — replaces the cloud-bound controller with a local web UI, scheduler, on-device biometrics, and native integrations for Home Assistant (MQTT) and Apple Home (HomeKit).
+Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Linux — replaces the cloud-bound controller with a local web UI, scheduler, on-device biometrics, and opt-in integrations for Home Assistant (MQTT), Apple Home (HomeKit), and AI assistants (MCP).
 
-**User docs:** [sleepypod.github.io](https://sleepypod.github.io/)
+**Documentation lives at [sleepypod.github.io](https://sleepypod.github.io/).** This README covers installing and working on the code; the docs site covers everything else.
 
 <p align="center">
   <a href="https://sleepypod.github.io/core/"><img src="docs/images/core-temperature.png" width="1000" alt="sleepypod core web UI with per-side temperature controls, sidebar navigation, and the schedule and sleep timeline" /></a>
 </p>
 
-The web UI brings temperature, schedules, Autopilot, sleep, and system diagnostics into one place. The optional Now / Night / Dawn stepper separates immediate manual holds from saved schedule edits. Choose it in **Settings → Appearance**. Control the same Pod from the [iOS app](https://sleepypod.github.io/ios/) or a bedside [M5 rotary dial](https://sleepypod.github.io/dial/).
+The web UI brings temperature, schedules, Autopilot, sleep, and system diagnostics into one place. Control the same Pod from the [iOS app](https://sleepypod.github.io/ios/) or a bedside [M5 rotary dial](https://sleepypod.github.io/dial/).
 
 <p align="center">
   <a href="https://sleepypod.github.io/ios/"><img src="docs/images/ios-temperature.png" width="220" alt="sleepypod iOS app temperature control" /></a>
@@ -29,54 +29,60 @@ The web UI brings temperature, schedules, Autopilot, sleep, and system diagnosti
 <sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/d3b4e86e0153944fba3c92fe96f04aca34db7165/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
 
 <p align="center">
-  <a href="https://sleepypod.github.io/">Docs</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
+  <a href="https://sleepypod.github.io/getting-started/">Get started</a> · <a href="https://sleepypod.github.io/core/">User guide</a> · <a href="https://sleepypod.github.io/developers/">Developer docs</a> · <a href="https://sleepypod.github.io/troubleshooting/">Troubleshooting</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a>
 </p>
 
 ---
 
+## Install
+
+1. **Get a root shell on the Pod.** Starting from a stock Pod? Follow [Open your Pod and get root access](https://sleepypod.github.io/core/root-access/) — parts list, enclosure photos, Tag-Connect wiring, and serial login. You do not need to install free-sleep first.
+2. **Run the installer on the Pod** (not on your computer):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install -o /tmp/sleepypod-install
+   less /tmp/sleepypod-install
+   bash /tmp/sleepypod-install
+   ```
+
+3. **Open `http://POD_IP:3000`** from a browser on the same network.
+
+[Install and update Core](https://sleepypod.github.io/core/installation/) covers verification, `sp-update`, and the `sp-*` helper commands. The [script reference](scripts/README.md) documents installer flags and file locations.
+
 ## Guides
 
-- [Temperature controls and manual holds](https://sleepypod.github.io/core/temperature/)
-- [Schedules and alarms](https://sleepypod.github.io/core/schedules/) · [Autopilot](https://sleepypod.github.io/core/autopilot/)
-- [System diagnostics](https://sleepypod.github.io/core/system/) · [Settings, backup, and maintenance](https://sleepypod.github.io/core/settings/)
-- [Build, test, and release workflows](https://sleepypod.github.io/developers/workflows/)
-- [Sensor pipeline and calibration](https://sleepypod.github.io/developers/sensor-pipeline/) · [Technical source library](https://sleepypod.github.io/developers/source-library/)
+| Using sleepypod | Developing sleepypod |
+|---|---|
+| [Temperature and manual holds](https://sleepypod.github.io/core/temperature/) | [Architecture](https://sleepypod.github.io/developers/architecture/) |
+| [Schedules and alarms](https://sleepypod.github.io/core/schedules/) · [Autopilot](https://sleepypod.github.io/core/autopilot/) | [Core development](https://sleepypod.github.io/developers/core/) · [API reference](https://sleepypod.github.io/developers/api/) |
+| [Sleep and biometrics](https://sleepypod.github.io/core/biometrics/) | [Sensor pipeline and calibration](https://sleepypod.github.io/developers/sensor-pipeline/) |
+| [HomeKit and MQTT](https://sleepypod.github.io/core/integrations/) · [MCP for agents](https://sleepypod.github.io/core/mcp/) | [Temperature controller](https://sleepypod.github.io/developers/temperature-control/) · [Hardware](https://sleepypod.github.io/developers/hardware/) |
+| [System diagnostics](https://sleepypod.github.io/core/system/) · [Settings and backups](https://sleepypod.github.io/core/settings/) | [Build, test, and release workflows](https://sleepypod.github.io/developers/workflows/) |
 
-## Installation
+---
 
-Starting with a stock Pod? Follow **[Open your Pod and get root access](https://sleepypod.github.io/core/root-access/)** first: parts list, enclosure photos, Tag-Connect wiring, serial login, and the handoff to installation. See [first-time installation](docs/INSTALLATION.md) for the model-specific starting points. You do not need to install free-sleep first.
+## Development
 
-Once you have a root shell on the Pod, run the installer **on the device**, not on your computer:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install -o /tmp/sleepypod-install
-less /tmp/sleepypod-install
-bash /tmp/sleepypod-install
-```
-
-The script:
-1. Installs Node.js and pnpm (if absent)
-2. Downloads the latest release (pre-built) or builds from source as fallback
-3. Installs dependencies and detects `dac.sock` path
-4. Runs database migrations and writes `.env`
-5. Installs and starts the `sleepypod.service` systemd unit
-6. Installs Python biometrics modules with isolated virtualenvs
-7. Optionally configures SSH on port 8822 with key-only auth
-
-### CLI helpers
-
-After install, these are available system-wide:
+Use the Node.js major in [`.node-version`](.node-version) and the pnpm version pinned in `package.json`. Read [`AGENTS.md`](AGENTS.md) for the architecture invariants and repo conventions before changing hardware, scheduler, or database code.
 
 ```bash
-sp-status         # systemctl status sleepypod.service
-sp-restart        # restart the service
-sp-logs           # journalctl -u sleepypod.service -f
-sp-update         # install latest pre-built release, migrate, restart (with rollback)
-sp-maintenance    # one-shot manual prime / reboot / status
-sp-uninstall      # stop services, remove systemd units, optionally wipe data
+pnpm install
+pnpm dev              # dev server on :3000 (not a hardware simulator)
+pnpm test             # Vitest
+pnpm lint && pnpm tsc
+
+pnpm db:generate              # sleepypod.db migration from schema
+pnpm db:biometrics:generate   # biometrics.db migration from schema
+pnpm lingui:extract           # extract new user-facing strings
 ```
 
-Cloned the repo on your computer? Build locally and deploy to an installed Pod:
+| Variable | Default (dev) | Description |
+|----------|---------------|-------------|
+| `DATABASE_URL` | `file:./sleepypod.dev.db` | Path to sleepypod.db |
+| `BIOMETRICS_DATABASE_URL` | `file:./biometrics.dev.db` | Path to biometrics.db |
+| `DAC_SOCK_PATH` | `/persistent/deviceinfo/dac.sock` | Unix socket path for hardware control |
+
+Deploy a local build to an installed Pod over SSH (port 8822):
 
 ```bash
 ./scripts/deploy POD_IP              # current checkout
@@ -86,565 +92,25 @@ Cloned the repo on your computer? Build locally and deploy to an installed Pod:
 
 See the [deployment guide](docs/DEPLOYMENT.md) for SSH requirements and fork/PR validation.
 
-
----
-
-## What it does
-
-- **Temperature scheduling** — set per-side temperature programs by day and time
-- **Power scheduling** — automatic on/off with optional warm-up temperature
-- **Alarm management** — vibration alarms with configurable duration (intensity/pattern accepted by the API; cover MCU clamps both on Pod 5 J55 — see `docs/hardware/alarms.md`)
-- **Biometrics** — heart rate, HRV, breathing rate, sleep session tracking, and movement from the Pod's own sensors
-- **Daily maintenance** — automated priming and system reboots on a schedule
-- **Local web UI** — accessible on your home network, no cloud required
-- **MQTT bridge (opt-in)** — publish state and accept commands on your home MQTT broker; auto-discoverable in Home Assistant
-- **HomeKit bridge (opt-in)** — control the pod from the Apple Home app; local-only, no Apple servers
-
----
-
-## HomeKit bridge (opt-in)
-
-The Pod ships an embedded [hap-nodejs](https://github.com/homebridge/HAP-NodeJS)
-bridge that publishes itself as a native HomeKit accessory over Bonjour. No
-Homebridge install, no Apple cloud round-trip — pairing and control happen
-entirely on your LAN.
-
-```mermaid
-graph LR
-  iOS[iPhone / iPad<br/>Home app] -- HAP / mDNS --> Pod[Pod<br/>sleepypod-core<br/>:51827]
-  Pod -- setPower / setTemperature --> DAC[Pod hardware]
-  Pod -. occupancy / vitals .- BIO[(biometrics.db)]
-```
-
-The bridge is **off by default** and lives behind the same iptables LAN-only
-policy as the rest of the app — toggle it on from **Settings → HomeKit**.
-
-### Quick start
-
-1. Open **Settings → HomeKit** in the Pod web UI and flip **HomeKit bridge** on.
-2. A QR code and 8-digit setup code render in the panel.
-3. In iOS Home: **Add Accessory → More options** (or scan the QR), enter the code.
-4. The Pod shows up as a bridge with one tile per side per accessory.
-5. Use **Unpair all controllers** in the same panel to reset pairing without
-   regenerating the bridge identity (automations stay intact).
-
-### Accessories
-
-Each side (`left`, `right`) gets its own set; switches that act on the whole
-pod ship once.
-
-| Accessory | Type | Reads from | Writes to |
-|---|---|---|---|
-| `Bed <side>` | Thermostat (single setpoint) | `deviceStatus.<side>` | `setTemperature` / `setPower` |
-| `Bed <side> power` | Switch | `deviceStatus.<side>.powered` | `setPower` (preserves last setpoint) |
-| `Bed <side> occupancy` | OccupancySensor | `sleep_records` (latest with `leftBedAt IS NULL`) | — |
-| `Snooze <side>` | Switch | `snoozeManager` | `snoozeAlarm` / `cancelSnooze` |
-| `Prime` | Switch | `primeNotification` (auto-off on completion) | `startPriming` |
-| `Pod ambient` | TemperatureSensor | `bed_temp.ambient_temp` (centidegrees → °C) | — |
-
-Thermostat is HomeKit's single-setpoint primitive (the pod hardware exposes
-one setpoint, not a heat/cool deadband). Mode `off` cuts power; `auto` powers
-on at the last requested temperature. HomeKit Celsius is converted at the
-boundary; the in-app unit preference is unaffected.
-
-### Identity durability
-
-The bridge's HomeKit identity (MAC-style username, pincode, setupId) is
-**deterministically derived** from a hardware-rooted seed (eMMC CID →
-machine-id → random fallback) via HKDF, and cached at
-`$DATA_DIR/homekit/identity.json` (where `$DATA_DIR` is the picker-chosen
-data dir — see [`scripts/README.md`](scripts/README.md#file-locations);
-typically `/persistent/sleepypod-data/homekit/identity.json` on Pod 4/5).
-A `/persistent` wipe or
-firmware reflash regenerates the **same** identity, so iOS still recognizes
-the bridge — you only re-pair, your automations and rooms stay intact. See
-**[ADR 0020](docs/adr/0020-homekit-identity-derivation.md)** for the full
-rationale, seed chain, and what the design intentionally does *not* protect
-against.
-
-### Environment variables
-
-Headless deployments can override the auto-detected mDNS advertiser. All
-other config (enable/disable, pairing) lives in `device_settings` and is
-managed from the UI.
-
-| Variable | Default | Description |
-|---|---|---|
-| `HOMEKIT_ADVERTISER` | auto (`avahi` if `/run/avahi-daemon/socket` exists, else `ciao`) | mDNS advertiser; force `avahi` to coexist with the existing `_sleepypod._tcp` service file, or `ciao` for pods without avahi |
-
----
-
-## MQTT bridge (opt-in)
-
-The Pod can connect outbound to an MQTT broker you already run (typically the
-[Mosquitto add-on](https://github.com/home-assistant/addons/tree/master/mosquitto)
-that ships with Home Assistant). Off by default — opt in from
-**Settings → MQTT** in the web UI.
-
-```mermaid
-graph LR
-  Pod[Pod<br/>sleepypod-core] -- mqtt:// --> Broker[(MQTT broker<br/>e.g. Mosquitto)]
-  Broker --> HA[Home Assistant]
-  Broker --> NR[Node-RED]
-  Broker --> Other[anything that<br/>speaks MQTT]
-  HA -. cmd/* .-> Broker
-  NR -. cmd/* .-> Broker
-  Broker -. cmd/* .-> Pod
-```
-
-The Pod is a **client**, not a broker. It does not embed a broker, does not
-listen on 1883, and does not punch holes in the LAN-only iptables policy.
-
-### Quick start
-
-1. Open **Settings → MQTT** in the Pod web UI.
-2. Set **Broker URL** (`mqtt://broker.lan:1883` or `mqtts://...` for TLS).
-3. Optional: username + password. Leave blank for anonymous brokers.
-4. Hit **Test Connection** to verify reachability, then toggle
-   **Enable MQTT Bridge** and **Save**.
-5. (Home Assistant users) flip on **Home Assistant Discovery** — climate,
-   sensor, and switch entities show up automatically under the Pod's device
-   page.
-
-Headless deployments can skip the UI by setting environment variables;
-the bridge resolves config in this order: `device_settings` row > env var > built-in default.
-
-| UI field | Env var | Default |
-|---|---|---|
-| Enable bridge | `MQTT_ENABLED` | `false` |
-| Broker URL | `MQTT_URL` | _(unset — bridge stays dormant)_ |
-| Username | `MQTT_USERNAME` | _(none)_ |
-| Password | `MQTT_PASSWORD` | _(none)_ |
-| Topic prefix | `MQTT_TOPIC_PREFIX` | `sleepypod` |
-| HA discovery | `MQTT_HA_DISCOVERY` | `false` |
-| HA discovery prefix | `MQTT_HA_DISCOVERY_PREFIX` | `homeassistant` |
-| TLS | `MQTT_TLS_ENABLED` | `false` |
-| TLS allow self-signed | `MQTT_TLS_INSECURE` | `false` |
-
-### Topics
-
-`<prefix>` defaults to `sleepypod`. `<device-id>` is the slugified hostname
-(override with `MQTT_DEVICE_ID`). All state topics are retained.
-
-| Topic | Direction | Payload |
-|---|---|---|
-| `<prefix>/<device-id>/availability` | pod → broker | `online` / `offline` (LWT) |
-| `<prefix>/<device-id>/state/device-status` | pod → broker | full deviceStatus JSON |
-| `<prefix>/<device-id>/state/<side>/climate` | pod → broker | per-side temp / mode |
-| `<prefix>/<device-id>/state/water-level` | pod → broker | `low` / `ok` / `unknown` |
-| `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
-| `<prefix>/<device-id>/state/environment/ambient` | pod → broker | `{"ts": <epoch_ms>, "temperature": <number\|null>, "humidity": <number\|null>}` (°C, %) |
-| `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
-| `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
-| `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
-| `<prefix>/<device-id>/cmd/clear-alarm` | broker → pod | `{"side"}` |
-| `<prefix>/<device-id>/cmd/start-priming` | broker → pod | `{}` |
-
-Commands route through the same tRPC procedures the iOS app calls, so Zod
-input schemas validate every payload — the bridge cannot accidentally
-diverge from the app's safety envelope.
-
-### Example: turn off the left side from any MQTT client
-
-```bash
-mosquitto_pub -h broker.lan \
-  -t 'sleepypod/eight-pod/cmd/set-power' \
-  -m '{"side":"left","powered":false}'
-```
-
-State mirrors back on `sleepypod/eight-pod/state/left/climate` within ~1 s.
-
-See **[ADR 0019](docs/adr/0019-mqtt-bridge.md)** for the design rationale —
-why client-not-broker, the credential storage decision, the tRPC dispatch
-model, and what's deferred until `protectedProcedure` lands.
-
----
-
-## Architecture
-
-```mermaid
-graph LR
-    subgraph HW ["Pod Hardware"]
-        DAC["dac.sock"]
-        FRANK["frankenfirmware<br/>(cwd: /persistent/biometrics)"]
-    end
-
-    subgraph RAWFS ["RAW frames — ADR 0018"]
-        TMPFS["/persistent/biometrics/*.RAW<br/>tmpfs · 500 MB · hot"]
-        ARCH["/persistent/biometrics-archive/<br/>eMMC · gzip cold"]
-        PEND["/persistent/biometrics/.pending/<br/>tmpfs · hard links · pinned"]
-        TMPFS -. "linker timer 1m: hard-link" .-> PEND
-        PEND -. "archiver timer 15m: gzip" .-> ARCH
-    end
-
-    subgraph TRANSPORT ["Hardware Transport"]
-        DT["DacTransport<br/>+ SequentialQueue"]
-    end
-
-    subgraph SIDECARS ["Biometrics Sidecars"]
-        PP["piezo-processor"]
-        SD["sleep-detector"]
-        BIODB[("biometrics.db")]
-    end
-
-    subgraph CORE ["sleepypod-core"]
-        subgraph READBUS ["Read Bus — 2s poll"]
-            DM["DacMonitor"]
-            SYNC["DeviceStateSync"]
-        end
-
-        subgraph WRITEBUS ["Write Bus — immediate"]
-            BMS["broadcastMutation<br/>Status()"]
-        end
-
-        API["tRPC API :3000"]
-        SCHED["Scheduler"]
-        BF["broadcastFrame()"]
-        WS["piezoStream<br/>WS :3001"]
-        DB[("sleepypod.db")]
-    end
-
-    subgraph CLIENTS ["Clients"]
-        UI["React UI"]
-    end
-
-    %% Hardware transport — single serialization point
-    DAC <--> DT
-    API --> DT
-    SCHED --> DT
-    DM --> DT
-
-    %% Read bus
-    DM --> SYNC
-    SYNC --> DB
-    DM --> BF
-
-    %% Write bus
-    API -->|on success| BMS
-    SCHED -->|on success| BMS
-    BMS --> BF
-
-    %% RAW pipeline — firmware writes hot tmpfs, archiver rolls cold to eMMC
-    FRANK -->|writes CBOR| TMPFS
-
-    %% WebSocket delivery
-    BF --> WS
-    TMPFS -->|tail CBOR| WS
-    WS -->|push frames| UI
-
-    %% Biometrics pipeline
-    TMPFS --> PP & SD
-    PP & SD --> BIODB
-    BIODB -->|query| API
-
-    %% App layer
-    API <--> DB
-    UI <-->|HTTP| API
-```
-
-### Biometrics data flow
-
-The Pod hardware daemon (frankenfirmware) writes raw sensor data continuously as CBOR-encoded binary records into `/persistent/biometrics/*.RAW`, which is a **500 MB tmpfs** to keep ~1 GB/day of writes off the eMMC. The firmware rotates and then *deletes* each finished frame within a second, so a linker timer hard-links every live frame into `.pending/` on the same tmpfs (same inode, no copy) to outlive that unlink; an archiver timer then gzips the released frames into `/persistent/biometrics-archive/` on eMMC (cold storage with a pruner cap of 80% disk usage). See **[ADR 0018](docs/adr/0018-tmpfs-raw-frames.md)** for the firmware-integration rationale, including how `SEQNO.RAW` and state directories are symlinked through so the firmware sees its persistent state unchanged.
-
-Independent Python sidecar processes tail the hot tmpfs files, extract signals, and write results to `biometrics.db` (durable on eMMC). The core app never touches raw data — it reads clean rows via tRPC.
-
-```mermaid
-sequenceDiagram
-    participant HW as Pod Hardware<br/>(frankenfirmware)
-    participant TMPFS as /persistent/biometrics<br/>(tmpfs, 500 MB)
-    participant ARCH as /persistent/biometrics-archive<br/>(eMMC, gzip cold)
-    participant PP as piezo-processor
-    participant SD as sleep-detector
-    participant BDB as biometrics.db
-    participant UI as Web UI
-
-    HW->>TMPFS: writes CBOR records (500Hz piezo, capSense)
-    loop every ~60s
-        PP->>TMPFS: tail + decode piezo-dual records
-        PP->>PP: bandpass filter, HR/HRV/breathing rate
-        PP->>BDB: INSERT vitals row
-    end
-    loop continuously
-        SD->>TMPFS: tail + decode capSense records
-        SD->>SD: capacitance threshold, presence/absence
-        SD->>BDB: INSERT sleep_record on session end
-    end
-    loop every 15 min
-        TMPFS->>ARCH: gzip files older than 15 min
-    end
-    UI->>BDB: tRPC getVitals / getSleepRecords
-```
-
-### Power-state sleep tracking
-
-The core app also creates stub sleep records from device power transitions — independent of the sensor modules. This ensures a record exists even when biometrics modules are not running.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Off
-    Off --> On: setPower true, stamp poweredOnAt
-    On --> Off: setPower false, write stub sleep record
-    On --> On: status updated, upsert device_state
-```
-
-### Scheduler startup
-
-The Pod's RTC can reset to ~2010 after a power cycle. The scheduler waits for a valid system clock before starting any cron jobs.
-
-```mermaid
-flowchart LR
-    A["instrumentation.ts<br/>register"] --> B{year >= 2024?}
-    B -- no --> C["wait 5s<br/>poll again"]
-    C --> B
-    B -- yes --> D[JobManager.loadSchedules]
-    D --> E["temperature jobs<br/>power jobs<br/>alarm jobs<br/>prime + reboot jobs"]
-```
-
----
-
-## Tech stack
-
-| Layer | Choice |
-|-------|--------|
-| Framework | Next.js 16 (App Router) |
-| Language | TypeScript (strict) |
-| UI | React 19 |
-| API | tRPC v11 |
-| Database | SQLite via better-sqlite3 |
-| ORM | Drizzle ORM |
-| Scheduler | node-schedule |
-| i18n | Lingui |
-| Package manager | pnpm |
-| Test runner | Vitest |
-| Linter | ESLint flat config + @stylistic |
-| HomeKit bridge | hap-nodejs (embedded in next-server) |
-| MQTT client | mqtt.js (outbound to user's broker) |
-
----
-
-## Databases
-
-Two SQLite files with separate Drizzle connections and independent migration sets.
-
-```mermaid
-graph LR
-    subgraph sdb ["sleepypod.db — config & state"]
-        T1[device_state]
-        T2[device_settings]
-        T3[side_settings]
-        T4[temperature_schedules]
-        T5[power_schedules]
-        T6[alarm_schedules]
-        T7[tap_gestures]
-        T8[system_health]
-    end
-
-    subgraph bdb ["biometrics.db — time-series"]
-        B1[vitals]
-        B2[sleep_records]
-        B3[movement]
-    end
-```
-
-### `sleepypod.db` — config and runtime state
-
-| Table | Purpose |
-|-------|---------|
-| `device_state` | Current temperature, power, water level per side |
-| `device_settings` | Timezone, temperature unit, daily reboot/prime config |
-| `side_settings` | Per-side name and away mode |
-| `temperature_schedules` | Timed temperature change jobs |
-| `power_schedules` | Timed on/off jobs with warm-up temperature |
-| `alarm_schedules` | Vibration alarms with intensity, pattern, and duration |
-| `tap_gestures` | Configurable double/triple-tap actions |
-| `system_health` | Health status per component (core app + modules) |
-| `run_once_sessions` | Ephemeral one-shot temperature / power runs |
-
-### `biometrics.db` — time-series health data
-
-| Table | Purpose |
-|-------|---------|
-| `vitals` | Heart rate, HRV, breathing rate — one row per ~60s interval |
-| `vitals_quality` | Per-interval signal quality flags for the `vitals` row |
-| `sleep_records` | Session boundaries, duration, exit count, presence intervals |
-| `movement` | Per-interval movement scores |
-| `bed_temp` | Per-side bed-surface temperature samples |
-| `freezer_temp` | Reservoir / freezer-side temperature samples |
-| `ambient_light` | Room ambient-light samples |
-| `flow_readings` | Pump flow-rate samples |
-| `water_level_readings` | Continuous water-level samples |
-| `water_level_alerts` | Threshold crossings (low / refill events) |
-| `calibration_profiles` | Saved sensor calibration coefficients (per ADR 0014) |
-| `calibration_runs` | Audit log of calibration runs |
-
-Biometrics uses WAL mode and a 5-second busy timeout so multiple sidecar processes can write concurrently without contention.
-
----
-
-## Biometrics module system
-
-Modules are independent OS processes — any language, managed by systemd. They share `biometrics.db` as the data contract. A crash in a module has zero impact on the core app.
-
-```mermaid
-graph LR
-    subgraph Contract ["Schema as contract"]
-        S[biometrics-schema.ts]
-    end
-    subgraph Bundled
-        PP["piezo-processor (Python)"]
-        SD["sleep-detector (Python)"]
-    end
-    subgraph Future
-        CM["community-module (any language)"]
-    end
-    PP -->|writes to| S
-    SD -->|writes to| S
-    CM -.->|writes to| S
-```
-
-Each module ships a `manifest.json`:
-
-```json
-{
-  "name": "piezo-processor",
-  "version": "1.0.0",
-  "description": "Heart rate, HRV, and breathing rate from piezo sensors",
-  "provides": ["vitals.heartRate", "vitals.hrv", "vitals.breathingRate"],
-  "writes": ["vitals"],
-  "service": "sleepypod-piezo-processor.service",
-  "language": "python"
-}
-```
-
-### Bundled modules
-
-| Module | Input | Output | Method |
-|--------|-------|--------|--------|
-| `piezo-processor` | 500 Hz piezoelectric (CBOR) | HR, HRV, breathing rate → `vitals` | Bandpass filter + HeartPy peak detection + Welch PSD |
-| `sleep-detector` | Capacitance presence (CBOR) | Session boundaries, exits → `sleep_records`, `movement` | Threshold detection with ABSENCE_TIMEOUT_S session gating |
-
----
-
-## Directory structure
-
-```text
-sleepypod-core/
-├── src/
-│   ├── app/                        # Next.js App Router pages and layouts
-│   ├── components/                 # React components
-│   ├── db/
-│   │   ├── schema.ts               # sleepypod.db schema (Drizzle)
-│   │   ├── biometrics-schema.ts    # biometrics.db schema (public contract)
-│   │   ├── index.ts                # main DB connection
-│   │   ├── biometrics.ts           # biometrics DB connection (WAL)
-│   │   ├── migrations/             # sleepypod.db migrations
-│   │   └── biometrics-migrations/  # biometrics.db migrations
-│   ├── hardware/
-│   │   ├── client.ts               # dac.sock Unix socket client
-│   │   ├── deviceStateSync.ts      # status:updated → DB + stub sleep records
-│   │   └── types.ts                # DeviceStatus, SideStatus, etc.
-│   ├── homekit/                    # hap-nodejs bridge, accessories, identity
-│   ├── streaming/                  # piezoStream WS, bonjour announce, MQTT bridge
-│   ├── services/                   # autoOffWatcher, temperatureKeepalive, etc.
-│   ├── modules/
-│   │   └── types.ts                # ModuleManifest interface
-│   ├── scheduler/
-│   │   ├── jobManager.ts           # Orchestrates all scheduled jobs
-│   │   └── scheduler.ts            # node-schedule wrapper with events
-│   └── server/
-│       └── routers/                # tRPC routers
-├── modules/
-│   ├── piezo-processor/            # Python: HR/HRV/breathing from piezo
-│   └── sleep-detector/             # Python: sleep sessions from capacitance
-├── docs/
-│   └── adr/                        # Architecture Decision Records
-├── scripts/
-│   └── install                     # Full install + update script
-├── instrumentation.ts              # Scheduler init + graceful shutdown
-├── drizzle.config.ts               # Drizzle config for sleepypod.db
-└── drizzle.biometrics.config.ts    # Drizzle config for biometrics.db
-```
-
----
-
-## Environment variables
-
-| Variable | Default (dev) | Description |
-|----------|---------------|-------------|
-| `DATABASE_URL` | `file:./sleepypod.dev.db` | Path to sleepypod.db |
-| `BIOMETRICS_DATABASE_URL` | `file:./biometrics.dev.db` | Path to biometrics.db |
-| `DAC_SOCK_PATH` | `/persistent/deviceinfo/dac.sock` | Unix socket path for hardware control |
-| `NODE_ENV` | `development` | Set to `production` in the systemd service |
-
----
-
-## Development
-
-```bash
-# Install dependencies
-pnpm install
-
-# Run dev server
-pnpm dev
-
-# Run tests
-pnpm test
-
-# Lint / type-check
-pnpm lint
-pnpm lint:fix
-pnpm tsc
-
-# Database — sleepypod.db
-pnpm db:generate       # generate migration from schema
-pnpm db:migrate        # apply migrations
-pnpm db:studio         # open Drizzle Studio
-
-# Database — biometrics.db
-pnpm db:biometrics:generate
-pnpm db:biometrics:migrate
-pnpm db:biometrics:studio
-
-# i18n
-pnpm lingui:extract    # extract new user-facing strings for translation
-```
-
----
-
-## Architecture decisions
-
-Key decisions are documented in [`docs/adr/`](docs/adr/):
-
-| ADR | Decision |
-|-----|---------|
-| [0003](docs/adr/0003-core-stack.md) | TypeScript strict, React, Lingui for i18n |
-| [0004](docs/adr/0004-nextjs-unified.md) | Next.js App Router as the application framework |
-| [0005](docs/adr/0005-trpc.md) | tRPC for end-to-end type-safe API |
-| [0006](docs/adr/0006-developer-tooling.md) | ESLint, Vitest, Conventional Commits, pnpm |
-| [0010](docs/adr/0010-drizzle-orm-sqlite.md) | Drizzle ORM + SQLite for embedded constraints |
-| [0012](docs/adr/0012-biometrics-module-system.md) | Plugin/sidecar architecture for biometrics |
-| [0014](docs/adr/0014-sensor-calibration.md) | Per-sensor calibration profiles |
-| [0015](docs/adr/0015-event-bus-mutation-broadcast.md) | Event bus: broadcast device state after mutations |
-| [0017](docs/adr/0017-uv-python-package-management.md) | uv for Python module package management |
-| [0018](docs/adr/0018-tmpfs-raw-frames.md) | Tmpfs at `/persistent/biometrics/` for live RAW frames + gzip cold archive on eMMC |
-| [0019](docs/adr/0019-mqtt-bridge.md) | MQTT bridge for Home Assistant integration |
-| [0020](docs/adr/0020-homekit-identity-derivation.md) | Deterministic HomeKit identity from hardware-rooted seed |
-
-### Key tradeoffs
-
-**Why SQLite, not Postgres?**
-The Pod is constrained ARM hardware. SQLite has no server process, fits under 1 MB of overhead, and handles the write volume (a few rows per minute) with headroom to spare.
-
-**Why two databases?**
-Config/state and time-series biometrics have fundamentally different access patterns, retention, and backup needs. Keeping them separate means biometrics data can be cleared or exported without touching device config, and each DB can be tuned independently.
-
-**Why Python modules, not Node.js?**
-Heart rate extraction from 500 Hz piezoelectric data requires FFT, bandpass filtering, and peak detection. Python's scipy/numpy ecosystem handles this naturally. A crash in a Python module has zero impact on the core app.
-
-**How does real-time data reach clients?**
-A WebSocket server on port 3001 (`piezoStream`) acts as a read-only pub/sub channel. It streams raw sensor data (piezo, bed temp, capacitance) by tailing `/persistent/biometrics/*.RAW` (tmpfs, per ADR 0018), and pushes `deviceStatus` frames via two buses:
-- **Read bus** — DacMonitor polls hardware every 2s and broadcasts the authoritative `deviceStatus` frame. This is the consistency backstop.
-- **Write bus** — After any hardware mutation succeeds (user-initiated via tRPC or automated via Scheduler), `broadcastMutationStatus()` overlays the changed fields onto the last polled status and broadcasts immediately. All connected clients see the change within ~200ms.
+### In-repo reference
+
+The docs site is written for people; these files track the code and change with it.
+
+| Path | What's there |
+|---|---|
+| [`docs/adr/`](docs/adr/) | Architecture Decision Records |
+| [`docs/wiki/`](docs/wiki/INDEX.md) | Compiled topic briefings across the codebase |
+| [`docs/integrations.md`](docs/integrations.md) | HomeKit accessory map, MQTT topics, integration env vars |
+| [`docs/temperature-control.md`](docs/temperature-control.md) | Temperature arbitration between manual, schedule, and Autopilot |
+| [`docs/nats-frame-readers.md`](docs/nats-frame-readers.md) | RAW vs NATS sensor transport selection |
+| [`docs/hardware/`](docs/hardware/) | DAC protocol, alarms, calibration, sensor profiles |
+| [`docs/trpc-api-architecture.md`](docs/trpc-api-architecture.md) | tRPC router layout and REST surface |
+| [`src/mcp/README.md`](src/mcp/README.md) | MCP tool catalogue and design rules |
+| [`modules/`](modules/) | Python sidecars: vitals, sleep detection, calibration, environment, RAW archiving |
+
+### Tech stack
+
+Next.js 16 (App Router) · React 19 · TypeScript (strict) · tRPC v11 · SQLite via better-sqlite3 + Drizzle ORM · Lingui · Vitest · pnpm · Python sidecars managed by uv · hap-nodejs (HomeKit) · mqtt.js
 
 ---
 
