@@ -21,6 +21,7 @@ import { buildThermostatService } from '../accessories/thermostat'
 import { __resetSideController } from '../accessories/sideController'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import type { DeviceStatus } from '@/src/hardware/types'
+import { fahrenheitToLevel } from '@/src/hardware/types'
 
 const status: DeviceStatus = {
   leftSide: { currentTemperature: 75, targetTemperature: 70, currentLevel: -20, targetLevel: -45, heatingDuration: 0 },
@@ -117,6 +118,17 @@ describe('thermostat accessory', () => {
     const [, f] = setTemperature.mock.calls[0]
     expect(f).toBeGreaterThanOrEqual(55)
     expect(f).toBeLessThanOrEqual(110)
+  })
+
+  it.each([28, 28.5])('rounds a %s°C target to whole °F so it never lands on the neutral level', async (c) => {
+    // 28.0°C is 82.4°F, which fahrenheitToLevel maps to level 0: the firmware
+    // treats that as off, and device_state then reads the side as off.
+    const { service } = buildThermostatService('left', fakeMonitor as DacMonitor)
+    await service.getCharacteristic(Characteristic.TargetTemperature).handleSetRequest(c)
+    expect(setTemperature).toHaveBeenCalledTimes(1)
+    const [, f] = setTemperature.mock.calls[0]
+    expect(Number.isInteger(f)).toBe(true)
+    expect(fahrenheitToLevel(f)).not.toBe(0)
   })
 
   it('TargetHeatingCoolingState onGet returns AUTO (3) when powered, OFF (0) otherwise', async () => {

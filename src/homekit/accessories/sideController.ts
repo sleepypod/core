@@ -87,8 +87,11 @@ async function logged<T>(label: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+// Whole °F only: HomeKit's °C→°F conversion is fractional, and 82.36–82.64°F
+// rounds to level 0, which the firmware treats as neutral/off — 28.0°C would
+// silently switch the side off.
 function clampF(f: number): number {
-  return Math.min(MAX_TEMP, Math.max(MIN_TEMP, f))
+  return Math.min(MAX_TEMP, Math.max(MIN_TEMP, Math.round(f)))
 }
 
 export function isPoweredFromStatus(status: DeviceStatus, side: Side): boolean {
