@@ -326,9 +326,9 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
   })
 
   it('suppresses when firmware targetLevel is 0 while device_state still says powered', async () => {
-    // The field-observed failure: firmware commanded neutral, but
-    // device_state.isPowered stays true because durationExpired requires
-    // heatingDuration=0 too and currentLevel is still non-zero.
+    // Firmware commanded neutral while device_state still says powered (a
+    // lagging write, or a poll inside a mutation freshness window): the guard
+    // must follow the firmware target, not the mirror.
     await sync.sync(status({ targetLevel: 0, heatingDuration: 600 }))
     seedSide('left', true, 75) // sync's upsert may have flipped it; force the lagging-DB state
     seedSide('right', true, 75)

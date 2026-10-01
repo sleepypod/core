@@ -197,10 +197,16 @@ export class DeviceStateSync {
     const sideStatus = side === 'left' ? status.leftSide : status.rightSide
     const now = new Date()
 
-    // An observed countdown expiry or an explicit neutral/zero state ends
-    // regulation even while firmware retains the target or current level.
-    // Keep the DB/UI off while the water equalizes back to ambient.
-    const durationExpired = (sideStatus.targetLevel === 0 && sideStatus.heatingDuration === 0)
+    // A neutral target ends regulation even while firmware retains the
+    // current level. Keep the DB/UI off while the water equalizes back to
+    // ambient. An explicit power-off only sets level 0 (setPower) and leaves
+    // the firmware's countdown running, so the countdown must not be required
+    // to reach zero: otherwise currentLevel wobbling through the equalization
+    // flips the mirror on and off for an hour, and after a restart the
+    // temperature controller reads one of those "on" polls as a live session
+    // and re-energizes a side that was switched off. No integer °F maps to
+    // level 0 (82.36–82.64°F), so a neutral target is never a real request.
+    const durationExpired = sideStatus.targetLevel === 0
       || this.hasConfirmedSessionEnd(side, now.getTime())
     const isNowPowered = durationExpired ? false : sideStatus.currentLevel !== 0
 

@@ -884,7 +884,10 @@ describe('DeviceStateSync — sync targetTemperature behaviour without mutation'
     expect(row?.is_powered).toBe(1)
   })
 
-  it('does not expire a zero target level while heating duration remains', async () => {
+  it('reads a neutral target as off even while the firmware countdown and current level remain', async () => {
+    // An explicit power-off only sets level 0; the firmware keeps its heat
+    // session countdown running and currentLevel wobbles while the water
+    // equalizes. That must not read as powered.
     await sync.sync(status({
       side: 'right',
       targetTemperature: 78,
@@ -894,8 +897,30 @@ describe('DeviceStateSync — sync targetTemperature behaviour without mutation'
     }))
 
     expect(readSide('right')).toEqual(expect.objectContaining({
-      is_powered: 1,
-      target_temperature: 78,
+      is_powered: 0,
+      target_temperature: null,
+      powered_on_at: null,
+    }))
+  })
+
+  it('turns a powered side off on a neutral-target poll after a restart, with no mutation marker', async () => {
+    // Pod 88, 2026-09-30: after the scheduled off, the mirror flipped on/off
+    // every 10–20 s on currentLevel alone; a service restart then lost the
+    // controller's in-memory off flag, read one "on" poll as a live session
+    // and re-energized the side for 8 h at the stale schedule target.
+    seedSide('right', true, 80)
+
+    await sync.sync(status({
+      side: 'right',
+      currentLevel: -10,
+      targetLevel: 0,
+      heatingDuration: 27_900,
+    }))
+
+    expect(readSide('right')).toEqual(expect.objectContaining({
+      is_powered: 0,
+      target_temperature: null,
+      powered_on_at: null,
     }))
   })
 
