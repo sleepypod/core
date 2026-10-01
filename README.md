@@ -56,7 +56,7 @@ The web UI brings temperature, schedules, Autopilot, sleep, and system diagnosti
 | [Temperature and manual holds](https://sleepypod.github.io/core/temperature/) | [Architecture](https://sleepypod.github.io/developers/architecture/) |
 | [Schedules and alarms](https://sleepypod.github.io/core/schedules/) · [Autopilot](https://sleepypod.github.io/core/autopilot/) | [Core development](https://sleepypod.github.io/developers/core/) · [API reference](https://sleepypod.github.io/developers/api/) |
 | [Sleep and biometrics](https://sleepypod.github.io/core/biometrics/) | [Sensor pipeline and calibration](https://sleepypod.github.io/developers/sensor-pipeline/) |
-| [HomeKit and MQTT](https://sleepypod.github.io/core/integrations/) · [MCP for agents](https://sleepypod.github.io/core/mcp/) | [Temperature controller](https://sleepypod.github.io/developers/temperature-control/) · [Hardware](https://sleepypod.github.io/developers/hardware/) |
+| [HomeKit and MQTT](https://sleepypod.github.io/core/integrations/) ([topics and env vars](docs/integrations.md)) · [MCP for agents](https://sleepypod.github.io/core/mcp/) | [Temperature controller](https://sleepypod.github.io/developers/temperature-control/) · [Hardware](https://sleepypod.github.io/developers/hardware/) |
 | [System diagnostics](https://sleepypod.github.io/core/system/) · [Settings and backups](https://sleepypod.github.io/core/settings/) | [Build, test, and release workflows](https://sleepypod.github.io/developers/workflows/) |
 
 ---

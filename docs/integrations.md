@@ -18,8 +18,11 @@ graph LR
   Pod -. occupancy / vitals .- BIO[(biometrics.db)]
 ```
 
-The bridge is **off by default** and lives behind the same iptables LAN-only
-policy as the rest of the app — toggle it on from **Settings → HomeKit**.
+The bridge is **off by default** — toggle it on from **Settings → HomeKit**.
+The installer's iptables rules accept HAP (tcp/51827) only from LAN address
+ranges; mDNS discovery (udp/5353) is accepted without a source restriction,
+so the bridge is discoverable but not pairable or controllable from outside
+the LAN.
 
 ### Accessories
 
@@ -48,9 +51,12 @@ machine-id → random fallback) via HKDF, and cached at
 `$DATA_DIR/homekit/identity.json` (where `$DATA_DIR` is the picker-chosen
 data dir — see [`scripts/README.md`](../scripts/README.md#file-locations);
 typically `/persistent/sleepypod-data/homekit/identity.json` on Pod 4/5).
-A `/persistent` wipe or
+As long as the selected seed is unchanged, a `/persistent` wipe or
 firmware reflash regenerates the **same** identity, so iOS still recognizes
-the bridge — you only re-pair, your automations and rooms stay intact. See
+the bridge — you only re-pair, your automations and rooms stay intact. When
+the seed comes from `machine-id` (which does not survive a factory reset) or
+the `random-dev` fallback, deleting `identity.json` produces a new identity,
+and the bridge must be removed and re-added in iOS. See
 **[ADR 0020](adr/0020-homekit-identity-derivation.md)** for the full
 rationale, seed chain, and what the design intentionally does *not* protect
 against.
@@ -100,10 +106,15 @@ the bridge resolves config in this order: `device_settings` row > env var > buil
 | Username | `MQTT_USERNAME` | _(none)_ |
 | Password | `MQTT_PASSWORD` | _(none)_ |
 | Topic prefix | `MQTT_TOPIC_PREFIX` | `sleepypod` |
-| HA discovery | `MQTT_HA_DISCOVERY` | `false` |
+| HA discovery | `MQTT_HA_DISCOVERY` | `true` |
 | HA discovery prefix | `MQTT_HA_DISCOVERY_PREFIX` | `homeassistant` |
-| TLS | `MQTT_TLS_ENABLED` | `false` |
+| TLS | `MQTT_TLS` | `false` |
 | TLS allow self-signed | `MQTT_TLS_INSECURE` | `false` |
+
+The URL scheme decides whether the connection is encrypted: `mqtts://` uses
+TLS, `mqtt://` is plain TCP. The TLS toggle does not upgrade an `mqtt://` URL;
+it only gates `MQTT_TLS_INSECURE`, which skips certificate verification when
+both are on.
 
 ### Topics
 
