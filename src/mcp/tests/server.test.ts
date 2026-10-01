@@ -488,6 +488,32 @@ describe('sleepypod MCP server', () => {
     expect(callerMock.automations.create).not.toHaveBeenCalled()
   })
 
+  it('manage_automation create always starts in dry-run, even when copying a live rule', async () => {
+    const client = await connect()
+    callerMock.automations.create.mockImplementation(async (input: unknown) => input)
+    const rule = {
+      name: 'Cool when hot',
+      dryRun: false,
+      trigger: { kind: 'tick', everyMin: 5 },
+      conditions: { kind: 'compare', op: '>', left: { kind: 'signal', signal: 'ambient.temperature' }, right: { kind: 'literal', value: 75 } },
+      actions: [{ kind: 'setTemperature', side: 'left', temp: { kind: 'literal', value: 66 } }],
+    }
+    const result = await client.callTool({ name: 'manage_automation', arguments: { action: 'create', rule } }) as CallToolResult
+    expect(result.isError, text(result)).toBeFalsy()
+    expect(callerMock.automations.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Cool when hot', dryRun: true }))
+  })
+
+  it('rejects unparseable dates at the schema boundary', async () => {
+    const client = await connect()
+    const result = await client.callTool({
+      name: 'get_vitals_trend',
+      arguments: { side: 'left', startDate: 'garbage', endDate: '2026-09-29' },
+    }) as CallToolResult
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('ISO 8601')
+    expect(callerMock.biometrics.getVitalsSummary).not.toHaveBeenCalled()
+  })
+
   it('serves the settings resource and renders both prompts', async () => {
     const client = await connect()
     const { contents } = await client.readResource({ uri: 'sleepypod://settings' })

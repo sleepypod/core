@@ -32,6 +32,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 ## Intent catalogue
 
 ### Right now
+
 | Intent (what a person says) | Tool | Procedures |
 |---|---|---|
 | "What's the bed set to?" / "Is my side on?" / "Is it priming?" | `get_pod_status` | `device.getStatus`, `settings.getAll` |
@@ -39,6 +40,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | "How warm is the room?" / "How bright was it overnight?" | `get_environment` | `environment.getLatestBedTemp`, `getLatestFreezerTemp`, `getLatestAmbientLight`, `getSummary`, `getAmbientLightSummary` |
 
 ### Sleep and health
+
 | Intent | Tool | Procedures |
 |---|---|---|
 | "How did I sleep?" / "Resting HR last night?" / "How much deep sleep?" | `get_sleep_summary` | `biometrics.getLatestSleep`, `getSleepRecords`, `getSleepStages`, `getVitalsSummary`, `getMovementSummary` |
@@ -46,6 +48,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | "Is my HRV trending down?" / "Was last night unusual?" | `get_vitals_trend` | `biometrics.getVitalsBaseline`, `getVitalsSummary` |
 
 ### Control tonight
+
 | Intent | Tool | Procedures |
 |---|---|---|
 | "Set my side to 68" / "Warm it up for an hour" | `set_temperature` | `device.setTemperature` |
@@ -56,12 +59,14 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | "Prime the pod" / "Water level is low" | `prime_pod` | `device.startPriming` |
 
 ### Recurring schedules
+
 | Intent | Tool | Procedures |
 |---|---|---|
 | "What's my schedule?" / "Why didn't it turn on?" | `get_schedules` | `schedules.getAll`, `settings.getAll` |
 | "Every weekday cool to 66 at 10pm" / "Wake me 7am with vibration" / "Delete Monday's alarm" | `manage_schedule` | `schedules.create/update/delete{Temperature,Power,Alarm}Schedule` |
 
 ### Settings
+
 | Intent | Tool | Procedures |
 |---|---|---|
 | "What timezone / unit is it on?" | `get_settings` | `settings.getAll` |
@@ -69,12 +74,14 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | "Switch to Celsius" / "Dim the LED at night" / "Prime daily at 2pm" / "Cap at 10 hours" | `set_device_settings` | `settings.updateDevice` |
 
 ### Automations (Autopilot)
+
 | Intent | Tool | Procedures |
 |---|---|---|
 | "What rules are active?" / "What's controlling the bed tonight?" | `get_automations` | `automations.status`, `tonight`, `list` |
 | "Pause all automations" / "Turn rule 3 live" / "Make a rule that cools when HR > 60" | `manage_automation` | `automations.setEnabled`, `setDryRun`, `setKillSwitch`, `create`, `update`, `delete` |
 
 ### Health and maintenance
+
 | Intent | Tool | Procedures |
 |---|---|---|
 | "Something's wrong" / "Is the bed actually cooling?" / "Is everything OK?" | `diagnose_pod` | `health.system`, `hardware`, `thermal`, `waterLevel.getLatest`, `getAlerts`, `pumpAlerts.list`, `system.getDiskUsage`, `getVersion`, `internetStatus` |
@@ -82,6 +89,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | "Clear the pump alert" / "Restart the piezo service" / "Free up space" / "Update the software" | `pod_maintenance` | `pumpAlerts.acknowledgeAndRestore`, `waterLevel.dismissAlert`, `health.restartService`, `system.freeStorage`, `databases.checkIntegrity`, `system.triggerUpdate` |
 
 ### Resources and prompts
+
 | Kind | Name | Purpose |
 |---|---|---|
 | resource | `sleepypod://status` | Same compact snapshot as `get_pod_status`, for hosts that attach resources as context. |

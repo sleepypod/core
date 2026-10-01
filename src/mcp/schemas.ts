@@ -43,4 +43,7 @@ export const alarmDuration = alarmDurationSchema.describe('How long to vibrate, 
 
 export const days = z.number().int().min(1).max(90).optional().describe('How many days back to look.')
 
-export const isoDate = z.string().optional().describe('ISO 8601 date or datetime, e.g. "2026-09-28".')
+export const isoDate = z.string()
+  .refine(v => !Number.isNaN(Date.parse(v)), 'Must be an ISO 8601 date or datetime')
+  .optional()
+  .describe('ISO 8601 date or datetime, e.g. "2026-09-28".')

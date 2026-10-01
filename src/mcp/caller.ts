@@ -43,6 +43,7 @@ export async function runTool(body: () => Promise<CallToolResult>): Promise<Call
     return await body()
   }
   catch (error) {
+    console.error('[mcp] tool failed:', error)
     return { isError: true, content: [{ type: 'text', text: describeError(error) }] }
   }
 }

@@ -34,7 +34,7 @@ export function registerAutomationTools(server: McpServer) {
       + '"create" or "update" with a rule object. A rule has name, optional side, priority, cooldownMin, '
       + 'trigger ({kind:"tick",everyMin} | {kind:"signalChange",signal} | {kind:"timeOfDay",at}), conditions '
       + '(comparisons over dotted signals like "left.heartRate", "ambient.temperature", combinable with '
-      + 'and/or/not) and actions (e.g. setTemperature with side and a value expression). Every temperature '
+      + 'and/or/not) and actions (e.g. {kind:"setTemperature", side, temp: {kind:"literal", value}} or notify). Every temperature '
       + 'in a rule (signal thresholds, action values, clamps) is in °F regardless of the device unit; convert '
       + 'Celsius first (20°C = 68°F). New rules default to dryRun so nothing fires until the user switches it '
       + 'live. Read get_automations with includeRules first to copy the shape of an existing rule.',
@@ -65,7 +65,8 @@ export function registerAutomationTools(server: McpServer) {
         await caller.automations.delete({ id: needId() })
         return textResult(`Automation ${id} deleted.`)
       case 'create':
-        return jsonResult(await caller.automations.create(automationCreateSchema.parse(rule ?? {})))
+        // Always start in dry-run, even when copying a live rule; "live" is a separate, explicit action.
+        return jsonResult(await caller.automations.create(automationCreateSchema.parse({ ...rule, dryRun: true })))
       case 'update':
         return jsonResult(await caller.automations.update(automationUpdateSchema.parse({ ...rule, id: needId() })))
     }
