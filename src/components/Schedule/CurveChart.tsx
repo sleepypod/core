@@ -393,10 +393,12 @@ export function CurveChart<T extends CurveSetPoint>({
               <path data-testid="curve-bed" d={bedPath} fill="none" stroke="var(--text-3)" strokeWidth="1.25" strokeLinejoin="round" />
             )}
             <path d={path} fill="none" stroke={`url(#${gradientId})`} strokeWidth="2.5" strokeLinejoin="round" />
+            {/* Same marks as the System → Scheduler lanes: green "on", grey "off" with its line. */}
             {endLabels && coords.length > 1 && (
-              <g className="font-mono" fontSize="10" fill="var(--text-3)" data-testid="curve-ends">
-                <text x={x0 - 4} y={coords[0].y - 6} textAnchor="end">on</text>
-                <text x={x1 + 5} y={coords[coords.length - 1].y + 4}>off</text>
+              <g className="font-mono" fontSize="10" data-testid="curve-ends">
+                <text x={x0 - 4} y={height - padY + 4} textAnchor="end" fill="var(--status-ok)">on</text>
+                <line x1={x1} x2={x1} y1={padY} y2={height - padY} stroke="var(--text-3)" />
+                <text x={x1 + 4} y={height - padY + 4} fill="var(--text-3)">off</text>
               </g>
             )}
             {nowX !== null && (

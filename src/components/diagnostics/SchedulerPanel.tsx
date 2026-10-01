@@ -295,16 +295,17 @@ function SideCurve({ lane, top, width, X, next }: {
         <>
           <defs>
             <linearGradient id={gradientId} x1={pts[0].x} y1="0" x2={Math.max(endX, pts[0].x + 1)} y2="0" gradientUnits="userSpaceOnUse">
-              {pts.map((p, i) => (
-                <stop key={i} offset={((p.x - pts[0].x) / (Math.max(endX, pts[0].x + 1) - pts[0].x)).toFixed(3)} stopColor={TONE_VAR[tempTone(p.tempF)]} />
-              ))}
+              {/* Hard stops: each hold keeps its tone right up to the step. */}
+              {pts.flatMap((p, i) => {
+                const offset = ((p.x - pts[0].x) / (Math.max(endX, pts[0].x + 1) - pts[0].x)).toFixed(3)
+                const stops = [<stop key={`${i}-to`} offset={offset} stopColor={TONE_VAR[tempTone(p.tempF)]} />]
+                if (i > 0) stops.unshift(<stop key={`${i}-from`} offset={offset} stopColor={TONE_VAR[tempTone(pts[i - 1].tempF)]} />)
+                return stops
+              })}
             </linearGradient>
           </defs>
           <path d={`${path} L${endX},${bottom} L${pts[0].x},${bottom} Z`} fill="var(--text-1)" fillOpacity="0.04" />
-          <path d={path} fill="none" stroke={`url(#${gradientId})`} strokeWidth="2" />
-          {pts.map((p, i) => (
-            <circle key={`${p.id}-${i}`} cx={p.x} cy={p.y} r={3} fill="var(--surface-card)" stroke={TONE_VAR[tempTone(p.tempF)]} strokeWidth="1.5" />
-          ))}
+          <path d={path} fill="none" stroke={`url(#${gradientId})`} strokeWidth="2" strokeLinejoin="round" />
           {maxP && maxP.tempF !== minP?.tempF && (
             <text x={maxP.x} y={maxP.y - 8} textAnchor="middle" fill={TONE_VAR[tempTone(maxP.tempF)]} fontSize="10" className="font-mono">{`${maxP.tempF}°`}</text>
           )}
