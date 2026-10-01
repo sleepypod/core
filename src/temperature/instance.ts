@@ -3,6 +3,7 @@ import { db } from '@/src/db'
 import { alarmSchedules, deviceSettings, deviceState, powerSchedules, runOnceSessions, sideSettings, temperatureHolds, temperatureSchedules } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { hasFirmwareSynced } from '@/src/hardware/sideMutations'
 import { shouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { fahrenheitToLevel, MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
@@ -162,7 +163,19 @@ export async function startTemperatureController(): Promise<void> {
   const service = { running: true, pending: new Set<Promise<void>>(), timer: undefined as ReturnType<typeof setInterval> | undefined }
   globalState.__sp_temperatureService = service
   const ticking = new Set<Side>()
+  let waitingLogged = false
   const tick = () => {
+    // device_state is only trustworthy once the firmware has reported in
+    // since this process started; before that a stale is_powered row would
+    // make reconcile energize a side nobody asked for. Explicit commands
+    // (power-on, manual, scheduler) don't pass through here and are unaffected.
+    if (!hasFirmwareSynced()) {
+      if (!waitingLogged) {
+        console.log('[temperature] waiting for first firmware status before reconciling')
+        waitingLogged = true
+      }
+      return Promise.all([...service.pending])
+    }
     for (const side of ['left', 'right'] as const) {
       if (!service.running || ticking.has(side)) continue
       ticking.add(side)

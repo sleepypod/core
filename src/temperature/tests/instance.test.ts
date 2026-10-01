@@ -43,6 +43,7 @@ import * as databaseModule from '@/src/db'
 import { deviceSettings, deviceState, runOnceSessions, sideSettings, temperatureHolds, temperatureSchedules } from '@/src/db/schema'
 import { getTemperatureController, getTemperatureControlStatus, startTemperatureController, stopTemperatureController } from '../instance'
 import { withSideLock } from '@/src/hardware/sideLock'
+import { _resetFirmwareSynced, markFirmwareSynced } from '@/src/hardware/sideMutations'
 
 const fileDatabase = databaseModule as typeof databaseModule & { reopenForTest: () => void, cleanupForTest: () => void }
 afterAll(() => fileDatabase.cleanupForTest())
@@ -52,6 +53,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-09-28T22:00:00Z'))
   safety.blocked = false
   vi.clearAllMocks()
+  markFirmwareSynced() // the firmware has reported in, as it has on a running pod
   resetControlDatabase(sqlite)
   db.insert(deviceSettings).values({ id: 1, timezone: 'UTC' }).run()
   db.insert(sideSettings).values([{ side: 'left', name: 'Left' }, { side: 'right', name: 'Right' }]).run()
@@ -185,6 +187,28 @@ describe('production controller with migrated SQLite', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(getTemperatureController().status('left').source).toBe('schedule')
     expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 72)
+  })
+
+  it('does not reconcile from a stale powered row until the firmware has reported in', async () => {
+    // Pod 88, 2026-09-30: after a restart the loop read a leftover
+    // is_powered=1 row as a live session and energized the side. Nothing
+    // may be applied from device_state until DeviceStateSync has mirrored
+    // one real status; explicit commands are not gated.
+    _resetFirmwareSynced()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await startTemperatureController()
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(hardware.setTemperature).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalledWith('[temperature] waiting for first firmware status before reconciling')
+      expect(log).toHaveBeenCalledTimes(1)
+      await getTemperatureController().setManual('right', 74)
+      expect(hardware.setTemperature).toHaveBeenLastCalledWith('right', 74)
+      markFirmwareSynced()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(hardware.setTemperature).toHaveBeenCalledWith('left', 72)
+    }
+    finally { log.mockRestore() }
   })
 
   it('expires the right hold while the left side lock is occupied', async () => {

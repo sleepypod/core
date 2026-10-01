@@ -1,9 +1,20 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { _resetMutationStamps, getLastSideMutationAt } from '../sideMutations'
+import { _resetFirmwareSynced, _resetMutationStamps, getLastSideMutationAt, hasFirmwareSynced } from '../sideMutations'
 
 afterEach(() => {
   _resetMutationStamps()
+  _resetFirmwareSynced()
   vi.useRealTimers()
+})
+
+it('shares the first-sync flag with an independently loaded DAC-side module instance', async () => {
+  _resetFirmwareSynced()
+  expect(hasFirmwareSynced()).toBe(false)
+  vi.resetModules()
+  const dacModule = await import('../sideMutations')
+  dacModule.markFirmwareSynced()
+
+  expect(hasFirmwareSynced()).toBe(true)
 })
 
 it('shares route mutations with an independently loaded DAC-side module instance', async () => {

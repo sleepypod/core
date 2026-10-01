@@ -24,7 +24,7 @@ vi.mock('@/src/db', async () => {
 })
 
 import * as dbModule from '@/src/db'
-import { DeviceStateSync, markSideMutated, _resetMutationStamps, getAlarmState } from '../deviceStateSync'
+import { DeviceStateSync, markSideMutated, _resetMutationStamps, _resetFirmwareSynced, getAlarmState, hasFirmwareSynced } from '../deviceStateSync'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   sqlite: BetterSqlite3.Database
@@ -263,6 +263,20 @@ describe('DeviceStateSync — mutation freshness window', () => {
 
     expect(readSide('left')?.is_powered).toBe(0) // not fresh, reconciled to neutral
     expect(readSide('right')?.is_powered).toBe(0) // fresh, preserved as off
+  })
+
+  it('marks the firmware as synced only after a status is mirrored successfully', async () => {
+    _resetFirmwareSynced()
+    ;(sqlite as any).exec('DROP TABLE device_state')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await sync.sync(status({ side: 'right', currentLevel: 5, targetLevel: 5, heatingDuration: 100 }))
+      expect(hasFirmwareSynced()).toBe(false)
+      resetSchema()
+      await sync.sync(status({ side: 'right', currentLevel: 5, targetLevel: 5, heatingDuration: 100 }))
+      expect(hasFirmwareSynced()).toBe(true)
+    }
+    finally { error.mockRestore() }
   })
 
   it('without any mutation, sync writes the firmware-derived powered state directly', async () => {

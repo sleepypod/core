@@ -5,9 +5,9 @@ import { waterLevelReadings, flowReadings, primeEvents, thermalState } from '@/s
 import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
 import { DEFAULT_HEATING_DURATION } from './types'
 import type { DeviceStatus, Side } from './types'
-import { getLastSideMutationAt } from './sideMutations'
+import { getLastSideMutationAt, markFirmwareSynced } from './sideMutations'
 
-export { markSideMutated, _resetMutationStamps } from './sideMutations'
+export { markSideMutated, _resetMutationStamps, hasFirmwareSynced, _resetFirmwareSynced } from './sideMutations'
 
 /**
  * Consumes status:updated events and writes current device state to the DB.
@@ -130,6 +130,7 @@ export class DeviceStateSync {
         this.upsertSide('left', status),
         this.upsertSide('right', status),
       ])
+      markFirmwareSynced()
     }
     catch (error) {
       console.error(
