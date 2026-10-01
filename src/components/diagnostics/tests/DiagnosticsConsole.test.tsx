@@ -234,6 +234,18 @@ describe('DiagnosticsConsole dashboard', () => {
     expect(onJump).toHaveBeenCalledWith('scheduler')
   })
 
+  it('shares one hover across the Tonight lanes with each side\u2019s target and bed', () => {
+    render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    const lanes = screen.getByTestId('tonight-lanes')
+    vi.spyOn(lanes, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 1096, height: 200, right: 1096, bottom: 200, toJSON: () => ({}) })
+    // Window is 5 PM \u2192 9 AM (16 h); 2 AM is 9 h in, past the 96px label column.
+    fireEvent.pointerMove(lanes, { clientX: 96 + 1000 * 9 / 16, clientY: 40 })
+    const hover = screen.getByTestId('tonight-hover')
+    expect(hover.textContent).toMatch(/^2:00\sAM \u00b7 target \/ bedJon80\u00b0 \/ \u2014Right\u2014 \/ \u2014$/)
+    fireEvent.pointerLeave(lanes)
+    expect(screen.queryByTestId('tonight-hover')).toBeNull()
+  })
+
   it('shows compact side cards with the holding status', () => {
     mocks.thermal = { ...(mocks.thermal as object), sides: [side('left', { verdict: 'holding', targetTempF: 80, currentTempF: 80 }), side('right', { verdict: 'stalled', note: 'pump stalled' })] }
     const onJump = vi.fn()

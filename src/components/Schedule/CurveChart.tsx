@@ -158,6 +158,11 @@ export function heldTemperature(timeline: Array<{ minutes: number, temperature: 
   return held
 }
 
+/** Target held and bed measured at `minutes`, for readouts drawn outside the chart. */
+export function readAt(setPoints: CurveSetPoint[], bed: BedSample[], minutes: number): { target: number | null, bed: number | null } {
+  return { target: heldTemperature(buildTimeline(setPoints), minutes), bed: nearestSample(bed, minutes)?.temperature ?? null }
+}
+
 /** The bed sample nearest `minutes`, if one lies within `gap` minutes. */
 export function nearestSample(samples: BedSample[], minutes: number, gap = BED_GAP_MINUTES): BedSample | null {
   let best: BedSample | null = null
@@ -213,6 +218,11 @@ interface CurveChartProps<T extends CurveSetPoint> {
   bed?: BedSample[]
   /** "on" / "off" labels at the first and last set point (read-only charts). */
   endLabels?: boolean
+  /** Controlled hover (stacked lanes share one): the minute under the pointer, reported through `onHoverMinutes`. */
+  hoverMinutes?: number | null
+  onHoverMinutes?: (minutes: number | null) => void
+  /** Draw the hover line and readout; stacked lanes turn this off and draw their own across all lanes. */
+  hoverMarks?: boolean
   className?: string
 }
 
@@ -238,6 +248,9 @@ export function CurveChart<T extends CurveSetPoint>({
   showAxis = true,
   bed,
   endLabels = !onChangePoint,
+  hoverMinutes,
+  onHoverMinutes,
+  hoverMarks = true,
   className,
 }: CurveChartProps<T>) {
   const { unit } = useTemperatureUnit()
@@ -291,14 +304,16 @@ export function CurveChart<T extends CurveSetPoint>({
     return i === 0 ? [{ offset, color }] : [{ offset, color: TONE_VAR[tempTone(timeline[i - 1].temperature)] }, { offset, color }]
   })
 
+  const hoverAt = hoverMinutes !== undefined ? hoverMinutes : hover
+  const setHoverAt = (m: number | null) => (onHoverMinutes ? onHoverMinutes(m) : setHover(m))
   let readout: { x: number, label: string } | null = null
-  if (hover !== null && !onChangePoint) {
-    const target = heldTemperature(allPoints, hover)
-    const sample = nearestSample(samples, hover)
+  if (hoverMarks && hoverAt !== null && !onChangePoint && hoverAt >= start && hoverAt <= end) {
+    const target = heldTemperature(allPoints, hoverAt)
+    const sample = nearestSample(samples, hoverAt)
     const fmt = (v: number | null, decimals = 0) => (v === null ? '—' : formatSetpointF(v, unit, { includeUnit: false, decimals }))
     readout = {
-      x: X(hover),
-      label: `${formatTime12h(minutesToTime(hover))} · ${fmt(target)}${samples.length > 0 ? ` / ${fmt(sample?.temperature ?? null, 1)}` : ''}`,
+      x: X(hoverAt),
+      label: `${formatTime12h(minutesToTime(hoverAt))} · ${fmt(target)}${samples.length > 0 ? ` / ${fmt(sample?.temperature ?? null, 1)}` : ''}`,
     }
   }
 
@@ -335,7 +350,7 @@ export function CurveChart<T extends CurveSetPoint>({
     const rect = svgRef.current.getBoundingClientRect()
     const x = Math.max(0, Math.min(width, e.clientX - rect.left))
     if (!onChangePoint) {
-      setHover(Math.round(invX(x)))
+      setHoverAt(Math.round(invX(x)))
       return
     }
     if (!drag) return
@@ -371,7 +386,7 @@ export function CurveChart<T extends CurveSetPoint>({
             role="img"
             aria-label="Temperature curve"
             onPointerMove={drag || !onChangePoint ? onPointerMove : undefined}
-            onPointerLeave={onChangePoint ? undefined : () => setHover(null)}
+            onPointerLeave={onChangePoint ? undefined : () => setHoverAt(null)}
             onPointerUp={() => setDrag(null)}
             onPointerCancel={() => setDrag(null)}
           >

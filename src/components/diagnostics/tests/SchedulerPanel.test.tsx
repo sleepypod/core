@@ -82,6 +82,17 @@ describe('SchedulerPanel', () => {
     expect(timeline.textContent).toContain('1 jobs')
   })
 
+  it('reads out each side\u2019s target under the pointer', () => {
+    render(<SchedulerPanel />)
+    const svg = screen.getByRole('img', { name: /Scheduled jobs/ })
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 640, height: 300, right: 640, bottom: 300, toJSON: () => ({}) })
+    // The night axis runs 5 PM \u2192 9 AM (16 h): 1 AM is halfway across.
+    fireEvent.pointerMove(svg, { clientX: 320, clientY: 50 })
+    expect(screen.getByTestId('timeline-hover').textContent).toMatch(/^1:00\sAM \u00b7 Jon 80\u00b0 \u00b7 Right \u2014$/)
+    fireEvent.pointerLeave(svg)
+    expect(screen.queryByTestId('timeline-hover')).toBeNull()
+  })
+
   it('lists the next five with plain labels and muted ids', () => {
     render(<SchedulerPanel />)
     expect(screen.getByText('5 of 5 this week')).toBeTruthy()

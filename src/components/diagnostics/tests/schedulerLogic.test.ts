@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildNights, describeSchedule, fmtIn, fmtWhen, groupCounts, jobText, jobTypeLabel, nightAxis, podLane, sideLane,
+  buildNights, describeSchedule, fmtIn, fmtWhen, groupCounts, heldTarget, jobText, jobTypeLabel, nightAxis, podLane, sideLane,
   type TimelineOccurrence,
 } from '../schedulerLogic'
 
@@ -96,5 +96,21 @@ describe('nights', () => {
     expect(left.points.map(p => p.id)).toEqual(['on', 't'])
     expect(left).toMatchObject({ on: [1], off: [3], alarms: [4] })
     expect(podLane(list).map(o => o.id)).toEqual(['led'])
+  })
+})
+
+describe('heldTarget', () => {
+  const lane = sideLane([
+    occ({ id: 'a', side: 'left', at: 10 * HOUR, targetTempF: 80 }),
+    occ({ id: 'b', side: 'left', at: 12 * HOUR, targetTempF: 72 }),
+    occ({ id: 'off', type: 'power_off', side: 'left', at: 18 * HOUR }),
+  ], 'left')
+
+  it('holds the last set point until the side powers off', () => {
+    expect(heldTarget(lane, 9 * HOUR)).toBeNull()
+    expect(heldTarget(lane, 10 * HOUR)).toBe(80)
+    expect(heldTarget(lane, 13 * HOUR)).toBe(72)
+    expect(heldTarget(lane, 18 * HOUR)).toBeNull()
+    expect(heldTarget(lane, 20 * HOUR)).toBeNull()
   })
 })

@@ -3,7 +3,7 @@
  * point, and power / presence bars on the shared axis.
  */
 
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const at = (d: number, h: number, m = 0) => new Date(2026, 8, d, h, m).getTime()
@@ -73,6 +73,21 @@ describe('ScheduleTimeline', () => {
     expect(screen.getByTestId('timeline-left-power').children).toHaveLength(1)
     expect(screen.getByTestId('timeline-right-power').children).toHaveLength(0)
     expect(within(card).getByText('no schedule')).toBeTruthy()
+  })
+
+  it('draws a hover line with the time and each side\u2019s target under the pointer', () => {
+    m.nowMinute = at(28, 19) / 60_000
+    m.records = {}
+    render(<ScheduleTimeline unit="F" />)
+    const body = screen.getByTestId('timeline-body')
+    vi.spyOn(body, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 1096, height: 300, right: 1096, bottom: 300, toJSON: () => ({}) })
+    // Window is 6 PM Sep 27 \u2192 9 AM Sep 29 (39 h); 1 AM Sep 28 is 7 h in, past the 96px label column.
+    fireEvent.pointerMove(body, { clientX: 96 + 1000 * 7 / 39, clientY: 40 })
+    expect(screen.getByTestId('timeline-hover').textContent).toMatch(/^1:00\sAM$/)
+    expect(screen.getByTestId('timeline-left-hover').textContent).toBe('76\u00b0')
+    expect(screen.queryByTestId('timeline-right-hover')).toBeNull()
+    fireEvent.pointerMove(body, { clientX: 20, clientY: 40 })
+    expect(screen.queryByTestId('timeline-hover')).toBeNull()
   })
 
   it('shows a skeleton until the client clock is known', () => {

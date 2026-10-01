@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  nextPoint, nightCurve, nightMismatch, powerIntervals, presenceIntervals, tempRange, timelineWindow,
+  nextPoint, nightCurve, nightMismatch, powerIntervals, presenceIntervals, targetAt, tempRange, timelineWindow,
 } from '../timelineLogic'
 
 const at = (d: number, h: number, m = 0) => new Date(2026, 8, d, h, m).getTime()
@@ -106,5 +106,19 @@ describe('nextPoint / tempRange', () => {
     expect(tempRange([a, b])).toEqual({ lo: 74, hi: 85 })
     expect(tempRange([[{ at: 0, temperature: 80 }]])).toEqual({ lo: 77, hi: 83 })
     expect(tempRange([[], []])).toBeNull()
+  })
+})
+
+describe('targetAt', () => {
+  it('reads the held set point from whichever curve covers the moment', () => {
+    const a = [{ at: 100, temperature: 76 }, { at: 200, temperature: 72 }, { at: 300, temperature: 84 }]
+    const b = [{ at: 1000, temperature: 80 }, { at: 1100, temperature: 80 }]
+    expect(targetAt([a, b], 99)).toBeNull()
+    expect(targetAt([a, b], 100)).toBe(76)
+    expect(targetAt([a, b], 250)).toBe(72)
+    expect(targetAt([a, b], 300)).toBe(84)
+    expect(targetAt([a, b], 500)).toBeNull()
+    expect(targetAt([a, b], 1050)).toBe(80)
+    expect(targetAt([[]], 0)).toBeNull()
   })
 })

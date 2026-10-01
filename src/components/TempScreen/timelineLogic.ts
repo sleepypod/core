@@ -126,6 +126,17 @@ export function nightMismatch(curve: CurvePoint[], presence: Interval[]): NightM
   }
 }
 
+/** The set point held at `t` by whichever curve covers it, or null when none does. */
+export function targetAt(curves: CurvePoint[][], t: number): number | null {
+  for (const c of curves) {
+    if (c.length === 0 || t < c[0].at || t > c[c.length - 1].at) continue
+    let held = c[0].temperature
+    for (const p of c) if (p.at <= t) held = p.temperature
+    return held
+  }
+  return null
+}
+
 /** The first set point after `now` across the given curves. */
 export function nextPoint(curves: CurvePoint[][], now: number): CurvePoint | null {
   let best: CurvePoint | null = null

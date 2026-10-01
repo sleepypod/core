@@ -248,6 +248,18 @@ export function sideLane(occurrences: TimelineOccurrence[], side: Side): SideLan
   return lane
 }
 
+/**
+ * The target a side's lane holds at `t`: the last set point before it, unless
+ * the side powered off in between. Null before the first set point.
+ */
+export function heldTarget(lane: SideLane, t: number): number | null {
+  let held: { at: number, tempF: number } | null = null
+  for (const p of lane.points) if (p.at <= t) held = p
+  if (!held) return null
+  const offAt = held.at
+  return lane.off.some(o => o >= offAt && o <= t) ? null : held.tempF
+}
+
 /** Jobs that act on the pod rather than a side: LED, reboot, prime, calibration. */
 export function podLane(occurrences: TimelineOccurrence[]): TimelineOccurrence[] {
   return occurrences.filter(o => !o.side)

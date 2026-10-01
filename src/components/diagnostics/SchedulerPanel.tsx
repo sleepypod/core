@@ -10,7 +10,7 @@ import { stepPath } from '@/src/components/Schedule/CurveChart'
 import { NEUTRAL_TEMP_F, TONE_TEXT, TONE_VAR, tempTone } from '@/src/components/Schedule/scheduleFormat'
 import { cn } from '@/lib/utils'
 import {
-  buildNights, describeSchedule, fmtIn, fmtTime, fmtWhen, groupCounts, jobGroup, jobText, nightAxis, podLane, sideLane,
+  buildNights, describeSchedule, fmtIn, fmtTime, fmtWhen, groupCounts, heldTarget, jobGroup, jobText, nightAxis, podLane, sideLane,
   type JobGroup, type JobText, type Night, type Side, type TimelineJob, type TimelineOccurrence,
 } from './schedulerLogic'
 
@@ -196,6 +196,9 @@ function NightTimeline({ occurrences, now, next }: { occurrences: TimelineOccurr
 
 function NightChart({ night, now, next, sideName }: { night: Night, now: number, next: TimelineOccurrence | undefined, sideName: (s: Side) => string }) {
   const [ref, width] = useWidth<HTMLDivElement>()
+  const svgRef = useRef<SVGSVGElement>(null)
+  // Same hover as the Schedule chart: a line across the lanes and each side's target at that time.
+  const [hover, setHover] = useState<number | null>(null)
   const { from, to } = nightAxis(night)
   const lanes = (['left', 'right'] as const).map(side => ({ side, lane: sideLane(night.occurrences, side) }))
   const pod = podLane(night.occurrences)
@@ -205,6 +208,22 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
   const stepH = width > 0 && width < 520 ? 4 : 2
   for (let t = from; t <= to; t += stepH * HOUR) ticks.push(t)
   const nowX = now >= from && now <= to ? X(now) : null
+
+  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = Math.max(0, Math.min(width, e.clientX - rect.left))
+    setHover(from + (x / width) * (to - from))
+  }
+  const readout = hover === null
+    ? null
+    : {
+        x: X(hover),
+        label: [fmtTime(hover), ...lanes.map(({ side, lane }) => {
+          const target = heldTarget(lane, hover)
+          return `${sideName(side)} ${target === null ? '—' : `${target}°`}`
+        })].join(' · '),
+      }
 
   return (
     <div className="flex min-w-0">
@@ -224,7 +243,17 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
       </div>
       <div ref={ref} className="min-w-0 flex-1" style={{ height }}>
         {width > 0 && (
-          <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="block overflow-visible" role="img" aria-label={`Scheduled jobs, ${night.dates}`}>
+          <svg
+            ref={svgRef}
+            width={width}
+            height={height}
+            viewBox={`0 0 ${width} ${height}`}
+            className="block overflow-visible"
+            role="img"
+            aria-label={`Scheduled jobs, ${night.dates}`}
+            onPointerMove={onPointerMove}
+            onPointerLeave={() => setHover(null)}
+          >
             {ticks.map(t => (
               <g key={t}>
                 <line x1={X(t)} x2={X(t)} y1={TOP} y2={height - 22} stroke="var(--border-grid)" />
@@ -251,6 +280,21 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
                 <line x1={nowX} x2={nowX} y1={12} y2={height - 22} stroke="var(--text-1)" strokeOpacity="0.6" />
                 <text x={nowX + (nowX > width - 90 ? -4 : 4)} y={9} textAnchor={nowX > width - 90 ? 'end' : 'start'} fill="var(--text-1)" fontSize="10" className="font-mono">
                   {`now ${fmtTime(now)}`}
+                </text>
+              </g>
+            )}
+            {readout && (
+              <g data-testid="timeline-hover" pointerEvents="none">
+                <line x1={readout.x} x2={readout.x} y1={12} y2={height - 22} stroke="var(--text-1)" strokeOpacity="0.35" />
+                <text
+                  x={readout.x > width / 2 ? readout.x - 6 : readout.x + 6}
+                  y={TOP + SIDE_H - 10}
+                  textAnchor={readout.x > width / 2 ? 'end' : 'start'}
+                  fill="var(--text-1)"
+                  fontSize="10"
+                  className="font-mono"
+                >
+                  {readout.label}
                 </text>
               </g>
             )}
