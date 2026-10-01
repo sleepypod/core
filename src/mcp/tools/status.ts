@@ -3,9 +3,9 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { getCaller, jsonResult, runTool } from '../caller'
-import { isoDate, unit } from '../schemas'
-import { resolveUnit } from '../units'
+import { getCaller, jsonResult, runTool } from '@/src/mcp/caller'
+import { isoDate, unit } from '@/src/mcp/schemas'
+import { fromSetpointF, resolveUnit } from '@/src/mcp/units'
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
 
@@ -14,15 +14,21 @@ export async function buildPodStatus(requestedUnit: 'F' | 'C' | undefined) {
   const caller = getCaller()
   const u = await resolveUnit(requestedUnit)
   const status = await caller.device.getStatus({ unit: u })
-  const sideView = (key: 'leftSide' | 'rightSide', s: 'left' | 'right') => ({
-    currentTemperature: status[key].currentTemperature,
-    targetTemperature: status[key].targetTemperature,
-    powered: status[key].targetLevel !== 0,
-    alarmVibrating: status[key].isAlarmVibrating ?? false,
-    snooze: status.snooze[s],
-    temperatureControl: status.temperatureControl?.[s] ?? null,
-    pumpStall: status.pumpStallNotifications?.[s] ?? null,
-  })
+  const sideView = (key: 'leftSide' | 'rightSide', s: 'left' | 'right') => {
+    // The router converts side temperatures but leaves the controller's target in °F.
+    const control = status.temperatureControl?.[s]
+    return {
+      currentTemperature: status[key].currentTemperature,
+      targetTemperature: status[key].targetTemperature,
+      powered: status[key].targetLevel !== 0,
+      alarmVibrating: status[key].isAlarmVibrating ?? false,
+      snooze: status.snooze[s],
+      temperatureControl: control
+        ? { ...control, targetTemperature: fromSetpointF(control.targetTemperature, u) }
+        : null,
+      pumpStall: status.pumpStallNotifications?.[s] ?? null,
+    }
+  }
   return {
     unit: u,
     left: sideView('leftSide', 'left'),
@@ -53,12 +59,15 @@ export function registerStatusTools(server: McpServer) {
     title: 'Get bedroom environment',
     description:
       'Latest bed surface temperatures per side, ambient room temperature and humidity, freezer (thermal unit) '
-      + 'temperature and ambient light. Pass startDate/endDate for averaged summaries over a range instead of '
-      + 'the latest readings. Use for "is my room too warm", "how bright was it last night".',
+      + 'temperature and ambient light. Pass both startDate and endDate for averaged summaries over a range '
+      + 'instead of the latest readings. Use for "is my room too warm", "how bright was it last night".',
     inputSchema: { unit, startDate: isoDate, endDate: isoDate },
     annotations: READ_ONLY,
   }, async ({ unit: u, startDate, endDate }) => runTool(async () => {
     const caller = getCaller()
+    if ((startDate === undefined) !== (endDate === undefined)) {
+      throw new Error('A range summary needs both startDate and endDate; omit both for the latest readings.')
+    }
     const resolved = await resolveUnit(u)
     if (startDate && endDate) {
       const range = { startDate: new Date(startDate), endDate: new Date(endDate) }

@@ -10,6 +10,7 @@ import {
   tapTypeSchema,
   temperatureUnitSchema,
   timeStringSchema,
+  timezoneSchema,
 } from '@/src/server/validation-schemas'
 
 const timestampSchema = z.coerce.date()
@@ -214,7 +215,7 @@ export const settingsRouter = router({
     .input(
       z
         .object({
-          timezone: z.string().optional(),
+          timezone: timezoneSchema.optional(),
           temperatureUnit: temperatureUnitSchema.optional(),
           rebootDaily: z.boolean().optional(),
           rebootTime: timeStringSchema.optional(),

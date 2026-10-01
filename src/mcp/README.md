@@ -28,6 +28,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 - **Errors come back as `isError` text** with the TRPC code, so the model can explain "pump stall guard tripped" instead of retrying blindly.
 - **Annotations are honest.** Read tools set `readOnlyHint`; anything that deletes, restarts or re-energizes sets `destructiveHint` so hosts prompt for approval.
 - **Big payloads are trimmed** (device status, sleep records). Everything else passes the router output through unchanged.
+- **Tool output is untrusted model input.** Logs, sleep records and settings can contain text written by anything on the LAN or by firmware. The connected host reads it as data, not as instructions; the annotations above are hints to the host, not a security boundary.
 
 ## Intent catalogue
 

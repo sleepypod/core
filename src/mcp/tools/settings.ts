@@ -4,8 +4,8 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { getCaller, jsonResult, runTool } from '../caller'
-import { side, timeOfDay } from '../schemas'
+import { getCaller, jsonResult, runTool } from '@/src/mcp/caller'
+import { side, timeOfDay } from '@/src/mcp/schemas'
 
 const MUTATING = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
 

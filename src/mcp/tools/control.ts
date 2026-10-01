@@ -4,7 +4,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { getCaller, jsonResult, runTool, textResult } from '../caller'
+import { getCaller, jsonResult, runTool, textResult } from '@/src/mcp/caller'
 import {
   alarmDuration,
   side,
@@ -13,10 +13,15 @@ import {
   unit,
   vibrationIntensity,
   vibrationPattern,
-} from '../schemas'
-import { resolveUnit, toSetpointF } from '../units'
+} from '@/src/mcp/schemas'
+import { fromSetpointF, resolveUnit, toSetpointF } from '@/src/mcp/units'
 
-const MUTATING = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+// Repeating these calls has no further effect: same target, same power state, same released hold.
+const IDEMPOTENT = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+// Repeating these moves a deadline (hold expiry, snooze) or re-fires the motor.
+const TIMED = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+// Starting a curve replaces any active session on that side.
+const REPLACING = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
 
 export function registerControlTools(server: McpServer) {
   server.registerTool('set_temperature', {
@@ -36,7 +41,7 @@ export function registerControlTools(server: McpServer) {
       holdMinutes: z.number().int().min(1).max(1440).optional()
         .describe('Keep this manual temperature for N minutes, then hand control back to schedules.'),
     },
-    annotations: MUTATING,
+    annotations: TIMED,
   }, async ({ side: s, temperature: t, unit: u, holdMinutes }) => runTool(async () => {
     const resolved = await resolveUnit(u)
     const setpoint = toSetpointF(t, resolved)
@@ -51,7 +56,7 @@ export function registerControlTools(server: McpServer) {
       + 'off state. Turning off does not disable schedules; the next scheduled event will turn it back on. '
       + 'Use set_side_settings with awayMode for a longer absence.',
     inputSchema: { side, powered: z.boolean().describe('true to turn on, false to turn off.'), temperature: temperature.optional(), unit },
-    annotations: MUTATING,
+    annotations: IDEMPOTENT,
   }, async ({ side: s, powered, temperature: t, unit: u }) => runTool(async () => {
     const resolved = await resolveUnit(u)
     const setpoint = t === undefined ? undefined : toSetpointF(t, resolved)
@@ -65,14 +70,15 @@ export function registerControlTools(server: McpServer) {
       'Drop the manual temperature hold on a side so schedules, run-once sessions and automations control it again. '
       + 'Returns the new controller status.',
     inputSchema: { side },
-    annotations: MUTATING,
+    annotations: IDEMPOTENT,
   }, async ({ side: s }) => runTool(async () => jsonResult(await getCaller().device.resumeTemperature({ side: s }))))
 
   server.registerTool('manage_alarm', {
     title: 'Trigger, stop or snooze the vibration alarm',
     description:
-      'Immediate alarm control for one side. action "trigger" starts vibrating now (needs intensity, pattern, '
-      + 'duration); "stop" silences it; "snooze" silences it and re-fires after snoozeMinutes (default 5). '
+      'Immediate alarm control for one side. action "trigger" starts vibrating now (intensity, pattern and '
+      + 'duration default to 50, "rise" and 60 s); "stop" silences it; "snooze" silences it and re-fires after '
+      + 'snoozeMinutes (default 5). '
       + 'Scheduled wake-up alarms are managed with manage_schedule, not here.',
     inputSchema: {
       side,
@@ -82,7 +88,7 @@ export function registerControlTools(server: McpServer) {
       duration: alarmDuration.optional(),
       snoozeMinutes: z.number().int().min(1).max(30).optional(),
     },
-    annotations: MUTATING,
+    annotations: TIMED,
   }, async ({ side: s, action, intensity, pattern, duration, snoozeMinutes }) => runTool(async () => {
     const caller = getCaller()
     if (action === 'stop') {
@@ -125,10 +131,21 @@ export function registerControlTools(server: McpServer) {
       wakeTime: timeOfDay.optional().describe('Required for "start". When the curve ends.'),
       unit,
     },
-    annotations: MUTATING,
+    annotations: REPLACING,
   }, async ({ side: s, action, setPoints, wakeTime, unit: u }) => runTool(async () => {
     const caller = getCaller()
-    if (action === 'status') return jsonResult(await caller.runOnce.getActive({ side: s }))
+    if (action === 'status') {
+      const resolved = await resolveUnit(u)
+      const active = await caller.runOnce.getActive({ side: s })
+      if (!active) return jsonResult({ unit: resolved, active: null })
+      return jsonResult({
+        unit: resolved,
+        active: {
+          ...active,
+          setPoints: active.setPoints.map(p => ({ ...p, temperature: fromSetpointF(p.temperature, resolved) })),
+        },
+      })
+    }
     if (action === 'cancel') {
       await caller.runOnce.cancel({ side: s })
       return textResult(`Run-once curve on ${s} cancelled.`)

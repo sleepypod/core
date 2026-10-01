@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { branchNameSchema } from '@/src/server/validation-schemas'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { execFile } from 'node:child_process'
@@ -270,18 +271,7 @@ export const systemRouter = router({
   triggerUpdate: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/system/update', protect: false, tags: ['System'] } })
     .input(z.object({
-      branch: z.string()
-        .regex(/^[a-zA-Z0-9._\-/]+$/, 'Invalid branch name')
-        // git-ref safety the character class can't express: no path
-        // traversal ('..'), no leading/trailing '/', no empty segments
-        // ('//'), and no leading '-' (option injection into git argv).
-        .refine(
-          b => !b.includes('..') && !b.includes('//')
-            && !b.startsWith('/') && !b.endsWith('/')
-            && !b.startsWith('-') && !b.endsWith('.lock'),
-          'Invalid branch name',
-        )
-        .optional(),
+      branch: branchNameSchema.optional(),
     }))
     .output(z.object({
       triggered: z.boolean(),

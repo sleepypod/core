@@ -604,6 +604,13 @@ const baseSide = {
   createdAt: new Date(0), updatedAt: new Date(0),
 }
 
+describe('settings.updateDevice — timezone validation', () => {
+  it('rejects a timezone the runtime cannot resolve before touching the database', async () => {
+    await expect(caller.updateDevice({ timezone: 'America/NotAZone' }))
+      .rejects.toThrow(/valid IANA timezone/)
+  })
+})
+
 describe('settings.updateDevice — extra branches', () => {
   it('throws NOT_FOUND when current device row is missing inside the tx', async () => {
     dbState.txRowsQueue.push([]) // tx select(current) → empty

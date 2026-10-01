@@ -4,7 +4,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { getCaller, jsonResult, runTool, textResult } from '../caller'
+import { getCaller, jsonResult, runTool, textResult } from '@/src/mcp/caller'
 import {
   alarmDuration,
   dayOfWeek,
@@ -15,8 +15,8 @@ import {
   unit,
   vibrationIntensity,
   vibrationPattern,
-} from '../schemas'
-import { resolveUnit, toSetpointF } from '../units'
+} from '@/src/mcp/schemas'
+import { resolveUnit, toSetpointF } from '@/src/mcp/units'
 
 export function registerScheduleTools(server: McpServer) {
   server.registerTool('get_schedules', {
@@ -30,9 +30,9 @@ export function registerScheduleTools(server: McpServer) {
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async ({ side: s, unit: u }) => runTool(async () => {
     const caller = getCaller()
-    const resolved = await resolveUnit(u)
-    const sides = s ? [s] : (['left', 'right'] as const)
     const settings = await caller.settings.getAll({})
+    const resolved = u ?? (settings.device.temperatureUnit === 'C' ? 'C' : 'F')
+    const sides = s ? [s] : (['left', 'right'] as const)
     const result: Record<string, unknown> = { unit: resolved }
     for (const sd of sides) {
       const schedules = await caller.schedules.getAll({ side: sd, unit: resolved })

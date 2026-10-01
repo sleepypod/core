@@ -5,7 +5,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { automationCreateSchema, automationUpdateSchema } from '@/src/server/validation-schemas'
-import { getCaller, jsonResult, runTool, textResult } from '../caller'
+import { getCaller, jsonResult, runTool, textResult } from '@/src/mcp/caller'
 
 export function registerAutomationTools(server: McpServer) {
   server.registerTool('get_automations', {

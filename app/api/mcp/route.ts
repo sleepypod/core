@@ -48,7 +48,7 @@ async function handler(req: Request): Promise<Response> {
   finally {
     // The response body is already materialized in JSON mode, so closing here
     // cannot truncate it. Closing releases the transport/server pair.
-    void transport.close()
+    transport.close().catch((err: unknown) => console.warn('[mcp] transport close failed:', err))
   }
 }
 

@@ -280,6 +280,23 @@ describe('biometrics.getMovement / getMovementBuckets / getMovementSummary', () 
   })
 })
 
+describe('biometrics.getSleepRecord', () => {
+  it('returns null when the id does not exist', async () => {
+    dbState.rowsQueue.push([])
+    await expect(caller.getSleepRecord({ id: 404 })).resolves.toBeNull()
+  })
+
+  it('returns the record for an id regardless of recency', async () => {
+    dbState.rowsQueue.push([
+      { id: 7, side: 'right', enteredBedAt: new Date(0), leftBedAt: null,
+        sleepDurationSeconds: 0, timesExitedBed: 0,
+        presentIntervals: null, notPresentIntervals: null, createdAt: new Date(0) },
+    ])
+    const out = await caller.getSleepRecord({ id: 7 })
+    expect(out?.id).toBe(7)
+  })
+})
+
 describe('biometrics.getLatestSleep', () => {
   it('returns null when no record', async () => {
     dbState.rowsQueue.push([])
@@ -922,6 +939,12 @@ describe('biometrics error wrapping (INTERNAL_SERVER_ERROR catches)', () => {
     forceDbError('select')
     await expect(caller.getMovementSummary({ side: 'left' }))
       .rejects.toThrow(/Failed to fetch movement summary.*db down/)
+  })
+
+  it('getSleepRecord wraps DB errors as INTERNAL_SERVER_ERROR', async () => {
+    forceDbError('select')
+    await expect(caller.getSleepRecord({ id: 1 }))
+      .rejects.toThrow(/Failed to fetch sleep record.*db down/)
   })
 
   it('getLatestSleep wraps DB errors as INTERNAL_SERVER_ERROR', async () => {

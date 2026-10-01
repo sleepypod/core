@@ -23,7 +23,7 @@ const callerMock = vi.hoisted(() => {
       deleteTemperatureSchedule: fn(), deletePowerSchedule: fn(), deleteAlarmSchedule: fn(),
     },
     biometrics: {
-      getLatestSleep: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
+      getLatestSleep: fn(), getSleepRecord: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
       getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(),
     },
     environment: {
@@ -62,7 +62,7 @@ const STATUS = {
   wifiSSID: 'home',
   roomClimate: { temperatureC: 21, humidity: 40, timestamp: 1 },
   waterLevelRaw: { raw: null, calibratedEmpty: null, calibratedFull: null, timestamp: null },
-  temperatureControl: { left: { owner: 'manual' }, right: { owner: 'schedule' } },
+  temperatureControl: { left: { owner: 'manual', targetTemperature: 72 }, right: { owner: 'schedule', targetTemperature: null } },
 }
 
 async function connect() {
@@ -138,12 +138,22 @@ describe('sleepypod MCP server', () => {
     expect(result.isError).toBeFalsy()
     expect(parse(result)).toMatchObject({
       unit: 'F',
-      left: { currentTemperature: 70, targetTemperature: 72, powered: true, temperatureControl: { owner: 'manual' } },
+      left: { currentTemperature: 70, targetTemperature: 72, powered: true, temperatureControl: { owner: 'manual', targetTemperature: 72 } },
       right: { powered: false },
       waterLevel: 'ok',
       wifi: { ssid: 'home', strength: -50 },
     })
     expect(callerMock.device.getStatus).toHaveBeenCalledWith({ unit: 'F' })
+  })
+
+  it('get_pod_status converts the controller target into the requested unit', async () => {
+    const client = await connect()
+    const result = await client.callTool({ name: 'get_pod_status', arguments: { unit: 'C' } }) as CallToolResult
+    expect(parse(result)).toMatchObject({
+      unit: 'C',
+      left: { temperatureControl: { targetTemperature: 22.2 } },
+      right: { temperatureControl: { targetTemperature: null } },
+    })
   })
 
   it('set_temperature converts the caller unit to a °F setpoint', async () => {
@@ -307,6 +317,7 @@ describe('sleepypod MCP server', () => {
     const result = await client.callTool({ name: 'get_schedules', arguments: {} }) as CallToolResult
     expect(parse(result)).toMatchObject({ unit: 'F', left: { awayMode: false }, right: { awayMode: true, alarm: [] } })
     expect(callerMock.schedules.getAll).toHaveBeenCalledTimes(2)
+    expect(callerMock.settings.getAll).toHaveBeenCalledTimes(1)
   })
 
   it('pod_maintenance routes each action and demands its required argument', async () => {
@@ -378,8 +389,12 @@ describe('sleepypod MCP server', () => {
     const missing = await client.callTool({ name: 'run_once_curve', arguments: { side: 'left', action: 'start' } }) as CallToolResult
     expect(missing.isError).toBe(true)
 
-    await client.callTool({ name: 'run_once_curve', arguments: { side: 'left', action: 'status' } })
+    const none = await client.callTool({ name: 'run_once_curve', arguments: { side: 'left', action: 'status' } }) as CallToolResult
     expect(callerMock.runOnce.getActive).toHaveBeenCalledWith({ side: 'left' })
+    expect(parse(none)).toEqual({ unit: 'F', active: null })
+    callerMock.runOnce.getActive.mockResolvedValue({ id: 5, side: 'left', setPoints: [{ time: '22:00', temperature: 68 }], wakeTime: '07:00', startedAt: 0, expiresAt: 1, status: 'active' })
+    const status = await client.callTool({ name: 'run_once_curve', arguments: { side: 'left', action: 'status', unit: 'C' } }) as CallToolResult
+    expect(parse(status)).toMatchObject({ unit: 'C', active: { setPoints: [{ time: '22:00', temperature: 20 }] } })
     await client.callTool({ name: 'run_once_curve', arguments: { side: 'left', action: 'cancel' } })
     expect(callerMock.runOnce.cancel).toHaveBeenCalledWith({ side: 'left' })
   })
@@ -421,6 +436,39 @@ describe('sleepypod MCP server', () => {
 
     const occupancy = await client.callTool({ name: 'get_bed_occupancy', arguments: {} }) as CallToolResult
     expect(parse(occupancy)).toEqual({ left: { occupied: true } })
+  })
+
+  it('get_sleep_summary looks a record up by id and rejects ids from the other side', async () => {
+    const client = await connect()
+    const record = { id: 9, side: 'left', enteredBedAt: new Date(0), leftBedAt: new Date(1000), sleepDurationSeconds: 1, timesExitedBed: 0, presentIntervals: [], notPresentIntervals: [], createdAt: new Date(0) }
+    callerMock.biometrics.getSleepRecord.mockResolvedValue(record)
+    callerMock.biometrics.getSleepStages.mockResolvedValue({ epochs: [], blocks: [], distribution: {} })
+    callerMock.biometrics.getVitalsSummary.mockResolvedValue({})
+    callerMock.biometrics.getMovementSummary.mockResolvedValue({})
+    const ok = await client.callTool({ name: 'get_sleep_summary', arguments: { side: 'left', sleepRecordId: 9 } }) as CallToolResult
+    expect(parse(ok)).toMatchObject({ record: { id: 9 } })
+    expect(callerMock.biometrics.getSleepRecord).toHaveBeenCalledWith({ id: 9 })
+    expect(callerMock.biometrics.getLatestSleep).not.toHaveBeenCalled()
+
+    const wrongSide = await client.callTool({ name: 'get_sleep_summary', arguments: { side: 'right', sleepRecordId: 9 } }) as CallToolResult
+    expect(wrongSide.isError).toBe(true)
+    expect(text(wrongSide)).toContain('not found for the right side')
+  })
+
+  it('get_vitals_trend forwards a partial date range instead of dropping it', async () => {
+    const client = await connect()
+    callerMock.biometrics.getVitalsBaseline.mockResolvedValue({})
+    callerMock.biometrics.getVitalsSummary.mockResolvedValue({})
+    await client.callTool({ name: 'get_vitals_trend', arguments: { side: 'left', startDate: '2026-09-20' } })
+    expect(callerMock.biometrics.getVitalsSummary).toHaveBeenCalledWith({ side: 'left', startDate: new Date('2026-09-20') })
+  })
+
+  it('get_environment rejects a half-specified range', async () => {
+    const client = await connect()
+    const result = await client.callTool({ name: 'get_environment', arguments: { endDate: '2026-09-29' } }) as CallToolResult
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('both startDate and endDate')
+    expect(callerMock.environment.getLatestBedTemp).not.toHaveBeenCalled()
   })
 
   it('get_sleep_summary reports an empty history', async () => {

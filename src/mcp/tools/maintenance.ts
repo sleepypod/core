@@ -5,8 +5,9 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { getCaller, jsonResult, runTool } from '../caller'
-import { side } from '../schemas'
+import { branchNameSchema } from '@/src/server/validation-schemas'
+import { getCaller, jsonResult, runTool } from '@/src/mcp/caller'
+import { side } from '@/src/mcp/schemas'
 
 export function registerMaintenanceTools(server: McpServer) {
   server.registerTool('pod_maintenance', {
@@ -35,7 +36,7 @@ export function registerMaintenanceTools(server: McpServer) {
         'sleepypod-environment-monitor.service',
       ]).optional(),
       includeDbBackups: z.boolean().optional(),
-      branch: z.string().regex(/^[a-zA-Z0-9._\-/]+$/).optional().describe('Git branch to install instead of the latest release.'),
+      branch: branchNameSchema.optional().describe('Git branch to install instead of the latest release.'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, async ({ action, side: s, alertId, service, includeDbBackups, branch }) => runTool(async () => {

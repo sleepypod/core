@@ -487,6 +487,41 @@ export const biometricsRouter = router({
    * @param side - Which side to query
    * @returns Latest sleep record or null if no records found
    */
+  /**
+   * Fetch one sleep record by id, regardless of how many newer records exist.
+   */
+  getSleepRecord: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/sleep-records/get', protect: false, tags: ['Biometrics'] } })
+    .input(z.object({ id: idSchema }).strict())
+    .output(z.object({
+      id: z.number(),
+      side: sideSchema,
+      enteredBedAt: z.date(),
+      leftBedAt: z.date().nullable(),
+      sleepDurationSeconds: z.number(),
+      timesExitedBed: z.number(),
+      presentIntervals: z.unknown(),
+      notPresentIntervals: z.unknown(),
+      createdAt: z.date(),
+    }).nullable())
+    .query(async ({ input }) => {
+      try {
+        const [record] = await biometricsDb
+          .select()
+          .from(sleepRecords)
+          .where(eq(sleepRecords.id, input.id))
+          .limit(1)
+        return record || null
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch sleep record: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
   getLatestSleep: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/sleep-records/latest', protect: false, tags: ['Biometrics'] } })
     .input(

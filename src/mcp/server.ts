@@ -9,14 +9,14 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { getCaller } from './caller'
-import { registerAutomationTools } from './tools/automations'
-import { registerControlTools } from './tools/control'
-import { registerMaintenanceTools } from './tools/maintenance'
-import { registerScheduleTools } from './tools/schedules'
-import { registerSettingsTools } from './tools/settings'
-import { registerSleepTools } from './tools/sleep'
-import { buildPodStatus, registerStatusTools } from './tools/status'
+import { getCaller } from '@/src/mcp/caller'
+import { registerAutomationTools } from '@/src/mcp/tools/automations'
+import { registerControlTools } from '@/src/mcp/tools/control'
+import { registerMaintenanceTools } from '@/src/mcp/tools/maintenance'
+import { registerScheduleTools } from '@/src/mcp/tools/schedules'
+import { registerSettingsTools } from '@/src/mcp/tools/settings'
+import { registerSleepTools } from '@/src/mcp/tools/sleep'
+import { buildPodStatus, registerStatusTools } from '@/src/mcp/tools/status'
 
 export const MCP_SERVER_NAME = 'sleepypod'
 
