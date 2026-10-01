@@ -28,6 +28,9 @@ export function textResult(text: string): CallToolResult {
 }
 
 function describeError(error: unknown): string {
+  // Internal errors wrap database/transport failures; the full error is logged
+  // server-side so the model only needs to know the call did not succeed.
+  if (error instanceof TRPCError && error.code === 'INTERNAL_SERVER_ERROR') return 'INTERNAL_SERVER_ERROR: the pod could not complete the request'
   if (error instanceof TRPCError) return `${error.code}: ${error.message}`
   if (error instanceof Error) return error.message
   return String(error)

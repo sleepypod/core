@@ -189,6 +189,20 @@ describe('sleepypod MCP server', () => {
     expect(text(result)).toBe('PRECONDITION_FAILED: Pump stall guard tripped')
   })
 
+  it('hides internal error details from the model', async () => {
+    const client = await connect()
+    callerMock.device.setTemperature.mockRejectedValue(
+      new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'SQLITE_BUSY: database is locked at /persistent/sleepypod.db' }),
+    )
+    const result = await client.callTool({
+      name: 'set_temperature',
+      arguments: { side: 'left', temperature: 70 },
+    }) as CallToolResult
+    expect(result.isError).toBe(true)
+    expect(text(result)).toBe('INTERNAL_SERVER_ERROR: the pod could not complete the request')
+    expect(text(result)).not.toContain('SQLITE')
+  })
+
   it('manage_alarm maps snooze minutes to seconds and reports the resume time', async () => {
     const client = await connect()
     callerMock.device.snoozeAlarm.mockResolvedValue({ success: true, snoozeUntil: 1_700_000_000 })
