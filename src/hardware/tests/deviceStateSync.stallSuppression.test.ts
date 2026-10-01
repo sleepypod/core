@@ -54,6 +54,17 @@ function resetSchema(): void {
   ;(biometricsSqlite as any).exec(`
     DROP TABLE IF EXISTS water_level_readings;
     DROP TABLE IF EXISTS flow_readings;
+    DROP TABLE IF EXISTS thermal_state;
+    DROP TABLE IF EXISTS prime_events;
+    CREATE TABLE prime_events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL);
+    CREATE TABLE thermal_state (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      side TEXT NOT NULL,
+      is_powered INTEGER NOT NULL,
+      target_temp_f REAL,
+      current_temp_f REAL
+    );
     CREATE TABLE water_level_readings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp INTEGER NOT NULL,
@@ -439,6 +450,23 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     vi.setSystemTime(new Date('2026-07-11T08:16:40Z'))
     sync.recordFlowData(frame({ rpm: 0 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
+  })
+
+  it('feeds expectedActive=false and a null duration for a side commanded off', async () => {
+    seedSide('left', false, null)
+    seedSide('right', false, null)
+    sync.recordFlowData(frame({ rpm: 1_800 }))
+    expect(await lastGuardInput('left')).toMatchObject({ expectedActive: false, preStallDurationSeconds: null })
+  })
+
+  it('feeds expectedActive=true and a null duration for an active side with no observed countdown', async () => {
+    // No status poll yet: the side is commanded on but nothing projects a
+    // remaining session, so the guard gets no pre-stall duration (never the
+    // 8 h default).
+    seedSide('left', true, 78)
+    seedSide('right', true, 78)
+    sync.recordFlowData(frame({ rpm: 1_800 }))
+    expect(await lastGuardInput('left')).toMatchObject({ expectedActive: true, preStallDurationSeconds: null })
   })
 
   it('feeds the guard the projected remaining session seconds, not the 8h default', async () => {
