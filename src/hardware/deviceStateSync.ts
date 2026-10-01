@@ -197,15 +197,21 @@ export class DeviceStateSync {
     const sideStatus = side === 'left' ? status.leftSide : status.rightSide
     const now = new Date()
 
-    // A neutral target ends regulation even while firmware retains the
-    // current level. Keep the DB/UI off while the water equalizes back to
-    // ambient. An explicit power-off only sets level 0 (setPower) and leaves
-    // the firmware's countdown running, so the countdown must not be required
-    // to reach zero: otherwise currentLevel wobbling through the equalization
-    // flips the mirror on and off for an hour, and after a restart the
-    // temperature controller reads one of those "on" polls as a live session
-    // and re-energizes a side that was switched off. No integer °F maps to
-    // level 0 (82.36–82.64°F), so a neutral target is never a real request.
+    // Regulation has ended in either of two separate cases:
+    //  - A neutral target, even while firmware retains the current level.
+    //    An explicit power-off only sets level 0 (setPower) and leaves the
+    //    firmware's countdown running, so the countdown must not be required
+    //    to reach zero: otherwise currentLevel wobbling through the
+    //    equalization flips the mirror on and off for an hour, and after a
+    //    restart the temperature controller reads one of those "on" polls as
+    //    a live session and re-energizes a side that was switched off. At
+    //    level 0 the hardware neither heats nor cools, so "off" is the honest
+    //    reading. No integer °F maps to level 0 (82.36–82.64°F); HomeKit's
+    //    unrounded °C→°F conversion can land there (28.0°C = 82.4°F), and
+    //    that side then reads off until the target changes.
+    //  - A confirmed countdown expiry while firmware retains a non-neutral
+    //    target (hasConfirmedSessionEnd only applies when targetLevel != 0).
+    // Keep the DB/UI off while the water equalizes back to ambient.
     const durationExpired = sideStatus.targetLevel === 0
       || this.hasConfirmedSessionEnd(side, now.getTime())
     const isNowPowered = durationExpired ? false : sideStatus.currentLevel !== 0
