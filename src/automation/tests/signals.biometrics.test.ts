@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hoisted DB mock — drives BiometricsSignalReader by stubbing the chained
 // biometricsDb.select().from(table)[.where()].orderBy().limit().all() call.
@@ -84,10 +84,17 @@ describe('reduceCap', () => {
 
 describe('BiometricsSignalReader', () => {
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-15T12:00:00Z'))
     dbMock.state.rows = {}
     dbMock.state.sideCalls = {}
     dbMock.state.throws = false
     capMock.snapshot = null
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('surfaces fresh vitals, movement, environment, and cap signals with unit conversion', () => {
@@ -193,6 +200,5 @@ describe('BiometricsSignalReader', () => {
       '[automation] BiometricsSignalReader.read failed:',
       expect.any(Error),
     )
-    warn.mockRestore()
   })
 })
