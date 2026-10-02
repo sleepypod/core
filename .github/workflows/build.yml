@@ -54,7 +54,13 @@ jobs:
       - name: Set install script default branch
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: sed -i "s|__BRANCH__|${BRANCH}|" scripts/install
+        # Only substitute names that are safe both in the sed replacement and
+        # inside the installer's double-quoted assignment; anything else keeps
+        # the placeholder, which the installer treats as main.
+        run: |
+          if [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            sed -i "s|__BRANCH__|${BRANCH}|" scripts/install
+          fi
 
       - name: Create deploy tarball
         run: |
