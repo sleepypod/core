@@ -1,8 +1,8 @@
 name: Branch Release Cleanup
 
-# Drop the rolling `<slug>-latest` prerelease + tag when a feature branch is
-# deleted. Without this, every short-lived branch would accrete a permanent
-# prerelease in the GitHub Releases page.
+# Drop a deleted feature branch's asset from the shared `branch-builds`
+# prerelease, plus its pre-consolidation `<slug>-latest` release if one is
+# still around.
 
 on:
   delete:
@@ -21,11 +21,13 @@ jobs:
           REF="${{ github.event.ref }}"
           SLUG="${REF//\//-}"
           echo "tag=${SLUG}-latest" >> "$GITHUB_OUTPUT"
+          echo "asset=sleepypod-core--${SLUG}.tar.gz" >> "$GITHUB_OUTPUT"
 
-      - name: Drop rolling release + tag
+      - name: Drop branch build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.slug.outputs.tag }}"
-          # Idempotent — 404 (branch never had a prerelease) is fine.
+          # Idempotent — 404 (branch never had a build) is fine.
+          gh release delete-asset branch-builds "${{ steps.slug.outputs.asset }}" --yes --repo "${{ github.repository }}" 2>/dev/null || true
           gh release delete "$TAG" --yes --cleanup-tag --repo "${{ github.repository }}" 2>/dev/null || true

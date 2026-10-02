@@ -34,7 +34,7 @@ jobs:
         run: |
           SLUG="${GITHUB_REF_NAME//\//-}"
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
-          echo "tag=${SLUG}-latest" >> "$GITHUB_OUTPUT"
+          echo "asset=sleepypod-core--${SLUG}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -71,21 +71,22 @@ jobs:
             --exclude='.serena' \
             --exclude='.claude' \
             .
-          mv /tmp/sleepypod-core.tar.gz .
+          mv /tmp/sleepypod-core.tar.gz "${{ steps.slug.outputs.asset }}"
 
-      - name: Publish rolling branch release
+      - name: Publish branch build
+        # Every branch shares one `branch-builds` prerelease and gets its own
+        # asset, so feature branches don't each add an entry to the Releases
+        # page. sp-update and the installer resolve the asset by slug.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ steps.slug.outputs.tag }}"
-          # --cleanup-tag drops the prior release + tag atomically. 404 (first
-          # push of a new branch) is expected; the `|| true` swallows it.
-          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" sleepypod-core.tar.gz \
-            --target "${{ github.sha }}" \
-            --title "Branch: ${{ github.ref_name }} (latest)" \
-            --notes "Rolling pre-built release from branch \`${{ github.ref_name }}\`.
-
-          **Commit:** ${{ github.sha }}
-          **Updated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --prerelease
+          gh release view branch-builds >/dev/null 2>&1 \
+            || gh release create branch-builds \
+                 --target dev \
+                 --title "Branch builds" \
+                 --notes "Pre-built tarballs for feature branches, one \`sleepypod-core--<branch-slug>.tar.gz\` asset per branch (\`/\` → \`-\`). Install one with \`sp-update <branch>\`. Assets are replaced on every push and removed when the branch is deleted." \
+                 --prerelease \
+            || gh release view branch-builds >/dev/null
+          gh release upload branch-builds "${{ steps.slug.outputs.asset }}" --clobber
+          # Drop this branch's pre-consolidation rolling release, if any.
+          gh release delete "${{ steps.slug.outputs.slug }}-latest" --yes --cleanup-tag 2>/dev/null || true

@@ -1087,23 +1087,36 @@ else
   # Try CI release first (includes pre-built .next). Mirrors sp-update:
   #   main / latest  → releases/latest          (semantic-release vX.Y.Z)
   #   dev            → releases/tags/dev-latest (rolling, dev-release.yml)
-  #   <other>        → releases/tags/<slug>-latest (branch-release.yml)
-  # `feat/foo` slugs to `feat-foo-latest` to match branch-release.yml.
+  #   <other>        → releases/tags/branch-builds, asset
+  #                    sleepypod-core--<slug>.tar.gz (branch-release.yml),
+  #                    then the legacy releases/tags/<slug>-latest
+  # `feat/foo` slugs to `feat-foo` to match branch-release.yml.
+  RELEASE_ASSET="sleepypod-core.tar.gz"
+  LEGACY_RELEASE_API=""
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
   elif [ "$DOWNLOAD_BRANCH" = "dev" ]; then
     # Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
   else
-    RELEASE_TAG="${DOWNLOAD_BRANCH//\//-}-latest"
-    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
+    RELEASE_SLUG="${DOWNLOAD_BRANCH//\//-}"
+    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/branch-builds"
+    RELEASE_ASSET="sleepypod-core--${RELEASE_SLUG}.tar.gz"
+    LEGACY_RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_SLUG}-latest"
   fi
 
   if [ -n "${RELEASE_API:-}" ]; then
     RELEASE_JSON=$(curl -sf "$RELEASE_API" || true)
     RELEASE_URL=$(printf '%s' "$RELEASE_JSON" \
-      | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
-      | grep -o 'https://[^"]*' || true)
+      | grep -o '"browser_download_url": *"[^"]*"' \
+      | grep -o 'https://[^"]*' \
+      | grep -m1 -F "/${RELEASE_ASSET}" || true)
+    if [ -z "$RELEASE_URL" ] && [ -n "$LEGACY_RELEASE_API" ]; then
+      RELEASE_JSON=$(curl -sf "$LEGACY_RELEASE_API" || true)
+      RELEASE_URL=$(printf '%s' "$RELEASE_JSON" \
+        | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
+        | grep -o 'https://[^"]*' || true)
+    fi
     # Semantic-release tag (vX.Y.Z), recorded in .git-info for the UI; rolling *-latest tags are skipped.
     RELEASE_VERSION=$(printf '%s' "$RELEASE_JSON" \
       | grep -om1 '"tag_name": *"v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][^"]*"' \

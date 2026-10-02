@@ -287,36 +287,52 @@ if [ -n "$ARCHIVE" ]; then
   tar xzf "$ARCHIVE" -C "$WORK_DIR"
 else
   open_update_wan
+  # Candidates are "<release API URL> <asset name>", tried in order. Feature
+  # branches publish to the shared `branch-builds` prerelease; the per-branch
+  # `<slug>-latest` release is the pre-consolidation location, kept as a
+  # fallback for branches whose workflow predates it.
   if [ "$BRANCH" = main ] || [ "$BRANCH" = latest ]; then
-    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/latest sleepypod-core.tar.gz"
+  elif [ "$BRANCH" = dev ]; then
+    RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest sleepypod-core.tar.gz"
   else
-    RELEASE_TAG="${BRANCH//\//-}-latest"
-    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
+    BRANCH_SLUG="${BRANCH//\//-}"
+    RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/branch-builds sleepypod-core--${BRANCH_SLUG}.tar.gz
+https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${BRANCH_SLUG}-latest sleepypod-core.tar.gz"
   fi
-  echo "Checking for pre-built release: $RELEASE_API"
-  if ! HTTP_STATUS=$(curl -sS -L --connect-timeout 10 --max-time 60 \
-      -o "$WORK_DIR/release.json" -w '%{http_code}' "$RELEASE_API"); then
-    echo "Error: Could not contact GitHub. Check the Pod's network and retry." >&2
+  RELEASE_URL=""
+  while read -r RELEASE_API RELEASE_ASSET; do
+    echo "Checking for pre-built release: $RELEASE_API ($RELEASE_ASSET)"
+    if ! HTTP_STATUS=$(curl -sS -L --connect-timeout 10 --max-time 60 \
+        -o "$WORK_DIR/release.json" -w '%{http_code}' "$RELEASE_API"); then
+      echo "Error: Could not contact GitHub. Check the Pod's network and retry." >&2
+      exit 1
+    fi
+    case "$HTTP_STATUS" in
+      200) ;;
+      404) continue ;;
+      *)
+        echo "Error: GitHub release lookup returned HTTP $HTTP_STATUS (check API access/rate limits)." >&2
+        exit 1 ;;
+    esac
+    RELEASE_URL=$(node -e '
+      const fs = require("fs");
+      const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const asset = release.assets?.find(a => a.name === process.argv[2]);
+      if (asset && /^https:\/\//.test(asset.browser_download_url)) process.stdout.write(asset.browser_download_url);
+    ' "$WORK_DIR/release.json" "$RELEASE_ASSET")
+    [ -n "$RELEASE_URL" ] && break
+  done <<EOF
+$RELEASE_CANDIDATES
+EOF
+  if [ -z "$RELEASE_URL" ]; then
+    rm -f "$WORK_DIR/release.json"
+    echo "Error: No accessible pre-built release for '$BRANCH' in '$GITHUB_REPO'." >&2
+    echo "Enable GitHub Actions in the fork and push the branch to publish its Branch Release." >&2
+    echo "Or, from a cloned repo on your computer: ./scripts/deploy POD_IP" >&2
+    echo "Installed files have not been replaced; source-only builds are not supported on the Pod." >&2
     exit 1
   fi
-  case "$HTTP_STATUS" in
-    200) ;;
-    404)
-      echo "Error: No accessible pre-built release for '$BRANCH' in '$GITHUB_REPO'." >&2
-      echo "Enable GitHub Actions in the fork and push the branch to publish its Branch Release." >&2
-      echo "Or, from a cloned repo on your computer: ./scripts/deploy POD_IP" >&2
-      echo "Installed files have not been replaced; source-only builds are not supported on the Pod." >&2
-      exit 1 ;;
-    *)
-      echo "Error: GitHub release lookup returned HTTP $HTTP_STATUS (check API access/rate limits)." >&2
-      exit 1 ;;
-  esac
-  RELEASE_URL=$(node -e '
-    const fs = require("fs");
-    const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    const asset = release.assets?.find(a => a.name === "sleepypod-core.tar.gz");
-    if (asset && /^https:\/\//.test(asset.browser_download_url)) process.stdout.write(asset.browser_download_url);
-  ' "$WORK_DIR/release.json")
   # Semantic-release tags (vX.Y.Z) are only known here, after the tarball was
   # built, so record them in .git-info for the UI. Rolling *-latest tags are not versions.
   RELEASE_VERSION=$(node -e '
@@ -324,10 +340,6 @@ else
     if (/^v\d+\.\d+\.\d+/.test(tag)) process.stdout.write(tag);
   ' "$WORK_DIR/release.json" 2>/dev/null || true)
   rm -f "$WORK_DIR/release.json"
-  if [ -z "$RELEASE_URL" ]; then
-    echo "Error: Release has no sleepypod-core.tar.gz asset. Build/publish the release, or use ./scripts/deploy POD_IP from your computer." >&2
-    exit 1
-  fi
   echo "Downloading pre-built release..."
   if ! curl -fSL --connect-timeout 10 --max-time 600 "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
     echo "Error: Release download/extraction failed. Installed files have not been replaced; retry the update." >&2
