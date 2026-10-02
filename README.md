@@ -12,7 +12,7 @@
 
 Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Linux — replaces the cloud-bound controller with a local web UI, scheduler, on-device biometrics, and opt-in integrations for Home Assistant (MQTT), Apple Home (HomeKit), and AI assistants (MCP).
 
-**Documentation lives at [sleepypod.github.io](https://sleepypod.github.io/).** This README covers installing and working on the code; the docs site covers everything else.
+**Documentation lives at [sleepypod.github.io](https://sleepypod.github.io/getting-started/).** This README covers installing and working on the code; the docs site covers everything else.
 
 **No Pod? [Try the live demo](https://sleepypod-demo.vercel.app).** It runs the real web UI against simulated Pod data in your browser, so you can change temperatures, edit schedules, and browse sleep history without hardware.
 
