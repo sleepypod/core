@@ -1087,37 +1087,20 @@ else
   # Try CI release first (includes pre-built .next). Mirrors sp-update:
   #   main / latest  → releases/latest          (semantic-release vX.Y.Z)
   #   dev            → releases/tags/dev-latest (rolling, dev-release.yml)
-  #   <other>        → releases/tags/branch-builds, asset
-  #                    sleepypod-core--<key>.tar.gz (branch-release.yml),
-  #                    then the legacy releases/tags/<slug>-latest
-  # `feat/foo` slugs to `feat-foo` to match branch-release.yml.
-  RELEASE_ASSET="sleepypod-core.tar.gz"
-  LEGACY_RELEASE_API=""
+  #   <other>        → no release; the build.yml artifact below
+  RELEASE_API=""
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
   elif [ "$DOWNLOAD_BRANCH" = "dev" ]; then
     # Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
-  else
-    RELEASE_SLUG="${DOWNLOAD_BRANCH//\//-}"
-    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/branch-builds"
-    # Same key as branch-release.yml: anything outside [A-Za-z0-9._-] → `-`.
-    RELEASE_ASSET="sleepypod-core--${DOWNLOAD_BRANCH//[^A-Za-z0-9._-]/-}.tar.gz"
-    LEGACY_RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_SLUG}-latest"
   fi
 
   if [ -n "${RELEASE_API:-}" ]; then
     RELEASE_JSON=$(curl -sf "$RELEASE_API" || true)
     RELEASE_URL=$(printf '%s' "$RELEASE_JSON" \
-      | grep -o '"browser_download_url": *"[^"]*"' \
-      | grep -o 'https://[^"]*' \
-      | grep -m1 -F "/${RELEASE_ASSET}" || true)
-    if [ -z "$RELEASE_URL" ] && [ -n "$LEGACY_RELEASE_API" ]; then
-      RELEASE_JSON=$(curl -sf "$LEGACY_RELEASE_API" || true)
-      RELEASE_URL=$(printf '%s' "$RELEASE_JSON" \
-        | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
-        | grep -o 'https://[^"]*' || true)
-    fi
+      | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
+      | grep -o 'https://[^"]*' || true)
     # Semantic-release tag (vX.Y.Z), recorded in .git-info for the UI; rolling *-latest tags are skipped.
     RELEASE_VERSION=$(printf '%s' "$RELEASE_JSON" \
       | grep -om1 '"tag_name": *"v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][^"]*"' \
@@ -1142,6 +1125,20 @@ else
     fi
   fi
 
+  # nightly.link 404s on a raw `/` in the branch segment; percent-encode
+  # everything outside the URL-unreserved set.
+  urlencode() {
+    local s="$1" out="" c i
+    for ((i = 0; i < ${#s}; i++)); do
+      c="${s:i:1}"
+      case "$c" in
+        [A-Za-z0-9._~-]) out+="$c" ;;
+        *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+      esac
+    done
+    printf '%s' "$out"
+  }
+
   # Try a CI workflow artifact via nightly.link. Two paths in:
   #   1. --artifact-url <url>  — pinned to an exact run (PR comments use this).
   #   2. --branch <name>       — resolved to the latest successful build on
@@ -1155,7 +1152,7 @@ else
         && [ "$INSTALL_BRANCH" != "main" ] \
         && [ "$INSTALL_BRANCH" != "dev" ] \
         && [ "$INSTALL_BRANCH" != "latest" ]; then
-      ARTIFACT_URL="https://nightly.link/${GITHUB_REPO}/workflows/build/${INSTALL_BRANCH}/sleepypod-core.zip"
+      ARTIFACT_URL="https://nightly.link/${GITHUB_REPO}/workflows/build/$(urlencode "$INSTALL_BRANCH")/sleepypod-core.zip"
     fi
 
     if [ -n "$ARTIFACT_URL" ]; then

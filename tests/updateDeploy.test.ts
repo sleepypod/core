@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, assetName?: string } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -57,6 +57,9 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   put(join(bundle, 'node_modules/foreign.node'), 'wrong architecture')
   const archive = join(dir, 'bundle.tar.gz')
   expect(spawnSync('tar', ['czf', archive, '-C', bundle, '.']).status).toBe(0)
+  // nightly.link serves the build.yml artifact as a zip wrapping the tarball.
+  const artifactZip = join(dir, 'artifact.zip')
+  expect(spawnSync('python3', ['-c', 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "w").write(sys.argv[2], "sleepypod-core.tar.gz")', artifactZip, archive]).status).toBe(0)
   let script = readFileSync(join(repo, 'scripts/bin/sp-update'), 'utf8')
   const rewrites: [string, string][] = [
     ['export PATH="/usr/local/bin:$PATH"', ''],
@@ -92,6 +95,10 @@ if [[ "$*" == *api.github.com* ]]; then
   if [ "$#" -lt 2 ]; then echo "curl stub: missing -o" >&2; exit 2; fi
   printf '%s' "$TEST_RELEASE" > "$2"
   printf '%s' "$TEST_HTTP_STATUS"
+elif [[ "$*" == *nightly.link* ]]; then
+  if [ "$TEST_DOWNLOAD_FAIL" = 1 ]; then exit 22; fi
+  while [ "$#" -gt 0 ] && [ "$1" != -o ]; do shift; done
+  cp "$TEST_ZIP" "$2"
 else
   if [ "$TEST_DOWNLOAD_FAIL" = 1 ]; then head -c 20 "$TEST_ARCHIVE"; exit 1; fi
   cat "$TEST_ARCHIVE"
@@ -102,13 +109,13 @@ fi
 if [ "$TEST_BACKUP_FAIL" = 1 ] && [ "$1" = cf ]; then exit 1; fi
 exec '${tar}' "$@"
 `)
-  const result = spawnSync('bash', [join(dir, 'update'), ...(options.archive ? ['--archive', archive] : ['fix/test'])], {
+  const result = spawnSync('bash', [join(dir, 'update'), ...(options.archive ? ['--archive', archive] : [options.branch ?? 'fix/test'])], {
     encoding: 'utf8',
     env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log,
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
-      TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive,
-      TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: options.assetName ?? 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
+      TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive, TEST_ZIP: artifactZip,
+      TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
   })
   return { result, app, dir, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
 }
@@ -131,7 +138,7 @@ describe('sp-update staged deployment', () => {
   })
 
   it.each(['404', '403', '500'])('rejects HTTP %s without touching installed files or dependencies', (status) => {
-    const { result, app, log } = updater({ status, blocked: true })
+    const { result, app, log } = updater({ status, blocked: true, branch: 'dev' })
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain(status === '404' ? 'No accessible pre-built release' : `HTTP ${status}`)
     expect(readFileSync(join(app, 'old.txt'), 'utf8')).toBe('old code')
@@ -142,25 +149,27 @@ describe('sp-update staged deployment', () => {
     expect(log).not.toContain('archive/refs/heads')
   })
   it('rejects a release without an asset', () => {
-    const { result, app } = updater({ noAsset: true })
+    const { result, app } = updater({ noAsset: true, branch: 'dev' })
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toContain('No accessible pre-built release')
+    expect(result.stderr).toContain('Release has no sleepypod-core.tar.gz asset')
     expect(existsSync(join(app, 'old.txt'))).toBe(true)
   })
-  it('installs a feature branch from its asset on the shared branch-builds release', () => {
-    const { result, log } = updater({ assetName: 'sleepypod-core--fix-test.tar.gz' })
+  it('installs a feature branch from its build.yml artifact via nightly.link', () => {
+    const { result, app, log } = updater()
     expect(result.status, result.stderr).toBe(0)
-    expect(log).toContain('releases/tags/branch-builds')
-    expect(log).not.toContain('releases/tags/fix-test-latest')
+    expect(log).toContain('nightly.link/sleepypod/core/workflows/build/fix%2Ftest/sleepypod-core.zip')
+    expect(log).not.toContain('api.github.com')
+    expect(readFileSync(join(app, '.next/BUILD_ID'), 'utf8')).toBe('new-build')
   })
-  it('falls back to the legacy <slug>-latest release when branch-builds has no asset for the branch', () => {
-    const { result, log } = updater()
-    expect(result.status, result.stderr).toBe(0)
-    expect(log.indexOf('releases/tags/branch-builds')).toBeGreaterThanOrEqual(0)
-    expect(log.indexOf('releases/tags/branch-builds')).toBeLessThan(log.indexOf('releases/tags/fix-test-latest'))
-  })
-  it('rejects interrupted downloads and keeps the installed app', () => {
+  it('rejects a feature branch with no CI build and keeps the installed app', () => {
     const { result, app, log } = updater({ downloadFail: true })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('No accessible CI build')
+    expect(existsSync(join(app, 'old.txt'))).toBe(true)
+    expect(log).not.toContain('pnpm install')
+  })
+  it('rejects interrupted release downloads and keeps the installed app', () => {
+    const { result, app, log } = updater({ downloadFail: true, branch: 'dev' })
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain('download/extraction failed')
     expect(existsSync(join(app, 'old.txt'))).toBe(true)

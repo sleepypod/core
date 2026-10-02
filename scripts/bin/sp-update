@@ -282,29 +282,59 @@ open_update_wan() {
   fi
 }
 
+# nightly.link 404s on a raw `/` in the branch segment; percent-encode
+# everything outside the URL-unreserved set.
+urlencode() {
+  local s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~-]) out+="$c" ;;
+      *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 if [ -n "$ARCHIVE" ]; then
   echo "Using local build: $ARCHIVE"
   tar xzf "$ARCHIVE" -C "$WORK_DIR"
 else
   open_update_wan
-  # Candidates are "<release API URL> <asset name>", tried in order. Feature
-  # branches publish to the shared `branch-builds` prerelease; the per-branch
-  # `<slug>-latest` release is the pre-consolidation location, kept as a
-  # fallback for branches whose workflow predates it.
-  if [ "$BRANCH" = main ] || [ "$BRANCH" = latest ]; then
-    RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/latest sleepypod-core.tar.gz"
-  elif [ "$BRANCH" = dev ]; then
-    RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest sleepypod-core.tar.gz"
+  if [ "$BRANCH" != main ] && [ "$BRANCH" != latest ] && [ "$BRANCH" != dev ]; then
+    # Feature branches install the build.yml artifact for the branch's latest
+    # successful run. nightly.link serves it without GitHub auth, wrapped in a
+    # zip; build.yml's retention (30 days) bounds how old a branch can be.
+    ARTIFACT_URL="https://nightly.link/${GITHUB_REPO}/workflows/build/$(urlencode "$BRANCH")/sleepypod-core.zip"
+    echo "Downloading CI build for '$BRANCH': $ARTIFACT_URL"
+    if ! curl -fSL --connect-timeout 10 --max-time 600 -o "$WORK_DIR/artifact.zip" "$ARTIFACT_URL"; then
+      rm -f "$WORK_DIR/artifact.zip"
+      echo "Error: No accessible CI build for '$BRANCH' in '$GITHUB_REPO'." >&2
+      echo "Push the branch (with Actions enabled in the fork) and wait for Build & Package to pass." >&2
+      echo "Or, from a cloned repo on your computer: ./scripts/deploy POD_IP" >&2
+      echo "Installed files have not been replaced; source-only builds are not supported on the Pod." >&2
+      exit 1
+    fi
+    # Pods reliably ship python3 but not always unzip.
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -q -o "$WORK_DIR/artifact.zip" sleepypod-core.tar.gz -d "$WORK_DIR" || true
+    else
+      python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extract("sleepypod-core.tar.gz", sys.argv[2])' \
+        "$WORK_DIR/artifact.zip" "$WORK_DIR" || true
+    fi
+    rm -f "$WORK_DIR/artifact.zip"
+    if [ ! -s "$WORK_DIR/sleepypod-core.tar.gz" ] || ! tar xzf "$WORK_DIR/sleepypod-core.tar.gz" -C "$WORK_DIR"; then
+      echo "Error: CI build download/extraction failed. Installed files have not been replaced; retry the update." >&2
+      exit 1
+    fi
+    rm -f "$WORK_DIR/sleepypod-core.tar.gz"
   else
-    BRANCH_SLUG="${BRANCH//\//-}"
-    # Same key as branch-release.yml: anything outside [A-Za-z0-9._-] → `-`.
-    BRANCH_KEY="${BRANCH//[^A-Za-z0-9._-]/-}"
-    RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/branch-builds sleepypod-core--${BRANCH_KEY}.tar.gz
-https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${BRANCH_SLUG}-latest sleepypod-core.tar.gz"
-  fi
-  RELEASE_URL=""
-  while read -r RELEASE_API RELEASE_ASSET; do
-    echo "Checking for pre-built release: $RELEASE_API ($RELEASE_ASSET)"
+    if [ "$BRANCH" = dev ]; then
+      RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
+    else
+      RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    fi
+    echo "Checking for pre-built release: $RELEASE_API"
     if ! HTTP_STATUS=$(curl -sS -L --connect-timeout 10 --max-time 60 \
         -o "$WORK_DIR/release.json" -w '%{http_code}' "$RELEASE_API"); then
       echo "Error: Could not contact GitHub. Check the Pod's network and retry." >&2
@@ -312,7 +342,11 @@ https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${BRANCH_SLUG}-latest 
     fi
     case "$HTTP_STATUS" in
       200) ;;
-      404) continue ;;
+      404)
+        echo "Error: No accessible pre-built release for '$BRANCH' in '$GITHUB_REPO'." >&2
+        echo "Or, from a cloned repo on your computer: ./scripts/deploy POD_IP" >&2
+        echo "Installed files have not been replaced; source-only builds are not supported on the Pod." >&2
+        exit 1 ;;
       *)
         echo "Error: GitHub release lookup returned HTTP $HTTP_STATUS (check API access/rate limits)." >&2
         exit 1 ;;
@@ -320,39 +354,32 @@ https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${BRANCH_SLUG}-latest 
     RELEASE_URL=$(node -e '
       const fs = require("fs");
       const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-      const asset = release.assets?.find(a => a.name === process.argv[2]);
+      const asset = release.assets?.find(a => a.name === "sleepypod-core.tar.gz");
       if (asset && /^https:\/\//.test(asset.browser_download_url)) process.stdout.write(asset.browser_download_url);
-    ' "$WORK_DIR/release.json" "$RELEASE_ASSET")
-    [ -n "$RELEASE_URL" ] && break
-  done <<EOF
-$RELEASE_CANDIDATES
-EOF
-  if [ -z "$RELEASE_URL" ]; then
+    ' "$WORK_DIR/release.json")
+    # Semantic-release tags (vX.Y.Z) are only known here, after the tarball was
+    # built, so record them in .git-info for the UI. Rolling *-latest tags are not versions.
+    RELEASE_VERSION=$(node -e '
+      const tag = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).tag_name ?? "";
+      if (/^v\d+\.\d+\.\d+/.test(tag)) process.stdout.write(tag);
+    ' "$WORK_DIR/release.json" 2>/dev/null || true)
     rm -f "$WORK_DIR/release.json"
-    echo "Error: No accessible pre-built release for '$BRANCH' in '$GITHUB_REPO'." >&2
-    echo "Enable GitHub Actions in the fork and push the branch to publish its Branch Release." >&2
-    echo "Or, from a cloned repo on your computer: ./scripts/deploy POD_IP" >&2
-    echo "Installed files have not been replaced; source-only builds are not supported on the Pod." >&2
-    exit 1
-  fi
-  # Semantic-release tags (vX.Y.Z) are only known here, after the tarball was
-  # built, so record them in .git-info for the UI. Rolling *-latest tags are not versions.
-  RELEASE_VERSION=$(node -e '
-    const tag = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).tag_name ?? "";
-    if (/^v\d+\.\d+\.\d+/.test(tag)) process.stdout.write(tag);
-  ' "$WORK_DIR/release.json" 2>/dev/null || true)
-  rm -f "$WORK_DIR/release.json"
-  echo "Downloading pre-built release..."
-  if ! curl -fSL --connect-timeout 10 --max-time 600 "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
-    echo "Error: Release download/extraction failed. Installed files have not been replaced; retry the update." >&2
-    exit 1
-  fi
-  if [ -n "$RELEASE_VERSION" ] && [ -s "$WORK_DIR/.git-info" ]; then
-    node -e '
-      const fs = require("fs");
-      const info = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-      fs.writeFileSync(process.argv[1], JSON.stringify({ ...info, version: process.argv[2] }));
-    ' "$WORK_DIR/.git-info" "$RELEASE_VERSION" 2>/dev/null || true
+    if [ -z "$RELEASE_URL" ]; then
+      echo "Error: Release has no sleepypod-core.tar.gz asset. Build/publish the release, or use ./scripts/deploy POD_IP from your computer." >&2
+      exit 1
+    fi
+    echo "Downloading pre-built release..."
+    if ! curl -fSL --connect-timeout 10 --max-time 600 "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
+      echo "Error: Release download/extraction failed. Installed files have not been replaced; retry the update." >&2
+      exit 1
+    fi
+    if [ -n "$RELEASE_VERSION" ] && [ -s "$WORK_DIR/.git-info" ]; then
+      node -e '
+        const fs = require("fs");
+        const info = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        fs.writeFileSync(process.argv[1], JSON.stringify({ ...info, version: process.argv[2] }));
+      ' "$WORK_DIR/.git-info" "$RELEASE_VERSION" 2>/dev/null || true
+    fi
   fi
 fi
 

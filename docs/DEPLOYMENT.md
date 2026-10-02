@@ -98,9 +98,10 @@ a fork). With neither a selector nor a branch, the current checkout is built.
 
 This works even if the fork's branch predates the new CLI: the local clone's
 updater is uploaded alongside the build. No fork release is required.
-Alternatively, enable Actions in the fork and push the branch so its Branch
-Release workflow publishes `sleepypod-core--<branch>.tar.gz` (`/` and other characters outside `A-Za-z0-9._-` become `-`)
-on the fork's shared `branch-builds` prerelease.
+Alternatively, enable Actions in the fork and push the branch. Once its
+Build & Package run passes, `sp-update` downloads that run's
+`sleepypod-core` artifact through [nightly.link](https://nightly.link)
+(artifacts are kept for 30 days).
 Then run on the Pod:
 
 ```bash
@@ -129,7 +130,7 @@ The pod self-updates by downloading from GitHub. Triggered via the `system.trigg
 ```bash
 # From SSH on the pod:
 sp-update              # latest release (pre-built)
-sp-update feat/alarms  # pre-built sleepypod-core--feat-alarms.tar.gz from branch-builds
+sp-update feat/alarms  # Build & Package artifact for feat/alarms, via nightly.link
 sp-update --archive /persistent/sleepypod-core.tar.gz  # uploaded pre-built archive
 
 # From web UI or iOS app (tRPC):
