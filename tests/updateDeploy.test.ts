@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, assetName?: string } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -108,7 +108,7 @@ exec '${tar}' "$@"
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
       TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive,
-      TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
+      TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: options.assetName ?? 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
   })
   return { result, app, dir, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
 }
@@ -143,8 +143,21 @@ describe('sp-update staged deployment', () => {
   })
   it('rejects a release without an asset', () => {
     const { result, app } = updater({ noAsset: true })
-    expect(result.stderr).toContain('Release has no sleepypod-core.tar.gz asset')
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('No accessible pre-built release')
     expect(existsSync(join(app, 'old.txt'))).toBe(true)
+  })
+  it('installs a feature branch from its asset on the shared branch-builds release', () => {
+    const { result, log } = updater({ assetName: 'sleepypod-core--fix-test.tar.gz' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(log).toContain('releases/tags/branch-builds')
+    expect(log).not.toContain('releases/tags/fix-test-latest')
+  })
+  it('falls back to the legacy <slug>-latest release when branch-builds has no asset for the branch', () => {
+    const { result, log } = updater()
+    expect(result.status, result.stderr).toBe(0)
+    expect(log.indexOf('releases/tags/branch-builds')).toBeGreaterThanOrEqual(0)
+    expect(log.indexOf('releases/tags/branch-builds')).toBeLessThan(log.indexOf('releases/tags/fix-test-latest'))
   })
   it('rejects interrupted downloads and keeps the installed app', () => {
     const { result, app, log } = updater({ downloadFail: true })

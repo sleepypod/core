@@ -297,7 +297,9 @@ else
     RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest sleepypod-core.tar.gz"
   else
     BRANCH_SLUG="${BRANCH//\//-}"
-    RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/branch-builds sleepypod-core--${BRANCH_SLUG}.tar.gz
+    # Same key as branch-release.yml: anything outside [A-Za-z0-9._-] → `-`.
+    BRANCH_KEY="${BRANCH//[^A-Za-z0-9._-]/-}"
+    RELEASE_CANDIDATES="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/branch-builds sleepypod-core--${BRANCH_KEY}.tar.gz
 https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${BRANCH_SLUG}-latest sleepypod-core.tar.gz"
   fi
   RELEASE_URL=""

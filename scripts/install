@@ -1088,7 +1088,7 @@ else
   #   main / latest  → releases/latest          (semantic-release vX.Y.Z)
   #   dev            → releases/tags/dev-latest (rolling, dev-release.yml)
   #   <other>        → releases/tags/branch-builds, asset
-  #                    sleepypod-core--<slug>.tar.gz (branch-release.yml),
+  #                    sleepypod-core--<key>.tar.gz (branch-release.yml),
   #                    then the legacy releases/tags/<slug>-latest
   # `feat/foo` slugs to `feat-foo` to match branch-release.yml.
   RELEASE_ASSET="sleepypod-core.tar.gz"
@@ -1101,7 +1101,8 @@ else
   else
     RELEASE_SLUG="${DOWNLOAD_BRANCH//\//-}"
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/branch-builds"
-    RELEASE_ASSET="sleepypod-core--${RELEASE_SLUG}.tar.gz"
+    # Same key as branch-release.yml: anything outside [A-Za-z0-9._-] → `-`.
+    RELEASE_ASSET="sleepypod-core--${DOWNLOAD_BRANCH//[^A-Za-z0-9._-]/-}.tar.gz"
     LEGACY_RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_SLUG}-latest"
   fi
 

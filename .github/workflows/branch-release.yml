@@ -34,7 +34,9 @@ jobs:
         run: |
           SLUG="${GITHUB_REF_NAME//\//-}"
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
-          echo "asset=sleepypod-core--${SLUG}.tar.gz" >> "$GITHUB_OUTPUT"
+          # Asset key: every character outside [A-Za-z0-9._-] becomes `-`, so `#`
+          # (gh release upload's label separator) and `/` never reach the filename.
+          echo "asset=sleepypod-core--${GITHUB_REF_NAME//[^A-Za-z0-9._-]/-}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -76,15 +78,15 @@ jobs:
       - name: Publish branch build
         # Every branch shares one `branch-builds` prerelease and gets its own
         # asset, so feature branches don't each add an entry to the Releases
-        # page. sp-update and the installer resolve the asset by slug.
+        # page. sp-update and the installer resolve the asset by the same key.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view branch-builds >/dev/null 2>&1 \
             || gh release create branch-builds \
-                 --target dev \
+                 --target "${{ github.sha }}" \
                  --title "Branch builds" \
-                 --notes "Pre-built tarballs for feature branches, one \`sleepypod-core--<branch-slug>.tar.gz\` asset per branch (\`/\` → \`-\`). Install one with \`sp-update <branch>\`. Assets are replaced on every push and removed when the branch is deleted." \
+                 --notes "Pre-built tarballs for feature branches, one \`sleepypod-core--<branch-slug>.tar.gz\` asset per branch (characters outside \`A-Za-z0-9._-\` → \`-\`). Install one with \`sp-update <branch>\`. Assets are replaced on every push and removed when the branch is deleted." \
                  --prerelease \
             || gh release view branch-builds >/dev/null
           gh release upload branch-builds "${{ steps.slug.outputs.asset }}" --clobber

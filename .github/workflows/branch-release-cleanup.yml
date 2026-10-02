@@ -21,7 +21,7 @@ jobs:
           REF="${{ github.event.ref }}"
           SLUG="${REF//\//-}"
           echo "tag=${SLUG}-latest" >> "$GITHUB_OUTPUT"
-          echo "asset=sleepypod-core--${SLUG}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "asset=sleepypod-core--${REF//[^A-Za-z0-9._-]/-}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Drop branch build
         env:

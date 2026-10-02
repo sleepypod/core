@@ -99,7 +99,7 @@ a fork). With neither a selector nor a branch, the current checkout is built.
 This works even if the fork's branch predates the new CLI: the local clone's
 updater is uploaded alongside the build. No fork release is required.
 Alternatively, enable Actions in the fork and push the branch so its Branch
-Release workflow publishes `sleepypod-core--<branch-with-slashes-replaced>.tar.gz`
+Release workflow publishes `sleepypod-core--<branch>.tar.gz` (`/` and other characters outside `A-Za-z0-9._-` become `-`)
 on the fork's shared `branch-builds` prerelease.
 Then run on the Pod:
 
