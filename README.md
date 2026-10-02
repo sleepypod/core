@@ -14,6 +14,8 @@ Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Li
 
 **Documentation lives at [sleepypod.github.io](https://sleepypod.github.io/).** This README covers installing and working on the code; the docs site covers everything else.
 
+**No Pod? [Try the live demo](https://sleepypod-demo.vercel.app).** It runs the real web UI against simulated Pod data in your browser, so you can change temperatures, edit schedules, and browse sleep history without hardware.
+
 <p align="center">
   <a href="https://sleepypod.github.io/core/"><img src="docs/images/core-temperature.png" width="1000" alt="sleepypod core web UI with per-side temperature controls, sidebar navigation, and the schedule and sleep timeline" /></a>
 </p>
@@ -29,7 +31,7 @@ The web UI brings temperature, schedules, Autopilot, sleep, and system diagnosti
 <sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/d3b4e86e0153944fba3c92fe96f04aca34db7165/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
 
 <p align="center">
-  <a href="https://sleepypod.github.io/getting-started/">Get started</a> · <a href="https://sleepypod.github.io/core/">User guide</a> · <a href="https://sleepypod.github.io/developers/">Developer docs</a> · <a href="https://sleepypod.github.io/troubleshooting/">Troubleshooting</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a>
+  <a href="https://sleepypod-demo.vercel.app">Live demo</a> · <a href="https://sleepypod.github.io/getting-started/">Get started</a> · <a href="https://sleepypod.github.io/core/">User guide</a> · <a href="https://sleepypod.github.io/developers/">Developer docs</a> · <a href="https://sleepypod.github.io/troubleshooting/">Troubleshooting</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a>
 </p>
 
 ---
