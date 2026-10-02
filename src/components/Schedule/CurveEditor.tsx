@@ -1,17 +1,22 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Snowflake, Scale, Flame, X, Minus, Moon, Sun, Loader2, Sparkles } from 'lucide-react'
-import clsx from 'clsx'
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Check, ChevronLeft, Flame, Loader2, Plus, Scale, Snowflake, Sparkles } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Button, Card, DayPicker, InlineError, PageHeader, SectionLabel, Stepper } from '@/src/components/ds'
 import { AICurveWizard } from './AICurveWizard'
 import { CurveChart } from './CurveChart'
-import { SetPointCard } from './SetPointCard'
+import { SetPointCard, type EditorSetPoint } from './SetPointCard'
 import { SetPointEditor } from './SetPointEditor'
 import { TimeInput } from './TimeInput'
-import { DAYS, type DayOfWeek } from './DaySelector'
+import { ConfirmDialog } from './ConfirmDialog'
+import { DAY_PICKER_LABELS, DAY_SHORT, daysToIndexes, formatDayRange, indexesToDays } from './scheduleFormat'
 import { useSchedule } from '@/src/hooks/useSchedule'
-import type { SchedulePhase } from '@/src/hooks/useSchedules'
-import type { CurvePoint, CoolingIntensity } from '@/src/lib/sleepCurve/types'
+import { useSideNames } from '@/src/hooks/useSideNames'
+import { useSide } from '@/src/providers/SideProvider'
+import type { DayOfWeek } from '@/src/lib/scheduleTime'
+import type { CoolingIntensity } from '@/src/lib/sleepCurve/types'
 import {
   generateSleepCurve,
   curveToScheduleTemperatures,
@@ -20,10 +25,9 @@ import {
 import { rebaseSetPoints } from '@/src/lib/sleepCurve/rebase'
 import { sortChronological } from '@/src/lib/scheduleGrouping'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import { displayToSetpointF, formatSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
+import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 
 interface CurveEditorProps {
-  open: boolean
   onClose: () => void
   /** When provided, editor opens in edit mode for the existing curve. */
   initialDays?: DayOfWeek[]
@@ -31,16 +35,10 @@ interface CurveEditorProps {
   initialSetPoints?: Array<{ time: string, temperature: number }>
 }
 
-interface LocalSetPoint {
-  localId: number
-  time: string
-  temperature: number
-}
-
 interface PresetDef {
   id: CoolingIntensity
   label: string
-  icon: typeof Snowflake
+  icon: LucideIcon
 }
 
 const PRESETS: PresetDef[] = [
@@ -56,79 +54,59 @@ const DEFAULT_MAX_TEMP = 86
 const TEMP_FLOOR = 55
 const TEMP_CEIL = 110
 
-function toPhase(point: LocalSetPoint): SchedulePhase {
-  return {
-    id: point.localId,
-    name: '',
-    icon: 'moon',
-    time: point.time,
-    temperature: point.temperature,
-    enabled: true,
-  }
+const clampTemp = (t: number) => Math.round(Math.max(TEMP_FLOOR, Math.min(TEMP_CEIL, t)))
+
+const desktopQuery = '(min-width: 900px)'
+function subscribeDesktop(cb: () => void) {
+  const mql = window.matchMedia?.(desktopQuery)
+  mql?.addEventListener('change', cb)
+  return () => mql?.removeEventListener('change', cb)
 }
-
-function buildCurveData(points: LocalSetPoint[]) {
-  if (points.length === 0) return null
-  const sorted = [...points].sort((a, b) => a.time.localeCompare(b.time))
-  const temps = sorted.map(p => p.temperature)
-  const min = Math.min(...temps)
-  const max = Math.max(...temps)
-  const btMin = timeStringToMinutes(sorted[0].time)
-
-  const curvePoints: CurvePoint[] = sorted.map((p, i) => {
-    let tMin = timeStringToMinutes(p.time) - btMin
-    if (tMin < -120) tMin += 24 * 60
-    const frac = sorted.length > 1 ? i / (sorted.length - 1) : 0
-    const phase
-      = frac < 0.1
-        ? ('warmUp' as const)
-        : frac < 0.25
-          ? ('coolDown' as const)
-          : frac < 0.55
-            ? ('deepSleep' as const)
-            : frac < 0.75
-              ? ('maintain' as const)
-              : frac < 0.9
-                ? ('preWake' as const)
-                : ('wake' as const)
-    return { minutesFromBedtime: tMin, tempOffset: p.temperature - 80, phase }
-  }).sort((a, b) => a.minutesFromBedtime - b.minutesFromBedtime)
-
-  return { points: curvePoints, bedtimeMinutes: btMin, minTempF: min, maxTempF: max }
+function useIsDesktop() {
+  return useSyncExternalStore(
+    subscribeDesktop,
+    () => window.matchMedia?.(desktopQuery).matches ?? true,
+    () => true,
+  )
 }
 
 /**
- * Full-screen editor for creating or editing a curve.
+ * Curve editor subpage (in-page, replaces the schedule list while open).
+ * Desktop: 300px settings column + chart and set-point rows. Phone: stacked.
  * Local state until "Save" — then writes via `useSchedule.saveCurve` (one batch).
  */
 export function CurveEditor({
-  open,
   onClose,
   initialDays = [],
   initialSetPoints = [],
 }: CurveEditorProps) {
-  const { saveCurve, detectCurveConflicts, isMutating } = useSchedule()
+  const { saveCurve, detectCurveConflicts, isMutating, allSchedules } = useSchedule()
   const { unit } = useTemperatureUnit()
+  const { selectedSide } = useSide()
+  const { leftName, rightName } = useSideNames()
+  const isDesktop = useIsDesktop()
 
   const isEdit = initialDays.length > 0
-  const initialSorted = useMemo(() => sortChronological(initialSetPoints), [initialSetPoints])
-  const initialBedtime = initialSorted[0]?.time ?? DEFAULT_BEDTIME
-  const initialWake = initialSorted[initialSorted.length - 1]?.time ?? DEFAULT_WAKE
-  const initialMinTemp = initialSetPoints.length > 0
-    ? Math.min(...initialSetPoints.map(p => p.temperature))
-    : DEFAULT_MIN_TEMP
-  const initialMaxTemp = initialSetPoints.length > 0
-    ? Math.max(...initialSetPoints.map(p => p.temperature))
-    : DEFAULT_MAX_TEMP
+  const [initial] = useState(() => {
+    const sorted = sortChronological(initialSetPoints)
+    const temps = initialSetPoints.map(p => p.temperature)
+    return {
+      bedtime: sorted[0]?.time ?? DEFAULT_BEDTIME,
+      wake: sorted[sorted.length - 1]?.time ?? DEFAULT_WAKE,
+      min: temps.length > 0 ? Math.min(...temps) : DEFAULT_MIN_TEMP,
+      max: temps.length > 0 ? Math.max(...temps) : DEFAULT_MAX_TEMP,
+    }
+  })
 
-  const [days, setDays] = useState<Set<DayOfWeek>>(new Set(initialDays))
-  const [points, setPoints] = useState<LocalSetPoint[]>(() =>
-    initialSetPoints.map((p, i) => ({ localId: -(i + 1), time: p.time, temperature: p.temperature })),
+  const [days, setDays] = useState<Set<DayOfWeek>>(() => new Set(initialDays))
+  const [points, setPoints] = useState<EditorSetPoint[]>(() =>
+    initialSetPoints.map((p, i) => ({ id: -(i + 1), time: p.time, temperature: p.temperature })),
   )
-  const [bedtime, setBedtime] = useState(initialBedtime)
-  const [wakeTime, setWakeTime] = useState(initialWake)
-  const [minTemp, setMinTemp] = useState(initialMinTemp)
-  const [maxTemp, setMaxTemp] = useState(initialMaxTemp)
+  const [bedtime, setBedtime] = useState(initial.bedtime)
+  const [wakeTime, setWakeTime] = useState(initial.wake)
+  const [minTemp, setMinTemp] = useState(initial.min)
+  const [maxTemp, setMaxTemp] = useState(initial.max)
+  const [activePreset, setActivePreset] = useState<CoolingIntensity | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [pendingConflict, setPendingConflict] = useState<DayOfWeek[] | null>(null)
@@ -136,121 +114,62 @@ export function CurveEditor({
   const [aiWizardOpen, setAIWizardOpen] = useState(false)
   const idCounter = useRef(-1000)
 
-  // Reset state when opening (avoid stale state from previous open)
-  useEffect(() => {
-    if (!open) return
-    /* eslint-disable-next-line react-hooks/set-state-in-effect */
-    setDays(new Set(initialDays))
-
-    setPoints(initialSetPoints.map((p, i) => ({ localId: -(i + 1), time: p.time, temperature: p.temperature })))
-
-    setBedtime(initialBedtime)
-
-    setWakeTime(initialWake)
-
-    setMinTemp(initialMinTemp)
-
-    setMaxTemp(initialMaxTemp)
-
-    setEditorOpen(false)
-
-    setEditingId(null)
-
-    setPendingConflict(null)
-
-    setSaveError(null)
-
-    setAIWizardOpen(false)
-  }, [open, initialDays, initialSetPoints, initialBedtime, initialWake, initialMinTemp, initialMaxTemp])
-
-  // Lock body scroll when open
-  useEffect(() => {
-    if (!open) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [open])
-
-  const curveData = useMemo(() => buildCurveData(points), [points])
-
-  // Phases sorted chronologically (handles overnight wrap), with auto-on/off
-  // labels for the first and last entries so the user knows which point drives
-  // the Pod's auto power-on and auto power-off times.
-  const orderedPhases = useMemo(() => {
-    const sorted = sortChronological(points.map(p => ({ time: p.time, temperature: p.temperature })))
+  // Rows in chronological order (overnight wrap aware). The first and last
+  // entries drive the Pod's auto power-on and power-off times.
+  const orderedPoints = useMemo(() => {
+    const sorted = sortChronological(points)
+    const used = new Set<number>()
     return sorted.map((sp) => {
-      const original = points.find(p => p.time === sp.time && p.temperature === sp.temperature)
-      return original
-    }).filter((p): p is LocalSetPoint => p !== undefined).map(p => toPhase(p))
+      const match = points.find(p => !used.has(p.id) && p.time === sp.time && p.temperature === sp.temperature)
+      if (match) used.add(match.id)
+      return match
+    }).filter((p): p is EditorSetPoint => p !== undefined)
   }, [points])
 
-  const autoOnId = orderedPhases[0]?.id ?? null
-  const autoOffId = orderedPhases.length > 1 ? orderedPhases[orderedPhases.length - 1].id : null
+  const autoOnId = orderedPoints[0]?.id ?? null
+  const autoOffId = orderedPoints.length > 1 ? orderedPoints[orderedPoints.length - 1].id : null
 
-  const toggleDay = useCallback((day: DayOfWeek) => {
-    setDays((prev) => {
-      const next = new Set(prev)
-      if (next.has(day)) next.delete(day)
-      else next.add(day)
-      return next
-    })
+  // Days outside this curve that another curve already schedules.
+  const otherCurveDays = useMemo(() => {
+    const scheduled = new Set((allSchedules?.temperature ?? []).filter(t => t.enabled).map(t => t.dayOfWeek))
+    const original = new Set(initialDays)
+    return [...scheduled].filter(d => !original.has(d) && !days.has(d))
+  }, [allSchedules, initialDays, days])
+
+  const editPoints = useCallback((fn: (prev: EditorSetPoint[]) => EditorSetPoint[]) => {
+    setPoints(fn)
+    setActivePreset(null)
   }, [])
 
-  const handleAddPoint = useCallback(() => {
-    setEditingId(null)
-    setEditorOpen(true)
-  }, [])
-
-  const handleEditPoint = useCallback((phase: SchedulePhase) => {
-    setEditingId(phase.id)
-    setEditorOpen(true)
-  }, [])
-
-  const handleAdjustTemp = useCallback((id: number, delta: number) => {
-    setPoints(prev => prev.map(p =>
-      p.localId === id
-        ? { ...p, temperature: Math.max(55, Math.min(110, p.temperature + delta)) }
-        : p,
-    ))
-  }, [])
+  const handleSetTemp = useCallback((id: number, temperature: number) => {
+    editPoints(prev => prev.map(p => (p.id === id ? { ...p, temperature } : p)))
+  }, [editPoints])
 
   const handleDeletePoint = useCallback((id: number) => {
-    setPoints(prev => prev.filter(p => p.localId !== id))
-  }, [])
+    editPoints(prev => prev.filter(p => p.id !== id))
+  }, [editPoints])
 
   const handleEditorCreate = useCallback((time: string, temperature: number) => {
-    const newId = idCounter.current--
-    setPoints(prev => [...prev, { localId: newId, time, temperature }])
-  }, [])
+    const id = idCounter.current--
+    editPoints(prev => [...prev, { id, time, temperature }])
+  }, [editPoints])
 
-  const handleEditorUpdate = useCallback(
-    (id: number, updates: { time?: string, temperature?: number }) => {
-      setPoints(prev => prev.map(p =>
-        p.localId === id
-          ? { ...p, ...updates }
-          : p,
-      ))
-    },
-    [],
-  )
+  const handleEditorUpdate = useCallback((id: number, updates: { time?: string, temperature?: number }) => {
+    editPoints(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)))
+  }, [editPoints])
 
-  const handleEditorDelete = useCallback((id: number) => {
-    handleDeletePoint(id)
-  }, [handleDeletePoint])
+  const handleChartChange = useCallback((item: EditorSetPoint, next: { time: string, temperature: number }) => {
+    editPoints(prev => prev.map(p => (p.id === item.id ? { ...p, ...next } : p)))
+  }, [editPoints])
 
   const handleApplyAICurve = useCallback((config: {
     setPoints: Array<{ time: string, temperature: number }>
     bedtime: string
     wakeTime: string
   }) => {
-    const next: LocalSetPoint[] = config.setPoints.map((sp, i) => ({
-      localId: -(i + 1),
-      time: sp.time,
-      temperature: Math.round(Math.max(TEMP_FLOOR, Math.min(TEMP_CEIL, sp.temperature))),
-    }))
+    const next = config.setPoints.map((sp, i) => ({ id: -(i + 1), time: sp.time, temperature: clampTemp(sp.temperature) }))
     setPoints(next)
+    setActivePreset(null)
     setBedtime(config.bedtime)
     setWakeTime(config.wakeTime)
     const temps = next.map(p => p.temperature)
@@ -286,12 +205,12 @@ export function CurveEditor({
       maxTempF: maxTemp,
     })
     const scheduleTemps = curveToScheduleTemperatures(curvePoints, bedtimeMinutes)
-    const next: LocalSetPoint[] = Object.entries(scheduleTemps).map(([time, temperature], i) => ({
-      localId: -(i + 1),
+    setPoints(Object.entries(scheduleTemps).map(([time, temperature], i) => ({
+      id: -(i + 1),
       time,
-      temperature: Math.round(Math.max(TEMP_FLOOR, Math.min(TEMP_CEIL, temperature))),
-    }))
-    setPoints(next)
+      temperature: clampTemp(temperature),
+    })))
+    setActivePreset(preset.id)
   }, [bedtime, wakeTime, minTemp, maxTemp])
 
   const performSave = useCallback(async (force = false) => {
@@ -323,206 +242,217 @@ export function CurveEditor({
       onClose()
     }
     catch (err) {
+      setPendingConflict(null)
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
   }, [days, points, initialDays, detectCurveConflicts, saveCurve, onClose])
 
-  if (!open) return null
+  const editingPoint = editingId !== null ? points.find(p => p.id === editingId) ?? null : null
+  const title = isEdit ? 'Edit curve' : 'New curve'
+  const sideLabel = selectedSide === 'both' ? 'Both sides' : selectedSide === 'left' ? leftName : rightName
+  const daysLabel = formatDayRange(days)
+  const canSave = !isMutating && days.size > 0 && points.length > 0
+  const toDisplay = (f: number) => Math.round(setpointFToDisplay(f, unit) ?? f)
+  const toF = (v: number) => clampTemp(displayToSetpointF(v, unit) ?? v)
+  const saveLabel = isMutating ? 'Saving…' : 'Save curve'
 
-  const editingPhase = editingId !== null ? orderedPhases.find(p => p.id === editingId) ?? null : null
+  // Phone: cards stack in their own order (days, chart, times, set points,
+  // range, preset). Desktop: the wrappers become the two grid columns and the
+  // chart + set points merge into one card.
+  const innerCard = 'min-[900px]:rounded-none min-[900px]:border-0 min-[900px]:bg-transparent min-[900px]:p-0'
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+    <div className="flex flex-col gap-3.5 min-[900px]:gap-[18px]">
+      {/* Phone top bar */}
+      <div className="relative flex min-h-[30px] items-center min-[900px]:hidden">
         <button
+          type="button"
           onClick={onClose}
-          className="flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 active:bg-zinc-800"
-          aria-label="Cancel"
+          className="relative z-[1] -ml-1.5 flex cursor-pointer items-center gap-0.5 border-0 bg-transparent p-0 text-[15px] text-fg-2"
         >
-          <X size={18} />
+          <ChevronLeft size={20} />
+          Cancel
         </button>
-        <span className="text-sm font-medium text-white">
-          {isEdit ? 'Edit Curve' : 'New Curve'}
-        </span>
+        <h1 className="pointer-events-none absolute inset-x-0 text-center text-[17px] font-medium">{title}</h1>
         <button
+          type="button"
           onClick={() => void performSave()}
-          disabled={isMutating || days.size === 0 || points.length === 0}
-          className="flex items-center gap-1.5 rounded-full bg-sky-500 px-4 py-1.5 text-xs font-semibold text-white active:bg-sky-600 disabled:opacity-60"
+          disabled={!canSave}
+          className="relative z-[1] ml-auto cursor-pointer border-0 bg-transparent p-0 text-[15px] font-medium text-fg disabled:cursor-default disabled:opacity-45"
         >
-          {isMutating && <Loader2 size={12} className="animate-spin" />}
           {isMutating ? 'Saving…' : 'Save'}
         </button>
       </div>
 
-      {/* Day picker */}
-      <div className="border-b border-zinc-800 px-4 pt-3 pb-5">
-        <p className="mb-2 text-[11px] uppercase tracking-wider text-zinc-500">Days</p>
-        <div className="flex items-center justify-between gap-1">
-          {DAYS.map(({ key, short, label }) => {
-            const isOn = days.has(key)
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => toggleDay(key)}
-                aria-pressed={isOn}
-                aria-label={label}
-                className={clsx(
-                  'flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold transition-colors',
-                  isOn ? 'bg-sky-500 text-white' : 'bg-zinc-900 text-zinc-500 active:bg-zinc-800',
-                )}
-              >
-                {short}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Bedtime / Wake — drives preset generation and Pod auto on/off */}
-      <div className="border-b border-zinc-800 px-4 py-3">
-        <p className="mb-2 text-[11px] uppercase tracking-wider text-zinc-500">
-          Sleep window
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <TimeInput
-            label="Bedtime"
-            value={bedtime}
-            onChange={handleBedtimeChange}
-            icon={<Moon size={12} />}
-            accentClass="text-purple-400"
-          />
-          <TimeInput
-            label="Wake up"
-            value={wakeTime}
-            onChange={handleWakeTimeChange}
-            icon={<Sun size={12} />}
-            accentClass="text-amber-400"
-          />
-        </div>
-      </div>
-
-      {/* Min / Max temp — drives preset generation */}
-      <div className="border-b border-zinc-800 px-4 py-3">
-        <p className="mb-2 text-[11px] uppercase tracking-wider text-zinc-500">
-          Temperature range
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <TempStepper
-            label="Coolest"
-            value={minTemp}
-            onChange={v => setMinTemp(Math.min(v, maxTemp - 2))}
-            unit={unit}
-            icon={<Snowflake size={12} />}
-            accentClass="text-blue-400"
-          />
-          <TempStepper
-            label="Warmest"
-            value={maxTemp}
-            onChange={v => setMaxTemp(Math.max(v, minTemp + 2))}
-            unit={unit}
-            icon={<Flame size={12} />}
-            accentClass="text-orange-400"
-          />
-        </div>
-      </div>
-
-      {/* Chart preview */}
-      {curveData && (
-        <div className="shrink-0 border-b border-zinc-800 bg-zinc-900/40 px-3 pt-4 pb-3 mt-2">
-          <CurveChart
-            points={curveData.points}
-            bedtimeMinutes={curveData.bedtimeMinutes}
-            minTempF={curveData.minTempF}
-            maxTempF={curveData.maxTempF}
-            compact
-          />
-        </div>
-      )}
-
-      {/* Set points list */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 pb-32">
-        {points.length === 0
-          ? (
-              <div className="space-y-3 py-4">
-                <p className="text-center text-xs text-zinc-500">
-                  Start from a preset or add set points manually
-                </p>
-                <div className="grid grid-cols-4 gap-2">
-                  {PRESETS.map((preset) => {
-                    const Icon = preset.icon
-                    return (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => handleApplyPreset(preset)}
-                        className="flex flex-col items-center gap-1 rounded-xl border border-zinc-800 bg-zinc-900 px-2 py-3 text-zinc-400 active:scale-[0.97]"
-                      >
-                        <Icon size={16} />
-                        <span className="text-[11px] font-semibold">{preset.label}</span>
-                      </button>
-                    )
-                  })}
-                  <button
-                    type="button"
-                    onClick={() => setAIWizardOpen(true)}
-                    className="flex flex-col items-center gap-1 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-2 py-3 text-cyan-400 active:scale-[0.97]"
-                  >
-                    <Sparkles size={16} />
-                    <span className="text-[11px] font-semibold">Custom AI</span>
-                  </button>
-                </div>
-              </div>
-            )
-          : (
-              <div className="space-y-1.5">
-                {orderedPhases.map(phase => (
-                  <SetPointCard
-                    key={phase.id}
-                    phase={phase}
-                    onAdjustTemp={handleAdjustTemp}
-                    onDelete={handleDeletePoint}
-                    onTapCard={handleEditPoint}
-                    disabled={isMutating}
-                    autoLabel={
-                      phase.id === autoOnId
-                        ? 'on'
-                        : phase.id === autoOffId
-                          ? 'off'
-                          : null
-                    }
-                  />
-                ))}
-              </div>
-            )}
-
-        {saveError && (
-          <p className="mt-3 text-center text-xs text-red-400">{saveError}</p>
+      <PageHeader
+        className="hidden min-[900px]:flex"
+        back="Schedule"
+        onBack={onClose}
+        title={title}
+        middle={(
+          <span className="font-mono text-xs text-fg-2">
+            {daysLabel ? `${sideLabel} · ${daysLabel}` : sideLabel}
+          </span>
         )}
+        right={(
+          <>
+            <Button onClick={onClose}>Cancel</Button>
+            <Button variant="primary" onClick={() => void performSave()} disabled={!canSave}>
+              {isMutating && <Loader2 size={14} className="animate-spin" />}
+              {saveLabel}
+            </Button>
+          </>
+        )}
+      />
+
+      <div className="flex flex-col gap-3 min-[900px]:grid min-[900px]:grid-cols-[300px_minmax(0,1fr)] min-[900px]:items-start min-[900px]:gap-3.5">
+        <div className="contents min-[900px]:flex min-[900px]:min-w-0 min-[900px]:flex-col min-[900px]:gap-3">
+          <Card className="order-1 min-[900px]:order-none">
+            <SectionLabel>Days</SectionLabel>
+            <DayPicker
+              value={daysToIndexes(days)}
+              onChange={v => setDays(new Set(indexesToDays(v)))}
+              labels={DAY_PICKER_LABELS}
+            />
+            {otherCurveDays.length > 0 && (
+              <span className="text-xs text-fg-2">
+                {`${formatDayRange(otherCurveDays)} ${otherCurveDays.length === 1 ? 'uses' : 'use'} another curve`}
+              </span>
+            )}
+          </Card>
+
+          <Card className="order-3 min-[900px]:order-none">
+            <SectionLabel className="hidden min-[900px]:flex">Times</SectionLabel>
+            <div className="grid grid-cols-2 gap-3">
+              <TimeInput label="Bedtime" value={bedtime} onChange={handleBedtimeChange} />
+              <TimeInput label="Wake up" value={wakeTime} onChange={handleWakeTimeChange} />
+            </div>
+          </Card>
+
+          <Card className="order-5 min-[900px]:order-none">
+            <SectionLabel>Range</SectionLabel>
+            <div className="flex items-center justify-between gap-2.5">
+              <span className="text-sm">Coolest</span>
+              <Stepper
+                label="coolest temperature"
+                value={toDisplay(minTemp)}
+                min={toDisplay(TEMP_FLOOR)}
+                max={toDisplay(TEMP_CEIL)}
+                onChange={v => setMinTemp(Math.min(toF(v), maxTemp - 2))}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2.5">
+              <span className="text-sm">Warmest</span>
+              <Stepper
+                label="warmest temperature"
+                value={toDisplay(maxTemp)}
+                min={toDisplay(TEMP_FLOOR)}
+                max={toDisplay(TEMP_CEIL)}
+                onChange={v => setMaxTemp(Math.max(toF(v), minTemp + 2))}
+              />
+            </div>
+          </Card>
+
+          <Card className="order-6 min-[900px]:order-none">
+            <SectionLabel>Preset</SectionLabel>
+            <div className="flex flex-col gap-1.5">
+              {PRESETS.map((preset) => {
+                const Icon = preset.icon
+                const on = activePreset === preset.id
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => handleApplyPreset(preset)}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-2.5 rounded-ctl border bg-transparent px-3 py-[9px] text-left text-sm transition-colors hover:bg-active',
+                      on ? 'border-fg text-fg' : 'border-line-2 text-fg-2',
+                    )}
+                  >
+                    <Icon size={15} />
+                    {preset.label}
+                    {on && <Check size={15} className="ml-auto" />}
+                  </button>
+                )
+              })}
+              <button
+                type="button"
+                onClick={() => setAIWizardOpen(true)}
+                className="flex cursor-pointer items-center gap-2.5 rounded-ctl border border-dashed border-line-2 bg-transparent px-3 py-[9px] text-left text-sm text-fg-2 transition-colors hover:bg-active"
+              >
+                <Sparkles size={15} />
+                Custom AI curve
+              </button>
+            </div>
+          </Card>
+        </div>
+
+        <div className="contents min-[900px]:flex min-[900px]:min-w-0 min-[900px]:flex-col min-[900px]:gap-3 min-[900px]:rounded-card min-[900px]:border min-[900px]:border-line min-[900px]:bg-surface min-[900px]:px-[18px] min-[900px]:py-4">
+          <Card className={cn('order-2 min-[900px]:order-none', innerCard)}>
+            <div className="hidden items-center gap-2.5 min-[900px]:flex">
+              <span className="text-[15px] font-medium">Curve</span>
+              {points.length > 0 && (
+                <span className="text-xs text-fg-2">Drag a point to change its time or temperature</span>
+              )}
+            </div>
+            {points.length > 0
+              ? (
+                  <CurveChart
+                    setPoints={points}
+                    height={isDesktop ? 210 : 130}
+                    large
+                    onChangePoint={handleChartChange}
+                    getKey={p => p.id}
+                  />
+                )
+              : (
+                  <p className="py-6 text-center text-[13px] text-fg-2">
+                    Start from a preset or add set points manually
+                  </p>
+                )}
+          </Card>
+
+          <Card className={cn('order-4 min-[900px]:order-none', innerCard)}>
+            <SectionLabel className="min-[900px]:hidden">Set points</SectionLabel>
+            {orderedPoints.map(point => (
+              <SetPointCard
+                key={point.id}
+                point={point}
+                onSetTemp={handleSetTemp}
+                onDelete={handleDeletePoint}
+                onTapTime={(p) => {
+                  setEditingId(p.id)
+                  setEditorOpen(true)
+                }}
+                disabled={isMutating}
+                autoLabel={point.id === autoOnId ? 'on' : point.id === autoOffId ? 'off' : null}
+              />
+            ))}
+            <Button
+              variant="dashed"
+              icon={Plus}
+              full
+              onClick={() => {
+                setEditingId(null)
+                setEditorOpen(true)
+              }}
+            >
+              Add set point
+            </Button>
+            {saveError && <InlineError>{saveError}</InlineError>}
+          </Card>
+        </div>
       </div>
 
-      {/* Floating add button */}
-      <div className="pb-safe absolute inset-x-0 bottom-0 border-t border-zinc-800 bg-zinc-950/95 px-4 py-3 backdrop-blur-sm">
-        <button
-          onClick={handleAddPoint}
-          className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-zinc-700 text-sm font-medium text-zinc-300 active:bg-zinc-800"
-        >
-          <Plus size={14} />
-          Add Set Point
-        </button>
-      </div>
-
-      {/* Custom AI curve wizard */}
       <AICurveWizard
         open={aiWizardOpen}
         onClose={() => setAIWizardOpen(false)}
         onApply={handleApplyAICurve}
       />
 
-      {/* Per-point editor sheet */}
       <SetPointEditor
-        editingPhase={editingPhase}
+        editingPoint={editingPoint}
         open={editorOpen}
         onClose={() => {
           setEditorOpen(false)
@@ -530,96 +460,20 @@ export function CurveEditor({
         }}
         onCreate={handleEditorCreate}
         onUpdate={handleEditorUpdate}
-        onDelete={handleEditorDelete}
+        onDelete={handleDeletePoint}
       />
 
-      {/* Conflict confirm dialog */}
-      {pendingConflict && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-sm rounded-2xl bg-zinc-900 p-5">
-            <h3 className="text-sm font-semibold text-white">Move days from another curve?</h3>
-            <p className="mt-2 text-xs text-zinc-400">
-              {pendingConflict.map(d => DAYS.find(x => x.key === d)?.label).join(', ')}
-              {' '}
-              {pendingConflict.length === 1 ? 'is' : 'are'}
-              {' '}
-              already part of another curve. Saving will move
-              {' '}
-              {pendingConflict.length === 1 ? 'it' : 'them'}
-              {' '}
-              to this curve.
-            </p>
-            <div className="mt-4 flex gap-2">
-              <button
-                onClick={() => setPendingConflict(null)}
-                className="flex-1 rounded-xl border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-300 active:bg-zinc-800"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void performSave(true)}
-                disabled={isMutating}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3 py-2 text-xs font-semibold text-white active:bg-sky-600 disabled:opacity-60"
-              >
-                {isMutating && <Loader2 size={12} className="animate-spin" />}
-                {isMutating ? 'Saving…' : 'Move & Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-interface TempStepperProps {
-  label: string
-  value: number
-  onChange: (value: number) => void
-  unit: TempUnit
-  icon?: React.ReactNode
-  accentClass?: string
-}
-
-function TempStepper({ label, value, onChange, unit, icon, accentClass }: TempStepperProps) {
-  const displayValue = Math.round(setpointFToDisplay(value, unit) ?? value)
-  const minDisplay = Math.round(setpointFToDisplay(TEMP_FLOOR, unit) ?? TEMP_FLOOR)
-  const maxDisplay = Math.round(setpointFToDisplay(TEMP_CEIL, unit) ?? TEMP_CEIL)
-  const applyDisplayDelta = (delta: number) => {
-    const nextDisplay = Math.max(minDisplay, Math.min(maxDisplay, displayValue + delta))
-    const nextF = Math.round(displayToSetpointF(nextDisplay, unit) ?? value)
-    onChange(Math.max(TEMP_FLOOR, Math.min(TEMP_CEIL, nextF)))
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-400">
-        {icon && <span className={accentClass}>{icon}</span>}
-        {label}
-      </label>
-      <div className="flex h-11 items-center rounded-lg border border-zinc-700 bg-zinc-800/50">
-        <button
-          type="button"
-          onClick={() => applyDisplayDelta(-1)}
-          disabled={value <= TEMP_FLOOR}
-          className="flex h-full w-10 items-center justify-center text-zinc-400 transition-colors active:text-white disabled:opacity-30"
-          aria-label={`Decrease ${label}`}
-        >
-          <Minus size={14} strokeWidth={3} />
-        </button>
-        <span className="flex-1 text-center text-sm font-semibold tabular-nums text-white">
-          {formatSetpointF(value, unit)}
-        </span>
-        <button
-          type="button"
-          onClick={() => applyDisplayDelta(1)}
-          disabled={value >= TEMP_CEIL}
-          className="flex h-full w-10 items-center justify-center text-zinc-400 transition-colors active:text-white disabled:opacity-30"
-          aria-label={`Increase ${label}`}
-        >
-          <Plus size={14} strokeWidth={3} />
-        </button>
-      </div>
+      <ConfirmDialog
+        open={pendingConflict !== null}
+        title="Move days from another curve?"
+        message={pendingConflict
+          ? `${pendingConflict.map(d => DAY_SHORT[d]).join(', ')} ${pendingConflict.length === 1 ? 'is' : 'are'} already part of another curve. Saving will move ${pendingConflict.length === 1 ? 'it' : 'them'} to this curve.`
+          : ''}
+        confirmLabel={isMutating ? 'Saving…' : 'Move & save'}
+        busy={isMutating}
+        onConfirm={() => void performSave(true)}
+        onCancel={() => setPendingConflict(null)}
+      />
     </div>
   )
 }

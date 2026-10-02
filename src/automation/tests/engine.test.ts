@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AutomationEngine, type AutomationEngineDeps } from '../engine'
+import type { AutomationEngine } from '../engine'
+import { engineFixture, type EngineFixtureDeps as AutomationEngineDeps } from './controllerHarness'
+import type { TemperatureController } from '@/src/temperature/controller'
 import type { SignalSnapshot } from '../signals'
 import { AUTOMATION_TICK_MS, type Action, type AutomationRule, type Condition, type DayOfWeek, type Expr, type RunOutcome, type Trigger, type Side } from '../types'
 
@@ -22,28 +24,32 @@ interface RunDetail {
     clamped?: boolean
     sent?: boolean
     dryRun?: boolean
+    error?: string
     temp?: number
   }>
 }
 
 interface Harness {
   engine: AutomationEngine
+  control: TemperatureController
   setNow: (ms: number) => void
   advance: (ms: number) => void
   setSignal: (key: string, value: number | undefined) => void
   setClock: (nowMinutes: number, dayOfWeek?: DayOfWeek, dateKey?: string) => void
   setRunOnce: (active: boolean) => void
+  setStallBlocked: (side: Side, blocked: boolean) => void
   runs: { id: number, outcome: RunOutcome, detail: RunDetail }[]
   notifies: { id: number, message: string }[]
   hwCalls: HwCall[]
   disabled: number[]
 }
 
-function makeHarness(rules: AutomationRule[]): Harness {
+function makeHarness(rules: AutomationRule[], lock: AutomationEngineDeps['withSideLock'] = async (_side, fn) => fn()): Harness {
   // Base clock is a realistic epoch so a `tick` trigger's first evaluation is
   // due (production `now` is always >> any everyMin window from epoch 0).
   let nowMs = 1_700_000_000_000
   let runOnce = false
+  const stallBlocked: Record<Side, boolean> = { left: false, right: false }
   let nowMinutes = 0
   let dayOfWeek: DayOfWeek = 'monday'
   let dateKey = '2026-07-01'
@@ -62,19 +68,21 @@ function makeHarness(rules: AutomationRule[]): Harness {
       setTemperature: async (side, temp, duration) => { hwCalls.push({ op: 'temp', side, temp, duration }) },
       setPower: async (side, on, temp) => { hwCalls.push({ op: 'power', side, on, temp }) },
     }),
-    withSideLock: async (_side, fn) => fn(),
+    withSideLock: lock,
+    pumpStallShouldBlock: side => stallBlocked[side],
     broadcast: () => {},
     markMutated: () => {},
-    loadRules: async () => rules,
+    loadRules: async () => structuredClone(rules),
     recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
     disableRule: async (id) => { disabled.push(id) },
     hasActiveRunOnceSession: async () => runOnce,
     notify: (id, message) => notifies.push({ id, message }),
   }
 
-  const engine = new AutomationEngine(deps)
+  const { engine, control } = engineFixture(deps)
   return {
     engine,
+    control,
     setNow: (ms) => { nowMs = ms },
     advance: (ms) => { nowMs += ms },
     setSignal: (key, value) => { snapshot[key] = value },
@@ -84,6 +92,7 @@ function makeHarness(rules: AutomationRule[]): Harness {
       if (date) dateKey = date
     },
     setRunOnce: (a) => { runOnce = a },
+    setStallBlocked: (side, blocked) => { stallBlocked[side] = blocked },
     runs,
     notifies,
     hwCalls,
@@ -246,6 +255,17 @@ describe('AutomationEngine — anti-thrash', () => {
 })
 
 describe('AutomationEngine — runaway guard', () => {
+  it('counts coalesced shutdowns against each originating rule budget', async () => {
+    const h = makeHarness([1, 2].map(id => rule({ id, actions: [{ kind: 'setPower', on: false }] })))
+    await h.engine.reload()
+    for (let i = 0; i < 20; i++) {
+      await h.engine.tick()
+      h.advance(60_000)
+    }
+    expect(h.hwCalls.filter(call => call.on === false)).toHaveLength(12)
+    expect(h.disabled).toEqual([1, 2])
+  })
+
   it('auto-disables a rule that exceeds the hourly action budget', async () => {
     const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: sig('target') }] })])
     await h.engine.reload()
@@ -267,11 +287,11 @@ describe('AutomationEngine — precedence gates', () => {
   it('skips hardware while a manual-override hold is active on the side', async () => {
     const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
     await h.engine.reload()
-    h.engine.registerManualOverride('left')
+    await h.control.setManual('left', 76)
     await h.engine.tick()
-    expect(h.hwCalls).toHaveLength(0)
+    expect(h.hwCalls).toHaveLength(1)
     expect(h.runs[0].outcome).toBe('skipped')
-    expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('manual-override')
+    expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('manual-hold')
   })
 
   it('skips hardware while a run-once session is active on the side', async () => {
@@ -279,7 +299,8 @@ describe('AutomationEngine — precedence gates', () => {
     h.setRunOnce(true)
     await h.engine.reload()
     await h.engine.tick()
-    expect(h.hwCalls).toHaveLength(0)
+    expect(h.hwCalls).toHaveLength(2)
+    expect(h.hwCalls.every(call => call.temp === 74)).toBe(true)
     expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('run-once')
   })
 })
@@ -410,9 +431,9 @@ describe('AutomationEngine — lifecycle', () => {
   it('start() installs the tick timer and stop() clears it', async () => {
     const h = makeHarness([rule({ actions: [{ kind: 'notify', message: 'x' }] })])
     await h.engine.start() // reloads + installs interval
-    h.engine.stop() // clears the interval
+    await h.engine.stop() // clears the interval
     // A second stop() is a safe no-op.
-    h.engine.stop()
+    await h.engine.stop()
   })
 })
 
@@ -422,12 +443,12 @@ describe('AutomationEngine — global kill-switch', () => {
     await h.engine.reload()
     expect(h.engine.isGloballyEnabled()).toBe(true)
 
-    h.engine.setGlobalEnabled(false)
+    await h.engine.setGlobalEnabled(false)
     expect(h.engine.isGloballyEnabled()).toBe(false)
     await h.engine.tick()
     expect(h.runs).toHaveLength(0)
 
-    h.engine.setGlobalEnabled(true)
+    await h.engine.setGlobalEnabled(true)
     await h.engine.tick()
     expect(h.runs).toHaveLength(1)
   })
@@ -478,7 +499,7 @@ describe('AutomationEngine — setPower', () => {
     const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true, temp: lit(72) }] })])
     await h.engine.reload()
     await h.engine.tick()
-    expect(h.hwCalls[0]).toMatchObject({ op: 'power', side: 'left', on: true, temp: 72 })
+    expect(h.hwCalls[0]).toMatchObject({ op: 'temp', side: 'left', temp: 72 })
     expect(h.runs[0].outcome).toBe('fired')
   })
 
@@ -548,6 +569,7 @@ describe('AutomationEngine — action error', () => {
         setPower: async () => {},
       }),
       withSideLock: async (_side, fn) => fn(),
+      pumpStallShouldBlock: () => false,
       broadcast: () => {},
       markMutated: () => {},
       loadRules: async () => [rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })],
@@ -556,11 +578,11 @@ describe('AutomationEngine — action error', () => {
       hasActiveRunOnceSession: async () => false,
       notify: () => {},
     }
-    const engine = new AutomationEngine(deps)
+    const { engine } = engineFixture(deps)
     await engine.reload()
     await engine.tick()
     expect(runs[0].outcome).toBe('error')
-    expect(runs[0].detail.reason).toBe('eval-threw')
+    expect(runs[0].detail.actions?.[0]?.error).toContain('hardware offline')
   })
 
   it('stringifies a non-Error thrown during evaluation', async () => {
@@ -571,6 +593,7 @@ describe('AutomationEngine — action error', () => {
       clock: () => ({ nowMinutes: 0, dayOfWeek: 'monday' }),
       getHardware: () => ({ connect: async () => {}, setTemperature: async () => {}, setPower: async () => {} }),
       withSideLock: async (_side, fn) => fn(),
+      pumpStallShouldBlock: () => false,
       broadcast: () => {},
       markMutated: () => {},
       loadRules: async () => [rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })],
@@ -580,11 +603,11 @@ describe('AutomationEngine — action error', () => {
       hasActiveRunOnceSession: async () => { throw 'gate exploded' },
       notify: () => {},
     }
-    const engine = new AutomationEngine(deps)
+    const { engine } = engineFixture(deps)
     await engine.reload()
     await engine.tick()
     expect(runs[0].outcome).toBe('error')
-    expect(runs[0].detail.message).toBe('gate exploded')
+    expect(runs[0].detail.actions?.[0]?.error).toBe('gate exploded')
   })
 })
 
@@ -593,7 +616,7 @@ describe('AutomationEngine — branch coverage corners', () => {
     const h = makeHarness([rule({ actions: [{ kind: 'notify', message: 'x' }] })])
     await h.engine.start()
     await h.engine.start() // timer already set → no-op on the interval
-    h.engine.stop()
+    await h.engine.stop()
   })
 
   it('the interval callback drives ticks', async () => {
@@ -603,7 +626,7 @@ describe('AutomationEngine — branch coverage corners', () => {
       await h.engine.start()
       await vi.advanceTimersByTimeAsync(AUTOMATION_TICK_MS)
       expect(h.runs.length).toBeGreaterThanOrEqual(1)
-      h.engine.stop()
+      await h.engine.stop()
     }
     finally {
       vi.useRealTimers()
@@ -644,6 +667,7 @@ describe('AutomationEngine — branch coverage corners', () => {
       clock: () => ({ nowMinutes: 0, dayOfWeek: 'monday' }),
       getHardware: () => ({ connect: async () => {}, setTemperature: async () => {}, setPower: async () => {} }),
       withSideLock: async (_side, fn) => fn(),
+      pumpStallShouldBlock: () => false,
       broadcast: () => {},
       markMutated: () => {},
       loadRules: async () => [],
@@ -653,11 +677,11 @@ describe('AutomationEngine — branch coverage corners', () => {
       notify: () => {},
       log: msg => logs.push(msg),
     }
-    const engine = new AutomationEngine(deps)
+    const { engine } = engineFixture(deps)
     await engine.start()
-    engine.setGlobalEnabled(false)
-    engine.setGlobalEnabled(true)
-    engine.stop()
+    await engine.setGlobalEnabled(false)
+    await engine.setGlobalEnabled(true)
+    await engine.stop()
     expect(logs.some(m => m.includes('started'))).toBe(true)
     expect(logs.some(m => m.includes('OFF'))).toBe(true)
     expect(logs.some(m => m.includes('ON'))).toBe(true)
@@ -710,9 +734,29 @@ describe('AutomationEngine — branch coverage corners', () => {
     const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true }] })]) // no temp
     await h.engine.reload()
     await h.engine.tick()
-    expect(h.hwCalls[0]).toMatchObject({ op: 'power', side: 'left', on: true })
-    expect(h.hwCalls[0].temp).toBeUndefined()
+    expect(h.hwCalls[0]).toMatchObject({ op: 'temp', side: 'left', temp: 75 })
     expect(h.runs[0].outcome).toBe('fired')
+  })
+
+  it('re-asserts after a manual override expires even when the target is unchanged', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(1)
+
+    // The user dials the side directly: the override suspends autopilot AND
+    // invalidates the anti-thrash baseline — hardware is no longer at 72.
+    await h.control.setManual('left', 76)
+    h.advance(60_000)
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(2) // includes the manual write; automation remains suspended inside the override window
+
+    h.advance(2 * 60 * 60_000) // override expired
+    await h.engine.tick()
+    // With a stale baseline this would be anti-thrash-skipped (|72−72| < 0.5)
+    // and the user's manual setpoint would silently stick forever.
+    expect(h.hwCalls).toHaveLength(3)
+    expect(h.hwCalls[2]).toMatchObject({ op: 'temp', side: 'left', temp: 72 })
   })
 
   it('reports clamped when an anti-thrash re-assertion is still out of band', async () => {
@@ -726,5 +770,309 @@ describe('AutomationEngine — branch coverage corners', () => {
     await h.engine.tick()
     expect(h.runs[1].detail.actions?.[0]?.antiThrash).toBe(true)
     expect(h.runs[1].outcome).toBe('clamped')
+  })
+})
+
+describe('AutomationEngine — pump stall guard gate', () => {
+  it('skips a setTemperature action while the guard blocks the side', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
+      h.setStallBlocked('left', true)
+      await h.engine.reload()
+      await h.engine.tick()
+      expect(h.hwCalls).toHaveLength(0)
+      expect(h.runs[0].outcome).toBe('skipped')
+      expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('safety')
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('skips a setPower(on) action while the guard blocks the side', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true, temp: lit(70) }] })])
+      h.setStallBlocked('left', true)
+      await h.engine.reload()
+      await h.engine.tick()
+      expect(h.hwCalls).toHaveLength(0)
+      expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('safety')
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('still sends setPower(off) while the guard blocks the side', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: false }] })])
+    h.setStallBlocked('left', true)
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls[0]).toMatchObject({ op: 'power', side: 'left', on: false })
+    expect(h.runs[0].outcome).toBe('fired')
+  })
+
+  it('cancels an automation shutdown disabled while waiting for the side lock', async () => {
+    let release!: () => void
+    let entered!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const queued = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: false }] })], async (_side, fn) => {
+      entered()
+      await gate
+      return fn()
+    })
+    await h.engine.reload()
+    const tick = h.engine.tick()
+    await queued
+    const disabled = h.engine.setGlobalEnabled(false)
+    release()
+    await Promise.all([tick, disabled])
+    expect(h.hwCalls).toEqual([])
+    expect(h.runs.filter(run => run.outcome === 'fired')).toEqual([])
+  })
+
+  it('blocks a write whose trip lands while it is queued on the side lock', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const runs: { id: number, outcome: RunOutcome, detail: RunDetail }[] = []
+      const hwCalls: HwCall[] = []
+      let blocked = false
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const deps: AutomationEngineDeps = {
+        signals: { read: () => ({}) },
+        now: () => 1_700_000_000_000,
+        clock: () => ({ nowMinutes: 0, dayOfWeek: 'monday' }),
+        getHardware: () => ({
+          connect: async () => {},
+          setTemperature: async (side, temp, duration) => { hwCalls.push({ op: 'temp', side, temp, duration }) },
+          setPower: async (side, on, temp) => { hwCalls.push({ op: 'power', side, on, temp }) },
+        }),
+        // Simulates queueing behind another writer: the locked callback only
+        // runs once release() fires — the trip lands during that wait, so
+        // only a check inside the lock body can observe it.
+        withSideLock: async (_side, fn) => {
+          await gate
+          return fn()
+        },
+        pumpStallShouldBlock: () => blocked,
+        broadcast: () => {},
+        markMutated: () => {},
+        loadRules: async () => [rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })],
+        recordRun: async (id, outcome, detail) => { runs.push({ id, outcome, detail: detail as RunDetail }) },
+        disableRule: async () => {},
+        hasActiveRunOnceSession: async () => false,
+        notify: () => {},
+      }
+      const { engine } = engineFixture(deps)
+      await engine.reload()
+      const tick = engine.tick()
+      // Let the tick reach withSideLock and park on the gate while healthy.
+      await new Promise((resolve) => {
+        setImmediate(resolve)
+      })
+      blocked = true
+      release()
+      await tick
+      expect(hwCalls).toHaveLength(0)
+      expect(runs[0].detail.actions?.[0]?.skipped).toBe('safety')
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('only skips the blocked side when a rule fans out to both', async () => {
+    const h = makeHarness([rule({ side: null, actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      h.setStallBlocked('left', true)
+      await h.engine.reload()
+      await h.engine.tick()
+      expect(h.hwCalls).toHaveLength(1)
+      expect(h.hwCalls[0]).toMatchObject({ op: 'temp', side: 'right', temp: 72 })
+      expect(h.runs[0].detail.actions?.[0]?.skipped).toBe('safety')
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('AutomationEngine — shared control requests', () => {
+  it('publishes competing rules as one batch without flashing the lower-priority target', async () => {
+    const h = makeHarness([
+      rule({ id: 1, priority: 1, actions: [{ kind: 'setTemperature', temp: lit(70) }] }),
+      rule({ id: 2, priority: 9, actions: [{ kind: 'setTemperature', temp: lit(80) }] }),
+    ])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls).toHaveLength(1)
+    expect(h.hwCalls[0].temp).toBe(80)
+    expect(h.control.status('left').requestId).toBe('rule:2:0')
+    expect(h.runs.find(r => r.id === 1)?.outcome).toBe('skipped')
+  })
+
+  it('withdraws a policy as soon as conditions become false, even between trigger times', async () => {
+    const h = makeHarness([rule({
+      trigger: tickEvery(10),
+      conditions: { kind: 'compare', op: '>', left: sig('room'), right: lit(70) },
+      actions: [{ kind: 'setTemperature', temp: lit(68) }],
+    })])
+    h.setSignal('room', 75)
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.control.status('left').source).toBe('autopilot')
+    h.setSignal('room', 65)
+    h.advance(60_000)
+    await h.engine.tick()
+    expect(h.control.status('left').source).toBeNull()
+  })
+
+  it('revokes disabled and edited rules immediately on reload', async () => {
+    const rules = [rule({ actions: [{ kind: 'setTemperature', temp: lit(70) }] })]
+    const h = makeHarness(rules)
+    await h.engine.reload()
+    await h.engine.tick()
+    rules[0] = { ...rules[0], enabled: false }
+    await h.engine.reload()
+    expect(h.control.status('left').source).toBeNull()
+  })
+
+  it('reactivates edited and re-enabled signal policies without replaying sibling side effects', async () => {
+    const rules = [rule({
+      trigger: { kind: 'signalChange', signal: 'room' },
+      actions: [
+        { kind: 'setTemperature', mode: 'policy', temp: lit(68) },
+        { kind: 'notify', message: 'real change' },
+        { kind: 'setTemperature', mode: 'one-shot', side: 'right', temp: lit(79) },
+      ],
+    })]
+    const h = makeHarness(rules)
+    h.setSignal('room', 70)
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+    expect(h.control.status('right').source).toBeNull()
+    expect(h.notifies).toHaveLength(0)
+    rules[0] = { ...rules[0], name: 'renamed' }
+    await h.engine.reload()
+    expect(h.control.status('left').source).toBeNull()
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+    await h.engine.setGlobalEnabled(false)
+    await h.engine.setGlobalEnabled(true)
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+    rules[0] = { ...rules[0], enabled: false }
+    await h.engine.reload()
+    rules[0] = { ...rules[0], enabled: true }
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+    expect(h.notifies).toHaveLength(0)
+    expect(h.control.status('right').source).toBeNull()
+    h.setSignal('room', 71)
+    await h.engine.tick()
+    expect(h.notifies).toHaveLength(1)
+    expect(h.control.status('right').targetTemperature).toBe(79)
+  })
+
+  it('reacquires a signal policy when conditions recover without a trigger-signal edge', async () => {
+    const h = makeHarness([rule({
+      trigger: { kind: 'signalChange', signal: 'room' },
+      conditions: { kind: 'compare', op: '>', left: sig('occupancy'), right: lit(0) },
+      actions: [{ kind: 'setTemperature', mode: 'policy', temp: lit(68) }],
+    })])
+    h.setSignal('room', 70)
+    h.setSignal('occupancy', 1)
+    await h.engine.reload()
+    await h.engine.tick()
+    h.setSignal('occupancy', 0)
+    await h.engine.tick()
+    expect(h.control.status('left').source).toBeNull()
+    h.setSignal('occupancy', 1)
+    await h.engine.tick()
+    expect(h.control.status('left').targetTemperature).toBe(68)
+  })
+
+  it('uses baseline history for action windows while condition windows still observe live targets', async () => {
+    const relative: Expr = {
+      kind: 'binary', op: '+',
+      left: { kind: 'window', fn: 'max', signal: 'left.targetTemperature', lastMin: 1 }, right: lit(1),
+    }
+    const h = makeHarness([
+      rule({ actions: [{ kind: 'setTemperature', mode: 'policy', temp: relative }] }),
+      rule({ id: 2, conditions: { kind: 'compare', op: '>', left: { kind: 'window', fn: 'max', signal: 'left.targetTemperature', lastMin: 1 }, right: lit(76) }, actions: [{ kind: 'notify', message: 'live target above 76' }] }),
+    ])
+    await h.engine.reload()
+    for (let i = 0; i < 4; i++) {
+      h.setSignal('left.targetTemperature', 75 + i)
+      await h.engine.tick()
+      h.advance(60_000)
+    }
+    expect(h.hwCalls.map(call => call.temp)).toEqual([76])
+    expect(h.notifies).toHaveLength(2)
+  })
+
+  it('freezes a relative one-shot target and never uses its own output as the next baseline', async () => {
+    const h = makeHarness([rule({ actions: [{
+      kind: 'setTemperature',
+      temp: { kind: 'binary', op: '-', left: sig('left.targetTemperature'), right: lit(2) },
+    }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    expect(h.hwCalls[0].temp).toBe(73) // documented 75°F baseline when no schedule exists
+    for (let i = 0; i < 35; i++) {
+      h.advance(60_000)
+      h.setSignal('left.targetTemperature', 73)
+      await h.engine.tick()
+    }
+    expect(h.hwCalls.every(call => call.temp === 73)).toBe(true)
+    expect(h.hwCalls).toHaveLength(1)
+  })
+
+  it('allows a one-shot to expire while a manual hold still masks it', async () => {
+    const h = makeHarness([rule({
+      trigger: { kind: 'timeOfDay', at: '00:00' },
+      actions: [{ kind: 'setTemperature', temp: lit(70), holdMinutes: 1 }],
+    })])
+    await h.engine.reload()
+    await h.control.setManual('left', 76)
+    await h.engine.tick()
+    h.advance(2 * 60_000)
+    await h.engine.tick()
+    await h.control.resume('left')
+    expect(h.control.status('left').source).toBeNull()
+    expect(h.hwCalls.map(call => call.temp)).toEqual([76])
+  })
+
+  it('does not repeatedly power on after a scheduled shutdown while a policy stays active', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setPower', on: true, temp: lit(72) }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    await h.control.powerOff('left')
+    h.advance(60_000)
+    await h.engine.tick()
+    expect(h.control.status('left').blocked).toBe('off')
+    expect(h.hwCalls.map(call => call.op)).toEqual(['temp', 'power'])
+  })
+
+  it('expires continuous ownership if the evaluator stops refreshing it', async () => {
+    const h = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(72) }] })])
+    await h.engine.reload()
+    await h.engine.tick()
+    h.advance(2 * AUTOMATION_TICK_MS)
+    await h.control.reconcile('left')
+    expect(h.control.status('left').source).toBeNull()
   })
 })

@@ -16,6 +16,17 @@ function getTimeInput(container: HTMLElement): HTMLInputElement {
 }
 
 describe('TimeInput component', () => {
+  it('keeps the invisible picker overlay inside the field (no sideways scroll on mobile)', () => {
+    const { container } = render(<TimeInput label="Wake at" value="07:45" onChange={() => {}} />)
+    const input = getTimeInput(container)
+    // The overlay is stretched over the field; its default margin/padding
+    // used to push it past the field and scroll the alarm editor sideways.
+    expect(input.className).toContain('[&::-webkit-calendar-picker-indicator]:m-0')
+    expect(input.className).toContain('[&::-webkit-calendar-picker-indicator]:p-0')
+    expect(input.className).toContain('appearance-none')
+    expect(input.parentElement?.className).toContain('overflow-hidden')
+  })
+
   it('renders the label and current value', () => {
     const { container, getByText } = render(
       <TimeInput label="On time" value="22:00" onChange={() => {}} />,

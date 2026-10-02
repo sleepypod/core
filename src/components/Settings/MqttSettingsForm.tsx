@@ -1,9 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { Wifi, Globe, User, KeyRound, Tag, Home, Lock, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
+import { Plug } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Toggle } from './Toggle'
+import { Badge, Button, Card, CardHeader, InlineError, SectionLabel, SettingRow, Skeleton, StatusDot, Toggle } from '@/src/components/ds'
+import { cn } from '@/lib/utils'
 
 type Source = 'db' | 'env' | 'default'
 
@@ -17,8 +18,6 @@ interface MqttSettings {
   tlsEnabled: boolean
   sources: Record<'enabled' | 'url' | 'username' | 'password' | 'topicPrefix' | 'haDiscovery' | 'tlsEnabled', Source>
 }
-
-type TextField = 'url' | 'username' | 'topicPrefix'
 
 function sourceLabel(s: Source): string | null {
   if (s === 'env') return '.env'
@@ -39,10 +38,8 @@ function relativeTime(iso: string | null | undefined): string {
 }
 
 /**
- * MQTT bridge settings: connection, auth, topic prefix, HA discovery, TLS.
- *
- * Contract shape: see sleepypod-core-26 epic. The mqtt.* tRPC router lands
- * with sleepypod-core-27; until then tsc fails on `trpc.mqtt`.
+ * MQTT bridge card: status, bridge + HA discovery toggles, connection, auth,
+ * topic prefix, test connection and save.
  */
 export function MqttSettingsForm() {
   const utils = trpc.useUtils()
@@ -52,33 +49,42 @@ export function MqttSettingsForm() {
   })
 
   const data = settingsQuery.data
+  const status = statusQuery.data
+
+  const statusDot = statusQuery.isLoading
+    ? <StatusDot tone="muted" label="Checking…" />
+    : status?.connected
+      ? <StatusDot tone="ok" label="Connected" />
+      : <StatusDot tone="muted" label="Disconnected" />
+
+  if (settingsQuery.isLoading) {
+    return <Skeleton className="h-[420px]" />
+  }
 
   return (
-    <div className="space-y-4">
-      <ConnectionStatusCard
-        connected={statusQuery.data?.connected ?? false}
-        lastError={statusQuery.data?.lastError ?? null}
-        messagesPublished={statusQuery.data?.messagesPublished ?? 0}
-        lastPublishAt={statusQuery.data?.lastPublishAt ?? null}
-        loading={statusQuery.isLoading}
-      />
-
-      {settingsQuery.isLoading && (
-        <div className="h-40 animate-pulse rounded-2xl bg-zinc-900" />
-      )}
+    <Card>
+      <CardHeader title="MQTT" right={statusDot} />
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-2">
+        <span>
+          {'Published '}
+          <span className="font-mono text-fg">{(status?.messagesPublished ?? 0).toLocaleString()}</span>
+        </span>
+        <span>
+          {'Last publish '}
+          <span className="font-mono text-fg">{relativeTime(status?.lastPublishAt ?? null)}</span>
+        </span>
+      </div>
+      {status?.lastError && <InlineError className="break-words text-xs">{status.lastError}</InlineError>}
 
       {settingsQuery.error && (
-        <div className="rounded-2xl bg-zinc-900 p-4">
-          <p className="text-sm text-red-400">
-            Failed to load MQTT settings:
-            {' '}
-            {settingsQuery.error.message}
-          </p>
-        </div>
+        <InlineError>
+          {'Failed to load MQTT settings: '}
+          {settingsQuery.error.message}
+        </InlineError>
       )}
 
       {data && (
-        <SettingsCard
+        <SettingsFields
           data={data}
           onSaved={() => {
             utils.mqtt.getSettings.invalidate()
@@ -86,68 +92,11 @@ export function MqttSettingsForm() {
           }}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
-interface ConnectionStatusCardProps {
-  connected: boolean
-  lastError: string | null
-  messagesPublished: number
-  lastPublishAt: string | null
-  loading: boolean
-}
-
-function ConnectionStatusCard({
-  connected,
-  lastError,
-  messagesPublished,
-  lastPublishAt,
-  loading,
-}: ConnectionStatusCardProps) {
-  const Icon = connected ? CheckCircle2 : XCircle
-  const color = connected ? 'text-emerald-400' : 'text-zinc-500'
-
-  return (
-    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Wifi size={16} className="text-zinc-400" />
-        <span className="text-sm font-medium text-zinc-300">Bridge Status</span>
-      </div>
-
-      <div className="flex items-center gap-2">
-        {loading
-          ? <Loader2 size={16} className="animate-spin text-zinc-400" />
-          : <Icon size={16} className={color} />}
-        <span className={`text-sm font-medium ${color}`}>
-          {loading ? 'Checking…' : connected ? 'Connected' : 'Disconnected'}
-        </span>
-      </div>
-
-      <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        <div>
-          <dt className="text-zinc-500">Messages published</dt>
-          <dd className="text-zinc-300">{messagesPublished.toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt className="text-zinc-500">Last publish</dt>
-          <dd className="text-zinc-300">{relativeTime(lastPublishAt)}</dd>
-        </div>
-      </dl>
-
-      {lastError && (
-        <p className="mt-2 break-words text-xs text-red-400">{lastError}</p>
-      )}
-    </div>
-  )
-}
-
-interface SettingsCardProps {
-  data: MqttSettings
-  onSaved: () => void
-}
-
-function SettingsCard({ data, onSaved }: SettingsCardProps) {
+function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => void }) {
   const [enabled, setEnabled] = useState(data.enabled)
   const [haDiscovery, setHaDiscovery] = useState(data.haDiscovery)
   const [tlsEnabled, setTlsEnabled] = useState(data.tlsEnabled)
@@ -221,249 +170,111 @@ function SettingsCard({ data, onSaved }: SettingsCardProps) {
   const canTest = Boolean(url.trim() || data.url)
 
   return (
-    <div className="space-y-5">
-      {/* Master enable + HA discovery (closely related — what does the bridge do) */}
-      <div className="space-y-2">
-        <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Wifi size={16} className={enabled ? 'text-sky-400' : 'text-zinc-400'} />
-              <div>
-                <span className="text-sm font-medium text-zinc-300">Enable MQTT Bridge</span>
-                <p className="text-xs text-zinc-500">Publishes status + biometrics, accepts commands</p>
-              </div>
-            </div>
-            <Toggle
-              enabled={enabled}
-              onToggle={() => setEnabled(v => !v)}
-              disabled={isPending}
-              label="Toggle MQTT bridge"
-            />
-          </div>
-        </div>
-        <ToggleCard
-          icon={<Home size={16} className={haDiscovery ? 'text-sky-400' : 'text-zinc-400'} />}
-          label="Home Assistant Discovery"
-          description="Publishes climate/switch/sensor entities"
-          enabled={haDiscovery}
-          onToggle={() => setHaDiscovery(v => !v)}
-          disabled={isPending}
-          ariaLabel="Toggle Home Assistant discovery"
-        />
-      </div>
+    <>
+      <SettingRow label="MQTT bridge" sub="Publishes status + biometrics, accepts commands">
+        <Toggle on={enabled} onChange={setEnabled} disabled={isPending} label="Toggle MQTT bridge" />
+      </SettingRow>
+      <SettingRow label="Home Assistant discovery" sub="Publishes climate/switch/sensor entities">
+        <Toggle on={haDiscovery} onChange={setHaDiscovery} disabled={isPending} label="Toggle Home Assistant discovery" />
+      </SettingRow>
 
-      {/* Connection */}
-      <Section label="Connection">
-        <TextFieldCard
-          icon={<Globe size={16} className="text-zinc-400" />}
-          label="Broker URL"
-          field="url"
-          value={url}
-          placeholder={data.url || 'mqtt://broker.local:1883'}
-          source={data.sources.url}
-          onChange={setUrl}
-          disabled={isPending}
-          autoComplete="off"
-        />
-        <ToggleCard
-          icon={<Lock size={16} className={tlsEnabled ? 'text-sky-400' : 'text-zinc-400'} />}
-          label="TLS"
-          description="Use mqtts:// transport"
-          enabled={tlsEnabled}
-          onToggle={() => setTlsEnabled(v => !v)}
-          disabled={isPending}
-          ariaLabel="Toggle TLS"
-        />
-        <button
-          onClick={handleTest}
-          disabled={!canTest || testMutation.isPending}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-3 text-sm font-medium text-zinc-300 transition-colors active:bg-zinc-800 disabled:opacity-50"
-        >
-          {testMutation.isPending && <Loader2 size={14} className="animate-spin" />}
-          Test Connection
-        </button>
-        {testMutation.data && (
-          <p className={`text-xs ${testMutation.data.ok ? 'text-emerald-400' : 'text-red-400'}`}>
-            {testMutation.data.ok
-              ? 'Connection succeeded.'
-              : `Connection failed: ${testMutation.data.error ?? 'unknown error'}`}
-          </p>
-        )}
-        {testMutation.error && (
-          <p className="text-xs text-red-400">{testMutation.error.message}</p>
-        )}
-      </Section>
+      <SectionLabel className="mt-2">CONNECTION</SectionLabel>
+      <Field
+        label="Broker URL"
+        value={url}
+        placeholder={data.url || 'mqtt://broker.local:1883'}
+        source={data.sources.url}
+        onChange={setUrl}
+        disabled={isPending}
+      />
+      <SettingRow label="TLS" sub="Use mqtts:// transport">
+        <Toggle on={tlsEnabled} onChange={setTlsEnabled} disabled={isPending} label="Toggle TLS" />
+      </SettingRow>
 
-      {/* Authentication */}
-      <Section
-        label="Authentication"
-        hint="Leave both blank for anonymous brokers (e.g. local Mosquitto with allow_anonymous true)."
-      >
-        <TextFieldCard
-          icon={<User size={16} className="text-zinc-400" />}
+      <SectionLabel className="mt-2">AUTHENTICATION</SectionLabel>
+      <div className="grid grid-cols-2 gap-3">
+        <Field
           label="Username"
-          field="username"
           value={username}
           placeholder={data.username || ''}
           source={data.sources.username}
           onChange={setUsername}
           disabled={isPending}
-          autoComplete="off"
         />
-        <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <KeyRound size={16} className="text-zinc-400" />
-              <span className="text-sm font-medium text-zinc-300">Password</span>
-            </div>
-            <span
-              className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                data.passwordIsSet
-                  ? 'bg-emerald-500/15 text-emerald-400'
-                  : 'bg-zinc-800 text-zinc-500'
-              }`}
-            >
-              {data.passwordIsSet ? 'set' : 'unset'}
-            </span>
-          </div>
-          <input
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            placeholder={data.passwordIsSet ? '••••••••' : ''}
-            autoComplete="new-password"
-            disabled={isPending}
-            className="h-11 w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-          />
-          {data.sources.password === 'env' && (
-            <p className="mt-1.5 text-xs text-zinc-500">Currently sourced from .env</p>
-          )}
-        </div>
-      </Section>
-
-      {/* Topics */}
-      <Section label="Topics">
-        <TextFieldCard
-          icon={<Tag size={16} className="text-zinc-400" />}
-          label="Topic Prefix"
-          field="topicPrefix"
-          value={topicPrefix}
-          placeholder="sleepypod"
-          source={data.sources.topicPrefix}
-          onChange={setTopicPrefix}
+        <Field
+          label="Password"
+          type="password"
+          value={password}
+          placeholder={data.passwordIsSet ? '••••••••' : ''}
+          source={data.sources.password}
+          tag={`${data.sources.password === 'env' ? '.env · ' : ''}${data.passwordIsSet ? 'set' : 'unset'}`}
+          onChange={setPassword}
           disabled={isPending}
-          autoComplete="off"
+          autoComplete="new-password"
         />
-      </Section>
-
-      {/* Save */}
-      <button
-        onClick={handleSave}
-        disabled={isPending}
-        className="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500/20 px-3 py-3 text-sm font-medium text-sky-400 transition-colors active:bg-sky-500/30 disabled:opacity-50"
-      >
-        {isPending && <Loader2 size={14} className="animate-spin" />}
-        {isPending ? 'Saving…' : 'Save'}
-      </button>
-
-      {updateMutation.error && (
-        <p className="text-xs text-red-400">{updateMutation.error.message}</p>
-      )}
-      {updateMutation.isSuccess && (
-        <p className="text-xs text-emerald-400">Settings saved.</p>
-      )}
-    </div>
-  )
-}
-
-interface SectionProps {
-  label: string
-  hint?: string
-  children: React.ReactNode
-}
-
-function Section({ label, hint, children }: SectionProps) {
-  return (
-    <section className="space-y-2">
-      <h3 className="px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">{label}</h3>
-      {children}
-      {hint && <p className="px-1 text-xs text-zinc-500">{hint}</p>}
-    </section>
-  )
-}
-
-interface ToggleCardProps {
-  icon: React.ReactNode
-  label: string
-  description: string
-  enabled: boolean
-  onToggle: () => void
-  disabled?: boolean
-  ariaLabel: string
-}
-
-function ToggleCard({ icon, label, description, enabled, onToggle, disabled, ariaLabel }: ToggleCardProps) {
-  return (
-    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {icon}
-          <div>
-            <span className="text-sm font-medium text-zinc-300">{label}</span>
-            <p className="text-xs text-zinc-500">{description}</p>
-          </div>
-        </div>
-        <Toggle enabled={enabled} onToggle={onToggle} disabled={disabled} label={ariaLabel} />
       </div>
-    </div>
+      <p className="text-xs text-fg-2">Leave both blank for anonymous brokers (e.g. local Mosquitto with allow_anonymous true).</p>
+
+      <SectionLabel className="mt-2">TOPICS</SectionLabel>
+      <Field
+        label="Topic prefix"
+        value={topicPrefix}
+        placeholder="sleepypod"
+        source={data.sources.topicPrefix}
+        onChange={setTopicPrefix}
+        disabled={isPending}
+      />
+
+      {testMutation.data && (
+        <p className={cn('text-xs', testMutation.data.ok ? 'text-ok' : 'text-danger')}>
+          {testMutation.data.ok
+            ? 'Connection succeeded.'
+            : `Connection failed: ${testMutation.data.error ?? 'unknown error'}`}
+        </p>
+      )}
+      {testMutation.error && <InlineError className="text-xs">{testMutation.error.message}</InlineError>}
+      {updateMutation.error && <InlineError className="text-xs">{updateMutation.error.message}</InlineError>}
+      {updateMutation.isSuccess && <p className="text-xs text-ok">Settings saved.</p>}
+
+      <div className="mt-1 flex flex-wrap justify-end gap-2.5">
+        <Button icon={Plug} onClick={handleTest} disabled={!canTest || testMutation.isPending}>
+          {testMutation.isPending ? 'Testing…' : 'Test connection'}
+        </Button>
+        <Button variant="primary" onClick={handleSave} disabled={isPending}>
+          {isPending ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+    </>
   )
 }
 
-interface TextFieldCardProps {
-  icon: React.ReactNode
+function Field({ label, value, placeholder, source, tag, onChange, disabled, type = 'text', autoComplete = 'off' }: {
   label: string
-  field: TextField
   value: string
   placeholder: string
   source: Source
+  tag?: string
   onChange: (v: string) => void
   disabled?: boolean
+  type?: 'text' | 'password'
   autoComplete?: string
-}
-
-function TextFieldCard({
-  icon,
-  label,
-  value,
-  placeholder,
-  source,
-  onChange,
-  disabled,
-  autoComplete,
-}: TextFieldCardProps) {
-  const sourceTag = sourceLabel(source)
+}) {
+  const sourceTag = tag ?? sourceLabel(source)
   return (
-    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {icon}
-          <span className="text-sm font-medium text-zinc-300">{label}</span>
-        </div>
-        {sourceTag && (
-          <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[11px] font-medium text-zinc-400">
-            {sourceTag}
-          </span>
-        )}
-      </div>
+    <label className="flex min-w-0 flex-col gap-1.5">
+      <span className="flex items-center gap-2 text-xs text-fg-2">
+        {label}
+        {sourceTag && <Badge>{sourceTag}</Badge>}
+      </span>
       <input
-        type="text"
+        type={type}
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
         autoComplete={autoComplete}
         disabled={disabled}
-        className="h-11 w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+        className="min-w-0 rounded-ctl border border-line-2 bg-field px-3 py-[9px] font-mono text-[13px] text-fg outline-none placeholder:text-fg-3 focus:border-fg-3 disabled:opacity-45"
       />
-    </div>
+    </label>
   )
 }

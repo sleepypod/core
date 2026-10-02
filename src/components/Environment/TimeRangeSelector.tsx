@@ -25,16 +25,16 @@ interface TimeRangeSelectorProps {
 
 export function TimeRangeSelector({ value, onChange }: TimeRangeSelectorProps) {
   return (
-    <div className="flex gap-1 rounded-lg bg-zinc-900 p-1">
+    <div className="flex rounded-seg border border-line p-[3px]">
       {ranges.map(range => (
         <button
           key={range.value}
           onClick={() => onChange(range.value)}
           className={cn(
-            'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-semibold transition-colors',
+            'flex items-center justify-center rounded-thumb px-3 py-[5px] font-mono text-xs transition-colors',
             value === range.value
-              ? 'bg-zinc-700 text-white'
-              : 'text-zinc-500 active:bg-zinc-800',
+              ? 'bg-active text-fg'
+              : 'text-fg-2 hover:text-fg',
           )}
         >
           {range.label}

@@ -214,6 +214,39 @@ describe('mqtt.updateSettings — field discrimination', () => {
       mqttTlsEnabled: true,
     })
   })
+
+  it('does not write mqttUrl when url is omitted', async () => {
+    await caller.updateSettings({ enabled: true })
+    const updates = dbMock.setSpy.mock.calls[0][0]
+    expect(updates).toMatchObject({ mqttEnabled: true, updatedAt: expect.any(Date) })
+    expect(updates).not.toHaveProperty('mqttUrl')
+  })
+
+  it('preserves haDiscovery=true rather than treating it as a nullish clear', async () => {
+    await caller.updateSettings({ haDiscovery: true })
+    expect(dbMock.setSpy.mock.calls[0][0]).toMatchObject({ mqttHaDiscovery: true })
+  })
+
+  it('wraps database Error details and does not restart the bridge', async () => {
+    dbMock.setSpy.mockReturnValueOnce({
+      where: vi.fn(async () => { throw new Error('sqlite read-only') }),
+    })
+    await expect(caller.updateSettings({ enabled: true })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to update MQTT settings: sqlite read-only',
+    })
+    expect(bridgeMock.shutdownMqttBridge).not.toHaveBeenCalled()
+  })
+
+  it('uses Unknown error for a non-Error database rejection', async () => {
+    dbMock.setSpy.mockReturnValueOnce({
+      where: vi.fn(async () => { throw 'database offline' }),
+    })
+    await expect(caller.updateSettings({ enabled: false })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to update MQTT settings: Unknown error',
+    })
+  })
 })
 
 describe('mqtt.updateSettings — restart is fire-and-forget', () => {
@@ -235,10 +268,28 @@ describe('mqtt.updateSettings — restart is fire-and-forget', () => {
 
   it('mutation still resolves when the bridge restart throws', async () => {
     bridgeMock.shutdownMqttBridge.mockRejectedValue(new Error('shutdown boom'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const result = await caller.updateSettings({ enabled: false })
 
     expect(result).toEqual({ success: true })
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith('[mqtt] restart after settings update failed:', 'shutdown boom')
+    })
+    warn.mockRestore()
+  })
+
+  it('logs a non-Error start failure after shutdown completes', async () => {
+    bridgeMock.startMqttBridge.mockRejectedValueOnce({ refused: true })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(caller.updateSettings({ enabled: true })).resolves.toEqual({ success: true })
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith('[mqtt] restart after settings update failed:', { refused: true })
+    })
+    expect(bridgeMock.shutdownMqttBridge).toHaveBeenCalledOnce()
+    expect(bridgeMock.startMqttBridge).toHaveBeenCalledOnce()
+    warn.mockRestore()
   })
 })
 

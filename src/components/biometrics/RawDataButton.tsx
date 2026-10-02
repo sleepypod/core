@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useCallback, useMemo } from 'react'
-import { Download, X, FileText, HardDrive, Trash2, Database, Package } from 'lucide-react'
+import { Download, FileText, HardDrive, Trash2, Database, Package } from 'lucide-react'
+import { Button, Card, GhostIcon, InlineError, Modal } from '@/src/components/ds'
+import { cn } from '@/lib/utils'
 import { trpc } from '@/src/utils/trpc'
-import { useSide } from '@/src/hooks/useSide'
+import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 
 function formatCSVDate(date: Date): string {
@@ -78,12 +80,19 @@ function formatDate(isoDate: string): string {
  * Also wires into the raw tRPC router for RAW file management (list, download, delete)
  * and disk usage monitoring.
  */
-export function RawDataButton() {
+export function RawDataButton({ variant = 'card', range }: {
+  /** `button` renders just the trigger, for a footer. */
+  variant?: 'card' | 'button'
+  /** Export window; defaults to the shared week navigator's week. */
+  range?: { start: Date, end: Date }
+} = {}) {
   const [isOpen, setIsOpen] = useState(false)
   const [showFiles, setShowFiles] = useState(false)
   const [deletingFile, setDeletingFile] = useState<string | null>(null)
-  const { side } = useSide()
-  const { weekStart, weekEnd } = useWeekNavigator()
+  const { side } = useBiometricsSide()
+  const week = useWeekNavigator()
+  const weekStart = range?.start ?? week.weekStart
+  const weekEnd = range?.end ?? week.weekEnd
   const utils = trpc.useUtils()
 
   // Only fetch when sheet is open to avoid unnecessary queries
@@ -187,257 +196,143 @@ export function RawDataButton() {
     link.click()
   }, [weekStart, weekEnd])
 
+  const close = () => {
+    setIsOpen(false)
+    setShowFiles(false)
+  }
+
+  const csvFiles = [
+    { name: `vitals-${side}.csv`, rows: vitals.length, onClick: exportVitals },
+    { name: `sleep-${side}.csv`, rows: sleepRecords.length, onClick: exportSleep },
+    { name: `movement-${side}.csv`, rows: movement.length, onClick: exportMovement },
+  ]
+
   return (
     <>
-      <button
-        onClick={() => setIsOpen(true)}
-        className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-2xl bg-zinc-900/80 p-3 text-sm text-zinc-400 active:bg-zinc-800"
-      >
-        <Download size={16} />
-        Export Raw Data
-      </button>
+      {variant === 'button'
+        ? <Button icon={Download} size="sm" onClick={() => setIsOpen(true)}>Raw data</Button>
+        : (
+            <Card flat className="flex-row items-center gap-3">
+              <Database size={16} className="shrink-0 text-icon" />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-sm">Raw data</span>
+                <span className="text-xs text-fg-2">CSV export and sensor files for the selected week</span>
+              </div>
+              <Button icon={Download} size="sm" onClick={() => setIsOpen(true)}>Export raw data</Button>
+            </Card>
+          )}
 
-      {/* Bottom sheet overlay */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsOpen(false)
-          }}
-        >
-          <div className="w-full max-w-md max-h-[85dvh] overflow-y-auto rounded-t-2xl bg-zinc-900 p-4 pb-6 sm:p-5 sm:pb-8">
-            {/* Sheet header */}
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-zinc-100">Raw Data</h3>
-              <button
-                onClick={() => {
-                  setIsOpen(false)
-                  setShowFiles(false)
-                }}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800"
-              >
-                <X size={16} className="text-zinc-400" />
-              </button>
-            </div>
-
-            {/* Stats card — matches iOS statRow layout */}
-            <div className="mb-4 rounded-xl bg-zinc-800/60 p-3 text-xs">
-              <StatRow label="Side" value={side} capitalize />
-              <StatRow label="Vitals records" value={String(vitals.length)} />
-              <StatRow label="Sleep sessions" value={String(sleepRecords.length)} />
-              <StatRow label="Movement records" value={String(movement.length)} />
-
-              {/* Disk usage from raw tRPC router + biometrics.getFileCount */}
-              {(fileCount || diskUsage) && (
+      <Modal open={isOpen} onClose={close} title="Raw data" icon={Database} iconClassName="text-icon">
+        <div className="flex flex-col gap-1.5 rounded-ctl border border-line px-3 py-2.5 text-[13px]">
+          <StatRow label="Side" value={side} capitalize />
+          <StatRow label="Vitals records" value={String(vitals.length)} />
+          <StatRow label="Sleep sessions" value={String(sleepRecords.length)} />
+          <StatRow label="Movement records" value={String(movement.length)} />
+          {(fileCount || diskUsage) && (
+            <>
+              <div className="my-1 border-t border-line" />
+              {fileCount && (
                 <>
-                  <div className="my-2 border-t border-zinc-700" />
-                  {fileCount && (
-                    <>
-                      <StatRow label="Raw files (left)" value={String(fileCount.rawFiles.left)} />
-                      <StatRow label="Raw files (right)" value={String(fileCount.rawFiles.right)} />
-                      <StatRow label="Total size" value={`${fileCount.totalSizeMB} MB`} />
-                    </>
-                  )}
-                  {diskUsage && diskUsage.availableBytes > 0 && (
-                    <StatRow
-                      label="Disk available"
-                      value={formatBytes(diskUsage.availableBytes)}
-                    />
-                  )}
+                  <StatRow label="Raw files (left)" value={String(fileCount.rawFiles.left)} />
+                  <StatRow label="Raw files (right)" value={String(fileCount.rawFiles.right)} />
+                  <StatRow label="Total size" value={`${fileCount.totalSizeMB} MB`} />
                 </>
               )}
-            </div>
+              {diskUsage && diskUsage.availableBytes > 0 && (
+                <StatRow label="Disk available" value={formatBytes(diskUsage.availableBytes)} />
+              )}
+            </>
+          )}
+        </div>
 
-            {/* CSV Export Files — matches iOS fileRow layout */}
-            <div className="mb-3 rounded-xl bg-zinc-800/60 overflow-hidden">
-              <button
-                onClick={exportVitals}
-                disabled={vitals.length === 0}
-                className="flex w-full min-h-[44px] items-center gap-3 p-3 text-sm text-zinc-200 active:bg-zinc-700 disabled:opacity-40"
-              >
-                <FileText size={14} className="text-red-400 shrink-0" />
-                <div className="flex-1 text-left">
-                  <div className="font-mono text-xs">
-                    vitals-
-                    {side}
-                    .csv
-                  </div>
-                  <div className="text-[10px] text-zinc-500">
-                    {vitals.length}
-                    {' '}
-                    rows
-                  </div>
-                </div>
-                <Download size={16} className="text-sky-400 shrink-0" />
-              </button>
-
-              <div className="border-t border-zinc-700/50" />
-
-              <button
-                onClick={exportSleep}
-                disabled={sleepRecords.length === 0}
-                className="flex w-full min-h-[44px] items-center gap-3 p-3 text-sm text-zinc-200 active:bg-zinc-700 disabled:opacity-40"
-              >
-                <FileText size={14} className="text-sky-400 shrink-0" />
-                <div className="flex-1 text-left">
-                  <div className="font-mono text-xs">
-                    sleep-
-                    {side}
-                    .csv
-                  </div>
-                  <div className="text-[10px] text-zinc-500">
-                    {sleepRecords.length}
-                    {' '}
-                    rows
-                  </div>
-                </div>
-                <Download size={16} className="text-sky-400 shrink-0" />
-              </button>
-
-              <div className="border-t border-zinc-700/50" />
-
-              <button
-                onClick={exportMovement}
-                disabled={movement.length === 0}
-                className="flex w-full min-h-[44px] items-center gap-3 p-3 text-sm text-zinc-200 active:bg-zinc-700 disabled:opacity-40"
-              >
-                <FileText size={14} className="text-amber-400 shrink-0" />
-                <div className="flex-1 text-left">
-                  <div className="font-mono text-xs">
-                    movement-
-                    {side}
-                    .csv
-                  </div>
-                  <div className="text-[10px] text-zinc-500">
-                    {movement.length}
-                    {' '}
-                    rows
-                  </div>
-                </div>
-                <Download size={16} className="text-sky-400 shrink-0" />
-              </button>
-            </div>
-
-            {/* Export All button */}
+        <div className="flex flex-col">
+          {csvFiles.map(f => (
             <button
-              onClick={exportAll}
-              disabled={vitals.length === 0 && sleepRecords.length === 0 && movement.length === 0}
-              className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-sky-600 p-3 text-sm font-medium text-white active:bg-sky-700 disabled:opacity-40"
+              key={f.name}
+              type="button"
+              onClick={f.onClick}
+              disabled={f.rows === 0}
+              className="flex min-h-11 cursor-pointer items-center gap-3 border-0 border-t border-line bg-transparent px-0.5 py-2.5 text-left first:border-t-0 hover:bg-active disabled:cursor-default disabled:opacity-45"
             >
-              <Download size={16} />
-              Export All as CSV
+              <FileText size={14} className="shrink-0 text-icon" />
+              <div className="min-w-0 flex-1">
+                <div className="font-mono text-[13px]">{f.name}</div>
+                <div className="font-mono text-[11px] text-fg-2">{`${f.rows} rows`}</div>
+              </div>
+              <Download size={15} className="shrink-0 text-fg-2" />
             </button>
+          ))}
+        </div>
 
-            {/* Info text — matches iOS */}
-            <p className="mt-3 text-center text-[10px] text-zinc-500">
-              CSV files can be opened in Excel, Numbers, or imported into Python/R for analysis.
-            </p>
+        <div className="flex flex-col gap-2">
+          <Button
+            variant="primary"
+            icon={Download}
+            full
+            onClick={exportAll}
+            disabled={vitals.length === 0 && sleepRecords.length === 0 && movement.length === 0}
+          >
+            Export all as CSV
+          </Button>
+          <p className="text-center text-xs text-fg-2">CSV files open in Excel or Numbers, or import into Python/R.</p>
+          <Button icon={Package} full onClick={exportArchive}>Export archive (.tar.gz)</Button>
+          <p className="text-center text-xs text-fg-2">
+            RAW waveforms + biometrics.db copy for this week. Untar and open biometrics.db with any SQLite client.
+          </p>
+        </div>
 
-            {/* Full archive — RAW waveforms + biometrics.db dump for the visible week */}
-            <button
-              onClick={exportArchive}
-              className="mt-3 flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-zinc-800/60 p-3 text-sm font-medium text-zinc-200 active:bg-zinc-700"
-            >
-              <Package size={16} className="text-amber-400" />
-              Export Archive (.tar.gz)
-            </button>
-            <p className="mt-2 text-center text-[10px] text-zinc-500">
-              RAW waveforms + biometrics.db copy for this week. Untar and open biometrics.db with any SQLite client.
-            </p>
+        <div className="flex flex-col gap-2 border-t border-line pt-3">
+          <button
+            type="button"
+            onClick={() => setShowFiles(!showFiles)}
+            aria-expanded={showFiles}
+            className="flex min-h-11 cursor-pointer items-center gap-2.5 rounded-ctl border-0 bg-transparent px-0.5 text-left hover:bg-active"
+          >
+            <HardDrive size={14} className="text-icon" />
+            <span className="flex-1 text-sm">Sensor data files</span>
+            <span className="font-mono text-xs text-fg-2">{diskUsage ? `${diskUsage.rawFileCount} files` : '…'}</span>
+          </button>
 
-            {/* Raw sensor files section — wired to raw.files tRPC router */}
-            <div className="mt-5 border-t border-zinc-700/50 pt-4">
-              <button
-                onClick={() => setShowFiles(!showFiles)}
-                className="flex w-full min-h-[44px] items-center justify-between rounded-xl bg-zinc-800/60 p-3"
-              >
-                <div className="flex items-center gap-2">
-                  <HardDrive size={14} className="text-zinc-400" />
-                  <span className="text-xs font-medium text-zinc-300">
-                    Sensor Data Files
-                  </span>
-                </div>
-                <span className="text-[10px] text-zinc-500">
-                  {diskUsage ? `${diskUsage.rawFileCount} files` : '…'}
-                </span>
-              </button>
+          {showFiles && (
+            <div className="flex flex-col">
+              {rawFilesQuery.isLoading && <p className="py-4 text-center text-xs text-fg-2">Loading files…</p>}
+              {rawFilesQuery.isError && <InlineError className="py-2 text-center">Failed to load files</InlineError>}
+              {rawFiles.length === 0 && !rawFilesQuery.isLoading && !rawFilesQuery.isError && (
+                <p className="py-4 text-center text-xs text-fg-2">No RAW files found</p>
+              )}
 
-              {showFiles && (
-                <div className="mt-2 space-y-1">
-                  {rawFilesQuery.isLoading && (
-                    <div className="py-4 text-center text-xs text-zinc-500">Loading files…</div>
-                  )}
-
-                  {rawFilesQuery.isError && (
-                    <div className="py-4 text-center text-xs text-red-400">
-                      Failed to load files
+              {rawFiles.map((file, idx) => (
+                <div key={file.name} className="flex items-center gap-2 border-t border-line py-2 first:border-t-0">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono text-xs">{file.name}</div>
+                    <div className="font-mono text-[11px] text-fg-2">
+                      {`${formatBytes(file.sizeBytes)} · ${formatDate(file.modifiedAt)}`}
                     </div>
-                  )}
-
-                  {rawFiles.length === 0 && !rawFilesQuery.isLoading && !rawFilesQuery.isError && (
-                    <div className="py-4 text-center text-xs text-zinc-500">No RAW files found</div>
-                  )}
-
-                  {rawFiles.map((file, idx) => (
-                    <div
-                      key={file.name}
-                      className="flex items-center gap-2 rounded-lg bg-zinc-800/40 p-2.5"
-                    >
-                      <Database size={12} className="text-zinc-500 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="truncate font-mono text-[11px] text-zinc-300">
-                          {file.name}
-                        </div>
-                        <div className="flex gap-2 text-[10px] text-zinc-500">
-                          <span>{formatBytes(file.sizeBytes)}</span>
-                          <span>·</span>
-                          <span>{formatDate(file.modifiedAt)}</span>
-                        </div>
-                      </div>
-
-                      {/* Download button */}
-                      <button
-                        onClick={() => handleDownloadRawFile(file.name)}
-                        className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-700/50 active:bg-zinc-600"
-                        title={`Download ${file.name}`}
-                      >
-                        <Download size={12} className="text-sky-400" />
-                      </button>
-
-                      {/* Delete button — disabled for the active (newest, idx===0) file */}
-                      <button
-                        onClick={() => handleDeleteFile(file.name)}
-                        disabled={idx === 0 || deletingFile === file.name}
-                        className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-700/50 active:bg-zinc-600 disabled:opacity-30"
-                        title={idx === 0 ? 'Cannot delete active file' : `Delete ${file.name}`}
-                      >
-                        {deletingFile === file.name
-                          ? (
-                              <span className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" />
-                            )
-                          : (
-                              <Trash2 size={12} className="text-red-400" />
-                            )}
-                      </button>
-                    </div>
-                  ))}
-
-                  {deleteFileMutation.isError && (
-                    <p className="text-center text-[10px] text-red-400 mt-1">
-                      {deleteFileMutation.error?.message ?? 'Delete failed'}
-                    </p>
-                  )}
+                  </div>
+                  <GhostIcon icon={Download} size={14} label={`Download ${file.name}`} onClick={() => handleDownloadRawFile(file.name)} />
+                  {/* Disabled for the active (newest, idx===0) file */}
+                  <GhostIcon
+                    icon={Trash2}
+                    size={14}
+                    label={idx === 0 ? 'Cannot delete active file' : `Delete ${file.name}`}
+                    onClick={() => handleDeleteFile(file.name)}
+                    disabled={idx === 0 || deletingFile === file.name}
+                    className="hover:text-danger"
+                  />
                 </div>
+              ))}
+
+              {deleteFileMutation.isError && (
+                <InlineError className="text-center">{deleteFileMutation.error?.message ?? 'Delete failed'}</InlineError>
               )}
             </div>
-          </div>
+          )}
         </div>
-      )}
+      </Modal>
     </>
   )
 }
 
-/** Stat row — matches iOS statRow layout */
 function StatRow({
   label,
   value,
@@ -448,11 +343,9 @@ function StatRow({
   capitalize?: boolean
 }) {
   return (
-    <div className="flex items-center justify-between py-0.5">
-      <span className="text-zinc-400">{label}</span>
-      <span className={`font-mono text-zinc-200 ${capitalize ? 'capitalize' : ''}`}>
-        {value}
-      </span>
+    <div className="flex items-center justify-between">
+      <span className="text-fg-2">{label}</span>
+      <span className={cn('font-mono', capitalize && 'capitalize')}>{value}</span>
     </div>
   )
 }

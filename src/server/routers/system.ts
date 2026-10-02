@@ -1,10 +1,12 @@
 import { z } from 'zod'
+import { branchNameSchema } from '@/src/server/validation-schemas'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { execFile } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
+import { getStorageReport, runStorageCleanup } from '@/src/lib/podStorage'
 
 const execFileAsync = promisify(execFile)
 
@@ -269,18 +271,7 @@ export const systemRouter = router({
   triggerUpdate: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/system/update', protect: false, tags: ['System'] } })
     .input(z.object({
-      branch: z.string()
-        .regex(/^[a-zA-Z0-9._\-/]+$/, 'Invalid branch name')
-        // git-ref safety the character class can't express: no path
-        // traversal ('..'), no leading/trailing '/', no empty segments
-        // ('//'), and no leading '-' (option injection into git argv).
-        .refine(
-          b => !b.includes('..') && !b.includes('//')
-            && !b.startsWith('/') && !b.endsWith('/')
-            && !b.startsWith('-') && !b.endsWith('.lock'),
-          'Invalid branch name',
-        )
-        .optional(),
+      branch: branchNameSchema.optional(),
     }))
     .output(z.object({
       triggered: z.boolean(),
@@ -532,6 +523,66 @@ export const systemRouter = router({
     }),
 
   /**
+   * /persistent usage by category, days of raw history left by the pruner,
+   * and what sp-storage-cleanup could reclaim (System → Storage).
+   */
+  getStorage: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/storage', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      persistent: z.object({
+        totalBytes: z.number(),
+        usedBytes: z.number(),
+        availableBytes: z.number(),
+        usedPercent: z.number(),
+      }),
+      prunerTargetPercent: z.number(),
+      segments: z.array(z.object({
+        key: z.enum(['rawArchive', 'app', 'database', 'swap', 'reclaimable', 'other']),
+        bytes: z.number(),
+      })),
+      rawHistory: z.object({
+        fileCount: z.number(),
+        oldest: z.string().nullable(),
+        newest: z.string().nullable(),
+        days: z.number().nullable(),
+      }),
+      reclaimable: z.object({
+        available: z.boolean(),
+        totalBytes: z.number(),
+        items: z.array(z.object({
+          path: z.string(),
+          bytes: z.number(),
+          reason: z.string(),
+          kind: z.enum(['temp', 'release', 'modules', 'backup']),
+        })),
+      }),
+    }))
+    .query(() => getStorageReport()),
+
+  /**
+   * Delete sleepypod's own leftovers on /persistent (never the live install,
+   * databases, raw archive, swap or HomeKit data). Old database backups only
+   * when asked; the newest of each is always kept.
+   */
+  freeStorage: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/system/storage/free', protect: false, tags: ['System'] } })
+    .input(z.object({ includeDbBackups: z.boolean().default(false) }).strict())
+    .output(z.object({ freedBytes: z.number(), removed: z.number() }))
+    .mutation(async ({ input }) => {
+      try {
+        return await runStorageCleanup(input.includeDbBackups)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Storage cleanup failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
    * Returns build/version info from .git-info (generated at build time).
    */
   getVersion: publicProcedure
@@ -542,9 +593,11 @@ export const systemRouter = router({
       commitHash: z.string(),
       commitTitle: z.string(),
       buildDate: z.string(),
+      /** Semantic-release tag (vX.Y.Z) when installed from a tagged release, else null. */
+      version: z.string().nullable(),
     }))
     .query(async () => {
-      const fallback = { branch: 'unknown', commitHash: 'unknown', commitTitle: 'unknown', buildDate: 'unknown' }
+      const fallback = { branch: 'unknown', commitHash: 'unknown', commitTitle: 'unknown', buildDate: 'unknown', version: null }
       try {
         const raw = await readFile('.git-info', 'utf-8')
         const parsed = JSON.parse(raw)
@@ -553,6 +606,7 @@ export const systemRouter = router({
           commitHash: typeof parsed.commitHash === 'string' ? parsed.commitHash : 'unknown',
           commitTitle: typeof parsed.commitTitle === 'string' ? parsed.commitTitle : 'unknown',
           buildDate: typeof parsed.buildDate === 'string' ? parsed.buildDate : 'unknown',
+          version: typeof parsed.version === 'string' && /^v\d+\.\d+\.\d+/.test(parsed.version) ? parsed.version : null,
         }
       }
       catch {

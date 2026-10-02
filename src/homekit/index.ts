@@ -57,7 +57,7 @@ export async function startHomeKitIfEnabled(): Promise<void> {
 
 export function enable(): Promise<void> {
   return serialize(() => withTransition(async () => {
-    if (isStarted()) return
+    if (isStarted() && getStatus().running) return
     const monitor = await getDacMonitor()
     await startBridge(monitor)
     setStarted(true)

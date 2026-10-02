@@ -39,9 +39,9 @@ export function PullToRefresh({ onRefresh, enabled = true, children }: PullToRef
         >
           <RefreshCw
             size={20}
-            className={`text-zinc-400 transition-transform duration-200 ${
+            className={`transition-transform duration-200 ${
               isRefreshing ? 'animate-spin' : ''
-            } ${isPastThreshold ? 'text-sky-400' : ''}`}
+            } ${isPastThreshold ? 'text-fg' : 'text-fg-3'}`}
             style={{
               transform: isRefreshing
                 ? undefined

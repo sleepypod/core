@@ -1,3 +1,5 @@
+import { TEMP_NEUTRAL } from '@/src/hardware/types'
+
 /**
  * Temperature color utilities matching iOS TempColor enum.
  * Colors are based on the delta between target and current temperature.
@@ -70,4 +72,36 @@ export function offsetDisplay(offset: number): string {
   if (offset > 0) return `+${offset}`
   if (offset < 0) return `${offset}`
   return '0'
+}
+
+/**
+ * Hue for a set point: blue when cool, violet around neutral (82.5°F), rose
+ * when warm — saturating 8°F either side, as in the Eight Sleep app.
+ */
+export function tempHue(f: number): number {
+  const t = Math.max(-1, Math.min(1, (f - TEMP_NEUTRAL) / 8))
+  return Math.round(t < 0 ? 268 + t * 45 : 268 + t * 77)
+}
+
+/**
+ * Sky hue for a time of day (minutes past midnight) — the card's upper wash:
+ * deep indigo at night, rose-amber at dawn, pale sky by day, violet at dusk.
+ */
+export function skyHue(minutes: number): number {
+  const m = ((minutes % 1440) + 1440) % 1440
+  const stops: [number, number][] = [
+    [0, 235], [300, 240], [390, 15], [480, 205], [1020, 205], [1140, 290], [1290, 235], [1440, 235],
+  ]
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [m0, h0] = stops[i]
+    const [m1, h1] = stops[i + 1]
+    if (m >= m0 && m <= m1) {
+      // Interpolate the short way round the hue wheel.
+      let d = h1 - h0
+      if (d > 180) d -= 360
+      if (d < -180) d += 360
+      return Math.round((h0 + d * ((m - m0) / (m1 - m0)) + 360) % 360)
+    }
+  }
+  return 235
 }

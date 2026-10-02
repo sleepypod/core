@@ -1,11 +1,11 @@
 /**
- * Pure view-model logic for the diagnostics console — formatting, scheduler
- * lane bucketing, and the biometrics/thermal derivations. Kept free of React
+ * Pure view-model logic for the diagnostics console — formatting, the
+ * scheduler job shape, and the biometrics/thermal derivations. Kept free of React
  * and tRPC so it can be unit-tested directly; the console is a thin view over
  * these functions.
  */
 
-import { formatDisplayTemp, formatSetpointF } from '@/src/lib/tempUtils'
+import { formatDisplayTemp } from '@/src/lib/tempUtils'
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
@@ -35,38 +35,37 @@ export function minutesSince(ms: number): number {
   return Math.max(0, Math.floor((Date.now() - ms) / 60000))
 }
 
-export function fmtRel(iso: string | null): string {
-  if (!iso) return '—'
-  const diffMs = new Date(iso).getTime() - Date.now()
-  if (diffMs < 0) return 'past'
-  const min = Math.floor(diffMs / 60_000)
-  if (min < 1) return '<1m'
-  if (min < 60) return `${min}m`
-  const h = Math.floor(min / 60)
-  if (h < 24) return `${h}h ${min % 60}m`
-  return `${Math.floor(h / 24)}d ${h % 24}h`
-}
-
 export function fmtClock(iso: string | null): string {
   return iso ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'
 }
 
-export function fmtDayLabel(ms: number): { weekday: string, day: string } {
-  const d = new Date(ms)
-  return {
-    weekday: d.toLocaleDateString([], { weekday: 'short' }),
-    day: d.toLocaleDateString([], { day: 'numeric', month: 'short' }),
-  }
-}
-
 export const VERDICT_STYLES: Record<string, { label: string, className: string }> = {
-  delivering: { label: 'DELIVERING', className: 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30' },
-  idle: { label: 'IDLE', className: 'bg-sky-500/15 text-sky-300 ring-sky-500/30' },
-  off: { label: 'OFF', className: 'bg-zinc-600/20 text-zinc-400 ring-zinc-600/30' },
-  stalled: { label: 'STALLED', className: 'bg-red-500/20 text-red-300 ring-red-500/40' },
+  delivering: { label: 'DELIVERING', className: 'text-ok' },
+  holding: { label: 'HOLDING', className: 'text-hold' },
+  off: { label: 'OFF', className: 'text-fg-3' },
+  stalled: { label: 'STALLED', className: 'text-danger' },
+  unknown: { label: 'NO PUMP DATA', className: 'text-fg-2' },
 }
 
-// ── Scheduler lanes ────────────────────────────────────────────────────────────
+/**
+ * Header status for a thermal side card: while delivering, show the direction
+ * the pod is driving the bed (COOLING / WARMING, in the matching accent);
+ * otherwise the raw verdict.
+ */
+export function thermalDirection(side: {
+  verdict: string
+  isPowered: boolean
+  targetTempF: number | null
+  currentTempF: number | null
+}): { label: string, className: string } {
+  const v = VERDICT_STYLES[side.verdict] ?? { label: side.verdict.toUpperCase(), className: 'text-fg-2' }
+  if (side.verdict !== 'delivering' || !side.isPowered || side.targetTempF == null || side.currentTempF == null) return v
+  if (side.targetTempF < side.currentTempF - 0.5) return { label: 'COOLING', className: 'text-cool' }
+  if (side.targetTempF > side.currentTempF + 0.5) return { label: 'WARMING', className: 'text-warm' }
+  return { label: 'HOLDING', className: 'text-hold' }
+}
+
+// ── Scheduler jobs ─────────────────────────────────────────────────────────────
 
 export interface SchedJob {
   id: string
@@ -75,43 +74,6 @@ export interface SchedJob {
   nextRun: string | null
   targetTempF?: number | null
   brightness?: number | null
-}
-
-/** The job's payload value as a short display string ('82°F', '40%', or '—'). */
-export function fmtJobValue(job: Pick<SchedJob, 'targetTempF' | 'brightness'>): string {
-  if (job.targetTempF != null) return formatSetpointF(job.targetTempF, 'F')
-  if (job.brightness != null) return `${job.brightness}%`
-  return '—'
-}
-
-export interface DayLane { date: number, isToday: boolean, jobs: SchedJob[] }
-
-const DAY_MS = 86_400_000
-
-/** Bucket upcoming jobs into the next 7 day-lanes, starting at local midnight today. */
-export function buildWeekLanes(jobs: SchedJob[]): DayLane[] {
-  const start = new Date()
-  start.setHours(0, 0, 0, 0)
-  const startMs = start.getTime()
-  const lanes: DayLane[] = Array.from({ length: 7 }, (_, i) => ({ date: startMs + i * DAY_MS, isToday: i === 0, jobs: [] }))
-  for (const j of jobs) {
-    if (!j.nextRun) continue
-    const idx = Math.floor((new Date(j.nextRun).getTime() - startMs) / DAY_MS)
-    if (idx >= 0 && idx < 7) lanes[idx].jobs.push(j)
-  }
-  for (const lane of lanes) lane.jobs.sort((a, b) => new Date(a.nextRun ?? 0).getTime() - new Date(b.nextRun ?? 0).getTime())
-  return lanes
-}
-
-export function jobTone(type: string): string {
-  const t = type.toLowerCase()
-  if (t.includes('temp')) return 'bg-orange-500/15 text-orange-300'
-  if (t.includes('off')) return 'bg-zinc-600/30 text-zinc-300'
-  if (t.includes('on')) return 'bg-emerald-500/15 text-emerald-300'
-  if (t.includes('alarm')) return 'bg-amber-500/15 text-amber-300'
-  if (t.includes('prime')) return 'bg-sky-500/15 text-sky-300'
-  if (t.includes('reboot')) return 'bg-purple-500/15 text-purple-300'
-  return 'bg-zinc-700/40 text-zinc-300'
 }
 
 // ── Biometrics data-flow check ──────────────────────────────────────────────────
@@ -168,25 +130,3 @@ export interface ThermalSideSnapshot {
   waterTempF: number | null
 }
 
-export interface ThermalTrendPoint {
-  t: number
-  target: number | null
-  bed: number | null
-  water: number | null
-}
-
-/** Project the buffered thermal history into a per-side trend series. */
-export function thermalTrendPoints(
-  history: Array<{ t: number, sides: ThermalSideSnapshot[] }>,
-  side: string,
-): ThermalTrendPoint[] {
-  return history.map((h) => {
-    const hs = h.sides.find(x => x.side === side)
-    return {
-      t: h.t,
-      target: hs?.isPowered ? hs.targetTempF ?? null : null,
-      bed: hs?.currentTempF ?? null,
-      water: hs?.waterTempF ?? null,
-    }
-  })
-}

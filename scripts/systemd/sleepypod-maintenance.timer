@@ -1,0 +1,10 @@
+[Unit]
+Description=Run SleepyPod housekeeping after boot and daily
+
+[Timer]
+OnActiveSec=10min
+OnUnitActiveSec=1d
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

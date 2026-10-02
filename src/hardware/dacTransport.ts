@@ -17,6 +17,7 @@ import { unlink } from 'fs/promises'
 import { createServer, type Server, type Socket } from 'net'
 import split from 'binary-split'
 import type { Transform } from 'stream'
+import { beginStatusChange } from './statusRevision'
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -292,9 +293,9 @@ class DacTransport {
     if (!this.socket.destroyed) this.socket.destroy()
   }
 
-  public static fromSocket(socket: Socket) {
+  public static fromSocket(socket: Socket, sequentialQueue: SequentialQueue) {
     const messageStream = new MessageStream(socket, SEPARATOR)
-    return new DacTransport(socket, messageStream, new SequentialQueue())
+    return new DacTransport(socket, messageStream, sequentialQueue)
   }
 
   private async write(data: Buffer) {
@@ -311,10 +312,10 @@ class DacServer {
     await this.listener.close()
   }
 
-  public async waitForConnection(): Promise<DacTransport> {
+  public async waitForConnection(sequentialQueue: SequentialQueue): Promise<DacTransport> {
     const socket = await this.listener.waitForConnection()
     console.log('[DAC] frankenfirmware connected')
-    return DacTransport.fromSocket(socket)
+    return DacTransport.fromSocket(socket, sequentialQueue)
   }
 
   public static async start(path: string) {
@@ -394,25 +395,37 @@ function withTimeout<T>(promise: Promise<T>, onTimeout: () => Error): Promise<T>
   })
 }
 
-// ─── Module-level state ──────────────────────────────────────────────────────
+// ─── Process-wide state ──────────────────────────────────────────────────────
 
-let dacServer: DacServer | undefined
-let transport: DacTransport | undefined
-let connectPromise: Promise<DacTransport> | undefined
+interface DacState {
+  dacServer?: DacServer
+  transport?: DacTransport
+  connectPromise?: Promise<DacTransport>
+  sequentialQueue: SequentialQueue
+}
+
+// Next.js can evaluate this module separately for instrumentation and routes.
+// Share ownership of the listener, connection, and queue across those bundles.
+const g = globalThis as Record<string, unknown>
+const state = (g.__sp_dac_transport__ ??= {
+  sequentialQueue: new SequentialQueue(),
+}) as DacState
 
 function waitWithTimeout(server: DacServer) {
-  return withTimeout(server.waitForConnection(), () => {
+  return withTimeout(server.waitForConnection(state.sequentialQueue), () => {
     console.warn(`[DAC] restarting after ${connectionTimeoutMs() / 1_000}s timeout`)
     return new ConnectionTimeoutError()
   })
 }
 
 async function shutdown() {
-  transport?.close()
-  transport = undefined
-  if (dacServer) {
-    await dacServer.close()
-    dacServer = undefined
+  // A snapshot from the old connection must not survive a reconnect.
+  beginStatusChange()()
+  state.transport?.close()
+  state.transport = undefined
+  if (state.dacServer) {
+    await state.dacServer.close()
+    state.dacServer = undefined
   }
 }
 
@@ -423,23 +436,22 @@ async function shutdown() {
  * Retries with server recreation on timeout.
  */
 export async function connectDac(socketPath: string): Promise<void> {
-  if (transport) return
-  if (connectPromise) {
-    await connectPromise
+  if (state.transport) return
+  if (state.connectPromise) {
+    await state.connectPromise
     return
   }
 
-  connectPromise = (async () => {
+  state.connectPromise = (async () => {
     let timeoutAttempts = 0
     while (true) {
-      if (!dacServer) {
-        dacServer = await DacServer.start(socketPath)
-      }
+      // Failed attempts close their listener before retrying.
+      state.dacServer = await DacServer.start(socketPath)
 
       try {
-        transport = await waitWithTimeout(dacServer)
+        state.transport = await waitWithTimeout(state.dacServer)
         console.log('[DAC] connected')
-        return transport
+        return state.transport
       }
       catch (error) {
         if (error instanceof ConnectionTimeoutError) {
@@ -461,10 +473,10 @@ export async function connectDac(socketPath: string): Promise<void> {
   })()
 
   try {
-    await connectPromise
+    await state.connectPromise
   }
   finally {
-    connectPromise = undefined
+    state.connectPromise = undefined
   }
 }
 
@@ -476,22 +488,28 @@ export async function connectDac(socketPath: string): Promise<void> {
  * @returns Raw response string from firmware
  */
 export async function sendCommand(command: string, arg?: string): Promise<string> {
-  if (!transport) {
+  if (!state.transport) {
     throw new Error('[DAC] not connected — call connectDac() first')
   }
 
-  if (arg === undefined || arg === '') {
-    return transport.sendMessage(command)
+  // HELLO and DEVICE_STATUS are read-only. Invalidate for every other command,
+  // including raw commands and writes from HomeKit, gestures, and the scheduler.
+  const finish = command === '0' || command === '14' ? undefined : beginStatusChange()
+  try {
+    return await (arg === undefined || arg === ''
+      ? state.transport.sendMessage(command)
+      : state.transport.callFunction(command, arg))
   }
-
-  return transport.callFunction(command, arg)
+  finally {
+    finish?.()
+  }
 }
 
 /**
  * Disconnect and tear down.
  */
 export async function disconnectDac(): Promise<void> {
-  connectPromise = undefined
+  state.connectPromise = undefined
   await shutdown()
 }
 
@@ -499,5 +517,5 @@ export async function disconnectDac(): Promise<void> {
  * Check if frankenfirmware is currently connected.
  */
 export function isDacConnected(): boolean {
-  return transport !== undefined
+  return state.transport !== undefined
 }

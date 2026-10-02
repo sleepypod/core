@@ -1,0 +1,228 @@
+{
+  "label": "initial-after-8fc0933",
+  "base": "http://127.0.0.1:3000",
+  "startedAt": "2026-09-06T04:02:27.360Z",
+  "node": "v22.17.0",
+  "pid": "6212",
+  "methodology": "15s idle; one deviceStatus WebSocket; 3 warmups; 60 serial status reads spaced at least 500ms start-to-start; 12 bursts of 4 concurrent reads; 10 warm HTML requests per page. /proc CPU uses SC_CLK_TCK=100 and reports percent of one core. HTTP timing includes body; no browser rendering. Finally 20 system-health requests concurrent with a no-op healthcheck sentinel.",
+  "idle": {
+    "durationSec": 15,
+    "cpuPercentOneCore": 11.33,
+    "rssMiBStart": 166.13,
+    "rssMiBEnd": 165.22
+  },
+  "status": {
+    "n": 60,
+    "medianMs": 42.95,
+    "p95Ms": 56.13,
+    "maxMs": 83.29,
+    "meanMs": 43.36
+  },
+  "statusSamplesMs": [
+    32.29,
+    45.94,
+    83.29,
+    44.2,
+    50.16,
+    44.6,
+    52.86,
+    34.53,
+    34.72,
+    42.95,
+    51.68,
+    43.27,
+    55,
+    40.36,
+    56.13,
+    37.15,
+    35.19,
+    35.1,
+    34.16,
+    46.13,
+    36.07,
+    35.01,
+    50.31,
+    34.9,
+    40.83,
+    36.59,
+    34.27,
+    35.54,
+    52.71,
+    39.39,
+    51.36,
+    34.1,
+    64.67,
+    33.77,
+    50.23,
+    33.5,
+    50.1,
+    43.49,
+    47.22,
+    34.05,
+    49.28,
+    35.71,
+    60.54,
+    36.42,
+    46.2,
+    34.03,
+    51.66,
+    41.31,
+    46.18,
+    33.67,
+    47.51,
+    34.48,
+    52.21,
+    34.01,
+    48.01,
+    34.96,
+    50.88,
+    43.7,
+    47.48,
+    35.58
+  ],
+  "active": {
+    "durationSec": 30.01,
+    "cpuPercentOneCore": 19.06,
+    "rssMiBStart": 168.91,
+    "rssMiBEnd": 175.16
+  },
+  "concurrentStatus": {
+    "n": 48,
+    "medianMs": 76.15,
+    "p95Ms": 114.53,
+    "maxMs": 153.55,
+    "meanMs": 74.39
+  },
+  "concurrentHealth": {
+    "n": 12,
+    "medianMs": 119.65,
+    "p95Ms": 172.11,
+    "maxMs": 172.11,
+    "meanMs": 123.4
+  },
+  "burst": {
+    "durationSec": 5.21,
+    "cpuPercentOneCore": 56.59,
+    "rssMiBStart": 175.16,
+    "rssMiBEnd": 178.05
+  },
+  "pages": {
+    "/en": {
+      "html": {
+        "n": 10,
+        "medianMs": 45.94,
+        "p95Ms": 82.19,
+        "maxMs": 82.19,
+        "meanMs": 49.93
+      },
+      "htmlBytes": 13406,
+      "initialJsFiles": 10,
+      "initialJsDecodedBytes": 732523,
+      "fetchAllInitialJsMs": 382.84
+    },
+    "/en/debug": {
+      "html": {
+        "n": 10,
+        "medianMs": 34.47,
+        "p95Ms": 37.97,
+        "maxMs": 37.97,
+        "meanMs": 34.87
+      },
+      "htmlBytes": 23656,
+      "initialJsFiles": 12,
+      "initialJsDecodedBytes": 783209,
+      "fetchAllInitialJsMs": 244.18
+    }
+  },
+  "settings": {
+    "n": 20,
+    "medianMs": 31.39,
+    "p95Ms": 39.87,
+    "maxMs": 51.33,
+    "meanMs": 33.16
+  },
+  "websocket": {
+    "frames": 40,
+    "gaps": {
+      "n": 39,
+      "medianMs": 1001.52,
+      "p95Ms": 1038.2,
+      "maxMs": 1044.16,
+      "meanMs": 1003.74
+    }
+  },
+  "health": {
+    "status": "running",
+    "podVersion": "J00",
+    "gesturesSupported": true
+  },
+  "systemHealth": {
+    "n": 20,
+    "medianMs": 39.38,
+    "p95Ms": 58.33,
+    "maxMs": 98.39,
+    "meanMs": 44.1
+  },
+  "healthSentinel": {
+    "n": 20,
+    "medianMs": 61.36,
+    "p95Ms": 74.2,
+    "maxMs": 77.32,
+    "meanMs": 63.15
+  },
+  "version": {
+    "branch": "perf/startup-api",
+    "commitHash": "8fc0933",
+    "commitTitle": "perf: shorten startup and remove blocking API diagnostics",
+    "buildDate": "2026-09-06T03:53:15.156Z"
+  },
+  "performance": {
+    "uptimeSeconds": 330.578933103,
+    "rssBytes": 196968448,
+    "startup": [
+      {
+        "name": "migrations-ready",
+        "elapsedMs": 74,
+        "durationMs": 73
+      },
+      {
+        "name": "hardware-services-started",
+        "elapsedMs": 281,
+        "durationMs": 1
+      },
+      {
+        "name": "http-initialization-ready",
+        "elapsedMs": 287,
+        "durationMs": 0
+      },
+      {
+        "name": "scheduler-ready",
+        "elapsedMs": 13555,
+        "durationMs": 13267
+      },
+      {
+        "name": "mqtt-started",
+        "elapsedMs": 13899,
+        "durationMs": 0
+      },
+      {
+        "name": "sensor-source-raw",
+        "elapsedMs": 64269,
+        "durationMs": 0
+      },
+      {
+        "name": "first-sensor-frame",
+        "elapsedMs": 64329,
+        "durationMs": 0
+      }
+    ],
+    "sensorSource": "raw",
+    "firstFrameMs": 64329,
+    "eventLoop": {
+      "meanMs": 21.69,
+      "p95Ms": 23.15,
+      "maxMs": 3080.72
+    }
+  },
+  "finishedAt": "2026-09-06T04:03:26.786Z"
+}

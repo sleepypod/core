@@ -17,14 +17,17 @@
  * monitors competing for the same socket.
  */
 
+import { getTemperatureControlStatus } from '@/src/temperature/instance'
 import { connectDac, disconnectDac } from './dacTransport'
 import { DacMonitor } from './dacMonitor'
 import { GestureActionHandler } from './gestureActionHandler'
 import { defaultGestureActionDeps } from './gestureActionHandler.deps'
 import { DeviceStateSync, getAlarmState } from './deviceStateSync'
 import { trackPrimingState, resetPrimingState, getPrimeCompletedAt } from './primeNotification'
+import { getAllPumpStallNotices } from './pumpStallNotification'
 import { cancelSnooze, getSnoozeStatus } from './snoozeManager'
 import { clearSharedHardwareClient, getSharedHardwareClient } from './sharedClient'
+import { applyMutationOverlay } from '../streaming/mutationOverlay'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
 
@@ -98,14 +101,19 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
         import('../streaming/piezoStream').then(({ broadcastFrame }) => {
           const primeCompletedAt = getPrimeCompletedAt()
           const alarmState = getAlarmState()
+          const stallNotices = getAllPumpStallNotices()
           broadcastFrame({
             type: 'deviceStatus',
+            temperatureControl: getTemperatureControlStatus(),
             ts: Date.now(),
-            leftSide: { ...status.leftSide, isAlarmVibrating: alarmState.left },
-            rightSide: { ...status.rightSide, isAlarmVibrating: alarmState.right },
+            // A poll can still report the pre-command target right after a
+            // mutation; keep the mutation's target until the firmware agrees.
+            leftSide: { ...applyMutationOverlay('left', { ...status.leftSide }), isAlarmVibrating: alarmState.left },
+            rightSide: { ...applyMutationOverlay('right', { ...status.rightSide }), isAlarmVibrating: alarmState.right },
             waterLevel: status.waterLevel,
             isPriming: status.isPriming,
             ...(primeCompletedAt && { primeCompletedNotification: { timestamp: primeCompletedAt } }),
+            ...((stallNotices.left || stallNotices.right) && { pumpStallNotifications: stallNotices }),
             snooze: {
               left: getSnoozeStatus('left'),
               right: getSnoozeStatus('right'),

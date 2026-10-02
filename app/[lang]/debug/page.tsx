@@ -1,7 +1,6 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { DiagnosticsConsole } from '@/src/components/diagnostics/DiagnosticsConsole'
-
-export default function DebugPage() {
-  return <DiagnosticsConsole />
+export default async function Page({ params }: { params: Promise<{ lang: string }> }) {
+  const { lang } = await params
+  redirect(`/${lang}/system`)
 }

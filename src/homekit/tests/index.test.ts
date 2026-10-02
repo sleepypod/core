@@ -22,7 +22,8 @@ const m = vi.hoisted(() => {
     setTransitioning: vi.fn((v: boolean) => { status.transitioning = v }),
     getDacMonitor: vi.fn(async () => ({ id: 'monitor' })),
     enabled: { value: true },
-    dbThrows: { value: false },
+    dbThrows: { value: null as unknown },
+    rowMissing: { value: false },
     status,
   }
 })
@@ -43,11 +44,16 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 vi.mock('@/src/db', () => ({
   db: {
     select: () => {
-      if (m.dbThrows.value) throw new Error('db down')
+      if (m.dbThrows.value) {
+        if (m.dbThrows.value === true) throw new Error('db down')
+        throw m.dbThrows.value
+      }
       return {
         from: () => ({
           where: () => ({
-            limit: () => Promise.resolve([{ homekitEnabled: m.enabled.value ? 1 : 0 }]),
+            limit: () => Promise.resolve(
+              m.rowMissing.value ? [] : [{ homekitEnabled: m.enabled.value ? 1 : 0 }],
+            ),
           }),
         }),
       }
@@ -74,12 +80,13 @@ describe('homekit lifecycle', () => {
     m.setTransitioning.mockClear()
     m.getDacMonitor.mockClear()
     m.enabled.value = true
-    m.dbThrows.value = false
+    m.dbThrows.value = null
+    m.rowMissing.value = false
     m.status.running = false
     m.status.transitioning = false
   })
   afterEach(() => {
-    // Drain serializer between cases by re-importing fresh module.
+    vi.restoreAllMocks()
   })
 
   it('startHomeKitIfEnabled is a no-op when flag is false', async () => {
@@ -103,6 +110,31 @@ describe('homekit lifecycle', () => {
     expect(m.startBridge).not.toHaveBeenCalled()
   })
 
+  it('an absent settings row is disabled without being treated as a DB error', async () => {
+    m.rowMissing.value = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mod = await import('../index')
+
+    await mod.startHomeKitIfEnabled()
+
+    expect(m.startBridge).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('logs the raw value for a non-Error enabled-flag failure', async () => {
+    m.dbThrows.value = 'plain DB failure'
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mod = await import('../index')
+
+    await mod.startHomeKitIfEnabled()
+
+    expect(warn).toHaveBeenCalledWith(
+      '[homekit] failed to read enabled flag:',
+      'plain DB failure',
+    )
+    expect(m.startBridge).not.toHaveBeenCalled()
+  })
+
   it('enable() is idempotent within the same module instance', async () => {
     const mod = await import('../index')
     await mod.enable()
@@ -116,6 +148,32 @@ describe('homekit lifecycle', () => {
     await mod.disable()
     await mod.disable()
     expect(m.stopBridge).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a failed shutdown retryable without starting another bridge', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.stopBridge.mockRejectedValueOnce(new Error('unpublish failed'))
+    await expect(mod.disable()).rejects.toThrow('unpublish failed')
+    await mod.enable()
+    expect(m.startBridge).toHaveBeenCalledTimes(1)
+    await mod.disable()
+    expect(m.stopBridge).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-enables after partial teardown closes the server but rejects mDNS cleanup', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.stopBridge.mockImplementationOnce(async () => {
+      m.status.running = false
+      throw new Error('advertiser unavailable')
+    })
+
+    await expect(mod.disable()).rejects.toThrow('advertiser unavailable')
+    expect(mod.status().running).toBe(false)
+    await mod.enable()
+    expect(m.startBridge).toHaveBeenCalledTimes(2)
+    expect(mod.status().running).toBe(true)
   })
 
   it('shutdownHomeKit is a thin wrapper for disable()', async () => {
@@ -150,6 +208,31 @@ describe('homekit lifecycle', () => {
     expect(m.startBridge).not.toHaveBeenCalled()
   })
 
+  it('unpair while disabled resets started so a later enable can publish', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.startBridge.mockClear()
+    m.enabled.value = false
+    await mod.unpair()
+
+    m.enabled.value = true
+    await mod.enable()
+
+    expect(m.startBridge).toHaveBeenCalledOnce()
+  })
+
+  it('unpair while enabled leaves started true and a later enable is idempotent', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.startBridge.mockClear()
+    await mod.unpair()
+    expect(m.startBridge).toHaveBeenCalledOnce()
+
+    await mod.enable()
+
+    expect(m.startBridge).toHaveBeenCalledOnce()
+  })
+
   it('regeneratePairing() rotates identity, restarts bridge, and returns status', async () => {
     const mod = await import('../index')
     await mod.enable()
@@ -167,6 +250,31 @@ describe('homekit lifecycle', () => {
     m.enabled.value = false
     await mod.regeneratePairing()
     expect(m.startBridge).not.toHaveBeenCalled()
+  })
+
+  it('disabled regeneration resets started so enable can publish afterward', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.startBridge.mockClear()
+    m.enabled.value = false
+    await mod.regeneratePairing()
+
+    m.enabled.value = true
+    await mod.enable()
+
+    expect(m.startBridge).toHaveBeenCalledOnce()
+  })
+
+  it('enabled regeneration leaves started true and enable remains idempotent', async () => {
+    const mod = await import('../index')
+    await mod.enable()
+    m.startBridge.mockClear()
+    await mod.regeneratePairing()
+    expect(m.startBridge).toHaveBeenCalledOnce()
+
+    await mod.enable()
+
+    expect(m.startBridge).toHaveBeenCalledOnce()
   })
 
   it('serializes overlapping enable() calls — only one startBridge', async () => {

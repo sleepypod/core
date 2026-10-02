@@ -1,0 +1,17 @@
+# shellcheck shell=bash
+# Lets the web service (User=sleepypod) run sp-storage-cleanup as root for the
+# System → Storage page. Its own fragment so OTA updates can add it without
+# rewriting the install-time sleepypod-update fragment. Non-fatal: the page
+# still lists reclaimable space without it, it just can't free it.
+install_storage_cleanup_sudoers() {
+  local file="/etc/sudoers.d/sleepypod-storage" tmp
+  tmp=$(mktemp)
+  printf '%s\n' 'sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-storage-cleanup' > "$tmp"
+  chmod 0440 "$tmp"
+  if visudo -c -q -f "$tmp" 2>/dev/null; then
+    install -m 0440 -o root -g root "$tmp" "$file"
+  else
+    echo "Warning: sleepypod-storage sudoers fragment failed validation — skipped" >&2
+  fi
+  rm -f "$tmp"
+}

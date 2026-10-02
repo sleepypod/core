@@ -220,7 +220,17 @@ export const alarmSchedules = sqliteTable('alarm_schedules', {
 // Device State (Runtime)
 // ============================================================================
 
+export const temperatureHolds = sqliteTable('temperature_holds', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  temperature: real('temperature').notNull(),
+  // Epoch milliseconds preserve the exact hold boundary across restarts.
+  startedAt: integer('started_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+})
+
 export const deviceState = sqliteTable('device_state', {
+  // Explicit manual hardware cutoff, independent of temperature ownership (epoch ms).
+  hardwareDeadline: integer('hardware_deadline'),
   side: text('side', { enum: ['left', 'right'] }).primaryKey(),
   currentTemperature: real('current_temperature'), // Current temp in °F
   targetTemperature: real('target_temperature'), // Target temp in °F

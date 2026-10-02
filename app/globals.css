@@ -7,8 +7,55 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-plex-sans), 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* ─── Sleepypod design tokens (2026 redesign) ─────────────────────── */
+  --color-app: var(--surface-app);
+  --color-surface: var(--surface-card);
+  --color-active: var(--surface-active);
+  --color-field: var(--surface-field);
+  --color-code: var(--surface-code);
+  --color-line: var(--border-1);
+  --color-line-2: var(--border-2);
+  --color-grid: var(--border-grid);
+  --color-fg: var(--text-1);
+  --color-fg-2: var(--text-2);
+  --color-fg-3: var(--text-3);
+  --color-icon: var(--text-icon);
+  --color-inverse: var(--text-inverse);
+  --color-cool: var(--accent-cool);
+  --color-warm: var(--accent-warm);
+  --color-hold: var(--accent-neutral);
+  --color-track: var(--dial-track);
+  --color-status: var(--text-status);
+  --color-side-left: var(--side-left);
+  --color-side-right: var(--side-right);
+  --color-ok: var(--status-ok);
+  --color-warn: var(--status-warn);
+  --color-danger: var(--status-danger);
+  --color-ok-line: var(--status-ok-border);
+  --color-warn-line: var(--status-warn-border);
+  --color-warn-bg: var(--status-warn-bg);
+  --color-danger-line: var(--status-danger-border);
+  --color-stage-awake: var(--stage-awake);
+  --color-stage-rem: var(--stage-rem);
+  --color-stage-light: var(--stage-light);
+  --color-stage-deep: var(--stage-deep);
+  --color-hr: var(--chart-hr);
+  --color-humidity: var(--chart-humidity);
+  --color-link: var(--accent-link);
+  --color-vital-hr: var(--chart-vital-hr);
+  --color-vital-hrv: var(--chart-vital-hrv);
+  --color-vital-br: var(--chart-vital-br);
+  --radius-tag: 3px;
+  --radius-thumb: 6px;
+  --radius-ctl: 8px;
+  --radius-seg: 9px;
+  --radius-card: 12px;
+  --radius-dialog: 16px;
+  --radius-sheet: 24px;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -47,81 +94,158 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
+/* ─── Sleepypod color tokens ────────────────────────────────────────────
+   Dark is the default. Light applies via [data-theme="light"] on <html>,
+   or via prefers-color-scheme when the theme preference is "auto". */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.58 0.22 27);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.809 0.105 251.813);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sp-ink-0: #0b0b0c;
+  --sp-ink-1: #0f0f11;
+  --sp-ink-2: #17171a;
+  --sp-ink-code: #08080a;
+  --sp-line-1: #1f1f22;
+  --sp-line-2: #26262a;
+  --sp-line-grid: #16161a;
+  --sp-fg-1: #ececec;
+  --sp-fg-2: #8b8b92;
+  --sp-fg-3: #5d5d63;
+  --sp-fg-icon: #b0b0b6;
+  --sp-cool: #7ab5e0;
+  --sp-warm: #e0976a;
+  --sp-neutral: #9ab3c9;
+  --sp-green: #50c878;
+  --sp-amber: #e0b45a;
+  --sp-red: #e06a6a;
+  --sp-violet: #a58be0;
+  --sp-indigo: #4f73c9;
+  --sp-humidity: #4a90d9;
+
+  --surface-app: var(--sp-ink-0);
+  --surface-card: var(--sp-ink-1);
+  --surface-active: var(--sp-ink-2);
+  --surface-field: var(--sp-ink-0);
+  --surface-code: var(--sp-ink-code);
+  --border-1: var(--sp-line-1);
+  --border-2: var(--sp-line-2);
+  --border-grid: var(--sp-line-grid);
+  --text-1: var(--sp-fg-1);
+  --text-2: var(--sp-fg-2);
+  --text-3: var(--sp-fg-3);
+  --text-icon: var(--sp-fg-icon);
+  --text-inverse: var(--sp-ink-0);
+
+  --accent-cool: var(--sp-cool);
+  --accent-warm: var(--sp-warm);
+  --accent-neutral: var(--sp-neutral);
+  --dial-track: #1f1f23;
+  --side-left: #a99cf2;
+  --side-right: #f08cc4;
+  --text-status: #c4c4d0;
+  --temp-off-bg: linear-gradient(180deg, #17181d, #121216);
+
+  --status-ok: var(--sp-green);
+  --status-warn: var(--sp-amber);
+  --status-danger: var(--sp-red);
+  --status-ok-border: #1f3a2a;
+  --status-warn-border: #3a3222;
+  --status-warn-bg: #2a2414;
+  --status-danger-border: #3a2020;
+
+  --stage-awake: var(--sp-warm);
+  --stage-rem: var(--sp-violet);
+  --stage-light: var(--sp-cool);
+  --stage-deep: var(--sp-indigo);
+  --chart-hr: var(--sp-red);
+  --chart-humidity: var(--sp-humidity);
+  --heat-rgb: 122, 181, 224;
+  --accent-link: #8fc3ec;
+  --chart-vital-hr: #e8877a;
+  --chart-vital-hrv: #b294e6;
+  --chart-vital-br: #6db3e3;
+
+  --toggle-off-track: var(--sp-line-2);
+  --toggle-off-knob: #6a6a70;
+  --toggle-on-knob: var(--sp-ink-0);
+  --overlay: rgba(0, 0, 0, 0.62);
+  --shadow-dialog: 0 24px 60px rgba(0, 0, 0, 0.35);
 }
 
-.dark {
-  /* Deep black background matching theme.background (#0a0a0a) */
-  --background: oklch(0.07 0 0);
-  --foreground: oklch(0.985 0 0);
-  /* Card bg matching theme.card (#141414) / zinc-900 */
-  --card: oklch(0.12 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.12 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  /* Primary: sky-400 accent for active elements */
-  --primary: oklch(0.746 0.108 233);
-  --primary-foreground: oklch(0.985 0 0);
-  /* Secondary: zinc-800 level */
-  --secondary: oklch(0.21 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  /* Muted: zinc-900 level */
-  --muted: oklch(0.16 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  /* Accent: zinc-800 */
-  --accent: oklch(0.21 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  /* Border: zinc-800 (~#27272a) */
-  --border: oklch(0.24 0 0);
-  /* Input: slightly lighter for contrast */
-  --input: oklch(0.21 0 0);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.746 0.108 233);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --sidebar: oklch(0.12 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.746 0.108 233);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.21 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.24 0 0);
-  --sidebar-ring: oklch(0.556 0 0);
+[data-theme="light"] {
+  --sp-ink-0: #f6f6f5;
+  --sp-ink-1: #ffffff;
+  --sp-ink-2: #ececea;
+  --sp-ink-code: #f1f1ee;
+  --sp-line-1: #e2e2df;
+  --sp-line-2: #d6d6d2;
+  --sp-line-grid: #efefec;
+  --sp-fg-1: #111113;
+  --sp-fg-2: #6b6b70;
+  --sp-fg-3: #9a9aa0;
+  --sp-fg-icon: #44444a;
+  --sp-cool: #2f6fb5;
+  --sp-warm: #c8643a;
+  --sp-neutral: #5f7f9c;
+  --sp-green: #2e9d5b;
+  --sp-amber: #b07d1a;
+  --sp-red: #c94444;
+  --sp-violet: #7a5cc4;
+  --sp-indigo: #34509e;
+  --sp-humidity: #2f6fb5;
+  --dial-track: #e8e8e5;
+  --side-left: #6a58d6;
+  --side-right: #c2438c;
+  --text-status: #4a4a55;
+  --temp-off-bg: linear-gradient(180deg, #f3f3f5, #ececef);
+  --status-ok-border: #bfe0cb;
+  --status-warn-border: #ead9b0;
+  --status-warn-bg: #fbf1dc;
+  --status-danger-border: #f0c8c8;
+  --heat-rgb: 47, 111, 181;
+  --accent-link: #2f6fb5;
+  --chart-vital-hr: #c94f40;
+  --chart-vital-hrv: #7a5cc4;
+  --chart-vital-br: #2f7fb8;
+  --toggle-off-track: #dcdcd8;
+  --toggle-off-knob: #ffffff;
+  --toggle-on-knob: #ffffff;
+  --overlay: rgba(20, 20, 24, 0.32);
+  color-scheme: light;
+}
+
+:root {
+  /* shadcn semantic vars mapped onto the sleepypod tokens so base-ui/shadcn
+     primitives follow the active theme. */
+  --background: var(--surface-app);
+  --foreground: var(--text-1);
+  --card: var(--surface-card);
+  --card-foreground: var(--text-1);
+  --popover: var(--surface-card);
+  --popover-foreground: var(--text-1);
+  --primary: var(--text-1);
+  --primary-foreground: var(--text-inverse);
+  --secondary: var(--surface-active);
+  --secondary-foreground: var(--text-1);
+  --muted: var(--surface-active);
+  --muted-foreground: var(--text-2);
+  --accent: var(--surface-active);
+  --accent-foreground: var(--text-1);
+  --destructive: var(--status-danger);
+  --border: var(--border-1);
+  --input: var(--border-2);
+  --ring: var(--text-3);
+  --chart-1: var(--accent-cool);
+  --chart-2: var(--accent-warm);
+  --chart-3: var(--stage-rem);
+  --chart-4: var(--stage-deep);
+  --chart-5: var(--accent-neutral);
+  --radius: 0.75rem;
+  --sidebar: var(--surface-app);
+  --sidebar-foreground: var(--text-1);
+  --sidebar-primary: var(--text-1);
+  --sidebar-primary-foreground: var(--text-inverse);
+  --sidebar-accent: var(--surface-active);
+  --sidebar-accent-foreground: var(--text-1);
+  --sidebar-border: var(--border-1);
+  --sidebar-ring: var(--text-3);
 }
 
 @layer base {
@@ -130,7 +254,8 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-app text-fg font-sans antialiased;
+    font-size: 14px;
   }
 
   /* Prevent 300ms tap delay on touch devices */
@@ -179,15 +304,10 @@ body {
 /* ─── Dark theme form element styles ──────────────────────────────────── */
 
 /* Ensure <select> <option> elements render with dark background */
-.dark select,
-.dark option {
-  background-color: #1a1a1a;
-  color: #e4e4e7;
-}
-
-/* Style native dropdown arrow for dark theme */
-.dark select {
-  color-scheme: dark;
+select,
+option {
+  background-color: var(--surface-card);
+  color: var(--text-1);
 }
 
 /* Dark scrollbar for WebKit browsers */
@@ -199,7 +319,7 @@ body {
   background: transparent;
 }
 .dark ::-webkit-scrollbar-thumb {
-  background: #333;
+  background: var(--border-2);
   border-radius: 3px;
 }
 
@@ -207,9 +327,9 @@ body {
 .dark input:-webkit-autofill,
 .dark input:-webkit-autofill:hover,
 .dark input:-webkit-autofill:focus {
-  -webkit-box-shadow: 0 0 0 30px #1a1a1a inset !important;
-  -webkit-text-fill-color: #e4e4e7 !important;
-  caret-color: #e4e4e7;
+  -webkit-box-shadow: 0 0 0 30px var(--surface-field) inset !important;
+  -webkit-text-fill-color: var(--text-1) !important;
+  caret-color: var(--text-1);
 }
 
 /* Ensure color-scheme is dark for all form controls */
@@ -217,11 +337,71 @@ html.dark {
   color-scheme: dark;
 }
 
-/* ─── ReactFlow pipeline node overrides ──────────────────────────────── */
+/* ─── Sleepypod helpers ──────────────────────────────────────────────── */
 
-.react-flow__node-pipeline {
-  background: transparent !important;
-  border: none !important;
-  padding: 0 !important;
-  box-shadow: none !important;
+/* Mono uppercase eyebrow label (11px, +0.06em). */
+.sp-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+/* Status word (COOLING / WARMING / HOLDING). */
+.sp-status {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* TempBackdrop / stepper ink: --h (hue) is set inline per temperature or time
+   of day. Colors fill a masked layer so a hue change can transition. */
+.sp-temp-sky {
+  background-color: hsl(var(--h, 235) 45% 32% / 0.4);
+  mask-image: linear-gradient(to bottom, #000, transparent 65%);
+}
+
+.sp-temp-glow {
+  background-color: hsl(var(--h, 268) 55% 56% / 0.5);
+  mask-image: radial-gradient(ellipse 90% 65% at 50% 80%, #000, transparent);
+}
+
+.sp-temp-off {
+  background: var(--temp-off-bg);
+}
+
+.sp-temp-ink {
+  color: hsl(var(--h, 268) 62% 74%);
+}
+
+[data-theme="light"] .sp-temp-sky {
+  background-color: hsl(var(--h, 235) 70% 86% / 0.55);
+}
+
+[data-theme="light"] .sp-temp-glow {
+  background-color: hsl(var(--h, 268) 70% 72% / 0.45);
+}
+
+[data-theme="light"] .sp-temp-ink {
+  color: hsl(var(--h, 268) 50% 42%);
+}
+
+.sp-fade-in {
+  animation: sp-fade-in 150ms var(--ease-standard);
+}
+
+/* Vibration preview progress: grows across its track over animation-duration. */
+.sp-sweep {
+  animation: sp-sweep linear forwards;
+}
+
+@keyframes sp-sweep {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes sp-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

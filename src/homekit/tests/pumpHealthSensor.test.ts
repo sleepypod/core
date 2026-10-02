@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Characteristic } from 'hap-nodejs'
+import { Characteristic, Service } from 'hap-nodejs'
 import {
   clearPumpStallNotice,
   resetPumpStallNotifications,
@@ -15,6 +15,23 @@ describe('pumpHealthSensor accessory', () => {
   afterEach(() => {
     vi.useRealTimers()
     resetPumpStallNotifications()
+  })
+
+  it.each([
+    ['left', 'Pod pump left', 'pump-left'],
+    ['right', 'Pod pump right', 'pump-right'],
+  ] as const)('uses stable metadata for the %s side', (side, name, subtype) => {
+    const { service, stop } = buildPumpHealthSensor(side)
+    expect(service.displayName).toBe(name)
+    expect(service.subtype).toBe(subtype)
+    stop()
+  })
+
+  it('does not emit a redundant initial update for a healthy pump', () => {
+    const update = vi.spyOn(Service.prototype, 'updateCharacteristic')
+    const { stop } = buildPumpHealthSensor('left')
+    expect(update).not.toHaveBeenCalled()
+    stop()
   })
 
   it('reports LEAK_NOT_DETECTED when no stall notice is set', async () => {

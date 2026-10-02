@@ -215,6 +215,18 @@ describe('Error Classes', () => {
 
 describe('Zod Schema', () => {
   describe('rawDeviceDataSchema', () => {
+    const completeData = {
+      tgHeatLevelR: '50',
+      tgHeatLevelL: '-30',
+      heatTimeL: '1800',
+      heatLevelL: '-25',
+      heatTimeR: '3600',
+      heatLevelR: '45',
+      sensorLabel: '8SLEEP-SN-12345-I00',
+      waterLevel: 'true',
+      priming: 'false',
+    } as const
+
     test('validates correct data', () => {
       const validData = {
         tgHeatLevelR: '50',
@@ -319,6 +331,35 @@ describe('Zod Schema', () => {
 
       const result = rawDeviceDataSchema.safeParse(partialMatch)
       expect(result.success).toBe(false)
+    })
+
+    test.each([
+      ['tgHeatLevelR', ['50x', 'x50', '--50', '5.0', '+50', 'word']],
+      ['tgHeatLevelL', ['-30x', 'x-30', '--30', '3.0', '+30', 'word']],
+      ['heatLevelL', ['-25x', 'x-25', '--25', '2.5', '+25', 'word']],
+      ['heatLevelR', ['45x', 'x45', '--45', '4.5', '+45', 'word']],
+      ['heatTimeL', ['1800x', 'x1800', '-1800', '18.00', '+1800', 'word']],
+      ['heatTimeR', ['3600x', 'x3600', '-3600', '36.00', '+3600', 'word']],
+    ] as const)('requires the whole %s field to have its signedness and digits', (field, invalidValues) => {
+      for (const invalid of invalidValues) {
+        expect(
+          rawDeviceDataSchema.safeParse({ ...completeData, [field]: invalid }).success,
+          `${field} unexpectedly accepted ${invalid}`,
+        ).toBe(false)
+      }
+    })
+
+    test('accepts both exact boolean wire literals and rejects every other spelling', () => {
+      for (const waterLevel of ['true', 'false'] as const) {
+        for (const priming of ['true', 'false'] as const) {
+          expect(rawDeviceDataSchema.safeParse({ ...completeData, waterLevel, priming }).success).toBe(true)
+        }
+      }
+
+      for (const invalid of ['', 'TRUE', 'False', '0', '1']) {
+        expect(rawDeviceDataSchema.safeParse({ ...completeData, waterLevel: invalid }).success).toBe(false)
+        expect(rawDeviceDataSchema.safeParse({ ...completeData, priming: invalid }).success).toBe(false)
+      }
     })
   })
 })

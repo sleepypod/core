@@ -70,11 +70,16 @@ vi.mock('node:child_process', () => {
 })
 
 const SERVICE_FILE = '/etc/avahi/services/sleepypod.service'
+const originalPort = process.env.PORT
+const originalWsPort = process.env.PIEZO_WS_PORT
 
 let logSpy: ReturnType<typeof vi.spyOn>
 let warnSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
+  vi.resetModules()
+  delete process.env.PORT
+  delete process.env.PIEZO_WS_PORT
   fsMock.state.existing = new Set<string>()
   fsMock.state.writeThrows = false
   fsMock.state.mkdirThrows = false
@@ -90,6 +95,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  if (originalPort === undefined) delete process.env.PORT
+  else process.env.PORT = originalPort
+  if (originalWsPort === undefined) delete process.env.PIEZO_WS_PORT
+  else process.env.PIEZO_WS_PORT = originalWsPort
   logSpy.mockRestore()
   warnSpy.mockRestore()
 })
@@ -131,6 +140,22 @@ describe('startBonjourAnnouncement', () => {
     )
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('Advertising _sleepypod._tcp on port 3000'),
+    )
+  })
+
+  it('writes configured HTTP and WebSocket ports into the service announcement', async () => {
+    process.env.PORT = '4310'
+    process.env.PIEZO_WS_PORT = '4311'
+    fsMock.state.existing.add('/etc/avahi')
+    const { startBonjourAnnouncement } = await loadModule()
+
+    startBonjourAnnouncement()
+
+    const [, body] = fsMock.writeFileSync.mock.calls[0] as [string, string]
+    expect(body).toContain('<port>4310</port>')
+    expect(body).toContain('<txt-record>wsPort=4311</txt-record>')
+    expect(logSpy).toHaveBeenCalledWith(
+      '[bonjour] Advertising _sleepypod._tcp on port 4310 (wsPort=4311) via Avahi',
     )
   })
 

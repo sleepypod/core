@@ -4,7 +4,7 @@ import { useCallback, useRef } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 
 /** Ordered screen routes for swipe navigation. */
-const SCREEN_ORDER = ['/', '/schedule', '/data', '/sensors', '/status', '/settings']
+const SCREEN_ORDER = ['/', '/schedule', '/sleep', '/system', '/settings']
 
 /** Minimum horizontal swipe distance in px to trigger navigation. */
 const SWIPE_THRESHOLD = 60

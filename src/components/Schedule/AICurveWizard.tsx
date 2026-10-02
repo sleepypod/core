@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   X,
   Sparkles,
@@ -8,15 +8,16 @@ import {
   Check,
   Share2,
   ClipboardPaste,
-  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   Trash2,
   Plus,
-  Minus,
   Save,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Alert, Button, GhostIcon, Modal, SectionLabel, Stepper } from '@/src/components/ds'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 import {
   generatePrompt,
   parseAIResponse,
@@ -26,10 +27,8 @@ import {
   deleteTemplate,
 } from '@/src/lib/sleepCurve/curvePrompt'
 import type { GeneratedCurve, CurveTemplate, ParseResult } from '@/src/lib/sleepCurve/curvePrompt'
-import { timeStringToMinutes } from '@/src/lib/sleepCurve/generate'
-import type { CurvePoint } from '@/src/lib/sleepCurve/types'
 import { CurveChart } from './CurveChart'
-import { PhaseLegend } from './PhaseLegend'
+import { TONE_VAR, tempTone } from './scheduleFormat'
 
 interface AICurveWizardProps {
   open: boolean
@@ -248,168 +247,105 @@ export function AICurveWizard({ open, onClose, onApply }: AICurveWizardProps) {
     onClose()
   }, [curve, editablePoints, onApply, onClose])
 
-  const tempRange = useMemo(() => {
-    if (editablePoints.length === 0) return { min: 55, max: 110 }
-    const temps = editablePoints.map(p => p.tempF)
-    return { min: Math.min(...temps), max: Math.max(...temps) }
-  }, [editablePoints])
-
-  const chartData = useMemo(() => {
-    if (!curve || editablePoints.length < 2) return null
-    const btMin = timeStringToMinutes(curve.bedtime)
-
-    const withRelative = editablePoints.map((p) => {
-      let tMin = timeStringToMinutes(p.time) - btMin
-      if (tMin < -120) tMin += 24 * 60
-      return { ...p, minutesFromBedtime: tMin }
-    }).sort((a, b) => a.minutesFromBedtime - b.minutesFromBedtime)
-
-    const total = withRelative.length
-    const points: CurvePoint[] = withRelative.map((p, i) => {
-      const frac = i / (total - 1)
-      const phase = frac < 0.1
-        ? 'warmUp' as const
-        : frac < 0.25
-          ? 'coolDown' as const
-          : frac < 0.55
-            ? 'deepSleep' as const
-            : frac < 0.75
-              ? 'maintain' as const
-              : frac < 0.9
-                ? 'preWake' as const
-                : 'wake' as const
-      return { minutesFromBedtime: p.minutesFromBedtime, tempOffset: p.tempF - 80, phase }
-    })
-
-    return { points, bedtimeMinutes: btMin }
-  }, [curve, editablePoints])
-
-  if (!open) return null
-
   return (
-    <>
-      <div className="fixed inset-0 z-[60] bg-black/60" onClick={onClose} />
-
-      <div className="fixed inset-x-0 bottom-0 z-[70] flex max-h-[90dvh] flex-col rounded-t-2xl bg-zinc-900 shadow-xl sm:inset-x-auto sm:inset-y-4 sm:left-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:rounded-2xl">
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Sparkles size={16} className="text-cyan-400" />
-            <span className="text-sm font-semibold text-white">Custom AI Curve</span>
-          </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 text-zinc-400">
-            <X size={14} />
-          </button>
-        </div>
-
-        <div className="flex border-b border-zinc-800 px-4 py-2">
-          {STEP_LABELS.map((label, i) => (
-            <button
-              key={label}
-              onClick={() => goToStep(i as Step)}
-              disabled={i > highestStep}
-              className={cn(
-                'flex-1 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors',
-                i === step ? 'text-cyan-400' : i <= highestStep ? 'text-zinc-500' : 'text-zinc-700',
-              )}
-            >
-              {i + 1}
-              .
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-4 py-4">
-          {step === 0 && (
-            <StepDescribe
-              preferences={preferences}
-              onPreferencesChange={setPreferences}
-              templates={savedTemplates}
-              onLoadTemplate={handleLoadTemplate}
-              onDeleteTemplate={handleDeleteTemplate}
-            />
-          )}
-          {step === 1 && (
-            <StepReview
-              prompt={prompt}
-              copied={copied}
-              onCopy={handleCopy}
-              canShare={canShare}
-              onShare={handleShare}
-            />
-          )}
-          {step === 2 && (
-            <StepImport
-              jsonInput={jsonInput}
-              onJsonInputChange={setJsonInput}
-              parseResult={parseResult}
-              onPaste={handlePaste}
-            />
-          )}
-          {step === 3 && curve && (
-            <StepPreview
-              curve={curve}
-              editablePoints={editablePoints}
-              tempRange={tempRange}
-              chartData={chartData}
-              onUpdatePoint={updatePoint}
-              onAddPoint={addPoint}
-              onRemovePoint={removePoint}
-              onSaveTemplate={handleSaveTemplate}
-              onApply={handleApply}
-            />
-          )}
-        </div>
-
-        <div className="flex items-center justify-between border-t border-zinc-800 px-4 py-3">
-          <button
-            onClick={goBack}
-            disabled={step === 0}
-            className="flex items-center gap-1 text-xs text-zinc-400 disabled:opacity-30"
-          >
-            <ChevronLeft size={14} />
-            {' '}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Custom AI curve"
+      icon={Sparkles}
+      iconClassName="text-fg-2"
+      width={560}
+      footer={(
+        <>
+          <Button variant="ghost" icon={ChevronLeft} onClick={goBack} disabled={step === 0}>
             Back
-          </button>
-
-          {step === 0 && (
-            <div className="flex gap-2">
-              <button
-                onClick={handleSkipToImport}
-                className="flex items-center gap-1 rounded-lg border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700"
-              >
-                <ClipboardPaste size={12} />
-                {' '}
-                Import
-              </button>
-              <button
-                onClick={goNext}
-                disabled={!preferences.trim()}
-                className="flex items-center gap-1 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-cyan-600 disabled:opacity-40"
-              >
-                Generate
-                {' '}
+          </Button>
+          <div className="ml-auto flex gap-2.5">
+            {step === 0 && (
+              <>
+                <Button icon={ClipboardPaste} onClick={handleSkipToImport}>Import</Button>
+                <Button variant="primary" onClick={goNext} disabled={!preferences.trim()}>
+                  Generate
+                  <ChevronRight size={14} />
+                </Button>
+              </>
+            )}
+            {step > 0 && step < 3 && (
+              <Button variant="primary" onClick={goNext} disabled={step === 2 && !parseResult?.success}>
+                Next
                 <ChevronRight size={14} />
-              </button>
-            </div>
-          )}
-
-          {step > 0 && step < 3 && (
-            <button
-              onClick={goNext}
-              disabled={step === 2 && !parseResult?.success}
-              className="flex items-center gap-1 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-cyan-600 disabled:opacity-40"
-            >
-              Next
-              {' '}
-              <ChevronRight size={14} />
-            </button>
-          )}
-        </div>
+              </Button>
+            )}
+            {step === 3 && (
+              <>
+                <Button icon={Save} onClick={handleSaveTemplate}>Save template</Button>
+                <Button variant="primary" onClick={handleApply} disabled={editablePoints.length < 3}>
+                  Use curve
+                </Button>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    >
+      <div className="grid grid-cols-4 gap-1 border-b border-line pb-2.5">
+        {STEP_LABELS.map((label, i) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => goToStep(i as Step)}
+            disabled={i > highestStep}
+            aria-current={i === step ? 'step' : undefined}
+            className={cn(
+              'sp-label cursor-pointer justify-center border-0 bg-transparent p-0 py-1 disabled:cursor-default',
+              i === step ? 'text-fg' : i <= highestStep ? 'text-fg-2' : 'text-fg-3',
+            )}
+          >
+            {`${i + 1}. ${label}`}
+          </button>
+        ))}
       </div>
-    </>
+
+      {step === 0 && (
+        <StepDescribe
+          preferences={preferences}
+          onPreferencesChange={setPreferences}
+          templates={savedTemplates}
+          onLoadTemplate={handleLoadTemplate}
+          onDeleteTemplate={handleDeleteTemplate}
+        />
+      )}
+      {step === 1 && (
+        <StepReview
+          prompt={prompt}
+          copied={copied}
+          onCopy={handleCopy}
+          canShare={canShare}
+          onShare={handleShare}
+        />
+      )}
+      {step === 2 && (
+        <StepImport
+          jsonInput={jsonInput}
+          onJsonInputChange={setJsonInput}
+          parseResult={parseResult}
+          onPaste={handlePaste}
+        />
+      )}
+      {step === 3 && curve && (
+        <StepPreview
+          curve={curve}
+          editablePoints={editablePoints}
+          onUpdatePoint={updatePoint}
+          onAddPoint={addPoint}
+          onRemovePoint={removePoint}
+        />
+      )}
+    </Modal>
   )
 }
+
+const FIELD = 'w-full rounded-ctl border border-line-2 bg-field px-3 py-[9px] text-fg outline-none placeholder:text-fg-3 focus:border-fg-3'
 
 function StepDescribe({
   preferences,
@@ -425,9 +361,9 @@ function StepDescribe({
   onDeleteTemplate: (name: string) => void
 }) {
   return (
-    <div className="space-y-4">
-      <div>
-        <p className="mb-2 text-xs text-zinc-400">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-2">
+        <p className="text-[13px] text-fg-2">
           Describe your sleep preferences in natural language. An AI will design a personalized temperature curve.
         </p>
         <textarea
@@ -435,17 +371,19 @@ function StepDescribe({
           onChange={e => onPreferencesChange(e.target.value)}
           placeholder="e.g., I run hot, bed at 11pm, wake at 6:30. Really cold first few hours..."
           rows={4}
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-800/50 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-cyan-500/50 focus:outline-none"
+          aria-label="Sleep preferences"
+          className={cn(FIELD, 'text-sm')}
         />
       </div>
 
-      <div className="space-y-1.5">
-        <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Try an example</p>
+      <div className="flex flex-col gap-1.5">
+        <SectionLabel>Try an example</SectionLabel>
         {EXAMPLE_SUGGESTIONS.map(suggestion => (
           <button
             key={suggestion}
+            type="button"
             onClick={() => onPreferencesChange(suggestion)}
-            className="block w-full rounded-lg border border-zinc-800 px-3 py-2 text-left text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-300"
+            className="block w-full cursor-pointer rounded-ctl border border-line-2 bg-transparent px-3 py-2 text-left text-[13px] text-fg-2 transition-colors hover:bg-active hover:text-fg"
           >
             {suggestion}
           </button>
@@ -453,29 +391,19 @@ function StepDescribe({
       </div>
 
       {templates.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Saved Curves</p>
+        <div className="flex flex-col gap-1.5">
+          <SectionLabel>Saved curves</SectionLabel>
           {templates.map(t => (
-            <div key={t.name} className="flex items-center gap-2 rounded-lg border border-zinc-800 px-3 py-2">
+            <div key={t.name} className="flex items-center gap-2 rounded-ctl border border-line-2 px-3 py-1.5">
               <button
+                type="button"
                 onClick={() => onLoadTemplate(t)}
-                className="flex flex-1 items-center gap-2 text-left"
+                className="flex flex-1 cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-left"
               >
-                <span className="h-2 w-2 rounded-full bg-cyan-400" />
-                <span className="flex-1 text-xs font-medium text-zinc-300">{t.name}</span>
-                <span className="text-[10px] text-zinc-600">
-                  {t.bedtime}
-                  {' '}
-                  →
-                  {t.wake}
-                </span>
+                <span className="flex-1 text-[13px] text-fg">{t.name}</span>
+                <span className="font-mono text-[11px] text-fg-2">{`${t.bedtime} → ${t.wake}`}</span>
               </button>
-              <button
-                onClick={() => onDeleteTemplate(t.name)}
-                className="flex h-6 w-6 items-center justify-center rounded text-zinc-600 hover:text-red-400"
-              >
-                <X size={12} />
-              </button>
+              <GhostIcon icon={X} size={14} label={`Delete ${t.name}`} onClick={() => onDeleteTemplate(t.name)} />
             </div>
           ))}
         </div>
@@ -498,57 +426,31 @@ function StepReview({
   onShare: () => void
 }) {
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-zinc-400">
+    <div className="flex flex-col gap-3">
+      <p className="text-[13px] text-fg-2">
         {canShare
           ? 'Share this prompt to ChatGPT, Claude, or Gemini. Then paste the JSON response in the next step.'
           : 'Select and copy this prompt, then paste it into ChatGPT, Claude, or Gemini. Paste the JSON response in the next step.'}
       </p>
 
-      <div className="max-h-[40vh] overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-3">
-        <pre id="ai-prompt-text" className="whitespace-pre-wrap text-[11px] leading-relaxed text-zinc-300 select-all">{prompt}</pre>
+      <div className="max-h-[40vh] overflow-y-auto rounded-ctl border border-line bg-code p-3">
+        <pre id="ai-prompt-text" className="select-all whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-fg-2">{prompt}</pre>
       </div>
 
       <div className="flex gap-2">
         {canShare && (
-          <button
-            onClick={onShare}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-white transition-all hover:bg-cyan-600 active:scale-[0.98]"
-          >
-            <Share2 size={16} />
-            {' '}
-            Share Prompt
-          </button>
+          <Button variant="primary" icon={Share2} className="flex-1" onClick={onShare}>
+            Share prompt
+          </Button>
         )}
-
-        <button
+        <Button
+          variant={canShare ? 'secondary' : 'primary'}
+          icon={copied ? Check : Copy}
+          className={cn(!canShare && 'flex-1', copied && 'border-ok-line text-ok')}
           onClick={onCopy}
-          className={cn(
-            'flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition-all',
-            canShare ? 'border border-zinc-800 bg-zinc-800/50 text-zinc-400' : 'flex-1',
-            copied
-              ? 'bg-emerald-500/20 text-emerald-400'
-              : !canShare
-                  ? 'bg-cyan-500 text-white hover:bg-cyan-600 active:scale-[0.98]'
-                  : '',
-          )}
         >
-          {copied
-            ? (
-                <>
-                  <Check size={16} />
-                  {' '}
-                  Selected!
-                </>
-              )
-            : (
-                <>
-                  <Copy size={16} />
-                  {' '}
-                  {canShare ? 'Copy' : 'Select All'}
-                </>
-              )}
-        </button>
+          {copied ? 'Selected' : canShare ? 'Copy' : 'Select all'}
+        </Button>
       </div>
     </div>
   )
@@ -566,8 +468,8 @@ function StepImport({
   onPaste: () => void
 }) {
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-zinc-400">
+    <div className="flex flex-col gap-3">
+      <p className="text-[13px] text-fg-2">
         Paste the AI&apos;s JSON response below. It will be validated automatically.
       </p>
 
@@ -576,47 +478,28 @@ function StepImport({
         onChange={e => onJsonInputChange(e.target.value)}
         placeholder='{"name": "...", "bedtime": "22:00", "wake": "07:00", "points": {...}, "reasoning": "..."}'
         rows={8}
-        className="w-full rounded-xl border border-zinc-800 bg-zinc-800/50 px-3 py-2.5 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-cyan-500/50 focus:outline-none"
+        aria-label="AI response JSON"
+        className={cn(FIELD, 'font-mono text-xs')}
       />
 
-      <button
-        onClick={onPaste}
-        className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-800/50 px-4 py-2.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700"
-      >
-        <ClipboardPaste size={14} />
-        {' '}
-        Paste from Clipboard
-      </button>
+      <Button icon={ClipboardPaste} full onClick={onPaste}>
+        Paste from clipboard
+      </Button>
 
       {parseResult && (
         parseResult.success
           ? (
-              <div className="flex items-start gap-2 rounded-xl bg-emerald-500/10 px-3 py-2.5">
-                <Check size={14} className="mt-0.5 shrink-0 text-emerald-400" />
-                <div className="text-xs text-emerald-400">
-                  <span className="font-semibold">{parseResult.curve.name}</span>
-                  <span className="ml-1 text-emerald-400/70">
-                    —
-                    {' '}
-                    {Object.keys(parseResult.curve.points).length}
-                    {' '}
-                    set points,
-                    {' '}
-                    {parseResult.curve.bedtime}
-                    {' '}
-                    →
-                    {' '}
-                    {parseResult.curve.wake}
+              <div className="flex items-start gap-2 rounded-ctl border border-ok-line px-3 py-2.5 text-[13px] text-ok">
+                <Check size={14} className="mt-0.5 shrink-0" />
+                <span>
+                  <span className="font-medium">{parseResult.curve.name}</span>
+                  <span className="font-mono text-xs">
+                    {` — ${Object.keys(parseResult.curve.points).length} set points, ${parseResult.curve.bedtime} → ${parseResult.curve.wake}`}
                   </span>
-                </div>
+                </span>
               </div>
             )
-          : (
-              <div className="flex items-start gap-2 rounded-xl bg-red-500/10 px-3 py-2.5">
-                <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-400" />
-                <p className="text-xs text-red-400">{parseResult.error}</p>
-              </div>
-            )
+          : <Alert tone="danger">{parseResult.error}</Alert>
       )}
     </div>
   )
@@ -625,153 +508,70 @@ function StepImport({
 function StepPreview({
   curve,
   editablePoints,
-  tempRange,
-  chartData,
   onUpdatePoint,
   onAddPoint,
   onRemovePoint,
-  onSaveTemplate,
-  onApply,
 }: {
   curve: GeneratedCurve
   editablePoints: Array<{ time: string, tempF: number }>
-  tempRange: { min: number, max: number }
-  chartData: { points: CurvePoint[], bedtimeMinutes: number } | null
   onUpdatePoint: (idx: number, field: 'time' | 'tempF', value: string | number) => void
   onAddPoint: () => void
   onRemovePoint: (idx: number) => void
-  onSaveTemplate: () => void
-  onApply: () => void
 }) {
+  const { unit } = useTemperatureUnit()
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-white">{curve.name}</span>
-        <span className="rounded-full bg-zinc-800 px-2.5 py-1 text-[10px] font-medium text-zinc-400">
-          {curve.bedtime}
-          {' '}
-          →
-          {curve.wake}
-        </span>
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[15px] font-medium">{curve.name}</span>
+        <span className="font-mono text-xs text-fg-2">{`${curve.bedtime} → ${curve.wake}`}</span>
       </div>
 
-      {chartData && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-          <CurveChart
-            points={chartData.points}
-            bedtimeMinutes={chartData.bedtimeMinutes}
-            minTempF={tempRange.min}
-            maxTempF={tempRange.max}
-          />
-          <div className="mt-2">
-            <PhaseLegend />
-          </div>
-        </div>
+      {editablePoints.length >= 2 && (
+        <CurveChart setPoints={editablePoints.map(p => ({ time: p.time, temperature: p.tempF }))} height={160} />
       )}
 
       {curve.reasoning && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-800/30 px-3 py-2.5">
-          <p className="text-[11px] leading-relaxed text-zinc-400">{curve.reasoning}</p>
-        </div>
+        <p className="rounded-ctl border border-line px-3 py-2.5 text-xs leading-relaxed text-fg-2">{curve.reasoning}</p>
       )}
 
-      <div className="space-y-1">
-        <div className="flex items-center justify-between">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-            Set Points (
-            {editablePoints.length}
-            )
-          </p>
-          <button
-            onClick={onAddPoint}
-            className="flex items-center gap-1 text-[10px] text-cyan-400"
-          >
-            <Plus size={10} />
-            {' '}
-            Add
-          </button>
-        </div>
+      <div className="flex flex-col gap-2">
+        <SectionLabel right={<Button size="sm" variant="ghost" icon={Plus} onClick={onAddPoint}>Add</Button>}>
+          {`Set points (${editablePoints.length})`}
+        </SectionLabel>
 
-        <div className="max-h-[30vh] overflow-y-auto rounded-xl border border-zinc-800">
+        <div className="flex max-h-[30vh] flex-col overflow-y-auto">
           {editablePoints.map((point, idx) => (
-            <div
-              key={`${point.time}-${idx}`}
-              className={cn(
-                'flex items-center gap-2 px-3 py-2',
-                idx > 0 && 'border-t border-zinc-800/50',
-              )}
-            >
+            <div key={`${point.time}-${idx}`} className="flex items-center gap-2.5 border-t border-line py-2">
+              <span
+                className="block size-2 shrink-0 rounded-full"
+                style={{ background: TONE_VAR[tempTone(point.tempF)] }}
+              />
               <input
                 type="time"
                 value={point.time}
+                aria-label={`Set point ${idx + 1} time`}
                 onChange={e => onUpdatePoint(idx, 'time', e.target.value)}
-                className="w-20 rounded bg-zinc-800 px-2 py-1 text-xs text-white [color-scheme:dark]"
+                className="w-[110px] rounded-ctl border border-line-2 bg-field px-2 py-1 font-mono text-xs text-fg"
               />
-
-              <div className="flex flex-1 items-center gap-2">
-                <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-zinc-800">
-                  <div
-                    className={cn(
-                      'absolute inset-y-0 left-0 rounded-full',
-                      point.tempF <= 74 ? 'bg-blue-500' : point.tempF <= 82 ? 'bg-violet-500' : 'bg-orange-500',
-                    )}
-                    style={{ width: `${((point.tempF - 55) / 55) * 100}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => onUpdatePoint(idx, 'tempF', point.tempF - 1)}
-                  className="flex h-6 w-6 items-center justify-center rounded bg-zinc-800 text-zinc-400"
-                >
-                  <Minus size={10} />
-                </button>
-                <span className={cn(
-                  'w-10 text-center text-xs font-medium tabular-nums',
-                  point.tempF <= 74 ? 'text-blue-400' : point.tempF <= 82 ? 'text-zinc-300' : 'text-orange-400',
-                )}
-                >
-                  {point.tempF}
-                  °
-                </span>
-                <button
-                  onClick={() => onUpdatePoint(idx, 'tempF', point.tempF + 1)}
-                  className="flex h-6 w-6 items-center justify-center rounded bg-zinc-800 text-zinc-400"
-                >
-                  <Plus size={10} />
-                </button>
-              </div>
-
-              <button
-                onClick={() => onRemovePoint(idx)}
+              <span className="flex-1" />
+              <Stepper
+                value={Math.round(setpointFToDisplay(point.tempF, unit) ?? point.tempF)}
+                min={Math.round(setpointFToDisplay(55, unit) ?? 55)}
+                max={Math.round(setpointFToDisplay(110, unit) ?? 110)}
+                label={`set point ${idx + 1} temperature`}
+                onChange={v => onUpdatePoint(idx, 'tempF', Math.round(displayToSetpointF(v, unit) ?? point.tempF))}
+              />
+              <GhostIcon
+                icon={Trash2}
+                size={14}
+                label={`Remove set point ${idx + 1}`}
+                className="-mr-2 text-fg-3"
                 disabled={editablePoints.length <= 3}
-                className="flex h-6 w-6 items-center justify-center text-zinc-600 hover:text-red-400 disabled:opacity-30"
-              >
-                <Trash2 size={10} />
-              </button>
+                onClick={() => onRemovePoint(idx)}
+              />
             </div>
           ))}
         </div>
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={onSaveTemplate}
-          className="flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-800/50 px-4 py-3 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700"
-        >
-          <Save size={14} />
-          {' '}
-          Save
-        </button>
-
-        <button
-          onClick={onApply}
-          disabled={editablePoints.length < 3}
-          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-white transition-all hover:bg-cyan-600 active:scale-[0.98] disabled:opacity-60"
-        >
-          Use Curve
-        </button>
       </div>
     </div>
   )

@@ -1,9 +1,22 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, test } from 'vitest'
+import { PassThrough } from 'stream'
 import { MessageStream } from '../messageStream'
 import { createMockReadable, sleep } from './testUtils'
 
 describe('MessageStream', () => {
+  test('uses a double-newline delimiter by default across arbitrary chunks', async () => {
+    const stream = new PassThrough()
+    const messageStream = new MessageStream(stream)
+
+    stream.write('first\n')
+    stream.write('\nsecond\n\n')
+
+    await expect(messageStream.readMessage()).resolves.toEqual(Buffer.from('first'))
+    await expect(messageStream.readMessage()).resolves.toEqual(Buffer.from('second'))
+    messageStream.destroy()
+  })
+
   test('reads buffered messages immediately', async () => {
     const stream = createMockReadable(['message1', 'message2'])
     const messageStream = new MessageStream(stream as any)
@@ -232,7 +245,7 @@ describe('MessageStream', () => {
     const messageStream = new MessageStream(stream, '\n\n', 50)
 
     // Read times out — its response never arrived in time
-    await expect(messageStream.readMessage()).rejects.toThrow('Message read timeout')
+    await expect(messageStream.readMessage()).rejects.toThrow('Message read timeout after 0.05 seconds')
 
     // The response arrives late: with no pending read it lands in the queue
     dest.emit('data', Buffer.from('stale-response'))

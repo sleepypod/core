@@ -1,15 +1,16 @@
 'use client'
 
-import { useId, useMemo } from 'react'
+import { useMemo } from 'react'
 import {
   ResponsiveContainer,
   AreaChart,
   Area,
   XAxis,
   YAxis,
-  CartesianGrid,
   Tooltip,
 } from 'recharts'
+import { SectionLabel } from '@/src/components/ds'
+import { TOOLTIP_LABEL_STYLE, TOOLTIP_STYLE } from '@/src/components/Sensors/chartTheme'
 
 interface HumidityDataPoint {
   timestamp: Date | string
@@ -25,8 +26,8 @@ function formatTime(timestamp: string | Date): string {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
+/** Humidity card body: current value, flat area chart, min/avg/max footer. */
 export function HumidityChart({ data }: HumidityChartProps) {
-  const gradientId = useId()
   const chartData = useMemo(() => {
     const sorted = [...data].reverse()
     const mapped = sorted.map(d => ({
@@ -42,63 +43,72 @@ export function HumidityChart({ data }: HumidityChartProps) {
       : mapped
   }, [data])
 
-  if (chartData.length === 0) {
-    return (
-      <div className="flex h-[140px] items-center justify-center text-sm text-zinc-500">
-        No humidity data available
-      </div>
-    )
-  }
+  const stats = useMemo(() => {
+    const values = data.map(d => d.humidity).filter((v): v is number => v !== null)
+    if (values.length === 0) return null
+    return {
+      // API order is newest-first
+      latest: values[0],
+      min: Math.min(...values),
+      max: Math.max(...values),
+      avg: values.reduce((a, b) => a + b, 0) / values.length,
+    }
+  }, [data])
 
   return (
-    <div className="h-[140px] w-full">
-      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-        <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-          <defs>
-            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#4a90d9" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="#4a90d9" stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#333" strokeOpacity={0.5} />
-          <XAxis
-            dataKey="time"
-            type="number"
-            domain={['dataMin', 'dataMax']}
-            tickFormatter={(v: number) => formatTime(new Date(v))}
-            tick={{ fill: '#71717a', fontSize: 10 }}
-            stroke="#333"
-            tickCount={4}
-          />
-          <YAxis
-            domain={[0, 100]}
-            tick={{ fill: '#71717a', fontSize: 10 }}
-            stroke="#333"
-            tickFormatter={(v: number) => `${v}%`}
-          />
-          <Tooltip
-            contentStyle={{
-              backgroundColor: '#1a1a1a',
-              border: '1px solid #333',
-              borderRadius: 8,
-              fontSize: 12,
-              color: '#fff',
-            }}
-            labelFormatter={v => formatTime(new Date(v as number))}
-            formatter={value => [`${Number(value).toFixed(1)}%`, 'Humidity']}
-          />
-          <Area
-            type="monotone"
-            dataKey="humidity"
-            stroke="#4a90d9"
-            strokeWidth={1.5}
-            fill={`url(#${gradientId})`}
-            dot={false}
-            activeDot={{ r: 3, fill: '#4a90d9' }}
-            connectNulls
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </div>
+    <>
+      <SectionLabel right={stats && <span className="text-base text-fg">{`${Math.round(stats.latest)}%`}</span>}>
+        Humidity
+      </SectionLabel>
+
+      {chartData.length === 0 || !stats
+        ? (
+            <div className="flex h-[130px] items-center justify-center text-[13px] text-fg-3">
+              No humidity data available
+            </div>
+          )
+        : (
+            <div className="h-[130px] w-full">
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                <AreaChart data={chartData} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="time" type="number" domain={['dataMin', 'dataMax']} hide />
+                  <YAxis domain={[Math.floor(stats.min - 2), Math.ceil(stats.max + 2)]} hide />
+                  <Tooltip
+                    contentStyle={TOOLTIP_STYLE}
+                    labelStyle={TOOLTIP_LABEL_STYLE}
+                    labelFormatter={v => formatTime(new Date(v as number))}
+                    formatter={value => [`${Number(value).toFixed(1)}%`, 'Humidity']}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="humidity"
+                    stroke="var(--chart-humidity)"
+                    strokeWidth={1.5}
+                    fill="var(--chart-humidity)"
+                    fillOpacity={0.12}
+                    dot={false}
+                    activeDot={{ r: 3, fill: 'var(--chart-humidity)' }}
+                    connectNulls
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+      <div className="grid grid-cols-3 border-t border-line pt-2.5 font-mono text-xs text-fg-2">
+        <span>
+          {'min '}
+          <span className="text-fg">{stats ? Math.round(stats.min) : '--'}</span>
+        </span>
+        <span>
+          {'avg '}
+          <span className="text-fg">{stats ? Math.round(stats.avg) : '--'}</span>
+        </span>
+        <span>
+          {'max '}
+          <span className="text-fg">{stats ? Math.round(stats.max) : '--'}</span>
+        </span>
+      </div>
+    </>
   )
 }

@@ -29,6 +29,19 @@ describe('occupancySensor accessory', () => {
     vi.useRealTimers()
   })
 
+  it.each(['left', 'right'] as const)('uses stable metadata for the %s side', (side) => {
+    const { service, stop } = buildOccupancySensor(side)
+    expect(service.displayName).toBe(`Bed ${side} occupancy`)
+    expect(service.subtype).toBe(side)
+    stop()
+  })
+
+  it('does not require Node-specific unref support on the poll handle', () => {
+    const interval = vi.spyOn(globalThis, 'setInterval').mockReturnValue(7 as never)
+    expect(() => buildOccupancySensor('left')).not.toThrow()
+    interval.mockRestore()
+  })
+
   it('reports OCCUPANCY_NOT_DETECTED when the virtual sensor returns occupied=false', async () => {
     occupancyMock.mockReturnValue(result(false))
     const { service, stop } = buildOccupancySensor('left')

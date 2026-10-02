@@ -27,6 +27,8 @@ const calibrationStatusSchema = z.object({
   createdAt: z.date(),
   expiresAt: z.date().nullable(),
   errorMessage: z.string().nullable(),
+  /** Sensor-specific baseline written by the calibrator (see modules/common/calibration.py). */
+  parameters: z.record(z.string(), z.unknown()).nullable(),
 })
 
 export const calibrationRouter = router({
@@ -60,6 +62,7 @@ export const calibrationRouter = router({
           createdAt: p.createdAt,
           expiresAt: p.expiresAt,
           errorMessage: p.errorMessage,
+          parameters: p.parameters && typeof p.parameters === 'object' ? p.parameters as Record<string, unknown> : null,
         }
       }
 
@@ -92,7 +95,7 @@ export const calibrationRouter = router({
       samplesUsed: z.number().nullable(),
       errorMessage: z.string().nullable(),
       durationMs: z.number().nullable(),
-      triggeredBy: z.enum(['daily', 'manual', 'startup']),
+      triggeredBy: z.enum(['daily', 'manual', 'startup', 'retry']),
       createdAt: z.date(),
     })))
     .query(async ({ input }) => {

@@ -3,3 +3,6 @@
 *.mov filter=lfs diff=lfs merge=lfs -text
 docs/images/*.gif filter=lfs diff=lfs merge=lfs -text
 *.gif filter=lfs diff=lfs merge=lfs -text
+
+# Web assets ship in source tarballs (sp-update, release), which never resolve LFS pointers.
+public/** !filter !diff !merge binary

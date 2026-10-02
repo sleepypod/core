@@ -82,6 +82,14 @@ describe('raw.files', () => {
     fsMock.readdir.mockRejectedValue(new Error('disk dead'))
     await expect(caller.files({})).rejects.toThrow(/Failed to list RAW files/)
   })
+
+  it('uses Unknown error for a non-Error listing rejection', async () => {
+    fsMock.readdir.mockRejectedValue('filesystem unavailable')
+    await expect(caller.files({})).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to list RAW files: Unknown error',
+    })
+  })
 })
 
 describe('raw.deleteFile', () => {
@@ -96,7 +104,10 @@ describe('raw.deleteFile', () => {
 
   it('rejects symlinks', async () => {
     fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true } as never)
-    await expect(caller.deleteFile({ filename: 'a.RAW' })).rejects.toThrow(/Path traversal detected/)
+    await expect(caller.deleteFile({ filename: 'a.RAW' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Path traversal detected',
+    })
   })
 
   it('rejects when canonical path escapes RAW_DIR', async () => {
@@ -152,6 +163,21 @@ describe('raw.deleteFile', () => {
     expect(result).toEqual({ deleted: true, message: 'Deleted b.RAW' })
     expect(fsMock.unlink).toHaveBeenCalledTimes(1)
   })
+
+  it('deletes a valid file when the directory has no other RAW entries', async () => {
+    fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false } as never)
+    fsMock.realpath.mockImplementation(async (p: unknown) => String(p).endsWith('only.RAW')
+      ? '/persistent/only.RAW'
+      : '/persistent')
+    fsMock.readdir.mockResolvedValue([] as never)
+    fsMock.unlink.mockResolvedValue(undefined as never)
+
+    await expect(caller.deleteFile({ filename: 'only.RAW' })).resolves.toEqual({
+      deleted: true,
+      message: 'Deleted only.RAW',
+    })
+    expect(fsMock.unlink).toHaveBeenCalledWith('/persistent/only.RAW')
+  })
 })
 
 describe('raw.diskUsage', () => {
@@ -168,6 +194,27 @@ describe('raw.diskUsage', () => {
     expect(result.availableBytes).toBe(800)
     expect(result.rawFileCount).toBe(1)
     expect(result.rawBytes).toBe(1234)
+    expect(execMock.execFile).toHaveBeenCalledWith(
+      'df',
+      ['-B1', '/persistent'],
+      { timeout: 5000 },
+      expect.any(Function),
+    )
+  })
+
+  it('trims leading blank lines and splits runs of df whitespace', async () => {
+    fsMock.readdir.mockResolvedValue([] as never)
+    execMock.execFile.mockImplementation((_f, _a, _o, cb) => {
+      cb(null, { stdout: '\nFilesystem   1B-blocks   Used   Available Use% Mounted\n/dev/root    4096        1024   3072      25%  /persistent\n' })
+    })
+
+    await expect(caller.diskUsage({})).resolves.toEqual({
+      totalBytes: 4096,
+      usedBytes: 1024,
+      availableBytes: 3072,
+      rawFileCount: 0,
+      rawBytes: 0,
+    })
   })
 
   it('falls back to zero df totals when df is unavailable', async () => {
@@ -182,6 +229,14 @@ describe('raw.diskUsage', () => {
   it('wraps unexpected listRawFiles failure as INTERNAL_SERVER_ERROR', async () => {
     fsMock.readdir.mockRejectedValue(new Error('disk on fire'))
     await expect(caller.diskUsage({})).rejects.toThrow(/Failed to get disk usage/)
+  })
+
+  it('uses Unknown error for a non-Error disk-usage failure', async () => {
+    fsMock.readdir.mockRejectedValue({ offline: true })
+    await expect(caller.diskUsage({})).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to get disk usage: Unknown error',
+    })
   })
 })
 
@@ -200,5 +255,23 @@ describe('raw.deleteFile error wrappers', () => {
     fsMock.unlink.mockRejectedValue(new Error('EBUSY: locked'))
 
     await expect(caller.deleteFile({ filename: 'b.RAW' })).rejects.toThrow(/Failed to delete file/)
+  })
+
+  it('uses Unknown error for a non-Error unlink failure', async () => {
+    fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false } as never)
+    fsMock.realpath.mockImplementation(async (p: unknown) => String(p).endsWith('b.RAW')
+      ? '/persistent/b.RAW'
+      : '/persistent')
+    fsMock.readdir.mockResolvedValue(['a.RAW', 'b.RAW'] as never)
+    fsMock.stat.mockImplementation(async (p: unknown) => ({
+      size: 1,
+      mtime: String(p).endsWith('a.RAW') ? new Date('2025-02-01') : new Date('2025-01-01'),
+    }) as never)
+    fsMock.unlink.mockRejectedValue({ busy: true })
+
+    await expect(caller.deleteFile({ filename: 'b.RAW' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to delete file: Unknown error',
+    })
   })
 })

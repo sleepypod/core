@@ -13,7 +13,7 @@ export PATH="/usr/local/bin:$PATH"
 #   sp-update feat/alarms  # update to a specific branch
 #
 # Handles iptables toggle automatically (opens WAN, downloads, closes WAN).
-# No git required — uses GitHub's tarball API.
+# No git required. Requires a pre-built release or a local deployment archive.
 
 INSTALL_DIR="/home/dac/sleepypod-core"
 # DATA_DIR pointer is written by scripts/install (storage-aware picker).
@@ -24,11 +24,51 @@ else
   DATA_DIR="/persistent/sleepypod-data"
 fi
 GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
-BRANCH="${1:-main}"
+BRANCH=main
+ARCHIVE=""
+usage() {
+  cat <<'EOF'
+Usage: sp-update [branch]
+       sp-update --archive /path/to/sleepypod-core.tar.gz
+
+Downloads a pre-built GitHub release; never builds Next.js on the Pod.
+For a cloned repo on your computer, run: ./scripts/deploy POD_IP [branch]
+SLEEPYPOD_GITHUB_REPO selects the release repository (default: sleepypod/core).
+TMPDIR selects temporary storage (default: /persistent).
+EOF
+}
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  --archive)
+    if [ "$#" -ne 2 ] || [ ! -f "$2" ]; then
+      echo "Error: --archive requires an existing tar.gz file." >&2
+      exit 1
+    fi
+    ARCHIVE="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+    ;;
+  -*) usage >&2; exit 1 ;;
+  *)
+    if [ "$#" -gt 1 ]; then usage >&2; exit 1; fi
+    BRANCH="${1:-main}"
+    ;;
+esac
+if [ ! -d "$INSTALL_DIR" ] || ! command -v systemctl >/dev/null; then
+  echo "Error: sp-update runs on an installed Pod. On your computer use ./scripts/deploy POD_IP [branch]." >&2
+  exit 1
+fi
+# Existing installations may point at a release via a symlink. find does
+# not descend through a command-line symlink by default; resolve it so stale
+# .next/standalone files are removed rather than silently booting old code.
+INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
+export TMPDIR="${TMPDIR:-/persistent}"
 
 echo "=== SleepyPod Update ==="
-echo "Branch: $BRANCH"
-echo "Repo:   $GITHUB_REPO"
+if [ -n "$ARCHIVE" ]; then
+  echo "Archive: $ARCHIVE"
+else
+  echo "Branch: $BRANCH"
+  echo "Repo:   $GITHUB_REPO"
+fi
 echo ""
 
 # Source shared iptables helpers (with inline fallback for transitional installs)
@@ -39,13 +79,38 @@ else
   SAVED_IPTABLES=""
   WAN_WAS_BLOCKED=false
   wan_is_blocked() {
-    iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
+    iptables -S OUTPUT 2>/dev/null \
+      | grep -Eq '^-P OUTPUT DROP$|^-A OUTPUT -j (DROP|SLEEPYPOD-BLOCK)$'
+  }
+  sleepypod_chain_is_effectively_blocked() {
+    local rules line
+    rules="$(iptables -S SLEEPYPOD-BLOCK 2>/dev/null)" || return 1
+    while IFS= read -r line; do
+      case "$line" in
+        '-A SLEEPYPOD-BLOCK -j ACCEPT') return 1 ;;
+        '-A SLEEPYPOD-BLOCK -j DROP') return 0 ;;
+      esac
+    done <<< "$rules"
+    return 1
+  }
+  wan_is_effectively_blocked() {
+    local rules line policy_drop=false
+    rules="$(iptables -S OUTPUT 2>/dev/null)" || return 1
+    while IFS= read -r line; do
+      case "$line" in
+        '-P OUTPUT DROP') policy_drop=true ;;
+        '-A OUTPUT -j ACCEPT') return 1 ;;
+        '-A OUTPUT -j DROP') return 0 ;;
+        '-A OUTPUT -j SLEEPYPOD-BLOCK') sleepypod_chain_is_effectively_blocked; return ;;
+      esac
+    done <<< "$rules"
+    [ "$policy_drop" = true ]
   }
   unblock_wan() {
     echo "Opening WAN access..."
-    # Capture state verbatim. `|| true` would mask a failed save and
-    # quietly fall through on restore — silent data loss.
-    if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+    # Capture stdout only: backend warnings on stderr are not valid input to
+    # iptables-restore and must not contaminate the saved ruleset.
+    if ! SAVED_IPTABLES="$(iptables-save)"; then
       echo "Error: iptables-save failed — refusing to unblock WAN." >&2
       echo "$SAVED_IPTABLES" >&2
       SAVED_IPTABLES=""
@@ -55,26 +120,67 @@ else
       echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
       return 1
     fi
-    iptables -F && iptables -X && iptables -t nat -F && iptables -t nat -X
+    iptables -P INPUT ACCEPT || return 1
+    iptables -P OUTPUT ACCEPT || return 1
+    iptables -P FORWARD ACCEPT || return 1
+    iptables -F || return 1
+    iptables -X || return 1
+    iptables -t nat -F || return 1
+    iptables -t nat -X || return 1
     echo "WAN open."
   }
   restore_wan() {
     if [ -n "$SAVED_IPTABLES" ]; then
       echo "Restoring iptables rules..."
-      echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || iptables -P OUTPUT DROP
+      if ! printf '%s\n' "$SAVED_IPTABLES" | iptables-restore || ! wan_is_effectively_blocked; then
+        echo "Error: failed to restore a blocking iptables ruleset; applying a deny policy." >&2
+        iptables -P OUTPUT DROP || return 1
+        iptables -P INPUT DROP || return 1
+        iptables -P FORWARD DROP || return 1
+      fi
     else
-      iptables -P OUTPUT DROP
+      iptables -P OUTPUT DROP || return 1
+      iptables -P INPUT DROP || return 1
+      iptables -P FORWARD DROP || return 1
     fi
     echo "WAN blocked."
   }
 fi
 
+# sp-update replaces its source tree while this process continues running
+# from the old script inode. Reload the newly-installed helper before a final
+# restore (or rollback) so its firewall fixes take effect on this very update,
+# while preserving the snapshot captured by the old helper.
+reload_iptables_helpers() {
+  [ -f "$INSTALL_DIR/scripts/lib/iptables-helpers" ] || return 0
+  local saved_rules="$SAVED_IPTABLES"
+  local was_blocked="$WAN_WAS_BLOCKED"
+  if ! bash -n "$INSTALL_DIR/scripts/lib/iptables-helpers"; then
+    echo "Warning: newly-installed iptables helper is invalid; using the loaded helper." >&2
+    return 0
+  fi
+  if ! source "$INSTALL_DIR/scripts/lib/iptables-helpers"; then
+    echo "Warning: could not reload newly-installed iptables helper; using the loaded helper." >&2
+  fi
+  SAVED_IPTABLES="$saved_rules"
+  WAN_WAS_BLOCKED="$was_blocked"
+}
+
 # Cleanup — re-block WAN, rollback code, and restart service on failure
 ROLLBACK_READY=false
+SERVICE_STOPPED=false
+WORK_DIR=""
+BACKUP_DIR=""
 cleanup() {
   local exit_code=$?
   if [ "$WAN_WAS_BLOCKED" = true ]; then
-    restore_wan
+    reload_iptables_helpers
+    if ! restore_wan; then
+      echo "Critical: firewall restore failed; forcing default policies DROP." >&2
+      iptables -P OUTPUT DROP 2>/dev/null || true
+      iptables -P INPUT DROP 2>/dev/null || true
+      iptables -P FORWARD DROP 2>/dev/null || true
+    fi
     WAN_WAS_BLOCKED=false
   fi
   if [ "$exit_code" -ne 0 ] && [ "$ROLLBACK_READY" = true ]; then
@@ -84,7 +190,7 @@ cleanup() {
         ! -name 'node_modules' \
         ! -name '.env' \
         -exec rm -rf {} +
-      cp -r "$BACKUP_DIR/." "$INSTALL_DIR/"
+      cp -a "$BACKUP_DIR/." "$INSTALL_DIR/"
       # Intentionally NOT restoring sp-* tools to /usr/local/bin/.
       # They were already swapped in atomically (see install(1) below)
       # before the failure; restoring the pre-update copies can re-pin a
@@ -127,130 +233,208 @@ cleanup() {
       echo "Database restored from $DB_BACKUP."
     fi
     systemctl start sleepypod.service 2>/dev/null || true
-  elif [ "$exit_code" -ne 0 ]; then
+  elif [ "$exit_code" -ne 0 ] && [ "$SERVICE_STOPPED" = true ]; then
     echo "Update failed before rollback point, starting service with existing code..." >&2
     systemctl start sleepypod.service 2>/dev/null || true
   fi
+  [ -z "$WORK_DIR" ] || rm -rf "$WORK_DIR"
+  # Keep a failed update's backup for manual recovery.
+  if [ "$exit_code" -eq 0 ] && [ -n "$BACKUP_DIR" ]; then
+    rm -rf "$BACKUP_DIR"
+  fi
+  return "$exit_code"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Clear staging/rollback dirs that earlier interrupted runs left on
+# /persistent before measuring free space. Uses the installed copy (the new
+# source isn't downloaded yet); older pods without it just skip this.
+if [ -x /usr/local/bin/sp-storage-cleanup ]; then
+  INSTALL_DIR="$INSTALL_DIR" /usr/local/bin/sp-storage-cleanup --only temp || echo "Warning: storage cleanup failed (continuing)" >&2
+fi
 
 # Pre-flight: disk space
-DISK_AVAIL=$(df -m "$INSTALL_DIR" | awk 'NR==2{print $4}')
-if [ "$DISK_AVAIL" -lt 300 ]; then
-  echo "Error: Need 300MB free, only ${DISK_AVAIL}MB available" >&2
-  exit 1
-fi
-
-# Open WAN if blocked
-if wan_is_blocked; then
-  # Ensure /etc/hosts telemetry block is in place before opening WAN
-  if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
-    echo "Installing /etc/hosts telemetry block before opening WAN..."
-    "$INSTALL_DIR/scripts/internet-control" hosts-block 2>/dev/null || true
+for space_dir in "$INSTALL_DIR" "$TMPDIR"; do
+  DISK_AVAIL=$(df -m "$space_dir" | awk 'NR==2{print $4}')
+  if [ "$DISK_AVAIL" -lt 300 ]; then
+    echo "Error: Need 300MB free in $space_dir, only ${DISK_AVAIL}MB available" >&2
+    exit 1
   fi
-  WAN_WAS_BLOCKED=true
-  unblock_wan
+done
+
+# Local archive validation happens before stopping services. GitHub downloads need
+# WAN access, so stop first only when the firewall needs to be opened: the
+# service's firewall self-heal otherwise races unblock_wan.
+WORK_DIR=$(mktemp -d "$TMPDIR/sleepypod-update.XXXXXX")
+open_update_wan() {
+  if wan_is_blocked; then
+    if [ "$SERVICE_STOPPED" = false ]; then
+      systemctl stop sleepypod.service
+      SERVICE_STOPPED=true
+    fi
+    if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
+      "$INSTALL_DIR/scripts/internet-control" hosts-block 2>/dev/null || true
+    fi
+    WAN_WAS_BLOCKED=true
+    unblock_wan
+  fi
+}
+
+# nightly.link 404s on a raw `/` in the branch segment; percent-encode
+# everything outside the URL-unreserved set.
+urlencode() {
+  local s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~-]) out+="$c" ;;
+      *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+if [ -n "$ARCHIVE" ]; then
+  echo "Using local build: $ARCHIVE"
+  tar xzf "$ARCHIVE" -C "$WORK_DIR"
+else
+  open_update_wan
+  if [ "$BRANCH" != main ] && [ "$BRANCH" != latest ] && [ "$BRANCH" != dev ]; then
+    # Feature branches install the build.yml artifact for the branch's latest
+    # successful run. nightly.link serves it without GitHub auth, wrapped in a
+    # zip; build.yml's retention (30 days) bounds how old a branch can be.
+    ARTIFACT_URL="https://nightly.link/${GITHUB_REPO}/workflows/build/$(urlencode "$BRANCH")/sleepypod-core.zip"
+    echo "Downloading CI build for '$BRANCH': $ARTIFACT_URL"
+    if ! curl -fSL --connect-timeout 10 --max-time 600 -o "$WORK_DIR/artifact.zip" "$ARTIFACT_URL"; then
+      rm -f "$WORK_DIR/artifact.zip"
+      echo "Error: No accessible CI build for '$BRANCH' in '$GITHUB_REPO'." >&2
+      echo "Push the branch (with Actions enabled in the fork) and wait for Build & Package to pass." >&2
+      echo "Or, from a cloned repo on your computer: ./scripts/deploy POD_IP" >&2
+      echo "Installed files have not been replaced; source-only builds are not supported on the Pod." >&2
+      exit 1
+    fi
+    # Pods reliably ship python3 but not always unzip.
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -q -o "$WORK_DIR/artifact.zip" sleepypod-core.tar.gz -d "$WORK_DIR" || true
+    else
+      python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extract("sleepypod-core.tar.gz", sys.argv[2])' \
+        "$WORK_DIR/artifact.zip" "$WORK_DIR" || true
+    fi
+    rm -f "$WORK_DIR/artifact.zip"
+    if [ ! -s "$WORK_DIR/sleepypod-core.tar.gz" ] || ! tar xzf "$WORK_DIR/sleepypod-core.tar.gz" -C "$WORK_DIR"; then
+      echo "Error: CI build download/extraction failed. Installed files have not been replaced; retry the update." >&2
+      exit 1
+    fi
+    rm -f "$WORK_DIR/sleepypod-core.tar.gz"
+  else
+    if [ "$BRANCH" = dev ]; then
+      RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
+    else
+      RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    fi
+    echo "Checking for pre-built release: $RELEASE_API"
+    if ! HTTP_STATUS=$(curl -sS -L --connect-timeout 10 --max-time 60 \
+        -o "$WORK_DIR/release.json" -w '%{http_code}' "$RELEASE_API"); then
+      echo "Error: Could not contact GitHub. Check the Pod's network and retry." >&2
+      exit 1
+    fi
+    case "$HTTP_STATUS" in
+      200) ;;
+      404)
+        echo "Error: No accessible pre-built release for '$BRANCH' in '$GITHUB_REPO'." >&2
+        echo "Or, from a cloned repo on your computer: ./scripts/deploy POD_IP" >&2
+        echo "Installed files have not been replaced; source-only builds are not supported on the Pod." >&2
+        exit 1 ;;
+      *)
+        echo "Error: GitHub release lookup returned HTTP $HTTP_STATUS (check API access/rate limits)." >&2
+        exit 1 ;;
+    esac
+    RELEASE_URL=$(node -e '
+      const fs = require("fs");
+      const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const asset = release.assets?.find(a => a.name === "sleepypod-core.tar.gz");
+      if (asset && /^https:\/\//.test(asset.browser_download_url)) process.stdout.write(asset.browser_download_url);
+    ' "$WORK_DIR/release.json")
+    # Semantic-release tags (vX.Y.Z) are only known here, after the tarball was
+    # built, so record them in .git-info for the UI. Rolling *-latest tags are not versions.
+    RELEASE_VERSION=$(node -e '
+      const tag = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).tag_name ?? "";
+      if (/^v\d+\.\d+\.\d+/.test(tag)) process.stdout.write(tag);
+    ' "$WORK_DIR/release.json" 2>/dev/null || true)
+    rm -f "$WORK_DIR/release.json"
+    if [ -z "$RELEASE_URL" ]; then
+      echo "Error: Release has no sleepypod-core.tar.gz asset. Build/publish the release, or use ./scripts/deploy POD_IP from your computer." >&2
+      exit 1
+    fi
+    echo "Downloading pre-built release..."
+    if ! curl -fSL --connect-timeout 10 --max-time 600 "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
+      echo "Error: Release download/extraction failed. Installed files have not been replaced; retry the update." >&2
+      exit 1
+    fi
+    if [ -n "$RELEASE_VERSION" ] && [ -s "$WORK_DIR/.git-info" ]; then
+      node -e '
+        const fs = require("fs");
+        const info = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        fs.writeFileSync(process.argv[1], JSON.stringify({ ...info, version: process.argv[2] }));
+      ' "$WORK_DIR/.git-info" "$RELEASE_VERSION" 2>/dev/null || true
+    fi
+  fi
 fi
 
-# Check connectivity
-if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
-  echo "Error: Cannot reach GitHub. Check network." >&2
+# Validate staged artifacts before touching the installed application. Exclude
+# workstation dependencies and environment files even for hand-made archives.
+for required in .next/BUILD_ID .next/required-server-files.json .next/standalone/server.js package.json pnpm-lock.yaml; do
+  if [ ! -s "$WORK_DIR/$required" ]; then
+    echo "Error: Pre-built archive is missing $required. Build on your computer with ./scripts/deploy POD_IP, or publish a complete CI release." >&2
+    exit 1
+  fi
+done
+find "$WORK_DIR" -name node_modules -prune -exec rm -rf {} +
+find "$WORK_DIR" -maxdepth 1 -name '.env*' -exec rm -rf {} +
+
+# Check the target project's package-manager version before replacing files.
+# An unpinned global install can silently ignore native-dependency settings.
+PNPM_VERSION=$(node -p 'require(process.argv[1]).packageManager' "$WORK_DIR/package.json")
+if [[ ! "$PNPM_VERSION" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Error: Archive must pin packageManager to pnpm@x.y.z." >&2
+  exit 1
+fi
+# pnpm may manage its own pinned version, which can require WAN even for a
+# local archive. Production dependencies also still need registry access.
+open_update_wan
+ACTUAL_PNPM=$(cd "$WORK_DIR" && pnpm --version)
+if [ "$ACTUAL_PNPM" != "${PNPM_VERSION#pnpm@}" ]; then
+  echo "Error: Expected $PNPM_VERSION, found pnpm $ACTUAL_PNPM. Install the pinned version (npm install -g $PNPM_VERSION), then retry." >&2
   exit 1
 fi
 
-# Backup current code for rollback (everything except node_modules)
-BACKUP_DIR="/tmp/sleepypod-rollback"
-rm -rf "$BACKUP_DIR"
-mkdir -p "$BACKUP_DIR"
-tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . 2>/dev/null | tar xf - -C "$BACKUP_DIR" || true
+if [ "$SERVICE_STOPPED" = false ]; then
+  systemctl stop sleepypod.service
+  SERVICE_STOPPED=true
+fi
 
-# Stop service before DB backup (ensures WAL is flushed)
-systemctl stop sleepypod.service
+# Fail closed if the backup cannot be completed. Keep it off the Pod's /tmp
+# tmpfs by honoring TMPDIR for both staging and rollback storage.
+BACKUP_DIR=$(mktemp -d "$TMPDIR/sleepypod-rollback.XXXXXX")
+tar cf - -C "$INSTALL_DIR" --exclude='node_modules' . | tar xf - -C "$BACKUP_DIR"
 
-# Backup database (after stop so WAL/SHM are consistent)
-# Timestamped name so two rapid updates don't clobber the previous backup.
-# Matches scripts/install's naming; sp-maintenance prunes to 3 most recent.
 BACKUP_TS=$(date +%s)
 DB_BACKUP="$DATA_DIR/sleepypod.db.bak.$BACKUP_TS"
 if [ -f "$DATA_DIR/sleepypod.db" ]; then
   cp "$DATA_DIR/sleepypod.db" "$DB_BACKUP"
-  [ -f "$DATA_DIR/sleepypod.db-wal" ] && cp "$DATA_DIR/sleepypod.db-wal" "$DATA_DIR/sleepypod.db-wal.bak.$BACKUP_TS"
-  [ -f "$DATA_DIR/sleepypod.db-shm" ] && cp "$DATA_DIR/sleepypod.db-shm" "$DATA_DIR/sleepypod.db-shm.bak.$BACKUP_TS"
+  [ ! -f "$DATA_DIR/sleepypod.db-wal" ] || cp "$DATA_DIR/sleepypod.db-wal" "$DATA_DIR/sleepypod.db-wal.bak.$BACKUP_TS"
+  [ ! -f "$DATA_DIR/sleepypod.db-shm" ] || cp "$DATA_DIR/sleepypod.db-shm" "$DATA_DIR/sleepypod.db-shm.bak.$BACKUP_TS"
   echo "Database backed up to $DB_BACKUP."
 fi
 
-# Download code — try CI release first (includes pre-built .next), fall back to source tarball
-WORK_DIR=$(mktemp -d)
-HAS_BUILD=false
-
-# Resolve the release endpoint. Mirrors scripts/install so OTA updates use
-# the same CI-built tarballs as fresh installs:
-#   main / latest      → releases/latest (semantic-release vX.Y.Z asset)
-#   dev                → releases/tags/dev-latest      (built by dev-release.yml)
-#   <other branch>     → releases/tags/<slug>-latest   (built by branch-release.yml)
-# Slugging matches branch-release.yml: `feat/foo` → `feat-foo-latest`.
-if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "latest" ]; then
-  RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-  echo "Checking for CI release (latest stable)..."
-elif [ "$BRANCH" = "dev" ]; then
-  RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
-  echo "Checking for CI release (tag: dev-latest)..."
-else
-  RELEASE_TAG="${BRANCH//\//-}-latest"
-  RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
-  echo "Checking for CI release (tag: $RELEASE_TAG)..."
-fi
-RELEASE_URL=$(curl -sf "$RELEASE_API" \
-  | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
-  | grep -o 'https://[^"]*' || true)
-
-if [ -n "$RELEASE_URL" ]; then
-  echo "Downloading CI release..."
-  if curl -fSL "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
-    HAS_BUILD=true
-    echo "CI release downloaded (pre-built)."
-  else
-    # CI download failed mid-stream (e.g. curl truncation). Partial
-    # files would otherwise contaminate WORK_DIR — the source-tarball
-    # fallback below extracts into the same dir, and `ls "$WORK_DIR"
-    # | head -1` would then pick up stale CI-release contents instead
-    # of the freshly-extracted source subdir. Mirrors scripts/install.
-    find "$WORK_DIR" -mindepth 1 -delete 2>/dev/null || true
-  fi
-fi
-
-if [ "$HAS_BUILD" = false ]; then
-  # A failed CI-release download can leave partial extraction in WORK_DIR;
-  # drop and recreate so the source-tarball structure check is reliable.
-  rm -rf "$WORK_DIR"
-  WORK_DIR=$(mktemp -d)
-  # Fall back to source tarball (no .next — would need build on pod)
-  # "latest" is not a real branch — use main for the source tarball
-  SOURCE_BRANCH="$BRANCH"
-  [ "$SOURCE_BRANCH" = "latest" ] && SOURCE_BRANCH="main"
-  echo "Downloading $SOURCE_BRANCH from GitHub..."
-  TARBALL_URL="https://github.com/${GITHUB_REPO}/archive/refs/heads/${SOURCE_BRANCH}.tar.gz"
-  if ! curl -fSL "$TARBALL_URL" | tar xz -C "$WORK_DIR"; then
-    echo "Error: Failed to download branch '$BRANCH'" >&2
-    exit 1
-  fi
-  # Source tarball extracts to a subdirectory (e.g., core-main/)
-  SUBDIR=$(ls "$WORK_DIR" | head -1)
-  if [ -z "$SUBDIR" ] || [ ! -d "$WORK_DIR/$SUBDIR" ]; then
-    echo "Error: Unexpected tarball structure in $WORK_DIR" >&2
-    exit 1
-  fi
-  # Move contents up so WORK_DIR is the root
-  mv "$WORK_DIR/$SUBDIR"/* "$WORK_DIR/$SUBDIR"/.[!.]* "$WORK_DIR/" 2>/dev/null || true
-  rmdir "$WORK_DIR/$SUBDIR" 2>/dev/null || true
-fi
-
 # Clean old files (preserve node_modules, .env)
+ROLLBACK_READY=true
 find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
   ! -name 'node_modules' \
   ! -name '.env' \
   -exec rm -rf {} +
-ROLLBACK_READY=true
 
 # Move new code into place
 cp -r "$WORK_DIR/." "$INSTALL_DIR/"
@@ -267,29 +451,12 @@ if [ -f "$INSTALL_DIR/scripts/lib/relocation-helpers" ]; then
   ensure_persistent_node_modules "$INSTALL_DIR"
 fi
 
-# Install production dependencies
-pnpm install --frozen-lockfile --prod
+# Native dependencies must be installed for the Pod, never copied from a Mac.
+CI=true pnpm install --frozen-lockfile --prod
 
-# Build only if no pre-built .next exists
-if [ ! -d "$INSTALL_DIR/.next" ]; then
-  echo "No pre-built .next found, building..."
-  # CI=true so pnpm doesn't prompt for TTY confirmation when prod-only
-  # node_modules need to be replaced with the full dev set.
-  CI=true pnpm install --frozen-lockfile
-  SP_BRANCH="$BRANCH" pnpm build
-else
-  # Regenerate .git-info with the correct branch for pre-built releases
+# Preserve the commit/branch metadata produced by the actual build.
+if [ ! -s .git-info ]; then
   SP_BRANCH="$BRANCH" node scripts/generate-git-info.mjs 2>/dev/null || true
-fi
-
-# Validate the build actually produced a startable .next bundle. next start
-# refuses to boot without BUILD_ID and silently crashloops via systemd
-# Restart=on-failure, so without this check sp-update would print "Update
-# complete!" while the service is dying every 10 seconds.
-if [ ! -f "$INSTALL_DIR/.next/BUILD_ID" ]; then
-  echo "Error: build did not produce $INSTALL_DIR/.next/BUILD_ID — refusing to start service" >&2
-  echo "Inspect the build output above; common causes: pnpm build script swallowed an error, OOM/SIGTERM during turbopack, or pre-built tarball missing the file." >&2
-  exit 1
 fi
 
 # Sync biometrics modules
@@ -406,6 +573,22 @@ EOF
   systemctl daemon-reload
 fi
 
+# Order the Node sensor streamer after firmware NATS when that unit exists.
+# This is deliberately ordering-only (no Wants=/Requires=): old-firmware pods
+# do not ship nats-server.service and must continue starting normally. The
+# streamer's own 60-second probe remains the race-safe runtime selector.
+NATS_ORDERING_DROPIN=/etc/systemd/system/sleepypod.service.d/nats-ordering.conf
+mkdir -p "$(dirname "$NATS_ORDERING_DROPIN")"
+nats_ordering_content=$(cat << 'EOF'
+[Unit]
+After=nats-server.service
+EOF
+)
+if [ "$(cat "$NATS_ORDERING_DROPIN" 2>/dev/null || true)" != "$nats_ordering_content" ]; then
+  printf '%s\n' "$nats_ordering_content" > "$NATS_ORDERING_DROPIN"
+  systemctl daemon-reload
+fi
+
 # Install CLI tools from new source.
 #
 # Use `install` (atomic mkstemp + rename) instead of `cp` — sp-update is
@@ -420,8 +603,20 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
   done
 fi
 
+# Reconcile the deferred housekeeping timer on existing installations.
+if [ -f "$INSTALL_DIR/scripts/lib/maintenance-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/maintenance-helpers"
+  install_maintenance_timer
+fi
+
+if [ -f "$INSTALL_DIR/scripts/lib/storage-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/storage-helpers"
+  install_storage_cleanup_sudoers
+fi
+
 # Re-block WAN before starting service
 if [ "$WAN_WAS_BLOCKED" = true ]; then
+  reload_iptables_helpers
   restore_wan
   WAN_WAS_BLOCKED=false
 fi
@@ -432,6 +627,12 @@ systemctl start sleepypod.service
 sleep 5
 if systemctl is-active --quiet sleepypod.service; then
   echo "Update complete! Service is running."
+  # Old release builds and the orphaned node_modules eat into the space the
+  # biometrics pruner leaves for raw history. Never fatal: the update is done.
+  # The new copy was installed to /usr/local/bin with the other sp-* tools.
+  if [ -x /usr/local/bin/sp-storage-cleanup ]; then
+    INSTALL_DIR="$INSTALL_DIR" /usr/local/bin/sp-storage-cleanup --exclude "$BACKUP_DIR" || echo "Warning: storage cleanup failed" >&2
+  fi
   exit 0
 fi
 

@@ -499,3 +499,91 @@ export function buildSentence(r: BuilderRule): SentenceChunk[] {
   out.push({ text: '.' })
   return out
 }
+
+// ---------------------------------------------------------------------------
+// Live signals + templates
+// ---------------------------------------------------------------------------
+
+/**
+ * Signals the engine reads live today (ADR 0023): per-side temperature/level
+ * and water.low. Biometric, ambient and enum signals are backtest only, so a
+ * rule reading them can never fire on the bed yet.
+ */
+export const LIVE_SIGNALS: ReadonlySet<string> = new Set([
+  '{side}.currentTemperature',
+  '{side}.targetTemperature',
+  '{side}.currentLevel',
+  'water.low',
+])
+
+/** Signal ids (templated) a rule's WHEN/IF read, in first-seen order. */
+export function ruleSignals(r: BuilderRule): string[] {
+  const out: string[] = []
+  const add = (s: string) => {
+    if (!out.includes(s)) out.push(s)
+  }
+  if (r.when.type !== 'time') add(r.when.signal)
+  for (const c of r.ifs) if (c.type === 'cond') add(c.signal)
+  return out
+}
+
+/** Lower-cased labels of the signals a rule reads that have no live source. */
+export function missingLiveSignals(r: BuilderRule): string[] {
+  return ruleSignals(r).filter(s => !LIVE_SIGNALS.has(s)).map(s => sigLabel(s).toLowerCase())
+}
+
+export type TemplateId = 'hold-room' | 'restless' | 'water-low'
+
+export interface RuleTemplate {
+  id: TemplateId
+  title: string
+  description: string
+  rule: () => BuilderRule
+}
+
+export const TEMPLATES: readonly RuleTemplate[] = [
+  {
+    id: 'hold-room',
+    title: 'Hold room +3°F',
+    description: 'Between 11 PM and 6 AM, keep the bed 3°F above room temperature.',
+    rule: () => ({
+      ...blankRule(),
+      name: 'Hold room +3°F',
+      when: { type: 'time', between: ['23:00', '06:00'] },
+      ifs: [],
+      then: [{ action: 'setTemperature', expr: 'ambient + 3', clamp: [60, 85] }],
+      cooldown: 0,
+    }),
+  },
+  {
+    id: 'restless',
+    title: 'Cool when restless',
+    description: 'If movement stays high for 10 minutes, lower the bed 2°F for 20 minutes.',
+    rule: () => ({
+      ...blankRule(),
+      name: 'Cool when restless',
+      when: { type: 'agg', agg: 'avg', signal: '{side}.movement', window: 10, op: '>', value: 200 },
+      ifs: [],
+      then: [{ action: 'setTemperature', delta: -2, revert: 20, clamp: [...DEFAULT_CLAMP] }],
+      cooldown: 30,
+    }),
+  },
+  {
+    id: 'water-low',
+    title: 'Tell me when water is low',
+    description: 'Send a notification when the water tank reads low.',
+    rule: () => ({
+      ...blankRule(),
+      name: 'Tell me when water is low',
+      when: { type: 'change', signal: 'water.low' },
+      ifs: [{ type: 'cond', signal: 'water.low', op: '==', value: 1 }],
+      then: [{ action: 'notify', message: 'The water tank is low.' }],
+      cooldown: 0,
+    }),
+  },
+]
+
+/** A template's prefilled rule, or null for an unknown id. */
+export function templateRule(id: string | null | undefined): BuilderRule | null {
+  return TEMPLATES.find(t => t.id === id)?.rule() ?? null
+}

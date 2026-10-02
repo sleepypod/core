@@ -58,12 +58,14 @@ describe('homekit storage', () => {
     }
   })
 
-  it('clearPairings removes AccessoryInfo + IdentifierCache for the username', () => {
+  it('clearPairings removes pairing, identifier, and controller storage for the username', () => {
     const dir = getStorageDir()
     const username = 'AA:BB:CC:11:22:33'
     const key = 'AABBCC112233'
     const accessory = join(dir, `AccessoryInfo.${key}.json`)
     const identifiers = join(dir, `IdentifierCache.${key}.json`)
+    const controllers = join(dir, `ControllerStorage.${key}.json`)
+    writeFileSync(controllers, '{}')
     writeFileSync(accessory, '{}')
     writeFileSync(identifiers, '{}')
 
@@ -71,6 +73,7 @@ describe('homekit storage', () => {
 
     expect(existsSync(accessory)).toBe(false)
     expect(existsSync(identifiers)).toBe(false)
+    expect(existsSync(controllers)).toBe(false)
   })
 
   it('clearPairings is a no-op when files are absent', () => {
@@ -82,6 +85,12 @@ describe('homekit storage', () => {
     const id = loadOrCreateIdentity()
     clearPairings(id.username)
     expect(existsSync(join(dir, 'identity.json'))).toBe(true)
+  })
+
+  it('treats an AccessoryInfo file without pairedClients as unpaired', () => {
+    const file = join(getStorageDir(), 'AccessoryInfo.AABBCCDDEEFF.json')
+    writeFileSync(file, JSON.stringify({ displayName: 'sleepypod' }))
+    expect(readPairedControllers('AA:BB:CC:DD:EE:FF')).toEqual([])
   })
 
   it('readPairedControllers returns [] when AccessoryInfo missing', () => {

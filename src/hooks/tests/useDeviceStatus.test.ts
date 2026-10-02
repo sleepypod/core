@@ -22,8 +22,12 @@ const sensorMock = vi.hoisted(() => {
 })
 
 const trpcMock = vi.hoisted(() => {
-  const state: { http: any, isLoading: boolean } = { http: undefined, isLoading: false }
   const refetch = vi.fn(() => Promise.resolve('refetched'))
+  const state: { http: any, isLoading: boolean, refetch: typeof refetch } = {
+    http: undefined,
+    isLoading: false,
+    refetch,
+  }
   return {
     state,
     refetch,
@@ -35,7 +39,7 @@ const trpcMock = vi.hoisted(() => {
             return {
               data: state.http,
               isLoading: state.isLoading,
-              refetch,
+              refetch: state.refetch,
             }
           }),
         },
@@ -59,6 +63,7 @@ beforeEach(() => {
   sensorMock.state.status = 'connected'
   trpcMock.state.http = undefined
   trpcMock.state.isLoading = false
+  trpcMock.state.refetch = trpcMock.refetch
   trpcMock.trpc.device.getStatus.useQuery.mockClear()
 })
 
@@ -97,6 +102,18 @@ describe('useDeviceStatus', () => {
     expect(result.current.isLoading).toBe(true)
   })
 
+  it('reports not loading when HTTP is idle and no WS frame has arrived', () => {
+    const { result } = renderHook(() => useDeviceStatus())
+    expect(result.current.isLoading).toBe(false)
+  })
+
+  it('reports not loading once a WS frame exists even if HTTP is loading', () => {
+    sensorMock.state.frame = wsFrame
+    trpcMock.state.isLoading = true
+    const { result } = renderHook(() => useDeviceStatus())
+    expect(result.current.isLoading).toBe(false)
+  })
+
   it('returns merged WS frame data once received and reports streaming', () => {
     sensorMock.state.frame = wsFrame
     const { result } = renderHook(() => useDeviceStatus())
@@ -125,6 +142,17 @@ describe('useDeviceStatus', () => {
     const { result } = renderHook(() => useDeviceStatus())
     await result.current.refetch()
     expect(trpcMock.refetch).toHaveBeenCalled()
+  })
+
+  it('uses a replacement tRPC refetch function after rerender', async () => {
+    const replacementRefetch = vi.fn(() => Promise.resolve('replacement'))
+    const { result, rerender } = renderHook(() => useDeviceStatus())
+
+    trpcMock.state.refetch = replacementRefetch
+    rerender()
+    await result.current.refetch()
+
+    expect(replacementRefetch).toHaveBeenCalledOnce()
   })
 
   it('keeps fast HTTP polling before any WS frame arrives', () => {
@@ -175,6 +203,29 @@ describe('useDeviceStatus', () => {
     finally {
       vi.useRealTimers()
     }
+  })
+
+  it('treats a frame exactly 15 seconds old as stale', () => {
+    vi.useFakeTimers()
+    try {
+      sensorMock.state.frame = wsFrame
+      const { result, rerender } = renderHook(() => useDeviceStatus())
+      expect(result.current.isStreaming).toBe(true)
+
+      vi.advanceTimersByTime(15_000)
+      rerender()
+
+      expect(result.current.isStreaming).toBe(false)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not treat a null frame as a delivered WS frame', () => {
+    sensorMock.state.frame = null
+    const { result } = renderHook(() => useDeviceStatus())
+    expect(result.current.isStreaming).toBe(false)
   })
 
   it('serves the last WS frame while disconnected if HTTP has no data yet', () => {

@@ -3,10 +3,11 @@
  *
  * All hardware/streaming dependencies are mocked. We assert payload shape,
  * overlay merging, the no-status / no-monitor guards, the prime-completed
- * conditional spread, and the error guard.
+ * and pump-stall conditional spreads, and the error guard.
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { _resetMutationOverlays } from '../mutationOverlay'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const dacMock = vi.hoisted(() => {
@@ -29,6 +30,12 @@ const alarmMock = vi.hoisted(() => {
   const state: { left: boolean, right: boolean } = { left: false, right: false }
   const getAlarmState = vi.fn(() => state)
   return { state, getAlarmState }
+})
+
+const stallMock = vi.hoisted(() => {
+  const state: { left: unknown, right: unknown } = { left: null, right: null }
+  const getAllPumpStallNotices = vi.fn(() => ({ left: state.left, right: state.right }))
+  return { state, getAllPumpStallNotices }
 })
 
 const snoozeMock = vi.hoisted(() => {
@@ -56,6 +63,10 @@ vi.mock('@/src/hardware/deviceStateSync', () => ({
   getAlarmState: alarmMock.getAlarmState,
 }))
 
+vi.mock('@/src/hardware/pumpStallNotification', () => ({
+  getAllPumpStallNotices: stallMock.getAllPumpStallNotices,
+}))
+
 vi.mock('@/src/hardware/snoozeManager', () => ({
   getSnoozeStatus: snoozeMock.getSnoozeStatus,
 }))
@@ -78,15 +89,19 @@ const baseStatus = {
 let warnSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
+  _resetMutationOverlays()
   dacMock.state.monitor = null
   primeMock.state.primeCompletedAt = null
   alarmMock.state.left = false
   alarmMock.state.right = false
+  stallMock.state.left = null
+  stallMock.state.right = null
   snoozeMock.calls.length = 0
   dacMock.getDacMonitorIfRunning.mockClear()
   piezoMock.broadcastFrame.mockClear()
   primeMock.getPrimeCompletedAt.mockClear()
   alarmMock.getAlarmState.mockClear()
+  stallMock.getAllPumpStallNotices.mockClear()
   snoozeMock.getSnoozeStatus.mockClear()
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -191,6 +206,16 @@ describe('broadcastMutationStatus', () => {
     expect(frame.leftSide).toEqual({ temperatureC: 22, isOn: true, isAlarmVibrating: false })
   })
 
+  it('ignores an overlay payload when no side is provided', () => {
+    setLastStatus(baseStatus)
+
+    broadcastMutationStatus(undefined, { temperatureC: 99, isOn: false })
+
+    const frame = piezoMock.broadcastFrame.mock.calls[0]?.[0] as Record<string, any>
+    expect(frame.leftSide).toEqual({ temperatureC: 22, isOn: true, isAlarmVibrating: false })
+    expect(frame.rightSide).toEqual({ temperatureC: 24, isOn: false, isAlarmVibrating: false })
+  })
+
   it('includes primeCompletedNotification when a timestamp is set', () => {
     setLastStatus(baseStatus)
     primeMock.state.primeCompletedAt = 1_700_000_000_000
@@ -199,6 +224,42 @@ describe('broadcastMutationStatus', () => {
 
     const frame = piezoMock.broadcastFrame.mock.calls[0]?.[0] as Record<string, any>
     expect(frame.primeCompletedNotification).toEqual({ timestamp: 1_700_000_000_000 })
+  })
+
+  it('includes pumpStallNotifications when one side has an active notice', () => {
+    setLastStatus(baseStatus)
+    stallMock.state.right = { alertId: 42, trippedAt: 1_700_000_000, rpm: 0, restore: null }
+
+    broadcastMutationStatus()
+
+    const frame = piezoMock.broadcastFrame.mock.calls[0]?.[0] as Record<string, any>
+    expect(frame.pumpStallNotifications).toEqual({
+      left: null,
+      right: { alertId: 42, trippedAt: 1_700_000_000, rpm: 0, restore: null },
+    })
+  })
+
+  it('includes pumpStallNotifications when only the left side has an active notice', () => {
+    setLastStatus(baseStatus)
+    stallMock.state.left = { alertId: 43, trippedAt: 1_700_000_000, rpm: 0, restore: null }
+
+    broadcastMutationStatus()
+
+    const frame = piezoMock.broadcastFrame.mock.calls[0]?.[0] as Record<string, any>
+    expect(frame.pumpStallNotifications).toEqual({
+      left: { alertId: 43, trippedAt: 1_700_000_000, rpm: 0, restore: null },
+      right: null,
+    })
+  })
+
+  it('omits pumpStallNotifications when both sides are null', () => {
+    setLastStatus(baseStatus)
+
+    broadcastMutationStatus()
+
+    const frame = piezoMock.broadcastFrame.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(frame).toBeDefined()
+    expect(frame && 'pumpStallNotifications' in frame).toBe(false)
   })
 
   it('catches and logs errors thrown by downstream dependencies', () => {
@@ -228,4 +289,14 @@ describe('broadcastMutationStatus', () => {
       expect.any(Error),
     )
   })
+})
+
+it('retains a just-written target in control-only publications and opposite-side mutations', () => {
+  setLastStatus({ ...baseStatus, leftSide: { targetTemperature: 70, targetLevel: -50 }, rightSide: { targetTemperature: 72, targetLevel: -40 } })
+  broadcastMutationStatus('left', { targetTemperature: 75, targetLevel: -30 })
+  broadcastMutationStatus()
+  broadcastMutationStatus('right', { targetTemperature: 74 })
+  for (const [frame] of piezoMock.broadcastFrame.mock.calls) {
+    expect(frame.leftSide).toMatchObject({ targetTemperature: 75, targetLevel: -30 })
+  }
 })

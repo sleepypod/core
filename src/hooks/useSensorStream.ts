@@ -1,7 +1,10 @@
 'use client'
 
+import type { TemperatureControlStatus } from '@/src/temperature/controller'
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react'
 import { normalizeFrame } from '@/src/streaming/normalizeFrame'
+import { createDemoSocket } from '@/src/demo/socket'
+import type { SideStatus } from '@/src/hardware/types'
 
 // ---------------------------------------------------------------------------
 // Sensor frame types (matching piezoStream.ts server output)
@@ -10,7 +13,7 @@ import { normalizeFrame } from '@/src/streaming/normalizeFrame'
 export const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
-  'deviceStatus', 'gesture',
+  'deviceStatus', 'gesture', 'lps',
 ] as const
 
 export type SensorType = typeof ALL_SENSOR_TYPES[number]
@@ -24,6 +27,21 @@ export interface PiezoDualFrame {
   right1: number[]
   left2?: number[]
   right2?: number[]
+}
+
+/**
+ * LPS diagnostic frame. Channel bytes remain in their JSON Buffer envelope,
+ * unlike piezo-dual's decoded sample arrays. Units and physical side mapping
+ * are unconfirmed; preserve sentinel samples and temperature placeholders.
+ */
+export interface LpsFrame {
+  type: 'lps'
+  ts: number
+  temp: Record<'left1' | 'left2' | 'right1' | 'right2', number>
+  pres: {
+    adc: number
+    freq: number
+  } & Record<'left1' | 'left2' | 'right1' | 'right2', { type: 'Buffer', data: number[] }>
 }
 
 /** Capacitive presence sensor frame (~2 Hz). */
@@ -116,24 +134,16 @@ export interface GestureFrame {
   tapType: string
 }
 
-/** Device status frame — pushed by dacMonitor every 2s. */
+/** Device status frame — pushed on DacMonitor's adaptive poll (1s active /
+ * 2s default / 5s idle) and immediately after mutations via
+ * broadcastMutationStatus. Sides carry the full SideStatus payload the
+ * producers spread (nullable temps when a side is off/neutral). */
 export interface DeviceStatusFrame {
+  temperatureControl?: { left: TemperatureControlStatus, right: TemperatureControlStatus }
   type: 'deviceStatus'
   ts: number
-  leftSide: {
-    currentTemperature: number
-    targetTemperature: number
-    currentLevel: number
-    targetLevel: number
-    isAlarmVibrating: boolean
-  }
-  rightSide: {
-    currentTemperature: number
-    targetTemperature: number
-    currentLevel: number
-    targetLevel: number
-    isAlarmVibrating: boolean
-  }
+  leftSide: SideStatus & { isAlarmVibrating: boolean }
+  rightSide: SideStatus & { isAlarmVibrating: boolean }
   waterLevel: 'low' | 'ok'
   isPriming: boolean
   primeCompletedNotification?: { timestamp: number }
@@ -160,6 +170,7 @@ export interface DeviceStatusFrame {
 /** Union of all sensor frame types. */
 export type SensorFrame
   = | PiezoDualFrame
+    | LpsFrame
     | CapSenseFrame
     | CapSense2Frame
     | BedTempFrame
@@ -175,13 +186,17 @@ export type SensorFrame
 // Server → Client control messages
 // ---------------------------------------------------------------------------
 
+interface SnapshotMessage { type: 'snapshot', latest: SensorFrame[], waveform: PiezoDualFrame[], range?: TimeRange }
+interface WaveformMessage { type: 'waveform', requestId: number, frames: PiezoDualFrame[] }
 interface ErrorMessage { type: 'error', message: string }
 interface SubscribedMessage { type: 'subscribed', sensors: string[] }
 interface TimeRangeMessage { type: 'time_range', min: number, max: number, file: string | null }
 interface SeekCompleteMessage { type: 'seek_complete' }
 
 type ServerControlMessage
-  = | ErrorMessage
+  = | SnapshotMessage
+    | WaveformMessage
+    | ErrorMessage
     | SubscribedMessage
     | TimeRangeMessage
     | SeekCompleteMessage
@@ -202,6 +217,10 @@ export interface TimeRange {
 
 export interface SensorStreamState {
   status: ConnectionStatus
+  /** Sensor measurement time, separate from transport receipt time. */
+  lastSensorTime: number | null
+  waveform: PiezoDualFrame[]
+  replayWaveform: PiezoDualFrame[] | null
   /** Latest frame per sensor type (for current-value displays). */
   latestFrames: Partial<Record<SensorType, SensorFrame>>
   /** Most recent error message from server or connection failure. */
@@ -225,6 +244,7 @@ export interface SensorStreamState {
 
 interface SensorStreamSingleton {
   state: SensorStreamState
+  waveformRequestId: number
   fpsTimestamps: number[]
   fpsUpdateTimer: ReturnType<typeof setInterval> | null
   listeners: Set<() => void>
@@ -250,6 +270,9 @@ if (!g[SINGLETON_KEY]) {
   g[SINGLETON_KEY] = {
     state: {
       status: 'disconnected',
+      lastSensorTime: null,
+      waveform: [],
+      replayWaveform: null,
       latestFrames: {},
       lastError: null,
       subscribedSensors: null,
@@ -258,6 +281,7 @@ if (!g[SINGLETON_KEY]) {
       isSeeking: false,
       timeRange: null,
     },
+    waveformRequestId: 0,
     fpsTimestamps: [],
     fpsUpdateTimer: null,
     listeners: new Set<() => void>(),
@@ -380,6 +404,26 @@ function handleMessage(event: MessageEvent) {
   try {
     const msg: ServerMessage = JSON.parse(event.data)
 
+    if (msg.type === 'snapshot') {
+      const latestFrames = { ...state.latestFrames }
+      for (const raw of [...msg.latest, ...msg.waveform]) {
+        const frame = normalizeFrame({ ...raw }) as unknown as SensorFrame
+        const previous = latestFrames[frame.type]
+        if (!previous || frame.ts >= previous.ts) latestFrames[frame.type] = frame
+      }
+      const sensorTimes = Object.values(latestFrames).filter(f => f.type !== 'deviceStatus').map(f => f.ts * 1000)
+      setState({ latestFrames, waveform: msg.waveform,
+        ...(msg.range && { timeRange: msg.range.max === 0 ? null : msg.range }),
+        lastSensorTime: sensorTimes.length ? Math.max(...sensorTimes) : null })
+      return
+    }
+    if (msg.type === 'waveform') {
+      if (msg.requestId === singleton.waveformRequestId) {
+        setState({ replayWaveform: msg.frames, isSeeking: false })
+      }
+      return
+    }
+
     // Control messages
     if (msg.type === 'error') {
       setState({ lastError: (msg as ErrorMessage).message })
@@ -411,8 +455,16 @@ function handleMessage(event: MessageEvent) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const frame = normalizeFrame(msg as any) as unknown as SensorFrame
     trackFrame()
+    const previous = state.latestFrames[frame.type]
+    if (previous && frame.ts < previous.ts) return
     const newLatest = { ...state.latestFrames, [frame.type]: frame }
-    setState({ latestFrames: newLatest, lastFrameTime: Date.now() })
+    const waveform = frame.type === 'piezo-dual'
+      ? [...state.waveform, frame].filter(f => f.ts >= frame.ts - 10).slice(-40)
+      : state.waveform
+    setState({ latestFrames: newLatest, lastFrameTime: Date.now(), waveform,
+      lastSensorTime: frame.type !== 'deviceStatus' && Number.isFinite(frame.ts)
+        ? Math.max(state.lastSensorTime ?? 0, frame.ts * 1000)
+        : state.lastSensorTime })
 
     // Notify per-sensor listeners
     const typedListeners = sensorListeners.get(frame.type as SensorType)
@@ -444,7 +496,9 @@ function connect() {
   singleton.intentionalClose = false
 
   try {
-    singleton.ws = new WebSocket(url)
+    singleton.ws = process.env.NEXT_PUBLIC_DEMO === '1'
+      ? createDemoSocket()
+      : new WebSocket(url, 'sensor-snapshot-v1')
   }
   catch {
     setState({ status: 'disconnected', lastError: 'Failed to create WebSocket' })
@@ -454,6 +508,7 @@ function connect() {
 
   singleton.ws.onopen = () => {
     singleton.reconnectAttempt = 0
+    goLive()
     setState({ status: 'connected', lastError: null })
     startFpsTimer()
 
@@ -491,7 +546,8 @@ function disconnect() {
     singleton.ws.close()
     singleton.ws = null
   }
-  setState({ status: 'disconnected', latestFrames: {}, subscribedSensors: null, fps: 0, lastFrameTime: null, isSeeking: false, timeRange: null })
+  singleton.waveformRequestId += 1
+  setState({ lastSensorTime: null, waveform: [], replayWaveform: null, status: 'disconnected', latestFrames: {}, subscribedSensors: null, fps: 0, lastFrameTime: null, isSeeking: false, timeRange: null })
 }
 
 /**
@@ -526,6 +582,7 @@ function recomputeAndSendSubscription() {
   if (singleton.ws?.readyState === WebSocket.OPEN) {
     singleton.ws.send(JSON.stringify({
       type: 'subscribe',
+      snapshot: true,
       sensors: merged ?? [],
     }))
   }
@@ -544,6 +601,23 @@ function sendSeek(timestamp: number): void {
     setState({ isSeeking: true })
     singleton.ws.send(JSON.stringify({ type: 'seek', timestamp }))
   }
+}
+
+function seekWaveform(timestamp: number): void {
+  if (singleton.ws?.readyState !== WebSocket.OPEN) return
+  const requestId = ++singleton.waveformRequestId
+  setState({ isSeeking: true, replayWaveform: [] })
+  singleton.ws.send(JSON.stringify({ type: 'get_waveform', timestamp, requestId }))
+  setTimeout(() => {
+    if (singleton.waveformRequestId === requestId && state.isSeeking) {
+      setState({ isSeeking: false, lastError: 'Waveform request timed out' })
+    }
+  }, 5000)
+}
+
+function goLive(): void {
+  singleton.waveformRequestId += 1
+  setState({ replayWaveform: null, isSeeking: false })
 }
 
 /**
@@ -645,6 +719,8 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
 
   return {
     ...snapshot,
+    seekWaveform,
+    goLive,
     /** Send a seek request — server replays frames from the given timestamp (epoch seconds). */
     seek,
     /** Request the available time range for scrubbing. */

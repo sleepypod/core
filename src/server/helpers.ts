@@ -1,9 +1,26 @@
 /**
  * Shared helper functions for tRPC routers
  */
+import { TemperatureBlockedError } from '@/src/temperature/controller'
 import { TRPCError } from '@trpc/server'
 import type { HardwareClient } from '@/src/hardware/client'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
+import type { Side } from '@/src/hardware/types'
+
+/**
+ * Throw PRECONDITION_FAILED when the pump stall guard is holding the side
+ * off. Callers gate every energizing write on this (ADR 0022); powering
+ * off is never blocked.
+ */
+export function assertPumpStallNotBlocked(side: Side): void {
+  if (pumpStallShouldBlock(side)) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Pump stall protection active — re-enable the side first',
+    })
+  }
+}
 
 /**
  * Execute a callback with the shared hardware client.
@@ -28,6 +45,9 @@ export async function withHardwareClient<T>(
     return await callback(client)
   }
   catch (error) {
+    if (error instanceof TemperatureBlockedError) {
+      throw new TRPCError({ code: 'PRECONDITION_FAILED', message: error.message, cause: error })
+    }
     if (error instanceof TRPCError) {
       throw error
     }
@@ -42,6 +62,15 @@ export async function withHardwareClient<T>(
         return await callback(client)
       }
       catch (retryError) {
+        // A TRPCError from the retried callback (e.g. the pump-stall guard's
+        // PRECONDITION_FAILED) is an intentional rejection, not a hardware
+        // failure — surface it instead of masking it as a 500.
+        if (retryError instanceof TemperatureBlockedError) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: retryError.message, cause: retryError })
+        }
+        if (retryError instanceof TRPCError) {
+          throw retryError
+        }
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `${errorMessage}: ${retryError instanceof Error ? retryError.message : 'Reconnect failed'}`,

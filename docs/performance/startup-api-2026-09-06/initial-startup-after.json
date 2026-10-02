@@ -1,0 +1,636 @@
+{
+  "label": "after-startup-api",
+  "startedAt": "2026-09-06T03:57:56.006Z",
+  "serviceRestartMs": 193,
+  "httpReadyMs": 16988,
+  "firstSensorMs": 68852,
+  "firstCurrentSensorMs": 85741,
+  "firstDeviceStatusMs": 31219,
+  "samples": [
+    {
+      "atMs": 15777,
+      "latencyMs": 1211
+    },
+    {
+      "atMs": 18496,
+      "latencyMs": 403
+    },
+    {
+      "atMs": 18995,
+      "latencyMs": 96
+    },
+    {
+      "atMs": 19496,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 19996,
+      "latencyMs": 54
+    },
+    {
+      "atMs": 20497,
+      "latencyMs": 45
+    },
+    {
+      "atMs": 20998,
+      "latencyMs": 43
+    },
+    {
+      "atMs": 21498,
+      "latencyMs": 44
+    },
+    {
+      "atMs": 21998,
+      "latencyMs": 47
+    },
+    {
+      "atMs": 22500,
+      "latencyMs": 39
+    },
+    {
+      "atMs": 23001,
+      "latencyMs": 35
+    },
+    {
+      "atMs": 23503,
+      "latencyMs": 36
+    },
+    {
+      "atMs": 24003,
+      "latencyMs": 38
+    },
+    {
+      "atMs": 24503,
+      "latencyMs": 36
+    },
+    {
+      "atMs": 25003,
+      "latencyMs": 35
+    },
+    {
+      "atMs": 25503,
+      "latencyMs": 37
+    },
+    {
+      "atMs": 26004,
+      "latencyMs": 36
+    },
+    {
+      "atMs": 26504,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 27005,
+      "latencyMs": 36
+    },
+    {
+      "atMs": 27506,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 28007,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 28508,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 29008,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 29509,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 30010,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 30511,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 31011,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 31512,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 32013,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 32514,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 33015,
+      "latencyMs": 35
+    },
+    {
+      "atMs": 33515,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 34016,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 34516,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 35017,
+      "latencyMs": 25
+    },
+    {
+      "atMs": 35518,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 36019,
+      "latencyMs": 29
+    },
+    {
+      "atMs": 36520,
+      "latencyMs": 27
+    },
+    {
+      "atMs": 37021,
+      "latencyMs": 26
+    },
+    {
+      "atMs": 37520,
+      "latencyMs": 25
+    },
+    {
+      "atMs": 38022,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 38523,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 39024,
+      "latencyMs": 35
+    },
+    {
+      "atMs": 39525,
+      "latencyMs": 35
+    },
+    {
+      "atMs": 40025,
+      "latencyMs": 38
+    },
+    {
+      "atMs": 40526,
+      "latencyMs": 35
+    },
+    {
+      "atMs": 41027,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 41528,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 42028,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 42529,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 43030,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 43531,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 44032,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 44533,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 45034,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 45535,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 46036,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 46536,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 47037,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 47537,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 48038,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 48539,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 49039,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 49540,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 50040,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 50541,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 51042,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 51542,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 52042,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 52543,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 53044,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 53545,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 54046,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 54546,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 55047,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 55548,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 56049,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 56549,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 57049,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 57550,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 58051,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 58551,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 59052,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 59552,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 60052,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 60553,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 61054,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 61554,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 62055,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 62556,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 63057,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 63557,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 64058,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 64559,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 65060,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 65560,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 66061,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 66562,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 67063,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 67564,
+      "latencyMs": 27
+    },
+    {
+      "atMs": 68065,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 68564,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 69065,
+      "latencyMs": 35
+    },
+    {
+      "atMs": 69567,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 70068,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 70567,
+      "latencyMs": 36
+    },
+    {
+      "atMs": 71068,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 71567,
+      "latencyMs": 36
+    },
+    {
+      "atMs": 72069,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 72569,
+      "latencyMs": 26
+    },
+    {
+      "atMs": 73069,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 73568,
+      "latencyMs": 37
+    },
+    {
+      "atMs": 74068,
+      "latencyMs": 36
+    },
+    {
+      "atMs": 74570,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 75070,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 75569,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 76069,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 76570,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 77070,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 77570,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 78070,
+      "latencyMs": 35
+    },
+    {
+      "atMs": 78572,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 79073,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 79574,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 80074,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 80574,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 81075,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 81575,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 82075,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 82577,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 83078,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 83579,
+      "latencyMs": 34
+    },
+    {
+      "atMs": 84080,
+      "latencyMs": 29
+    },
+    {
+      "atMs": 84581,
+      "latencyMs": 31
+    },
+    {
+      "atMs": 85081,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 85582,
+      "latencyMs": 33
+    },
+    {
+      "atMs": 86083,
+      "latencyMs": 29
+    },
+    {
+      "atMs": 86584,
+      "latencyMs": 29
+    },
+    {
+      "atMs": 87085,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 87586,
+      "latencyMs": 29
+    },
+    {
+      "atMs": 88086,
+      "latencyMs": 30
+    },
+    {
+      "atMs": 88587,
+      "latencyMs": 32
+    },
+    {
+      "atMs": 89088,
+      "latencyMs": 29
+    },
+    {
+      "atMs": 89589,
+      "latencyMs": 29
+    }
+  ],
+  "performance": {
+    "uptimeSeconds": 89.932637617,
+    "rssBytes": 199188480,
+    "startup": [
+      {
+        "name": "migrations-ready",
+        "elapsedMs": 74,
+        "durationMs": 73
+      },
+      {
+        "name": "hardware-services-started",
+        "elapsedMs": 281,
+        "durationMs": 1
+      },
+      {
+        "name": "http-initialization-ready",
+        "elapsedMs": 287,
+        "durationMs": 0
+      },
+      {
+        "name": "scheduler-ready",
+        "elapsedMs": 13555,
+        "durationMs": 13267
+      },
+      {
+        "name": "mqtt-started",
+        "elapsedMs": 13899,
+        "durationMs": 0
+      },
+      {
+        "name": "sensor-source-raw",
+        "elapsedMs": 64269,
+        "durationMs": 0
+      },
+      {
+        "name": "first-sensor-frame",
+        "elapsedMs": 64329,
+        "durationMs": 0
+      }
+    ],
+    "sensorSource": "raw",
+    "firstFrameMs": 64329,
+    "eventLoop": {
+      "meanMs": 24.77,
+      "p95Ms": 32.26,
+      "maxMs": 3080.72
+    }
+  },
+  "finishedAt": "2026-09-06T03:59:26.144Z"
+}

@@ -1,9 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { User, Plane, Timer, Infinity as InfinityIcon } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Toggle } from './Toggle'
+import { Card, CardHeader, InlineError, SelectValue, SettingRow, StatusDot, TextField, Toggle } from '@/src/components/ds'
+import { SectionColumns } from './SettingsLayout'
 
 interface SideData {
   side: 'left' | 'right'
@@ -28,8 +28,13 @@ interface SideSettingsFormProps {
 
 const AUTO_OFF_DURATION_OPTIONS = [5, 10, 15, 30, 45, 60, 90, 120] as const
 
+function formatMinutes(mins: number): string {
+  if (mins < 60) return `${mins} min`
+  return `${Math.floor(mins / 60)} h${mins % 60 ? ` ${mins % 60} min` : ''}`
+}
+
 /**
- * Per-side settings: name, away mode, always on, and auto-off for a single side.
+ * Per-side settings: profile name, away mode, always on, and auto-off.
  */
 export function SideSettingsForm({ side, sideData, presenceAvailable }: SideSettingsFormProps) {
   const d = sideData ?? {
@@ -43,15 +48,15 @@ export function SideSettingsForm({ side, sideData, presenceAvailable }: SideSett
 
   // key forces remount when server data changes, replacing the useEffect sync pattern
   return (
-    <SideCard
-      key={`${d.name}-${d.awayMode}-${d.alwaysOn}-${d.autoOffEnabled}-${d.autoOffMinutes}`}
+    <SideCards
+      key={`${d.side}-${d.name}-${d.awayMode}-${d.alwaysOn}-${d.autoOffEnabled}-${d.autoOffMinutes}`}
       data={d}
       presenceAvailable={presenceAvailable}
     />
   )
 }
 
-function SideCard({ data, presenceAvailable }: { data: SideData, presenceAvailable: boolean | null }) {
+function SideCards({ data, presenceAvailable }: { data: SideData, presenceAvailable: boolean | null }) {
   const utils = trpc.useUtils()
   const [name, setName] = useState(data.name)
   const [awayMode, setAwayMode] = useState(data.awayMode)
@@ -125,117 +130,92 @@ function SideCard({ data, presenceAvailable }: { data: SideData, presenceAvailab
     mutation.mutate({ side: data.side, autoOffMinutes: minutes })
   }
 
-  return (
-    <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <User size={16} className="text-zinc-400" />
-        <span className="text-sm font-medium text-zinc-300">
-          {sideLabel}
-          {' '}
-          Side
-        </span>
-      </div>
+  const minuteOptions = (AUTO_OFF_DURATION_OPTIONS as readonly number[]).includes(autoOffMinutes)
+    ? AUTO_OFF_DURATION_OPTIONS
+    : [...AUTO_OFF_DURATION_OPTIONS, autoOffMinutes].sort((a, b) => a - b)
 
-      {/* Name input */}
-      <div className="mb-3">
-        <label className="mb-1.5 block text-xs font-medium text-zinc-400">Name</label>
-        <input
-          type="text"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          onBlur={handleNameBlur}
-          onKeyDown={handleNameKeyDown}
-          maxLength={20}
-          disabled={isPending}
-          className="h-11 w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-          placeholder={sideLabel}
-        />
-      </div>
+  const presence = presenceAvailable === null
+    ? <StatusDot tone="muted" label="Checking presence" />
+    : presenceAvailable
+      ? <StatusDot tone="ok" label="Presence available" />
+      : <StatusDot tone="warn" label="Presence unavailable" />
 
-      {/* Away mode toggle */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Plane size={14} className={awayMode ? 'text-sky-400' : 'text-zinc-500'} />
-          <span className="text-sm text-zinc-300">Away Mode</span>
+  const left = (
+    <>
+      <Card>
+        <CardHeader title="Profile" />
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex min-w-0 flex-col gap-1.5">
+            <span className="text-xs text-fg-2">Name</span>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              onBlur={handleNameBlur}
+              onKeyDown={handleNameKeyDown}
+              maxLength={20}
+              disabled={isPending}
+              placeholder={sideLabel}
+              className="min-w-0 rounded-ctl border border-line-2 bg-field px-3 py-[9px] text-sm text-fg outline-none placeholder:text-fg-3 focus:border-fg-3 disabled:opacity-45"
+            />
+          </label>
+          <TextField label="Side" mono={false} value={sideLabel} />
         </div>
-        <Toggle
-          enabled={awayMode}
-          onToggle={handleAwayToggle}
-          disabled={isPending}
-          label={`Toggle away mode for ${sideLabel} side`}
-        />
-      </div>
+      </Card>
 
-      {/* Always On toggle */}
-      <div className="mt-3 border-t border-zinc-800 pt-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <InfinityIcon size={14} className={alwaysOn ? 'text-sky-400' : 'text-zinc-500'} />
-            <div>
-              <span className="text-sm text-zinc-300">Always On</span>
-              <p className="text-xs text-zinc-500">Prevents firmware&apos;s 8-hour auto-off</p>
-            </div>
-          </div>
+      <Card>
+        <CardHeader title="Away mode" subtitle="Pauses the schedule and keeps this side off until you return" />
+        <SettingRow label="Away">
           <Toggle
-            enabled={alwaysOn}
-            onToggle={handleAlwaysOnToggle}
+            on={awayMode}
+            onChange={handleAwayToggle}
+            disabled={isPending}
+            label={`Toggle away mode for ${sideLabel} side`}
+          />
+        </SettingRow>
+      </Card>
+    </>
+  )
+
+  const right = (
+    <>
+      <Card>
+        <CardHeader title="Auto-off" subtitle="Turns this side off after you leave the bed" right={presence} />
+        <SettingRow label="Turn off after">
+          <SelectValue
+            label="Auto-off after"
+            value={autoOffMinutes}
+            options={minuteOptions.map(m => ({ value: m, label: formatMinutes(m) }))}
+            onChange={handleAutoOffMinutesChange}
+            disabled={isPending || !autoOffEnabled}
+          />
+          <Toggle
+            on={autoOffEnabled}
+            onChange={handleAutoOffToggle}
+            disabled={autoOffToggleDisabled}
+            label={`Toggle auto-off for ${sideLabel} side`}
+          />
+        </SettingRow>
+        {/* Presence-sensing gate: explain why auto-off is unavailable / inactive */}
+        {presenceUnavailable && (
+          <p className="text-xs leading-[1.4] text-warn">
+            {autoOffEnabled
+              ? 'Presence sensing is unavailable, so auto-off is currently inactive. Calibrate the capacitance sensor for this side to restore it.'
+              : 'Requires presence sensing. Calibrate the capacitance sensor for this side to enable auto-off.'}
+          </p>
+        )}
+        <SettingRow label="Always on" sub="Prevents the firmware’s 8-hour auto-off">
+          <Toggle
+            on={alwaysOn}
+            onChange={handleAlwaysOnToggle}
             disabled={isPending}
             label={`Toggle always on for ${sideLabel} side`}
           />
-        </div>
-      </div>
-
-      {/* Auto-off toggle */}
-      <div className="mt-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Timer size={14} className={autoOffEnabled ? 'text-sky-400' : 'text-zinc-500'} />
-          <span className="text-sm text-zinc-300">Auto-off when empty</span>
-        </div>
-        <Toggle
-          enabled={autoOffEnabled}
-          onToggle={handleAutoOffToggle}
-          disabled={autoOffToggleDisabled}
-          label={`Toggle auto-off for ${sideLabel} side`}
-        />
-      </div>
-
-      {/* Presence-sensing gate: explain why auto-off is unavailable / inactive */}
-      {presenceUnavailable && (
-        <p className="mt-2 text-xs text-amber-400/80">
-          {autoOffEnabled
-            ? 'Presence sensing is unavailable, so auto-off is currently inactive. Calibrate the capacitance sensor for this side to restore it.'
-            : 'Requires presence sensing. Calibrate the capacitance sensor for this side to enable auto-off.'}
-        </p>
-      )}
-
-      {/* Auto-off duration picker (shown when enabled) */}
-      {autoOffEnabled && (
-        <div className="mt-3">
-          <label className="mb-1.5 block text-xs font-medium text-zinc-400">
-            Auto-off after
-          </label>
-          <div className="flex flex-wrap gap-1.5">
-            {AUTO_OFF_DURATION_OPTIONS.map(mins => (
-              <button
-                key={mins}
-                onClick={() => handleAutoOffMinutesChange(mins)}
-                disabled={isPending}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-                  autoOffMinutes === mins
-                    ? 'bg-sky-500/20 text-sky-400 ring-1 ring-sky-500/40'
-                    : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
-                }`}
-              >
-                {mins < 60 ? `${mins}m` : `${mins / 60}h${mins % 60 ? ` ${mins % 60}m` : ''}`}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {mutation.error && (
-        <p className="mt-2 text-xs text-red-400">{mutation.error.message}</p>
-      )}
-    </div>
+        </SettingRow>
+      </Card>
+      {mutation.error && <InlineError>{mutation.error.message}</InlineError>}
+    </>
   )
+
+  return <SectionColumns left={left} right={right} />
 }

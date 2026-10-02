@@ -1,3 +1,4 @@
+import { getTemperatureController } from '@/src/temperature/instance'
 import { Scheduler } from './scheduler'
 import { JobType } from './types'
 import { db } from '@/src/db'
@@ -13,10 +14,11 @@ import {
 import { and, eq, gt } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { encode as cborEncode } from 'cbor-x'
-import { fahrenheitToLevel, HardwareCommand } from '@/src/hardware/types'
+import { HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { timeToDate, nowInTimezone } from './timeUtils'
 
@@ -33,6 +35,7 @@ interface JobManagerOptions {
  * Job manager - orchestrates all scheduled tasks
  */
 export class JobManager {
+  private shutdownRequested = false
   private scheduler: Scheduler
   private reloadInProgress: Promise<void> | null = null
   private reloadPending: boolean = false
@@ -148,14 +151,19 @@ export class JobManager {
   async loadSchedules(): Promise<void> {
     console.log('Loading schedules from database...')
 
-    // node-schedule's scheduleJob is synchronous and CPU-bound; registering
-    // hundreds of cron jobs in a tight loop blocks the event loop for seconds
-    // and starves the HTTP layer of the chance to flush API responses.
-    // Yielding every YIELD_EVERY iterations lets the response flush while the
-    // remainder of the rebuild continues. Incremental scheduling (issue #612)
-    // is the proper fix.
-    const YIELD_EVERY = 25
-    const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve))
+    // One cron registration can take tens of milliseconds on a Pod. A fixed
+    // batch of 25 starves socket/probe callbacks for seconds, so also cap each
+    // batch by elapsed time (a single registration is the smallest work unit).
+    let batchStartedAt = performance.now()
+    let batchSize = 0
+    const yieldIfNeeded = async () => {
+      batchSize++
+      if (batchSize >= 25 || performance.now() - batchStartedAt >= 8) {
+        await new Promise<void>(resolve => setImmediate(resolve))
+        batchSize = 0
+        batchStartedAt = performance.now()
+      }
+    }
 
     // Load temperature schedules
     const tempSchedules = await db.select().from(temperatureSchedules)
@@ -163,7 +171,7 @@ export class JobManager {
       if (tempSchedules[i].enabled) {
         this.scheduleTemperature(tempSchedules[i])
       }
-      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
+      await yieldIfNeeded()
     }
 
     // Load power schedules
@@ -171,9 +179,10 @@ export class JobManager {
     for (let i = 0; i < powSchedules.length; i++) {
       if (powSchedules[i].enabled) {
         this.schedulePowerOn(powSchedules[i])
+        await yieldIfNeeded()
         this.schedulePowerOff(powSchedules[i])
       }
-      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
+      await yieldIfNeeded()
     }
 
     // Load alarm schedules
@@ -182,7 +191,7 @@ export class JobManager {
       if (almSchedules[i].enabled) {
         this.scheduleAlarm(almSchedules[i])
       }
-      if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop()
+      await yieldIfNeeded()
     }
 
     // Load system schedules (priming, reboot)
@@ -201,7 +210,7 @@ export class JobManager {
       }
 
       if (settings.ledNightModeEnabled && settings.ledNightStartTime && settings.ledNightEndTime) {
-        await this.scheduleLedNightMode(
+        this.scheduleLedNightMode(
           settings.ledNightStartTime,
           settings.ledNightEndTime,
           settings.ledDayBrightness,
@@ -317,24 +326,10 @@ export class JobManager {
    * the registered scheduler handler.
    */
   async runTemperatureJob(sched: typeof temperatureSchedules.$inferSelect): Promise<void> {
-    if (await this.hasActiveRunOnceSession(sched.side)) {
-      console.log(`Skipping recurring temp job temp-${sched.id} — run-once session active for ${sched.side}`)
-      return
+    const status = await getTemperatureController().reconcile(sched.side)
+    if (status.source !== 'schedule' || status.blocked) {
+      console.log(`[jobManager] temperature schedule ${sched.id} deferred: ${status.blocked ?? status.source ?? 'no target'}`)
     }
-    await withSideLock(sched.side, async () => {
-      if (!(await this.isSidePowered(sched.side))) {
-        console.log(`Skipping temp job temp-${sched.id} — ${sched.side} is not powered`)
-        return
-      }
-      markSideMutated(sched.side)
-      const client = getSharedHardwareClient()
-      await client.connect()
-      await client.setTemperature(sched.side, sched.temperature)
-      broadcastMutationStatus(sched.side, {
-        targetTemperature: sched.temperature,
-        targetLevel: fahrenheitToLevel(sched.temperature),
-      })
-    })
   }
 
   /**
@@ -359,16 +354,15 @@ export class JobManager {
       return
     }
     await withSideLock(sched.side, async () => {
+      if (pumpStallShouldBlock(sched.side)) {
+        console.warn(`[jobManager] skipped power-on power-on-${sched.id}: pump stall guard blocks ${sched.side}`)
+        return
+      }
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
-      await client.setPower(sched.side, true, sched.onTemperature)
+      await getTemperatureController().powerOnLocked(sched.side, sched.onTemperature ?? 75)
       cancelAutoOffTimer(sched.side)
-      const onTemp = sched.onTemperature ?? 75
-      broadcastMutationStatus(sched.side, {
-        targetTemperature: onTemp,
-        targetLevel: fahrenheitToLevel(onTemp),
-      })
     })
   }
 
@@ -400,7 +394,7 @@ export class JobManager {
       await this.markSideOff(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
-      await client.setPower(sched.side, false)
+      await getTemperatureController().powerOffLocked(sched.side)
       broadcastMutationStatus(sched.side, { targetLevel: 0 })
     })
   }
@@ -430,11 +424,15 @@ export class JobManager {
       // explicit power-off and would re-arm the same race the temperature
       // path's gate was added to prevent (see withSideLock comment).
       const powered = await this.isSidePowered(sched.side)
+      const stallBlocked = pumpStallShouldBlock(sched.side)
       markSideMutated(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
-      if (powered) {
-        await client.setTemperature(sched.side, sched.alarmTemperature)
+      if (powered && !stallBlocked) {
+        await getTemperatureController().reconcileLocked(sched.side)
+      }
+      else if (powered) {
+        console.warn(`[jobManager] skipped alarm temperature alarm-${sched.id}: pump stall guard blocks ${sched.side}; firing vibration only`)
       }
       else {
         console.log(`Alarm job alarm-${sched.id} — ${sched.side} not powered; skipping temperature, firing vibration only`)
@@ -445,10 +443,6 @@ export class JobManager {
         duration: sched.duration,
       })
       broadcastMutationStatus(sched.side, {
-        ...(powered && {
-          targetTemperature: sched.alarmTemperature,
-          targetLevel: fahrenheitToLevel(sched.alarmTemperature),
-        }),
         isAlarmVibrating: true,
       })
     })
@@ -516,7 +510,7 @@ export class JobManager {
    */
   async applyCurrentLedBrightness(): Promise<void> {
     const [settings] = await db.select().from(deviceSettings).limit(1)
-    if (!settings) return
+    if (!settings || this.shutdownRequested) return
 
     const target = this.computeCurrentLedBrightness(
       settings.ledNightModeEnabled,
@@ -558,12 +552,12 @@ export class JobManager {
    * one at nightStartTime to dim LEDs, one at nightEndTime to restore brightness.
    * Also applies the correct brightness immediately based on current time.
    */
-  private async scheduleLedNightMode(
+  private scheduleLedNightMode(
     nightStartTime: string,
     nightEndTime: string,
     dayBrightness: number,
     nightBrightness: number,
-  ): Promise<void> {
+  ): void {
     const [startHour, startMinute] = this.parseTime(nightStartTime)
     const startCron = `${startMinute} ${startHour} * * *`
 
@@ -573,6 +567,7 @@ export class JobManager {
     // unrelated scheduler reload.
     this.scheduler.scheduleJob('led-night-start', JobType.LED_BRIGHTNESS, startCron, async () => {
       const [s] = await db.select().from(deviceSettings).limit(1)
+      if (this.shutdownRequested) return
       const target = s?.ledNightBrightness ?? nightBrightness
       console.log(`LED night mode: setting brightness to ${target}`)
       await this.sendLedBrightness(target)
@@ -583,6 +578,7 @@ export class JobManager {
 
     this.scheduler.scheduleJob('led-night-end', JobType.LED_BRIGHTNESS, endCron, async () => {
       const [s] = await db.select().from(deviceSettings).limit(1)
+      if (this.shutdownRequested) return
       const target = s?.ledDayBrightness ?? dayBrightness
       console.log(`LED night mode: setting brightness to ${target}`)
       await this.sendLedBrightness(target)
@@ -591,19 +587,16 @@ export class JobManager {
     // Apply correct brightness immediately based on whether we're in the night window.
     // Delegates to computeCurrentLedBrightness so the window math has one source of
     // truth (it also serves applyCurrentLedBrightness for slider-driven writes).
-    const targetBrightness = this.computeCurrentLedBrightness(
-      true,
-      nightStartTime,
-      nightEndTime,
-      dayBrightness,
-      nightBrightness,
-    )
-    try {
-      await this.sendLedBrightness(targetBrightness)
-    }
-    catch (e) {
-      console.warn('LED night mode: failed to apply initial brightness:', e)
-    }
+    // Yield until schedule registration finishes. The hardware client owns the
+    // connection wait; when it resolves, read current settings so a slider change
+    // made during startup cannot be overwritten by stale boot brightness.
+    const client = getSharedHardwareClient()
+    void client.connect().then(async () => {
+      if (this.shutdownRequested) return
+      await this.applyCurrentLedBrightness()
+    }).catch((error) => {
+      console.warn('LED night mode: failed to apply initial brightness:', error)
+    })
   }
 
   /**
@@ -633,16 +626,21 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
-            // Power off the side
-            try {
-              const client = getSharedHardwareClient()
-              await client.connect()
-              await client.setPower(side, false)
-              broadcastMutationStatus(side, { targetLevel: 0 })
-            }
-            catch (e) {
-              console.warn(`[awayMode] Failed to power off ${side}:`, e)
-            }
+            // Power off the side — under the side lock, marking it off in
+            // the DB first so temp/alarm jobs queued behind this one observe
+            // isPowered=false and skip (same protocol as runPowerOffJob).
+            await withSideLock(side, async () => {
+              await this.markSideOff(side)
+              try {
+                const client = getSharedHardwareClient()
+                await client.connect()
+                await getTemperatureController().powerOffLocked(side)
+                broadcastMutationStatus(side, { targetLevel: 0 })
+              }
+              catch (e) {
+                console.warn(`[awayMode] Failed to power off ${side}:`, e)
+              }
+            })
           },
           { side },
         )
@@ -664,17 +662,25 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
-            // Restore power for the side
-            try {
-              const client = getSharedHardwareClient()
-              await client.connect()
-              await client.setPower(side, true)
-              cancelAutoOffTimer(side)
-              broadcastMutationStatus(side, {})
-            }
-            catch (e) {
-              console.warn(`[awayMode] Failed to power on ${side}:`, e)
-            }
+            // Restore power for the side — inside the side lock, with the
+            // guard checked there, so a stall trip while this job is queued
+            // still blocks the power-on (ADR 0022).
+            await withSideLock(side, async () => {
+              if (pumpStallShouldBlock(side)) {
+                console.warn(`[jobManager] skipped away-return power-on: pump stall guard blocks ${side}`)
+                return
+              }
+              try {
+                const client = getSharedHardwareClient()
+                await client.connect()
+                await getTemperatureController().powerOnLocked(side)
+                cancelAutoOffTimer(side)
+                broadcastMutationStatus(side, {})
+              }
+              catch (e) {
+                console.warn(`[awayMode] Failed to power on ${side}:`, e)
+              }
+            })
           },
           { side },
         )
@@ -725,9 +731,13 @@ export class JobManager {
       const ts = Date.now()
       const target = join(triggerDir, `.calibrate-trigger.${ts}`)
       const tmp = `${target}.tmp`
+      // `source: 'scheduled'` makes the calibrator skip capacitance: the
+      // sleep-detector keeps a self-adjusting presence baseline, and a
+      // scheduled snapshot can capture a sleeper as the "empty" bed.
       const payload = JSON.stringify({
         side: 'all',
         sensor_type: 'all',
+        source: 'scheduled',
         ts: Math.floor(ts / 1000),
       })
       await writeFile(tmp, payload)
@@ -739,11 +749,20 @@ export class JobManager {
   /**
    * Execute a system reboot via systemctl.
    * Returns a Promise so callers can await and the scheduler can surface failures.
+   *
+   * The systemd unit drops next-server to User=sleepypod, which cannot reboot
+   * the machine directly — a bare `systemctl reboot` fails with "Interactive
+   * authentication required" and the daily / pre-prime reboot jobs silently
+   * never fire. We sudo via the NOPASSWD rule installed by scripts/install
+   * (/etc/sudoers.d/sleepypod-update) or self-healed for OTA-only pods by
+   * sp-maintenance (/etc/sudoers.d/sleepypod-reboot), mirroring
+   * system.triggerUpdate. `-n` makes sudo fail loudly rather than prompt when
+   * the rule is absent.
    */
   private async executeReboot(): Promise<void> {
     const { exec } = await import('child_process')
     return new Promise((resolve, reject) => {
-      exec('systemctl reboot', (error) => {
+      exec('sudo -n systemctl reboot', (error) => {
         if (error) {
           console.error('Reboot command failed:', error.message)
           reject(error)
@@ -1061,16 +1080,7 @@ export class JobManager {
         JobType.RUN_ONCE,
         fireDate,
         async () => {
-          await withSideLock(side, async () => {
-            markSideMutated(side)
-            const client = getSharedHardwareClient()
-            await client.connect()
-            await client.setTemperature(side, sp.temperature)
-            broadcastMutationStatus(side, {
-              targetTemperature: sp.temperature,
-              targetLevel: fahrenheitToLevel(sp.temperature),
-            })
-          })
+          await getTemperatureController().reconcile(side)
         },
         { sessionId, side, index: i, targetTemperature: sp.temperature },
       )
@@ -1082,7 +1092,7 @@ export class JobManager {
       `runonce-cleanup-${sessionId}`,
       JobType.RUN_ONCE,
       cleanupDate,
-      async () => {
+      async () => withSideLock(side, async () => {
         // Check if session is still active — if cancelled or replaced, bail out
         // to avoid powering off a side that a replacement session is using
         const [current] = await db
@@ -1101,21 +1111,19 @@ export class JobManager {
           .set({ status: 'completed' })
           .where(eq(runOnceSessions.id, sessionId))
 
-        await withSideLock(side, async () => {
-          await this.markSideOff(side)
-          try {
-            const client = getSharedHardwareClient()
-            await client.connect()
-            await client.setPower(side, false)
-            broadcastMutationStatus(side, { targetLevel: 0 })
-          }
-          catch (e) {
-            console.warn(`[runOnce] Failed to power off ${side} at wake:`, e)
-          }
-        })
+        await this.markSideOff(side)
+        try {
+          const client = getSharedHardwareClient()
+          await client.connect()
+          await getTemperatureController().powerOffLocked(side)
+          broadcastMutationStatus(side, { targetLevel: 0 })
+        }
+        catch (e) {
+          console.warn(`[runOnce] Failed to power off ${side} at wake:`, e)
+        }
 
         console.log(`Run-once session ${sessionId} completed — ${side} powered off`)
-      },
+      }),
       { sessionId, side, cleanup: true },
     )
   }
@@ -1123,9 +1131,10 @@ export class JobManager {
   /**
    * Cancel an active run-once session for a side.
    */
-  cancelRunOnceSession(side: 'left' | 'right'): void {
+  cancelRunOnceSession(side: 'left' | 'right', sessionId?: number): void {
     for (const job of this.scheduler.getJobs()) {
-      if (job.type === JobType.RUN_ONCE && job.metadata?.side === side) {
+      if (job.type === JobType.RUN_ONCE && job.metadata?.side === side
+        && (sessionId === undefined || job.metadata.sessionId === sessionId)) {
         this.scheduler.cancelJob(job.id)
       }
     }
@@ -1151,7 +1160,7 @@ export class JobManager {
         try {
           const client = getSharedHardwareClient()
           await client.connect()
-          await client.setPower(session.side, false)
+          await withSideLock(session.side, () => getTemperatureController().powerOffLocked(session.side))
           broadcastMutationStatus(session.side, { targetLevel: 0 })
         }
         catch { /* best effort */ }
@@ -1205,6 +1214,7 @@ export class JobManager {
    * Gracefully shutdown
    */
   async shutdown(): Promise<void> {
+    this.shutdownRequested = true
     this.stopHeartbeat()
     this.removeEventListeners()
     await this.scheduler.shutdown()

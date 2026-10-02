@@ -88,6 +88,8 @@ stateDiagram-v2
 
 `RawFileFollower` tails `.RAW` files in `/persistent/` with a 10 ms poll interval. Each record is CBOR-decoded. Only records with `type == "piezo-dual"` are processed. Each record contains approximately 500 int32 samples per channel (`left1`, `right1`), representing 1 second of data at 500 Hz.
 
+**Lost samples.** The firmware writes `INT32_MAX` (2147483647) in place of a sample it lost — it logs `[sensor] sample lost` — on all four channels at once, in a few percent of records. Read as data that is a spike ~450× any real signal: symmetric on both sides, so the pump gate (Stage 2) dropped the record and its 5 s guard, and downstream windows restarted. `_int32_samples` replaces each marker by linear interpolation between its neighbours (the nearest valid sample at a record edge). On a Pod 4 night this took data dropped as "pump" from 24% of records to under 1%. The sensor stream (`piezoStream.ts`) repairs it the same way for the live waveform.
+
 ### Stage 2: Pump Gating
 
 See [Section 4](#4-pump-gating).
@@ -185,6 +187,12 @@ The thresholds `enter=400,000`, `exit=150,000`, and `acr=0.45` were derived from
 - **Empty left side:** Median std ranged 20k-80k, autocorrelation quality 0.05-0.30. Well below entry thresholds.
 - **Occupied right side:** Median std ranged 300k-900k, autocorrelation quality 0.50-0.85 during normal sleep.
 - **The gap between 150k and 400k** provides a comfortable margin that accommodates deep sleep (low amplitude) without triggering on empty-bed coupling.
+
+### Single-sleeper mode
+
+When exactly one side is in away mode, both sides' vitals go through `SingleSleeperVitals`: each cycle's two candidates are paired and only the higher-quality one is written, under the home side; an away-side candidate whose partner doesn't arrive within `VITALS_INTERVAL_S` is written alone as the home side. A solo sleeper who rolls onto the empty side keeps one heart-rate series instead of spilling rows onto the away side. See `docs/sleep-detector.md` § Single-Sleeper Mode.
+
+Pending single-sleeper rows expire on the reader thread even when RAW/NATS input is idle or pump gating skips records. A failed write retains the completed interval separately from candidates awaiting a partner; it must commit before another candidate is accepted, so later intervals cannot replace it. Pending rows remain in memory and do not survive a process crash.
 
 ## 6. Heart Rate Extraction
 

@@ -25,6 +25,8 @@ node_modules
 # Testing
 test-results
 coverage
+.coverage
+.coverage.*
 .stryker-tmp
 reports/mutation
 

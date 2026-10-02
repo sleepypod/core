@@ -9,8 +9,8 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
 } from 'recharts'
+import { AXIS_TICK, TOOLTIP_LABEL_STYLE, TOOLTIP_STYLE } from '@/src/components/Sensors/chartTheme'
 
 interface BedTempDataPoint {
   timestamp: Date | string
@@ -60,7 +60,7 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
 
   if (chartData.length === 0) {
     return (
-      <div className="flex h-[200px] items-center justify-center text-sm text-zinc-500">
+      <div className="flex h-[170px] items-center justify-center text-[13px] text-fg-3">
         No temperature data available
       </div>
     )
@@ -86,80 +86,72 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
     : chartData
 
   return (
-    <div className="h-[200px] w-full">
+    <div className="h-[170px] w-full">
       <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-        <LineChart data={downsampled} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#333" strokeOpacity={0.5} />
+        <LineChart data={downsampled} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
+          <CartesianGrid vertical={false} stroke="var(--border-grid)" />
           <XAxis
             dataKey="time"
             type="number"
             domain={['dataMin', 'dataMax']}
             tickFormatter={(v: number) => formatTime(new Date(v))}
-            tick={{ fill: '#71717a', fontSize: 10 }}
-            stroke="#333"
-            tickCount={4}
+            tick={{ ...AXIS_TICK, fontSize: 11 }}
+            axisLine={false}
+            tickLine={false}
+            tickCount={6}
           />
           <YAxis
             domain={[minTemp, maxTemp]}
-            tick={{ fill: '#71717a', fontSize: 10 }}
-            stroke="#333"
+            tick={AXIS_TICK}
+            axisLine={false}
+            tickLine={false}
+            tickCount={4}
             tickFormatter={(v: number) => `${Math.round(v)}°`}
           />
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#1a1a1a',
-              border: '1px solid #333',
-              borderRadius: 8,
-              fontSize: 12,
-              color: '#fff',
-            }}
+            contentStyle={TOOLTIP_STYLE}
+            labelStyle={TOOLTIP_LABEL_STYLE}
             labelFormatter={v => formatTooltipTime(new Date(v as number))}
             formatter={(value, name) => [
               `${Number(value).toFixed(1)}°${unit}`,
               String(name),
             ]}
           />
-          <Legend
-            iconType="circle"
-            iconSize={6}
-            wrapperStyle={{ fontSize: 10, color: '#a1a1aa' }}
-            align="center"
-          />
+          {showAmbient && (
+            <Line
+              type="monotone"
+              dataKey="ambient"
+              name="Ambient"
+              stroke="var(--text-3)"
+              strokeWidth={1.5}
+              strokeDasharray="4 4"
+              dot={false}
+              activeDot={{ r: 3, fill: 'var(--text-3)' }}
+              connectNulls
+            />
+          )}
           <Line
             type="monotone"
             dataKey="left"
             name="Left"
-            stroke="#5cb8e0"
+            stroke="var(--accent-cool)"
             strokeWidth={highlightSide === 'both' ? 2 : highlightSide === 'left' ? 2 : highlightSide === 'right' ? 1 : 1.5}
             strokeOpacity={highlightSide === 'right' ? 0.3 : 1}
             dot={false}
-            activeDot={{ r: 3, fill: '#5cb8e0' }}
+            activeDot={{ r: 3, fill: 'var(--accent-cool)' }}
             connectNulls
           />
           <Line
             type="monotone"
             dataKey="right"
             name="Right"
-            stroke="#40e0d0"
+            stroke="var(--accent-warm)"
             strokeWidth={highlightSide === 'both' ? 2 : highlightSide === 'right' ? 2 : highlightSide === 'left' ? 1 : 1.5}
             strokeOpacity={highlightSide === 'left' ? 0.3 : 1}
             dot={false}
-            activeDot={{ r: 3, fill: '#40e0d0' }}
+            activeDot={{ r: 3, fill: 'var(--accent-warm)' }}
             connectNulls
           />
-          {showAmbient && (
-            <Line
-              type="monotone"
-              dataKey="ambient"
-              name="Ambient"
-              stroke="#d4a84a"
-              strokeWidth={1}
-              strokeDasharray="4 2"
-              dot={false}
-              activeDot={{ r: 3, fill: '#d4a84a' }}
-              connectNulls
-            />
-          )}
         </LineChart>
       </ResponsiveContainer>
     </div>

@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# sp-maintenance — housekeeping tasks run on every boot
+# sp-maintenance — essential boot repairs; deferred housekeeping with --housekeeping
 #
 # Called by sleepypod.service ExecStartPre so it runs before the app starts.
-# Keeps disk usage in check on the pod's limited storage (~6GB).
+# Expensive cleanup runs independently from sleepypod-maintenance.timer.
 
 # DATA_DIR pointer is written by scripts/install (storage-aware picker).
 # Legacy fallback keeps installs without the pointer file working.
@@ -17,68 +17,80 @@ INSTALL_DIR="/home/dac/sleepypod-core"
 
 echo "=== SleepyPod Maintenance ==="
 
-# 1. Vacuum systemd journal (cap at 50MB)
-if command -v journalctl &>/dev/null; then
-  # Guard against two failure modes reported on a fresh Pod 4:
-  # (a) /persistent/journal missing → `du` fails, pipefail propagates, the
-  #     whole $(…) subshell errors under `set -e` unless we tolerate it.
-  # (b) directory exists but awk output is empty → `[ "" -gt 50 ]` errors
-  #     with "integer expression expected" under `set -e`.
-  # Belt-and-suspenders: tolerate pipeline failure with `|| true`, then
-  # default the variable to 0 if still unset/empty.
-  JOURNAL_SIZE=$(du -sm /persistent/journal 2>/dev/null | awk '{print $1}' || true)
-  JOURNAL_SIZE=${JOURNAL_SIZE:-0}
-  if [ "$JOURNAL_SIZE" -gt 50 ]; then
-    echo "Vacuuming journal (${JOURNAL_SIZE}MB → 50MB)..."
-    journalctl --vacuum-size=50M 2>/dev/null || true
-  fi
-fi
-
-# 2. Clean stale temp files (leftover from failed updates, builds, etc.)
-TEMP_CLEANED=0
-for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*; do
-  if [ -e "$d" ]; then
-    rm -rf "$d" 2>/dev/null && TEMP_CLEANED=$((TEMP_CLEANED + 1))
-  fi
-done
-[ "$TEMP_CLEANED" -gt 0 ] && echo "Cleaned $TEMP_CLEANED stale temp entries."
-
-# 3. Prune old database backups (keep 3 most recent of each kind).
-# Each backup set is a triplet — sleepypod.db.bak.<ts>, plus the matching
-# sleepypod.db-wal.bak.<ts> and sleepypod.db-shm.bak.<ts> sidecars created
-# by sp-update. Pruning only the .db files would leak WAL/SHM backups for
-# pruned timestamps.
-if [ -d "$DATA_DIR" ]; then
-  prune_bak_pattern() {
-    local pattern="$1"
-    # `ls $DIR/glob | wc -l` dies under set -euo pipefail when the glob
-    # doesn't match (ls exits 1 on "no such file", pipefail propagates,
-    # set -e kills the command substitution). Use `find` instead: clean
-    # exit 0 whether or not matches exist.
-    local count
-    count=$(find "$DATA_DIR" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | wc -l)
-    count=${count:-0}
-    if [ "$count" -gt 3 ]; then
-      local prune=$((count - 3))
-      find "$DATA_DIR" -maxdepth 1 -name "$pattern" -type f -printf '%T@ %p\n' 2>/dev/null \
-        | sort -rn | tail -n "$prune" | awk '{print $2}' | xargs -r rm -f
-      echo "Pruned $prune old $pattern backups (kept 3)."
+case "${1:-}" in
+  --housekeeping)
+    # 1. Vacuum systemd journal (cap at 50MB)
+    if command -v journalctl &>/dev/null; then
+      # Guard against two failure modes reported on a fresh Pod 4:
+      # (a) /persistent/journal missing → `du` fails, pipefail propagates, the
+      #     whole $(…) subshell errors under `set -e` unless we tolerate it.
+      # (b) directory exists but awk output is empty → `[ "" -gt 50 ]` errors
+      #     with "integer expression expected" under `set -e`.
+      # Belt-and-suspenders: tolerate pipeline failure with `|| true`, then
+      # default the variable to 0 if still unset/empty.
+      JOURNAL_SIZE=$(du -sm /persistent/journal 2>/dev/null | awk '{print $1}' || true)
+      JOURNAL_SIZE=${JOURNAL_SIZE:-0}
+      if [ "$JOURNAL_SIZE" -gt 50 ]; then
+        echo "Vacuuming journal (${JOURNAL_SIZE}MB → 50MB)..."
+        journalctl --vacuum-size=50M 2>/dev/null || true
+      fi
     fi
-  }
-  prune_bak_pattern 'sleepypod.db.bak.*'
-  prune_bak_pattern 'sleepypod.db-wal.bak.*'
-  prune_bak_pattern 'sleepypod.db-shm.bak.*'
-fi
 
-# 4. Prune pnpm content-addressable store
-if command -v pnpm &>/dev/null; then
-  STORE_SIZE=$(du -sm /home/root/.local/share/pnpm/store 2>/dev/null | awk '{print $1}' || true)
-  STORE_SIZE=${STORE_SIZE:-0}
-  if [ "$STORE_SIZE" -gt 100 ]; then
-    echo "Pruning pnpm store (${STORE_SIZE}MB)..."
-    pnpm store prune 2>/dev/null || true
-  fi
-fi
+    # 2. Clean stale temp files (leftover from failed updates, builds, etc.)
+    TEMP_CLEANED=0
+    for d in /tmp/tmp.* /tmp/sleepypod-* /tmp/sp-* /tmp/core-*; do
+      # Never remove fresh update/build staging directories while the app is live.
+      if [ -e "$d" ] \
+        && RECENT_ACTIVITY=$(find "$d" -mtime -2 -print -quit 2>/dev/null) \
+        && [ -z "$RECENT_ACTIVITY" ]; then
+        rm -rf "$d" 2>/dev/null && TEMP_CLEANED=$((TEMP_CLEANED + 1))
+      fi
+    done
+    [ "$TEMP_CLEANED" -gt 0 ] && echo "Cleaned $TEMP_CLEANED stale temp entries."
+
+    # 3. Prune old database backups (keep 3 most recent of each kind).
+    # Each backup set is a triplet — sleepypod.db.bak.<ts>, plus the matching
+    # sleepypod.db-wal.bak.<ts> and sleepypod.db-shm.bak.<ts> sidecars created
+    # by sp-update. Pruning only the .db files would leak WAL/SHM backups for
+    # pruned timestamps.
+    if [ -d "$DATA_DIR" ]; then
+      prune_bak_pattern() {
+        local pattern="$1"
+        # `ls $DIR/glob | wc -l` dies under set -euo pipefail when the glob
+        # doesn't match (ls exits 1 on "no such file", pipefail propagates,
+        # set -e kills the command substitution). Use `find` instead: clean
+        # exit 0 whether or not matches exist.
+        local count
+        count=$(find "$DATA_DIR" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | wc -l)
+        count=${count:-0}
+        if [ "$count" -gt 3 ]; then
+          local prune=$((count - 3))
+          find "$DATA_DIR" -maxdepth 1 -name "$pattern" -type f -printf '%T@ %p\n' 2>/dev/null \
+            | sort -rn | tail -n "$prune" | awk '{print $2}' | xargs -r rm -f
+          echo "Pruned $prune old $pattern backups (kept 3)."
+        fi
+      }
+      prune_bak_pattern 'sleepypod.db.bak.*'
+      prune_bak_pattern 'sleepypod.db-wal.bak.*'
+      prune_bak_pattern 'sleepypod.db-shm.bak.*'
+    fi
+
+    # 4. Prune pnpm content-addressable store
+    if command -v pnpm &>/dev/null; then
+      STORE_SIZE=$(du -sm /home/root/.local/share/pnpm/store 2>/dev/null | awk '{print $1}' || true)
+      STORE_SIZE=${STORE_SIZE:-0}
+      if [ "$STORE_SIZE" -gt 100 ]; then
+        echo "Pruning pnpm store (${STORE_SIZE}MB)..."
+        pnpm store prune 2>/dev/null || true
+      fi
+    fi
+
+    echo "Housekeeping complete."
+    exit 0
+    ;;
+  ''|--startup) ;;
+  *) echo "Usage: sp-maintenance [--startup|--housekeeping]" >&2; exit 2 ;;
+esac
 
 # 5. Self-heal /persistent/deviceinfo perms so next-server can unlink
 # stale dac.sock on startup. Older installs created the dir with mkdir's
@@ -97,8 +109,57 @@ if getent group dac &>/dev/null; then
     else
       echo "Repairing $DEVICEINFO_DIR perms ($OWNER_GROUP $MODE → root:dac 2770)..."
     fi
-    chown root:dac "$DEVICEINFO_DIR"
     chown root:dac "$DEVICEINFO_DIR" || { echo "ERROR: chown $DEVICEINFO_DIR failed — next-server will fail to unlink dac.sock" >&2; exit 1; }
+    chmod 2770 "$DEVICEINFO_DIR"
+  fi
+fi
+
+# 6. Self-heal the reboot sudoers rule for pods that updated via sp-update
+# (which does NOT re-run scripts/install). Newer fresh installs write this
+# into /etc/sudoers.d/sleepypod-update; existing pods that only ever run
+# sp-update never get it, so the daily / pre-prime reboot jobs
+# (JobManager.executeReboot → `sudo -n systemctl reboot`) fail auth and the
+# pod never reboots on schedule. Keep the command paths in sync with the
+# sleepypod-update fragment in scripts/install. Best-effort: an ExecStartPre
+# failure would block the app from starting, so every step tolerates failure.
+REBOOT_SUDOERS=/etc/sudoers.d/sleepypod-reboot
+REBOOT_SUDOERS_CONTENT='sleepypod ALL=(root) NOPASSWD: /bin/systemctl reboot, /usr/bin/systemctl reboot'
+if [ ! -f "$REBOOT_SUDOERS" ] || [ "$(cat "$REBOOT_SUDOERS" 2>/dev/null)" != "$REBOOT_SUDOERS_CONTENT" ]; then
+  # sleepypod.service deliberately restricts PATH to /usr/local/bin:/usr/bin:/bin,
+  # while sudo installs visudo in /usr/sbin on the pod. Resolve it from the
+  # installer's privileged secure_path explicitly so OTA self-healing does not
+  # silently skip validation under ExecStartPre.
+  VISUDO_BIN=""
+  TMP_SUDOERS=""
+  for candidate in \
+    /usr/local/sbin/visudo /usr/local/bin/visudo \
+    /usr/sbin/visudo /usr/bin/visudo /sbin/visudo /bin/visudo; do
+    if [ -x "$candidate" ]; then
+      VISUDO_BIN="$candidate"
+      break
+    fi
+  done
+
+  if [ -z "$VISUDO_BIN" ]; then
+    echo "WARNING: visudo not found — skipping $REBOOT_SUDOERS" >&2
+  else
+    TMP_SUDOERS=$(mktemp 2>/dev/null || echo "")
+  fi
+  if [ -n "${TMP_SUDOERS:-}" ]; then
+    if ! printf '%s\n' "$REBOOT_SUDOERS_CONTENT" > "$TMP_SUDOERS"; then
+      echo "WARNING: could not write temporary reboot sudoers fragment — skipping" >&2
+    elif ! chmod 0440 "$TMP_SUDOERS" 2>/dev/null; then
+      echo "WARNING: could not secure temporary reboot sudoers fragment — skipping" >&2
+    elif "$VISUDO_BIN" -c -q -f "$TMP_SUDOERS" 2>/dev/null; then
+      if install -m 0440 -o root -g root "$TMP_SUDOERS" "$REBOOT_SUDOERS" 2>/dev/null; then
+        echo "Installed reboot sudoers rule ($REBOOT_SUDOERS)."
+      else
+        echo "WARNING: could not install $REBOOT_SUDOERS (need root?) — skipping" >&2
+      fi
+    else
+      echo "WARNING: reboot sudoers fragment failed visudo — skipping" >&2
+    fi
+    rm -f "$TMP_SUDOERS" 2>/dev/null || true
   fi
 fi
 

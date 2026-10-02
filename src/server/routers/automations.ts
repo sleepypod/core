@@ -13,10 +13,10 @@
 
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
-import { and, desc, eq, gte, isNotNull, lte } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull, lte } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { automationRuns, automations, deviceSettings } from '@/src/db/schema'
+import { automationRuns, automations, deviceSettings, runOnceSessions, temperatureHolds } from '@/src/db/schema'
 import { ambientLight, bedTemp, capSenseFrames, freezerTemp, movement, sleepRecords, vitals, waterLevelReadings } from '@/src/db/biometrics-schema'
 import { centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
 import {
@@ -29,8 +29,12 @@ import {
   sideSchema,
 } from '@/src/server/validation-schemas'
 import { getAutomationEngineIfRunning } from '@/src/automation'
-import { runBacktest, type BacktestRule, type Sample } from '@/src/automation/backtest'
-import type { Action, Condition, Trigger } from '@/src/automation/types'
+import { runBacktest, type BacktestResult, type BacktestRule, type Sample } from '@/src/automation/backtest'
+import { bucketRuns, classifyRun, collapseRuns, conditionTimeWindow, inTimeWindow } from '@/src/automation/activity'
+import { clockInTimezone } from '@/src/automation/signals'
+import type { Action, Condition, Expr, Trigger } from '@/src/automation/types'
+import { getTemperatureControlStatus } from '@/src/temperature/instance'
+import { temperatureControlStatusSchema } from '@/src/temperature/schema'
 
 /** Reload the running engine so a CRUD change takes effect immediately. */
 async function reloadEngine(): Promise<void> {
@@ -58,6 +62,23 @@ const automationOutput = z.object({
 })
 
 type AutomationRow = typeof automations.$inferSelect
+
+const backtestSummaryOutput = z.object({
+  /** Nights replayed (per side; the larger count for a both-sides rule). */
+  nights: z.number(),
+  wouldFire: z.number(),
+  /** Max / min of the compared value (windowed aggregate, else the raw signal). */
+  peak: z.number().nullable(),
+  low: z.number().nullable(),
+  threshold: z.number().nullable(),
+})
+
+const sideTonightOutput = z.object({
+  control: temperatureControlStatusSchema.nullable(),
+  hold: z.object({ temperature: z.number(), startedAt: z.number(), expiresAt: z.number() }).nullable(),
+  runOnceUntil: z.number().nullable(),
+  lastAutopilot: z.object({ ruleName: z.string(), temp: z.number(), at: z.number() }).nullable(),
+})
 
 function toOutput(row: AutomationRow) {
   return {
@@ -182,12 +203,12 @@ export const automationsRouter = router({
     .meta({ openapi: { method: 'POST', path: '/automations/kill-switch', protect: false, tags: ['Autopilot'] } })
     .input(z.object({ enabled: z.boolean() }).strict())
     .output(z.object({ enabled: z.boolean() }))
-    .mutation(({ input }) => {
+    .mutation(async ({ input }) => {
       db.insert(deviceSettings)
         .values({ id: 1, autopilotEnabled: input.enabled })
         .onConflictDoUpdate({ target: deviceSettings.id, set: { autopilotEnabled: input.enabled, updatedAt: new Date() } })
         .run()
-      getAutomationEngineIfRunning()?.setGlobalEnabled(input.enabled)
+      await getAutomationEngineIfRunning()?.setGlobalEnabled(input.enabled)
       return { enabled: input.enabled }
     }),
 
@@ -278,7 +299,61 @@ export const automationsRouter = router({
       return { globalEnabled: settings?.on ?? true, rules }
     }),
 
-  /** Available past nights to backtest against, derived from sleep records. */
+  /**
+   * Per-rule evaluation history for the Diagnostics page: every run row since
+   * the earlier of local midnight and `hours` ago (compact: time, outcome,
+   * skip reason, whether a live action was sent), plus a live read of the
+   * signals each rule's condition references. Skip rows don't record the value
+   * the condition saw, so the live read is the closest truthful "observed".
+   */
+  diagnostics: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/automations/diagnostics', protect: false, tags: ['Autopilot'] } })
+    .input(z.object({ hours: z.number().int().min(1).max(24).default(3) }).strict())
+    .output(z.object({
+      now: z.date(),
+      since: z.date(),
+      startOfDay: z.date(),
+      globalEnabled: z.boolean(),
+      rules: z.array(automationOutput.extend({
+        runs: z.array(z.object({
+          t: z.date(),
+          outcome: z.enum(['fired', 'skipped', 'clamped', 'dry_run', 'error']),
+          reason: z.string().nullable(),
+          sent: z.boolean(),
+        })),
+        signals: z.record(z.string(), z.number().nullable()),
+      })),
+    }))
+    .query(async ({ input }) => {
+      const now = new Date()
+      const startOfDay = new Date(now)
+      startOfDay.setHours(0, 0, 0, 0)
+      const since = new Date(Math.min(startOfDay.getTime(), now.getTime() - input.hours * 3_600_000))
+      const [settings] = db.select({ on: deviceSettings.autopilotEnabled }).from(deviceSettings).limit(1).all()
+      const rows = db.select().from(automations).orderBy(desc(automations.priority), automations.id).all()
+      const snapshot = await readLiveSignals()
+      const rules = rows.map((r) => {
+        const runs = db
+          .select({ firedAt: automationRuns.firedAt, outcome: automationRuns.outcome, detail: automationRuns.detail })
+          .from(automationRuns)
+          .where(and(eq(automationRuns.automationId, r.id), gte(automationRuns.firedAt, since)))
+          .orderBy(automationRuns.firedAt)
+          .all()
+        const signals: Record<string, number | null> = {}
+        for (const key of conditionSignals(r.conditions as Condition)) signals[key] = snapshot[key] ?? null
+        return {
+          ...toOutput(r),
+          runs: runs.map(x => ({ t: x.firedAt, outcome: x.outcome, ...runSummary(x.detail) })),
+          signals,
+        }
+      })
+      return { now, since, startOfDay, globalEnabled: settings?.on ?? true, rules }
+    }),
+
+  /**
+   * Available past nights to backtest against, derived from sleep records: one
+   * per night (the longest session), labelled by the date the night started.
+   */
   nights: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/automations/nights', protect: false, tags: ['Autopilot'] } })
     .input(z.object({ side: sideSchema, limit: z.number().int().min(1).max(30).default(7) }).strict())
@@ -290,19 +365,12 @@ export const automationsRouter = router({
       endMs: z.number(),
     })))
     .query(({ input }) => {
-      const rows = biometricsDb
-        .select({ id: sleepRecords.id, enteredBedAt: sleepRecords.enteredBedAt, leftBedAt: sleepRecords.leftBedAt })
-        .from(sleepRecords)
-        .where(eq(sleepRecords.side, input.side))
-        .orderBy(desc(sleepRecords.enteredBedAt))
-        .limit(input.limit)
-        .all()
-      return rows.map((r, i) => ({
-        sleepRecordId: r.id,
-        label: i === 0 ? 'Last night' : weekday(r.enteredBedAt),
-        date: monthDay(r.enteredBedAt),
-        startMs: r.enteredBedAt.getTime(),
-        endMs: r.leftBedAt.getTime(),
+      return recentNights(input.side, input.limit).map(n => ({
+        sleepRecordId: n.id,
+        label: n.label,
+        date: n.date,
+        startMs: n.startMs,
+        endMs: n.endMs,
       }))
     }),
 
@@ -350,6 +418,168 @@ export const automationsRouter = router({
       }
       catch (error) {
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Backtest failed: ${msg(error)}`, cause: error })
+      }
+    }),
+
+  /**
+   * Replay a rule (inline, so the editor can check unsaved edits) over the last
+   * recorded nights: how often it would fire and the range its compared value
+   * actually reached — shown beside the threshold input so users don't pick a
+   * threshold the signal never gets near.
+   */
+  backtestRange: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/automations/backtest-range', protect: false, tags: ['Autopilot'] } })
+    .input(z.object({
+      nights: z.number().int().min(1).max(14).default(5),
+      rule: z.object({
+        side: sideSchema.nullable().default(null),
+        cooldownMin: z.number().int().min(0).max(1440).nullable().default(null),
+        trigger: automationTriggerSchema,
+        conditions: automationConditionSchema,
+        actions: z.array(automationActionSchema).min(1).max(10),
+      }),
+    }).strict())
+    .output(backtestSummaryOutput)
+    .query(({ input }) => {
+      try {
+        return backtestNights(input.rule as BacktestRule, input.nights)
+      }
+      catch (error) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Backtest failed: ${msg(error)}`, cause: error })
+      }
+    }),
+
+  /**
+   * Per-rule backtest over the last 5 recorded nights, for the Automations
+   * list. Cached by rule revision + night set, so it recomputes after a save
+   * or once a new night is recorded.
+   */
+  backtestSummaries: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/automations/backtest-summaries', protect: false, tags: ['Autopilot'] } })
+    .input(z.object({}).strict())
+    .output(z.array(backtestSummaryOutput.extend({ id: z.number() })))
+    .query(() => {
+      const rows = db.select().from(automations).orderBy(desc(automations.priority), automations.id).all()
+      return rows.map((r) => {
+        const rule = toOutput(r)
+        try {
+          return { id: r.id, ...cachedBacktest(rule, r.updatedAt.getTime()) }
+        }
+        catch (e) {
+          console.warn(`[automations] backtest summary failed for rule ${r.id}:`, msg(e))
+          return { id: r.id, nights: 0, wouldFire: 0, peak: null, low: null, threshold: null }
+        }
+      })
+    }),
+
+  /**
+   * Who controls each side right now, with what the Automations page needs to
+   * explain it: the controller's selected source, the manual hold row (when
+   * the dial was turned and when it lapses), an active run-once session, and
+   * the latest setpoint autopilot actually sent.
+   */
+  tonight: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/automations/tonight', protect: false, tags: ['Autopilot'] } })
+    .input(z.object({}).strict())
+    .output(z.object({
+      now: z.number(),
+      sides: z.object({ left: sideTonightOutput, right: sideTonightOutput }),
+    }))
+    .query(() => {
+      const now = Date.now()
+      const control = getTemperatureControlStatus()
+      const holds = db.select().from(temperatureHolds).all()
+      const sessions = db
+        .select({ side: runOnceSessions.side, expiresAt: runOnceSessions.expiresAt })
+        .from(runOnceSessions)
+        .where(eq(runOnceSessions.status, 'active'))
+        .all()
+      const recent = db
+        .select({ firedAt: automationRuns.firedAt, detail: automationRuns.detail, ruleName: automations.name })
+        .from(automationRuns)
+        .leftJoin(automations, eq(automationRuns.automationId, automations.id))
+        .where(and(
+          gte(automationRuns.firedAt, new Date(now - 12 * 3_600_000)),
+          inArray(automationRuns.outcome, ['fired', 'clamped']),
+        ))
+        .orderBy(desc(automationRuns.firedAt))
+        .limit(200)
+        .all()
+      const side = (s: 'left' | 'right') => {
+        const hold = holds.find(h => h.side === s)
+        const session = sessions.find(x => x.side === s && x.expiresAt.getTime() > now)
+        let lastAutopilot: { ruleName: string, temp: number, at: number } | null = null
+        for (const run of recent) {
+          const c = classifyRun({ automationId: 0, firedAt: run.firedAt, outcome: 'fired', detail: run.detail }, null)
+          if (c.code === 'set-temperature' && c.temp != null && c.sides.includes(s)) {
+            lastAutopilot = { ruleName: run.ruleName ?? 'Autopilot', temp: c.temp, at: run.firedAt.getTime() }
+            break
+          }
+        }
+        return {
+          control: control?.[s] ?? null,
+          hold: hold && hold.expiresAt > now ? { temperature: hold.temperature, startedAt: hold.startedAt, expiresAt: hold.expiresAt } : null,
+          runOnceUntil: session ? session.expiresAt.getTime() : null,
+          lastAutopilot,
+        }
+      }
+      return { now, sides: { left: side('left'), right: side('right') } }
+    }),
+
+  /**
+   * Activity log: every run in the given nights (ascending start times; each
+   * night runs to the next start, the last to now), classified and with
+   * consecutive same-reason skips collapsed. Manual holds that began in range
+   * come back separately — the client shows them as "Paused".
+   */
+  activity: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/automations/activity', protect: false, tags: ['Autopilot'] } })
+    .input(z.object({ nightStarts: z.array(z.number().int().nonnegative()).min(1).max(30) }).strict())
+    .output(z.object({
+      now: z.number(),
+      nights: z.array(z.object({
+        start: z.number(),
+        entries: z.array(z.object({
+          ruleId: z.number(),
+          ruleName: z.string(),
+          outcome: z.enum(['fired', 'skipped', 'clamped', 'dry_run', 'error']),
+          code: z.string(),
+          start: z.number(),
+          end: z.number(),
+          count: z.number(),
+          temp: z.number().nullable(),
+          sides: z.array(sideSchema),
+        })),
+      })),
+      holds: z.array(z.object({ side: sideSchema, temperature: z.number(), startedAt: z.number(), expiresAt: z.number() })),
+    }))
+    .query(({ input }) => {
+      const now = Date.now()
+      const starts = [...input.nightStarts].sort((a, b) => a - b)
+      const since = new Date(starts[0])
+      const rules = db.select().from(automations).all()
+      const byId = new Map(rules.map(r => [r.id, r]))
+      const windows = new Map(rules.map(r => [r.id, conditionTimeWindow(r.conditions as Condition)]))
+      const localMinute = localMinuteOfDay(loadTimezone())
+      const runs = db
+        .select({ automationId: automationRuns.automationId, firedAt: automationRuns.firedAt, outcome: automationRuns.outcome, detail: automationRuns.detail })
+        .from(automationRuns)
+        .where(gte(automationRuns.firedAt, since))
+        .orderBy(automationRuns.firedAt)
+        .all()
+      const classified = runs.map((r) => {
+        const w = windows.get(r.automationId)
+        return classifyRun(r, w ? inTimeWindow(localMinute(r.firedAt.getTime()), w) : null)
+      })
+      const buckets = bucketRuns(classified, starts, now + 60_000)
+      const holds = db.select().from(temperatureHolds).where(gte(temperatureHolds.startedAt, starts[0])).all()
+      return {
+        now,
+        nights: starts.map((start, i) => ({
+          start,
+          entries: collapseRuns(buckets[i]).map(e => ({ ...e, ruleName: byId.get(e.ruleId)?.name ?? `Rule ${e.ruleId}` })),
+        })).reverse(),
+        holds: holds.map(h => ({ side: h.side, temperature: h.temperature, startedAt: h.startedAt, expiresAt: h.expiresAt })),
       }
     }),
 
@@ -402,6 +632,63 @@ export const automationsRouter = router({
 // helpers
 // ---------------------------------------------------------------------------
 
+/** Signal keys a condition reads (plain or windowed), in first-seen order. */
+function conditionSignals(c: Condition): string[] {
+  const out = new Set<string>()
+  const expr = (e: Expr): void => {
+    if (e.kind === 'signal' || e.kind === 'window') out.add(e.signal)
+    else if (e.kind === 'binary') {
+      expr(e.left)
+      expr(e.right)
+    }
+    else if (e.kind === 'clamp') {
+      expr(e.value)
+      expr(e.min)
+      expr(e.max)
+    }
+  }
+  const walk = (x: Condition): void => {
+    if (x.kind === 'and' || x.kind === 'or') x.conditions.forEach(walk)
+    else if (x.kind === 'not') walk(x.condition)
+    else if (x.kind === 'compare') {
+      expr(x.left)
+      expr(x.right)
+    }
+    else if (x.kind === 'between') {
+      expr(x.subject)
+      expr(x.min)
+      expr(x.max)
+    }
+  }
+  walk(c)
+  return [...out]
+}
+
+/** Skip reason and whether any action reached hardware, from a run's detail JSON. */
+function runSummary(detail: unknown): { reason: string | null, sent: boolean } {
+  if (!detail || typeof detail !== 'object') return { reason: null, sent: false }
+  const d = detail as { reason?: unknown, actions?: Array<{ sent?: unknown }> }
+  return {
+    reason: typeof d.reason === 'string' ? d.reason : null,
+    sent: Array.isArray(d.actions) && d.actions.some(a => a?.sent === true),
+  }
+}
+
+/** The same composite snapshot the engine reads each tick; empty on failure. */
+async function readLiveSignals(): Promise<Record<string, number | undefined>> {
+  try {
+    const [{ CompositeSignalReader, DeviceSignalReader }, { BiometricsSignalReader }] = await Promise.all([
+      import('@/src/automation/signals'),
+      import('@/src/automation/signals.biometrics'),
+    ])
+    return new CompositeSignalReader([new BiometricsSignalReader(), new DeviceSignalReader()]).read()
+  }
+  catch (e) {
+    console.warn('[automations] live signal read failed:', msg(e))
+    return {}
+  }
+}
+
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : 'Unknown error'
 }
@@ -444,13 +731,131 @@ function resolveNight(side: 'left' | 'right', sleepRecordId?: number): NightWind
       .all()
     if (!latest) return null
     const endMs = latest.t.getTime()
-    return { startMs: endMs - 12 * 3_600_000, endMs, label: 'Recent', date: monthDay(latest.t) }
+    return { startMs: endMs - 12 * 3_600_000, endMs, label: 'Recent', date: nightOf(endMs + HALF_DAY_MS).date }
   }
   return {
     startMs: row.enteredBedAt.getTime(),
     endMs: row.leftBedAt.getTime(),
     label: 'Last night',
-    date: monthDay(row.enteredBedAt),
+    date: nightOf(row.enteredBedAt.getTime()).date,
+  }
+}
+
+interface NightRef { id: number, startMs: number, endMs: number, key: string, label: string, date: string }
+
+const HALF_DAY_MS = 12 * 3_600_000
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/**
+ * The night a session belongs to, named by the day it started: a session
+ * entered before noon belongs to the previous evening (bed at 12:30 AM Monday
+ * is Sunday night).
+ */
+function nightOf(enteredMs: number): { key: string, weekday: string, date: string } {
+  const d = new Date(enteredMs - HALF_DAY_MS)
+  return {
+    key: `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`,
+    weekday: WEEKDAYS[d.getDay()],
+    date: `${MONTHS[d.getMonth()]} ${d.getDate()}`,
+  }
+}
+
+/**
+ * The side's most recent nights, newest first — one per night (its longest
+ * session, so a night split by a bathroom trip doesn't show up twice).
+ */
+function recentNights(side: 'left' | 'right', limit: number): NightRef[] {
+  const rows = biometricsDb
+    .select({ id: sleepRecords.id, enteredBedAt: sleepRecords.enteredBedAt, leftBedAt: sleepRecords.leftBedAt })
+    .from(sleepRecords)
+    .where(eq(sleepRecords.side, side))
+    .orderBy(desc(sleepRecords.enteredBedAt))
+    .limit(limit * 4)
+    .all()
+  const byNight = new Map<string, NightRef>()
+  for (const r of rows) {
+    const startMs = r.enteredBedAt.getTime()
+    const endMs = r.leftBedAt.getTime()
+    const n = nightOf(startMs)
+    const prev = byNight.get(n.key)
+    if (!prev) {
+      if (byNight.size >= limit) break
+      byNight.set(n.key, { id: r.id, startMs, endMs, key: n.key, label: byNight.size === 0 ? 'Last night' : n.weekday, date: n.date })
+    }
+    else if (endMs - startMs > prev.endMs - prev.startMs) {
+      byNight.set(n.key, { ...prev, id: r.id, startMs, endMs })
+    }
+  }
+  return [...byNight.values()]
+}
+
+type BacktestSummary = z.infer<typeof backtestSummaryOutput>
+
+/** Replay a rule over each side's last `limit` nights and fold the results. */
+function backtestNights(rule: BacktestRule, limit: number): BacktestSummary {
+  const tz = loadTimezone()
+  const sides: Array<'left' | 'right'> = rule.side ? [rule.side] : ['left', 'right']
+  let nights = 0
+  let wouldFire = 0
+  let peak: number | null = null
+  let low: number | null = null
+  let threshold: number | null = null
+  for (const side of sides) {
+    const refs = recentNights(side, limit)
+    nights = Math.max(nights, refs.length)
+    for (const n of refs) {
+      const result: BacktestResult = runBacktest({
+        rule: { ...rule, side },
+        timezone: tz,
+        startMs: n.startMs,
+        endMs: n.endMs,
+        stepMin: 2,
+        series: loadSeries(side, n.startMs, n.endMs),
+      })
+      wouldFire += result.summary.wouldFire
+      threshold ??= result.threshold
+      for (const v of (result.avg ?? result.primary)?.values ?? []) {
+        if (v == null) continue
+        if (peak == null || v > peak) peak = v
+        if (low == null || v < low) low = v
+      }
+    }
+  }
+  return { nights, wouldFire, peak, low, threshold }
+}
+
+const backtestCache = new Map<string, BacktestSummary>()
+
+/** Keyed by rule revision + the nights it replays; a save or a new night misses. */
+function cachedBacktest(rule: ReturnType<typeof toOutput>, updatedAtMs: number): BacktestSummary {
+  const sides: Array<'left' | 'right'> = rule.side ? [rule.side] : ['left', 'right']
+  const nightIds = sides.map(s => recentNights(s, 5).map(n => `${n.id}:${n.endMs}`).join(',')).join('|')
+  const key = `${rule.id}:${updatedAtMs}:${nightIds}`
+  const hit = backtestCache.get(key)
+  if (hit) return hit
+  for (const k of backtestCache.keys()) if (k.startsWith(`${rule.id}:`)) backtestCache.delete(k)
+  const summary = backtestNights({ side: rule.side, cooldownMin: rule.cooldownMin, trigger: rule.trigger, conditions: rule.conditions, actions: rule.actions }, 5)
+  backtestCache.set(key, summary)
+  return summary
+}
+
+/**
+ * Local minute-of-day in `tz`, memoising the UTC offset per hour — building
+ * an Intl formatter per run row is too slow for a night of minute ticks.
+ */
+function localMinuteOfDay(tz: string): (ms: number) => number {
+  const offsets = new Map<number, number>()
+  return (ms: number) => {
+    const hour = Math.floor(ms / 3_600_000)
+    let offset = offsets.get(hour)
+    if (offset === undefined) {
+      const { nowMinutes } = clockInTimezone(tz, new Date(hour * 3_600_000))
+      const utcMinutes = Math.floor((hour * 3_600_000) / 60_000) % 1440
+      offset = nowMinutes - utcMinutes
+      offsets.set(hour, offset)
+    }
+    return (((Math.floor(ms / 60_000) + offset) % 1440) + 1440) % 1440
   }
 }
 
@@ -540,11 +945,3 @@ function loadSeries(side: 'left' | 'right', startMs: number, endMs: number): Rec
   return series
 }
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-function weekday(d: Date): string {
-  return WEEKDAYS[d.getDay()]
-}
-function monthDay(d: Date): string {
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}`
-}

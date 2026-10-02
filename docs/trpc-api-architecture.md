@@ -177,6 +177,9 @@ Device and side configuration management.
 - Disables scheduled operations for a side
 - Manual control still works
 - Use for extended absences
+- Exactly one side away = single-sleeper bed: the biometrics modules merge
+  that side's presence, movement and vitals into the other side's session
+  (see `docs/sleep-detector.md` § Single-Sleeper Mode)
 
 ### Schedules Router (`schedules.*`)
 

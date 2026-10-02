@@ -1,174 +1,208 @@
 /**
- * Autopilot console — the full-bleed desktop surface that hosts the Automations
- * list, the Rule editor (modal), and the Diagnostics/status panel behind a
- * left side-nav. Breaks out of the app's mobile `max-w-md` shell the same way
- * the diagnostics console does. Owns all tRPC data + mutations.
+ * Autopilot console — hosts the Automations page (who controls the bed
+ * tonight, the rules, and the activity log) and the Diagnostics/status panel;
+ * a rule opens on its own page (/autopilot/<id>, /autopilot/new). The view
+ * lives in `?view=`; desktop switches it from the sidebar, phones from a
+ * segmented switch. Renders inside the AppShell's <main>. Owns all tRPC data +
+ * mutations.
  */
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import { useNowMinute } from '@/src/components/Schedule/CurveChart'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { Plus } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Icon, type IconName } from './icons'
+import { Button, PageHeader, SegmentedControl, Toggle } from '@/src/components/ds'
+import { useDocumentTitle } from '@/src/hooks/useDocumentTitle'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { formatSetpointF } from '@/src/lib/tempUtils'
+import type { Condition } from '@/src/automation/types'
 import { AutomationsList, type ListItem } from './AutomationsList'
-import { RuleEditor } from './RuleEditor'
-import { StatusPanel } from './StatusPanel'
-import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
-
-const ACCENT = '#0c87c2'
-
-// Scoped styles ported from the design HTML: mono face, slim scrollbars, the
-// modal fade, and the accent default — confined to `.ap-console`.
-const SCOPED_CSS = `
-.ap-console { --accent: ${ACCENT}; }
-.ap-console .mono { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-feature-settings: 'tnum'; }
-.ap-console .tabular-nums { font-variant-numeric: tabular-nums; }
-.ap-console *::-webkit-scrollbar { width: 10px; height: 10px; }
-.ap-console *::-webkit-scrollbar-track { background: transparent; }
-.ap-console *::-webkit-scrollbar-thumb { background: #27272a; border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
-.ap-console input::placeholder { color: #52525b; }
-@keyframes apFade { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: none; } }
-`
-
-function NavItem({ icon, label, active, badge, onClick }: { icon: IconName, label: string, active: boolean, badge?: number, onClick: () => void }) {
-  const I = Icon[icon]
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={active ? { background: 'color-mix(in srgb, var(--accent) 14%, transparent)', color: 'var(--accent)' } : undefined}
-      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors ${active ? '' : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'}`}
-    >
-      <I size={17} />
-      <span className="flex-1 text-left">{label}</span>
-      {badge != null && <span className="mono text-[11px] text-zinc-500">{badge}</span>}
-    </button>
-  )
-}
+import { ActivityCard } from './ActivityCard'
+import { TonightCard, type FireMark, type TimelineRule } from './TonightCard'
+import { StatusPanel, STRIP_HOURS, type RuleMode as DiagMode } from './StatusPanel'
+import { fromAST, missingLiveSignals, type TemplateId } from './builderModel'
+import { nightStarts, ruleMode, statusLine, type RuleMode } from './automationsLogic'
+import { AUTOPILOT_VIEWS, resolveAutopilotView, type AutopilotView } from './autopilotViews'
 
 export function AutopilotConsole() {
   const utils = trpc.useUtils()
-  const [screen, setScreen] = useState<'list' | 'status'>('list')
-  const [editing, setEditing] = useState<BuilderRule | null>(null)
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const { unit } = useTemperatureUnit()
+  const view = resolveAutopilotView(searchParams.get('view'))
+  useDocumentTitle(AUTOPILOT_VIEWS.find(v => v.id === view)?.label, 'Autopilot')
+  const setView = useCallback((next: AutopilotView) => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (next === 'automations') params.delete('view')
+    else params.set('view', next)
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }, [pathname, router, searchParams])
+
+  const onAutomations = view === 'automations'
+  const [nightCount, setNightCount] = useState(2)
+  const nowMinute = useNowMinute()
+  // Night boundaries only move at 6 PM, so the query key stays put minute to minute.
+  const starts = nowMinute == null ? [] : nightStarts(nowMinute * 60_000, nightCount)
 
   const listQ = trpc.automations.list.useQuery({})
   const statusQ = trpc.automations.status.useQuery({}, { refetchInterval: 15000 })
-  const runsQ = trpc.automations.runs.useQuery({ limit: 100 }, { refetchInterval: 15000 })
+  const diagQ = trpc.automations.diagnostics.useQuery({ hours: STRIP_HOURS }, { enabled: view === 'diagnostics', refetchInterval: 15000 })
+  const tonightQ = trpc.automations.tonight.useQuery({}, { enabled: onAutomations, refetchInterval: 30000 })
+  const backtestQ = trpc.automations.backtestSummaries.useQuery({}, { enabled: onAutomations, staleTime: 5 * 60_000 })
+  const activityQ = trpc.automations.activity.useQuery(
+    { nightStarts: starts },
+    { enabled: onAutomations && starts.length > 0, refetchInterval: 60000, placeholderData: prev => prev },
+  )
 
   const invalidate = () => {
     void utils.automations.list.invalidate()
     void utils.automations.status.invalidate()
-    void utils.automations.runs.invalidate()
+    void utils.automations.diagnostics.invalidate()
+    void utils.automations.tonight.invalidate()
   }
 
-  const createM = trpc.automations.create.useMutation({ onSuccess: invalidate })
-  const updateM = trpc.automations.update.useMutation({ onSuccess: invalidate })
   const setEnabledM = trpc.automations.setEnabled.useMutation({ onSuccess: invalidate })
   const setDryRunM = trpc.automations.setDryRun.useMutation({ onSuccess: invalidate })
   const killM = trpc.automations.setKillSwitch.useMutation({ onSuccess: () => {
     void utils.automations.status.invalidate()
+    void utils.automations.diagnostics.invalidate()
     void utils.automations.getKillSwitch.invalidate()
   } })
 
-  // Build list items from the rule rows + the status map (last-fired/today).
-  const items: ListItem[] = useMemo(() => {
-    const rows = listQ.data ?? []
-    const statusById = new Map((statusQ.data?.rules ?? []).map(s => [s.id, s]))
-    return rows.map((row) => {
-      const builder = fromAST(row)
-      const s = statusById.get(row.id)
-      const lastFired = s?.lastFiredAt ? agoShort(s.lastFiredAt) : 'never'
-      return {
-        id: row.id,
-        name: row.name,
-        enabled: row.enabled,
-        mode: row.dryRun ? 'dryrun' : 'active',
-        side: (row.side ?? 'both') as ListItem['side'],
-        builder,
-        lastFired,
-        firesToday: s?.firesToday ?? 0,
-      }
-    })
-  }, [listQ.data, statusQ.data])
-
-  const saving = createM.isPending || updateM.isPending
-
-  const save = (rule: BuilderRule) => {
-    const ast = toAST(rule)
-    if (rule.id != null) updateM.mutate({ id: rule.id, ...ast }, { onSuccess: () => setEditing(null) })
-    else createM.mutate(ast, { onSuccess: () => setEditing(null) })
+  // Off = disabled; Dry-run / Active = enabled with dryRun on / off.
+  const setMode = async (id: number, mode: RuleMode | DiagMode) => {
+    const row = listQ.data?.find(r => r.id === id) ?? diagQ.data?.rules.find(r => r.id === id)
+    if (mode === 'off') {
+      if (row?.enabled !== false) setEnabledM.mutate({ id, enabled: false })
+      return
+    }
+    const dryRun = mode === 'dryrun'
+    if (row?.dryRun !== dryRun) await setDryRunM.mutateAsync({ id, dryRun })
+    if (row?.enabled !== true) setEnabledM.mutate({ id, enabled: true })
   }
 
+  const rows = useMemo(() => listQ.data ?? [], [listQ.data])
+  const builders = useMemo(() => new Map(rows.map(r => [r.id, fromAST(r)])), [rows])
+  const summaries = useMemo(() => new Map((backtestQ.data ?? []).map(s => [s.id, s])), [backtestQ.data])
+
+  const items: ListItem[] = rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    mode: ruleMode(row),
+    side: row.side ?? 'both',
+    builder: builders.get(row.id) ?? fromAST(row),
+    backtest: summaries.get(row.id),
+  }))
+
+  const ruleInfo = useMemo(() => new Map(rows.map(r => [r.id, {
+    conditions: r.conditions as Condition,
+    missing: missingLiveSignals(builders.get(r.id) ?? fromAST(r)),
+  }])), [rows, builders])
+
+  const timelineRules: TimelineRule[] = rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    mode: ruleMode(r),
+    side: r.side,
+    conditions: r.conditions as Condition,
+    missing: ruleInfo.get(r.id)?.missing ?? [],
+  }))
+
+  const tonightNight = activityQ.data?.nights[0]
+  const fires: FireMark[] = (tonightNight?.entries ?? [])
+    .filter(e => e.outcome === 'fired' || e.outcome === 'clamped' || e.outcome === 'dry_run')
+    .map(e => ({ ruleId: e.ruleId, at: e.start, outcome: e.outcome, sides: e.sides }))
+
+  const lang = pathname?.split('/')[1] || 'en'
   const killed = statusQ.data ? !statusQ.data.globalEnabled : false
-  const activeCount = items.filter(i => i.enabled && i.mode === 'active').length
+  const fmt = (f: number) => formatSetpointF(f, unit, { includeUnit: false })
+
+  const openTemplate = (id: TemplateId) => router.push(`/${lang}/autopilot/new?template=${id}`)
 
   return (
-    <div className="ap-console mx-[calc(50%-50vw)] w-screen px-4 text-zinc-100" style={{ ['--accent' as string]: ACCENT }}>
-      <style dangerouslySetInnerHTML={{ __html: SCOPED_CSS }} />
-      <div className="mx-auto flex max-w-[1500px] gap-4">
-        {/* side nav */}
-        <aside className="flex w-[212px] shrink-0 flex-col self-start rounded-xl border border-zinc-800 bg-zinc-950/80">
-          <div className="flex items-center gap-2.5 px-4 py-4">
-            <span className="grid h-8 w-8 place-items-center rounded-lg" style={{ background: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'var(--accent)' }}>
-              <Icon.Sliders size={17} />
-            </span>
-            <div className="leading-tight">
-              <div className="text-[14px] font-semibold text-zinc-100">Autopilot</div>
-              <div className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">sleepypod</div>
-            </div>
-          </div>
-          <nav className="flex flex-col gap-1 px-3 py-2">
-            <NavItem icon="List" label="Automations" badge={items.length} active={screen === 'list'} onClick={() => setScreen('list')} />
-            <NavItem icon="Pulse" label="Diagnostics" active={screen === 'status'} onClick={() => setScreen('status')} />
-          </nav>
-          <div className="mt-auto p-3">
-            <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${killed ? 'border-red-500/30 bg-red-500/10 text-red-300' : 'border-zinc-800 bg-zinc-900/40 text-zinc-400'}`}>
-              <span className={`h-2 w-2 rounded-full ${killed ? 'bg-red-400' : 'bg-emerald-400'}`} style={killed ? undefined : { boxShadow: '0 0 0 3px rgba(52,211,153,0.18)' }} />
-              {killed ? 'Halted' : 'Running'}
-              <span className="ml-auto text-zinc-600">
-                {activeCount}
-                {' '}
-                active
-              </span>
-            </div>
-          </div>
-        </aside>
-
-        {/* content */}
-        <main className="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden" style={{ minHeight: 'calc(100dvh - 7rem)' }}>
-          {screen === 'list' && (
-            <AutomationsList
-              items={items}
-              loading={listQ.isLoading}
-              onToggle={(id, enabled) => setEnabledM.mutate({ id, enabled })}
-              onOpen={a => setEditing(a.builder)}
-              onNew={() => setEditing(blankRule())}
+    <>
+      <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Autopilot /</span>
+      <PageHeader
+        title={(
+          <span className="flex items-baseline gap-3">
+            <span className="min-[900px]:hidden">Autopilot</span>
+            <span className="hidden min-[900px]:inline">{AUTOPILOT_VIEWS.find(v => v.id === view)?.label}</span>
+            {onAutomations && !listQ.isLoading && (
+              <span className="font-mono text-xs font-normal whitespace-nowrap text-fg-2" data-testid="automations-status">{statusLine(rows)}</span>
+            )}
+          </span>
+        )}
+        right={(
+          <>
+            <label className="flex cursor-pointer items-center gap-2.5 rounded-ctl border border-line px-3 py-1.5 text-[13px]">
+              <Toggle size="md" label="Autopilot enabled" on={!killed} onChange={on => killM.mutate({ enabled: on })} />
+              {killed ? 'Autopilot off' : 'Autopilot on'}
+            </label>
+            {onAutomations && (
+              <Button variant="primary" size="md" icon={Plus} onClick={() => router.push(`/${lang}/autopilot/new`)} className="max-[899px]:hidden">
+                New automation
+              </Button>
+            )}
+            <SegmentedControl
+              ariaLabel="Autopilot view"
+              size="sm"
+              className="min-[900px]:hidden"
+              value={view}
+              onChange={setView}
+              options={[
+                { value: 'automations', label: (
+                  <>
+                    Automations
+                    <span className="font-mono text-fg-3">{items.length}</span>
+                  </>
+                ) },
+                { value: 'diagnostics', label: 'Diagnostics' },
+              ]}
             />
-          )}
-          {screen === 'status' && (
-            <StatusPanel
-              globalEnabled={statusQ.data?.globalEnabled ?? true}
-              onKill={enabled => killM.mutate({ enabled })}
-              rules={statusQ.data?.rules ?? []}
-              runs={runsQ.data ?? []}
-              loading={statusQ.isLoading}
-              onDry={(id, dryRun) => setDryRunM.mutate({ id, dryRun })}
-            />
-          )}
-        </main>
-      </div>
+          </>
+        )}
+      />
 
-      {editing && <RuleEditor automation={editing} onClose={() => setEditing(null)} onSave={save} saving={saving} />}
-    </div>
+      {killed && (
+        <div className="rounded-ctl border border-line-2 bg-active px-4 py-2.5 text-[13px] text-fg-2" role="status">
+          Autopilot is off. No rules are evaluated.
+        </div>
+      )}
+
+      {onAutomations && (
+        <>
+          <Button variant="primary" size="md" icon={Plus} full onClick={() => router.push(`/${lang}/autopilot/new`)} className="min-[900px]:hidden">
+            New automation
+          </Button>
+          <TonightCard rules={timelineRules} tonight={tonightQ.data} fires={fires} unit={unit} />
+          <AutomationsList
+            items={items}
+            loading={listQ.isLoading}
+            onMode={(id, mode) => void setMode(id, mode).catch(() => {})}
+            onOpen={a => router.push(`/${lang}/autopilot/${a.id}`)}
+            onTemplate={openTemplate}
+          />
+          <ActivityCard
+            data={activityQ.data}
+            rules={ruleInfo}
+            fmt={fmt}
+            onMore={() => setNightCount(n => Math.min(30, n + 2))}
+            loadingMore={activityQ.isFetching && activityQ.isPlaceholderData}
+          />
+        </>
+      )}
+      {view === 'diagnostics' && (
+        <StatusPanel
+          data={diagQ.data}
+          loading={diagQ.isLoading}
+          onKill={enabled => killM.mutate({ enabled })}
+          onMode={(id, mode) => void setMode(id, mode).catch(() => {})}
+        />
+      )}
+    </>
   )
-}
-
-function agoShort(d: Date | string): string {
-  const date = d instanceof Date ? d : new Date(d)
-  const ms = Date.now() - date.getTime()
-  if (ms < 60_000) return 'now'
-  const m = Math.floor(ms / 60_000)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
 }

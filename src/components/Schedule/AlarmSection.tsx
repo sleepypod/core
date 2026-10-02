@@ -1,9 +1,11 @@
 'use client'
 
 import { useCallback, useMemo, useState } from 'react'
-import { Plus, Bell } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import type { DayOfWeek } from './DaySelector'
+import { Button, InlineError, SectionLabel, Skeleton } from '@/src/components/ds'
+import type { SideSelection } from '@/src/providers/SideProvider'
+import type { DayOfWeek } from '@/src/lib/scheduleTime'
 import { AlarmCard, type AlarmGroup } from './AlarmCard'
 import { AlarmEditor } from './AlarmEditor'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -30,7 +32,7 @@ const DAY_ORDER: DayOfWeek[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thu
  * Rows are bucketed by a deterministic signature so "wake at 7am Mon–Fri" renders
  * as one card backed by five row ids.
  */
-function groupAlarms(rows: AlarmRow[]): AlarmGroup[] {
+export function groupAlarms(rows: AlarmRow[]): AlarmGroup[] {
   const buckets = new Map<string, AlarmGroup>()
   for (const r of rows) {
     const key = [
@@ -69,15 +71,17 @@ function groupAlarms(rows: AlarmRow[]): AlarmGroup[] {
 
 interface AlarmSectionProps {
   side: Side
+  /** Page-level side selection; seeds the editor's side control for new alarms. */
+  selectedSide?: SideSelection
 }
 
 /**
- * Alarms list + editor section. Lives on the schedule page below temperature curves.
- * Reads `schedules.getAll.alarm`, groups identical rows across days into single cards,
- * and routes create/edit through `AlarmEditor`.
+ * Alarms column on the schedule page. Reads `schedules.getAll.alarm`, groups
+ * identical rows across days into single cards, and routes create/edit through
+ * `AlarmEditor` and deletes through a confirmation dialog.
  */
-export function AlarmSection({ side }: AlarmSectionProps) {
-  const { data, isLoading } = trpc.schedules.getAll.useQuery({ side })
+export function AlarmSection({ side, selectedSide = side }: AlarmSectionProps) {
+  const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
   const utils = trpc.useUtils()
 
   const [editing, setEditing] = useState<AlarmGroup | null>(null)
@@ -109,6 +113,12 @@ export function AlarmSection({ side }: AlarmSectionProps) {
     setCreating(false)
   }, [])
 
+  const handleRequestDelete = useCallback((group: AlarmGroup) => {
+    setEditing(null)
+    setCreating(false)
+    setPendingDelete(group)
+  }, [])
+
   const handleTest = useCallback((group: AlarmGroup) => {
     const id = group.ids.join(',')
     setTestingId(id)
@@ -136,8 +146,8 @@ export function AlarmSection({ side }: AlarmSectionProps) {
     }
     catch (err) {
       // Keep the dialog open so the user can retry or cancel. Surface the failure
-      // in a banner — silently closing the dialog after a failed delete leaves the
-      // alarm row visible but with no signal to the user that the delete didn't take.
+      // in the dialog — silently closing it after a failed delete leaves the
+      // alarm visible with no signal that the delete didn't take.
       setDeleteError(err instanceof Error ? err.message : 'Failed to delete alarm')
     }
   }, [pendingDelete, batchUpdate, utils])
@@ -147,64 +157,55 @@ export function AlarmSection({ side }: AlarmSectionProps) {
     setDeleteError(null)
   }, [])
 
+  const dayCount = pendingDelete?.days.length ?? 0
+
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
-          <Bell size={11} />
-          Alarms
-        </p>
-      </div>
+    <div className="flex min-w-0 flex-col gap-3">
+      <SectionLabel right={groups.length > 0 ? <span className="font-mono">{groups.length}</span> : undefined}>
+        Alarms
+      </SectionLabel>
 
-      {isLoading && !data && (
-        <div className="h-20 animate-pulse rounded-2xl bg-zinc-900" />
+      {isLoading && !data && <Skeleton className="h-[92px]" />}
+
+      {error && (
+        <InlineError>
+          Failed to load alarms:
+          {' '}
+          {error.message}
+        </InlineError>
       )}
 
-      {!isLoading && groups.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-amber-500/30 bg-amber-500/5 p-5 text-center">
-          <p className="text-sm font-medium text-white">No alarms yet</p>
-          <p className="mt-1 text-xs text-zinc-400">
-            Set a wake-up alarm — the cover buzzes you awake.
-          </p>
-          <button
-            onClick={handleCreate}
-            className="mt-3 inline-flex h-10 items-center gap-1.5 rounded-xl bg-amber-500 px-4 text-sm font-semibold text-zinc-950 active:bg-amber-600"
-          >
-            <Plus size={14} />
-            Add alarm
-          </button>
-        </div>
-      )}
+      {groups.map(group => (
+        <AlarmCard
+          key={group.ids.join(',')}
+          group={group}
+          onEdit={() => handleEdit(group)}
+          onTest={() => handleTest(group)}
+          isTesting={testingId === group.ids.join(',')}
+        />
+      ))}
 
-      {groups.length > 0 && (
-        <>
-          <div className="space-y-2">
-            {groups.map(group => (
-              <AlarmCard
-                key={group.ids.join(',')}
-                group={group}
-                onEdit={() => handleEdit(group)}
-                onDelete={() => setPendingDelete(group)}
-                onTest={() => handleTest(group)}
-                isTesting={testingId === group.ids.join(',')}
-              />
-            ))}
-          </div>
-          <button
-            onClick={handleCreate}
-            className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-zinc-700 text-sm font-medium text-zinc-400 active:bg-zinc-900"
-          >
-            <Plus size={14} />
-            Add another alarm
-          </button>
-        </>
+      {setAlarm.error && <InlineError>{`Test failed: ${setAlarm.error.message}`}</InlineError>}
+
+      {!isLoading && (
+        <Button
+          variant="dashed"
+          icon={Plus}
+          full
+          onClick={handleCreate}
+          className="rounded-card py-[11px] max-[899px]:h-11 max-[899px]:text-sm"
+        >
+          Add alarm
+        </Button>
       )}
 
       <AlarmEditor
         open={creating || editing !== null}
         onClose={handleCloseEditor}
         side={side}
+        defaultSide={selectedSide}
         existingGroup={editing}
+        onRequestDelete={handleRequestDelete}
       />
 
       <ConfirmDialog
@@ -213,10 +214,11 @@ export function AlarmSection({ side }: AlarmSectionProps) {
         message={
           deleteError
             ? `Couldn't delete: ${deleteError}. Try again, or cancel.`
-            : `This will remove the alarm for ${pendingDelete?.days.length === 7 ? 'every day' : `${pendingDelete?.days.length ?? 0} day${(pendingDelete?.days.length ?? 0) === 1 ? '' : 's'}`}. The cover will no longer buzz at this time.`
+            : `This will remove the alarm for ${dayCount === 7 ? 'every day' : `${dayCount} day${dayCount === 1 ? '' : 's'}`}. The cover will no longer buzz at this time.`
         }
         confirmLabel={deleteError ? 'Retry' : 'Delete'}
         variant="danger"
+        busy={batchUpdate.isPending}
         onConfirm={() => void confirmDelete()}
         onCancel={cancelDelete}
       />

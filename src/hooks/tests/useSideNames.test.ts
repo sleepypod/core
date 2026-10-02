@@ -31,6 +31,14 @@ afterEach(() => {
 })
 
 describe('useSideNames', () => {
+  it('keeps side-name settings fresh for thirty seconds', () => {
+    renderHook(() => useSideNames())
+    expect(trpcMock.trpc.settings.getAll.useQuery).toHaveBeenLastCalledWith(
+      {},
+      { staleTime: 30_000 },
+    )
+  })
+
   it('falls back to Left/Right when no settings data', () => {
     const { result } = renderHook(() => useSideNames())
     expect(result.current.leftName).toBe('Left')
@@ -50,6 +58,20 @@ describe('useSideNames', () => {
 
   it('falls back per-side when only one name is set', () => {
     trpcMock.state.data = { sides: { left: { name: 'Alice' }, right: {} } }
+    const { result } = renderHook(() => useSideNames())
+    expect(result.current.leftName).toBe('Alice')
+    expect(result.current.rightName).toBe('Right')
+  })
+
+  it('falls back independently when the left side entry is missing', () => {
+    trpcMock.state.data = { sides: { right: { name: 'Bob' } } }
+    const { result } = renderHook(() => useSideNames())
+    expect(result.current.leftName).toBe('Left')
+    expect(result.current.rightName).toBe('Bob')
+  })
+
+  it('falls back independently when the right side entry is missing', () => {
+    trpcMock.state.data = { sides: { left: { name: 'Alice' } } }
     const { result } = renderHook(() => useSideNames())
     expect(result.current.leftName).toBe('Alice')
     expect(result.current.rightName).toBe('Right')

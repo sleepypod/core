@@ -208,6 +208,15 @@ describe('system.wifiStatus', () => {
     expect(result.signal).toBe(80)
   })
 
+  it('trims leading whitespace before finding the active nmcli row', async () => {
+    queueExec(file => file === 'nmcli', { stdout: '   yes:HomeWiFi:80\n' })
+    await expect(caller.wifiStatus({})).resolves.toEqual({
+      connected: true,
+      ssid: 'HomeWiFi',
+      signal: 80,
+    })
+  })
+
   it('handles escaped colons in SSID', async () => {
     queueExec(
       file => file === 'nmcli',
@@ -236,6 +245,21 @@ describe('system.wifiStatus', () => {
     expect(result.connected).toBe(true)
     expect(result.ssid).toBe('Home')
     expect(result.signal).toBeNull()
+  })
+
+  it('keeps a trailing literal backslash in an SSID field', async () => {
+    queueExec(file => file === 'nmcli', { stdout: 'yes:Home\\\\:77\n' })
+    const result = await caller.wifiStatus({})
+    expect(result).toEqual({ connected: true, ssid: 'Home\\', signal: 77 })
+  })
+
+  it('keeps an unescaped backslash at the absolute end of the active row', async () => {
+    queueExec(file => file === 'nmcli', { stdout: 'yes:Trailing\\' })
+    await expect(caller.wifiStatus({})).resolves.toEqual({
+      connected: true,
+      ssid: 'Trailing\\',
+      signal: null,
+    })
   })
 })
 
@@ -417,6 +441,24 @@ describe('system.getLogs', () => {
     expect(result.lines).toHaveLength(2)
     expect(result.nextCursor).toBeNull()
   })
+
+  it('normalizes an empty journal cursor to null when more entries exist', async () => {
+    queueExec(file => file === 'journalctl', {
+      stdout: 'line1\nline2\nline3\n-- cursor:    \n',
+    })
+    await expect(caller.getLogs({ unit: 'sleepypod.service', lines: 2 })).resolves.toEqual({
+      lines: ['line3', 'line2'],
+      nextCursor: null,
+    })
+  })
+
+  it('trims cursor padding and discards whitespace-only log lines', async () => {
+    queueExec(file => file === 'journalctl', {
+      stdout: 'line1\nline2\n   \nline3\n-- cursor: s=padded   \n',
+    })
+    const result = await caller.getLogs({ unit: 'sleepypod.service', lines: 2 })
+    expect(result).toEqual({ lines: ['line3', 'line2'], nextCursor: 's=padded' })
+  })
 })
 
 describe('system.getDiskUsage', () => {
@@ -506,7 +548,15 @@ describe('system.getVersion', () => {
       commitHash: 'abc123',
       commitTitle: 'fix: thing',
       buildDate: '2026-04-01',
+      version: null,
     })
+  })
+
+  it('returns the release version when .git-info records a vX.Y.Z tag, ignoring anything else', async () => {
+    fsPromisesMock.readFile.mockResolvedValue(JSON.stringify({ branch: 'main', commitHash: 'abc123', commitTitle: 't', buildDate: 'd', version: 'v2.8.0' }))
+    expect((await caller.getVersion({})).version).toBe('v2.8.0')
+    fsPromisesMock.readFile.mockResolvedValue(JSON.stringify({ branch: 'dev', commitHash: 'abc123', commitTitle: 't', buildDate: 'd', version: 'dev-latest' }))
+    expect((await caller.getVersion({})).version).toBeNull()
   })
 
   it('returns "unknown" placeholders when .git-info is missing', async () => {
@@ -514,7 +564,7 @@ describe('system.getVersion', () => {
     const result = await caller.getVersion({})
     expect(result).toEqual({
       branch: 'unknown', commitHash: 'unknown',
-      commitTitle: 'unknown', buildDate: 'unknown',
+      commitTitle: 'unknown', buildDate: 'unknown', version: null,
     })
   })
 
@@ -529,7 +579,7 @@ describe('system.getVersion', () => {
     const result = await caller.getVersion({})
     expect(result).toEqual({
       branch: 'unknown', commitHash: 'unknown',
-      commitTitle: 'unknown', buildDate: 'unknown',
+      commitTitle: 'unknown', buildDate: 'unknown', version: null,
     })
   })
 
@@ -708,6 +758,16 @@ describe('system.getDiskUsage — exact command + whitespace/percent edges', () 
     expect(result.usedPercent).toBe(20)
   })
 
+  it('trims leading blank lines before selecting the df data row', async () => {
+    recordExec(() => '\nFilesystem 1B-blocks Used Available Use% Mounted\n/dev/root 900 300 600 33% /\n')
+    await expect(caller.getDiskUsage({})).resolves.toEqual({
+      totalBytes: 900,
+      usedBytes: 300,
+      availableBytes: 600,
+      usedPercent: 33.33,
+    })
+  })
+
   it('returns usedPercent=0 (not Infinity) when totalBytes is 0', async () => {
     // Guards the `totalBytes > 0 ? … : 0` branch: a `>= 0`/`true` mutant would
     // divide by zero and surface Infinity.
@@ -758,5 +818,23 @@ describe('system.getStorageBreakdown — exact commands', () => {
     const result = await caller.getStorageBreakdown({})
     expect(result.emmc.totalBytes).toBe(0)
     expect(result.emmc.usedPercent).toBe(0)
+  })
+
+  it('trims leading df/du whitespace in the storage helpers', async () => {
+    recordExec((file, args) => {
+      if (file === 'df' && args.includes('/persistent') && !args.includes('/persistent/biometrics'))
+        return '\nFilesystem 1B-blocks Used Available Use% Mounted\n/dev/root 500 125 375 25% /persistent\n'
+      if (file === 'df')
+        return '\nFilesystem 1B-blocks Used Available Use% Mounted\ntmpfs 200 50 150 25% /persistent/biometrics\n'
+      if (file === 'du') return '\n  4321   /persistent/biometrics-archive\n'
+      return ''
+    })
+    fsPromisesMock.readdir.mockResolvedValueOnce([{ isFile: () => true } as never])
+
+    await expect(caller.getStorageBreakdown({})).resolves.toEqual({
+      emmc: { totalBytes: 500, usedBytes: 125, availableBytes: 375, usedPercent: 25 },
+      biometricsTmpfs: { totalBytes: 200, usedBytes: 50, availableBytes: 150, usedPercent: 25 },
+      biometricsArchive: { usedBytes: 4321, fileCount: 1 },
+    })
   })
 })

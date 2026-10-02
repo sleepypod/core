@@ -79,9 +79,13 @@ class RawFileFollower:
             return start + 1 + idx
         return start + 1 + len(chunk)
 
-    def read_records(self):
-        """Yield decoded CBOR records as they arrive, sleeping between poll attempts."""
+    def read_records(self, on_poll=None):
+        """Yield records; call optional on_poll on the reader thread even while idle."""
         while not self._shutdown.is_set():
+            if on_poll is not None:
+                on_poll()
+                if self._shutdown.is_set():
+                    break
             latest = self._find_latest()
             if latest is None:
                 time.sleep(1)

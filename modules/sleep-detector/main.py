@@ -11,8 +11,9 @@ Writes to two tables:
 
 Detection logic:
   Each capacitance record contains three channels per side (out, cen, in).
-  Presence is determined via calibrated z-score thresholds when a calibration
-  profile is available, falling back to a fixed sum threshold otherwise.
+  Presence is the summed signed raw-unit rise above a self-adjusting
+  per-channel empty-bed baseline (a body only adds capacitance) — see
+  AdaptiveBaseline. Scheduled calibration no longer sets it.
   A session starts on the first present sample and ends after ABSENCE_TIMEOUT_S
   consecutive absent samples.
 
@@ -20,7 +21,12 @@ Movement scoring (Proportional Integration Mode):
   Movement is computed as the sum of absolute sample-to-sample deltas across
   the 3 sensing channel pairs per epoch (Kortelainen et al. 2010; Cole-Kripke
   1992). This measures actual body displacement over time rather than static
-  deviation from an empty-bed baseline.
+  deviation from an empty-bed baseline. On Pod 3/4 (integer capSense) each
+  channel's delta counts only by its excess over CAPSENSE_NOISE_K times that
+  channel's typical delta, since sensor noise alone would fill the scale, and
+  only when it lands on a level the channel hasn't held in the last minute:
+  in some positions one channel flips between two levels with each breath.
+  Pod 3/4 epochs also skip the 3-epoch median filter, which zeroed turn-overs.
 
   Pump artifact gating (#230):
     Pump vibrations contaminate capSense2 deltas, inflating movement scores
@@ -53,6 +59,7 @@ import time
 import json
 import math
 import signal
+import statistics
 import logging
 import sqlite3
 import threading
@@ -65,11 +72,19 @@ from typing import Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
-from common.raw_follower import RawFileFollower
+from common.nats_follower import create_follower
+from common.side_mode import SingleSleeperMode
+from common.dialect import (
+    KNOWN_RECORD_TYPES,
+    log_capsense_status_once,
+    warn_unknown_type_once,
+)
 from common.calibration import (
+    CAPSENSE_PRESENCE_THRESHOLD,
     CalibrationStore,
-    is_present_capsense_calibrated,
-    is_present_capsense2_calibrated,
+    capsense_channel_values,
+    capsense_threshold,
+    capsense2_channel_values,
 )
 
 # ---------------------------------------------------------------------------
@@ -100,10 +115,39 @@ PRESENCE_DEBOUNCE_S = 30.0
 MAX_SESSION_S = 16 * 3600
 # How often to write a movement row (seconds)
 MOVEMENT_INTERVAL_S = 60
-# Fallback presence threshold when uncalibrated
-PRESENCE_THRESHOLD = 1500
 # How often to reload calibration profiles (seconds)
 CALIBRATION_RELOAD_S = 60
+# Self-adjusting empty-bed baseline (replaces scheduled capacitance
+# calibration, which could capture a motionless sleeper as "empty").
+# Presence enters above the threshold and exits below this fraction of it,
+# so a reading hovering at the threshold can't flap.
+PRESENCE_EXIT_FRACTION = 0.5
+# While empty and within the exit threshold, the baseline follows slow drift
+# (thermal, bedding) with this time constant (seconds).
+BASELINE_UP_TAU_S = 30 * 60
+# A reading BELOW baseline is always an empty bed (a body only adds
+# capacitance), so a baseline captured with someone in bed drops to the true
+# empty level within minutes of them getting up.
+BASELINE_DOWN_TAU_S = 120
+# Samples further apart than this don't count as tracking time (gaps,
+# restarts), so one sample can't move the baseline all the way.
+BASELINE_MAX_STEP_S = 10.0
+# How often the baseline is written back to calibration_profiles so the app
+# and Node's occupancy check (capSense2) see the same empty-bed level.
+BASELINE_PUBLISH_S = 15 * 60
+# capSense2 profile threshold default (raw float units), as the calibrator.
+CAPSENSE2_PRESENCE_THRESHOLD = 6.0
+# In-progress session state survives restarts/reboots via this file. Without
+# it a reboot or service restart mid-session silently dropped the whole night.
+STATE_PATH = Path(os.environ.get(
+    "SLEEP_DETECTOR_STATE_PATH", str(BIOMETRICS_DB.parent / "sleep-detector-state.json")))
+STATE_VERSION = 1
+# How often to checkpoint an open session (seconds). Session start/close and
+# bed-exits checkpoint immediately.
+STATE_SAVE_INTERVAL_S = 60
+# A restored session whose last sample is older than this is closed at the
+# last presence instead of resumed — the downtime can't be attributed to sleep.
+STATE_MAX_GAP_S = 30 * 60
 # Earliest ts considered a valid wall-clock timestamp (2020-01-01 UTC).
 # RAW frames very rarely arrive with a tiny relative ts (e.g. 3s after some
 # synthetic origin) before the firmware has a real wall-clock reference.
@@ -116,12 +160,37 @@ MIN_VALID_WALL_CLOCK_TS = 1577836800.0  # 2020-01-01 00:00:00 UTC
 PUMP_GUARD_S = 3.0
 # Reference channel anomaly threshold (capSense2 units)
 REF_ANOMALY_THRESHOLD = 0.02
+# Pod 3/4 capSense movement. The integer channels change by several counts
+# between samples with nobody moving (median |delta| ~3-7), so a plain sum of
+# deltas is mostly noise: at 2 Hz a still minute summed to ~2,000-2,500 and
+# saturated the 1000 cap every minute, and the trailing-baseline subtraction
+# then zeroed every minute — movement read 0 all night. Instead only a delta
+# beyond CAPSENSE_NOISE_K times that channel's typical delta (median of its
+# last CAPSENSE_NOISE_WINDOW samples, ~10 min, at least CAPSENSE_NOISE_FLOOR)
+# counts, by its excess. On a Pod 4 night this scored still minutes ~0 and
+# tracked piezo-detected body movement (rank correlation 0.65 vs 0.34).
+CAPSENSE_NOISE_K = 6.0
+CAPSENSE_NOISE_WINDOW = 1200
+CAPSENSE_NOISE_MIN_SAMPLES = 60
+CAPSENSE_NOISE_FLOOR = 1.0
+CAPSENSE_NOISE_UPDATE_EVERY = 30
+# A jump only counts when it lands on a level the channel hasn't held in the
+# last CAPSENSE_LEVEL_MEMORY samples (~3 min). In some lying positions one
+# channel flips between two fixed levels with each breath (~200 counts apart,
+# every few seconds) while the body is still; summed as deltas that scored
+# 1000 for half an hour at a time. Turning over moves the channels to new
+# levels and still counts; the return leg of an out-and-back motion doesn't.
+CAPSENSE_LEVEL_MEMORY = 360
+
 # Baseline subtraction: trailing epoch window and cold start
 BASELINE_TRAILING_EPOCHS = 30
 BASELINE_COLD_START_EPOCHS = 10  # ~10 minutes at 60s epochs
 # Percentile for baseline (5th percentile)
 BASELINE_PERCENTILE = 5
-# Median filter window (epochs)
+# Median filter window (epochs). Not applied to capSense (Pod 3/4): there a
+# turn-over is usually one busy minute between still ones, which the median
+# zeroed, and the noise margin and level memory already reject the sensor's
+# artifacts.
 MEDIAN_FILTER_WINDOW = 3
 
 # ---------------------------------------------------------------------------
@@ -289,6 +358,42 @@ def write_movement(holder: "DBHolder", side: str,
         return False
 
 
+def load_state(path: Path) -> dict:
+    """Read the persisted per-side tracker state; {} when missing or unusable."""
+    try:
+        state = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        log.warning("Ignoring unreadable state file %s: %s", path, e)
+        return {}
+    if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
+        log.warning("Ignoring state file %s with unexpected shape/version", path)
+        return {}
+    return state
+
+
+def save_state(path: Path, trackers) -> bool:
+    """Atomically write every tracker's state. Returns True on success.
+
+    tmp + fsync + rename so a power cut leaves either the previous or the new
+    file, never a truncated one."""
+    state = {"version": STATE_VERSION}
+    for t in trackers:
+        state[t.side] = t.snapshot()
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        return True
+    except OSError as e:
+        log.warning("Could not save state to %s: %s", path, e)
+        return False
+
+
 def report_health(status: str, message: str) -> None:
     try:
         conn = sqlite3.connect(str(SLEEPYPOD_DB), timeout=2.0)
@@ -380,20 +485,34 @@ def compute_movement_delta(current: list, previous: list) -> float:
 
 
 class CalibrationCache:
-    """Periodically reloads capacitance calibration profiles for both sides."""
+    """Periodically reloads capacitance calibration profiles for both sides,
+    and writes the self-adjusting baseline back to them."""
 
     def __init__(self, store: CalibrationStore):
         self._store = store
-        self._profiles: Dict[str, Optional[dict]] = {"left": None, "right": None}
+        # side -> (params, created_at) of the active completed profile
+        self._profiles: Dict[str, Optional[tuple]] = {"left": None, "right": None}
         self._last_reload = 0.0
 
-    def get_baselines(self, side: str) -> Optional[dict]:
-        self._maybe_reload()
+    def get_profile(self, side: str, force: bool = False) -> Optional[tuple]:
+        """(params, created_at) of the active capacitance profile, or None."""
+        self._maybe_reload(force)
         return self._profiles.get(side)
 
-    def _maybe_reload(self) -> None:
+    def publish(self, side: str, params: dict, window_start: int,
+                window_end: int, samples: int) -> bool:
+        """Upsert the adaptive baseline as the side's capacitance profile."""
+        try:
+            self._store.upsert_profile(side, "capacitance", params, 1.0,
+                                       window_start, window_end, samples)
+            return True
+        except Exception as e:
+            log.warning("Failed to publish %s baseline: %s", side, e)
+            return False
+
+    def _maybe_reload(self, force: bool = False) -> None:
         now = time.time()
-        if now - self._last_reload < CALIBRATION_RELOAD_S:
+        if not force and now - self._last_reload < CALIBRATION_RELOAD_S:
             return
         self._last_reload = now
         for side in ("left", "right"):
@@ -401,11 +520,164 @@ class CalibrationCache:
                 profile = self._store.get_active(side, "capacitance")
                 if profile:
                     params = profile["parameters"]
-                    self._profiles[side] = json.loads(params) if isinstance(params, str) else params
+                    params = json.loads(params) if isinstance(params, str) else params
+                    self._profiles[side] = (params, profile.get("created_at"))
                 else:
                     self._profiles[side] = None
             except Exception as e:
                 log.warning("Failed to load calibration for %s: %s", side, e)
+
+
+class AdaptiveBaseline:
+    """Self-adjusting empty-bed level for one side's capacitance channels.
+
+    Replaces scheduled capacitance calibration: a fixed snapshot went stale
+    with drift, and a snapshot taken while someone slept (the fixed-UTC-hour
+    fallback can land mid-night) made the empty bed read occupied all day.
+
+    - Presence: summed signed rise over the baseline. Enters above
+      `threshold`, exits below threshold * PRESENCE_EXIT_FRACTION.
+    - Drift: while empty and within the exit threshold, follows the reading
+      with time constant BASELINE_UP_TAU_S.
+    - Contamination: any reading below baseline pulls it down with
+      BASELINE_DOWN_TAU_S — a body only adds capacitance.
+    - Seeding: saved state, else the calibration profile (including a manual
+      recalibration, adopted whenever a newer one appears), else the first
+      sample.
+
+    capSense tracks raw {out, cen, in}; capSense2 tracks ref-compensated
+    pair averages {A, B, C} against a fixed ref_mean.
+    """
+
+    def __init__(self, fmt: str, means: dict, threshold: float,
+                 ref_mean: Optional[float] = None, source: str = "bootstrap",
+                 profile_seen_at: Optional[float] = None):
+        self.fmt = fmt
+        self.means = {ch: float(v) for ch, v in means.items()}
+        self.threshold = float(threshold)
+        self.ref_mean = ref_mean
+        self.source = source
+        # created_at of the newest external profile already adopted or
+        # deliberately skipped, so it isn't re-adopted every reload.
+        self.profile_seen_at = profile_seen_at
+        self._last_track_ts: Optional[float] = None
+
+    @property
+    def exit_threshold(self) -> float:
+        return self.threshold * PRESENCE_EXIT_FRACTION
+
+    @classmethod
+    def from_profile(cls, params: dict, fmt: str, created_at: Optional[float]):
+        """Seed from a calibration profile, or None if it doesn't match fmt."""
+        channels = params.get("channels") or {}
+        if fmt == "capSense2":
+            if params.get("format") != "capSense2":
+                return None
+            names = ("A", "B", "C")
+            threshold = float(params.get("threshold", CAPSENSE2_PRESENCE_THRESHOLD))
+            ref_mean = (params.get("ref") or {}).get("mean")
+        else:
+            if params.get("format") == "capSense2":
+                return None
+            names = ("out", "cen", "in")
+            threshold = capsense_threshold(params)
+            ref_mean = None
+        try:
+            means = {ch: float(channels[ch]["mean"]) for ch in names}
+        except (KeyError, TypeError, ValueError):
+            return None
+        return cls(fmt, means, threshold, ref_mean=ref_mean,
+                   source=params.get("source", "profile"),
+                   profile_seen_at=created_at)
+
+    @classmethod
+    def from_state(cls, state: Optional[dict]):
+        if not isinstance(state, dict):
+            return None
+        try:
+            return cls(str(state["format"]), dict(state["means"]), float(state["threshold"]),
+                       ref_mean=state.get("ref_mean"), source="state",
+                       profile_seen_at=state.get("profile_seen_at"))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def snapshot(self) -> dict:
+        return {"format": self.fmt, "means": self.means, "threshold": self.threshold,
+                "ref_mean": self.ref_mean, "profile_seen_at": self.profile_seen_at}
+
+    def values(self, record: dict, side: str) -> Optional[dict]:
+        """This format's per-channel values for a frame, or None if unusable."""
+        if self.fmt == "capSense2":
+            return capsense2_channel_values(record, side, self.ref_mean, skip_sentinels=True)
+        return capsense_channel_values(record, side)
+
+    def deviation(self, values: dict) -> float:
+        return sum(v - self.means[ch] for ch, v in values.items())
+
+    def is_present(self, values: dict, currently_present: bool) -> bool:
+        limit = self.exit_threshold if currently_present else self.threshold
+        return self.deviation(values) > limit
+
+    def track(self, ts: float, values: dict, occupied: bool) -> None:
+        """Follow the empty-bed level. Called once per sample after the
+        presence decision; `occupied` is the committed (debounced) state."""
+        dt = 0.0 if self._last_track_ts is None else ts - self._last_track_ts
+        self._last_track_ts = ts
+        dt = max(0.0, min(dt, BASELINE_MAX_STEP_S))
+        if dt == 0.0:
+            return
+        dev = self.deviation(values)
+        if dev < 0:
+            tau = BASELINE_DOWN_TAU_S
+        elif not occupied and dev < self.exit_threshold:
+            tau = BASELINE_UP_TAU_S
+        else:
+            return
+        alpha = dt / tau
+        for ch, v in values.items():
+            self.means[ch] += alpha * (v - self.means[ch])
+
+    def reseed(self, values: dict, source: str) -> None:
+        self.means = {ch: float(v) for ch, v in values.items()}
+        self.source = source
+
+    def to_params(self) -> dict:
+        """Calibration-profile params (the shape the calibrators write)."""
+        if self.fmt == "capSense2":
+            params = {"format": "capSense2", "threshold": self.threshold,
+                      "channels": {ch: {"mean": round(m, 4), "std": 0.05}
+                                   for ch, m in self.means.items()}}
+            if self.ref_mean is not None:
+                params["ref"] = {"mean": round(self.ref_mean, 4), "std": 0.001}
+        else:
+            params = {"format": "capSense", "threshold": self.threshold,
+                      "channels": {ch: {"mean": round(m, 2), "std": 5.0}
+                                   for ch, m in self.means.items()}}
+        params["source"] = "adaptive"
+        return params
+
+
+def bootstrap_baseline(record: dict, side: str) -> Optional[AdaptiveBaseline]:
+    """Seed a baseline from one frame when no state or profile exists. If the
+    bed happens to be occupied, the occupant reads absent until they get up;
+    the reading then falls below baseline and the fast downward track takes
+    it to the true empty level."""
+    fmt = record.get("type")
+    if fmt == "capSense2":
+        data = record.get(side, {})
+        vals = data.get("values") if data else None
+        ref_mean = None
+        if vals and len(vals) >= 8 and CAPSENSE2_SENTINEL not in (vals[6], vals[7]):
+            ref_mean = (vals[6] + vals[7]) / 2.0
+        values = capsense2_channel_values(record, side, ref_mean, skip_sentinels=True)
+        threshold = CAPSENSE2_PRESENCE_THRESHOLD
+    else:
+        ref_mean = None
+        values = capsense_channel_values(record, side)
+        threshold = CAPSENSE_PRESENCE_THRESHOLD
+    if values is None:
+        return None
+    return AdaptiveBaseline(fmt, values, threshold, ref_mean=ref_mean, source="bootstrap")
 
 # ---------------------------------------------------------------------------
 # Numeric helpers (no numpy dependency)
@@ -518,20 +790,33 @@ class PumpGateCapSense:
                         except (TypeError, ValueError):
                             pass
                         break
+                # NATS Pod 5 frzHealth nests pump state under side.pump.
+                pump = side_data.get("pump")
+                if rpm == 0 and isinstance(pump, dict):
+                    val = pump.get("rpm")
+                    if val is not None:
+                        try:
+                            rpm = float(val)
+                        except (TypeError, ValueError):
+                            pass
                 # Also check pumpDuty as fallback — any duty > 0 means pump is running
                 if rpm == 0:
-                    for key in ("pumpDuty", "pump_duty", "duty"):
-                        val = side_data.get(key)
-                        if val is not None:
-                            try:
-                                rpm = 1.0 if float(val) > 0 else 0.0
-                            except (TypeError, ValueError):
-                                pass
-                            break
+                    duty = next((side_data.get(key) for key in
+                                 ("pumpDuty", "pump_duty", "duty")
+                                 if side_data.get(key) is not None), None)
+                    if duty is None and isinstance(pump, dict):
+                        duty = next((pump.get(key) for key in ("duty", "power")
+                                     if pump.get(key) is not None), None)
+                    if duty is not None:
+                        try:
+                            rpm = 1.0 if float(duty) > 0 else 0.0
+                        except (TypeError, ValueError):
+                            pass
 
             elif rtype == "frzTherm":
                 # frzTherm may carry pump duty cycle
-                for key in ("pumpDuty", "pump_duty", "duty", "pumpRpm", "pump_rpm"):
+                for key in ("pumpDuty", "pump_duty", "duty", "pumpRpm",
+                            "pump_rpm", "power"):
                     val = side_data.get(key)
                     if val is not None:
                         try:
@@ -599,6 +884,16 @@ class PumpGateCapSense:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class SideObservation:
+    """One side's reading of one frame (SessionTracker.observe)."""
+    ts: float
+    present: Optional[bool]  # None: unusable frame, no new evidence
+    delta: float
+    values: Optional[dict]
+    record: dict
+
+
+@dataclass
 class SessionTracker:
     side: str
     db: "DBHolder"
@@ -626,26 +921,176 @@ class SessionTracker:
     _epoch_scores: deque = field(default_factory=lambda: deque(maxlen=BASELINE_TRAILING_EPOCHS))
     _median_buf: deque = field(default_factory=lambda: deque(maxlen=MEDIAN_FILTER_WINDOW))
     _pump_gated_samples: int = 0  # counter for logging
+    # capSense (Pod 3/4) per-channel delta history and typical delta; see
+    # CAPSENSE_NOISE_K.
+    _cap_deltas: deque = field(default_factory=lambda: deque(maxlen=CAPSENSE_NOISE_WINDOW))
+    _cap_noise: Optional[list] = None
+    _cap_since_update: int = 0
+    # Recent capSense channel values; the last one is the previous sample.
+    _cap_levels: deque = field(default_factory=lambda: deque(maxlen=CAPSENSE_LEVEL_MEMORY + 1))
+    # Sessions closed only by the MAX_SESSION_S cap since the last natural
+    # (absence-timeout) close. Two in a row means the presence signal never
+    # dropped for 32+ hours — a stuck level signal, not a sleeper.
+    _consecutive_cap_closes: int = 0
+    # ts of the latest processed sample, persisted so a restore can tell how
+    # long the detector was down.
+    _last_ts: Optional[float] = None
+    # Set by restore() when the occupant was present at shutdown; cleared by
+    # the first present sample afterwards. If absence is committed first, the
+    # occupant left during the downtime, so the exit is dated at the last
+    # pre-restart presence instead of the first post-restart sample.
+    _resumed_last_present: Optional[float] = None
+    # The RAW follower re-reads the current file from offset 0 on startup, so
+    # up to ~15 min of already-processed samples replay after a restore;
+    # samples at or before this ts are skipped.
+    _replay_until_ts: Optional[float] = None
+    # Session start/close or a bed-exit happened since the last checkpoint.
+    state_dirty: bool = False
+    # Self-adjusting empty-bed level (see AdaptiveBaseline).
+    baseline: Optional[AdaptiveBaseline] = None
+    _cap_closed: bool = False
+    # Per-sample level decision (with hysteresis), independent of sessions —
+    # kept current even while this side's readings are merged into the other.
+    _level_present: bool = False
+    _last_publish_ts: Optional[float] = None
+    _tracked_samples: int = 0
 
-    def process(self, ts: float, record: dict) -> None:
-        baselines = self.calibration.get_baselines(self.side)
+    def snapshot(self) -> dict:
+        """JSON-serializable state needed to resume after a restart."""
+        return {
+            "session_start": self._session_start.timestamp() if self._session_start else None,
+            "last_present_ts": self._last_present_ts,
+            "present_intervals": self._present_intervals,
+            "absent_intervals": self._absent_intervals,
+            "interval_start": self._interval_start,
+            "was_present": self._was_present,
+            "exit_count": self._exit_count,
+            "debounced_present": self._debounced_present,
+            "state_since": self._state_since,
+            "consecutive_cap_closes": self._consecutive_cap_closes,
+            "last_ts": self._last_ts,
+            "level_present": self._level_present,
+            "baseline": self.baseline.snapshot() if self.baseline is not None else None,
+        }
+
+    def restore(self, state: Optional[dict], now: float) -> None:
+        """Resume an in-progress session saved by snapshot().
+
+        A session whose last sample is older than STATE_MAX_GAP_S is closed at
+        the last presence rather than resumed."""
+        if not isinstance(state, dict):
+            return
+        self.baseline = AdaptiveBaseline.from_state(state.get("baseline"))
+        try:
+            self._consecutive_cap_closes = int(state.get("consecutive_cap_closes") or 0)
+            # The replay watermark applies whether or not a session is open: a
+            # sessionless side (the away side in single-sleeper mode) still
+            # feeds sessions, and must not replay frames it already processed.
+            last_ts = state.get("last_ts")
+            self._last_ts = float(last_ts) if last_ts is not None else None
+            self._replay_until_ts = self._last_ts
+            # Hysteresis latch: a reading between the exit and enter
+            # thresholds is occupied only if it already was — resetting it
+            # on restart would close a session that is still going.
+            self._level_present = bool(state.get("level_present"))
+            start = state.get("session_start")
+            if start is None:
+                return
+            self._session_start = datetime.fromtimestamp(float(start), tz=timezone.utc)
+            self._last_present_ts = state.get("last_present_ts")
+            self._present_intervals = list(state.get("present_intervals") or [])
+            self._absent_intervals = list(state.get("absent_intervals") or [])
+            self._interval_start = state.get("interval_start")
+            self._was_present = bool(state.get("was_present"))
+            self._exit_count = int(state.get("exit_count") or 0)
+            self._debounced_present = bool(state.get("debounced_present"))
+            self._state_since = state.get("state_since")
+        except (TypeError, ValueError, OverflowError, OSError) as e:
+            log.warning("%s: ignoring corrupt saved session: %s", self.side, e)
+            self._reset_session()
+            return
+
+        last_seen = self._last_ts or self._last_present_ts or float(start)
+        if now - last_seen > STATE_MAX_GAP_S:
+            log.info("%s: saved session stale (down %.0f min) — closing at last presence",
+                     self.side, (now - last_seen) / 60)
+            self._close_session(self._last_present_ts or last_seen)
+            return
+
+        if self._debounced_present:
+            self._resumed_last_present = self._last_present_ts
+        log.info("%s: resumed session started at %s", self.side, self._session_start.isoformat())
+
+    def _sync_baseline(self, record: dict) -> Optional[AdaptiveBaseline]:
+        """The presence baseline for this frame's format. Adopts a calibration
+        profile newer than any already seen (e.g. a manual recalibration).
+        With no baseline at all (state file missing), this detector's own
+        published baseline is a better seed than the first frame, which may
+        be occupied. Seeds from the first frame only when nothing else exists."""
+        fmt = "capSense2" if record.get("type") == "capSense2" else "capSense"
+        b = self.baseline if self.baseline is not None and self.baseline.fmt == fmt else None
+        profile = self.calibration.get_profile(self.side) if self.calibration else None
+        if profile is not None:
+            params, created_at = profile
+            own = isinstance(params, dict) and params.get("source") == "adaptive"
+            if isinstance(params, dict) and (not own or b is None):
+                seen = b.profile_seen_at if b is not None else None
+                if seen is None or (created_at or 0) > seen:
+                    adopted = AdaptiveBaseline.from_profile(params, fmt, created_at)
+                    if adopted is not None:
+                        log.info("%s: presence baseline from calibration profile (created %s)",
+                                 self.side, created_at)
+                        b = adopted
+                    elif b is not None:
+                        b.profile_seen_at = created_at  # wrong format — stop re-checking
+        if b is None:
+            b = bootstrap_baseline(record, self.side)
+            if b is not None:
+                log.info("%s: presence baseline seeded from live %s reading", self.side, fmt)
+        self.baseline = b
+        return b
+
+    def _maybe_publish_baseline(self, ts: float, record: dict) -> None:
+        if self._last_publish_ts is None:
+            self._last_publish_ts = ts
+            return
+        if ts - self._last_publish_ts < BASELINE_PUBLISH_S or self.calibration is None:
+            return
+        self._last_publish_ts = ts
+        # Re-read first: a manual calibration that finished since the last
+        # reload must be adopted, not overwritten.
+        self.calibration.get_profile(self.side, force=True)
+        b = self._sync_baseline(record)
+        if b is not None and self.calibration.publish(
+                self.side, b.to_params(), int(ts - BASELINE_PUBLISH_S), int(ts),
+                self._tracked_samples):
+            self._tracked_samples = 0
+
+    def observe(self, ts: float, record: dict) -> Optional["SideObservation"]:
+        """Read one frame for this side: presence evidence, movement delta and
+        the channel values the baseline tracks. None for a replayed frame.
+        Does not touch the session — see commit()."""
+        if self._replay_until_ts is not None:
+            if ts <= self._replay_until_ts:
+                return None  # already processed before the restart
+            self._replay_until_ts = None
+        self._last_ts = ts
         rtype = record.get("type", "")
-        # Only use baselines if they match the record format
-        fmt = baselines.get("format") if baselines else None
-        if rtype == "capSense2":
-            cal = baselines if fmt == "capSense2" else None
-            present = is_present_capsense2_calibrated(
-                record, self.side, cal, fallback_threshold=60.0,
-            )
-        else:
-            cal = baselines if fmt != "capSense2" else None
-            present = is_present_capsense_calibrated(
-                record, self.side, cal, fallback_threshold=PRESENCE_THRESHOLD,
-            )
+        baseline = self._sync_baseline(record)
+        values = baseline.values(record, self.side) if baseline is not None else None
+        present: Optional[bool] = None  # unusable frame: no new evidence
+        if values is not None:
+            present = baseline.is_present(values, self._level_present)
+            self._level_present = present
+        # Movement's capSense2 common-mode rejection uses the baseline's ref.
+        baselines = ({"ref": {"mean": baseline.ref_mean}}
+                     if baseline is not None and baseline.ref_mean is not None else None)
 
-        # Set scale factor based on sensor type (Pod 3 int vs Pod 5 float)
-        if rtype == "capSense" and self._scale_factor != 0.5:
-            self._scale_factor = 0.5
+        # Set scale factor based on sensor type (Pod 3/4 int vs Pod 5 float).
+        # capSense scores the excess over its noise (see CAPSENSE_NOISE_K)
+        # one to one, and skips the median filter (keyed on this factor).
+        if rtype == "capSense" and self._scale_factor != 1.0:
+            self._scale_factor = 1.0
         elif rtype == "capSense2" and self._scale_factor != 10.0:
             self._scale_factor = 10.0
 
@@ -664,11 +1109,69 @@ class SessionTracker:
             if self.pump_gate.is_gated(record, self.side, channel_deltas, baselines):
                 delta = 0.0
                 self._pump_gated_samples += 1
+            elif rtype == "capSense" and channel_deltas is not None:
+                delta = self._capsense_movement(channel_deltas, current_values)
+            if rtype == "capSense":
+                self._cap_levels.append(current_values)
         else:
             # Sentinel or invalid — skip delta, keep previous (zero-order hold)
             delta = 0.0
+        return SideObservation(ts, present, delta, values, record)
 
-        self._update(ts, present, delta)
+    def _capsense_movement(self, channel_deltas: list,
+                           values: Optional[list] = None) -> float:
+        """Sum of each channel's delta beyond CAPSENSE_NOISE_K times its
+        typical delta; 0 until CAPSENSE_NOISE_MIN_SAMPLES have been seen.
+        With `values`, a channel landing within that margin of a level it
+        held in the last CAPSENSE_LEVEL_MEMORY samples adds nothing."""
+        self._cap_deltas.append(channel_deltas)
+        if len(self._cap_deltas) < CAPSENSE_NOISE_MIN_SAMPLES:
+            return 0.0
+        self._cap_since_update += 1
+        if self._cap_noise is None or self._cap_since_update >= CAPSENSE_NOISE_UPDATE_EVERY:
+            self._cap_noise = [
+                max(CAPSENSE_NOISE_FLOOR, statistics.median(d[i] for d in self._cap_deltas))
+                for i in range(len(channel_deltas))
+            ]
+            self._cap_since_update = 0
+        excess = [max(0.0, d - CAPSENSE_NOISE_K * n)
+                  for d, n in zip(channel_deltas, self._cap_noise)]
+        if values is not None and any(excess):
+            earlier = list(self._cap_levels)[:-1]
+            for i, e in enumerate(excess):
+                margin = CAPSENSE_NOISE_K * self._cap_noise[i]
+                if e and any(abs(values[i] - lv[i]) <= margin for lv in earlier):
+                    excess[i] = 0.0
+        return sum(excess)
+
+    def commit(self, ts: float, present: Optional[bool], delta: float) -> bool:
+        """Advance the session with one sample's presence and movement.
+        Returns True if the session was just force-closed at MAX_SESSION_S."""
+        self._update(ts, self._debounced_present if present is None else present, delta)
+        capped, self._cap_closed = self._cap_closed, False
+        return capped
+
+    def settle(self, obs: "SideObservation", reset: bool = False) -> None:
+        """Baseline upkeep after the session step. `reset` makes the current
+        level the new empty level: presence never dropped for MAX_SESSION_S,
+        so the load on the bed isn't a sleeper."""
+        if obs.values is None or self.baseline is None:
+            return
+        if reset:
+            self.baseline.reseed(obs.values, "cap-reset")
+            log.warning("%s: presence baseline reset to current level after a capped session",
+                        self.side)
+        else:
+            self.baseline.track(obs.ts, obs.values, self._level_present)
+        self._tracked_samples += 1
+        self._maybe_publish_baseline(obs.ts, obs.record)
+
+    def process(self, ts: float, record: dict) -> None:
+        obs = self.observe(ts, record)
+        if obs is None:
+            return
+        capped = self.commit(ts, obs.present, obs.delta)
+        self.settle(obs, reset=capped)
 
     def _apply_debounce(self, ts: float, raw_present: bool) -> bool:
         """Fold the raw per-sample presence into the committed (debounced)
@@ -704,14 +1207,22 @@ class SessionTracker:
         return False
 
     def _update(self, ts: float, present: bool, movement: float) -> None:
+        self._last_ts = ts
         self._movement_buf.append(movement)
         self._flush_movement(ts)
+
+        if present:
+            self._resumed_last_present = None
 
         # Debounce raw presence so brief capSense dropouts don't fragment the
         # session or inflate times_exited_bed (pod 88 field debug 2026-06-10).
         changed = self._apply_debounce(ts, present)
         # Timestamp of the true transition when one just committed, else `ts`.
         edge_ts = self._state_since if changed and self._state_since is not None else ts
+        if changed and not self._debounced_present and self._resumed_last_present is not None:
+            # Never seen present since the restart: they left during the downtime.
+            edge_ts = self._resumed_last_present
+            self._resumed_last_present = None
 
         if self._debounced_present:
             if self._session_start is None:
@@ -719,6 +1230,7 @@ class SessionTracker:
                 self._session_start = datetime.fromtimestamp(edge_ts, tz=timezone.utc)
                 self._interval_start = edge_ts
                 self._was_present = True
+                self.state_dirty = True
                 log.info("%s: session started at %s", self.side, self._session_start.isoformat())
 
             elif changed and self._interval_start is not None:
@@ -735,6 +1247,7 @@ class SessionTracker:
                 self._present_intervals.append([self._interval_start, edge_ts])
                 self._interval_start = edge_ts
                 self._exit_count += 1
+                self.state_dirty = True
 
             self._was_present = False
 
@@ -746,6 +1259,8 @@ class SessionTracker:
                 # avoid emitting absent intervals with end < start
                 close_ts = self._interval_start if self._interval_start is not None else self._last_present_ts
                 self._close_session(close_ts)
+                if self._session_start is None:  # committed — a real exit was seen
+                    self._consecutive_cap_closes = 0
 
         # Safety net: force-close a runaway session that never reaches the
         # absence timeout, capping sleep_duration_seconds at MAX_SESSION_S.
@@ -756,6 +1271,17 @@ class SessionTracker:
                 and self._debounced_present
                 and ts - self._session_start.timestamp() >= MAX_SESSION_S):
             self._close_session(self._session_start.timestamp() + MAX_SESSION_S)
+            if self._session_start is None:  # committed — count it, don't spam retries
+                self._consecutive_cap_closes += 1
+                self._cap_closed = True
+                log.warning(
+                    "%s: session force-closed at the %dh cap — presence never dropped (%d consecutive)",
+                    self.side, MAX_SESSION_S // 3600, self._consecutive_cap_closes)
+                if self._consecutive_cap_closes >= 2:
+                    log.warning(
+                        "%s: presence looks stuck-occupied — %d back-to-back sessions closed only at "
+                        "the cap; check capSense2 level deviation vs calibration baseline (/debug)",
+                        self.side, self._consecutive_cap_closes)
 
     def _close_session(self, left_ts: float) -> None:
         if self._session_start is None:
@@ -794,6 +1320,10 @@ class SessionTracker:
         if not wrote:
             return
 
+        self._reset_session()
+        self.state_dirty = True
+
+    def _reset_session(self) -> None:
         self._session_start = None
         self._last_present_ts = None
         self._present_intervals = []
@@ -810,6 +1340,7 @@ class SessionTracker:
         self._epoch_scores.clear()
         self._median_buf.clear()
         self._pump_gated_samples = 0
+        self._resumed_last_present = None
 
     def _flush_movement(self, ts: float) -> None:
         if ts - self._last_movement_write < MOVEMENT_INTERVAL_S:
@@ -830,7 +1361,7 @@ class SessionTracker:
         # Step 1: Sum of absolute deltas over the epoch (PIM analog)
         # Scale factor depends on sensor type:
         #   capSense2 (Pod 5): float channels, deltas ~0.05-5.0 → ×10
-        #   capSense  (Pod 3): int ADC channels, deltas ~1-50 → ×0.5
+        #   capSense  (Pod 3/4): int ADC channels, excess over noise → ×1
         raw_sum = sum(self._movement_buf)
         raw_score = min(1000, int(raw_sum * self._scale_factor))
 
@@ -844,9 +1375,11 @@ class SessionTracker:
             # Cold start: not enough history yet, skip baseline subtraction
             score_after_baseline = raw_score
 
-        # Step 3: 3-epoch median filter for smoothing
+        # Step 3: 3-epoch median filter for smoothing (not for capSense)
         self._median_buf.append(score_after_baseline)
-        if len(self._median_buf) >= MEDIAN_FILTER_WINDOW:
+        if self._scale_factor == 1.0:
+            filtered_score = score_after_baseline
+        elif len(self._median_buf) >= MEDIAN_FILTER_WINDOW:
             filtered_score = _median(list(self._median_buf))
         else:
             # Not enough epochs yet for median filter, pass through
@@ -863,6 +1396,36 @@ class SessionTracker:
         if wrote:
             self._movement_buf = []
             self._last_movement_write = ts
+
+
+def process_single_sleeper(home: SessionTracker, away: SessionTracker,
+                           ts: float, record: dict) -> None:
+    """One frame in single-sleeper mode (the other side is in away mode).
+
+    The sleeper is in bed while EITHER side reads occupied — rolling over or
+    a leg on the away side keeps one home-side session going instead of
+    opening a phantom one there. Movement from both sides is summed into the
+    home side's epochs. The away side keeps tracking its own baseline but
+    never records a session.
+    """
+    h = home.observe(ts, record)
+    a = away.observe(ts, record)
+    if h is None:
+        # The home session already covered this frame (restart replay);
+        # the away side's reading of it must not re-enter the session.
+        return
+    if away._session_start is not None:
+        # Away mode switched on mid-session: end that side's session where
+        # its occupant was last seen; from now on its readings are merged.
+        away._close_session(away._last_present_ts or ts)
+    evidence = [o.present for o in (h, a) if o is not None and o.present is not None]
+    present = any(evidence) if evidence else None
+    delta = h.delta + (a.delta if a is not None else 0.0)
+    capped = home.commit(ts, present, delta)
+    # A capped session in merged mode may be held open by either side's load.
+    home.settle(h, reset=capped)
+    if a is not None:
+        away.settle(a, reset=capped)
 
 
 # ---------------------------------------------------------------------------
@@ -885,7 +1448,17 @@ def main() -> None:
     # side is observed by the other on its next write (no orphaned handles).
     left = SessionTracker(side="left", db=db_holder, calibration=cal_cache, pump_gate=pump_gate)
     right = SessionTracker(side="right", db=db_holder, calibration=cal_cache, pump_gate=pump_gate)
-    follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
+    trackers = (left, right)
+    # One side in away mode: a single sleeper, whose rollovers onto the away
+    # side merge into their own session.
+    bed_mode = SingleSleeperMode(SLEEPYPOD_DB)
+    saved = load_state(STATE_PATH)
+    for t in trackers:
+        t.restore(saved.get(t.side), time.time())
+    last_save = time.monotonic()
+    # Source selected once at startup: NatsFollower on new-firmware pods (NATS
+    # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
+    follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
 
     report_health("healthy", "sleep-detector started")
     log.info("Calibration profiles will be loaded from biometrics.db (reload every %ds)", CALIBRATION_RELOAD_S)
@@ -900,6 +1473,14 @@ def main() -> None:
         for record in follower.read_records():
             rtype = record.get("type")
 
+            # Surface genuinely-new firmware types once (blanketReadings, log,
+            # …) instead of dropping them silently.
+            if not isinstance(rtype, str):
+                continue
+            if rtype not in KNOWN_RECORD_TYPES:
+                warn_unknown_type_once(record, "sleep-detector")
+                continue
+
             # Update pump state from freezer health/thermal records
             if rtype in PUMP_STATE_TYPES:
                 pump_gate.update_pump_state(record)
@@ -908,15 +1489,31 @@ def main() -> None:
             if rtype not in CAPSENSE_TYPES:
                 continue
 
+            # Record (do not gate on) new-firmware capSense per-side status.
+            log_capsense_status_once(record, "sleep-detector")
+
             ts = sanitize_ts(record.get("ts"))
-            left.process(ts, record)
-            right.process(ts, record)
+            home_side = bed_mode.home_side()
+            if home_side is None:
+                left.process(ts, record)
+                right.process(ts, record)
+            elif home_side == "left":
+                process_single_sleeper(left, right, ts, record)
+            else:
+                process_single_sleeper(right, left, ts, record)
+
+            if (left.state_dirty or right.state_dirty
+                    or time.monotonic() - last_save >= STATE_SAVE_INTERVAL_S):
+                if save_state(STATE_PATH, trackers):
+                    left.state_dirty = right.state_dirty = False
+                last_save = time.monotonic()
 
     except Exception as e:
         log.exception("Fatal error in main loop: %s", e)
         report_health("down", str(e))
         sys.exit(1)
     finally:
+        save_state(STATE_PATH, trackers)
         cal_store.close()
         db_holder.conn.close()
         log.info("Shutdown complete")

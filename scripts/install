@@ -24,6 +24,8 @@ echo ""
 # Mode flags
 #   --local            Skip download (code already on disk, e.g. via scp/deploy)
 #   --no-ssh           Skip interactive SSH setup prompt
+#   --ssh-key KEY      Configure SSH with this public key, no prompts. For runs
+#                      with no terminal at all (CI, `ssh pod 'bash install'`).
 #   --branch X         Install a specific branch (default: main). For branches
 #                      outside main/dev/latest, the latest successful build
 #                      artifact is fetched via nightly.link.
@@ -37,6 +39,7 @@ echo ""
 #                      rootfs vs /persistent by total partition size.
 INSTALL_LOCAL=false
 SKIP_SSH=false
+SSH_KEY_ARG=""
 INSTALL_BRANCH=""
 ARTIFACT_URL_OVERRIDE=""
 PURGE_FREE_SLEEP=false
@@ -50,6 +53,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --local)              INSTALL_LOCAL=true ;;
     --no-ssh)             SKIP_SSH=true ;;
+    --ssh-key)            shift; SSH_KEY_ARG="${1:-}" ;;
     --branch)             shift; INSTALL_BRANCH="${1:-}" ;;
     --artifact-url)       shift; ARTIFACT_URL_OVERRIDE="${1:-}" ;;
     --purge-free-sleep)   PURGE_FREE_SLEEP=true ;;
@@ -178,7 +182,13 @@ cleanup() {
   # Restore iptables if we temporarily unblocked
   if [ "$WAN_WAS_BLOCKED" = true ]; then
     echo "Restoring iptables rules..."
-    restore_wan
+    if ! restore_wan; then
+      echo "Critical: firewall restore failed; forcing default policies DROP." >&2
+      iptables -P OUTPUT DROP 2>/dev/null || true
+      iptables -P INPUT DROP 2>/dev/null || true
+      iptables -P FORWARD DROP 2>/dev/null || true
+    fi
+    WAN_WAS_BLOCKED=false
   fi
 
   if [ $exit_code -ne 0 ]; then
@@ -291,18 +301,44 @@ reclaim_rootfs_caches() {
 # Kept inline here because install needs them before the source tree is on disk.
 
 wan_is_blocked() {
-  # Check if the OUTPUT chain has a DROP rule (WAN is blocked)
-  iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP" 2>/dev/null
+  iptables -S OUTPUT 2>/dev/null \
+    | grep -Eq '^-P OUTPUT DROP$|^-A OUTPUT -j (DROP|SLEEPYPOD-BLOCK)$'
+}
+
+sleepypod_chain_is_effectively_blocked() {
+  local rules line
+  rules="$(iptables -S SLEEPYPOD-BLOCK 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      '-A SLEEPYPOD-BLOCK -j ACCEPT') return 1 ;;
+      '-A SLEEPYPOD-BLOCK -j DROP') return 0 ;;
+    esac
+  done <<< "$rules"
+  return 1
+}
+
+wan_is_effectively_blocked() {
+  local rules line policy_drop=false
+  rules="$(iptables -S OUTPUT 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      '-P OUTPUT DROP') policy_drop=true ;;
+      '-A OUTPUT -j ACCEPT') return 1 ;;
+      '-A OUTPUT -j DROP') return 0 ;;
+      '-A OUTPUT -j SLEEPYPOD-BLOCK') sleepypod_chain_is_effectively_blocked; return ;;
+    esac
+  done <<< "$rules"
+  [ "$policy_drop" = true ]
 }
 
 SAVED_IPTABLES=""
 
 unblock_wan() {
   echo "Temporarily unblocking WAN access..."
-  # Capture state verbatim. `|| true` would mask a failed save and
-  # quietly fall through to a minimal block_wan ruleset on restore —
-  # silent data loss. Fail loudly instead so the caller can bail.
-  if ! SAVED_IPTABLES="$(iptables-save 2>&1)"; then
+  # Capture rules from stdout only. iptables-save can emit backend warnings
+  # on stderr; mixing those into this payload makes iptables-restore reject
+  # an otherwise-valid snapshot and unexpectedly fall back to block_wan.
+  if ! SAVED_IPTABLES="$(iptables-save)"; then
     echo "Error: iptables-save failed — refusing to unblock WAN." >&2
     echo "$SAVED_IPTABLES" >&2
     SAVED_IPTABLES=""
@@ -312,24 +348,39 @@ unblock_wan() {
     echo "Error: iptables-save produced no output — refusing to unblock WAN." >&2
     exit 1
   fi
-  iptables -F
-  iptables -X
-  iptables -t nat -F
-  iptables -t nat -X
+  iptables -P INPUT ACCEPT || return 1
+  iptables -P OUTPUT ACCEPT || return 1
+  iptables -P FORWARD ACCEPT || return 1
+  iptables -F || return 1
+  iptables -X || return 1
+  iptables -t nat -F || return 1
+  iptables -t nat -X || return 1
   echo "WAN unblocked."
 }
 
 restore_wan() {
   if [ -n "$SAVED_IPTABLES" ]; then
     echo "Restoring saved iptables rules..."
-    echo "$SAVED_IPTABLES" | iptables-restore 2>/dev/null || block_wan
-  else
-    block_wan
+    if printf '%s\n' "$SAVED_IPTABLES" | iptables-restore; then
+      if wan_is_effectively_blocked; then
+        return 0
+      fi
+      echo "Error: restored iptables snapshot did not block OUTPUT; rebuilding the WAN block." >&2
+    else
+      echo "Error: failed to restore saved iptables rules; rebuilding the WAN block." >&2
+    fi
   fi
+  block_wan
 }
 
 block_wan() {
   echo "Re-blocking WAN access..."
+
+  # Fail closed before mutating any rules. Explicit returns keep failures
+  # visible even when this function runs from a conditional cleanup path.
+  iptables -P OUTPUT DROP || return 1
+  iptables -P INPUT DROP || return 1
+  iptables -P FORWARD DROP || return 1
 
   # Flush first to avoid duplicate rules
   iptables -F 2>/dev/null || true
@@ -350,26 +401,26 @@ block_wan() {
   fi
 
   # Allow established connections
-  iptables -I INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  iptables -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -I INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || return 1
+  iptables -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || return 1
 
   # Allow LAN traffic (RFC 1918)
   for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
-    iptables -A INPUT  -s "$cidr" -j ACCEPT
-    iptables -A OUTPUT -d "$cidr" -j ACCEPT
+    iptables -A INPUT  -s "$cidr" -j ACCEPT || return 1
+    iptables -A OUTPUT -d "$cidr" -j ACCEPT || return 1
   done
 
   # Allow NTP
-  iptables -I OUTPUT -p udp --dport 123 -j ACCEPT
-  iptables -I INPUT  -p udp --sport 123 -j ACCEPT
+  iptables -I OUTPUT -p udp --dport 123 -j ACCEPT || return 1
+  iptables -I INPUT  -p udp --sport 123 -j ACCEPT || return 1
 
   # Allow mDNS (Bonjour — iOS discovers pod via _sleepypod._tcp and _hap._tcp)
   # IPv4 multicast (224.0.0.251); the matching IPv6 multicast (ff02::fb) is
   # opened below if ip6tables is available.
-  iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT
-  iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT
-  iptables -I INPUT  -p udp --dport 5353 -j ACCEPT
-  iptables -I INPUT  -p udp --sport 5353 -j ACCEPT
+  iptables -I OUTPUT -p udp --dport 5353 -j ACCEPT || return 1
+  iptables -I OUTPUT -p udp --sport 5353 -j ACCEPT || return 1
+  iptables -I INPUT  -p udp --dport 5353 -j ACCEPT || return 1
+  iptables -I INPUT  -p udp --sport 5353 -j ACCEPT || return 1
 
   # Allow HomeKit Accessory Protocol (HAP) bridge inbound on tcp/51827.
   # Source-restricted to RFC1918 + link-local so a public IP misconfig can't
@@ -377,7 +428,7 @@ block_wan() {
   # above, but explicit so future LAN tightening doesn't silently break iOS
   # Home pairing.
   for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
-    iptables -I INPUT -p tcp -s "$cidr" --dport 51827 -j ACCEPT
+    iptables -I INPUT -p tcp -s "$cidr" --dport 51827 -j ACCEPT || return 1
   done
 
   # IPv6: iOS may discover/pair over IPv6 on dual-stack LANs. Mirror the
@@ -394,17 +445,25 @@ block_wan() {
   fi
 
   # Allow loopback
-  iptables -A INPUT  -i lo -j ACCEPT
-  iptables -A OUTPUT -o lo -j ACCEPT
+  iptables -A INPUT  -i lo -j ACCEPT || return 1
+  iptables -A OUTPUT -o lo -j ACCEPT || return 1
 
   # Block everything else
-  iptables -A INPUT  -j DROP
-  iptables -A OUTPUT -j DROP
+  iptables -A INPUT  -j DROP || return 1
+  iptables -A OUTPUT -j DROP || return 1
 
   # Persist
   if command -v iptables-save &>/dev/null; then
-    mkdir -p /etc/iptables
-    iptables-save > /etc/iptables/iptables.rules
+    mkdir -p /etc/iptables || return 1
+    iptables-save > /etc/iptables/iptables.rules || return 1
+  fi
+
+  if ! wan_is_effectively_blocked; then
+    echo "Error: rebuilt ruleset does not block OUTPUT." >&2
+    iptables -P OUTPUT DROP 2>/dev/null || true
+    iptables -P INPUT DROP 2>/dev/null || true
+    iptables -P FORWARD DROP 2>/dev/null || true
+    return 1
   fi
 
   echo "WAN blocked."
@@ -547,9 +606,11 @@ preflight_free_sleep_conflict() {
 #   su -                            # switch to root with the passwd you set
 #   bash scripts/install            # run this script
 # The optional SSH-setup block at the end of this script writes your key to
-# /root/.ssh/authorized_keys and re-hardens sshd (port 8822, key-only, no
-# password auth, no root password login). After that you can ssh directly as
-# root with your key.
+# whichever authorized_keys file sshd actually reads for root (resolved by
+# scripts/lib/ssh-helpers — root's home is /home/root here, and free-sleep
+# may have pinned an absolute AuthorizedKeysFile) and only then re-hardens
+# sshd (port 8822, key-only, no password auth, no root password login).
+# After that you can ssh directly as root with your key.
 if [ "$EUID" -ne 0 ]; then
   echo "Error: This script must be run as root (use sudo or su -)" >&2
   echo "" >&2
@@ -745,9 +806,21 @@ fi
 # the sleepypod tools usable from any sudo shell without re-enabling the
 # system fragment, which might be commented out for a reason on the
 # vendor image.
+# The reboot rule lets the daily / pre-prime reboot jobs work: next-server
+# runs as User=sleepypod and JobManager.executeReboot shells `sudo -n
+# systemctl reboot`. Without this a bare reboot fails auth and the pod never
+# reboots on schedule (observed: 5-day uptime with reboot_daily on). Scope is
+# exactly `systemctl reboot` — both common systemctl paths so the rule matches
+# whichever the image ships. secure_path (below) lets sudo resolve it.
+# The restart rules back System → Health's "Restart <module>" fix, scoped to
+# exactly the three biometrics module units.
 SUDOERS_FILE="/etc/sudoers.d/sleepypod-update"
 SUDOERS_CONTENT='Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update'
+sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update
+sleepypod ALL=(root) NOPASSWD: /bin/systemctl reboot, /usr/bin/systemctl reboot
+sleepypod ALL=(root) NOPASSWD: /bin/systemctl restart sleepypod-piezo-processor.service, /usr/bin/systemctl restart sleepypod-piezo-processor.service
+sleepypod ALL=(root) NOPASSWD: /bin/systemctl restart sleepypod-sleep-detector.service, /usr/bin/systemctl restart sleepypod-sleep-detector.service
+sleepypod ALL=(root) NOPASSWD: /bin/systemctl restart sleepypod-environment-monitor.service, /usr/bin/systemctl restart sleepypod-environment-monitor.service'
 SUDOERS_TMP=$(mktemp)
 printf '%s\n' "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
 chmod 0440 "$SUDOERS_TMP"
@@ -1014,34 +1087,57 @@ else
   # Try CI release first (includes pre-built .next). Mirrors sp-update:
   #   main / latest  → releases/latest          (semantic-release vX.Y.Z)
   #   dev            → releases/tags/dev-latest (rolling, dev-release.yml)
-  #   <other>        → releases/tags/<slug>-latest (branch-release.yml)
-  # `feat/foo` slugs to `feat-foo-latest` to match branch-release.yml.
+  #   <other>        → no release; the build.yml artifact below
+  RELEASE_API=""
   if [ "$DOWNLOAD_BRANCH" = "main" ] || [ "$DOWNLOAD_BRANCH" = "latest" ]; then
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
   elif [ "$DOWNLOAD_BRANCH" = "dev" ]; then
     # Rolling dev tag was renamed from `dev` to `dev-latest` in #427.
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
-  else
-    RELEASE_TAG="${DOWNLOAD_BRANCH//\//-}-latest"
-    RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
   fi
 
   if [ -n "${RELEASE_API:-}" ]; then
-    RELEASE_URL=$(curl -sf "$RELEASE_API" \
+    RELEASE_JSON=$(curl -sf "$RELEASE_API" || true)
+    RELEASE_URL=$(printf '%s' "$RELEASE_JSON" \
       | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
       | grep -o 'https://[^"]*' || true)
+    # Semantic-release tag (vX.Y.Z), recorded in .git-info for the UI; rolling *-latest tags are skipped.
+    RELEASE_VERSION=$(printf '%s' "$RELEASE_JSON" \
+      | grep -om1 '"tag_name": *"v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][^"]*"' \
+      | grep -o 'v[0-9][^"]*' || true)
 
     if [ -n "$RELEASE_URL" ]; then
       echo "Downloading CI release..."
       if curl -fSL "$RELEASE_URL" | tar xz -C "$DOWNLOAD_DIR"; then
         HAS_BUILD=true
         echo "CI release downloaded (pre-built)."
+        if [ -n "$RELEASE_VERSION" ] && [ -s "$DOWNLOAD_DIR/.git-info" ]; then
+          node -e '
+            const fs = require("fs");
+            const info = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            fs.writeFileSync(process.argv[1], JSON.stringify({ ...info, version: process.argv[2] }));
+          ' "$DOWNLOAD_DIR/.git-info" "$RELEASE_VERSION" 2>/dev/null || true
+        fi
       else
         # Clean partial download before fallback
         find "$DOWNLOAD_DIR" -mindepth 1 -delete 2>/dev/null || true
       fi
     fi
   fi
+
+  # nightly.link 404s on a raw `/` in the branch segment; percent-encode
+  # everything outside the URL-unreserved set.
+  urlencode() {
+    local s="$1" out="" c i
+    for ((i = 0; i < ${#s}; i++)); do
+      c="${s:i:1}"
+      case "$c" in
+        [A-Za-z0-9._~-]) out+="$c" ;;
+        *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+      esac
+    done
+    printf '%s' "$out"
+  }
 
   # Try a CI workflow artifact via nightly.link. Two paths in:
   #   1. --artifact-url <url>  — pinned to an exact run (PR comments use this).
@@ -1056,7 +1152,7 @@ else
         && [ "$INSTALL_BRANCH" != "main" ] \
         && [ "$INSTALL_BRANCH" != "dev" ] \
         && [ "$INSTALL_BRANCH" != "latest" ]; then
-      ARTIFACT_URL="https://nightly.link/${GITHUB_REPO}/workflows/build/${INSTALL_BRANCH}/sleepypod-core.zip"
+      ARTIFACT_URL="https://nightly.link/${GITHUB_REPO}/workflows/build/$(urlencode "$INSTALL_BRANCH")/sleepypod-core.zip"
     fi
 
     if [ -n "$ARTIFACT_URL" ]; then
@@ -1294,7 +1390,7 @@ fi
 cat > /etc/systemd/system/sleepypod.service << EOF
 [Unit]
 Description=SleepyPod Core Service
-After=network.target
+After=network.target nats-server.service
 
 [Service]
 Type=simple
@@ -1334,7 +1430,7 @@ Environment="RAW_DATA_DIR=/persistent/biometrics"
 Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
 # The \`+\` prefix runs ExecStartPre as root regardless of User=. Needed
 # for /deviceinfo symlink creation (root-owned) and sp-maintenance
-# (journal vacuum, /tmp cleanup, pnpm store prune).
+# (required DAC directory permissions and reboot authorization).
 ExecStartPre=+/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStartPre=+/usr/local/bin/sp-maintenance
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
@@ -1360,8 +1456,9 @@ KillMode=process
 # sandboxing protects against threats the API already exposes while
 # blocking the deliberate sudo→sp-update path. The remaining controls
 # — User=sleepypod (no UID 0), narrow ambient caps, the sudoers
-# fragment scoping elevation to /usr/local/bin/sp-update — give the
-# defense-in-depth that actually matters for this device.
+# fragment scoping elevation to /usr/local/bin/sp-update and exact
+# systemctl reboot invocations — give the defense-in-depth that actually
+# matters for this device.
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 RuntimeDirectory=dac
 
@@ -1400,6 +1497,13 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
     chmod 0755 "$target"
   done
 fi
+
+# Housekeeping runs after boot, independently of API readiness.
+source "$INSTALL_DIR/scripts/lib/maintenance-helpers"
+install_maintenance_timer
+
+source "$INSTALL_DIR/scripts/lib/storage-helpers"
+install_storage_cleanup_sudoers
 
 # Reload systemd and enable service
 echo "Enabling service..."
@@ -1697,65 +1801,163 @@ fi
 fix_db_permissions
 
 # Optional SSH configuration
+#
+# The documented `curl … | sudo bash` install hands bash the script on stdin,
+# so stdin is never a terminal — the prompts read the controlling terminal
+# instead. Only a run with no terminal at all skips them, and --ssh-key covers
+# that case without prompting.
+SETUP_SSH=""
+SSH_KEY="$SSH_KEY_ARG"
 if [ "$SKIP_SSH" = true ]; then
   echo "Skipping SSH setup (--no-ssh)"
-elif [ ! -t 0 ]; then
-  echo "Skipping SSH setup (non-interactive)"
-else
+elif [ -n "$SSH_KEY" ]; then
+  SETUP_SSH=y
+elif { : </dev/tty; } 2>/dev/null; then
   echo ""
   echo "========================================"
   echo "  Optional SSH Configuration"
   echo "========================================"
   echo ""
-  read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH
+  read -rp "Configure SSH on port 8822? [y/N] " SETUP_SSH </dev/tty || true
+else
+  echo "Skipping SSH setup (no terminal to prompt on — re-run with --ssh-key \"<public key>\" to configure it)"
 fi
 
-if [ "${SKIP_SSH:-}" != true ] && [ -t 0 ] && [[ "${SETUP_SSH:-}" =~ ^[Yy]$ ]]; then
+if [[ "$SETUP_SSH" =~ ^[Yy]$ ]]; then
   echo "Configuring SSH..."
 
-  # Backup sshd_config
+  if [ ! -f "$INSTALL_DIR/scripts/lib/ssh-helpers" ]; then
+    # Without the helpers we can't tell where sshd reads authorized_keys
+    # from, and hardening on a guess locks the pod out for good. Leave sshd
+    # exactly as it is.
+    echo "Error: $INSTALL_DIR/scripts/lib/ssh-helpers not found — aborting install." >&2
+    echo "sshd was left unchanged. Re-run the installer once the source tree is complete." >&2
+    exit 1
+  fi
+  source "$INSTALL_DIR/scripts/lib/ssh-helpers"
+
+  # Keep the first-ever config as a historical artifact, but restore from a
+  # fresh per-run snapshot — .backup is frozen at the first run, so restoring
+  # it on a re-run reverts to the stock config (port 22, password auth on)
+  # rather than to the state this run started from.
   if [ ! -f /etc/ssh/sshd_config.backup ]; then
     cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
   fi
+  cp -f /etc/ssh/sshd_config /etc/ssh/sshd_config.pre-install
 
-  # Update SSH configuration
-  sed -i "s/#\?Port .*/Port 8822/" /etc/ssh/sshd_config
-  sed -i "s/#\?PermitRootLogin .*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
-  sed -i "s/#\?PasswordAuthentication .*/PasswordAuthentication no/" /etc/ssh/sshd_config
-  sed -i "s/#\?PermitEmptyPasswords .*/PermitEmptyPasswords no/" /etc/ssh/sshd_config
+  # Port is safe to set before we know whether a key will land — it doesn't
+  # change who can authenticate. The rest of the hardening waits until the
+  # key is verifiably in place.
+  set_sshd_directive Port 8822
 
-  echo ""
-  echo "Enter your SSH public key:"
-  read -r SSH_KEY
+  # Repair installs from before the authorized_keys path fix, where the key
+  # went to /root/.ssh and sshd (root home = /home/root) never read it.
+  migrate_stranded_authorized_keys root
 
+  if [ -z "$SSH_KEY" ]; then
+    echo ""
+    echo "Enter your SSH public key:"
+    read -r SSH_KEY </dev/tty || true
+  fi
+
+  SSH_KEY_INSTALLED=false
   if [ -n "$SSH_KEY" ]; then
-    # Validate key format
-    if echo "$SSH_KEY" | grep -qE '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp[0-9]+) [A-Za-z0-9+/=]+'; then
-      mkdir -p /root/.ssh
-      echo "$SSH_KEY" >> /root/.ssh/authorized_keys
-      chmod 700 /root/.ssh
-      chmod 600 /root/.ssh/authorized_keys
-      echo "SSH key added"
-    else
-      echo "Warning: Invalid SSH key format, skipping"
-    fi
+    # Parse the key with ssh-keygen rather than pattern-matching it. A key
+    # that merely looks well-formed but sshd can't load would leave us
+    # disabling password auth against an unusable credential.
+    KEY_STATUS=0
+    validate_public_key "$SSH_KEY" || KEY_STATUS=$?
+    case "$KEY_STATUS" in
+      0)
+        if AUTHORIZED_KEYS="$(install_authorized_key root "$SSH_KEY")"; then
+          echo "SSH key added to $AUTHORIZED_KEYS"
+          SSH_KEY_INSTALLED=true
+        fi
+        ;;
+      1)
+        echo "Warning: ssh-keygen could not parse that public key, skipping" >&2
+        ;;
+      *)
+        echo "Warning: ssh-keygen is unavailable — cannot verify the key, skipping" >&2
+        ;;
+    esac
+  fi
+
+  # Only disable password auth once root has a key sshd can actually read,
+  # and sshd's AllowUsers/DenyUsers rules let root log in at all. Hardening
+  # without both is an unrecoverable lockout — port 8822 is the pod's only
+  # remote entry point, and getting back in means opening the case for a
+  # serial console.
+  SSH_HARDEN=false
+  if [ "$SSH_KEY_INSTALLED" != true ]; then
+    echo "No SSH key installed — leaving password authentication as-is." >&2
+    echo "Re-run the installer with a valid public key to harden sshd." >&2
+  elif ensure_sshd_allows_user root; then
+    SSH_HARDEN=true
+  else
+    echo "sshd's user access rules would refuse root — leaving password authentication as-is." >&2
+  fi
+
+  if [ "$SSH_HARDEN" = true ]; then
+    set_sshd_directive PermitRootLogin prohibit-password
+    set_sshd_directive PasswordAuthentication no
+    set_sshd_directive PermitEmptyPasswords no
   fi
 
   # Validate SSH config before restarting
   if ! sshd -t; then
     echo "Error: sshd_config validation failed. Restoring backup..." >&2
-    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    cp /etc/ssh/sshd_config.pre-install /etc/ssh/sshd_config
     exit 1
   fi
 
-  # Restart SSH (try both service names for compatibility)
-  if systemctl restart sshd 2>/dev/null; then
-    echo "SSH configured on port 8822 (keys only)"
-  elif systemctl restart ssh 2>/dev/null; then
-    echo "SSH configured on port 8822 (keys only)"
+  # A directive can be syntactically valid and still not take effect — an
+  # Include, a later duplicate, or a Match block can override it. Confirm
+  # what sshd will actually do before we restart it into that config.
+  #
+  # The auth directives are checked in root's connection context: all three
+  # are Match-able, so a global reading would pass while `Match User root`
+  # re-enabled password auth for exactly the account being hardened. Port
+  # can't appear in a Match block, so it stays global.
+  SSH_EXPECTED="port=8822"
+  if [ "$SSH_HARDEN" = true ]; then
+    SSH_EXPECTED="$SSH_EXPECTED root:permitrootlogin=prohibit-password"
+    SSH_EXPECTED="$SSH_EXPECTED root:passwordauthentication=no root:permitemptypasswords=no"
+  fi
+  for expectation in $SSH_EXPECTED; do
+    case "$expectation" in
+      *:*) SSH_CONTEXT="${expectation%%:*}"; expectation="${expectation#*:}" ;;
+      *)   SSH_CONTEXT="" ;;
+    esac
+    directive="${expectation%%=*}"
+    want="${expectation#*=}"
+    got="$(sshd_effective_value "$directive" /etc/ssh/sshd_config "$SSH_CONTEXT")"
+    if [ "$got" != "$want" ]; then
+      echo "Error: sshd reports $directive=${got:-<unset>}, expected $want." >&2
+      echo "Restoring backup and leaving sshd untouched..." >&2
+      cp /etc/ssh/sshd_config.pre-install /etc/ssh/sshd_config
+      exit 1
+    fi
+  done
+
+  if [ "$SSH_HARDEN" = true ] && ! sshd_allows_user root; then
+    echo "Error: sshd's user access rules refuse root after the edit." >&2
+    echo "Restoring backup and leaving sshd untouched..." >&2
+    cp /etc/ssh/sshd_config.pre-install /etc/ssh/sshd_config
+    exit 1
+  fi
+
+  if [ "$SSH_HARDEN" = true ]; then
+    SSH_RESULT="SSH configured on port 8822 (keys only)"
+  else
+    SSH_RESULT="SSH configured on port 8822 (existing auth methods unchanged)"
+  fi
+
+  if restart_sshd; then
+    echo "$SSH_RESULT"
   else
     echo "Error: Failed to restart SSH service" >&2
-    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    cp /etc/ssh/sshd_config.pre-install /etc/ssh/sshd_config
     exit 1
   fi
 fi

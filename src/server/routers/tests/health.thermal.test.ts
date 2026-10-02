@@ -10,9 +10,10 @@
  * returns rows from a queue in that order.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type * as ThermalHistoryModule from '@/src/lib/thermalHistory'
 import { deviceSettings, deviceState } from '@/src/db/schema'
-import { bedTemp, flowReadings, freezerTemp } from '@/src/db/biometrics-schema'
+import { bedTemp, flowReadings, freezerTemp, primeEvents } from '@/src/db/biometrics-schema'
 
 const guardMock = vi.hoisted(() => ({ shouldBlock: vi.fn<(side: string) => boolean>(() => false) }))
 
@@ -24,7 +25,14 @@ const rows = vi.hoisted(() => ({
   flow: [] as unknown[],
   freezer: [] as unknown[],
   bed: [] as unknown[],
+  prime: [] as unknown[],
 }))
+
+const historyMock = vi.hoisted(() => ({ get: vi.fn() }))
+vi.mock('@/src/lib/thermalHistory', async (importOriginal) => {
+  const actual = await importOriginal<typeof ThermalHistoryModule>()
+  return { ...actual, getThermalHistory: historyMock.get }
+})
 
 const dbMock = vi.hoisted(() => {
   const makeChain = (resolve: () => unknown[]) => {
@@ -45,7 +53,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
   getSharedHardwareClient: vi.fn(),
   getDacMonitorIfRunning: vi.fn(),
 }))
-vi.mock('@/src/hardware/iptablesCheck', () => ({ checkIptables: vi.fn(() => ({ ok: true, rules: [] })) }))
+vi.mock('@/src/hardware/iptablesCheck', () => ({ checkIptablesCached: vi.fn(async () => ({ ok: true, rules: [] })) }))
 vi.mock('@/src/hardware/pumpStallGuard', () => ({ shouldBlock: guardMock.shouldBlock }))
 
 function resolveFor(table: unknown): unknown[] {
@@ -58,6 +66,7 @@ function resolveFor(table: unknown): unknown[] {
   if (table === flowReadings) return rows.flow
   if (table === freezerTemp) return rows.freezer
   if (table === bedTemp) return rows.bed
+  if (table === primeEvents) return rows.prime
   return []
 }
 
@@ -85,6 +94,11 @@ beforeEach(() => {
   rows.flow = []
   rows.freezer = []
   rows.bed = []
+  rows.prime = []
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('health.thermal verdicts', () => {
@@ -138,6 +152,19 @@ describe('health.thermal verdicts', () => {
     expect(left.note).toContain('TEC')
   })
 
+  it('unknown, not stalled, when powered on a pod that has never reported pump speed', async () => {
+    // Pod 3/4 firmware sends no frzHealth frames, so flow_readings stays empty.
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 75, currentTemperature: 75, isAlarmVibrating: false, poweredOnAt: new Date() }],
+      [{ side: 'right', isPowered: true, targetTemperature: 77, currentTemperature: 77, isAlarmVibrating: false, poweredOnAt: new Date() }],
+    ]
+    rows.flow = []
+    const res = await caller.thermal({})
+    expect(res.sides.map(s => s.verdict)).toEqual(['unknown', 'unknown'])
+    expect(res.sides[0].pumpRpm).toBeNull()
+    expect(res.sides[0].note).toContain('does not report pump speed')
+  })
+
   it('stalled when powered but the latest flow reading is stale (no fresh frames)', async () => {
     rows.deviceStateQueue = [
       [{ side: 'left', isPowered: true, targetTemperature: 81, currentTemperature: 72, isAlarmVibrating: false, poweredOnAt: new Date() }],
@@ -161,14 +188,95 @@ describe('health.thermal verdicts', () => {
     expect(res.sides[0].verdict).toBe('delivering')
   })
 
-  it('idle when powered and flowing but already at target', async () => {
+  it('holding when powered and flowing and already at target', async () => {
     rows.deviceStateQueue = [
       [{ side: 'left', isPowered: true, targetTemperature: 80, currentTemperature: 80.5, isAlarmVibrating: false, poweredOnAt: new Date() }],
       [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
     ]
     rows.flow = [{ timestamp: FRESH, leftPumpRpm: 1900, rightPumpRpm: 0, leftFlowrateCd: 2600, rightFlowrateCd: 0 }]
     const res = await caller.thermal({})
-    expect(res.sides[0].verdict).toBe('idle')
+    expect(res.sides[0].verdict).toBe('holding')
+  })
+
+  it('treats the exact freshness, rpm, and target-delta boundaries as flowing and on-target', async () => {
+    const now = new Date('2026-07-20T01:00:00Z').getTime()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 82, currentTemperature: 80, isAlarmVibrating: false, poweredOnAt: null }],
+      [{ side: 'right', isPowered: false, targetTemperature: null, currentTemperature: null, isAlarmVibrating: false, poweredOnAt: null }],
+    ]
+    rows.flow = [{
+      timestamp: new Date(now - 180_000),
+      leftPumpRpm: 100,
+      rightPumpRpm: 0,
+      leftFlowrateCd: 1,
+      rightFlowrateCd: 0,
+    }]
+
+    const left = (await caller.thermal({})).sides[0]
+    expect(left.readingAgeSec).toBe(180)
+    expect(left.pumpRpm).toBe(100)
+    expect(left.verdict).toBe('holding')
+  })
+
+  it('maps asymmetric flow, water, and bed fields to the correct side', async () => {
+    const poweredOnAt = new Date('2026-07-19T23:00:00Z')
+    rows.deviceStateQueue = [
+      [{ side: 'left', isPowered: true, targetTemperature: 80, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt }],
+      [{ side: 'right', isPowered: true, targetTemperature: 75, currentTemperature: 74, isAlarmVibrating: true, poweredOnAt }],
+    ]
+    rows.flow = [{
+      timestamp: FRESH,
+      leftPumpRpm: 111,
+      rightPumpRpm: 222,
+      leftFlowrateCd: 333,
+      rightFlowrateCd: 444,
+    }]
+    rows.freezer = [{
+      leftWaterTemp: 1000,
+      rightWaterTemp: 2000,
+      heatsinkTemp: null,
+      ambientTemp: null,
+    }]
+    rows.bed = [{ leftCenterTemp: 1500, rightCenterTemp: 2500 }]
+
+    const result = await caller.thermal({})
+    expect(result.sides).toEqual([
+      expect.objectContaining({
+        side: 'left',
+        pumpRpm: 111,
+        flowrate: 333,
+        waterTempF: 50,
+        bedSurfaceTempF: 59,
+        isAlarmVibrating: false,
+        poweredOnAt: poweredOnAt.toISOString(),
+      }),
+      expect.objectContaining({
+        side: 'right',
+        pumpRpm: 222,
+        flowrate: 444,
+        waterTempF: 68,
+        bedSurfaceTempF: 77,
+        isAlarmVibrating: true,
+        poweredOnAt: poweredOnAt.toISOString(),
+      }),
+    ])
+  })
+
+  it('defaults absent settings and device-state flags to false', async () => {
+    rows.settings = []
+    rows.deviceStateQueue = [[], []]
+    const result = await caller.thermal({})
+    expect(result.pumpStallProtectionEnabled).toBe(false)
+    expect(result.sides.map(side => ({
+      isPowered: side.isPowered,
+      isAlarmVibrating: side.isAlarmVibrating,
+      poweredOnAt: side.poweredOnAt,
+      verdict: side.verdict,
+    }))).toEqual([
+      { isPowered: false, isAlarmVibrating: false, poweredOnAt: null, verdict: 'off' },
+      { isPowered: false, isAlarmVibrating: false, poweredOnAt: null, verdict: 'off' },
+    ])
   })
 
   it('converts centi-°C water/bed/ambient sensors to °F and surfaces guard + settings flags', async () => {
@@ -192,5 +300,58 @@ describe('health.thermal verdicts', () => {
     expect(left.bedSurfaceTempF).toBeCloseTo(75.2, 1) // 24.00°C
     expect(left.guardBlocked).toBe(true)
     expect(left.isAlarmVibrating).toBe(true)
+  })
+})
+
+describe('health.maintenance', () => {
+  it('reports the guard, daily prime and last recorded prime', async () => {
+    rows.settings = [{ pumpStall: false, primePodDaily: true, primePodTime: '14:00' }]
+    rows.prime = [{ ts: new Date(5_000) }]
+    expect(await caller.maintenance({})).toEqual({
+      pumpStallProtectionEnabled: false,
+      primePodDaily: true,
+      primePodTime: '14:00',
+      lastPrimeAt: 5_000,
+      firstPrimeRecordedAt: 5_000,
+    })
+  })
+
+  it('falls back when nothing is stored', async () => {
+    rows.settings = []
+    expect(await caller.maintenance({})).toEqual({
+      pumpStallProtectionEnabled: false,
+      primePodDaily: false,
+      primePodTime: null,
+      lastPrimeAt: null,
+      firstPrimeRecordedAt: null,
+    })
+  })
+})
+
+describe('health.thermalHistory', () => {
+  const empty = {
+    range: '12h', from: 0, to: 1, bucketSec: 120, points: [], powerOn: [],
+    available: { bedTarget: false, water: false, surface: false, pump: false, hub: false }, bedTargetSince: null,
+  }
+
+  it('defaults to 12 h and passes the current power-on times through', async () => {
+    historyMock.get.mockReset().mockReturnValue(empty)
+    rows.deviceStateQueue = [[
+      { side: 'left', isPowered: true, poweredOnAt: new Date(9_000) },
+      { side: 'right', isPowered: false, poweredOnAt: new Date(8_000) },
+    ]]
+    expect(await caller.thermalHistory({})).toEqual(empty)
+    const [, range, , poweredOnAt] = historyMock.get.mock.calls[0]
+    expect(range).toBe('12h')
+    expect(poweredOnAt).toEqual({ left: 9_000, right: null })
+  })
+
+  it('rejects unknown ranges and wraps read failures', async () => {
+    await expect(caller.thermalHistory({ range: '2d' as never })).rejects.toThrow()
+    historyMock.get.mockReset().mockImplementation(() => {
+      throw new Error('disk I/O error')
+    })
+    rows.deviceStateQueue = [[]]
+    await expect(caller.thermalHistory({ range: '7d' })).rejects.toThrow('Failed to read thermal history: disk I/O error')
   })
 })

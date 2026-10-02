@@ -1,19 +1,9 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-} from 'recharts'
-import { Droplets } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
+import { Card, InlineError, LineChart, SectionLabel, SegmentedControl, SelectValue, Skeleton } from '@/src/components/ds'
 
 interface FlowChartDataPoint {
   time: number
@@ -23,26 +13,23 @@ interface FlowChartDataPoint {
   rightRpm: number | null
 }
 
-function formatTime(timestamp: string | Date | number): string {
-  const d = new Date(timestamp)
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-}
-
-function formatTooltipTime(timestamp: number): string {
-  const d = new Date(timestamp)
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })
-}
-
 type ViewMode = 'flowrate' | 'rpm'
 
+const HOUR_OPTIONS = [
+  { value: 1, label: '1h' },
+  { value: 6, label: '6h' },
+  { value: 24, label: '24h' },
+  { value: 72, label: '3d' },
+  { value: 168, label: '7d' },
+] as const
+
 /**
- * Flowrate and pump RPM chart.
- * Queries historical flow readings from the biometrics DB and displays
- * left/right flowrate (centidegrees) or pump RPM over time.
- * Also shows live data from the frzHealth WebSocket frame.
+ * Flow rate / pump RPM card.
+ * Live left/right values from the frzHealth WebSocket frame, plus the
+ * historical flow readings from the biometrics DB as a compact trend.
  */
 export function FlowrateChart() {
-  const [hours, setHours] = useState(6)
+  const [hours, setHours] = useState<number>(6)
   const [viewMode, setViewMode] = useState<ViewMode>('flowrate')
 
   const frzHealth = useSensorFrame('frzHealth')
@@ -68,8 +55,7 @@ export function FlowrateChart() {
 
     // Data is already in chronological order from the API.
     // leftFlowrateCd/rightFlowrateCd are stored as raw×100 to keep the table
-    // integer-typed; divide back to degrees so the chart and the live readout
-    // share a unit.
+    // integer-typed; divide back so the chart and the live readout share a unit.
     const points: FlowChartDataPoint[] = raw.map(d => ({
       time: new Date(d.timestamp).getTime(),
       leftFlow: d.leftFlowrateCd != null ? d.leftFlowrateCd / 100 : null,
@@ -88,167 +74,65 @@ export function FlowrateChart() {
 
   const leftKey = viewMode === 'flowrate' ? 'leftFlow' as const : 'leftRpm' as const
   const rightKey = viewMode === 'flowrate' ? 'rightFlow' as const : 'rightRpm' as const
-  const unitLabel = viewMode === 'flowrate' ? '' : 'RPM'
 
-  // Compute Y-axis domain
-  const allValues = chartData.flatMap(d => [d[leftKey], d[rightKey]].filter((v): v is number => v !== null))
-  const minVal = allValues.length > 0 ? Math.floor(Math.min(...allValues)) - 1 : 0
-  const maxVal = allValues.length > 0 ? Math.ceil(Math.max(...allValues)) + 1 : 100
-  const domain: [number, number] = [Math.max(0, minVal), maxVal]
+  const live = frzHealth
+    ? viewMode === 'flowrate'
+      ? {
+          left: frzHealth.left.flowrate !== null ? frzHealth.left.flowrate.toFixed(2) : '--',
+          right: frzHealth.right.flowrate !== null ? frzHealth.right.flowrate.toFixed(2) : '--',
+        }
+      : { left: frzHealth.left.pumpRpm.toLocaleString(), right: frzHealth.right.pumpRpm.toLocaleString() }
+    : { left: '--', right: '--' }
+  const unitLabel = viewMode === 'flowrate' ? 'flow' : 'rpm'
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <Droplets size={10} className="text-blue-400" />
-          <h3 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-            {viewMode === 'flowrate' ? 'Flow Rate' : 'Pump RPM'}
-          </h3>
+    <Card className="gap-2.5 px-4 py-3.5">
+      <SectionLabel
+        right={(
+          <span className="flex items-center gap-1.5">
+            <SegmentedControl
+              size="sm"
+              ariaLabel="Flow view"
+              options={[{ value: 'flowrate', label: 'Flow' }, { value: 'rpm', label: 'RPM' }]}
+              value={viewMode}
+              onChange={setViewMode}
+              className="rounded-thumb p-0.5 font-mono [&>button]:rounded-[4px] [&>button]:px-2 [&>button]:py-0.5"
+            />
+            <SelectValue label="Flow history range" value={hours} options={HOUR_OPTIONS} onChange={setHours} className="[&_select]:py-1 [&_select]:text-xs" />
+          </span>
+        )}
+      >
+        {viewMode === 'flowrate' ? 'Flow rate' : 'Pump rpm'}
+      </SectionLabel>
+
+      <div className="grid grid-cols-2 gap-2.5">
+        <div>
+          <div className="font-mono text-lg font-light">{live.left}</div>
+          <div className="text-[11px] text-fg-2">{`Left · ${unitLabel}`}</div>
         </div>
-
-        <div className="flex items-center gap-1.5">
-          {/* View mode toggle */}
-          <div className="flex rounded-md bg-zinc-800">
-            <button
-              onClick={() => setViewMode('flowrate')}
-              className={`rounded-md px-2 py-0.5 text-[9px] font-medium transition-colors ${
-                viewMode === 'flowrate' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              Flow
-            </button>
-            <button
-              onClick={() => setViewMode('rpm')}
-              className={`rounded-md px-2 py-0.5 text-[9px] font-medium transition-colors ${
-                viewMode === 'rpm' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              RPM
-            </button>
-          </div>
-
-          {/* Time range selector */}
-          <select
-            value={hours}
-            onChange={e => setHours(Number(e.target.value))}
-            className="rounded-md bg-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400 outline-none"
-          >
-            <option value={1}>1h</option>
-            <option value={6}>6h</option>
-            <option value={24}>24h</option>
-            <option value={72}>3d</option>
-            <option value={168}>7d</option>
-          </select>
+        <div>
+          <div className="font-mono text-lg font-light">{live.right}</div>
+          <div className="text-[11px] text-fg-2">{`Right · ${unitLabel}`}</div>
         </div>
       </div>
 
-      {/* Live values from WebSocket */}
-      {frzHealth && (
-        <div className="grid grid-cols-[auto_1fr_1fr] gap-x-2 gap-y-1 items-center">
-          <div />
-          <div className="text-center text-[9px] font-semibold text-sky-400">Left</div>
-          <div className="text-center text-[9px] font-semibold text-teal-400">Right</div>
-
-          <div className="flex items-center gap-1 text-blue-400">
-            <Droplets size={10} />
-            <span className="text-[9px] font-medium">{viewMode === 'flowrate' ? 'Flow' : 'RPM'}</span>
-          </div>
-          <div className="rounded-md bg-zinc-800/50 px-2 py-1 text-center text-[11px] font-medium tabular-nums text-zinc-200">
-            {viewMode === 'flowrate'
-              ? (frzHealth.left.flowrate !== null ? frzHealth.left.flowrate.toFixed(1) : '--')
-              : frzHealth.left.pumpRpm}
-          </div>
-          <div className="rounded-md bg-zinc-800/50 px-2 py-1 text-center text-[11px] font-medium tabular-nums text-zinc-200">
-            {viewMode === 'flowrate'
-              ? (frzHealth.right.flowrate !== null ? frzHealth.right.flowrate.toFixed(1) : '--')
-              : frzHealth.right.pumpRpm}
-          </div>
-        </div>
-      )}
-
-      {/* Historical chart */}
       {flowQuery.isLoading
-        ? (
-            <div className="flex h-[180px] items-center justify-center">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
-            </div>
-          )
+        ? <Skeleton className="h-14" />
         : flowQuery.isError
-          ? (
-              <div className="flex h-[180px] items-center justify-center text-sm text-red-400">
-                Failed to load flow data
-              </div>
-            )
-          : chartData.length === 0
-            ? (
-                <div className="flex h-[180px] items-center justify-center text-sm text-zinc-500">
-                  No flow data available
-                </div>
-              )
+          ? <InlineError>Failed to load flow data</InlineError>
+          : chartData.length < 2
+            ? <p className="text-xs text-fg-3">No flow history</p>
             : (
-                <div className="h-[180px] w-full">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                    <LineChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#333" strokeOpacity={0.5} />
-                      <XAxis
-                        dataKey="time"
-                        type="number"
-                        domain={['dataMin', 'dataMax']}
-                        tickFormatter={(v: number) => formatTime(v)}
-                        tick={{ fill: '#71717a', fontSize: 10 }}
-                        stroke="#333"
-                        tickCount={4}
-                      />
-                      <YAxis
-                        domain={domain}
-                        tick={{ fill: '#71717a', fontSize: 10 }}
-                        stroke="#333"
-                        tickFormatter={(v: number) => `${Math.round(v)}`}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#1a1a1a',
-                          border: '1px solid #333',
-                          borderRadius: 8,
-                          fontSize: 12,
-                          color: '#fff',
-                        }}
-                        labelFormatter={v => formatTooltipTime(v as number)}
-                        formatter={(value, name) => [
-                          `${Number(value).toFixed(1)} ${unitLabel}`,
-                          String(name),
-                        ]}
-                      />
-                      <Legend
-                        iconType="circle"
-                        iconSize={6}
-                        wrapperStyle={{ fontSize: 10, color: '#a1a1aa' }}
-                        align="center"
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey={leftKey}
-                        name="Left"
-                        stroke="#5cb8e0"
-                        strokeWidth={2}
-                        dot={false}
-                        activeDot={{ r: 3, fill: '#5cb8e0' }}
-                        connectNulls
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey={rightKey}
-                        name="Right"
-                        stroke="#40e0d0"
-                        strokeWidth={2}
-                        dot={false}
-                        activeDot={{ r: 3, fill: '#40e0d0' }}
-                        connectNulls
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                <LineChart
+                  height={56}
+                  series={[
+                    { data: chartData.map(d => d[leftKey] ?? Number.NaN), color: 'var(--accent-cool)', width: 1.5 },
+                    { data: chartData.map(d => d[rightKey] ?? Number.NaN), color: 'var(--accent-warm)', width: 1.5 },
+                  ]}
+                  xLabel={i => new Date(chartData[i].time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  format={v => (viewMode === 'flowrate' ? v.toFixed(2) : Math.round(v).toLocaleString())}
+                />
               )}
-    </div>
+    </Card>
   )
 }

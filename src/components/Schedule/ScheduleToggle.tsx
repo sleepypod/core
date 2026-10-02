@@ -1,6 +1,6 @@
 'use client'
 
-import { cn } from '@/lib/utils'
+import { Toggle } from '@/src/components/ds'
 
 interface ScheduleToggleProps {
   /** Whether the schedule is currently enabled */
@@ -11,53 +11,34 @@ interface ScheduleToggleProps {
   isLoading?: boolean
 }
 
+/**
+ * Header switch that pauses/resumes the whole schedule. Labelled "Schedule"
+ * on desktop and On/Off on phones.
+ */
 export function ScheduleToggle({
   enabled,
   onToggle,
   isLoading = false,
 }: ScheduleToggleProps) {
   return (
-    <div className="rounded-xl bg-zinc-900 px-4 py-3">
-      <div className="flex items-center justify-between">
-        <div className="flex flex-col gap-0.5">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-white">Schedule</span>
-            <span className={cn(
-              'inline-block h-2 w-2 rounded-full',
-              enabled ? 'bg-emerald-400' : 'bg-zinc-600',
-            )}
-            />
-          </div>
-          <span className="text-xs text-zinc-400">
-            Automatically control power and temperature
-          </span>
-        </div>
-
-        <button
-          role="switch"
-          aria-checked={enabled}
-          aria-label="Toggle schedule"
-          disabled={isLoading}
-          onClick={onToggle}
-          className={cn(
-            'flex min-h-[44px] min-w-[48px] items-center justify-center',
-            isLoading && 'opacity-50'
-          )}
-        >
-          <span className={cn(
-            'relative h-7 w-12 rounded-full transition-colors duration-200',
-            enabled ? 'bg-sky-500' : 'bg-zinc-700',
-          )}
-          >
-            <span
-              className={cn(
-                'absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white transition-transform duration-200',
-                enabled && 'translate-x-5'
-              )}
-            />
-          </span>
-        </button>
-      </div>
+    <div className="flex items-center gap-2 text-[13px] text-fg-2 min-[900px]:gap-2.5">
+      <span className="hidden min-[900px]:inline">Schedule</span>
+      <span className="min-[900px]:hidden">{enabled ? 'On' : 'Off'}</span>
+      <Toggle
+        on={enabled}
+        onChange={onToggle}
+        disabled={isLoading}
+        label="Toggle schedule"
+        className="max-[899px]:hidden"
+      />
+      <Toggle
+        on={enabled}
+        onChange={onToggle}
+        disabled={isLoading}
+        size="md"
+        label="Toggle schedule"
+        className="min-[900px]:hidden"
+      />
     </div>
   )
 }

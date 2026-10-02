@@ -1,234 +1,96 @@
 'use client'
 
-import { useState } from 'react'
-import clsx from 'clsx'
-import { Wifi, Lock, Globe, Droplet, Eye, EyeOff } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Card, KeyValue } from '@/src/components/ds'
 import { POD_CAPS } from '@/src/hardware/pods'
 import type { PodVersion } from '@/src/hardware/types'
 
-interface HealthCircleProps {
-  healthy: number
-  total: number
-  podVersion?: string | null
-  sensorLabel?: string | null
-  branch?: string
-  commitHash?: string
-  internetBlocked?: boolean
-  wifiSsid?: string
-  wifiSignal?: number
-  podIP?: string
-  waterLevel?: string
-  isPriming?: boolean
-  onWaterClick?: () => void
-}
-
-function podModelName(version: string): string {
+export function podModelName(version: string | null | undefined): string | undefined {
+  if (!version) return undefined
   const caps = POD_CAPS[version as PodVersion]
   return caps?.modelName ?? version
 }
 
-export function HealthCircle({
-  healthy,
-  total,
-  podVersion,
-  sensorLabel,
-  branch,
-  commitHash,
-  internetBlocked,
-  wifiSsid,
-  wifiSignal,
-  podIP,
-  waterLevel,
-  isPriming,
-  onWaterClick,
-}: HealthCircleProps) {
-  const [showHardwareInfo, setShowHardwareInfo] = useState(false)
+/** "N/N healthy" ring: full green when everything passes, amber arc otherwise. */
+export function HealthRing({ healthy, total, size = 84, caption = true }: {
+  healthy: number
+  total: number
+  size?: number
+  caption?: boolean
+}) {
   const progress = total > 0 ? healthy / total : 0
-  const allHealthy = healthy === total && total > 0
-  const circumference = 2 * Math.PI * 18
-
+  const allHealthy = total > 0 && healthy === total
+  const r = 42
+  const c = 2 * Math.PI * r
+  const stroke = size < 60 ? 7 : 5
+  const label = `${healthy}/${total}`
+  // Shrink the count to fit inside the stroke: mono glyphs are ~0.6em wide, 85% of the inner diameter.
+  const inner = (2 * (r - stroke / 2) * size) / 96
+  const fontSize = Math.min(size < 60 ? 12 : 16, (inner * 0.85) / (label.length * 0.6))
   return (
-    <div className="rounded-2xl bg-zinc-900/80 p-3 sm:p-4">
-      {/* Row 1: Health ring + sleepypod + pod model */}
-      <div className="flex items-center gap-3">
-        <div className="relative h-11 w-11 shrink-0">
-          <svg viewBox="0 0 40 40" className="h-full w-full -rotate-90">
-            <circle cx="20" cy="20" r="18" fill="none" stroke="#222" strokeWidth="3.5" />
-            <circle
-              cx="20"
-              cy="20"
-              r="18"
-              fill="none"
-              stroke={allHealthy ? '#34d399' : '#f59e0b'}
-              strokeWidth="3.5"
-              strokeLinecap="round"
-              strokeDasharray={circumference}
-              strokeDashoffset={circumference * (1 - progress)}
-              className="transition-all duration-500"
-            />
-          </svg>
-          <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-white">
-            {healthy}
-          </span>
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-white">sleepypod</span>
-            {podVersion && (
-              <span className="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400">
-                {podModelName(podVersion)}
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-zinc-400">
-            {healthy}
-            {' '}
-            of
-            {total}
-            {' '}
-            services healthy
-          </p>
-        </div>
+    <div className="relative shrink-0" style={{ width: size, height: size }} role="img" aria-label={`${healthy} of ${total} checks healthy`}>
+      <svg width={size} height={size} viewBox="0 0 96 96" className="-rotate-90">
+        <circle cx="48" cy="48" r={r} fill="none" stroke="var(--border-1)" strokeWidth={stroke} />
+        <circle
+          cx="48"
+          cy="48"
+          r={r}
+          fill="none"
+          stroke={allHealthy ? 'var(--status-ok)' : 'var(--status-warn)'}
+          strokeWidth={stroke}
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - progress)}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="font-mono font-light leading-none tabular-nums" style={{ fontSize }}>
+          {label}
+        </span>
+        {caption && size >= 60 && <span className="text-[10px] text-fg-2">healthy</span>}
       </div>
+    </div>
+  )
+}
 
-      {/* Row 2: Connection — IP + wifi + internet */}
-      {(podIP || wifiSignal !== undefined || internetBlocked !== undefined) && (
-        <>
-          <div className="my-2.5 border-t border-zinc-800" />
-          <div className="flex items-center gap-2 text-xs">
-            {podIP && (
-              <span className="flex items-center gap-1 text-zinc-400">
-                <span className="text-emerald-400">&#x2713;</span>
-                <span className="font-mono text-[11px]">{podIP}</span>
-              </span>
-            )}
-            <span className="flex-1" />
-            {wifiSignal !== undefined && (
-              <span className={clsx(
-                'flex items-center gap-1',
-                wifiSignal > 60 ? 'text-zinc-400' : wifiSignal > 30 ? 'text-amber-400' : 'text-red-400',
-              )}
-              >
-                <Wifi size={10} />
-                <span className="text-[10px]">
-                  {wifiSsid ?? 'WiFi'}
-                  {' '}
-                  {wifiSignal}
-                  %
-                </span>
-              </span>
-            )}
-            {internetBlocked !== undefined && (
-              <>
-                <span className="text-zinc-700">&middot;</span>
-                {internetBlocked
-                  ? (
-                      <span className="flex items-center gap-1 text-[10px] text-emerald-400">
-                        <Lock size={10} />
-                        {' '}
-                        Local only
-                      </span>
-                    )
-                  : (
-                      <span className="flex items-center gap-1 text-[10px] text-amber-400">
-                        <Globe size={10} />
-                        {' '}
-                        Internet
-                      </span>
-                    )}
-              </>
-            )}
-          </div>
-        </>
-      )}
+export interface HealthItem {
+  label: string
+  value: ReactNode
+  onClick?: () => void
+}
 
-      {/* Row 3: Water + Calibration + branch/version */}
-      <>
-        <div className="my-2.5 border-t border-zinc-800" />
-        <div className="flex items-center gap-2">
-          {/* Water status — tappable */}
-          {isPriming
+/**
+ * Status health card: ring of passing checks next to a grid of pod facts
+ * (Pod, Build, Wi-Fi, Address, Water, Internet, Disk, Uptime).
+ */
+export function HealthCircle({ healthy, total, items }: {
+  healthy: number
+  total: number
+  items: HealthItem[]
+}) {
+  return (
+    <Card className="flex-row items-center gap-4 px-4 py-3.5 @min-[800px]:gap-[22px] @min-[800px]:px-5 @min-[800px]:py-[18px]">
+      <div className="@min-[800px]:hidden">
+        <HealthRing healthy={healthy} total={total} size={64} />
+      </div>
+      <div className="hidden @min-[800px]:block">
+        <HealthRing healthy={healthy} total={total} />
+      </div>
+      <div className="grid min-w-0 flex-1 grid-cols-2 gap-x-6 gap-y-3.5 @min-[800px]:grid-cols-4">
+        {items.map(it => (
+          it.onClick
             ? (
-                <button onClick={onWaterClick} className="flex items-center gap-1 text-[10px] text-sky-400 active:opacity-70">
-                  <Droplet size={10} />
-                  {' '}
-                  Priming...
+                <button
+                  key={it.label}
+                  type="button"
+                  onClick={it.onClick}
+                  className="min-w-0 cursor-pointer rounded-thumb border-0 bg-transparent p-0 text-left text-fg hover:bg-active"
+                >
+                  <KeyValue label={it.label} value={it.value} size={13} />
                 </button>
               )
-            : waterLevel
-              ? (
-                  <button
-                    onClick={onWaterClick}
-                    className={clsx(
-                      'flex items-center gap-1 text-[10px] active:opacity-70',
-                      waterLevel === 'low' ? 'text-amber-400' : 'text-emerald-400',
-                    )}
-                  >
-                    <Droplet size={10} />
-                    {' '}
-                    Water
-                    {' '}
-                    {waterLevel === 'ok' ? 'OK' : 'Low'}
-                  </button>
-                )
-              : (
-                  <button onClick={onWaterClick} className="flex items-center gap-1 text-[10px] text-zinc-500 active:opacity-70">
-                    <Droplet size={10} />
-                    {' '}
-                    Water
-                  </button>
-                )}
-
-          <span className="flex-1" />
-
-          {/* Branch chip */}
-          {branch && (
-            <span className="rounded-full bg-zinc-800 px-2 py-1 text-[10px] font-medium text-zinc-400">
-              &#x2387;
-              {' '}
-              {branch}
-              {commitHash && (
-                <span className="ml-1 text-zinc-500">{commitHash.slice(0, 7)}</span>
-              )}
-            </span>
-          )}
-        </div>
-      </>
-
-      {/* Row 4: Hardware info — hidden by default */}
-      {podVersion && (
-        <>
-          <div className="my-2.5 border-t border-zinc-800" />
-          <div className="space-y-1.5">
-            <button
-              onClick={() => setShowHardwareInfo(v => !v)}
-              className="flex items-center gap-1.5 text-[10px] text-zinc-500 active:opacity-70"
-            >
-              {showHardwareInfo ? <EyeOff size={10} /> : <Eye size={10} />}
-              Hardware Info
-            </button>
-            {showHardwareInfo && (
-              <div className="space-y-1 rounded-lg bg-zinc-800/50 px-2.5 py-2 text-[10px]">
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Pod Version</span>
-                  <span className="font-mono text-zinc-300">{podVersion}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Model</span>
-                  <span className="text-zinc-300">{podModelName(podVersion)}</span>
-                </div>
-                {sensorLabel && (
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">Serial</span>
-                    <span className="font-mono text-zinc-300">{sensorLabel}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
+            : <KeyValue key={it.label} label={it.label} value={it.value} size={13} />
+        ))}
+      </div>
+    </Card>
   )
 }

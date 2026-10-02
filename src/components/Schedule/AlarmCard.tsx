@@ -1,11 +1,14 @@
 'use client'
 
-import { Bell, Pencil, Play, Trash2 } from 'lucide-react'
-import clsx from 'clsx'
-import type { DayOfWeek } from './DaySelector'
-import { formatTime12h } from './TimeInput'
+import type { MouseEvent } from 'react'
+import { Bell, Pencil, Play } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Card, GhostIcon } from '@/src/components/ds'
+import type { DayOfWeek } from '@/src/lib/scheduleTime'
+import { formatTime12h } from '@/src/lib/scheduleTime'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatSetpointF } from '@/src/lib/tempUtils'
+import { formatDayRange } from './scheduleFormat'
 
 export interface AlarmGroup {
   /** All underlying alarm_schedules row ids in this group */
@@ -22,101 +25,71 @@ export interface AlarmGroup {
 interface AlarmCardProps {
   group: AlarmGroup
   onEdit: () => void
-  onDelete: () => void
   onTest: () => void
   isTesting?: boolean
 }
 
-const DAY_SHORT: Record<DayOfWeek, string> = {
-  sunday: 'Sun', monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed',
-  thursday: 'Thu', friday: 'Fri', saturday: 'Sat',
-}
-
-const DAY_ORDER: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-const WEEKDAYS: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
-const WEEKENDS: DayOfWeek[] = ['saturday', 'sunday']
-
-function formatDayRange(days: DayOfWeek[]): string {
-  if (days.length === 0) return ''
-  if (days.length === 7) return 'Every day'
-  const set = new Set(days)
-  if (WEEKDAYS.every(d => set.has(d)) && set.size === 5) return 'Weekdays'
-  if (WEEKENDS.every(d => set.has(d)) && set.size === 2) return 'Weekends'
-
-  const ordered = DAY_ORDER.filter(d => set.has(d))
-  const indices = ordered.map(d => DAY_ORDER.indexOf(d))
-  const isContiguous = indices.every((idx, i) => i === 0 || idx === indices[i - 1] + 1)
-  if (isContiguous && ordered.length > 2) {
-    return `${DAY_SHORT[ordered[0]]}–${DAY_SHORT[ordered[ordered.length - 1]]}`
+function stop(fn: () => void) {
+  return (e: MouseEvent) => {
+    e.stopPropagation()
+    fn()
   }
-  return ordered.map(d => DAY_SHORT[d]).join(', ')
 }
 
-export function AlarmCard({ group, onEdit, onDelete, onTest, isTesting = false }: AlarmCardProps) {
+/** Amber bell, mono wake time, repeat days and `10s buzz · rise · 84°`. Paused alarms are dashed. */
+export function AlarmCard({ group, onEdit, onTest, isTesting = false }: AlarmCardProps) {
   const { unit } = useTemperatureUnit()
-  const label = formatDayRange(group.days)
+  const label = formatDayRange(group.days, { named: true })
+  const paused = !group.enabled
 
   return (
-    <div
-      className={clsx(
-        'rounded-2xl border p-3 sm:p-4',
-        group.enabled
-          ? 'border-zinc-800 bg-zinc-900'
-          : 'border-dashed border-amber-500/30 bg-zinc-900/50',
-      )}
+    <Card
+      flat
+      dashed={paused}
+      tone={paused ? 'warn' : undefined}
+      onClick={onEdit}
+      className="flex-row items-center gap-3 px-4 py-3.5 min-[900px]:items-start"
     >
-      <div className="flex items-start gap-3">
-        <Bell size={18} className="mt-1 shrink-0 text-amber-400" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-semibold text-white">
-              {formatTime12h(group.time)}
-            </span>
-            {!group.enabled && (
-              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-medium uppercase text-amber-500">
-                Paused
-              </span>
-            )}
-          </div>
-          <p className="mt-0.5 text-[11px] text-zinc-400">{label}</p>
-
-          <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
-            <span>
-              {group.duration}
-              s buzz
-            </span>
-            <span>·</span>
-            <span>
-              {formatSetpointF(group.alarmTemperature, unit)}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            onClick={onTest}
-            disabled={isTesting}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-amber-400 transition-colors active:bg-zinc-800 disabled:opacity-50"
-            aria-label={`Test ${label} alarm`}
-          >
-            <Play size={14} />
-          </button>
-          <button
-            onClick={onEdit}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors active:bg-zinc-800 active:text-sky-400"
-            aria-label={`Edit ${label} alarm`}
-          >
-            <Pencil size={14} />
-          </button>
-          <button
-            onClick={onDelete}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-600 transition-colors active:bg-zinc-800 active:text-red-400"
-            aria-label={`Delete ${label} alarm`}
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
+      <Bell size={16} className={cn('shrink-0 min-[900px]:mt-[3px]', paused ? 'text-fg-3' : 'text-warn')} />
+      <div className="flex min-w-0 flex-1 flex-col min-[900px]:gap-0.5">
+        <span className={cn('font-mono text-[17px] min-[900px]:text-lg', paused && 'text-fg-2')}>
+          {formatTime12h(group.time)}
+        </span>
+        <span className="text-xs text-fg-2">
+          {label}
+          {paused && (
+            <>
+              {' · '}
+              <span className="text-warn">paused</span>
+            </>
+          )}
+          <span className="min-[900px]:hidden">
+            {' · '}
+            {group.duration}
+            s buzz
+          </span>
+        </span>
+        <span className="mt-1 hidden font-mono text-[11px] text-fg-3 min-[900px]:block">
+          {`${group.duration}s buzz · ${group.vibrationPattern} · ${formatSetpointF(group.alarmTemperature, unit, { includeUnit: false })}`}
+        </span>
       </div>
-    </div>
+      <div className="-my-1.5 -mr-2 flex shrink-0 flex-col">
+        <GhostIcon
+          icon={Play}
+          size={14}
+          label={`Test ${label} alarm`}
+          disabled={isTesting}
+          className={paused ? undefined : 'text-warn hover:text-warn'}
+          onClick={stop(onTest)}
+        />
+        <GhostIcon
+          icon={Pencil}
+          size={14}
+          label={`Edit ${label} alarm`}
+          className="hidden min-[900px]:flex"
+          onClick={stop(onEdit)}
+        />
+      </div>
+    </Card>
   )
 }

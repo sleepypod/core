@@ -37,12 +37,15 @@ import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from collections import deque
-from typing import Optional
+from dataclasses import dataclass
+from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cbor2
-from common.raw_follower import RawFileFollower
+from common.nats_follower import create_follower
+from common.dialect import KNOWN_RECORD_TYPES, warn_unknown_type_once
+from common.side_mode import SingleSleeperMode
 import numpy as np
 from scipy.signal import butter, sosfiltfilt, hilbert, find_peaks
 
@@ -201,6 +204,98 @@ def write_vitals(holder: "DBHolder", side: str, ts: datetime,
         return False
 
 
+@dataclass
+class VitalsCandidate:
+    """One side's computed vitals for one VITALS_INTERVAL_S cycle."""
+    side: str
+    ts: datetime
+    heart_rate: Optional[float]
+    hrv: Optional[float]
+    breathing_rate: Optional[float]
+    quality_score: float
+    flags: Optional[list]
+    hr_raw: Optional[float]
+
+    def write(self, holder: "DBHolder", side: Optional[str] = None) -> bool:
+        return write_vitals(holder, side or self.side, self.ts, self.heart_rate,
+                            self.hrv, self.breathing_rate,
+                            quality_score=self.quality_score, flags=self.flags,
+                            hr_raw=self.hr_raw)
+
+
+class SingleSleeperVitals:
+    """Routes vitals rows when one side is in away mode (single sleeper).
+
+    A solo sleeper who rolls onto the away side is picked up by that side's
+    piezo too — the same heartbeat, within a few bpm. Each cycle's
+    candidates from the two sides are paired and
+    only the higher-quality one is written, under the home side, so the
+    home session shows one heart-rate series with no gaps or duplicates.
+    A candidate whose partner doesn't arrive within VITALS_INTERVAL_S (the
+    other side saw no one) is written alone under the home side.
+
+    Outside single-sleeper mode rows are written under their own side.
+    """
+
+    def __init__(self, holder: "DBHolder", mode: SingleSleeperMode,
+                 clock: Callable[[], float] = time.monotonic):
+        self._holder = holder
+        self._mode = mode
+        self._clock = clock
+        self._pending: Optional[VitalsCandidate] = None
+        self._retry: Optional[VitalsCandidate] = None
+        self._retry_home: Optional[str] = None
+        self._pending_home: Optional[str] = None
+        self._pending_at = 0.0
+
+    def submit(self, cand: VitalsCandidate) -> bool:
+        """Accept one side's candidate. True means the side may advance its
+        write cursor: the row was written, or is held (for pairing or a
+        write retry). A held candidate is only dropped once written."""
+        # Completed intervals must never pair with a later candidate.
+        if self._retry is not None and not self.flush():
+            return False
+        home = self._mode.home_side()
+        if home is None:
+            if not self.flush():
+                return False
+            return cand.write(self._holder)
+        pending = self._pending
+        if pending is not None and pending.side != cand.side and self._pending_home == home:
+            best = cand if cand.quality_score > pending.quality_score else pending
+            self._pending = best
+            self.flush()
+            return True
+        # A same-side repeat means its partner never arrived: write the
+        # older one first. If that fails, refuse the new candidate so its
+        # side keeps it and resubmits, rather than dropping the older row.
+        if not self.flush():
+            return False
+        self._pending, self._pending_home, self._pending_at = cand, home, self._clock()
+        return True
+
+    def tick(self) -> None:
+        """Write a held candidate whose partner didn't arrive in time."""
+        held = self._pending is not None or self._retry is not None
+        if held and self._clock() - self._pending_at >= VITALS_INTERVAL_S:
+            self.flush()
+
+    def flush(self) -> bool:
+        """Write the held candidate, if any. On failure it stays held and
+        idle retries wait VITALS_INTERVAL_S; a new submission retries first.
+        True when nothing is left held."""
+        if self._retry is None:
+            self._retry, self._retry_home = self._pending, self._pending_home
+            self._pending = None
+        if self._retry is None:
+            return True
+        if self._retry.write(self._holder, side=self._retry_home):
+            self._retry = None
+            return True
+        self._pending_at = self._clock()
+        return False
+
+
 def report_health(status: str, message: str) -> None:
     """Write module health to sleepypod.db system_health table."""
     try:
@@ -268,15 +363,27 @@ class FrzHealthPumpState:
                     except (TypeError, ValueError):
                         rpm = 0.0
                     break
+            # New NATS firmware nests the same reading at side.pump.rpm.
+            pump = data.get("pump")
+            if rpm == 0 and isinstance(pump, dict):
+                val = pump.get("rpm")
+                if val is not None:
+                    try:
+                        rpm = float(val)
+                    except (TypeError, ValueError):
+                        rpm = 0.0
             if rpm == 0:
-                for key in ("pumpDuty", "pump_duty", "duty"):
-                    val = data.get(key)
-                    if val is not None:
-                        try:
-                            rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(val) > 0 else 0.0
-                        except (TypeError, ValueError):
-                            rpm = 0.0
-                        break
+                duty = next((data.get(key) for key in
+                             ("pumpDuty", "pump_duty", "duty")
+                             if data.get(key) is not None), None)
+                if duty is None and isinstance(pump, dict):
+                    duty = next((pump.get(key) for key in ("duty", "power")
+                                 if pump.get(key) is not None), None)
+                if duty is not None:
+                    try:
+                        rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(duty) > 0 else 0.0
+                    except (TypeError, ValueError):
+                        rpm = 0.0
 
             now_active = rpm >= PUMP_ACTIVE_RPM_MIN
             if self._was_active[side] and not now_active:
@@ -811,6 +918,9 @@ class SideProcessor:
         self._last_med_std: float = 0.0  # cached for cross-channel comparison
         self._last_acr_qual: float = 0.0
         self._pump_state = pump_state
+        # Where computed vitals go; None writes them under this side.
+        # main() routes both sides through SingleSleeperVitals.submit.
+        self.sink: Optional[Callable[[VitalsCandidate], bool]] = None
 
     def ingest(self, samples: np.ndarray) -> None:
         self._hr_buf.extend(samples)
@@ -915,9 +1025,8 @@ class SideProcessor:
                 flags.append("no_br")
             if med_std < self._presence.enter_threshold:
                 flags.append("low_signal")
-            wrote = write_vitals(self.db_holder, self.side, ts, hr, hrv, br,
-                                 quality_score=quality, flags=flags or None,
-                                 hr_raw=hr_raw)
+            cand = VitalsCandidate(self.side, ts, hr, hrv, br, quality, flags or None, hr_raw)
+            wrote = self.sink(cand) if self.sink is not None else cand.write(self.db_holder)
             log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f q=%.2f", self.side,
                      hr or 0, hrv or 0, br or 0, quality)
             # Only advance the downsample cursor when the write actually
@@ -933,19 +1042,39 @@ class SideProcessor:
 # Main loop
 # ---------------------------------------------------------------------------
 
+# frankenfirmware writes INT32_MAX in place of a sample it lost ("[sensor]
+# sample lost" in its log): one sample, on all four piezo channels at once,
+# in a few percent of records. Taken as data it is a spike ~450x any real
+# signal: the pump gate drops the record (and 5 s after it), and the beat
+# tracker restarts.
+LOST_SAMPLE = np.iinfo(np.int32).max
+
+
 def _int32_samples(buf) -> np.ndarray:
-    """Decode an int32 sample buffer, tolerating truncated tails.
+    """Decode an int32 sample buffer, tolerating truncated tails and
+    repairing lost-sample markers.
 
     A RAW record cut mid-write can carry a payload whose length is not a
     multiple of 4; np.frombuffer would raise ValueError and kill the module.
-    Truncate to whole samples instead.
+    Truncate to whole samples instead. A LOST_SAMPLE marker is replaced by
+    linear interpolation between its neighbours (the nearest valid sample at
+    a record edge); a record with no valid sample decodes as empty.
     """
     if not isinstance(buf, (bytes, bytearray, memoryview)):
         return np.empty(0, dtype=np.int32)
     usable = len(buf) - (len(buf) % 4)
     if usable == 0:
         return np.empty(0, dtype=np.int32)
-    return np.frombuffer(buf[:usable], dtype=np.int32)
+    samples = np.frombuffer(buf[:usable], dtype=np.int32)
+    lost = samples == LOST_SAMPLE
+    if not lost.any():
+        return samples
+    if lost.all():
+        return np.empty(0, dtype=np.int32)
+    idx = np.arange(samples.size)
+    repaired = samples.astype(np.float64)
+    repaired[lost] = np.interp(idx[lost], idx[~lost], repaired[~lost])
+    return np.round(repaired).astype(np.int32)
 
 
 def main() -> None:
@@ -962,13 +1091,28 @@ def main() -> None:
     right = SideProcessor("right", db_holder, pump_state=pump_state)
     left._other = right
     right._other = left
-    follower = RawFileFollower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
+    # One side in away mode: a single sleeper — the away side's readings
+    # (rolled over, leg across) are merged into the home side's series.
+    vitals_router = SingleSleeperVitals(db_holder, SingleSleeperMode(SLEEPYPOD_DB))
+    left.sink = right.sink = vitals_router.submit
+    # Source selected once at startup: NatsFollower on new-firmware pods (NATS
+    # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
+    follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
 
     report_health("healthy", "piezo-processor v2 started")
 
     try:
-        for record in follower.read_records():
+        for record in follower.read_records(on_poll=vitals_router.tick):
             rtype = record.get("type")
+
+            # Surface genuinely-new firmware types once (blanketReadings, log,
+            # …) instead of dropping them silently; known types this module
+            # doesn't consume fall through to the checks below.
+            if not isinstance(rtype, str):
+                continue
+            if rtype not in KNOWN_RECORD_TYPES:
+                warn_unknown_type_once(record, "piezo-processor")
+                continue
 
             # Track per-side pump state for the asymmetric pump-coupling guard
             if rtype == "frzHealth":
@@ -997,6 +1141,7 @@ def main() -> None:
         report_health("down", str(e))
         sys.exit(1)
     finally:
+        vitals_router.flush()
         db_holder.conn.close()
         log.info("Shutdown complete")
 

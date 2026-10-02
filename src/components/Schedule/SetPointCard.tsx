@@ -1,160 +1,88 @@
 'use client'
 
-import { Minus, Plus, Trash2 } from 'lucide-react'
-import clsx from 'clsx'
-import type { SchedulePhase } from '@/src/hooks/useSchedules'
-import { formatTime12h } from './TimeInput'
-import { colorForTempF } from '@/src/lib/sleepCurve/tempColor'
+import { Trash2 } from 'lucide-react'
+import { GhostIcon, Stepper } from '@/src/components/ds'
+import { formatTime12h } from '@/src/lib/scheduleTime'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import { formatSetpointF } from '@/src/lib/tempUtils'
+import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
+import { TONE_VAR, tempTone } from './scheduleFormat'
+
+export interface EditorSetPoint {
+  id: number
+  time: string
+  /** °F */
+  temperature: number
+}
+
+const MIN_TEMP = 55
+const MAX_TEMP = 110
 
 interface SetPointCardProps {
-  phase: SchedulePhase
-  onAdjustTemp: (id: number, delta: number) => void
+  point: EditorSetPoint
+  /** Receives the new temperature in °F. */
+  onSetTemp: (id: number, temperatureF: number) => void
   onDelete: (id: number) => void
-  onTapCard: (phase: SchedulePhase) => void
+  /** Tapping the time opens the set-point editor. */
+  onTapTime: (point: EditorSetPoint) => void
   disabled?: boolean
-  /** Optional badge shown next to the time (e.g. "Auto on", "Auto off") */
+  /** Marks the point that drives the Pod's auto power-on / power-off. */
   autoLabel?: 'on' | 'off' | null
 }
 
 /**
- * Vertical set point row — time, colored temp, +/- controls, delete.
+ * Editor row: tone dot, time, power on/off label, temperature stepper
+ * (in the user's unit, stored as °F) and delete.
  */
 export function SetPointCard({
-  phase,
-  onAdjustTemp,
+  point,
+  onSetTemp,
   onDelete,
-  onTapCard,
+  onTapTime,
   disabled = false,
   autoLabel = null,
 }: SetPointCardProps) {
   const { unit } = useTemperatureUnit()
-  const tempColor = colorForTempF(phase.temperature)
+  const display = Math.round(setpointFToDisplay(point.temperature, unit) ?? point.temperature)
+  const time = formatTime12h(point.time)
 
   return (
-    <div
-      className={clsx(
-        'flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 transition-opacity',
-        !phase.enabled && 'opacity-40',
-        disabled && 'opacity-60',
-      )}
-      onClick={() => {
-        if (!disabled) onTapCard(phase)
-      }}
-      role="button"
-      aria-disabled={disabled}
-      tabIndex={disabled ? -1 : 0}
-      onKeyDown={(e) => {
-        if (!disabled && (e.key === 'Enter' || e.key === ' ')) {
-          e.preventDefault()
-          onTapCard(phase)
-        }
-      }}
-    >
-      {/* Time */}
-      <div className="min-w-[60px]">
-        <span className="text-sm font-medium text-zinc-300">
-          {formatTime12h(phase.time)}
-        </span>
-      </div>
-
-      {/* Temp indicator dot + value */}
-      <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-3 border-t border-line pt-3" data-testid="set-point-row">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <span
-          className="inline-block h-2 w-2 rounded-full"
-          style={{ backgroundColor: tempColor }}
+          className="block size-2 shrink-0 rounded-full"
+          style={{ background: autoLabel === 'off' ? 'var(--text-3)' : TONE_VAR[tempTone(point.temperature)] }}
         />
-        <span className="text-sm font-bold tabular-nums text-white">
-          {formatSetpointF(phase.temperature, unit)}
-        </span>
-      </div>
-
-      {/* Auto on/off badge */}
-      {autoLabel && (
-        <span
-          className={clsx(
-            'rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
-            autoLabel === 'on'
-              ? 'bg-emerald-500/10 text-emerald-400'
-              : 'bg-zinc-700/50 text-zinc-400',
-          )}
-        >
-          Auto
-          {' '}
-          {autoLabel === 'on' ? 'on' : 'off'}
-        </span>
-      )}
-
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      {/* +/- controls */}
-      <div className="flex items-center gap-0" onClick={e => e.stopPropagation()}>
         <button
-          onClick={() => onAdjustTemp(phase.id, -2)}
-          disabled={disabled || phase.temperature <= 55}
-          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors active:text-zinc-200 disabled:opacity-30"
-          aria-label="Decrease temperature"
-        >
-          <Minus size={12} strokeWidth={3} />
-        </button>
-        <button
-          onClick={() => onAdjustTemp(phase.id, 2)}
-          disabled={disabled || phase.temperature >= 110}
-          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors active:text-zinc-200 disabled:opacity-30"
-          aria-label="Increase temperature"
-        >
-          <Plus size={12} strokeWidth={3} />
-        </button>
-      </div>
-
-      {/* Delete */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation()
-          onDelete(phase.id)
-        }}
-        disabled={disabled}
-        className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-600 transition-colors active:text-red-400 disabled:opacity-30"
-        aria-label={`Delete ${phase.name}`}
-      >
-        <Trash2 size={12} />
-      </button>
-    </div>
-  )
-}
-
-interface SetPointListProps {
-  phases: SchedulePhase[]
-  onAdjustTemp: (id: number, delta: number) => void
-  onDelete: (id: number) => void
-  onTapCard: (phase: SchedulePhase) => void
-  disabled?: boolean
-}
-
-/**
- * Vertical list of set point rows.
- */
-export function SetPointList({
-  phases,
-  onAdjustTemp,
-  onDelete,
-  onTapCard,
-  disabled = false,
-}: SetPointListProps) {
-  return (
-    <div className="space-y-1.5">
-      {phases.map(phase => (
-        <SetPointCard
-          key={phase.id}
-          phase={phase}
-          onAdjustTemp={onAdjustTemp}
-          onDelete={onDelete}
-          onTapCard={onTapCard}
+          type="button"
+          onClick={() => onTapTime(point)}
           disabled={disabled}
+          aria-label={`Edit set point ${time}`}
+          className="w-[78px] shrink-0 cursor-pointer whitespace-nowrap border-0 bg-transparent p-0 text-left font-mono text-sm text-fg hover:text-fg-2 disabled:cursor-default"
+        >
+          {time}
+        </button>
+        {autoLabel && (
+          <span className="truncate text-xs text-fg-2">{autoLabel === 'on' ? 'Power on' : 'Power off'}</span>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2.5">
+        <Stepper
+          value={display}
+          min={Math.round(setpointFToDisplay(MIN_TEMP, unit) ?? MIN_TEMP)}
+          max={Math.round(setpointFToDisplay(MAX_TEMP, unit) ?? MAX_TEMP)}
+          disabled={disabled}
+          label={`temperature at ${time}`}
+          onChange={v => onSetTemp(point.id, Math.max(MIN_TEMP, Math.min(MAX_TEMP, Math.round(displayToSetpointF(v, unit) ?? point.temperature))))}
         />
-      ))}
+        <GhostIcon
+          icon={Trash2}
+          size={15}
+          label={`Delete set point ${time}`}
+          className="-mr-2 text-fg-3 hover:text-danger"
+          disabled={disabled}
+          onClick={() => onDelete(point.id)}
+        />
+      </div>
     </div>
   )
 }

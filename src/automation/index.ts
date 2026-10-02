@@ -6,7 +6,7 @@
  */
 
 export { AutomationEngine } from './engine'
-export type { AutomationEngineDeps, HardwareWriter } from './engine'
+export type { AutomationEngineDeps } from './engine'
 export {
   getAutomationEngine,
   getAutomationEngineIfRunning,

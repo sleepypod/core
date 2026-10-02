@@ -1,0 +1,169 @@
+"""
+Real NATS sensor capture fixtures for SleepyPod frame-reader tests.
+
+One exemplar payload for each sensor subject from a 1-minute ``raw.>`` capture
+off a field Pod 5 running new (NATS) firmware (Discord report, 2026-07-19),
+taken with ``scripts/probe-nats-capture.py``. These seven sensor payloads were
+cleared for test use. The retained ``raw.log`` message is intentionally omitted
+because it contains a persistent hardware identifier and is outside the live
+reader subscription.
+
+Each entry's ``payload_b64`` is the base64 of the exact bytes as published.
+
+Wire-format contract: every ``raw.sens.*`` / ``raw.frz.*`` sensor subject is a
+single, complete CBOR map — one message == one record — which is what
+:class:`common.nats_follower.NatsFollower` decodes (its live subscription is
+``raw.sens.>`` + ``raw.frz.>``). The sensor subscription deliberately excludes
+the concatenated-map ``raw.log`` diagnostic subject.
+
+Decode a single-map fixture with ``cbor2.loads(base64.b64decode(b64))``.
+
+DO NOT hand-edit — regenerate from a fresh capture if the wire format changes.
+"""
+
+# subject -> {"type", "size", "single_map", "payload_b64"}
+CAPTURE_FIXTURES = {
+    'raw.sens.capsense': {
+        "type": 'capSense',
+        "size": 101,
+        "single_map": True,
+        "payload_b64": (
+            'v2R0eXBlaGNhcFNlbnNlYnRzGmpdCpFkbGVmdKRjb3V0GQzYY2NlbhkOlmJpbhkMvmZzdGF0'
+            'dXNkZ29vZGVyaWdodKRjb3V0GQaQY2NlbhkHY2JpbhkIuGZzdGF0dXNkZ29vZP8='
+        ),
+    },
+    'raw.sens.piezo': {
+        "type": 'piezo-dual',
+        "size": 4066,
+        "single_map": True,
+        "payload_b64": (
+            'p2R0eXBlanBpZXpvLWR1YWxidHMaal0KkWRmcmVxGQH0Y2FkYxhBZGdhaW4ZAZBlbGVmdDFZ'
+            'B9AaNPr/IhT6/yIU+v8lCPr/y/L5/wyx+f8Msfn/15f5/1FR+f/aJPn/2iT5/140+f+hKvn/'
+            'QBn5/0AZ+f/r+fj/6/n4/9jt+P/Y7fj/IOr4/y7g+P9wz/j/cM/4/6a++P+/qvj/spL4/7KS'
+            '+P+hhPj/znX4/40c+P+NHPj/g/v3/3Hd9/9suvf/bLr3/0aR9//WYff/2xH3/9sR9/+Y5fb/'
+            'XIv2/1yL9v9ci/b/pHT2/8Jb9v+nJvb/pyb2/+X39f90/fX/XAf2/1wH9v/PEfb/a//1/zQO'
+            '9v80Dvb/0D/2/2VA9v9tT/b/bU/2/99Y9v9pWPb/pl72/6Ze9v9yZ/b/PXT2/+KQ9v/ikPb/'
+            '1ZT2/9ib9v8Ht/b/B7f2/9/V9v/z9vb/lzL3/5cy9/+ZVvf/t5H3/z4n+P8+J/j/Z134/3CY'
+            '+P+YGfn/mBn5/zlX+f8RlPn/cAT6/3AE+v8iN/r/zVv6/zun+v82zPr/Nsz6/5zj+v/GE/v/'
+            'xhP7/wg9+//yTvv/+2z7//ts+//NpPv/zdL7/xDW+/8Q1vv/jeT7/2v4+/9yEPz/chD8/yIY'
+            '/P9sHfz/2Rn8/1YV/P9WFfz/lRz8/1k2/P9ZNvz/IUf8/yFH/P9JQfz/SUH8//pE/P+nNfz/'
+            '0DP8/9Az/P+LYvz/0Gv8/xJ9/P8Sffz/ZHz8//GA/P9Dmvz/Q5r8/3Ci/P8gnvz/kbD8/5Gw'
+            '/P/Mtvz//bn8/+C0/P/gtPz/v8D8/xLi/P8S4vz/EuL8/3Dp/P/f6vz/VOf8/+Xw/P/l8Pz/'
+            'XAX9/9Ae/f/QHv3/LR79/7gU/f9UF/3/VBf9/54X/f8VAP3/n+D8/5/g/P9/Af3/6f78/372'
+            '/P9+9vz/ivT8/4Pu/P+m6/z/puv8/7Ts/P+d6/z/e8z8/3vM/P9Jzvz/qvP8//sN/f/7Df3/'
+            'Oh39/+ww/f8Ne/3/DXv9/7mi/f8txf3/DhT+//I1/v/yNf7/V03+/yt7/v8re/7/8o/+/8ag'
+            '/v/fwf7/VdH+/1XR/v/Jtf7/g4/+/4OP/v8Dtv7/d7j+/9Ch/v/Qof7/rZ3+/9+c/v9yjP7/'
+            'coz+/6Fy/v98Uf7/wRv+/8Eb/v9+F/7/1fT9/2LH/f9ix/3/EJj9/65y/f96If3/eiH9/6Ha'
+            '/P+h2vz/gsr8/4LK/P8Ep/z/ZIb8/24//P9uP/z/FSX8/5UJ/P+Az/v/gM/7/yGn+//tevv/'
+            '2i77/9ou+/+FHfv/RQX7/73C+v+9wvr/D6T6/8h++v+oLPr/qCz6/zIu+v8GBfr/BgX6/wYF'
+            '+v/f4Pn/rcf5/+SX+f/kl/n/JYb5/49++f+hd/n/oXf5/3Fq+f/nWPn/kTf5/5E3+f8vK/n/'
+            'MBv5/yr++P8q/vj/2M34/6a/+P/R3vj/0d74/yjS+P/hyvj/Icz4/yHM+P9qz/j/D9D4/8rY'
+            '+P/K2Pj/3ub4/43z+P8J+/j/Cfv4/3cB+f+oDPn/aQn5/2kJ+f9OEPn/axz5/33u+P997vj/'
+            'iAz5/39E+f/eavn/3mr5/59r+f9+cPn/AHj5/616+f+tevn/7oT5/7+O+f+/jvn/yYz5/4+B'
+            '+f95jvn/eY75/zuO+f+VjPn/l3z5/8NT+f9wTPn/M035/7N4+f+zePn/mHr5/z1++f9qePn/'
+            'fWz5/4dh+f+HYfn/v1P5/79T+f+HTvn/h075/85O+f/OTvn/x135/25d+f8SUvn/ElL5/4xG'
+            '+f/EO/n/0Qb5/9EG+f93BPn/ijL5/+0i+f/tIvn/bhv5/wAj+f8mKvn/Jir5/yUf+f/mD/n/'
+            '5wD5/+cA+f9M9fj/6On4/+jp+P/o6fj/tuT4/x7k+P8N3Pj/Ddz4/zC9+P+Eofj/Abj4/wG4'
+            '+P+7s/j/Z7D4/8vA+P/LwPj/wcz4/9zN+P/Gvfj/xr34/yKt+P9Ro/j/uKn4/7ip+P9Qsvj/'
+            'hsL4/3nQ+P950Pj/8s74/w3A+P+2fvj/tn74/1OE+P8/oPj/qZX4/6mV+P9ahPj/zXz4/+t2'
+            '+P/rdvj/03L4/y1q+P9NU/j/TVP4/0k5+P+OJPj/lv33/5b99//7+ff/vPn3/43o9//P0Pf/'
+            'z9D3/4eZ9/9ZkPf/WZD3/2CN9/9gjff/+G73//hu9/9mWff/lT73/w0U9/8NFPf/dgT3/0fx'
+            '9v8uxvb/Lsb2/2iw9v+nkvb/3FL2/9xS9v9TPvb/CiP2/wK/9f8Cv/X/EZ/1/xGf9f9UmfX/'
+            'VJn1/1KP9f/vdvX/zGf1/8xn9f/fWPX/D1T1/0E+9f9BPvX/RDH1//gk9f/XFvX/1xb1/2sQ'
+            '9f9rEPX/7fj0/+349P+J7/T/xbj0/9/E9P/fxPT/yeD0/6qy9P+qsvT/qrL0/4mm9P+up/T/'
+            'DrP0/w6z9P8evPT/ecn0/9zF9P/cxfT/nLr0/6+29P/WzPT/1sz0/4bU9P/R4/T/57L0/+ey'
+            '9P/spPT/WKj0/1bU9P9W1PT/fuH0/+ju9P8i//T/Iv/0/+H/9P8gBvX/+SL1//ki9f+KKvX/'
+            'BzT1/xlL9f8ZS/X/H071/yRM9f/TWfX/01n1/3xw9f8YWfX/gUj1/4FI9f8lX/X/i1T1/3tN'
+            '9f97TfX/5kj1/9469f+9H/X/3hT1/94U9f8sB/X/owb1/6MG9f/DA/X/6QL1/wLi9P8C4vT/'
+            'xdz0/2ZyaWdodDFZB9A0hPj/5WT4/+Vk+P+5Yvj/5lf4/xMw+P8TMPj/1xL4/+P59/8gx/f/'
+            'IMf3/8i59/+Dr/f/xIH3/8SB9/+QU/f/kFP3/21N9/9tTff/dUn3/4dR9/+UMff/lDH3/60K'
+            '9//r8/b/Idz2/yHc9v8R1Pb/Ecb2/3a59v92ufb/K6/2/0Oh9v8KkPb/CpD2/5t+9v/Ac/b/'
+            'FWj2/xVo9v8HcPb/MGv2/zBr9v8wa/b/b2r2/wp09v9Kbfb/Sm32/2Fz9v/6iPb/Gaz2/xms'
+            '9v/Czvb/0ur2/x4K9/8eCvf/BxT3/1Qq9/8eY/f/HmP3/0p39/+Ghvf/Lbn3/y259//U4Pf/'
+            'iQn4/99S+P/fUvj/0H74/4ye+P/N5/j/zef4/64N+f+nN/n/so35/7KN+f/nufn/q9v5/zUe'
+            '+v81Hvr/CjT6/wxW+v/Ljfr/y436/wK1+v+fyPr/gvL6/4Ly+v9h/Pr/gwz7/6gf+/8YJvv/'
+            'GCb7/9gz+/9SRPv/UkT7/ypO+/+bXfv/S3r7/0t6+/9fgPv/yHH7/2xp+/9safv/hGX7/3Zm'
+            '+/8EVvv/BFb7/1I++//cIvv/geH6/6DO+v+gzvr/z7j6/wyV+v8Mlfr/+2H6//th+v+BLvr/'
+            'gS76/98d+v+PDvr/qQn6/6kJ+v/6APr/QgH6/2Di+f9g4vn/7dr5/+XS+f8RxPn/EcT5/2C+'
+            '+f+ss/n/XpD5/16Q+f+Xgvn/G1D5/4A++f+APvn/nyn5/wcC+f8HAvn/BwL5/4vi+P9zv/j/'
+            'rIT4/5x5+P+cefj/T3z4/+l4+P/pePj/jmL4/6lQ+P+oP/j/qD/4/ydG+P85Sfj/xjX4/8Y1'
+            '+P8JHPj/Own4/+AH+P/gB/j/MQT4/9YL+P9GDvj/Rg74/5kV+P/FEfj/nw74/58O+P+uD/j/'
+            'ok/4//Jw+P/ycPj/y4H4/3x5+P+eZfj/nmX4/1t0+P+mjPj/HJ/4/2Ci+P9govj/PK74/x3O'
+            '+P8dzvj/2874/2DF+P/ty/j/K9n4/yvZ+P/k5Pj/Y7T4/2O0+P9Gofj/Lpv4/xe9+P8Xvfj/'
+            '4cz4/9/T+P/zw/j/88P4//rC+P+jxPj/Brr4/wa6+P9I1Pj/Ivz4/9Dp+P/Q6fj/8dD4/xLF'
+            '+P8J6/j/Cev4/ycQ+f8nEPn/MAv5/zAL+f/PAfn/1/v4/3L7+P9y+/j/3QL5/6sV+f8OIvn/'
+            'DiL5/+8b+f9TA/n/uvv4/7r7+P/M//j/WRj5/0w1+f9MNfn//jz5/ytA+f8cVPn/HFT5/7BN'
+            '+f/DKvn/wyr5/8Mq+f8YJvn/twT5/zXG+P81xvj/c6b4/z+O+P+Zcfj/mXH4/8lV+P9OQfj/'
+            'Dvv3/w779/+u4ff/P8j3/xys9/8crPf/55P3/2eF9/8eXPf/Hlz3/4ZS9/87O/f/Kjr3/yo6'
+            '9/+UM/f/IjP3//Yx9//2Mff/SED3/+M+9/9TLff/Uy33/7Ys9/8CM/f/WDT3/1g09/98IPf/'
+            'gBn3/wgj9/8II/f/EC73/xJC9/9iUvf/YlL3/0Vj9/8qbPf/D2/3/4d89/+HfPf/5IX3/5yg'
+            '9/+coPf/IaL3/+ep9//fq/f/nbH3/7nN9/981Pf/4873/8fQ9//b1vf/Utz3/7ba9/+22vf/'
+            'ROH3/9Pl9/8M5vf/luj3/1bq9/9W6vf/vM33/7zN9/+Ew/f/hMP3/67G9/+uxvf/jsH3/9rD'
+            '9/+Rrff/ka33/+qm9/+lpff/cpr3/3Ka9/+Fl/f/kIv3/5Zu9/+Wbvf/WWr3/7tw9/8Fe/f/'
+            'BXv3/7hv9//XWff/pDv3/6Q79/99P/f/yyv3/8sr9//LK/f/cBz3/zMa9/8HJ/f/Byf3/+gZ'
+            '9/+uE/f/o+/2/6Pv9v/V7vb/l+72/9UF9//VBff/fgf3/+P59v8C7vb/Au72/wTh9v/S3vb/'
+            'd/H2/3fx9v/hAPf/K/z2/50F9/+dBff/mvv2/z789v8e9/b/Hvf2/8wM9/9lE/f/VQ73/1UO'
+            '9/8QAff/tf72/3cQ9/93EPf/Lhz3/xIp9/8WHvf/Fh73/ysi9/90C/f/vBH3/7wR9/8iHvf/'
+            'Dyb3/9Is9/8SI/f/EiP3/9kk9/8uIPf/LiD3//It9//yLff/3i/3/94v9/9pK/f/3yX3/7gU'
+            '9/+4FPf/9g73/5UR9//7C/f/+wv3/3AB9/838fb/adD2/2nQ9v/dyPb/08j2/9ym9v/cpvb/'
+            'W5v2/1ub9v+Bmvb/gZr2/wmQ9v9glvb/KZL2/ymS9v+vjvb/zYv2/5mW9v+Zlvb/QI72/xKL'
+            '9v+vkvb/r5L2/yCi9v8govb/eZn2/3mZ9v9plPb/NJP2/6Ko9v+iqPb/C6r2/zdx9v83cfb/'
+            'N3H2/7tg9v+GVvb/jmn2/45p9v82a/b/Bm72/9tU9v/bVPb/klj2/7hh9v8jcfb/I3H2/8CE'
+            '9v/FjPb/P5H2/z+R9v+Skvb/R4P2/22G9v9thvb/vIj2/4mX9v8mjPb/Joz2/zJ19v81aPb/'
+            'b3T2/2909v8Qhfb/uYb2/89s9v/PbPb/Hl72/2hP9v9xS/b/cUv2/z5I9v9GR/b/2DP2/9gz'
+            '9v9vK/b/NCb2/2wr9v9sK/b/HDH2/wot9v/gG/b/oBP2/6AT9v9mFPb/XAX2/1wF9v8lAPb/'
+            '7+/1/8Dy9f/A8vX/H/H1/w=='
+        ),
+    },
+    'raw.sens.bedtemp': {
+        "type": 'bedTemp',
+        "size": 112,
+        "single_map": True,
+        "payload_b64": (
+            'v2R0eXBlZ2JlZFRlbXBidHMaal0Kl2NhbWIZCS5jbWN1GQyHYmh1GRiaZGxlZnSkZHNpZGUZ'
+            'Cu5jb3V0GQqxY2NlbhkLAGJpbhkKYWVyaWdodKRkc2lkZRkJI2NvdXQZCO9jY2VuGQjyYmlu'
+            'GQk3/w=='
+        ),
+    },
+    'raw.frz.temp': {
+        "type": 'frzTemp',
+        "size": 53,
+        "single_map": True,
+        "payload_b64": (
+            'v2R0eXBlZ2ZyelRlbXBidHMaal0KmmRsZWZ0GQqMZXJpZ2h0GQlAY2FtYhkJWWJocxkJDv8='
+        ),
+    },
+    'raw.frz.health': {
+        "type": 'frzHealth',
+        "size": 213,
+        "single_map": True,
+        "payload_b64": (
+            'v2R0eXBlaWZyekhlYWx0aGJ0cxpqXQqUZ3ZlcnNpb24BZGxlZnSjY3RlY6FnY3VycmVudPpB'
+            'lJpqZHB1bXCjZG1vZGVjcHdtY3JwbRkHTGV3YXRlcvVldGVtcHOhaGZsb3dyYXRl+kHVgABl'
+            'cmlnaHSjY3RlY6FnY3VycmVudPpBna/6ZHB1bXCjZG1vZGVjcHdtY3JwbQBld2F0ZXL1ZXRl'
+            'bXBzoWhmbG93cmF0ZfpB1QAAY2ZhbqJjdG9woWNycG0ZAZ5mYm90dG9toWNycG0ZATj/'
+        ),
+    },
+    'raw.frz.therm': {
+        "type": 'frzTherm',
+        "size": 124,
+        "single_map": True,
+        "payload_b64": (
+            'v2R0eXBlaGZyelRoZXJtYnRzGmpdCpRndmVyc2lvbgFkbGVmdKRmdGFyZ2V0+kHYAABlcG93'
+            'ZXL6PMRGM2V2YWxpZPVnZW5hYmxlZPVlcmlnaHSkZnRhcmdldPpB2AAAZXBvd2Vy+gAAAABl'
+            'dmFsaWT1Z2VuYWJsZWT0/w=='
+        ),
+    },
+    'raw.sens.blanket': {
+        "type": 'blanketReadings',
+        "size": 247,
+        "single_map": True,
+        "payload_b64": (
+            'v2R0eXBlb2JsYW5rZXRSZWFkaW5nc2d2ZXJzaW9uAWJ0cxpqXQqSZGxlZnS/ZHRlbXD6QcSA'
+            'AGF4+r1NAABhevo8ggAAYXn6PJYAAGxlcnJvcl9zdHJpbmf2bGlzX2Nvbm5lY3RlZPRuZmxv'
+            'd19kaXJlY3Rpb272c2NvcnJlY3Rfb3JpZW50YXRpb272/2VyaWdodL9kdGVtcPpBxIAAYXj6'
+            'vU0AAGF6+jyCAABhefo8lgAAbGVycm9yX3N0cmluZ/ZsaXNfY29ubmVjdGVk9G5mbG93X2Rp'
+            'cmVjdGlvbvZzY29ycmVjdF9vcmllbnRhdGlvbvb//w=='
+        ),
+    },
+}

@@ -38,6 +38,14 @@ const {
   stopBiometricsRetention,
 } = await import('../retention')
 
+const originalRetentionDays = process.env.BIOMETRICS_RETENTION_DAYS
+const originalRetentionIntervalHours = process.env.BIOMETRICS_RETENTION_INTERVAL_HOURS
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) Reflect.deleteProperty(process.env, name)
+  else process.env[name] = value
+}
+
 type BiometricsDb = ReturnType<typeof drizzle<typeof schema>>
 
 function openTempDb(): { db: BiometricsDb, close: () => void } {
@@ -118,14 +126,25 @@ describe('pruneOldBiometrics', () => {
       { timestamp: fresh, type: 'stall_right' },
     ]).run()
 
+    db.insert(schema.thermalState).values([
+      { timestamp: old, side: 'left', isPowered: true },
+      { timestamp: fresh, side: 'left', isPowered: false },
+    ]).run()
+
     db.insert(schema.vitalsQuality).values([
       { vitalsId: 1, side: 'left', timestamp: old, qualityScore: 0.5 },
       { vitalsId: 2, side: 'left', timestamp: fresh, qualityScore: 0.9 },
     ]).run()
 
+    // Pruned by when the run last held, not when it started.
+    db.insert(schema.healthRuns).values([
+      { checkId: 'dac', status: 'ok', startedAt: old, lastSeenAt: old },
+      { checkId: 'dac', status: 'ok', startedAt: old, lastSeenAt: fresh },
+    ]).run()
+
     const result = pruneOldBiometrics(cutoff, db)
 
-    expect(result.rowsDeleted).toBe(9)
+    expect(result.rowsDeleted).toBe(11)
     expect(result.perTable).toEqual({
       vitals: 1,
       vitals_quality: 1,
@@ -136,6 +155,8 @@ describe('pruneOldBiometrics', () => {
       ambient_light: 1,
       water_level_readings: 1,
       pump_alerts: 1,
+      thermal_state: 1,
+      health_runs: 1,
     })
 
     // Verify fresh rows remain
@@ -242,6 +263,8 @@ describe('pruneOldBiometrics', () => {
       ambient_light: 0,
       water_level_readings: 0,
       pump_alerts: 0,
+      thermal_state: 0,
+      health_runs: 0,
     })
   })
 
@@ -322,6 +345,9 @@ describe('runRetentionPass', () => {
 
     expect(result.rowsDeleted).toBeGreaterThan(0)
     expect(runSpy).toHaveBeenCalledTimes(1)
+    expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({
+      queryChunks: [expect.objectContaining({ value: ['PRAGMA incremental_vacuum'] })],
+    }))
   })
 
   it('swallows incremental_vacuum failures and still returns the result', () => {
@@ -357,6 +383,17 @@ describe('runRetentionPass', () => {
 })
 
 describe('configureAutoVacuum', () => {
+  it('always closes the temporary SQLite handle', () => {
+    const close = vi.spyOn(Database.prototype, 'close')
+    try {
+      configureAutoVacuum(':memory:')
+      expect(close).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      close.mockRestore()
+    }
+  })
+
   it('sets auto_vacuum = INCREMENTAL on a fresh DB file', () => {
     const tmpPath = path.join(
       process.cwd(),
@@ -393,16 +430,37 @@ describe('startBiometricsRetention / stopBiometricsRetention', () => {
     mockState.db = opened.db
     close = opened.close
     vi.useFakeTimers()
+
+    // Guard mutation tests against invalid zero/sub-millisecond recurring
+    // intervals. Without this, arithmetic/validation mutants can make a
+    // large fake-timer advance execute millions of callbacks and time out
+    // instead of failing at the faulty interval calculation.
+    const fakeSetInterval = globalThis.setInterval
+    vi.spyOn(globalThis, 'setInterval').mockImplementation(((...params: Parameters<typeof setInterval>) => {
+      const [callback, delay, ...args] = params
+      if (typeof delay === 'number' && delay < 1_000) {
+        throw new Error(`retention interval is implausibly short: ${delay}`)
+      }
+      return fakeSetInterval(callback, delay, ...args)
+    }) as typeof setInterval)
   })
 
   afterEach(() => {
-    stopBiometricsRetention()
-    vi.useRealTimers()
-    vi.restoreAllMocks()
-    delete process.env.BIOMETRICS_RETENTION_DAYS
-    delete process.env.BIOMETRICS_RETENTION_INTERVAL_HOURS
-    close()
-    mockState.db = null
+    try {
+      stopBiometricsRetention()
+    }
+    finally {
+      try {
+        close()
+      }
+      finally {
+        vi.useRealTimers()
+        vi.restoreAllMocks()
+        restoreEnv('BIOMETRICS_RETENTION_DAYS', originalRetentionDays)
+        restoreEnv('BIOMETRICS_RETENTION_INTERVAL_HOURS', originalRetentionIntervalHours)
+        mockState.db = null
+      }
+    }
   })
 
   it('runs the initial pass after the configured delay and again per interval', () => {
@@ -430,18 +488,33 @@ describe('startBiometricsRetention / stopBiometricsRetention', () => {
     expect(getDb().select().from(vitals).all()).toHaveLength(0)
   })
 
+  it('does not log a prune message for a successful zero-delete pass', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    startBiometricsRetention({
+      retentionDays: 30,
+      intervalHours: 1,
+      initialDelayMs: 0,
+    })
+    vi.advanceTimersByTime(0)
+
+    expect(log).not.toHaveBeenCalled()
+  })
+
   it('is idempotent: a second start while one is pending is a no-op', () => {
     startBiometricsRetention({
       retentionDays: 7,
       intervalHours: 24,
       initialDelayMs: 5_000,
     })
+    expect(vi.getTimerCount()).toBe(1)
     // Second call should NOT replace the timer or schedule extra work.
     startBiometricsRetention({
       retentionDays: 7,
       intervalHours: 24,
       initialDelayMs: 5_000,
     })
+    expect(vi.getTimerCount()).toBe(1)
 
     seedAllTables(getDb(), new Date(Date.now() - 365 * 86_400_000))
     vi.advanceTimersByTime(5_000)
@@ -482,6 +555,15 @@ describe('startBiometricsRetention / stopBiometricsRetention', () => {
     // Crossing 24h should fire.
     vi.advanceTimersByTime(1)
     expect(getDb().select().from(vitals).all()).toHaveLength(0)
+  })
+
+  it('uses a valid interval from BIOMETRICS_RETENTION_INTERVAL_HOURS', () => {
+    process.env.BIOMETRICS_RETENTION_INTERVAL_HOURS = '2'
+
+    startBiometricsRetention({ retentionDays: 30, initialDelayMs: 0 })
+    vi.advanceTimersByTime(0)
+
+    expect(globalThis.setInterval).toHaveBeenCalledWith(expect.any(Function), 2 * 3_600_000)
   })
 
   it('falls back to 24h when intervalHours option is zero', () => {

@@ -1,42 +1,30 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
-import dynamic from 'next/dynamic'
-import { Droplets, Minus, TrendingDown, TrendingUp } from 'lucide-react'
-import { useSensorStream } from '@/src/hooks/useSensorStream'
+import { useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
-import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
-import { TimeRangeSelector, getDateRangeFromTimeRange, type TimeRange } from '@/src/components/Environment/TimeRangeSelector'
+import { Card, InlineError, SectionLabel, SegmentedControl, Skeleton } from '@/src/components/ds'
+import { getDateRangeFromTimeRange, type TimeRange } from '@/src/components/Environment/TimeRangeSelector'
 import { BedTempChart } from '@/src/components/Environment/BedTempChart'
 import { HumidityChart } from '@/src/components/Environment/HumidityChart'
-import { ConnectionStatusBar } from './ConnectionStatusBar'
 import { PresenceCard } from './PresenceCard'
 import { BedTempMatrix } from './BedTempMatrix'
 import { FreezerHealthCard } from './FreezerHealthCard'
 import { FlowrateChart } from './FlowrateChart'
 import { PiezoWaveform } from './PiezoWaveform'
 
-const DataPipeline = dynamic(() => import('./DataPipeline').then(m => ({ default: m.DataPipeline })), {
-  ssr: false,
-  loading: () => <div className="flex h-[400px] items-center justify-center text-xs text-zinc-600">Loading pipeline...</div>,
-})
+const TREND_RANGES: ReadonlyArray<{ value: TimeRange, label: string }> = [
+  { value: '1h', label: '1h' },
+  { value: '6h', label: '6h' },
+  { value: '24h', label: '24h' },
+]
 
 /**
- * Main Sensors screen composition.
- * Connects to the WebSocket sensor stream and renders all live sensor
- * data panels: connection bar, sensor matrix (bed temp), presence with
- * zone activity, piezo waveform, bed temp trend (recharts), humidity (recharts),
- * movement, and system health.
- *
- * Pull-to-refresh reconnects the WebSocket stream.
- * Matches iOS BedSensorScreen layout and functionality.
+ * System → Sensors tab: live sensor cards on a responsive grid
+ * (3 columns when the content area allows, 2 on tablets, 1 on phones).
+ * The WebSocket connection and the Stop/Start toggle live in SystemScreen.
  */
-export function SensorsScreen() {
-  const [streamEnabled, setStreamEnabled] = useState(true)
+export function SensorsScreen({ streamEnabled = true }: { streamEnabled?: boolean }) {
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
-
-  // Connect to the sensor stream
-  const stream = useSensorStream({ enabled: streamEnabled })
 
   const dateRange = useMemo(
     () => getDateRangeFromTimeRange(timeRange),
@@ -48,7 +36,7 @@ export function SensorsScreen() {
     return Math.min(hours * 60, 1440)
   }, [timeRange])
 
-  // Fetch historical bed temp for trend chart + humidity chart
+  // Historical bed temp feeds both the trend and the humidity chart
   const bedTempQuery = trpc.environment.getBedTemp.useQuery(
     {
       startDate: dateRange.startDate,
@@ -62,7 +50,6 @@ export function SensorsScreen() {
     },
   )
 
-  // Fetch environment summary for stats
   const summaryQuery = trpc.environment.getSummary.useQuery(
     {
       startDate: dateRange.startDate,
@@ -71,208 +58,94 @@ export function SensorsScreen() {
     },
     { staleTime: 60_000 },
   )
-
   const summary = summaryQuery.data?.bedTemp
 
-  // Determine ambient trend
-  const latestQuery = trpc.environment.getLatestBedTemp.useQuery(
-    { unit: 'F' },
-    { refetchInterval: 30_000, staleTime: 15_000 },
-  )
-  const latest = latestQuery.data
-
-  const ambientTrend = useMemo(() => {
-    if (!summary?.minAmbientTemp || !summary?.maxAmbientTemp) return null
-    const range = summary.maxAmbientTemp - summary.minAmbientTemp
-    if (range < 1) return 'stable'
-    if (latest?.ambientTemp != null) {
-      const mid = (summary.minAmbientTemp + summary.maxAmbientTemp) / 2
-      return latest.ambientTemp > mid ? 'warming' : 'cooling'
-    }
-    return null
-  }, [summary, latest])
-
-  /** Pull-to-refresh: toggle stream off/on to force reconnect. */
-  const handleRefresh = useCallback(async () => {
-    setStreamEnabled(false)
-    await new Promise(resolve => setTimeout(resolve, 300))
-    setStreamEnabled(true)
-  }, [])
-
   return (
-    <PullToRefresh onRefresh={handleRefresh} enabled={streamEnabled}>
-      <div className="-mt-1 space-y-3 pb-4">
-        {/* Connection status bar + stream toggle */}
-        <div className="flex items-center gap-2">
-          <div className="flex-1">
-            <ConnectionStatusBar
-              status={stream.status}
-              fps={stream.fps}
-              lastError={stream.lastError}
-              subscribedSensors={stream.subscribedSensors}
-              lastFrameTime={stream.lastFrameTime}
+    <div className="grid grid-flow-row-dense gap-3.5 @min-[640px]:grid-cols-2 @min-[960px]:grid-cols-3">
+      <PresenceCard />
+      <BedTempMatrix />
+      <FreezerHealthCard />
+
+      {/* Bed temperature trend */}
+      <Card className="gap-2.5 px-4 py-3.5 @min-[640px]:col-span-2">
+        <SectionLabel
+          className="flex-wrap gap-x-3.5"
+          right={(
+            <SegmentedControl
+              size="sm"
+              ariaLabel="Trend range"
+              options={TREND_RANGES}
+              value={timeRange}
+              onChange={setTimeRange}
+              className="rounded-thumb p-0.5 font-mono [&>button]:rounded-[4px] [&>button]:px-2 [&>button]:py-0.5"
             />
-          </div>
-          <button
-            onClick={() => setStreamEnabled(v => !v)}
-            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
-              streamEnabled
-                ? 'bg-red-900/30 text-red-400 active:bg-red-900/50'
-                : 'bg-emerald-900/30 text-emerald-400 active:bg-emerald-900/50'
-            }`}
-          >
-            {streamEnabled ? 'Stop' : 'Start'}
-          </button>
-        </div>
+          )}
+        >
+          Bed temperature
+          <LegendSwatch color="var(--accent-cool)" label="Left" />
+          <LegendSwatch color="var(--accent-warm)" label="Right" />
+          <LegendSwatch color="var(--text-3)" label="Ambient" dashed />
+        </SectionLabel>
 
-        {/* Paused state */}
-        {!streamEnabled && (
-          <div className="flex h-32 items-center justify-center rounded-2xl bg-zinc-900">
-            <div className="text-center">
-              <p className="text-sm text-zinc-400">Stream paused</p>
-              <p className="text-xs text-zinc-600">Tap Start to resume live data</p>
-            </div>
+        {bedTempQuery.isLoading
+          ? <Skeleton className="h-[170px]" />
+          : bedTempQuery.isError
+            ? <InlineError className="flex h-[170px] items-center justify-center">Failed to load temperature data</InlineError>
+            : (
+                <BedTempChart
+                  data={bedTempQuery.data ?? []}
+                  unit="F"
+                  showAmbient
+                  highlightSide="both"
+                />
+              )}
+
+        {/* Phones: summary stats instead of the axis-heavy desktop chart */}
+        {summary && (
+          <div className="grid grid-cols-4 gap-1 border-t border-line pt-2.5 font-mono text-xs min-[900px]:hidden">
+            <SummaryItem label="Avg L" value={summary.avgLeftCenterTemp != null ? `${Math.round(summary.avgLeftCenterTemp)}°` : '--'} />
+            <SummaryItem label="Avg R" value={summary.avgRightCenterTemp != null ? `${Math.round(summary.avgRightCenterTemp)}°` : '--'} />
+            <SummaryItem label="Ambient" value={summary.avgAmbientTemp != null ? `${Math.round(summary.avgAmbientTemp)}°` : '--'} />
+            <SummaryItem label="Humidity" value={summary.avgHumidity != null ? `${Math.round(summary.avgHumidity)}%` : '--'} />
           </div>
         )}
+      </Card>
 
-        {streamEnabled && (
-          <>
-            {/* Data Pipeline — static DAG + live canvas timeline */}
-            <SensorCard>
-              <DataPipeline />
-            </SensorCard>
+      {/* Humidity */}
+      <Card className="gap-2.5 px-4 py-3.5">
+        {bedTempQuery.isLoading
+          ? (
+              <>
+                <SectionLabel>Humidity</SectionLabel>
+                <Skeleton className="h-[130px]" />
+              </>
+            )
+          : <HumidityChart data={bedTempQuery.data ?? []} />}
+      </Card>
 
-            {/* Piezo Waveform — real-time BCG signal */}
-            <SensorCard>
-              <PiezoWaveform />
-            </SensorCard>
-
-            {/* Bed Presence — capacitive sensing with zone activity */}
-            <SensorCard>
-              <PresenceCard />
-            </SensorCard>
-
-            {/* Sensor Matrix — Bed Temperature Grid */}
-            <SensorCard>
-              <BedTempMatrix />
-            </SensorCard>
-
-            {/* Bed Temperature Trend — recharts LineChart (from biometrics) */}
-            <SensorCard>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <TrendIcon trend={ambientTrend} />
-                    <h3 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-                      Bed Temperature Trend
-                    </h3>
-                  </div>
-                  <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-                </div>
-
-                {bedTempQuery.isLoading
-                  ? (
-                      <div className="flex h-[200px] items-center justify-center">
-                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
-                      </div>
-                    )
-                  : bedTempQuery.isError
-                    ? (
-                        <div className="flex h-[200px] items-center justify-center text-sm text-red-400">
-                          Failed to load temperature data
-                        </div>
-                      )
-                    : (
-                        <BedTempChart
-                          data={bedTempQuery.data ?? []}
-                          unit="F"
-                          showAmbient
-                          highlightSide="both"
-                        />
-                      )}
-
-                {/* Summary stats */}
-                {summary && (
-                  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-t border-zinc-800 pt-2">
-                    <SummaryItem
-                      label="Avg Bed L"
-                      value={summary.avgLeftCenterTemp != null ? `${Math.round(summary.avgLeftCenterTemp)}°` : '--'}
-                    />
-                    <SummaryItem
-                      label="Avg Bed R"
-                      value={summary.avgRightCenterTemp != null ? `${Math.round(summary.avgRightCenterTemp)}°` : '--'}
-                    />
-                    <SummaryItem
-                      label="Avg Ambient"
-                      value={summary.avgAmbientTemp != null ? `${Math.round(summary.avgAmbientTemp)}°` : '--'}
-                    />
-                    <SummaryItem
-                      label="Humidity"
-                      value={summary.avgHumidity != null ? `${Math.round(summary.avgHumidity)}%` : '--'}
-                    />
-                  </div>
-                )}
-              </div>
-            </SensorCard>
-
-            {/* Humidity Trend — recharts AreaChart (from biometrics) */}
-            <SensorCard>
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
-                  <Droplets size={10} className="text-[#4a90d9]" />
-                  <h3 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-                    Humidity
-                  </h3>
-                </div>
-                {bedTempQuery.isLoading
-                  ? (
-                      <div className="flex h-[140px] items-center justify-center">
-                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
-                      </div>
-                    )
-                  : (
-                      <HumidityChart data={bedTempQuery.data ?? []} />
-                    )}
-              </div>
-            </SensorCard>
-
-            {/* System — freezer thermal health */}
-            <SensorCard>
-              <FreezerHealthCard />
-            </SensorCard>
-
-            {/* Flowrate + Pump RPM trend (from biometrics) */}
-            <SensorCard>
-              <FlowrateChart />
-            </SensorCard>
-          </>
-        )}
-      </div>
-    </PullToRefresh>
-  )
-}
-
-/** Consistent card wrapper matching iOS cardStyle(). */
-function SensorCard({ children }: { children: React.ReactNode }) {
-  return (
-    <section className="rounded-2xl border border-zinc-800/50 bg-zinc-900 p-2 sm:p-3">
-      {children}
-    </section>
-  )
-}
-
-function TrendIcon({ trend }: { trend: string | null }) {
-  if (trend === 'warming') return <TrendingUp size={10} className="text-[#d4a84a]" />
-  if (trend === 'cooling') return <TrendingDown size={10} className="text-[#4a90d9]" />
-  return <Minus size={10} className="text-zinc-500" />
-}
-
-function SummaryItem({ label, value }: { label: string, value: string }) {
-  return (
-    <div className="flex flex-col items-center">
-      <span className="text-xs font-medium tabular-nums text-zinc-300">{value}</span>
-      <span className="text-[9px] text-zinc-600">{label}</span>
+      <PiezoWaveform enabled={streamEnabled} className="@min-[640px]:col-span-2" />
+      <FlowrateChart />
     </div>
   )
 }
 
+function LegendSwatch({ color, label, dashed }: { color: string, label: string, dashed?: boolean }) {
+  return (
+    <span className="flex items-center gap-1.5 tracking-normal normal-case max-[899px]:hidden">
+      <span
+        className="block w-2.5"
+        style={dashed ? { borderTop: `2px dashed ${color}` } : { height: 2, background: color }}
+      />
+      {label}
+    </span>
+  )
+}
+
+function SummaryItem({ label, value }: { label: string, value: string }) {
+  return (
+    <div>
+      {value}
+      <div className="font-sans text-[10px] text-fg-2">{label}</div>
+    </div>
+  )
+}

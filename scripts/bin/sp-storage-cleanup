@@ -1,0 +1,188 @@
+#!/bin/bash
+# Reclaim space on /persistent from sleepypod's own leftovers.
+#
+# The biometrics pruner keeps /persistent under 80% by deleting the oldest RAW
+# archives, so every byte of leftover here is raw history lost. Only these
+# whitelisted kinds are ever considered:
+#
+#   temp       stale sp-update / deploy staging and rollback copies
+#              (sleepypod-rollback.*, sleepypod-update.*, sleepypod-update-tmp,
+#              sleepypod-deploy.*, sleepypod-deploy-*) older than STALE_AGE_SEC
+#   releases   unpacked builds in sleepypod-releases/ other than the one the
+#              install resolves to and the newest remaining one
+#   modules    /persistent/sleepypod-core/node_modules when the install's
+#              node_modules is neither it nor a bind mount of it
+#   backups    old biometrics.db / sleepypod.db backups in the data dir, newest
+#              of each kept — only with --include-db-backups
+#
+# Never touches the resolved install, live databases, biometrics-archive,
+# swapfile, homekit data, or anything outside PERSISTENT_ROOT.
+#
+# Busybox-safe: df -P, stat -c, du -sk, no find -printf / GNU-only flags.
+#
+# Usage: sp-storage-cleanup [--dry-run] [--json] [--only temp|all]
+#                           [--include-db-backups] [--exclude PATH]...
+set -euo pipefail
+
+PERSISTENT_ROOT="${PERSISTENT_ROOT:-/persistent}"
+INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
+DATA_DIR="${DATA_DIR:-}"
+if [ -z "$DATA_DIR" ]; then
+  if [ -f /etc/sleepypod/data-dir ]; then DATA_DIR="$(cat /etc/sleepypod/data-dir)"
+  else DATA_DIR="$PERSISTENT_ROOT/sleepypod-data"
+  fi
+fi
+FSTAB="${FSTAB:-/etc/fstab}"
+STALE_AGE_SEC="${STALE_AGE_SEC:-3600}"
+
+DRY_RUN=false
+JSON=false
+ONLY=all
+DB_BACKUPS=false
+EXCLUDES=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true ;;
+    --json) JSON=true ;;
+    --only) ONLY="${2:-}"; shift ;;
+    --include-db-backups) DB_BACKUPS=true ;;
+    --exclude) EXCLUDES+=("${2:-}"); shift ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    *) echo "sp-storage-cleanup: unknown option $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+case "$ONLY" in temp|all) ;; *) echo "sp-storage-cleanup: --only must be temp or all" >&2; exit 2 ;; esac
+
+[ -d "$PERSISTENT_ROOT" ] || { $JSON && echo '{"items":[],"freedBytes":0}'; exit 0; }
+PERSISTENT_ROOT="$(cd "$PERSISTENT_ROOT" && pwd -P)"
+
+# The live install, fully resolved. Empty when missing (never matches a path).
+CURRENT=""
+if [ -d "$INSTALL_DIR" ]; then CURRENT="$(cd "$INSTALL_DIR" && pwd -P)"; fi
+NOW=$(date +%s)
+
+# stat -c is GNU/busybox; stat -f is the BSD fallback so tests run on macOS.
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo "$NOW"; }
+devino() { stat -L -c '%d:%i' "$1" 2>/dev/null || stat -L -f '%d:%i' "$1" 2>/dev/null || true; }
+bytes() { du -sk "$1" 2>/dev/null | awk '{print $1 * 1024}'; }
+json_str() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+
+ITEMS_PATH=()
+ITEMS_REASON=()
+
+# Guard every candidate: must be inside PERSISTENT_ROOT, not the install (or
+# a parent/child of it), and not excluded.
+add() {
+  local path="$1" reason="$2" real
+  [ -e "$path" ] || return 0
+  real="$(cd "$(dirname "$path")" && pwd -P)/$(basename "$path")"
+  case "$real" in "$PERSISTENT_ROOT"/*) ;; *) return 0 ;; esac
+  if [ -n "$CURRENT" ]; then
+    case "$CURRENT/" in "$real"/*) return 0 ;; esac
+    case "$real/" in "$CURRENT"/*) return 0 ;; esac
+  fi
+  local ex
+  for ex in "${EXCLUDES[@]+"${EXCLUDES[@]}"}"; do
+    [ -n "$ex" ] || continue
+    [ "$real" = "$ex" ] && return 0
+    [ -e "$ex" ] && [ "$real" = "$(cd "$(dirname "$ex")" && pwd -P)/$(basename "$ex")" ] && return 0
+  done
+  ITEMS_PATH+=("$real")
+  ITEMS_REASON+=("$reason")
+}
+
+# ── temp: stale staging / rollback dirs ──────────────────────────────────────
+for p in "$PERSISTENT_ROOT"/sleepypod-rollback.* "$PERSISTENT_ROOT"/sleepypod-update.* \
+         "$PERSISTENT_ROOT"/sleepypod-update-tmp "$PERSISTENT_ROOT"/sleepypod-deploy.* \
+         "$PERSISTENT_ROOT"/sleepypod-deploy-*; do
+  [ -e "$p" ] || continue
+  [ $((NOW - $(mtime "$p"))) -ge "$STALE_AGE_SEC" ] || continue
+  case "$(basename "$p")" in
+    sleepypod-rollback.*) add "$p" "leftover rollback copy from an interrupted update" ;;
+    sleepypod-deploy*) add "$p" "leftover deploy staging" ;;
+    *) add "$p" "leftover update staging" ;;
+  esac
+done
+
+if [ "$ONLY" = all ]; then
+  # ── releases: keep the live one and the newest other ───────────────────────
+  RELEASES="$PERSISTENT_ROOT/sleepypod-releases"
+  if [ -d "$RELEASES" ]; then
+    newest="" newest_m=-1
+    for d in "$RELEASES"/*/; do
+      [ -d "$d" ] || continue
+      d="${d%/}"
+      [ "$(cd "$d" && pwd -P)" = "$CURRENT" ] && continue
+      m=$(mtime "$d")
+      if [ "$m" -gt "$newest_m" ]; then newest="$d"; newest_m="$m"; fi
+    done
+    for d in "$RELEASES"/*/; do
+      [ -d "$d" ] || continue
+      d="${d%/}"
+      [ "$d" = "$newest" ] && continue
+      add "$d" "old release build"
+    done
+  fi
+
+  # ── modules: orphaned relocated node_modules ────────────────────────────────
+  ORPHAN_NM="$PERSISTENT_ROOT/sleepypod-core/node_modules"
+  if [ -d "$ORPHAN_NM" ] && [ -n "$CURRENT" ]; then
+    live_nm="$CURRENT/node_modules"
+    in_use=false
+    # Same device+inode means live_nm is this dir (symlink or bind mount).
+    if [ -e "$live_nm" ] && [ "$(devino "$live_nm")" = "$(devino "$ORPHAN_NM")" ]; then
+      in_use=true
+    fi
+    [ "$CURRENT" = "$PERSISTENT_ROOT/sleepypod-core" ] && in_use=true
+    if [ -f "$FSTAB" ] && grep -q "$ORPHAN_NM" "$FSTAB" 2>/dev/null; then in_use=true; fi
+    if [ -r /proc/mounts ] && grep -q " $ORPHAN_NM " /proc/mounts 2>/dev/null; then in_use=true; fi
+    $in_use || add "$ORPHAN_NM" "unused node_modules from an older install layout"
+  fi
+fi
+
+# ── backups: old database copies, newest of each kept ────────────────────────
+if $DB_BACKUPS && [ -d "$DATA_DIR" ]; then
+  for base in biometrics.db sleepypod.db; do
+    newest="" newest_m=-1
+    for f in "$DATA_DIR"/"$base".bak* "$DATA_DIR"/"$base".pre-*; do
+      [ -e "$f" ] || continue
+      m=$(mtime "$f")
+      if [ "$m" -gt "$newest_m" ]; then newest="$f"; newest_m="$m"; fi
+    done
+    for f in "$DATA_DIR"/"$base".bak* "$DATA_DIR"/"$base".pre-*; do
+      [ -e "$f" ] && [ "$f" != "$newest" ] || continue
+      add "$f" "old $base backup"
+    done
+  done
+fi
+
+# ── act / report ─────────────────────────────────────────────────────────────
+freed=0
+json_items=""
+for i in "${!ITEMS_PATH[@]}"; do
+  p="${ITEMS_PATH[$i]}"
+  r="${ITEMS_REASON[$i]}"
+  b=$(bytes "$p")
+  b=${b:-0}
+  if ! $DRY_RUN; then
+    if rm -rf -- "$p" 2>/dev/null; then freed=$((freed + b))
+    else echo "sp-storage-cleanup: could not remove $p" >&2; continue
+    fi
+  else
+    freed=$((freed + b))
+  fi
+  if $JSON; then
+    [ -z "$json_items" ] || json_items="$json_items,"
+    json_items="$json_items{\"path\":$(json_str "$p"),\"bytes\":$b,\"reason\":$(json_str "$r")}"
+  else
+    printf '%s %s  %s — %s\n' "$($DRY_RUN && echo would-remove || echo removed)" "$((b / 1048576))M" "$p" "$r"
+  fi
+done
+
+if $JSON; then
+  printf '{"dryRun":%s,"items":[%s],"freedBytes":%s}\n' "$DRY_RUN" "$json_items" "$freed"
+else
+  echo "sp-storage-cleanup: $($DRY_RUN && echo reclaimable || echo freed) $((freed / 1048576))M"
+fi

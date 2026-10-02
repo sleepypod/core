@@ -7,6 +7,7 @@
  */
 'use client'
 
+import { cn } from '@/lib/utils'
 import { Icon } from './icons'
 
 import type { BacktestResult } from '@/src/automation/backtest'
@@ -23,11 +24,11 @@ function minToClock(m: number): string {
 }
 
 function Stat({ label, value, tone = 'zinc' }: { label: string, value: string, tone?: 'zinc' | 'red' | 'accent' }) {
-  const color = tone === 'red' ? '#f87171' : tone === 'accent' ? 'var(--accent)' : '#e4e4e7'
+  const color = tone === 'red' ? 'text-danger' : tone === 'accent' ? 'text-cool' : 'text-fg'
   return (
-    <div className="rounded-lg border border-zinc-800/70 bg-zinc-900/40 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-[0.1em] text-zinc-500">{label}</div>
-      <div className="mono text-[15px] font-medium mt-0.5" style={{ color }}>{value}</div>
+    <div className="min-w-0 rounded-ctl border border-line px-3 py-2">
+      <div className="sp-label">{label}</div>
+      <div className={cn('mt-0.5 truncate font-mono text-[15px]', color)}>{value}</div>
     </div>
   )
 }
@@ -40,12 +41,12 @@ function NightPicker({ nights, nightId, onNight }: { nights: NightOption[], nigh
           key={n.sleepRecordId}
           type="button"
           onClick={() => onNight(n.sleepRecordId)}
-          style={n.sleepRecordId === nightId ? { background: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'var(--accent)', borderColor: 'color-mix(in srgb, var(--accent) 30%, transparent)' } : undefined}
-          className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${n.sleepRecordId === nightId ? '' : 'border-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+          aria-pressed={n.sleepRecordId === nightId}
+          className={cn('rounded-thumb border px-2 py-1 text-[12px] transition-colors', n.sleepRecordId === nightId ? 'border-line-2 bg-active text-fg' : 'border-line text-fg-2 hover:text-fg')}
         >
           {n.label}
           {' '}
-          <span className="text-[10px] opacity-60">{n.date}</span>
+          <span className="font-mono text-[10px] text-fg-3">{n.date}</span>
         </button>
       ))}
     </div>
@@ -54,12 +55,12 @@ function NightPicker({ nights, nightId, onNight }: { nights: NightOption[], nigh
 
 function Chart({ r }: { r: BacktestResult }) {
   const N = r.clockMin.length
-  if (N < 2) return <div className="text-[12px] text-zinc-500 px-2 py-8 text-center">Not enough data in this window to replay.</div>
+  if (N < 2) return <div className="px-2 py-8 text-center text-[12px] text-fg-3">Not enough data in this window to replay.</div>
 
   // Policy overlays ambient + setpoint on one shared temperature scale.
   const policy = r.mode === 'policy'
 
-  const W = 660, mL = 38, mR = 42, mT = 14
+  const W = 660, mL = 38, mR = 44, mT = 14
   const iw = W - mL - mR
   // Edge mode reserves a dedicated event rail beneath the plot so the plot
   // itself stays clean at any event density; policy keeps the original layout.
@@ -144,15 +145,15 @@ function Chart({ r }: { r: BacktestResult }) {
   })()
 
   return (
-    <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2">
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+    <div className="overflow-x-auto rounded-ctl border border-line bg-code p-2">
+      <svg className="min-w-[480px]" width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
         {[0, 0.25, 0.5, 0.75, 1].map((g, i) => (
-          <line key={i} x1={mL} x2={W - mR} y1={mT + ih * g} y2={mT + ih * g} stroke="#1c1c20" strokeWidth="1" />
+          <line key={i} x1={mL} x2={W - mR} y1={mT + ih * g} y2={mT + ih * g} stroke="var(--border-grid)" strokeWidth="1" />
         ))}
         {tickIdx.map((idx, i) => (
           <g key={i}>
-            <line x1={x(idx)} x2={x(idx)} y1={mT} y2={mT + ih} stroke="#18181b" strokeWidth="1" />
-            <text x={x(idx)} y={labelY} textAnchor="middle" className="mono" style={{ fontSize: 9, fill: '#71717a' }}>{minToClock(r.clockMin[idx])}</text>
+            <line x1={x(idx)} x2={x(idx)} y1={mT} y2={mT + ih} stroke="var(--border-grid)" strokeWidth="1" />
+            <text x={x(idx)} y={labelY} textAnchor="middle" className="font-mono" style={{ fontSize: 9, fill: 'var(--text-3)' }}>{minToClock(r.clockMin[idx])}</text>
           </g>
         ))}
 
@@ -173,7 +174,7 @@ function Chart({ r }: { r: BacktestResult }) {
           })
           if (s >= 0) spans.push([s, N - 1])
           return spans.map(([a, b], i) => (
-            <rect key={i} x={x(a)} y={mT} width={Math.max(1, x(b) - x(a))} height={ih} fill="rgba(255,255,255,0.02)" />
+            <rect key={i} x={x(a)} y={mT} width={Math.max(1, x(b) - x(a))} height={ih} fill="var(--text-1)" opacity="0.03" />
           ))
         })()}
 
@@ -181,58 +182,58 @@ function Chart({ r }: { r: BacktestResult }) {
         {cooldownBands.map(([a, b], k) => {
           const x0 = Math.max(mL, x(a) - stepX / 2)
           const x1 = Math.min(W - mR, x(b) + stepX / 2)
-          return <rect key={`cb${k}`} x={x0} y={mT} width={Math.max(1, x1 - x0)} height={ih} fill="#71717a" opacity="0.07" />
+          return <rect key={`cb${k}`} x={x0} y={mT} width={Math.max(1, x1 - x0)} height={ih} fill="var(--text-3)" opacity="0.1" />
         })}
 
         {/* policy clamp band */}
         {policy && r.clamp && (
           <>
-            <rect x={mL} y={yTemp(r.clamp.max)} width={iw} height={Math.max(0, yTemp(r.clamp.min) - yTemp(r.clamp.max))} fill="color-mix(in srgb, var(--accent) 6%, transparent)" />
-            <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.max)} y2={yTemp(r.clamp.max)} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
-            <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.min)} y2={yTemp(r.clamp.min)} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
+            <rect x={mL} y={yTemp(r.clamp.max)} width={iw} height={Math.max(0, yTemp(r.clamp.min) - yTemp(r.clamp.max))} fill="color-mix(in srgb, var(--accent-cool) 6%, transparent)" />
+            <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.max)} y2={yTemp(r.clamp.max)} stroke="var(--accent-cool)" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
+            <line x1={mL} x2={W - mR} y1={yTemp(r.clamp.min)} y2={yTemp(r.clamp.min)} stroke="var(--accent-cool)" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
           </>
         )}
 
         {/* fire zone — faint red tint above the threshold (edge) */}
         {!policy && r.threshold != null && r.primaryAxis && (
-          <rect x={mL} y={mT} width={iw} height={Math.max(0, yPrimary(r.threshold) - mT)} fill="#ef4444" opacity="0.05" />
+          <rect x={mL} y={mT} width={iw} height={Math.max(0, yPrimary(r.threshold) - mT)} fill="var(--status-danger)" opacity="0.06" />
         )}
 
         {/* threshold (edge) */}
         {!policy && r.threshold != null && r.primaryAxis && (
           <>
-            <line x1={mL} x2={W - mR} y1={yPrimary(r.threshold)} y2={yPrimary(r.threshold)} stroke="#ef4444" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.6" />
-            <text x={W - mR + 3} y={yPrimary(r.threshold) + 3} className="mono" style={{ fontSize: 9, fill: '#ef4444' }}>{r.threshold}</text>
+            <line x1={mL} x2={W - mR} y1={yPrimary(r.threshold)} y2={yPrimary(r.threshold)} stroke="var(--status-danger)" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.6" />
+            <text x={W - mR + 3} y={yPrimary(r.threshold) + 3} className="font-mono" style={{ fontSize: 9, fill: 'var(--status-danger)' }}>{r.threshold}</text>
           </>
         )}
 
         {/* primary raw trace — soft hairline behind the avg (edge) */}
-        {r.primary && <path d={linePath(r.primary.values, yPrimary)} fill="none" stroke="#3f3f46" strokeWidth={policy ? 1.3 : 1} opacity={policy ? 1 : 0.5} />}
+        {r.primary && <path d={linePath(r.primary.values, yPrimary)} fill="none" stroke="var(--text-3)" strokeWidth={policy ? 1.3 : 1} opacity={policy ? 0.8 : 0.45} />}
         {/* policy raw (pre-clamp) ghost */}
-        {policy && r.setpointRaw && <path d={linePath(r.setpointRaw, yTemp)} fill="none" stroke="#52525b" strokeWidth="1" strokeDasharray="3 3" />}
+        {policy && r.setpointRaw && <path d={linePath(r.setpointRaw, yTemp)} fill="none" stroke="var(--text-3)" strokeWidth="1" strokeDasharray="3 3" />}
         {/* windowed avg — brightest, heaviest trace (edge) */}
-        {r.avg && <path d={linePath(r.avg.values, yPrimary)} fill="none" stroke={policy ? '#d4d4d8' : '#fafafa'} strokeWidth={policy ? 1.8 : 2} />}
+        {r.avg && <path d={linePath(r.avg.values, yPrimary)} fill="none" stroke={policy ? 'var(--text-2)' : 'var(--text-1)'} strokeWidth={policy ? 1.8 : 2} />}
 
         {/* setpoint */}
-        <path d={policy ? linePath(r.setpoint, yTemp) : stepPath} fill="none" stroke="var(--accent)" strokeWidth="2.1" />
+        <path d={policy ? linePath(r.setpoint, yTemp) : stepPath} fill="none" stroke="var(--accent-cool)" strokeWidth="2.1" />
 
         {/* fire dots on the avg curve (edge) */}
         {!policy && r.fires.map((i, k) => {
           const yv = r.avg?.values[i] ?? r.primary?.values[i] ?? null
           return yv == null
             ? null
-            : <circle key={`f${k}`} cx={x(i)} cy={yPrimary(yv)} r="4" fill="#ef4444" stroke="#0a0a0b" strokeWidth="1.5" />
+            : <circle key={`f${k}`} cx={x(i)} cy={yPrimary(yv)} r="4" fill="var(--status-danger)" stroke="var(--surface-code)" strokeWidth="1.5" />
         })}
 
         {/* event rail — carries all event density so the plot stays clean (edge) */}
         {!policy && (
           <g>
-            <rect x={mL} y={railTop} width={iw} height={railH} rx={3} fill="#141417" stroke="#26262b" strokeWidth="1" />
+            <rect x={mL} y={railTop} width={iw} height={railH} rx={3} fill="var(--surface-active)" stroke="var(--border-2)" strokeWidth="1" />
             {r.suppressed.map((i, k) => (
-              <line key={`rs${k}`} x1={x(i)} x2={x(i)} y1={railTop + 3.5} y2={railBottom - 3.5} stroke="#52525b" strokeWidth="1" opacity="0.8" />
+              <line key={`rs${k}`} x1={x(i)} x2={x(i)} y1={railTop + 3.5} y2={railBottom - 3.5} stroke="var(--text-3)" strokeWidth="1" opacity="0.8" />
             ))}
             {r.fires.map((i, k) => (
-              <line key={`rf${k}`} x1={x(i)} x2={x(i)} y1={railTop + 1.5} y2={railBottom - 1.5} stroke="#ef4444" strokeWidth="1.8" />
+              <line key={`rf${k}`} x1={x(i)} x2={x(i)} y1={railTop + 1.5} y2={railBottom - 1.5} stroke="var(--status-danger)" strokeWidth="1.8" />
             ))}
           </g>
         )}
@@ -240,15 +241,16 @@ function Chart({ r }: { r: BacktestResult }) {
         {/* axes labels */}
         {!policy && r.primaryAxis && (
           <>
-            <text x={mL - 5} y={yPrimary(r.primaryAxis.max) + 3} textAnchor="end" className="mono" style={{ fontSize: 9, fill: '#52525b' }}>{Math.round(r.primaryAxis.max)}</text>
-            <text x={mL - 5} y={yPrimary(r.primaryAxis.min) - 1} textAnchor="end" className="mono" style={{ fontSize: 9, fill: '#52525b' }}>{Math.round(r.primaryAxis.min)}</text>
+            <text x={mL - 5} y={yPrimary(r.primaryAxis.max) + 3} textAnchor="end" className="font-mono" style={{ fontSize: 9, fill: 'var(--text-3)' }}>{Math.round(r.primaryAxis.max)}</text>
+            <text x={mL - 5} y={yPrimary(r.primaryAxis.min) - 1} textAnchor="end" className="font-mono" style={{ fontSize: 9, fill: 'var(--text-3)' }}>{Math.round(r.primaryAxis.min)}</text>
           </>
         )}
-        <text x={W - mR + 3} y={yTemp(policy ? sharedMax : tempA.max) + 8} className="mono" style={{ fontSize: 9, fill: 'var(--accent)' }}>
+        {/* Setpoint axis sits in its own column right of the threshold label so the two never overlap. */}
+        <text x={W - 3} y={yTemp(policy ? sharedMax : tempA.max) + 8} textAnchor="end" className="font-mono" style={{ fontSize: 9, fill: 'var(--accent-cool)' }}>
           {Math.round(policy ? sharedMax : tempA.max)}
           °
         </text>
-        <text x={W - mR + 3} y={yTemp(policy ? sharedMin : tempA.min)} className="mono" style={{ fontSize: 9, fill: 'var(--accent)' }}>
+        <text x={W - 3} y={yTemp(policy ? sharedMin : tempA.min)} textAnchor="end" className="font-mono" style={{ fontSize: 9, fill: 'var(--accent-cool)' }}>
           {Math.round(policy ? sharedMin : tempA.min)}
           °
         </text>
@@ -276,10 +278,10 @@ export function BacktestPanel({
   const r = result
   return (
     <div>
-      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Icon.Flask size={14} className="text-zinc-500" />
-          <span className="text-[12px] font-semibold tracking-[0.12em] uppercase text-zinc-400">
+          <Icon.Flask size={14} className="text-icon" />
+          <span className="sp-label">
             Backtest
             {r ? (r.mode === 'policy' ? ' · policy' : ' · edge') : ''}
           </span>
@@ -287,26 +289,26 @@ export function BacktestPanel({
         <NightPicker nights={nights} nightId={nightId} onNight={onNight} />
       </div>
 
-      {loading && <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2 h-[160px] grid place-items-center text-[12px] text-zinc-600">Replaying…</div>}
-      {!loading && message && <div className="rounded-lg border border-zinc-800/70 bg-zinc-900/40 p-4 text-[12px] text-zinc-500">{message}</div>}
+      {loading && <div className="grid h-[160px] place-items-center rounded-ctl border border-line bg-code p-2 text-[12px] text-fg-3">Replaying…</div>}
+      {!loading && message && <div className="rounded-ctl border border-dashed border-line-2 p-4 text-[13px] text-fg-2">{message}</div>}
       {!loading && !message && r && (
         <>
           <Chart r={r} />
-          <div className="mt-3 flex items-center gap-3 flex-wrap text-[11px] text-zinc-400">
-            {r.avg && <Legend swatch={r.mode === 'edge' ? '#fafafa' : '#d4d4d8'}>{r.avg.label}</Legend>}
-            {r.primary && <Legend swatch="#3f3f46">{r.mode === 'policy' ? r.primary.label.toLowerCase() : `raw ${r.primary.label.toLowerCase()}`}</Legend>}
-            {r.mode === 'policy' && r.setpointRaw && <Legend dashed swatch="#52525b">pre-clamp</Legend>}
-            {r.mode === 'edge' && r.threshold != null && <Legend dashed swatch="#ef4444">threshold</Legend>}
-            <Legend swatch="var(--accent)">setpoint</Legend>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-fg-2">
+            {r.avg && <Legend swatch={r.mode === 'edge' ? 'var(--text-1)' : 'var(--text-2)'}>{r.avg.label}</Legend>}
+            {r.primary && <Legend swatch="var(--text-3)">{r.mode === 'policy' ? r.primary.label.toLowerCase() : `raw ${r.primary.label.toLowerCase()}`}</Legend>}
+            {r.mode === 'policy' && r.setpointRaw && <Legend dashed swatch="var(--text-3)">pre-clamp</Legend>}
+            {r.mode === 'edge' && r.threshold != null && <Legend dashed swatch="var(--status-danger)">threshold</Legend>}
+            <Legend swatch="var(--accent-cool)">setpoint</Legend>
             {r.mode === 'edge' && (
               <>
-                <Dot color="#ef4444">fired</Dot>
-                <Tick color="#52525b">suppressed</Tick>
-                <Block color="#71717a">cooldown</Block>
+                <Dot color="var(--status-danger)">fired</Dot>
+                <Tick color="var(--text-3)">suppressed</Tick>
+                <Block color="var(--text-3)">cooldown</Block>
               </>
             )}
           </div>
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-1 gap-2 min-[480px]:grid-cols-3">
             {r.mode === 'policy'
               ? (
                   <>
@@ -332,7 +334,7 @@ export function BacktestPanel({
 function Legend({ swatch, dashed, children }: { swatch: string, dashed?: boolean, children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className={`h-0.5 w-4 rounded ${dashed ? 'border-t border-dashed' : ''}`} style={dashed ? { borderColor: swatch } : { background: swatch }} />
+      <span className={cn('h-0.5 w-4 rounded', dashed && 'border-t border-dashed')} style={dashed ? { borderColor: swatch } : { background: swatch }} />
       {children}
     </span>
   )

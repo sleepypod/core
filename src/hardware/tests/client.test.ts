@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { HardwareClient, createHardwareClient } from '../client'
 import { HardwareCommand, MAX_TEMP, MIN_TEMP, PodVersion } from '../types'
 import { DEVICE_STATUS_POD3, DEVICE_STATUS_POD4, ERROR_RESPONSE } from './fixtures'
@@ -18,6 +18,7 @@ describe('HardwareClient', () => {
       await ctx.hardwareClient!.connect()
 
       expect(ctx.hardwareClient!.isConnected()).toBe(true)
+      expect(ctx.server.getClientCount()).toBe(1)
     })
 
     test('disconnect closes connection', () => {
@@ -54,6 +55,35 @@ describe('HardwareClient', () => {
       expect(status).toBeDefined()
 
       client.disconnect()
+    })
+
+    test('auto-reconnects by default when the option is omitted', async () => {
+      const client = new HardwareClient({
+        socketPath: ctx.socketPath,
+        connectionTimeout: 1000,
+      })
+      await client.connect()
+      client.disconnect()
+
+      await expect(client.getDeviceStatus()).resolves.toEqual(expect.objectContaining({ podVersion: PodVersion.POD_4 }))
+      expect(client.isConnected()).toBe(true)
+      client.disconnect()
+    })
+
+    test('reports the exact socket failure context and leaves no raw client', async () => {
+      const socketPath = `/tmp/nonexistent-client-${Date.now()}.sock`
+      const client = new HardwareClient({ socketPath, connectionTimeout: 20 })
+
+      await expect(client.connect()).rejects.toThrow('Failed to connect to hardware:')
+      expect(client.getRawClient()).toBeNull()
+    })
+
+    test('defends against a reconnect implementation that resolves without a client', async () => {
+      const client = new HardwareClient({ socketPath: ctx.socketPath })
+      const connect = vi.spyOn(client, 'connect').mockResolvedValue(undefined)
+
+      await expect(client.getDeviceStatus()).rejects.toThrow('Client connection failed')
+      expect(connect).toHaveBeenCalledOnce()
     })
   })
 
@@ -123,13 +153,27 @@ describe('HardwareClient', () => {
 
       // Temperature 110°F (max) should map to level 100
       await ctx.hardwareClient!.setTemperature('right', MAX_TEMP)
+
+      expect(ctx.server.getReceivedCommands()).toEqual([
+        { command: HardwareCommand.TEMP_LEVEL_LEFT, argument: '2' },
+        { command: HardwareCommand.LEFT_TEMP_DURATION, argument: '28800' },
+        { command: HardwareCommand.TEMP_LEVEL_LEFT, argument: '-100' },
+        { command: HardwareCommand.LEFT_TEMP_DURATION, argument: '28800' },
+        { command: HardwareCommand.TEMP_LEVEL_RIGHT, argument: '100' },
+        { command: HardwareCommand.RIGHT_TEMP_DURATION, argument: '28800' },
+      ])
     })
 
     test('sends commands to correct side', async () => {
       await ctx.hardwareClient!.setTemperature('left', 70)
-      await ctx.hardwareClient!.setTemperature('right', 75)
+      await ctx.hardwareClient!.setTemperature('right', 75, 123)
 
-      // Both should succeed without errors
+      expect(ctx.server.getReceivedCommands()).toEqual([
+        { command: HardwareCommand.TEMP_LEVEL_LEFT, argument: '-45' },
+        { command: HardwareCommand.LEFT_TEMP_DURATION, argument: '28800' },
+        { command: HardwareCommand.TEMP_LEVEL_RIGHT, argument: '-27' },
+        { command: HardwareCommand.RIGHT_TEMP_DURATION, argument: '123' },
+      ])
     })
   })
 
@@ -172,6 +216,14 @@ describe('HardwareClient', () => {
           duration: 181,
         })
       ).rejects.toThrow('Alarm duration must be between 0 and 180 seconds')
+
+      await expect(
+        ctx.hardwareClient!.setAlarm('right', {
+          vibrationIntensity: 50,
+          vibrationPattern: 'rise',
+          duration: -1,
+        })
+      ).rejects.toThrow('Alarm duration must be between 0 and 180 seconds')
     })
 
     test('accepts boundary values', async () => {
@@ -208,6 +260,11 @@ describe('HardwareClient', () => {
           duration: 60,
         })
       ).resolves.not.toThrow()
+
+      expect(ctx.server.getReceivedCommands().map(({ command }) => command)).toEqual([
+        HardwareCommand.ALARM_LEFT,
+        HardwareCommand.ALARM_RIGHT,
+      ])
     })
 
     test('throws on hardware error', async () => {
@@ -226,10 +283,16 @@ describe('HardwareClient', () => {
   describe('clearAlarm', () => {
     test('clears left alarm', async () => {
       await expect(ctx.hardwareClient!.clearAlarm('left')).resolves.not.toThrow()
+      expect(ctx.server.getReceivedCommands()).toEqual([
+        { command: HardwareCommand.ALARM_CLEAR, argument: '0' },
+      ])
     })
 
     test('clears right alarm', async () => {
       await expect(ctx.hardwareClient!.clearAlarm('right')).resolves.not.toThrow()
+      expect(ctx.server.getReceivedCommands()).toEqual([
+        { command: HardwareCommand.ALARM_CLEAR, argument: '1' },
+      ])
     })
 
     test('is idempotent', async () => {
@@ -263,7 +326,10 @@ describe('HardwareClient', () => {
     })
 
     test('powers off by setting level to 0', async () => {
-      await expect(ctx.hardwareClient!.setPower('left', false)).resolves.not.toThrow()
+      await expect(ctx.hardwareClient!.setPower('right', false)).resolves.not.toThrow()
+      expect(ctx.server.getReceivedCommands()).toEqual([
+        { command: HardwareCommand.TEMP_LEVEL_RIGHT, argument: '0' },
+      ])
     })
 
     test('validates temperature when powering on', async () => {

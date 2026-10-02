@@ -1,26 +1,27 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useCallback, useState } from 'react'
+import { Pencil, Trash2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Pencil, Trash2, X, Loader2, Check } from 'lucide-react'
+import { Button, InlineError, Modal, TextField } from '@/src/components/ds'
 
 interface SleepRecordActionsProps {
   recordId: number
   enteredBedAt: Date
-  leftBedAt: Date
+  /** null while the session is still open (occupant in bed). */
+  leftBedAt: Date | null
   onActionComplete?: () => void
 }
 
-function formatDateTimeLocal(date: Date): string {
+export function formatDateTimeLocal(date: Date): string {
   const d = new Date(date)
-  // Format to datetime-local input value
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 /**
- * Inline actions for editing/deleting a sleep record.
- * Matches iOS sleep record management functionality.
+ * "Edit times" for a sleep record: a dialog (sheet on phones) to correct
+ * bed/wake times or delete the record.
  *
  * Wires into:
  * - biometrics.updateSleepRecord → edit bed/wake times
@@ -32,136 +33,87 @@ export function SleepRecordActions({
   leftBedAt,
   onActionComplete,
 }: SleepRecordActionsProps) {
-  const [mode, setMode] = useState<'idle' | 'edit' | 'confirmDelete'>('idle')
-  const [editBedTime, setEditBedTime] = useState(formatDateTimeLocal(enteredBedAt))
-  const [editWakeTime, setEditWakeTime] = useState(formatDateTimeLocal(leftBedAt))
+  const [open, setOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [editBedTime, setEditBedTime] = useState('')
+  const [editWakeTime, setEditWakeTime] = useState('')
 
   const utils = trpc.useUtils()
+  const onSuccess = () => {
+    utils.biometrics.getSleepRecords.invalidate()
+    utils.biometrics.getLatestSleep.invalidate()
+    utils.biometrics.getSleepStages.invalidate()
+    setOpen(false)
+    onActionComplete?.()
+  }
+  const updateMutation = trpc.biometrics.updateSleepRecord.useMutation({ onSuccess })
+  const deleteMutation = trpc.biometrics.deleteSleepRecord.useMutation({ onSuccess })
 
-  const updateMutation = trpc.biometrics.updateSleepRecord.useMutation({
-    onSuccess: () => {
-      utils.biometrics.getSleepRecords.invalidate()
-      utils.biometrics.getLatestSleep.invalidate()
-      setMode('idle')
-      onActionComplete?.()
-    },
-  })
-
-  const deleteMutation = trpc.biometrics.deleteSleepRecord.useMutation({
-    onSuccess: () => {
-      utils.biometrics.getSleepRecords.invalidate()
-      utils.biometrics.getLatestSleep.invalidate()
-      setMode('idle')
-      onActionComplete?.()
-    },
-  })
+  const openEditor = useCallback(() => {
+    setEditBedTime(formatDateTimeLocal(enteredBedAt))
+    setEditWakeTime(leftBedAt ? formatDateTimeLocal(leftBedAt) : '')
+    setConfirmDelete(false)
+    updateMutation.reset()
+    deleteMutation.reset()
+    setOpen(true)
+  }, [enteredBedAt, leftBedAt, updateMutation, deleteMutation])
 
   const handleSave = useCallback(() => {
     updateMutation.mutate({
       id: recordId,
       enteredBedAt: new Date(editBedTime),
-      leftBedAt: new Date(editWakeTime),
+      ...(editWakeTime ? { leftBedAt: new Date(editWakeTime) } : {}),
     })
   }, [recordId, editBedTime, editWakeTime, updateMutation])
 
   const handleDelete = useCallback(() => {
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      return
+    }
     deleteMutation.mutate({ id: recordId })
-  }, [recordId, deleteMutation])
+  }, [confirmDelete, recordId, deleteMutation])
 
   const isPending = updateMutation.isPending || deleteMutation.isPending
+  const errorMessage = updateMutation.error?.message ?? deleteMutation.error?.message
 
-  if (mode === 'idle') {
-    return (
-      <div className="flex items-center gap-1">
-        <button
-          onClick={() => setMode('edit')}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-600 active:bg-zinc-800 active:text-zinc-400"
-          title="Edit sleep record"
-        >
-          <Pencil size={12} />
-        </button>
-        <button
-          onClick={() => setMode('confirmDelete')}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-600 active:bg-zinc-800 active:text-red-400"
-          title="Delete sleep record"
-        >
-          <Trash2 size={12} />
-        </button>
-      </div>
-    )
-  }
-
-  if (mode === 'confirmDelete') {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] text-red-400">Delete?</span>
-        <button
-          onClick={handleDelete}
-          disabled={isPending}
-          className="flex h-8 items-center gap-1 rounded-lg bg-red-900/30 px-2 text-[10px] font-semibold text-red-400 active:bg-red-900/50 disabled:opacity-50"
-        >
-          {deleteMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : 'Yes'}
-        </button>
-        <button
-          onClick={() => setMode('idle')}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 active:bg-zinc-800"
-        >
-          <X size={12} />
-        </button>
-      </div>
-    )
-  }
-
-  // Edit mode
   return (
-    <div className="mt-2 space-y-2 rounded-lg bg-zinc-800/50 p-2">
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="text-[9px] text-zinc-500">Bedtime</label>
-          <input
-            type="datetime-local"
-            value={editBedTime}
-            onChange={e => setEditBedTime(e.target.value)}
-            className="w-full rounded-md bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 outline-none focus:ring-1 focus:ring-sky-500"
-          />
-        </div>
-        <div>
-          <label className="text-[9px] text-zinc-500">Wake</label>
-          <input
-            type="datetime-local"
-            value={editWakeTime}
-            onChange={e => setEditWakeTime(e.target.value)}
-            className="w-full rounded-md bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 outline-none focus:ring-1 focus:ring-sky-500"
-          />
-        </div>
-      </div>
-      <div className="flex items-center justify-end gap-1.5">
-        {(updateMutation.isError || deleteMutation.isError) && (
-          <span className="flex-1 text-[9px] text-red-400">
-            {updateMutation.error?.message ?? deleteMutation.error?.message}
-          </span>
+    <>
+      <button
+        type="button"
+        onClick={openEditor}
+        aria-label="Edit times"
+        className="flex cursor-pointer items-center gap-1.5 rounded-ctl border-0 bg-transparent px-1.5 py-1 text-[13px] text-fg-2 hover:bg-active hover:text-fg"
+      >
+        <Pencil size={14} />
+        <span className="max-[899px]:hidden">Edit times</span>
+      </button>
+
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Edit sleep record"
+        width={480}
+        footer={(
+          <>
+            <Button variant="danger" icon={Trash2} onClick={handleDelete} disabled={isPending}>
+              {confirmDelete ? 'Confirm delete' : 'Delete'}
+            </Button>
+            <div className="flex-1" />
+            <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button variant="primary" onClick={handleSave} disabled={isPending || !editBedTime}>
+              {updateMutation.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </>
         )}
-        <button
-          onClick={() => setMode('idle')}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 active:bg-zinc-800"
-        >
-          <X size={12} />
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={isPending}
-          className="flex h-8 items-center gap-1 rounded-lg bg-sky-600 px-3 text-[10px] font-semibold text-white active:bg-sky-700 disabled:opacity-50"
-        >
-          {updateMutation.isPending
-            ? (
-                <Loader2 size={10} className="animate-spin" />
-              )
-            : (
-                <Check size={10} />
-              )}
-          Save
-        </button>
-      </div>
-    </div>
+      >
+        <div className="grid grid-cols-1 gap-3 min-[900px]:grid-cols-2">
+          <TextField label="Bedtime" type="datetime-local" value={editBedTime} onChange={setEditBedTime} />
+          <TextField label="Wake" type="datetime-local" value={editWakeTime} onChange={setEditWakeTime} />
+        </div>
+        {confirmDelete && <p className="text-[13px] text-fg-2">Deleting removes this night from Sleep. This cannot be undone.</p>}
+        {errorMessage && <InlineError>{errorMessage}</InlineError>}
+      </Modal>
+    </>
   )
 }

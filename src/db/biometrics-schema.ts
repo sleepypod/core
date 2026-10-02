@@ -128,6 +128,14 @@ export const capSenseFrames = sqliteTable('cap_sense_frames', {
   spread: real('spread').notNull(),
   peakZone: integer('peak_zone'), // 0–2 modal zone over the window, or null
   frameCount: integer('frame_count').notNull(), // raw frames aggregated into this row
+  // Per-side status histogram `{status: sampleCount}` over the window, e.g.
+  // `{"good": 8, "warmup": 2}`. Null when every sample was "good" (or carried
+  // no status, as on legacy .RAW frames) — the overwhelmingly common case, so
+  // storage cost ≈ nil. Populated only from the NATS capSense dialect, whose
+  // per-side records carry `status`. Feeds the future capSense.status gate:
+  // lets us correlate historically which windows were non-good before gating
+  // on states we have not yet observed in the field.
+  statusCounts: text('status_counts', { mode: 'json' }),
 }, t => [
   // One row per side/window — guards against duplicates if a restart re-reads
   // the active RAW file from the start (insert is conflict-tolerant).
@@ -178,6 +186,49 @@ export const flowReadings = sqliteTable('flow_readings', {
   uniqueIndex('idx_flow_readings_timestamp').on(t.timestamp),
 ])
 
+/**
+ * Per-side regulation state sampled from the DAC status poll: at most once a
+ * minute per side, plus immediately on every power transition. It gives the
+ * Thermal page target/bed history and power-on markers, which device_state
+ * (a single current row per side) can't.
+ */
+export const thermalState = sqliteTable('thermal_state', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  isPowered: integer('is_powered', { mode: 'boolean' }).notNull(),
+  targetTempF: real('target_temp_f'),
+  currentTempF: real('current_temp_f'),
+}, t => [
+  index('idx_thermal_state_timestamp').on(t.timestamp),
+])
+
+/** One row per completed prime cycle (priming → not priming on the DAC status). */
+export const primeEvents = sqliteTable('prime_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+}, t => [
+  index('idx_prime_events_timestamp').on(t.timestamp),
+])
+
+/**
+ * Run-length history of System → Health's data-path checks. The sampler
+ * extends the open run for a check (last_seen_at) every minute while its
+ * status holds, and starts a new run when it changes. Time covered by no run
+ * is time the core wasn't sampling (not running), shown as a gap.
+ */
+export const healthRuns = sqliteTable('health_runs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  checkId: text('check_id').notNull(),
+  status: text('status', { enum: ['ok', 'idle', 'stale', 'down', 'unknown'] }).notNull(),
+  detail: text('detail'),
+  startedAt: integer('started_at', { mode: 'timestamp' }).notNull(),
+  lastSeenAt: integer('last_seen_at', { mode: 'timestamp' }).notNull(),
+}, t => [
+  index('idx_health_runs_check_started').on(t.checkId, t.startedAt),
+  index('idx_health_runs_last_seen').on(t.lastSeenAt),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {
@@ -210,7 +261,7 @@ export const calibrationRuns = sqliteTable('calibration_runs', {
   samplesUsed: integer('samples_used'),
   errorMessage: text('error_message'),
   durationMs: integer('duration_ms'),
-  triggeredBy: text('triggered_by', { enum: ['daily', 'manual', 'startup'] }).notNull(),
+  triggeredBy: text('triggered_by', { enum: ['daily', 'manual', 'startup', 'retry'] }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, t => [
   index('idx_cal_runs_side_type').on(t.side, t.sensorType, t.createdAt),

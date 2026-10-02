@@ -1,7 +1,8 @@
 import type { HardwareClient } from './client'
-import { MAX_TEMP, MIN_TEMP, TEMP_NEUTRAL, type Side } from './types'
+import { MAX_TEMP, MIN_TEMP, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
-import { getAutomationEngineIfRunning } from '@/src/automation'
+import { getTemperatureController } from '@/src/temperature/instance'
+import { shouldBlock as pumpStallShouldBlock } from './pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 
 // Re-export for callers that need to build deps
@@ -94,23 +95,26 @@ export class GestureActionHandler {
     event: GestureEvent,
     gesture: TapGestureRow
   ): Promise<void> => {
-    const state = await this.deps.findDeviceState(event.side)
-    const currentTemp = state?.targetTemperature ?? 75
-    const amount = gesture.temperatureAmount ?? 0
-    if (!gesture.temperatureChange) return // misconfigured row — skip
-    const delta = gesture.temperatureChange === 'increment' ? amount : -amount
-    const newTemp = Math.min(MAX_TEMP, Math.max(MIN_TEMP, currentTemp + delta))
-
     await withSideLock(event.side, async () => {
-      const client = this.deps.newHardwareClient(this.socketPath)
-      try {
-        getAutomationEngineIfRunning()?.registerManualOverride(event.side)
-        await client.connect()
-        await client.setTemperature(event.side, newTemp)
+      // Step from the temperature SleepyPod itself has set (the controller's
+      // selected target), not the firmware's reported target: the firmware
+      // applies its own tap adjustment (one Eight Sleep step, 2.75°F) before
+      // this runs, and the status may already include it. Writing the result
+      // as an absolute target then replaces that adjustment, so a tap moves
+      // exactly the configured amount instead of both added together.
+      const owned = getTemperatureController().status(event.side).targetTemperature
+      const currentTemp = owned
+        ?? (await this.deps.findDeviceState(event.side))?.targetTemperature
+        ?? 75
+      const amount = gesture.temperatureAmount ?? 0
+      if (!gesture.temperatureChange) return
+      const delta = gesture.temperatureChange === 'increment' ? amount : -amount
+      const newTemp = Math.min(MAX_TEMP, Math.max(MIN_TEMP, currentTemp + delta))
+      if (pumpStallShouldBlock(event.side)) {
+        console.warn(`[gestureActionHandler] skipped setTemperature: pump stall guard blocks ${event.side}`)
+        return
       }
-      finally {
-        client.disconnect()
-      }
+      await getTemperatureController().setManualLocked(event.side, newTemp)
     })
   }
 
@@ -161,18 +165,20 @@ export class GestureActionHandler {
     }
     else {
       if (gesture.alarmInactiveBehavior === 'power') {
-        const currentlyPowered = state?.isPowered ?? false
-        const nextPowered = !currentlyPowered
-        // Pass the polled target so a power-on preserves the user's setpoint
-        // across off-cycles instead of landing on the firmware-default
-        // fallback in DacHardwareClient.setPower.
-        const target = state?.targetTemperature ?? TEMP_NEUTRAL
         await withSideLock(event.side, async () => {
+          // Resolve the toggle after older queued commands have updated state.
+          const current = await this.deps.findDeviceState(event.side)
+          const nextPowered = !(current?.isPowered ?? false)
+          const target = current?.targetTemperature ?? 75
+          if (nextPowered && pumpStallShouldBlock(event.side)) {
+            console.warn(`[gestureActionHandler] skipped power-on: pump stall guard blocks ${event.side}`)
+            return
+          }
           const client = this.deps.newHardwareClient(this.socketPath)
           try {
-            getAutomationEngineIfRunning()?.registerManualOverride(event.side)
             await client.connect()
-            await client.setPower(event.side, nextPowered, nextPowered ? target : undefined)
+            if (nextPowered) await getTemperatureController().setManualLocked(event.side, target)
+            else await getTemperatureController().powerOffLocked(event.side)
           }
           finally {
             client.disconnect()

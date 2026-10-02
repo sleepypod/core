@@ -1,26 +1,39 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useOnSensorFrame, useSensorStream, type PiezoDualFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
+import { useSensorStream } from '@/src/hooks/useSensorStream'
+import { Card, HoverMark, SectionLabel, Slider } from '@/src/components/ds'
+import { cn } from '@/lib/utils'
 
 /** Maximum samples to keep in the waveform buffer per channel. */
-const MAX_SAMPLES = 1500
+const MAX_SAMPLES = 10_000
 /** Downsampled point target for rendering (~200 points, matching iOS). */
 const RENDER_TARGET_POINTS = 200
 /** Minimum samples before rendering a trace (matching iOS guard). */
 const MIN_SAMPLES = 20
 /** Canvas height in CSS pixels. */
-const CANVAS_HEIGHT = 160
-/** Left channel color (matches iOS). */
-const LEFT_COLOR = '#4a9eff'
-/** Right channel color (matches iOS). */
-const RIGHT_COLOR = '#40e0d0'
-/** Minor grid line color (matching iOS "0a1018"). */
-const GRID_MINOR_COLOR = '#0a1018'
-/** Major grid line color (matching iOS "0f1a2a"). */
-const GRID_MAJOR_COLOR = '#1a2a3a'
-/** Background color. */
-const BG_COLOR = '#09090b'
+const CANVAS_HEIGHT = 96
+
+/** Theme colors resolved from CSS tokens (refreshed periodically so theme switches apply). */
+interface WaveColors {
+  left: string
+  right: string
+  grid: string
+  gridMajor: string
+  text: string
+}
+
+function readColors(): WaveColors {
+  const cs = getComputedStyle(document.documentElement)
+  const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback
+  return {
+    left: v('--accent-cool', '#7ab5e0'),
+    right: v('--accent-warm', '#e0976a'),
+    grid: v('--border-grid', '#16161a'),
+    gridMajor: v('--border-1', '#1f1f22'),
+    text: v('--text-3', '#5d5d63'),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Catmull-Rom interpolation helpers (matching iOS tracePath)
@@ -144,9 +157,9 @@ function drawCatmullRomTrace(
 // Grid drawing
 // ---------------------------------------------------------------------------
 
-function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: number) {
+function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: number, colors: WaveColors) {
   // Minor grid lines (matching iOS: dynamic column count, 8 rows)
-  ctx.strokeStyle = GRID_MINOR_COLOR
+  ctx.strokeStyle = colors.grid
   ctx.lineWidth = 0.5 * dpr
 
   // Vertical minor grid (spaced ~25 CSS px apart, matching iOS)
@@ -169,7 +182,7 @@ function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: numb
   }
 
   // Major center crosshair lines (matching iOS major color)
-  ctx.strokeStyle = GRID_MAJOR_COLOR
+  ctx.strokeStyle = colors.gridMajor
   ctx.lineWidth = 0.8 * dpr
 
   // Horizontal center
@@ -211,7 +224,7 @@ function formatTime(epochSeconds: number): string {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
-export function PiezoWaveform() {
+export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean, className?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -225,67 +238,79 @@ export function PiezoWaveform() {
   // Track visibility for channel toggles
   const [showLeft, setShowLeft] = useState(true)
   const [showRight, setShowRight] = useState(true)
-  // Reactive sample counts (updated on each frame for display)
+  // Reactive sample counts + rate (updated on each frame for display)
   const [sampleCounts, setSampleCounts] = useState({ left: 0, right: 0 })
+  const [freq, setFreq] = useState(0)
+  // Hover readout over the canvas: the sample under the pointer on each
+  // channel. Read from the buffers in the handler (they are refs, not state).
+  const [readout, setReadout] = useState<{ pct: number, label: string } | null>(null)
+  const onHover = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const frac = rect.width > 0 ? (e.clientX - rect.left) / rect.width : -1
+    const n = Math.max(leftBufferRef.current.length, rightBufferRef.current.length)
+    if (!Number.isFinite(frac) || frac < 0 || frac > 1 || n < 2) {
+      setReadout(null)
+      return
+    }
+    const i = Math.round(frac * (n - 1))
+    const back = freqRef.current > 0 ? `-${((n - 1 - i) / freqRef.current).toFixed(2)}s` : `#${i}`
+    const l = leftBufferRef.current[i]
+    const r = rightBufferRef.current[i]
+    setReadout({
+      pct: (i / (n - 1)) * 100,
+      label: [back, showLeft && l != null ? `L ${Math.round(l)}` : null, showRight && r != null ? `R ${Math.round(r)}` : null].filter(Boolean).join(' · '),
+    })
+  }
 
-  // Seek / timeline scrubber state
-  const { seek, getTimeRange, isSeeking, timeRange } = useSensorStream({ sensors: ['piezo-dual'] })
+  // Seek / timeline scrubber state. `enabled` follows the System Stop toggle
+  // so this consumer doesn't hold the shared socket open while paused.
+  const { seekWaveform: seek, goLive, waveform, replayWaveform, getTimeRange, isSeeking, timeRange } = useSensorStream({ sensors: ['piezo-dual'], enabled })
   const [scrubValue, setScrubValue] = useState<number | null>(null) // null = live
   const timeRangeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Fetch time range on mount and every 30 seconds
   useEffect(() => {
+    goLive()
+  }, [goLive])
+
+  // Fetch time range on mount and every 5 seconds
+  useEffect(() => {
+    if (!enabled) return
     getTimeRange()
     timeRangeIntervalRef.current = setInterval(() => {
       getTimeRange()
-    }, 30_000)
+    }, 5_000)
     return () => {
       if (timeRangeIntervalRef.current) {
         clearInterval(timeRangeIntervalRef.current)
       }
     }
-  }, [getTimeRange])
+  }, [getTimeRange, enabled])
 
-  const isLive = scrubValue === null || (timeRange !== null && scrubValue >= timeRange.max)
+  const isLive = replayWaveform === null
 
-  const handleScrub = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = Number(e.target.value)
+  const handleScrub = useCallback((val: number) => {
     setScrubValue(val)
     seek(val)
   }, [seek])
 
   const handleGoLive = useCallback(() => {
     setScrubValue(null)
-  }, [])
+    goLive()
+  }, [goLive])
 
-  // Receive piezo frames and append to buffers
-  useOnSensorFrame(useCallback((frame: SensorFrame) => {
-    if (frame.type !== 'piezo-dual') return
-    const piezo = frame as PiezoDualFrame
+  // A snapshot/replay is installed as one window; live data continues to collect
+  // separately while scrubbing, so Go live immediately restores the newest view.
+  useEffect(() => {
+    if (!enabled) return
+    const frames = replayWaveform ?? waveform
+    leftBufferRef.current = frames.flatMap(f => f.left1).slice(-MAX_SAMPLES)
+    rightBufferRef.current = frames.flatMap(f => f.right1).slice(-MAX_SAMPLES)
+    hasDataRef.current = frames.length > 0
+    freqRef.current = frames.at(-1)?.freq ?? freqRef.current
 
-    hasDataRef.current = true
-    freqRef.current = piezo.freq ?? freqRef.current
-
-    // Append and trim left
-    const left = leftBufferRef.current
-    left.push(...piezo.left1)
-    if (left.length > MAX_SAMPLES) {
-      leftBufferRef.current = left.slice(-MAX_SAMPLES)
-    }
-
-    // Append and trim right
-    const right = rightBufferRef.current
-    right.push(...piezo.right1)
-    if (right.length > MAX_SAMPLES) {
-      rightBufferRef.current = right.slice(-MAX_SAMPLES)
-    }
-
-    // Update reactive sample counts (throttled via RAF)
-    setSampleCounts({
-      left: leftBufferRef.current.length,
-      right: rightBufferRef.current.length,
-    })
-  }, []))
+    setSampleCounts({ left: leftBufferRef.current.length, right: rightBufferRef.current.length })
+    setFreq(freqRef.current)
+  }, [enabled, waveform, replayWaveform])
 
   // Canvas rendering loop
   useEffect(() => {
@@ -295,8 +320,14 @@ export function PiezoWaveform() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    let colors = readColors()
+    let tick = 0
+
     function render() {
       if (!canvas || !ctx) return
+
+      // Re-read tokens about once a second so theme switches apply
+      if (++tick % 60 === 0) colors = readColors()
 
       const dpr = window.devicePixelRatio || 1
 
@@ -317,19 +348,14 @@ export function PiezoWaveform() {
       const w = canvas.width
       const h = canvas.height
 
-      // Clear
-      ctx.fillStyle = BG_COLOR
-      ctx.fillRect(0, 0, w, h)
-
-      // Draw grid (minor + major)
-      drawGrid(ctx, w, h, dpr)
+      ctx.clearRect(0, 0, w, h)
+      drawGrid(ctx, w, h, dpr, colors)
 
       if (!hasDataRef.current) {
-        // "No data" text
-        ctx.fillStyle = '#52525b'
+        ctx.fillStyle = colors.text
         ctx.font = `${12 * dpr}px system-ui, sans-serif`
         ctx.textAlign = 'center'
-        ctx.fillText('Waiting for piezo data…', w / 2, h / 2)
+        ctx.fillText('Waiting for piezo data', w / 2, h / 2 + 4 * dpr)
         animFrameRef.current = requestAnimationFrame(render)
         return
       }
@@ -342,11 +368,10 @@ export function PiezoWaveform() {
       const visibleRight = showRight ? rightSamples : []
 
       if (visibleLeft.length < MIN_SAMPLES && visibleRight.length < MIN_SAMPLES) {
-        // Not enough data yet
-        ctx.fillStyle = '#52525b'
+        ctx.fillStyle = colors.text
         ctx.font = `${11 * dpr}px system-ui, sans-serif`
         ctx.textAlign = 'center'
-        ctx.fillText('Collecting samples…', w / 2, h / 2)
+        ctx.fillText('Collecting samples', w / 2, h / 2 + 4 * dpr)
         animFrameRef.current = requestAnimationFrame(render)
         return
       }
@@ -361,21 +386,12 @@ export function PiezoWaveform() {
       // Build and draw Catmull-Rom interpolated traces
       if (showLeft && leftSamples.length >= MIN_SAMPLES) {
         const pts = buildPoints(leftSamples, w, h, rMin, range)
-        drawCatmullRomTrace(ctx, pts, LEFT_COLOR, dpr)
+        drawCatmullRomTrace(ctx, pts, colors.left, dpr)
       }
 
       if (showRight && rightSamples.length >= MIN_SAMPLES) {
         const pts = buildPoints(rightSamples, w, h, rMin, range)
-        drawCatmullRomTrace(ctx, pts, RIGHT_COLOR, dpr)
-      }
-
-      // Frequency label (top-right)
-      if (freqRef.current > 0) {
-        ctx.fillStyle = '#52525b'
-        const fontSize = 10 * dpr
-        ctx.font = `${fontSize}px monospace`
-        ctx.textAlign = 'right'
-        ctx.fillText(`${freqRef.current} Hz`, w - 8 * dpr, 16 * dpr)
+        drawCatmullRomTrace(ctx, pts, colors.right, dpr)
       }
 
       animFrameRef.current = requestAnimationFrame(render)
@@ -391,134 +407,71 @@ export function PiezoWaveform() {
   }, [showLeft, showRight])
 
   return (
-    <div className="space-y-2">
-      {/* Header with title and legend/toggles */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <svg
-            className="h-3.5 w-3.5 text-blue-400"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M2 12h2l3-7 4 14 4-10 3 3h4" />
-          </svg>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-            Piezo Waveform
-          </h3>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowLeft(v => !v)}
-            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              showLeft
-                ? 'bg-[#4a9eff]/15 text-[#4a9eff]'
-                : 'bg-zinc-800 text-zinc-500'
-            }`}
-          >
-            <span
-              className="inline-block h-1.5 w-1.5 rounded-full"
-              style={{ backgroundColor: showLeft ? LEFT_COLOR : '#52525b' }}
-            />
-            Left
-          </button>
-          <button
-            onClick={() => setShowRight(v => !v)}
-            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              showRight
-                ? 'bg-[#40e0d0]/15 text-[#40e0d0]'
-                : 'bg-zinc-800 text-zinc-500'
-            }`}
-          >
-            <span
-              className="inline-block h-1.5 w-1.5 rounded-full"
-              style={{ backgroundColor: showRight ? RIGHT_COLOR : '#52525b' }}
-            />
-            Right
-          </button>
-        </div>
-      </div>
+    <Card className={cn('gap-2 px-4 py-3.5', className)}>
+      <SectionLabel
+        right={(
+          <span className="font-mono">
+            {freq > 0 ? `${freq} Hz` : '--'}
+            {` · L ${sampleCounts.left} · R ${sampleCounts.right}`}
+          </span>
+        )}
+      >
+        Piezo
+        <ChannelChip label="Left" on={showLeft} color="var(--accent-cool)" onClick={() => setShowLeft(v => !v)} />
+        <ChannelChip label="Right" on={showRight} color="var(--accent-warm)" onClick={() => setShowRight(v => !v)} />
+      </SectionLabel>
 
-      {/* Canvas waveform display */}
-      <div ref={containerRef} className="overflow-hidden rounded-xl border border-[#1a2a3a]/50 bg-[#020208]">
+      <div ref={containerRef} className="relative overflow-hidden" onPointerMove={onHover} onPointerLeave={() => setReadout(null)}>
         <canvas
           ref={canvasRef}
           style={{ width: '100%', height: `${CANVAS_HEIGHT}px`, display: 'block' }}
         />
+        {readout && <HoverMark pct={readout.pct} label={readout.label} />}
       </div>
 
-      {/* Sample count footer */}
-      <div className="flex justify-between text-[10px] text-zinc-600">
-        <span>
-          L:
-          {sampleCounts.left}
-          {' '}
-          samples
-        </span>
-        <span>
-          R:
-          {sampleCounts.right}
-          {' '}
-          samples
-        </span>
-      </div>
-
+      {!timeRange && !isLive && (
+        <button type="button" onClick={handleGoLive} className="self-end text-xs text-ok hover:underline">
+          Go live
+        </button>
+      )}
       {/* Timeline scrubber */}
       {timeRange && (
-        <div className="space-y-1">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-[10px] text-zinc-500">
-              {isLive
-                ? (
-                    <>
-                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-emerald-400 font-medium">Live</span>
-                    </>
-                  )
-                : (
-                    <>
-                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-500" />
-                      <span>{scrubValue !== null ? formatTime(scrubValue) : ''}</span>
-                    </>
-                  )}
-              {isSeeking && (
-                <span className="ml-1 text-amber-400">seeking...</span>
+        <div className="flex items-center gap-2.5 font-mono text-[11px] text-fg-3">
+          <span className="shrink-0">{formatTime(timeRange.min)}</span>
+          <Slider
+            label="Piezo replay position"
+            min={timeRange.min}
+            max={timeRange.max}
+            value={isLive ? timeRange.max : Math.max(timeRange.min, Math.min(scrubValue ?? timeRange.max, timeRange.max))}
+            onChange={handleScrub}
+          />
+          <span className="shrink-0">{formatTime(timeRange.max)}</span>
+          {isLive
+            ? <span className="shrink-0 text-fg-3">{enabled ? 'Latest' : 'Paused'}</span>
+            : (
+                <button type="button" onClick={handleGoLive} className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-ok hover:underline">
+                  {isSeeking ? 'seeking' : 'Go live'}
+                </button>
               )}
-            </div>
-            {!isLive && (
-              <button
-                onClick={handleGoLive}
-                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20 transition-colors"
-              >
-                Go live
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] text-zinc-600 tabular-nums shrink-0">
-              {formatTime(timeRange.min)}
-            </span>
-            <input
-              type="range"
-              min={timeRange.min}
-              max={timeRange.max}
-              step={1}
-              value={scrubValue ?? timeRange.max}
-              onChange={handleScrub}
-              className="h-1 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-blue-500
-                [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3
-                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full
-                [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:shadow-sm"
-            />
-            <span className="text-[9px] text-zinc-600 tabular-nums shrink-0">
-              {formatTime(timeRange.max)}
-            </span>
-          </div>
         </div>
       )}
-    </div>
+    </Card>
+  )
+}
+
+function ChannelChip({ label, on, color, onClick }: { label: string, on: boolean, color: string, onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={cn(
+        'flex cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 font-mono text-[11px] tracking-normal normal-case',
+        on ? 'text-fg-2' : 'text-fg-3 line-through',
+      )}
+    >
+      <span className="block h-0.5 w-2.5" style={{ background: on ? color : 'var(--text-3)' }} />
+      {label}
+    </button>
   )
 }

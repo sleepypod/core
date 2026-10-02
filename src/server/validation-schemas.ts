@@ -82,6 +82,35 @@ export const temperatureUnitSchema = z.enum(['F', 'C'])
 export const tapTypeSchema = z.enum(['doubleTap', 'tripleTap', 'quadTap'])
 
 /**
+ * Git branch name accepted by system.triggerUpdate. The character class
+ * alone cannot express ref safety, so the refine blocks path traversal
+ * ('..'), empty segments ('//'), leading/trailing '/', option injection
+ * into git argv (leading '-') and '.lock' suffixes.
+ */
+export const branchNameSchema = z.string()
+  .regex(/^[a-zA-Z0-9._\-/]+$/, 'Invalid branch name')
+  .refine(
+    b => !b.includes('..') && !b.includes('//')
+      && !b.startsWith('/') && !b.endsWith('/')
+      && !b.startsWith('-') && !b.endsWith('.lock'),
+    'Invalid branch name',
+  )
+
+/**
+ * IANA timezone identifier, validated against the runtime's ICU data so the
+ * scheduler and automation clocks never receive a name they cannot resolve.
+ */
+export const timezoneSchema = z.string().refine((tz) => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz })
+    return true
+  }
+  catch {
+    return false
+  }
+}, 'Must be a valid IANA timezone, e.g. "America/Los_Angeles"')
+
+/**
  * ISO 8601 datetime string validation
  */
 export const isoDatetimeSchema = z
@@ -184,12 +213,16 @@ export const automationActionSchema = z.union([
     temp: automationExprSchema,
     clamp: automationClampSchema.optional(),
     durationSec: z.number().int().min(0).max(86400).optional(),
+    mode: z.enum(['policy', 'one-shot']).optional(),
+    holdMinutes: z.number().int().min(1).max(1440).optional(),
   }).strict(),
   z.object({
     kind: z.literal('setPower'),
     side: sideSchema.optional(),
     on: z.boolean(),
     temp: automationExprSchema.optional(),
+    mode: z.enum(['policy', 'one-shot']).optional(),
+    holdMinutes: z.number().int().min(1).max(1440).optional(),
   }).strict(),
 ])
 

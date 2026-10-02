@@ -1,6 +1,7 @@
 'use client'
 
 import { Bell, BellOff, Clock } from 'lucide-react'
+import { Button } from '@/src/components/ds'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/providers/SideProvider'
 
@@ -19,7 +20,7 @@ interface AlarmBannerProps {
 
 /**
  * Alarm banner shown on Temp screen when vibration alarm is active.
- * Matches iOS AlarmBanner — yellow/tan color scheme with Snooze and Stop buttons.
+ * Warn-toned banner with Snooze and Stop buttons (or Cancel while snoozed).
  */
 export const AlarmBanner = ({
   leftAlarmActive,
@@ -97,15 +98,15 @@ export const AlarmBanner = ({
   const isPending = clearAlarmMutation.isPending || snoozeAlarmMutation.isPending
 
   return (
-    <div className="rounded-2xl border border-amber-500/20 bg-amber-950/30 p-3 sm:p-4">
+    <div role="status" className="rounded-card border border-warn-line bg-warn-bg px-[18px] py-3.5">
       {/* Active alarm */}
       {isAnyAlarmActive && (
         <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <Bell size={18} className="shrink-0 text-amber-400" />
+          <div className="flex items-center gap-2.5">
+            <Bell size={16} className="shrink-0 text-warn" />
             <div className="flex-1">
-              <p className="text-sm font-semibold text-amber-200">Alarm Active</p>
-              <p className="text-xs text-amber-400/70">
+              <p className="text-[15px] font-medium text-fg">Alarm active</p>
+              <p className="text-[13px] text-fg-2">
                 {alarmSides.join(' & ')}
                 {' '}
                 side vibrating
@@ -113,51 +114,39 @@ export const AlarmBanner = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleSnooze}
-              disabled={isPending}
-              className="flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-amber-900/40 px-3 py-2.5 text-sm font-medium text-amber-200 transition-all active:scale-95 disabled:opacity-50"
-            >
-              <Clock size={14} />
+          <div className="grid grid-cols-2 gap-2">
+            <Button icon={Clock} onClick={handleSnooze} disabled={isPending}>
               Snooze 5m
-            </button>
-            <button
-              onClick={handleStop}
-              disabled={isPending}
-              className="flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-amber-900/40 px-3 py-2.5 text-sm font-medium text-amber-200 transition-all active:scale-95 disabled:opacity-50"
-            >
-              <BellOff size={14} />
+            </Button>
+            <Button icon={BellOff} variant="primary" onClick={handleStop} disabled={isPending}>
               Stop
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
       {/* Snoozed alarm (when not actively vibrating) */}
       {!isAnyAlarmActive && isAnySnoozed && (
-        <div className="flex items-center gap-2">
-          <Clock size={16} className="shrink-0 text-amber-400/60" />
-          <p className="flex-1 text-sm text-amber-300/70">
+        <div className="flex items-center gap-2.5">
+          <Clock size={14} className="shrink-0 text-warn" />
+          <p className="flex-1 text-[13px] text-fg-2">
             Snoozed —
             {' '}
             {snoozeSides.join(' & ')}
             {' '}
             resumes in
             {' '}
-            {snooze?.left?.snoozeUntil
-              ? formatSnoozeRemaining(snooze.left.snoozeUntil)
-              : snooze?.right?.snoozeUntil
-                ? formatSnoozeRemaining(snooze.right.snoozeUntil)
-                : ''}
+            <span className="font-mono text-fg">
+              {snooze?.left?.snoozeUntil
+                ? formatSnoozeRemaining(snooze.left.snoozeUntil)
+                : snooze?.right?.snoozeUntil
+                  ? formatSnoozeRemaining(snooze.right.snoozeUntil)
+                  : ''}
+            </span>
           </p>
-          <button
-            onClick={handleStop}
-            disabled={isPending}
-            className="rounded-lg bg-amber-900/40 px-3 min-h-[44px] text-xs font-medium text-amber-200 transition-all active:scale-95 disabled:opacity-50"
-          >
+          <Button size="sm" onClick={handleStop} disabled={isPending}>
             Cancel
-          </button>
+          </Button>
         </div>
       )}
     </div>

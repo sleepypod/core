@@ -79,9 +79,146 @@ class TestShouldRunDaily:
 
         assert should_run_daily(ExplodingStore(), now, last_run=now - 3600) is False
 
+    def test_stale_capacitance_alone_does_not_run(self):
+        """The fixed-UTC-hour fallback can land mid-night and recalibrate
+        capacitance on a sleeper; the sleep-detector now owns the presence
+        baseline, so its age never schedules a run."""
+        now = _ts_at_hour(DAILY_HOUR)
+        ages = _fresh_ages(hours=1.0)
+        ages[("left", "capacitance")] = 30.0
+        del ages[("right", "capacitance")]
+        assert should_run_daily(FakeStore(ages), now, last_run=0.0) is False
+
     def test_single_stale_sensor_triggers_run(self):
         now = _ts_at_hour(DAILY_HOUR)
         ages = _fresh_ages(hours=1.0)
         ages[("left", "temperature")] = 26.0
         store = FakeStore(ages)
         assert should_run_daily(store, now, last_run=0.0) is True
+
+
+from main import (  # noqa: E402
+    CAL_SIDES,
+    SCHEDULED_SENSOR_TYPES,
+    compute_pending,
+    load_recent_records,
+    run_pending_calibrations,
+    trigger_sensor_types,
+)
+
+
+class ProfileStore:
+    """Minimal calibration store exposing get_active for pending computation."""
+
+    def __init__(self, now):
+        self._now = now
+        self.profiles = {}  # (side, sensor_type) -> profile dict
+
+    def get_active(self, side, sensor_type):
+        return self.profiles.get((side, sensor_type))
+
+    def complete(self, side, sensor_type):
+        self.profiles[(side, sensor_type)] = {"expires_at": self._now + 100000}
+
+    def expire(self, side, sensor_type):
+        self.profiles[(side, sensor_type)] = {"expires_at": self._now - 1}
+
+
+_ALL = {(s, st) for s in CAL_SIDES for st in SCHEDULED_SENSOR_TYPES}
+
+
+class TestComputePending:
+    def test_empty_store_marks_everything_pending(self):
+        now = time.time()
+        assert compute_pending(ProfileStore(now), now) == _ALL
+
+    def test_completed_profile_is_not_pending(self):
+        now = time.time()
+        store = ProfileStore(now)
+        store.complete("left", "piezo")
+        pending = compute_pending(store, now)
+        assert ("left", "piezo") not in pending
+        assert len(pending) == len(_ALL) - 1
+
+    def test_expired_profile_is_pending(self):
+        now = time.time()
+        store = ProfileStore(now)
+        store.expire("right", "piezo")
+        assert ("right", "piezo") in compute_pending(store, now)
+
+
+class TestRunPendingCalibrations:
+    def test_startup_failure_persists_then_clears_on_retry(self, monkeypatch):
+        """A one-shot empty-buffer failure at startup must NOT stick until the
+        next process restart — the item stays pending and later succeeds."""
+        now = time.time()
+        store = ProfileStore(now)
+        samples = {"ready": False}
+
+        def fake_run(store_, side, st, triggered_by, buffer=None):
+            if not samples["ready"]:
+                return False  # buffer empty — calibration raises/fails
+            store_.complete(side, st)
+            return True
+
+        monkeypatch.setattr(main, "run_calibration", fake_run)
+
+        # Startup: nothing calibratable yet → everything still pending.
+        remaining = run_pending_calibrations(store, now, "startup")
+        assert remaining == _ALL
+
+        # Samples accrue → the retry clears all pending profiles.
+        samples["ready"] = True
+        remaining = run_pending_calibrations(store, time.time(), "retry")
+        assert remaining == set()
+
+    def test_only_unfilled_profiles_remain_pending(self, monkeypatch):
+        now = time.time()
+        store = ProfileStore(now)
+        # Temperature succeeds (DB-backed); piezo still starved.
+        ok = {("left", "temperature"), ("right", "temperature")}
+
+        def fake_run(store_, side, st, triggered_by, buffer=None):
+            if (side, st) in ok:
+                store_.complete(side, st)
+                return True
+            return False
+
+        monkeypatch.setattr(main, "run_calibration", fake_run)
+        remaining = run_pending_calibrations(store, now, "startup")
+        assert remaining == _ALL - ok
+
+
+class TestLoadRecentRecordsBuffer:
+    def test_buffer_snapshot_drives_records(self):
+        class FakeBuffer:
+            def snapshot(self):
+                return {"capSense": [{"type": "capSense"}, {"type": "capSense"}],
+                        "piezo-dual": [{"type": "piezo-dual"}]}
+
+        recs = load_recent_records(hours=6, buffer=FakeBuffer())
+        assert len(recs["capSense"]) == 2
+        assert len(recs["piezo-dual"]) == 1
+        # Missing types default to empty lists (never KeyError downstream).
+        assert recs["capSense2"] == []
+        assert recs["bedTemp"] == []
+
+
+class TestCapacitanceIsManualOnly:
+    def test_missing_capacitance_is_never_pending(self):
+        now = time.time()
+        assert all(st != "capacitance" for _side, st in compute_pending(ProfileStore(now), now))
+
+    def test_manual_all_trigger_includes_capacitance(self):
+        assert trigger_sensor_types({"side": "all", "sensor_type": "all"}) == (
+            "capacitance", "piezo", "temperature")
+
+    def test_manual_capacitance_trigger(self):
+        assert trigger_sensor_types({"sensor_type": "capacitance"}) == ("capacitance",)
+
+    def test_scheduled_trigger_skips_capacitance(self):
+        # jobManager's pre-prime job writes source: "scheduled".
+        assert trigger_sensor_types(
+            {"side": "all", "sensor_type": "all", "source": "scheduled"}) == ("piezo", "temperature")
+        assert trigger_sensor_types(
+            {"sensor_type": "capacitance", "source": "scheduled"}) == ()

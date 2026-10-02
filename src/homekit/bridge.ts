@@ -2,7 +2,7 @@
  * HAP Bridge orchestrator.
  *
  * Builds a single Bridge accessory (one HomeKit device) that owns
- * Thermostat x2, PowerSwitch x2, OccupancySensor x2, prime Switch, snooze Switch x2.
+ * Thermostat x2, OccupancySensor x2, prime Switch, snooze Switch x2.
  *
  * State updates are driven by the existing DacMonitor event bus.
  * Pairing data is persisted under /persistent/sleepypod-data/homekit/.
@@ -13,6 +13,7 @@
  */
 
 import { existsSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
 import {
   Accessory,
   Bridge,
@@ -33,7 +34,6 @@ import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import { buildAmbientSensor } from './accessories/ambientSensor'
 import { buildPumpHealthSensor } from './accessories/pumpHealthSensor'
 import { buildOccupancySensor } from './accessories/occupancySensor'
-import { buildPowerSwitch } from './accessories/powerSwitch'
 import { buildPrimeSwitch } from './accessories/primeSwitch'
 import { buildSnoozeSwitch } from './accessories/snoozeSwitch'
 import { buildThermostatService } from './accessories/thermostat'
@@ -60,6 +60,7 @@ const KEYS = {
   identity: '__sp_homekit_identity__',
   setupURI: '__sp_homekit_setupURI__',
   transitioning: '__sp_homekit_transitioning__',
+  retiredAdvertisers: '__sp_homekit_retiredAdvertisers__',
 } as const
 
 const getBridge = (): Bridge | null => (G[KEYS.bridge] as Bridge | null) ?? null
@@ -103,8 +104,28 @@ export interface BridgeStatus {
   pairedControllers: string[]
 }
 
+// Failed mDNS cleanup must not strand an already-closed HAP listener. Retain
+// only the advertiser for best-effort cleanup on later lifecycle transitions.
+type AdvertiserHandle = NonNullable<Bridge['_advertiser']>
+function retiredAdvertisers(): Set<AdvertiserHandle> {
+  return (G[KEYS.retiredAdvertisers] ??= new Set<AdvertiserHandle>()) as Set<AdvertiserHandle>
+}
+
+async function retryAdvertiserCleanup(): Promise<void> {
+  for (const advertiser of retiredAdvertisers()) {
+    try {
+      await advertiser.destroy()
+      retiredAdvertisers().delete(advertiser)
+    }
+    catch (e) {
+      console.warn('[homekit] retired advertiser cleanup failed:', e instanceof Error ? e.message : e)
+    }
+  }
+}
+
 export async function startBridge(monitor: DacMonitor): Promise<void> {
   if (getBridge()) return
+  await retryAdvertiserCleanup()
   initHapStorage()
 
   let identity = loadOrCreateIdentity()
@@ -178,12 +199,6 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
     snoozeAcc.addService(snooze.service)
     accessory.addBridgedAccessory(snoozeAcc)
     localStoppers.push(snooze.stop)
-
-    const power = buildPowerSwitch(side, monitor)
-    const powerAcc = wrapAccessory(`Bed ${side} power`, `power-${side}`, identity.username)
-    powerAcc.addService(power.service)
-    accessory.addBridgedAccessory(powerAcc)
-    localStoppers.push(power.stop)
   }
 
   const prime = buildPrimeSwitch()
@@ -283,6 +298,7 @@ export async function startBridge(monitor: DacMonitor): Promise<void> {
 }
 
 export async function stopBridge(): Promise<void> {
+  await retryAdvertiserCleanup()
   for (const stop of getStoppers()) {
     try {
       stop()
@@ -295,28 +311,33 @@ export async function stopBridge(): Promise<void> {
 
   const b = getBridge()
   if (b) {
-    // Split unpublish/destroy: if unpublish throws but destroy still runs to
-    // completion the bridge is safely torn down. Clearing the singleton when
-    // destroy did NOT complete masks a still-live bridge and causes
-    // port-conflict / restart confusion on the next enable().
+    // destroy() is a factory reset in hap-nodejs: it deletes AccessoryInfo,
+    // IdentifierCache, and controller storage. Ordinary shutdown must only
+    // unpublish so paired controllers and accessory IDs survive restarts.
     try {
       await b.unpublish()
     }
     catch (e) {
-      console.warn('[homekit] unpublish failed:', e instanceof Error ? e.message : e)
+      // hap-nodejs 1.2.0 clears _server before awaiting advertiser.destroy().
+      // If only mDNS failed, the HAP server is already stopped: release the
+      // singleton so enable can publish again, while preserving pairing data.
+      // A failure before server destruction keeps the live bridge in place.
+      if (!b._server) {
+        const advertiser = b._advertiser
+        if (advertiser) {
+          // A retired advertiser must not rename/save the old accessory after
+          // a later reset. All HAP advertisers inherit from EventEmitter.
+          if (advertiser instanceof EventEmitter) advertiser.removeAllListeners('updated-name')
+          retiredAdvertisers().add(advertiser)
+          b._advertiser = undefined
+        }
+        setBridge(null)
+        setSetupURI(null)
+      }
+      throw e
     }
-    let destroyed = false
-    try {
-      await b.destroy()
-      destroyed = true
-    }
-    catch (e) {
-      console.warn('[homekit] destroy failed:', e instanceof Error ? e.message : e)
-    }
-    if (destroyed) {
-      setBridge(null)
-      setSetupURI(null)
-    }
+    setBridge(null)
+    setSetupURI(null)
   }
   else {
     setSetupURI(null)
@@ -349,15 +370,8 @@ export async function unpairAll(): Promise<void> {
   // Homebridge rotates the MAC for the same reason (homebridge-config-ui-x
   // resetHomebridgeAccessory).
   const oldUsername = getIdentity()?.username ?? loadOrCreateIdentity().username
+  // A failed unpublish throws before any pairing data or identity changes.
   await stopBridge()
-  // stopBridge intentionally keeps the singleton live when destroy() fails
-  // (port-safety on next enable). Rotating identity in that state would
-  // desync getStatus (new MAC) from the live HAP server (still old MAC).
-  // Abort instead — operator can retry once the underlying destroy issue
-  // clears.
-  if (getBridge() !== null) {
-    throw new Error('homekit unpair aborted: bridge teardown incomplete (destroy() failed)')
-  }
   clearPairings(oldUsername)
   const id = regenerateIdentity()
   setIdentity(id)

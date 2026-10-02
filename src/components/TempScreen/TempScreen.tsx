@@ -1,248 +1,270 @@
 'use client'
 
-import { useCallback } from 'react'
-import { trpc } from '@/src/utils/trpc'
-import { useSide } from '@/src/providers/SideProvider'
-import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
-import { useOptimisticValue } from '@/src/hooks/useOptimisticValue'
-import { SideSelector } from '@/src/components/SideSelector/SideSelector'
+import { useState } from 'react'
+import { Link2, Power } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Button, PageHeader, Skeleton } from '@/src/components/ds'
+import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
-import { TemperatureDial } from '@/src/components/TemperatureDial/TemperatureDial'
-import { AlarmBanner } from '@/src/components/TempScreen/AlarmBanner'
-import { PrimingIndicator } from '@/src/components/TempScreen/PrimingIndicator'
-import { PrimeCompleteNotification } from '@/src/components/TempScreen/PrimeCompleteNotification'
-import { PumpStallNotification } from '@/src/components/TempScreen/PumpStallNotification'
-import { AmbientLightChip } from '@/src/components/TempScreen/AmbientLightChip'
-import { displayToSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
-import { TEMP } from '@/src/lib/tempColors'
-import { Minus, Plus, Power } from 'lucide-react'
-import clsx from 'clsx'
+import { SideSelector } from '@/src/components/SideSelector/SideSelector'
+import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
+import { useSideNames } from '@/src/hooks/useSideNames'
+import type { TempUnit } from '@/src/lib/tempUtils'
+import { usePrefs } from '@/src/providers/PrefsProvider'
+import { useSide, type Side } from '@/src/providers/SideProvider'
+import { trpc } from '@/src/utils/trpc'
+import { AlarmBanner } from './AlarmBanner'
+import { AlarmCard } from './AlarmCard'
+import { LastNightCard } from './LastNightCard'
+import { PrimeCompleteNotification } from './PrimeCompleteNotification'
+import { PrimingIndicator } from './PrimingIndicator'
+import { PumpStallNotification } from './PumpStallNotification'
+import { ScheduleTimeline } from './ScheduleTimeline'
+import { SideCard, type Presence } from './SideCard'
+import { stepForDisplay, type NightPhaseKey } from './nightPhases'
+import type { StepperTab } from './TempStepper'
+import { TonightCard, useNow } from './TonightCard'
+import { useNightPhases } from './useNightPhases'
+import { useSideTemperature } from './useSideTemperature'
+
+const SIDES: Side[] = ['left', 'right']
+
+/*
+ * Grid: phones (<900px) stack switcher → one SideCard → context cards.
+ * Desktop puts both SideCards side by side once they fit (each needs the
+ * 280px control + padding), and adds the 300px context column when there is
+ * room for all three; otherwise the context cards wrap below in two columns.
+ */
+const GRID = 'grid gap-3.5 min-[900px]:gap-4 min-[900px]:@min-[680px]:grid-cols-2 min-[900px]:@min-[976px]:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_300px]'
+const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[680px]:col-span-2 min-[900px]:@min-[680px]:grid-cols-2 min-[900px]:@min-[976px]:col-span-1 min-[900px]:@min-[976px]:grid-cols-1'
 
 /**
- * Main temperature screen — mirrors iOS TempScreen.swift composition.
- *
- * Layout:
- * 1. PrimingIndicator (when pod is priming water system)
- * 2. PrimeCompleteNotification (dismissible, after priming finishes)
- * 3. AlarmBanner (when vibration alarm is active, with snooze/stop)
- * 4. TemperatureDial (270° circular dial with draggable thumb — matches iOS TemperatureDialView)
- * 5. Temp controls (+/- buttons, power toggle)
- * 6. EnvironmentInfoPanel (ambient temp, humidity, bed temp)
- * 7. UserSelector (at bottom for easy thumb reach)
- * SideSelector is rendered here (Temp screen only, not in the global layout).
+ * Temp (home) screen.
  *
  * Device router wiring:
- * - device.getStatus (query, 7s poll) → current/target temp, power, alarm, priming, snooze
- * - device.setTemperature (mutation) → dial drag + ±1 buttons
- * - device.setPower (mutation) → power toggle
- * - device.clearAlarm (mutation) → alarm banner stop button
- * - device.snoozeAlarm (mutation) → alarm banner snooze button
- * - device.dismissPrimeNotification (mutation) → prime complete dismiss
- * - settings.getAll (query) → temperature unit preference
- * - environment.getLatestBedTemp (query) → EnvironmentInfoPanel
- * - environment.getLatestFreezerTemp (query) → EnvironmentInfoPanel
- * - environment.getLatestAmbientLight (query) → AmbientLightChip
- * - biometrics.getLatestSleep (query) → LatestSleepChip
+ * - device.getStatus (WS-preferred via useDeviceStatus) → per-side current/target
+ *   temp, power, temperature ownership, alarm, priming, pump stall, snooze
+ * - device.setTemperature / device.setPower → SideCard −/+/drag/power (optimistic;
+ *   −/+ bursts pool into one write)
+ * - schedules.getAll / schedules.batchUpdate → stepper variant's Night / Dawn
+ *   (shifts tonight's set points; see useNightPhases)
+ * - device.resumeTemperature → Resume on an active manual hold
+ * - device.clearAlarm / device.snoozeAlarm → AlarmBanner
+ * - device.dismissPrimeNotification → PrimeCompleteNotification
+ * - biometrics.getOccupancy → in-bed dot (omitted when presence can't be sensed)
+ * - settings.getAll → unit, side names, away mode
+ * - Schedule and sleep timeline (desktop): schedules.getAll, biometrics.getSleepRecords,
+ *   health.thermalHistory
+ * - context cards: schedules.getAll, environment.getLatestBedTemp,
+ *   environment.getLatestAmbientLight, biometrics.getLatestSleep/getVitalsSummary
  *
- * Polls device.getStatus every 7 seconds for real-time updates.
- * Uses optimistic local target temp during dial drag for smooth interaction.
+ * Link sides mirrors every change (drag, ±, power) to both sides. All off
+ * powers down whichever sides are on, linked or not.
  */
 export const TempScreen = () => {
-  const { primarySide, activeSides } = useSide()
+  const { isLinked, toggleLink, primarySide } = useSide()
+  const { control: variant, tempDisplay } = usePrefs()
+  const { sideName } = useSideNames()
 
   // Device status via WebSocket (2s push) with HTTP fallback
   const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
 
   const { data: settings } = trpc.settings.getAll.useQuery({})
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
+  const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
 
-  const setTempMutation = trpc.device.setTemperature.useMutation()
-  const setPowerMutation = trpc.device.setPower.useMutation()
+  const [holdMinutes, setHoldMinutes] = useState(30)
 
-  // Get current side's status
-  const currentSideStatus = primarySide === 'left' ? status?.leftSide : status?.rightSide
-  const currentTemp = currentSideStatus?.currentTemperature ?? 80
-  const serverTarget = currentSideStatus?.targetTemperature ?? 80
-  const targetLevel = currentSideStatus?.targetLevel ?? 0
-
-  // Optimistic overrides: the visible status is WS-preferred (~2s cadence),
-  // so clearing local state in onSettled snapped the dial back to the stale
-  // value, then forward when the next frame arrived. These hold the local
-  // value until the server confirms it (or a timeout gives up).
-  const targetOpt = useOptimisticValue(serverTarget)
-  const powerOpt = useOptimisticValue(targetLevel !== 0)
-  const targetTemp = targetOpt.value
-  const isOn = powerOpt.value
-
-  // Alarm & priming status from device
-  const leftAlarmActive = status?.leftSide?.isAlarmVibrating ?? false
-  const rightAlarmActive = status?.rightSide?.isAlarmVibrating ?? false
-  const isPriming = status?.isPriming ?? false
-  const hasPrimeNotification = status?.primeCompletedNotification != null
-  const stallNotices = status?.pumpStallNotifications
-  const snoozeStatus = status?.snooze
-
-  /** Handle continuous drag updates — visual only, no hardware calls. */
-  const handleDialChange = useCallback((tempF: number) => {
-    targetOpt.preview(tempF)
-  }, [targetOpt])
-
-  /** Handle drag end — send final value to hardware, keep it visible until
-   * an incoming status frame confirms it. */
-  const handleDialCommit = useCallback((tempF: number) => {
-    targetOpt.commit(tempF)
-    for (const side of activeSides) {
-      setTempMutation.mutate(
-        { side, temperature: tempF },
-        {
-          onSettled: () => refetch(),
-          onError: () => targetOpt.discard(),
-        },
-      )
-    }
-  }, [activeSides, setTempMutation, refetch, targetOpt])
-
-  const handleTempAdjust = (delta: number) => {
-    const displayValue = setpointFToDisplay(targetTemp, unit) ?? targetTemp
-    const converted = displayToSetpointF(displayValue + delta, unit) ?? targetTemp
-    const newTemp = Math.round(Math.max(TEMP.MIN_F, Math.min(TEMP.MAX_F, converted)))
-    targetOpt.commit(newTemp)
-    for (const side of activeSides) {
-      setTempMutation.mutate(
-        { side, temperature: newTemp },
-        {
-          onSettled: () => refetch(),
-          onError: () => targetOpt.discard(),
-        },
-      )
-    }
+  const controls = {
+    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch),
+    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch),
   }
 
-  const handlePowerToggle = () => {
-    const nextPowered = !isOn
-    powerOpt.commit(nextPowered)
-    for (const side of activeSides) {
-      setPowerMutation.mutate(
-        { side, powered: nextPowered },
-        {
-          onSettled: () => refetch(),
-          onError: () => powerOpt.discard(),
-        },
-      )
-    }
+  // Stepper variant: Night / Dawn read and edit tonight's schedule per side.
+  const isStepper = variant === 'stepper'
+  const now = useNow()
+  // Per side, so choosing Night on one card doesn't switch the other — unless linked.
+  const [stepperTab, setStepperTab] = useState<Record<Side, StepperTab>>({ left: 'now', right: 'now' })
+  const handleTabChange = (side: Side, tab: StepperTab) => {
+    setStepperTab(prev => ({ ...prev, ...Object.fromEntries(targetsFor(side).map(s => [s, tab])) }))
   }
+  const nightPhases = {
+    left: useNightPhases('left', now, unit, tempDisplay, isStepper),
+    right: useNightPhases('right', now, unit, tempDisplay, isStepper),
+  }
+
+  const targetsFor = (side: Side): Side[] => (isLinked ? SIDES : [side])
+
+  const handleStepPhase = (side: Side, phase: NightPhaseKey, delta: number) => {
+    for (const s of targetsFor(side)) nightPhases[s].nudge(phase, delta)
+  }
+
+  /** Continuous drag — visual only, no hardware calls. */
+  const handlePreview = (side: Side, f: number) => {
+    for (const s of targetsFor(side)) controls[s].preview(f)
+  }
+
+  /** Drag end / keyboard — send to hardware, hold until status confirms. */
+  const handleCommit = (side: Side, f: number) => {
+    for (const s of targetsFor(side)) controls[s].commitTemp(f)
+  }
+
+  /** ± — shown immediately, sent once taps pause (one hardware write per burst). */
+  const handleStep = (side: Side, delta: number) => {
+    const f = stepForDisplay(controls[side].targetF, delta, unit, tempDisplay)
+    for (const s of targetsFor(side)) controls[s].stepTemp(f)
+  }
+
+  const handlePower = (side: Side) => {
+    const next = !controls[side].isOn
+    for (const s of targetsFor(side)) controls[s].commitPower(next)
+  }
+
+  const anyOn = SIDES.some(s => controls[s].isOn)
+  const handleAllOff = () => {
+    for (const s of SIDES) if (controls[s].isOn) controls[s].commitPower(false)
+  }
+
+  const presenceFor = (side: Side): Presence => {
+    const occ = occupancy?.[side]
+    if (!occ) return null
+    if (occ.occupied) return 'in'
+    return occ.available ? 'out' : null
+  }
+
+  const header = (
+    <PageHeader
+      title="Temperature"
+      right={(
+        <>
+          <AutopilotStatusChip className="no-underline" />
+          <Button
+            icon={Link2}
+            aria-pressed={isLinked}
+            onClick={toggleLink}
+            className={cn('hidden min-[900px]:inline-flex', isLinked ? 'bg-active text-fg' : 'text-fg-2')}
+          >
+            {isLinked ? 'Sides linked' : 'Link sides'}
+          </Button>
+          <Button icon={Power} onClick={handleAllOff} disabled={!anyOn}>
+            All off
+          </Button>
+        </>
+      )}
+    />
+  )
 
   if (statusLoading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <span className="text-sm text-zinc-500">Connecting…</span>
-      </div>
+      <>
+        {header}
+        <div className={GRID}>
+          <Skeleton className="h-[520px]" />
+          <Skeleton className="h-[520px] max-[899px]:hidden" />
+          <div className={CONTEXT}>
+            <span className="sp-label" role="status">Connecting…</span>
+          </div>
+        </div>
+      </>
     )
   }
 
+  const stallNotices = status?.pumpStallNotifications
+  const isPriming = status?.isPriming ?? false
+
   return (
-    <div className="flex flex-col gap-3 sm:gap-4">
-      {/* Side selector — only on the Temp screen */}
-      <SideSelector />
+    <>
+      {header}
 
       {/* Pump stall — highest priority, dismissible per-side */}
-      {stallNotices?.left && (
-        <PumpStallNotification
-          side="left"
-          rpm={stallNotices.left.rpm}
-          trippedAt={stallNotices.left.trippedAt}
-          onAction={() => refetch()}
-        />
-      )}
-      {stallNotices?.right && (
-        <PumpStallNotification
-          side="right"
-          rpm={stallNotices.right.rpm}
-          trippedAt={stallNotices.right.trippedAt}
-          onAction={() => refetch()}
-        />
-      )}
+      {SIDES.map((side) => {
+        const notice = stallNotices?.[side]
+        return notice && (
+          <PumpStallNotification
+            key={side}
+            side={side}
+            rpm={notice.rpm}
+            trippedAt={notice.trippedAt}
+            alertId={notice.alertId}
+            onAction={() => { void refetch() }}
+          />
+        )
+      })}
 
-      {/* Priming indicator — shown when pod water system is actively priming */}
-      {isPriming && (
-        <div className="flex justify-center">
-          <PrimingIndicator />
-        </div>
-      )}
+      {isPriming && <PrimingIndicator />}
 
-      {/* Prime completion notification — dismissible */}
-      {hasPrimeNotification && !isPriming && (
-        <PrimeCompleteNotification onDismiss={() => refetch()} />
+      {status?.primeCompletedNotification != null && !isPriming && (
+        <PrimeCompleteNotification onDismiss={() => { void refetch() }} />
       )}
 
       {/* Alarm banner — active vibration with snooze/stop, or snoozed countdown */}
       <AlarmBanner
-        leftAlarmActive={leftAlarmActive}
-        rightAlarmActive={rightAlarmActive}
-        snooze={snoozeStatus}
-        onActionComplete={refetch}
+        leftAlarmActive={status?.leftSide?.isAlarmVibrating ?? false}
+        rightAlarmActive={status?.rightSide?.isAlarmVibrating ?? false}
+        snooze={status?.snooze}
+        onActionComplete={() => { void refetch() }}
       />
 
-      {/* Circular temperature dial — matches iOS TemperatureDialView */}
-      <TemperatureDial
-        currentTempF={currentTemp}
-        targetTempF={targetTemp}
-        isOn={isOn}
-        unit={unit}
-        onTemperatureChange={handleDialChange}
-        onTemperatureCommit={handleDialCommit}
+      <SideSelector
+        className="min-[900px]:hidden"
+        overrides={{
+          left: { targetF: controls.left.targetF, isOn: controls.left.isOn },
+          right: { targetF: controls.right.targetF, isOn: controls.right.isOn },
+        }}
       />
 
-      {/* Temperature controls: −/power/+ (tight gap to dial to avoid mobile scroll) */}
-      <div className="-mt-2 flex items-center justify-center gap-4 sm:mt-0 sm:gap-6">
-        {/* Minus button */}
-        <button
-          onClick={() => handleTempAdjust(-1)}
-          disabled={!isOn || setTempMutation.isPending}
-          className={clsx(
-            'flex h-12 w-12 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
-            'bg-zinc-900 text-zinc-400 active:bg-zinc-800 active:scale-95',
-            'disabled:cursor-default disabled:opacity-30 disabled:active:scale-100',
-          )}
-        >
-          <Minus size={22} />
-        </button>
+      <div className={GRID}>
+        {SIDES.map((side) => {
+          const c = controls[side]
+          return (
+            <SideCard
+              key={side}
+              side={side}
+              name={sideName(side)}
+              presence={presenceFor(side)}
+              away={Boolean(settings?.sides?.[side]?.awayMode)}
+              control={status?.temperatureControl?.[side]}
+              variant={variant}
+              display={tempDisplay}
+              unit={unit}
+              targetF={c.targetF}
+              bedF={c.bedF}
+              isOn={c.isOn}
+              stepDisabled={!c.isOn || c.tempPending}
+              powerDisabled={c.powerPending}
+              holdMinutes={holdMinutes}
+              onHoldChange={setHoldMinutes}
+              onPreview={f => handlePreview(side, f)}
+              onCommit={f => handleCommit(side, f)}
+              onStep={delta => handleStep(side, delta)}
+              onPower={() => handlePower(side)}
+              onResumed={() => { void refetch() }}
+              hiddenOnPhone={side !== primarySide}
+              stepper={isStepper
+                ? {
+                    tab: stepperTab[side],
+                    onTabChange: tab => handleTabChange(side, tab),
+                    schedule: nightPhases[side],
+                    onStepPhase: (phase, delta) => handleStepPhase(side, phase, delta),
+                    now,
+                  }
+                : undefined}
+            />
+          )
+        })}
 
-        {/* Power button */}
-        <button
-          onClick={handlePowerToggle}
-          disabled={setPowerMutation.isPending}
-          className={clsx(
-            'flex h-14 w-14 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-16 sm:w-16',
-            'active:scale-95',
-            isOn
-              ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
-              : 'bg-zinc-900 text-zinc-600 border border-transparent',
-          )}
-        >
-          <Power size={26} />
-        </button>
-
-        {/* Plus button */}
-        <button
-          onClick={() => handleTempAdjust(1)}
-          disabled={!isOn || setTempMutation.isPending}
-          className={clsx(
-            'flex h-12 w-12 cursor-pointer items-center justify-center rounded-full transition-all duration-200 sm:h-14 sm:w-14',
-            'bg-zinc-900 text-zinc-400 active:bg-zinc-800 active:scale-95',
-            'disabled:cursor-default disabled:opacity-30 disabled:active:scale-100',
-          )}
-        >
-          <Plus size={22} />
-        </button>
+        <div className={CONTEXT}>
+          {/* Desktop: the Schedule and sleep timeline below covers tonight. */}
+          <div className="min-[900px]:hidden">
+            <TonightCard side={primarySide} unit={unit} />
+          </div>
+          <EnvironmentInfoPanel side={primarySide} unit={unit} />
+          <LastNightCard side={primarySide} name={sideName(primarySide)} />
+          <AlarmCard side={primarySide} />
+        </div>
       </div>
 
-      {/* Environment info: home temp + lux (matching iOS) */}
-      <EnvironmentInfoPanel unit={unit} />
-      <div className="flex items-center justify-center">
-        <AmbientLightChip />
-      </div>
-
-    </div>
+      <ScheduleTimeline unit={unit} className="max-[899px]:hidden" />
+    </>
   )
 }

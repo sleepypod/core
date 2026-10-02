@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  fmtF, fmtAge, fmtMs, fmtNum, minutesSince, fmtRel, fmtClock, fmtDayLabel,
-  VERDICT_STYLES, buildWeekLanes, jobTone, fmtJobValue, biometricsFlowStatus, thermalTrendPoints,
-  type SchedJob, type ThermalSideSnapshot,
+  fmtF, fmtAge, fmtMs, fmtNum, minutesSince, fmtClock,
+  VERDICT_STYLES, thermalDirection, biometricsFlowStatus,
 } from '../diagnosticsLogic'
 
 describe('formatters', () => {
@@ -35,12 +34,6 @@ describe('formatters', () => {
     expect(fmtClock(null)).toBe('—')
     expect(fmtClock('2026-05-31T13:05:00Z')).toMatch(/\d/)
   })
-
-  it('fmtDayLabel returns weekday + day strings', () => {
-    const { weekday, day } = fmtDayLabel(new Date('2026-05-31T12:00:00Z').getTime())
-    expect(weekday.length).toBeGreaterThan(0)
-    expect(day.length).toBeGreaterThan(0)
-  })
 })
 
 describe('time-relative formatters', () => {
@@ -55,89 +48,35 @@ describe('time-relative formatters', () => {
     expect(minutesSince(Date.now() + 60_000)).toBe(0) // future → clamped
     expect(minutesSince(Date.now() - 5 * 60_000)).toBe(5)
   })
-
-  it('fmtRel', () => {
-    expect(fmtRel(null)).toBe('—')
-    expect(fmtRel(new Date(Date.now() - 1000).toISOString())).toBe('past')
-    expect(fmtRel(new Date(Date.now() + 30_000).toISOString())).toBe('<1m')
-    expect(fmtRel(new Date(Date.now() + 5 * 60_000).toISOString())).toBe('5m')
-    expect(fmtRel(new Date(Date.now() + 2 * 3_600_000 + 3 * 60_000).toISOString())).toBe('2h 3m')
-    expect(fmtRel(new Date(Date.now() + 2 * 86_400_000 + 3 * 3_600_000).toISOString())).toBe('2d 3h')
-  })
-})
-
-describe('jobTone', () => {
-  it('maps by keyword', () => {
-    expect(jobTone('temperature')).toContain('orange')
-    expect(jobTone('powerOff')).toContain('zinc-600')
-    expect(jobTone('powerOn')).toContain('emerald')
-    expect(jobTone('alarm')).toContain('amber')
-    expect(jobTone('prime')).toContain('sky')
-    expect(jobTone('reboot')).toContain('purple')
-    expect(jobTone('mystery')).toContain('zinc-700')
-  })
-})
-
-describe('fmtJobValue', () => {
-  it('prefers temperature, then brightness, else dash', () => {
-    expect(fmtJobValue({ targetTempF: 82.4 })).toBe('82°F')
-    expect(fmtJobValue({ brightness: 40 })).toBe('40%')
-    expect(fmtJobValue({ targetTempF: 80, brightness: 40 })).toBe('80°F')
-    expect(fmtJobValue({})).toBe('—')
-    expect(fmtJobValue({ targetTempF: null, brightness: null })).toBe('—')
-  })
 })
 
 describe('VERDICT_STYLES', () => {
-  it('covers the four thermal verdicts', () => {
-    expect(Object.keys(VERDICT_STYLES).sort()).toEqual(['delivering', 'idle', 'off', 'stalled'])
+  it('covers the five thermal verdicts', () => {
+    expect(Object.keys(VERDICT_STYLES).sort()).toEqual(['delivering', 'holding', 'off', 'stalled', 'unknown'])
   })
 })
 
-describe('buildWeekLanes', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-05-31T12:00:00'))
-  })
-  afterEach(() => vi.useRealTimers())
+describe('thermalDirection', () => {
+  const base = { verdict: 'delivering', isPowered: true, targetTempF: 76, currentTempF: 80 }
 
-  function midnightToday(): number {
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    return d.getTime()
-  }
-
-  it('buckets jobs into 7 lanes, marks today, sorts, drops out-of-range and null', () => {
-    const start = midnightToday()
-    const job = (id: string, offsetMs: number | null): SchedJob => ({
-      id, type: 'temperature', nextRun: offsetMs == null ? null : new Date(start + offsetMs).toISOString(),
-    })
-    const jobs: SchedJob[] = [
-      job('today-late', 20 * 3_600_000), // today 20:00
-      job('today-early', 8 * 3_600_000), // today 08:00
-      job('day3', 3 * 86_400_000 + 3_600_000),
-      job('too-far', 8 * 86_400_000), // dropped
-      job('past', -86_400_000), // dropped
-      job('null', null), // skipped
-    ]
-
-    const lanes = buildWeekLanes(jobs)
-    expect(lanes).toHaveLength(7)
-    expect(lanes[0].isToday).toBe(true)
-    expect(lanes[1].isToday).toBe(false)
-    // today lane sorted ascending by time
-    expect(lanes[0].jobs.map(j => j.id)).toEqual(['today-early', 'today-late'])
-    expect(lanes[3].jobs.map(j => j.id)).toEqual(['day3'])
-    // out-of-range and null never placed
-    const allIds = lanes.flatMap(l => l.jobs.map(j => j.id))
-    expect(allIds).not.toContain('too-far')
-    expect(allIds).not.toContain('past')
-    expect(allIds).not.toContain('null')
+  it('reports COOLING when the target is below the bed', () => {
+    expect(thermalDirection(base)).toEqual({ label: 'COOLING', className: 'text-cool' })
   })
 
-  it('handles no jobs', () => {
-    const lanes = buildWeekLanes([])
-    expect(lanes.every(l => l.jobs.length === 0)).toBe(true)
+  it('reports WARMING when the target is above the bed', () => {
+    expect(thermalDirection({ ...base, targetTempF: 84 })).toEqual({ label: 'WARMING', className: 'text-warm' })
+  })
+
+  it('reports HOLDING within ±0.5°F', () => {
+    expect(thermalDirection({ ...base, targetTempF: 80.5 }).label).toBe('HOLDING')
+    expect(thermalDirection({ ...base, targetTempF: 79.5 }).label).toBe('HOLDING')
+  })
+
+  it('falls back to the verdict when not delivering or data is missing', () => {
+    expect(thermalDirection({ ...base, verdict: 'stalled' })).toEqual(VERDICT_STYLES.stalled)
+    expect(thermalDirection({ ...base, isPowered: false })).toEqual(VERDICT_STYLES.delivering)
+    expect(thermalDirection({ ...base, currentTempF: null })).toEqual(VERDICT_STYLES.delivering)
+    expect(thermalDirection({ ...base, verdict: 'weird' })).toEqual({ label: 'WEIRD', className: 'text-fg-2' })
   })
 })
 
@@ -182,28 +121,5 @@ describe('biometricsFlowStatus', () => {
     const res = biometricsFlowStatus(rows, occ(false, false), files(4))
     expect(res.tone).toBe('idle')
     expect(res.label).toContain('30m ago')
-  })
-})
-
-describe('thermalTrendPoints', () => {
-  const snap = (over: Partial<ThermalSideSnapshot>): ThermalSideSnapshot => ({
-    side: 'left', isPowered: true, targetTempF: 80, currentTempF: 75, waterTempF: 70, ...over,
-  })
-
-  it('projects a side series and gates target on power', () => {
-    const history = [
-      { t: 1, sides: [snap({ side: 'left' }), snap({ side: 'right', targetTempF: 90 })] },
-      { t: 2, sides: [snap({ side: 'left', isPowered: false, currentTempF: 74 })] },
-    ]
-    const pts = thermalTrendPoints(history, 'left')
-    expect(pts).toEqual([
-      { t: 1, target: 80, bed: 75, water: 70 },
-      { t: 2, target: null, bed: 74, water: 70 },
-    ])
-  })
-
-  it('emits nulls when the side is absent from a snapshot', () => {
-    const pts = thermalTrendPoints([{ t: 5, sides: [] }], 'left')
-    expect(pts).toEqual([{ t: 5, target: null, bed: null, water: null }])
   })
 })

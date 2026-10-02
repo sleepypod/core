@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { timeToDate, nowInTimezone } from '../timeUtils'
 
 describe('timeToDate', () => {
@@ -75,6 +75,53 @@ describe('timeToDate', () => {
     const ref = new Date('2026-04-01T12:00:00Z')
     expect(() => timeToDate('12:00', 'Not/A_Zone', ref)).toThrow()
   })
+
+  it('names the timezone when target-zone calendar parts are incomplete', () => {
+    const fake = function DateTimeFormat() {
+      return {
+        formatToParts: () => [
+          { type: 'year', value: '2026' },
+          { type: 'month', value: '04' },
+        ],
+      }
+    } as unknown as typeof Intl.DateTimeFormat
+    const format = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(fake)
+    try {
+      expect(() => timeToDate('12:00', 'Test/MissingDay', new Date())).toThrow(
+        'Invalid timezone: Test/MissingDay',
+      )
+    }
+    finally {
+      format.mockRestore()
+    }
+  })
+
+  it('names the timezone when offset calculation parts are incomplete', () => {
+    const RealDateTimeFormat = Intl.DateTimeFormat
+    const fake = function DateTimeFormat(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) {
+      if (options && 'second' in options) {
+        return {
+          formatToParts: () => [
+            { type: 'year', value: '2026' },
+            { type: 'month', value: '04' },
+            { type: 'day', value: '01' },
+            { type: 'hour', value: '12' },
+            { type: 'minute', value: '00' },
+          ],
+        }
+      }
+      return new RealDateTimeFormat(locales, options)
+    } as unknown as typeof Intl.DateTimeFormat
+    const format = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(fake)
+    try {
+      expect(() => timeToDate('12:30', 'UTC', new Date('2026-04-01T10:00:00Z'))).toThrow(
+        'Invalid timezone: UTC',
+      )
+    }
+    finally {
+      format.mockRestore()
+    }
+  })
 })
 
 describe('nowInTimezone', () => {
@@ -103,5 +150,20 @@ describe('nowInTimezone', () => {
 
   it('throws on invalid timezone', () => {
     expect(() => nowInTimezone('Not/A_Zone', new Date())).toThrow()
+  })
+
+  it('names the timezone when wall-clock parts are incomplete', () => {
+    const fake = function DateTimeFormat() {
+      return { formatToParts: () => [{ type: 'hour', value: '12' }] }
+    } as unknown as typeof Intl.DateTimeFormat
+    const format = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(fake)
+    try {
+      expect(() => nowInTimezone('Test/MissingMinute', new Date())).toThrow(
+        'Invalid timezone: Test/MissingMinute',
+      )
+    }
+    finally {
+      format.mockRestore()
+    }
   })
 })

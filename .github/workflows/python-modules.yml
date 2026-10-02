@@ -7,6 +7,7 @@ on:
       - 'modules/**/*.py'
       - 'modules/**/pyproject.toml'
       - 'modules/**/uv.lock'
+      - 'modules/.coveragerc'
       - '.github/workflows/python-modules.yml'
   pull_request:
     types: [opened, synchronize, reopened]
@@ -14,6 +15,7 @@ on:
       - 'modules/**/*.py'
       - 'modules/**/pyproject.toml'
       - 'modules/**/uv.lock'
+      - 'modules/.coveragerc'
       - '.github/workflows/python-modules.yml'
   workflow_dispatch:
 
@@ -46,7 +48,9 @@ jobs:
             workdir: modules
             target: common
             cov_source: common
-            deps: ""
+            # cbor2 is needed to decode the real NATS capture fixtures through
+            # NatsFollower's decode path (test_nats_follower).
+            deps: "cbor2"
           - name: cover-buttons
             workdir: modules/cover-buttons
             target: .
@@ -92,10 +96,15 @@ jobs:
       - name: Install test deps
         working-directory: ${{ matrix.module.workdir }}
         run: |
-          uv venv .venv
+          if [ -f uv.lock ]; then
+            uv sync --locked --no-install-project
+          else
+            uv venv .venv
+            uv pip install --python .venv/bin/python ${{ matrix.module.deps }}
+          fi
           # shellcheck source=/dev/null
           . .venv/bin/activate
-          uv pip install pytest pytest-cov ${{ matrix.module.deps }}
+          uv pip install pytest pytest-cov
 
       - name: Run pytest with coverage
         working-directory: ${{ matrix.module.workdir }}
@@ -103,6 +112,7 @@ jobs:
           # shellcheck source=/dev/null
           . .venv/bin/activate
           pytest ${{ matrix.module.target }} \
+            --cov-config=${{ github.workspace }}/modules/.coveragerc \
             --cov=${{ matrix.module.cov_source }} \
             --cov-report=xml:coverage.xml \
             --junit-xml=junit.xml \
@@ -113,6 +123,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           use_oidc: true
+          fail_ci_if_error: false
           slug: sleepypod/core
           flags: python,${{ matrix.module.name }}
           files: ${{ matrix.module.workdir }}/coverage.xml
@@ -122,9 +133,11 @@ jobs:
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v5
         with:
+          report_type: test_results
           use_oidc: true
+          fail_ci_if_error: false
           slug: sleepypod/core
           flags: python,${{ matrix.module.name }}
           files: ${{ matrix.module.workdir }}/junit.xml

@@ -71,6 +71,40 @@ describe('useScheduleActive', () => {
     expect(result.current.nextTime).toBe('2:30 PM')
   })
 
+  it('sorts same-day set points before choosing the next one', () => {
+    trpcMock.state.data = {
+      temperature: [
+        { enabled: true, dayOfWeek: 'wednesday', time: '18:00', temperature: 60 },
+        { enabled: true, dayOfWeek: 'wednesday', time: '14:00', temperature: 70 },
+      ],
+    }
+    const { result } = renderHook(() => useScheduleActive())
+    expect(result.current.nextEvent).toEqual({ time: '2:00 PM', temperature: 70 })
+  })
+
+  it('does not treat a set point at the current minute as upcoming', () => {
+    trpcMock.state.data = {
+      temperature: [
+        { enabled: true, dayOfWeek: 'wednesday', time: '10:00', temperature: 65 },
+        { enabled: true, dayOfWeek: 'thursday', time: '07:00', temperature: 68 },
+      ],
+    }
+    const { result } = renderHook(() => useScheduleActive())
+    expect(result.current.nextEvent).toEqual({ time: '7:00 AM', temperature: 68 })
+  })
+
+  it('includes the current minutes when deciding whether a point has passed', () => {
+    vi.setSystemTime(new Date(2026, 4, 13, 10, 30, 0))
+    trpcMock.state.data = {
+      temperature: [
+        { enabled: true, dayOfWeek: 'wednesday', time: '10:00', temperature: 65 },
+        { enabled: true, dayOfWeek: 'thursday', time: '07:00', temperature: 68 },
+      ],
+    }
+    const { result } = renderHook(() => useScheduleActive())
+    expect(result.current.nextEvent).toEqual({ time: '7:00 AM', temperature: 68 })
+  })
+
   it('walks forward to a later day when today has nothing left', () => {
     trpcMock.state.data = {
       temperature: [

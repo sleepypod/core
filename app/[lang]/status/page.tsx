@@ -1,5 +1,6 @@
-import { StatusScreen } from '@/src/components/status/StatusScreen'
+import { redirect } from 'next/navigation'
 
-export default function StatusPage() {
-  return <StatusScreen />
+export default async function Page({ params }: { params: Promise<{ lang: string }> }) {
+  const { lang } = await params
+  redirect(`/${lang}/system`)
 }

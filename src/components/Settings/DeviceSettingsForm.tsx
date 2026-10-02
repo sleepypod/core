@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Globe, Thermometer, RotateCcw, Droplets, Timer, Lightbulb, Loader2, ShieldAlert } from 'lucide-react'
+import { RotateCcw, Wifi } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Toggle } from './Toggle'
-import { TimeInput } from '../Schedule/TimeInput'
+import { Button, Card, CardHeader, InlineError, SegmentedControl, SelectValue, SettingRow, Slider, Toggle } from '@/src/components/ds'
+import { NumberField, SaveToast, SectionColumns, TimeField } from './SettingsLayout'
 
 interface DeviceSettings {
   timezone: string
@@ -28,9 +28,10 @@ interface DeviceSettings {
 }
 
 const DEFAULT_MAX_ON_HOURS = 12
+const MAX_ON_HOUR_OPTIONS = [1, 2, 3, 4, 6, 8, 10, 12, 16, 20, 24, 36, 48]
 
 // Common US/international timezones
-const TIMEZONES = [
+export const TIMEZONES = [
   'America/New_York',
   'America/Chicago',
   'America/Denver',
@@ -52,8 +53,9 @@ const TIMEZONES = [
 ]
 
 /**
- * Device-level settings form: timezone, temperature unit, reboot schedule, prime pod schedule.
- * Matches iOS DeviceSettingsCardView device section.
+ * Device-level settings: timezone, unit, power cap, pump protection,
+ * reconnect/restart, daily maintenance, LED, and a vibration test.
+ * Every control auto-saves through settings.updateDevice.
  */
 export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   const utils = trpc.useUtils()
@@ -121,6 +123,8 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   useEffect(() => () => {
     if (savedTimer.current) clearTimeout(savedTimer.current)
   }, [])
+
+  const rebootMutation = trpc.system.triggerUpdate.useMutation()
 
   const isPending = mutation.isPending
 
@@ -202,16 +206,12 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     if (maxOnEnabled) save({ globalMaxOnHours: clamped })
   }
 
-  // LED brightness handlers — sliders update local state continuously, but the
-  // mutation only fires on pointer/touch release so dragging doesn't flood the
-  // hardware with SET_SETTINGS commands.
-  function handleLedDayChange(brightness: number) {
-    setLedDayBrightness(brightness)
-  }
-
-  function commitLedDay() {
-    if (ledDayBrightness !== device.ledDayBrightness) {
-      save({ ledDayBrightness })
+  // LED brightness sliders update local state continuously, but the mutation
+  // only fires on pointer/key release so dragging doesn't flood the hardware
+  // with SET_SETTINGS commands.
+  function commitLedDay(value: number) {
+    if (value !== device.ledDayBrightness) {
+      save({ ledDayBrightness: value })
     }
   }
 
@@ -230,13 +230,9 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     }
   }
 
-  function handleLedNightBrightnessChange(brightness: number) {
-    setLedNightBrightness(brightness)
-  }
-
-  function commitLedNightBrightness() {
-    if (ledNightBrightness !== device.ledNightBrightness) {
-      save({ ledNightBrightness })
+  function commitLedNightBrightness(value: number) {
+    if (value !== device.ledNightBrightness) {
+      save({ ledNightBrightness: value })
     }
   }
 
@@ -259,18 +255,10 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   // Pump-safety number inputs: update state on every keystroke but only clamp
   // + save on blur so partial values like "5" → "500" aren't clamped to the
   // min mid-type and don't fire a mutation per character.
-  function handlePumpStallThreshold(rpm: number) {
-    setPumpStallThreshold(rpm)
-  }
-
   function commitPumpStallThreshold() {
     const clamped = Math.max(100, Math.min(1500, Math.round(pumpStallThreshold)))
     setPumpStallThreshold(clamped)
     if (clamped !== device.pumpStallRpmThreshold) save({ pumpStallRpmThreshold: clamped })
-  }
-
-  function handlePumpStallDwell(samples: number) {
-    setPumpStallDwell(samples)
   }
 
   function commitPumpStallDwell() {
@@ -285,18 +273,10 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     save({ pumpStallAutoRecoveryEnabled: next })
   }
 
-  function handlePumpRecoveryRpm(rpm: number) {
-    setPumpRecoveryRpm(rpm)
-  }
-
   function commitPumpRecoveryRpm() {
     const clamped = Math.max(500, Math.min(3000, Math.round(pumpRecoveryRpm)))
     setPumpRecoveryRpm(clamped)
     if (clamped !== device.pumpStallRecoveryRpm) save({ pumpStallRecoveryRpm: clamped })
-  }
-
-  function handlePumpRecoverySamples(samples: number) {
-    setPumpRecoverySamples(samples)
   }
 
   function commitPumpRecoverySamples() {
@@ -305,379 +285,245 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     if (clamped !== device.pumpStallRecoverySamples) save({ pumpStallRecoverySamples: clamped })
   }
 
-  const showToast = isPending || savedFlash
+  function handleRestart() {
+    if (confirm('Restart the sleepypod service? The pod will be briefly unavailable.')) {
+      rebootMutation.mutate({})
+    }
+  }
 
-  return (
-    <div className="space-y-4">
-      <div
-        aria-live="polite"
-        className={`pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-4 transition-opacity duration-200 sm:bottom-28 ${
-          showToast ? 'opacity-100' : 'opacity-0'
-        }`}
-      >
-        <div className="flex items-center gap-2 rounded-full bg-zinc-800/95 px-3 py-1.5 text-xs font-medium text-zinc-200 shadow-lg ring-1 ring-zinc-700/60 backdrop-blur">
-          {isPending
-            ? (
-                <>
-                  <Loader2 size={12} className="animate-spin text-sky-400" />
-                  Saving…
-                </>
-              )
-            : savedFlash
-              ? (
-                  <>
-                    <CheckCircle2 size={12} className="text-emerald-400" />
-                    Saved
-                  </>
-                )
-              : null}
-        </div>
-      </div>
+  const timezoneOptions = (TIMEZONES.includes(timezone) ? TIMEZONES : [...TIMEZONES, timezone])
+    .map(tz => ({ value: tz, label: tz.replace(/_/g, ' ') }))
+  const maxOnOptions = (MAX_ON_HOUR_OPTIONS.includes(maxOnHours) ? MAX_ON_HOUR_OPTIONS : [...MAX_ON_HOUR_OPTIONS, maxOnHours].sort((a, b) => a - b))
+    .map(h => ({ value: h, label: `${h} h` }))
 
-      {/* Timezone */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="mb-3 flex items-center gap-2">
-          <Globe size={16} className="text-zinc-400" />
-          <span className="text-sm font-medium text-zinc-300">Timezone</span>
-        </div>
-        <select
-          value={timezone}
-          onChange={e => handleTimezoneChange(e.target.value)}
-          disabled={isPending}
-          className="h-11 w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+  const left = (
+    <>
+      <Card>
+        <CardHeader title="Pod" />
+        <SettingRow label="Timezone">
+          <SelectValue
+            label="Timezone"
+            value={timezone}
+            options={timezoneOptions}
+            onChange={handleTimezoneChange}
+            disabled={isPending}
+            className="max-w-[210px]"
+          />
+        </SettingRow>
+        <SettingRow label="Temperature unit">
+          <SegmentedControl
+            ariaLabel="Temperature unit"
+            value={tempUnit === 'C' ? 'C' : 'F'}
+            options={[{ value: 'F', label: '°F' }, { value: 'C', label: '°C' }]}
+            onChange={handleTempUnitChange}
+          />
+        </SettingRow>
+      </Card>
+
+      <Card>
+        <CardHeader title="Power" />
+        <SettingRow
+          label="Auto power-off cap"
+          sub="Turns a side off after it has been on this long. Always-on sides and run-once sessions are exempt."
         >
-          {TIMEZONES.map(tz => (
-            <option key={tz} value={tz}>
-              {tz.replace(/_/g, ' ')}
-            </option>
-          ))}
-          {/* Include current timezone if not in common list */}
-          {!TIMEZONES.includes(timezone) && (
-            <option value={timezone}>{timezone.replace(/_/g, ' ')}</option>
-          )}
-        </select>
-      </div>
-
-      {/* Temperature Unit */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="mb-3 flex items-center gap-2">
-          <Thermometer size={16} className="text-zinc-400" />
-          <span className="text-sm font-medium text-zinc-300">Temperature Unit</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => handleTempUnitChange('F')}
-            disabled={isPending}
-            className={`rounded-lg min-h-[44px] text-[13px] font-medium transition-colors disabled:opacity-50 sm:text-sm ${
-              tempUnit === 'F'
-                ? 'bg-sky-500/20 text-sky-400'
-                : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
-            }`}
-          >
-            °F
-          </button>
-          <button
-            onClick={() => handleTempUnitChange('C')}
-            disabled={isPending}
-            className={`rounded-lg min-h-[44px] text-[13px] font-medium transition-colors disabled:opacity-50 sm:text-sm ${
-              tempUnit === 'C'
-                ? 'bg-sky-500/20 text-sky-400'
-                : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
-            }`}
-          >
-            °C
-          </button>
-        </div>
-      </div>
-
-      {/* Auto Reboot */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <RotateCcw size={16} className={rebootDaily ? 'text-sky-400' : 'text-zinc-400'} />
-            <span className="text-sm font-medium text-zinc-300">Daily Reboot</span>
-          </div>
-          <Toggle
-            enabled={rebootDaily}
-            onToggle={handleRebootToggle}
-            disabled={isPending}
-            label="Toggle daily reboot"
+          <SelectValue
+            label="Auto power-off hours"
+            value={maxOnHours}
+            options={maxOnOptions}
+            onChange={handleMaxOnHoursChange}
+            disabled={isPending || !maxOnEnabled}
           />
-        </div>
-        {rebootDaily && (
-          <div className="mt-2">
-            <TimeInput
-              label="Reboot Time"
-              value={rebootTime}
-              onChange={handleRebootTimeChange}
-              disabled={isPending}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Prime Pod */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Droplets size={16} className={primePodDaily ? 'text-sky-400' : 'text-zinc-400'} />
-            <span className="text-sm font-medium text-zinc-300">Daily Prime Pod</span>
-          </div>
           <Toggle
-            enabled={primePodDaily}
-            onToggle={handlePrimeToggle}
-            disabled={isPending}
-            label="Toggle daily prime pod"
-          />
-        </div>
-        {primePodDaily && (
-          <div className="mt-2">
-            <TimeInput
-              label="Prime Time"
-              value={primePodTime}
-              onChange={handlePrimeTimeChange}
-              disabled={isPending}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Global auto-off cap (wall-clock safety net) */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Timer size={16} className={maxOnEnabled ? 'text-sky-400' : 'text-zinc-400'} />
-            <span className="text-sm font-medium text-zinc-300">Auto Power-Off Cap</span>
-          </div>
-          <Toggle
-            enabled={maxOnEnabled}
-            onToggle={handleMaxOnToggle}
+            on={maxOnEnabled}
+            onChange={handleMaxOnToggle}
             disabled={isPending}
             label="Toggle global auto power-off cap"
           />
-        </div>
-        <p className="mb-2 text-xs text-zinc-500">
-          Forces any side that has been on for longer than this to power off. Runs on top of the per-side auto-off. Always-on sides and active run-once sessions are exempt.
-        </p>
-        {maxOnEnabled && (
-          <div className="mt-2 flex items-center gap-2">
-            <label htmlFor="maxOnHours" className="text-sm text-zinc-300">
-              Hours
-            </label>
-            <input
-              id="maxOnHours"
-              type="number"
-              min={1}
-              max={48}
-              step={1}
-              value={maxOnHours}
-              onChange={e => handleMaxOnHoursChange(Number(e.target.value))}
-              disabled={isPending}
-              className="h-11 w-24 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-            />
-          </div>
+        </SettingRow>
+      </Card>
+
+      <Card>
+        <CardHeader title="Pump protection" />
+        <SettingRow label="Pump stall protection" sub="Powers a side off when pump RPM stays under the threshold for the dwell window">
+          <Toggle
+            on={pumpStallEnabled}
+            onChange={handlePumpStallToggle}
+            disabled={isPending}
+            label="Toggle pump stall protection"
+          />
+        </SettingRow>
+        {pumpStallEnabled && (
+          <>
+            <SettingRow label="Trip threshold" sub="RPM">
+              <NumberField
+                label="Trip threshold (RPM)"
+                value={pumpStallThreshold}
+                min={100}
+                max={1500}
+                step={50}
+                onChange={setPumpStallThreshold}
+                onBlur={commitPumpStallThreshold}
+                disabled={isPending}
+              />
+            </SettingRow>
+            <SettingRow label="Dwell samples" sub="Consecutive sub-threshold frames, ~60 s apart">
+              <NumberField
+                label="Dwell samples"
+                value={pumpStallDwell}
+                min={1}
+                max={10}
+                onChange={setPumpStallDwell}
+                onBlur={commitPumpStallDwell}
+                disabled={isPending}
+              />
+            </SettingRow>
+            <SettingRow label="Pump auto-recovery" sub="Restores the side once the pump returns">
+              <Toggle
+                on={pumpAutoRecover}
+                onChange={handlePumpAutoRecoverToggle}
+                disabled={isPending}
+                label="Toggle pump auto-recovery"
+              />
+            </SettingRow>
+            {pumpAutoRecover && (
+              <>
+                <SettingRow label="Recovery RPM">
+                  <NumberField
+                    label="Recovery RPM"
+                    value={pumpRecoveryRpm}
+                    min={500}
+                    max={3000}
+                    step={50}
+                    onChange={setPumpRecoveryRpm}
+                    onBlur={commitPumpRecoveryRpm}
+                    disabled={isPending}
+                  />
+                </SettingRow>
+                <SettingRow label="Recovery samples">
+                  <NumberField
+                    label="Recovery samples"
+                    value={pumpRecoverySamples}
+                    min={1}
+                    max={10}
+                    onChange={setPumpRecoverySamples}
+                    onBlur={commitPumpRecoverySamples}
+                    disabled={isPending}
+                  />
+                </SettingRow>
+              </>
+            )}
+          </>
         )}
+      </Card>
+
+      <div className="flex flex-wrap gap-2.5">
+        <Button icon={Wifi} onClick={() => window.location.reload()}>
+          Reconnect
+        </Button>
+        <Button variant="danger" icon={RotateCcw} onClick={handleRestart} disabled={rebootMutation.isPending}>
+          {rebootMutation.isPending ? 'Restarting…' : 'Restart service'}
+        </Button>
       </div>
+      {rebootMutation.isSuccess && (
+        <p className="text-xs text-ok">Service restarting — reconnecting…</p>
+      )}
+      {rebootMutation.error && <InlineError>{rebootMutation.error.message}</InlineError>}
+    </>
+  )
 
-      {/* LED brightness + night mode */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="mb-3 flex items-center gap-2">
-          <Lightbulb size={16} className="text-zinc-400" />
-          <span className="text-sm font-medium text-zinc-300">Pod LED</span>
-        </div>
+  const right = (
+    <>
+      <Card>
+        <CardHeader title="Daily maintenance" />
+        <SettingRow label="Daily reboot">
+          <TimeField
+            label="Reboot time"
+            value={rebootTime}
+            onChange={handleRebootTimeChange}
+            disabled={isPending || !rebootDaily}
+          />
+          <Toggle
+            on={rebootDaily}
+            onChange={handleRebootToggle}
+            disabled={isPending}
+            label="Toggle daily reboot"
+          />
+        </SettingRow>
+        <SettingRow label="Daily prime" sub="Circulates water to clear air from the lines">
+          <TimeField
+            label="Prime time"
+            value={primePodTime}
+            onChange={handlePrimeTimeChange}
+            disabled={isPending || !primePodDaily}
+          />
+          <Toggle
+            on={primePodDaily}
+            onChange={handlePrimeToggle}
+            disabled={isPending}
+            label="Toggle daily prime pod"
+          />
+        </SettingRow>
+      </Card>
 
-        <div className="mb-4">
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-xs font-medium text-zinc-400">Brightness</span>
-            <span className="text-xs font-medium text-white">
+      <Card>
+        <CardHeader title="LED" />
+        <SettingRow label="Brightness">
+          <div className="flex w-[150px] items-center gap-2.5">
+            <Slider
+              label="LED brightness"
+              value={ledDayBrightness}
+              onChange={setLedDayBrightness}
+              onCommit={commitLedDay}
+              disabled={isPending}
+            />
+            <span className="w-8 text-right font-mono text-xs">
               {ledDayBrightness}
               %
             </span>
           </div>
-          <input
-            aria-label="LED brightness"
-            type="range"
-            min={0}
-            max={100}
-            step={1}
-            value={ledDayBrightness}
-            onChange={e => handleLedDayChange(parseInt(e.target.value, 10))}
-            onPointerUp={commitLedDay}
-            onKeyUp={commitLedDay}
-            disabled={isPending}
-            className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-40 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
-          />
-          <div className="flex justify-between text-[10px] text-zinc-600">
-            <span>0%</span>
-            <span>100%</span>
-          </div>
-        </div>
-
-        <div className="mb-3 flex items-center justify-between">
-          <span className="text-sm font-medium text-zinc-300">Night Mode</span>
+        </SettingRow>
+        <SettingRow label="Night mode" sub={`Dims the LED to ${ledNightBrightness}% overnight`}>
           <Toggle
-            enabled={ledNightEnabled}
-            onToggle={handleLedNightToggle}
+            on={ledNightEnabled}
+            onChange={handleLedNightToggle}
             disabled={isPending}
             label="Toggle LED night mode"
           />
-        </div>
+        </SettingRow>
         {ledNightEnabled && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              <TimeInput
-                label="Start"
-                value={ledNightStart}
-                onChange={handleLedNightStartChange}
-                disabled={isPending}
-              />
-              <TimeInput
-                label="End"
-                value={ledNightEnd}
-                onChange={handleLedNightEndChange}
-                disabled={isPending}
-              />
-            </div>
-            <div>
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-xs font-medium text-zinc-400">Night brightness</span>
-                <span className="text-xs font-medium text-white">
+          <>
+            <SettingRow label="Window">
+              <TimeField label="Night mode start" value={ledNightStart} onChange={handleLedNightStartChange} disabled={isPending} />
+              <span className="text-fg-3">–</span>
+              <TimeField label="Night mode end" value={ledNightEnd} onChange={handleLedNightEndChange} disabled={isPending} />
+            </SettingRow>
+            <SettingRow label="Night brightness">
+              <div className="flex w-[150px] items-center gap-2.5">
+                <Slider
+                  label="LED night brightness"
+                  value={ledNightBrightness}
+                  onChange={setLedNightBrightness}
+                  onCommit={commitLedNightBrightness}
+                  disabled={isPending}
+                />
+                <span className="w-8 text-right font-mono text-xs">
                   {ledNightBrightness}
                   %
                 </span>
               </div>
-              <input
-                aria-label="LED night brightness"
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={ledNightBrightness}
-                onChange={e => handleLedNightBrightnessChange(parseInt(e.target.value, 10))}
-                onPointerUp={commitLedNightBrightness}
-                onKeyUp={commitLedNightBrightness}
-                disabled={isPending}
-                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-700 accent-sky-500 disabled:cursor-not-allowed disabled:opacity-40 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500"
-              />
-              <div className="flex justify-between text-[10px] text-zinc-600">
-                <span>0%</span>
-                <span>100%</span>
-              </div>
-            </div>
-          </div>
+            </SettingRow>
+          </>
         )}
-      </div>
+      </Card>
 
-      {/* Pump safety */}
-      <div className="rounded-2xl bg-zinc-900 p-3 sm:p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <ShieldAlert size={16} className={pumpStallEnabled ? 'text-red-400' : 'text-zinc-400'} />
-            <span className="text-sm font-medium text-zinc-300">Pump safety</span>
-          </div>
-          <Toggle
-            enabled={pumpStallEnabled}
-            onToggle={handlePumpStallToggle}
-            disabled={isPending}
-            label="Toggle pump stall protection"
-          />
-        </div>
-        <p className="mb-3 text-xs text-zinc-500">
-          When the pump RPM stays under the threshold for the dwell window, the side powers off until you re-enable it.
-        </p>
-        {pumpStallEnabled && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <label htmlFor="pumpThresholdRpm" className="text-sm text-zinc-300">
-                Trip threshold (RPM)
-              </label>
-              <input
-                id="pumpThresholdRpm"
-                type="number"
-                min={100}
-                max={1500}
-                step={50}
-                value={pumpStallThreshold}
-                onChange={e => handlePumpStallThreshold(Number(e.target.value))}
-                onBlur={commitPumpStallThreshold}
-                disabled={isPending}
-                className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-              />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <label htmlFor="pumpStallDwell" className="text-sm text-zinc-300">
-                Dwell samples
-              </label>
-              <input
-                id="pumpStallDwell"
-                type="number"
-                min={1}
-                max={10}
-                step={1}
-                value={pumpStallDwell}
-                onChange={e => handlePumpStallDwell(Number(e.target.value))}
-                onBlur={commitPumpStallDwell}
-                disabled={isPending}
-                className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-              />
-            </div>
-            <p className="text-xs text-zinc-500">
-              Consecutive sub-threshold frames before tripping. Frames arrive every ~60 seconds.
-            </p>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-zinc-300">Auto-recover when pump returns</span>
-              <Toggle
-                enabled={pumpAutoRecover}
-                onToggle={handlePumpAutoRecoverToggle}
-                disabled={isPending}
-                label="Toggle pump auto-recovery"
-              />
-            </div>
-            {pumpAutoRecover && (
-              <>
-                <div className="flex items-center justify-between gap-2">
-                  <label htmlFor="pumpRecoveryRpm" className="text-sm text-zinc-300">
-                    Recovery RPM
-                  </label>
-                  <input
-                    id="pumpRecoveryRpm"
-                    type="number"
-                    min={500}
-                    max={3000}
-                    step={50}
-                    value={pumpRecoveryRpm}
-                    onChange={e => handlePumpRecoveryRpm(Number(e.target.value))}
-                    onBlur={commitPumpRecoveryRpm}
-                    disabled={isPending}
-                    className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <label htmlFor="pumpRecoverySamples" className="text-sm text-zinc-300">
-                    Recovery samples
-                  </label>
-                  <input
-                    id="pumpRecoverySamples"
-                    type="number"
-                    min={1}
-                    max={10}
-                    step={1}
-                    value={pumpRecoverySamples}
-                    onChange={e => handlePumpRecoverySamples(Number(e.target.value))}
-                    onBlur={commitPumpRecoverySamples}
-                    disabled={isPending}
-                    className="h-11 w-28 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-                  />
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
+      {mutation.error && <InlineError>{mutation.error.message}</InlineError>}
+    </>
+  )
 
-      {mutation.error && (
-        <p className="text-xs text-red-400">{mutation.error.message}</p>
-      )}
-    </div>
+  return (
+    <>
+      <SectionColumns left={left} right={right} />
+      <SaveToast pending={isPending} saved={savedFlash} />
+    </>
   )
 }

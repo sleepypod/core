@@ -2,10 +2,26 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
-import { CheckCircle, Download, Loader2, RefreshCw, AlertTriangle, Globe } from 'lucide-react'
+import { Download, Globe, RefreshCw } from 'lucide-react'
+import { Alert, Button, Card, CardHeader, KeyValue, SegmentedControl, SettingRow, Skeleton, StatusDot } from '@/src/components/ds'
+
+type Channel = 'main' | 'dev'
+
+export function formatBuildDate(dateStr: string, withTime = false): string {
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return dateStr
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: withTime ? undefined : 'numeric',
+    ...(withTime ? { hour: 'numeric', minute: '2-digit' } : {}),
+  })
+}
 
 /**
  * UpdateCard — shows current version and provides a trigger to update the pod software.
+ * `compact` is the Status summary; the full card (Settings → Updates) adds the
+ * build details and the main | dev channel picker.
  *
  * Wires into:
  * - system.getVersion → shows running version/branch
@@ -20,7 +36,7 @@ import { CheckCircle, Download, Loader2, RefreshCw, AlertTriangle, Globe } from 
  * prompts to temporarily allow internet. After the update completes
  * (or fails), internet is re-blocked automatically.
  */
-export function UpdateCard() {
+export function UpdateCard({ compact = false }: { compact?: boolean } = {}) {
   const utils = trpc.useUtils()
   const version = trpc.system.getVersion.useQuery({})
   const triggerUpdate = trpc.system.triggerUpdate.useMutation()
@@ -225,97 +241,59 @@ export function UpdateCard() {
     setErrorMessage(null)
   }
 
-  return (
-    <div className="rounded-2xl bg-zinc-900/80 p-3 sm:p-4">
-      {/* Header */}
-      <div className="mb-2 flex items-center gap-2 sm:mb-3">
-        {updateState === 'idle' || updateState === 'confirming' || updateState === 'branch-picker' || updateState === 'internet-prompt'
-          ? (
-              <>
-                <CheckCircle size={16} className="text-emerald-400" />
-                <span className="text-sm font-medium text-white">Software</span>
-              </>
-            )
-          : updateState === 'error'
-            ? (
-                <>
-                  <AlertTriangle size={16} className="text-red-400" />
-                  <span className="text-sm font-medium text-white">Update Failed</span>
-                </>
-              )
-            : (
-                <>
-                  <Loader2 size={16} className="animate-spin text-sky-400" />
-                  <span className="text-sm font-medium text-white">
-                    {updateState === 'unblocking'
-                      ? 'Enabling internet...'
-                      : updateState === 'updating'
-                        ? 'Updating...'
-                        : 'Reconnecting...'}
-                  </span>
-                </>
-              )}
-      </div>
+  const busy = updateState === 'unblocking' || updateState === 'updating' || updateState === 'reconnecting'
+  const commit = versionData && versionData.commitHash !== 'unknown' ? versionData.commitHash.slice(0, 7) : '—'
+  const branch = versionData && versionData.branch !== 'unknown' ? versionData.branch : '—'
+  const built = versionData && versionData.buildDate !== 'unknown' ? formatBuildDate(versionData.buildDate) : '—'
+  const channel: Channel | undefined = (selectedBranch ?? versionData?.branch) === 'main'
+    ? 'main'
+    : (selectedBranch ?? versionData?.branch) === 'dev' ? 'dev' : undefined
 
-      {/* Version tags */}
-      {versionData && (
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <VersionTag
-            label={versionData.commitHash !== 'unknown' ? versionData.commitHash.slice(0, 7) : '—'}
-            color="emerald"
+  const statusDot = updateState === 'error'
+    ? <StatusDot tone="danger" label="Update failed" />
+    : busy
+      ? (
+          <StatusDot
+            tone="warn"
+            label={updateState === 'unblocking' ? 'Enabling internet…' : updateState === 'updating' ? 'Updating…' : 'Reconnecting…'}
           />
-          <span className="text-xs text-zinc-600">on</span>
-          <VersionTag
-            label={versionData.branch !== 'unknown' ? versionData.branch : '—'}
-            color="zinc"
-          />
-        </div>
-      )}
+        )
+      : versionData ? <StatusDot tone="ok" label="Installed" /> : null
 
-      {version.isLoading && (
-        <div className="flex items-center gap-2 py-2">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-600 border-t-sky-400" />
-          <span className="text-xs text-zinc-500">Loading version...</span>
-        </div>
-      )}
+  /** Changing channel is an update to that branch — same confirm flow. */
+  const handleChannel = (next: Channel) => {
+    if (busy) return
+    setErrorMessage(null)
+    if (next === versionData?.branch) {
+      setSelectedBranch(undefined)
+      setUpdateState('idle')
+      return
+    }
+    setSelectedBranch(next)
+    setUpdateState('confirming')
+  }
 
-      {/* Error message */}
-      {errorMessage && (
-        <p className="mb-3 text-xs text-red-400">{errorMessage}</p>
-      )}
+  const prompts = (
+    <>
+      {errorMessage && <Alert tone="danger">{errorMessage}</Alert>}
 
       {/* Branch picker for non-standard branches */}
       {updateState === 'branch-picker' && (
-        <div className="mb-3">
-          <p className="mb-2 text-xs text-amber-400">
+        <div className="flex flex-col gap-2.5">
+          <p className="text-[13px] text-warn">
             {`Current branch (${versionData?.branch}) is not a release channel. Pick a channel to update to:`}
           </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => handleBranchSelected('main')}
-              className="flex-1 rounded-lg border border-zinc-800 bg-zinc-800/50 px-4 py-2.5 text-xs font-medium text-emerald-400 transition-colors active:bg-zinc-700"
-            >
-              main
-            </button>
-            <button
-              onClick={() => handleBranchSelected('dev')}
-              className="flex-1 rounded-lg border border-zinc-800 bg-zinc-800/50 px-4 py-2.5 text-xs font-medium text-sky-400 transition-colors active:bg-zinc-700"
-            >
-              dev
-            </button>
-            <button
-              onClick={handleCancel}
-              className="rounded-lg border border-zinc-800 px-4 py-2.5 text-xs font-medium text-zinc-400 transition-colors active:bg-zinc-800"
-            >
-              Cancel
-            </button>
+          <div className="flex gap-2.5">
+            <Button onClick={() => handleBranchSelected('main')}>main</Button>
+            <Button onClick={() => handleBranchSelected('dev')}>dev</Button>
+            <Button variant="ghost" onClick={handleCancel}>Cancel</Button>
           </div>
         </div>
       )}
 
       {/* Confirmation prompt */}
       {updateState === 'confirming' && (
-        <p className="mb-3 text-xs text-amber-400">
+        <p className="text-[13px] text-warn">
           {selectedBranch
             ? `This will switch to ${selectedBranch}, rebuild, and restart the service. The pod will be briefly unavailable.`
             : 'This will download the latest code, rebuild, and restart the service. The pod will be briefly unavailable.'}
@@ -324,98 +302,108 @@ export function UpdateCard() {
 
       {/* Internet blocked prompt */}
       {updateState === 'internet-prompt' && (
-        <div className="mb-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Globe size={14} className="text-amber-400" />
-            <p className="text-xs text-amber-400">
-              Internet is currently blocked. Temporarily allow internet to check for updates?
-            </p>
-          </div>
-          <p className="text-[10px] text-zinc-500">
+        <div className="flex flex-col gap-1">
+          <p className="flex items-center gap-2 text-[13px] text-warn">
+            <Globe size={14} className="shrink-0" />
+            Internet is currently blocked. Temporarily allow internet to check for updates?
+          </p>
+          <p className="text-xs text-fg-2">
             Internet will be re-blocked automatically after the update completes.
           </p>
         </div>
       )}
 
-      {/* Action buttons */}
-      {(updateState === 'idle' || updateState === 'confirming' || updateState === 'error' || updateState === 'internet-prompt') && (
-        <div className="flex gap-2">
-          {updateState === 'internet-prompt'
-            ? (
-                <button
-                  onClick={handleAllowInternet}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800/50 px-4 py-2.5 text-xs font-medium text-amber-400 transition-colors active:bg-zinc-700"
-                >
-                  <Globe size={14} />
-                  Allow &amp; Update
-                </button>
-              )
-            : (
-                <button
-                  onClick={handleUpdate}
-                  disabled={version.isLoading}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800/50 px-4 py-2.5 text-xs font-medium text-sky-400 transition-colors active:bg-zinc-700 disabled:opacity-50"
-                >
-                  {updateState === 'confirming'
-                    ? (
-                        <>
-                          <Download size={14} />
-                          Confirm Update
-                        </>
-                      )
-                    : updateState === 'error'
-                      ? (
-                          <>
-                            <RefreshCw size={14} />
-                            Retry Update
-                          </>
-                        )
-                      : (
-                          <>
-                            <RefreshCw size={14} />
-                            Check for Updates
-                          </>
-                        )}
-                </button>
-              )}
-
-          {(updateState === 'confirming' || updateState === 'internet-prompt') && (
-            <button
-              onClick={handleCancel}
-              className="rounded-lg border border-zinc-800 px-4 py-2.5 text-xs font-medium text-zinc-400 transition-colors active:bg-zinc-800"
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Unblocking/updating/reconnecting state */}
-      {(updateState === 'unblocking' || updateState === 'updating' || updateState === 'reconnecting') && (
-        <div className="flex items-center gap-2 rounded-lg bg-zinc-800/50 px-4 py-3">
-          <Loader2 size={14} className="animate-spin text-sky-400" />
-          <span className="text-xs text-zinc-400">
-            {updateState === 'unblocking'
-              ? 'Enabling internet access...'
-              : updateState === 'updating'
-                ? 'Triggering update...'
-                : 'Waiting for service to restart...'}
-          </span>
-        </div>
+      {busy && (
+        <p className="text-[13px] text-fg-2">
+          {updateState === 'unblocking'
+            ? 'Enabling internet access…'
+            : updateState === 'updating'
+              ? 'Triggering update…'
+              : 'Waiting for service to restart…'}
+        </p>
+      )}
+    </>
+  )
+
+  const actions = (updateState === 'idle' || updateState === 'confirming' || updateState === 'error' || updateState === 'internet-prompt') && (
+    <div className="flex flex-wrap gap-2.5">
+      {updateState === 'internet-prompt'
+        ? (
+            <Button variant="primary" icon={Globe} onClick={handleAllowInternet}>
+              Allow &amp; update
+            </Button>
+          )
+        : (
+            <Button
+              variant={updateState === 'confirming' ? 'primary' : 'secondary'}
+              icon={updateState === 'confirming' ? Download : RefreshCw}
+              onClick={handleUpdate}
+              disabled={version.isLoading}
+            >
+              {updateState === 'confirming'
+                ? 'Confirm update'
+                : updateState === 'error'
+                  ? 'Retry update'
+                  : compact ? 'Check now' : 'Check for updates'}
+            </Button>
+          )}
+      {(updateState === 'confirming' || updateState === 'internet-prompt') && (
+        <Button variant="ghost" onClick={handleCancel}>Cancel</Button>
       )}
     </div>
   )
-}
 
-function VersionTag({ label, color }: { label: string, color: 'emerald' | 'zinc' }) {
-  const colorClasses
-    = color === 'emerald'
-      ? 'bg-emerald-500/15 text-emerald-400'
-      : 'bg-zinc-800 text-zinc-400'
+  if (compact) {
+    return (
+      <Card>
+        <CardHeader title="Software" icon={Download} right={statusDot} />
+        {version.isLoading
+          ? <Skeleton className="h-5 border-0" />
+          : (
+              <div className="truncate font-mono text-[13px]">
+                {`${branch} @ ${commit} · built ${versionData && versionData.buildDate !== 'unknown' ? formatBuildDate(versionData.buildDate, true) : '—'}`}
+              </div>
+            )}
+        {prompts}
+        <div className="flex items-center gap-3">
+          <span className="min-w-0 flex-1 truncate text-[13px] text-fg-2">
+            {versionData && versionData.commitTitle !== 'unknown' ? versionData.commitTitle : ''}
+          </span>
+          {actions}
+        </div>
+      </Card>
+    )
+  }
 
   return (
-    <span className={`rounded-md px-2 py-1 text-xs font-medium ${colorClasses}`}>
-      {label}
-    </span>
+    <Card>
+      <CardHeader title="Software" right={statusDot} />
+      {version.isLoading
+        ? <Skeleton className="h-[92px] border-0" />
+        : (
+            <div className="grid grid-cols-2 gap-3">
+              <KeyValue label="Branch" value={branch} />
+              <KeyValue label="Commit" value={commit} />
+              <KeyValue label="Built" value={built} />
+              <KeyValue
+                label="Title"
+                value={versionData && versionData.commitTitle !== 'unknown' ? versionData.commitTitle : '—'}
+                valueClassName="font-sans"
+                size={13}
+              />
+            </div>
+          )}
+      <SettingRow label="Update channel">
+        <SegmentedControl
+          ariaLabel="Update channel"
+          value={channel ?? ('' as Channel)}
+          options={['main', 'dev'] as const}
+          onChange={handleChannel}
+        />
+      </SettingRow>
+      {prompts}
+      {actions}
+    </Card>
   )
 }

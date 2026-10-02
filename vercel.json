@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "rm -f instrumentation.ts tests/instrumentation*.test.ts && NEXT_PUBLIC_DEMO=1 SP_BRANCH=demo pnpm build",
+  "git": {
+    "deploymentEnabled": {
+      "*": false,
+      "dev": true
+    }
+  }
+}

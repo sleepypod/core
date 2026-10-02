@@ -22,9 +22,7 @@
 import { eq, and } from 'drizzle-orm'
 import { db } from '@/src/db'
 import { deviceSettings, sideSettings, deviceState, runOnceSessions } from '@/src/db/schema'
-import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
-import { markSideMutated } from '@/src/hardware/deviceStateSync'
-import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
+import { getTemperatureController } from '@/src/temperature/instance'
 import { getOccupancy } from '@/src/lib/occupancy'
 
 // ---------------------------------------------------------------------------
@@ -186,34 +184,7 @@ function presenceState(side: Side): 'occupied' | 'empty' | 'unsensable' {
 /** Power off a side via the shared hardware client. */
 async function powerOffSide(side: Side): Promise<void> {
   try {
-    const client = getSharedHardwareClient()
-    await client.connect()
-    await client.setPower(side, false)
-
-    // Best-effort DB sync — also clear poweredOnAt so the global cap doesn't
-    // see a stale "powered on X hours ago" after the side comes back on later
-    // via a path that doesn't stamp through deviceStateSync.
-    try {
-      // Stamp freshness immediately before the DB write so the 5s guard
-      // protects this mutation from concurrent DAC polls — placing it before
-      // the slow hardware roundtrip risks the window expiring before the DB
-      // update lands.
-      markSideMutated(side)
-      db.update(deviceState)
-        .set({
-          isPowered: false,
-          poweredOnAt: null,
-          targetTemperature: null,
-          lastUpdated: new Date(),
-        })
-        .where(eq(deviceState.side, side))
-        .run()
-    }
-    catch {
-      // next status poll will re-sync
-    }
-
-    broadcastMutationStatus(side, { targetLevel: 0 })
+    await getTemperatureController().powerOff(side)
     console.log(`[auto-off] Powered off ${side} side (no presence detected)`)
   }
   catch (error) {

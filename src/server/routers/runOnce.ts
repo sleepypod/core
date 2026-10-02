@@ -5,9 +5,10 @@ import { db } from '@/src/db'
 import { runOnceSessions, deviceSettings } from '@/src/db/schema'
 import { eq, and, gt } from 'drizzle-orm'
 import { getJobManager } from '@/src/scheduler'
-import { withHardwareClient } from '@/src/server/helpers'
+import { assertPumpStallNotBlocked } from '@/src/server/helpers'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
-import { fahrenheitToLevel } from '@/src/hardware/types'
+import { withSideLock } from '@/src/hardware/sideLock'
+import { getTemperatureController } from '@/src/temperature/instance'
 import { sideSchema, temperatureSchema, timeStringSchema } from '@/src/server/validation-schemas'
 import { timeToDate } from '@/src/scheduler/timeUtils'
 
@@ -35,30 +36,14 @@ export const runOnceRouter = router({
       expiresAt: z.number(),
     }))
     .mutation(async ({ input }) => {
+      // Fail fast before cancelling the existing session — starting a session
+      // powers the side on, which a tripped pump stall guard must block.
+      assertPumpStallNotBlocked(input.side)
+
       const jobManager = await getJobManager()
 
-      // Cancel any existing active session for this side
-      // (synchronous transaction — better-sqlite3 is sync)
-      db.transaction((tx) => {
-        const existing = tx
-          .select({ id: runOnceSessions.id })
-          .from(runOnceSessions)
-          .where(and(
-            eq(runOnceSessions.side, input.side),
-            eq(runOnceSessions.status, 'active'),
-          ))
-          .all()
-
-        for (const row of existing) {
-          tx.update(runOnceSessions)
-            .set({ status: 'cancelled' })
-            .where(eq(runOnceSessions.id, row.id))
-            .run()
-        }
-      })
-      jobManager.cancelRunOnceSession(input.side)
-
-      // Compute expiry from wake time
+      // Compute expiry from wake time and validate it BEFORE cancelling the
+      // existing session — a rejected start must leave that session running.
       const [settings] = await db.select().from(deviceSettings).limit(1)
       const timezone = settings?.timezone ?? 'America/Los_Angeles'
       const now = new Date()
@@ -73,50 +58,66 @@ export const runOnceRouter = router({
         })
       }
 
-      // Power on + fire first set point immediately (before inserting session,
-      // so a hardware failure doesn't leave an orphaned active session)
-      const firstTemp = input.setPoints[0].temperature
-      await withHardwareClient(async (client) => {
-        await client.setPower(input.side, true, firstTemp)
-        return { success: true }
-      }, 'Failed to start run-once session')
-
-      broadcastMutationStatus(input.side, {
-        targetTemperature: firstTemp,
-        targetLevel: fahrenheitToLevel(firstTemp),
-      })
-
-      // Create session in DB (after hardware success)
-      const [session] = await db
-        .insert(runOnceSessions)
-        .values({
-          side: input.side,
-          setPoints: JSON.stringify(input.setPoints),
-          wakeTime: input.wakeTime,
-          expiresAt,
-          status: 'active',
+      return withSideLock(input.side, async () => {
+        assertPumpStallNotBlocked(input.side)
+        const previous = db.select().from(runOnceSessions).where(and(
+          eq(runOnceSessions.side, input.side), eq(runOnceSessions.status, 'active'),
+        )).all()
+        const controller = getTemperatureController()
+        const wasPowered = controller.status(input.side).blocked === null
+        // Commit the session before resolving its target. Cancellation and
+        // insertion are atomic; a failed insert leaves the old session intact.
+        const session = db.transaction((tx) => {
+          tx.update(runOnceSessions).set({ status: 'cancelled' }).where(and(
+            eq(runOnceSessions.side, input.side), eq(runOnceSessions.status, 'active'),
+          )).run()
+          const row = tx.insert(runOnceSessions).values({
+            side: input.side,
+            setPoints: JSON.stringify(input.setPoints),
+            wakeTime: input.wakeTime,
+            startedAt: now,
+            expiresAt,
+            status: 'active',
+          }).returning({ id: runOnceSessions.id }).get()
+          if (!row) throw new Error('Failed to create run-once session')
+          return row
         })
-        .returning({ id: runOnceSessions.id })
-
-      if (!session) {
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create run-once session' })
-      }
-
-      // Schedule remaining set points (skip the first — already applied) + cleanup
-      jobManager.scheduleRunOnceSession(
-        session.id,
-        input.side,
-        input.setPoints.slice(1),
-        input.wakeTime,
-        timezone,
-      )
-
-      console.log(`Run-once session ${session.id} started for ${input.side} until ${input.wakeTime}`)
-
-      return {
-        sessionId: session.id,
-        expiresAt: Math.floor(expiresAt.getTime() / 1000),
-      }
+        let attemptedPower = false
+        try {
+          // Register the new jobs before energizing. Old jobs remain registered
+          // until success so a failed replacement can retain its original clock.
+          jobManager.scheduleRunOnceSession(
+            session.id, input.side, input.setPoints.slice(1), input.wakeTime, timezone,
+          )
+          attemptedPower = true
+          await controller.powerOnLocked(input.side, input.setPoints[0].temperature)
+        }
+        catch (error) {
+          jobManager.cancelRunOnceSession(input.side, session.id)
+          db.transaction((tx) => {
+            tx.update(runOnceSessions).set({ status: 'cancelled' }).where(eq(runOnceSessions.id, session.id)).run()
+            for (const old of previous) {
+              if (old.expiresAt.getTime() > Date.now()) {
+                tx.update(runOnceSessions).set({ status: 'active' }).where(eq(runOnceSessions.id, old.id)).run()
+              }
+            }
+          })
+          // Never leave an untracked, partially energized start running.
+          try {
+            if (attemptedPower) {
+              controller.invalidate(input.side)
+              if (wasPowered) await controller.reconcileLocked(input.side, true)
+              else await controller.powerOffLocked(input.side)
+            }
+          }
+          catch (cleanupError) {
+            console.warn('[runOnce] Failed to restore hardware after rejected start:', cleanupError)
+          }
+          throw error
+        }
+        for (const old of previous) jobManager.cancelRunOnceSession(input.side, old.id)
+        return { sessionId: session.id, expiresAt: Math.floor(expiresAt.getTime() / 1000) }
+      })
     }),
 
   /**
@@ -179,15 +180,13 @@ export const runOnceRouter = router({
     .mutation(async ({ input }) => {
       const jobManager = await getJobManager()
 
-      await db
-        .update(runOnceSessions)
-        .set({ status: 'cancelled' })
-        .where(and(
-          eq(runOnceSessions.side, input.side),
-          eq(runOnceSessions.status, 'active'),
+      await withSideLock(input.side, async () => {
+        await db.update(runOnceSessions).set({ status: 'cancelled' }).where(and(
+          eq(runOnceSessions.side, input.side), eq(runOnceSessions.status, 'active'),
         ))
-
-      jobManager.cancelRunOnceSession(input.side)
+        jobManager.cancelRunOnceSession(input.side)
+        await getTemperatureController().reconcileLocked(input.side)
+      })
       broadcastMutationStatus(input.side)
       console.log(`Run-once session cancelled for ${input.side}`)
       return { success: true }

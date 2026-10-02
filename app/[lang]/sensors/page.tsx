@@ -1,5 +1,6 @@
-import { SensorsScreen } from '@/src/components/Sensors/SensorsScreen'
+import { redirect } from 'next/navigation'
 
-export default function SensorsPage() {
-  return <SensorsScreen />
+export default async function Page({ params }: { params: Promise<{ lang: string }> }) {
+  const { lang } = await params
+  redirect(`/${lang}/system`)
 }

@@ -31,7 +31,36 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm build
+        run: SP_BRANCH="$BRANCH" pnpm build
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+
+      - name: Pin commit metadata into .git-info
+        # sp-update installs this artifact for feature branches (via
+        # nightly.link). The tarball has no .git, so pin the real branch and
+        # SHA instead of whatever `git rev-parse` sees in the CI checkout.
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          jq -n \
+            --arg branch "$BRANCH" \
+            --arg hash "${SHA:0:7}" \
+            --arg title "$(git log -1 --format=%s "$SHA" 2>/dev/null || git log -1 --format=%s)" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{branch:$branch, commitHash:$hash, commitTitle:$title, buildDate:$date}' \
+            > .git-info
+
+      - name: Set install script default branch
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        # Only substitute names that are safe both in the sed replacement and
+        # inside the installer's double-quoted assignment; anything else keeps
+        # the placeholder, which the installer treats as main.
+        run: |
+          if [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            sed -i "s|__BRANCH__|${BRANCH}|" scripts/install
+          fi
 
       - name: Create deploy tarball
         run: |

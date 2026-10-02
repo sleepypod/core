@@ -2,39 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useOnSensorFrame, type LogFrame, type GestureFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
-import { Terminal, Trash2, Pause, Play } from 'lucide-react'
+import { Trash2, Pause, Play } from 'lucide-react'
+import { GhostIcon, Pill, SegmentedControl } from '@/src/components/ds'
 
 const MAX_ENTRIES = 100
 
 const LEVEL_COLORS: Record<string, string> = {
-  DEBUG: 'text-zinc-500',
-  INFO: 'text-sky-400',
-  WARN: 'text-amber-400',
-  WARNING: 'text-amber-400',
-  ERROR: 'text-red-400',
-  CRITICAL: 'text-red-500',
-}
-
-const TYPE_COLORS: Record<string, string> = {
-  'piezo-dual': 'text-purple-400',
-  'capSense': 'text-green-400',
-  'capSense2': 'text-green-400',
-  'bedTemp': 'text-orange-400',
-  'bedTemp2': 'text-orange-400',
-  'frzTemp': 'text-blue-400',
-  'frzHealth': 'text-blue-400',
-  'frzTherm': 'text-blue-400',
-  'deviceStatus': 'text-sky-400',
-  'log': 'text-amber-400',
-  'gesture': 'text-pink-400',
+  DEBUG: 'text-fg-3',
+  INFO: 'text-fg-2',
+  WARN: 'text-warn',
+  WARNING: 'text-warn',
+  ERROR: 'text-danger',
+  CRITICAL: 'text-danger',
 }
 
 function getLevelColor(level: string): string {
-  return LEVEL_COLORS[level.toUpperCase()] ?? 'text-zinc-400'
-}
-
-function getTypeColor(type: string): string {
-  return TYPE_COLORS[type] ?? 'text-zinc-400'
+  return LEVEL_COLORS[level.toUpperCase()] ?? 'text-fg-2'
 }
 
 function formatTime(ts: number): string {
@@ -51,8 +34,8 @@ interface RawEntry {
 }
 
 /**
- * Unified diagnostic console — firmware logs (default) + raw frame inspector.
- * Terminal-style with auto-scroll, pause, type filtering, and expandable frames.
+ * Unified diagnostic console — firmware logs (default) + raw frame inspector. Terminal-style with auto-scroll, pause, type
+ * filtering, and expandable frames.
  */
 export function FirmwareLogConsole() {
   const [mode, setMode] = useState<ViewMode>('logs')
@@ -146,59 +129,32 @@ export function FirmwareLogConsole() {
   const entryCount = mode === 'logs' ? logs.length : filteredFrames.length
 
   return (
-    <div className="space-y-1.5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <Terminal size={14} className="text-zinc-400" />
-          <h3 className="text-sm font-semibold text-zinc-200">Console</h3>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {/* Mode toggle */}
-          <div className="flex rounded-md bg-zinc-800/50">
-            <button
-              onClick={() => handleModeSwitch('logs')}
-              className={`px-2 py-0.5 text-[9px] font-medium rounded-l-md transition-colors ${
-                mode === 'logs' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              Logs
-            </button>
-            <button
-              onClick={() => handleModeSwitch('frames')}
-              className={`px-2 py-0.5 text-[9px] font-medium rounded-r-md transition-colors ${
-                mode === 'frames' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              Frames
-            </button>
-          </div>
-
-          {/* Pause */}
-          <button
-            onClick={() => setPaused(p => !p)}
-            className={`rounded-md p-1 text-[9px] ${
-              paused ? 'text-amber-400 bg-amber-500/10' : 'text-zinc-600 hover:text-zinc-400'
-            }`}
-            title={paused ? 'Resume' : 'Pause'}
-          >
-            {paused ? <Play size={11} /> : <Pause size={11} />}
-          </button>
-
-          <span className="text-[9px] tabular-nums text-zinc-600">{entryCount}</span>
-
-          <button onClick={handleClear} className="rounded-md p-1 text-zinc-600 hover:text-zinc-400" title="Clear">
-            <Trash2 size={11} />
-          </button>
-        </div>
+    <div className="flex flex-col gap-2.5">
+      <div className="flex items-center gap-2">
+        <SegmentedControl
+          size="sm"
+          ariaLabel="Console view"
+          options={[{ value: 'logs', label: 'Logs' }, { value: 'frames', label: 'Frames' }]}
+          value={mode}
+          onChange={handleModeSwitch}
+        />
+        <span className="ml-auto font-mono text-xs text-fg-2">{`${entryCount} entries`}</span>
+        <GhostIcon
+          icon={paused ? Play : Pause}
+          label={paused ? 'Resume' : 'Pause'}
+          size={14}
+          onClick={() => setPaused(p => !p)}
+          className={paused ? 'text-warn' : undefined}
+        />
+        <GhostIcon icon={Trash2} label="Clear" size={14} onClick={handleClear} />
       </div>
 
       {/* Type filter (frames mode only) */}
       {mode === 'frames' && typesSeen.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          <FilterPill label="All" active={typeFilter === null} onClick={() => setTypeFilter(null)} />
+        <div className="flex flex-wrap gap-1.5">
+          <Pill selected={typeFilter === null} onClick={() => setTypeFilter(null)} className="px-2.5 py-1 font-mono text-xs">All</Pill>
           {typesSeen.map(type => (
-            <FilterPill key={type} label={type} active={typeFilter === type} onClick={() => setTypeFilter(type)} />
+            <Pill key={type} selected={typeFilter === type} onClick={() => setTypeFilter(type)} className="px-2.5 py-1 font-mono text-xs">{type}</Pill>
           ))}
         </div>
       )}
@@ -207,22 +163,20 @@ export function FirmwareLogConsole() {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="h-52 overflow-y-auto rounded-xl bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed"
+        className="h-[min(420px,55dvh)] overflow-y-auto rounded-ctl border border-line bg-code px-3 py-2.5 font-mono text-xs leading-[1.7]"
       >
         {mode === 'logs'
           ? (
               logs.length === 0
                 ? (
-                    <Empty text="Waiting for firmware logs..." />
+                    <Empty text="Waiting for firmware logs" />
                   )
                 : (
                     logs.map((log, i) => (
-                      <div key={`${log.ts}-${i}`} className="flex gap-2">
-                        <span className="shrink-0 text-zinc-600">{formatTime(log.ts)}</span>
-                        <span className={`shrink-0 w-11 text-right font-semibold ${getLevelColor(log.level)}`}>
-                          {log.level.toUpperCase().slice(0, 5)}
-                        </span>
-                        <span className="text-zinc-300 break-all">{log.msg}</span>
+                      <div key={`${log.ts}-${i}`} className="grid grid-cols-[64px_44px_minmax(0,1fr)] gap-2">
+                        <span className="text-fg-3">{formatTime(log.ts)}</span>
+                        <span className={getLevelColor(log.level)}>{log.level.toUpperCase().slice(0, 5)}</span>
+                        <span className="break-all text-fg">{log.msg}</span>
                       </div>
                     ))
                   )
@@ -230,7 +184,7 @@ export function FirmwareLogConsole() {
           : (
               filteredFrames.length === 0
                 ? (
-                    <Empty text="Waiting for frames..." />
+                    <Empty text="Waiting for frames" />
                   )
                 : (
                     filteredFrames.map((entry, i) => {
@@ -240,24 +194,22 @@ export function FirmwareLogConsole() {
                       return (
                         <div key={`${entry.ts}-${i}`}>
                           <button
+                            type="button"
                             onClick={() => {
                               setExpandedIdx(isExpanded ? null : i)
                               if (!paused) setPaused(true)
                             }}
-                            className={`flex w-full items-center gap-2 rounded px-1 py-0.5 text-left ${
-                              isExpanded ? 'bg-sky-500/10' : 'hover:bg-zinc-900'
+                            className={`flex w-full cursor-pointer items-center gap-2 rounded-tag border-0 px-1 text-left font-mono text-xs ${
+                              isExpanded ? 'bg-active' : 'bg-transparent hover:bg-active'
                             }`}
                           >
-                            <span className="shrink-0 text-zinc-600">{formatTime(entry.ts)}</span>
-                            <span className={`shrink-0 font-semibold ${getTypeColor(entry.type)}`}>{entry.type}</span>
+                            <span className="shrink-0 text-fg-3">{formatTime(entry.ts)}</span>
+                            <span className="shrink-0 text-fg">{entry.type}</span>
                             <span className="flex-1" />
-                            <span className="text-zinc-700">
-                              {age}
-                              s
-                            </span>
+                            <span className="text-fg-3">{`${age}s`}</span>
                           </button>
                           {isExpanded && (
-                            <pre className="ml-4 max-h-48 overflow-auto py-1 text-[9px] text-zinc-500">
+                            <pre className="ml-4 max-h-48 overflow-auto py-1 text-[11px] text-fg-2">
                               {entry.json}
                             </pre>
                           )}
@@ -274,20 +226,7 @@ export function FirmwareLogConsole() {
 function Empty({ text }: { text: string }) {
   return (
     <div className="flex h-full items-center justify-center">
-      <span className="text-zinc-600">{text}</span>
+      <span className="font-sans text-[13px] text-fg-3">{text}</span>
     </div>
-  )
-}
-
-function FilterPill({ label, active, onClick }: { label: string, active: boolean, onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-md px-2 py-0.5 text-[8px] font-medium transition-colors ${
-        active ? 'bg-sky-500/20 text-sky-400' : 'bg-zinc-800 text-zinc-500 active:bg-zinc-700'
-      }`}
-    >
-      {label}
-    </button>
   )
 }

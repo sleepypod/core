@@ -1,9 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { CheckCircle2, Copy, Globe, KeyRound, Loader2, Plug, Save, User, XCircle } from 'lucide-react'
+import { Copy, KeyRound, Plug } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Toggle } from './Toggle'
+import { Button, Card, CardHeader, InlineError, Pill, SettingRow, Skeleton, StatusDot, TextField, Toggle } from '@/src/components/ds'
+import { SectionColumns } from './SettingsLayout'
 
 interface FormState {
   enabled: boolean
@@ -34,7 +35,12 @@ export function ArchivePushSettingsForm() {
   const configQuery = trpc.archivePush.getConfig.useQuery({})
 
   if (configQuery.isLoading) {
-    return <div className="h-40 animate-pulse rounded-2xl bg-zinc-900" />
+    return (
+      <SectionColumns
+        left={<Skeleton className="h-[360px]" />}
+        right={<Skeleton className="h-[180px]" />}
+      />
+    )
   }
 
   const data = configQuery.data ?? {
@@ -99,184 +105,133 @@ function Editor({ initial }: { initial: InitialConfig }) {
     }))
   }
 
-  return (
-    <div className="space-y-4">
-      <div className="rounded-2xl bg-zinc-900 p-4">
-        <h3 className="mb-1 text-sm font-semibold text-white">Nightly archive push</h3>
-        <p className="mb-4 text-xs text-zinc-500">
-          Rsync the cold archive (and a biometrics.db dump) to a host you control. Runs once per
-          night via systemd timer. Disabled by default.
-        </p>
-
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-zinc-200">Enable nightly push</span>
-          <Toggle
-            label="Enable nightly push"
-            enabled={form.enabled}
-            onToggle={() => setForm(f => ({ ...f, enabled: !f.enabled }))}
-          />
-        </div>
-
-        <div className="mt-4 space-y-3">
-          <Field icon={Globe} label="Host">
-            <input
-              value={form.host}
-              onChange={e => setForm(f => ({ ...f, host: e.target.value }))}
-              placeholder="nas.local"
-              className="w-full rounded-lg bg-zinc-800 px-3 py-2 text-sm text-white outline-none focus:ring-1 focus:ring-sky-500"
-            />
-          </Field>
-          <Field icon={User} label="Remote user">
-            <input
-              value={form.remoteUser}
-              onChange={e => setForm(f => ({ ...f, remoteUser: e.target.value }))}
-              placeholder="sleepypod"
-              className="w-full rounded-lg bg-zinc-800 px-3 py-2 text-sm text-white outline-none focus:ring-1 focus:ring-sky-500"
-            />
-          </Field>
-          <Field icon={Globe} label="Remote path">
-            <input
-              value={form.remotePath}
-              onChange={e => setForm(f => ({ ...f, remotePath: e.target.value }))}
-              placeholder="/volume1/sleepypod-archive"
-              className="w-full rounded-lg bg-zinc-800 px-3 py-2 text-sm text-white outline-none focus:ring-1 focus:ring-sky-500"
-            />
-          </Field>
-          <Field icon={Globe} label="Port">
-            <input
-              type="number"
-              value={form.port}
-              onChange={(e) => {
-                const parsed = Number(e.target.value)
-                setForm(f => ({ ...f, port: Number.isFinite(parsed) ? parsed : 22 }))
-              }}
-              className="w-32 rounded-lg bg-zinc-800 px-3 py-2 text-sm text-white outline-none focus:ring-1 focus:ring-sky-500"
-            />
-          </Field>
-
-          <div>
-            <span className="mb-2 block text-xs font-medium text-zinc-400">Include</span>
-            <div className="flex gap-2">
-              {(['raw', 'db'] as const).map(key => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => toggleInclude(key)}
-                  className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
-                    form.include.includes(key)
-                      ? 'bg-sky-600 text-white'
-                      : 'bg-zinc-800 text-zinc-400'
-                  }`}
-                >
-                  {key === 'raw' ? 'RAW waveforms' : 'biometrics.db'}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <button
-          onClick={handleSave}
-          disabled={setConfig.isPending}
-          className="mt-4 flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-sky-600 p-3 text-sm font-medium text-white active:bg-sky-700 disabled:opacity-50"
-        >
-          {setConfig.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-          {setConfig.isSuccess && !setConfig.isPending ? 'Saved' : 'Save'}
-        </button>
+  const left = (
+    <Card>
+      <CardHeader
+        title="Nightly archive push"
+        subtitle="Copies the biometrics archive (and a biometrics.db dump) to a host you control over SSH, once per night."
+      />
+      <SettingRow label="Enable nightly push">
+        <Toggle
+          label="Enable nightly push"
+          on={form.enabled}
+          onChange={() => setForm(f => ({ ...f, enabled: !f.enabled }))}
+        />
+      </SettingRow>
+      <div className="grid grid-cols-[minmax(0,1fr)_90px] gap-3">
+        <TextField
+          label="Host"
+          value={form.host}
+          placeholder="nas.local"
+          onChange={host => setForm(f => ({ ...f, host }))}
+        />
+        <TextField
+          label="Port"
+          type="number"
+          value={form.port}
+          onChange={(v) => {
+            const parsed = Number(v)
+            setForm(f => ({ ...f, port: Number.isFinite(parsed) ? parsed : 22 }))
+          }}
+        />
       </div>
-
-      <div className="rounded-2xl bg-zinc-900 p-4">
-        <div className="mb-2 flex items-center gap-2">
-          <KeyRound size={14} className="text-amber-400" />
-          <h3 className="text-sm font-semibold text-white">SSH identity</h3>
+      <TextField
+        label="Remote user"
+        value={form.remoteUser}
+        placeholder="sleepypod"
+        onChange={remoteUser => setForm(f => ({ ...f, remoteUser }))}
+      />
+      <TextField
+        label="Remote path"
+        value={form.remotePath}
+        placeholder="/volume1/sleepypod-archive"
+        onChange={remotePath => setForm(f => ({ ...f, remotePath }))}
+      />
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs text-fg-2">Include</span>
+        <div className="flex flex-wrap gap-2">
+          {(['raw', 'db'] as const).map(key => (
+            <Pill key={key} selected={form.include.includes(key)} onClick={() => toggleInclude(key)}>
+              {key === 'raw' ? 'RAW waveforms' : 'biometrics.db'}
+            </Pill>
+          ))}
         </div>
-        <p className="mb-3 text-xs text-zinc-500">
-          Generate an ed25519 keypair on the pod, then add the public key to
-          {' '}
-          <code className="text-zinc-300">~/.ssh/authorized_keys</code>
-          {' '}
-          on your remote.
-        </p>
+      </div>
+      {setConfig.error && <InlineError>{setConfig.error.message}</InlineError>}
+      <div className="flex justify-end">
+        <Button variant="primary" onClick={handleSave} disabled={setConfig.isPending}>
+          {setConfig.isPending ? 'Saving…' : setConfig.isSuccess ? 'Saved' : 'Save'}
+        </Button>
+      </div>
+    </Card>
+  )
 
+  const right = (
+    <>
+      <Card>
+        <CardHeader
+          title="SSH identity"
+          subtitle={(
+            <>
+              {'Add this public key to the remote user’s '}
+              <code className="font-mono text-fg">~/.ssh/authorized_keys</code>
+            </>
+          )}
+        />
         {publicKey
           ? (
-              <div className="space-y-2">
-                <pre className="overflow-x-auto rounded-lg bg-zinc-800 p-3 font-mono text-[10px] text-zinc-300">
+              <>
+                <pre className="whitespace-pre-wrap break-all rounded-ctl border border-line bg-code p-3 font-mono text-xs leading-normal text-fg-2">
                   {publicKey}
                 </pre>
-                <button
-                  onClick={handleCopy}
-                  className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-zinc-800 p-3 text-sm font-medium text-zinc-200 active:bg-zinc-700"
-                >
-                  <Copy size={14} />
-                  {copied ? 'Copied' : 'Copy public key'}
-                </button>
-              </div>
+                <div className="flex gap-2.5">
+                  <Button icon={Copy} onClick={handleCopy}>
+                    {copied ? 'Copied' : 'Copy key'}
+                  </Button>
+                </div>
+              </>
             )
           : (
-              <button
-                onClick={() => generateKey.mutate({})}
-                disabled={generateKey.isPending}
-                className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-zinc-800 p-3 text-sm font-medium text-zinc-200 active:bg-zinc-700 disabled:opacity-50"
-              >
-                {generateKey.isPending
-                  ? <Loader2 size={14} className="animate-spin" />
-                  : <KeyRound size={14} />}
-                Generate ed25519 keypair
-              </button>
+              <div className="flex">
+                <Button icon={KeyRound} onClick={() => generateKey.mutate({})} disabled={generateKey.isPending}>
+                  {generateKey.isPending ? 'Generating…' : 'Generate ed25519 keypair'}
+                </Button>
+              </div>
             )}
-        {generateKey.error && (
-          <p className="mt-2 text-xs text-red-400">{generateKey.error.message}</p>
-        )}
-      </div>
+        {generateKey.error && <InlineError>{generateKey.error.message}</InlineError>}
+      </Card>
 
-      <div className="rounded-2xl bg-zinc-900 p-4">
-        <div className="mb-2 flex items-center gap-2">
-          <Plug size={14} className="text-emerald-400" />
-          <h3 className="text-sm font-semibold text-white">Test connection</h3>
+      <Card>
+        <CardHeader
+          title="Test connection"
+          subtitle={(
+            <>
+              {'Probes the remote with a non-destructive '}
+              <code className="font-mono text-fg">ssh … true</code>
+              . Save first if you’ve edited the form.
+            </>
+          )}
+        />
+        <div className="flex flex-wrap items-center gap-2.5">
+          {testConnection.data && (
+            <StatusDot
+              tone={testConnection.data.ok ? 'ok' : 'danger'}
+              label={testConnection.data.ok ? 'Reachable' : 'Failed'}
+            />
+          )}
+          <span className="ml-auto">
+            <Button icon={Plug} onClick={() => testConnection.mutate({})} disabled={testConnection.isPending}>
+              {testConnection.isPending ? 'Testing…' : 'Test now'}
+            </Button>
+          </span>
         </div>
-        <p className="mb-3 text-xs text-zinc-500">
-          Probe the remote with a non-destructive
-          {' '}
-          <code className="text-zinc-300">ssh ... true</code>
-          . Save first if you&apos;ve edited the form.
-        </p>
-        <button
-          onClick={() => testConnection.mutate({})}
-          disabled={testConnection.isPending}
-          className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl bg-zinc-800 p-3 text-sm font-medium text-zinc-200 active:bg-zinc-700 disabled:opacity-50"
-        >
-          {testConnection.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
-          Run test
-        </button>
         {testConnection.data && (
-          <div className={`mt-3 flex items-start gap-2 rounded-lg p-3 text-xs ${
-            testConnection.data.ok
-              ? 'bg-emerald-950/40 text-emerald-300'
-              : 'bg-red-950/40 text-red-300'
-          }`}
-          >
-            {testConnection.data.ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-            <span className="font-mono break-all">{testConnection.data.message}</span>
-          </div>
+          <p className="break-all font-mono text-xs text-fg-2">{testConnection.data.message}</p>
         )}
-      </div>
-    </div>
+        {testConnection.error && <InlineError>{testConnection.error.message}</InlineError>}
+      </Card>
+    </>
   )
-}
 
-function Field({ icon: Icon, label, children }: {
-  icon: React.ComponentType<{ size?: number, className?: string }>
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-zinc-400">
-        <Icon size={12} />
-        {label}
-      </span>
-      {children}
-    </label>
-  )
+  return <SectionColumns left={left} right={right} />
 }

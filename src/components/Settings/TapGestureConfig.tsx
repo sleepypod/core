@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useCallback } from 'react'
+import { Hand, Trash2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
-import { Hand, Plus, Trash2, Thermometer, Bell, ChevronDown } from 'lucide-react'
-import clsx from 'clsx'
+import { Button, Card, CardHeader, InlineError, Modal, SegmentedControl, SettingRow, Skeleton, Stepper, ValueChip } from '@/src/components/ds'
+import { cn } from '@/lib/utils'
+import { SectionColumns } from './SettingsLayout'
 
 type TapType = 'doubleTap' | 'tripleTap' | 'quadTap'
 type ActionType = 'temperature' | 'alarm'
@@ -23,17 +25,29 @@ interface GestureRecord {
 }
 
 const TAP_TYPES: { key: TapType, label: string, taps: number }[] = [
-  { key: 'doubleTap', label: 'Double Tap', taps: 2 },
-  { key: 'tripleTap', label: 'Triple Tap', taps: 3 },
-  { key: 'quadTap', label: 'Quad Tap', taps: 4 },
+  { key: 'doubleTap', label: 'Double tap', taps: 2 },
+  { key: 'tripleTap', label: 'Triple tap', taps: 3 },
+  { key: 'quadTap', label: 'Quad tap', taps: 4 },
 ]
 
-function gestureDescription(gesture: GestureRecord): string {
-  if (gesture.actionType === 'temperature') {
-    const dir = gesture.temperatureChange === 'increment' ? '+' : '-'
-    return `${dir}${gesture.temperatureAmount}° temp`
-  }
-  return gesture.alarmBehavior === 'snooze' ? 'Snooze alarm' : 'Dismiss alarm'
+function temperatureLabel(g: GestureRecord): string {
+  const dir = g.temperatureChange === 'increment' ? '+' : '−'
+  return `Temperature ${dir}${g.temperatureAmount}°`
+}
+
+/** What the gesture does when no alarm is ringing. */
+export function idleDescription(g: GestureRecord | undefined): string {
+  if (!g) return 'Not set'
+  if (g.actionType === 'temperature') return temperatureLabel(g)
+  return g.alarmInactiveBehavior === 'power' ? 'Power on / off' : 'Nothing'
+}
+
+/** What the gesture does while an alarm is ringing. */
+export function ringingDescription(g: GestureRecord | undefined): string {
+  if (!g) return 'Not set'
+  if (g.actionType === 'temperature') return temperatureLabel(g)
+  if (g.alarmBehavior === 'snooze') return `Snooze ${Math.round((g.alarmSnoozeDuration ?? 300) / 60)} min`
+  return 'Stop alarm'
 }
 
 interface EditState {
@@ -71,12 +85,21 @@ function editStateFromGesture(g: GestureRecord): EditState {
   }
 }
 
+function TapDots({ taps }: { taps: number }) {
+  return (
+    <span className="flex gap-[3px]" aria-hidden>
+      {[1, 2, 3, 4].map(i => (
+        <span key={i} className={cn('size-1.5 rounded-full', i <= taps ? 'bg-fg' : 'bg-line-2')} />
+      ))}
+    </span>
+  )
+}
+
 /**
- * Tap Gesture Configuration component.
- * Allows configuring double/triple/quad tap actions per side.
- * Matches iOS TapGestureConfigView feature set with editable controls.
+ * Tap gestures for one side: what double/triple/quad taps do normally and
+ * while an alarm is ringing. Each chip opens the gesture editor.
  */
-export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right' } = {}) {
+export function TapGestureConfig({ filterSide = 'left' }: { filterSide?: Side } = {}) {
   const { sideName } = useSideNames()
   const utils = trpc.useUtils()
   const settingsQuery = trpc.settings.getAll.useQuery({})
@@ -89,6 +112,7 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
   const deleteGesture = trpc.settings.deleteGesture.useMutation({
     onSuccess: () => {
       utils.settings.getAll.invalidate()
+      setEditing(null)
     },
   })
 
@@ -104,6 +128,11 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
     },
     [gestures]
   )
+
+  const openEditor = (tapType: TapType) => {
+    const gesture = findGesture(filterSide, tapType)
+    setEditing(gesture ? editStateFromGesture(gesture) : defaultEditState(filterSide, tapType))
+  }
 
   const handleSave = useCallback(() => {
     if (!editing) return
@@ -137,359 +166,169 @@ export function TapGestureConfig({ filterSide }: { filterSide?: 'left' | 'right'
     [deleteGesture]
   )
 
-  const renderSideSection = (side: Side) => {
-    return (
-      <div className="space-y-2">
-        <h4 className="text-xs font-semibold text-sky-400">{sideName(side)}</h4>
-
-        {TAP_TYPES.map(({ key, label }) => {
-          const gesture = findGesture(side, key)
-          const isEditing
-            = editing?.side === side && editing?.tapType === key
-
-          return (
-            <div key={`${side}-${key}`}>
-              {/* Gesture row */}
-              <div className="flex min-h-[44px] items-center gap-3 rounded-xl bg-zinc-900/50 px-3 py-2.5">
-                {/* Tap icon */}
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-800">
-                  <Hand size={14} className="text-zinc-500" />
-                </div>
-
-                {/* Label */}
-                <div className="flex-1">
-                  <span className="text-sm text-zinc-300">{label}</span>
-                  {gesture && (
-                    <p className="text-xs text-zinc-500">
-                      {gestureDescription(gesture)}
-                    </p>
-                  )}
-                </div>
-
-                {/* Actions */}
-                {gesture
-                  ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() =>
-                            setEditing(
-                              isEditing ? null : editStateFromGesture(gesture)
-                            )}
-                          className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-500 active:bg-zinc-800 active:text-zinc-300"
-                        >
-                          <ChevronDown
-                            size={14}
-                            className={clsx(
-                              'transition-transform',
-                              isEditing && 'rotate-180'
-                            )}
-                          />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(side, key)}
-                          disabled={deleteGesture.isPending}
-                          className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-600 active:bg-zinc-800 active:text-red-400 disabled:opacity-50"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    )
-                  : (
-                      <button
-                        onClick={() =>
-                          setEditing(
-                            isEditing ? null : defaultEditState(side, key)
-                          )}
-                        className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-600 active:bg-zinc-800 active:text-sky-400"
-                      >
-                        <Plus size={14} />
-                      </button>
-                    )}
-              </div>
-
-              {/* Edit panel */}
-              {isEditing && editing && (
-                <GestureEditPanel
-                  state={editing}
-                  onChange={setEditing}
-                  onSave={handleSave}
-                  onCancel={() => setEditing(null)}
-                  isSaving={setGesture.isPending}
-                />
-              )}
-            </div>
-          )
-        })}
-      </div>
-    )
-  }
-
   if (settingsQuery.isLoading) {
     return (
-      <div className="rounded-2xl bg-zinc-900 p-4">
-        <div className="animate-pulse space-y-3">
-          <div className="h-4 w-28 rounded bg-zinc-800" />
-          <div className="h-10 rounded-xl bg-zinc-800" />
-          <div className="h-10 rounded-xl bg-zinc-800" />
-          <div className="h-10 rounded-xl bg-zinc-800" />
-        </div>
-      </div>
+      <SectionColumns
+        left={<Skeleton className="h-[196px]" />}
+        right={<Skeleton className="h-[196px]" />}
+      />
     )
   }
 
-  return (
-    <div className="space-y-3 rounded-2xl bg-zinc-900 p-3 sm:space-y-4 sm:p-4">
-      {/* Header */}
-      <div>
-        <h3 className="text-sm font-medium text-white">Tap Gestures</h3>
-        <p className="mt-1 text-xs text-zinc-500">
-          Tap on the pod cover to control temperature or alarm
-        </p>
-      </div>
+  const rows = (describe: (g: GestureRecord | undefined) => string, ringing: boolean) =>
+    TAP_TYPES.map(({ key, label, taps }) => (
+      <SettingRow
+        key={key}
+        label={(
+          <>
+            <TapDots taps={taps} />
+            {label}
+          </>
+        )}
+      >
+        <ValueChip
+          aria-label={`${label}${ringing ? ' while ringing' : ''}: ${describe(findGesture(filterSide, key))}`}
+          onClick={() => openEditor(key)}
+          className={findGesture(filterSide, key) ? undefined : 'text-fg-2'}
+        >
+          {describe(findGesture(filterSide, key))}
+        </ValueChip>
+      </SettingRow>
+    ))
 
-      {/* Side sections — filtered if filterSide is set */}
-      {(!filterSide || filterSide === 'left') && renderSideSection('left')}
-      {!filterSide && <div className="border-t border-zinc-800" />}
-      {(!filterSide || filterSide === 'right') && renderSideSection('right')}
-    </div>
+  const editingLabel = editing ? TAP_TYPES.find(t => t.key === editing.tapType)?.label : ''
+  const editingExists = editing ? !!findGesture(editing.side, editing.tapType) : false
+
+  return (
+    <>
+      <SectionColumns
+        left={(
+          <Card>
+            <CardHeader title="Tap gestures" subtitle="Tap the top of the cover on your side" />
+            {rows(idleDescription, false)}
+          </Card>
+        )}
+        right={(
+          <Card>
+            <CardHeader title="While an alarm is ringing" />
+            {rows(ringingDescription, true)}
+          </Card>
+        )}
+      />
+      {settingsQuery.error && <InlineError>{settingsQuery.error.message}</InlineError>}
+
+      <Modal
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        title={editing ? `${editingLabel} · ${sideName(editing.side)}` : ''}
+        icon={Hand}
+        iconClassName="text-icon"
+        width={480}
+        footer={editing && (
+          <>
+            {editingExists && (
+              <Button
+                variant="danger"
+                icon={Trash2}
+                onClick={() => handleDelete(editing.side, editing.tapType)}
+                disabled={deleteGesture.isPending}
+              >
+                Remove
+              </Button>
+            )}
+            <div className="ml-auto flex gap-2.5">
+              <Button onClick={() => setEditing(null)}>Cancel</Button>
+              <Button variant="primary" onClick={handleSave} disabled={setGesture.isPending}>
+                {setGesture.isPending ? 'Saving…' : 'Save'}
+              </Button>
+            </div>
+          </>
+        )}
+      >
+        {editing && (
+          <GestureEditPanel state={editing} onChange={setEditing} />
+        )}
+        {setGesture.error && <InlineError>{setGesture.error.message}</InlineError>}
+        {deleteGesture.error && <InlineError>{deleteGesture.error.message}</InlineError>}
+      </Modal>
+    </>
   )
 }
 
 /**
- * Inline edit panel for configuring a tap gesture action.
+ * Body of the gesture editor: action type plus its parameters.
  */
 function GestureEditPanel({
   state,
   onChange,
-  onSave,
-  onCancel,
-  isSaving,
 }: {
   state: EditState
   onChange: (s: EditState) => void
-  onSave: () => void
-  onCancel: () => void
-  isSaving: boolean
 }) {
   return (
-    <div className="mt-1 space-y-3 rounded-xl border border-zinc-800 bg-zinc-900 p-3">
-      {/* Action type selector */}
-      <div className="flex rounded-lg bg-zinc-800 p-0.5">
-        <button
-          onClick={() => onChange({ ...state, actionType: 'temperature' })}
-          className={clsx(
-            'flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium transition-colors',
-            state.actionType === 'temperature'
-              ? 'bg-zinc-700 text-white'
-              : 'text-zinc-500'
-          )}
-        >
-          <Thermometer size={12} />
-          Temperature
-        </button>
-        <button
-          onClick={() => onChange({ ...state, actionType: 'alarm' })}
-          className={clsx(
-            'flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium transition-colors',
-            state.actionType === 'alarm'
-              ? 'bg-zinc-700 text-white'
-              : 'text-zinc-500'
-          )}
-        >
-          <Bell size={12} />
-          Alarm
-        </button>
-      </div>
+    <div className="flex flex-col gap-3">
+      <SegmentedControl
+        full
+        ariaLabel="Gesture action"
+        value={state.actionType}
+        options={[{ value: 'temperature', label: 'Temperature' }, { value: 'alarm', label: 'Alarm & power' }]}
+        onChange={actionType => onChange({ ...state, actionType })}
+      />
 
-      {/* Temperature config */}
       {state.actionType === 'temperature' && (
-        <div className="space-y-3">
-          {/* Direction */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-zinc-400">Direction</span>
-            <div className="flex rounded-lg bg-zinc-800 p-0.5">
-              <button
-                onClick={() =>
-                  onChange({ ...state, temperatureChange: 'increment' })}
-                className={clsx(
-                  'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
-                  state.temperatureChange === 'increment'
-                    ? 'bg-sky-500/20 text-sky-400'
-                    : 'text-zinc-500'
-                )}
-              >
-                + Up
-              </button>
-              <button
-                onClick={() =>
-                  onChange({ ...state, temperatureChange: 'decrement' })}
-                className={clsx(
-                  'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
-                  state.temperatureChange === 'decrement'
-                    ? 'bg-sky-500/20 text-sky-400'
-                    : 'text-zinc-500'
-                )}
-              >
-                - Down
-              </button>
-            </div>
-          </div>
-
-          {/* Amount */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-zinc-400">Amount</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() =>
-                  onChange({
-                    ...state,
-                    temperatureAmount: Math.max(1, state.temperatureAmount - 1),
-                  })}
-                className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-800 text-zinc-400 active:bg-zinc-700"
-              >
-                -
-              </button>
-              <span className="w-8 text-center text-sm font-medium text-white">
-                {state.temperatureAmount}
-                °
-              </span>
-              <button
-                onClick={() =>
-                  onChange({
-                    ...state,
-                    temperatureAmount: Math.min(10, state.temperatureAmount + 1),
-                  })}
-                className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-800 text-zinc-400 active:bg-zinc-700"
-              >
-                +
-              </button>
-            </div>
-          </div>
-        </div>
+        <>
+          <SettingRow label="Direction">
+            <SegmentedControl
+              ariaLabel="Direction"
+              value={state.temperatureChange}
+              options={[{ value: 'increment', label: 'Warmer' }, { value: 'decrement', label: 'Cooler' }]}
+              onChange={temperatureChange => onChange({ ...state, temperatureChange })}
+            />
+          </SettingRow>
+          <SettingRow label="Amount">
+            <Stepper
+              label="Amount"
+              value={state.temperatureAmount}
+              min={1}
+              max={10}
+              onChange={temperatureAmount => onChange({ ...state, temperatureAmount })}
+            />
+          </SettingRow>
+        </>
       )}
 
-      {/* Alarm config */}
       {state.actionType === 'alarm' && (
-        <div className="space-y-3">
-          {/* Behavior */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-zinc-400">Behavior</span>
-            <div className="flex rounded-lg bg-zinc-800 p-0.5">
-              <button
-                onClick={() =>
-                  onChange({ ...state, alarmBehavior: 'snooze' })}
-                className={clsx(
-                  'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
-                  state.alarmBehavior === 'snooze'
-                    ? 'bg-sky-500/20 text-sky-400'
-                    : 'text-zinc-500'
-                )}
-              >
-                Snooze
-              </button>
-              <button
-                onClick={() =>
-                  onChange({ ...state, alarmBehavior: 'dismiss' })}
-                className={clsx(
-                  'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
-                  state.alarmBehavior === 'dismiss'
-                    ? 'bg-sky-500/20 text-sky-400'
-                    : 'text-zinc-500'
-                )}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-
-          {/* Snooze duration (only when snooze selected) */}
+        <>
+          <SettingRow label="While ringing">
+            <SegmentedControl
+              ariaLabel="While ringing"
+              value={state.alarmBehavior}
+              options={[{ value: 'snooze', label: 'Snooze' }, { value: 'dismiss', label: 'Stop alarm' }]}
+              onChange={alarmBehavior => onChange({ ...state, alarmBehavior })}
+            />
+          </SettingRow>
           {state.alarmBehavior === 'snooze' && (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-zinc-400">Snooze Duration</span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() =>
-                    onChange({
-                      ...state,
-                      alarmSnoozeDuration: Math.max(
-                        60,
-                        state.alarmSnoozeDuration - 60
-                      ),
-                    })}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-800 text-zinc-400 active:bg-zinc-700"
-                >
-                  -
-                </button>
-                <span className="w-12 text-center text-sm font-medium text-white">
-                  {Math.round(state.alarmSnoozeDuration / 60)}
-                  m
-                </span>
-                <button
-                  onClick={() =>
-                    onChange({
-                      ...state,
-                      alarmSnoozeDuration: Math.min(
-                        600,
-                        state.alarmSnoozeDuration + 60
-                      ),
-                    })}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-zinc-800 text-zinc-400 active:bg-zinc-700"
-                >
-                  +
-                </button>
-              </div>
-            </div>
+            <SettingRow label="Snooze for">
+              <Stepper
+                label="Snooze duration"
+                value={Math.round(state.alarmSnoozeDuration / 60)}
+                min={1}
+                max={10}
+                format={v => `${v} min`}
+                onChange={mins => onChange({ ...state, alarmSnoozeDuration: mins * 60 })}
+              />
+            </SettingRow>
           )}
-
-          {/* Inactive alarm behavior */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-zinc-400">When No Alarm</span>
-            <div className="flex rounded-lg bg-zinc-800 p-0.5">
-              <button
-                onClick={() =>
-                  onChange({ ...state, alarmInactiveBehavior: 'none' })}
-                className={clsx(
-                  'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
-                  state.alarmInactiveBehavior === 'none'
-                    ? 'bg-sky-500/20 text-sky-400'
-                    : 'text-zinc-500'
-                )}
-              >
-                Nothing
-              </button>
-              <button
-                onClick={() =>
-                  onChange({ ...state, alarmInactiveBehavior: 'power' })}
-                className={clsx(
-                  'rounded-md px-3 min-h-[44px] flex items-center justify-center text-xs font-medium transition-colors',
-                  state.alarmInactiveBehavior === 'power'
-                    ? 'bg-sky-500/20 text-sky-400'
-                    : 'text-zinc-500'
-                )}
-              >
-                Power Off
-              </button>
-            </div>
-          </div>
-        </div>
+          <SettingRow label="When no alarm">
+            <SegmentedControl
+              ariaLabel="When no alarm"
+              value={state.alarmInactiveBehavior}
+              options={[{ value: 'none', label: 'Nothing' }, { value: 'power', label: 'Power on / off' }]}
+              onChange={alarmInactiveBehavior => onChange({ ...state, alarmInactiveBehavior })}
+            />
+          </SettingRow>
+        </>
       )}
-
-      {/* Save/Cancel buttons */}
-      <div className="flex gap-2 pt-1">
-        <button
-          onClick={onCancel}
-          className="flex-1 rounded-xl bg-zinc-800 min-h-[44px] text-xs font-medium text-zinc-400 active:bg-zinc-700"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={onSave}
-          disabled={isSaving}
-          className="flex-1 rounded-xl bg-sky-500 min-h-[44px] text-xs font-medium text-white active:bg-sky-600 disabled:opacity-50"
-        >
-          {isSaving ? 'Saving...' : 'Save'}
-        </button>
-      </div>
     </div>
   )
 }

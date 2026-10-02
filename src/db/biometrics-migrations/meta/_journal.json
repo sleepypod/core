@@ -92,6 +92,34 @@
       "when": 1783119596827,
       "tag": "0012_careful_microchip",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1784532247701,
+      "tag": "0013_parched_deathbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1790645178949,
+      "tag": "0014_thermal_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1790645607218,
+      "tag": "0015_prime_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1790656961908,
+      "tag": "0016_health_runs",
+      "breakpoints": true
     }
   ]
 }

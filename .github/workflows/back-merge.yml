@@ -1,0 +1,168 @@
+name: Back-merge main into dev
+
+# Release PRs land on main through a squash merge queue, so every release
+# leaves main with a commit dev doesn't have. Without a real merge commit on
+# dev the next dev -> main promotion conflicts or re-applies history (see the
+# manual reconciles 234ecb83 / 980a33b2). This runs after "Analyze & Release"
+# so semantic-release's chore(release) commit, if any, comes along too.
+#
+# Pushes directly to dev (not through dev's merge queue, which would squash
+# the merge and defeat the purpose). The Dev ruleset only lets bypass actors
+# do that, so BACKMERGE_TOKEN must be an org-admin fine-grained PAT, or a
+# GitHub App installation token whose app is on the Dev ruleset bypass list,
+# with contents:write on this repo. Without the secret the job skips.
+
+on:
+  workflow_run:
+    workflows: ["Analyze & Release"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: back-merge-main-into-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  back-merge:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # to open an issue when the merge conflicts
+    steps:
+      - name: Check for BACKMERGE_TOKEN
+        id: token
+        env:
+          BACKMERGE_TOKEN: ${{ secrets.BACKMERGE_TOKEN }}
+        run: |
+          if [ -z "$BACKMERGE_TOKEN" ]; then
+            echo "::notice::BACKMERGE_TOKEN is not set; skipping back-merge of main into dev."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout dev
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.BACKMERGE_TOKEN }}
+
+      - name: Merge main into dev and push
+        id: merge
+        if: steps.token.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          attempt() {
+            git fetch --no-tags origin \
+              +refs/heads/main:refs/remotes/origin/main \
+              +refs/heads/dev:refs/remotes/origin/dev || return 1
+            if git merge-base --is-ancestor origin/main origin/dev; then
+              echo "::notice::origin/main is already an ancestor of origin/dev; nothing to back-merge."
+              return 0
+            fi
+
+            # Name the release the same way the manual reconciles did:
+            # the squash-merged release PR number, else main's short SHA.
+            local ref
+            ref="$(git log --format=%s origin/dev..origin/main \
+              | grep -oE '\(#[0-9]+\)$' | head -n1 | tr -d '()' || true)"
+            [ -n "$ref" ] || ref="$(git rev-parse --short origin/main)"
+            local msg="Merge main into dev to reconcile squash-merged release ${ref}"
+
+            git checkout -q --detach origin/dev || return 1
+            if ! git merge --no-ff origin/main -m "$msg"; then
+              local files
+              files="$(git diff --name-only --diff-filter=U)"
+              git merge --abort
+              {
+                echo "conflict=true"
+                echo "main_sha=$(git rev-parse --short origin/main)"
+                echo "dev_sha=$(git rev-parse --short origin/dev)"
+                echo "files<<EOF"
+                echo "$files"
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              echo "::error::Merging main into dev conflicts in: $(echo "$files" | tr '\n' ' ')"
+              exit 1
+            fi
+
+            git push origin HEAD:dev
+          }
+
+          if ! attempt; then
+            echo "::warning::Push to dev failed (dev may have moved); re-fetching and retrying once."
+            attempt
+          fi
+
+      - name: Open or update conflict issue
+        if: failure() && steps.merge.outputs.conflict == 'true'
+        uses: actions/github-script@v9
+        env:
+          FILES: ${{ steps.merge.outputs.files }}
+          MAIN_SHA: ${{ steps.merge.outputs.main_sha }}
+          DEV_SHA: ${{ steps.merge.outputs.dev_sha }}
+        with:
+          script: |
+            const title = 'Back-merge main → dev needs a hand'
+            const files = process.env.FILES.split('\n').filter(Boolean)
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const body = [
+              `The automatic back-merge of \`main\` (${process.env.MAIN_SHA}) into \`dev\` (${process.env.DEV_SHA}) hit conflicts, so nothing was pushed.`,
+              '',
+              'Conflicting files:',
+              ...files.map((f) => `- \`${f}\``),
+              '',
+              'Resolve by hand (needs Dev ruleset bypass, since this must be a real merge commit rather than a squash through the merge queue):',
+              '',
+              '```bash',
+              'git fetch origin',
+              'git checkout -B dev origin/dev',
+              'git merge --no-ff origin/main -m "Merge main into dev to reconcile squash-merged release #<PR>"',
+              '# resolve conflicts, then',
+              'git add -A && git commit --no-edit',
+              'git push origin HEAD:dev',
+              '```',
+              '',
+              `Failed run: ${runUrl}`,
+            ].join('\n')
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            })
+            const existing = issues.find((i) => i.title === title && !i.pull_request)
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              })
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Back-merge conflicted again: ${runUrl}`,
+              })
+              core.info(`Updated issue #${existing.number}`)
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              })
+              core.info(`Opened issue #${created.number}`)
+            }

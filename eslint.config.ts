@@ -28,6 +28,7 @@ export default defineConfig([
 
   globalIgnores([
     '.claude/**',
+    '.codex/**',
     '.next/**',
     '.venv/**',
     '**/.venv/**',

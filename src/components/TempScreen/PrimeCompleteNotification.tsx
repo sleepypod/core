@@ -23,17 +23,19 @@ export const PrimeCompleteNotification = ({ onDismiss }: PrimeCompleteNotificati
   }
 
   return (
-    <div className="flex items-center gap-2 rounded-2xl border border-emerald-500/20 bg-emerald-950/30 p-3 sm:p-4">
-      <CheckCircle size={18} className="shrink-0 text-emerald-400" />
-      <p className="flex-1 text-sm text-emerald-200">
+    <div role="status" className="flex items-center gap-2.5 rounded-ctl border border-ok-line px-3 py-2.5">
+      <CheckCircle size={14} className="shrink-0 text-ok" />
+      <p className="flex-1 text-[13px] text-ok">
         Priming complete — your pod is ready
       </p>
       <button
+        type="button"
+        aria-label="Dismiss"
         onClick={handleDismiss}
         disabled={dismissMutation.isPending}
-        className="flex h-11 w-11 items-center justify-center rounded-full text-emerald-400/60 transition-all hover:text-emerald-300 active:scale-90 disabled:opacity-50"
+        className="flex size-8 cursor-pointer items-center justify-center rounded-ctl border-0 bg-transparent text-fg-2 hover:bg-active hover:text-fg disabled:opacity-45"
       >
-        <X size={16} />
+        <X size={14} />
       </button>
     </div>
   )

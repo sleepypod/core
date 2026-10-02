@@ -2,69 +2,49 @@
 
 import { useEffect, useState } from 'react'
 import { type ConnectionStatus } from '@/src/hooks/useSensorStream'
-import { Loader2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 interface ConnectionStatusBarProps {
   status: ConnectionStatus
   fps: number
   lastError: string | null
-  subscribedSensors: string[] | null
+  /** Number of distinct sensor types currently streaming. */
+  sensorCount: number
   lastFrameTime: number | null
+  /** Stream toggled off by the user (Stop). */
+  paused: boolean
+  onToggle: () => void
+  className?: string
 }
 
-const STATUS_CONFIG: Record<ConnectionStatus, {
-  label: string
-  color: string
-  bg: string
-  dotColor: string
-  borderColor: string
-}> = {
-  connected: {
-    label: 'Live',
-    color: 'text-emerald-400',
-    bg: 'bg-[#0a0a14]',
-    dotColor: 'bg-emerald-400',
-    borderColor: 'border-emerald-400/20',
-  },
-  connecting: {
-    label: 'Connecting',
-    color: 'text-amber-400',
-    bg: 'bg-[#0a0a14]',
-    dotColor: 'bg-amber-400',
-    borderColor: 'border-amber-400/20',
-  },
-  reconnecting: {
-    label: 'Reconnecting',
-    color: 'text-amber-400',
-    bg: 'bg-[#0a0a14]',
-    dotColor: 'bg-amber-400',
-    borderColor: 'border-amber-400/20',
-  },
-  disconnected: {
-    label: 'Disconnected',
-    color: 'text-red-400',
-    bg: 'bg-[#0a0a14]',
-    dotColor: 'bg-red-400',
-    borderColor: 'border-red-400/20',
-  },
+const STATUS_LABEL: Record<ConnectionStatus, string> = {
+  connected: 'LIVE',
+  connecting: 'CONNECTING',
+  reconnecting: 'RECONNECTING',
+  disconnected: 'OFFLINE',
 }
 
-/** Format relative time ago string. */
-function useRelativeTime(timestamp: number | null): string {
-  const [text, setText] = useState('')
+const STATUS_TONE: Record<ConnectionStatus, { text: string, dot: string }> = {
+  connected: { text: 'text-ok', dot: 'bg-ok' },
+  connecting: { text: 'text-warn', dot: 'bg-warn' },
+  reconnecting: { text: 'text-warn', dot: 'bg-warn' },
+  disconnected: { text: 'text-danger', dot: 'bg-danger' },
+}
+
+/** Seconds since the last frame, re-rendered every second. */
+function useFrameAge(timestamp: number | null) {
+  const [age, setAge] = useState({ text: '', fresh: false })
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
     if (!timestamp) {
-      setText('')
+      setAge({ text: '', fresh: false })
       return
     }
 
     function update() {
-      const diff = Math.floor((Date.now() - (timestamp ?? 0)) / 1000)
-      if (diff < 2) setText('just now')
-      else if (diff < 60) setText(`${diff}s ago`)
-      else setText(`${Math.floor(diff / 60)}m ago`)
+      const diff = Math.max(0, (Date.now() - (timestamp ?? 0)) / 1000)
+      setAge({ text: diff < 60 ? `${diff.toFixed(1)}s` : `${Math.floor(diff / 60)}m`, fresh: diff <= 10 })
     }
 
     update()
@@ -73,74 +53,62 @@ function useRelativeTime(timestamp: number | null): string {
     return () => clearInterval(interval)
   }, [timestamp])
 
-  return text
+  return age
 }
 
 /**
- * Connection status indicator bar matching iOS BedSensorScreen connectionBar.
- * Shows live pulse dot, status label, FPS counter, and relative time.
+ * Live sensor-stream bar for the System header:
+ * `● LIVE · 30 fps · 6 sensors · last frame 0.1s  [Stop]`.
+ * Phones get the compact `● LIVE · 30 FPS` form.
  */
 export function ConnectionStatusBar({
   status,
   fps,
   lastError,
-  subscribedSensors,
+  sensorCount,
   lastFrameTime,
+  paused,
+  onToggle,
+  className,
 }: ConnectionStatusBarProps) {
-  const config = STATUS_CONFIG[status]
-  const isConnected = status === 'connected'
-  const isLoading = status === 'connecting' || status === 'reconnecting'
-  const relativeTime = useRelativeTime(lastFrameTime)
+  const { text: age, fresh } = useFrameAge(paused ? null : lastFrameTime)
+  const connected = !paused && status === 'connected'
+  const label = paused ? 'PAUSED' : connected && !fresh ? (lastFrameTime ? 'STALE' : 'WAITING') : STATUS_LABEL[status]
+  const tone = connected && !fresh ? { text: 'text-warn', dot: 'bg-warn' } : paused ? { text: 'text-fg-3', dot: 'bg-fg-3' } : STATUS_TONE[status]
+  const title = !paused && status !== 'connected' && lastError ? lastError : undefined
 
   return (
-    <div className={`flex items-center justify-between rounded-xl border ${config.borderColor} ${config.bg} px-3 py-2`}>
-      <div className="flex items-center gap-2">
-        {/* Live pulse dot */}
-        {isLoading
-          ? (
-              <Loader2 size={12} className={`animate-spin ${config.color}`} />
-            )
-          : (
-              <span className="relative flex h-[7px] w-[7px]">
-                {isConnected && (
-                  <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${config.dotColor} opacity-60`} />
-                )}
-                <span className={`relative inline-flex h-[7px] w-[7px] rounded-full ${config.dotColor}`} />
-              </span>
-            )}
-
-        {/* Status label */}
-        <span className={`text-xs font-semibold ${config.color}`}>
-          {lastError && !isConnected ? lastError : config.label}
-        </span>
-      </div>
-
-      <div className="flex items-center gap-3">
-        {/* Subscribed sensor count */}
-        {subscribedSensors && (
-          <span className="text-[9px] text-zinc-600">
-            {subscribedSensors.length}
-            {' '}
-            sensors
-          </span>
+    <div
+      className={cn(
+        'flex items-center gap-2.5 font-mono text-xs text-fg-2 min-[900px]:gap-3.5 min-[900px]:rounded-ctl min-[900px]:border min-[900px]:border-line min-[900px]:py-1.5 min-[900px]:pl-3 min-[900px]:pr-1.5',
+        className,
+      )}
+      title={title}
+    >
+      <span className={cn('flex items-center gap-1.5 whitespace-nowrap', tone.text)} data-testid="stream-status">
+        <span className={cn('block size-1.5 shrink-0 rounded-full', tone.dot)} />
+        {label}
+        {connected && fps > 0 && (
+          <span className="min-[900px]:hidden">{`· ${fps} FPS`}</span>
         )}
-
-        {/* FPS counter */}
-        {isConnected && fps > 0 && (
-          <span className="font-mono text-[9px] text-zinc-500">
-            {fps}
-            {' '}
-            fps
-          </span>
+      </span>
+      {connected && (
+        <>
+          <span className="hidden whitespace-nowrap min-[900px]:inline">{`${fps} fps`}</span>
+          <span className="hidden whitespace-nowrap min-[900px]:inline">{`${sensorCount} sensors`}</span>
+          {age && <span className="hidden whitespace-nowrap @min-[900px]:inline">{`sensor age ${age}`}</span>}
+        </>
+      )}
+      <button
+        type="button"
+        onClick={onToggle}
+        className={cn(
+          'cursor-pointer rounded-thumb border bg-transparent px-2.5 py-1 font-sans text-xs transition-colors hover:bg-active',
+          paused ? 'border-line-2 text-fg' : 'border-danger-line text-danger',
         )}
-
-        {/* Relative time since last frame */}
-        {relativeTime && (
-          <span className="text-[9px] text-zinc-600">
-            {relativeTime}
-          </span>
-        )}
-      </div>
+      >
+        {paused ? 'Start' : 'Stop'}
+      </button>
     </div>
   )
 }
