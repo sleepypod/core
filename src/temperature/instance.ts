@@ -8,12 +8,13 @@ import { shouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { fahrenheitToLevel, MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
-import { recurringTarget, sessionTarget, type RecurringOccurrenceCache } from './baseline'
+import { alarmTemperatureTargets, recurringTarget, sessionTarget, type AlarmOccurrenceCache, type RecurringOccurrenceCache } from './baseline'
 import { TemperatureController, type TemperatureRequest } from './controller'
 
 const invalidSessions: Record<Side, Map<number, string>> = { left: new Map(), right: new Map() }
 
 const occurrenceCaches: Record<Side, RecurringOccurrenceCache> = { left: new Map(), right: new Map() }
+const alarmCaches: Record<Side, AlarmOccurrenceCache> = { left: new Map(), right: new Map() }
 
 const recurringCache: Partial<Record<Side, { key: string, target: TemperatureRequest | null }>> = {}
 
@@ -29,8 +30,9 @@ function readBaseline(side: Side, now: number): TemperatureRequest[] {
       .where(and(eq(powerSchedules.side, side), eq(powerSchedules.enabled, true))).all()
     const alarms = db.select().from(alarmSchedules)
       .where(and(eq(alarmSchedules.side, side), eq(alarmSchedules.enabled, true))).all()
+    // Alarm temperatures apply over their own span (alarmTemperatureTargets),
+    // not as schedule points that would last until the next one.
     const rows = [
-      ...alarms.map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.alarmTemperature })),
       ...temps.map(r => ({ id: `temperature:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature })),
       ...powers.map(r => ({ id: `power:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.onTime, temperature: r.onTemperature })),
     ]
@@ -39,6 +41,10 @@ function readBaseline(side: Side, now: number): TemperatureRequest[] {
     const baseline = cached?.key === key ? cached.target : recurringTarget(rows, timezone, now, occurrenceCaches[side])
     recurringCache[side] = { key, target: baseline }
     if (baseline) requests.push(baseline)
+    requests.push(...alarmTemperatureTargets(
+      alarms.map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.alarmTemperature, wakeWindow: r.wakeWindow, duration: r.duration })),
+      timezone, now, alarmCaches[side],
+    ))
   }
   const sessions = db.select().from(runOnceSessions)
     .where(and(eq(runOnceSessions.side, side), eq(runOnceSessions.status, 'active'))).all()

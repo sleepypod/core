@@ -6,7 +6,7 @@
  * dac transport are fully mocked.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const helpersMock = vi.hoisted(() => {
   const client = {
@@ -980,6 +980,11 @@ describe('device.execute (raw command)', () => {
 })
 
 describe('device best-effort DB sync swallows errors', () => {
+  afterEach(async () => {
+    const { suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    suspendActiveAlarms()
+  })
+
   beforeEach(() => {
     // Make `db.update(...)...` chain reject so the catch path fires.
     const failingChain = () => {
@@ -1000,7 +1005,7 @@ describe('device best-effort DB sync swallows errors', () => {
     })
     expect(result).toEqual({ success: true })
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { isAlarmVibrating: true })
-    expect(errSpy).toHaveBeenCalledWith('Failed to sync alarm state to DB:', expect.any(Error))
+    expect(errSpy).toHaveBeenCalledWith('[alarmState] failed to store alarm state for left:', 'db dead')
     errSpy.mockRestore()
   })
 
@@ -1009,7 +1014,7 @@ describe('device best-effort DB sync swallows errors', () => {
     const result = await caller.clearAlarm({ side: 'right' })
     expect(result).toEqual({ success: true })
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('right', { isAlarmVibrating: false })
-    expect(errSpy).toHaveBeenCalledWith('Failed to sync alarm clear state to DB:', expect.any(Error))
+    expect(errSpy).toHaveBeenCalledWith('[alarmState] failed to store alarm state for right:', 'db dead')
     errSpy.mockRestore()
   })
 
@@ -1021,7 +1026,7 @@ describe('device best-effort DB sync swallows errors', () => {
     })
     expect(result.success).toBe(true)
     expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('left', { isAlarmVibrating: false })
-    expect(errSpy).toHaveBeenCalledWith('Failed to sync snooze state to DB:', expect.any(Error))
+    expect(errSpy).toHaveBeenCalledWith('[alarmState] failed to store alarm state for left:', 'db dead')
     errSpy.mockRestore()
   })
 })

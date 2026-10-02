@@ -67,6 +67,19 @@ export const alarmDurationSchema = z
   .max(180, 'Duration must not exceed 180 seconds')
 
 /**
+ * Alarm wake window in minutes: movement this long before the alarm time
+ * fires it early. 0 turns it off.
+ */
+export const WAKE_WINDOW_MINUTES = [0, 10, 15, 20, 30] as const
+export const wakeWindowSchema = z
+  .number()
+  .int()
+  .refine(
+    (v): v is typeof WAKE_WINDOW_MINUTES[number] => (WAKE_WINDOW_MINUTES as readonly number[]).includes(v),
+    { message: `Wake window must be one of ${WAKE_WINDOW_MINUTES.join(', ')} minutes` },
+  )
+
+/**
  * Vibration pattern enum
  */
 export const vibrationPatternSchema = z.enum(['double', 'rise'])

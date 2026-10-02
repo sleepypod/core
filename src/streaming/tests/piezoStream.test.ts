@@ -1906,6 +1906,27 @@ describe('piezoStream — server lifecycle and protocol', () => {
     }
   })
 
+  it('fans tap-gesture frames out to onServerFrame listeners without an unknown-type warning', async () => {
+    const filePath = path.join(tmpRawDir, 'taps.RAW')
+    const rec = buildOuterRecord(1, [{ type: 'tap-gesture', ts: 2400, side: 'left', taps: 2 }])
+    const warn = vi.spyOn(console, 'warn')
+    const cb = vi.fn()
+    const unsub = onServerFrame(cb)
+    try {
+      const port = startAndPort()
+      const client = await connectClient(port)
+      fs.writeFileSync(filePath, rec)
+      await client.waitFor(m => m.type === 'tap-gesture')
+      expect(cb).toHaveBeenCalledWith(expect.objectContaining({ type: 'tap-gesture', side: 'left', taps: 2, ts: 2400 }))
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('unknown sensor frame type'), 'tap-gesture')
+      await client.close()
+    }
+    finally {
+      unsub()
+      warn.mockRestore()
+    }
+  })
+
   it('does not fan non-frzHealth file frames out to server-side listeners', async () => {
     const filePath = path.join(tmpRawDir, 'not-health.RAW')
     const rec = buildOuterRecord(1, [{ type: 'capSense', ts: 2300, left: 0, right: 0 }])

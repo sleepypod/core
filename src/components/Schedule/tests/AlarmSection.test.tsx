@@ -24,7 +24,7 @@ vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ 
 import { AlarmSection, groupAlarms } from '../AlarmSection'
 
 const row = (id: number, dayOfWeek: string, over: Record<string, unknown> = {}) => ({
-  id, side: 'left', dayOfWeek, time: '06:45', vibrationIntensity: 100, vibrationPattern: 'rise', duration: 10, alarmTemperature: 84, enabled: true, ...over,
+  id, side: 'left', dayOfWeek, time: '06:45', vibrationIntensity: 100, vibrationPattern: 'rise', duration: 10, alarmTemperature: 84, wakeWindow: 0, enabled: true, ...over,
 })
 
 beforeEach(() => {
@@ -49,6 +49,17 @@ describe('groupAlarms', () => {
     expect(groups[0]).toMatchObject({ ids: [1, 2], days: ['monday', 'friday'], time: '06:45' })
     expect(groups[1]).toMatchObject({ ids: [5], duration: 30 })
     expect(groups[2]).toMatchObject({ ids: [3, 4], days: ['sunday', 'saturday'], enabled: false })
+  })
+})
+
+describe('groupAlarms wake window', () => {
+  it('keeps alarms with different wake windows in separate groups', () => {
+    const groups = groupAlarms([
+      row(1, 'monday', { wakeWindow: 20 }),
+      row(2, 'tuesday', { wakeWindow: 20 }),
+      row(3, 'wednesday'),
+    ] as never)
+    expect(groups.map(g => [g.ids, g.wakeWindow])).toEqual([[[1, 2], 20], [[3], 0]])
   })
 })
 

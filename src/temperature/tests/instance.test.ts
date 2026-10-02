@@ -40,7 +40,7 @@ vi.mock('@/src/db', async () => {
 
 import { db, sqlite } from '@/src/db'
 import * as databaseModule from '@/src/db'
-import { deviceSettings, deviceState, runOnceSessions, sideSettings, temperatureHolds, temperatureSchedules } from '@/src/db/schema'
+import { alarmSchedules, deviceSettings, deviceState, runOnceSessions, sideSettings, temperatureHolds, temperatureSchedules } from '@/src/db/schema'
 import { getTemperatureController, getTemperatureControlStatus, startTemperatureController, stopTemperatureController } from '../instance'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { _resetFirmwareSynced, markFirmwareSynced } from '@/src/hardware/sideMutations'
@@ -179,6 +179,33 @@ describe('production controller with migrated SQLite', () => {
     db.delete(deviceState).where(eq(deviceState.side, 'right')).run()
     await controller.setManual('right', 73)
     expect(db.select().from(deviceState).where(eq(deviceState.side, 'right')).get()?.targetTemperature).toBe(73)
+  })
+
+  it('warms to the alarm temperature ahead of the alarm, over the night\'s schedule', async () => {
+    // Monday 22:00 UTC; the 22:15 schedule point (68) falls inside the warm-up.
+    db.insert(alarmSchedules).values({
+      side: 'left', dayOfWeek: 'monday', time: '22:40', vibrationIntensity: 50, duration: 60, alarmTemperature: 95,
+    }).run()
+    const controller = getTemperatureController()
+    vi.setSystemTime(new Date('2026-09-28T22:09:00Z'))
+    await controller.reconcile('left')
+    expect(controller.status('left').targetTemperature).toBe(72)
+    vi.setSystemTime(new Date('2026-09-28T22:10:00Z'))
+    await controller.reconcile('left')
+    expect(controller.status('left')).toMatchObject({ source: 'schedule', requestId: 'alarm:1', targetTemperature: 95 })
+    vi.setSystemTime(new Date('2026-09-28T22:20:00Z'))
+    await controller.reconcile('left')
+    expect(controller.status('left').targetTemperature).toBe(95)
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 95)
+    // Through the alarm (60 s) and 15 minutes after it...
+    vi.setSystemTime(new Date('2026-09-28T22:55:59Z'))
+    await controller.reconcile('left')
+    expect(controller.status('left')).toMatchObject({ requestId: 'alarm:1', targetTemperature: 95 })
+    // ...then back to the schedule instead of holding 95 until the evening.
+    vi.setSystemTime(new Date('2026-09-28T22:56:00Z'))
+    await controller.reconcile('left')
+    expect(controller.status('left')).toMatchObject({ source: 'schedule', targetTemperature: 68 })
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 68)
   })
 
   it('expires holds automatically through the service loop', async () => {

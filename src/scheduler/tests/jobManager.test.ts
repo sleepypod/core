@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import type { WakeWindows } from '../wakeWindow'
 
 const hardwareClient = vi.hoisted(() => ({
   connect: vi.fn(async () => {}),
@@ -951,6 +952,7 @@ describe('JobManager incremental upsert/cancel', () => {
     vibrationPattern: 'rise' as const,
     duration: 120,
     alarmTemperature: 80,
+    wakeWindow: 0,
     enabled: true,
     createdAt: new Date(0),
     updatedAt: new Date(0),
@@ -1085,6 +1087,73 @@ describe('JobManager incremental upsert/cancel', () => {
     const alarmJobAfter = manager.getScheduler().getJob(`alarm-${baseAlarm.id}`)
     expect(alarmJobAfter).toBe(alarmJobBefore)
     expect(manager.getScheduler().getNextInvocation(`alarm-${baseAlarm.id}`)?.getTime()).toBe(nextBefore)
+  })
+
+  describe('wake window', () => {
+    const windows = () => (manager as unknown as { wakeWindows: WakeWindows }).wakeWindows
+    const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const
+    /** Weekly slot `minutes` from now in UTC (the manager's timezone). */
+    const inMinutes = (minutes: number) => {
+      const d = new Date(Date.now() + minutes * 60_000)
+      return { dayOfWeek: DAYS[d.getUTCDay()], time: `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}` }
+    }
+
+    it('schedules a window-opening job that many minutes before the alarm', () => {
+      manager.upsertAlarmJob({ ...baseAlarm, wakeWindow: 20 })
+      const job = manager.getScheduler().getJob('alarm-window-1')
+      expect(job?.type).toBe(JobType.WAKE_WINDOW)
+      expect(job?.schedule).toBe('40 6 * * 1')
+      expect(job?.metadata).toEqual({ scheduleId: 1, side: 'left' })
+    })
+
+    it('opens the window across midnight on the previous day', () => {
+      manager.upsertAlarmJob({ ...baseAlarm, time: '00:10', wakeWindow: 20 })
+      expect(manager.getScheduler().getJob('alarm-window-1')?.schedule).toBe('50 23 * * 0')
+    })
+
+    it('has no window job when the window is off, and drops it when turned off or cancelled', () => {
+      manager.upsertAlarmJob(baseAlarm)
+      expect(manager.getScheduler().getJob('alarm-window-1')).toBeUndefined()
+      manager.upsertAlarmJob({ ...baseAlarm, wakeWindow: 15 })
+      expect(manager.getScheduler().getJob('alarm-window-1')).toBeDefined()
+      manager.upsertAlarmJob({ ...baseAlarm, wakeWindow: 0 })
+      expect(manager.getScheduler().getJob('alarm-window-1')).toBeUndefined()
+      manager.upsertAlarmJob({ ...baseAlarm, wakeWindow: 15 })
+      manager.cancelAlarmJob(1)
+      expect(manager.getScheduler().getJob('alarm-window-1')).toBeUndefined()
+      expect(manager.getScheduler().getJob('alarm-1')).toBeUndefined()
+    })
+
+    it('starts watching right away when scheduled inside the window', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      manager.upsertAlarmJob({ ...baseAlarm, ...inMinutes(5), wakeWindow: 10 })
+      expect(windows().isOpen(1)).toBe(true)
+      manager.cancelAlarmJob(1)
+      expect(windows().isOpen(1)).toBe(false)
+    })
+
+    it('does not watch before the window opens', () => {
+      manager.upsertAlarmJob({ ...baseAlarm, ...inMinutes(30), wakeWindow: 10 })
+      expect(windows().isOpen(1)).toBe(false)
+    })
+
+    it('stops watching when the window is turned off', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      manager.upsertAlarmJob({ ...baseAlarm, ...inMinutes(5), wakeWindow: 10 })
+      manager.upsertAlarmJob({ ...baseAlarm, ...inMinutes(5), wakeWindow: 0 })
+      expect(windows().isOpen(1)).toBe(false)
+    })
+
+    it('the set-time job skips an alarm that already fired early, and fires otherwise', async () => {
+      const run = vi.spyOn(manager, 'runAlarmJob').mockResolvedValue()
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const claim = vi.spyOn(windows(), 'claim').mockReturnValueOnce(true)
+      await manager.runScheduledAlarm(baseAlarm)
+      expect(claim).toHaveBeenCalledWith(1)
+      expect(run).not.toHaveBeenCalled()
+      await manager.runScheduledAlarm(baseAlarm)
+      expect(run).toHaveBeenCalledWith(baseAlarm)
+    })
   })
 
   it('alarm CRUD via incremental helpers completes well under the 200ms unit-test budget', () => {
@@ -1500,6 +1569,61 @@ describe('JobManager residual mutation contracts', () => {
     vi.restoreAllMocks()
   })
 
+  describe('power-off during an alarm warm-up', () => {
+    const power = { ...row, id: 31, side: 'left' as const, dayOfWeek: 'monday' as const, onTime: '22:00', offTime: '07:30', onTemperature: 80 }
+    const alarmRow = { id: 5, side: 'left', enabled: true, duration: 120, wakeWindow: 0 }
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-10-01T11:30:00.000Z'))
+      vi.spyOn(manager, 'hasActiveRunOnceSession').mockResolvedValue(false)
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+    })
+
+    const alarmIn = (minutes: number, wakeWindow = 0) => {
+      vi.spyOn(db, 'select').mockReturnValueOnce({ from: () => queryRows([{ ...alarmRow, wakeWindow }]) } as any)
+      vi.spyOn(manager.getScheduler(), 'getNextInvocation').mockImplementation(id =>
+        id === 'alarm-5' ? new Date(Date.now() + minutes * 60_000) : null)
+    }
+
+    it('holds the power-off until the alarm has finished, then powers off', async () => {
+      const captured = captureOneTimeJobs()
+      const schedule = vi.mocked(manager.getScheduler().scheduleOneTimeJob)
+      alarmIn(10)
+      await manager.runPowerOffJob(power)
+      expect(control.powerOffLocked).not.toHaveBeenCalled()
+      const [id, type, fireDate] = schedule.mock.calls[0]
+      expect(id).toBe('power-off-after-alarm-left')
+      expect(type).toBe(JobType.POWER_OFF)
+      // Alarm in 10 min + 120 s vibration + 1 min.
+      expect(fireDate.getTime()).toBe(Date.now() + 10 * 60_000 + 120_000 + 60_000)
+      await required(captured.get('power-off-after-alarm-left'), 'held power-off').handler()
+      expect(control.powerOffLocked).toHaveBeenCalledWith('left')
+    })
+
+    it('powers off at once when the alarm is beyond its warm-up', async () => {
+      const schedule = vi.spyOn(manager.getScheduler(), 'scheduleOneTimeJob')
+      alarmIn(31)
+      await manager.runPowerOffJob(power)
+      expect(schedule).not.toHaveBeenCalled()
+      expect(control.powerOffLocked).toHaveBeenCalledWith('left')
+    })
+
+    it('uses the wake window as the warm-up when longer', async () => {
+      captureOneTimeJobs()
+      alarmIn(40, 45)
+      await manager.runPowerOffJob(power)
+      expect(control.powerOffLocked).not.toHaveBeenCalled()
+    })
+
+    it('ignores alarms with no upcoming run', async () => {
+      vi.spyOn(db, 'select').mockReturnValueOnce({ from: () => queryRows([alarmRow]) } as any)
+      vi.spyOn(manager.getScheduler(), 'getNextInvocation').mockReturnValue(null)
+      await manager.runPowerOffJob(power)
+      expect(control.powerOffLocked).toHaveBeenCalledWith('left')
+    })
+  })
+
   it('logs every recurring-job skip and the alarm vibration-only branch exactly', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(manager, 'hasActiveRunOnceSession')
@@ -1548,6 +1672,7 @@ describe('JobManager residual mutation contracts', () => {
       dayOfWeek: 'monday',
       time: '06:30',
       alarmTemperature: 88,
+      wakeWindow: 0,
       vibrationIntensity: 50,
       vibrationPattern: 'rise',
       duration: 30,
@@ -1609,6 +1734,7 @@ describe('JobManager residual mutation contracts', () => {
       dayOfWeek: 'monday',
       time: '06:30',
       alarmTemperature: 88,
+      wakeWindow: 0,
       vibrationIntensity: 50,
       vibrationPattern: 'rise',
       duration: 30,
@@ -1624,6 +1750,29 @@ describe('JobManager residual mutation contracts', () => {
       '[jobManager] skipped alarm temperature alarm-43: pump stall guard blocks right; firing vibration only',
     )
     expect(broadcastMutationStatus).toHaveBeenCalledWith('right', { isAlarmVibrating: true })
+  })
+
+  it('records a scheduled alarm as vibrating, with its settings, so a tap can snooze it', async () => {
+    const { getActiveAlarmConfig, suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    vi.spyOn(manager as any, 'isSidePowered').mockResolvedValue(false)
+    try {
+      await manager.runAlarmJob({
+        ...row,
+        id: 44,
+        side: 'left',
+        dayOfWeek: 'monday',
+        time: '06:50',
+        alarmTemperature: 80,
+        wakeWindow: 0,
+        vibrationIntensity: 100,
+        vibrationPattern: 'rise',
+        duration: 120,
+      })
+      expect(getActiveAlarmConfig('left')).toEqual({ vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120 })
+    }
+    finally {
+      suspendActiveAlarms()
+    }
   })
 
   it('skips away-return power-on while the guard blocks the side but still clears awayMode', async () => {

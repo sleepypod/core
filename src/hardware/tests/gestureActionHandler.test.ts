@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { GestureActionDeps } from '../gestureActionHandler'
 import type { GestureEvent } from '../dacMonitor'
 import type { HardwareClient } from '../client'
+import type { AlarmConfig } from '../alarmPersistence'
 
 let controllerClient: HardwareClient
 const pumpStallShouldBlock = vi.fn<(side: 'left' | 'right') => boolean>(() => false)
@@ -21,7 +22,7 @@ vi.mock('../pumpStallGuard', () => ({
   shouldBlock: (side: 'left' | 'right') => pumpStallShouldBlock(side),
 }))
 
-const { GestureActionHandler } = await import('../gestureActionHandler')
+const { GestureActionHandler, DEFAULT_SNOOZE_ALARM } = await import('../gestureActionHandler')
 const { withSideLock } = await import('../sideLock')
 
 // ---------------------------------------------------------------------------
@@ -47,16 +48,26 @@ const makeMockClient = (overrides: DeepPartial<HardwareClient> = {}): HardwareCl
   ...overrides,
 } as unknown as HardwareClient)
 
+const makeAlarmHooks = (activeConfig: AlarmConfig | null = null) => ({
+  activeConfig: vi.fn<(side: 'left' | 'right') => AlarmConfig | null>(() => activeConfig),
+  ended: vi.fn<(side: 'left' | 'right') => Promise<void>>().mockResolvedValue(undefined),
+  snooze: vi.fn<(side: 'left' | 'right', seconds: number, config: AlarmConfig) => void>(),
+  cancelSnooze: vi.fn<(side: 'left' | 'right') => void>(),
+})
+
 const makeDeps = (
   gestureRow: object | null = null,
   stateRow: object | null = null,
-  client: HardwareClient = makeMockClient()
-): { deps: GestureActionDeps, client: HardwareClient } => ({
+  client: HardwareClient = makeMockClient(),
+  alarm = makeAlarmHooks(),
+): { deps: GestureActionDeps, client: HardwareClient, alarm: ReturnType<typeof makeAlarmHooks> } => ({
   client,
+  alarm,
   deps: {
     findGestureConfig: vi.fn().mockResolvedValue(gestureRow),
     findDeviceState: vi.fn().mockResolvedValue(stateRow),
     newHardwareClient: vi.fn().mockReturnValue(client),
+    alarm,
   },
 })
 
@@ -87,7 +98,8 @@ describe('GestureActionHandler', () => {
 
     await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
-    expect(deps.findDeviceState).not.toHaveBeenCalled()
+    // It may check whether an alarm was vibrating (to record the firmware
+    // stopping it), but never touches the hardware.
     expect(deps.newHardwareClient).not.toHaveBeenCalled()
     expect(client.connect).not.toHaveBeenCalled()
   })
@@ -130,6 +142,7 @@ describe('GestureActionHandler', () => {
         const client = makeMockClient()
         const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 5 }
         const deps: GestureActionDeps = {
+          alarm: makeAlarmHooks(),
           findGestureConfig: vi.fn().mockResolvedValue(gesture),
           findDeviceState: vi.fn().mockResolvedValue({ targetTemperature: 70 }),
           newHardwareClient: vi.fn().mockReturnValue(client),
@@ -221,89 +234,93 @@ describe('GestureActionHandler', () => {
     test('dismisses active alarm', async () => {
       const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss' }
       const state = { isAlarmVibrating: true, isPowered: true }
-      const { deps, client } = makeDeps(gesture, state)
+      const { deps, client, alarm } = makeDeps(gesture, state)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
 
       expect(client.clearAlarm).toHaveBeenCalledWith('left')
+      expect(alarm.cancelSnooze).toHaveBeenCalledWith('left')
+      expect(alarm.ended).toHaveBeenCalledWith('left')
+      expect(alarm.snooze).not.toHaveBeenCalled()
       expect(client.disconnect).toHaveBeenCalledOnce()
     })
 
-    test('snoozes active alarm — clears immediately', async () => {
-      vi.useFakeTimers()
+    test('snoozes an active alarm: clears it, records it stopped, and snoozes it', async () => {
       const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 300 }
       const state = { isAlarmVibrating: true, isPowered: true }
-      const { deps, client } = makeDeps(gesture, state)
+      const { deps, client, alarm } = makeDeps(gesture, state)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
 
       expect(client.clearAlarm).toHaveBeenCalledWith('left')
+      expect(alarm.ended).toHaveBeenCalledWith('left')
+      expect(alarm.snooze).toHaveBeenCalledWith('left', 300, DEFAULT_SNOOZE_ALARM)
     })
 
-    test('snooze restarts alarm after duration', async () => {
-      vi.useFakeTimers()
-      const snoozeClient = makeMockClient()
-      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 300 }
-      const state = { isAlarmVibrating: true }
-      const newHardwareClient = vi.fn()
-        .mockReturnValueOnce(makeMockClient()) // first call: clear alarm
-        .mockReturnValueOnce(snoozeClient) // second call: restart alarm
-      const deps: GestureActionDeps = {
-        findGestureConfig: vi.fn().mockResolvedValue(gesture),
-        findDeviceState: vi.fn().mockResolvedValue(state),
-        newHardwareClient,
-      }
+    test('a snoozed alarm comes back with its own settings', async () => {
+      const scheduled: AlarmConfig = { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120 }
+      const alarm = makeAlarmHooks(scheduled)
+      // ended() forgets the active alarm, so its settings must be read first.
+      alarm.ended.mockImplementation(async () => {
+        alarm.activeConfig.mockReturnValue(null)
+      })
+      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 540 }
+      const { deps } = makeDeps(gesture, { isAlarmVibrating: true }, makeMockClient(), alarm)
 
-      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'doubleTap'))
 
-      await vi.advanceTimersByTimeAsync(299_999)
-      expect(snoozeClient.connect).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(1)
-      await Promise.resolve()
-
-      expect(snoozeClient.setAlarm).toHaveBeenCalledWith('left', expect.objectContaining({
-        vibrationIntensity: 50,
-        vibrationPattern: 'rise',
-        duration: 180,
-      }))
-      expect(snoozeClient.disconnect).toHaveBeenCalledOnce()
+      expect(alarm.snooze).toHaveBeenCalledWith('right', 540, scheduled)
     })
 
-    test('does nothing for an active alarm with no configured behavior', async () => {
-      vi.useFakeTimers()
+    test('snoozes for 300 s when no duration is configured', async () => {
+      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: null }
+      const { deps, alarm } = makeDeps(gesture, { isAlarmVibrating: true })
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+      expect(alarm.snooze).toHaveBeenCalledWith('left', 300, DEFAULT_SNOOZE_ALARM)
+    })
+
+    test('with no configured behavior, only records the alarm stopped (the firmware stopped it)', async () => {
       const gesture = { actionType: 'alarm', alarmBehavior: null }
-      const { deps, client } = makeDeps(gesture, { isAlarmVibrating: true })
+      const { deps, client, alarm } = makeDeps(gesture, { isAlarmVibrating: true })
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
 
       expect(client.connect).toHaveBeenCalledOnce()
       expect(client.clearAlarm).not.toHaveBeenCalled()
-      expect(vi.getTimerCount()).toBe(0)
+      expect(alarm.ended).toHaveBeenCalledWith('right')
+      expect(alarm.snooze).not.toHaveBeenCalled()
       expect(client.disconnect).toHaveBeenCalledOnce()
     })
+  })
 
-    test('clamps a huge snooze to the signed 32-bit timer ceiling', async () => {
-      vi.useFakeTimers()
-      const maxSeconds = Math.floor((2 ** 31 - 1) / 1000)
-      const restart = makeMockClient()
-      const deps: GestureActionDeps = {
-        findGestureConfig: vi.fn().mockResolvedValue({
-          actionType: 'alarm',
-          alarmBehavior: 'snooze',
-          alarmSnoozeDuration: Number.MAX_SAFE_INTEGER,
-        }),
-        findDeviceState: vi.fn().mockResolvedValue({ isAlarmVibrating: true }),
-        newHardwareClient: vi.fn()
-          .mockReturnValueOnce(makeMockClient())
-          .mockReturnValueOnce(restart),
-      }
+  describe('other gestures during a vibrating alarm', () => {
+    test('a temperature gesture records the alarm stopped and still adjusts temperature', async () => {
+      const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 2 }
+      const { deps, client, alarm } = makeDeps(gesture, { isAlarmVibrating: true, targetTemperature: 70 })
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
-      await vi.advanceTimersByTimeAsync(maxSeconds * 1000 - 1)
-      expect(restart.connect).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(1)
-      await Promise.resolve()
-      expect(restart.setAlarm).toHaveBeenCalledOnce()
+
+      expect(alarm.ended).toHaveBeenCalledWith('left')
+      expect(client.setTemperature).toHaveBeenCalledWith('left', 72)
+    })
+
+    test('an unconfigured gesture still records the alarm stopped', async () => {
+      const { deps, alarm } = makeDeps(null, { isAlarmVibrating: true })
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'quadTap'))
+
+      expect(alarm.ended).toHaveBeenCalledWith('left')
+    })
+
+    test('with no alarm vibrating, alarm state is left alone', async () => {
+      const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 2 }
+      const { deps, alarm } = makeDeps(gesture, { isAlarmVibrating: false, targetTemperature: 70 })
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
+
+      expect(alarm.ended).not.toHaveBeenCalled()
     })
   })
 
@@ -387,53 +404,6 @@ describe('GestureActionHandler', () => {
       expect(client.setPower).not.toHaveBeenCalled()
       expect(client.clearAlarm).not.toHaveBeenCalled()
     })
-  })
-
-  test('cleanup() cancels pending snooze restart timers so process can exit', async () => {
-    vi.useFakeTimers()
-    const snoozeClient = makeMockClient()
-    const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 300 }
-    const state = { isAlarmVibrating: true }
-    const newHardwareClient = vi.fn()
-      .mockReturnValueOnce(makeMockClient())
-      .mockReturnValueOnce(snoozeClient)
-    const deps: GestureActionDeps = {
-      findGestureConfig: vi.fn().mockResolvedValue(gesture),
-      findDeviceState: vi.fn().mockResolvedValue(state),
-      newHardwareClient,
-    }
-
-    const handler = new GestureActionHandler(SOCKET_PATH, deps)
-    await handler.handle(makeEvent('left', 'tripleTap'))
-
-    handler.cleanup()
-    await vi.advanceTimersByTimeAsync(300_000)
-    expect(snoozeClient.setAlarm).not.toHaveBeenCalled()
-  })
-
-  test('snooze restart logs without throwing when restart connect fails', async () => {
-    vi.useFakeTimers()
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const failingClient = makeMockClient({
-      connect: vi.fn().mockRejectedValue(new Error('connect refused')),
-    })
-    const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 1 }
-    const state = { isAlarmVibrating: true }
-    const newHardwareClient = vi.fn()
-      .mockReturnValueOnce(makeMockClient())
-      .mockReturnValueOnce(failingClient)
-    const deps: GestureActionDeps = {
-      findGestureConfig: vi.fn().mockResolvedValue(gesture),
-      findDeviceState: vi.fn().mockResolvedValue(state),
-      newHardwareClient,
-    }
-
-    await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
-    await vi.advanceTimersByTimeAsync(1000)
-    // Allow promise chain to resolve
-    await vi.advanceTimersByTimeAsync(100)
-    expect(errSpy).toHaveBeenCalledWith('GestureActionHandler: snooze restart failed:', expect.any(Error))
-    errSpy.mockRestore()
   })
 
   test('errors in execution do not throw', async () => {
