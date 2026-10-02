@@ -425,6 +425,8 @@ async function initializeBackgroundServices(): Promise<void> {
  */
 export function shouldRunInstrumentation(env: Record<string, string | undefined> = process.env): boolean {
   if (env.NEXT_RUNTIME && env.NEXT_RUNTIME !== 'nodejs') return false
+  // The hosted demo has no pod: the browser answers tRPC and sensor calls itself.
+  if (env.NEXT_PUBLIC_DEMO === '1') return false
   return true
 }
 

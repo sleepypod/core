@@ -3,6 +3,7 @@
 import type { TemperatureControlStatus } from '@/src/temperature/controller'
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react'
 import { normalizeFrame } from '@/src/streaming/normalizeFrame'
+import { createDemoSocket } from '@/src/demo/socket'
 import type { SideStatus } from '@/src/hardware/types'
 
 // ---------------------------------------------------------------------------
@@ -495,7 +496,9 @@ function connect() {
   singleton.intentionalClose = false
 
   try {
-    singleton.ws = new WebSocket(url, 'sensor-snapshot-v1')
+    singleton.ws = process.env.NEXT_PUBLIC_DEMO === '1'
+      ? createDemoSocket()
+      : new WebSocket(url, 'sensor-snapshot-v1')
   }
   catch {
     setState({ status: 'disconnected', lastError: 'Failed to create WebSocket' })

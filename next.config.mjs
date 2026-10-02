@@ -12,6 +12,9 @@ const nextConfig = {
   // exposes TypeScript source, API route internals, and file paths.
   // Use server-side-only source maps + a private error monitor for prod debugging.
   productionBrowserSourceMaps: false,
+  // Always inline the demo flag (even when unset) so pod builds can drop
+  // src/demo/ as dead code instead of leaving a runtime env lookup.
+  env: { NEXT_PUBLIC_DEMO: process.env.NEXT_PUBLIC_DEMO ?? '' },
   // Standalone output for cross-machine deploys (build on macOS, run on pod).
   // Turbopack bakes RELATIVE_ROOT_PATH at build time — without standalone,
   // the .next bundle only works on the machine that built it.
