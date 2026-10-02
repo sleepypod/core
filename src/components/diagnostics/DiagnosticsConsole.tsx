@@ -194,7 +194,7 @@ function ThermalPanel({ thermal, history }: { thermal: ThermalQuery, history: Th
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5">
-        {data && !data.pumpStallProtectionEnabled && <PumpStallWarning />}
+        {data && data.reportsPumpSpeed && !data.pumpStallProtectionEnabled && <PumpStallWarning />}
         {data && (
           <span className="font-mono text-xs text-fg-2">
             {`heatsink ${fmtF(data.heatsinkTempF)} · hub ambient ${fmtF(data.ambientTempF)}`}

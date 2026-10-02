@@ -122,6 +122,9 @@ export function readThermalTruth() {
 
   return {
     pumpStallProtectionEnabled: settings?.enabled ?? false,
+    // Pod 3/4 firmware sends no pump speed, so the stall guard has nothing to
+    // act on there and its being off isn't worth flagging.
+    reportsPumpSpeed: flow != null,
     heatsinkTempF: water?.heatsinkTemp != null ? Math.round(centiDegreesToF(water.heatsinkTemp) * 10) / 10 : null,
     ambientTempF: water?.ambientTemp != null ? Math.round(centiDegreesToF(water.ambientTemp) * 10) / 10 : null,
     sides,

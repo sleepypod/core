@@ -11,7 +11,7 @@ import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import { usePrefs } from '@/src/providers/PrefsProvider'
-import { useSide, type Side } from '@/src/providers/SideProvider'
+import { useShownSides, useSide, type Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
 import { AlarmBanner } from './AlarmBanner'
 import { AlarmCard } from './AlarmCard'
@@ -60,9 +60,18 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  *
  * Link sides mirrors every change (drag, ±, power) to both sides. All off
  * powers down whichever sides are on, linked or not.
+ *
+ * With one side in away mode both cards stay, linked by default (SideProvider)
+ * so the whole bed moves together. Tonight's schedule is the sleeper's — the
+ * away side follows it on the pod — so the stepper's Night/Dawn show and edit
+ * that side's, and the context cards and timeline are the sleeper's.
  */
 export const TempScreen = () => {
-  const { isLinked, toggleLink, primarySide } = useSide()
+  const { isLinked, toggleLink, primarySide, singleSleeperSide } = useSide()
+  const shown = useShownSides()
+  // One side away: the sleeper's schedule, context and timeline.
+  const contextSide = singleSleeperSide ?? primarySide
+  const scheduleSide = (side: Side): Side => singleSleeperSide ?? side
   const { control: variant, tempDisplay } = usePrefs()
   const { sideName } = useSideNames()
 
@@ -94,9 +103,10 @@ export const TempScreen = () => {
   }
 
   const targetsFor = (side: Side): Side[] => (isLinked ? SIDES : [side])
+  const scheduleTargetsFor = (side: Side): Side[] => (singleSleeperSide ? [singleSleeperSide] : targetsFor(side))
 
   const handleStepPhase = (side: Side, phase: NightPhaseKey, delta: number) => {
-    for (const s of targetsFor(side)) nightPhases[s].nudge(phase, delta)
+    for (const s of scheduleTargetsFor(side)) nightPhases[s].nudge(phase, delta)
   }
 
   /** Continuous drag — visual only, no hardware calls. */
@@ -230,7 +240,7 @@ export const TempScreen = () => {
               targetF={c.targetF}
               bedF={c.bedF}
               isOn={c.isOn}
-              stepDisabled={!c.isOn || c.tempPending}
+              stepDisabled={!c.isOn}
               powerDisabled={c.powerPending}
               holdMinutes={holdMinutes}
               onHoldChange={setHoldMinutes}
@@ -244,7 +254,7 @@ export const TempScreen = () => {
                 ? {
                     tab: stepperTab[side],
                     onTabChange: tab => handleTabChange(side, tab),
-                    schedule: nightPhases[side],
+                    schedule: nightPhases[scheduleSide(side)],
                     onStepPhase: (phase, delta) => handleStepPhase(side, phase, delta),
                     now,
                   }
@@ -256,15 +266,15 @@ export const TempScreen = () => {
         <div className={CONTEXT}>
           {/* Desktop: the Schedule and sleep timeline below covers tonight. */}
           <div className="min-[900px]:hidden">
-            <TonightCard side={primarySide} unit={unit} />
+            <TonightCard side={contextSide} unit={unit} />
           </div>
-          <EnvironmentInfoPanel side={primarySide} unit={unit} />
-          <LastNightCard side={primarySide} name={sideName(primarySide)} />
-          <AlarmCard side={primarySide} />
+          <EnvironmentInfoPanel side={contextSide} unit={unit} />
+          <LastNightCard side={contextSide} name={sideName(contextSide)} />
+          <AlarmCard side={contextSide} />
         </div>
       </div>
 
-      <ScheduleTimeline unit={unit} className="max-[899px]:hidden" />
+      <ScheduleTimeline unit={unit} sides={shown} className="max-[899px]:hidden" />
     </>
   )
 }

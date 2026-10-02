@@ -11,8 +11,8 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const sideMock = vi.hoisted(() => {
-  const state: { primarySide: 'left' | 'right', activeSides: Array<'left' | 'right'> }
-    = { primarySide: 'left', activeSides: ['left'] }
+  const state: { primarySide: 'left' | 'right', activeSides: Array<'left' | 'right'>, singleSleeperSide: 'left' | 'right' | null }
+    = { primarySide: 'left', activeSides: ['left'], singleSleeperSide: null }
   return { state }
 })
 
@@ -100,6 +100,7 @@ afterEach(() => {
   scheduleGroupingMock.sortChronological.mockClear()
   sideMock.state.primarySide = 'left'
   sideMock.state.activeSides = ['left']
+  sideMock.state.singleSleeperSide = null
 })
 
 describe('useSchedule — derived state', () => {
@@ -544,6 +545,30 @@ describe('useSchedule — saveCurve / deleteCurve edge cases', () => {
     const sides = new Set(arg.creates.temperature.map((c: any) => c.side))
     expect(sides.has('left')).toBe(true)
     expect(sides.has('right')).toBe(true)
+  })
+
+  it('saveCurve writes only the sleeper\'s side when the other is away, even with both selected', async () => {
+    sideMock.state.activeSides = ['left', 'right']
+    sideMock.state.singleSleeperSide = 'right'
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 2, dayOfWeek: 'monday', time: '07:00', temperature: 70, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [
+          { time: '07:00', temperature: 68 },
+          { time: '22:00', temperature: 60 },
+        ],
+        originalDays: ['monday'],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(new Set(arg.creates.temperature.map((c: { side: string }) => c.side))).toEqual(new Set(['right']))
+    expect(arg.deletes.temperature).toEqual([2])
   })
 
   it('saveCurve clamps onTemperature into the 55–110 range', async () => {

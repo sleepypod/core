@@ -39,7 +39,7 @@ const nightDate = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short',
  * Wires into schedules.getAll, biometrics.getSleepRecords and
  * health.thermalHistory (24h).
  */
-export function ScheduleTimeline({ unit, className }: { unit: TempUnit, className?: string }) {
+export function ScheduleTimeline({ unit, className, sides = SIDES }: { unit: TempUnit, className?: string, sides?: readonly Side[] }) {
   const lang = langFromPath(usePathname())
   const nowMinute = useNowMinute()
   const win = nowMinute == null ? null : timelineWindow(new Date(nowMinute * 60_000))
@@ -60,12 +60,12 @@ export function ScheduleTimeline({ unit, className }: { unit: TempUnit, classNam
           <ArrowRight size={14} />
         </Link>
       </div>
-      <TimelineBody win={win} now={now} unit={unit} />
+      <TimelineBody win={win} now={now} unit={unit} sides={sides} />
     </Card>
   )
 }
 
-function TimelineBody({ win, now, unit }: { win: TimelineWindow, now: number, unit: TempUnit }) {
+function TimelineBody({ win, now, unit, sides }: { win: TimelineWindow, now: number, unit: TempUnit, sides: readonly Side[] }) {
   const span = win.end - win.start
   const pct = (t: number) => ((t - win.start) / span) * 100
   const ticks: number[] = []
@@ -104,7 +104,7 @@ function TimelineBody({ win, now, unit }: { win: TimelineWindow, now: number, un
       <span />
       <div className="h-4" />
 
-      {SIDES.map(side => <SideRows key={side} side={side} win={win} now={now} unit={unit} pct={pct} hoverT={hoverT} />)}
+      {sides.map(side => <SideRows key={side} side={side} win={win} now={now} unit={unit} pct={pct} hoverT={hoverT} />)}
 
       <span />
       <div className="relative h-5 font-mono text-[10px] text-fg-3" aria-hidden>

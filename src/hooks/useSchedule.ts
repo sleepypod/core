@@ -51,7 +51,11 @@ export interface DayScheduleData {
  * Handles multi-day selection, bulk operations, and scheduler reload.
  */
 export function useSchedule() {
-  const { primarySide: side, activeSides } = useSide()
+  const { primarySide, activeSides: chosenSides, singleSleeperSide } = useSide()
+  // One side away: schedules are the sleeper's (the away side follows them
+  // on the pod), so reads and writes stay on that side.
+  const side = singleSleeperSide ?? primarySide
+  const activeSides = useMemo(() => (singleSleeperSide ? [singleSleeperSide] : chosenSides), [singleSleeperSide, chosenSides])
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>(getCurrentDay())
   const [selectedDays, setSelectedDays] = useState<Set<DayOfWeek>>(() => new Set([getCurrentDay()]))
   const [isApplying, setIsApplying] = useState(false)

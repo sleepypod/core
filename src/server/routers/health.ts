@@ -14,7 +14,7 @@ import {
   deviceState,
   deviceSettings,
 } from '@/src/db/schema'
-import { primeEvents } from '@/src/db/biometrics-schema'
+import { flowReadings, primeEvents } from '@/src/db/biometrics-schema'
 import { desc, eq } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
@@ -494,6 +494,7 @@ export const healthRouter = router({
     .input(z.object({}))
     .output(z.object({
       pumpStallProtectionEnabled: z.boolean(),
+      reportsPumpSpeed: z.boolean(),
       heatsinkTempF: z.number().nullable(),
       ambientTempF: z.number().nullable(),
       sides: z.array(z.object({
@@ -621,6 +622,7 @@ export const healthRouter = router({
     .input(z.object({}))
     .output(z.object({
       pumpStallProtectionEnabled: z.boolean(),
+      reportsPumpSpeed: z.boolean(),
       primePodDaily: z.boolean(),
       primePodTime: z.string().nullable(),
       lastPrimeAt: z.number().nullable(),
@@ -638,8 +640,10 @@ export const healthRouter = router({
         .all()
       const [last] = biometricsDb.select({ ts: primeEvents.timestamp }).from(primeEvents).orderBy(desc(primeEvents.timestamp)).limit(1).all()
       const [first] = biometricsDb.select({ ts: primeEvents.timestamp }).from(primeEvents).orderBy(primeEvents.timestamp).limit(1).all()
+      const [flow] = biometricsDb.select({ ts: flowReadings.timestamp }).from(flowReadings).limit(1).all()
       return {
         pumpStallProtectionEnabled: settings?.pumpStall ?? false,
+        reportsPumpSpeed: flow != null,
         primePodDaily: settings?.primePodDaily ?? false,
         primePodTime: settings?.primePodTime ?? null,
         lastPrimeAt: last?.ts ? last.ts.getTime() : null,

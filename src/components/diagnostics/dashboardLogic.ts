@@ -65,6 +65,8 @@ export interface AttentionItem {
 
 export interface MaintenanceFacts {
   pumpStallProtectionEnabled: boolean
+  /** False on pods that never report pump speed (Pod 3/4): the guard can't act there. */
+  reportsPumpSpeed?: boolean
   primePodDaily: boolean
   lastPrimeAt: number | null
 }
@@ -90,7 +92,7 @@ export function attentionItems(
       detail: 'No vitals or movement for over 2 hours. Either nobody is there and the empty-bed reading is off, or vitals are stuck.',
     })
   }
-  if (m && !m.pumpStallProtectionEnabled) {
+  if (m && !m.pumpStallProtectionEnabled && m.reportsPumpSpeed !== false) {
     out.push({ id: 'pump-stall', title: 'Pump-stall protection is off', detail: 'A stalled pump won\'t power the side down.' })
   }
   if (waterLevel === 'low') {

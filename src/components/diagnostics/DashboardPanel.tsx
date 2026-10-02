@@ -8,6 +8,7 @@ import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
+import { useShownSides } from '@/src/providers/SideProvider'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { Button, Card, HoverMark, InlineError, KeyValue, Skeleton, StatusDot, useHoverFraction } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
@@ -28,7 +29,6 @@ import { OccupancyCheck } from './OccupancyCheck'
 type ThermalData = inferRouterOutputs<AppRouter>['health']['thermal']
 type ThermalSide = ThermalData['sides'][number]
 type Side = 'left' | 'right'
-const SIDES: Side[] = ['left', 'right']
 
 /**
  * System → Dashboard: one status line, an attention list that only appears
@@ -36,19 +36,20 @@ const SIDES: Side[] = ['left', 'right']
  * a compact card per side with its last 12 hours.
  */
 export function DashboardPanel({ thermal, onJump }: { thermal: ThermalData | undefined, onJump: (s: DiagSection) => void }) {
+  // One side away: the sleeper's side only.
+  const shown = useShownSides()
   return (
     <>
       <StatusLine />
       <AttentionCard />
       <PumpAlertsCard />
       <TonightCard onJump={onJump} />
-      <div className="grid items-start gap-3.5 @min-[760px]:grid-cols-2">
+      <div className={cn('grid items-start gap-3.5', shown.length > 1 && '@min-[760px]:grid-cols-2')}>
         {thermal
-          ? thermal.sides.map(s => <SideSummaryCard key={s.side} side={s} onClick={() => onJump('thermal')} />)
+          ? thermal.sides.filter(s => shown.includes(s.side as Side)).map(s => <SideSummaryCard key={s.side} side={s} onClick={() => onJump('thermal')} />)
           : (
               <>
-                <Skeleton className="h-[170px]" />
-                <Skeleton className="h-[170px]" />
+                {shown.map(side => <Skeleton key={side} className="h-[170px]" />)}
               </>
             )}
       </div>
@@ -189,6 +190,7 @@ function UsageBar({ percent }: { percent: number }) {
 // ── Attention ───────────────────────────────────────────────────────────────
 
 function AttentionCard() {
+  const shown = useShownSides()
   const utils = trpc.useUtils()
   const lang = langFromPath(usePathname())
   const maintenance = trpc.health.maintenance.useQuery({}, { refetchInterval: 60_000 })
@@ -208,7 +210,7 @@ function AttentionCard() {
   const nowMinute = useNowMinute()
   if (nowMinute == null) return null
   const occupancy = dataPath.data?.occupancy
-  const suspectSides = occupancy ? (['left', 'right'] as const).filter(s => occupancy[s] === 'suspect') : []
+  const suspectSides = occupancy ? shown.filter(s => occupancy[s] === 'suspect') : []
   const items = attentionItems(maintenance.data, water.data?.level ?? device.data?.waterLevel, nowMinute * 60_000, suspectSides)
   if (items.length === 0) return null
   const priming = device.data?.isPriming ?? false
@@ -252,6 +254,7 @@ const HOUR_MIN = 60
 
 function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
   const { sideName } = useSideNames()
+  const shown = useShownSides()
   const { unit } = useTemperatureUnit()
   const system = trpc.health.system.useQuery({}, { refetchInterval: 15_000 })
   const scheduler = trpc.health.scheduler.useQuery({ withinHours: 24 }, { refetchInterval: 60_000 })
@@ -282,7 +285,7 @@ function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
   const midnight = win.midnight.getTime()
   // Curves saved entirely after midnight sit a day earlier on the chart's minute axis.
   const shiftFor = (tl: Array<{ minutes: number }>) => (tl.length && tl[tl.length - 1].minutes < 12 * HOUR_MIN ? -24 * HOUR_MIN : 0)
-  const sides = SIDES.map((side) => {
+  const sides = shown.map((side) => {
     const setPoints = nightSetPoints(temps[side], win.day)
     const tl = buildTimeline(setPoints)
     const shift = shiftFor(tl)

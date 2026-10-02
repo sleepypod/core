@@ -22,8 +22,9 @@ interface SideContextValue {
   primarySide: Side
   /**
    * The single sleeper's side when exactly one side is in away mode, else
-   * null. Biometrics views show only this side (useBiometricsSide). Control
-   * screens are unaffected beyond defaulting to 'both' when the mode starts.
+   * null. Views that show one person (sleep, schedule, vitals) use this side
+   * (useBiometricsSide, useShownSides); the Temp screen keeps both sides and
+   * defaults to 'both' (linked) when the mode starts.
    */
   singleSleeperSide: Side | null
 }
@@ -194,6 +195,24 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
           )}
     </SideContext.Provider>
   )
+}
+
+/**
+ * The single sleeper's side (one side in away mode), or null — also null
+ * outside a SideProvider, for components that only adapt to the mode.
+ */
+export const useSingleSleeperSide = (): Side | null => useContext(SideContext)?.singleSleeperSide ?? null
+
+const BOTH_SIDES: readonly Side[] = ['left', 'right']
+const ONLY: Record<Side, readonly Side[]> = { left: ['left'], right: ['right'] }
+
+/**
+ * The sides a per-side view lists: just the single sleeper's side while the
+ * other is away, else both. Stable arrays, safe as effect dependencies.
+ */
+export const useShownSides = (): readonly Side[] => {
+  const single = useSingleSleeperSide()
+  return single ? ONLY[single] : BOTH_SIDES
 }
 
 export const useSide = () => {

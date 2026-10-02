@@ -7,6 +7,7 @@ import { hasFirmwareSynced } from '@/src/hardware/sideMutations'
 import { shouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { fahrenheitToLevel, MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
+import { scheduleSourceSide } from '@/src/lib/singleSleeper'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { recurringTarget, sessionTarget, type RecurringOccurrenceCache } from './baseline'
 import { TemperatureController, type TemperatureRequest } from './controller'
@@ -20,15 +21,19 @@ const recurringCache: Partial<Record<Side, { key: string, target: TemperatureReq
 function readBaseline(side: Side, now: number): TemperatureRequest[] {
   const settings = db.select({ timezone: deviceSettings.timezone }).from(deviceSettings).get()
   const timezone = settings?.timezone || 'America/Los_Angeles'
-  const away = db.select({ awayMode: sideSettings.awayMode }).from(sideSettings).where(eq(sideSettings.side, side)).get()?.awayMode
+  const away = Object.fromEntries(db.select({ side: sideSettings.side, awayMode: sideSettings.awayMode }).from(sideSettings).all()
+    .map(r => [r.side, { awayMode: r.awayMode }]))
+  // A single sleeper's away side follows that sleeper's schedule; a side
+  // that's simply away has none.
+  const source = scheduleSourceSide(side, away)
   const requests: TemperatureRequest[] = []
-  if (!away) {
+  if (source) {
     const temps = db.select().from(temperatureSchedules)
-      .where(and(eq(temperatureSchedules.side, side), eq(temperatureSchedules.enabled, true))).all()
+      .where(and(eq(temperatureSchedules.side, source), eq(temperatureSchedules.enabled, true))).all()
     const powers = db.select().from(powerSchedules)
-      .where(and(eq(powerSchedules.side, side), eq(powerSchedules.enabled, true))).all()
+      .where(and(eq(powerSchedules.side, source), eq(powerSchedules.enabled, true))).all()
     const alarms = db.select().from(alarmSchedules)
-      .where(and(eq(alarmSchedules.side, side), eq(alarmSchedules.enabled, true))).all()
+      .where(and(eq(alarmSchedules.side, source), eq(alarmSchedules.enabled, true))).all()
     const rows = [
       ...alarms.map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.alarmTemperature })),
       ...temps.map(r => ({ id: `temperature:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature })),

@@ -550,6 +550,17 @@ export const settingsRouter = router({
           }
         }
 
+        // One side going away makes it mirror the sleeper on the other side.
+        if (input.awayMode === true) {
+          try {
+            const jobManager = await getJobManager()
+            await jobManager.syncMirroredSide()
+          }
+          catch (e) {
+            console.error('Single-sleeper mirror failed:', e)
+          }
+        }
+
         // Start/stop keepalive if alwaysOn changed
         if ('alwaysOn' in input) {
           if (input.alwaysOn) {

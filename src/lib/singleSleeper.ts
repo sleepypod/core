@@ -21,3 +21,25 @@ export function singleSleeperSideFor(
   if (leftAway === rightAway) return null
   return leftAway ? 'right' : 'left'
 }
+
+/**
+ * Whose schedule drives `side`: its own when it isn't away; the single
+ * sleeper's when it's the away side of a single-sleeper bed (the whole bed
+ * follows the one sleeper); none when both sides are away.
+ */
+export function scheduleSourceSide(
+  side: Side,
+  sides: { left?: SideAway | null, right?: SideAway | null } | null | undefined,
+): Side | null {
+  if (!sides?.[side]?.awayMode) return side
+  const single = singleSleeperSideFor(sides)
+  return single && single !== side ? single : null
+}
+
+/** The side that mirrors `side`'s schedule and power, when `side` is a single sleeper's. */
+export function mirrorSideFor(
+  side: Side,
+  sides: { left?: SideAway | null, right?: SideAway | null } | null | undefined,
+): Side | null {
+  return singleSleeperSideFor(sides) === side ? (side === 'left' ? 'right' : 'left') : null
+}

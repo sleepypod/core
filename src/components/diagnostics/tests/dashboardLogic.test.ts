@@ -69,6 +69,11 @@ describe('attentionItems', () => {
   it('flags the pump-stall guard being off', () => {
     expect(attentionItems({ ...ok, pumpStallProtectionEnabled: false }, 'ok', now).map(i => i.id)).toEqual(['pump-stall'])
   })
+  it('does not flag the guard on a pod that reports no pump speed', () => {
+    // Pod 3/4: no pump speed, so the guard has nothing to act on.
+    expect(attentionItems({ ...ok, pumpStallProtectionEnabled: false, reportsPumpSpeed: false }, 'ok', now)).toEqual([])
+    expect(attentionItems({ ...ok, pumpStallProtectionEnabled: false, reportsPumpSpeed: true }, 'ok', now).map(i => i.id)).toEqual(['pump-stall'])
+  })
   it('flags a stale or missing prime unless daily prime is on', () => {
     const stale = { ...ok, lastPrimeAt: now - 8 * 86_400_000 }
     const [item] = attentionItems(stale, 'ok', now)

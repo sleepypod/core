@@ -20,6 +20,7 @@ const schedulerMock = vi.hoisted(() => {
     upsertPrimeJob: vi.fn(),
     upsertLedNightMode: vi.fn(async () => undefined),
     upsertAwayMode: vi.fn(),
+    syncMirroredSide: vi.fn(async () => undefined),
   }
   return { getJobManager: vi.fn(async () => jm), jm }
 })
@@ -126,6 +127,7 @@ beforeEach(() => {
   schedulerMock.jm.upsertPrimeJob.mockReset()
   schedulerMock.jm.upsertLedNightMode.mockReset().mockResolvedValue(undefined)
   schedulerMock.jm.upsertAwayMode.mockReset()
+  schedulerMock.jm.syncMirroredSide.mockReset().mockResolvedValue(undefined)
   keepaliveMock.startKeepalive.mockReset()
   keepaliveMock.stopKeepalive.mockReset()
   autoOffMock.restartAutoOffTimers.mockReset()
@@ -695,6 +697,29 @@ describe('settings.updateSide — extra branches', () => {
     await caller.updateSide({ side: 'left', awayStart: '2025-01-01T00:00:00Z' })
     expect(schedulerMock.jm.upsertAwayMode).toHaveBeenCalledWith('left', '2025-01-01T00:00:00Z', null)
     expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
+  })
+
+  it('brings a side that goes away in line with the sleeper on the other side', async () => {
+    const current = { ...baseSide }
+    dbState.txRowsQueue.push([current], [{ ...current, awayMode: true }])
+    await caller.updateSide({ side: 'left', awayMode: true })
+    expect(schedulerMock.jm.syncMirroredSide).toHaveBeenCalledOnce()
+  })
+
+  it('does not sync when away mode is turned off or untouched, and survives a sync failure', async () => {
+    const current = { ...baseSide }
+    dbState.txRowsQueue.push([current], [current])
+    await caller.updateSide({ side: 'left', awayMode: false })
+    dbState.txRowsQueue.push([current], [current])
+    await caller.updateSide({ side: 'left', name: 'Renamed' })
+    expect(schedulerMock.jm.syncMirroredSide).not.toHaveBeenCalled()
+
+    schedulerMock.jm.syncMirroredSide.mockRejectedValueOnce(new Error('hw down'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    dbState.txRowsQueue.push([current], [{ ...current, awayMode: true }])
+    await caller.updateSide({ side: 'left', awayMode: true })
+    expect(errorSpy).toHaveBeenCalledWith('Single-sleeper mirror failed:', expect.any(Error))
+    errorSpy.mockRestore()
   })
 
   it('logs but does not fail when away-window scheduler upsert throws', async () => {

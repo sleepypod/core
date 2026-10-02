@@ -181,6 +181,31 @@ describe('production controller with migrated SQLite', () => {
     expect(db.select().from(deviceState).where(eq(deviceState.side, 'right')).get()?.targetTemperature).toBe(73)
   })
 
+  it('runs a single sleeper\'s schedule on the away side too', async () => {
+    const controller = getTemperatureController()
+    await controller.reconcile('right')
+    expect(controller.status('right').targetTemperature).toBeNull()
+    db.update(sideSettings).set({ awayMode: true }).where(eq(sideSettings.side, 'right')).run()
+    await controller.reconcile('right')
+    expect(controller.status('right')).toMatchObject({ source: 'schedule', targetTemperature: 72 })
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('right', 72)
+    vi.setSystemTime(new Date('2026-09-28T22:20:00Z'))
+    await controller.reconcile('right')
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('right', 68)
+    // The sleeper's own side is unaffected.
+    expect(controller.status('left').targetTemperature).toBe(68)
+  })
+
+  it('runs no schedule on either side when both are away', async () => {
+    db.update(sideSettings).set({ awayMode: true }).run()
+    const controller = getTemperatureController()
+    await controller.reconcile('left')
+    await controller.reconcile('right')
+    expect(controller.status('left').targetTemperature).toBeNull()
+    expect(controller.status('right').targetTemperature).toBeNull()
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+  })
+
   it('expires holds automatically through the service loop', async () => {
     await getTemperatureController().setManual('left', 76, 60_000)
     await startTemperatureController()

@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
+import { useShownSides } from '@/src/providers/SideProvider'
 import { Button, Card, CardHeader, InlineError, Skeleton, StatusDot } from '@/src/components/ds'
 import { stepPath } from '@/src/components/Schedule/CurveChart'
 import { NEUTRAL_TEMP_F, TONE_TEXT, TONE_VAR, tempTone } from '@/src/components/Schedule/scheduleFormat'
@@ -200,9 +201,11 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
   // Same hover as the Schedule chart: a line across the lanes and each side's target at that time.
   const [hover, setHover] = useState<number | null>(null)
   const { from, to } = nightAxis(night)
-  const lanes = (['left', 'right'] as const).map(side => ({ side, lane: sideLane(night.occurrences, side) }))
+  // One side away: only the sleeper's lane.
+  const lanes = useShownSides().map(side => ({ side, lane: sideLane(night.occurrences, side) }))
   const pod = podLane(night.occurrences)
-  const height = TOP + SIDE_H * 2 + POD_H + 22
+  const lanesH = SIDE_H * lanes.length
+  const height = TOP + lanesH + POD_H + 22
   const X = (t: number) => ((t - from) / (to - from)) * width
   const ticks: number[] = []
   const stepH = width > 0 && width < 520 ? 4 : 2
@@ -272,9 +275,9 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
                 next={next?.side === side && next.at >= from && next.at <= to ? next : undefined}
               />
             ))}
-            <PodMarkers jobs={pod.filter(j => j.at >= from && j.at <= to)} y={TOP + SIDE_H * 2 + POD_H / 2} X={X} />
-            <OffAxisNote jobs={pod.filter(j => j.at < from)} x={0} anchor="start" y={TOP + SIDE_H * 2 + POD_H / 2 + 18} />
-            <OffAxisNote jobs={pod.filter(j => j.at > to)} x={width} anchor="end" y={TOP + SIDE_H * 2 + POD_H / 2 + 18} />
+            <PodMarkers jobs={pod.filter(j => j.at >= from && j.at <= to)} y={TOP + lanesH + POD_H / 2} X={X} />
+            <OffAxisNote jobs={pod.filter(j => j.at < from)} x={0} anchor="start" y={TOP + lanesH + POD_H / 2 + 18} />
+            <OffAxisNote jobs={pod.filter(j => j.at > to)} x={width} anchor="end" y={TOP + lanesH + POD_H / 2 + 18} />
             {nowX != null && (
               <g data-testid="timeline-now">
                 <line x1={nowX} x2={nowX} y1={12} y2={height - 22} stroke="var(--text-1)" strokeOpacity="0.6" />

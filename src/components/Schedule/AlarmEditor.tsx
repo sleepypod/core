@@ -1,12 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, Loader2, Play, Square, Trash2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, DayPicker, InlineError, Modal, Pill, SegmentedControl, Slider, Stepper } from '@/src/components/ds'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import type { SideSelection } from '@/src/providers/SideProvider'
+import { useSingleSleeperSide, type SideSelection } from '@/src/providers/SideProvider'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
 import { formatTime12h } from '@/src/lib/scheduleTime'
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
@@ -65,6 +65,8 @@ export function AlarmEditor({
   const isEdit = existingGroup !== null
   const { unit } = useTemperatureUnit()
   const { leftName, rightName } = useSideNames()
+  // One side away: alarms go on the sleeper's side, no side picker.
+  const singleSleeperSide = useSingleSleeperSide()
   const minDisplayTemp = Math.round(setpointFToDisplay(MIN_TEMP, unit) ?? MIN_TEMP)
   const maxDisplayTemp = Math.round(setpointFToDisplay(MAX_TEMP, unit) ?? MAX_TEMP)
   const defaultDisplayTemp = Math.round(setpointFToDisplay(DEFAULT_TEMP, unit) ?? DEFAULT_TEMP)
@@ -79,9 +81,16 @@ export function AlarmEditor({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
 
-  // Reset local state when opening
+  // Load the form when it opens, or when a different alarm is passed in. Not
+  // on every new `existingGroup` object: callers rebuild it on each render
+  // (the home screen re-renders with every status update), which reset any
+  // edit in progress back to the saved values.
+  const loadedFrom = useRef<string | null>(null)
   useEffect(() => {
-    if (!open) return
+    const source = !open ? null : existingGroup ? `edit:${existingGroup.ids.join(',')}` : 'new'
+    if (source === loadedFrom.current) return
+    loadedFrom.current = source
+    if (source === null) return
     /* eslint-disable react-hooks/set-state-in-effect */
     if (existingGroup) {
       setDays(new Set(existingGroup.days))
@@ -112,7 +121,10 @@ export function AlarmEditor({
   const utils = trpc.useUtils()
 
   const isMutating = batchUpdate.isPending
-  const sides = useMemo<Side[]>(() => (targetSide === 'both' ? ['left', 'right'] : [targetSide]), [targetSide])
+  const sides = useMemo<Side[]>(
+    () => (singleSleeperSide ? [singleSleeperSide] : targetSide === 'both' ? ['left', 'right'] : [targetSide]),
+    [singleSleeperSide, targetSide],
+  )
 
   const handleTest = useCallback(async () => {
     try {
@@ -220,17 +232,19 @@ export function AlarmEditor({
             />
           </span>
         </label>
-        <SegmentedControl
-          className="ml-auto"
-          ariaLabel="Alarm side"
-          value={targetSide}
-          onChange={setTargetSide}
-          options={[
-            { value: 'left', label: leftName },
-            { value: 'right', label: rightName },
-            { value: 'both', label: 'Both' },
-          ]}
-        />
+        {!singleSleeperSide && (
+          <SegmentedControl
+            className="ml-auto"
+            ariaLabel="Alarm side"
+            value={targetSide}
+            onChange={setTargetSide}
+            options={[
+              { value: 'left', label: leftName },
+              { value: 'right', label: rightName },
+              { value: 'both', label: 'Both' },
+            ]}
+          />
+        )}
       </div>
 
       <div className="flex flex-col gap-2.5">

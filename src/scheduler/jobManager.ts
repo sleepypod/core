@@ -21,6 +21,7 @@ import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { timeToDate, nowInTimezone } from './timeUtils'
+import { mirrorSideFor, singleSleeperSideFor } from '@/src/lib/singleSleeper'
 
 const HEARTBEAT_INTERVAL_MS_DEFAULT = 60_000
 const HEARTBEAT_STALE_MS_DEFAULT = 90_000
@@ -68,6 +69,51 @@ export class JobManager {
       .where(eq(deviceState.side, side))
       .limit(1)
     return row?.isPowered ?? false
+  }
+
+  /**
+   * Sides a schedule row on `side` drives: its own, plus the away side of a
+   * single-sleeper bed, which mirrors the sleeper's power (its temperature
+   * follows through the controller's baseline).
+   */
+  private async drivenSides(side: 'left' | 'right'): Promise<Array<'left' | 'right'>> {
+    try {
+      const rows = await db.select({ side: sideSettings.side, awayMode: sideSettings.awayMode }).from(sideSettings)
+      const mirror = mirrorSideFor(side, Object.fromEntries(rows.map(r => [r.side, { awayMode: r.awayMode }])))
+      return mirror ? [side, mirror] : [side]
+    }
+    catch (e) {
+      console.warn(`[jobManager] could not read away mode for ${side}:`, e instanceof Error ? e.message : e)
+      return [side]
+    }
+  }
+
+  /**
+   * One side just went away with the other still home: the away side now
+   * mirrors the sleeper, so bring its power in line (on at the sleeper's
+   * current target, or off). No-op unless exactly one side is away.
+   */
+  async syncMirroredSide(): Promise<void> {
+    const rows = await db.select({ side: sideSettings.side, awayMode: sideSettings.awayMode }).from(sideSettings)
+    const single = singleSleeperSideFor(Object.fromEntries(rows.map(r => [r.side, { awayMode: r.awayMode }])))
+    if (!single) return
+    const away = single === 'left' ? 'right' : 'left'
+    if (!(await this.isSidePowered(single))) {
+      await this.powerOffForSchedule(away)
+      return
+    }
+    const [home] = await db.select({ target: deviceState.targetTemperature }).from(deviceState).where(eq(deviceState.side, single)).limit(1)
+    await withSideLock(away, async () => {
+      if (pumpStallShouldBlock(away)) {
+        console.warn(`[jobManager] single-sleeper mirror: pump stall guard blocks ${away}`)
+        return
+      }
+      markSideMutated(away)
+      const client = getSharedHardwareClient()
+      await client.connect()
+      await getTemperatureController().powerOnLocked(away, home?.target ?? 75)
+      cancelAutoOffTimer(away)
+    })
   }
 
   /**
@@ -349,20 +395,24 @@ export class JobManager {
   }
 
   async runPowerOnJob(sched: typeof powerSchedules.$inferSelect): Promise<void> {
-    if (await this.hasActiveRunOnceSession(sched.side)) {
-      console.log(`Skipping recurring power-on job — run-once session active for ${sched.side}`)
+    for (const side of await this.drivenSides(sched.side)) await this.powerOnForSchedule(side, sched)
+  }
+
+  private async powerOnForSchedule(side: 'left' | 'right', sched: typeof powerSchedules.$inferSelect): Promise<void> {
+    if (await this.hasActiveRunOnceSession(side)) {
+      console.log(`Skipping recurring power-on job — run-once session active for ${side}`)
       return
     }
-    await withSideLock(sched.side, async () => {
-      if (pumpStallShouldBlock(sched.side)) {
-        console.warn(`[jobManager] skipped power-on power-on-${sched.id}: pump stall guard blocks ${sched.side}`)
+    await withSideLock(side, async () => {
+      if (pumpStallShouldBlock(side)) {
+        console.warn(`[jobManager] skipped power-on power-on-${sched.id}: pump stall guard blocks ${side}`)
         return
       }
-      markSideMutated(sched.side)
+      markSideMutated(side)
       const client = getSharedHardwareClient()
       await client.connect()
-      await getTemperatureController().powerOnLocked(sched.side, sched.onTemperature ?? 75)
-      cancelAutoOffTimer(sched.side)
+      await getTemperatureController().powerOnLocked(side, sched.onTemperature ?? 75)
+      cancelAutoOffTimer(side)
     })
   }
 
@@ -383,19 +433,23 @@ export class JobManager {
   }
 
   async runPowerOffJob(sched: typeof powerSchedules.$inferSelect): Promise<void> {
-    if (await this.hasActiveRunOnceSession(sched.side)) {
-      console.log(`Skipping recurring power-off job — run-once session active for ${sched.side}`)
+    for (const side of await this.drivenSides(sched.side)) await this.powerOffForSchedule(side)
+  }
+
+  private async powerOffForSchedule(side: 'left' | 'right'): Promise<void> {
+    if (await this.hasActiveRunOnceSession(side)) {
+      console.log(`Skipping recurring power-off job — run-once session active for ${side}`)
       return
     }
-    await withSideLock(sched.side, async () => {
+    await withSideLock(side, async () => {
       // Mark off in DB BEFORE hardware so any temp/alarm job that acquires
       // the side lock after this one observes isPowered=false and skips its
       // setTemperature command.
-      await this.markSideOff(sched.side)
+      await this.markSideOff(side)
       const client = getSharedHardwareClient()
       await client.connect()
-      await getTemperatureController().powerOffLocked(sched.side)
-      broadcastMutationStatus(sched.side, { targetLevel: 0 })
+      await getTemperatureController().powerOffLocked(side)
+      broadcastMutationStatus(side, { targetLevel: 0 })
     })
   }
 
@@ -626,6 +680,11 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
+            // The other side still home: this side now mirrors that sleeper.
+            if (await this.drivenSides(side === 'left' ? 'right' : 'left').then(s => s.includes(side))) {
+              await this.syncMirroredSide().catch(e => console.warn(`[awayMode] Failed to mirror ${side}:`, e))
+              return
+            }
             // Power off the side — under the side lock, marking it off in
             // the DB first so temp/alarm jobs queued behind this one observe
             // isPowered=false and skip (same protocol as runPowerOffJob).

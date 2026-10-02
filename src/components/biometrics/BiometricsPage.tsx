@@ -19,6 +19,7 @@ import { useNowMinute } from '@/src/components/Schedule/CurveChart'
 import { DiagTable, type DiagColumn } from '@/src/components/diagnostics/DiagTable'
 import { fmtNum } from '@/src/components/diagnostics/diagnosticsLogic'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
+import { useShownSides } from '@/src/providers/SideProvider'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { OccupancyCheck } from '@/src/components/diagnostics/OccupancyCheck'
 import { RawDataButton } from './RawDataButton'
@@ -262,10 +263,12 @@ interface OccupancyLike {
 }
 
 function SidesCard({ occupancy, sideName }: { occupancy: Record<Side, OccupancyLike> | undefined, sideName: (s: Side) => string }) {
+  // One side away: the sleeper's side only.
+  const shown = useShownSides()
   return (
     <div className="@container rounded-card border border-line bg-surface" data-testid="sides-card">
-      <div className="grid @min-[640px]:grid-cols-2">
-        {(['left', 'right'] as const).map((sd, i) => {
+      <div className={cn('grid', shown.length > 1 && '@min-[640px]:grid-cols-2')}>
+        {shown.map((sd, i) => {
           const o = occupancy?.[sd]
           return (
             <div key={sd} className={cn('flex flex-col gap-3.5 px-[18px] py-4 min-[900px]:px-6', i === 1 && 'border-t border-line @min-[640px]:border-t-0 @min-[640px]:border-l')}>

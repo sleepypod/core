@@ -149,6 +149,7 @@ describe('health.thermal verdicts', () => {
     const res = await caller.thermal({})
     const left = res.sides[0]
     expect(left.verdict).toBe('stalled')
+    expect(res.reportsPumpSpeed).toBe(true)
     expect(left.note).toContain('TEC')
   })
 
@@ -161,6 +162,7 @@ describe('health.thermal verdicts', () => {
     rows.flow = []
     const res = await caller.thermal({})
     expect(res.sides.map(s => s.verdict)).toEqual(['unknown', 'unknown'])
+    expect(res.reportsPumpSpeed).toBe(false)
     expect(res.sides[0].pumpRpm).toBeNull()
     expect(res.sides[0].note).toContain('does not report pump speed')
   })
@@ -307,8 +309,10 @@ describe('health.maintenance', () => {
   it('reports the guard, daily prime and last recorded prime', async () => {
     rows.settings = [{ pumpStall: false, primePodDaily: true, primePodTime: '14:00' }]
     rows.prime = [{ ts: new Date(5_000) }]
+    rows.flow = [{ ts: new Date(4_000) }]
     expect(await caller.maintenance({})).toEqual({
       pumpStallProtectionEnabled: false,
+      reportsPumpSpeed: true,
       primePodDaily: true,
       primePodTime: '14:00',
       lastPrimeAt: 5_000,
@@ -318,8 +322,10 @@ describe('health.maintenance', () => {
 
   it('falls back when nothing is stored', async () => {
     rows.settings = []
+    rows.flow = []
     expect(await caller.maintenance({})).toEqual({
       pumpStallProtectionEnabled: false,
+      reportsPumpSpeed: false,
       primePodDaily: false,
       primePodTime: null,
       lastPrimeAt: null,

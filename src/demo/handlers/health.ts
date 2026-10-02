@@ -182,6 +182,7 @@ function thermalNow(): RouterOutputs['health']['thermal'] {
   const status = getDemoDeviceStatus('F')
   return {
     pumpStallProtectionEnabled: true,
+    reportsPumpSpeed: true,
     heatsinkTempF: 83.4,
     ambientTempF: AMBIENT_F,
     sides: SIDES.map((side) => {
@@ -412,6 +413,7 @@ export const health: DemoHandlers<'health'> = {
     const lastPrime = today.getTime() <= Date.now() ? today.getTime() + 6 * MINUTE : today.getTime() - DAY + 6 * MINUTE
     return {
       pumpStallProtectionEnabled: true,
+      reportsPumpSpeed: true,
       primePodDaily: true,
       primePodTime: PRIME_TIME,
       lastPrimeAt: lastPrime,

@@ -36,7 +36,11 @@ interface EditingCurve {
  * in the context column. Creating/editing a curve swaps in `CurveEditor`.
  */
 export function SchedulePage() {
-  const { primarySide: side, selectedSide, selectSide } = useSide()
+  // One side away: the page is that sleeper's schedule (the away side follows
+  // it on the pod) and the switch is hidden.
+  const { primarySide, selectedSide: chosenSide, selectSide, singleSleeperSide } = useSide()
+  const side = singleSleeperSide ?? primarySide
+  const selectedSide = singleSleeperSide ?? chosenSide
   const {
     confirmMessage,
     isPowerEnabled,
@@ -180,11 +184,13 @@ export function SchedulePage() {
     <>
       <PageHeader
         title="Schedule"
-        middle={(
-          <div className="hidden min-[900px]:block">
-            <SegmentedControl ariaLabel="Side" options={sideOptions} value={selectedSide} onChange={selectSide} />
-          </div>
-        )}
+        middle={singleSleeperSide
+          ? undefined
+          : (
+              <div className="hidden min-[900px]:block">
+                <SegmentedControl ariaLabel="Side" options={sideOptions} value={selectedSide} onChange={selectSide} />
+              </div>
+            )}
         right={(
           <>
             <ScheduleToggle
@@ -199,14 +205,16 @@ export function SchedulePage() {
         )}
       />
 
-      <SegmentedControl
-        full
-        ariaLabel="Side"
-        className="min-[900px]:hidden"
-        options={sideOptions}
-        value={selectedSide}
-        onChange={selectSide}
-      />
+      {!singleSleeperSide && (
+        <SegmentedControl
+          full
+          ariaLabel="Side"
+          className="min-[900px]:hidden"
+          options={sideOptions}
+          value={selectedSide}
+          onChange={selectSide}
+        />
+      )}
 
       <SchedulerConfirmation
         message={confirmMessage}
