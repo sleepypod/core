@@ -35,6 +35,11 @@ _spec = importlib.util.spec_from_file_location(
     "common.side_mode", Path(__file__).resolve().parent.parent / "common" / "side_mode.py")
 _stubs["common.side_mode"] = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_stubs["common.side_mode"])
+# common.bed_presence is stdlib-only too: real module for the presence gate.
+_spec = importlib.util.spec_from_file_location(
+    "common.bed_presence", Path(__file__).resolve().parent.parent / "common" / "bed_presence.py")
+_stubs["common.bed_presence"] = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_stubs["common.bed_presence"])
 sys.modules.update(_stubs)
 
 from main import (  # noqa: E402
@@ -1579,3 +1584,40 @@ def test_main_flushes_pending_vitals_during_idle_poll(monkeypatch, tmp_path, pum
 
     monkeypatch.setattr(main, "create_follower", lambda *a, **kw: IdleFollower())
     main.main()
+
+
+class TestBedPresenceGate:
+    """Piezo presence passes on bed vibration with nobody there (a prime, the
+    pump); the sleep-detector's capacitance presence vetoes it."""
+
+    def _run(self, occupied):
+        import main
+        conn = TestWriteVitalsResilience()._make_db()
+        proc = main.SideProcessor("left", main.DBHolder(conn))
+        seen = []
+        proc.sink = lambda cand: seen.append(cand) or True
+        if occupied != "unset":
+            proc.bed_occupied = lambda: occupied
+        signal = make_bcg_signal(60, 70)
+        with patch("main.time.time", return_value=1_000_000.0):
+            proc._presence.update = lambda *a, **kw: True
+            proc.ingest(signal)
+        return proc, seen
+
+    def test_no_vitals_when_the_bed_reads_empty(self):
+        proc, seen = self._run(False)
+        assert seen == []
+        # Same bookkeeping as piezo absence: no burst on the next ingest.
+        assert proc._last_write == 1_000_000.0
+
+    def test_vitals_when_the_bed_reads_occupied(self):
+        _, seen = self._run(True)
+        assert len(seen) == 1
+
+    def test_unknown_bed_presence_leaves_piezo_presence_alone(self):
+        _, seen = self._run(None)
+        assert len(seen) == 1
+
+    def test_no_gate_configured(self):
+        _, seen = self._run("unset")
+        assert len(seen) == 1

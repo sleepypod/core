@@ -194,6 +194,10 @@ When exactly one side is in away mode, both sides' vitals go through `SingleSlee
 
 Pending single-sleeper rows expire on the reader thread even when RAW/NATS input is idle or pump gating skips records. A failed write retains the completed interval separately from candidates awaiting a partner; it must commit before another candidate is accepted, so later intervals cannot replace it. Pending rows remain in memory and do not survive a process crash.
 
+### Bed Presence Veto
+
+Piezo presence only sees vibration energy and rhythm, so strong bed vibration with nobody there (a prime, the pump on pods that don't report pump speed) passes it and produced vitals for an empty bed. Before computing vitals, a side also asks the sleep-detector, which commits presence from the capacitance sensors and saves it to `sleep-detector-state.json` (`common/bed_presence.py`). If that says the side is empty, the window is treated as absent. With one side away it asks about the home side, where the readings are stored. If the state file is missing, unreadable or more than five minutes old, presence is unknown and piezo presence stands alone.
+
 ## 6. Heart Rate Extraction
 
 ### Bandpass: 0.8-8.5 Hz

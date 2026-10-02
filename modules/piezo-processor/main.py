@@ -46,6 +46,7 @@ import cbor2
 from common.nats_follower import create_follower
 from common.dialect import KNOWN_RECORD_TYPES, warn_unknown_type_once
 from common.side_mode import SingleSleeperMode
+from common.bed_presence import BedPresence
 import numpy as np
 from scipy.signal import butter, sosfiltfilt, hilbert, find_peaks
 
@@ -56,6 +57,9 @@ from scipy.signal import butter, sosfiltfilt, hilbert, find_peaks
 RAW_DATA_DIR = Path(os.environ.get("RAW_DATA_DIR", "/persistent"))
 BIOMETRICS_DB = Path(os.environ.get("BIOMETRICS_DATABASE_URL", "file:/persistent/sleepypod-data/biometrics.db").replace("file:", ""))
 SLEEPYPOD_DB = Path(os.environ.get("DATABASE_URL", "file:/persistent/sleepypod-data/sleepypod.db").replace("file:", ""))
+# The sleep-detector's saved state: its committed per-side presence.
+SLEEP_DETECTOR_STATE = Path(os.environ.get(
+    "SLEEP_DETECTOR_STATE_PATH", str(BIOMETRICS_DB.parent / "sleep-detector-state.json")))
 
 SAMPLE_RATE = 500          # Hz — piezo sensor sample rate
 VITALS_INTERVAL_S = 60     # write a vitals row every N seconds
@@ -921,6 +925,9 @@ class SideProcessor:
         # Where computed vitals go; None writes them under this side.
         # main() routes both sides through SingleSleeperVitals.submit.
         self.sink: Optional[Callable[[VitalsCandidate], bool]] = None
+        # The bed's own answer to "is anyone here" (sleep-detector presence):
+        # False vetoes piezo presence, None (unknown) leaves it alone.
+        self.bed_occupied: Optional[Callable[[], Optional[bool]]] = None
 
     def ingest(self, samples: np.ndarray) -> None:
         self._hr_buf.extend(samples)
@@ -991,6 +998,11 @@ class SideProcessor:
                     return
 
         present = self._presence.update(med_std, acr_qual)
+        # Piezo presence is vibration energy and rhythm; a prime or the pump
+        # shaking an empty bed passes it. Trust the capacitance-based
+        # presence when the sleep-detector says nobody is there.
+        if present and self.bed_occupied is not None and self.bed_occupied() is False:
+            present = False
 
         if not present:
             # Reset the interval cursor so a return from extended absence
@@ -1093,8 +1105,14 @@ def main() -> None:
     right._other = left
     # One side in away mode: a single sleeper — the away side's readings
     # (rolled over, leg across) are merged into the home side's series.
-    vitals_router = SingleSleeperVitals(db_holder, SingleSleeperMode(SLEEPYPOD_DB))
+    bed_mode = SingleSleeperMode(SLEEPYPOD_DB)
+    vitals_router = SingleSleeperVitals(db_holder, bed_mode)
     left.sink = right.sink = vitals_router.submit
+    # Vitals only while the bed reads occupied — on the side they're stored
+    # under, which is the home side with one side away.
+    bed = BedPresence(SLEEP_DETECTOR_STATE)
+    left.bed_occupied = lambda: bed.occupied(bed_mode.home_side() or "left")
+    right.bed_occupied = lambda: bed.occupied(bed_mode.home_side() or "right")
     # Source selected once at startup: NatsFollower on new-firmware pods (NATS
     # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
     follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
