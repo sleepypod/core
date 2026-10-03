@@ -26,6 +26,19 @@ const fsPromisesMock = vi.hoisted(() => ({
   readFile: vi.fn(async () => ''),
   writeFile: vi.fn(async () => undefined),
   mkdir: vi.fn(async () => undefined),
+  stat: vi.fn(async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }),
+}))
+
+// getSensorSource reads the stream's startup pick + frame times in-process.
+const sensorMock = vi.hoisted(() => ({
+  frameTimes: {} as Record<string, number>,
+  perf: { sensorSource: 'pending' as 'pending' | 'raw' | 'nats', firstFrameMs: null as number | null, uptimeSeconds: 12 },
+}))
+vi.mock('@/src/streaming/piezoStream', () => ({
+  getSensorFrameTimes: () => sensorMock.frameTimes,
+}))
+vi.mock('@/src/lib/serverPerformance', () => ({
+  getServerPerformance: () => sensorMock.perf,
 }))
 
 const fsSyncMock = vi.hoisted(() => ({
@@ -57,6 +70,11 @@ beforeEach(() => {
   fsPromisesMock.readFile.mockReset().mockResolvedValue('')
   fsPromisesMock.writeFile.mockReset().mockResolvedValue(undefined)
   fsPromisesMock.mkdir.mockReset().mockResolvedValue(undefined)
+  fsPromisesMock.stat.mockReset().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+  sensorMock.frameTimes = {}
+  sensorMock.perf = { sensorSource: 'pending', firstFrameMs: null, uptimeSeconds: 12 }
+  delete process.env.PIEZO_SENSOR_SOURCE
+  delete process.env.PIEZO_NATS_DISABLED
 })
 
 // Helper: queue execFile responses by command-name match
@@ -836,5 +854,119 @@ describe('system.getStorageBreakdown — exact commands', () => {
       biometricsTmpfs: { totalBytes: 200, usedBytes: 50, availableBytes: 150, usedPercent: 25 },
       biometricsArchive: { usedBytes: 4321, fileCount: 1 },
     })
+  })
+})
+
+describe('system.getSensorSource', () => {
+  const enoent = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })
+  const exit = (code: number) => Object.assign(new Error(`exit ${code}`), { code })
+
+  /** Route execFile by (file, args) → stdout string, Error, or undefined for "exit 0, no output". */
+  function routeExec(route: (file: string, args: string[]) => string | Error | undefined) {
+    execMock.execFile.mockImplementation((...allArgs: unknown[]) => {
+      const file = allArgs[0] as string
+      const args = (allArgs[1] as string[]) ?? []
+      const cb = allArgs[allArgs.length - 1] as (e: unknown, o: { stdout: string }) => void
+      const out = route(file, args)
+      if (out instanceof Error) cb(out, { stdout: '' })
+      else cb(null, { stdout: out ?? '' })
+    })
+  }
+
+  it('reports a dev box: every probe unavailable, pick pending, no frames', async () => {
+    routeExec(() => enoent)
+    fsPromisesMock.readFile.mockRejectedValue(enoent)
+
+    const r = await caller.getSensorSource({})
+    expect(r.firmware.probed).toBe(false)
+    expect(r.firmware.generation).toBe('raw-filesystem')
+    expect(r.firmware.signals).toEqual({
+      natsUnitInstalled: null,
+      natsServerActive: null,
+      jetstreamDirPresent: false,
+      biometricsTmpfsMounted: null,
+      frankShimRoutesTmpfs: false,
+      frankServiceRoutesTmpfs: null,
+    })
+    expect(r.stream).toEqual({
+      source: 'pending',
+      override: null,
+      legacyNatsDisabled: false,
+      lastFrameAtMs: null,
+      lastFrameAgeMs: null,
+      lastFrameType: null,
+      firstFrameMs: null,
+      uptimeSeconds: 12,
+    })
+  })
+
+  it('classifies a NATS pod and picks the newest frame across types', async () => {
+    routeExec((file, args) => {
+      if (file === 'systemctl' && args[0] === 'show') return 'loaded\n'
+      if (file === 'systemctl' && args[0] === 'is-active') return undefined
+      if (file === 'systemctl' && args[0] === 'cat') return exit(1)
+      if (file === 'mountpoint') return exit(1)
+      return enoent
+    })
+    fsPromisesMock.stat.mockResolvedValue({ isDirectory: () => true } as never)
+    fsPromisesMock.readFile.mockRejectedValue(enoent)
+    sensorMock.perf = { sensorSource: 'nats', firstFrameMs: 1800, uptimeSeconds: 900 }
+    sensorMock.frameTimes = { 'piezo-dual': 1_000, 'capSense': 5_000, 'bedTemp': 3_000 }
+
+    const r = await caller.getSensorSource({})
+    expect(r.firmware.generation).toBe('nats')
+    expect(r.firmware.expectedTransport).toBe('nats')
+    expect(r.firmware.label).toBe('NATS JetStream')
+    expect(r.firmware.probed).toBe(true)
+    expect(r.firmware.signals).toMatchObject({ natsUnitInstalled: true, natsServerActive: true, jetstreamDirPresent: true, biometricsTmpfsMounted: false })
+    expect(r.stream).toMatchObject({ source: 'nats', lastFrameAtMs: 5_000, lastFrameType: 'capSense', firstFrameMs: 1800 })
+    expect(r.stream.lastFrameAgeMs).toBeGreaterThan(0)
+  })
+
+  it('classifies the old frank.sh shim pod and surfaces the env override', async () => {
+    routeExec((file, args) => {
+      if (file === 'systemctl' && args[0] === 'show') return 'not-found\n'
+      if (file === 'systemctl' && args[0] === 'is-active') return exit(3)
+      if (file === 'systemctl' && args[0] === 'cat') return '[Service]\nExecStart=/opt/eight/bin/frank.sh\n'
+      if (file === 'mountpoint') return undefined
+      return enoent
+    })
+    fsPromisesMock.readFile.mockResolvedValue('#!/bin/sh\ncd /persistent/biometrics\nexec frank\n')
+    sensorMock.perf = { sensorSource: 'raw', firstFrameMs: 400, uptimeSeconds: 60 }
+    process.env.PIEZO_SENSOR_SOURCE = 'raw'
+    process.env.PIEZO_NATS_DISABLED = '1'
+
+    const r = await caller.getSensorSource({})
+    expect(r.firmware.generation).toBe('raw-tmpfs-shim')
+    expect(r.firmware.signals).toMatchObject({ natsUnitInstalled: false, natsServerActive: false, jetstreamDirPresent: false, biometricsTmpfsMounted: true, frankShimRoutesTmpfs: true, frankServiceRoutesTmpfs: false })
+    expect(r.stream.override).toBe('raw')
+    expect(r.stream.legacyNatsDisabled).toBe(true)
+  })
+
+  it('classifies the mid-era frank.service drop-in and ignores an invalid override', async () => {
+    routeExec((file, args) => {
+      if (file === 'systemctl' && args[0] === 'show') return 'not-found\n'
+      if (file === 'systemctl' && args[0] === 'is-active') return exit(3)
+      if (file === 'systemctl' && args[0] === 'cat') return '[Service]\nWorkingDirectory=/persistent/biometrics\n'
+      if (file === 'mountpoint') return undefined
+      return enoent
+    })
+    fsPromisesMock.readFile.mockResolvedValue('#!/bin/sh\nexec frank\n')
+    process.env.PIEZO_SENSOR_SOURCE = 'bogus'
+
+    const r = await caller.getSensorSource({})
+    expect(r.firmware.generation).toBe('raw-tmpfs-service')
+    expect(r.stream.override).toBeNull()
+  })
+
+  it('treats a non-ENOENT stat failure as an unavailable probe', async () => {
+    routeExec(() => exit(1))
+    fsPromisesMock.stat.mockRejectedValue(Object.assign(new Error('EACCES'), { code: 'EACCES' }))
+    fsPromisesMock.readFile.mockRejectedValue(Object.assign(new Error('EACCES'), { code: 'EACCES' }))
+
+    const r = await caller.getSensorSource({})
+    expect(r.firmware.signals.jetstreamDirPresent).toBeNull()
+    expect(r.firmware.signals.frankShimRoutesTmpfs).toBeNull()
+    expect(r.firmware.generation).toBe('raw-filesystem')
   })
 })

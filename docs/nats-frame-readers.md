@@ -186,6 +186,52 @@ else:
   source.
 - The two sources never run concurrently in one process (duplicate-row risk).
 
+## Surfacing the selection in the app
+
+A fleet spans all three firmware generations at once, and the first question
+in every "biometrics are empty" thread is *which pipeline is this pod on, and
+is data flowing?* Until now the only answer was `sp-status` over SSH. Two
+in-app surfaces answer it without a shell:
+
+- **Settings → Device → Sensor data source** (`SensorSourceCard`, backed by
+  `system.getSensorSource`). Read-only. Shows the firmware generation, the
+  transport the core's stream picked at startup, and the age of the last live
+  frame, with a note when the two disagree or an env override is in force.
+- **System → Health** (`health.dataPath`) already renders the `frames` node as
+  `NATS · 3s ago` / `RAW · …`. The card reuses the same freshness thresholds
+  so the two never disagree about whether data is flowing.
+
+### Firmware classification
+
+`src/lib/firmwareGeneration.ts::classifyFirmware` is a pure function over the
+same signals `sp-status` prints, in the same order, so the card and the shell
+diagnostic agree:
+
+| Generation | Rule | sp-status line |
+|---|---|---|
+| `nats` | NATS unit loaded/masked **or** `/persistent/jetstream` exists **or** nats-server active | `NATS JetStream (new firmware, April 2026+)` |
+| `raw-tmpfs-shim` | tmpfs mounted and `frank.sh` contains `cd /persistent/biometrics` | `tmpfs *.RAW via patched frank.sh shim` |
+| `raw-tmpfs-service` | tmpfs mounted and `frank.service` has `WorkingDirectory=/persistent/biometrics` | `tmpfs *.RAW via frank.service WorkingDirectory` |
+| `raw-tmpfs-unverified` | tmpfs mounted, neither writer routing seen | `tmpfs mounted … (writer routing unverified)` |
+| `raw-filesystem` | nothing above | `filesystem *.RAW (tmpfs not mounted; legacy/mid-era firmware)` |
+
+NATS is decided on *installation identity*, not liveness — the same rule as
+`discoverSensorSource` — so a server that is restarting at the moment of the
+query does not flip the label. Each probe is tri-state: `true`/`false` when it
+ran, `null` when the tool itself is missing (no systemd → dev box). The card
+shows "Not running on a pod" when no systemd probe could run.
+
+### What the card deliberately does not do
+
+- **No toggle.** Source selection happens once per process and the two
+  sources are designed never to run together, so a UI switch would need a
+  service restart to take effect and would invite forcing the wrong path. The
+  existing `PIEZO_SENSOR_SOURCE=raw|nats` env override covers custom firmware;
+  the card names it when set.
+- **No per-module view.** The Python readers each run the same selector in
+  their own process. Their liveness is already on System → Health per unit;
+  their individual source pick is in their journals.
+
 ## `NatsFollower` design
 
 New file: `modules/common/nats_follower.py`. Interface-compatible with
@@ -258,7 +304,13 @@ observed status. v1 records status two ways:
 ## Backfill (explicitly out of scope for v1)
 
 The `raw` JetStream stream exists and retains messages
-(`/persistent/jetstream`, consumed by firmware's `jetstream-uploader`). A
+(`/persistent/jetstream`, consumed by firmware's `jetstream-uploader`).
+Observed retention is 1 day or 6 GB, whichever comes first (free-sleep
+PR 57, measured on a Pod 3 — so this firmware is not Pod 5-only). That same
+PR shows an ephemeral JetStream consumer with `DeliverPolicy.BY_START_TIME`
+answering a bounded historical window on this firmware, which is the
+natural replacement for the calibrator's live-only buffer: a 6 h fetch at
+startup instead of waiting for a 300-record window to accrue. A
 durable JetStream consumer could give every reader deterministic restart
 backfill beyond the current RAW file. v1 uses core subscribe to keep the live
 path small and avoid:

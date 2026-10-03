@@ -4,11 +4,63 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { execFile } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { getStorageReport, runStorageCleanup } from '@/src/lib/podStorage'
+import {
+  classifyFirmware,
+  expectedTransport,
+  FIRMWARE_LABELS,
+  firmwareProbed,
+  type FirmwareSignals,
+} from '@/src/lib/firmwareGeneration'
+import { getServerPerformance } from '@/src/lib/serverPerformance'
+import { getSensorFrameTimes } from '@/src/streaming/piezoStream'
 
 const execFileAsync = promisify(execFile)
+
+/**
+ * Probe the pod's firmware footprint for `getSensorSource`. Each probe maps a
+ * missing tool (ENOENT — dev box, no systemd) to `null` and any other failure
+ * to `false`, so the classifier can tell "not a pod" from "not that variant".
+ */
+async function collectFirmwareSignals(): Promise<FirmwareSignals> {
+  const isEnoent = (err: unknown) => (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+  const exec = async (file: string, args: string[]): Promise<string | null | false> => {
+    try {
+      const { stdout } = await execFileAsync(file, args, { timeout: 3000 })
+      return stdout
+    }
+    catch (err) {
+      return isEnoent(err) ? null : false
+    }
+  }
+  const tri = (out: string | null | false, test: (s: string) => boolean): boolean | null =>
+    out === null ? null : out === false ? false : test(out)
+
+  const [loadState, active, jetstream, mounted, frankSh, frankUnit] = await Promise.all([
+    exec('systemctl', ['show', 'nats-server.service', '--property=LoadState', '--value']),
+    exec('systemctl', ['is-active', '--quiet', 'nats-server.service']),
+    stat('/persistent/jetstream').then(s => s.isDirectory()).catch((err: unknown) => (isEnoent(err) ? false : null)),
+    exec('mountpoint', ['-q', '/persistent/biometrics']),
+    readFile('/opt/eight/bin/frank.sh', 'utf-8').catch((err: unknown) => (isEnoent(err) ? false as const : null)),
+    exec('systemctl', ['cat', 'frank.service']),
+  ])
+
+  return {
+    natsUnitInstalled: tri(loadState, (s) => {
+      const v = s.trim()
+      return v === 'loaded' || v === 'masked'
+    }),
+    natsServerActive: tri(active, () => true),
+    jetstreamDirPresent: jetstream,
+    biometricsTmpfsMounted: tri(mounted, () => true),
+    frankShimRoutesTmpfs: tri(frankSh, s => s.includes('cd /persistent/biometrics')),
+    frankServiceRoutesTmpfs: tri(frankUnit, s => /^WorkingDirectory=\/persistent\/biometrics$/m.test(s)),
+  }
+}
+
+const SENSOR_TRANSPORT_OVERRIDES = ['raw', 'nats'] as const
 
 /**
  * Resolve an executable path, checking common locations on Yocto and Debian.
@@ -611,6 +663,87 @@ export const systemRouter = router({
       }
       catch {
         return fallback
+      }
+    }),
+
+  /**
+   * Which sensor-frame transport this pod's firmware provides, and which one
+   * the core's stream actually selected at startup. Read-only: selection
+   * happens once per process (see `docs/nats-frame-readers.md`), so this
+   * exists to make the choice visible in Settings → Device without a shell.
+   */
+  getSensorSource: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/sensor-source', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      firmware: z.object({
+        generation: z.enum(['nats', 'raw-tmpfs-shim', 'raw-tmpfs-service', 'raw-tmpfs-unverified', 'raw-filesystem']),
+        label: z.string(),
+        detail: z.string(),
+        expectedTransport: z.enum(['nats', 'raw']),
+        /** False on a dev box where no systemd probe could run. */
+        probed: z.boolean(),
+        signals: z.object({
+          natsUnitInstalled: z.boolean().nullable(),
+          natsServerActive: z.boolean().nullable(),
+          jetstreamDirPresent: z.boolean().nullable(),
+          biometricsTmpfsMounted: z.boolean().nullable(),
+          frankShimRoutesTmpfs: z.boolean().nullable(),
+          frankServiceRoutesTmpfs: z.boolean().nullable(),
+        }),
+      }),
+      stream: z.object({
+        /** `pending` until the startup probe settles on a source. */
+        source: z.enum(['pending', 'raw', 'nats']),
+        /** PIEZO_SENSOR_SOURCE when set to a valid value, else null. */
+        override: z.enum(SENSOR_TRANSPORT_OVERRIDES).nullable(),
+        /** PIEZO_NATS_DISABLED=1 — the legacy RAW-only escape hatch. */
+        legacyNatsDisabled: z.boolean(),
+        lastFrameAtMs: z.number().nullable(),
+        /** Server-side age so the client never needs its own clock. */
+        lastFrameAgeMs: z.number().nullable(),
+        lastFrameType: z.string().nullable(),
+        firstFrameMs: z.number().nullable(),
+        uptimeSeconds: z.number(),
+      }),
+    }))
+    .query(async () => {
+      const signals = await collectFirmwareSignals()
+      const generation = classifyFirmware(signals)
+      const perf = getServerPerformance()
+
+      let lastFrameAtMs: number | null = null
+      let lastFrameType: string | null = null
+      for (const [type, at] of Object.entries(getSensorFrameTimes())) {
+        if (lastFrameAtMs === null || at > lastFrameAtMs) {
+          lastFrameAtMs = at
+          lastFrameType = type
+        }
+      }
+
+      const rawOverride = process.env.PIEZO_SENSOR_SOURCE
+      const override = (SENSOR_TRANSPORT_OVERRIDES as readonly string[]).includes(rawOverride ?? '')
+        ? rawOverride as typeof SENSOR_TRANSPORT_OVERRIDES[number]
+        : null
+
+      return {
+        firmware: {
+          generation,
+          ...FIRMWARE_LABELS[generation],
+          expectedTransport: expectedTransport(generation),
+          probed: firmwareProbed(signals),
+          signals,
+        },
+        stream: {
+          source: perf.sensorSource,
+          override,
+          legacyNatsDisabled: process.env.PIEZO_NATS_DISABLED === '1',
+          lastFrameAtMs,
+          lastFrameAgeMs: lastFrameAtMs === null ? null : Math.max(0, Date.now() - lastFrameAtMs),
+          lastFrameType,
+          firstFrameMs: perf.firstFrameMs,
+          uptimeSeconds: perf.uptimeSeconds,
+        },
       }
     }),
 })

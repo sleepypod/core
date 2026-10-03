@@ -15,6 +15,7 @@ import { DOCS_URL } from '@/src/components/AppShell/navItems'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
+import { SensorSourceCard } from './SensorSourceCard'
 import { SideSettingsForm } from './SideSettingsForm'
 import { TapGestureConfig } from './TapGestureConfig'
 import { MqttSettingsForm } from './MqttSettingsForm'
@@ -132,7 +133,13 @@ export function SettingsScreen() {
 function SectionBody({ section, side }: { section: SectionId, side: Side }) {
   switch (section) {
     case 'device':
-      return <WithSettings>{data => <DeviceSettingsForm device={data.device} />}</WithSettings>
+      return (
+        <>
+          <WithSettings>{data => <DeviceSettingsForm device={data.device} />}</WithSettings>
+          {/* Read-only: which firmware pipeline this pod is on and whether frames flow. */}
+          <SectionColumns left={<SensorSourceCard />} />
+        </>
+      )
     case 'sides':
       return <WithSettings>{data => <SidesSection data={data} side={side} />}</WithSettings>
     case 'gestures':
