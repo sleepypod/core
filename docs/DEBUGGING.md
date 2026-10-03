@@ -35,6 +35,14 @@ frames — see `src/streaming/piezoStream.ts` and `src/server/routers/raw.ts`.
 The Biometrics page in the console shows a live **data-flow banner** — if it
 reads red/amber while the bed is occupied, the ingest pipeline has stalled.
 
+0. Open **Settings → Device → Sensor data source** first. It names the
+   firmware generation (NATS JetStream vs the `.RAW` variants), which
+   transport the core picked at startup, and the age of the last frame. A
+   note under the rows calls out a fallback or an env override. This is the
+   in-app equivalent of the `biometrics pipeline` section of `sp-status`
+   (`docs/nats-frame-readers.md` → "Surfacing the selection in the app"). On
+   NATS firmware, stop here: there are no `.RAW` files to inspect, and an
+   empty `/persistent/biometrics` is expected.
 1. Confirm `RAW_DATA_DIR` matches the tmpfs hot dir (`/persistent/biometrics`,
    per ADR-0018). A mismatch makes readers see an empty directory while frank
    writes fine — the classic silent failure (`docs/sleep-detector.md` §9).

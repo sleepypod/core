@@ -9,6 +9,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
   biometrics: { getOccupancy: { useQuery: () => ({ data: { left: { available: true }, right: { available: false } } }) } },
 } }))
 vi.mock('../DeviceSettingsForm', () => ({ DeviceSettingsForm: () => <div>Device form</div> }))
+vi.mock('../SensorSourceCard', () => ({ SensorSourceCard: () => <div>Sensor source card</div> }))
 vi.mock('../SideSettingsForm', () => ({ SideSettingsForm: ({ side, presenceAvailable }: { side: string, presenceAvailable: boolean }) => (
   <div>
     {'Side '}
@@ -66,6 +67,7 @@ it.each([
   mock.query = `section=${section}`
   render(<SettingsScreen />)
   expect(screen.getByText(text)).toBeTruthy()
+  if (section === 'device') expect(screen.getByText('Sensor source card')).toBeTruthy()
   if (section === 'sides') {
     fireEvent.click(screen.getAllByRole('tab', { name: 'Sam' })[0])
     expect(screen.getByText('Side right false')).toBeTruthy()
