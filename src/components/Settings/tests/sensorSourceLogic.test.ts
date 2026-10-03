@@ -46,6 +46,10 @@ describe('sensorSourceVerdict', () => {
     const v = sensorSourceVerdict({ ...base, source: 'raw' })
     expect(v.tone).toBe('ok') // freshness still decides the tone
     expect(v.note).toContain('Firmware looks like NATS firmware, but the stream fell back to .RAW files')
+    const reverse = sensorSourceVerdict({ ...base, source: 'nats', expectedTransport: 'raw' })
+    expect(reverse.note).toContain('Firmware looks like .RAW firmware, but the stream fell back to NATS stream')
+    // A pending pick is not a mismatch yet, even when an override is absent.
+    expect(sensorSourceVerdict({ ...base, source: 'pending', expectedTransport: 'raw', lastFrameAgeMs: null }).note).toBeNull()
   })
 
   it('names the env override instead of calling it a mismatch', () => {

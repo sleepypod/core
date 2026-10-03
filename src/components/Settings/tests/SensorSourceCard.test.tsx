@@ -60,13 +60,26 @@ it('reads as a dev box when no firmware probe ran, and shows a pending pick', ()
   expect(screen.getByText('Choosing')).toBeTruthy()
 })
 
-it('renders a skeleton while loading and the error inline', () => {
+it('warns when a settled source has delivered nothing past the startup grace', () => {
+  mock.data = {
+    ...natsPod,
+    stream: { ...natsPod.stream, lastFrameAtMs: null, lastFrameAgeMs: null, lastFrameType: null, uptimeSeconds: 600 },
+  }
+  render(<SensorSourceCard />)
+  expect(screen.getByText('No frames')).toBeTruthy()
+  expect(screen.getByTestId('last-frame').textContent).toBe('none yet')
+  expect(screen.queryByText('capSense frame')).toBeNull()
+})
+
+it('renders a skeleton while loading, nothing without data, and the error inline', () => {
   mock.loading = true
   mock.data = undefined
   const { rerender, container } = render(<SensorSourceCard />)
   expect(screen.queryByText('Sensor data source')).toBeNull()
   expect(container.firstChild).not.toBeNull()
   mock.loading = false
+  rerender(<SensorSourceCard />)
+  expect(container.firstChild).toBeNull()
   mock.error = new Error('offline')
   rerender(<SensorSourceCard />)
   expect(screen.getByText('offline')).toBeTruthy()
