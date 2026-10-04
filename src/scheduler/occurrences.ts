@@ -62,7 +62,12 @@ function localDays(from: number, to: number, timezone: string): { days: LocalDay
     const m = date.getUTCMonth() + 1
     const d = date.getUTCDate()
     const midnight = Date.UTC(y, m - 1, d)
-    days.push({ y, m, d, weekday: date.getUTCDay(), offStart: offsetAt(midnight - offsetAt(midnight)), offEnd: offsetAt(midnight + DAY - 1 - offsetAt(midnight + DAY - 1)) })
+    // Sample the "start" offset three hours before the day begins: zones such
+    // as America/Havana spring forward at midnight, so the offset at the day's
+    // first instant is already the post-transition one and a 00:30 row would
+    // otherwise resolve to the previous evening.
+    const dayStart = midnight - offsetAt(midnight)
+    days.push({ y, m, d, weekday: date.getUTCDay(), offStart: offsetAt(dayStart - 3 * 3_600_000), offEnd: offsetAt(midnight + DAY - 1 - offsetAt(midnight + DAY - 1)) })
   }
   return { days, offsetAt }
 }
