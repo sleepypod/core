@@ -51,6 +51,13 @@ export const healthRouter = router({
     .output(z.object({
       uptimeSeconds: z.number(),
       rssBytes: z.number(),
+      /** process.memoryUsage() split: V8 heap vs native buffers; RSS minus these is the allocator's. */
+      memory: z.object({
+        heapTotalBytes: z.number(),
+        heapUsedBytes: z.number(),
+        externalBytes: z.number(),
+        arrayBuffersBytes: z.number(),
+      }),
       startup: z.array(z.object({ name: z.string(), elapsedMs: z.number(), durationMs: z.number() })),
       sensorSource: z.enum(['pending', 'raw', 'nats']),
       firstFrameMs: z.number().nullable(),

@@ -56,9 +56,19 @@ export function getServerPerformance() {
   const s = state()
   const h = s.histogram
   const ms = (ns: number) => Number.isFinite(ns) ? Math.round(ns / 10_000) / 100 : 0
+  // RSS alone cannot say whether memory sits in V8's heap, in native buffers
+  // or in the allocator (SQLite page caches, snapshot leftovers); the split
+  // is what a "too resource hungry" report needs.
+  const memory = process.memoryUsage()
   return {
     uptimeSeconds: process.uptime(),
-    rssBytes: process.memoryUsage.rss(),
+    rssBytes: memory.rss,
+    memory: {
+      heapTotalBytes: memory.heapTotal,
+      heapUsedBytes: memory.heapUsed,
+      externalBytes: memory.external,
+      arrayBuffersBytes: memory.arrayBuffers,
+    },
     startup: s.phases.slice(),
     sensorSource: s.sensorSource,
     firstFrameMs: s.firstFrameMs,
