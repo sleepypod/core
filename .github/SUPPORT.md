@@ -19,7 +19,8 @@ much quicker — whether you're posting in Discord or opening a GitHub issue.
 This matters more than you'd expect. A leftover free-sleep install keeps its own
 services running and competes with sleepypod for control of the hardware — it's a
 top cause of "my pod does X and won't stop." If yes, say so up front, even if you
-believe you removed it.
+believe you removed it. To remove it cleanly, follow
+[Migrating from free-sleep](https://sleepypod.github.io/core/migrating-from-free-sleep/).
 
 ## 3. Grab your logs (no SSH needed)
 
