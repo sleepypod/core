@@ -1,11 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
-import * as cronParser from 'cron-parser'
+import { describe, expect, it } from 'vitest'
+import { parseExpression } from 'cron-parser'
 import { recurringTarget, sessionTarget, type WeeklyTarget, type RecurringOccurrenceCache } from '../baseline'
-
-vi.mock('cron-parser', async (importOriginal) => {
-  const original = await importOriginal<typeof cronParser>()
-  return { ...original, parseExpression: vi.fn(original.parseExpression) }
-})
 
 describe('current recurring target', () => {
   const rows: WeeklyTarget[] = [
@@ -30,23 +25,53 @@ describe('current recurring target', () => {
   })
 
   it('reuses unchanged weekly occurrences across minutes and recomputes only a due row', () => {
-    const parse = vi.mocked(cronParser.parseExpression)
-    parse.mockClear()
     const cache: RecurringOccurrenceCache = new Map()
-    try {
-      const start = Date.parse('2026-09-29T01:00Z')
-      expect(recurringTarget(rows, 'UTC', start, cache)?.temperature).toBe(75)
-      expect(parse).toHaveBeenCalledTimes(2)
-      expect(recurringTarget(rows, 'UTC', start + 60_000, cache)?.temperature).toBe(75)
-      expect(parse).toHaveBeenCalledTimes(2)
-      expect(recurringTarget(rows, 'UTC', Date.parse('2026-09-29T02:00Z'), cache)?.temperature).toBe(68)
-      expect(parse).toHaveBeenCalledTimes(3)
-      // A setpoint edit changes the target without recalculating its clock.
-      expect(recurringTarget([{ ...rows[1], temperature: 70 }], 'UTC', Date.parse('2026-09-29T02:01Z'), cache)?.temperature).toBe(70)
-      expect(parse).toHaveBeenCalledTimes(3)
-      expect(cache.size).toBe(1) // deleted/disabled schedules do not accumulate
+    const entry = (row: WeeklyTarget) => cache.get(JSON.stringify(['UTC', row.dayOfWeek, row.time]))
+    const start = Date.parse('2026-09-29T01:00Z')
+    expect(recurringTarget(rows, 'UTC', start, cache)?.temperature).toBe(75)
+    expect(cache.size).toBe(2)
+    const [bedtime, overnight] = [entry(rows[0]), entry(rows[1])]
+    expect(recurringTarget(rows, 'UTC', start + 60_000, cache)?.temperature).toBe(75)
+    // Same objects: nothing was recomputed for an unchanged minute.
+    expect(entry(rows[0])).toBe(bedtime)
+    expect(entry(rows[1])).toBe(overnight)
+    expect(recurringTarget(rows, 'UTC', Date.parse('2026-09-29T02:00Z'), cache)?.temperature).toBe(68)
+    // Only the row that just fired rolled to its new weekly interval.
+    expect(entry(rows[0])).toBe(bedtime)
+    expect(entry(rows[1])).not.toBe(overnight)
+    expect(entry(rows[1])).toEqual({ startsAt: Date.parse('2026-09-29T02:00Z'), expiresAt: Date.parse('2026-10-06T02:00Z') })
+    // A setpoint edit changes the target without recalculating its clock.
+    const rolled = entry(rows[1])
+    expect(recurringTarget([{ ...rows[1], temperature: 70 }], 'UTC', Date.parse('2026-09-29T02:01Z'), cache)?.temperature).toBe(70)
+    expect(entry(rows[1])).toBe(rolled)
+    expect(cache.size).toBe(1) // deleted/disabled schedules do not accumulate
+  })
+
+  it('matches cron-parser for every weekday and hour across a year of DST transitions', () => {
+    // The scheduler's arithmetic path must keep node-schedule/cron-parser
+    // semantics for the boundary the controller derives from it.
+    const sample = (iso: string, dayOfWeek: WeeklyTarget['dayOfWeek'], time: string, tz: string) => {
+      const now = Date.parse(iso)
+      const got = recurringTarget([{ id: 'x', dayOfWeek, time, temperature: 70 }], tz, now)
+      if (!got) throw new Error(`no target for ${dayOfWeek} ${time} ${tz} at ${iso}`)
+      const [hour, minute] = time.split(':').map(Number)
+      const dows = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+      const it = parseExpression(`${minute} ${hour} * * ${dows.indexOf(dayOfWeek)}`, { currentDate: new Date(now - 15 * 86_400_000), tz })
+      let startsAt = it.next().getTime()
+      let expiresAt = it.next().getTime()
+      while (expiresAt <= now) {
+        startsAt = expiresAt
+        expiresAt = it.next().getTime()
+      }
+      expect({ startsAt: got.startsAt, expiresAt: got.expiresAt }).toEqual({ startsAt, expiresAt })
     }
-    finally { parse.mockClear() }
+    for (const tz of ['America/New_York', 'Europe/Berlin', 'Australia/Sydney', 'UTC']) {
+      for (const iso of ['2026-03-08T06:59Z', '2026-03-08T07:30Z', '2026-03-29T00:59Z', '2026-04-05T15:59Z', '2026-10-04T16:00Z', '2026-10-25T01:30Z', '2026-11-01T05:30Z', '2026-11-01T06:30Z']) {
+        for (const dayOfWeek of ['sunday', 'wednesday', 'saturday'] as const) {
+          for (const time of ['00:00', '01:30', '02:30', '03:30', '23:59']) sample(iso, dayOfWeek, time, tz)
+        }
+      }
+    }
   })
 
   it('invalidates cached occurrences on clock rollback, timezone and time edits', () => {

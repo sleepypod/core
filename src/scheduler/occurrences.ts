@@ -77,6 +77,41 @@ function resolveDstWallTime(guess: number, day: LocalDay, offsetAt: (utcMs: numb
   return candidates.length ? Math.min(...candidates) : guess - day.offStart
 }
 
+export type WeeklyZone = ReturnType<typeof localDays>
+
+/**
+ * The zone's days around `now`, wide enough that every weekday has one
+ * occurrence on each side of `now`. Build once per pass and share it across
+ * rows: the Intl formatter is the expensive part.
+ */
+export function weeklyZone(now: number, timezone: string): WeeklyZone {
+  return localDays(now - 8 * DAY, now + 8 * DAY, timezone)
+}
+
+/**
+ * For a weekly `minute hour * * weekday` schedule: the latest firing at or
+ * before `now` and the next one after it, with cron-parser's DST semantics
+ * (a skipped spring time lands just past the gap, a repeated fall time fires
+ * once). Replaces `parseExpression(...).next()` for the temperature baseline,
+ * where one cron-parser row cost ~0.5 s on the pod's CPU.
+ */
+export function weeklyWindow(zone: WeeklyZone, weekday: number, hour: number, minute: number, now: number): { startsAt: number, expiresAt: number } {
+  let startsAt = -Infinity
+  let expiresAt = Infinity
+  for (const day of zone.days) {
+    if (day.weekday !== weekday % 7) continue
+    const guess = Date.UTC(day.y, day.m - 1, day.d, hour, minute)
+    const at = day.offStart === day.offEnd ? guess - day.offStart : resolveDstWallTime(guess, day, zone.offsetAt)
+    if (at <= now) {
+      if (at > startsAt) startsAt = at
+    }
+    else if (at < expiresAt) {
+      expiresAt = at
+    }
+  }
+  return { startsAt, expiresAt }
+}
+
 /**
  * Every time each loaded job fires within [from, to), in time order. Recurring
  * jobs are expanded from their cron expression in the scheduler's timezone, so
