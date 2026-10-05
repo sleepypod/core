@@ -1,6 +1,8 @@
 import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from 'vitest'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { BaseError } from '@/src/hardware/base/types'
+const availability = vi.hoisted(() => ({ configured: false }))
+vi.mock('@/src/hardware/base/configuration', () => ({ isBaseConfigured: async () => availability.configured }))
 const hardware = vi.hoisted(() => ({ status: vi.fn(), setPosition: vi.fn(), stop: vi.fn(), reconnect: vi.fn() }))
 const scheduler = vi.hoisted(() => ({ upsertBaseSchedule: vi.fn(), removeBaseSchedule: vi.fn() }))
 vi.mock('@/src/hardware/base/instance', () => ({ getBaseController: () => hardware }))
@@ -25,6 +27,14 @@ beforeEach(() => {
 afterAll(() => sqlite.close())
 
 describe('base API', () => {
+  it('reports configuration availability without initializing the controller', async () => {
+    availability.configured = false
+    expect(await caller.getAvailability({})).toEqual({ configured: false })
+    availability.configured = true
+    expect(await caller.getAvailability({})).toEqual({ configured: true })
+    expect(hardware.status).not.toHaveBeenCalled()
+    expect(hardware.reconnect).not.toHaveBeenCalled()
+  })
   it('validates positions and defaults the speed before hardware', async () => {
     await caller.setPosition({ head: 20, feet: 15 })
     expect(hardware.setPosition).toHaveBeenCalledWith({ head: 20, feet: 15, feedRate: 50, sides: ['left', 'right'] })

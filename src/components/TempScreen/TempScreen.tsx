@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { BaseLink } from '@/src/components/Base/BaseLink'
 import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, PageHeader, Skeleton } from '@/src/components/ds'
@@ -138,7 +137,6 @@ export const TempScreen = () => {
       title="Temperature"
       right={(
         <>
-          <BaseLink />
           <AutopilotStatusChip className="no-underline" />
           <Button
             icon={Link2}

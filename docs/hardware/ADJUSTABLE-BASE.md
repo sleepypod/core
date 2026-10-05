@@ -1,8 +1,14 @@
 # Adjustable-base control
 
-Open **Temperature → Base** (`/<language>/base`). The page overlays measured positions and targets on a bed profile. Head/feet steppers and presets edit a target; **Move** sends it with the selected speed. **Move immediately when selecting a preset** is an opt-in browser preference. **Stop both** always remains enabled and reports delivery failures visibly.
+Open **Base** from the main menu (`/<language>/base`). The menu item appears only when valid local base configuration exists; a temporary Bluetooth disconnect does not hide it. With no base configured, open the URL directly. The hosted demo always includes Base. The page overlays measured positions and targets on a bed profile. Head/feet steppers and presets edit a target; **Move** sends it with the selected speed. **Move immediately when selecting a preset** is an opt-in browser preference. **Stop both** always remains enabled and reports delivery failures visibly.
 
 The per-side layouts from the design's 2a/2b are selectable as **Side cards** and **Single card** when `independentControl` is true. Side cards have independent targets and a persisted link toggle; linking copies the left target to the right. Single card has a persisted Both/name/name scope switch and overlays both measured positions. Names come from side settings. Both layouts share targets, speed and schedules. The demo simulates independent movement and Stop over time.
+
+## Preview without hardware
+
+Open `/<language>/base?debug=1` to simulate the base on a normal pod build. A visible **Base debug** banner identifies this mode. Both layouts, independent movement, presets, Stop and schedules use a fresh in-memory base for that page session. Every `base.*` call is intercepted, including unknown operations, so the debug page never sends base writes or stores schedules on the pod. Other reads, such as side names and timezone, still use the normal settings source.
+
+Debug queries use a separate query cache and transport; **Exit debug** reloads the normal Base page. Simulated schedules reset on reload/exit. Menu availability continues to reflect the real configuration. `?debug=1` only applies to the Base page, and is separate from the whole-app `NEXT_PUBLIC_DEMO=1` build mode.
 
 ## Setup and supported hardware
 
@@ -32,6 +38,7 @@ The same LAN-only trust model as the rest of the Pod applies. REST paths below h
 
 | REST | Purpose |
 | --- | --- |
+| GET `/base/availability` | `{configured}` from validated local setup, without connecting Bluetooth |
 | GET `/base/status` | Connection, separate-side measured position, age/stale state, global and per-side estimated motion (`movingBySide`), `independentControl` capability |
 | POST `/base/reconnect` with `{}` | Reload stock configuration and reconnect |
 | POST `/base/position` | `{head: 0..60, feet: 0..45, feedRate: 30..100}`; integers; rate defaults to 50; `sides` defaults to `["left", "right"]` |

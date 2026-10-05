@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { httpBatchStreamLink } from '@trpc/client'
 import { getQueryKey } from '@trpc/react-query'
+import { baseDebugLink } from '@/src/demo/baseDebugLink'
 import { demoLink } from '@/src/demo/link'
 import { trpc } from './trpc'
 import { transformer } from './transformer'
@@ -15,9 +16,10 @@ export function createWebQueryClient(): QueryClient {
   return client
 }
 
-export function createWebTRPCClient() {
+export function createWebTRPCClient({ baseDebug = false }: { baseDebug?: boolean } = {}) {
   return trpc.createClient({
     links: [
+      ...(baseDebug ? [baseDebugLink()] : []),
       process.env.NEXT_PUBLIC_DEMO === '1'
         ? demoLink()
         // Deliver fast queries even while hardware/history queries are pending.

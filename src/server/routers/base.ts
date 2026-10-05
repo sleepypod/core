@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { db } from '@/src/db'
 import { baseSchedules } from '@/src/db/schema'
+import { isBaseConfigured } from '@/src/hardware/base/configuration'
 import { getBaseController } from '@/src/hardware/base/instance'
 import { BASE_PRESETS, BaseError, basePositionSchema, baseMoveSchema, baseScopeSchema, baseDaysSchema, baseDayNumbers, basePresetSchema, baseStatusSchema } from '@/src/hardware/base/types'
 import { getJobManager } from '@/src/scheduler'
@@ -26,6 +27,10 @@ async function command(fn: () => Promise<void>) {
 }
 
 export const baseRouter = router({
+  getAvailability: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/base/availability', tags: ['Base'] } })
+    .input(z.object({})).output(z.object({ configured: z.boolean() }))
+    .query(async () => ({ configured: await isBaseConfigured() })),
   getStatus: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/base/status', tags: ['Base'] } })
     .input(z.object({})).output(baseStatusSchema)

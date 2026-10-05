@@ -6,7 +6,7 @@ import { TabBar } from '../TabBar'
 import { activeNavId, langFromPath, pathWithoutLang } from '../navItems'
 
 const state = vi.hoisted(() => ({
-  path: '/en', query: '', active: true,
+  path: '/en', query: '', active: true, base: undefined as { configured: boolean } | undefined,
   status: undefined as unknown, health: undefined as unknown,
   version: undefined as unknown, water: undefined as unknown,
   start: vi.fn(), end: vi.fn(),
@@ -16,6 +16,7 @@ vi.mock('@/src/hooks/useScheduleActive', () => ({ useScheduleActive: () => ({ is
 vi.mock('@/src/hooks/useSwipeNavigation', () => ({ useSwipeNavigation: () => ({ onTouchStart: state.start, onTouchEnd: state.end }) }))
 vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => 29000000 }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
+  base: { getAvailability: { useQuery: () => ({ data: state.base }) } },
   device: { getStatus: { useQuery: () => ({ data: state.status }) } },
   health: { system: { useQuery: () => ({ data: state.health }) }, maintenance: { useQuery: () => ({}) } },
   system: { getVersion: { useQuery: () => ({ data: state.version }) } },
@@ -23,13 +24,13 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
 } }))
 
 beforeEach(() => {
-  Object.assign(state, { path: '/en', query: '', active: true, status: undefined, health: undefined, version: undefined, water: undefined })
+  Object.assign(state, { path: '/en', query: '', active: true, status: undefined, health: undefined, version: undefined, water: undefined, base: undefined })
   vi.clearAllMocks()
 })
 
 describe('responsive navigation', () => {
   it.each([
-    ['/de/autopilot/7', 'autopilot'], ['/en/data', 'sleep'], ['/en/status', 'system'],
+    ['/fr/base', 'base'], ['/de/autopilot/7', 'autopilot'], ['/en/data', 'sleep'], ['/en/status', 'system'],
     ['/en/debug', 'system'], ['/en/sensors', 'system'], ['/en/schedule', 'schedule'],
     ['/en/settings', 'settings'], ['/en/schedule-other', 'temp'], [null, 'temp'],
   ])('resolves %s without matching unrelated prefixes', (path, expected) => {
@@ -49,6 +50,23 @@ describe('responsive navigation', () => {
     expect(link.getAttribute('href')).toBe(href)
     expect(link.getAttribute('aria-current')).toBe('page')
     expect(screen.getByRole('link', { name: 'Docs' }).getAttribute('rel')).toBe('noopener noreferrer')
+  })
+  it.each([Sidebar, TabBar])('only includes Base after a configured base is detected', (Navigation) => {
+    state.path = '/fr/base'
+    const { rerender } = render(<Navigation />)
+    expect(screen.queryByRole('link', { name: /^base$/i })).toBeNull()
+    expect(screen.getByRole('link', { name: /^temp$/i }).getAttribute('aria-current')).toBeNull()
+    state.base = { configured: false }
+    rerender(<Navigation />)
+    expect(screen.queryByRole('link', { name: /^base$/i })).toBeNull()
+    state.base = { configured: true }
+    rerender(<Navigation />)
+    const link = screen.getByRole('link', { name: /^base$/i })
+    expect(link.getAttribute('href')).toBe('/fr/base')
+    expect(link.getAttribute('aria-current')).toBe('page')
+    state.base = { configured: false }
+    rerender(<Navigation />)
+    expect(screen.queryByRole('link', { name: /^base$/i })).toBeNull()
   })
   it('shows pod model and every issue in full, with build info behind the DEV chip', () => {
     Object.assign(state, { path: '/en/system', status: { podVersion: 'J00' }, water: { level: 'low' }, version: { commitHash: 'abcdef1234', branch: 'feat/ui-redesign' } })

@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 
 /** Ordered screen routes for swipe navigation. */
 const SCREEN_ORDER = ['/', '/schedule', '/sleep', '/system', '/settings']
+const BASE_SCREEN_ORDER = ['/', '/base', '/schedule', '/sleep', '/system', '/settings']
 
 /** Minimum horizontal swipe distance in px to trigger navigation. */
 const SWIPE_THRESHOLD = 60
@@ -25,7 +26,8 @@ interface SwipeState {
  * Swipe right → previous screen, swipe left → next screen.
  * Only triggers if the swipe is predominantly horizontal and exceeds threshold.
  */
-export function useSwipeNavigation() {
+export function useSwipeNavigation(hasBase = false) {
+  const screenOrder = hasBase ? BASE_SCREEN_ORDER : SCREEN_ORDER
   const router = useRouter()
   const pathname = usePathname()
   const swipeRef = useRef<SwipeState | null>(null)
@@ -79,7 +81,7 @@ export function useSwipeNavigation() {
     if (target.closest('[data-no-swipe], [style*="overflow-x"], .overflow-x-auto, .overflow-x-scroll')) return
 
     const basePath = getBasePath()
-    const currentIndex = SCREEN_ORDER.findIndex(
+    const currentIndex = screenOrder.findIndex(
       p => basePath === p || (p !== '/' && basePath.startsWith(p))
     )
     if (currentIndex === -1) return
@@ -87,10 +89,10 @@ export function useSwipeNavigation() {
     const direction = deltaX > 0 ? -1 : 1 // swipe right = prev, swipe left = next
     const nextIndex = currentIndex + direction
 
-    if (nextIndex < 0 || nextIndex >= SCREEN_ORDER.length) return
+    if (nextIndex < 0 || nextIndex >= screenOrder.length) return
 
     const lang = getLang()
-    const nextPath = SCREEN_ORDER[nextIndex]
+    const nextPath = screenOrder[nextIndex]
 
     isNavigatingRef.current = true
     router.push(`/${lang}${nextPath}`)
@@ -99,7 +101,7 @@ export function useSwipeNavigation() {
     setTimeout(() => {
       isNavigatingRef.current = false
     }, 400)
-  }, [getBasePath, getLang, router])
+  }, [getBasePath, getLang, router, screenOrder])
 
   return {
     onTouchStart,

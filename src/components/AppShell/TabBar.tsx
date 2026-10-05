@@ -5,10 +5,13 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useScheduleActive } from '@/src/hooks/useScheduleActive'
 import { activeNavId, langFromPath, NAV_ITEMS } from './navItems'
+import { useBaseAvailable } from './useBaseAvailable'
 import { usePodHealth } from './usePodHealth'
 
 /** Phone bottom tab bar (< 900px). Respects the safe-area inset. */
 export function TabBar({ className }: { className?: string }) {
+  const hasBase = useBaseAvailable()
+  const items = NAV_ITEMS.filter(item => item.id !== 'base' || hasBase)
   const pathname = usePathname()
   const lang = langFromPath(pathname)
   const active = activeNavId(pathname)
@@ -18,12 +21,14 @@ export function TabBar({ className }: { className?: string }) {
   return (
     <nav
       aria-label="Main"
+      style={{ gridTemplateColumns: `repeat(${items.length}, minmax(52px, 1fr))` }}
       className={cn(
-        'fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-line bg-app px-2 pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5 font-mono text-[10px] tracking-[0.04em]',
+        'fixed inset-x-0 bottom-0 z-40 grid overflow-x-auto border-t border-line bg-app px-2 pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5 font-mono',
+        hasBase ? 'text-[9px] tracking-[0.02em]' : 'text-[10px] tracking-[0.04em]',
         className,
       )}
     >
-      {NAV_ITEMS.map((n) => {
+      {items.map((n) => {
         const on = n.id === active
         return (
           <Link

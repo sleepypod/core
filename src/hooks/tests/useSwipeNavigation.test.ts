@@ -40,6 +40,14 @@ afterEach(() => {
 })
 
 describe('useSwipeNavigation', () => {
+  it('includes Base in swipe navigation only when it exists', () => {
+    const { result } = renderHook(() => useSwipeNavigation(true))
+    act(() => {
+      result.current.onTouchStart(touchEvent([{ clientX: 200, clientY: 100 }]))
+      result.current.onTouchEnd(touchEvent([{ clientX: 50, clientY: 100 }]))
+    })
+    expect(navMock.push).toHaveBeenCalledWith('/en/base')
+  })
   it('navigates to the next screen on a leftward swipe', () => {
     const { result } = renderHook(() => useSwipeNavigation())
     act(() => {

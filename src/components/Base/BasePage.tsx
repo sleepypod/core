@@ -1,11 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
 import { Link2, Square, RefreshCw } from 'lucide-react'
 import { PageHeader } from '@/src/components/ds'
-import { langFromPath } from '@/src/components/AppShell/navItems'
 import { BASE_SIDES, scopeSides } from '@/src/hardware/base/types'
 import type { BaseScope } from '@/src/hardware/base/types'
 import { trpc } from '@/src/utils/trpc'
@@ -14,7 +11,6 @@ import { BedProfile, Presets, Speed, Steppers, buttonStyle, labelStyle, panelSty
 import type { Angles, Targets } from './controls'
 
 export function BasePage() {
-  const lang = langFromPath(usePathname())
   const query = trpc.base.getStatus.useQuery({}, { refetchInterval: 1000 })
   const settings = trpc.settings.getAll.useQuery({})
   const names = { left: settings.data?.sides.left.name || 'Left', right: settings.data?.sides.right.name || 'Right' }
@@ -79,7 +75,7 @@ export function BasePage() {
     const atTarget = !!measured && sides.every(side => samePosition(measured[side], target))
     const inMotion = sides.some(side => status?.movingBySide[side])
     const label = inMotion ? 'Moving' : atTarget ? 'At target' : `Move ${selected === 'both' ? 'both ' : cards ? '' : `${names[selected]} `}to ${target.head}° / ${target.feet}°`
-    return <button type="button" className="min-h-10 min-w-0 max-w-full flex-1 overflow-hidden rounded-lg bg-fg px-3 py-2 text-sm font-medium text-ellipsis whitespace-nowrap text-app disabled:bg-active disabled:text-fg-2 disabled:opacity-45" disabled={!!(unavailable || busy || atTarget || inMotion)} onClick={() => move(requested, target)}>{label}</button>
+    return <button type="button" className={`min-h-10 min-w-0 max-w-full flex-1 overflow-hidden rounded-lg bg-fg px-3 py-2 text-sm font-medium text-ellipsis whitespace-nowrap text-app disabled:bg-active disabled:text-fg-2 disabled:opacity-45 ${cards ? 'w-full' : 'basis-full @min-[900px]:basis-auto'}`} disabled={!!(unavailable || busy || atTarget || inMotion)} onClick={() => move(requested, target)}>{label}</button>
   }
   const cardStatus = (side: 'left' | 'right') => !measured ? 'NOT CONFIGURED' : status?.movingBySide[side] ? 'MOVING' : samePosition(measured[side], targets[side]) ? 'AT TARGET' : 'NOT APPLIED'
   return (
@@ -89,10 +85,6 @@ export function BasePage() {
         middle={<span className={`${labelStyle} ${moving ? 'text-[#50c878]' : 'text-fg-2'}`}>{moving ? 'MOVING' : 'IDLE'}</span>}
         right={(
           <>
-            <nav aria-label="Bed controls" className="flex rounded-lg border border-line-2 p-[3px] text-sm">
-              <Link href={`/${lang}`} className="rounded-md px-3 py-1.5 text-fg-2">Temperature</Link>
-              <span aria-current="page" className="rounded-md bg-active px-3 py-1.5">Base</span>
-            </nav>
             <button
               type="button"
               onClick={() => {
