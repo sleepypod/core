@@ -1,10 +1,9 @@
-import { useState } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BaseSchedules } from '../BaseSchedules'
-import type { BasePosition } from '@/src/hardware/base/types'
+import type { RouterOutputs } from '@/src/demo/types'
 const m = vi.hoisted(() => ({
-  rows: [] as Array<{ id: number, head: number, feet: number, feedRate: number, enabled: boolean, dayOfWeek: 'monday', time: string }>,
+  rows: [] as RouterOutputs['base']['getSchedules'],
   save: vi.fn(), remove: vi.fn(), loading: false,
   onError: undefined as ((error: { message: string }) => void) | undefined,
 }))
@@ -19,10 +18,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
   },
   settings: { getAll: { useQuery: () => ({ data: { device: { timezone: 'Europe/Berlin' } } }) } },
 } }))
-function Editor() {
-  const [target, setTarget] = useState<BasePosition>({ head: 20, feet: 10, feedRate: 60 })
-  return <BaseSchedules target={target} onSelectTarget={setTarget} />
-}
+const names = { left: 'Jon', right: 'Heidi' }
 beforeEach(() => {
   vi.clearAllMocks()
   m.rows = []
@@ -31,35 +27,34 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('base schedule editor', () => {
-  it('saves selected targets on the selected calendar day and time', () => {
-    render(<Editor />)
-    expect(screen.getByText(/Europe\/Berlin/)).toBeTruthy()
-    fireEvent.change(screen.getByRole('combobox', { name: 'Day' }), { target: { value: 'tuesday' } })
+  it.each([false, true])('saves recurrence, side, named preset and speed (compact=%s)', (compact) => {
+    render(<BaseSchedules names={names} independent speed={75} compact={compact} />)
+    expect(screen.getByText('Europe/Berlin')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Days'), { target: { value: 'weekdays' } })
     fireEvent.change(screen.getByLabelText('Time'), { target: { value: '23:15' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add scheduled position' }))
-    expect(m.save).toHaveBeenCalledWith({ id: undefined, head: 20, feet: 10, feedRate: 60, dayOfWeek: 'tuesday', time: '23:15', enabled: true })
+    fireEvent.change(screen.getByLabelText('Schedule side'), { target: { value: 'right' } })
+    fireEvent.change(screen.getByLabelText('Schedule preset'), { target: { value: 'read' } })
+    fireEvent.click(screen.getByRole('button', { name: compact ? 'Add to schedule' : 'Add' }))
+    expect(m.save).toHaveBeenCalledWith({ head: 40, feet: 0, feedRate: 75, dayOfWeek: 'weekdays', time: '23:15', side: 'right', presetName: 'Read', enabled: true })
   })
-  it('edits an existing target and preserves its paused state', () => {
-    m.rows = [{ id: 3, dayOfWeek: 'monday', time: '22:00', head: 30, feet: 15, feedRate: 50, enabled: false }]
-    render(<Editor />)
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
-    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '23:15' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save scheduled position' }))
-    expect(m.save).toHaveBeenCalledWith({ ...m.rows[0], time: '23:15' })
-  })
-  it('pauses and deletes only the selected row', () => {
-    m.rows = [{ id: 4, dayOfWeek: 'monday', time: '22:00', head: 30, feet: 15, feedRate: 50, enabled: true }]
-    render(<Editor />)
-    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
-    expect(m.save).toHaveBeenCalledWith({ ...m.rows[0], enabled: false })
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  it('displays side and recurrence, deletes only the selected row', () => {
+    m.rows = [{ id: 4, dayOfWeek: 'weekdays', side: 'left', presetName: 'Relax', time: '22:00', head: 30, feet: 15, feedRate: 50, enabled: true }]
+    render(<BaseSchedules names={names} independent speed={50} compact />)
+    expect(screen.getByText('Weekdays · Jon')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Weekdays 22:00 Jon' }))
     expect(m.remove).toHaveBeenCalledWith({ id: 4 })
   })
-  it('shows failed saves and disables adding until loading completes', () => {
+  it('offers only both sides for synchronized hardware and surfaces errors', () => {
+    render(<BaseSchedules names={names} independent={false} speed={50} />)
+    expect(screen.queryByRole('option', { name: 'Jon' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(m.save).toHaveBeenCalledWith(expect.objectContaining({ side: 'both' }))
+    act(() => m.onError?.({ message: 'Time overlaps' }))
+    expect(screen.getByRole('alert').textContent).toBe('Time overlaps')
+  })
+  it('blocks additions until existing schedules load', () => {
     m.loading = true
-    render(<Editor />)
-    expect((screen.getByRole('button', { name: 'Add scheduled position' }) as HTMLButtonElement).disabled).toBe(true)
-    act(() => m.onError?.({ message: 'Duplicate schedule time' }))
-    expect(screen.getByRole('alert').textContent).toBe('Duplicate schedule time')
+    render(<BaseSchedules names={names} independent speed={50} />)
+    expect((screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

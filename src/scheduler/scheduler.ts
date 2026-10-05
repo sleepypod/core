@@ -67,7 +67,9 @@ export class Scheduler extends EventEmitter {
         tz: this.config.timezone,
         rule: cronExpression,
       },
-      async () => {
+      async (fireDate) => {
+        // Never catch up physical adjustments after an event-loop stall or suspend.
+        if (type === JobType.BASE && fireDate && Date.now() - fireDate.getTime() > 60_000) return
         const result = await this.executeJob(id, type, handler)
         this.emit('jobExecuted', id, result)
       }

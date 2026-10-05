@@ -165,13 +165,15 @@ const expectedTables: Record<string, TableSpec> = {
     columns: [
       { name: 'id', notNull: true, default: 'fn' },
       { name: 'day_of_week', notNull: true, default: undefined },
+      { name: 'side', notNull: true, default: 'both' },
+      { name: 'preset_name', notNull: true, default: 'Custom' },
       { name: 'time', notNull: true, default: undefined },
       { name: 'head', notNull: true, default: undefined },
       { name: 'feet', notNull: true, default: undefined },
       { name: 'feed_rate', notNull: true, default: 50 },
       { name: 'enabled', notNull: true, default: true },
     ],
-    indexes: [{ name: 'base_schedules_day_time', unique: true, columns: ['day_of_week', 'time'] }],
+    indexes: [{ name: 'base_schedules_day_time_side', unique: true, columns: ['day_of_week', 'time', 'side'] }],
   },
   temperatureHolds: {
     name: 'temperature_holds',

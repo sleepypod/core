@@ -60,6 +60,22 @@ describe('whole-bed controller', () => {
     now += 10001
     expect(controller.status()).toMatchObject({ stale: true, moving: null })
   })
+  it('exposes synchronized capability and rejects one-sided writes before any transport activity', async () => {
+    await ready()
+    expect(controller.status().independentControl).toBe(false)
+    await expect(controller.setPosition({ ...target, sides: ['left'] })).rejects.toThrow('whole-bed')
+    expect(transport.write).not.toHaveBeenCalled()
+  })
+  it('tracks motion independently and expires both estimates with stale telemetry', async () => {
+    await ready()
+    onData(telemetry([191, 24, 540, 763]))
+    expect(controller.status().movingBySide).toEqual({ left: true, right: false })
+    now += 4000
+    onData(telemetry([191, 24, 541, 763]))
+    expect(controller.status().movingBySide).toEqual({ left: false, right: true })
+    now += 10001
+    expect(controller.status().movingBySide).toEqual({ left: null, right: null })
+  })
   it('serializes torso then legs with a gap and rejects overlapping moves', async () => {
     await ready()
     const move = controller.setPosition(target)

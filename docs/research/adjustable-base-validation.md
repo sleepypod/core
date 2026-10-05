@@ -36,3 +36,15 @@ The initial full-suite failure was `src/demo/tests/coverage.test.ts`, reporting 
 ## Practical limit
 
 The real local API correctly reports no configured base. Mocked transport tests and browser demo behavior establish software behavior, not physical calibration, motion or stop latency. Qualification on a paired TriMix base remains necessary before claiming verified physical operation. The [setup guide](../hardware/ADJUSTABLE-BASE.md) lists prerequisites and the hardware qualification sequence. Independent split-side positioning is not implemented because beta's evidenced commands synchronize both sides.
+
+## Per-side layouts 2a/2b (2026-10-04 follow-up)
+
+Implemented against `Sleepypod Base.dc.html` sections 2a/2b and the supplied implementation prompts. Both layouts are available through a persisted layout preference when the backend explicitly advertises independent control. The real synchronized TriMix controller falls back to the whole-bed layout; independent movement is exercised by the demo and regression fixtures, not inferred from `SplitBase`.
+
+- UI tests cover independent targets, link-on copy, linked edits/moves, unlink preservation, persisted preferences, scoped and immediate presets, mixed targets, measured overlays/labels, bounds, unavailable state, always-enabled global Stop and hardware fallback.
+- Controller/API tests cover independent motion estimates, rejection of unsupported one-sided BLE writes, scoped payload validation and recurring schedule overlap detection.
+- Scheduler tests cover recurrence groups in the device timezone, own-side away checks, both-side checks, scope/target revalidation under lock, skipping late callbacks/lock waits and no physical retries.
+- Focused run: **29 files, 530 tests passed**, including all base, scheduler, demo and DB tests. The DB contract snapshot was reviewed and updated only for the intended recurrence/side/preset fields and unique index.
+- Full lint passed with the existing Stryker default-export warning. Both Drizzle schema checks passed. Generated migration 0018 has a strictly increasing journal timestamp and preserves existing rows with side `both` and preset name `Custom`.
+- Browser verification: both desktop layouts, linked editing from the opposite card, scoped movement to measured arrival, global Stop, a Weekdays/Sam preset schedule, preset matching and mixed-target messaging. Both layouts were inspected at a 390×844 viewport; actual document client/scroll widths were both 384px, with stacked cards and no horizontal overflow. Temporary viewport override was reset.
+- The calibrated 60°/45° angle limits and 30% minimum speed are preserved. The requested 25% segment is disabled. Physical motion/stop qualification remains outside what these software checks establish.

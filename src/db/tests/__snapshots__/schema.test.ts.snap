@@ -435,7 +435,9 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
     "checks": 0,
     "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
-      "day_of_week | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:sunday,monday,tuesday,wednesday,thursday,friday,saturday",
+      "day_of_week | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:daily,weekdays,weekends,sunday,monday,tuesday,wednesday,thursday,friday,saturday",
+      "side | sql:text | logical:string/SQLiteText | not-null | default:both | not-primary-key | not-unique | not-autoincrement | enum:both,left,right",
+      "preset_name | sql:text | logical:string/SQLiteText | not-null | default:Custom | not-primary-key | not-unique | not-autoincrement | enum:none",
       "time | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "head | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "feet | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
@@ -445,7 +447,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
     "exportName": "baseSchedules",
     "foreignKeys": [],
     "indexes": [
-      "base_schedules_day_time | unique | columns:day_of_week,time | where:none",
+      "base_schedules_day_time_side | unique | columns:day_of_week,time,side | where:none",
     ],
     "name": "base_schedules",
     "primaryKeys": [],

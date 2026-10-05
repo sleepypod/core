@@ -1,7 +1,7 @@
 import { withSideLock } from '../sideLock'
 import { PositionDecoder, positionPacket, stopPacket } from './protocol'
-import { BaseError, baseConfigurationSchema, basePositionSchema } from './types'
-import type { BaseConfiguration, BasePosition, BaseStatus, BaseTransport } from './types'
+import { BaseError, baseConfigurationSchema, baseMoveSchema } from './types'
+import type { BaseConfiguration, BaseMove, BaseStatus, BaseTransport } from './types'
 
 const STALE_MS = 10_000
 export class BaseController {
@@ -11,7 +11,7 @@ export class BaseController {
   private position: BaseStatus['position'] = null
   private lastUpdate: number | null = null
   private lastTicks: number[] | null = null
-  private changedAt: number | null = null
+  private changedAt: Record<'left' | 'right', number | null> = { left: null, right: null }
   private samples = 0
   private busy = false
   private stopping = false
@@ -58,13 +58,15 @@ export class BaseController {
     this.lastUpdate = null
     this.lastTicks = null
     this.position = null
-    this.changedAt = null
+    this.changedAt = { left: null, right: null }
     this.samples = 0
     try {
       await this.transport.connect(this.config, (bytes) => {
         if (this.closed || connection !== this.connectionGeneration) return
         for (const data of decoder.push(bytes)) {
-          if (this.lastTicks && data.ticks.some((tick, i) => tick !== this.lastTicks?.[i])) this.changedAt = this.now()
+          for (const [side, offset] of [['left', 0], ['right', 2]] as const) {
+            if (this.lastTicks && [offset, offset + 1].some(i => data.ticks[i] !== this.lastTicks?.[i])) this.changedAt[side] = this.now()
+          }
           this.samples++
           this.lastTicks = data.ticks
           this.position = { left: data.left, right: data.right }
@@ -100,10 +102,16 @@ export class BaseController {
 
   status(): BaseStatus {
     const stale = this.state !== 'connected' || this.lastUpdate === null || (this.now() < this.lastUpdate || this.now() - this.lastUpdate > STALE_MS)
+    const motion = (side: 'left' | 'right') => {
+      const changed = this.changedAt[side]
+      return stale || this.samples < 2 ? null : changed !== null && this.now() - changed < 3000
+    }
+    const movingBySide = { left: motion('left'), right: motion('right') }
     return {
+      independentControl: false, movingBySide,
       state: this.state, splitBase: this.config?.SplitBase ?? null,
       position: this.position, lastUpdate: this.lastUpdate, stale,
-      moving: stale || this.samples < 2 ? null : this.changedAt !== null && this.now() - this.changedAt < 3000,
+      moving: stale || this.samples < 2 ? null : movingBySide.left || movingBySide.right,
       busy: this.busy || this.stopping, error: this.error,
     }
   }
@@ -141,8 +149,9 @@ export class BaseController {
     return write
   }
 
-  async setPosition(input: BasePosition, canMove: () => Promise<boolean> = async () => true): Promise<void> {
-    const position = basePositionSchema.parse(input)
+  async setPosition(input: BaseMove, canMove: () => Promise<boolean> = async () => true): Promise<void> {
+    const position = baseMoveSchema.parse(input)
+    if (position.sides.length !== 2) throw new BaseError('unavailable', 'This base supports whole-bed movement only')
     this.assertReady(true)
     if (this.busy || this.stopping) throw new BaseError('busy', 'Another base command is in progress')
     this.busy = true

@@ -1,6 +1,8 @@
 # Adjustable-base control
 
-Open **Temperature → Base** (`/<language>/base`). The page offers head/feet targets, movement speed, Flat/Sleep/Relax/Read presets, measured angles for each side, Stop, and recurring whole-bed schedules. Changing a slider only edits the target; Apply sends it. Presets send immediately. The illustration previews the selected target, not measured motion.
+Open **Temperature → Base** (`/<language>/base`). The page overlays measured positions and targets on a bed profile. Head/feet steppers and presets edit a target; **Move** sends it with the selected speed. **Move immediately when selecting a preset** is an opt-in browser preference. **Stop both** always remains enabled and reports delivery failures visibly.
+
+The per-side layouts from the design's 2a/2b are selectable as **Side cards** and **Single card** when `independentControl` is true. Side cards have independent targets and a persisted link toggle; linking copies the left target to the right. Single card has a persisted Both/name/name scope switch and overlays both measured positions. Names come from side settings. Both layouts share targets, speed and schedules. The demo simulates independent movement and Stop over time.
 
 ## Setup and supported hardware
 
@@ -16,13 +18,13 @@ The address is the already-paired base, not the Pod. The controller validates bo
 
 Use Reconnect after setup/configuration changes. Missing configuration does not start Bluetooth and does not affect temperature control. Failed connections retry with bounded backoff; movement commands are never replayed after reconnect. A restart also never restores an old requested base position.
 
-Only synchronized whole-bed positioning is implemented. `SplitBase: true` is displayed, but both halves still move together. Do not infer independent-side support from the separate measured angles.
+The current TriMix transport supports synchronized whole-bed positioning only and reports `independentControl: false`, including when `SplitBase: true`. The UI therefore falls back to one whole-bed card and hides the per-side switches. One-sided API commands and schedules are rejected rather than silently moving both halves. Independent hardware commands require a separately qualified transport. Calibrated limits remain 60° head and 45° feet; minimum speed is 30%, so the design’s 25% segment is disabled and 50/75/100% are available.
 
 ## Status and schedules
 
-Measured positions come only from checksum-valid position notifications. A fresh connection starts with unknown angles. After ten seconds without a position notification, the display becomes unavailable and new moves are blocked. Stop remains available while connected even with stale telemetry. A successful command response acknowledges the Bluetooth write, not physical arrival or physical stopping. Motion is estimated from tick changes and shown as unknown when stale.
+Measured positions come only from checksum-valid position notifications. A fresh connection starts with unknown angles. After ten seconds without a position notification, the display becomes unavailable and new moves are blocked. Stop remains enabled even offline or with stale telemetry; offline commands return a visible error. A successful command response acknowledges the Bluetooth write, not physical arrival or physical stopping. Motion is estimated from tick changes and shown as unknown when stale.
 
-Schedules use the device timezone and the selected **calendar day** (Monday 01:00 means early Monday, not Tuesday). Each row moves both sides; duplicate day/time rows are rejected. Either side's away mode suppresses a scheduled move. Cooling power does not gate base movement. Edit adjusts the existing row; Pause preserves it; Delete removes it. Missed or failed movements are not caught up or retried. Changing timezone rebuilds recurring jobs through the existing JobManager reload path.
+Schedules use the device timezone and the selected **calendar day** (Monday 01:00 means early Monday, not Tuesday). Rows include a side (`both`, `left`, `right`), preset name, and a single day, Daily, Weekdays, or Weekends. Overlapping day/time slots for the same physical side are rejected. Only the selected side’s away mode suppresses a side schedule; `both` is suppressed if either side is away. The current synchronized transport only accepts `both`. Cooling power does not gate base movement. The sentence form (side cards) and compact form (single card) add named presets; Delete removes a row. The API retains update and pause support for existing clients. Legacy schedules migrate to `both` without changing their targets or enabled state. Missed or failed movements are not caught up or retried. A callback or lock wait more than one minute late is skipped. Changing timezone rebuilds recurring jobs through the existing JobManager reload path.
 
 ## Local API
 
@@ -30,17 +32,17 @@ The same LAN-only trust model as the rest of the Pod applies. REST paths below h
 
 | REST | Purpose |
 | --- | --- |
-| GET `/base/status` | Connection, separate-side measured position, age/stale state, estimated motion |
+| GET `/base/status` | Connection, separate-side measured position, age/stale state, global and per-side estimated motion (`movingBySide`), `independentControl` capability |
 | POST `/base/reconnect` with `{}` | Reload stock configuration and reconnect |
-| POST `/base/position` | `{head: 0..60, feet: 0..45, feedRate: 30..100}`; integers; rate defaults to 50 |
-| POST `/base/preset` | `{preset: "flat" | "sleep" | "relax" | "read"}` |
+| POST `/base/position` | `{head: 0..60, feet: 0..45, feedRate: 30..100}`; integers; rate defaults to 50; `sides` defaults to `["left", "right"]` |
+| POST `/base/preset` | `{preset: "flat" | "sleep" | "relax" | "read", sides?: ["left", "right"]}` |
 | POST `/base/stop` with `{}` | Cancel pending movement and send synchronized stop |
 | GET `/base/schedules` | List scheduled positions |
-| POST `/base/schedules` | Create/update: optional `id`, `dayOfWeek`, `time` (HH:mm), `enabled`, head/feet/rate |
+| POST `/base/schedules` | Create/update: optional `id`, `dayOfWeek`, `time` (HH:mm), `enabled`, head/feet/rate, `side` (defaults to `both`), `presetName`; `dayOfWeek` also accepts `daily`, `weekdays`, `weekends` |
 | DELETE `/base/schedules/{id}` | Remove a schedule |
 
 ## Deployment and qualification
 
-Configuration database migration `0017_warm_synch` is generated by Drizzle and runs through the existing startup migration path. There is no biometrics migration. `dbus-next` is a server external dependency. Its pinned pnpm patch makes the unused desktop X11 import optional so Next's standalone tracer can package the system-bus client. The optional usocket native addon is excluded by a package-scoped pnpm override; Node's Unix-socket fallback is used. This avoids adding a native build and its transitive installer dependencies to the Pod.
+Configuration database migrations `0017_warm_synch` and `0018_daffy_baron_zemo` are generated by Drizzle and run through the existing startup migration path. There is no biometrics migration. `dbus-next` is a server external dependency. Its pinned pnpm patch makes the unused desktop X11 import optional so Next's standalone tracer can package the system-bus client. The optional usocket native addon is excluded by a package-scoped pnpm override; Node's Unix-socket fallback is used. This avoids adding a native build and its transitive installer dependencies to the Pod.
 
 Software tests use fake transport/D-Bus replies and local SQLite. They do not prove physical operation. On a paired TriMix base, qualification should verify configuration discovery; both sides' reported angles; a small head and feet change; each preset; Stop during motion and between motor writes; disconnected/stale states; reconnect without replay; and one calendar-time schedule with away suppression. Confirm the upstream irregular degree/tick calibration against that hardware before relying on large-angle positions. If Bluetooth is disconnected, the UI cannot confirm or deliver a stop to the base.

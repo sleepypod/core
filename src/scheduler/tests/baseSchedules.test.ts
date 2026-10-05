@@ -64,6 +64,49 @@ describe('whole-bed elevation scheduling', () => {
     await manager.runBaseJob(row.id)
     expect(base.setPosition).toHaveBeenCalledTimes(1)
   })
+  it.each([['daily', '0,1,2,3,4,5,6'], ['weekdays', '1,2,3,4,5'], ['weekends', '0,6']] as const)('registers %s in the device timezone', (dayOfWeek, days) => {
+    const row = db.insert(baseSchedules).values({ ...values, dayOfWeek }).returning().get()
+    manager.upsertBaseSchedule(row)
+    expect(nodeSchedule.scheduleJob).toHaveBeenCalledWith({ tz: 'Europe/Berlin', rule: `30 22 * * ${days}` }, expect.any(Function))
+  })
+  it.each(['left', 'right'] as const)('checks only the %s side away mode and rechecks scope inside the lock', async (side) => {
+    const other = side === 'left' ? 'right' : 'left'
+    const row = db.insert(baseSchedules).values({ ...values, side }).returning().get()
+    db.update(sideSettings).set({ awayMode: true }).where(eq(sideSettings.side, other)).run()
+    base.setPosition.mockImplementation(async (position, guard: () => Promise<boolean>) => {
+      expect(position.sides).toEqual([side])
+      expect(await guard()).toBe(true)
+      db.update(sideSettings).set({ awayMode: true }).where(eq(sideSettings.side, side)).run()
+      expect(await guard()).toBe(false)
+      db.update(sideSettings).set({ awayMode: false }).run()
+      db.update(baseSchedules).set({ side: other }).where(eq(baseSchedules.id, row.id)).run()
+      expect(await guard()).toBe(false)
+    })
+    await manager.runBaseJob(row.id)
+    expect(base.setPosition).toHaveBeenCalledOnce()
+  })
+  it('skips a missed base invocation after suspend instead of catching up', async () => {
+    const row = db.insert(baseSchedules).values(values).returning().get()
+    manager.upsertBaseSchedule(row)
+    const callback = vi.mocked(nodeSchedule.scheduleJob).mock.calls.at(-1)?.[1] as (date: Date) => Promise<void>
+    await callback(new Date(Date.now() - 61_000))
+    expect(base.setPosition).not.toHaveBeenCalled()
+  })
+  it('skips a move that waited too long for a hardware lock', async () => {
+    const row = db.insert(baseSchedules).values(values).returning().get()
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    base.setPosition.mockImplementation(async (_position, guard: () => Promise<boolean>) => {
+      clock.mockReturnValue(now + 61_000)
+      expect(await guard()).toBe(false)
+    })
+    try {
+      await manager.runBaseJob(row.id)
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
   it('does not send disabled or deleted schedules', async () => {
     const row = db.insert(baseSchedules).values({ ...values, enabled: false }).returning().get()
     await manager.runBaseJob(row.id)

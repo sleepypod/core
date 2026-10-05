@@ -336,13 +336,15 @@ export const automationRuns = sqliteTable('automation_runs', {
 // Indexes are now defined inline within each table definition above using index()
 // This ensures Drizzle Kit generates them in migrations
 
-// A synchronized adjustable base is a whole-bed actuator, not a per-side one.
+// Side-aware schedules; synchronized transports only accept both sides.
 export const baseSchedules = sqliteTable('base_schedules', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  dayOfWeek: text('day_of_week', { enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] }).notNull(),
+  dayOfWeek: text('day_of_week', { enum: ['daily', 'weekdays', 'weekends', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] }).notNull(),
+  side: text('side', { enum: ['both', 'left', 'right'] }).notNull().default('both'),
+  presetName: text('preset_name').notNull().default('Custom'),
   time: text('time').notNull(),
   head: integer('head').notNull(),
   feet: integer('feet').notNull(),
   feedRate: integer('feed_rate').notNull().default(50),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-}, table => [uniqueIndex('base_schedules_day_time').on(table.dayOfWeek, table.time)])
+}, table => [uniqueIndex('base_schedules_day_time_side').on(table.dayOfWeek, table.time, table.side)])

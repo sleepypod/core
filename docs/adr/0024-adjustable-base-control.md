@@ -34,3 +34,11 @@ The BLE adapter must fail visibly on unexpected BlueZ responses. No command is s
 Physical qualification is still required on a TriMix base before claiming verified physical operation; the local implementation can be validated without energizing hardware. See the investigation for firmware assumptions and provenance.
 
 The dbus-next package has an unguarded optional desktop X11 import. A pinned pnpm patch wraps only that require in try/catch; no X11 package or native addon is needed for the system bus. A package-scoped override excludes optional usocket and its native installer dependencies; ordinary filesystem Unix sockets use Node net. See [setup and qualification](../hardware/ADJUSTABLE-BASE.md).
+
+## Per-side UI and schedule extension (2a/2b)
+
+The Base page now provides both requested layouts behind an explicit `independentControl` capability. This supersedes the whole-bed-only UI and data-model choices in decisions 7–8, while retaining the hardware restriction in decision 5. The current TriMix transport advertises false; separate measurements or `SplitBase` alone are not evidence of independent actuation. Its controller rejects one-sided writes before taking locks or writing BLE. The demo advertises true and simulates per-side measured motion.
+
+Targets are separate from telemetry in both layouts. Layout, link state, last scope, and opt-in immediate presets persist in browser storage. Stop is global and always enabled, with visible command failures. Calibrated limits remain 60°/45° and 30–100% speed; 25% is visibly unavailable. No motor selectors or calibration tables change.
+
+Generated migration 0018 extends schedules with side and preset name, preserving old rows as `both`. Recurrence includes Daily/Weekdays/Weekends. The scheduler checks only the affected side(s) for away mode, rechecks scope and targets under the controller lock, and skips callbacks or lock waits over one minute late. API validation prevents overlapping recurrence slots for the same side and rejects per-side schedules on synchronized transports. Existing update/pause API calls remain supported.

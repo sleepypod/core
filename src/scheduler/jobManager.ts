@@ -1,3 +1,4 @@
+import { baseDayNumbers, scopeSides } from '@/src/hardware/base/types'
 import { getBaseController } from '@/src/hardware/base/instance'
 import { getTemperatureController } from '@/src/temperature/instance'
 import { Scheduler } from './scheduler'
@@ -317,7 +318,7 @@ export class JobManager {
     getBaseController()
     const [hour, minute] = this.parseTime(sched.time)
     this.scheduler.scheduleJob(`base-${sched.id}`, JobType.BASE,
-      this.buildWeeklyCron(sched.dayOfWeek, hour, minute),
+      `${minute} ${hour} * * ${baseDayNumbers(sched.dayOfWeek).join(',')}`,
       () => this.runBaseJob(sched.id), { scheduleId: sched.id })
   }
 
@@ -329,13 +330,14 @@ export class JobManager {
     if (this.shutdownRequested) return
     const [row] = await db.select().from(baseSchedules).where(eq(baseSchedules.id, id))
     if (!row?.enabled) return
-    await getBaseController().setPosition(row, async () => {
-      if (this.shutdownRequested) return false
+    const deadline = Date.now() + 60_000
+    await getBaseController().setPosition({ ...row, sides: scopeSides(row.side) }, async () => {
+      if (this.shutdownRequested || Date.now() > deadline) return false
       const [current] = await db.select().from(baseSchedules).where(eq(baseSchedules.id, id))
       if (!current?.enabled || current.head !== row.head || current.feet !== row.feet || current.feedRate !== row.feedRate
-        || current.dayOfWeek !== row.dayOfWeek || current.time !== row.time) return false
+        || current.dayOfWeek !== row.dayOfWeek || current.time !== row.time || current.side !== row.side) return false
       const sides = await db.select().from(sideSettings)
-      return sides.some(s => s.side === 'left') && sides.some(s => s.side === 'right') && !sides.some(s => s.awayMode)
+      return scopeSides(row.side).every(side => sides.some(s => s.side === side && !s.awayMode))
     })
   }
 
