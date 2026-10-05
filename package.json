@@ -80,7 +80,7 @@
   "devDependencies": {
     "@babel/preset-typescript": "^7.28.5",
     "@codecov/nextjs-webpack-plugin": "^2.0.1",
-    "@eslint/css": "^1.0.0",
+    "@eslint/css": "^2.0.0",
     "@eslint/js": "^9.39.3",
     "@eslint/json": "^2.0.0",
     "@lingui/babel-plugin-lingui-macro": "^5.9.2",
