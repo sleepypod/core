@@ -1,6 +1,6 @@
 # Adjustable-base implementation verification
 
-Verified locally on 2026-10-04 in `.codex/worktrees/adjustable-base`, branch `feat/adjustable-base`, starting from `0348650a7af63f66ffec2a7f3bf4160702efd65d` (origin/dev). Work is local; no deploy, push or physical base movement was performed.
+Verified locally on 2026-10-04 in `.codex/worktrees/adjustable-base`, branch `feat/adjustable-base`, starting from `0348650a7af63f66ffec2a7f3bf4160702efd65d` (origin/dev). No deploy or physical base movement was performed.
 
 ## Requirements and evidence
 
@@ -31,7 +31,7 @@ Verified locally on 2026-10-04 in `.codex/worktrees/adjustable-base`, branch `fe
 - `git diff --check`: passed.
 - Migration journal timestamps verified strictly increasing; schema snapshot reviewed for only the added base table.
 
-The one full-suite failure is `src/demo/tests/coverage.test.ts`, reporting missing `system.getSensorSource`. This is pre-existing at starting commit `0348650a`: `git show HEAD:src/components/Settings/SensorSourceCard.tsx` already calls that procedure, while `git show HEAD:src/demo/handlers/system.ts` has no corresponding handler. Those production files were not changed. All newly added base demo handlers have real-router contract coverage. The new schema/router expectations were updated and their tests pass.
+The initial full-suite failure was `src/demo/tests/coverage.test.ts`, reporting missing `system.getSensorSource`. This was pre-existing at starting commit `0348650a`: `SensorSourceCard.tsx` already called that procedure, while `src/demo/handlers/system.ts` had no corresponding handler. The pre-push gate reproduced it, so a separate fix adds the demo response. Demo coverage and real-router contract tests now pass: **2 files, 70 tests**. All newly added base demo handlers have real-router contract coverage. The new schema/router expectations were updated and their tests pass.
 
 ## Practical limit
 
