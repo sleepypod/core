@@ -1,0 +1,54 @@
+#!/bin/bash
+# Compact support context shared by sp-status, sp-logs, and sp-bundle-logs.
+# Never source .env or dump device serials/credentials. Hardware is queried
+# through the existing HTTP API, not by opening another DAC connection.
+INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
+NODE=/usr/local/bin/node
+[ -x "$NODE" ] || NODE=$(command -v node 2>/dev/null || true)
+
+printf '=== pod / firmware / build ===\n'
+port=${PORT:-}
+if [ -z "$port" ] && [ -r "$INSTALL_DIR/.env" ]; then
+  port=$(sed -n 's/^PORT=//p' "$INSTALL_DIR/.env" | head -1 | tr -d '\"\047')
+fi
+case "$port" in ''|*[!0-9]*) port=3000 ;; esac
+model=""
+if [ -n "$NODE" ] && command -v curl >/dev/null 2>&1; then
+  model=$(curl --silent --fail --max-time 2 --noproxy '*' "http://127.0.0.1:$port/api/device/status" 2>/dev/null \
+    | "$NODE" -e '
+      let input = "";
+      process.stdin.on("data", chunk => input += chunk);
+      process.stdin.on("end", () => {
+        try {
+          const status = JSON.parse(input);
+          const revision = String(status.sensorLabel || "").split("-").reverse().find(s => /^[H-Z][0-9]{2}$/.test(s));
+          if (revision) console.log(`Pod ${revision[0] === "H" ? 3 : revision[0] === "I" ? 4 : 5} (${revision})`);
+        } catch {}
+      });
+    ' 2>/dev/null)
+fi
+printf 'pod model:   %s\n' "${model:-unknown (device status unavailable)}"
+printf 'rat_version: %s\n' "$(cat /etc/rat_version 2>/dev/null || echo unknown)"
+epoch=$(cat /etc/build_time_epoch 2>/dev/null || true)
+if [ -n "$epoch" ]; then
+  built=$(date -u -d "@$epoch" 2>/dev/null || echo "$epoch (epoch)")
+  printf 'built (UTC): %s\n' "$built"
+else
+  echo 'built (UTC): unknown'
+fi
+if [ -f /opt/eight/bin/frank.sh ]; then
+  echo 'frank.sh:    present (legacy firmware path)'
+else
+  echo 'frank.sh:    absent'
+fi
+if [ -n "$NODE" ] && [ -r "$INSTALL_DIR/.git-info" ]; then
+  "$NODE" -e '
+    try {
+      const info = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      console.log(`sleepypod:   ${info.commitHash || "unknown"} (${info.branch || "unknown"})`);
+      console.log(`app built:   ${info.buildDate || "unknown"}`);
+    } catch { console.log("sleepypod:   unknown (unreadable build metadata)"); }
+  ' "$INSTALL_DIR/.git-info"
+else
+  echo 'sleepypod:   unknown (build metadata unavailable)'
+fi

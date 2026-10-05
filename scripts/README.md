@@ -177,8 +177,9 @@ After installation (installed from `scripts/bin/`):
 - `sp-status` - Report service + firmware variant + biometrics pipeline (old `.RAW` shim vs mid-era direct `.RAW` vs new NATS JetStream), module health, and firmware-side service rollup. Output is paste-friendly for support threads.
 - `sp-storage-cleanup` - Remove sleepypod's own leftovers on `/persistent` (stale rollback/staging dirs, old `sleepypod-releases/*` builds, orphaned relocated `node_modules`; old DB backups with `--include-db-backups`). `--dry-run --json` prints the plan. Run by `sp-update` and by System → Storage.
 - `sp-restart` - Restart sleepypod + reconnect frankenfirmware
-- `sp-logs` - View live logs
-- `sp-bundle-logs` - One-shot diagnostic capture (`/tmp/sleepypod-bundle-<ts>.tar.gz`); redacts secrets by default, pass `--no-redact` for raw
+- `sp-info` - Pod model, firmware revision/build date, and SleepyPod build (model is unknown if the device-status API is unavailable)
+- `sp-logs` - View live logs with support context; `--firmware` adds firmware logs, `--since TIME --until TIME` selects history across retained boots
+- `sp-bundle-logs` - One-shot diagnostic capture (`/tmp/sleepypod-bundle-<ts>.tar.gz`); includes firmware/app journals and their combined timeline plus pod/firmware/build context; `--since TIME --until TIME` captures an incident across retained boots; redacts secrets by default, pass `--no-redact` for raw
 - `sp-update` - Update to latest version from GitHub
 - `sp-uninstall` - Remove sleepypod and all related services
 
@@ -275,6 +276,7 @@ scripts/
 ├── pod/
 │   └── detect               # Pod detection: DAC_SOCK_PATH, POD_GEN
 ├── bin/                     # CLI tools — copied to /usr/local/bin/ during install
+│   ├── sp-info
 │   ├── sp-status
 │   ├── sp-restart
 │   ├── sp-logs

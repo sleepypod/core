@@ -1,2 +1,24 @@
 #!/bin/bash
-journalctl -u sleepypod.service -f
+# Follow app logs by default; --firmware includes frank in the same timeline.
+# A time window selects historical logs across boots instead of following.
+set -o pipefail
+units=(-u sleepypod.service)
+window=()
+follow=(-f)
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --firmware) units+=(-u frank.service); shift ;;
+    --since|--until)
+      if [ "$#" -lt 2 ] || [ -z "$2" ] || [[ "$2" == --* ]]; then
+        echo "Missing value for $1" >&2; exit 2
+      fi
+      window+=("$1" "$2"); follow=(); shift 2 ;;
+    --no-pager) shift ;; # Always disabled for copyable support output.
+    -h|--help)
+      echo "Usage: sp-logs [--firmware] [--since TIME] [--until TIME] [--no-pager]"
+      exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+"$(dirname "$0")/sp-info"
+exec journalctl "${units[@]}" "${window[@]}" "${follow[@]}" --no-pager

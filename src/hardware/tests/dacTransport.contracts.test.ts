@@ -328,6 +328,38 @@ describe('dacTransport private transport contracts through the public API', () =
     await expect(transport.sendCommand('stream-end')).rejects.toThrow('stream ended')
   })
 
+  it('ignores late old-socket events after adopting replacement firmware', async () => {
+    const { socket: old, server } = await connectHarnessSocket()
+    old.emit('end')
+    expect(transport.isDacConnected()).toBe(false)
+    const replacement = new HarnessSocket()
+    server.emit('connection', replacement)
+    const command = transport.sendCommand('0')
+    await waitForWrites(replacement, 1)
+    // The old close can be delivered after the new connection is installed.
+    old.emit('close')
+    expect(transport.isDacConnected()).toBe(true)
+    replacement.respond('READY\n\n')
+    await expect(command).resolves.toBe('READY')
+    expect(harness.servers).toHaveLength(1)
+  })
+
+  it('skips a dead queued connection while waiting for live replacement firmware', async () => {
+    const { socket: old, server } = await connectHarnessSocket()
+    const stale = new HarnessSocket()
+    server.emit('connection', stale)
+    stale.destroy()
+    old.emit('end')
+    const command = transport.sendCommand('0')
+    const replacement = new HarnessSocket()
+    server.emit('connection', replacement)
+    await waitForWrites(replacement, 1)
+    replacement.respond('READY\n\n')
+    await expect(command).resolves.toBe('READY')
+    expect(stale.writes).toEqual([])
+    expect(harness.servers).toHaveLength(1)
+  })
+
   it('keeps only the newest unsolicited connection and closes every pending socket on shutdown', async () => {
     const { server } = await connectHarnessSocket()
     const stale = new HarnessSocket()

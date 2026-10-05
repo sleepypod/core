@@ -74,6 +74,17 @@ export const getDacMonitor = async (): Promise<DacMonitor> => {
       const gestureHandler = new GestureActionHandler(DAC_SOCK_PATH, defaultGestureActionDeps)
       const stateSync = new DeviceStateSync()
 
+      // EventEmitter throws unhandled 'error' events. Log once per outage;
+      // polls continue and the transport accepts replacement firmware.
+      let reportedError = false
+      monitor.on('error', (error) => {
+        if (!reportedError) console.warn('[DAC] monitor disconnected:', error.message)
+        reportedError = true
+      })
+      monitor.on('connection:established', () => {
+        reportedError = false
+      })
+
       // Taps arrive from status polling and, on firmware that writes them,
       // from tap-gesture sensor records; the dispatcher handles each tap once.
       const gestures = new GestureDispatcher((event) => {

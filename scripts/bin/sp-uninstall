@@ -85,6 +85,8 @@ systemctl daemon-reload
 
 # Remove CLI tools
 echo "Removing CLI tools..."
+rm -f /usr/local/bin/sp-info
+rm -f /usr/local/bin/sp-bundle-logs
 rm -f /usr/local/bin/sp-status
 rm -f /usr/local/bin/sp-restart
 rm -f /usr/local/bin/sp-logs
