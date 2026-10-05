@@ -197,6 +197,9 @@ in-app surfaces answer it without a shell:
   `system.getSensorSource`). Read-only. Shows the firmware generation, the
   transport the core's stream picked at startup, and the age of the last live
   frame, with a note when the two disagree or an env override is in force.
+  The firmware half is probed once per process (the signals cannot change
+  while the core is running); only the stream fields are live on each poll,
+  and a service restart re-detects.
 - **System → Health** (`health.dataPath`) already renders the `frames` node as
   `NATS · 3s ago` / `RAW · …`. The card reuses the same freshness thresholds
   so the two never disagree about whether data is flowing.

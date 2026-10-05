@@ -1,5 +1,4 @@
 import type { DemoHandlers, RouterOutputs } from '../types'
-import { FIRMWARE_LABELS } from '@/src/lib/firmwareGeneration'
 import { DAY, HOUR, MINUTE, hashSeed, seededRandom } from '../util'
 
 type Storage = RouterOutputs['system']['getStorage']
@@ -161,28 +160,20 @@ export const system: DemoHandlers<'system'> = {
     return { freedBytes: removed.reduce((s, i) => s + i.bytes, 0), removed: removed.length }
   },
 
-  getVersion: () => {
-    if (pendingUpdateAt !== null && Date.now() >= pendingUpdateAt) {
-      buildDate = new Date(pendingUpdateAt).toISOString()
-      pendingUpdateAt = null
-    }
-    return { branch: 'demo', commitHash: COMMIT, commitTitle: COMMIT_TITLE, buildDate, version: null }
-  },
-
   getSensorSource: () => {
-    // The demo socket emits a piezo frame roughly once a second; report the last whole second.
-    const lastFrameAtMs = Math.floor(Date.now() / 1000) * 1000
+    const lastFrameAgeMs = 400 + (Date.now() % 1_200)
     return {
       firmware: {
         generation: 'nats',
-        ...FIRMWARE_LABELS.nats,
+        label: 'NATS JetStream',
+        detail: 'New firmware. Sensor frames arrive over NATS JetStream.',
         expectedTransport: 'nats',
         probed: true,
         signals: {
           natsUnitInstalled: true,
           natsServerActive: true,
           jetstreamDirPresent: true,
-          biometricsTmpfsMounted: true,
+          biometricsTmpfsMounted: false,
           frankShimRoutesTmpfs: false,
           frankServiceRoutesTmpfs: false,
         },
@@ -191,13 +182,21 @@ export const system: DemoHandlers<'system'> = {
         source: 'nats',
         override: null,
         legacyNatsDisabled: false,
-        lastFrameAtMs,
-        lastFrameAgeMs: Date.now() - lastFrameAtMs,
+        lastFrameAtMs: Date.now() - lastFrameAgeMs,
+        lastFrameAgeMs,
         lastFrameType: 'piezo-dual',
         firstFrameMs: 3124,
         uptimeSeconds: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000),
       },
     }
+  },
+
+  getVersion: () => {
+    if (pendingUpdateAt !== null && Date.now() >= pendingUpdateAt) {
+      buildDate = new Date(pendingUpdateAt).toISOString()
+      pendingUpdateAt = null
+    }
+    return { branch: 'demo', commitHash: COMMIT, commitTitle: COMMIT_TITLE, buildDate, version: null }
   },
 }
 
