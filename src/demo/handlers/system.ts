@@ -111,6 +111,34 @@ function storage(): Storage {
 }
 
 export const system: DemoHandlers<'system'> = {
+  getSensorSource: () => ({
+    firmware: {
+      generation: 'nats',
+      label: 'NATS (demo)',
+      detail: 'Simulated firmware with a local NATS sensor stream.',
+      expectedTransport: 'nats',
+      probed: true,
+      signals: {
+        natsUnitInstalled: true,
+        natsServerActive: true,
+        jetstreamDirPresent: true,
+        biometricsTmpfsMounted: true,
+        frankShimRoutesTmpfs: false,
+        frankServiceRoutesTmpfs: false,
+      },
+    },
+    stream: {
+      source: 'nats',
+      override: null,
+      legacyNatsDisabled: false,
+      lastFrameAtMs: Date.now() - 250,
+      lastFrameAgeMs: 250,
+      lastFrameType: 'piezo-dual',
+      firstFrameMs: 120,
+      uptimeSeconds: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000),
+    },
+  }),
+
   internetStatus: () => ({ blocked: internetBlocked }),
 
   setInternetAccess: (input) => {
