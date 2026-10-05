@@ -23,12 +23,16 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
 } }))
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })))
   localStorage.clear()
   mock.pending = false
   mock.error = null
   mock.status = { state: 'connected', splitBase: true, independentControl: true, movingBySide: { left: false, right: false }, position: { left: { head: 1, feet: 5 }, right: { head: 30, feet: 15 } }, stale: false, moving: false, lastUpdate: Date.now(), busy: false, error: null }
 })
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 const left = () => within(screen.getByRole('region', { name: 'Jon base controls' }))
 const right = () => within(screen.getByRole('region', { name: 'Heidi base controls' }))
 const single = () => fireEvent.click(screen.getByRole('button', { name: 'Single card' }))
