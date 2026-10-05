@@ -22,6 +22,7 @@ const sensorSingleton = (globalThis as any).__sleepypod_sensorStream
 const originalWebSocket = globalThis.WebSocket
 const originalLocationDescriptor = Object.getOwnPropertyDescriptor(window, 'location')
 const originalPiezoWsPort = process.env.NEXT_PUBLIC_PIEZO_WS_PORT
+const originalDemoFlag = process.env.NEXT_PUBLIC_DEMO
 
 function restorePiezoWsPort(): void {
   if (originalPiezoWsPort === undefined) delete process.env.NEXT_PUBLIC_PIEZO_WS_PORT
@@ -30,6 +31,7 @@ function restorePiezoWsPort(): void {
 
 interface FakeWS {
   url: string
+  protocol: string | undefined
   readyState: number
   sent: string[]
   onopen?: () => void
@@ -48,20 +50,40 @@ const wsMock = vi.hoisted(() => {
   return { sockets }
 })
 
+const demoMock = vi.hoisted(() => ({ calls: 0, socket: null as any }))
+vi.mock('@/src/demo/socket', () => ({
+  createDemoSocket: () => {
+    demoMock.calls++
+    demoMock.socket = {
+      readyState: 0,
+      sent: [] as string[],
+      send(data: string) {
+        this.sent.push(data)
+      },
+      close() {
+        this.readyState = 3
+      },
+    }
+    return demoMock.socket
+  },
+}))
+
 beforeAll(() => {
   ;(globalThis as any).WebSocket = class {
     static OPEN = 1
     static CONNECTING = 0
     static CLOSED = 3
     url: string
+    protocol: string | undefined
     readyState = 0
     sent: string[] = []
     onopen?: () => void
     onmessage?: (e: { data: string }) => void
     onclose?: () => void
     onerror?: () => void
-    constructor(url: string) {
+    constructor(url: string, protocol?: string) {
       this.url = url
+      this.protocol = protocol
       wsMock.sockets.push(this)
     }
 
@@ -137,6 +159,10 @@ afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     restorePiezoWsPort()
+    if (originalDemoFlag === undefined) delete process.env.NEXT_PUBLIC_DEMO
+    else process.env.NEXT_PUBLIC_DEMO = originalDemoFlag
+    demoMock.calls = 0
+    demoMock.socket = null
   }
 })
 
@@ -1197,5 +1223,146 @@ describe('intentional WebSocket close callback', () => {
       expect(sensorSingleton.reconnectTimeout).toBeNull()
     }
     finally { stream.unmount() }
+  })
+})
+
+describe('useSensorStream — #591 mutation kills', () => {
+  const piezo = (ts: number) => ({ type: 'piezo-dual', ts, freq: 500, left1: [ts], right1: [ts] })
+
+  async function openStream() {
+    const stream = renderHook(() => useSensorStream())
+    await waitFor(() => expect(wsMock.sockets.length).toBe(1))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    return { stream, ws }
+  }
+
+  it('snapshot replaces a live frame with an equal-or-newer timestamp', async () => {
+    const { stream, ws } = await openStream()
+    act(() => ws.triggerMessage({ type: 'gesture', ts: 100, side: 'left', tapType: 'single' }))
+    act(() => ws.triggerMessage({ type: 'snapshot', latest: [{ type: 'gesture', ts: 100, side: 'left', tapType: 'double' }], waveform: [] }))
+    expect(stream.result.current.latestFrames.gesture).toMatchObject({ ts: 100, tapType: 'double' })
+    act(() => ws.triggerMessage({ type: 'snapshot', latest: [{ type: 'gesture', ts: 110, side: 'left', tapType: 'triple' }], waveform: [] }))
+    expect(stream.result.current.latestFrames.gesture).toMatchObject({ ts: 110, tapType: 'triple' })
+    stream.unmount()
+  })
+
+  it('snapshot lastSensorTime is the newest non-deviceStatus measurement in ms', async () => {
+    const { stream, ws } = await openStream()
+    act(() => ws.triggerMessage({
+      type: 'snapshot',
+      latest: [
+        { type: 'capSense', ts: 100, left: 1, right: 2 },
+        { type: 'bedTemp', ts: 150 },
+        { type: 'deviceStatus', ts: 200, left: {}, right: {} },
+      ],
+      waveform: [],
+    }))
+    expect(stream.result.current.lastSensorTime).toBe(150_000)
+    stream.unmount()
+  })
+
+  it('snapshot with only a deviceStatus frame leaves lastSensorTime null', async () => {
+    const { stream, ws } = await openStream()
+    act(() => ws.triggerMessage({ type: 'snapshot', latest: [{ type: 'deviceStatus', ts: 200, left: {}, right: {} }], waveform: [] }))
+    expect(stream.result.current.lastSensorTime).toBeNull()
+    expect(stream.result.current.latestFrames.deviceStatus?.ts).toBe(200)
+    stream.unmount()
+  })
+
+  it('accepts a live frame whose timestamp equals the previous one', async () => {
+    const { stream, ws } = await openStream()
+    act(() => ws.triggerMessage({ type: 'gesture', ts: 100, side: 'left', tapType: 'single' }))
+    act(() => ws.triggerMessage({ type: 'gesture', ts: 100, side: 'left', tapType: 'double' }))
+    expect(stream.result.current.latestFrames.gesture).toMatchObject({ ts: 100, tapType: 'double' })
+    stream.unmount()
+  })
+
+  it('keeps live waveform frames within the trailing 10 s window, inclusive, capped at 40', async () => {
+    const { stream, ws } = await openStream()
+    act(() => ws.triggerMessage(piezo(80)))
+    act(() => ws.triggerMessage(piezo(90)))
+    act(() => ws.triggerMessage(piezo(100)))
+    expect(stream.result.current.waveform.map(f => f.ts)).toEqual([90, 100])
+    for (let i = 1; i <= 45; i++) act(() => ws.triggerMessage(piezo(100 + i * 0.1)))
+    expect(stream.result.current.waveform).toHaveLength(40)
+    expect(stream.result.current.waveform.at(-1)?.ts).toBeCloseTo(104.5)
+    stream.unmount()
+  })
+
+  it('negotiates the sensor-snapshot-v1 subprotocol', async () => {
+    const { stream, ws } = await openStream()
+    expect(ws.protocol).toBe('sensor-snapshot-v1')
+    stream.unmount()
+  })
+
+  it('uses the demo socket only when NEXT_PUBLIC_DEMO is exactly "1"', async () => {
+    process.env.NEXT_PUBLIC_DEMO = '1'
+    const demo = renderHook(() => useSensorStream())
+    await waitFor(() => expect(demoMock.calls).toBe(1))
+    expect(wsMock.sockets).toHaveLength(0)
+    demo.unmount()
+
+    process.env.NEXT_PUBLIC_DEMO = ''
+    const real = renderHook(() => useSensorStream())
+    await waitFor(() => expect(wsMock.sockets.length).toBe(1))
+    expect(demoMock.calls).toBe(1)
+    real.unmount()
+  })
+
+  it('sends get_waveform with monotonically increasing request ids', async () => {
+    const { stream, ws } = await openStream()
+    act(() => stream.result.current.seekWaveform(70))
+    const first = JSON.parse(ws.sent.at(-1) ?? '{}')
+    expect(first).toEqual({ type: 'get_waveform', timestamp: 70, requestId: expect.any(Number) })
+    act(() => stream.result.current.seekWaveform(80))
+    const second = JSON.parse(ws.sent.at(-1) ?? '{}')
+    expect(second.requestId).toBeGreaterThan(first.requestId)
+    stream.unmount()
+  })
+
+  it('goLive clears seeking and invalidates request ids so a stale reply cannot match a later seek', async () => {
+    const { stream, ws } = await openStream()
+    act(() => stream.result.current.seekWaveform(70))
+    const first = JSON.parse(ws.sent.at(-1) ?? '{}')
+    expect(stream.result.current.isSeeking).toBe(true)
+    act(() => stream.result.current.goLive())
+    expect(stream.result.current.isSeeking).toBe(false)
+    act(() => stream.result.current.seekWaveform(80))
+    act(() => ws.triggerMessage({ type: 'waveform', requestId: first.requestId, frames: [piezo(70)] }))
+    expect(stream.result.current.replayWaveform).toEqual([])
+    expect(stream.result.current.isSeeking).toBe(true)
+    stream.unmount()
+  })
+
+  it('disconnect advances the waveform request id', async () => {
+    const stream = renderHook(() => useSensorStream())
+    await waitFor(() => expect(wsMock.sockets.length).toBe(1))
+    const before = sensorSingleton.waveformRequestId
+    stream.unmount()
+    expect(sensorSingleton.waveformRequestId).toBe(before + 1)
+  })
+
+  it('a superseded seek timer does not time out the newer in-flight request', async () => {
+    vi.useFakeTimers()
+    try {
+      const stream = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      const ws = wsMock.sockets[0] as FakeWS
+      act(() => ws.triggerOpen())
+      act(() => stream.result.current.seekWaveform(70))
+      act(() => vi.advanceTimersByTime(3_000))
+      act(() => stream.result.current.seekWaveform(80))
+      act(() => vi.advanceTimersByTime(2_000))
+      expect(stream.result.current.isSeeking).toBe(true)
+      expect(stream.result.current.lastError).toBeNull()
+      act(() => vi.advanceTimersByTime(3_000))
+      expect(stream.result.current.isSeeking).toBe(false)
+      expect(stream.result.current.lastError).toBe('Waveform request timed out')
+      stream.unmount()
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })
