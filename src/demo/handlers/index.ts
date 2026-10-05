@@ -1,3 +1,4 @@
+import { base } from './base'
 import { archivePush } from './archivePush'
 import { automations } from './automations'
 import { biometrics } from './biometrics'
@@ -17,6 +18,7 @@ import { system } from './system'
 import { waterLevel } from './waterLevel'
 
 export const demoRouters = {
+  base,
   archivePush,
   automations,
   biometrics,

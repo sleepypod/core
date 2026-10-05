@@ -434,6 +434,26 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
   {
     "checks": 0,
     "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
+      "day_of_week | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:sunday,monday,tuesday,wednesday,thursday,friday,saturday",
+      "time | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "head | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "feet | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "feed_rate | sql:integer | logical:number/SQLiteInteger | not-null | default:50 | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "enabled | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:true | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "baseSchedules",
+    "foreignKeys": [],
+    "indexes": [
+      "base_schedules_day_time | unique | columns:day_of_week,time | where:none",
+    ],
+    "name": "base_schedules",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:fn:1 | primary-key | not-unique | not-autoincrement | enum:none",
       "timezone | sql:text | logical:string/SQLiteText | not-null | default:America/Los_Angeles | not-primary-key | not-unique | not-autoincrement | enum:none",
       "temperature_unit | sql:text | logical:string/SQLiteText | not-null | default:F | not-primary-key | not-unique | not-autoincrement | enum:F,C",

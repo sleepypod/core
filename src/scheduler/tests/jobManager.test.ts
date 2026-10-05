@@ -1,3 +1,4 @@
+vi.mock('@/src/hardware/base/instance', () => ({ getBaseController: vi.fn() }))
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
@@ -61,6 +62,7 @@ vi.mock('@/src/db/schema', () => {
   // The stub DB doesn't actually query them, so the shape doesn't matter beyond the name.
   const make = (name: string) => ({ _: { name } })
   return {
+    baseSchedules: make('baseSchedules'),
     temperatureSchedules: make('temperatureSchedules'),
     powerSchedules: make('powerSchedules'),
     alarmSchedules: make('alarmSchedules'),
@@ -1364,7 +1366,7 @@ describe('JobManager.loadSchedules event-loop yielding', () => {
   it('awaits setImmediate every 25 entries so the event loop can service I/O', async () => {
     // Keep elapsed time below the budget to isolate the row-count backstop.
     vi.spyOn(performance, 'now').mockReturnValue(0)
-    // Ninety rows across the three loops require three count-based yields.
+    // 120 rows across four loops require four count-based yields.
     const rows = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, enabled: false }))
     vi.spyOn(db, 'select').mockImplementation((() => ({
       from: () => {
@@ -1380,7 +1382,7 @@ describe('JobManager.loadSchedules event-loop yielding', () => {
     const setImmediateSpy = vi.spyOn(global, 'setImmediate') as unknown as ReturnType<typeof vi.fn>
     await manager.loadSchedules()
     // The system schedules call also runs but uses .limit, not the looped path.
-    expect(setImmediateSpy).toHaveBeenCalledTimes(3)
+    expect(setImmediateSpy).toHaveBeenCalledTimes(4)
   })
 
   it.each([

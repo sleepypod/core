@@ -23,7 +23,7 @@ const nextConfig = {
   // so the correct platform binary (linux-arm64 on pod) is used.
   // hap-nodejs is included because its module-evaluation side effects
   // (HAPStorage / mDNS init) crash Next.js's page-data worker with EBADF.
-  serverExternalPackages: ['better-sqlite3', 'mqtt', 'hap-nodejs'],
+  serverExternalPackages: ['better-sqlite3', 'mqtt', 'hap-nodejs', 'dbus-next'],
   turbopack: {
     root: __dirname,
     // Lingui .po file loader (used in dev mode where Turbopack is active)

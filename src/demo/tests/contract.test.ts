@@ -56,6 +56,19 @@ describe('demo handlers honour the real router contracts', () => {
     },
   )
 
+  it('base demo mutations match the hardware API and schedule output contracts', async () => {
+    await call('base.reconnect')
+    await call('base.setPosition', { head: 20, feet: 10 })
+    await call('base.setPreset', { preset: 'relax' })
+    await call('base.stop')
+    const row = await call<{ id: number }>('base.saveSchedule', {
+      dayOfWeek: 'tuesday', time: '23:15', head: 30, feet: 15, enabled: true,
+    })
+    await call('base.saveSchedule', { ...row, enabled: false })
+    await call('base.getSchedules')
+    await call('base.deleteSchedule', { id: row.id })
+  })
+
   describe('queries with required input', () => {
     for (const side of ['left', 'right'] as const) {
       it(`answer per-side reads for ${side}`, async () => {

@@ -1,3 +1,4 @@
+import { baseRouter } from './base'
 import { z } from 'zod'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { deviceRouter } from './device'
@@ -26,6 +27,7 @@ export const appRouter = router({
     .query(() => 'yay!'),
 
   device: deviceRouter,
+  base: baseRouter,
   settings: settingsRouter,
   schedules: schedulesRouter,
   biometrics: biometricsRouter,

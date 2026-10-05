@@ -21,6 +21,7 @@ describe('appRouter public surface', () => {
     expect(Object.keys(appRouter._def.record)).toEqual([
       'healthcheck',
       'device',
+      'base',
       'settings',
       'schedules',
       'biometrics',

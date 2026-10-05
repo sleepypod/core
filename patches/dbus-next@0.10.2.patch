@@ -1,0 +1,19 @@
+diff --git a/lib/address-x11.js b/lib/address-x11.js
+index c4fbfa38cd25c940983fc5e2ef0b4a5a36f5ac61..40104b38b54bb7fe1e174c40d9d02e24e32ab90c 100644
+--- a/lib/address-x11.js
++++ b/lib/address-x11.js
+@@ -4,7 +4,13 @@ const os = require('os');
+ function getDbusAddressFromWindowSelection (callback) {
+   // read dbus adress from window selection
+   // TODO: implement this somewhere
+-  const x11 = require('x11');
++  // Optional desktop-only dependency; the system bus never needs X11.
++  let x11 = null;
++  try {
++    x11 = require('x11');
++  } catch (_) {
++    // Preserve the existing explicit unsupported-X11 error below.
++  }
+   if (x11 === null) {
+     throw new Error('cannot get session bus address from window selection: dbus-next was installed without x11 support');
+   }
