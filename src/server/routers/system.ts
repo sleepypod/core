@@ -35,7 +35,8 @@ async function collectFirmwareSignals(): Promise<{ signals: FirmwareSignals, tra
       return stdout
     }
     catch (err) {
-      if ((err as { killed?: boolean })?.killed) transient = true
+      const failure = err as { killed?: boolean, code?: string | number }
+      if (failure?.killed || (!isEnoent(err) && typeof failure?.code !== 'number')) transient = true
       return isEnoent(err) ? null : false
     }
   }
@@ -67,33 +68,35 @@ async function collectFirmwareSignals(): Promise<{ signals: FirmwareSignals, tra
   }
 }
 
-let firmwareSignalsPromise: Promise<FirmwareSignals> | null = null
+const firmwareState = globalThis as typeof globalThis & {
+  __firmwareSignalsPromise?: Promise<FirmwareSignals> | null
+}
 
 /**
  * Firmware signals cannot change while this process is alive (a firmware
  * update reboots the pod), so the four process spawns and two file reads in
  * `collectFirmwareSignals` happen once per process. The Settings → Device
  * card polls `getSensorSource` every 10 s; only the stream fields are live.
- * A service restart re-detects. A probe cut short by its timeout is served
+ * A service restart re-detects. A probe interrupted by a timeout or spawn failure is served
  * once but not memoized, so the next poll retries.
  */
 export function getFirmwareSignals(): Promise<FirmwareSignals> {
-  firmwareSignalsPromise ??= collectFirmwareSignals().then(({ signals, transient }) => {
+  firmwareState.__firmwareSignalsPromise ??= collectFirmwareSignals().then(({ signals, transient }) => {
     if (transient) {
-      firmwareSignalsPromise = null
-      console.warn('[system] firmware probe timed out; retrying on the next poll')
+      firmwareState.__firmwareSignalsPromise = null
+      console.warn('[system] firmware probe failed transiently; retrying on the next poll')
     }
     else {
       console.log('[system] firmware probed once: %s', classifyFirmware(signals))
     }
     return signals
   })
-  return firmwareSignalsPromise
+  return firmwareState.__firmwareSignalsPromise
 }
 
 /** Test-only: forget the memoized probe so each case sees a fresh process. */
 export function _resetFirmwareSignalsForTest(): void {
-  firmwareSignalsPromise = null
+  firmwareState.__firmwareSignalsPromise = null
 }
 
 const SENSOR_TRANSPORT_OVERRIDES = ['raw', 'nats'] as const

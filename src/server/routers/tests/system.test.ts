@@ -1004,6 +1004,27 @@ describe('system.getSensorSource', () => {
     expect(second.stream).toMatchObject({ source: 'nats', lastFrameAtMs: 9_000, lastFrameType: 'capSense', firstFrameMs: 1800 })
   })
 
+  it('shares an in-flight probe across module instances', async () => {
+    const first = getFirmwareSignals()
+    vi.resetModules()
+    const reloaded = await import('@/src/server/routers/system')
+    expect(reloaded.getFirmwareSignals()).toBe(first)
+    await first
+    expect(execMock.execFile).toHaveBeenCalledTimes(4)
+  })
+
+  it('retries a temporary spawn failure without a killed flag', async () => {
+    routeExec(() => Object.assign(new Error('resource unavailable'), { code: 'EAGAIN' }))
+    await getFirmwareSignals()
+    execMock.execFile.mockClear()
+    routeExec(() => undefined)
+    await getFirmwareSignals()
+    expect(execMock.execFile).toHaveBeenCalledTimes(4)
+    execMock.execFile.mockClear()
+    await getFirmwareSignals()
+    expect(execMock.execFile).not.toHaveBeenCalled()
+  })
+
   it('does not memoize a probe cut short by its timeout, so the next poll retries', async () => {
     const timedOut = Object.assign(new Error('spawn systemctl ETIMEDOUT'), { killed: true, signal: 'SIGTERM' })
     routeExec((file, args) => {
