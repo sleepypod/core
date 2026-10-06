@@ -7,7 +7,8 @@ import { BASE_SIDES, scopeSides } from '@/src/hardware/base/types'
 import type { BaseScope } from '@/src/hardware/base/types'
 import { trpc } from '@/src/utils/trpc'
 import { BaseSchedules } from './BaseSchedules'
-import { BedProfile, Presets, Speed, Steppers, buttonStyle, labelStyle, panelStyle, samePosition, usePreference } from './controls'
+import { BedView, useBedModel, useSimpleBedView } from './BedView'
+import { Presets, Speed, Steppers, buttonStyle, labelStyle, panelStyle, samePosition, usePreference } from './controls'
 import type { Angles, Targets } from './controls'
 
 export function BasePage() {
@@ -20,6 +21,8 @@ export function BasePage() {
   const [linked, setLinked] = usePreference('linked', 'false', ['true', 'false'])
   const [savedScope, setScope] = usePreference<BaseScope>('scope', 'both', ['both', 'left', 'right'])
   const [instant, setInstant] = usePreference('instantPresets', 'false', ['true', 'false'])
+  const [bedModel, setBedModel] = useBedModel()
+  const [simpleView, setSimpleView] = useSimpleBedView()
   const [notice, setNotice] = useState('')
   const [failure, setFailure] = useState('')
   const refresh = () => {
@@ -77,6 +80,7 @@ export function BasePage() {
     const label = inMotion ? 'Moving' : atTarget ? 'At target' : `Move ${selected === 'both' ? 'both ' : cards ? '' : `${names[selected]} `}to ${target.head}° / ${target.feet}°`
     return <button type="button" className={`min-h-10 min-w-0 max-w-full flex-1 overflow-hidden rounded-lg bg-fg px-3 py-2 text-sm font-medium text-ellipsis whitespace-nowrap text-app disabled:bg-active disabled:text-fg-2 disabled:opacity-45 ${cards ? 'w-full' : 'basis-full @min-[900px]:basis-auto'}`} disabled={!!(unavailable || busy || atTarget || inMotion)} onClick={() => move(requested, target)}>{label}</button>
   }
+  const bedProps = { left: measured?.left ?? null, right: measured?.right ?? null, leftTarget: targets.left, rightTarget: targets.right, moving: status?.movingBySide ?? {}, names }
   const cardStatus = (side: 'left' | 'right') => !measured ? 'NOT CONFIGURED' : status?.movingBySide[side] ? 'MOVING' : samePosition(measured[side], targets[side]) ? 'AT TARGET' : 'NOT APPLIED'
   return (
     <div className="@container flex flex-col gap-5">
@@ -143,10 +147,20 @@ export function BasePage() {
                 </div>
               )
             : <p className="text-xs text-fg-2">This base moves both sides together.</p>}
-          <label className="flex items-center gap-2 text-xs text-fg-2">
-            <input type="checkbox" checked={instant === 'true'} onChange={e => setInstant(e.target.checked ? 'true' : 'false')} />
-            Move immediately when selecting a preset
-          </label>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-fg-2">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={instant === 'true'} onChange={e => setInstant(e.target.checked ? 'true' : 'false')} />
+              Move immediately when selecting a preset
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={bedModel === 'mattress'} onChange={e => setBedModel(e.target.checked ? 'mattress' : 'base')} />
+              Show mattress
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={simpleView === 'true'} onChange={e => setSimpleView(e.target.checked ? 'true' : 'false')} />
+              Simple bed view
+            </label>
+          </div>
         </div>
         {cards
           ? (
@@ -176,7 +190,7 @@ export function BasePage() {
                         <span className={`${labelStyle} text-fg-3`}>{side}</span>
                         <span className={`ml-auto ${labelStyle} ${cardStatus(side) === 'MOVING' ? 'text-[#50c878]' : cardStatus(side) === 'AT TARGET' ? 'text-fg-2' : 'text-[#e0b45a]'}`}>{cardStatus(side)}</span>
                       </div>
-                      <BedProfile targets={targets} measured={measured} scope={side} single={side} names={names} />
+                      <BedView {...bedProps} single={side} />
                       <Steppers name={names[side]} target={targets[side]} onChange={value => edit(side, value)} />
                       <Presets targets={targets} measured={measured} scope={side} names={names} grid onSelect={value => selectPreset(side, value)} />
                       {moveButton(side)}
@@ -193,7 +207,7 @@ export function BasePage() {
                     <h2 className="text-[15px] font-medium">Position</h2>
                     {independent && <div role="group" aria-label="Selected sides" className="flex w-full rounded-lg border border-line-2 p-[3px] @min-[900px]:ml-auto @min-[900px]:w-auto">{(['both', 'left', 'right'] as const).map(side => <button type="button" key={side} aria-pressed={scope === side} onClick={() => setScope(side)} className={`min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-sm @min-[900px]:min-w-16 @min-[900px]:flex-auto ${scope === side ? 'bg-active' : 'text-fg-2'}`}>{side === 'both' ? 'Both' : names[side]}</button>)}</div>}
                   </div>
-                  <BedProfile targets={targets} measured={measured} scope={scope} names={names} />
+                  <BedView {...bedProps} split={independent} />
                   <Steppers name={scope === 'both' ? 'both' : names[scope]} target={targets[scope === 'right' ? 'right' : 'left']} onChange={value => edit(scope, value)} />
                   {scope === 'both' && !samePosition(targets.left, targets.right) && (
                     <p className="text-center text-xs text-[#e0b45a]">

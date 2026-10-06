@@ -36,14 +36,15 @@ afterEach(() => {
 const left = () => within(screen.getByRole('region', { name: 'Jon base controls' }))
 const right = () => within(screen.getByRole('region', { name: 'Heidi base controls' }))
 const single = () => fireEvent.click(screen.getByRole('button', { name: 'Single card' }))
+const instant = () => screen.getByRole('checkbox', { name: 'Move immediately when selecting a preset' })
 
 describe('per-side base controls', () => {
   it('edits targets without movement or changing measured profiles, then moves only that side', () => {
     render(<BasePage />)
-    const measured = screen.getByTestId('measured-left').getAttribute('points')
+    const measured = screen.getByTestId('bed-left').innerHTML
     fireEvent.click(screen.getByRole('button', { name: 'Raise Jon head' }))
     expect(mock.position).not.toHaveBeenCalled()
-    expect(screen.getByTestId('measured-left').getAttribute('points')).toBe(measured)
+    expect(screen.getByTestId('bed-left').innerHTML).toBe(measured)
     fireEvent.click(left().getByRole('button', { name: 'Move to 1° / 0°' }))
     expect(mock.position).toHaveBeenCalledWith({ head: 1, feet: 0, feedRate: 50, sides: ['left'] })
   })
@@ -65,13 +66,13 @@ describe('per-side base controls', () => {
   it('persists layout, scope, link and instant-preset preferences across remounts', () => {
     const view = render(<BasePage />)
     fireEvent.click(screen.getByRole('switch'))
-    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(instant())
     single()
     fireEvent.click(screen.getByRole('button', { name: 'Heidi' }))
     view.unmount()
     render(<BasePage />)
     expect(screen.getByRole('button', { name: 'Heidi' }).getAttribute('aria-pressed')).toBe('true')
-    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true)
+    expect((instant() as HTMLInputElement).checked).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Side cards' }))
     expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true')
   })
@@ -79,40 +80,48 @@ describe('per-side base controls', () => {
     render(<BasePage />)
     fireEvent.click(left().getByRole('button', { name: 'relax 30° / 15°' }))
     expect(mock.position).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(instant())
     fireEvent.click(screen.getByRole('button', { name: '75%' }))
     fireEvent.click(right().getByRole('button', { name: 'read 40° / 0°' }))
     expect(mock.position).toHaveBeenCalledWith({ head: 40, feet: 0, feedRate: 75, sides: ['right'] })
   })
-  it('shows mixed targets in Both, draws both ghosts, and applies an edit to both', () => {
+  it('shows mixed targets in Both and applies an edit to both', () => {
     render(<BasePage />)
     fireEvent.click(left().getByRole('button', { name: 'relax 30° / 15°' }))
     single()
     expect(screen.getByText('Sides differ. Showing Jon; a change applies to both.')).toBeTruthy()
     expect(screen.getByLabelText('both head target').textContent).toBe('30°')
-    expect(screen.getByTestId('target-left').getAttribute('points')).not.toBe(screen.getByTestId('target-right').getAttribute('points'))
     fireEvent.click(screen.getByRole('button', { name: 'Raise both head' }))
     expect(screen.queryByText(/Sides differ/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Move both to 31° / 15°' }))
     expect(mock.position).toHaveBeenCalledWith({ head: 31, feet: 15, feedRate: 50, sides: ['left', 'right'] })
   })
-  it('switches selection, dims the other measured side and labels matching presets', () => {
+  it('switches selection and labels matching presets', () => {
     render(<BasePage />)
     single()
     fireEvent.click(screen.getByRole('button', { name: 'Heidi' }))
-    expect(screen.getByTestId('measured-left').getAttribute('stroke-width')).toBe('14')
-    expect(screen.getByTestId('measured-right').getAttribute('stroke-width')).toBe('22')
-    expect(screen.queryByTestId('target-left')).toBeNull()
     expect(screen.getByRole('button', { name: 'relax 30° / 15°' }).textContent).toContain('Heidi')
     fireEvent.click(screen.getByRole('button', { name: 'read 40° / 0°' }))
     fireEvent.click(screen.getByRole('button', { name: 'Move Heidi to 40° / 0°' }))
     expect(mock.position).toHaveBeenCalledWith({ head: 40, feet: 0, feedRate: 50, sides: ['right'] })
   })
-  it('combines equal measurements into one head label', () => {
-    mock.status.position = { left: { head: 1, feet: 5 }, right: { head: 1, feet: 5 } }
+  it('reads out measured angles as text under each bed view', () => {
     render(<BasePage />)
+    expect(screen.getAllByTestId('bed-readout').map(node => node.textContent)).toEqual(['Jon 1° / 5°', 'Heidi 30° / 15°'])
     single()
-    expect(screen.getByText('Jon · Heidi 1°')).toBeTruthy()
+    expect(screen.getByTestId('bed-readout').textContent).toBe('Jon 1° / 5° · Heidi 30° / 15°')
+    expect(screen.getByTestId('bed-right')).toBeTruthy()
+  })
+  it('persists the mattress and simple-view preferences', () => {
+    const view = render(<BasePage />)
+    expect(document.querySelector('rect[rx="8"]')).toBeNull()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show mattress' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Simple bed view' }))
+    expect(document.querySelectorAll('rect[rx="8"]')).toHaveLength(2)
+    view.unmount()
+    render(<BasePage />)
+    expect((screen.getByRole('checkbox', { name: 'Show mattress' }) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByRole('checkbox', { name: 'Simple bed view' }) as HTMLInputElement).checked).toBe(true)
   })
   it('disables move at the measured target and tracks motion independently', () => {
     mock.status.movingBySide.right = true
@@ -139,7 +148,7 @@ describe('per-side base controls', () => {
   it.each(['unconfigured', 'disconnected'] as const)('keeps stop enabled and hides measurements when %s', (state) => {
     mock.status.state = state
     render(<BasePage />)
-    expect(screen.queryByTestId('measured-left')).toBeNull()
+    expect(screen.getAllByTestId('bed-readout').map(node => node.textContent)).toEqual(['Jon — / —', 'Heidi — / —'])
     expect(document.querySelector('fieldset')?.disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Stop both' }) as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Stop both' }))
@@ -151,7 +160,7 @@ describe('per-side base controls', () => {
     mock.error = { message: 'Connection lost' }
     mock.pending = true
     render(<BasePage />)
-    expect(screen.queryByTestId('measured-left')).toBeNull()
+    expect(screen.getAllByTestId('bed-readout')[0].textContent).toBe('Jon — / —')
     fireEvent.click(screen.getByRole('button', { name: 'Stop both' }))
     expect(mock.stop).toHaveBeenCalledOnce()
     expect(screen.getByText('Connection lost')).toBeTruthy()
@@ -161,6 +170,8 @@ describe('per-side base controls', () => {
     render(<BasePage />)
     expect(screen.queryByRole('switch')).toBeNull()
     expect(screen.queryByRole('group', { name: 'Selected sides' })).toBeNull()
+    expect(screen.queryByTestId('bed-right')).toBeNull()
+    expect(screen.getByTestId('bed-readout').textContent).toBe('Jon · Heidi 1° / 5°')
     fireEvent.click(screen.getByRole('button', { name: 'read 40° / 0°' }))
     fireEvent.click(screen.getByRole('button', { name: 'Move both to 40° / 0°' }))
     expect(mock.position).toHaveBeenCalledWith({ head: 40, feet: 0, feedRate: 50, sides: ['left', 'right'] })

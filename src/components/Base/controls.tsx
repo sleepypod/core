@@ -2,7 +2,6 @@
 
 import { useSyncExternalStore } from 'react'
 import { Minus, Plus } from 'lucide-react'
-import { useAnimatedPositions } from './useAnimatedPositions'
 import { BASE_LIMITS, BASE_PRESETS, BASE_SIDES, scopeSides } from '@/src/hardware/base/types'
 import type { BasePosition, BaseScope, BaseSide } from '@/src/hardware/base/types'
 
@@ -49,78 +48,6 @@ export function profile(position: Angles) {
   const knee = { x: 320 + 120 * Math.cos(position.feet * rad), y: 170 - 120 * Math.sin(position.feet * rad) }
   const foot = { x: knee.x + 120 * Math.cos(position.feet * rad * 0.55), y: knee.y + 120 * Math.sin(position.feet * rad * 0.55) }
   return { head, foot, points: `${head.x},${head.y} 230,170 320,170 ${knee.x},${knee.y} ${foot.x},${foot.y}` }
-}
-
-interface BedProfileProps { targets: Targets, measured: Targets | null, scope: BaseScope, names: Names, single?: BaseSide }
-
-export function BedProfile(props: BedProfileProps) {
-  // A reconnect starts at the first real measurement, never an old cached pose.
-  return <AnimatedBedProfile key={props.measured ? 'measured' : 'unavailable'} {...props} />
-}
-
-function AnimatedBedProfile({ targets, measured, scope, names, single }: BedProfileProps) {
-  const animatedTargets = useAnimatedPositions(targets, 250)
-  const animatedMeasured = useAnimatedPositions(measured ?? targets, 1000)
-  const selected = scopeSides(scope)
-  const shown = single ? [single] : BASE_SIDES
-  const equal = measured && samePosition(measured.left, measured.right) && samePosition(animatedMeasured.left, animatedMeasured.right)
-  const labels = single ? [single] : equal ? ['left'] as const : BASE_SIDES
-  return (
-    <div>
-      <div className="relative mt-10">
-        <svg viewBox="0 0 600 240" role="img" aria-label="Measured base position and selected target" className="block w-full overflow-visible">
-          <path d="M70 196 H530 M120 196 V222 M480 196 V222" fill="none" stroke="#26262a" strokeWidth="4" strokeLinecap="round" />
-          {shown.filter(side => selected.includes(side)).map(side => <polyline key={`target-${side}`} data-testid={`target-${side}`} points={profile(animatedTargets[side]).points} fill="none" stroke="#1f1f23" strokeWidth="22" strokeLinecap="round" strokeLinejoin="round" />)}
-          {measured && [...shown].sort((a, b) => Number(selected.includes(a)) - Number(selected.includes(b))).map(side => <polyline key={side} data-testid={`measured-${side}`} points={profile(animatedMeasured[side]).points} fill="none" stroke={selected.includes(side) ? '#d8d8dc' : '#3a3a40'} strokeWidth={selected.includes(side) ? 22 : 14} strokeLinecap="round" strokeLinejoin="round" />)}
-        </svg>
-        {measured && labels.map((side) => {
-          const pos = profile(animatedMeasured[side])
-          // Nearby head angles need separate label lanes even when feet differ.
-          const close = !single && !equal && Math.abs(animatedMeasured.left.head - animatedMeasured.right.head) < 12
-          return (
-            <span key={side} className="pointer-events-none absolute -translate-y-full max-w-[85%] truncate font-mono text-xs uppercase" style={{ left: `${pos.head.x / 6}%`, top: `calc(${(pos.head.y - 11) / 2.4}% - ${close && side === 'right' ? 30 : 10}px)`, color: selected.includes(side) || equal ? '#ececec' : '#5d5d63' }}>
-              {single ? '' : equal ? `${names.left} · ${names.right} ` : `${names[side]} `}
-              {measured[side].head}
-              °
-            </span>
-          )
-        })}
-        {single && measured && (
-          <span className="pointer-events-none absolute -translate-x-1/2 -translate-y-full font-mono text-xs" style={{ left: `${profile(animatedMeasured[single]).foot.x / 6}%`, top: `calc(${(profile(animatedMeasured[single]).foot.y - 11) / 2.4}% - 10px)` }}>
-            {measured[single].feet}
-            °
-          </span>
-        )}
-      </div>
-      {!single && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 font-mono text-[10px] text-fg-2">
-          {[['SELECTED', '#d8d8dc'], ['OTHER SIDE', '#3a3a40'], ['TARGET', '#1f1f23']].map(([label, color]) => (
-            <span key={label} className="flex items-center gap-1.5">
-              <span className="h-1 w-3 rounded" style={{ background: color }} />
-              {label}
-            </span>
-          ))}
-          {measured && (
-            <span className="ml-auto">
-              {names.left[0]}
-              {' '}
-              {measured.left.head}
-              °/
-              {measured.left.feet}
-              ° ·
-              {' '}
-              {names.right[0]}
-              {' '}
-              {measured.right.head}
-              °/
-              {measured.right.feet}
-              °
-            </span>
-          )}
-        </div>
-      )}
-    </div>
-  )
 }
 
 export function Steppers({ target, onChange, name }: { target: Angles, onChange: (target: Angles) => void, name: string }) {

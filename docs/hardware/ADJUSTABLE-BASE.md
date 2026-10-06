@@ -1,8 +1,12 @@
 # Adjustable-base control
 
-Open **Base** from the main menu (`/<language>/base`). The menu item appears only when valid local base configuration exists; a temporary Bluetooth disconnect does not hide it. With no base configured, open the URL directly. The hosted demo always includes Base. The page overlays measured positions and targets on a bed profile. Head/feet steppers and presets edit a target; **Move** sends it with the selected speed. **Move immediately when selecting a preset** is an opt-in browser preference. **Stop both** always remains enabled and reports delivery failures visibly.
+Open **Base** from the main menu (`/<language>/base`). The menu item appears only when valid local base configuration exists; a temporary Bluetooth disconnect does not hide it. With no base configured, open the URL directly. The hosted demo always includes Base. The bed view draws the split base in 3D (three.js) and falls back to a 2D side view; see [Bed view](#bed-view). Head/feet steppers and presets edit a target; **Move** sends it with the selected speed. **Move immediately when selecting a preset** is an opt-in browser preference. **Stop both** always remains enabled and reports delivery failures visibly.
 
 The per-side layouts from the design's 2a/2b are selectable as **Side cards** and **Single card** when `independentControl` is true. Side cards have independent targets and a persisted link toggle; linking copies the left target to the right. Single card has a persisted Both/name/name scope switch and overlays both measured positions. Names come from side settings. Both layouts share targets, speed and schedules. The demo simulates independent movement and Stop over time.
+
+## Bed view
+
+The bed view is decorative; the text line under it is the exact measured readout. The 3D view loads a pinned three.js (0.170.0) in the browser from jsDelivr, then unpkg, then the copy the pod serves at `/vendor/three.module.min.js`, allowing 4 s per source, so pods on LANs without internet access still get 3D. Without WebGL, if every source fails, or if the WebGL context is lost, the page shows the 2D side view. Drag the 3D view to rotate it. **Show mattress** adds a mattress and pillows, and **Simple bed view** always uses 2D. Both are browser preferences. With reduced motion enabled, the bed snaps to each measurement instead of easing toward it.
 
 ## Preview without hardware
 
