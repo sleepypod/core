@@ -27,7 +27,10 @@ const recurringCache: Partial<Record<Side, { key: string, target: TemperatureReq
  * about 1 ms for all of them. Statements are cached per connection so a
  * test that reopens the database gets fresh ones.
  */
-const statementCache = new WeakMap<object, Map<string, Statement>>()
+const statementState = globalThis as typeof globalThis & {
+  __sp_temperatureStatements?: WeakMap<object, Map<string, Statement>>
+}
+const statementCache = statementState.__sp_temperatureStatements ??= new WeakMap<object, Map<string, Statement>>()
 function statement(sql: string): Statement {
   let cache = statementCache.get(sqlite)
   if (!cache) {
