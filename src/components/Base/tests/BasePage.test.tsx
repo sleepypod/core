@@ -39,9 +39,9 @@ const single = () => fireEvent.click(screen.getByRole('button', { name: 'Single 
 const instant = () => screen.getByRole('checkbox', { name: 'Move immediately when selecting a preset' })
 
 describe('per-side base controls', () => {
-  it('edits targets without movement or changing measured profiles, then moves only that side', () => {
+  it('edits targets without movement or changing measured profiles, then moves only that side', async () => {
     render(<BasePage />)
-    const measured = screen.getByTestId('bed-left').innerHTML
+    const measured = (await screen.findByTestId('bed-left')).innerHTML
     fireEvent.click(screen.getByRole('button', { name: 'Raise Jon head' }))
     expect(mock.position).not.toHaveBeenCalled()
     expect(screen.getByTestId('bed-left').innerHTML).toBe(measured)
@@ -105,12 +105,12 @@ describe('per-side base controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move Heidi to 40° / 0°' }))
     expect(mock.position).toHaveBeenCalledWith({ head: 40, feet: 0, feedRate: 50, sides: ['right'] })
   })
-  it('reads out measured angles as text under each bed view', () => {
+  it('reads out measured angles as text under each bed view', async () => {
     render(<BasePage />)
     expect(screen.getAllByTestId('bed-readout').map(node => node.textContent)).toEqual(['Jon 1° / 5°', 'Heidi 30° / 15°'])
     single()
     expect(screen.getByTestId('bed-readout').textContent).toBe('Jon 1° / 5° · Heidi 30° / 15°')
-    expect(screen.getByTestId('bed-right')).toBeTruthy()
+    expect(await screen.findByTestId('bed-right')).toBeTruthy()
   })
   it('persists the mattress and simple-view preferences', () => {
     const view = render(<BasePage />)
