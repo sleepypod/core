@@ -16,6 +16,9 @@ vi.mock('@/src/temperature/instance', () => ({
 vi.mock('@/src/hardware/pumpStallGuard', () => ({
   shouldBlock: () => shouldBlock(),
 }))
+vi.mock('@/src/scheduler', () => ({
+  getJobManager: async () => ({ releaseHeldPowerOff: () => {} }),
+}))
 
 import { buildThermostatService } from '../accessories/thermostat'
 import { __resetSideController } from '../accessories/sideController'

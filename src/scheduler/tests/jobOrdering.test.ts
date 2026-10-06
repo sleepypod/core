@@ -241,12 +241,22 @@ const tempSched = (side: 'left' | 'right', temperature: number) => ({
   updatedAt: new Date(),
 })
 
+/**
+ * The pod's weekday and HH:mm right now: an alarm's temperature only applies
+ * around its own time (warm-up through shortly after), as when its job runs.
+ */
+function alarmNow(): { dayOfWeek: 'sunday' | 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday', time: string } {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date())
+  const get = (type: string) => parts.find(x => x.type === type)!.value
+  return { dayOfWeek: get('weekday').toLowerCase() as ReturnType<typeof alarmNow>['dayOfWeek'], time: `${get('hour')}:${get('minute')}` }
+}
+
 const alarmSched = (side: 'left' | 'right') => ({
-  id: insertAlarmSchedule({ side, dayOfWeek: 'saturday', time: '09:00', alarmTemperature: 88 }),
+  id: insertAlarmSchedule({ side, ...alarmNow(), alarmTemperature: 88 }),
   side,
-  dayOfWeek: 'saturday' as const,
-  time: '09:00',
+  ...alarmNow(),
   alarmTemperature: 88,
+  wakeWindow: 0,
   vibrationIntensity: 100,
   vibrationPattern: 'rise' as const,
   duration: 10,
@@ -1429,7 +1439,7 @@ describe('JobManager handler closures', () => {
   })
 
   it('alarm cron handler closure delegates to runAlarmJob with isPowered gate', async () => {
-    insertAlarmSchedule({ side: 'right', dayOfWeek: 'monday', time: '06:00', alarmTemperature: 90 })
+    insertAlarmSchedule({ side: 'right', ...alarmNow(), alarmTemperature: 90 })
     seedSidePowered('right', true)
     await manager.loadSchedules()
 
@@ -1823,14 +1833,14 @@ describe('JobManager — streaming + downstream side-effects', () => {
 
   it('runAlarmJob broadcasts alarm temperature + isAlarmVibrating:true', async () => {
     seedSidePowered('right', true)
-    insertAlarmSchedule({ side: 'right', dayOfWeek: 'thursday', time: '06:30', alarmTemperature: 88 })
+    insertAlarmSchedule({ side: 'right', ...alarmNow(), alarmTemperature: 88 })
 
     await manager.runAlarmJob({
       id: 1,
       side: 'right',
-      dayOfWeek: 'thursday' as const,
-      time: '06:30',
+      ...alarmNow(),
       alarmTemperature: 88,
+      wakeWindow: 0,
       vibrationIntensity: 90,
       vibrationPattern: 'rise' as const,
       duration: 30,

@@ -117,6 +117,43 @@ describe('DacMonitor', () => {
     )
   })
 
+  test('a last-tap time is one tap, however large the jump (Pod 4 firmware)', async () => {
+    const monitor = createMonitor()
+    const gestures: Array<{ side: string, tapType: string, firmwareTime?: number }> = []
+    monitor.on('gesture:detected', e => gestures.push(e))
+    await monitor.start()
+    await waitFor(() => monitor.getLastStatus() !== null, 500)
+
+    // The field now holds the unix time of the last triple tap, not a count.
+    ctx.server.setCommandResponse(
+      HardwareCommand.DEVICE_STATUS,
+      DEVICE_STATUS_POD4.replace('"l":2,"r":0', '"l":1790653291,"r":0')
+    )
+    await waitFor(() => gestures.length > 0, 500)
+    await sleep(POLL_MS * 4)
+
+    expect(gestures).toEqual([
+      expect.objectContaining({ side: 'left', tapType: 'tripleTap', firmwareTime: 1790653291 }),
+    ])
+  })
+
+  test('a jump in a tap counter is capped per poll', async () => {
+    const monitor = createMonitor()
+    const gestures: unknown[] = []
+    monitor.on('gesture:detected', e => gestures.push(e))
+    await monitor.start()
+    await waitFor(() => monitor.getLastStatus() !== null, 500)
+
+    ctx.server.setCommandResponse(
+      HardwareCommand.DEVICE_STATUS,
+      DEVICE_STATUS_POD4.replace('"l":0,"r":1', '"l":500,"r":1')
+    )
+    await waitFor(() => gestures.length > 0, 500)
+    await sleep(POLL_MS * 4)
+
+    expect(gestures).toHaveLength(3)
+  })
+
   test('does not emit gestures for pod without gesture support', async () => {
     ctx.server.setCommandResponse(HardwareCommand.DEVICE_STATUS, DEVICE_STATUS_POD3)
 

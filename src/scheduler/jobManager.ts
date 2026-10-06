@@ -18,9 +18,12 @@ import { HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { markAlarmStarted } from '@/src/hardware/alarmState'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { timeToDate, nowInTimezone } from './timeUtils'
+import { WakeWindows, slotBefore } from './wakeWindow'
+import { ALARM_HOLD_AFTER_MIN, alarmWarmupMinutes } from '@/src/temperature/baseline'
 
 const HEARTBEAT_INTERVAL_MS_DEFAULT = 60_000
 const HEARTBEAT_STALE_MS_DEFAULT = 90_000
@@ -44,6 +47,8 @@ export class JobManager {
   private readonly heartbeatIntervalMs: number
   private readonly heartbeatStaleMs: number
   private lastHeartbeatReloadAt = 0
+
+  private readonly wakeWindows = new WakeWindows()
 
   constructor(timezone: string, options: JobManagerOptions = {}) {
     this.scheduler = new Scheduler({
@@ -359,6 +364,7 @@ export class JobManager {
         return
       }
       markSideMutated(sched.side)
+      this.releaseHeldPowerOff(sched.side)
       const client = getSharedHardwareClient()
       await client.connect()
       await getTemperatureController().powerOnLocked(sched.side, sched.onTemperature ?? 75)
@@ -383,6 +389,54 @@ export class JobManager {
   }
 
   async runPowerOffJob(sched: typeof powerSchedules.$inferSelect): Promise<void> {
+    // Powering off now would cut short an alarm's warm-up: do it once the
+    // alarm has finished instead.
+    const after = await this.alarmWarmupEnd(sched.side)
+    if (after !== null) {
+      console.log(`[jobManager] power-off-${sched.id} held for the ${sched.side} alarm until ${new Date(after).toISOString()}`)
+      this.scheduler.scheduleOneTimeJob(
+        `power-off-after-alarm-${sched.side}`,
+        JobType.POWER_OFF,
+        new Date(after),
+        () => this.powerOffAfterAlarm(sched),
+        { scheduleId: sched.id, side: sched.side },
+      )
+      return
+    }
+    await this.powerOffAfterAlarm(sched)
+  }
+
+  /**
+   * When `side` is in (or within) an alarm's warm-up, the time that alarm's
+   * temperature span ends (its time plus vibration, plus ALARM_HOLD_AFTER_MIN,
+   * the same window alarmTemperatureTargets holds the temperature for, so a
+   * snooze re-fires into a bed that is still on), else null.
+   */
+  private async alarmWarmupEnd(side: 'left' | 'right'): Promise<number | null> {
+    const alarms = await db.select().from(alarmSchedules)
+      .where(and(eq(alarmSchedules.side, side), eq(alarmSchedules.enabled, true)))
+    const now = Date.now()
+    let end: number | null = null
+    for (const alarm of alarms) {
+      const at = this.scheduler.getNextInvocation(`alarm-${alarm.id}`)?.getTime()
+      if (at === undefined || at - now > alarmWarmupMinutes(alarm.wakeWindow) * 60_000) continue
+      end = Math.max(end ?? 0, at + alarm.duration * 1000 + ALARM_HOLD_AFTER_MIN * 60_000)
+    }
+    return end
+  }
+
+  /**
+   * Drop a power-off held for an alarm on `side`: an explicit power-on since
+   * then means the user wants the bed on, and the held job must not switch
+   * it off behind their back once the alarm is over.
+   */
+  releaseHeldPowerOff(side: 'left' | 'right'): void {
+    if (this.scheduler.cancelJob(`power-off-after-alarm-${side}`)) {
+      console.log(`[jobManager] released the power-off held for the ${side} alarm`)
+    }
+  }
+
+  private async powerOffAfterAlarm(sched: typeof powerSchedules.$inferSelect): Promise<void> {
     if (await this.hasActiveRunOnceSession(sched.side)) {
       console.log(`Skipping recurring power-off job — run-once session active for ${sched.side}`)
       return
@@ -410,9 +464,46 @@ export class JobManager {
       `alarm-${sched.id}`,
       JobType.ALARM,
       cron,
-      () => this.runAlarmJob(sched),
+      () => this.runScheduledAlarm(sched),
       { scheduleId: sched.id, side: sched.side, targetTemperature: sched.alarmTemperature }
     )
+
+    if (sched.wakeWindow > 0) {
+      const opens = slotBefore(sched.dayOfWeek, hour, minute, sched.wakeWindow)
+      this.scheduler.scheduleJob(
+        `alarm-window-${sched.id}`,
+        JobType.WAKE_WINDOW,
+        this.buildWeeklyCron(opens.dayOfWeek, opens.hour, opens.minute),
+        async () => this.openWakeWindow(sched),
+        { scheduleId: sched.id, side: sched.side }
+      )
+      // Scheduled (or rescheduled after a reload or edit) inside the window:
+      // the window-opening job won't run until next week, so open it now.
+      this.openWakeWindow(sched)
+    }
+    else {
+      this.scheduler.cancelJob(`alarm-window-${sched.id}`)
+      this.wakeWindows.close(sched.id)
+    }
+  }
+
+  /** The set-time alarm job — skipped when movement already fired it early. */
+  async runScheduledAlarm(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
+    if (this.wakeWindows.claim(sched.id)) {
+      console.log(`[jobManager] alarm-${sched.id} already fired early in its wake window`)
+      return
+    }
+    await this.runAlarmJob(sched)
+  }
+
+  /** Start watching for movement when the next alarm is within its wake window. */
+  private openWakeWindow(sched: typeof alarmSchedules.$inferSelect): void {
+    const alarmAt = this.scheduler.getNextInvocation(`alarm-${sched.id}`)
+    if (!alarmAt) return
+    // +1 min: the window-opening job fires at the top of its minute, so the
+    // alarm can read as up to a minute further away than the window.
+    if (alarmAt.getTime() - Date.now() > (sched.wakeWindow + 1) * 60_000) return
+    this.wakeWindows.open(sched.id, sched.side, alarmAt, sched.wakeWindow, () => this.runAlarmJob(sched))
   }
 
   async runAlarmJob(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
@@ -437,14 +528,15 @@ export class JobManager {
       else {
         console.log(`Alarm job alarm-${sched.id} — ${sched.side} not powered; skipping temperature, firing vibration only`)
       }
-      await client.setAlarm(sched.side, {
+      const alarm = {
         vibrationIntensity: sched.vibrationIntensity,
         vibrationPattern: sched.vibrationPattern,
         duration: sched.duration,
-      })
-      broadcastMutationStatus(sched.side, {
-        isAlarmVibrating: true,
-      })
+      }
+      await client.setAlarm(sched.side, alarm)
+      // Recorded, not just broadcast: a tap gesture reads it to decide
+      // whether it snoozes or dismisses this alarm.
+      await markAlarmStarted(sched.side, alarm)
     })
   }
 
@@ -671,6 +763,7 @@ export class JobManager {
                 return
               }
               try {
+                this.releaseHeldPowerOff(side)
                 const client = getSharedHardwareClient()
                 await client.connect()
                 await getTemperatureController().powerOnLocked(side)
@@ -869,6 +962,11 @@ export class JobManager {
   cancelPowerJob(id: number): void {
     this.scheduler.cancelJob(`power-on-${id}`)
     this.scheduler.cancelJob(`power-off-${id}`)
+    for (const side of ['left', 'right'] as const) {
+      if (this.scheduler.getJob(`power-off-after-alarm-${side}`)?.metadata?.scheduleId === id) {
+        this.releaseHeldPowerOff(side)
+      }
+    }
   }
 
   /**
@@ -884,6 +982,8 @@ export class JobManager {
 
   cancelAlarmJob(id: number): void {
     this.scheduler.cancelJob(`alarm-${id}`)
+    this.scheduler.cancelJob(`alarm-window-${id}`)
+    this.wakeWindows.close(id)
   }
 
   /**
@@ -1000,6 +1100,8 @@ export class JobManager {
         do {
           this.reloadPending = false
           this.scheduler.cancelRecurringJobs()
+          // loadSchedules reopens any window the reloaded alarms are inside.
+          this.wakeWindows.closeAll()
           await this.loadSchedules()
         } while (this.reloadPending)
       }
@@ -1217,6 +1319,7 @@ export class JobManager {
     this.shutdownRequested = true
     this.stopHeartbeat()
     this.removeEventListeners()
+    this.wakeWindows.closeAll()
     await this.scheduler.shutdown()
   }
 }

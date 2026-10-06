@@ -1,6 +1,7 @@
 import type { HardwareClient } from './client'
 import { MAX_TEMP, MIN_TEMP, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
+import type { AlarmConfig } from './alarmPersistence'
 import { getTemperatureController } from '@/src/temperature/instance'
 import { shouldBlock as pumpStallShouldBlock } from './pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
@@ -26,10 +27,28 @@ export interface DeviceStateRow {
   isAlarmVibrating: boolean
 }
 
+/** Alarm bookkeeping (alarmState / snoozeManager in production). */
+export interface AlarmHooks {
+  /** Settings of the alarm vibrating on `side`, to repeat after a snooze. */
+  activeConfig: (side: Side) => AlarmConfig | null
+  /** The alarm on `side` stopped (dismissed, snoozed, or by the firmware). */
+  ended: (side: Side) => Promise<void>
+  snooze: (side: Side, seconds: number, config: AlarmConfig) => void
+  cancelSnooze: (side: Side) => void
+}
+
 interface GestureActionDeps {
   findGestureConfig: (side: Side, tapType: GestureEvent['tapType']) => Promise<TapGestureRow | null>
   findDeviceState: (side: Side) => Promise<DeviceStateRow | null>
   newHardwareClient: (socketPath: string) => HardwareClient
+  alarm: AlarmHooks
+}
+
+/** Repeated after a snooze when the snoozed alarm's own settings are unknown. */
+export const DEFAULT_SNOOZE_ALARM: AlarmConfig = {
+  vibrationIntensity: 50,
+  vibrationPattern: 'rise',
+  duration: 180,
 }
 
 /**
@@ -38,16 +57,17 @@ interface GestureActionDeps {
  * Errors in action execution are caught and logged — never propagate.
  *
  * Note on isAlarmVibrating: the hardware DEVICE_STATUS response does not
- * include alarm vibration state. The value is sourced from device_state DB
- * which is set externally (e.g., by the alarm scheduler) before/after alarms.
- * If device_state is stale the alarm action will fall through to the
- * alarmInactiveBehavior path.
+ * include alarm vibration state. The value is sourced from device_state DB,
+ * kept by alarmState: every path that starts an alarm marks it vibrating
+ * and it is cleared when the alarm stops or its duration runs out.
+ *
+ * The firmware itself stops a vibrating alarm on any tap gesture, so a
+ * gesture that isn't an alarm action still marks the alarm ended.
  *
  * Pass `deps` to override DB/hardware behaviour in tests (dependency injection).
  */
 export class GestureActionHandler {
   private readonly deps: GestureActionDeps
-  private readonly snoozeTimeouts: Set<ReturnType<typeof setTimeout>> = new Set()
 
   constructor(
     private readonly socketPath: string,
@@ -68,19 +88,13 @@ export class GestureActionHandler {
     }
   }
 
-  /**
-   * Cancel all pending snooze restart timers.
-   * Call this during application shutdown to allow clean process exit.
-   */
-  cleanup = (): void => {
-    for (const id of this.snoozeTimeouts) {
-      clearTimeout(id)
-    }
-    this.snoozeTimeouts.clear()
-  }
-
   private execute = async (event: GestureEvent): Promise<void> => {
     const gesture = await this.deps.findGestureConfig(event.side, event.tapType)
+    if (gesture?.actionType !== 'alarm') {
+      // The firmware already stopped any vibrating alarm on this tap.
+      const state = await this.deps.findDeviceState(event.side)
+      if (state?.isAlarmVibrating) await this.deps.alarm.ended(event.side)
+    }
     if (!gesture) return
 
     if (gesture.actionType === 'temperature') {
@@ -132,31 +146,19 @@ export class GestureActionHandler {
 
         if (gesture.alarmBehavior === 'dismiss') {
           await client.clearAlarm(event.side)
-          // Lazy import to avoid circular dep chain (snoozeManager → dacMonitor.instance → db)
-          const { cancelSnooze } = await import('./snoozeManager')
-          cancelSnooze(event.side)
+          this.deps.alarm.cancelSnooze(event.side)
+          await this.deps.alarm.ended(event.side)
         }
         else if (gesture.alarmBehavior === 'snooze') {
+          // Read before ended() forgets it: the snoozed alarm comes back as it was.
+          const config = this.deps.alarm.activeConfig(event.side) ?? DEFAULT_SNOOZE_ALARM
           await client.clearAlarm(event.side)
-          // Clamp to setTimeout's 32-bit ms ceiling — a larger delay wraps
-          // and fires immediately, restarting the alarm the user snoozed.
-          const snoozeDuration = Math.min(
-            gesture.alarmSnoozeDuration ?? 300,
-            Math.floor((2 ** 31 - 1) / 1000),
-          )
-          const timeoutId = setTimeout(() => {
-            this.snoozeTimeouts.delete(timeoutId)
-            const restartClient = this.deps.newHardwareClient(this.socketPath)
-            restartClient.connect()
-              .then(() => restartClient.setAlarm(event.side, {
-                vibrationIntensity: 50,
-                vibrationPattern: 'rise',
-                duration: 180,
-              }))
-              .catch(err => console.error('GestureActionHandler: snooze restart failed:', err))
-              .finally(() => restartClient.disconnect())
-          }, snoozeDuration * 1000)
-          this.snoozeTimeouts.add(timeoutId)
+          await this.deps.alarm.ended(event.side)
+          this.deps.alarm.snooze(event.side, gesture.alarmSnoozeDuration ?? 300, config)
+        }
+        else {
+          // No alarm behavior configured: the firmware still stopped it.
+          await this.deps.alarm.ended(event.side)
         }
       }
       finally {

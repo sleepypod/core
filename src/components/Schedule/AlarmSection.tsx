@@ -22,6 +22,7 @@ interface AlarmRow {
   vibrationPattern: Pattern
   duration: number
   alarmTemperature: number
+  wakeWindow: number
   enabled: boolean
 }
 
@@ -41,6 +42,7 @@ export function groupAlarms(rows: AlarmRow[]): AlarmGroup[] {
       r.vibrationPattern,
       r.duration,
       r.alarmTemperature,
+      r.wakeWindow,
       r.enabled ? 1 : 0,
     ].join('|')
     const existing = buckets.get(key)
@@ -57,6 +59,7 @@ export function groupAlarms(rows: AlarmRow[]): AlarmGroup[] {
         vibrationPattern: r.vibrationPattern,
         duration: r.duration,
         alarmTemperature: r.alarmTemperature,
+        wakeWindow: r.wakeWindow,
         enabled: r.enabled,
       })
     }

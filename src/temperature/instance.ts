@@ -9,12 +9,13 @@ import { shouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { fahrenheitToLevel, MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
-import { recurringTarget, sessionTarget, type RecurringOccurrenceCache, type WeeklyTarget } from './baseline'
+import { alarmTemperatureTargets, recurringTarget, sessionTarget, type AlarmOccurrenceCache, type RecurringOccurrenceCache, type WeeklyTarget } from './baseline'
 import { TemperatureController, type TemperatureRequest } from './controller'
 
 const invalidSessions: Record<Side, Map<number, string>> = { left: new Map(), right: new Map() }
 
 const occurrenceCaches: Record<Side, RecurringOccurrenceCache> = { left: new Map(), right: new Map() }
+const alarmCaches: Record<Side, AlarmOccurrenceCache> = { left: new Map(), right: new Map() }
 
 const recurringCache: Partial<Record<Side, { key: string, target: TemperatureRequest | null }>> = {}
 
@@ -50,11 +51,11 @@ function readBaseline(side: Side, now: number): TemperatureRequest[] {
   const away = (statement('select away_mode as awayMode from side_settings where side = ?').get(side) as { awayMode: number } | undefined)?.awayMode
   const requests: TemperatureRequest[] = []
   if (!away) {
-    const alarms = statement('select id, day_of_week as dayOfWeek, time, alarm_temperature as temperature from alarm_schedules where side = ? and enabled = 1').all(side) as WeeklyRow[]
+    const alarms = statement('select id, day_of_week as dayOfWeek, time, alarm_temperature as temperature, wake_window as wakeWindow, duration from alarm_schedules where side = ? and enabled = 1').all(side) as (WeeklyRow & { wakeWindow: number, duration: number })[]
     const temps = statement('select id, day_of_week as dayOfWeek, time, temperature from temperature_schedules where side = ? and enabled = 1').all(side) as WeeklyRow[]
     const powers = statement('select id, day_of_week as dayOfWeek, on_time as time, on_temperature as temperature from power_schedules where side = ? and enabled = 1').all(side) as WeeklyRow[]
+    // Alarm temperatures have their own bounded warm-up/hold spans.
     const rows: WeeklyTarget[] = [
-      ...alarms.map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature })),
       ...temps.map(r => ({ id: `temperature:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature })),
       ...powers.map(r => ({ id: `power:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature })),
     ]
@@ -63,6 +64,10 @@ function readBaseline(side: Side, now: number): TemperatureRequest[] {
     const baseline = cached?.key === key ? cached.target : recurringTarget(rows, timezone, now, occurrenceCaches[side])
     recurringCache[side] = { key, target: baseline }
     if (baseline) requests.push(baseline)
+    requests.push(...alarmTemperatureTargets(
+      alarms.map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature, wakeWindow: r.wakeWindow, duration: r.duration })),
+      timezone, now, alarmCaches[side],
+    ))
   }
   // run_once_sessions timestamps are drizzle `timestamp` columns: unix seconds.
   const sessions = (statement('select id, set_points as setPoints, started_at as startedAt, expires_at as expiresAt from run_once_sessions where side = ? and status = \'active\'').all(side) as SessionRow[])

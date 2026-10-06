@@ -264,4 +264,24 @@ sudo scripts/internet-control status
 
 ## Replacing free-sleep
 
-`free-sleep.service` and `sleepypod.service` both bind to port 3000 — only one can run. The installer stops and disables `free-sleep.service` / `free-sleep-stream.service` at install time so sleepypod can take over the port permanently. Run `sp-uninstall` if you want to revert (the script flushes iptables and removes sleepypod's units; you'll then need to re-enable free-sleep manually with `systemctl enable --now free-sleep.service`).
+`free-sleep.service` and `sleepypod.service` both bind to port 3000 — only one can run. free-sleep also persists drop-all iptables rules that reload on every boot and fight sleepypod's own firewall, so the installer **refuses to install by default** when it finds free-sleep's units, `/home/dac/free-sleep`, or `/persistent/free-sleep-data`, and prints the manual cleanup block. The user-facing walkthrough is [Migrating from free-sleep](https://sleepypod.github.io/core/migrating-from-free-sleep/).
+
+Pass `--purge-free-sleep` to let the installer remove free-sleep and continue without a reboot:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install -o /tmp/sleepypod-install
+less /tmp/sleepypod-install
+sudo bash /tmp/sleepypod-install --purge-free-sleep
+```
+
+`purge_free_sleep` in `scripts/install` removes exactly:
+
+- `free-sleep`, `free-sleep-stream`, and `free-sleep-update` services (stopped, disabled, unit files deleted)
+- `/etc/iptables/iptables.rules` and `/etc/iptables/ip6tables.rules`
+- `/home/dac/free-sleep`
+- `/persistent/free-sleep-data`
+- `/etc/sudoers.d/dac`
+
+It also flushes the running iptables and ip6tables rules; the install then reconfigures iptables itself. Without the flag, run the cleanup block the installer prints, reboot, and re-run the installer. free-sleep's `unblock_internet_access.sh` is not a substitute: it flushes runtime rules only and leaves the persisted files in place.
+
+Run `sp-uninstall` if you want to revert (the script flushes iptables and removes sleepypod's units); the purge is not undone, so reinstall free-sleep from its own installer.

@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const mockSetAlarm = vi.fn().mockResolvedValue(undefined)
 const mockBroadcastMutationStatus = vi.fn()
+const mockMarkAlarmStarted = vi.fn().mockResolvedValue(undefined)
+
+vi.mock('../alarmState', () => ({
+  markAlarmStarted: (...args: unknown[]) => mockMarkAlarmStarted(...args),
+}))
 
 vi.mock('../dacMonitor.instance', () => ({
   getSharedHardwareClient: vi.fn(() => ({
@@ -13,11 +21,18 @@ vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
   broadcastMutationStatus: mockBroadcastMutationStatus,
 }))
 
-import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '../snoozeManager'
+import { snoozeAlarm, cancelSnooze, getSnoozeStatus, restoreSnoozes, suspendSnoozes, SNOOZE_LATE_GRACE_MS } from '../snoozeManager'
+import { loadAlarmState, resetAlarmStateCache, updateAlarmState } from '../alarmPersistence'
 
 describe('snoozeManager', () => {
+  let dir: string
+
   beforeEach(() => {
     vi.useFakeTimers()
+    dir = mkdtempSync(join(tmpdir(), 'snooze-'))
+    process.env.ALARM_STATE_PATH = join(dir, 'alarm-state.json')
+    resetAlarmStateCache()
+    mockMarkAlarmStarted.mockClear()
     mockSetAlarm.mockClear()
     mockSetAlarm.mockResolvedValue(undefined)
     mockBroadcastMutationStatus.mockClear()
@@ -26,7 +41,9 @@ describe('snoozeManager', () => {
   })
 
   afterEach(() => {
+    suspendSnoozes()
     vi.useRealTimers()
+    rmSync(dir, { recursive: true, force: true })
   })
 
   const config = { vibrationIntensity: 50, vibrationPattern: 'rise' as const, duration: 120 }
@@ -58,8 +75,10 @@ describe('snoozeManager', () => {
     await vi.advanceTimersByTimeAsync(1)
 
     expect(mockSetAlarm).toHaveBeenCalledWith('left', config)
-    expect(mockBroadcastMutationStatus).toHaveBeenCalledWith('left', { isAlarmVibrating: true })
+    // Recorded as vibrating (so a tap can snooze it again), not just broadcast.
+    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('left', config)
     expect(getSnoozeStatus('left')).toEqual({ active: false, snoozeUntil: null })
+    expect(loadAlarmState().snoozes.left).toBeUndefined()
   })
 
   it('cancelSnooze prevents re-trigger', async () => {
@@ -106,8 +125,61 @@ describe('snoozeManager', () => {
     await vi.advanceTimersByTimeAsync(4_000)
 
     expect(error).toHaveBeenCalledWith('[Snooze] Failed to restart alarm for right:', failure)
-    expect(mockBroadcastMutationStatus).not.toHaveBeenCalled()
+    expect(mockMarkAlarmStarted).not.toHaveBeenCalled()
     expect(getSnoozeStatus('right').active).toBe(false)
     error.mockRestore()
+  })
+
+  describe('persistence', () => {
+    it('keeps a pending snooze on disk until it fires or is cancelled', async () => {
+      vi.setSystemTime(10_000)
+      snoozeAlarm('left', 300, config)
+      expect(loadAlarmState().snoozes.left).toEqual({ until: 310_000, config })
+      cancelSnooze('left')
+      expect(loadAlarmState().snoozes.left).toBeUndefined()
+    })
+
+    it('a restarted process resumes a pending snooze at its original time', async () => {
+      vi.setSystemTime(0)
+      updateAlarmState((s) => {
+        s.snoozes.right = { until: 300_000, config }
+      })
+      vi.setSystemTime(120_000)
+      restoreSnoozes()
+      expect(getSnoozeStatus('right')).toEqual({ active: true, snoozeUntil: 300 })
+      await vi.advanceTimersByTimeAsync(179_999)
+      expect(mockSetAlarm).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(mockSetAlarm).toHaveBeenCalledWith('right', config)
+    })
+
+    it('fires at once a snooze missed by a short outage', async () => {
+      updateAlarmState((s) => {
+        s.snoozes.left = { until: 100_000, config }
+      })
+      restoreSnoozes(100_000 + SNOOZE_LATE_GRACE_MS)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(mockSetAlarm).toHaveBeenCalledWith('left', config)
+    })
+
+    it('drops a snooze missed by longer than the grace period', async () => {
+      updateAlarmState((s) => {
+        s.snoozes.left = { until: 100_000, config }
+      })
+      restoreSnoozes(100_001 + SNOOZE_LATE_GRACE_MS)
+      await vi.runAllTimersAsync()
+      expect(mockSetAlarm).not.toHaveBeenCalled()
+      expect(getSnoozeStatus('left').active).toBe(false)
+      expect(loadAlarmState().snoozes.left).toBeUndefined()
+    })
+
+    it('suspending at shutdown keeps the snooze for the next process', async () => {
+      snoozeAlarm('right', 300, config)
+      suspendSnoozes()
+      expect(getSnoozeStatus('right').active).toBe(false)
+      await vi.runAllTimersAsync()
+      expect(mockSetAlarm).not.toHaveBeenCalled()
+      expect(loadAlarmState().snoozes.right).toBeDefined()
+    })
   })
 })
