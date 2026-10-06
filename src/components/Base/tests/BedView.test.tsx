@@ -44,18 +44,22 @@ afterEach(() => {
 })
 
 describe('BedView', () => {
-  it('shows the 2D view while three.js loads, then swaps once the first 3D frame renders', async () => {
+  it('never flashes the 2D fallback while loading the library or waiting for the first 3D frame', async () => {
     render(<BedView {...props} />)
-    expect(screen.getByTestId('bed-view-2d')).toBeTruthy()
+    expect(screen.queryByTestId('bed-view-2d')).toBeNull()
+    expect(screen.getByRole('status', { name: 'Loading bed view' })).toBeTruthy()
     expect(screen.queryByTestId('bed-view-3d')).toBeNull()
     await act(async () => mock.resolve?.({ WebGLRenderer: function WebGLRenderer() {} }))
     expect(screen.getByTestId('bed-view-3d')).toBeTruthy()
-    expect(screen.getByTestId('bed-view-2d')).toBeTruthy()
+    expect(screen.queryByTestId('bed-view-2d')).toBeNull()
+    expect(screen.getByRole('status', { name: 'Loading bed view' })).toBeTruthy()
     act(() => mock.renderer?.onReady())
     expect(screen.queryByTestId('bed-view-2d')).toBeNull()
+    expect(screen.queryByRole('status', { name: 'Loading bed view' })).toBeNull()
     act(() => mock.renderer?.onFail())
     expect(screen.getByTestId('bed-view-2d')).toBeTruthy()
     expect(screen.queryByTestId('bed-view-3d')).toBeNull()
+    expect(screen.queryByRole('status', { name: 'Loading bed view' })).toBeNull()
   })
 
   it('stays 2D when WebGL is missing or every three.js source fails', async () => {
@@ -64,11 +68,14 @@ describe('BedView', () => {
     await act(async () => {})
     expect(mock.resolve).toBeNull()
     expect(screen.getByTestId('bed-view-2d')).toBeTruthy()
+    expect(screen.queryByRole('status', { name: 'Loading bed view' })).toBeNull()
     view.unmount()
     mock.webgl = true
     render(<BedView {...props} />)
     await act(async () => mock.resolve?.(null))
     expect(screen.queryByTestId('bed-view-3d')).toBeNull()
+    expect(screen.getByTestId('bed-view-2d')).toBeTruthy()
+    expect(screen.queryByRole('status', { name: 'Loading bed view' })).toBeNull()
   })
 
   it('never loads three.js with the simple bed view setting on', async () => {
@@ -76,9 +83,12 @@ describe('BedView', () => {
     render(<BedView {...props} />)
     await act(async () => {})
     expect(mock.resolve).toBeNull()
+    expect(screen.getByTestId('bed-view-2d')).toBeTruthy()
+    expect(screen.queryByRole('status', { name: 'Loading bed view' })).toBeNull()
   })
 
   it('reads out exact angles and motion as text; the drawing is decorative', () => {
+    localStorage.setItem('sleepypod.base.simpleBedView', 'true')
     render(<BedView {...props} />)
     expect(screen.getByTestId('bed-readout').textContent).toBe('Jon 30° / 15° · Heidi 1° / 5°')
     expect(screen.getByText('MOVING')).toBeTruthy()
@@ -86,6 +96,7 @@ describe('BedView', () => {
   })
 
   it('draws the back half and a target ghost only where they apply', () => {
+    localStorage.setItem('sleepypod.base.simpleBedView', 'true')
     const view = render(<BedView {...props} />)
     expect(screen.getByTestId('bed-right')).toBeTruthy()
     expect(screen.queryByTestId('ghost-left')).toBeNull()
@@ -101,6 +112,7 @@ describe('BedView', () => {
   })
 
   it('draws the focused side in front of the 2D view', () => {
+    localStorage.setItem('sleepypod.base.simpleBedView', 'true')
     const front = () => screen.getByTestId('bed-view-2d').lastElementChild?.getAttribute('data-testid')
     const view = render(<BedView {...props} />)
     expect(front()).toBe('bed-left')

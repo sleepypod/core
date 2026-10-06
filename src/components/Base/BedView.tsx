@@ -61,10 +61,9 @@ export function BedView({ left, right, leftTarget, rightTarget, moving, names, s
   const want3D = simple !== 'true' && !failed
 
   useEffect(() => {
-    // Without WebGL, 2D simply stays up; there is nothing to load.
-    if (!want3D || three || !hasWebGL()) return
+    if (!want3D || three) return
     let alive = true
-    void loadThree().then((loaded) => {
+    void (hasWebGL() ? loadThree() : Promise.resolve(null)).then((loaded) => {
       if (!alive) return
       if (loaded) setThree(() => loaded)
       else setFailed(true)
@@ -96,8 +95,11 @@ export function BedView({ left, right, leftTarget, rightTarget, moving, names, s
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <div className="relative aspect-[600/330] w-full overflow-hidden rounded-xl border border-line bg-surface">
-        {/* 2D stays up until the first 3D frame lands, so the box is never empty. */}
-        {!(use3D && ready) && <BedView2D {...renderer} />}
+        {/* Keep the same surface while 3D starts; 2D is a selected/failed mode only. */}
+        {!want3D && <BedView2D {...renderer} />}
+        {want3D && !(use3D && ready) && (
+          <div role="status" aria-label="Loading bed view" className="absolute inset-0 bg-surface" />
+        )}
         {use3D && <BedView3D three={three} onReady={onReady} onFail={onFail} {...renderer} />}
       </div>
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 font-mono text-xs">
