@@ -41,7 +41,7 @@ The Base page now provides both requested layouts behind an explicit `independen
 
 Targets are separate from telemetry in both layouts. Layout, link state, last scope, and opt-in immediate presets persist in browser storage. Stop is global and always enabled, with visible command failures. Calibrated limits remain 60°/45° and 30–100% speed; 25% is visibly unavailable. No motor selectors or calibration tables change.
 
-Generated migration 0018 extends schedules with side and preset name, preserving old rows as `both`. Recurrence includes Daily/Weekdays/Weekends. The scheduler checks only the affected side(s) for away mode, rechecks scope and targets under the controller lock, and skips callbacks or lock waits over one minute late. API validation prevents overlapping recurrence slots for the same side and rejects per-side schedules on synchronized transports. Existing update/pause API calls remain supported.
+Schedules carry side and preset name; generated migration 0018 creates `base_schedules` with both columns (side defaults to `both`). Recurrence includes Daily/Weekdays/Weekends. The scheduler checks only the affected side(s) for away mode, rechecks scope and targets under the controller lock, and skips callbacks or lock waits over one minute late. API validation prevents overlapping recurrence slots for the same side and rejects per-side schedules on synchronized transports. Existing update/pause API calls remain supported.
 
 ## Per-side lock and experimental status
 

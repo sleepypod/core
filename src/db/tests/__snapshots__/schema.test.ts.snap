@@ -373,6 +373,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "vibration_pattern | sql:text | logical:string/SQLiteText | not-null | default:rise | not-primary-key | not-unique | not-autoincrement | enum:double,rise",
       "duration | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "alarm_temperature | sql:real | logical:number/SQLiteReal | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "wake_window | sql:integer | logical:number/SQLiteInteger | not-null | default:0 | not-primary-key | not-unique | not-autoincrement | enum:none",
       "enabled | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:true | not-primary-key | not-unique | not-autoincrement | enum:none",
       "created_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",
       "updated_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",

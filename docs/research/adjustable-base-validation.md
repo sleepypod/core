@@ -12,7 +12,7 @@ Verified locally on 2026-10-04 in `.codex/worktrees/adjustable-base`, branch `fe
 | Correct hardware isolation | No DAC command changes; shared side locks acquired left then right for whole-bed moves; Stop invalidates pending generation and bypasses side locks |
 | Lifecycle and failure handling | Tests cover disconnected/unconfigured/stale state, missing BlueZ device, acknowledgement failure, timeout, late replies, bus loss, stop races, guarded moves and shutdown |
 | Local API | `base` tRPC router and eight REST operations; actual OpenAPI JSON contained all `/base/*` paths; GET status returned unconfigured/null positions locally; POST head=61 returned HTTP 400 |
-| Persistent elevation scheduling | Generated config migration `0017_warm_synch`; fresh in-memory SQLite migrations and CRUD tests; unique day/time; timezone registration, away suppression, current-row guards, no replay/retry |
+| Persistent elevation scheduling | Generated config migration `0018_amazing_captain_marvel`; fresh in-memory SQLite migrations and CRUD tests; unique day/time; timezone registration, away suppression, current-row guards, no replay/retry |
 | UI | `/[lang]/base`, Temperature → Base link; separate measured/target position, preview, sliders, presets, Stop, reconnect, schedule creation/edit/pause/delete |
 | Responsive behavior | Chrome default desktop and 390×844 phone viewport inspected; Stop remained visible above bottom navigation; viewport restored afterward |
 | UI interaction | Demo Relax changed measured positions to 30°/15°; created Monday 22:00 schedule, edited it to Tuesday 23:00 through native time input, confirmed stored row; Stop acknowledged; home/Base navigation verified |

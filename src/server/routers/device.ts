@@ -3,12 +3,11 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import { deviceState } from '@/src/db/schema'
-import { eq } from 'drizzle-orm'
 import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
-import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
+import { markAlarmEnded, markAlarmStarted } from '@/src/hardware/alarmState'
 import { HardwareCommand } from '@/src/hardware/types'
 import type { Side } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
@@ -16,6 +15,7 @@ import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { getLastSideMutationAt } from '@/src/hardware/sideMutations'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { getTemperatureController, getTemperatureControlStatus } from '@/src/temperature/instance'
+import { getJobManager } from '@/src/scheduler'
 import { holdMinutesSchema, temperatureControlStatusSchema } from '@/src/temperature/schema'
 import {
   sideSchema,
@@ -437,6 +437,10 @@ export const deviceRouter = router({
           assertPumpStallNotBlocked(input.side)
         }
         if (input.powered) {
+          // The user wants the bed on: a power-off held for an alarm must
+          // not switch it off once the alarm is over.
+          const jobManager = await getJobManager()
+          jobManager.releaseHeldPowerOff(input.side)
           if (input.temperature === undefined) await getTemperatureController().powerOnLocked(input.side)
           else await getTemperatureController().setManualLocked(input.side, input.temperature)
         }
@@ -496,27 +500,15 @@ export const deviceRouter = router({
       markSideMutated(input.side)
       return withHardwareClient(async (client) => {
         cancelSnooze(input.side)
-        await client.setAlarm(input.side, {
+        const alarm = {
           vibrationIntensity: input.vibrationIntensity,
           vibrationPattern: input.vibrationPattern,
           duration: input.duration,
-        })
-
-        // Best-effort DB sync — next getStatus() call will re-sync if this fails
-        try {
-          await db
-            .update(deviceState)
-            .set({
-              isAlarmVibrating: true,
-              lastUpdated: new Date(),
-            })
-            .where(eq(deviceState.side, input.side))
         }
-        catch (dbError) {
-          console.error('Failed to sync alarm state to DB:', dbError)
-        }
-
-        broadcastMutationStatus(input.side, { isAlarmVibrating: true })
+        await client.setAlarm(input.side, alarm)
+        // Stores and broadcasts isAlarmVibrating; clears it when the
+        // vibration's duration runs out.
+        await markAlarmStarted(input.side, alarm)
         return { success: true }
       }, 'Failed to set alarm')
     }),
@@ -547,22 +539,7 @@ export const deviceRouter = router({
       return withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
         cancelSnooze(input.side)
-
-        // Best-effort DB sync — next getStatus() call will re-sync if this fails
-        try {
-          await db
-            .update(deviceState)
-            .set({
-              isAlarmVibrating: false,
-              lastUpdated: new Date(),
-            })
-            .where(eq(deviceState.side, input.side))
-        }
-        catch (dbError) {
-          console.error('Failed to sync alarm clear state to DB:', dbError)
-        }
-
-        broadcastMutationStatus(input.side, { isAlarmVibrating: false })
+        await markAlarmEnded(input.side)
         return { success: true }
       }, 'Failed to clear alarm')
     }),
@@ -591,18 +568,7 @@ export const deviceRouter = router({
           vibrationPattern: input.vibrationPattern,
           duration: input.alarmDuration,
         })
-
-        try {
-          await db
-            .update(deviceState)
-            .set({ isAlarmVibrating: false, lastUpdated: new Date() })
-            .where(eq(deviceState.side, input.side))
-        }
-        catch (dbError) {
-          console.error('Failed to sync snooze state to DB:', dbError)
-        }
-
-        broadcastMutationStatus(input.side, { isAlarmVibrating: false })
+        await markAlarmEnded(input.side)
         return { success: true, snoozeUntil: Math.floor(snoozeUntil.getTime() / 1000) }
       }, 'Failed to snooze alarm')
     }),

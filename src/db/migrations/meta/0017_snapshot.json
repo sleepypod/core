@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "5331421c-552d-496c-be53-08057707569c",
+  "id": "dad0d8ef-c738-41fa-b669-437cd82f70f2",
   "prevId": "eb2a2128-9152-4404-853d-a222ce880650",
   "tables": {
     "alarm_schedules": {
@@ -63,6 +63,14 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "wake_window": {
+          "name": "wake_window",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         },
         "enabled": {
           "name": "enabled",
@@ -273,76 +281,6 @@
             "enabled"
           ],
           "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "base_schedules": {
-      "name": "base_schedules",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "day_of_week": {
-          "name": "day_of_week",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "time": {
-          "name": "time",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "head": {
-          "name": "head",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "feet": {
-          "name": "feet",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "feed_rate": {
-          "name": "feed_rate",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 50
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": true
-        }
-      },
-      "indexes": {
-        "base_schedules_day_time": {
-          "name": "base_schedules_day_time",
-          "columns": [
-            "day_of_week",
-            "time"
-          ],
-          "isUnique": true
         }
       },
       "foreignKeys": {},

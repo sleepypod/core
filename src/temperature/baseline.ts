@@ -50,6 +50,60 @@ export function recurringTarget(rows: WeeklyTarget[], timezone: string, now: num
   return latest
 }
 
+/** Minutes before an alarm its temperature takes over, so the bed is there by wake time. */
+export const ALARM_WARMUP_MIN = 30
+/** Minutes the alarm temperature holds after the alarm stops vibrating (covers a snooze or two). */
+export const ALARM_HOLD_AFTER_MIN = 15
+
+export interface AlarmTemperatureRow extends WeeklyTarget {
+  /** The alarm's wake window (minutes); the warm-up covers it when longer. */
+  wakeWindow: number
+  /** Vibration length (seconds). */
+  duration: number
+}
+
+export type AlarmOccurrenceCache = Map<string, number>
+
+/** Warm-up lead for an alarm: ALARM_WARMUP_MIN, or its wake window when longer. */
+export function alarmWarmupMinutes(wakeWindow: number): number {
+  return Math.max(ALARM_WARMUP_MIN, wakeWindow)
+}
+
+/**
+ * Alarm temperatures, each over its own span: from alarmWarmupMinutes before
+ * the alarm (the water needs a while to get there) until ALARM_HOLD_AFTER_MIN
+ * after it stops vibrating, at priority 1 so it wins over the night's
+ * schedule points. Outside that span the schedule applies — an alarm's
+ * temperature no longer lingers as the day's set point until the evening.
+ */
+export function alarmTemperatureTargets(rows: AlarmTemperatureRow[], timezone: string, now: number, cache: AlarmOccurrenceCache = new Map()): TemperatureRequest[] {
+  const out: TemperatureRequest[] = []
+  const activeKeys = new Set<string>()
+  for (const row of rows) {
+    const afterMs = row.duration * 1000 + ALARM_HOLD_AFTER_MIN * 60_000
+    const key = JSON.stringify([timezone, row.dayOfWeek, row.time, afterMs])
+    activeKeys.add(key)
+    let alarmAt = cache.get(key)
+    if (alarmAt === undefined || now >= alarmAt + afterMs) {
+      // The occurrence whose span may still hold now, else the next one.
+      const [hour, minute] = row.time.split(':').map(Number)
+      const cron = `${minute} ${hour} * * ${DAYS_OF_WEEK.indexOf(row.dayOfWeek)}`
+      alarmAt = parseExpression(cron, { currentDate: new Date(now - afterMs), tz: timezone }).next().getTime()
+      cache.set(key, alarmAt)
+    }
+    const startsAt = alarmAt - alarmWarmupMinutes(row.wakeWindow) * 60_000
+    if (now < startsAt) continue
+    out.push({
+      id: row.id, source: 'schedule', temperature: row.temperature,
+      startsAt, expiresAt: alarmAt + afterMs, createdAt: startsAt, priority: 1,
+    })
+  }
+  for (const key of cache.keys()) {
+    if (!activeKeys.has(key)) cache.delete(key)
+  }
+  return out
+}
+
 export interface SessionTarget {
   id: number
   startedAt: Date

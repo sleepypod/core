@@ -19,6 +19,8 @@ export interface AlarmGroup {
   vibrationPattern: 'rise' | 'double'
   duration: number
   alarmTemperature: number
+  /** Minutes before `time` in which movement fires the alarm early; 0 = off. */
+  wakeWindow: number
   enabled: boolean
 }
 
@@ -67,10 +69,11 @@ export function AlarmCard({ group, onEdit, onTest, isTesting = false }: AlarmCar
             {' · '}
             {group.duration}
             s buzz
+            {group.wakeWindow > 0 && ` · ${group.wakeWindow} min window`}
           </span>
         </span>
         <span className="mt-1 hidden font-mono text-[11px] text-fg-3 min-[900px]:block">
-          {`${group.duration}s buzz · ${group.vibrationPattern} · ${formatSetpointF(group.alarmTemperature, unit, { includeUnit: false })}`}
+          {`${group.duration}s buzz · ${group.vibrationPattern} · ${formatSetpointF(group.alarmTemperature, unit, { includeUnit: false })}${group.wakeWindow > 0 ? ` · ${group.wakeWindow} min window` : ''}`}
         </span>
       </div>
       <div className="-my-1.5 -mr-2 flex shrink-0 flex-col">

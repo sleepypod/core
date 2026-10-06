@@ -17,6 +17,11 @@ export interface GestureEvent {
   side: Side
   tapType: 'doubleTap' | 'tripleTap' | 'quadTap'
   timestamp: Date
+  /**
+   * The firmware's own time for this tap (unix seconds), when it reports
+   * one: lets the same tap seen from two sources be handled once.
+   */
+  firmwareTime?: number
 }
 
 export interface DacMonitorEvents {
@@ -38,6 +43,21 @@ const DEFAULT_POLL_INTERVAL_MS = 2000
 const ACTIVE_POLL_INTERVAL_MS = 1000
 const IDLE_POLL_INTERVAL_MS = 5000
 const TAP_TYPES = ['doubleTap', 'tripleTap', 'quadTap'] as const
+
+/**
+ * Some firmware (Pod 4 "I00") reports the time of the side's last tap (unix
+ * seconds) in these status fields, not a count. A value at or above this is
+ * a time: any change is exactly one tap. Read as a count, the first tap after
+ * a restart (0 → ~1.8e9) became ~1.8 billion gesture events and exhausted the
+ * server's memory within seconds.
+ */
+const TAP_TIME_FLOOR = 1_000_000_000
+
+/**
+ * Counters change by one per tap and are polled every 1-5 s; a larger jump is
+ * a counter glitch, never a burst of real taps worth replaying.
+ */
+const MAX_TAPS_PER_POLL = 3
 
 /**
  * Polls the hardware daemon on an adaptive interval — 1s active / 2s default /
@@ -252,14 +272,19 @@ export class DacMonitor extends EventEmitter {
         return
       }
 
-      const deltaL = currentCounts.l - lastCounts.l
-      for (let i = 0; i < deltaL; i += 1) {
-        this.emit('gesture:detected', { side: 'left', tapType, timestamp: new Date() })
-      }
-
-      const deltaR = currentCounts.r - lastCounts.r
-      for (let i = 0; i < deltaR; i += 1) {
-        this.emit('gesture:detected', { side: 'right', tapType, timestamp: new Date() })
+      for (const [key, side] of [['l', 'left'], ['r', 'right']] as const) {
+        const now = currentCounts[key]
+        const before = lastCounts[key]
+        if (now === before) continue
+        if (now >= TAP_TIME_FLOOR) {
+          // Last-tap time: one tap, identified by the firmware's time for it.
+          this.emit('gesture:detected', { side, tapType, timestamp: new Date(), firmwareTime: now })
+          continue
+        }
+        const taps = Math.min(now - before, MAX_TAPS_PER_POLL)
+        for (let i = 0; i < taps; i += 1) {
+          this.emit('gesture:detected', { side, tapType, timestamp: new Date() })
+        }
       }
     }
   }

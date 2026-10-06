@@ -6,7 +6,7 @@
  * each dep function.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const dbMock = vi.hoisted(() => {
   const limit = vi.fn(async () => [])
@@ -32,9 +32,41 @@ vi.mock('drizzle-orm', () => ({
 }))
 vi.mock('@/src/hardware/dacMonitor.instance', () => sharedMock)
 
+const alarmMock = vi.hoisted(() => ({
+  getActiveAlarmConfig: vi.fn(),
+  markAlarmEnded: vi.fn(),
+  snoozeAlarm: vi.fn(),
+  cancelSnooze: vi.fn(),
+}))
+vi.mock('@/src/hardware/alarmState', () => alarmMock)
+vi.mock('@/src/hardware/snoozeManager', () => alarmMock)
+
 const { defaultGestureActionDeps } = await import('@/src/hardware/gestureActionHandler.deps')
 
 describe('defaultGestureActionDeps', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it.each(['left', 'right'] as const)('wires alarm actions for %s', async (side) => {
+    const config = { vibrationIntensity: 65, vibrationPattern: 'double' as const, duration: 45 }
+    alarmMock.getActiveAlarmConfig.mockReturnValueOnce(config).mockReturnValueOnce(null)
+    const alarm = defaultGestureActionDeps.alarm
+    if (!alarm) throw new Error('Missing alarm dependencies')
+    expect(alarm.activeConfig(side)).toBe(config)
+    expect(alarm.activeConfig(side)).toBeNull()
+    expect(alarmMock.getActiveAlarmConfig).toHaveBeenCalledWith(side)
+
+    const ended = Promise.resolve()
+    alarmMock.markAlarmEnded.mockReturnValueOnce(ended)
+    expect(alarm.ended(side)).toBe(ended)
+    expect(alarmMock.markAlarmEnded).toHaveBeenCalledExactlyOnceWith(side)
+
+    alarm.snooze(side, 180, config)
+    await vi.dynamicImportSettled()
+    expect(alarmMock.snoozeAlarm).toHaveBeenCalledExactlyOnceWith(side, 180, config)
+    alarm.cancelSnooze(side)
+    await vi.waitFor(() => expect(alarmMock.cancelSnooze).toHaveBeenCalledExactlyOnceWith(side))
+  })
+
   it('findGestureConfig returns the first row or null', async () => {
     dbMock.limit.mockResolvedValueOnce([{ actionType: 'alarm' }] as never)
     expect(await defaultGestureActionDeps.findGestureConfig('left', 'doubleTap'))

@@ -5,7 +5,14 @@ const mocks = vi.hoisted(() => ({
   clearAlarm: vi.fn().mockResolvedValue(undefined),
   snoozeAlarmFn: vi.fn(),
   cancelSnoozeFn: vi.fn(),
+  activeConfig: vi.fn((): { vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number } | null => null),
+  markAlarmEnded: vi.fn().mockResolvedValue(undefined),
   state: { active: false },
+}))
+
+vi.mock('@/src/hardware/alarmState', () => ({
+  getActiveAlarmConfig: mocks.activeConfig,
+  markAlarmEnded: mocks.markAlarmEnded,
 }))
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
@@ -28,6 +35,8 @@ describe('snoozeSwitch accessory', () => {
     clearAlarm.mockClear()
     snoozeAlarm.mockClear()
     cancelSnooze.mockClear()
+    mocks.activeConfig.mockReset().mockReturnValue(null)
+    mocks.markAlarmEnded.mockClear()
     state.active = false
   })
   afterEach(() => {
@@ -50,6 +59,15 @@ describe('snoozeSwitch accessory', () => {
       9 * 60,
       expect.objectContaining({ vibrationIntensity: 50, vibrationPattern: 'rise', duration: 60 }),
     )
+    stop()
+  })
+
+  it('on → repeats the vibrating alarm\'s own settings and records it stopped', async () => {
+    mocks.activeConfig.mockReturnValue({ vibrationIntensity: 100, vibrationPattern: 'double', duration: 120 })
+    const { service, stop } = buildSnoozeSwitch('right')
+    await service.getCharacteristic(Characteristic.On).setValue(true)
+    expect(mocks.markAlarmEnded).toHaveBeenCalledWith('right')
+    expect(snoozeAlarm).toHaveBeenCalledWith('right', 9 * 60, { vibrationIntensity: 100, vibrationPattern: 'double', duration: 120 })
     stop()
   })
 

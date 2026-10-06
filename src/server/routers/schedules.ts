@@ -17,6 +17,7 @@ import {
   vibrationIntensitySchema,
   vibrationPatternSchema,
   alarmDurationSchema,
+  wakeWindowSchema,
 } from '@/src/server/validation-schemas'
 
 const temperatureScheduleOutput = z.object({
@@ -51,6 +52,7 @@ const alarmScheduleOutput = z.object({
   vibrationPattern: vibrationPatternSchema,
   duration: z.number(),
   alarmTemperature: z.number(),
+  wakeWindow: z.number(),
   enabled: z.boolean(),
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -451,6 +453,7 @@ export const schedulesRouter = router({
           vibrationPattern: vibrationPatternSchema.default('rise'),
           duration: alarmDurationSchema,
           alarmTemperature: temperatureSchema,
+          wakeWindow: wakeWindowSchema.default(0),
           enabled: z.boolean().default(true),
         })
         .strict()
@@ -499,6 +502,7 @@ export const schedulesRouter = router({
           vibrationPattern: vibrationPatternSchema.optional(),
           duration: alarmDurationSchema.optional(),
           alarmTemperature: temperatureSchema.optional(),
+          wakeWindow: wakeWindowSchema.optional(),
           enabled: z.boolean().optional(),
         })
         .strict()
@@ -621,6 +625,7 @@ export const schedulesRouter = router({
             vibrationPattern: vibrationPatternSchema.default('rise'),
             duration: alarmDurationSchema,
             alarmTemperature: temperatureSchema,
+            wakeWindow: wakeWindowSchema.default(0),
             enabled: z.boolean().default(true),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
@@ -645,6 +650,7 @@ export const schedulesRouter = router({
             vibrationPattern: vibrationPatternSchema.optional(),
             duration: alarmDurationSchema.optional(),
             alarmTemperature: temperatureSchema.optional(),
+            wakeWindow: wakeWindowSchema.optional(),
             enabled: z.boolean().optional(),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),

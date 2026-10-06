@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const setTemperature = vi.fn()
 const setPower = vi.fn()
 const shouldBlock = vi.fn<(side: 'left' | 'right') => boolean>()
+const releaseHeldPowerOff = vi.fn()
 
 // Test HomeKit's staging, serialization, and error mapping at the shared
 // controller boundary. Controller/hardware integration has its own real-DB tests.
@@ -14,6 +15,9 @@ vi.mock('@/src/temperature/instance', () => ({
 }))
 vi.mock('@/src/hardware/pumpStallGuard', () => ({
   shouldBlock: (side: 'left' | 'right') => shouldBlock(side),
+}))
+vi.mock('@/src/scheduler', () => ({
+  getJobManager: async () => ({ releaseHeldPowerOff }),
 }))
 
 import {
@@ -56,6 +60,7 @@ describe('sideController', () => {
     setTemperature.mockReset()
     setPower.mockReset()
     shouldBlock.mockReset()
+    releaseHeldPowerOff.mockReset()
     setTemperature.mockResolvedValue(undefined)
     setPower.mockResolvedValue(undefined)
     shouldBlock.mockReturnValue(false)
@@ -169,6 +174,14 @@ describe('sideController', () => {
     it('falls back to firmware status target when no cache exists', async () => {
       await setSidePowerOn(monitor(offStatus), 'right')
       expect(setTemperature).toHaveBeenCalledWith('right', 75)
+    })
+
+    it('releases a power-off held for an alarm before powering on', async () => {
+      await setSidePowerOn(monitor(offStatus), 'right')
+      expect(releaseHeldPowerOff).toHaveBeenCalledExactlyOnceWith('right')
+      expect(releaseHeldPowerOff.mock.invocationCallOrder[0]).toBeLessThan(setTemperature.mock.invocationCallOrder[0])
+      await setSidePowerOff(monitor(onStatus), 'right')
+      expect(releaseHeldPowerOff).toHaveBeenCalledOnce()
     })
 
     it('falls back to 75°F when no status and no cache', async () => {

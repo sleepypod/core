@@ -205,6 +205,8 @@ export const alarmSchedules = sqliteTable('alarm_schedules', {
     .default('rise'),
   duration: integer('duration').notNull(), // 0-180 seconds
   alarmTemperature: real('alarm_temperature').notNull(), // Temperature during alarm
+  // Minutes before `time` in which movement fires the alarm early; 0 = off.
+  wakeWindow: integer('wake_window').notNull().default(0),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()

@@ -397,7 +397,7 @@ describe('useSchedule — applyToOtherDays', () => {
     trpcMock.overrides.day = {
       temperature: [],
       power: [{ id: 1, side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 68, enabled: true }],
-      alarm: [{ id: 2, side: 'left', dayOfWeek: 'monday', time: '06:30', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 30, alarmTemperature: 72, enabled: true }],
+      alarm: [{ id: 2, side: 'left', dayOfWeek: 'monday', time: '06:30', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 30, alarmTemperature: 72, wakeWindow: 15, enabled: true }],
     }
     const { result } = renderHook(() => useSchedule())
     await act(async () => {
@@ -411,7 +411,7 @@ describe('useSchedule — applyToOtherDays', () => {
       expect.objectContaining({ side: 'left', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 68, enabled: true }),
     ])
     expect(arg.creates.alarm).toEqual([
-      expect.objectContaining({ side: 'left', dayOfWeek: 'tuesday', time: '06:30', vibrationPattern: 'rise', alarmTemperature: 72, enabled: true }),
+      expect.objectContaining({ side: 'left', dayOfWeek: 'tuesday', time: '06:30', vibrationPattern: 'rise', alarmTemperature: 72, wakeWindow: 15, enabled: true }),
     ])
   })
 

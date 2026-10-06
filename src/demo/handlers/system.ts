@@ -111,34 +111,6 @@ function storage(): Storage {
 }
 
 export const system: DemoHandlers<'system'> = {
-  getSensorSource: () => ({
-    firmware: {
-      generation: 'nats',
-      label: 'NATS (demo)',
-      detail: 'Simulated firmware with a local NATS sensor stream.',
-      expectedTransport: 'nats',
-      probed: true,
-      signals: {
-        natsUnitInstalled: true,
-        natsServerActive: true,
-        jetstreamDirPresent: true,
-        biometricsTmpfsMounted: true,
-        frankShimRoutesTmpfs: false,
-        frankServiceRoutesTmpfs: false,
-      },
-    },
-    stream: {
-      source: 'nats',
-      override: null,
-      legacyNatsDisabled: false,
-      lastFrameAtMs: Date.now() - 250,
-      lastFrameAgeMs: 250,
-      lastFrameType: 'piezo-dual',
-      firstFrameMs: 120,
-      uptimeSeconds: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000),
-    },
-  }),
-
   internetStatus: () => ({ blocked: internetBlocked }),
 
   setInternetAccess: (input) => {
@@ -186,6 +158,37 @@ export const system: DemoHandlers<'system'> = {
     const removed = reclaimable.filter(i => input.includeDbBackups || i.kind !== 'backup')
     reclaimable = reclaimable.filter(i => !removed.includes(i))
     return { freedBytes: removed.reduce((s, i) => s + i.bytes, 0), removed: removed.length }
+  },
+
+  getSensorSource: () => {
+    const lastFrameAgeMs = 400 + (Date.now() % 1_200)
+    return {
+      firmware: {
+        generation: 'nats',
+        label: 'NATS JetStream',
+        detail: 'New firmware. Sensor frames arrive over NATS JetStream.',
+        expectedTransport: 'nats',
+        probed: true,
+        signals: {
+          natsUnitInstalled: true,
+          natsServerActive: true,
+          jetstreamDirPresent: true,
+          biometricsTmpfsMounted: false,
+          frankShimRoutesTmpfs: false,
+          frankServiceRoutesTmpfs: false,
+        },
+      },
+      stream: {
+        source: 'nats',
+        override: null,
+        legacyNatsDisabled: false,
+        lastFrameAtMs: Date.now() - lastFrameAgeMs,
+        lastFrameAgeMs,
+        lastFrameType: 'piezo-dual',
+        firstFrameMs: 3124,
+        uptimeSeconds: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000),
+      },
+    }
   },
 
   getVersion: () => {
