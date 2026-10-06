@@ -38,7 +38,7 @@ describe('server performance telemetry', () => {
     expect(metrics.monitorEventLoopDelay).not.toHaveBeenCalled()
   })
 
-  it('splits RSS into V8 heap and native buffers from process.memoryUsage', () => {
+  it('reports RSS and overlapping memory counters from process.memoryUsage', () => {
     const usage = { rss: 200 * 2 ** 20, heapTotal: 90 * 2 ** 20, heapUsed: 70 * 2 ** 20, external: 6 * 2 ** 20, arrayBuffers: 2 ** 20 }
     vi.spyOn(process, 'memoryUsage').mockReturnValue(usage as NodeJS.MemoryUsage)
     expect(getServerPerformance()).toMatchObject({

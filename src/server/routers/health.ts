@@ -51,7 +51,7 @@ export const healthRouter = router({
     .output(z.object({
       uptimeSeconds: z.number(),
       rssBytes: z.number(),
-      /** process.memoryUsage() split: V8 heap vs native buffers; RSS minus these is the allocator's. */
+      /** process.memoryUsage() counters; arrayBuffers is included in external. These do not partition RSS. */
       memory: z.object({
         heapTotalBytes: z.number(),
         heapUsedBytes: z.number(),

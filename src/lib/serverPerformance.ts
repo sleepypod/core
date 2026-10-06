@@ -56,9 +56,8 @@ export function getServerPerformance() {
   const s = state()
   const h = s.histogram
   const ms = (ns: number) => Number.isFinite(ns) ? Math.round(ns / 10_000) / 100 : 0
-  // RSS alone cannot say whether memory sits in V8's heap, in native buffers
-  // or in the allocator (SQLite page caches, snapshot leftovers); the split
-  // is what a "too resource hungry" report needs.
+  // These process.memoryUsage() counters do not partition RSS.
+  // arrayBuffers is included in external.
   const memory = process.memoryUsage()
   return {
     uptimeSeconds: process.uptime(),
