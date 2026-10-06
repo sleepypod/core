@@ -4,6 +4,8 @@ import babel from '@rolldown/plugin-babel'
 import react from '@vitejs/plugin-react'
 import tsconfigPaths from 'vite-tsconfig-paths'
 import { defineConfig } from 'vitest/config'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const serverOnlyTestStub = '\0server-only-test-stub'
 
@@ -45,6 +47,11 @@ export default defineConfig({
       exclude: ['**/tests/**', '**/*.test.{ts,tsx}', '**/*.d.ts'],
     },
     name: 'unit',
+    // Alarm/snooze state is persisted next to the database; keep tests that
+    // exercise it without mocking from writing into the repo.
+    env: {
+      ALARM_STATE_PATH: join(tmpdir(), 'sleepypod-vitest', 'alarm-state.json'),
+    },
     exclude: ['.claude/worktrees/**', '.codex/**', '.ygg/worktrees/**', 'node_modules/**', '.next/**'],
   },
 })

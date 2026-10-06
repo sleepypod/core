@@ -37,6 +37,7 @@ export interface AlarmSchedule {
   vibrationIntensity: number
   duration: number
   alarmTemperature: number
+  wakeWindow: number
   enabled: boolean
   createdAt: Date
   updatedAt: Date

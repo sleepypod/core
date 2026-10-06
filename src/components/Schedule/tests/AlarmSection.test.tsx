@@ -24,7 +24,7 @@ vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ 
 import { AlarmSection, groupAlarms } from '../AlarmSection'
 
 const row = (id: number, dayOfWeek: string, over: Record<string, unknown> = {}) => ({
-  id, side: 'left', dayOfWeek, time: '06:45', vibrationIntensity: 100, vibrationPattern: 'rise', duration: 10, alarmTemperature: 84, enabled: true, ...over,
+  id, side: 'left', dayOfWeek, time: '06:45', vibrationIntensity: 100, vibrationPattern: 'rise', duration: 10, alarmTemperature: 84, wakeWindow: 0, enabled: true, ...over,
 })
 
 beforeEach(() => {
@@ -52,6 +52,17 @@ describe('groupAlarms', () => {
   })
 })
 
+describe('groupAlarms wake window', () => {
+  it('keeps alarms with different wake windows in separate groups', () => {
+    const groups = groupAlarms([
+      row(1, 'monday', { wakeWindow: 20 }),
+      row(2, 'tuesday', { wakeWindow: 20 }),
+      row(3, 'wednesday'),
+    ] as never)
+    expect(groups.map(g => [g.ids, g.wakeWindow])).toEqual([[[1, 2], 20], [[3], 0]])
+  })
+})
+
 describe('AlarmSection', () => {
   it('shows a skeleton while loading and no count', () => {
     m.query = { data: undefined, isLoading: true, error: null }
@@ -73,6 +84,13 @@ describe('AlarmSection', () => {
     expect(s.getByText('10s buzz · rise · 84°')).toBeTruthy()
     expect(s.getByText('paused')).toBeTruthy()
     expect(s.getByText('1')).toBeTruthy()
+  })
+
+  it('shows the wake window in both mobile and desktop alarm details', () => {
+    m.query = { data: { alarm: [row(1, 'monday', { wakeWindow: 20 })] }, isLoading: false, error: null }
+    const s = render(<AlarmSection side="left" />)
+    expect(s.getByText('· 10s buzz · 20 min window')).toBeTruthy()
+    expect(s.getByText('10s buzz · rise · 84° · 20 min window')).toBeTruthy()
   })
 
   it('tests an alarm on the listed side with its stored vibration', () => {

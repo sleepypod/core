@@ -49,10 +49,10 @@ function seed() {
     }
   }
   for (const dayOfWeek of WEEKDAYS) {
-    alarm.push({ id: nextId++, side: 'left', dayOfWeek, time: '06:45', vibrationIntensity: 60, vibrationPattern: 'rise', duration: 30, alarmTemperature: 78, ...meta })
-    alarm.push({ id: nextId++, side: 'right', dayOfWeek, time: '07:15', vibrationIntensity: 40, vibrationPattern: 'double', duration: 20, alarmTemperature: 84, ...meta })
+    alarm.push({ id: nextId++, side: 'left', dayOfWeek, time: '06:45', vibrationIntensity: 60, vibrationPattern: 'rise', duration: 30, alarmTemperature: 78, wakeWindow: 0, ...meta })
+    alarm.push({ id: nextId++, side: 'right', dayOfWeek, time: '07:15', vibrationIntensity: 40, vibrationPattern: 'double', duration: 20, alarmTemperature: 84, wakeWindow: 0, ...meta })
   }
-  alarm.push({ id: nextId++, side: 'right', dayOfWeek: 'saturday', time: '08:30', vibrationIntensity: 30, vibrationPattern: 'rise', duration: 20, alarmTemperature: 84, ...meta, enabled: false })
+  alarm.push({ id: nextId++, side: 'right', dayOfWeek: 'saturday', time: '08:30', vibrationIntensity: 30, vibrationPattern: 'rise', duration: 20, alarmTemperature: 84, wakeWindow: 0, ...meta, enabled: false })
 }
 seed()
 
@@ -111,7 +111,7 @@ export const schedules: DemoHandlers<'schedules'> = {
   },
 
   createAlarmSchedule: (input) => {
-    const row: AlarmRow = { ...input, vibrationPattern: input.vibrationPattern ?? 'rise', enabled: input.enabled ?? true, ...stamp() }
+    const row: AlarmRow = { ...input, vibrationPattern: input.vibrationPattern ?? 'rise', wakeWindow: input.wakeWindow ?? 0, enabled: input.enabled ?? true, ...stamp() }
     alarm.push(row)
     return { ...row }
   },
@@ -135,7 +135,7 @@ export const schedules: DemoHandlers<'schedules'> = {
 
     for (const c of input.creates?.temperature ?? []) temperature.push({ ...c, enabled: c.enabled ?? true, ...stamp() })
     for (const c of input.creates?.power ?? []) power.push({ ...c, enabled: c.enabled ?? true, ...stamp() })
-    for (const c of input.creates?.alarm ?? []) alarm.push({ ...c, vibrationPattern: c.vibrationPattern ?? 'rise', enabled: c.enabled ?? true, ...stamp() })
+    for (const c of input.creates?.alarm ?? []) alarm.push({ ...c, vibrationPattern: c.vibrationPattern ?? 'rise', wakeWindow: c.wakeWindow ?? 0, enabled: c.enabled ?? true, ...stamp() })
 
     for (const { id, ...changes } of input.updates?.temperature ?? []) update(temperature, 'Temperature', id, changes)
     for (const { id, ...changes } of input.updates?.power ?? []) update(power, 'Power', id, changes)

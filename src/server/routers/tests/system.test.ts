@@ -56,7 +56,7 @@ vi.mock('node:child_process', () => ({
 vi.mock('node:fs/promises', () => ({ ...fsPromisesMock, default: fsPromisesMock }))
 vi.mock('node:fs', () => ({ ...fsSyncMock, default: fsSyncMock }))
 
-const { systemRouter } = await import('@/src/server/routers/system')
+const { systemRouter, getFirmwareSignals, _resetFirmwareSignalsForTest } = await import('@/src/server/routers/system')
 const caller = systemRouter.createCaller({})
 
 beforeEach(() => {
@@ -75,6 +75,7 @@ beforeEach(() => {
   sensorMock.perf = { sensorSource: 'pending', firstFrameMs: null, uptimeSeconds: 12 }
   delete process.env.PIEZO_SENSOR_SOURCE
   delete process.env.PIEZO_NATS_DISABLED
+  _resetFirmwareSignalsForTest()
 })
 
 // Helper: queue execFile responses by command-name match
@@ -968,5 +969,68 @@ describe('system.getSensorSource', () => {
     expect(r.firmware.signals.jetstreamDirPresent).toBeNull()
     expect(r.firmware.signals.frankShimRoutesTmpfs).toBeNull()
     expect(r.firmware.generation).toBe('raw-filesystem')
+  })
+
+  it('probes firmware once per process: a second call spawns nothing and reuses the signals', async () => {
+    routeExec((file, args) => {
+      if (file === 'systemctl' && args[0] === 'show') return 'loaded\n'
+      if (file === 'systemctl' && args[0] === 'is-active') return undefined
+      return exit(1)
+    })
+    fsPromisesMock.stat.mockResolvedValue({ isDirectory: () => true } as never)
+    fsPromisesMock.readFile.mockRejectedValue(enoent)
+    sensorMock.frameTimes = { 'piezo-dual': 1_000 }
+
+    const first = await caller.getSensorSource({})
+    expect(first.firmware.generation).toBe('nats')
+    expect(execMock.execFile).toHaveBeenCalledTimes(4)
+    expect(fsPromisesMock.stat).toHaveBeenCalledTimes(1)
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1)
+    const signals = await getFirmwareSignals()
+
+    execMock.execFile.mockClear()
+    fsPromisesMock.stat.mockClear()
+    fsPromisesMock.readFile.mockClear()
+    sensorMock.frameTimes = { 'piezo-dual': 1_000, 'capSense': 9_000 }
+    sensorMock.perf = { sensorSource: 'nats', firstFrameMs: 1800, uptimeSeconds: 900 }
+
+    const second = await caller.getSensorSource({})
+    expect(execMock.execFile).not.toHaveBeenCalled()
+    expect(fsPromisesMock.stat).not.toHaveBeenCalled()
+    expect(fsPromisesMock.readFile).not.toHaveBeenCalled()
+    expect(await getFirmwareSignals()).toBe(signals)
+    expect(second.firmware.signals).toEqual(first.firmware.signals)
+    // Stream fields stay live while the firmware half is frozen.
+    expect(second.stream).toMatchObject({ source: 'nats', lastFrameAtMs: 9_000, lastFrameType: 'capSense', firstFrameMs: 1800 })
+  })
+
+  it('does not memoize a probe cut short by its timeout, so the next poll retries', async () => {
+    const timedOut = Object.assign(new Error('spawn systemctl ETIMEDOUT'), { killed: true, signal: 'SIGTERM' })
+    routeExec((file, args) => {
+      if (file === 'mountpoint') return timedOut
+      if (file === 'systemctl' && args[0] === 'show') return 'not-found\n'
+      return exit(1)
+    })
+    fsPromisesMock.readFile.mockResolvedValue('#!/bin/sh\ncd /persistent/biometrics\nexec frank\n')
+
+    const first = await caller.getSensorSource({})
+    expect(first.firmware.generation).toBe('raw-filesystem')
+    expect(first.firmware.signals.biometricsTmpfsMounted).toBe(false)
+
+    // The tmpfs answers on the retry → the card corrects itself instead of staying wrong.
+    routeExec((file, args) => {
+      if (file === 'mountpoint') return undefined
+      if (file === 'systemctl' && args[0] === 'show') return 'not-found\n'
+      return exit(1)
+    })
+    execMock.execFile.mockClear()
+    const second = await caller.getSensorSource({})
+    expect(execMock.execFile).toHaveBeenCalledTimes(4)
+    expect(second.firmware.generation).toBe('raw-tmpfs-shim')
+
+    // Now settled: a third call spawns nothing.
+    execMock.execFile.mockClear()
+    await caller.getSensorSource({})
+    expect(execMock.execFile).not.toHaveBeenCalled()
   })
 })
