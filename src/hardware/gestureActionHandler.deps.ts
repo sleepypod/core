@@ -5,6 +5,7 @@ import type { Side } from './types'
 import type { GestureActionDeps } from './gestureActionHandler'
 import type { GestureEvent } from './dacMonitor'
 import { getSharedHardwareClient } from './dacMonitor.instance'
+import { getActiveAlarmConfig, markAlarmEnded } from './alarmState'
 
 /**
  * Production dependency implementations for GestureActionHandler.
@@ -33,4 +34,16 @@ export const defaultGestureActionDeps: GestureActionDeps = {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   newHardwareClient: (_socketPath: string) =>
     getSharedHardwareClient(),
+
+  // Lazy imports: snoozeManager → dacMonitor.instance → this module.
+  alarm: {
+    activeConfig: side => getActiveAlarmConfig(side),
+    ended: side => markAlarmEnded(side),
+    snooze: (side, seconds, config) => {
+      void import('./snoozeManager').then(({ snoozeAlarm }) => snoozeAlarm(side, seconds, config))
+    },
+    cancelSnooze: (side) => {
+      void import('./snoozeManager').then(({ cancelSnooze }) => cancelSnooze(side))
+    },
+  },
 }

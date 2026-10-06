@@ -14,6 +14,7 @@ export enum JobType {
   RUN_ONCE = 'run_once',
   LED_BRIGHTNESS = 'led_brightness',
   AWAY_MODE = 'away_mode',
+  WAKE_WINDOW = 'wake_window',
 }
 
 /**

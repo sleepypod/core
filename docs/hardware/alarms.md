@@ -39,6 +39,42 @@ The UI calls `device.setAlarm` for immediate tests; the scheduler calls
 the same hardware client, with the same per-side opcode (`ALARM_LEFT`
 cmd 5 or `ALARM_RIGHT` cmd 6).
 
+## Wake window
+
+An alarm can set `wakeWindow` to 10, 15, 20 or 30 minutes (0 = off). A
+`wake_window` job opens the window that many minutes before the alarm time;
+from then the scheduler reads the sleep-detector's per-minute `movement` rows
+for that side every 20 s, and the first score at or above 300 fires the alarm
+right away. The set-time job then skips that occurrence. With no movement the
+alarm fires at its set time as usual. Snoozing works the same either way.
+
+Scores come from the detector, which writes a row a minute only while it holds
+a session open, so an early fire lands within about a minute of the movement
+and an empty bed never trips it. Scheduling (or rescheduling after a reload)
+inside a window opens it immediately; the record of an early fire lives in
+memory, so a restart between an early fire and the set time lets the alarm
+fire again at the set time. See `src/scheduler/wakeWindow.ts`.
+
+## Alarm temperature warm-up
+
+An alarm's temperature used to be a set point at the alarm time: the bed only
+started warming as you woke, and the temperature then stayed the day's set
+point until the next schedule point (often the evening power-on), so any
+power-on during the day went straight to it. Now each alarm's temperature
+applies over its own span, from `ALARM_WARMUP_MIN` (30) minutes before the
+alarm, or the start of the wake window when longer, until
+`ALARM_HOLD_AFTER_MIN` (15) minutes after it stops vibrating
+(`alarmTemperatureTargets` in `src/temperature/baseline.ts`). The request has
+priority 1, so it wins over the night's schedule points in that span; outside
+it the schedule applies.
+
+A scheduled power-off that lands inside a warm-up would switch the bed off
+before the alarm, so it is held as a one-time `power-off-after-alarm-<side>`
+job until the alarm's temperature span ends (its time plus vibration, plus
+`ALARM_HOLD_AFTER_MIN`), so a snooze re-fires into a bed that is still on.
+An explicit power-on in the meantime (a scheduled power-on, the app, HomeKit,
+away mode ending) or disabling the power schedule releases the held job.
+
 ## The documented alarm opcodes
 
 frankenfirmware's binary references three alarm-related code paths. Same
@@ -205,6 +241,40 @@ labels). `device.clearAlarm` uses this directly; `snoozeAlarm` clears,
 schedules a setTimeout, and re-sends the same alarm config when the
 timer fires (`src/hardware/snoozeManager.ts`).
 
+## Alarm state, tap gestures and snooze
+
+The firmware does not report whether an alarm is vibrating, and it stops a
+vibrating alarm by itself on **any** tap gesture (its log: `dismissing
+alarm (N taps)`), then reports the tap count. A snooze therefore has to be
+re-armed by us, and a tap only snoozes if we know an alarm is vibrating.
+
+- `src/hardware/alarmState.ts` is the one place that sets and clears
+  `device_state.isAlarmVibrating`: every path that starts an alarm (the
+  schedule, `device.setAlarm`, a snooze restarting) calls
+  `markAlarmStarted` with the alarm's settings, every path that stops one
+  calls `markAlarmEnded`, and an alarm nobody stops ends when its duration
+  runs out — so the flag can't linger for a later tap to "snooze".
+- A tap configured to snooze clears the alarm and snoozes it through
+  `snoozeManager` with the snoozed alarm's own settings (the gesture, API
+  and HomeKit paths all share it). Any other tap during an alarm just
+  records it ended, since the firmware already stopped it.
+- Taps come from two places (`src/hardware/gestureDispatch.ts`): the tap
+  fields of DEVICE_STATUS, polled by `DacMonitor`, and the `tap-gesture`
+  sensor records (`{side, taps, ts}`) that some firmware writes for every
+  tap. The status fields miss a tap that stops a vibrating alarm (the
+  firmware's own "tap to dismiss"), so a snooze tap is only seen in the
+  stream; once the stream has delivered a tap it is the only source. On
+  Pod 4 firmware the status fields hold the time of the last tap, not a
+  count: a change is exactly one tap (reading it as a count turned the first
+  tap after a restart into ~1.8 billion gestures and exhausted the server's
+  memory). A tap seen by both sources is handled once, and records replayed
+  from before a restart (older than 30 s) are ignored.
+- Vibrating alarms and pending snoozes are persisted to `alarm-state.json`
+  next to the database (`src/hardware/alarmPersistence.ts`) and restored on
+  startup: a restart (deploy, crash) mid-alarm keeps the flag until the
+  alarm's end; a snooze resumes at its original time, fires at once if it
+  came due at most 10 minutes before the restart, and is dropped if later.
+
 **Cover-motor startup race:** the cover MCU needs a non-trivial time to
 ramp the LP5009 from a clear state to motor-running. Sending
 `ALARM_CLEAR` within ~100ms of `ALARM_LEFT`/`RIGHT` cancels the buzz
@@ -258,6 +328,9 @@ pods (a warning logs but the cover motor has already started).
   current firmware — see [Reality check](#reality-check-pod-5-j55-firmware))
 - `src/server/routers/device.ts` — `setAlarm` / `clearAlarm` / `snoozeAlarm` tRPC procedures + `execute` raw passthrough
 - `src/scheduler/jobManager.ts` — fires scheduled `alarm_schedules` rows
+- `src/hardware/alarmState.ts` / `alarmPersistence.ts` — vibrating-alarm state (persisted)
+- `src/hardware/snoozeManager.ts` — snooze timers (persisted), shared by gesture, API and HomeKit
+- `src/hardware/gestureActionHandler.ts` — tap gestures → snooze / dismiss / temperature / power
 - `src/components/Schedule/AlarmEditor.tsx` — UI Test button + persistence
 
 ## Open work

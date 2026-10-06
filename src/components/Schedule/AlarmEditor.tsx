@@ -41,11 +41,27 @@ const MAX_DURATION = 180
 const MIN_TEMP = 55
 const MAX_TEMP = 110
 
+const WAKE_WINDOW_OPTIONS = [
+  { value: '0', label: 'Off' },
+  { value: '10', label: '10' },
+  { value: '15', label: '15' },
+  { value: '20', label: '20' },
+  { value: '30', label: '30 min' },
+] as const
+type WakeWindowOption = typeof WAKE_WINDOW_OPTIONS[number]['value']
+
 const QUICK_PICKS: Array<{ label: string, days: DayOfWeek[] }> = [
   { label: 'Weekdays', days: WEEKDAYS },
   { label: 'Weekends', days: WEEKENDS },
   { label: 'Every day', days: DAY_ORDER },
 ]
+
+/** `HH:mm` moved by `minutes`, wrapping around midnight. */
+function shiftTime(time: string, minutes: number): string {
+  const [h, m] = time.split(':').map(Number)
+  const t = (((h * 60 + m + minutes) % 1440) + 1440) % 1440
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`
+}
 
 /**
  * Alarm editor (Dialog on desktop, Sheet on phones).
@@ -76,6 +92,7 @@ export function AlarmEditor({
   const [intensity, setIntensity] = useState(FIXED_INTENSITY)
   const [duration, setDuration] = useState(DEFAULT_DURATION)
   const [displayTemperature, setDisplayTemperature] = useState(defaultDisplayTemp)
+  const [wakeWindow, setWakeWindow] = useState(0)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
 
@@ -91,6 +108,7 @@ export function AlarmEditor({
       setIntensity(existingGroup.vibrationIntensity)
       setDuration(existingGroup.duration)
       setDisplayTemperature(Math.round(setpointFToDisplay(existingGroup.alarmTemperature, unit) ?? existingGroup.alarmTemperature))
+      setWakeWindow(existingGroup.wakeWindow)
     }
     else {
       setDays(new Set())
@@ -100,6 +118,7 @@ export function AlarmEditor({
       setIntensity(FIXED_INTENSITY)
       setDuration(DEFAULT_DURATION)
       setDisplayTemperature(defaultDisplayTemp)
+      setWakeWindow(0)
     }
     setSaveError(null)
     setTesting(false)
@@ -148,6 +167,7 @@ export function AlarmEditor({
       vibrationPattern: pattern,
       duration,
       alarmTemperature: temperatureF,
+      wakeWindow,
       enabled,
     })))
 
@@ -164,7 +184,7 @@ export function AlarmEditor({
     catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save alarm')
     }
-  }, [days, sides, time, intensity, pattern, duration, displayTemperature, unit, existingGroup, batchUpdate, utils, onSaved, onClose])
+  }, [days, sides, time, intensity, pattern, duration, displayTemperature, wakeWindow, unit, existingGroup, batchUpdate, utils, onSaved, onClose])
 
   const clock = formatTime12h(time)
   const [clockDigits, clockPeriod] = clock.split(' ')
@@ -248,6 +268,24 @@ export function AlarmEditor({
             </Pill>
           ))}
         </div>
+      </div>
+
+      <div className="flex flex-col gap-2 border-t border-line pt-3.5">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="flex-1 text-sm">Wake window</span>
+          <SegmentedControl<WakeWindowOption>
+            size="sm"
+            ariaLabel="Wake window"
+            value={String(wakeWindow) as WakeWindowOption}
+            onChange={v => setWakeWindow(Number(v))}
+            options={WAKE_WINDOW_OPTIONS}
+          />
+        </div>
+        <span className="text-xs leading-[1.4] text-fg-3">
+          {wakeWindow > 0
+            ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime12h(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
+            : 'Goes off at the set time.'}
+        </span>
       </div>
 
       <div className="flex flex-col gap-3 border-t border-line pt-3.5">

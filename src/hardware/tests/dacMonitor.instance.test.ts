@@ -66,12 +66,10 @@ class FakeDacMonitor {
   }
 }
 
-const gestureCleanupMock = vi.fn()
 const gestureHandleMock = vi.fn()
 class FakeGestureActionHandler {
   socketPath: string
   deps: unknown
-  cleanup = gestureCleanupMock
   handle = gestureHandleMock
   constructor(socketPath: string, deps: unknown) {
     this.socketPath = socketPath
@@ -86,7 +84,8 @@ class FakeDeviceStateSync {
   recordFlowData = stateSyncRecordFlowMock
 }
 
-const cancelSnoozeMock = vi.fn<(side: 'left' | 'right') => void>()
+const suspendSnoozesMock = vi.fn()
+const suspendActiveAlarmsMock = vi.fn()
 const resetPrimingStateMock = vi.fn()
 const trackPrimingStateMock = vi.fn<(priming: boolean) => void>()
 const getPrimeCompletedAtMock = vi.fn(() => null as number | null)
@@ -136,8 +135,12 @@ vi.mock('../pumpStallNotification', () => ({
 }))
 
 vi.mock('../snoozeManager', () => ({
-  cancelSnooze: (side: 'left' | 'right') => cancelSnoozeMock(side),
+  suspendSnoozes: () => suspendSnoozesMock(),
   getSnoozeStatus: (side: 'left' | 'right') => getSnoozeStatusMock(side),
+}))
+
+vi.mock('../alarmState', () => ({
+  suspendActiveAlarms: () => suspendActiveAlarmsMock(),
 }))
 
 vi.mock('../responseParser', () => ({
@@ -194,11 +197,11 @@ describe('hardware/dacMonitor.instance', () => {
     isDacConnectedMock.mockReset().mockReturnValue(true)
     parseDeviceStatusMock.mockClear()
     parseSimpleResponseMock.mockReset().mockReturnValue({ success: true, message: 'ok' })
-    gestureCleanupMock.mockClear()
     gestureHandleMock.mockClear()
     stateSyncSyncMock.mockReset().mockResolvedValue(undefined)
     stateSyncRecordFlowMock.mockClear()
-    cancelSnoozeMock.mockClear()
+    suspendSnoozesMock.mockClear()
+    suspendActiveAlarmsMock.mockClear()
     resetPrimingStateMock.mockClear()
     trackPrimingStateMock.mockClear()
     getPrimeCompletedAtMock.mockReset().mockReturnValue(null)
@@ -718,6 +721,36 @@ describe('hardware/dacMonitor.instance', () => {
       expect(stateSyncRecordFlowMock).toHaveBeenCalledWith({ type: 'frzHealth', flow: 42 })
     })
 
+    it('feeds tap-gesture frames to the gesture handler, once per tap', async () => {
+      const mod = await freshModule()
+      await mod.getDacMonitor()
+      await flushMicrotasks()
+      const monitor = monitorInstances[0]
+      const cb = (onServerFrameMock.mock.calls[0]?.[0]) as ((frame: unknown) => void)
+      const ts = Math.floor(Date.now() / 1000)
+
+      cb({ type: 'tap-gesture', side: 'left', taps: 2, ts })
+      // The same tap, also reported by status polling (Pod 4: last-tap time).
+      monitor.emit('gesture:detected', { side: 'left', tapType: 'doubleTap', timestamp: new Date(), firmwareTime: ts })
+      await flushMicrotasks()
+
+      expect(gestureHandleMock).toHaveBeenCalledOnce()
+      expect(gestureHandleMock).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', tapType: 'doubleTap', firmwareTime: ts }))
+      expect(stateSyncRecordFlowMock).not.toHaveBeenCalled()
+    })
+
+    it('ignores a tap-gesture record replayed from before a restart', async () => {
+      const mod = await freshModule()
+      await mod.getDacMonitor()
+      await flushMicrotasks()
+      const cb = (onServerFrameMock.mock.calls[0]?.[0]) as ((frame: unknown) => void)
+
+      cb({ type: 'tap-gesture', side: 'left', taps: 3, ts: Math.floor(Date.now() / 1000) - 600 })
+      await flushMicrotasks()
+
+      expect(gestureHandleMock).not.toHaveBeenCalled()
+    })
+
     it('isolates DeviceStateSync.sync rejections (logged, not thrown)', async () => {
       const mod = await freshModule()
       await mod.getDacMonitor()
@@ -751,10 +784,10 @@ describe('hardware/dacMonitor.instance', () => {
       expect(monitor.stop).toHaveBeenCalled()
       expect(monitor.removeAllListeners).toHaveBeenCalledWith('gesture:detected')
       expect(monitor.removeAllListeners).toHaveBeenCalledWith('status:updated')
-      expect(gestureCleanupMock).toHaveBeenCalled()
       expect(disconnectDacMock).toHaveBeenCalled()
-      expect(cancelSnoozeMock).toHaveBeenCalledWith('left')
-      expect(cancelSnoozeMock).toHaveBeenCalledWith('right')
+      // Suspended, not cancelled: the next process restores them from disk.
+      expect(suspendSnoozesMock).toHaveBeenCalledOnce()
+      expect(suspendActiveAlarmsMock).toHaveBeenCalledOnce()
       expect(resetPrimingStateMock).toHaveBeenCalled()
       expect(mod.getDacServer()).toBeNull()
       expect(mod.getDacMonitorIfRunning()).toBeNull()

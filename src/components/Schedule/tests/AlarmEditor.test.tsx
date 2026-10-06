@@ -27,6 +27,7 @@ const group: AlarmGroup = {
   vibrationPattern: 'double',
   duration: 60,
   alarmTemperature: 84,
+  wakeWindow: 20,
   enabled: false,
 }
 
@@ -68,6 +69,7 @@ describe('AlarmEditor', () => {
       vibrationPattern: 'rise',
       duration: 30,
       alarmTemperature: 75,
+      wakeWindow: 0,
       enabled: true,
     })
     expect(payload.creates.alarm.map((a: { dayOfWeek: string }) => a.dayOfWeek)).toEqual(['monday', 'tuesday', 'wednesday', 'thursday', 'friday'])
@@ -102,8 +104,31 @@ describe('AlarmEditor', () => {
       vibrationPattern: 'rise',
       duration: 90,
       alarmTemperature: 85,
+      wakeWindow: 20,
       enabled: false,
     })
+  })
+
+  it('shows and saves the wake window', async () => {
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    expect(s.getByRole('tab', { name: '20' }).getAttribute('aria-selected')).toBe('true')
+    expect(s.getByText(/up to 20 min early, the first time you move after 7:40 AM\. Otherwise it goes off at 8:00 AM/)).toBeTruthy()
+
+    fireEvent.click(s.getByRole('tab', { name: '30 min' }))
+    expect(s.getByText(/up to 30 min early, the first time you move after 7:30 AM/)).toBeTruthy()
+    fireEvent.click(saveButton(s))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
+    expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm[0].wakeWindow).toBe(30)
+  })
+
+  it('wraps the window start across midnight and turns off', async () => {
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, time: '00:10' }} />)
+    expect(s.getByText(/first time you move after 11:50 PM/)).toBeTruthy()
+    fireEvent.click(s.getByRole('tab', { name: 'Off' }))
+    expect(s.getByText('Goes off at the set time.')).toBeTruthy()
+    fireEvent.click(saveButton(s))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
+    expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm[0].wakeWindow).toBe(0)
   })
 
   it('surfaces save failures and stays open', async () => {

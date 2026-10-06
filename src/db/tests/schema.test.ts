@@ -286,6 +286,7 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'vibration_pattern', notNull: true, default: 'rise' },
       { name: 'duration', notNull: true, default: undefined },
       { name: 'alarm_temperature', notNull: true, default: undefined },
+      { name: 'wake_window', notNull: true, default: 0 },
       { name: 'enabled', notNull: true, default: true },
       { name: 'created_at', notNull: true, default: 'sql' },
       { name: 'updated_at', notNull: true, default: 'sql' },

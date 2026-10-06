@@ -7,7 +7,7 @@ Automated scheduling system for pod control operations.
 The scheduler manages automated tasks including:
 - **Temperature schedules** - Per-side, per-day temperature changes
 - **Power schedules** - Automated on/off with custom temperatures
-- **Alarm schedules** - Wake-up vibrations with temperature control
+- **Alarm schedules** - Wake-up vibrations with temperature control, optionally fired early by movement in a wake window (`wakeWindow.ts`)
 - **Daily priming** - Automated maintenance
 - **Daily reboots** - System restarts
 
@@ -124,6 +124,7 @@ enum JobType {
   POWER_ON = 'power_on',        // Power on at scheduled time
   POWER_OFF = 'power_off',      // Power off at scheduled time
   ALARM = 'alarm',              // Wake-up alarms
+  WAKE_WINDOW = 'wake_window',  // Opens an alarm's wake window
   PRIME = 'prime',              // Daily priming
   REBOOT = 'reboot',            // System reboot
 }

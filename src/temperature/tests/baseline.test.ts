@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as cronParser from 'cron-parser'
-import { recurringTarget, sessionTarget, type WeeklyTarget, type RecurringOccurrenceCache } from '../baseline'
+import { ALARM_HOLD_AFTER_MIN, ALARM_WARMUP_MIN, alarmTemperatureTargets, alarmWarmupMinutes, recurringTarget, sessionTarget, type WeeklyTarget, type RecurringOccurrenceCache } from '../baseline'
 
 vi.mock('cron-parser', async (importOriginal) => {
   const original = await importOriginal<typeof cronParser>()
@@ -123,5 +123,64 @@ describe('current run-once target', () => {
   it('does not activate future or expired sessions', () => {
     expect(sessionTarget(session, 'UTC', Date.parse('2026-09-28T21:00Z'))).toBeNull()
     expect(sessionTarget(session, 'UTC', Date.parse('2026-09-29T07:00Z'))).toBeNull()
+  })
+})
+
+describe('alarmTemperatureTargets', () => {
+  // Monday 2026-09-28, UTC.
+  const at = (hh: number, mm: number, ss = 0) => Date.UTC(2026, 8, 28, hh, mm, ss)
+  // 07:40, 60 s of vibration: the span ends 07:41 + 15 min = 07:56.
+  const alarm = { id: 'alarm:7', dayOfWeek: 'monday' as const, time: '07:40', temperature: 95, wakeWindow: 0, duration: 60 }
+
+  it('asks for the alarm temperature from 30 minutes before the alarm to 15 minutes after it ends', () => {
+    expect(alarmTemperatureTargets([alarm], 'UTC', at(7, 9))).toEqual([])
+    expect(alarmTemperatureTargets([alarm], 'UTC', at(7, 10))).toEqual([{
+      id: 'alarm:7', source: 'schedule', temperature: 95,
+      startsAt: at(7, 10), expiresAt: at(7, 56), createdAt: at(7, 10), priority: 1,
+    }])
+    expect(alarmTemperatureTargets([alarm], 'UTC', at(7, 40))).toHaveLength(1)
+    expect(alarmTemperatureTargets([alarm], 'UTC', at(7, 55, 59))).toHaveLength(1)
+    // Then the schedule applies again; next week's alarm is far off.
+    expect(alarmTemperatureTargets([alarm], 'UTC', at(7, 56))).toEqual([])
+    expect(alarmTemperatureTargets([alarm], 'UTC', at(14, 0))).toEqual([])
+  })
+
+  it('starts with the wake window when that is longer', () => {
+    expect(alarmTemperatureTargets([{ ...alarm, wakeWindow: 45 }], 'UTC', at(6, 55))[0].startsAt).toBe(at(6, 55))
+    expect(alarmTemperatureTargets([{ ...alarm, wakeWindow: 45 }], 'UTC', at(6, 54))).toEqual([])
+    expect(alarmTemperatureTargets([{ ...alarm, wakeWindow: 20 }], 'UTC', at(7, 10))[0].startsAt).toBe(at(7, 10))
+  })
+
+  it('holds longer after a longer vibration', () => {
+    expect(alarmTemperatureTargets([{ ...alarm, duration: 180 }], 'UTC', at(7, 10))[0].expiresAt).toBe(at(7, 58))
+  })
+
+  it('warms across midnight for an alarm just after it', () => {
+    const early = { ...alarm, dayOfWeek: 'tuesday' as const, time: '00:10' }
+    const [target] = alarmTemperatureTargets([early], 'UTC', at(23, 45))
+    expect(target.startsAt).toBe(at(23, 40))
+    expect(target.expiresAt).toBe(Date.UTC(2026, 8, 29, 0, 26))
+  })
+
+  it('caches each alarm\'s occurrence until its span ends, and drops alarms that are gone', () => {
+    const cache = new Map<string, number>()
+    alarmTemperatureTargets([alarm], 'UTC', at(7, 20), cache)
+    expect([...cache.values()]).toEqual([at(7, 40)])
+    alarmTemperatureTargets([alarm], 'UTC', at(7, 50), cache)
+    expect([...cache.values()]).toEqual([at(7, 40)])
+    alarmTemperatureTargets([alarm], 'UTC', at(7, 56), cache)
+    expect([...cache.values()]).toEqual([Date.UTC(2026, 9, 5, 7, 40)])
+    alarmTemperatureTargets([], 'UTC', at(7, 56), cache)
+    expect(cache.size).toBe(0)
+  })
+})
+
+describe('alarmWarmupMinutes', () => {
+  it('is 30 minutes, or the wake window when longer', () => {
+    expect(ALARM_WARMUP_MIN).toBe(30)
+    expect(ALARM_HOLD_AFTER_MIN).toBe(15)
+    expect(alarmWarmupMinutes(0)).toBe(30)
+    expect(alarmWarmupMinutes(30)).toBe(30)
+    expect(alarmWarmupMinutes(45)).toBe(45)
   })
 })
