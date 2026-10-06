@@ -80,22 +80,30 @@ describe('current recurring target', () => {
     }
   }, 30_000)
 
-  it('shifts a row inside a midnight spring gap forward, never onto the previous evening', () => {
-    // America/Havana jumps 23:59:59 → 01:00 on 2026-03-08. cron-parser 4.9
-    // drops this firing entirely; the controller instead fires it once at the
-    // first instant past the gap, matching ordinary gaps such as New York 02:30.
+  it('skips Havana midnight gaps like cron-parser and preserves cache boundaries', () => {
     const rows: WeeklyTarget[] = [
       { id: 'sat', dayOfWeek: 'saturday', time: '22:00', temperature: 75 },
       { id: 'sun', dayOfWeek: 'sunday', time: '00:30', temperature: 68 },
     ]
-    const gapEnd = Date.parse('2026-03-08T05:30Z') // 00:30 CST would be 05:30Z; it fires there, as 01:30 CDT
-    expect(recurringTarget(rows, 'America/Havana', gapEnd - 60_000)?.id).toBe('sat')
-    const shifted = recurringTarget(rows, 'America/Havana', gapEnd)
-    expect(shifted?.id).toBe('sun')
-    expect(shifted?.startsAt).toBe(gapEnd)
-    expect(shifted?.expiresAt).toBe(Date.parse('2026-03-15T04:30Z')) // next Sunday 00:30 CDT
-    // A week later the Saturday row wins again until Sunday 00:30 CDT.
-    expect(recurringTarget(rows, 'America/Havana', Date.parse('2026-03-15T04:29Z'))?.id).toBe('sat')
+    const timezone = 'America/Havana'
+    const cache: RecurringOccurrenceCache = new Map()
+    const key = JSON.stringify([timezone, 'sunday', '00:30'])
+    const cron = parseExpression('30 0 * * 0', { currentDate: new Date('2026-02-28T00:00Z'), tz: timezone })
+    const startsAt = cron.next().getTime()
+    const expiresAt = cron.next().getTime()
+    expect(startsAt).toBe(Date.parse('2026-03-01T05:30Z'))
+    expect(expiresAt).toBe(Date.parse('2026-03-15T04:30Z'))
+    for (const iso of ['2026-03-08T04:30Z', '2026-03-08T05:30Z', '2026-03-14T04:00Z', '2026-03-15T04:29Z']) {
+      expect(recurringTarget(rows, timezone, Date.parse(iso), cache)?.id).toBe('sat')
+      expect(cache.get(key)).toEqual({ startsAt, expiresAt })
+      // Cold reads more than eight days from a real firing must also find it.
+      expect(recurringTarget([rows[1]], timezone, Date.parse(iso))).toMatchObject({ startsAt, expiresAt })
+    }
+    const cached = cache.get(key)
+    expect(recurringTarget(rows, timezone, expiresAt - 1, cache)?.id).toBe('sat')
+    expect(cache.get(key)).toBe(cached)
+    expect(recurringTarget(rows, timezone, expiresAt, cache)).toMatchObject({ id: 'sun', startsAt: expiresAt })
+    expect(cache.get(key)).not.toBe(cached)
   })
 })
 

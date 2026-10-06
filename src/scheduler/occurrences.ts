@@ -75,28 +75,32 @@ function localDays(from: number, to: number, timezone: string): { days: LocalDay
 /**
  * A wall time on a DST day: an ambiguous time (fall back) takes its first
  * occurrence and a skipped one (spring forward) lands just past the gap,
- * matching cron-parser.
+ * matching cron-parser. Midnight gaps are skipped entirely.
  */
-function resolveDstWallTime(guess: number, day: LocalDay, offsetAt: (utcMs: number) => number): number {
+function resolveDstWallTime(guess: number, day: LocalDay, offsetAt: (utcMs: number) => number): number | null {
   const candidates = [guess - day.offStart, guess - day.offEnd].filter(c => c + offsetAt(c) === guess)
-  return candidates.length ? Math.min(...candidates) : guess - day.offStart
+  if (candidates.length) return Math.min(...candidates)
+  // cron-parser skips nonexistent midnight occurrences rather than shifting
+  // them into the next hour. Ordinary spring gaps still shift forward.
+  return new Date(guess).getUTCHours() === 0 ? null : guess - day.offStart
 }
 
 export type WeeklyZone = ReturnType<typeof localDays>
 
 /**
  * The zone's days around `now`, wide enough that every weekday has one
- * occurrence on each side of `now`. Build once per pass and share it across
+ * occurrence on each side of `now`, even when a DST gap skips a week.
+ * Build once per pass and share it across
  * rows: the Intl formatter is the expensive part.
  */
 export function weeklyZone(now: number, timezone: string): WeeklyZone {
-  return localDays(now - 8 * DAY, now + 8 * DAY, timezone)
+  return localDays(now - 15 * DAY, now + 15 * DAY, timezone)
 }
 
 /**
  * For a weekly `minute hour * * weekday` schedule: the latest firing at or
  * before `now` and the next one after it, with cron-parser's DST semantics
- * (a skipped spring time lands just past the gap, a repeated fall time fires
+ * (midnight gaps are skipped, other spring gaps shift forward, fall times fire
  * once). Replaces `parseExpression(...).next()` for the temperature baseline,
  * where one cron-parser row cost ~0.5 s on the pod's CPU.
  */
@@ -107,6 +111,7 @@ export function weeklyWindow(zone: WeeklyZone, weekday: number, hour: number, mi
     if (day.weekday !== weekday % 7) continue
     const guess = Date.UTC(day.y, day.m - 1, day.d, hour, minute)
     const at = day.offStart === day.offEnd ? guess - day.offStart : resolveDstWallTime(guess, day, zone.offsetAt)
+    if (at === null) continue
     if (at <= now) {
       if (at > startsAt) startsAt = at
     }
@@ -154,7 +159,7 @@ export function expandOccurrences(jobs: OccurrenceSource[], from: Date, to: Date
         if (dows && !dows.has(day.weekday)) continue
         const guess = Date.UTC(day.y, day.m - 1, day.d, hour, minute)
         const at = day.offStart === day.offEnd ? guess - day.offStart : resolveDstWallTime(guess, day, zone.offsetAt)
-        if (at >= fromMs && at < toMs) out.push({ ...base, at })
+        if (at !== null && at >= fromMs && at < toMs) out.push({ ...base, at })
       }
       continue
     }
