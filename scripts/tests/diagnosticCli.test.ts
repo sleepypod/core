@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
@@ -99,4 +99,20 @@ it.each([false, true])('bundles firmware context and combined timeline (explicit
     expect(entry('journals/frank.service.log')).toContain(`<--since><${since}>`)
   }
   else expect(timeline).toContain('<-b>')
+})
+
+it.each(['--since', '--until'])('rejects invalid %s timestamps without producing a bundle', (option) => {
+  writeFileSync(join(bin, 'journalctl'), `#!/bin/bash
+for arg in "$@"; do
+  if [ "$arg" = "not-a-date" ]; then
+    echo "Failed to parse timestamp: not-a-date" >&2
+    exit 1
+  fi
+done
+`, { mode: 0o755 })
+  const result = run('sp-bundle-logs', [option, 'not-a-date'])
+  expect(result.status).toBe(2)
+  expect(result.stderr).toContain('Failed to parse timestamp')
+  expect(result.stdout).not.toContain('Bundle written:')
+  expect(readdirSync(root).filter(name => name.startsWith('sleepypod-bundle'))).toEqual([])
 })

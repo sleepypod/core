@@ -37,6 +37,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# Ask journalctl to parse the complete window before creating any artifacts.
+# A zero-entry query uses the same timestamp grammar as the captures below.
+if [ "$HAS_WINDOW" = true ]; then
+  if ! journalctl "${JOURNAL_WINDOW[@]}" --lines=0 --no-pager >/dev/null; then
+    echo "Cannot collect journals for the requested time window." >&2
+    exit 2
+  fi
+fi
+
 INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
 # DATA_DIR pointer is written by scripts/install (storage-aware picker).
 # Legacy fallback keeps installs without the pointer file working.
