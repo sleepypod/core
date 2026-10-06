@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { BASE_SIDES } from '@/src/hardware/base/types'
 import { SIDE_Z, createBedModel } from './bedModel3D'
-import { ORBIT, attachOrbitInput, createOrbit } from './bedOrbit'
+import { ORBIT, attachOrbitInput, createOrbit, homeAzimuth } from './bedOrbit'
 import type { BedRendererProps } from './BedView'
 import type { Three } from './loadThree'
 
@@ -15,7 +15,7 @@ interface Props extends BedRendererProps {
   onFail: () => void
 }
 
-function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 'right')[], focusZ: number, onReady: () => void, onFail: () => void) {
+function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 'right')[], focusZ: number, home: number, onReady: () => void, onFail: () => void) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' })
   const canvas = renderer.domElement
   canvas.setAttribute('aria-hidden', 'true')
@@ -62,7 +62,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   scene.add(model.root)
 
   const camera = new THREE.PerspectiveCamera(30, 600 / 330, 0.1, 40)
-  const orbit = createOrbit()
+  const orbit = createOrbit(home)
   const place = () => {
     const { x, y, z } = orbit.position(focusZ)
     camera.position.set(x, y, z)
@@ -97,7 +97,26 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   const observer = new ResizeObserver(resize)
   observer.observe(host)
 
+  // Swing around to a newly selected side; any touch of the controls takes over.
+  let swing = 0
+  const swingTo = (azimuth: number) => {
+    cancelAnimationFrame(swing)
+    orbit.home = azimuth
+    const from = orbit.state.azimuth
+    if (from === azimuth) return
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    const start = performance.now()
+    const step = (now: number) => {
+      const t = reduced ? 1 : Math.min(1, (now - start) / ORBIT.swingMs)
+      orbit.state.azimuth = from + (azimuth - from) * (1 - (1 - t) ** 3)
+      place()
+      requestRender()
+      if (t < 1) swing = requestAnimationFrame(step)
+    }
+    swing = requestAnimationFrame(step)
+  }
   const detachOrbit = attachOrbitInput(canvas, orbit, () => {
+    cancelAnimationFrame(swing)
     place()
     requestRender()
   })
@@ -135,8 +154,10 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
       }]))
       if (model.update(states, props.bedModel)) requestRender()
     },
+    swingTo,
     dispose() {
       cancelAnimationFrame(frame)
+      cancelAnimationFrame(swing)
       observer.disconnect()
       detachOrbit()
       theme.disconnect()
@@ -162,12 +183,14 @@ export default function BedView3D({ three, onReady, onFail, ...view }: Props) {
     callbacks.current = { onReady, onFail }
   })
   const sidesKey = view.single ?? 'both'
+  const home = homeAzimuth(view.single ?? view.focus)
+  const initialHome = useRef(home)
 
   useLayoutEffect(() => {
     if (!host.current) return
     const sides = view.single ? [view.single] : BASE_SIDES
     try {
-      bed.current = mountBed(three, host.current, sides, view.single ? SIDE_Z[view.single] : 0, () => callbacks.current.onReady(), () => callbacks.current.onFail())
+      bed.current = mountBed(three, host.current, sides, view.single ? SIDE_Z[view.single] : 0, initialHome.current, () => callbacks.current.onReady(), () => callbacks.current.onFail())
     }
     catch {
       callbacks.current.onFail()
@@ -184,6 +207,10 @@ export default function BedView3D({ three, onReady, onFail, ...view }: Props) {
   useLayoutEffect(() => {
     bed.current?.update(view)
   })
+
+  useLayoutEffect(() => {
+    bed.current?.swingTo(home)
+  }, [home])
 
   return <div ref={host} aria-hidden="true" data-testid="bed-view-3d" className="absolute inset-0" />
 }

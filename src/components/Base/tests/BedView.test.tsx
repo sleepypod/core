@@ -100,6 +100,17 @@ describe('BedView', () => {
     expect(screen.getByText('IDLE')).toBeTruthy()
   })
 
+  it('draws the focused side in front of the 2D view', () => {
+    const front = () => screen.getByTestId('bed-view-2d').lastElementChild?.getAttribute('data-testid')
+    const view = render(<BedView {...props} />)
+    expect(front()).toBe('bed-left')
+    view.rerender(<BedView {...props} focus="right" />)
+    expect(front()).toBe('bed-right')
+    expect(screen.getByTestId('bed-left')).toBeTruthy()
+    view.rerender(<BedView {...props} focus="right" split={false} />)
+    expect(front()).toBe('bed-left')
+  })
+
   it('shows placeholders while the position is unavailable', () => {
     render(<BedView {...props} left={null} right={null} />)
     expect(screen.getByTestId('bed-readout').textContent).toBe('Jon — / — · Heidi — / —')

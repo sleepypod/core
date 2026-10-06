@@ -1,11 +1,14 @@
 // Camera orbit for the 3D bed: rotate, tilt and zoom around a fixed target. No pan;
 // the bed always stays centred.
 
+import type { BaseScope } from '@/src/hardware/base/types'
+
 const deg = Math.PI / 180
 const LOOK_Y = 0.2
-// The product shot: foot end, on the left sleeper's side, 8.4 out and 3.4 up.
-const DEFAULT_HORIZONTAL = 8.4
-const DEFAULT_HEIGHT = 3.4
+// The product shot: foot end, on the left sleeper's side, pulled back far enough
+// that the near legs clear the bottom of the frame.
+const DEFAULT_HORIZONTAL = 9.2
+const DEFAULT_HEIGHT = 3.7
 export const ORBIT = {
   azimuth: 0.62,
   elevation: Math.atan2(DEFAULT_HEIGHT - LOOK_Y, DEFAULT_HORIZONTAL),
@@ -18,6 +21,7 @@ export const ORBIT = {
   minDistance: 5.5,
   maxDistance: 12,
   rotateRate: 0.008,
+  swingMs: 450,
   tiltRate: 0.006,
   wheelRate: 0.002,
   lookY: LOOK_Y,
@@ -27,10 +31,14 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 
 export interface OrbitState { azimuth: number, elevation: number, distance: number }
 
-export function createOrbit() {
-  const state: OrbitState = { azimuth: ORBIT.azimuth, elevation: ORBIT.elevation, distance: ORBIT.distance }
+/** Each sleeper's default view is from their own side; Both uses the left sleeper's. */
+export const homeAzimuth = (focus?: BaseScope) => focus === 'right' ? -ORBIT.azimuth : ORBIT.azimuth
+
+export function createOrbit(home: number = ORBIT.azimuth) {
+  const state: OrbitState = { azimuth: home, elevation: ORBIT.elevation, distance: ORBIT.distance }
   return {
     state,
+    home,
     /** Drag by pixels; grabbing the bed and pulling down shows more of its top. */
     drag(dx: number, dy: number) {
       state.azimuth = clamp(state.azimuth - dx * ORBIT.rotateRate, -ORBIT.maxAzimuth, ORBIT.maxAzimuth)
@@ -41,7 +49,7 @@ export function createOrbit() {
       if (scale > 0 && Number.isFinite(scale)) state.distance = clamp(state.distance / scale, ORBIT.minDistance, ORBIT.maxDistance)
     },
     reset() {
-      Object.assign(state, { azimuth: ORBIT.azimuth, elevation: ORBIT.elevation, distance: ORBIT.distance })
+      Object.assign(state, { azimuth: this.home, elevation: ORBIT.elevation, distance: ORBIT.distance })
     },
     position(focusZ: number) {
       const ground = state.distance * Math.cos(state.elevation)

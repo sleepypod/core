@@ -35,16 +35,17 @@ function Half({ side, pose, target, moving, colors, mattress }: { side: BaseSide
 }
 
 /** Side view of the base. Works fully offline; the 3D view's fallback. */
-export function BedView2D({ left, right, leftTarget, rightTarget, moving, single, split, bedModel }: BedRendererProps) {
+export function BedView2D({ left, right, leftTarget, rightTarget, moving, single, split, focus, bedModel }: BedRendererProps) {
   const mattress = bedModel === 'mattress'
-  const front: BaseSide = single ?? 'left'
+  const front: BaseSide = single ?? (split && focus === 'right' ? 'right' : 'left')
+  const back: BaseSide = front === 'left' ? 'right' : 'left'
   const pose = { left, right }
   const target = { left: leftTarget, right: rightTarget }
   return (
     <svg viewBox="0 -70 600 330" aria-hidden="true" data-testid="bed-view-2d" className="block size-full">
       {!single && split && (
         <g transform="translate(24 -16)">
-          <Half side="right" pose={right} target={rightTarget} moving={!!moving.right} colors={BACK} mattress={mattress} />
+          <Half side={back} pose={pose[back]} target={target[back]} moving={!!moving[back]} colors={BACK} mattress={mattress} />
         </g>
       )}
       <rect x={60} y={203} width={490} height={7} fill="#26262a" />

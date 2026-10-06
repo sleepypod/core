@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useState } from 'react'
 import { BASE_SIDES } from '@/src/hardware/base/types'
-import type { BaseSide } from '@/src/hardware/base/types'
+import type { BaseScope, BaseSide } from '@/src/hardware/base/types'
 import type { Pose } from './bedGeometry'
 import type { BedModel } from './bedModel3D'
 import { BedView2D } from './BedView2D'
@@ -31,6 +31,8 @@ export interface BedViewProps {
   single?: BaseSide
   /** The halves move independently; a whole-bed 2D view draws only the front half. */
   split?: boolean
+  /** The selected side faces the camera (3D) or is drawn in front (2D). */
+  focus?: BaseScope
 }
 
 /** What both renderers draw: the interpolated pose, never the exact readout. */
@@ -42,12 +44,13 @@ export interface BedRendererProps {
   moving: Record<BaseSide, boolean>
   single?: BaseSide
   split: boolean
+  focus?: BaseScope
   bedModel: BedModel
 }
 
 const angles = (pose: Pose | null) => pose ? `${pose.head}° / ${pose.feet}°` : '— / —'
 
-export function BedView({ left, right, leftTarget, rightTarget, moving, names, single, split = true }: BedViewProps) {
+export function BedView({ left, right, leftTarget, rightTarget, moving, names, single, split = true, focus }: BedViewProps) {
   const [bedModel] = useBedModel()
   const [simple] = useSimpleBedView()
   const [three, setThree] = useState<Three | null>(null)
@@ -84,6 +87,7 @@ export function BedView({ left, right, leftTarget, rightTarget, moving, names, s
     moving: { left: !!moving.left, right: !!moving.right },
     single,
     split,
+    focus,
     bedModel,
   }
   const use3D = want3D && three !== null

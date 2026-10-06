@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ORBIT, attachOrbitInput, createOrbit } from '../bedOrbit'
+import { ORBIT, attachOrbitInput, createOrbit, homeAzimuth } from '../bedOrbit'
 import type { Orbit } from '../bedOrbit'
 
 const deg = Math.PI / 180
@@ -33,12 +33,28 @@ beforeEach(() => {
 })
 
 describe('bed orbit', () => {
-  it('starts at the product shot: foot end, 8.4 out and 3.4 up', () => {
+  it('starts at the product shot: foot end, 9.2 out and 3.7 up', () => {
     const { x, y, z } = createOrbit().position(0)
-    expect(Math.hypot(x, z)).toBeCloseTo(8.4)
-    expect(y).toBeCloseTo(3.4)
+    expect(Math.hypot(x, z)).toBeCloseTo(9.2)
+    expect(y).toBeCloseTo(3.7)
     expect(Math.atan2(z, x)).toBeCloseTo(0.62)
     expect(createOrbit().position(-0.97).z).toBeCloseTo(z - 0.97)
+  })
+
+  it('frames each sleeper from their own side and resets to the current home', () => {
+    expect(homeAzimuth()).toBe(ORBIT.azimuth)
+    expect(homeAzimuth('both')).toBe(ORBIT.azimuth)
+    expect(homeAzimuth('left')).toBe(ORBIT.azimuth)
+    expect(homeAzimuth('right')).toBe(-ORBIT.azimuth)
+    const o = createOrbit(homeAzimuth('right'))
+    expect(o.position(0).z).toBeLessThan(0)
+    o.drag(50, 40)
+    o.zoom(1.3)
+    o.reset()
+    expect(o.state).toEqual({ azimuth: -ORBIT.azimuth, elevation: ORBIT.elevation, distance: ORBIT.distance })
+    o.home = ORBIT.azimuth
+    o.reset()
+    expect(o.state.azimuth).toBe(ORBIT.azimuth)
   })
 
   it('clamps rotation, tilt and zoom so the bed stays in view', () => {
