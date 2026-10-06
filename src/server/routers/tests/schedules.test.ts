@@ -1271,6 +1271,8 @@ describe('schedules openapi meta + input schema contract', () => {
     deleteAlarmSchedule: { method: 'DELETE', path: '/schedules/alarm', protect: false, tags: ['Schedules'] },
     batchUpdate: { method: 'POST', path: '/schedules/batch', protect: false, tags: ['Schedules'] },
     getByDay: { method: 'GET', path: '/schedules/by-day', protect: false, tags: ['Schedules'] },
+    getNightPhases: { method: 'GET', path: '/schedules/night-phases', protect: false, tags: ['Schedules'] },
+    setNightPhase: { method: 'POST', path: '/schedules/night-phases', protect: false, tags: ['Schedules'] },
   }
 
   const tempCreate = { side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68 }
