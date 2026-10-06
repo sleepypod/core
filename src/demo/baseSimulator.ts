@@ -1,10 +1,13 @@
 import type { DemoHandlers, RouterOutputs } from './types'
-import { BASE_PRESETS, BASE_SIDES, baseDayNumbers } from '@/src/hardware/base/types'
+import { BASE_PRESETS, BASE_SIDES, INDEPENDENT_CONTROL_UNLOCKED, baseDayNumbers } from '@/src/hardware/base/types'
 import type { BasePosition, BaseSide } from '@/src/hardware/base/types'
 
+const WHOLE_BED_ONLY = 'This base supports whole-bed movement only'
+
 /** A separate in-memory base for each debug session. Never opens hardware. */
-export function createBaseSimulator() {
-  const position: Record<BaseSide, BasePosition> = { left: { head: 30, feet: 15, feedRate: 50 }, right: { head: 1, feet: 5, feedRate: 50 } }
+export function createBaseSimulator({ independent = INDEPENDENT_CONTROL_UNLOCKED }: { independent?: boolean } = {}) {
+  // A whole-bed base moves both halves together, so they start level with each other.
+  const position: Record<BaseSide, BasePosition> = { left: { head: 30, feet: 15, feedRate: 50 }, right: independent ? { head: 1, feet: 5, feedRate: 50 } : { head: 30, feet: 15, feedRate: 50 } }
   const targets = structuredClone(position)
   const moving = { left: false, right: false }
   let updated = Date.now()
@@ -27,11 +30,12 @@ export function createBaseSimulator() {
     advance()
     const measured = (side: BaseSide) => ({ head: Math.round(position[side].head), feet: Math.round(position[side].feet) })
     return {
-      state: 'connected', splitBase: true, independentControl: true, position: { left: measured('left'), right: measured('right') },
+      state: 'connected', splitBase: true, independentControl: independent, position: { left: measured('left'), right: measured('right') },
       lastUpdate: Date.now(), stale: false, moving: moving.left || moving.right, movingBySide: { ...moving }, busy: false, error: null,
     }
   }
   const move = (input: BasePosition, sides: BaseSide[]) => {
+    if (!independent && sides.length !== BASE_SIDES.length) throw new Error(WHOLE_BED_ONLY)
     advance()
     for (const side of sides) {
       targets[side] = { ...input }
@@ -54,6 +58,7 @@ export function createBaseSimulator() {
     getSchedules: () => schedules.map(row => ({ ...row })),
     saveSchedule: (input) => {
       const side = input.side ?? 'both'
+      if (!independent && side !== 'both') throw new Error(WHOLE_BED_ONLY)
       if (schedules.some(row => row.id !== input.id && row.time === input.time && (row.side === side || row.side === 'both' || side === 'both') && baseDayNumbers(row.dayOfWeek).some(day => baseDayNumbers(input.dayOfWeek).includes(day)))) throw new Error('A base adjustment already exists for this side at this day and time')
       if (input.id !== undefined && !schedules.some(row => row.id === input.id)) throw new Error('Base schedule not found')
       const row = { ...input, side, presetName: input.presetName ?? 'Custom', feedRate: input.feedRate ?? 50, id: input.id ?? nextId++ }

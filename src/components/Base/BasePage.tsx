@@ -86,7 +86,12 @@ export function BasePage() {
     <div className="@container flex flex-col gap-5">
       <PageHeader
         title="Base"
-        middle={<span className={`${labelStyle} ${moving ? 'text-[#50c878]' : 'text-fg-2'}`}>{moving ? 'MOVING' : 'IDLE'}</span>}
+        middle={(
+          <>
+            <span title="Experimental: verified with simulated hardware only. Per-side movement is locked until the base firmware is confirmed." className={`${labelStyle} rounded border border-[#3a3222] px-1.5 py-0.5 text-[#e0b45a]`}>Experimental</span>
+            <span className={`${labelStyle} ${moving ? 'text-[#50c878]' : 'text-fg-2'}`}>{moving ? 'MOVING' : 'IDLE'}</span>
+          </>
+        )}
         right={(
           <>
             <button
@@ -207,7 +212,7 @@ export function BasePage() {
                     <h2 className="text-[15px] font-medium">Position</h2>
                     {independent && <div role="group" aria-label="Selected sides" className="flex w-full rounded-lg border border-line-2 p-[3px] @min-[900px]:ml-auto @min-[900px]:w-auto">{(['both', 'left', 'right'] as const).map(side => <button type="button" key={side} aria-pressed={scope === side} onClick={() => setScope(side)} className={`min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-sm @min-[900px]:min-w-16 @min-[900px]:flex-auto ${scope === side ? 'bg-active' : 'text-fg-2'}`}>{side === 'both' ? 'Both' : names[side]}</button>)}</div>}
                   </div>
-                  <BedView {...bedProps} split={independent} />
+                  <BedView {...bedProps} split={independent} focus={scope} />
                   <Steppers name={scope === 'both' ? 'both' : names[scope]} target={targets[scope === 'right' ? 'right' : 'left']} onChange={value => edit(scope, value)} />
                   {scope === 'both' && !samePosition(targets.left, targets.right) && (
                     <p className="text-center text-xs text-[#e0b45a]">

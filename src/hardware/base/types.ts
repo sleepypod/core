@@ -1,6 +1,13 @@
 import { z } from 'zod'
 
 export const BASE_LIMITS = { head: 60, feet: 45, minSpeed: 30 } as const
+/**
+ * Per-side (one-sided) movement stays locked until a TriMix firmware dump confirms the
+ * per-side motor selectors. While false, every status source (hardware, the hosted demo
+ * and ?debug=1) reports whole-bed control, so the per-side layouts stay hidden and
+ * one-sided moves and schedules are rejected.
+ */
+export const INDEPENDENT_CONTROL_UNLOCKED = false
 export const BASE_SIDES = ['left', 'right'] as const
 export type BaseSide = typeof BASE_SIDES[number]
 export const baseScopeSchema = z.enum(['both', 'left', 'right'])

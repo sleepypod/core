@@ -1,8 +1,10 @@
 # Adjustable-base control
 
+> **Experimental.** Adjustable-base control has been verified only against simulated hardware; it has not been qualified on a physical TriMix base (see [Deployment and qualification](#deployment-and-qualification)). The Base page shows an **Experimental** badge. Per-side movement is locked until a base firmware dump confirms the per-side motor selectors.
+
 Open **Base** from the main menu (`/<language>/base`). The menu item appears only when valid local base configuration exists; a temporary Bluetooth disconnect does not hide it. With no base configured, open the URL directly. The hosted demo always includes Base. The bed view draws the split base in 3D (three.js) and falls back to a 2D side view; see [Bed view](#bed-view). Head/feet steppers and presets edit a target; **Move** sends it with the selected speed. **Move immediately when selecting a preset** is an opt-in browser preference. **Stop both** always remains enabled and reports delivery failures visibly.
 
-The per-side layouts from the design's 2a/2b are selectable as **Side cards** and **Single card** when `independentControl` is true. Side cards have independent targets and a persisted link toggle; linking copies the left target to the right. Single card has a persisted Both/name/name scope switch and overlays both measured positions. Names come from side settings. Both layouts share targets, speed and schedules. The demo simulates independent movement and Stop over time.
+The per-side layouts from the design's 2a/2b are selectable as **Side cards** and **Single card** when `independentControl` is true. That is locked off: while `INDEPENDENT_CONTROL_UNLOCKED` in `src/hardware/base/types.ts` is `false`, the hardware, the hosted demo and `?debug=1` all report whole-bed control. The page then shows one whole-bed card, and one-sided moves and schedules are rejected. Flip the flag only after firmware confirms per-side actuation. Side cards have independent targets and a persisted link toggle; linking copies the left target to the right. Single card has a persisted Both/name/name scope switch and overlays both measured positions. Names come from side settings. Both layouts share targets, speed and schedules. The demo simulates movement and Stop over time; it simulates independent movement only when unlocked.
 
 ## Bed view
 
@@ -10,7 +12,7 @@ The bed view is decorative; the text line under it is the exact measured readout
 
 ## Preview without hardware
 
-Open `/<language>/base?debug=1` to simulate the base on a normal pod build. A visible **Base debug** banner identifies this mode. Both layouts, independent movement, presets, Stop and schedules use a fresh in-memory base for that page session. Every `base.*` call is intercepted, including unknown operations, so the debug page never sends base writes or stores schedules on the pod. Other reads, such as side names and timezone, still use the normal settings source.
+Open `/<language>/base?debug=1` to simulate the base on a normal pod build. A visible **Base debug** banner identifies this mode. Movement, presets, Stop and schedules use a fresh in-memory base for that page session. The per-side layouts appear only when per-side control is unlocked. Every `base.*` call is intercepted, including unknown operations, so the debug page never sends base writes or stores schedules on the pod. Other reads, such as side names and timezone, still use the normal settings source.
 
 Debug queries use a separate query cache and transport; **Exit debug** reloads the normal Base page. Simulated schedules reset on reload/exit. Menu availability continues to reflect the real configuration. `?debug=1` only applies to the Base page, and is separate from the whole-app `NEXT_PUBLIC_DEMO=1` build mode.
 
