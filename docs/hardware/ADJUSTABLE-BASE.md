@@ -6,7 +6,7 @@ The per-side layouts from the design's 2a/2b are selectable as **Side cards** an
 
 ## Bed view
 
-The bed view is decorative; the text line under it is the exact measured readout. The 3D view loads a pinned three.js (0.170.0) in the browser from jsDelivr, then unpkg, then the copy the pod serves at `/vendor/three.module.min.js`, allowing 4 s per source, so pods on LANs without internet access still get 3D. Without WebGL, if every source fails, or if the WebGL context is lost, the page shows the 2D side view. Drag the 3D view to rotate it. **Show mattress** adds a mattress and pillows, and **Simple bed view** always uses 2D. Both are browser preferences. With reduced motion enabled, the bed snaps to each measurement instead of easing toward it.
+The bed view is decorative; the text line under it is the exact measured readout. The 3D view loads a pinned three.js (0.170.0) in the browser from jsDelivr, then unpkg, then the copy the pod serves at `/vendor/three.module.min.js`, allowing 4 s per source, so pods on LANs without internet access still get 3D. Without WebGL, if every source fails, or if the WebGL context is lost, the page shows the 2D side view. Drag the 3D view to rotate and tilt it; pinch or ⌘/Ctrl + scroll to zoom; double-click or double-tap to reset. On touch, one finger rotates and vertical swipes still scroll the page, while two fingers tilt and zoom. **Show mattress** adds a mattress and pillows, and **Simple bed view** always uses 2D. Both are browser preferences. With reduced motion enabled, the bed snaps to each measurement instead of easing toward it.
 
 ## Preview without hardware
 

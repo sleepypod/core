@@ -3,12 +3,11 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { BASE_SIDES } from '@/src/hardware/base/types'
 import { SIDE_Z, createBedModel } from './bedModel3D'
+import { ORBIT, attachOrbitInput, createOrbit } from './bedOrbit'
 import type { BedRendererProps } from './BedView'
 import type { Three } from './loadThree'
 
-export const CAMERA = { fov: 30, radius: 8.4, height: 3.4, lookY: 0.2, azimuth: 0.62, maxAzimuth: 1.5, dragRate: 0.008 }
 const DARK = { card: '#0f0f11', floor: '#17171a' }
-export const clampAzimuth = (value: number) => Math.max(-CAMERA.maxAzimuth, Math.min(CAMERA.maxAzimuth, value))
 
 interface Props extends BedRendererProps {
   three: Three
@@ -62,11 +61,12 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   const model = createBedModel(THREE, sides)
   scene.add(model.root)
 
-  const camera = new THREE.PerspectiveCamera(CAMERA.fov, 600 / 330, 0.1, 40)
-  let azimuth = CAMERA.azimuth
+  const camera = new THREE.PerspectiveCamera(30, 600 / 330, 0.1, 40)
+  const orbit = createOrbit()
   const place = () => {
-    camera.position.set(CAMERA.radius * Math.cos(azimuth), CAMERA.height, focusZ + CAMERA.radius * Math.sin(azimuth))
-    camera.lookAt(0, CAMERA.lookY, focusZ)
+    const { x, y, z } = orbit.position(focusZ)
+    camera.position.set(x, y, z)
+    camera.lookAt(0, ORBIT.lookY, focusZ)
   }
   place()
 
@@ -97,24 +97,10 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   const observer = new ResizeObserver(resize)
   observer.observe(host)
 
-  let drag: { id: number, x: number } | null = null
-  const down = (event: PointerEvent) => {
-    drag = { id: event.pointerId, x: event.clientX }
-    canvas.setPointerCapture?.(event.pointerId)
-    canvas.style.cursor = 'grabbing'
-  }
-  const move = (event: PointerEvent) => {
-    if (!drag || drag.id !== event.pointerId) return
-    azimuth = clampAzimuth(azimuth - (event.clientX - drag.x) * CAMERA.dragRate)
-    drag.x = event.clientX
+  const detachOrbit = attachOrbitInput(canvas, orbit, () => {
     place()
     requestRender()
-  }
-  const up = (event: PointerEvent) => {
-    if (drag?.id !== event.pointerId) return
-    drag = null
-    canvas.style.cursor = 'grab'
-  }
+  })
   const lost = (event: Event) => {
     event.preventDefault()
     onFail()
@@ -135,12 +121,6 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   const theme = new MutationObserver(applyTheme)
   theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] })
   applyTheme()
-  canvas.style.cursor = 'grab'
-  canvas.style.touchAction = 'none'
-  canvas.addEventListener('pointerdown', down)
-  canvas.addEventListener('pointermove', move)
-  canvas.addEventListener('pointerup', up)
-  canvas.addEventListener('pointercancel', up)
   canvas.addEventListener('webglcontextlost', lost)
   document.addEventListener('visibilitychange', visibility)
   host.appendChild(canvas)
@@ -158,6 +138,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
     dispose() {
       cancelAnimationFrame(frame)
       observer.disconnect()
+      detachOrbit()
       theme.disconnect()
       document.removeEventListener('visibilitychange', visibility)
       canvas.removeEventListener('webglcontextlost', lost)
