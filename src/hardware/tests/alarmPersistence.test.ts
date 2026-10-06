@@ -19,6 +19,7 @@ describe('alarmPersistence', () => {
   afterEach(() => {
     process.env = { ...saved }
     resetAlarmStateCache()
+    vi.restoreAllMocks()
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -28,6 +29,27 @@ describe('alarmPersistence', () => {
     expect(alarmStatePath()).toBe('/persistent/sleepypod-data/alarm-state.json')
     process.env.ALARM_STATE_PATH = '/tmp/x.json'
     expect(alarmStatePath()).toBe('/tmp/x.json')
+  })
+
+  it.each([undefined, ''])('uses the local default when DATABASE_URL is %s', (url) => {
+    delete process.env.ALARM_STATE_PATH
+    if (url === undefined) delete process.env.DATABASE_URL
+    else process.env.DATABASE_URL = url
+    expect(alarmStatePath()).toBe('alarm-state.json')
+  })
+
+  it('logs non-Error serialization failures and retains the change in memory', () => {
+    const failure = { reason: 'serialization failed' }
+    const config = {
+      ...ALARM,
+      toJSON() { throw failure },
+    }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    updateAlarmState((s) => {
+      s.alarms.right = { until: 2_000, config }
+    })
+    expect(error).toHaveBeenCalledExactlyOnceWith('[alarmState] failed to persist alarm state:', failure)
+    expect(loadAlarmState().alarms.right).toEqual({ until: 2_000, config })
   })
 
   it('starts empty without a file', () => {

@@ -86,6 +86,13 @@ describe('AlarmSection', () => {
     expect(s.getByText('1')).toBeTruthy()
   })
 
+  it('shows the wake window in both mobile and desktop alarm details', () => {
+    m.query = { data: { alarm: [row(1, 'monday', { wakeWindow: 20 })] }, isLoading: false, error: null }
+    const s = render(<AlarmSection side="left" />)
+    expect(s.getByText('· 10s buzz · 20 min window')).toBeTruthy()
+    expect(s.getByText('10s buzz · rise · 84° · 20 min window')).toBeTruthy()
+  })
+
   it('tests an alarm on the listed side with its stored vibration', () => {
     m.query = { data: { alarm: [row(1, 'monday', { vibrationPattern: 'double', vibrationIntensity: 50 })] }, isLoading: false, error: null }
     const s = render(<AlarmSection side="right" />)
