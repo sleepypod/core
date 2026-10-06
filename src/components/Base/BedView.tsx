@@ -58,9 +58,10 @@ export function BedView({ left, right, leftTarget, rightTarget, moving, names, s
   const want3D = simple !== 'true' && !failed
 
   useEffect(() => {
-    if (!want3D || three) return
+    // Without WebGL, 2D simply stays up; there is nothing to load.
+    if (!want3D || three || !hasWebGL()) return
     let alive = true
-    void (hasWebGL() ? loadThree() : Promise.resolve(null)).then((loaded) => {
+    void loadThree().then((loaded) => {
       if (!alive) return
       if (loaded) setThree(() => loaded)
       else setFailed(true)
