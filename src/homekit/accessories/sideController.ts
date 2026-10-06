@@ -26,6 +26,7 @@ import { getTemperatureController } from '@/src/temperature/instance'
 import { TemperatureBlockedError } from '@/src/temperature/controller'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
+import { getJobManager } from '@/src/scheduler'
 
 /**
  * Guard denials surface as NOT_ALLOWED_IN_CURRENT_STATE (-70412): hap-nodejs
@@ -227,6 +228,10 @@ export async function setSidePowerOn(monitor: DacMonitor, side: Side): Promise<v
       assertNotGuardBlocked(side, `setPower(${side}, true)`)
       const target = clampF(getStagedTargetF(monitor, side))
       lastTargetF[side] = target
+      // The user wants the bed on: a power-off held for an alarm must not
+      // switch it off once the alarm is over.
+      const jobManager = await getJobManager()
+      jobManager.releaseHeldPowerOff(side)
       await logged(
         `setPower(${side}, true, ${target})`,
         () => getTemperatureController().setManualLocked(side, target),

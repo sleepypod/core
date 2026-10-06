@@ -229,7 +229,15 @@ async function withRetry<T>(
 const initializeDacMonitor = async (): Promise<void> => {
   try {
     await getDacMonitor()
-    if (isShuttingDown) await shutdownDacMonitor()
+    if (isShuttingDown) {
+      await shutdownDacMonitor()
+      return
+    }
+    // A restart mid-alarm or mid-snooze (deploy, crash) resumes it.
+    const { restoreActiveAlarms } = await import('@/src/hardware/alarmState')
+    const { restoreSnoozes } = await import('@/src/hardware/snoozeManager')
+    await restoreActiveAlarms()
+    restoreSnoozes()
   }
   catch (error) {
     console.warn(

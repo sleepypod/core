@@ -403,6 +403,14 @@ const ALL_SENSOR_TYPES = [
   'deviceStatus', 'gesture', 'lps',
 ] as const
 
+/**
+ * Frame types consumed only in-process (onServerFrame), not a client
+ * subscription type: frzHealth feeds flow data; tap-gesture ({side, taps,
+ * ts}, one per tap, including taps that stop an alarm) feeds the gesture
+ * handler.
+ */
+const SERVER_LISTENER_TYPES: ReadonlySet<string> = new Set(['frzHealth', 'tap-gesture'])
+
 /** Valid sensor type string. Used for subscription filtering. */
 type SensorType = typeof ALL_SENSOR_TYPES[number]
 
@@ -930,6 +938,7 @@ function dispatchSensorFrame(frame: Record<string, unknown>, backlog = false): v
   // New / out-of-scope firmware types (blanketReadings, …) pass through to
   // subscribers but are not ingested — log the first sight of each, once.
   if (!(ALL_SENSOR_TYPES as readonly string[]).includes(frameType)
+    && !SERVER_LISTENER_TYPES.has(frameType)
     && !streamState.warnedUnknownTypes.has(frameType)) {
     streamState.warnedUnknownTypes.add(frameType)
     console.warn('[sensorStream] unknown sensor frame type "%s" — broadcasting but not ingesting', frameType)
@@ -953,8 +962,8 @@ function dispatchSensorFrame(frame: Record<string, unknown>, backlog = false): v
     }
   }
 
-  // Notify server-side listeners (only frzHealth currently has consumers).
-  if (frameType === 'frzHealth' && serverFrameListeners.size > 0) {
+  // Notify server-side listeners (flow data, tap gestures).
+  if (SERVER_LISTENER_TYPES.has(frameType) && serverFrameListeners.size > 0) {
     for (const cb of serverFrameListeners) {
       try {
         cb(frame)
