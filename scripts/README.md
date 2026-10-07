@@ -311,7 +311,7 @@ sp-logs
 ```
 
 Common issues:
-- dac.sock path incorrect (auto-detected from `frank.sh`: Pod 3/4 uses `/deviceinfo/dac.sock`, Pod 5 uses `/persistent/deviceinfo/dac.sock`)
+- dac.sock path incorrect (check the path in `frank.sh`: `/deviceinfo/dac.sock` or `/persistent/deviceinfo/dac.sock`; socket location does not identify hardware generation)
 - Port 3000 already in use
 - Database initialization failed
 - Scheduler failing to start (check timezone in database)
