@@ -1231,7 +1231,7 @@ else
   echo "Source downloaded."
 fi
 
-# Detect pod generation and DAC socket path (code is now on disk)
+# Discover DAC socket path (code is now on disk); hardware identity is separate.
 if [ -f "$INSTALL_DIR/scripts/pod/detect" ]; then
   source "$INSTALL_DIR/scripts/pod/detect"
 else
@@ -1240,7 +1240,8 @@ else
   echo "  Try: curl -fsSL <url> | sudo bash -s -- --branch $SCRIPT_DEFAULT_BRANCH" >&2
   exit 1
 fi
-echo "Pod generation: $POD_GEN (DAC: $DAC_SOCK_PATH)"
+echo "Hub / cover hardware: unknown (unverified)"
+echo "DAC socket: $DAC_SOCK_PATH ($DAC_SOCK_SOURCE)"
 
 # Probe environment capabilities (Volta, system Python, ensurepip, ...).
 # Future Pod-specific install paths should branch on these vars rather

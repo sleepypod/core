@@ -23,6 +23,9 @@ export interface PodCapabilities {
   hasIptablesPersistent: boolean
 }
 
+// Historical profiles, not detected host capabilities. Sensor/cover revisions
+// cannot establish hub OS or socket layout on mixed setups. Runtime transport
+// uses DAC_SOCK_PATH; iptablesCheck probes all candidate paths in this table.
 export const POD_CAPS: Record<PodVersion, PodCapabilities> = {
   H00: {
     modelName: 'Pod 3',

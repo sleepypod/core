@@ -40,10 +40,11 @@ function run(script: string, args: string[] = []) {
   return spawnSync('/bin/bash', [join(bin, script), ...args], { encoding: 'utf8', env, timeout: 20_000 })
 }
 
-it('prints pod model, raw firmware revision and app build without device serials or env secrets', () => {
+it('prints sensor/cover revision, raw firmware revision and app build without device serials or env secrets', () => {
   const result = run('sp-info')
   expect(result.status, result.stderr).toBe(0)
-  expect(result.stdout).toContain('Pod 5 (J55)')
+  expect(result.stdout).toContain('sensor/cover: Pod 5 (J55)')
+  expect(result.stdout).toContain('hub model:   unknown (unverified)')
   expect(result.stdout).toContain('f76374f38f9ffed57b320b1b079c6fcf00242bf5')
   expect(result.stdout).toContain('abc123 (main)')
   expect(result.stdout).not.toContain('PRIVATE-SERIAL')
@@ -54,14 +55,15 @@ it.each(['', 'not json', '{"sensorLabel":"unknown"}'])('keeps firmware context w
   env.MOCK_STATUS = status
   const result = run('sp-info')
   expect(result.status, result.stderr).toBe(0)
-  expect(result.stdout).toContain('pod model:   unknown')
+  expect(result.stdout).toContain('sensor/cover: unknown')
   expect(result.stdout).toContain('f76374f38')
 })
 
 it('follows app logs by default with support context', () => {
   const result = run('sp-logs')
   expect(result.status, result.stderr).toBe(0)
-  expect(result.stdout).toContain('Pod 5 (J55)')
+  expect(result.stdout).toContain('sensor/cover: Pod 5 (J55)')
+  expect(result.stdout).toContain('hub model:   unknown (unverified)')
   expect(result.stdout).toContain('<-u><sleepypod.service><-f><--no-pager>')
 })
 

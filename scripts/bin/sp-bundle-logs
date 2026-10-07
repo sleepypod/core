@@ -101,8 +101,8 @@ capture "journals/hardware-timeline.log" journalctl -u frank.service -u sleepypo
 capture "versions/pod-firmware.txt" bash "$(dirname "$0")/sp-info"
 
 # --- pod capabilities -----------------------------------------------------
-# Source detect first so POD_GEN is set, then capabilities script populates
-# the rest. Both live under scripts/pod/ on the installed tree.
+# Discover socket location and provenance for diagnostics, then probe the
+# environment independently. Both live under scripts/pod/ on the installed tree.
 if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
   {
     set +u

@@ -27,7 +27,8 @@ if [ -n "$NODE" ] && command -v curl >/dev/null 2>&1; then
       });
     ' 2>/dev/null)
 fi
-printf 'pod model:   %s\n' "${model:-unknown (device status unavailable)}"
+printf 'hub model:   unknown (unverified)\n'
+printf 'sensor/cover: %s\n' "${model:-unknown (device status unavailable)}"
 printf 'rat_version: %s\n' "$(cat /etc/rat_version 2>/dev/null || echo unknown)"
 epoch=$(cat /etc/build_time_epoch 2>/dev/null || true)
 if [ -n "$epoch" ]; then

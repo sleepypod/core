@@ -1,19 +1,12 @@
 #!/bin/bash
-# Pod capabilities — install-time mirror of src/hardware/pods.ts POD_CAPS.
-#
-# Sourced by scripts/install (after scripts/pod/detect runs) and by
-# scripts/bin/sp-update. Provides bash variables that install paths can
-# branch on, so we can keep a single install script that adapts to each
-# Pod gen instead of duplicating logic per gen.
-#
-# Detection strategy: prefer environment probes (command -v, version
-# checks) over POD_GEN lookups. Probes survive firmware drift; lookups
-# don't. POD_GEN is only the fallback when probing isn't possible.
+# Environment capability probes, independent of socket location and hardware.
+# Sourced by installer, updater and diagnostics; detect need not run first.
+# Never use sensor/cover revision or filesystem layout to infer the hub OS.
 #
 # Sets in caller's scope (all are exported):
 #
-#   MODEL_NAME                      "Pod 3", "Pod 4", "Pod 5", or "Pod (unknown)"
-#   POD_OS                          "yocto" or "debian"
+#   MODEL_NAME                      "Hub / cover unknown (unverified)"
+#   POD_OS                          OS description from os-release, or "unknown"
 #   IPTABLES_PATH                   absolute path to iptables binary, "" if missing
 #   HAS_PACKAGE_MANAGER             "true" / "false"
 #   PACKAGE_MANAGER                 "apt" or "" (none)
@@ -33,7 +26,7 @@
 #   HAS_VOLTA                       "true" if Volta is present in PATH or ~/.volta
 #   HAS_IPTABLES_PERSISTENT         "true" / "false"
 #
-# Requires POD_GEN ("3_4" or "5") to be set by scripts/pod/detect first.
+# Does not require POD_GEN or DAC_SOCK_PATH.
 
 # --- Probes ---------------------------------------------------------------
 
@@ -99,17 +92,20 @@ _probe_has_iptables_persistent() {
   echo "false"
 }
 
-# --- Defaults ---------------------------------------------------------------
-# Model name + OS class come from POD_GEN since they can't be probed cheaply.
-# Everything else is probed below — firmware variants (seen in the wild:
-# Pod 5 with no apt-get, mediatek kirkstone with python 3.14) break any
-# hardcoded-by-gen assumption.
+# Read OS metadata independently. Use a subshell so os-release variables do
+# not leak into the installer. /etc takes precedence over the vendor file.
+_probe_os() (
+  unset PRETTY_NAME NAME ID
+  if [ -r /etc/os-release ]; then
+    . /etc/os-release
+  elif [ -r /usr/lib/os-release ]; then
+    . /usr/lib/os-release
+  fi
+  printf '%s\n' "${PRETTY_NAME:-${NAME:-${ID:-unknown}}}"
+)
 
-case "${POD_GEN:-}" in
-  3_4) MODEL_NAME="Pod 3 / Pod 4"; POD_OS="yocto" ;;
-  5)   MODEL_NAME="Pod 5";         POD_OS="debian" ;;
-  *)   MODEL_NAME="Pod (unknown)"; POD_OS="unknown" ;;
-esac
+MODEL_NAME="Hub / cover unknown (unverified)"
+POD_OS="$(_probe_os)"
 
 if command -v apt-get >/dev/null 2>&1; then
   HAS_PACKAGE_MANAGER="true"
@@ -140,7 +136,8 @@ export HAS_NFTABLES HAS_VOLTA HAS_IPTABLES_PERSISTENT
 
 print_pod_capabilities() {
   echo "Pod capabilities:"
-  echo "  Model:                $MODEL_NAME (POD_GEN=${POD_GEN:-?})"
+  echo "  Model:                $MODEL_NAME"
+  echo "  DAC socket:           ${DAC_SOCK_PATH:-unknown} (${DAC_SOCK_SOURCE:-not probed})"
   echo "  OS:                   $POD_OS"
   echo "  iptables:             ${IPTABLES_PATH:-<missing>}"
   echo "  Package manager:      ${PACKAGE_MANAGER:-none}"
