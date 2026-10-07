@@ -49,7 +49,9 @@ import {
 } from '../pumpStallGuard'
 import { getPumpStallNotice } from '../pumpStallNotification'
 import { withSideLock } from '../sideLock'
-import { _resetMutationStamps, markSideMutated } from '../sideMutations'
+import { DeviceStateSync } from '../deviceStateSync'
+import type { DeviceStatus } from '../types'
+import { _resetPumpRunEvidence, confirmPumpRun, _resetMutationStamps, markSideMutated } from '../sideMutations'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   sqlite: BetterSqlite3.Database
@@ -2802,5 +2804,150 @@ describe('pumpStallGuard mutation regressions — reservation ownership', () => 
     expect(hasUnconfirmedHardware('left')).toBe(false)
     expect(hasUnconfirmedHardware('right')).toBe(false)
     expect(warn).toHaveBeenCalledWith('[pumpStallGuard] device settings row is missing — preserving any armed guard')
+  })
+})
+
+describe('startup telemetry with the real pump stall guard', () => {
+  let sync: DeviceStateSync
+  const status = (duration = 0): DeviceStatus => ({
+    leftSide: { currentTemperature: 80, targetTemperature: 75, currentLevel: 5, targetLevel: -20, heatingDuration: duration },
+    rightSide: { currentTemperature: 80, targetTemperature: 75, currentLevel: 5, targetLevel: -20, heatingDuration: duration },
+    waterLevel: 'ok', isPriming: false, podVersion: 'J00' as DeviceStatus['podVersion'], sensorLabel: 'startup-test',
+  })
+  const sample = async (rpm = 0, duty?: number) => {
+    sync.recordFlowData({
+      left: { pump: { rpm: 1900 }, temps: { flowrate: 25 } },
+      right: { pump: { rpm, duty }, temps: { flowrate: 25 } },
+    })
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+  }
+  const dwell = async (duty?: number) => {
+    await sample(0, duty)
+    vi.advanceTimersByTime(10_000)
+    await sample(0, duty)
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-07T21:02:15Z'))
+    resetSchema()
+    biometricsSqlite.exec(`
+      CREATE TABLE IF NOT EXISTS flow_readings (
+        id INTEGER PRIMARY KEY, timestamp INTEGER, left_flowrate_cd INTEGER,
+        right_flowrate_cd INTEGER, left_pump_rpm INTEGER, right_pump_rpm INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS water_level_readings (
+        id INTEGER PRIMARY KEY, timestamp INTEGER, level TEXT
+      );
+      CREATE TABLE IF NOT EXISTS thermal_state (
+        id INTEGER PRIMARY KEY, timestamp INTEGER, side TEXT, is_powered INTEGER,
+        target_temp_f REAL, current_temp_f REAL
+      );
+    `)
+    _resetMutationStamps()
+    _resetPumpRunEvidence()
+    invalidateGuardSettingsCache()
+    reset()
+    setPower.mockReset().mockResolvedValue(undefined)
+    sync = new DeviceStateSync()
+  })
+
+  afterEach(() => {
+    _resetPumpRunEvidence()
+    reset()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('does not trip on saved ON state before polling or a retained target after polling', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await dwell()
+    // The first status still carries the old non-neutral target/current level.
+    await sync.sync(status())
+    for (let i = 0; i < 14; i++) {
+      vi.advanceTimersByTime(10_000)
+      await sync.sync(status())
+      await sample()
+    }
+    expect(shouldBlock('right')).toBe(false)
+    expect(getPumpStallNotice('right')).toBeNull()
+    expect(biometricsSqlite.prepare('SELECT * FROM pump_alerts').all()).toEqual([])
+    expect(setPower).not.toHaveBeenCalled()
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('right: waiting for live'))).toHaveLength(1)
+  })
+
+  it.each(['duty', 'countdown', 'command'] as const)('starts a fresh dwell after %s evidence, without counting startup zeros', async (evidence) => {
+    await dwell()
+    if (evidence === 'countdown') await sync.sync(status(7200))
+    if (evidence === 'command') confirmPumpRun('right')
+    const duty = evidence === 'duty' ? 50 : undefined
+    await sample(0, duty)
+    expect(shouldBlock('right')).toBe(false)
+    vi.advanceTimersByTime(9_999)
+    await sample(0, duty)
+    expect(shouldBlock('right')).toBe(false)
+    vi.advanceTimersByTime(1)
+    await sample(0, duty)
+    expect(shouldBlock('right')).toBe(true)
+    expect(setPower).toHaveBeenCalledWith('right', false)
+    expect(getPumpStallNotice('right')).toMatchObject({ rpm: 0 })
+  })
+
+  it('arms no-countdown firmware after observing its pump run', async () => {
+    await sync.sync(status())
+    await sample(1900)
+    await dwell()
+    expect(shouldBlock('right')).toBe(true)
+  })
+
+  it.each([[49, false], [50, true]])('requires observed pump motion before arming (%s RPM)', async (rpm, blocked) => {
+    await sample(rpm)
+    await dwell()
+    expect(shouldBlock('right')).toBe(blocked)
+  })
+
+  it('does not arm from a neutral target with a leftover positive countdown', async () => {
+    const stopped = status(7200)
+    stopped.rightSide.targetLevel = 0
+    await sync.sync(stopped)
+    // A subsequent retained target with no countdown still proves nothing.
+    await sync.sync(status())
+    await dwell()
+    expect(shouldBlock('right')).toBe(false)
+  })
+
+  it('does not mistake alarm mutation stamps for a successful power-on', async () => {
+    markSideMutated('right')
+    await dwell()
+    expect(shouldBlock('right')).toBe(false)
+  })
+
+  it('keeps a commanded stop suppressed even after startup confirmation', async () => {
+    confirmPumpRun('right')
+    await dwell(0)
+    expect(shouldBlock('right')).toBe(false)
+  })
+
+  it('preserves a rehydrated unresolved alert while startup state is unknown', async () => {
+    biometricsSqlite.prepare(`INSERT INTO pump_alerts (timestamp, type, side, rpm, action)
+      VALUES (?, 'stall_right', 'right', 0, 'power_off')`).run(Math.floor(Date.now() / 1000))
+    rehydrate()
+    await dwell()
+    expect(shouldBlock('right')).toBe(true)
+    expect(getPumpStallNotice('right')).not.toBeNull()
+    // Live drive evidence still enables cutoff of a restored incident.
+    await dwell(50)
+    expect(setPower).toHaveBeenCalledWith('right', false)
+  })
+
+  it('continues retrying a failed cutoff even without new startup evidence', async () => {
+    setPower.mockRejectedValueOnce(new Error('DAC unavailable'))
+    await dwell(50)
+    expect(shouldBlock('right')).toBe(true)
+    _resetPumpRunEvidence()
+    const previousCalls = setPower.mock.calls.length
+    await sample()
+    expect(setPower.mock.calls.length).toBeGreaterThan(previousCalls)
+    expect(shouldBlock('right')).toBe(true)
   })
 })

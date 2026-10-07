@@ -5,7 +5,7 @@ import { waterLevelReadings, flowReadings, primeEvents, thermalState } from '@/s
 import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
 import { DEFAULT_HEATING_DURATION } from './types'
 import type { DeviceStatus, Side } from './types'
-import { getLastSideMutationAt, markFirmwareSynced } from './sideMutations'
+import { confirmPumpRun, hasConfirmedPumpRun, getLastSideMutationAt, markFirmwareSynced } from './sideMutations'
 
 export { markSideMutated, _resetMutationStamps, hasFirmwareSynced, _resetFirmwareSynced } from './sideMutations'
 
@@ -111,6 +111,7 @@ export class DeviceStateSync {
   private primeEndedAt = 0
   private stallGuardInFlight: Record<Side, boolean> = { left: false, right: false }
   private stallGuardPending: Record<Side, { rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number } | null> = { left: null, right: null }
+  private waitingForPumpEvidence: Record<Side, boolean> = { left: false, right: false }
   private lastBothHealthyAt: number | null = null
   private bilateralStopCandidateUntil = 0
 
@@ -141,6 +142,9 @@ export class DeviceStateSync {
   }
 
   private recordSideStatus(side: Side, status: DeviceStatus['leftSide'], now: number): void {
+    // A retained target with heatTime=0 is ambiguous after a reboot. A
+    // positive live countdown, unlike the persisted DB row, proves a session.
+    if (status.targetLevel !== 0 && status.heatingDuration > 0) confirmPumpRun(side, now)
     const previous = this.lastSideStatus[side]
     const session = this.observedSession[side]
     const mutationAt = getLastSideMutationAt(side)
@@ -358,6 +362,10 @@ export class DeviceStateSync {
     }
 
     const now = Date.now()
+    // Observe at receipt, not when a coalesced guard call eventually drains.
+    for (const [side, pump] of [['left', leftPump], ['right', rightPump]] as const) {
+      if ((pump.duty != null && pump.duty > 0) || pump.rpm >= PUMP_FAILURE_RPM_MIN) confirmPumpRun(side, now)
+    }
 
     // Run anomaly checks on every frame (not rate-limited)
     this.checkFlowAnomalies(frzHealth, leftPump, rightPump, now)
@@ -508,8 +516,17 @@ export class DeviceStateSync {
       // Dwell and session-projection clocks run on the frame's arrival stamp,
       // not drain time — see the doc above.
       const now = at
-      const expectedActive = !this.isExpectedPumpStop(side, duty, row?.poweredOnAt, bilateralStopCandidate, now)
-        && Boolean(row?.isPowered && row.targetTemperature != null)
+      const confirmed = hasConfirmedPumpRun(side, now)
+      const commandedActive = Boolean(row?.isPowered && row.targetTemperature != null)
+      if (!confirmed && commandedActive && !this.waitingForPumpEvidence[side]) {
+        console.warn(`[pumpStallGuard] ${side}: waiting for live pump/session evidence after startup — saved power state alone cannot establish a stall`)
+        this.waitingForPumpEvidence[side] = true
+      }
+      const expectedActive = confirmed
+        && !this.isExpectedPumpStop(side, duty, row?.poweredOnAt, bilateralStopCandidate, now)
+        && commandedActive
+      // Always feed the guard, including while unknown: inactive samples reset
+      // new-trip dwell, while existing blocks/cutoff retries still run.
       // Real remaining session seconds, projected from the last firmware
       // poll like isExpectedPumpStop. The guard restores this snapshot on
       // auto-recovery, and feeding it the literal 8h default re-armed

@@ -57,3 +57,26 @@ export function hasFirmwareSynced(): boolean {
 export function _resetFirmwareSynced(): void {
   G[SYNC_KEY] = false
 }
+
+// Startup evidence is process-local, never restored from device_state. Keep
+// the first receipt time so frames queued before confirmation cannot arm a
+// stall retroactively. This is a startup gate; normal stop/expiry handling
+// remains responsible for subsequent sessions.
+const PUMP_RUN_KEY = '__sp_pump_run_confirmed_at__'
+
+export function confirmPumpRun(side: Side, at = Date.now()): void {
+  const evidence = G[PUMP_RUN_KEY] as Partial<Record<Side, number>> | undefined
+  const next = evidence ?? {}
+  next[side] ??= at
+  G[PUMP_RUN_KEY] = next
+}
+
+export function hasConfirmedPumpRun(side: Side, at: number): boolean {
+  const confirmedAt = (G[PUMP_RUN_KEY] as Partial<Record<Side, number>> | undefined)?.[side]
+  return confirmedAt != null && at >= confirmedAt
+}
+
+/** @internal — for tests only */
+export function _resetPumpRunEvidence(): void {
+  G[PUMP_RUN_KEY] = undefined
+}

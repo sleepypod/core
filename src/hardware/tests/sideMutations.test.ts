@@ -1,8 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { _resetFirmwareSynced, _resetMutationStamps, getLastSideMutationAt, hasFirmwareSynced } from '../sideMutations'
+import { _resetPumpRunEvidence, confirmPumpRun, hasConfirmedPumpRun, _resetFirmwareSynced, _resetMutationStamps, getLastSideMutationAt, hasFirmwareSynced } from '../sideMutations'
 
 afterEach(() => {
   _resetMutationStamps()
+  _resetPumpRunEvidence()
   _resetFirmwareSynced()
   vi.useRealTimers()
 })
@@ -27,4 +28,16 @@ it('shares route mutations with an independently loaded DAC-side module instance
 
   expect(getLastSideMutationAt('left')).toBe(Date.now())
   expect(getLastSideMutationAt('right')).toBe(0)
+})
+
+it('shares startup evidence and excludes frames received before confirmation', async () => {
+  _resetPumpRunEvidence()
+  expect(hasConfirmedPumpRun('left', 100)).toBe(false)
+  vi.resetModules()
+  const writer = await import('../sideMutations')
+  writer.confirmPumpRun('left', 100)
+  confirmPumpRun('left', 200)
+  expect(hasConfirmedPumpRun('left', 99)).toBe(false)
+  expect(hasConfirmedPumpRun('left', 100)).toBe(true)
+  expect(hasConfirmedPumpRun('right', 200)).toBe(false)
 })
