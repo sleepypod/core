@@ -166,8 +166,8 @@ describe('sharedClient startup pump evidence', () => {
   it('confirms only the side whose power-on completed, across module instances', async () => {
     const { getSharedHardwareClient } = await freshModule()
     await getSharedHardwareClient().setPower('right', true, 75)
-    expect(hasConfirmedPumpRun('right', Date.now())).toBe(true)
-    expect(hasConfirmedPumpRun('left', Date.now())).toBe(false)
+    expect(hasConfirmedPumpRun('right')).toBe(true)
+    expect(hasConfirmedPumpRun('left')).toBe(false)
   })
 
   it.each([0, 1])('does not confirm a rejected temperature command at step %s', async (step) => {
@@ -175,7 +175,7 @@ describe('sharedClient startup pump evidence', () => {
     if (step === 1) sendCommandMock.mockResolvedValueOnce('OK')
     sendCommandMock.mockResolvedValueOnce('ERROR')
     await expect(getSharedHardwareClient().setTemperature('left', 75)).rejects.toThrow()
-    expect(hasConfirmedPumpRun('left', Date.now())).toBe(false)
+    expect(hasConfirmedPumpRun('left')).toBe(false)
     expect(sendCommandMock).toHaveBeenCalledTimes(step + 1)
   })
 
@@ -188,16 +188,16 @@ describe('sharedClient startup pump evidence', () => {
     const pending = getSharedHardwareClient().setTemperature('left', 75)
     await Promise.resolve()
     await Promise.resolve()
-    expect(hasConfirmedPumpRun('left', Date.now())).toBe(false)
+    expect(hasConfirmedPumpRun('left')).toBe(false)
     finish('OK')
     await pending
-    expect(hasConfirmedPumpRun('left', Date.now())).toBe(true)
+    expect(hasConfirmedPumpRun('left')).toBe(true)
   })
 
   it.each([[82.5, 3600], [75, 0]])('does not arm for neutral/expired settings (%s F, %s seconds)', async (temperature, duration) => {
     const { getSharedHardwareClient } = await freshModule()
     await getSharedHardwareClient().setTemperature('left', temperature, duration)
-    expect(hasConfirmedPumpRun('left', Date.now())).toBe(false)
+    expect(hasConfirmedPumpRun('left')).toBe(false)
   })
 
   it('does not arm on power-off or alarm writes', async () => {
@@ -205,7 +205,7 @@ describe('sharedClient startup pump evidence', () => {
     const client = getSharedHardwareClient()
     await client.setPower('left', false)
     await client.setAlarm('right', { vibrationIntensity: 50, vibrationPattern: 'rise', duration: 30 })
-    expect(hasConfirmedPumpRun('left', Date.now())).toBe(false)
-    expect(hasConfirmedPumpRun('right', Date.now())).toBe(false)
+    expect(hasConfirmedPumpRun('left')).toBe(false)
+    expect(hasConfirmedPumpRun('right')).toBe(false)
   })
 })

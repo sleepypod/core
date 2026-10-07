@@ -2879,6 +2879,7 @@ describe('startup telemetry with the real pump stall guard', () => {
   it.each(['duty', 'countdown', 'command'] as const)('starts a fresh dwell after %s evidence, without counting startup zeros', async (evidence) => {
     await dwell()
     if (evidence === 'countdown') await sync.sync(status(7200))
+    if (evidence === 'duty') await sync.sync(status())
     if (evidence === 'command') confirmPumpRun('right')
     const duty = evidence === 'duty' ? 50 : undefined
     await sample(0, duty)
@@ -2901,6 +2902,7 @@ describe('startup telemetry with the real pump stall guard', () => {
   })
 
   it.each([[49, false], [50, true]])('requires observed pump motion before arming (%s RPM)', async (rpm, blocked) => {
+    await sync.sync(status())
     await sample(rpm)
     await dwell()
     expect(shouldBlock('right')).toBe(blocked)
@@ -2914,6 +2916,53 @@ describe('startup telemetry with the real pump stall guard', () => {
     await sync.sync(status())
     await dwell()
     expect(shouldBlock('right')).toBe(false)
+  })
+
+  it.each([undefined, 50])('does not arm from startup prime or spin-down motion (duty=%s)', async (duty) => {
+    // Sensor frames can arrive before the first status reveals priming.
+    await sample(1900, duty)
+    await sync.sync({ ...status(), isPriming: true })
+    await sample(1900, duty)
+    await sync.sync(status())
+    // A last moving frame during spin-down must not leave permanent evidence.
+    vi.advanceTimersByTime(119_000)
+    await sync.sync(status())
+    await sample(1900, duty)
+    vi.advanceTimersByTime(2_000)
+    await sync.sync(status())
+    await dwell()
+    expect(shouldBlock('right')).toBe(false)
+    expect(getPumpStallNotice('right')).toBeNull()
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it.each(['command', 'countdown'] as const)('preserves real %s evidence during startup priming', async (evidence) => {
+    await sync.sync({ ...status(evidence === 'countdown' ? 7200 : 0), isPriming: true })
+    if (evidence === 'command') confirmPumpRun('right')
+    // Positive duty must still expose a driven but stopped heating pump.
+    await dwell(50)
+    expect(shouldBlock('right')).toBe(true)
+  })
+
+  it('allows new run evidence after priming and its cooldown finish', async () => {
+    await sync.sync({ ...status(), isPriming: true })
+    await sample(1900)
+    await sync.sync(status())
+    vi.advanceTimersByTime(120_000)
+    await sync.sync(status())
+    await sample(1900)
+    await dwell()
+    expect(shouldBlock('right')).toBe(true)
+  })
+
+  it.each(['motion', 'command'] as const)('keeps %s evidence usable after a backward clock correction', async (evidence) => {
+    await sync.sync(status())
+    if (evidence === 'motion') await sample(1900)
+    else confirmPumpRun('right')
+    vi.setSystemTime(Date.now() - 3_600_000)
+    await sync.sync(status())
+    await dwell()
+    expect(shouldBlock('right')).toBe(true)
   })
 
   it('does not mistake alarm mutation stamps for a successful power-on', async () => {
@@ -2936,12 +2985,14 @@ describe('startup telemetry with the real pump stall guard', () => {
     expect(shouldBlock('right')).toBe(true)
     expect(getPumpStallNotice('right')).not.toBeNull()
     // Live drive evidence still enables cutoff of a restored incident.
+    await sync.sync(status())
     await dwell(50)
     expect(setPower).toHaveBeenCalledWith('right', false)
   })
 
   it('continues retrying a failed cutoff even without new startup evidence', async () => {
     setPower.mockRejectedValueOnce(new Error('DAC unavailable'))
+    await sync.sync(status())
     await dwell(50)
     expect(shouldBlock('right')).toBe(true)
     _resetPumpRunEvidence()
