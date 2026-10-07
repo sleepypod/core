@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { TimeInput } from '@/src/components/Schedule/TimeInput'
 import { useCallback, useState } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
@@ -17,6 +19,19 @@ export function formatDateTimeLocal(date: Date): string {
   const d = new Date(date)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** Keep local datetime values intact while allowing an explicit 24-hour editor. */
+function DateTimeField({ label, value, onChange }: { label: string, value: string, onChange: (v: string) => void }) {
+  const timeFormat = useTimeFormat()
+  if (timeFormat === '12h') return <TextField label={label} type="datetime-local" value={value} onChange={onChange} />
+  const [date, time = '00:00'] = value.split('T')
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <TextField label={`${label} date`} type="date" value={date} onChange={v => onChange(v ? `${v}T${time}` : '')} />
+      <TimeInput label={`${label} time`} value={time} disabled={!date} onChange={v => onChange(`${date}T${v}`)} />
+    </div>
+  )
 }
 
 /**
@@ -108,8 +123,8 @@ export function SleepRecordActions({
         )}
       >
         <div className="grid grid-cols-1 gap-3 min-[900px]:grid-cols-2">
-          <TextField label="Bedtime" type="datetime-local" value={editBedTime} onChange={setEditBedTime} />
-          <TextField label="Wake" type="datetime-local" value={editWakeTime} onChange={setEditWakeTime} />
+          <DateTimeField label="Bedtime" value={editBedTime} onChange={setEditBedTime} />
+          <DateTimeField label="Wake" value={editWakeTime} onChange={setEditWakeTime} />
         </div>
         {confirmDelete && <p className="text-[13px] text-fg-2">Deleting removes this night from Sleep. This cannot be undone.</p>}
         {errorMessage && <InlineError>{errorMessage}</InlineError>}

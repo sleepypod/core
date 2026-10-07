@@ -8,6 +8,8 @@
  */
 'use client'
 
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { CircleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Icon } from './icons'
@@ -26,7 +28,8 @@ export interface ListItem {
 const SIDE_CHIP: Record<ListItem['side'], string> = { left: 'L', right: 'R', both: 'L+R' }
 
 function RuleSentence({ b }: { b: BuilderRule }) {
-  const chunks = buildSentence(b)
+  const timeFormat = useTimeFormat()
+  const chunks = buildSentence(b, timeFormat)
   return (
     <span className="text-[13px] leading-snug text-fg-2 text-pretty">
       {chunks.map((c, i) => (

@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowDown, ArrowRight, CircleCheck, RotateCw, ScrollText, TriangleAlert, X } from 'lucide-react'
@@ -30,6 +32,7 @@ type History = inferRouterOutputs<AppRouter>['health']['history']
  * check with incidents in words.
  */
 export function HealthPanel({ onJump }: { onJump: (s: DiagSection) => void }) {
+  const timeFormat = useTimeFormat()
   const dataPath = trpc.health.dataPath.useQuery({}, { refetchInterval: 10_000 })
   const history = trpc.health.history.useQuery({}, { refetchInterval: 60_000 })
   const [selected, setSelected] = useSelectedNode()
@@ -46,7 +49,7 @@ export function HealthPanel({ onJump }: { onJump: (s: DiagSection) => void }) {
         <CardHeader
           title="Data path"
           subtitle="Sensors to outputs. Select a stage to see what passes through it."
-          right={data && <span className="font-mono text-[11px] text-fg-3">{`checked ${fmtClockMs(data.at)}`}</span>}
+          right={data && <span className="font-mono text-[11px] text-fg-3">{`checked ${fmtClockMs(data.at, timeFormat)}`}</span>}
         />
         {data
           ? <DataPathMap data={data} selected={selected} onSelect={id => setSelected(id === selected ? null : id)} />
@@ -385,6 +388,7 @@ const LEGEND = [
 ]
 
 function HistoryCard({ history, error, loading }: { history: History | undefined, error?: string, loading: boolean }) {
+  const timeFormat = useTimeFormat()
   const [hover, setHover] = useState<string | null>(null)
   const [all, setAll] = useState(false)
   if (loading) return <Skeleton className="h-[420px]" />
@@ -393,7 +397,7 @@ function HistoryCard({ history, error, loading }: { history: History | undefined
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-[15px] font-medium">Last 24 hours</span>
         <span className="text-[13px] text-fg-2">
-          {`Each check sampled once a minute.${history?.recordedSince != null ? ` Recording started ${fmtClockMs(history.recordedSince)}.` : ''}`}
+          {`Each check sampled once a minute.${history?.recordedSince != null ? ` Recording started ${fmtClockMs(history.recordedSince, timeFormat)}.` : ''}`}
         </span>
       </div>
       {error && <InlineError>{error}</InlineError>}
@@ -422,6 +426,7 @@ function LinkButton({ className, ...props }: React.ComponentProps<'button'>) {
 }
 
 function HistoryStrips({ history, all, onHover }: { history: History, all: boolean, onHover: (s: string | null) => void }) {
+  const timeFormat = useTimeFormat()
   const span = history.to - history.from
   const pct = (t: number) => `${((t - history.from) / span) * 100}%`
   const ticks = [0, 6, 12, 18].map(h => history.from + h * 3_600_000)
@@ -438,7 +443,7 @@ function HistoryStrips({ history, all, onHover }: { history: History, all: boole
                 key={r.start}
                 className={cn('absolute inset-y-0 border-r-2 border-surface last:border-r-0', STATUS_FILL[r.status])}
                 style={{ left: pct(r.start), width: `max(2px, calc(${pct(r.end)} - ${pct(r.start)}))` }}
-                onMouseEnter={() => onHover(`${c.label} · ${STATUS_WORD[r.status]} · ${fmtClockMs(r.start)} – ${r.end >= history.to - 90_000 ? 'now' : fmtClockMs(r.end)}`)}
+                onMouseEnter={() => onHover(`${c.label} · ${STATUS_WORD[r.status]} · ${fmtClockMs(r.start, timeFormat)} – ${r.end >= history.to - 90_000 ? 'now' : fmtClockMs(r.end, timeFormat)}`)}
               />
             ))}
           </div>
@@ -451,7 +456,7 @@ function HistoryStrips({ history, all, onHover }: { history: History, all: boole
         <span />
         <div className="relative h-4 font-mono text-[10px] text-fg-3">
           {ticks.map((t, i) => (
-            <span key={t} className={cn('absolute whitespace-nowrap', i > 0 && '-translate-x-1/2', i % 2 === 1 && 'hidden @min-[640px]:inline')} style={{ left: pct(t) }}>{fmtClockMs(t)}</span>
+            <span key={t} className={cn('absolute whitespace-nowrap', i > 0 && '-translate-x-1/2', i % 2 === 1 && 'hidden @min-[640px]:inline')} style={{ left: pct(t) }}>{fmtClockMs(t, timeFormat)}</span>
           ))}
           <span className="absolute right-0">now</span>
         </div>
@@ -464,8 +469,9 @@ function HistoryStrips({ history, all, onHover }: { history: History, all: boole
 const RECENT_INCIDENTS = 3
 
 function IncidentList({ history }: { history: History }) {
+  const timeFormat = useTimeFormat()
   const [all, setAll] = useState(false)
-  const lines = incidentLines(history, history.to)
+  const lines = incidentLines(history, history.to, timeFormat)
   const earlier = lines.length - RECENT_INCIDENTS
   const shown = all ? lines : lines.slice(0, RECENT_INCIDENTS)
   return (

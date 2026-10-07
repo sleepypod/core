@@ -103,3 +103,10 @@ describe('x axis', () => {
     expect(dense.length).toBeLessThanOrEqual(5)
   })
 })
+
+it('keeps full 24-hour labels on the vitals axis across midnight', () => {
+  const start = new Date(2026, 9, 6, 23, 0).getTime()
+  const ticks = segmentTicks({ start, end: start + 3 * 3600000, w: 600 }, 46, '24h')
+  expect(ticks.map(t => t.label)).toContain('00:00')
+  expect(ticks.map(t => t.label)).toContain('01:00')
+})

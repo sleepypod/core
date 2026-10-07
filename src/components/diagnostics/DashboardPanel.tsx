@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useState, type PointerEvent } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -251,6 +254,7 @@ const LANE_H = 64
 const HOUR_MIN = 60
 
 function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
+  const timeFormat = useTimeFormat()
   const { sideName } = useSideNames()
   const { unit } = useTemperatureUnit()
   const system = trpc.health.system.useQuery({}, { refetchInterval: 15_000 })
@@ -303,7 +307,7 @@ function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
         <span className="text-[15px] font-medium">Tonight</span>
         <span className="font-mono text-xs text-fg-2">
           {next
-            ? `next: ${next.side === 'left' || next.side === 'right' ? sideName(next.side) : 'Both'} → ${fToDisplay(next.targetTempF as number)} at ${fmtClock(next.nextRun)} · in ${formatCountdown(new Date(next.nextRun as string).getTime() - now)}`
+            ? `next: ${next.side === 'left' || next.side === 'right' ? sideName(next.side) : 'Both'} → ${fToDisplay(next.targetTempF as number)} at ${fmtClock(next.nextRun, timeFormat)} · in ${formatCountdown(new Date(next.nextRun as string).getTime() - now)}`
             : 'no temperature changes scheduled'}
         </span>
         <span className="ml-auto flex items-center gap-3 font-mono text-[11px] text-fg-2">
@@ -375,7 +379,7 @@ function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
               key={j.id}
               className="absolute top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center"
               style={{ left: `${pct(new Date(j.nextRun as string).getTime())}%` }}
-              title={`${podJobLabel(j, sideName)} · ${fmtClock(j.nextRun)}`}
+              title={`${podJobLabel(j, sideName)} · ${fmtClock(j.nextRun, timeFormat)}`}
             >
               <span className="size-2 rotate-45 bg-fg-2" />
               <span className="mt-0.5 whitespace-nowrap font-mono text-[9px] text-fg-2">{podJobLabel(j, sideName)}</span>
@@ -387,7 +391,7 @@ function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
         <div className="relative h-4 font-mono text-[10px] text-fg-3">
           {hourTicks.map(t => (
             <span key={t} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${pct(t)}%` }}>
-              {new Date(t).toLocaleTimeString([], { hour: 'numeric' })}
+              {formatClock(new Date(t), timeFormat, { hour: 'numeric' })}
             </span>
           ))}
         </div>
@@ -416,7 +420,7 @@ function TonightCard({ onJump }: { onJump: (s: DiagSection) => void }) {
                 hoverPct > 50 ? 'right-2' : 'left-2',
               )}
             >
-              <span className="col-span-2 text-fg-2">{`${fmtClock(new Date(hoverT).toISOString())} · target / bed`}</span>
+              <span className="col-span-2 text-fg-2">{`${fmtClock(new Date(hoverT).toISOString(), timeFormat)} · target / bed`}</span>
               {sides.map(({ side, setPoints, shift, bed }) => {
                 const at = readAt(setPoints, bed, (hoverT - midnight) / 60_000 + shift)
                 return [
@@ -438,6 +442,7 @@ const SPARK_W = 300
 const SPARK_H = 40
 
 function SideSummaryCard({ side: s, onClick }: { side: ThermalSide, onClick: () => void }) {
+  const timeFormat = useTimeFormat()
   const { sideName } = useSideNames()
   const history = trpc.health.thermalHistory.useQuery({ range: '12h' }, { refetchInterval: 60_000 })
   const side = s.side as Side
@@ -456,7 +461,7 @@ function SideSummaryCard({ side: s, onClick }: { side: ThermalSide, onClick: () 
     const t = h.from + hover.frac * (h.to - h.from)
     const p = nearestPoint(h.points, t)
     const v = p && Math.abs(p.t - t) <= h.bucketSec * 3000 ? p[key] : null
-    readout = { pct: hover.frac * 100, label: `${fmtClock(new Date(t).toISOString())} · ${fmtF(v)}` }
+    readout = { pct: hover.frac * 100, label: `${fmtClock(new Date(t).toISOString(), timeFormat)} · ${fmtF(v)}` }
   }
 
   return (
@@ -490,7 +495,7 @@ function SideSummaryCard({ side: s, onClick }: { side: ThermalSide, onClick: () 
           )
         : <div className="h-10" />}
       <span className="font-mono text-[10px] text-fg-3">
-        {`12 h${key === surfaceKey && h ? ' · surface' : ''}${onAt ? ` · on since ${onAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : s.isPowered ? '' : ' · off'}`}
+        {`12 h${key === surfaceKey && h ? ' · surface' : ''}${onAt ? ` · on since ${formatClock(onAt, timeFormat, { hour: 'numeric', minute: '2-digit' })}` : s.isPowered ? '' : ' · off'}`}
       </span>
     </Card>
   )

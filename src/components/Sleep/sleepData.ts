@@ -1,3 +1,5 @@
+import { formatTick, type TimeFormat } from '@/src/lib/timeFormat'
+export { formatClock, formatTick } from '@/src/lib/timeFormat'
 import type { HypnoBlock, StageKey, WeekNight } from '@/src/components/ds'
 import {
   calculateDistribution,
@@ -100,19 +102,6 @@ export function formatDuration(seconds: number | null | undefined): string {
   return `${h}h ${m}m`
 }
 
-export function formatClock(d: Date | number | null | undefined): string {
-  if (d == null) return '—'
-  return new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-}
-
-/** "11 PM" on the hour, "11:20 PM" otherwise — axis ticks. */
-export function formatTick(ms: number): string {
-  const d = new Date(ms)
-  return d.getMinutes() === 0
-    ? d.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })
-    : formatClock(d)
-}
-
 export function formatNightLong(d: Date): string {
   return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
 }
@@ -158,10 +147,10 @@ export interface Tick {
 }
 
 /** Start + end labels, plus whole hours every `step` h that aren't crowding the ends. */
-export function hypnoTicks(start: number, end: number, step = 2): Tick[] {
+export function hypnoTicks(start: number, end: number, step = 2, timeFormat: TimeFormat = '12h'): Tick[] {
   const span = end - start
   if (!(span > 0)) return []
-  const ticks: Tick[] = [{ label: formatTick(start), pct: 0 }]
+  const ticks: Tick[] = [{ label: formatTick(start, timeFormat), pct: 0 }]
   const first = new Date(start)
   first.setMinutes(0, 0, 0)
   first.setTime(first.getTime() + HOUR_MS)
@@ -169,9 +158,9 @@ export function hypnoTicks(start: number, end: number, step = 2): Tick[] {
   if (step === 2 && first.getHours() % 2 === 0) first.setTime(first.getTime() + HOUR_MS)
   for (let t = first.getTime(); t < end; t += step * HOUR_MS) {
     const pct = ((t - start) / span) * 100
-    if (pct >= 16 && pct <= 84) ticks.push({ label: formatTick(t), pct })
+    if (pct >= 16 && pct <= 84) ticks.push({ label: formatTick(t, timeFormat), pct })
   }
-  ticks.push({ label: formatTick(end), pct: 100 })
+  ticks.push({ label: formatTick(end, timeFormat), pct: 100 })
   return ticks
 }
 

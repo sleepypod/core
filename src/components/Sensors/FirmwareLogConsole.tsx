@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useOnSensorFrame, type LogFrame, type GestureFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
 import { Trash2, Pause, Play } from 'lucide-react'
@@ -20,9 +23,9 @@ function getLevelColor(level: string): string {
   return LEVEL_COLORS[level.toUpperCase()] ?? 'text-fg-2'
 }
 
-function formatTime(ts: number): string {
+function formatTime(ts: number, timeFormat: TimeFormat = '12h'): string {
   const date = new Date(ts < 1e12 ? ts * 1000 : ts)
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return formatClock(date, timeFormat, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 type ViewMode = 'logs' | 'frames'
@@ -38,6 +41,7 @@ interface RawEntry {
  * filtering, and expandable frames.
  */
 export function FirmwareLogConsole() {
+  const timeFormat = useTimeFormat()
   const [mode, setMode] = useState<ViewMode>('logs')
   const [logs, setLogs] = useState<LogFrame[]>([])
   const [frames, setFrames] = useState<RawEntry[]>([])
@@ -174,7 +178,7 @@ export function FirmwareLogConsole() {
                 : (
                     logs.map((log, i) => (
                       <div key={`${log.ts}-${i}`} className="grid grid-cols-[64px_44px_minmax(0,1fr)] gap-2">
-                        <span className="text-fg-3">{formatTime(log.ts)}</span>
+                        <span className="text-fg-3">{formatTime(log.ts, timeFormat)}</span>
                         <span className={getLevelColor(log.level)}>{log.level.toUpperCase().slice(0, 5)}</span>
                         <span className="break-all text-fg">{log.msg}</span>
                       </div>
@@ -203,7 +207,7 @@ export function FirmwareLogConsole() {
                               isExpanded ? 'bg-active' : 'bg-transparent hover:bg-active'
                             }`}
                           >
-                            <span className="shrink-0 text-fg-3">{formatTime(entry.ts)}</span>
+                            <span className="shrink-0 text-fg-3">{formatTime(entry.ts, timeFormat)}</span>
                             <span className="shrink-0 text-fg">{entry.type}</span>
                             <span className="flex-1" />
                             <span className="text-fg-3">{`${age}s`}</span>

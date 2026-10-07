@@ -1,5 +1,6 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
 import { useCallback, useMemo, useState } from 'react'
 import { useOnSensorFrame, type SensorFrame, type BedTempFrame, type BedTemp2Frame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
@@ -33,6 +34,7 @@ interface RawTempPoint {
  * Matches iOS BedSensorScreen tempTrendCard.
  */
 export function TempTrendChart() {
+  const { formatClock } = useTimeFormatter()
   const { unit, convert } = useTemperatureUnit()
   // Live frames are stored in raw Celsius (what the WebSocket carries) and
   // converted at display time via `history`. This keeps the buffer immune
@@ -215,7 +217,7 @@ export function TempTrendChart() {
         {/* X-axis time labels */}
         {xIndices.map((idx, i) => {
           const t = new Date(history[idx].time)
-          const label = `${t.getHours().toString().padStart(2, '0')}:${t.getMinutes().toString().padStart(2, '0')}`
+          const label = formatClock(t)
           return (
             <text
               key={`xl${i}`}

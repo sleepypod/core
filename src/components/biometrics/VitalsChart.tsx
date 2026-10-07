@@ -10,6 +10,8 @@
  */
 'use client'
 
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent } from 'react'
 import {
   BREAK_PX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, rollingMean, segmentTicks, sessionHeader,
@@ -61,6 +63,7 @@ export function VitalsChart({ sessions, stall, bands }: {
   stall: { start: number, end: number } | null
   bands: Record<MetricKey, Band>
 }) {
+  const timeFormat = useTimeFormat()
   const [wrapRef, wrapW] = useWidth<HTMLDivElement>()
   const hatchId = useId()
   const plotW = Math.max(0, wrapW - LABEL_W - GUTTER)
@@ -173,7 +176,7 @@ export function VitalsChart({ sessions, stall, bands }: {
             ))}
 
             {/* X axis ticks */}
-            {axis.segments.filter(s => s.kind === 'session').map(seg => segmentTicks(seg).map(tk => (
+            {axis.segments.filter(s => s.kind === 'session').map(seg => segmentTicks(seg, undefined, timeFormat).map(tk => (
               <text
                 key={`${seg.index}-${tk.t}`}
                 x={axis.xOf(seg, tk.t)}
@@ -207,7 +210,7 @@ export function VitalsChart({ sessions, stall, bands }: {
                   )
                 })}
                 <rect x={hoverX - 34} y={HEAD_H + PLOT_H + 4} width={68} height={18} rx={3} fill="var(--border-2)" />
-                <text x={hoverX} y={HEAD_H + PLOT_H + 17} textAnchor="middle" className="fill-fg font-mono" fontSize={11}>{clock(hovered.t)}</text>
+                <text x={hoverX} y={HEAD_H + PLOT_H + 17} textAnchor="middle" className="fill-fg font-mono" fontSize={11}>{clock(hovered.t, timeFormat)}</text>
               </g>
             )}
 

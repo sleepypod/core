@@ -1,3 +1,4 @@
+import { type TimeFormat } from '@/src/lib/timeFormat'
 /**
  * Builder model — the friendly WHEN/IF/THEN shape the editor edits, plus a
  * bidirectional mapping to the engine AST (src/automation/types.ts) that the
@@ -430,7 +431,8 @@ function opWord(op: UiOp): string {
   return ({ '>': 'rises above', '≥': 'is at least', '<': 'drops below', '≤': 'is at most', '==': 'equals', '≠': 'differs from' } as Record<UiOp, string>)[op]
 }
 
-export function fmtClock(hhmm: string): string {
+export function fmtClock(hhmm: string, timeFormat: TimeFormat = '12h'): string {
+  if (timeFormat === '24h') return hhmm
   const [h, m] = hhmm.split(':').map(Number)
   const ap = h < 12 ? 'am' : 'pm'
   let hh = h % 12
@@ -439,7 +441,7 @@ export function fmtClock(hhmm: string): string {
 }
 
 /** Assemble the plain-English "reads as" sentence with highlightable spans. */
-export function buildSentence(r: BuilderRule): SentenceChunk[] {
+export function buildSentence(r: BuilderRule, timeFormat: TimeFormat = '12h'): SentenceChunk[] {
   const out: SentenceChunk[] = []
   const sideShort = r.side === 'both' ? '' : `${r.side}-side `
   out.push({ text: 'When ' })
@@ -461,11 +463,11 @@ export function buildSentence(r: BuilderRule): SentenceChunk[] {
   }
   else {
     out.push({ text: `the clock reaches ` })
-    out.push({ text: `${fmtClock(w.between[0])}–${fmtClock(w.between[1])}`, hot: true })
+    out.push({ text: `${fmtClock(w.between[0], timeFormat)}–${fmtClock(w.between[1], timeFormat)}`, hot: true })
   }
   for (const c of r.ifs) {
     out.push({ text: ', and ' })
-    if (c.type === 'time') out.push({ text: `it's between ${fmtClock(c.between[0])}–${fmtClock(c.between[1])}`, hot: true })
+    if (c.type === 'time') out.push({ text: `it's between ${fmtClock(c.between[0], timeFormat)}–${fmtClock(c.between[1], timeFormat)}`, hot: true })
     else out.push({ text: `${sigLabel(c.signal).toLowerCase()} ${opWord(c.op)} ${c.value}`, hot: true })
   }
   out.push({ text: ', ' })

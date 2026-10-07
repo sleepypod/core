@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -9,7 +11,6 @@ import type { Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
 import { formatSleepDuration } from './tempScreenUtils'
 
-const clock = (d: Date) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 const round = (v: number | null | undefined) => (v == null ? '—' : String(Math.round(v)))
 
 /**
@@ -21,6 +22,7 @@ const round = (v: number | null | undefined) => (v == null ? '—' : String(Math
  * - biometrics.getVitalsSummary → averages over that record's window
  */
 export function LastNightCard({ side, name }: { side: Side, name: string }) {
+  const { formatClock: clock } = useTimeFormatter()
   const lang = langFromPath(usePathname())
   const latestQuery = trpc.biometrics.getLatestSleep.useQuery(
     { side },

@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
@@ -47,11 +50,11 @@ function qualityLabel(score: number | null): string {
   return `${(score * 100).toFixed(0)}%`
 }
 
-function formatDate(d: Date | null | undefined): string {
+function formatDate(d: Date | null | undefined, timeFormat: TimeFormat = '12h'): string {
   if (!d) return '--'
   const date = new Date(d)
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
-    + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    + ' ' + formatClock(date, timeFormat, { hour: '2-digit', minute: '2-digit' })
 }
 
 function SensorCalibrationRow({
@@ -65,6 +68,7 @@ function SensorCalibrationRow({
   onTrigger: (type: SensorType) => void
   isTriggeringType: SensorType | null
 }) {
+  const timeFormat = useTimeFormat()
   const config = SENSOR_CONFIG[type]
   const Icon = config.icon
   const isTriggering = isTriggeringType === type
@@ -94,7 +98,7 @@ function SensorCalibrationRow({
                   </span>
                 )}
                 <span className="text-[10px] text-zinc-600">
-                  {formatDate(profile.createdAt)}
+                  {formatDate(profile.createdAt, timeFormat)}
                 </span>
               </div>
             )

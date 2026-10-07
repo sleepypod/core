@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useCallback, useRef, useState } from 'react'
 import { Braces, Pause, Play } from 'lucide-react'
 import { useOnSensorFrame } from '@/src/hooks/useSensorStream'
@@ -21,6 +24,7 @@ interface StoredFrame {
  * updates so the JSON doesn't shift while reading.
  */
 export function RawFrameDrawer() {
+  const timeFormat = useTimeFormat()
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState<string | null>(null)
   const [paused, setPaused] = useState(false)
@@ -122,7 +126,7 @@ export function RawFrameDrawer() {
               <div className="mb-1.5 flex items-center gap-2 font-mono text-xs">
                 <span className="text-fg">{selectedFrame.type}</span>
                 <span className="text-fg-3">
-                  {new Date(selectedFrame.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  {formatClock(new Date(selectedFrame.ts), timeFormat, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                 </span>
               </div>
               <pre className="font-mono text-[11px] leading-relaxed text-fg-2">{selectedFrame.data}</pre>

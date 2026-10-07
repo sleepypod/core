@@ -1,10 +1,12 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { Popover } from '@base-ui/react/popover'
 import { Info, Minus, Plus } from 'lucide-react'
 import type { CSSProperties } from 'react'
 import { cn } from '@/lib/utils'
-import { formatTime12h, hhmmToMinutes } from '@/src/lib/scheduleTime'
+import { hhmmToMinutes } from '@/src/lib/scheduleTime'
 import { tempHue } from '@/src/lib/tempColors'
 import { setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 import type { TempDisplay } from '@/src/providers/PrefsProvider'
@@ -99,6 +101,7 @@ export function TempStepper({
   onStepPhase,
   className,
 }: TempStepperProps) {
+  const { formatTime } = useTimeFormatter()
   const { phases, draft } = schedule
   const valueFor = (t: StepperTab): number | null => (t === 'now' ? targetF : schedule.valueF(t))
   const available = (t: StepperTab) => t === 'now' || phases?.[t] != null
@@ -125,7 +128,7 @@ export function TempStepper({
 
   const bed = bedF == null ? '—' : `${Math.round(setpointFToDisplay(bedF, unit) ?? bedF)}°${unit}`
   const caption = phase && phases && !off
-    ? `${formatTime12h(phase.start)} – ${formatTime12h(phase.end)}`
+    ? `${formatTime(phase.start)} – ${formatTime(phase.end)}`
     : `${off ? 'Off' : heatState(targetF, bedF, unit)} · bed ${bed}`
   const days = phase && phases && !off && !schedule.error ? summarizeDays(phases.days) : null
   const hint = !draft
@@ -233,6 +236,7 @@ function StepButton({ icon: Icon, label, disabled, off, onClick }: {
 
 /** Explains the template values shown before a side has a Night / Dawn schedule. */
 function SuggestionInfo() {
+  const { formatTime } = useTimeFormatter()
   return (
     <Popover.Root>
       <Popover.Trigger
@@ -246,7 +250,7 @@ function SuggestionInfo() {
           <Popover.Popup className="max-w-[260px] rounded-ctl border border-line-2 bg-surface p-3 font-sans text-xs leading-relaxed text-fg-2 shadow-[var(--shadow-dialog)] outline-none">
             <p className="mb-1.5 font-medium text-fg">These are suggestions</p>
             <p>
-              {`This side has no Night & Dawn schedule yet, so these come from the balanced sleep curve (${formatTime12h(TEMPLATE_BEDTIME)} – ${formatTime12h(TEMPLATE_WAKE)}). `}
+              {`This side has no Night & Dawn schedule yet, so these come from the balanced sleep curve (${formatTime(TEMPLATE_BEDTIME)} – ${formatTime(TEMPLATE_WAKE)}). `}
               Nothing is saved until you tap − or +. Then the curve is saved, with your temperature, to every night that has no schedule. Fine-tune times on the Schedule page.
             </p>
           </Popover.Popup>

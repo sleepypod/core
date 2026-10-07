@@ -7,6 +7,9 @@
  */
 'use client'
 
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { type TimeFormat } from '@/src/lib/timeFormat'
+
 import { cn } from '@/lib/utils'
 import { Icon } from './icons'
 
@@ -14,7 +17,8 @@ import type { BacktestResult } from '@/src/automation/backtest'
 
 export interface NightOption { sleepRecordId: number, label: string, date: string }
 
-function minToClock(m: number): string {
+function minToClock(m: number, timeFormat: TimeFormat = '12h'): string {
+  if (timeFormat === '24h') return `${String(Math.floor((m / 60) % 24)).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`
   const h = Math.floor((m / 60) % 24)
   const mm = Math.floor(m % 60)
   const ap = h < 12 ? 'a' : 'p'
@@ -54,6 +58,7 @@ function NightPicker({ nights, nightId, onNight }: { nights: NightOption[], nigh
 }
 
 function Chart({ r }: { r: BacktestResult }) {
+  const timeFormat = useTimeFormat()
   const N = r.clockMin.length
   if (N < 2) return <div className="px-2 py-8 text-center text-[12px] text-fg-3">Not enough data in this window to replay.</div>
 
@@ -153,7 +158,7 @@ function Chart({ r }: { r: BacktestResult }) {
         {tickIdx.map((idx, i) => (
           <g key={i}>
             <line x1={x(idx)} x2={x(idx)} y1={mT} y2={mT + ih} stroke="var(--border-grid)" strokeWidth="1" />
-            <text x={x(idx)} y={labelY} textAnchor="middle" className="font-mono" style={{ fontSize: 9, fill: 'var(--text-3)' }}>{minToClock(r.clockMin[idx])}</text>
+            <text x={x(idx)} y={labelY} textAnchor="middle" className="font-mono" style={{ fontSize: 9, fill: 'var(--text-3)' }}>{minToClock(r.clockMin[idx], timeFormat)}</text>
           </g>
         ))}
 

@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useCallback } from 'react'
 import { Droplets, Play } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
@@ -14,8 +17,8 @@ const TREND_LABEL: Record<string, string> = {
   unknown: 'Insufficient data',
 }
 
-export function formatTime(d: Date | string | number): string {
-  return new Date(d).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+export function formatTime(d: Date | string | number, timeFormat: TimeFormat = '12h'): string {
+  return formatClock(new Date(d), timeFormat, { hour: 'numeric', minute: '2-digit' })
 }
 
 /**
@@ -23,6 +26,7 @@ export function formatTime(d: Date | string | number): string {
  * active alerts, prime confirmation, and the daily prime schedule.
  */
 export function WaterModal({ open, onClose }: { open: boolean, onClose: () => void }) {
+  const timeFormat = useTimeFormat()
   const utils = trpc.useUtils()
 
   const { data: latest, isLoading } = trpc.waterLevel.getLatest.useQuery(
@@ -97,7 +101,7 @@ export function WaterModal({ open, onClose }: { open: boolean, onClose: () => vo
                   </span>
                 </div>
                 <span className="pb-1 text-[13px] text-fg-2">
-                  {[trendText, `read ${formatTime(latest.timestamp)}`].filter(Boolean).join(' · ')}
+                  {[trendText, `read ${formatTime(latest.timestamp, timeFormat)}`].filter(Boolean).join(' · ')}
                 </span>
               </div>
             )

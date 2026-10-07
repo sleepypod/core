@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { useCallback, useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
@@ -13,7 +15,7 @@ import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatSetpointF } from '@/src/lib/tempUtils'
 import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
-import { formatTime12h, getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
+import { getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
 import { BothNightView, PersonCurveList } from './BothNightView'
 import { bedTrace, lastNightLabel, lastNightMidnight, lastNightRange } from './bedTrace'
 import { nextSetPoint, type TempRow } from './bothNight'
@@ -312,6 +314,7 @@ function deleteLabel(days: DayOfWeek[]): string {
 
 /** Footer: scheduler drift status from health.system (shared with the sidebar's query). */
 function SchedulerStatus({ sideLabel, next }: { sideLabel: string, next?: { name: string, time: string, temperature: number } | null }) {
+  const { formatTime } = useTimeFormatter()
   const { data } = trpc.health.system.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
   const { unit } = useTemperatureUnit()
   const scheduler = data?.scheduler
@@ -333,7 +336,7 @@ function SchedulerStatus({ sideLabel, next }: { sideLabel: string, next?: { name
           <span className="text-fg">{next.name}</span>
           {' → '}
           <span className="text-fg">{formatSetpointF(next.temperature, unit)}</span>
-          {` at ${formatTime12h(next.time)}`}
+          {` at ${formatTime(next.time)}`}
         </div>
       )}
       <div>{`Applies to ${sideLabel} · edits apply on save`}</div>

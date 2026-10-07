@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PREFS_STORAGE_KEYS } from '@/src/providers/PrefsProvider'
 import { SleepRecordActions } from '../SleepRecordActions'
 
 const state = vi.hoisted(() => ({
@@ -40,6 +41,7 @@ const bed = new Date(2026, 8, 27, 23, 20)
 const wake = new Date(2026, 8, 28, 6, 52)
 
 beforeEach(() => {
+  localStorage.clear()
   vi.clearAllMocks()
   state.updateError = null
 })
@@ -88,4 +90,21 @@ describe('SleepRecordActions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit times' }))
     expect(screen.getByText('leftBedAt must be after enteredBedAt')).toBeTruthy()
   })
+})
+
+it('edits sleep times in 24-hour mode without changing the local date or closing an open session', () => {
+  localStorage.setItem(PREFS_STORAGE_KEYS.timeFormat, '24h')
+  render(<SleepRecordActions recordId={7} enteredBedAt={bed} leftBedAt={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit times' }))
+  expect((screen.getByLabelText('Bedtime date') as HTMLInputElement).value).toBe('2026-09-27')
+  expect((screen.getByLabelText('Bedtime time hours') as HTMLSelectElement).value).toBe('23')
+  expect((screen.getByLabelText('Wake time hours') as HTMLSelectElement).disabled).toBe(true)
+  fireEvent.change(screen.getByLabelText('Bedtime time hours'), { target: { value: '22' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(state.update).toHaveBeenLastCalledWith({ id: 7, enteredBedAt: new Date(2026, 8, 27, 22, 20) })
+  fireEvent.change(screen.getByLabelText('Wake date'), { target: { value: '2026-09-28' } })
+  fireEvent.change(screen.getByLabelText('Wake time hours'), { target: { value: '07' } })
+  fireEvent.change(screen.getByLabelText('Wake time minutes'), { target: { value: '05' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(state.update).toHaveBeenLastCalledWith({ id: 7, enteredBedAt: new Date(2026, 8, 27, 22, 20), leftBedAt: new Date(2026, 8, 28, 7, 5) })
 })

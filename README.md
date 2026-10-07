@@ -53,6 +53,11 @@ The web UI brings temperature, schedules, Autopilot, sleep, and system diagnosti
 
 ## Guides
 
+Choose **Settings → Appearance → Time format → 24-hour** to show clocks as
+`23:30` instead of `11:30 PM`. On phones, Time format is directly on the Settings
+screen. The choice is saved per browser and applies to schedules, alarms, sleep,
+charts, and diagnostics; it does not change the Pod timezone or scheduled times.
+
 | Using sleepypod | Developing sleepypod |
 |---|---|
 | [Temperature and manual holds](https://sleepypod.github.io/core/temperature/) | [Architecture](https://sleepypod.github.io/developers/architecture/) |

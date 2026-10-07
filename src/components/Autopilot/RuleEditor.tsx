@@ -5,6 +5,8 @@
  */
 'use client'
 
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useEffect, useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { PageHeader } from '@/src/components/ds'
@@ -38,7 +40,8 @@ const numSignalOpts = SIGNALS.map(s => ({ value: s.id, label: s.label, icon: s.i
 
 // ---------- live sentence preview ----------
 function SentencePreview({ rule }: { rule: BuilderRule }) {
-  const chunks = buildSentence(rule)
+  const timeFormat = useTimeFormat()
+  const chunks = buildSentence(rule, timeFormat)
   return (
     <Card className="px-[18px] py-4" style={{ borderColor: 'color-mix(in srgb, var(--accent-cool) 35%, transparent)' }}>
       <div className="mb-2 flex items-center gap-2 text-cool">
@@ -55,7 +58,8 @@ function SentencePreview({ rule }: { rule: BuilderRule }) {
 }
 
 const TimeField = ({ value, onChange }: { value: string, onChange: (v: string) => void }) => {
-  const hours = Array.from({ length: 24 }, (_, h) => ({ value: `${String(h).padStart(2, '0')}:00`, label: fmtClock(`${String(h).padStart(2, '0')}:00`) }))
+  const timeFormat = useTimeFormat()
+  const hours = Array.from({ length: 24 }, (_, h) => ({ value: `${String(h).padStart(2, '0')}:00`, label: fmtClock(`${String(h).padStart(2, '0')}:00`, timeFormat) }))
   return <Select chip value={value} options={hours} onChange={onChange} />
 }
 

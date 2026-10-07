@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
@@ -122,6 +125,7 @@ function SummaryLine({ enabled, jobs, drift, next, now }: {
   next: TimelineOccurrence | undefined
   now: number
 }) {
+  const timeFormat = useTimeFormat()
   const { sideName } = useSideNames()
   const groups = groupCounts(jobs)
   const status = !enabled
@@ -143,7 +147,7 @@ function SummaryLine({ enabled, jobs, drift, next, now }: {
         <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-fg-2 @min-[760px]:ml-auto">
           next
           <JobValue text={jobText(next, sideName)} className="font-sans text-fg" />
-          {`at ${fmtWhen(next.at, now)} · ${fmtIn(next.at, now)}`}
+          {`at ${fmtWhen(next.at, now, timeFormat)} · ${fmtIn(next.at, now)}`}
         </span>
       )}
     </div>
@@ -195,6 +199,7 @@ function NightTimeline({ occurrences, now, next }: { occurrences: TimelineOccurr
 }
 
 function NightChart({ night, now, next, sideName }: { night: Night, now: number, next: TimelineOccurrence | undefined, sideName: (s: Side) => string }) {
+  const timeFormat = useTimeFormat()
   const [ref, width] = useWidth<HTMLDivElement>()
   const svgRef = useRef<SVGSVGElement>(null)
   // Same hover as the Schedule chart: a line across the lanes and each side's target at that time.
@@ -219,7 +224,7 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
     ? null
     : {
         x: X(hover),
-        label: [fmtTime(hover), ...lanes.map(({ side, lane }) => {
+        label: [fmtTime(hover, timeFormat), ...lanes.map(({ side, lane }) => {
           const target = heldTarget(lane, hover)
           return `${sideName(side)} ${target === null ? '—' : `${target}°`}`
         })].join(' · '),
@@ -258,7 +263,7 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
               <g key={t}>
                 <line x1={X(t)} x2={X(t)} y1={TOP} y2={height - 22} stroke="var(--border-grid)" />
                 <text x={X(t)} y={height - 6} textAnchor={t === from ? 'start' : t + stepH * HOUR > to ? 'end' : 'middle'} fill="var(--text-3)" fontSize="10" className="font-mono">
-                  {new Date(t).toLocaleTimeString([], { hour: 'numeric' })}
+                  {formatClock(new Date(t), timeFormat, { hour: 'numeric' })}
                 </text>
               </g>
             ))}
@@ -279,7 +284,7 @@ function NightChart({ night, now, next, sideName }: { night: Night, now: number,
               <g data-testid="timeline-now">
                 <line x1={nowX} x2={nowX} y1={12} y2={height - 22} stroke="var(--text-1)" strokeOpacity="0.6" />
                 <text x={nowX + (nowX > width - 90 ? -4 : 4)} y={9} textAnchor={nowX > width - 90 ? 'end' : 'start'} fill="var(--text-1)" fontSize="10" className="font-mono">
-                  {`now ${fmtTime(now)}`}
+                  {`now ${fmtTime(now, timeFormat)}`}
                 </text>
               </g>
             )}
@@ -403,11 +408,12 @@ function placePodLabels(jobs: TimelineOccurrence[], X: (t: number) => number) {
 }
 
 function PodMarkers({ jobs, y, X }: { jobs: TimelineOccurrence[], y: number, X: (t: number) => number }) {
+  const timeFormat = useTimeFormat()
   return (
     <g>
       {placePodLabels(jobs, X).map(({ job, x, label, showLabel }) => (
         <g key={`${job.id}-${job.at}`}>
-          <title>{`${label} · ${fmtTime(job.at)}`}</title>
+          <title>{`${label} · ${fmtTime(job.at, timeFormat)}`}</title>
           <rect x={x - 4} y={y - 4} width={8} height={8} transform={`rotate(45 ${x} ${y})`} fill="var(--text-2)" />
           {showLabel && <text x={x + 9} y={y + 4} fill="var(--text-2)" fontSize="11" className="font-mono">{label}</text>}
         </g>
@@ -418,10 +424,11 @@ function PodMarkers({ jobs, y, X }: { jobs: TimelineOccurrence[], y: number, X: 
 
 /** Pod jobs outside the night's hours, in words: "also Reboot 1:00 PM · Prime 2:00 PM". */
 function OffAxisNote({ jobs, x, y, anchor }: { jobs: TimelineOccurrence[], x: number, y: number, anchor: 'start' | 'end' }) {
+  const timeFormat = useTimeFormat()
   if (jobs.length === 0) return null
   return (
     <text x={x} y={y} textAnchor={anchor} fill="var(--text-3)" fontSize="10" className="font-mono">
-      {`${anchor === 'start' ? 'earlier' : 'later'}: ${jobs.map(j => `${podJobLabel(j)} ${fmtTime(j.at)}`).join(' · ')}`}
+      {`${anchor === 'start' ? 'earlier' : 'later'}: ${jobs.map(j => `${podJobLabel(j)} ${fmtTime(j.at, timeFormat)}`).join(' · ')}`}
     </text>
   )
 }
@@ -429,6 +436,7 @@ function OffAxisNote({ jobs, x, y, anchor }: { jobs: TimelineOccurrence[], x: nu
 // ── Next up ──────────────────────────────────────────────────────────────────
 
 function NextUp({ upcoming, now, onAll }: { upcoming: TimelineOccurrence[], now: number, onAll: () => void }) {
+  const timeFormat = useTimeFormat()
   const { sideName } = useSideNames()
   const rows = upcoming.slice(0, 5)
   return (
@@ -448,7 +456,7 @@ function NextUp({ upcoming, now, onAll }: { upcoming: TimelineOccurrence[], now:
             <div className="flex flex-col">
               {rows.map(o => (
                 <div key={`${o.id}-${o.at}`} className="grid grid-cols-[88px_1fr_auto] items-center gap-3 border-t border-line py-2.5 text-sm first:border-t-0 @min-[640px]:grid-cols-[96px_110px_1fr_auto]">
-                  <span className="font-mono">{fmtWhen(o.at, now)}</span>
+                  <span className="font-mono">{fmtWhen(o.at, now, timeFormat)}</span>
                   <span className="hidden font-mono text-fg-2 @min-[640px]:block">{fmtIn(o.at, now)}</span>
                   <JobValue text={jobText(o, sideName)} />
                   <span className="truncate font-mono text-xs text-fg-3">{o.id}</span>
@@ -472,6 +480,7 @@ const GROUP_TITLE: Record<JobGroup, string> = {
 const PREVIEW_ROWS = 12
 
 function AllJobs({ jobs, now, onBack }: { jobs: TimelineJob[], now: number, onBack: () => void }) {
+  const timeFormat = useTimeFormat()
   const { sideName } = useSideNames()
   const [filter, setFilter] = useState<JobGroup | null>(null)
   const [expanded, setExpanded] = useState<Set<JobGroup>>(new Set())
@@ -503,8 +512,8 @@ function AllJobs({ jobs, now, onBack }: { jobs: TimelineJob[], now: number, onBa
             {shown.map(j => (
               <div key={j.id} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-0.5 border-b border-line py-2 text-sm last:border-b-0 @min-[760px]:grid-cols-[minmax(160px,1.2fr)_minmax(160px,1.4fr)_150px_minmax(90px,auto)]">
                 <JobValue text={jobText(j, sideName)} />
-                <span className="text-right text-xs text-fg-2 @min-[760px]:text-left @min-[760px]:text-sm">{describeSchedule(j)}</span>
-                <span className="font-mono text-xs text-fg-2">{j.nextRun == null ? 'not scheduled' : `${fmtWhen(j.nextRun, now)} · ${fmtIn(j.nextRun, now)}`}</span>
+                <span className="text-right text-xs text-fg-2 @min-[760px]:text-left @min-[760px]:text-sm">{describeSchedule(j, timeFormat)}</span>
+                <span className="font-mono text-xs text-fg-2">{j.nextRun == null ? 'not scheduled' : `${fmtWhen(j.nextRun, now, timeFormat)} · ${fmtIn(j.nextRun, now)}`}</span>
                 <span className="truncate text-right font-mono text-[11px] text-fg-3">{j.id}</span>
               </div>
             ))}

@@ -1,5 +1,10 @@
 'use client'
 
+import { formatClock } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { ArrowRight } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -25,7 +30,6 @@ const CURVE_H = 56
 /** SVG user-space width; the curve stretches to the lane (strokes stay 1.5px). */
 const VB_W = 1000
 
-const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 const nightDate = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).replace(',', '')
 
 /**
@@ -66,6 +70,8 @@ export function ScheduleTimeline({ unit, className }: { unit: TempUnit, classNam
 }
 
 function TimelineBody({ win, now, unit }: { win: TimelineWindow, now: number, unit: TempUnit }) {
+  const timeFormat = useTimeFormat()
+  const { formatClock: clock } = useTimeFormatter()
   const span = win.end - win.start
   const pct = (t: number) => ((t - win.start) / span) * 100
   const ticks: number[] = []
@@ -114,7 +120,7 @@ function TimelineBody({ win, now, unit }: { win: TimelineWindow, now: number, un
             className={cn('absolute bottom-0 whitespace-nowrap', i % 2 === 1 && i !== ticks.length - 1 && '@max-[860px]:hidden')}
             style={{ left: `${pct(t)}%`, transform: i === 0 ? undefined : i === ticks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)' }}
           >
-            {new Date(t).toLocaleTimeString([], { hour: 'numeric' })}
+            {formatClock(new Date(t), timeFormat, { hour: 'numeric' })}
           </span>
         ))}
       </div>
@@ -301,6 +307,7 @@ function Bars({ intervals, pct, className, testId, label }: {
   testId: string
   label: string
 }) {
+  const { formatClock: clock } = useTimeFormatter()
   return (
     <div className="relative my-1 h-2 rounded-full bg-active" data-testid={testId}>
       {intervals.map(iv => (

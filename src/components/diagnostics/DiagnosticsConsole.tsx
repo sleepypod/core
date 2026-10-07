@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -70,6 +73,7 @@ interface ThermalQuery {
 // ── Thermal ──────────────────────────────────────────────────────────────────
 
 function ThermalSideCard({ side: s }: { side: ThermalSide }) {
+  const timeFormat = useTimeFormat()
   const { sideName } = useSideNames()
   const side = s.side as 'left' | 'right'
   const dir = thermalDirection(s)
@@ -94,7 +98,7 @@ function ThermalSideCard({ side: s }: { side: ThermalSide }) {
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-2">
           {s.guardBlocked && <Badge className="border-danger-line text-danger">GUARD BLOCKED</Badge>}
           {s.isAlarmVibrating && <Badge className="border-warn-line text-warn">ALARM VIBRATING</Badge>}
-          {s.poweredOnAt && <span className="font-mono">{`on since ${new Date(s.poweredOnAt).toLocaleTimeString()}`}</span>}
+          {s.poweredOnAt && <span className="font-mono">{`on since ${formatClock(new Date(s.poweredOnAt), timeFormat, {})}`}</span>}
         </div>
       )}
     </Card>
@@ -132,6 +136,7 @@ function PumpStallWarning() {
 }
 
 function ThermalPanel({ thermal, history }: { thermal: ThermalQuery, history: ThermalHistory }) {
+  const timeFormat = useTimeFormat()
   const data = thermal.data
   const { leftName, rightName } = useSideNames()
   const { unit } = useTemperatureUnit()
@@ -181,15 +186,15 @@ function ThermalPanel({ thermal, history }: { thermal: ThermalQuery, history: Th
       emptyNote: {
         bedTarget: h.bedTargetSince == null
           ? 'bed and target history starts recording with this update'
-          : `bed and target recorded since ${new Date(h.bedTargetSince).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`,
+          : `bed and target recorded since ${formatClock(new Date(h.bedTargetSince), timeFormat, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`,
       },
     }
   }
 
   const multiDay = chart ? chart.to - chart.from > 36 * 3_600_000 : false
   const tickFormat = (ms: number) => multiDay
-    ? new Date(ms).toLocaleString([], { weekday: 'short', hour: 'numeric' })
-    : new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    ? formatClock(new Date(ms), timeFormat, { weekday: 'short', hour: 'numeric' })
+    : formatClock(new Date(ms), timeFormat, { hour: 'numeric', minute: '2-digit' })
 
   return (
     <>

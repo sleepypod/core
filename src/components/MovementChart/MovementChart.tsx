@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { trpc } from '@/src/utils/trpc'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
@@ -120,11 +123,11 @@ function pickTickKeys(chartData: ChartDataPoint[], isMultiDay: boolean): string[
  * Tooltip uses the same format so the user sees the same string they
  * see on the axis.
  */
-function formatTickLabel(timeIso: string, isMultiDay: boolean): string {
+function formatTickLabel(timeIso: string, isMultiDay: boolean, timeFormat: TimeFormat = '12h'): string {
   const d = new Date(timeIso)
   return isMultiDay
     ? d.toLocaleDateString('en-US', { weekday: 'short' })
-    : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+    : formatClock(d, timeFormat, { hour: 'numeric', minute: '2-digit' })
 }
 
 interface MovementTooltipProps {
@@ -135,15 +138,16 @@ interface MovementTooltipProps {
 }
 
 function MovementTooltip({ active, payload, bucketSeconds }: MovementTooltipProps) {
+  const timeFormat = useTimeFormat()
   if (!active || !payload?.[0]) return null
   const data = payload[0].payload as ChartDataPoint
   // Tooltip shows the full bucket timestamp regardless of whether the
   // axis hides labels for non-day-boundary buckets.
-  const tooltipLabel = new Date(data.timestamp).toLocaleString('en-US', {
+  const tooltipLabel = formatClock(new Date(data.timestamp), timeFormat, {
     weekday: bucketSeconds >= 30 * 60 ? 'short' : undefined,
     hour: 'numeric',
     minute: '2-digit',
-    hour12: true,
+
   })
   return (
     <div className="rounded-ctl border border-line-2 bg-surface px-3 py-2 text-xs">
@@ -167,6 +171,7 @@ const AXIS_TICK = { fontSize: 10, fill: 'var(--text-3)', fontFamily: 'var(--font
  * server-side bucketed sums so a week view fits in one query.
  */
 export function MovementChart() {
+  const timeFormat = useTimeFormat()
   const { side } = useBiometricsSide()
   const { weekStart, weekEnd } = useWeekNavigator()
 
@@ -248,7 +253,7 @@ export function MovementChart() {
                         axisLine={false}
                         interval={tickInterval}
                         ticks={tickKeys}
-                        tickFormatter={(t: string) => formatTickLabel(t, isMultiDay)}
+                        tickFormatter={(t: string) => formatTickLabel(t, isMultiDay, timeFormat)}
                         padding={{ left: 8, right: 8 }}
                       />
                       <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={44} unit="/hr" allowDecimals={false} />

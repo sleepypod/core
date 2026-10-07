@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PREFS_STORAGE_KEYS } from '@/src/providers/PrefsProvider'
 import { BaseSchedules } from '../BaseSchedules'
 import type { RouterOutputs } from '@/src/demo/types'
 const m = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
 } }))
 const names = { left: 'Jon', right: 'Heidi' }
 beforeEach(() => {
+  localStorage.clear()
   vi.clearAllMocks()
   m.rows = []
   m.loading = false
@@ -37,11 +39,12 @@ describe('base schedule editor', () => {
     fireEvent.click(screen.getByRole('button', { name: compact ? 'Add to schedule' : 'Add' }))
     expect(m.save).toHaveBeenCalledWith({ head: 40, feet: 0, feedRate: 75, dayOfWeek: 'weekdays', time: '23:15', side: 'right', presetName: 'Read', enabled: true })
   })
-  it('displays side and recurrence, deletes only the selected row', () => {
+  it.each(['12h', '24h'])('displays side, recurrence and preferred time format (%s), deletes only the selected row', (format) => {
+    localStorage.setItem(PREFS_STORAGE_KEYS.timeFormat, format)
     m.rows = [{ id: 4, dayOfWeek: 'weekdays', side: 'left', presetName: 'Relax', time: '22:00', head: 30, feet: 15, feedRate: 50, enabled: true }]
     render(<BaseSchedules names={names} independent speed={50} compact />)
     expect(screen.getByText('Weekdays · Jon')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Weekdays 22:00 Jon' }))
+    fireEvent.click(screen.getByRole('button', { name: `Delete Weekdays ${format === '24h' ? '22:00' : '10:00 PM'} Jon` }))
     expect(m.remove).toHaveBeenCalledWith({ id: 4 })
   })
   it('offers only both sides for synchronized hardware and surfaces errors', () => {

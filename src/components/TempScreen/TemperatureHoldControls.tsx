@@ -1,5 +1,7 @@
 'use client'
 
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
 import { CalendarDays, Hand, ShieldAlert, Sparkles, Timer } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -16,10 +18,8 @@ export const HOLD_OPTIONS: ReadonlyArray<{ value: number, label: string }> = [
   { value: 120, label: '2 hr' },
 ]
 
-const formatClock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-
 /** Who currently owns the side's temperature (PR #727 ownership model). */
-export function ownershipLabel(control: TemperatureControlStatus): { icon: LucideIcon, text: string, danger?: boolean } {
+export function ownershipLabel(control: TemperatureControlStatus, timeFormat: TimeFormat = '12h'): { icon: LucideIcon, text: string, danger?: boolean } {
   if (control.blocked === 'safety') return { icon: ShieldAlert, text: 'Safety stop', danger: true }
   if (control.blocked === 'off') return { icon: Hand, text: 'Off' }
   switch (control.source) {
@@ -28,7 +28,7 @@ export function ownershipLabel(control: TemperatureControlStatus): { icon: Lucid
     case 'run-once': return { icon: Timer, text: 'Run-once session' }
     case 'manual': return {
       icon: Hand,
-      text: control.holdUntil != null ? `Manual hold · until ${formatClock(control.holdUntil)}` : 'Manual hold',
+      text: control.holdUntil != null ? `Manual hold · until ${formatClock(control.holdUntil, timeFormat)}` : 'Manual hold',
     }
     default: return { icon: Hand, text: 'Manual' }
   }
@@ -45,8 +45,9 @@ export function HoldStatus({ side, control, prefix, onResumed }: {
   prefix?: ReactNode
   onResumed: () => void
 }) {
+  const timeFormat = useTimeFormat()
   const resume = trpc.device.resumeTemperature.useMutation({ onSuccess: onResumed })
-  const owner = control ? ownershipLabel(control) : null
+  const owner = control ? ownershipLabel(control, timeFormat) : null
   const Icon = owner?.icon
   return (
     <div className="flex flex-col gap-1.5">

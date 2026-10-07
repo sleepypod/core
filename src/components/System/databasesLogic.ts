@@ -1,3 +1,4 @@
+import { type TimeFormat, formatClock as formatDisplayClock } from '@/src/lib/timeFormat'
 /**
  * View-model for System → Databases: growth projection against free disk,
  * per-table write strips, and the integrity / migration wording. Pure so it
@@ -174,10 +175,10 @@ export function fmtAgo(ms: number, now: number): string {
 }
 
 /** "7:01 PM" today, "Sun 8:24 AM" this week, "Sep 24" before that. */
-export function fmtLastWrite(ms: number, now: number): string {
+export function fmtLastWrite(ms: number, now: number, timeFormat: TimeFormat = '12h'): string {
   const d = new Date(ms)
   const n = new Date(now)
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  const time = formatDisplayClock(d, timeFormat, { hour: 'numeric', minute: '2-digit' })
   if (d.toDateString() === n.toDateString()) return time
   if (now - ms < 6 * DAY) return `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`
   return shortDay(ms)

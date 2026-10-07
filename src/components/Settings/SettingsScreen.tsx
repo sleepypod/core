@@ -21,7 +21,7 @@ import { TapGestureConfig } from './TapGestureConfig'
 import { MqttSettingsForm } from './MqttSettingsForm'
 import { HomeKitConfig } from './HomeKitConfig'
 import { ArchivePushSettingsForm } from './ArchivePushSettingsForm'
-import { AppearanceSettings, TempControlPicker, TempDisplayControl, ThemeControl, UnitsControl } from './AppearanceSettings'
+import { TimeFormatControl, AppearanceSettings, TempControlPicker, TempDisplayControl, ThemeControl, UnitsControl } from './AppearanceSettings'
 import { SectionColumns } from './SettingsLayout'
 import { resolveSection, SECTIONS, type SectionId } from './sections'
 
@@ -239,6 +239,9 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
         </SettingRow>
         <SettingRow label="Theme">
           <ThemeControl />
+        </SettingRow>
+        <SettingRow label="Time format">
+          <TimeFormatControl />
         </SettingRow>
         {settings.data && (
           <SettingRow label="Units">

@@ -1,3 +1,7 @@
+'use client'
+
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
 /**
  * Diagnostics / status panel — live Autopilot state and the audit trail. Global
  * kill-switch, then one card per rule: mode (Off / Dry-run / Live), the rule in
@@ -5,7 +9,6 @@
  * last-3-hours strip with one tick per minute, and today's run log with
  * repeats collapsed — the transparency Eight Sleep's black box lacks.
  */
-'use client'
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -60,8 +63,8 @@ function ago(ms: number | null, now: number): string {
   return `${Math.floor(h / 24)} d ago`
 }
 
-function clock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+function clock(ms: number, timeFormat: TimeFormat = '12h'): string {
+  return formatClock(new Date(ms), timeFormat, { hour: 'numeric', minute: '2-digit' })
 }
 
 function hhmm(ms: number): string {
@@ -120,6 +123,7 @@ const TICK_LABEL: Record<TickKind, string> = {
 }
 
 function EvaluationStrip({ strip, nowMs, cooldownMin }: { strip: Strip, nowMs: number, cooldownMin: number | null }) {
+  const timeFormat = useTimeFormat()
   const span = strip.endMs - strip.startMs
   const pct = (ms: number) => `${((ms - strip.startMs) / span) * 100}%`
   const n = strip.ticks.length
@@ -151,7 +155,7 @@ function EvaluationStrip({ strip, nowMs, cooldownMin }: { strip: Strip, nowMs: n
           >
             {marker.kind === 'fired' ? 'fired' : 'would fire'}
             {' · '}
-            {clock(strip.startMs + marker.i * 60_000)}
+            {clock(strip.startMs + marker.i * 60_000, timeFormat)}
           </span>
         )}
         <span className="absolute right-0 bottom-0 text-fg-2">now</span>
@@ -190,7 +194,7 @@ function EvaluationStrip({ strip, nowMs, cooldownMin }: { strip: Strip, nowMs: n
         {hoverIdx !== null && (
           <HoverMark
             pct={((hoverIdx + 0.5) / n) * 100}
-            label={`${clock(strip.startMs + hoverIdx * 60_000)} · ${TICK_LABEL[strip.ticks[hoverIdx]]}`}
+            label={`${clock(strip.startMs + hoverIdx * 60_000, timeFormat)} · ${TICK_LABEL[strip.ticks[hoverIdx]]}`}
             className="-top-1 -bottom-1"
           />
         )}
@@ -198,7 +202,7 @@ function EvaluationStrip({ strip, nowMs, cooldownMin }: { strip: Strip, nowMs: n
       <div className="relative h-4 font-mono text-[11px] text-fg-3">
         {hours.map(t => (
           <span key={t} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: pct(t) }}>
-            {new Date(t).toLocaleTimeString([], { hour: 'numeric' })}
+            {formatClock(new Date(t), timeFormat, { hour: 'numeric' })}
           </span>
         ))}
       </div>
@@ -334,6 +338,7 @@ function RuleDiagCard({ r, nowMs, startOfDayMs, globalEnabled, onMode }: {
   globalEnabled: boolean
   onMode: (id: number, mode: RuleMode) => void
 }) {
+  const timeFormat = useTimeFormat()
   const lang = usePathname()?.split('/')[1] || 'en'
   const mode = ruleMode(r)
   const expectMissing = r.enabled && globalEnabled
@@ -357,7 +362,7 @@ function RuleDiagCard({ r, nowMs, startOfDayMs, globalEnabled, onMode }: {
     }
   }, [r.runs, r.trigger, nowMs, startOfDayMs, expectMissing])
 
-  const sentence = useMemo(() => buildSentence(fromAST(r)), [r])
+  const sentence = useMemo(() => buildSentence(fromAST(r), timeFormat), [r, timeFormat])
   const verdict = lastVerdict(derived.last)
   const lastMs = derived.last ? toMs(derived.last.t) : null
 
@@ -394,7 +399,7 @@ function RuleDiagCard({ r, nowMs, startOfDayMs, globalEnabled, onMode }: {
         <Stat
           label="Last evaluated"
           value={ago(lastMs, nowMs)}
-          sub={`${lastMs != null ? `${clock(lastMs)} · ` : ''}${cadenceText(r.trigger)}`}
+          sub={`${lastMs != null ? `${clock(lastMs, timeFormat)} · ` : ''}${cadenceText(r.trigger)}`}
           tone={lastMs == null ? 'muted' : undefined}
         />
         <Stat
@@ -406,7 +411,7 @@ function RuleDiagCard({ r, nowMs, startOfDayMs, globalEnabled, onMode }: {
         <Stat
           label="Would have fired today"
           value={String(derived.wouldCount)}
-          sub={derived.lastWould ? `${clock(toMs(derived.lastWould.t))} · dry-run` : 'dry-run'}
+          sub={derived.lastWould ? `${clock(toMs(derived.lastWould.t), timeFormat)} · dry-run` : 'dry-run'}
           tone={derived.wouldCount ? 'warn' : undefined}
         />
         <Stat

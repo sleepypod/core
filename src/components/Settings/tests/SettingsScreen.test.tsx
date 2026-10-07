@@ -37,6 +37,7 @@ vi.mock('../AppearanceSettings', () => ({
       {temperatureUnit}
     </div>
   ),
+  TimeFormatControl: () => <div>Time format control</div>,
   TempControlPicker: () => <div>Control picker</div>, TempDisplayControl: () => null, ThemeControl: () => null, UnitsControl: () => null,
 }))
 beforeEach(() => {

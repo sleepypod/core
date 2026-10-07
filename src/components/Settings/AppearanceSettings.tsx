@@ -58,6 +58,18 @@ export function ThemeControl() {
   )
 }
 
+export function TimeFormatControl() {
+  const { timeFormat, setTimeFormat } = usePrefs()
+  return (
+    <SegmentedControl
+      ariaLabel="Time format"
+      value={timeFormat}
+      options={[{ value: '12h', label: '12-hour' }, { value: '24h', label: '24-hour' }]}
+      onChange={setTimeFormat}
+    />
+  )
+}
+
 /** Tiny dial / slider glyphs for the phone option cards. */
 function MiniDial() {
   return (
@@ -205,6 +217,9 @@ export function AppearanceSettings({ temperatureUnit }: { temperatureUnit: strin
         <CardHeader title="Display" />
         <SettingRow label="Theme">
           <ThemeControl />
+        </SettingRow>
+        <SettingRow label="Time format" sub="Saved for this browser">
+          <TimeFormatControl />
         </SettingRow>
         <SettingRow label="Units">
           <UnitsControl unit={temperatureUnit} />

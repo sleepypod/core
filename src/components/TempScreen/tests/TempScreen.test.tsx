@@ -5,6 +5,7 @@
  * Context cards and the phone switcher are stubbed — they have their own data.
  */
 
+import type * as PrefsModule from '@/src/providers/PrefsProvider'
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -41,7 +42,10 @@ vi.mock('@/src/hooks/useDeviceStatus', () => ({
 vi.mock('@/src/providers/SideProvider', () => ({
   useSide: () => ({ ...m.side, toggleLink: m.toggleLink, selectedSide: m.side.isLinked ? 'both' : m.side.primarySide }),
 }))
-vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: m.control, tempDisplay: m.display }) }))
+vi.mock('@/src/providers/PrefsProvider', async importOriginal => ({
+  ...await importOriginal<typeof PrefsModule>(),
+  usePrefs: () => ({ control: m.control, tempDisplay: m.display }),
+}))
 vi.mock('@/src/hooks/useSideNames', () => ({
   useSideNames: () => ({ sideName: (s: string) => (s === 'left' ? 'Jon' : 'Heidi') }),
 }))

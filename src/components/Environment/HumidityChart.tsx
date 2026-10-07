@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/PrefsProvider'
+
 import { useMemo } from 'react'
 import {
   ResponsiveContainer,
@@ -21,13 +24,14 @@ interface HumidityChartProps {
   data: HumidityDataPoint[]
 }
 
-function formatTime(timestamp: string | Date): string {
+function formatTime(timestamp: string | Date, timeFormat: TimeFormat = '12h'): string {
   const d = new Date(timestamp)
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return formatClock(d, timeFormat, { hour: 'numeric', minute: '2-digit' })
 }
 
 /** Humidity card body: current value, flat area chart, min/avg/max footer. */
 export function HumidityChart({ data }: HumidityChartProps) {
+  const timeFormat = useTimeFormat()
   const chartData = useMemo(() => {
     const sorted = [...data].reverse()
     const mapped = sorted.map(d => ({
@@ -76,7 +80,7 @@ export function HumidityChart({ data }: HumidityChartProps) {
                   <Tooltip
                     contentStyle={TOOLTIP_STYLE}
                     labelStyle={TOOLTIP_LABEL_STYLE}
-                    labelFormatter={v => formatTime(new Date(v as number))}
+                    labelFormatter={v => formatTime(new Date(v as number), timeFormat)}
                     formatter={value => [`${Number(value).toFixed(1)}%`, 'Humidity']}
                   />
                   <Area

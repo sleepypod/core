@@ -2,6 +2,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from 'react'
 
+import type { TimeFormat } from '@/src/lib/timeFormat'
+
 export type ControlVariant = 'dial' | 'slider' | 'stepper'
 export type ThemePref = 'auto' | 'dark' | 'light'
 /**
@@ -11,6 +13,9 @@ export type ThemePref = 'auto' | 'dark' | 'light'
 export type TempDisplay = 'degrees' | 'offset' | 'level'
 
 interface PrefsContextValue {
+  /** Clock display, saved in this browser. */
+  timeFormat: TimeFormat
+  setTimeFormat: (v: TimeFormat) => void
   /** Temperature control variant on the Temp screen. Stored per device. */
   control: ControlVariant
   setControl: (v: ControlVariant) => void
@@ -28,6 +33,7 @@ export const PREFS_STORAGE_KEYS = {
   control: 'sleepypod-pref-control',
   tempDisplay: 'sleepypod-pref-temp-display',
   theme: 'sleepypod-pref-theme',
+  timeFormat: 'sleepypod-pref-time-format',
 } as const
 
 const PrefsContext = createContext<PrefsContextValue | null>(null)
@@ -97,7 +103,14 @@ function store(key: string, value: string) {
   window.dispatchEvent(new Event(PREFS_EVENT))
 }
 
+/** Also usable in standalone charts without requiring the whole settings context. */
+export function useTimeFormat(): TimeFormat {
+  return useStoredPref<TimeFormat>(PREFS_STORAGE_KEYS.timeFormat, ['12h', '24h'], '12h')
+}
+
 export function PrefsProvider({ children }: { children: React.ReactNode }) {
+  const timeFormat = useTimeFormat()
+  const setTimeFormat = useCallback((v: TimeFormat) => store(PREFS_STORAGE_KEYS.timeFormat, v), [])
   const control = useStoredPref<ControlVariant>(PREFS_STORAGE_KEYS.control, ['dial', 'slider', 'stepper'], 'dial')
   const tempDisplay = useStoredPref<TempDisplay>(PREFS_STORAGE_KEYS.tempDisplay, ['degrees', 'offset', 'level'], 'degrees')
   const theme = useStoredPref<ThemePref>(PREFS_STORAGE_KEYS.theme, ['auto', 'dark', 'light'], 'auto')
@@ -114,8 +127,8 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   const setTheme = useCallback((v: ThemePref) => store(PREFS_STORAGE_KEYS.theme, v), [])
 
   const value = useMemo(
-    () => ({ control, setControl, tempDisplay, setTempDisplay, theme, setTheme, resolvedTheme }),
-    [control, setControl, tempDisplay, setTempDisplay, theme, setTheme, resolvedTheme],
+    () => ({ timeFormat, setTimeFormat, control, setControl, tempDisplay, setTempDisplay, theme, setTheme, resolvedTheme }),
+    [timeFormat, setTimeFormat, control, setControl, tempDisplay, setTempDisplay, theme, setTheme, resolvedTheme],
   )
 
   return <PrefsContext.Provider value={value}>{children}</PrefsContext.Provider>

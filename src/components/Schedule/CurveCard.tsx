@@ -1,12 +1,15 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+import { formatTime, type TimeFormat } from '@/src/lib/timeFormat'
+
 import { Fragment, type MouseEvent } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge, Card, GhostIcon, StatusDot } from '@/src/components/ds'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import { sortChronological } from '@/src/lib/scheduleGrouping'
-import { formatTime12h } from '@/src/lib/scheduleTime'
+
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 import { buildTimeline, CurveChart, CurveLegend, dropHolds, MiniCurve, type BedSample } from './CurveChart'
@@ -37,10 +40,10 @@ export function formatTempRange(setPoints: Array<{ temperature: number }>, unit:
 }
 
 /** "11:15 PM → 7:00 AM" from the chronologically first and last set points. */
-export function formatWindow(setPoints: Array<{ time: string, temperature: number }>): string | null {
+export function formatWindow(setPoints: Array<{ time: string, temperature: number }>, timeFormat: TimeFormat = '12h'): string | null {
   if (setPoints.length < 2) return null
   const sorted = sortChronological(setPoints)
-  return `${formatTime12h(sorted[0].time)} → ${formatTime12h(sorted[sorted.length - 1].time)}`
+  return `${formatTime(sorted[0].time, timeFormat)} → ${formatTime(sorted[sorted.length - 1].time, timeFormat)}`
 }
 
 export interface CurvePhase {
@@ -100,6 +103,7 @@ export function curvePhases(setPoints: Array<{ time: string, temperature: number
 
 /** The night's phases as columns: time, temperature (or ramp), caption. */
 export function PhaseStrip({ setPoints, className }: { setPoints: Array<{ time: string, temperature: number }>, className?: string }) {
+  const { formatTime } = useTimeFormatter()
   const { unit } = useTemperatureUnit()
   const phases = curvePhases(setPoints)
   return (
@@ -109,7 +113,7 @@ export function PhaseStrip({ setPoints, className }: { setPoints: Array<{ time: 
     >
       {phases.map(ph => (
         <div key={`${ph.time}-${ph.caption}`} className="flex min-w-0 flex-col gap-0.5">
-          <span className="font-mono text-[11px] text-fg-2">{formatTime12h(ph.time)}</span>
+          <span className="font-mono text-[11px] text-fg-2">{formatTime(ph.time)}</span>
           <span className="whitespace-nowrap font-mono text-lg">
             {ph.to === undefined
               ? <span>Off</span>
@@ -140,11 +144,12 @@ function stop(fn: () => void) {
 }
 
 export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null, featured = false, bed }: CurveCardProps) {
+  const { timeFormat } = useTimeFormatter()
   const { unit } = useTemperatureUnit()
   const hasSetPoints = group.setPoints.length > 0
   const paused = !!group.allDisabled
   const label = formatDayRange(group.days)
-  const sleepWindow = formatWindow(group.setPoints)
+  const sleepWindow = formatWindow(group.setPoints, timeFormat)
   const active = isActive && hasSetPoints && !paused
 
   const actions = (
