@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BedTempFrame, BedTemp2Frame } from '@/src/hooks/useSensorStream'
-import { latestThermalReading, THERMAL_RAMP, thermalColor, thermalState } from '../thermalData'
+import { latestThermalReading, THERMAL_RAMP, thermalColor, thermalLegend, thermalState } from '../thermalData'
 
 const frame: BedTempFrame = {
   type: 'bedTemp', ts: 100, ambientTemp: 23, mcuTemp: null, humidity: null,
@@ -20,6 +20,15 @@ describe('thermal surface data', () => {
     expect(latestThermalReading(frame)).toMatchObject({ left: [20, 22, 24], right: [30, 28, 26] })
     expect(latestThermalReading({ ...frame, leftOuterTemp: NaN, leftCenterTemp: null, leftInnerTemp: Infinity })?.left).toEqual([null, null, null])
     expect(latestThermalReading()).toBeNull()
+  })
+  it('skips a reading without a usable timestamp', () => {
+    const stored = { leftOuterTemp: 20, leftCenterTemp: 22, leftInnerTemp: 24, rightOuterTemp: 30, rightCenterTemp: 28, rightInnerTemp: 26, timestamp: new Date(Number.NaN) }
+    expect(latestThermalReading(undefined, undefined, stored)).toBeNull()
+    expect(latestThermalReading({ ...frame, ts: Number.NaN }, undefined, stored)).toBeNull()
+  })
+  it('draws the legend from the dark ramp by default', () => {
+    expect(thermalLegend()).toBe(`linear-gradient(to right, ${THERMAL_RAMP.dark.join(', ')})`)
+    expect(thermalLegend('light')).toContain(THERMAL_RAMP.light[0])
   })
   it('uses the controller current and target to indicate requested direction', () => {
     expect(thermalState([30, 31, 32], control, false)).toMatchObject({ direction: -1, strength: 1, mode: 'cooling', targetF: 70, currentF: 80 })
