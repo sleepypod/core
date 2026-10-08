@@ -77,6 +77,8 @@ vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
 vi.mock('../AlarmBanner', () => ({ AlarmBanner: () => null }))
 vi.mock('@/src/components/Autopilot/AutopilotStatusChip', () => ({ AutopilotStatusChip: () => null }))
+vi.mock('../../ThermalBed/ThermalBedCard', () => ({ default: () => <div data-testid="thermal-bed" /> }))
+vi.mock('../../Stage/TempStage', () => ({ TempStage: ({ onExit }: { onExit: () => void }) => <button type="button" onClick={onExit}>Exit stage</button> }))
 
 import { TempScreen } from '../TempScreen'
 
@@ -369,3 +371,37 @@ it('exposes solo setup without linking temperature controls', () => {
   expect(screen.getByRole('button', { name: 'Link sides' })).toBeTruthy()
   expect(card(screen, 'Heidi (right)').getAllByText(/Independent schedule/).length).toBeGreaterThan(0)
 })
+
+describe('sleeper line and view switches', () => {
+  it.each([
+    [{ device: { bedMode: 'solo-right' }, sides: { left: { awayMode: true }, right: { awayMode: true } } }, 'Solo sleeper · Heidi · Away'],
+    [{ device: {}, sides: { left: { awayMode: false }, right: { awayMode: false } } }, 'Two sleepers'],
+    [{ device: {}, sides: { left: { awayMode: true }, right: { awayMode: true } } }, 'Jon & Heidi away'],
+  ])('summarises the sleepers (%#)', (settings, label) => {
+    m.settings = settings
+    const screen = render(<TempScreen />)
+    expect(screen.getByRole('link', { name: `Manage sleepers: ${label}` })).toBeTruthy()
+  })
+
+  it('names the return date when exactly one away side has one', () => {
+    m.settings = { device: { timezone: 'UTC' }, sides: { left: { awayMode: false }, right: { awayMode: true, awayReturn: '2026-10-12T12:00:00Z' } } }
+    const screen = render(<TempScreen />)
+    expect(screen.getByRole('link', { name: /^Manage sleepers: Heidi away · Until \S/ })).toBeTruthy()
+  })
+
+  it('hides and restores the thermal view, and opens and leaves the stage', async () => {
+    vi.useRealTimers()
+    const screen = render(<TempScreen />)
+    const thermal = screen.getByRole('button', { name: 'Thermal view' })
+    expect(thermal.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(thermal)
+    expect(screen.getByRole('button', { name: 'Thermal view' }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByTestId('thermal-bed')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Thermal view' }))
+    expect(screen.getByRole('button', { name: 'Thermal view' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Stage' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Exit stage' }))
+    expect(screen.getByRole('button', { name: 'Stage' }).getAttribute('aria-pressed')).toBe('false')
+  })
+})
+
