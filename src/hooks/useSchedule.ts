@@ -433,7 +433,7 @@ export function useSchedule() {
    */
   const getCurveForDay = useCallback(
     (day: DayOfWeek): { days: DayOfWeek[], setPoints: Array<{ time: string, temperature: number }> } => {
-      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[], power?: PowerSchedule[] } | undefined
+      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[], power: PowerSchedule[] } | undefined
       if (!allData) return { days: [day], setPoints: [] }
 
       const fingerprint = (rows: TemperatureSchedule[]) =>
@@ -448,7 +448,7 @@ export function useSchedule() {
       const allDays: DayOfWeek[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
       const matchingDays = allDays.filter((d) => {
         const rows = allData.temperature.filter(t => t.dayOfWeek === d)
-        const action = (d: DayOfWeek) => (allData.power ?? []).filter(p => p.dayOfWeek === d).map(p => p.endAction ?? 'turn_off').sort().join('|')
+        const action = (d: DayOfWeek) => allData.power.filter(p => p.dayOfWeek === d).map(p => p.endAction ?? 'turn_off').sort().join('|')
         return fingerprint(rows) === targetFp && action(d) === action(day)
       })
 
