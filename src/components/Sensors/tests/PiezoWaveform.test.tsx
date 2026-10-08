@@ -231,4 +231,78 @@ describe('PiezoWaveform', () => {
     expect(ctx.bezierCurveTo.mock.calls.some(call => call[5] === 0)).toBe(true)
     expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(30)
   })
+
+  it('draws a replay window statically and reads out the replayed sample under the pointer', () => {
+    stream.waveform = [frame(100)]
+    stream.replayWaveform = [frame(75, 100)]
+    const { container } = render(<PiezoWaveform />)
+    const box = container.querySelector('canvas')?.parentElement as HTMLElement
+    const rect = vi.spyOn(box, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 400, height: 200, right: 400, bottom: 200, toJSON: () => ({}) })
+    draw(0)
+    expect(ctx.bezierCurveTo).toHaveBeenCalled()
+    // The right edge is the last replayed sample, 0 s before the end of the window.
+    fireEvent.pointerMove(box, { clientX: 400, clientY: 10 })
+    expect(screen.getByTestId('chart-hover').textContent).toBe('-0.00s · L 9 · R -9')
+    fireEvent.click(screen.getByRole('button', { name: 'Left' }))
+    fireEvent.pointerMove(box, { clientX: 0, clientY: 10 })
+    expect(screen.getByTestId('chart-hover').textContent).toBe('-0.20s · R 0')
+    // A collapsed box has no readout.
+    rect.mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0, toJSON: () => ({}) })
+    fireEvent.pointerMove(box, { clientX: 0, clientY: 10 })
+    expect(screen.queryByTestId('chart-hover')).toBeNull()
+  })
+
+  it('does not start a render loop without a 2D context', () => {
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(null)
+    stream.waveform = [frame(100)]
+    render(<PiezoWaveform />)
+    expect(requestAnimationFrame).not.toHaveBeenCalled()
+  })
+
+  it('treats frames with no samples as no data and a missing rate as 500 Hz', () => {
+    stream.waveform = [{ ...frame(100, 0), freq: 0 }]
+    const { rerender } = render(<PiezoWaveform />)
+    draw()
+    expect(ctx.fillText).toHaveBeenCalledWith('Waiting for piezo data', expect.any(Number), expect.any(Number))
+    vi.stubGlobal('devicePixelRatio', 0)
+    stream.waveform = [{ ...frame(99), freq: 0 }, { ...frame(100), freq: 0 }]
+    rerender(<PiezoWaveform />)
+    ctx.fillText.mockClear()
+    draw(16)
+    expect(ctx.fillText).not.toHaveBeenCalled()
+    expect(ctx.bezierCurveTo).toHaveBeenCalled()
+  })
+
+  it('draws a flat signal mid-canvas and skips drawing when no sample is finite', () => {
+    const flat = (ts: number) => ({ ...frame(ts), left1: Array<number>(500).fill(3), right1: Array<number>(500).fill(3) })
+    stream.waveform = [flat(99), flat(100)]
+    const { rerender } = render(<PiezoWaveform />)
+    draw(0)
+    const ys = new Set(ctx.bezierCurveTo.mock.calls.map(call => call[5]))
+    expect(ys).toEqual(new Set([48]))
+    const nan = (ts: number) => ({ ...frame(ts), left1: Array<number>(500).fill(Number.NaN), right1: Array<number>(500).fill(Number.NaN) })
+    stream.waveform = [nan(101), nan(102)]
+    rerender(<PiezoWaveform />)
+    ctx.bezierCurveTo.mockClear()
+    ctx.lineTo.mockClear()
+    draw(16)
+    expect(ctx.bezierCurveTo).not.toHaveBeenCalled()
+    expect(requestAnimationFrame).toHaveBeenCalled()
+  })
+
+  it('grows the scale quickly toward a louder signal and draws when the cursor ends a pass', () => {
+    // Sample numbers chosen so the cursor sits in the last bucket of a pass: the
+    // previous sweep is entirely inside the gap and is not drawn.
+    stream.waveform = [frame(95.46), frame(96.46)]
+    const { rerender } = render(<PiezoWaveform />)
+    draw(0)
+    expect(ctx.bezierCurveTo).toHaveBeenCalled()
+    const loud = (ts: number) => ({ ...frame(ts), left1: Array.from({ length: 500 }, (_, i) => (i % 10) * 100) })
+    stream.waveform = [frame(95.46), frame(96.46), loud(97.46)]
+    rerender(<PiezoWaveform />)
+    draw(50)
+    draw(100)
+    expect(ctx.bezierCurveTo).toHaveBeenCalled()
+  })
 })
+
