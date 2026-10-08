@@ -207,8 +207,32 @@ describe('TempScreen', () => {
   it('shows in-bed only when sensed, and away instead of presence', () => {
     const screen = render(<TempScreen />)
     expect(card(screen, 'Jon (left)').getAllByText('Left · In bed').length).toBeGreaterThan(0)
-    expect(card(screen, 'Heidi (right)').getAllByText('Right · Away · Schedule off').length).toBeGreaterThan(0)
+    expect(card(screen, 'Heidi (right)').getAllByText('Right · Schedule off').length).toBeGreaterThan(0)
+    expect(card(screen, 'Heidi (right)').getByTestId('side-away').textContent).toBe('AWAY')
+    expect(card(screen, 'Jon (left)').queryByTestId('side-away')).toBeNull()
     expect(screen.queryByText(/Out of bed/)).toBeNull()
+  })
+
+  it('draws an away side as a dashed, see-through card that keeps its controls while on', () => {
+    const screen = render(<TempScreen />)
+    const right = screen.getByRole('group', { name: 'Heidi (right)' })
+    expect(right.className).toContain('border-dashed')
+    expect(right.className).toContain('border-line-2')
+    expect(right.className).toContain('bg-transparent')
+    expect(within(right).getByText('Heidi').className).toContain('text-fg-2')
+    expect(within(right).getByRole('slider')).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Jon (left)' }).className).not.toContain('border-dashed')
+  })
+
+  it('an away side that is off reads Off with a Turn on button', () => {
+    m.status = { ...(m.status as object), rightSide: sideStatus(82, 0) }
+    const screen = render(<TempScreen />)
+    const right = card(screen, 'Heidi (right)')
+    expect(right.getByTestId('side-away-off').textContent).toContain('Off')
+    expect(right.queryByRole('slider')).toBeNull()
+    expect(right.getAllByRole('button', { name: 'Turn on' })).toHaveLength(1)
+    fireEvent.click(right.getByRole('button', { name: 'Turn on' }))
+    expect(m.setPower).toHaveBeenCalledWith({ side: 'right', powered: true }, expect.anything())
   })
 
   it('keeps both cards, linked, when one side is away', () => {
@@ -455,6 +479,8 @@ describe('TempScreen', () => {
 
     it('shows the heat state line, and dims and ignores the controls when off', () => {
       m.status = { ...(m.status as object), rightSide: sideStatus(82, 0) }
+      // Present but off (an away side that is off shows only Off and Turn on).
+      m.settings = { device: { temperatureUnit: 'F' }, sides: { left: { awayMode: false }, right: { awayMode: false } } }
       const screen = render(<TempScreen />)
       expect(card(screen, 'Jon (left)').getByTestId('stepper-status').textContent).toBe('Cooling · bed 80°F')
       const right = card(screen, 'Heidi (right)')
