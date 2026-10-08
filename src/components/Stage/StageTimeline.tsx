@@ -153,9 +153,14 @@ export function StageTimeline({ win, now, curves, activity, names, unit, display
                   <g key={side}>
                     <defs>
                       <linearGradient id={`${gradientId}-${side}`} x1={x0} y1="0" x2={x1} y2="0" gradientUnits="userSpaceOnUse">
-                        {pts.map((p, j) => (
-                          <stop key={j} offset={((coords[j].x - x0) / (x1 - x0 || 1)).toFixed(3)} stopColor={TONE_COLOR[tempTone(p.temperature)]} />
-                        ))}
+                        {/* Each step holds its tone until the next set point: a tone change gets two stops at the same offset. */}
+                        {pts.flatMap((p, j) => {
+                          const offset = ((coords[j].x - x0) / (x1 - x0 || 1)).toFixed(3)
+                          const tone = tempTone(p.temperature)
+                          const held = j > 0 ? tempTone(pts[j - 1].temperature) : tone
+                          const stop = <stop key={j} offset={offset} stopColor={TONE_COLOR[tone]} />
+                          return held === tone ? [stop] : [<stop key={`${j}-held`} offset={offset} stopColor={TONE_COLOR[held]} />, stop]
+                        })}
                       </linearGradient>
                     </defs>
                     <path d={`${path} L${x1},${LANE_H} L${x0},${LANE_H} Z`} fill={STAGE.text} fillOpacity="0.035" />

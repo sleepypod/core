@@ -60,4 +60,17 @@ describe('StageTimeline', () => {
     timeline()
     expect(screen.getByText('no schedule')).toBeTruthy()
   })
+
+  it('holds each step\'s tone until the next set point instead of blending into it', () => {
+    const rows = (points: [string, number][]) => points.map(([time, temperature]) => ({ dayOfWeek: 'monday', time, temperature, enabled: true }))
+    const curves = stageCurves({ left: rows([['22:00', 70], ['02:00', 90], ['06:00', 70]]), right: [] }, win)
+    const { container } = render(
+      <StageTimeline win={win} now={NOW.getTime()} curves={curves} names={names} unit="F" display="degrees" previewAt={null} onScrub={vi.fn()} />,
+    )
+    const stops = Array.from(container.querySelectorAll('stop')).map(el => [el.getAttribute('offset'), el.getAttribute('stop-color')])
+    expect(stops.map(([, color]) => color)).toEqual(['#6fa8dc', '#6fa8dc', '#e0945a', '#e0945a', '#6fa8dc'])
+    // Each tone change is a hard edge: the held tone and the new one share an offset.
+    expect(stops[1][0]).toBe(stops[2][0])
+    expect(stops[3][0]).toBe(stops[4][0])
+  })
 })
