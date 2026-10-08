@@ -18,6 +18,8 @@ vi.mock('../dacTransport', () => ({
   isDacConnected: () => isDacConnectedMock(),
 }))
 
+import { _resetPumpRunEvidence, hasConfirmedPumpRun } from '../sideMutations'
+
 import type * as SharedClientModule from '../sharedClient'
 type Module = typeof SharedClientModule
 
@@ -29,6 +31,7 @@ async function freshModule(): Promise<Module> {
 }
 
 beforeEach(() => {
+  _resetPumpRunEvidence()
   connectDacMock.mockClear()
   sendCommandMock.mockClear()
   isDacConnectedMock.mockReset()
@@ -156,5 +159,53 @@ describe('sharedClient command boundaries', () => {
     await expect(c.setPower('left', false)).rejects.toThrow('Failed to power off')
     expect(sendCommandMock).toHaveBeenCalledTimes(1)
     expect(sendCommandMock).toHaveBeenCalledWith('9', '0')
+  })
+})
+
+describe('sharedClient startup pump evidence', () => {
+  it('confirms only the side whose power-on completed, across module instances', async () => {
+    const { getSharedHardwareClient } = await freshModule()
+    await getSharedHardwareClient().setPower('right', true, 75)
+    expect(hasConfirmedPumpRun('right')).toBe(true)
+    expect(hasConfirmedPumpRun('left')).toBe(false)
+  })
+
+  it.each([0, 1])('does not confirm a rejected temperature command at step %s', async (step) => {
+    const { getSharedHardwareClient } = await freshModule()
+    if (step === 1) sendCommandMock.mockResolvedValueOnce('OK')
+    sendCommandMock.mockResolvedValueOnce('ERROR')
+    await expect(getSharedHardwareClient().setTemperature('left', 75)).rejects.toThrow()
+    expect(hasConfirmedPumpRun('left')).toBe(false)
+    expect(sendCommandMock).toHaveBeenCalledTimes(step + 1)
+  })
+
+  it('waits for the duration write to finish before confirming', async () => {
+    const { getSharedHardwareClient } = await freshModule()
+    let finish!: (response: string) => void
+    sendCommandMock.mockResolvedValueOnce('OK').mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+    const pending = getSharedHardwareClient().setTemperature('left', 75)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(hasConfirmedPumpRun('left')).toBe(false)
+    finish('OK')
+    await pending
+    expect(hasConfirmedPumpRun('left')).toBe(true)
+  })
+
+  it.each([[82.5, 3600], [75, 0]])('does not arm for neutral/expired settings (%s F, %s seconds)', async (temperature, duration) => {
+    const { getSharedHardwareClient } = await freshModule()
+    await getSharedHardwareClient().setTemperature('left', temperature, duration)
+    expect(hasConfirmedPumpRun('left')).toBe(false)
+  })
+
+  it('does not arm on power-off or alarm writes', async () => {
+    const { getSharedHardwareClient } = await freshModule()
+    const client = getSharedHardwareClient()
+    await client.setPower('left', false)
+    await client.setAlarm('right', { vibrationIntensity: 50, vibrationPattern: 'rise', duration: 30 })
+    expect(hasConfirmedPumpRun('left')).toBe(false)
+    expect(hasConfirmedPumpRun('right')).toBe(false)
   })
 })

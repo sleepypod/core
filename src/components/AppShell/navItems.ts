@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
-import { Calendar, Moon, Radio, Settings, Sparkles, Thermometer } from 'lucide-react'
+import { BedDouble, Calendar, Moon, Radio, Settings, Sparkles, Thermometer } from 'lucide-react'
 
-export type NavId = 'temp' | 'autopilot' | 'schedule' | 'sleep' | 'system' | 'settings'
+export type NavId = 'temp' | 'base' | 'autopilot' | 'schedule' | 'sleep' | 'system' | 'settings'
 
 export interface NavItem {
   id: NavId
@@ -15,9 +15,10 @@ export interface NavItem {
 /** User documentation (setup, features, troubleshooting). */
 export const DOCS_URL = 'https://sleepypod.github.io/'
 
-/** Six tabs, the same on every device. */
+/** Base is included only when local setup exists (or in the hosted demo). */
 export const NAV_ITEMS: NavItem[] = [
   { id: 'temp', label: 'Temp', icon: Thermometer, href: '/' },
+  { id: 'base', label: 'Base', icon: BedDouble, href: '/base' },
   { id: 'autopilot', label: 'Autopilot', icon: Sparkles, href: '/autopilot' },
   { id: 'schedule', label: 'Schedule', icon: Calendar, href: '/schedule' },
   { id: 'sleep', label: 'Sleep', icon: Moon, href: '/sleep', aliases: ['/data'] },

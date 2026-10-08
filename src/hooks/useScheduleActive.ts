@@ -1,8 +1,10 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from './useSide'
-import { DAYS_OF_WEEK, formatTime12h, hhmmToMinutes } from '@/src/lib/scheduleTime'
+import { DAYS_OF_WEEK, hhmmToMinutes } from '@/src/lib/scheduleTime'
 
 interface TempSchedule { enabled: boolean, dayOfWeek: string, time: string, temperature: number }
 
@@ -17,6 +19,7 @@ export interface NextScheduleEvent {
  * days so the hint stays accurate after today's last set point.
  */
 export function useScheduleActive() {
+  const { formatTime } = useTimeFormatter()
   const { side } = useSide()
   const { data } = trpc.schedules.getAll.useQuery({ side })
 
@@ -43,8 +46,8 @@ export function useScheduleActive() {
       const next = dayPoints[0]
       return {
         isActive: true,
-        nextEvent: { time: formatTime12h(next.time), temperature: next.temperature },
-        nextTime: formatTime12h(next.time),
+        nextEvent: { time: formatTime(next.time), temperature: next.temperature },
+        nextTime: formatTime(next.time),
       }
     }
   }

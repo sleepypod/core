@@ -13,6 +13,7 @@
  */
 
 import { connectDac, isDacConnected, sendCommand } from './dacTransport'
+import { confirmPumpRun } from './sideMutations'
 import { encodeAlarmPayload } from './alarmPayload'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import type { HardwareClient } from './client'
@@ -69,13 +70,17 @@ class DacHardwareClient {
       ? HardwareCommand.TEMP_LEVEL_LEFT
       : HardwareCommand.TEMP_LEVEL_RIGHT
 
-    await sendCommand(levelCommand, level.toString())
+    const levelResponse = parseSimpleResponse(await sendCommand(levelCommand, level.toString()))
+    if (!levelResponse.success) throw new HardwareError(`Failed to set temperature: ${levelResponse.message}`)
 
     const durationCommand = side === 'left'
       ? HardwareCommand.LEFT_TEMP_DURATION
       : HardwareCommand.RIGHT_TEMP_DURATION
 
-    await sendCommand(durationCommand, (duration ?? DEFAULT_HEATING_DURATION).toString())
+    const seconds = duration ?? DEFAULT_HEATING_DURATION
+    const durationResponse = parseSimpleResponse(await sendCommand(durationCommand, seconds.toString()))
+    if (!durationResponse.success) throw new HardwareError(`Failed to set duration: ${durationResponse.message}`)
+    if (level !== 0 && seconds > 0) confirmPumpRun(side)
   }
 
   async setAlarm(side: Side, config: AlarmConfig): Promise<void> {

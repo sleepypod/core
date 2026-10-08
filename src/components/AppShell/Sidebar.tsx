@@ -12,6 +12,7 @@ import { AUTOPILOT_VIEWS, resolveAutopilotView } from '@/src/components/Autopilo
 import { resolveSleepSection, SLEEP_SECTIONS } from '@/src/components/Sleep/sleepViews'
 import { trpc } from '@/src/utils/trpc'
 import { buildLine } from './footerStatus'
+import { useBaseAvailable } from './useBaseAvailable'
 import { usePodHealth } from './usePodHealth'
 import { activeNavId, DOCS_URL, langFromPath, NAV_ITEMS, type NavId } from './navItems'
 
@@ -21,6 +22,8 @@ const POD_NAMES: Record<string, string> = { H00: 'Pod 3', I00: 'Pod 4', J00: 'Po
 
 /** Desktop navigation rail (≥ 900px). */
 export function Sidebar({ className }: { className?: string }) {
+  const hasBase = useBaseAvailable()
+  const items = NAV_ITEMS.filter(item => item.id !== 'base' || hasBase)
   const pathname = usePathname()
   const lang = langFromPath(pathname)
   const active = activeNavId(pathname)
@@ -47,7 +50,7 @@ export function Sidebar({ className }: { className?: string }) {
         <BuildTag version={version.data?.version ?? null} host={host} branch={build?.branch ?? null} commit={build?.commit ?? null} />
       </div>
       <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-        {NAV_ITEMS.map((n) => {
+        {items.map((n) => {
           const on = n.id === active
           const group = n.id === 'autopilot' || n.id === 'sleep' || n.id === 'settings' || n.id === 'system'
           const Chevron = on ? ChevronDown : ChevronRight

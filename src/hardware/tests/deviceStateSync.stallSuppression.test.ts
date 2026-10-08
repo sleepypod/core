@@ -29,6 +29,7 @@ vi.mock('../pumpStallGuard', () => ({
 import * as dbModule from '@/src/db'
 import { onFrame } from '../pumpStallGuard'
 import { DeviceStateSync, markSideMutated, _resetMutationStamps } from '../deviceStateSync'
+import { confirmPumpRun, _resetPumpRunEvidence } from '../sideMutations'
 import { DEFAULT_HEATING_DURATION } from '../types'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
@@ -173,10 +174,15 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
   beforeEach(() => {
     resetSchema()
     _resetMutationStamps()
+    _resetPumpRunEvidence()
     vi.mocked(onFrame).mockClear()
     sync = new DeviceStateSync()
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-11T08:00:00Z'))
+    // This suite covers already-established sessions; startup is tested with
+    // the real guard in pumpStallGuard.test.ts.
+    confirmPumpRun('left')
+    confirmPumpRun('right')
     // DB says both sides are commanded active — the pre-fix code would
     // derive expectedActive=true from this alone.
     seedSide('left', true, 75)
@@ -298,7 +304,7 @@ describe('DeviceStateSync — stall guard expected-stop suppression', () => {
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
 
-  it('falls back to device_state when the frame omits duty', async () => {
+  it('uses device_state after live run confirmation when the frame omits duty', async () => {
     sync.recordFlowData(frame({ rpm: 0 }))
     expect((await lastGuardInput('left'))?.expectedActive).toBe(true)
   })
@@ -797,6 +803,7 @@ describe('DeviceStateSync — stall guard coalescing', () => {
   beforeEach(() => {
     resetSchema()
     _resetMutationStamps()
+    _resetPumpRunEvidence()
     vi.mocked(onFrame).mockClear()
     vi.mocked(onFrame).mockResolvedValue(undefined)
     sync = new DeviceStateSync()
@@ -837,6 +844,27 @@ describe('DeviceStateSync — stall guard coalescing', () => {
     await flush()
     expect(leftInputs()).toHaveLength(2)
     expect(leftInputs()[1]?.rpm).toBe(200)
+  })
+
+  it('does not arm a queued unknown frame when evidence arrives before it drains', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    let release!: () => void
+    vi.mocked(onFrame).mockImplementationOnce(() => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+    sync.recordFlowData(frame({ rpm: 0 })) // queued before the command
+    vi.setSystemTime(1_000) // NTP correction cannot reorder receipt evidence
+    confirmPumpRun('left')
+    release()
+    await flush()
+    expect(leftInputs().map(input => input.expectedActive)).toEqual([false, false])
+    sync.recordFlowData(frame({ rpm: 0 }))
+    await flush()
+    expect(leftInputs().at(-1)?.expectedActive).toBe(true)
+    vi.useRealTimers()
   })
 
   it('stamps guard inputs with frame arrival time, not queue-drain time', async () => {
@@ -880,6 +908,7 @@ describe('DeviceStateSync — bilateral-zero de-glitch', () => {
   beforeEach(() => {
     resetSchema()
     _resetMutationStamps()
+    _resetPumpRunEvidence()
     vi.mocked(onFrame).mockClear()
     vi.mocked(onFrame).mockResolvedValue(undefined)
     sync = new DeviceStateSync()

@@ -5,6 +5,8 @@
  */
 'use client'
 
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { SegmentedControl } from '@/src/components/ds'
@@ -61,6 +63,7 @@ export function ActivityCard({ data, rules, fmt, onMore, loadingMore }: {
   onMore: () => void
   loadingMore: boolean
 }) {
+  const timeFormat = useTimeFormat()
   const [filter, setFilter] = useState<ActivityFilter>('all')
 
   const nights = (data?.nights ?? []).map((night, i, all) => {
@@ -69,10 +72,10 @@ export function ActivityCard({ data, rules, fmt, onMore, loadingMore }: {
       .filter(e => matchesFilter(e.outcome, filter))
       .map((e) => {
         const rule = rules.get(e.ruleId)
-        const reason = reasonText(e, rule, rule?.missing ?? [], fmt)
+        const reason = reasonText(e, rule, rule?.missing ?? [], fmt, timeFormat)
         return {
           key: `${e.ruleId}-${e.start}-${e.outcome}-${e.code}`,
-          time: entryTime(e.start, e.end, data?.now ?? 0, e.count),
+          time: entryTime(e.start, e.end, data?.now ?? 0, e.count, timeFormat),
           sortAt: e.end,
           outcome: e.outcome,
           who: e.ruleName,
@@ -84,11 +87,11 @@ export function ActivityCard({ data, rules, fmt, onMore, loadingMore }: {
         if (h.startedAt < night.start || h.startedAt >= nightEnd) continue
         rows.push({
           key: `hold-${h.side}-${h.startedAt}`,
-          time: clock(h.startedAt),
+          time: clock(h.startedAt, timeFormat),
           sortAt: h.startedAt,
           outcome: 'paused',
           who: h.side === 'left' ? 'Left side' : 'Right side',
-          reason: `dial set to ${fmt(h.temperature)} · autopilot paused until ${clock(h.expiresAt)}`,
+          reason: `dial set to ${fmt(h.temperature)} · autopilot paused until ${clock(h.expiresAt, timeFormat)}`,
         })
       }
     }

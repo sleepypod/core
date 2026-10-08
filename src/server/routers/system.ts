@@ -24,14 +24,19 @@ const execFileAsync = promisify(execFile)
  * missing tool (ENOENT — dev box, no systemd) to `null` and any other failure
  * to `false`, so the classifier can tell "not a pod" from "not that variant".
  */
-async function collectFirmwareSignals(): Promise<FirmwareSignals> {
+async function collectFirmwareSignals(): Promise<{ signals: FirmwareSignals, transient: boolean }> {
   const isEnoent = (err: unknown) => (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+  // A probe killed by its timeout says nothing about the firmware; the
+  // memoizing caller must not freeze that answer for the process lifetime.
+  let transient = false
   const exec = async (file: string, args: string[]): Promise<string | null | false> => {
     try {
       const { stdout } = await execFileAsync(file, args, { timeout: 3000 })
       return stdout
     }
     catch (err) {
+      const failure = err as { killed?: boolean, code?: string | number }
+      if (failure?.killed || (!isEnoent(err) && typeof failure?.code !== 'number')) transient = true
       return isEnoent(err) ? null : false
     }
   }
@@ -48,16 +53,50 @@ async function collectFirmwareSignals(): Promise<FirmwareSignals> {
   ])
 
   return {
-    natsUnitInstalled: tri(loadState, (s) => {
-      const v = s.trim()
-      return v === 'loaded' || v === 'masked'
-    }),
-    natsServerActive: tri(active, () => true),
-    jetstreamDirPresent: jetstream,
-    biometricsTmpfsMounted: tri(mounted, () => true),
-    frankShimRoutesTmpfs: tri(frankSh, s => s.includes('cd /persistent/biometrics')),
-    frankServiceRoutesTmpfs: tri(frankUnit, s => /^WorkingDirectory=\/persistent\/biometrics$/m.test(s)),
+    transient,
+    signals: {
+      natsUnitInstalled: tri(loadState, (s) => {
+        const v = s.trim()
+        return v === 'loaded' || v === 'masked'
+      }),
+      natsServerActive: tri(active, () => true),
+      jetstreamDirPresent: jetstream,
+      biometricsTmpfsMounted: tri(mounted, () => true),
+      frankShimRoutesTmpfs: tri(frankSh, s => s.includes('cd /persistent/biometrics')),
+      frankServiceRoutesTmpfs: tri(frankUnit, s => /^WorkingDirectory=\/persistent\/biometrics$/m.test(s)),
+    },
   }
+}
+
+const firmwareState = globalThis as typeof globalThis & {
+  __firmwareSignalsPromise?: Promise<FirmwareSignals> | null
+}
+
+/**
+ * Firmware signals cannot change while this process is alive (a firmware
+ * update reboots the pod), so the four process spawns and two file reads in
+ * `collectFirmwareSignals` happen once per process. The Settings → Device
+ * card polls `getSensorSource` every 10 s; only the stream fields are live.
+ * A service restart re-detects. A probe interrupted by a timeout or spawn failure is served
+ * once but not memoized, so the next poll retries.
+ */
+export function getFirmwareSignals(): Promise<FirmwareSignals> {
+  firmwareState.__firmwareSignalsPromise ??= collectFirmwareSignals().then(({ signals, transient }) => {
+    if (transient) {
+      firmwareState.__firmwareSignalsPromise = null
+      console.warn('[system] firmware probe failed transiently; retrying on the next poll')
+    }
+    else {
+      console.log('[system] firmware probed once: %s', classifyFirmware(signals))
+    }
+    return signals
+  })
+  return firmwareState.__firmwareSignalsPromise
+}
+
+/** Test-only: forget the memoized probe so each case sees a fresh process. */
+export function _resetFirmwareSignalsForTest(): void {
+  firmwareState.__firmwareSignalsPromise = null
 }
 
 const SENSOR_TRANSPORT_OVERRIDES = ['raw', 'nats'] as const
@@ -708,7 +747,7 @@ export const systemRouter = router({
       }),
     }))
     .query(async () => {
-      const signals = await collectFirmwareSignals()
+      const signals = await getFirmwareSignals()
       const generation = classifyFirmware(signals)
       const perf = getServerPerformance()
 

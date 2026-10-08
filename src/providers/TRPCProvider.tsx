@@ -5,9 +5,9 @@ import { createWebQueryClient, createWebTRPCClient } from '@/src/utils/webClient
 import { QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 
-export const TRPCProvider = ({ children }: { children: React.ReactNode }) => {
+export const TRPCProvider = ({ children, baseDebug = false }: { children: React.ReactNode, baseDebug?: boolean }) => {
   const [queryClient] = useState(createWebQueryClient)
-  const [trpcClient] = useState(createWebTRPCClient)
+  const [trpcClient] = useState(() => createWebTRPCClient({ baseDebug }))
 
   return (
     <trpc.Provider client={trpcClient} queryClient={queryClient}>

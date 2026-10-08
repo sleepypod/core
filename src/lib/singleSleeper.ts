@@ -1,23 +1,44 @@
 import type { Side } from '@/src/hardware/types'
 
-interface SideAway {
-  awayMode?: boolean | null
+export interface BedConfiguration {
+  bedMode?: 'two' | 'solo-left' | 'solo-right'
+  unusedZoneMode?: 'follow' | 'off' | 'independent'
 }
 
-/**
- * The single sleeper's side when exactly one side is in away mode, else null.
- *
- * One side away means one person sleeps in the bed, on the other side. The
- * biometrics modules merge the away side's presence, movement and vitals into
- * that side (modules/common/side_mode.py — keep the rule identical), so the UI
- * shows one sleeper instead of a left/right split. Both sides away, or
- * neither, is ordinary per-side operation.
- */
-export function singleSleeperSideFor(
-  sides: { left?: SideAway | null, right?: SideAway | null } | null | undefined,
-): Side | null {
-  const leftAway = Boolean(sides?.left?.awayMode)
-  const rightAway = Boolean(sides?.right?.awayMode)
-  if (leftAway === rightAway) return null
-  return leftAway ? 'right' : 'left'
+export interface BedState extends BedConfiguration {
+  left?: { awayMode?: boolean | number | null } | null
+  right?: { awayMode?: boolean | number | null } | null
+}
+
+/** Occupancy and thermal zones are independent. Keep Python side_mode.py in sync. */
+export function activeSleeperSides(sides: BedState | null | undefined): Side[] {
+  const configured: Side[] = sides?.bedMode === 'solo-left'
+    ? ['left']
+    : sides?.bedMode === 'solo-right' ? ['right'] : ['left', 'right']
+  return configured.filter(side => !sides?.[side]?.awayMode)
+}
+
+export function singleSleeperSideFor(sides: BedState | null | undefined): Side | null {
+  const active = activeSleeperSides(sides)
+  return active.length === 1 ? active[0] : null
+}
+
+/** No sleeper means no recurring heat. An unused zone has an explicit policy. */
+export function scheduleSourceSide(side: Side, sides: BedState | null | undefined): Side | null {
+  const active = activeSleeperSides(sides)
+  if (active.includes(side)) return side
+  if (active.length === 0) return null
+  if (sides?.unusedZoneMode === 'independent') return side
+  if (sides?.unusedZoneMode === 'follow') return active[0]
+  return null
+}
+
+export function mirrorSideFor(side: Side, sides: BedState | null | undefined): Side | null {
+  const other = side === 'left' ? 'right' : 'left'
+  return scheduleSourceSide(other, sides) === side ? other : null
+}
+
+/** The schedule editor focuses one source only when the unused zone has no own schedule. */
+export function singleScheduleSideFor(sides: BedState | null | undefined): Side | null {
+  return sides?.unusedZoneMode === 'independent' ? null : singleSleeperSideFor(sides)
 }

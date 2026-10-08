@@ -8,6 +8,8 @@
  */
 'use client'
 
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useState, type CSSProperties, type PointerEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { HoverMark, Skeleton } from '@/src/components/ds'
@@ -16,13 +18,13 @@ import { tempTone, TONE_VAR } from '@/src/components/Schedule/scheduleFormat'
 import { tonightWindow } from '@/src/components/diagnostics/dashboardLogic'
 import { nightCurve, type CurvePoint } from '@/src/components/TempScreen/timelineLogic'
 import { useSideNames } from '@/src/hooks/useSideNames'
+import { useShownSides } from '@/src/providers/SideProvider'
 import { formatSetpointF, type TempUnit } from '@/src/lib/tempUtils'
 import type { Condition } from '@/src/automation/types'
 import { trpc } from '@/src/utils/trpc'
 import { clock, ownerView, ruleWindow, scheduleBands, scheduleBlocks, type Owner, type RuleMode, type SideTonight } from './automationsLogic'
 
 type Side = 'left' | 'right'
-const SIDES: Side[] = ['left', 'right']
 const HOUR = 3_600_000
 const LANE_H = 16
 
@@ -55,8 +57,11 @@ export function TonightCard({ rules, tonight, fires, unit }: {
   fires: FireMark[]
   unit: TempUnit
 }) {
+  const timeFormat = useTimeFormat()
   const nowMinute = useNowMinute()
   const { sideName } = useSideNames()
+  // One side away: tonight is just the sleeper's side.
+  const shown = useShownSides()
   const left = trpc.schedules.getAll.useQuery({ side: 'left' }, { staleTime: 60_000 })
   const right = trpc.schedules.getAll.useQuery({ side: 'right' }, { staleTime: 60_000 })
   // One hover across every lane: the moment under the pointer (epoch ms).
@@ -101,7 +106,7 @@ export function TonightCard({ rules, tonight, fires, unit }: {
     <div className="@container flex min-w-0 flex-col gap-4 rounded-card border border-line bg-surface px-[18px] py-4" data-testid="tonight-card">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-[15px] font-medium">Who controls the bed tonight</span>
-        <span className="font-mono text-xs text-fg-2">6 PM → 9 AM</span>
+        <span className="font-mono text-xs text-fg-2">{timeFormat === '24h' ? '18:00 → 09:00' : '6 PM → 9 AM'}</span>
         <div className="ml-auto flex items-center gap-4 font-mono text-[11px] text-fg-2">
           <span className="flex items-center gap-1.5">
             <span className="h-2 w-3.5 rounded-[2px] border border-link bg-link/30" />
@@ -114,9 +119,9 @@ export function TonightCard({ rules, tonight, fires, unit }: {
         </div>
       </div>
 
-      <div className="grid gap-2.5 @min-[640px]:grid-cols-2">
-        {SIDES.map((side) => {
-          const o = ownerView(tonight?.sides[side], curves[side], now, fmt)
+      <div className={cn('grid gap-2.5', shown.length > 1 && '@min-[640px]:grid-cols-2')}>
+        {shown.map((side) => {
+          const o = ownerView(tonight?.sides[side], curves[side], now, fmt, timeFormat)
           return (
             <div key={side} className="flex flex-col gap-1 rounded-ctl border border-line px-4 py-3" data-testid={`owner-${side}`}>
               <div className="flex items-center gap-2">
@@ -142,7 +147,7 @@ export function TonightCard({ rules, tonight, fires, unit }: {
           onPointerMove={onLanesPointerMove}
           onPointerLeave={() => setHoverT(null)}
         >
-          {SIDES.map(side => (
+          {shown.map(side => (
             <SideLanes
               key={side}
               side={side}
@@ -164,7 +169,7 @@ export function TonightCard({ rules, tonight, fires, unit }: {
           <div className="relative h-5 font-mono text-[10px] text-fg-3">
             {ticks.map(t => (
               <span key={t} className="absolute top-1 -translate-x-1/2 whitespace-nowrap" style={{ left: `${pct(t)}%` }}>
-                {clock(t).replace(':00', '')}
+                {timeFormat === '24h' ? clock(t, timeFormat) : clock(t, timeFormat).replace(':00', '')}
               </span>
             ))}
             {nowIn && (
@@ -179,7 +184,7 @@ export function TonightCard({ rules, tonight, fires, unit }: {
             {hoverT != null && (
               <HoverMark
                 pct={pct(hoverT)}
-                label={`${clock(hoverT)} · ${SIDES.map(s => `${sideName(s)} ${readoutAt(s, hoverT)}`).join(' · ')}`}
+                label={`${clock(hoverT, timeFormat)} · ${shown.map(s => `${sideName(s)} ${readoutAt(s, hoverT)}`).join(' · ')}`}
                 className="-top-5"
               />
             )}
@@ -203,6 +208,7 @@ function SideLanes({ side, name, blocks, hold, rules, fires, midnight, start, en
   pct: (t: number) => number
   fmt: (f: number) => string
 }) {
+  const timeFormat = useTimeFormat()
   const span = (a: number, b: number): CSSProperties => ({ left: `${pct(a)}%`, width: `${pct(b) - pct(a)}%` })
   const holdSpan = hold && hold.expiresAt > start && hold.startedAt < end ? hold : null
   return (
@@ -232,7 +238,7 @@ function SideLanes({ side, name, blocks, hold, rules, fires, midnight, start, en
             key={b.start}
             className="absolute inset-y-0"
             style={span(b.start, b.end)}
-            title={`${fmt(b.temperature)} · ${clock(b.start)} – ${clock(b.end)}`}
+            title={`${fmt(b.temperature)} · ${clock(b.start, timeFormat)} – ${clock(b.end, timeFormat)}`}
           />
         ))}
         {holdSpan && (
@@ -272,7 +278,7 @@ function SideLanes({ side, name, blocks, hold, rules, fires, midnight, start, en
             key={`${f.ruleId}-${f.at}`}
             className={cn('absolute top-1/2 size-2 -translate-1/2 rounded-full border border-app', f.outcome === 'dry_run' ? 'bg-warn' : 'bg-ok')}
             style={{ left: `${pct(f.at)}%` }}
-            title={`${clock(f.at)} · ${f.outcome === 'dry_run' ? 'would fire' : 'fired'}`}
+            title={`${clock(f.at, timeFormat)} · ${f.outcome === 'dry_run' ? 'would fire' : 'fired'}`}
           />
         ))}
       </div>

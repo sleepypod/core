@@ -15,6 +15,27 @@ journalctl -u sleepypod.service -n 200 --no-pager   # core app
 journalctl -u frank -n 200 --no-pager               # firmware: what the DAC actually did
 ```
 
+For a support handoff, `sp-bundle-logs` includes the firmware journal, a combined
+firmware/app timeline, and pod model, firmware revision/build date, and SleepyPod
+build metadata. `sp-info` prints that compact context; `sp-status` and `sp-logs`
+include it too. The model comes from the local device-status API; when hardware
+is unreachable it is reported as unknown, so include the model manually.
+
+To capture an install incident even after a reboot, select its UTC time window:
+
+```bash
+sp-bundle-logs --since '2026-10-05 19:50:00 UTC' --until '2026-10-05 20:05:00 UTC'
+sp-logs --firmware --since '2026-10-05 19:50:00 UTC' --until '2026-10-05 20:05:00 UTC'
+```
+
+Explicit windows search all retained boots. Without a window, bundles capture
+the current boot and `sp-logs --firmware` follows app and firmware logs together.
+On older installs without these options, use:
+
+```bash
+journalctl -u frank.service -u sleepypod.service --since '2026-10-05 19:50:00 UTC' --until '2026-10-05 20:05:00 UTC' --no-pager
+```
+
 SSH setup and hardening: `scripts/README.md`, `docs/DEPLOYMENT.md`.
 
 ## Data paths
@@ -81,6 +102,25 @@ The Thermal page now plots per-side **target / bed / water** trends. A stalled
 pump shows as water + bed flatlining away from target while the side still
 reports powered. The guard logic lives in `src/hardware/pumpStallGuard.ts`
 (surfaced as the `stalled` verdict via `health.thermal`).
+
+## HomeKit “leak” notification immediately after startup
+
+The HomeKit `Pod pump left/right` accessories expose pump-stall notices through
+`LeakSensor`; the Home app's leak wording does not identify a water leak.
+Check `journalctl -u sleepypod.service` for `[pumpStallGuard]` and compare the
+firmware's pump duty / on-off commands in `journalctl -u frank`.
+
+On startup, saved `device_state.isPowered` and a retained non-neutral target
+with a zero countdown are insufficient to establish a running pump. The guard
+waits for per-side live evidence: a positive session countdown with a non-neutral
+target, positive pump duty or observed RPM >= 50 outside priming/spin-down
+with a fresh non-neutral firmware status, or a successfully completed
+non-neutral temperature command with a positive duration. Unknown-state frames
+do not accumulate stall dwell. Confirmation is captured when each frame arrives,
+so queued frames cannot inherit later evidence and wall-clock corrections cannot
+revoke confirmation. A once-per-side “waiting for live pump/session
+evidence” log explains this state; missing evidence is not reported as a stall.
+Unresolved incidents remain blocked, and pending hardware cutoffs still retry.
 
 ## Database or native-module errors on the pod
 

@@ -1,3 +1,4 @@
+import { recordedBedTemperature } from './bedTemperatureSamples'
 import { getDemoDeviceStatus } from './handlers/device'
 import { randomBetween, toCelsius } from './util'
 
@@ -39,14 +40,11 @@ export function piezoFrame(ts: number) {
 }
 
 export function bedTempFrame(ts: number) {
-  const status = getDemoDeviceStatus('F')
-  // Surface temps sit a little closer to the room than the water does.
-  const surface = (f: number | null) => toCelsius(((f ?? 80) * 0.7) + (76 * 0.3))
-  const zones = (f: number | null) => [0, 0.3, -0.2, NO_SENSOR].map(d => d === NO_SENSOR ? d : surface(f) + d + randomBetween(Math.random, -0.05, 0.05))
+  const reading = recordedBedTemperature(ts)
   return {
-    type: 'bedTemp2', ts, version: 1, mcu: 33.8,
-    left: { amb: 21.4, hu: 44.2, board: 29.5, temps: zones(status.leftSide.currentTemperature) },
-    right: { amb: NO_SENSOR, hu: NO_SENSOR, board: 28.3, temps: zones(status.rightSide.currentTemperature) },
+    type: 'bedTemp2', ts, version: 1, mcu: reading.mcuTemp,
+    left: { amb: reading.ambientTemp, hu: reading.humidity, temps: [reading.leftOuterTemp, reading.leftCenterTemp, reading.leftInnerTemp, NO_SENSOR] },
+    right: { amb: NO_SENSOR, hu: NO_SENSOR, temps: [reading.rightOuterTemp, reading.rightCenterTemp, reading.rightInnerTemp, NO_SENSOR] },
   }
 }
 

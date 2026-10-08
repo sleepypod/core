@@ -12,6 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { Server, Socket } from 'net'
+import { once } from 'events'
 import { getStatusRevision } from '../statusRevision'
 import { promises as fs } from 'fs'
 import {
@@ -125,6 +126,68 @@ describe('dacTransport', () => {
       '[DAC] connected',
     ]))
     log.mockRestore()
+  })
+
+  test.each(['before', 'after'] as const)('recovers when replacement firmware connects %s the next command', async (when) => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    handleCommands(mockFranken)
+    await connecting
+    expect(await sendCommand('0')).toBe('READY')
+    const originalInode = (await fs.stat(socketPath)).ino
+    const revision = getStatusRevision()
+    if (revision === null) throw new Error('Unexpected in-flight hardware write')
+
+    mockFranken.end()
+    await once(mockFranken, 'close')
+    await vi.waitFor(() => expect(isDacConnected()).toBe(false))
+    expect(getStatusRevision()).toBeGreaterThan(revision)
+
+    const replace = async () => {
+      mockFranken = await connectAsFrankenfirmware(socketPath)
+      handleCommands(mockFranken, { 0: 'REPLACEMENT' })
+    }
+    if (when === 'before') await replace()
+    // Concurrent callers must share recovery and remain strictly sequential.
+    const commands = Promise.all([sendCommand('0'), sendCommand('0')])
+    if (when === 'after') await replace()
+    expect(await commands).toEqual(['REPLACEMENT', 'REPLACEMENT'])
+    expect(isDacConnected()).toBe(true)
+    expect((await fs.stat(socketPath)).ino).toBe(originalInode)
+  })
+
+  test('fails an interrupted command promptly and recovers without replaying it', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    await connecting
+    mockFranken.once('data', () => mockFranken?.end())
+    // An alarm may have executed before the disconnect: do not replay it.
+    await expect(sendCommand('5', 'alarm')).rejects.toThrow(/closed|ended/)
+    await vi.waitFor(() => expect(isDacConnected()).toBe(false))
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    const received: string[] = []
+    mockFranken.on('data', chunk => received.push(chunk.toString()))
+    handleCommands(mockFranken)
+    expect(await sendCommand('0')).toBe('READY')
+    expect(received).toEqual(['0\n\n'])
+  })
+
+  test('shutdown cancels a pending recovery instead of resurrecting the listener', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.access(socketPath), { interval: 5 })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    await connecting
+    mockFranken.end()
+    await once(mockFranken, 'close')
+    await vi.waitFor(() => expect(isDacConnected()).toBe(false))
+    const recovery = sendCommand('0')
+    const rejected = expect(recovery).rejects.toThrow('disconnected')
+    await disconnectDac()
+    await rejected
+    expect(isDacConnected()).toBe(false)
+    await expect(sendCommand('0')).rejects.toThrow('not connected')
   })
 
   test('sends command and receives response', async () => {

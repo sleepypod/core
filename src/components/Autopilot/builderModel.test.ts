@@ -309,6 +309,10 @@ describe('label / clock helpers', () => {
     expect(fmtClock('00:00')).toBe('12am')
     expect(fmtClock('09:30')).toBe('9:30am')
   })
+  it('keeps HH:mm as-is in 24-hour mode, including midnight', () => {
+    expect(fmtClock('00:00', '24h')).toBe('00:00')
+    expect(fmtClock('22:30', '24h')).toBe('22:30')
+  })
 })
 
 describe('buildSentence — remaining shapes', () => {

@@ -12,6 +12,20 @@ afterEach(() => {
 })
 
 describe('web clients', () => {
+  it('keeps an explicitly enabled base debug client separate from the live client', async () => {
+    const t = initTRPC.create({ transformer })
+    const router = t.router({ base: t.router({ getAvailability: t.procedure.query(() => ({ configured: false })) }) })
+    const fetchMock = vi.fn((url: string, init: RequestInit) => fetchRequestHandler({
+      endpoint: '/api/trpc', req: new Request(url, init), router, createContext: () => ({}),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const debug = createWebTRPCClient({ baseDebug: true })
+    expect(await debug.base.getAvailability.query({})).toEqual({ configured: true })
+    await debug.base.stop.mutate({})
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(await createWebTRPCClient().base.getAvailability.query({})).toEqual({ configured: false })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
   it('streams a fast result before a slow query in the same HTTP batch completes', async () => {
     const t = initTRPC.create({ transformer })
     let release: () => void = () => {}

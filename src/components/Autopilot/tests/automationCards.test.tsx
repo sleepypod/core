@@ -1,5 +1,6 @@
 import { requiredTemplate } from './builderFixtures'
 import type * as CurveChartModule from '@/src/components/Schedule/CurveChart'
+import type * as SideProviderModule from '@/src/providers/SideProvider'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { ActivityCard, type ActivityData } from '../ActivityCard'
@@ -11,6 +12,14 @@ import type { SideTonight } from '../automationsLogic'
 const t = (day: number, hour: number) => new Date(2026, 8, day, hour).getTime()
 const mock = vi.hoisted(() => ({ minute: null as number | null, schedule: undefined as unknown }))
 vi.mock('@/src/components/Schedule/CurveChart', async importOriginal => ({ ...await importOriginal<typeof CurveChartModule>(), useNowMinute: () => mock.minute }))
+const single = vi.hoisted(() => ({ sides: null as null | Array<'left' | 'right'> }))
+vi.mock('@/src/providers/SideProvider', async (importOriginal) => {
+  const actual = await importOriginal<typeof SideProviderModule>()
+  return {
+    ...actual,
+    useShownSides: () => single.sides ?? actual.useShownSides(),
+  }
+})
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ sideName: (side: string) => side === 'left' ? 'Alex' : 'Sam' }) }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: { schedules: { getAll: { useQuery: () => ({ data: mock.schedule }) } } } }))
 beforeEach(() => {
@@ -132,6 +141,18 @@ it('renders side ownership, schedule blocks, holds, rule windows and filtered fi
   expect(screen.getByTestId('chart-hover').textContent).toMatch(/^11:00\sPM \u00b7 Alex 81\u00b0 hold \u00b7 Sam 78\u00b0$/)
   fireEvent.pointerLeave(lanes)
   expect(screen.queryByTestId('chart-hover')).toBeNull()
+})
+
+it('shows tonight for the sleeper\'s side only when the other is away', () => {
+  single.sides = ['right']
+  try {
+    render(<TonightCard rules={[]} tonight={undefined} fires={[]} unit="F" />)
+    expect(screen.getByTestId('owner-right')).toBeTruthy()
+    expect(screen.queryByTestId('owner-left')).toBeNull()
+  }
+  finally {
+    single.sides = null
+  }
 })
 
 it('waits for the client clock and shows owner loading placeholders', () => {

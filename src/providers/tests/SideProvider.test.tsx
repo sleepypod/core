@@ -1,12 +1,13 @@
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SideProvider, useSide } from '../SideProvider'
+import { SideProvider, useSide, useShownSides } from '../SideProvider'
 
 const state = vi.hoisted(() => ({
+  device: { bedMode: 'two', unusedZoneMode: 'off' } as { bedMode: 'two' | 'solo-left' | 'solo-right', unusedZoneMode: 'off' | 'follow' | 'independent' },
   sides: undefined as undefined | { left: { awayMode: boolean }, right: { awayMode: boolean } },
 }))
 vi.mock('@/src/utils/trpc', () => ({
-  trpc: { settings: { getAll: { useQuery: () => ({ data: state.sides ? { sides: state.sides } : undefined }) } } },
+  trpc: { settings: { getAll: { useQuery: () => ({ data: state.sides ? { sides: state.sides, device: state.device } : undefined }) } } },
 }))
 
 type Ctx = ReturnType<typeof useSide>
@@ -25,62 +26,57 @@ beforeEach(() => {
   localStorage.clear()
   document.cookie = 'sleepypod-side=; path=/; max-age=0' // cookie is the fallback store
   state.sides = away(false, false)
+  state.device = { bedMode: 'two', unusedZoneMode: 'off' }
 })
 afterEach(cleanup)
 
-describe('SideProvider single-sleeper mode', () => {
-  it('reports no single sleeper and keeps the selection when neither side is away', () => {
+describe('SideProvider sleeper setup', () => {
+  it('keeps temperature selection and linking unchanged through solo, away and return', () => {
     localStorage.setItem('sleepypod-selected-side', 'right')
-    render(tree())
-    expect(ctx.singleSleeperSide).toBeNull()
+    const { rerender } = render(tree())
+    state.device.bedMode = 'solo-left'
+    rerender(tree())
+    expect(ctx.singleSleeperSide).toBe('left')
     expect(ctx.selectedSide).toBe('right')
-  })
-
-  it('defaults control screens to both (linked) when one side goes away', () => {
-    localStorage.setItem('sleepypod-selected-side', 'right')
-    state.sides = away(false, true)
-    render(tree())
+    expect(ctx.isLinked).toBe(false)
+    act(() => ctx.toggleLink())
+    state.sides = away(true, false)
+    rerender(tree())
+    expect(ctx.singleSleeperSide).toBeNull()
+    expect(ctx.isLinked).toBe(true)
+    state.sides = away(false, false)
+    rerender(tree())
     expect(ctx.singleSleeperSide).toBe('left')
     expect(ctx.selectedSide).toBe('both')
     expect(ctx.isLinked).toBe(true)
   })
 
-  it('still lets the user pick a side, and a reload keeps that choice', () => {
+  it('keeps both schedule editors available for independent zones with one biometric sleeper', () => {
+    state.device = { bedMode: 'solo-right', unusedZoneMode: 'independent' }
+    render(tree())
+    expect(ctx.singleSleeperSide).toBe('right')
+    expect(ctx.singleScheduleSide).toBeNull()
+  })
+
+  it('focuses the source schedule when the other zone follows it', () => {
+    state.device = { bedMode: 'solo-right', unusedZoneMode: 'follow' }
+    render(tree())
+    expect(ctx.singleScheduleSide).toBe('right')
+  })
+
+  it('keeps the selected side on reload while a partner is away', () => {
     state.sides = away(true, false)
     const first = render(tree())
     act(() => ctx.selectSide('left'))
-    expect(ctx.selectedSide).toBe('left')
     first.unmount()
     render(tree())
     expect(ctx.selectedSide).toBe('left')
     expect(ctx.singleSleeperSide).toBe('right')
   })
 
-  it('restores the previous selection when away mode is turned off', () => {
-    localStorage.setItem('sleepypod-selected-side', 'right')
-    state.sides = away(false, true)
-    const { rerender } = render(tree())
-    expect(ctx.selectedSide).toBe('both')
-    state.sides = away(false, false)
-    rerender(tree())
-    expect(ctx.selectedSide).toBe('right')
-    expect(ctx.isLinked).toBe(false)
-    expect(localStorage.getItem('sleepypod-single-sleeper-side')).toBeNull()
-  })
-
-  it('waits for settings before deciding (no flip-flop on load)', () => {
-    localStorage.setItem('sleepypod-selected-side', 'right')
-    localStorage.setItem('sleepypod-single-sleeper-side', 'left')
-    state.sides = undefined
-    render(tree())
-    expect(ctx.selectedSide).toBe('right')
-    expect(localStorage.getItem('sleepypod-single-sleeper-side')).toBe('left')
-  })
-
-  it('is per-side when both sides are away', () => {
-    state.sides = away(true, true)
-    render(tree())
-    expect(ctx.singleSleeperSide).toBeNull()
-    expect(ctx.selectedSide).toBe('left')
+  it.each(['left', 'right'] as const)('shows only the %s sleeper through the display hook', (side) => {
+    state.sides = away(side === 'right', side === 'left')
+    const { result } = renderHook(() => useShownSides(), { wrapper: SideProvider })
+    expect(result.current).toEqual([side])
   })
 })

@@ -3,7 +3,18 @@ import { db, biometricsDb } from '@/src/db'
 import { deviceSettings, deviceState } from '@/src/db/schema'
 import { bedTemp, freezerTemp, flowReadings } from '@/src/db/biometrics-schema'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
+import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
+import { PodVersion } from '@/src/hardware/types'
 import { centiDegreesToF } from '@/src/lib/tempUtils'
+
+/** Telemetry proves support; otherwise distinguish known models from startup uncertainty. */
+export function reportsPumpSpeed(hasFlow: boolean): boolean | null {
+  if (hasFlow) return true
+  const version = getDacMonitorIfRunning()?.getLastStatus()?.podVersion
+  if (version === PodVersion.POD_5) return true
+  if (version === PodVersion.POD_3 || version === PodVersion.POD_4) return false
+  return null
+}
 
 export type ThermalVerdict = 'off' | 'delivering' | 'holding' | 'stalled' | 'unknown'
 
@@ -54,6 +65,7 @@ export function readThermalTruth() {
     .limit(1)
     .all()
 
+  const pumpSpeedSupport = reportsPumpSpeed(flow != null)
   const now = Date.now()
   const flowAgeSec = flow?.timestamp ? Math.round((now - flow.timestamp.getTime()) / 1000) : null
 
@@ -83,11 +95,10 @@ export function readThermalTruth() {
       verdict = 'off'
     }
     else if (!flow) {
-      // No pump reading has ever been recorded: this pod's firmware
-      // doesn't send frzHealth (Pod 3/4), so there is no pump speed to
-      // judge. Calling that "stalled" flagged every powered side.
       verdict = 'unknown'
-      note = 'this pod does not report pump speed — water temperature tracking the target is the sign it is circulating'
+      note = pumpSpeedSupport === false
+        ? 'this pod does not report pump speed — water temperature tracking the target is the sign it is circulating'
+        : 'waiting for the first pump-speed reading — circulation is not yet verified'
     }
     else if (!flowing) {
       verdict = 'stalled'
@@ -122,6 +133,9 @@ export function readThermalTruth() {
 
   return {
     pumpStallProtectionEnabled: settings?.enabled ?? false,
+    // Pod 3/4 firmware sends no pump speed, so the stall guard has nothing to
+    // act on there and its being off isn't worth flagging.
+    reportsPumpSpeed: pumpSpeedSupport,
     heatsinkTempF: water?.heatsinkTemp != null ? Math.round(centiDegreesToF(water.heatsinkTemp) * 10) / 10 : null,
     ambientTempF: water?.ambientTemp != null ? Math.round(centiDegreesToF(water.ambientTemp) * 10) / 10 : null,
     sides,

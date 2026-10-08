@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   writes: [] as Array<{ isAlarmVibrating: boolean }>,
   fail: false,
+  failure: new Error('db dead') as unknown,
   broadcast: vi.fn(),
 }))
 
@@ -14,7 +15,7 @@ vi.mock('@/src/db', () => ({
     update: () => ({
       set: (values: { isAlarmVibrating: boolean }) => ({
         where: async () => {
-          if (mocks.fail) throw new Error('db dead')
+          if (mocks.fail) throw mocks.failure
           mocks.writes.push(values)
         },
       }),
@@ -38,6 +39,7 @@ describe('alarmState', () => {
     resetAlarmStateCache()
     mocks.writes.length = 0
     mocks.fail = false
+    mocks.failure = new Error('db dead')
     mocks.broadcast.mockClear()
   })
 
@@ -94,6 +96,22 @@ describe('alarmState', () => {
     expect(err).toHaveBeenCalledWith('[alarmState] failed to store alarm state for left:', 'db dead')
     expect(mocks.broadcast).toHaveBeenCalledWith('left', { isAlarmVibrating: true })
     err.mockRestore()
+  })
+
+  it('broadcasts and retains the active alarm after a non-Error store failure', async () => {
+    mocks.fail = true
+    mocks.failure = { code: 'SQLITE_BUSY' }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await markAlarmStarted('right', ALARM)
+      expect(error).toHaveBeenCalledExactlyOnceWith('[alarmState] failed to store alarm state for right:', mocks.failure)
+      expect(mocks.broadcast).toHaveBeenCalledExactlyOnceWith('right', { isAlarmVibrating: true })
+      expect(getActiveAlarmConfig('right')).toEqual(ALARM)
+      expect(loadAlarmState().alarms.right?.config).toEqual(ALARM)
+    }
+    finally {
+      error.mockRestore()
+    }
   })
 
   describe('restoreActiveAlarms', () => {

@@ -1,3 +1,4 @@
+import { type TimeFormat, formatClock as formatDisplayClock } from '@/src/lib/timeFormat'
 import { NODES, STAGES, type CheckStatus, type NodeId, type Stage } from '@/src/lib/dataPath'
 import type { Tone } from '@/src/components/ds'
 
@@ -107,8 +108,8 @@ export function fmtSpan(ms: number): string {
   return m % 60 ? `${h}h ${m % 60}m` : `${h}h`
 }
 
-export function fmtClockMs(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+export function fmtClockMs(ms: number, timeFormat: TimeFormat = '12h'): string {
+  return formatDisplayClock(new Date(ms), timeFormat, { hour: 'numeric', minute: '2-digit' })
 }
 
 /** A problem shorter than this is a blip; more than two in a day is recurring. */
@@ -136,6 +137,7 @@ export function incidentLines(
     checks: Array<{ id: NodeId, incidents: number }>
   },
   now: number,
+  timeFormat: TimeFormat = '12h',
 ): IncidentLine[] {
   const counts = new Map(history.checks.map(c => [c.id, c.incidents]))
   // Checks that broke and recovered together read as one incident: "Sleep
@@ -155,7 +157,7 @@ export function incidentLines(
         key: `${i.checkId}-${i.start}`,
         tone: down ? 'danger' : 'warn',
         title: `${joinAnd(group.map(g => g.label))} ${down ? 'down' : 'stalled'}`,
-        when: `${fmtClockMs(i.start)} – ${i.end == null ? 'now' : fmtClockMs(i.end)} · ${fmtSpan(end - i.start)}`,
+        when: `${fmtClockMs(i.start, timeFormat)} – ${i.end == null ? 'now' : fmtClockMs(i.end, timeFormat)} · ${fmtSpan(end - i.start)}`,
         tag,
         detail: i.detail,
       },
@@ -168,7 +170,7 @@ export function incidentLines(
         key: `gap-${g.start}`,
         tone: 'muted',
         title: 'Not recorded',
-        when: `${fmtClockMs(g.start)} – ${g.end >= now - 60_000 ? 'now' : fmtClockMs(g.end)} · ${fmtSpan(g.end - g.start)}`,
+        when: `${fmtClockMs(g.start, timeFormat)} – ${g.end >= now - 60_000 ? 'now' : fmtClockMs(g.end, timeFormat)} · ${fmtSpan(g.end - g.start)}`,
         tag: null,
         detail: 'The core service wasn’t running, so nothing was checked.',
       },

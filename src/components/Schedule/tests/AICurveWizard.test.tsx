@@ -3,12 +3,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AICurveWizard } from '../AICurveWizard'
 import { loadTemplates, saveTemplate } from '@/src/lib/sleepCurve/curvePrompt'
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
+const mock = vi.hoisted(() => ({ timeFormat: '12h' as '12h' | '24h' }))
+vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => mock.timeFormat }))
 const curve = { name: 'Cool night', bedtime: '22:00', wake: '07:00', points: { '22:00': 78, '02:00': 72, '07:00': 80 }, reasoning: 'Cool overnight, warm before waking.' }
 beforeEach(() => {
   localStorage.clear()
   vi.useFakeTimers()
 })
 afterEach(() => {
+  mock.timeFormat = '12h'
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
@@ -64,4 +67,20 @@ it('loads and deletes saved templates', () => {
   fireEvent.click(screen.getByRole('button', { name: '1. Describe' }))
   fireEvent.click(screen.getByRole('button', { name: 'Delete Cool night' }))
   expect(loadTemplates()).toEqual([])
+})
+it('edits preview set point times with 24-hour selects when the pod uses a 24-hour clock', () => {
+  mock.timeFormat = '24h'
+  const onApply = vi.fn()
+  render(<AICurveWizard open onApply={onApply} onClose={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+  fireEvent.change(screen.getByLabelText('AI response JSON'), { target: { value: JSON.stringify(curve) } })
+  act(() => vi.advanceTimersByTime(500))
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+  expect(screen.queryByLabelText('Set point 1 time', { selector: 'input' })).toBeNull()
+  const hours = screen.getByLabelText('Set point 1 time hours') as HTMLSelectElement
+  expect(hours.value).toBe('02')
+  fireEvent.change(hours, { target: { value: '03' } })
+  fireEvent.change(screen.getByLabelText('Set point 1 time minutes'), { target: { value: '45' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Use curve' }))
+  expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ setPoints: expect.arrayContaining([{ time: '03:45', temperature: 72 }]) }))
 })

@@ -11,6 +11,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
+import { PodVersion } from '@/src/hardware/types'
 import type * as ThermalHistoryModule from '@/src/lib/thermalHistory'
 import { deviceSettings, deviceState } from '@/src/db/schema'
 import { bedTemp, flowReadings, freezerTemp, primeEvents } from '@/src/db/biometrics-schema'
@@ -87,6 +89,7 @@ const caller = healthRouter.createCaller({})
 const FRESH = new Date(Date.now() - 30_000) // 30s old → not stale
 
 beforeEach(() => {
+  vi.mocked(getDacMonitorIfRunning).mockReset()
   guardMock.shouldBlock.mockReset().mockReturnValue(false)
   rows.settings = [{ enabled: false }]
   rows.deviceStateQueue = []
@@ -102,6 +105,25 @@ afterEach(() => {
 })
 
 describe('health.thermal verdicts', () => {
+  it.each([PodVersion.POD_5, null])('keeps startup support distinct from unsupported hardware (%s)', async (podVersion) => {
+    if (podVersion) {
+      vi.mocked(getDacMonitorIfRunning).mockReturnValue({ getLastStatus: () => ({ podVersion }) } as ReturnType<typeof getDacMonitorIfRunning>)
+    }
+    rows.deviceStateQueue = [[{ isPowered: true }], [{ isPowered: true }]]
+    const thermal = await caller.thermal({})
+    const maintenance = await caller.maintenance({})
+    expect(thermal.reportsPumpSpeed).toBe(podVersion ? true : null)
+    expect(maintenance.reportsPumpSpeed).toBe(thermal.reportsPumpSpeed)
+    expect(thermal.sides.map(s => s.verdict)).toEqual(['unknown', 'unknown'])
+    expect(thermal.sides[0].note).toContain('waiting for the first pump-speed reading')
+  })
+
+  it('uses observed flow even before the monitor identifies the model', async () => {
+    rows.flow = [{ timestamp: FRESH }]
+    expect((await caller.thermal({})).reportsPumpSpeed).toBe(true)
+    expect((await caller.maintenance({})).reportsPumpSpeed).toBe(true)
+  })
+
   it('off when the side is not powered', async () => {
     rows.deviceStateQueue = [
       [{ side: 'left', isPowered: false, targetTemperature: null, currentTemperature: 70, isAlarmVibrating: false, poweredOnAt: null }],
@@ -149,10 +171,12 @@ describe('health.thermal verdicts', () => {
     const res = await caller.thermal({})
     const left = res.sides[0]
     expect(left.verdict).toBe('stalled')
+    expect(res.reportsPumpSpeed).toBe(true)
     expect(left.note).toContain('TEC')
   })
 
-  it('unknown, not stalled, when powered on a pod that has never reported pump speed', async () => {
+  it.each([PodVersion.POD_3, PodVersion.POD_4])('does not expect pump readings on %s', async (podVersion) => {
+    vi.mocked(getDacMonitorIfRunning).mockReturnValue({ getLastStatus: () => ({ podVersion }) } as ReturnType<typeof getDacMonitorIfRunning>)
     // Pod 3/4 firmware sends no frzHealth frames, so flow_readings stays empty.
     rows.deviceStateQueue = [
       [{ side: 'left', isPowered: true, targetTemperature: 75, currentTemperature: 75, isAlarmVibrating: false, poweredOnAt: new Date() }],
@@ -161,6 +185,7 @@ describe('health.thermal verdicts', () => {
     rows.flow = []
     const res = await caller.thermal({})
     expect(res.sides.map(s => s.verdict)).toEqual(['unknown', 'unknown'])
+    expect(res.reportsPumpSpeed).toBe(false)
     expect(res.sides[0].pumpRpm).toBeNull()
     expect(res.sides[0].note).toContain('does not report pump speed')
   })
@@ -307,8 +332,10 @@ describe('health.maintenance', () => {
   it('reports the guard, daily prime and last recorded prime', async () => {
     rows.settings = [{ pumpStall: false, primePodDaily: true, primePodTime: '14:00' }]
     rows.prime = [{ ts: new Date(5_000) }]
+    rows.flow = [{ ts: new Date(4_000) }]
     expect(await caller.maintenance({})).toEqual({
       pumpStallProtectionEnabled: false,
+      reportsPumpSpeed: true,
       primePodDaily: true,
       primePodTime: '14:00',
       lastPrimeAt: 5_000,
@@ -318,8 +345,10 @@ describe('health.maintenance', () => {
 
   it('falls back when nothing is stored', async () => {
     rows.settings = []
+    rows.flow = []
     expect(await caller.maintenance({})).toEqual({
       pumpStallProtectionEnabled: false,
+      reportsPumpSpeed: null,
       primePodDaily: false,
       primePodTime: null,
       lastPrimeAt: null,

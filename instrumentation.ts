@@ -1,3 +1,4 @@
+import { shutdownBaseController } from '@/src/hardware/base/instance'
 /**
  * Server startup and process lifecycle management.
  *
@@ -62,6 +63,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Step 0: Stop keepalive timers
   try {
     await stopTemperatureController()
+    shutdownBaseController()
     shutdownKeepalives()
   }
   catch (error) {

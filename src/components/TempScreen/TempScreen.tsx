@@ -1,17 +1,22 @@
 'use client'
 
+import Link from 'next/link'
+import { activeSleeperSides, scheduleSourceSide } from '@/src/lib/singleSleeper'
 import { useState } from 'react'
-import { Link2, Power } from 'lucide-react'
+import dynamic from 'next/dynamic'
+import { Box, Link2, Power, Waves } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
+import { usePreference } from '@/src/components/Base/controls'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
+import { useStageMode } from '@/src/components/Stage/stagePrefs'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import { usePrefs } from '@/src/providers/PrefsProvider'
-import { useSide, type Side } from '@/src/providers/SideProvider'
+import { useShownSides, useSide, type Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
 import { AlarmBanner } from './AlarmBanner'
 import { AlarmCard } from './AlarmCard'
@@ -26,6 +31,9 @@ import type { StepperTab } from './TempStepper'
 import { TonightCard, useNow } from './TonightCard'
 import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
+
+const ThermalBedCard = dynamic(() => import('../ThermalBed/ThermalBedCard'), { ssr: false, loading: () => <div aria-hidden="true" className="mb-4 h-[560px] rounded-xl border border-line bg-surface min-[1000px]:h-[440px]" /> })
+const TempStage = dynamic(() => import('../Stage/TempStage').then(m => m.TempStage), { ssr: false, loading: () => <div aria-hidden="true" className="fixed inset-0 z-30 bg-[#0b0b0c] min-[900px]:left-[224px]" /> })
 
 const SIDES: Side[] = ['left', 'right']
 
@@ -60,9 +68,16 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  *
  * Link sides mirrors every change (drag, ±, power) to both sides. All off
  * powers down whichever sides are on, linked or not.
+ *
+ * Both temperature zones remain available in solo and partner-away modes.
+ * Schedule ownership follows the explicit unused-zone policy; linking only
+ * controls which zones receive the user's temperature and power adjustments.
  */
 export const TempScreen = () => {
-  const { isLinked, toggleLink, primarySide } = useSide()
+  const { isLinked, toggleLink, primarySide, singleSleeperSide } = useSide()
+  const shown = useShownSides()
+  // One side away: the sleeper's schedule, context and timeline.
+  const contextSide = singleSleeperSide ?? primarySide
   const { control: variant, tempDisplay } = usePrefs()
   const { sideName } = useSideNames()
 
@@ -70,9 +85,28 @@ export const TempScreen = () => {
   const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
 
   const { data: settings } = trpc.settings.getAll.useQuery({})
+  const bedState = { ...settings?.sides, ...settings?.device }
+  const scheduleSide = (side: Side): Side => scheduleSourceSide(side, bedState) ?? side
+  const soloSide = settings?.device?.bedMode === 'solo-left' ? 'left' : settings?.device?.bedMode === 'solo-right' ? 'right' : null
+  const awaySides = SIDES.filter(s => settings?.sides?.[s]?.awayMode && (!soloSide || s === soloSide))
+  const awayNames = awaySides.map(s => sideName(s))
+  const returnDates = awaySides.flatMap((s) => {
+    const date = settings?.sides?.[s]?.awayReturn
+    return date ? [new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: settings?.device?.timezone })] : []
+  })
+  const sleeperLabel = soloSide
+    ? `Solo sleeper · ${sideName(soloSide)}${awayNames.length ? ' · Away' : ''}`
+    : awayNames.length ? `${awayNames.join(' & ')} away${returnDates.length === 1 ? ` · Until ${returnDates[0]}` : ''}` : 'Two sleepers'
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
 
+  // The live bed is the home screen's status readout, so it is on until someone hides it.
+  const [thermalPref, setThermalPref] = usePreference('thermalView', 'true', ['true', 'false'])
+  const showThermal = thermalPref === 'true'
+  const setShowThermal = (next: boolean) => setThermalPref(next ? 'true' : 'false')
+  // The stage replaces the card layout with the full-screen 3D bed; it has its own data wiring.
+  const [stagePref, setStagePref] = useStageMode()
+  const showStage = stagePref === 'true'
   const [holdMinutes, setHoldMinutes] = useState(30)
 
   const controls = {
@@ -94,9 +128,10 @@ export const TempScreen = () => {
   }
 
   const targetsFor = (side: Side): Side[] => (isLinked ? SIDES : [side])
+  const scheduleTargetsFor = (side: Side): Side[] => [...new Set(targetsFor(side).map(s => scheduleSide(s)))]
 
   const handleStepPhase = (side: Side, phase: NightPhaseKey, delta: number) => {
-    for (const s of targetsFor(side)) nightPhases[s].nudge(phase, delta)
+    for (const s of scheduleTargetsFor(side)) nightPhases[s].nudge(phase, delta)
   }
 
   /** Continuous drag — visual only, no hardware calls. */
@@ -138,6 +173,12 @@ export const TempScreen = () => {
       right={(
         <>
           <AutopilotStatusChip className="no-underline" />
+          <Button icon={Box} aria-pressed={showStage} onClick={() => setStagePref('true')} className="text-fg-2">
+            Stage
+          </Button>
+          <Button icon={Waves} aria-pressed={showThermal} onClick={() => setShowThermal(!showThermal)} className={showThermal ? 'bg-active text-fg' : 'text-fg-2'}>
+            Thermal view
+          </Button>
           <Button
             icon={Link2}
             aria-pressed={isLinked}
@@ -153,6 +194,8 @@ export const TempScreen = () => {
       )}
     />
   )
+
+  if (showStage) return <TempStage onExit={() => setStagePref('false')} />
 
   if (statusLoading) {
     return (
@@ -205,6 +248,18 @@ export const TempScreen = () => {
         onActionComplete={() => { void refetch() }}
       />
 
+      {showThermal && (
+        <ThermalBedCard
+          unit={unit}
+          names={{ left: sideName('left'), right: sideName('right') }}
+          controls={{ left: status?.leftSide, right: status?.rightSide }}
+          blocked={{ left: isPriming || !!stallNotices?.left, right: isPriming || !!stallNotices?.right }}
+        />
+      )}
+      <Link href="/settings?section=sides" className="mb-3 inline-flex rounded-ctl border border-line-2 px-3 py-2 text-sm text-fg-2 hover:text-fg" aria-label={`Manage sleepers: ${sleeperLabel}`}>
+        {sleeperLabel}
+      </Link>
+
       <SideSelector
         className="min-[900px]:hidden"
         overrides={{
@@ -223,6 +278,8 @@ export const TempScreen = () => {
               name={sideName(side)}
               presence={presenceFor(side)}
               away={Boolean(settings?.sides?.[side]?.awayMode)}
+              scheduleStatus={!scheduleSourceSide(side, bedState) ? 'Schedule off' : !activeSleeperSides(bedState).includes(side) && bedState.unusedZoneMode === 'independent' ? 'Independent schedule' : undefined}
+              linkedTo={scheduleSide(side) !== side ? sideName(scheduleSide(side)) : undefined}
               control={status?.temperatureControl?.[side]}
               variant={variant}
               display={tempDisplay}
@@ -230,7 +287,7 @@ export const TempScreen = () => {
               targetF={c.targetF}
               bedF={c.bedF}
               isOn={c.isOn}
-              stepDisabled={!c.isOn || c.tempPending}
+              stepDisabled={!c.isOn}
               powerDisabled={c.powerPending}
               holdMinutes={holdMinutes}
               onHoldChange={setHoldMinutes}
@@ -244,7 +301,7 @@ export const TempScreen = () => {
                 ? {
                     tab: stepperTab[side],
                     onTabChange: tab => handleTabChange(side, tab),
-                    schedule: nightPhases[side],
+                    schedule: nightPhases[scheduleSide(side)],
                     onStepPhase: (phase, delta) => handleStepPhase(side, phase, delta),
                     now,
                   }
@@ -256,15 +313,15 @@ export const TempScreen = () => {
         <div className={CONTEXT}>
           {/* Desktop: the Schedule and sleep timeline below covers tonight. */}
           <div className="min-[900px]:hidden">
-            <TonightCard side={primarySide} unit={unit} />
+            <TonightCard side={contextSide} unit={unit} />
           </div>
-          <EnvironmentInfoPanel side={primarySide} unit={unit} />
-          <LastNightCard side={primarySide} name={sideName(primarySide)} />
-          <AlarmCard side={primarySide} />
+          <EnvironmentInfoPanel side={contextSide} unit={unit} />
+          <LastNightCard side={contextSide} name={sideName(contextSide)} />
+          <AlarmCard side={contextSide} />
         </div>
       </div>
 
-      <ScheduleTimeline unit={unit} className="max-[899px]:hidden" />
+      <ScheduleTimeline unit={unit} sides={shown} className="max-[899px]:hidden" />
     </>
   )
 }

@@ -154,7 +154,9 @@ export function useDualSideData(options: UseDualSideDataOptions = {}): DualSideD
     enabled = true,
   } = options
 
-  const { activeSides } = useSide()
+  const { activeSides: chosenSides, singleSleeperSide } = useSide()
+  // One side away: that sleeper's data only.
+  const activeSides = singleSleeperSide ? [singleSleeperSide] : chosenSides
 
   const hasLeft = activeSides.includes('left')
   const hasRight = activeSides.includes('right')

@@ -194,6 +194,12 @@ When exactly one side is in away mode, both sides' vitals go through `SingleSlee
 
 Pending single-sleeper rows expire on the reader thread even when RAW/NATS input is idle or pump gating skips records. A failed write retains the completed interval separately from candidates awaiting a partner; it must commit before another candidate is accepted, so later intervals cannot replace it. Pending rows remain in memory and do not survive a process crash.
 
+### Bed Presence Veto
+
+Piezo presence only sees vibration energy and rhythm, so strong bed vibration with nobody there (a prime, the pump on pods that don't report pump speed) passes it and produced vitals for an empty bed. Before computing vitals, a side also asks the sleep-detector, which commits presence from the capacitance sensors and saves it to `sleep-detector-state.json` (`common/bed_presence.py`). Only explicit, trustworthy absence vetoes a window. The checkpoint exposes `vitals_presence` (true/false/null) and `vitals_evidence_ts`, separately from session bookkeeping. A baseline seeded from a live frame or an older profile starts untrusted: a motionless sleeper at startup must not be treated as empty. Absence becomes trustworthy after a sustained capacitance drop larger than the presence threshold and convergence of the adaptive baseline to the lower level. Higher reference levels and drops must persist for the presence debounce interval; invalid samples and input gaps reset those candidates. The `absence_ready` flag survives checkpoint and adaptive-profile reuse; forced reseeding clears it.
+
+With one side away, readings use the home side. Presence on either side allows vitals, but an empty verdict requires usable, trusted evidence from both sides. Missing or unusable observations produce unknown immediately. A restart requires a new observation before publishing evidence. A missing, unreadable, legacy or stale checkpoint, or per-side evidence more than five minutes old, also means unknown, even if another side keeps rewriting the file. Unknown presence leaves piezo presence in control. Until an unloading has established a trustworthy baseline, empty-bed vibration can therefore still pass the piezo detector.
+
 ## 6. Heart Rate Extraction
 
 ### Bandpass: 0.8-8.5 Hz

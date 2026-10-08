@@ -116,7 +116,7 @@ curl -fsSL https://raw.githubusercontent.com/sleepypod/core/main/scripts/install
 This will:
 1. **Pre-flight checks** - Verify disk space, network, dependencies
 2. **Download code** - From GitHub tarball (or use `--local`)
-3. **Detect pod generation** - Auto-detect dac.sock path and pod hardware (`scripts/pod/detect`)
+3. **Discover DAC socket** - Discover socket path without inferring hub/cover hardware (`scripts/pod/detect`)
 4. **Install Node.js 22** - Binary download (no apt required)
 5. **Install dependencies** - With `--frozen-lockfile`
 6. **Build application** - Next.js production build (skipped if pre-built)
@@ -143,7 +143,7 @@ flowchart TD
     Tarball --> Detect
     Source --> Detect
 
-    Detect[Detect pod generation\nscripts/pod/detect] --> Node[Install Node.js 22 + pnpm]
+    Detect[Discover DAC socket\nscripts/pod/detect] --> Node[Install Node.js 22 + pnpm]
     Node --> Deps[pnpm install --frozen-lockfile --prod]
     Deps --> Build{.next exists?}
     Build -->|yes| Skip[Skip build]
@@ -177,8 +177,9 @@ After installation (installed from `scripts/bin/`):
 - `sp-status` - Report service + firmware variant + biometrics pipeline (old `.RAW` shim vs mid-era direct `.RAW` vs new NATS JetStream), module health, and firmware-side service rollup. Output is paste-friendly for support threads.
 - `sp-storage-cleanup` - Remove sleepypod's own leftovers on `/persistent` (stale rollback/staging dirs, old `sleepypod-releases/*` builds, orphaned relocated `node_modules`; old DB backups with `--include-db-backups`). `--dry-run --json` prints the plan. Run by `sp-update` and by System → Storage.
 - `sp-restart` - Restart sleepypod + reconnect frankenfirmware
-- `sp-logs` - View live logs
-- `sp-bundle-logs` - One-shot diagnostic capture (`/tmp/sleepypod-bundle-<ts>.tar.gz`); redacts secrets by default, pass `--no-redact` for raw
+- `sp-info` - Pod model, firmware revision/build date, and SleepyPod build (model is unknown if the device-status API is unavailable)
+- `sp-logs` - View live logs with support context; `--firmware` adds firmware logs, `--since TIME --until TIME` selects history across retained boots
+- `sp-bundle-logs` - One-shot diagnostic capture (`/tmp/sleepypod-bundle-<ts>.tar.gz`); includes firmware/app journals and their combined timeline plus pod/firmware/build context; `--since TIME --until TIME` captures an incident across retained boots; redacts secrets by default, pass `--no-redact` for raw
 - `sp-update` - Update to latest version from GitHub
 - `sp-uninstall` - Remove sleepypod and all related services
 
@@ -273,8 +274,9 @@ scripts/
 ├── lib/
 │   └── iptables-helpers     # Shared WAN/iptables functions (sourced by sp-update)
 ├── pod/
-│   └── detect               # Pod detection: DAC_SOCK_PATH, POD_GEN
+│   └── detect               # Socket discovery: DAC_SOCK_PATH, DAC_SOCK_SOURCE
 ├── bin/                     # CLI tools — copied to /usr/local/bin/ during install
+│   ├── sp-info
 │   ├── sp-status
 │   ├── sp-restart
 │   ├── sp-logs
@@ -309,7 +311,7 @@ sp-logs
 ```
 
 Common issues:
-- dac.sock path incorrect (auto-detected from `frank.sh`: Pod 3/4 uses `/deviceinfo/dac.sock`, Pod 5 uses `/persistent/deviceinfo/dac.sock`)
+- dac.sock path incorrect (check the path in `frank.sh`: `/deviceinfo/dac.sock` or `/persistent/deviceinfo/dac.sock`; socket location does not identify hardware generation)
 - Port 3000 already in use
 - Database initialization failed
 - Scheduler failing to start (check timezone in database)
@@ -382,3 +384,33 @@ Use this when you've already run `pnpm build` locally and just want to sync.
 ### Why the pod can't build
 
 Next.js production builds require 1-2GB RAM for Turbopack. The pod has ~512MB. Attempting `pnpm build` on-pod may OOM-kill the process or produce a corrupted build. All deployment paths avoid this by shipping pre-built `.next` artifacts.
+
+### Socket discovery and hardware identity
+
+`scripts/pod/detect` preserves supported `.env` socket paths when confirmed by
+an existing socket file or `frank.sh`. Otherwise it checks `frank.sh`, then
+existing sockets at `/persistent/deviceinfo/dac.sock` and `/deviceinfo/dac.sock`.
+With no usable evidence it retains the persistent-path fallback and explicitly
+reports it as **unverified**. A socket file alone does not prove a healthy connection.
+If the fallback differs from the path firmware uses, DAC communication can fail.
+
+Neither location identifies hub or cover generation: an SD-only hub3 with a
+pod4 cover can use the persistent path. Installer hardware identity remains
+unknown (`POD_GEN=unknown`, retained for compatibility). Capabilities read OS
+metadata from `/etc/os-release` (or `/usr/lib/os-release`) and probe installed
+tools and Python independently of hardware and socket location.
+
+The installer and updater select managed Python from the stdlib probe; sensor
+processing dispatches on CBOR record types. No consumer branches on installer
+`POD_GEN`. The incorrect model label alone does not establish a cause for
+biometrics failures.
+
+Runtime `podVersion` remains a legacy classification of `sensorLabel` revision
+segments (H/I/J families), with a Pod 3 fallback for unknown labels. Firmware
+logs associate this label with the sensor/cover subsystem, not an independently
+identified hub. `sp-info` reports this as sensor/cover context and leaves hub
+identity unverified. Mixed hardware identification still needs independently
+validated hub and cover evidence. The runtime UI/API retains its existing
+classification; the historical `POD_CAPS` table is not host detection (its only
+operational consumer probes the union of iptables paths). Runtime sockets use
+`DAC_SOCK_PATH`, not that table. Discovery sends no DAC requests.

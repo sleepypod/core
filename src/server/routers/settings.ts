@@ -9,6 +9,7 @@ import {
   sideSchema,
   tapTypeSchema,
   temperatureUnitSchema,
+  timeFormatSchema,
   timeStringSchema,
   timezoneSchema,
 } from '@/src/server/validation-schemas'
@@ -17,8 +18,12 @@ const timestampSchema = z.coerce.date()
 
 const deviceSettingsSchema = z.object({
   id: z.number(),
+  bedMode: z.enum(['two', 'solo-left', 'solo-right']).default('two'),
+  unusedZoneMode: z.enum(['follow', 'off', 'independent']).default('off'),
+  defaultScheduleEndAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
   timezone: z.string(),
   temperatureUnit: temperatureUnitSchema,
+  timeFormat: timeFormatSchema,
   rebootDaily: z.boolean(),
   rebootTime: z.string().nullable(),
   primePodDaily: z.boolean(),
@@ -168,6 +173,7 @@ export const settingsRouter = router({
             id: 1,
             timezone: 'America/Los_Angeles',
             temperatureUnit: 'F',
+            timeFormat: '12h',
             rebootDaily: false,
             rebootTime: '03:00',
             primePodDaily: false,
@@ -215,8 +221,12 @@ export const settingsRouter = router({
     .input(
       z
         .object({
+          bedMode: z.enum(['two', 'solo-left', 'solo-right']).optional(),
+          unusedZoneMode: z.enum(['follow', 'off', 'independent']).optional(),
+          defaultScheduleEndAction: z.enum(['turn_off', 'maintain']).optional(),
           timezone: timezoneSchema.optional(),
           temperatureUnit: temperatureUnitSchema.optional(),
+          timeFormat: timeFormatSchema.optional(),
           rebootDaily: z.boolean().optional(),
           rebootTime: timeStringSchema.optional(),
           primePodDaily: z.boolean().optional(),
@@ -240,8 +250,12 @@ export const settingsRouter = router({
     )
     .output(z.object({
       id: z.number(),
+      bedMode: z.enum(['two', 'solo-left', 'solo-right']).default('two'),
+      unusedZoneMode: z.enum(['follow', 'off', 'independent']).default('off'),
+      defaultScheduleEndAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
       timezone: z.string(),
       temperatureUnit: temperatureUnitSchema,
+      timeFormat: timeFormatSchema,
       rebootDaily: z.boolean(),
       rebootTime: z.string().nullable(),
       primePodDaily: z.boolean(),
@@ -282,6 +296,7 @@ export const settingsRouter = router({
         // pre-transaction read) so the disable-edge decision below cannot
         // race a concurrent settings mutation.
         let priorPumpStallProtectionEnabled = false
+        let bedConfigurationChanged = false
 
         const updated = db.transaction((tx) => {
           // Fetch current settings to validate final computed state
@@ -300,6 +315,8 @@ export const settingsRouter = router({
           }
 
           priorPumpStallProtectionEnabled = Boolean(current.pumpStallProtectionEnabled)
+          bedConfigurationChanged = (input.bedMode !== undefined && input.bedMode !== current.bedMode)
+            || (input.unusedZoneMode !== undefined && input.unusedZoneMode !== current.unusedZoneMode)
 
           // Compute final state after update
           const finalRebootDaily = input.rebootDaily ?? current.rebootDaily
@@ -429,6 +446,10 @@ export const settingsRouter = router({
           }
         }
 
+        if (bedConfigurationChanged) {
+          await (await getJobManager()).applyBedConfiguration()
+        }
+
         return updated
       }
       catch (error) {
@@ -477,7 +498,7 @@ export const settingsRouter = router({
       try {
         const { side, ...updates } = input
 
-        const updated = db.transaction((tx) => {
+        const { previous, updated } = db.transaction((tx) => {
           // Read current row to merge away window for validation
           const [current] = tx
             .select()
@@ -536,7 +557,7 @@ export const settingsRouter = router({
             })
           }
 
-          return result
+          return { previous: current, updated: result }
         })
 
         // Apply away-mode scheduling incrementally if it changed
@@ -547,6 +568,19 @@ export const settingsRouter = router({
           }
           catch (e) {
             console.error('Scheduler update failed:', e)
+          }
+        }
+
+        // A side going away (a real transition, not a re-sent true) mirrors
+        // the sleeper on the other side; with both now away, the other side
+        // stops mirroring this one.
+        if (input.awayMode !== undefined && input.awayMode !== previous.awayMode) {
+          try {
+            const jobManager = await getJobManager()
+            await jobManager.applyAwayMode(side)
+          }
+          catch (e) {
+            console.error('Single-sleeper mirror failed:', e)
           }
         }
 

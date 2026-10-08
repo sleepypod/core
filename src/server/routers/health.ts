@@ -14,14 +14,14 @@ import {
   deviceState,
   deviceSettings,
 } from '@/src/db/schema'
-import { primeEvents } from '@/src/db/biometrics-schema'
+import { flowReadings, primeEvents } from '@/src/db/biometrics-schema'
 import { desc, eq } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import { getDatabaseIntegrity } from '@/src/db/integrity'
 import { getServerPerformance } from '@/src/lib/serverPerformance'
 import { getThermalHistory, THERMAL_RANGES, type ThermalRange } from '@/src/lib/thermalHistory'
-import { readThermalTruth } from '@/src/lib/thermalTruth'
+import { readThermalTruth, reportsPumpSpeed } from '@/src/lib/thermalTruth'
 import { getDataPath } from '@/src/lib/dataPathCollect'
 import { readHistory } from '@/src/lib/healthHistory'
 import { NODES, RESTARTABLE_UNITS, STAGES } from '@/src/lib/dataPath'
@@ -51,6 +51,13 @@ export const healthRouter = router({
     .output(z.object({
       uptimeSeconds: z.number(),
       rssBytes: z.number(),
+      /** process.memoryUsage() counters; arrayBuffers is included in external. These do not partition RSS. */
+      memory: z.object({
+        heapTotalBytes: z.number(),
+        heapUsedBytes: z.number(),
+        externalBytes: z.number(),
+        arrayBuffersBytes: z.number(),
+      }),
       startup: z.array(z.object({ name: z.string(), elapsedMs: z.number(), durationMs: z.number() })),
       sensorSource: z.enum(['pending', 'raw', 'nats']),
       firstFrameMs: z.number().nullable(),
@@ -494,6 +501,7 @@ export const healthRouter = router({
     .input(z.object({}))
     .output(z.object({
       pumpStallProtectionEnabled: z.boolean(),
+      reportsPumpSpeed: z.boolean().nullable(),
       heatsinkTempF: z.number().nullable(),
       ambientTempF: z.number().nullable(),
       sides: z.array(z.object({
@@ -621,6 +629,7 @@ export const healthRouter = router({
     .input(z.object({}))
     .output(z.object({
       pumpStallProtectionEnabled: z.boolean(),
+      reportsPumpSpeed: z.boolean().nullable(),
       primePodDaily: z.boolean(),
       primePodTime: z.string().nullable(),
       lastPrimeAt: z.number().nullable(),
@@ -638,8 +647,10 @@ export const healthRouter = router({
         .all()
       const [last] = biometricsDb.select({ ts: primeEvents.timestamp }).from(primeEvents).orderBy(desc(primeEvents.timestamp)).limit(1).all()
       const [first] = biometricsDb.select({ ts: primeEvents.timestamp }).from(primeEvents).orderBy(primeEvents.timestamp).limit(1).all()
+      const [flow] = biometricsDb.select({ ts: flowReadings.timestamp }).from(flowReadings).limit(1).all()
       return {
         pumpStallProtectionEnabled: settings?.pumpStall ?? false,
+        reportsPumpSpeed: reportsPumpSpeed(flow != null),
         primePodDaily: settings?.primePodDaily ?? false,
         primePodTime: settings?.primePodTime ?? null,
         lastPrimeAt: last?.ts ? last.ts.getTime() : null,

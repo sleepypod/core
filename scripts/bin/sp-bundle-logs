@@ -13,24 +13,40 @@ set -uo pipefail
 # Usage:
 #   sp-bundle-logs              # redacted bundle
 #   sp-bundle-logs --no-redact  # include raw .env / homekit identity
+#   sp-bundle-logs --since TIME --until TIME  # incident across retained boots
 
 REDACT=true
-for arg in "$@"; do
-  case "$arg" in
-    --no-redact) REDACT=false ;;
+JOURNAL_WINDOW=(-b)
+HAS_WINDOW=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --no-redact) REDACT=false; shift ;;
+    --since|--until)
+      if [ "$#" -lt 2 ] || [ -z "$2" ] || [[ "$2" == --* ]]; then
+        echo "Missing value for $1" >&2; exit 2
+      fi
+      # Explicit windows span boots, so a reboot after an incident cannot
+      # silently hide its firmware restart from the support bundle.
+      if [ "$HAS_WINDOW" = false ]; then JOURNAL_WINDOW=(); HAS_WINDOW=true; fi
+      JOURNAL_WINDOW+=("$1" "$2"); shift 2 ;;
     -h|--help)
-      sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $arg" >&2
-      echo "Usage: sp-bundle-logs [--no-redact]" >&2
-      exit 2
-      ;;
+      echo "Usage: sp-bundle-logs [--no-redact] [--since TIME] [--until TIME]"
+      echo "Journals default to the current boot; time windows include all retained boots."
+      exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-INSTALL_DIR="/home/dac/sleepypod-core"
+# Ask journalctl to parse the complete window before creating any artifacts.
+# A zero-entry query uses the same timestamp grammar as the captures below.
+if [ "$HAS_WINDOW" = true ]; then
+  if ! journalctl "${JOURNAL_WINDOW[@]}" --lines=0 --no-pager >/dev/null; then
+    echo "Cannot collect journals for the requested time window." >&2
+    exit 2
+  fi
+fi
+
+INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
 # DATA_DIR pointer is written by scripts/install (storage-aware picker).
 # Legacy fallback keeps installs without the pointer file working.
 if [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
@@ -43,7 +59,7 @@ INSTALL_LOG="/tmp/sleepypod-install.log"
 
 TS="$(date +%Y%m%d-%H%M%S)"
 STAGE="$(mktemp -d -t sleepypod-bundle.XXXXXX)"
-OUT="/tmp/sleepypod-bundle-${TS}.tar.gz"
+OUT="${TMPDIR:-/tmp}/sleepypod-bundle-${TS}.tar.gz"
 trap 'rm -rf "$STAGE"' EXIT
 
 # Each capture wraps a command and tolerates non-zero exits — the goal is
@@ -59,9 +75,10 @@ capture() {
   } > "$out"
 }
 
-# --- service journals (boot-scoped) ---------------------------------------
+# --- service journals (current boot or explicit time window) ---------------------------------------
 SERVICES=(
   sleepypod.service
+  frank.service
   sleepypod-piezo-processor.service
   sleepypod-sleep-detector.service
   sleepypod-environment-monitor.service
@@ -75,13 +92,17 @@ SERVICES=(
 )
 
 for svc in "${SERVICES[@]}"; do
-  capture "journals/$svc.log" journalctl -u "$svc" -b --no-pager
+  capture "journals/$svc.log" journalctl -u "$svc" "${JOURNAL_WINDOW[@]}" --no-pager
   capture "status/$svc.txt"   systemctl status "$svc" --no-pager
 done
 
+# Chronological app + firmware timeline makes install/reconnect races visible.
+capture "journals/hardware-timeline.log" journalctl -u frank.service -u sleepypod.service "${JOURNAL_WINDOW[@]}" --no-pager
+capture "versions/pod-firmware.txt" bash "$(dirname "$0")/sp-info"
+
 # --- pod capabilities -----------------------------------------------------
-# Source detect first so POD_GEN is set, then capabilities script populates
-# the rest. Both live under scripts/pod/ on the installed tree.
+# Discover socket location and provenance for diagnostics, then probe the
+# environment independently. Both live under scripts/pod/ on the installed tree.
 if [ -f "$INSTALL_DIR/scripts/pod/capabilities" ]; then
   {
     set +u
@@ -171,7 +192,7 @@ done
 # followed by "Resync:" spam is the classic wrong-file symptom (attaching to
 # the 16-byte counter instead of a real capture) — only DEV shows in the tab.
 capture "raw/ws-3001.txt"          bash -c 'ss -ltn 2>/dev/null | grep -q ":3001 " && echo "port 3001 listening" || echo "port 3001 NOT listening"'
-capture "raw/sensorstream-log.txt" bash -c 'journalctl -u sleepypod.service -b --no-pager 2>/dev/null | grep -iE "\[sensorStream\]" | tail -40'
+capture "raw/sensorstream-log.txt" bash -c 'journalctl -u sleepypod.service "$@" --no-pager 2>/dev/null | grep -iE "\[sensorStream\]" | tail -40' _ "${JOURNAL_WINDOW[@]}"
 
 # Retention: gzip cold-archive size vs disk. A large archive next to a
 # near-full /persistent means the pruner has stalled — the usual cause of

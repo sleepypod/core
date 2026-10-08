@@ -1,3 +1,4 @@
+vi.mock('@/src/hardware/base/instance', () => ({ getBaseController: vi.fn() }))
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 import { resetControlDatabase } from '@/src/temperature/tests/databaseFixture'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -111,13 +112,14 @@ function insertPowerSchedule(opts: {
   dayOfWeek: string
   onTime: string
   offTime: string
+  endAction?: 'turn_off' | 'maintain'
   onTemperature: number
   enabled?: boolean
 }): number {
   const info = (sqlite as any)
     .prepare(
-      `INSERT INTO power_schedules (side, day_of_week, on_time, off_time, on_temperature, enabled)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO power_schedules (side, day_of_week, on_time, off_time, on_temperature, enabled, end_action)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       opts.side,
@@ -126,6 +128,7 @@ function insertPowerSchedule(opts: {
       opts.offTime,
       opts.onTemperature,
       opts.enabled === false ? 0 : 1,
+      opts.endAction ?? 'turn_off',
     )
   return Number(info.lastInsertRowid)
 }
@@ -270,7 +273,7 @@ const powerSched = (side: 'left' | 'right') => ({
   side,
   dayOfWeek: 'saturday' as const,
   onTime: '22:00',
-  offTime: '10:00',
+  offTime: '10:00', endAction: 'turn_off' as const,
   onTemperature: 89,
   enabled: true,
   createdAt: new Date(),
@@ -632,19 +635,29 @@ describe('JobManager.loadSchedules', () => {
     expect(tempJobs).toHaveLength(2)
   })
 
+  it('restores a maintained schedule without a shutdown after reloading', async () => {
+    const id = insertPowerSchedule({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, endAction: 'maintain' })
+    insertTempSchedule({ side: 'left', dayOfWeek: 'monday', time: '07:00', temperature: 80 })
+    await manager.loadSchedules()
+    const jobs = manager.getScheduler().getJobs()
+    expect(jobs.some(j => j.id === `power-on-${id}`)).toBe(true)
+    expect(jobs.some(j => j.type === 'temperature')).toBe(true)
+    expect(jobs.some(j => j.type === 'power_off')).toBe(false)
+  })
+
   it('registers power-on AND power-off jobs for each enabled power schedule', async () => {
     insertPowerSchedule({
       side: 'left',
       dayOfWeek: 'friday',
       onTime: '22:00',
-      offTime: '07:00',
+      offTime: '07:00', endAction: 'turn_off' as const,
       onTemperature: 80,
     })
     insertPowerSchedule({
       side: 'right',
       dayOfWeek: 'saturday',
       onTime: '23:00',
-      offTime: '06:00',
+      offTime: '06:00', endAction: 'turn_off' as const,
       onTemperature: 78,
       enabled: false,
     })
@@ -831,7 +844,7 @@ describe('JobManager run-once sessions', () => {
       side: 'left',
       dayOfWeek: 'monday' as const,
       onTime: '22:00',
-      offTime: '06:00',
+      offTime: '06:00', endAction: 'turn_off' as const,
       onTemperature: 82,
       enabled: true,
       createdAt: new Date(),
@@ -847,7 +860,7 @@ describe('JobManager run-once sessions', () => {
       side: 'right',
       dayOfWeek: 'monday' as const,
       onTime: '22:00',
-      offTime: '06:00',
+      offTime: '06:00', endAction: 'turn_off' as const,
       onTemperature: null as unknown as number, // exercise the ?? 75 branch
       enabled: true,
       createdAt: new Date(),
@@ -871,7 +884,7 @@ describe('JobManager run-once sessions', () => {
       side: 'left',
       dayOfWeek: 'monday' as const,
       onTime: '22:00',
-      offTime: '06:00',
+      offTime: '06:00', endAction: 'turn_off' as const,
       onTemperature: 80,
       enabled: true,
       createdAt: new Date(),
@@ -896,7 +909,7 @@ describe('JobManager run-once sessions', () => {
       side: 'right',
       dayOfWeek: 'monday' as const,
       onTime: '22:00',
-      offTime: '06:00',
+      offTime: '06:00', endAction: 'turn_off' as const,
       onTemperature: 80,
       enabled: true,
       createdAt: new Date(),
@@ -1409,7 +1422,7 @@ describe('JobManager handler closures', () => {
       side: 'right',
       dayOfWeek: 'monday',
       onTime: '22:00',
-      offTime: '07:00',
+      offTime: '07:00', endAction: 'turn_off' as const,
       onTemperature: 80,
     })
     await manager.loadSchedules()
@@ -1425,7 +1438,7 @@ describe('JobManager handler closures', () => {
       side: 'left',
       dayOfWeek: 'monday',
       onTime: '22:00',
-      offTime: '07:00',
+      offTime: '07:00', endAction: 'turn_off' as const,
       onTemperature: 80,
     })
     seedSidePowered('left', true)
@@ -1472,15 +1485,15 @@ describe('JobManager handler closures', () => {
     expect(setTemperature).toHaveBeenCalledWith('right', 75)
   })
 
-  it('away-mode start handler tolerates hardware failures', async () => {
+  it('away-mode start handler reports hardware failures', async () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString()
     insertSideSettings({ side: 'left', awayStart: future })
     await manager.loadSchedules()
 
     setPower.mockRejectedValueOnce(new Error('hw down'))
     const handler = captured.get('away-start-left')!
-    // Must not reject: handler swallows hw errors with console.warn
-    await expect(handler()).resolves.toBeUndefined()
+    // Surface partial application so the scheduler records the failure.
+    await expect(handler()).rejects.toThrow('hw down')
   })
 
   it('away-mode return handler tolerates hardware failures', async () => {
@@ -1668,7 +1681,7 @@ describe('JobManager handler closures', () => {
         side: 'left',
         dayOfWeek: 'monday' as const,
         onTime: '22:00',
-        offTime: '07:00',
+        offTime: '07:00', endAction: 'turn_off' as const,
         onTemperature: 80,
         enabled: true,
         createdAt: new Date(),
@@ -1777,7 +1790,7 @@ describe('JobManager — streaming + downstream side-effects', () => {
       side: 'right',
       dayOfWeek: 'monday' as const,
       onTime: '22:00',
-      offTime: '07:00',
+      offTime: '07:00', endAction: 'turn_off' as const,
       onTemperature: 84,
       enabled: true,
       createdAt: new Date(),
@@ -1800,7 +1813,7 @@ describe('JobManager — streaming + downstream side-effects', () => {
       side: 'left',
       dayOfWeek: 'monday' as const,
       onTime: '22:00',
-      offTime: '07:00',
+      offTime: '07:00', endAction: 'turn_off' as const,
       onTemperature: null as unknown as number,
       enabled: true,
       createdAt: new Date(),
@@ -1821,7 +1834,7 @@ describe('JobManager — streaming + downstream side-effects', () => {
       side: 'left',
       dayOfWeek: 'monday' as const,
       onTime: '22:00',
-      offTime: '07:00',
+      offTime: '07:00', endAction: 'turn_off' as const,
       onTemperature: 80,
       enabled: true,
       createdAt: new Date(),
@@ -1877,7 +1890,7 @@ describe('JobManager — streaming + downstream side-effects', () => {
       side: 'left',
       dayOfWeek: 'monday' as const,
       onTime: '22:00',
-      offTime: '07:00',
+      offTime: '07:00', endAction: 'turn_off' as const,
       onTemperature: 80,
       enabled: true,
       createdAt: new Date(),

@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from common.side_mode import SingleSleeperMode, home_side_for, other_side
+from common.side_mode import SingleSleeperMode, active_sides_for, home_side_for, other_side
 
 
 @pytest.mark.parametrize("away,home", [
@@ -80,3 +80,26 @@ def test_missing_db_is_per_side(tmp_path):
 def test_read_only_access_never_creates_the_db(tmp_path):
     SingleSleeperMode(tmp_path / "absent.db").home_side()
     assert not (tmp_path / "absent.db").exists()
+
+
+@pytest.mark.parametrize("bed_mode,side", [("solo-left", "left"), ("solo-right", "right")])
+def test_solo_setup_away_and_return(tmp_path, bed_mode, side):
+    path = _db(tmp_path, False, False)
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE device_settings (id INTEGER PRIMARY KEY, bed_mode TEXT)")
+        conn.execute("INSERT INTO device_settings VALUES (1, ?)", (bed_mode,))
+    mode = SingleSleeperMode(path, reload_s=0)
+    assert mode.home_side() == side
+    assert mode.active_sides() == (side,)
+    _set_away(path, side, True)
+    assert mode.home_side() is None
+    assert mode.active_sides() == ()
+    _set_away(path, side, False)
+    assert mode.home_side() == side
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE device_settings SET bed_mode='two'")
+    assert mode.active_sides() == ("left", "right")
+
+
+def test_both_away_has_no_active_sleepers():
+    assert active_sides_for({"left": True, "right": True}) == ()

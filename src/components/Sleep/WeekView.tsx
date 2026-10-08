@@ -1,12 +1,13 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { Card, CardHeader, InlineError, KeyValue, LineChart, SectionLabel, Skeleton, StageLegend, WeekBars } from '@/src/components/ds'
 import { MovementChart } from '@/src/components/MovementChart/MovementChart'
 import { trpc } from '@/src/utils/trpc'
 import {
   average,
   averageClock,
-  formatClock,
   formatDuration,
   formatNightLong,
   toHypnoBlocks,
@@ -26,6 +27,7 @@ interface WeekViewProps {
 }
 
 export function WeekView({ side, weekStart, nightKey, onSelectNight }: WeekViewProps) {
+  const { formatClock } = useTimeFormatter()
   const { nights, isLoading, error } = useWeekNights(side, weekStart)
   const withData = nights.filter(n => n.hours > 0)
   const picked = nights.findIndex(n => n.key === nightKey)
@@ -112,6 +114,7 @@ function VitalsRow({ label, unit, color, nights, pick }: {
 }
 
 function NightDrillIn({ side, night, record }: { side: Side, night: NightSummary, record: SleepRecordRow }) {
+  const { formatClock } = useTimeFormatter()
   const stages = trpc.biometrics.getSleepStages.useQuery({ side, sleepRecordId: record.id })
   const start = new Date(record.enteredBedAt).getTime()
   const end = record.leftBedAt ? new Date(record.leftBedAt).getTime() : start + record.sleepDurationSeconds * 1000

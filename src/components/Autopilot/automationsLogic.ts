@@ -1,3 +1,4 @@
+import { type TimeFormat, formatClock as formatDisplayClock } from '@/src/lib/timeFormat'
 /**
  * View-model for the Automations page — who owns each side now, tonight's
  * timeline lanes, rule row copy and activity-log copy. Pure (times are epoch
@@ -41,14 +42,14 @@ export const OWNER_LABEL: Record<Owner, string> = {
   'off': 'Off',
 }
 
-export const clock = (t: number) => new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+export const clock = (t: number, timeFormat: TimeFormat = '12h') => formatDisplayClock(new Date(t), timeFormat, { hour: 'numeric', minute: '2-digit' })
 
 /**
  * The side's owner, by TemperatureController precedence (manual hold →
  * run-once → autopilot → schedule → off), with one sentence explaining it.
  * `fmt` renders a °F setpoint in the user's unit ("81°").
  */
-export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: number, fmt: (f: number) => string): OwnerView {
+export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: number, fmt: (f: number) => string, timeFormat: TimeFormat = '12h'): OwnerView {
   const next = curve.find(p => p.at > now)
   // Without a running controller, infer the owner from what's persisted.
   const inferred = s?.hold && s.hold.expiresAt > now
@@ -61,7 +62,7 @@ export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: 
     return {
       owner: 'manual',
       label: OWNER_LABEL.manual,
-      detail: `Dial set to ${fmt(hold.temperature)} at ${clock(hold.startedAt)}. ${resumes} at ${clock(hold.expiresAt)}.`,
+      detail: `Dial set to ${fmt(hold.temperature)} at ${clock(hold.startedAt, timeFormat)}. ${resumes} at ${clock(hold.expiresAt, timeFormat)}.`,
     }
   }
   if (source === 'run-once') {
@@ -69,7 +70,7 @@ export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: 
     return {
       owner: 'run-once',
       label: OWNER_LABEL['run-once'],
-      detail: `${target != null ? `${fmt(target)} from a run-once session` : 'Run-once session'}${s?.runOnceUntil ? ` until ${clock(s.runOnceUntil)}` : ''}.`,
+      detail: `${target != null ? `${fmt(target)} from a run-once session` : 'Run-once session'}${s?.runOnceUntil ? ` until ${clock(s.runOnceUntil, timeFormat)}` : ''}.`,
     }
   }
   if (source === 'autopilot') {
@@ -77,7 +78,7 @@ export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: 
     return {
       owner: 'autopilot',
       label: OWNER_LABEL.autopilot,
-      detail: last ? `${last.ruleName} set ${fmt(last.temp)} at ${clock(last.at)}.` : 'An automation holds this side.',
+      detail: last ? `${last.ruleName} set ${fmt(last.temp)} at ${clock(last.at, timeFormat)}.` : 'An automation holds this side.',
     }
   }
   if (source === 'schedule') {
@@ -86,7 +87,7 @@ export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: 
     // Skip steps that read the same ("80° until 10:30 PM, then 80°").
     const change = current == null ? next : curve.find(p => p.at > now && (p === curve[curve.length - 1] || fmt(p.temperature) !== fmt(current)))
     const then = change && change !== curve[curve.length - 1] ? `, then ${fmt(change.temperature)}` : ''
-    const until = change ? ` until ${clock(change.at)}` : ''
+    const until = change ? ` until ${clock(change.at, timeFormat)}` : ''
     return {
       owner: 'schedule',
       label: OWNER_LABEL.schedule,
@@ -99,7 +100,7 @@ export function ownerView(s: SideTonight | undefined, curve: CurvePoint[], now: 
     label: OWNER_LABEL.off,
     detail: s?.control?.blocked === 'safety'
       ? 'Paused by pump stall protection.'
-      : start ? `Schedule starts at ${clock(start.at)}.` : 'No schedule tonight.',
+      : start ? `Schedule starts at ${clock(start.at, timeFormat)}.` : 'No schedule tonight.',
   }
 }
 
@@ -258,7 +259,8 @@ export interface EntryLike {
   sides: Array<'left' | 'right'>
 }
 
-function fmtWindow(w: { start: string, end: string }): string {
+function fmtWindow(w: { start: string, end: string }, timeFormat: TimeFormat = '12h'): string {
+  if (timeFormat === '24h') return `${w.start}–${w.end}`
   const f = (hhmm: string) => {
     const [h, m] = hhmm.split(':').map(Number)
     const hh = h % 12 === 0 ? 12 : h % 12
@@ -268,11 +270,11 @@ function fmtWindow(w: { start: string, end: string }): string {
 }
 
 /** The reason column: why the rule did (or didn't) change the bed. */
-export function reasonText(e: EntryLike, rule: { conditions: Condition } | undefined, missing: string[], fmt: (f: number) => string): string {
+export function reasonText(e: EntryLike, rule: { conditions: Condition } | undefined, missing: string[], fmt: (f: number) => string, timeFormat: TimeFormat = '12h'): string {
   const w = rule ? conditionTimeWindow(rule.conditions) : null
   switch (e.code) {
     case 'signal-unavailable': return `${missing[0] ?? 'signal'} unavailable`
-    case 'outside-window': return w ? `outside ${fmtWindow(w)}` : 'outside its window'
+    case 'outside-window': return w ? `outside ${fmtWindow(w, timeFormat)}` : 'outside its window'
     case 'condition-false': return 'condition not met'
     case 'cooldown': return 'cooling down'
     case 'manual-hold': return 'manual hold'
@@ -291,8 +293,8 @@ export function reasonText(e: EntryLike, rule: { conditions: Condition } | undef
 }
 
 /** `6:31 PM`, or `11:00 PM → 6 AM` for a collapsed range (`→ now` if still running). */
-export function entryTime(start: number, end: number, now: number, count: number): string {
-  if (count <= 1) return clock(start)
-  const endLabel = now - end < 3 * MINUTE ? 'now' : clock(end).replace(':00 ', ' ')
-  return `${clock(start)} → ${endLabel}`
+export function entryTime(start: number, end: number, now: number, count: number, timeFormat: TimeFormat = '12h'): string {
+  if (count <= 1) return clock(start, timeFormat)
+  const endLabel = now - end < 3 * MINUTE ? 'now' : clock(end, timeFormat).replace(':00 ', ' ')
+  return `${clock(start, timeFormat)} → ${endLabel}`
 }

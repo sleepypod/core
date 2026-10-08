@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react'
 import { useSwipeNavigation } from '@/src/hooks/useSwipeNavigation'
+import { useBaseAvailable } from './useBaseAvailable'
 import { Sidebar } from './Sidebar'
 import { TabBar } from './TabBar'
 
@@ -12,7 +13,8 @@ import { TabBar } from './TabBar'
  * content area itself is ≥ 960px (`@min-[960px]:`).
  */
 export function AppShell({ children }: { children: ReactNode }) {
-  const { onTouchStart, onTouchEnd } = useSwipeNavigation()
+  const hasBase = useBaseAvailable()
+  const { onTouchStart, onTouchEnd } = useSwipeNavigation(hasBase)
   return (
     <div className="flex min-h-dvh bg-app text-fg">
       <Sidebar className="hidden min-[900px]:flex" />

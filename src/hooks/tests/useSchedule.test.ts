@@ -11,8 +11,8 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const sideMock = vi.hoisted(() => {
-  const state: { primarySide: 'left' | 'right', activeSides: Array<'left' | 'right'> }
-    = { primarySide: 'left', activeSides: ['left'] }
+  const state: { primarySide: 'left' | 'right', activeSides: Array<'left' | 'right'>, singleScheduleSide: 'left' | 'right' | null }
+    = { primarySide: 'left', activeSides: ['left'], singleScheduleSide: null }
   return { state }
 })
 
@@ -100,6 +100,7 @@ afterEach(() => {
   scheduleGroupingMock.sortChronological.mockClear()
   sideMock.state.primarySide = 'left'
   sideMock.state.activeSides = ['left']
+  sideMock.state.singleScheduleSide = null
 })
 
 describe('useSchedule — derived state', () => {
@@ -544,6 +545,30 @@ describe('useSchedule — saveCurve / deleteCurve edge cases', () => {
     const sides = new Set(arg.creates.temperature.map((c: any) => c.side))
     expect(sides.has('left')).toBe(true)
     expect(sides.has('right')).toBe(true)
+  })
+
+  it('saveCurve writes only the sleeper\'s side when the other is away, even with both selected', async () => {
+    sideMock.state.activeSides = ['left', 'right']
+    sideMock.state.singleScheduleSide = 'right'
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 2, dayOfWeek: 'monday', time: '07:00', temperature: 70, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({
+        targetDays: ['monday'],
+        setPoints: [
+          { time: '07:00', temperature: 68 },
+          { time: '22:00', temperature: 60 },
+        ],
+        originalDays: ['monday'],
+      })
+    })
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(new Set(arg.creates.temperature.map((c: { side: string }) => c.side))).toEqual(new Set(['right']))
+    expect(arg.deletes.temperature).toEqual([2])
   })
 
   it('saveCurve clamps onTemperature into the 55–110 range', async () => {
@@ -1786,4 +1811,42 @@ describe('useSchedule — mutation boundary and dependency regressions', () => {
     const { result } = renderHook(() => useSchedule())
     expect(result.current.isLoading).toBe(false)
   })
+})
+
+it('saves a single-point maintain curve to both sides', async () => {
+  trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+  trpcMock.overrides.allRight = { temperature: [], power: [], alarm: [] }
+  sideMock.state.activeSides = ['left', 'right']
+  const { result } = renderHook(() => useSchedule())
+  await act(async () => result.current.saveCurve({ targetDays: ['monday'], setPoints: [{ time: '22:00', temperature: 75 }], endAction: 'maintain' }))
+  expect(trpcMock.batchMutate.mock.calls[0][0].creates.power).toEqual([
+    expect.objectContaining({ side: 'left', endAction: 'maintain', onTime: '22:00' }),
+    expect.objectContaining({ side: 'right', endAction: 'maintain', onTime: '22:00' }),
+  ])
+})
+
+it('preserves maintain when copying a day', async () => {
+  trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+  trpcMock.overrides.day = { temperature: [], power: [{ id: 1, side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true, endAction: 'maintain' }], alarm: [] }
+  const { result } = renderHook(() => useSchedule())
+  await act(async () => result.current.applyToOtherDays(['tuesday']))
+  expect(trpcMock.batchMutate.mock.calls[0][0].creates.power).toEqual([expect.objectContaining({ dayOfWeek: 'tuesday', endAction: 'maintain' })])
+})
+
+it('getCurveForDay splits days with the same set points by end action', () => {
+  const days = ['monday', 'tuesday', 'wednesday', 'thursday']
+  trpcMock.overrides.allLeft = {
+    temperature: days.map((dayOfWeek, id) => ({ id, dayOfWeek, time: '22:00', temperature: 75, enabled: true })),
+    power: [
+      { id: 1, dayOfWeek: 'monday', endAction: 'maintain' },
+      { id: 2, dayOfWeek: 'tuesday', endAction: 'maintain' },
+      { id: 3, dayOfWeek: 'wednesday', endAction: 'turn_off' },
+      // Rows saved before end actions existed count as turning off.
+      { id: 4, dayOfWeek: 'thursday' },
+    ],
+    alarm: [],
+  }
+  const { result } = renderHook(() => useSchedule())
+  expect(result.current.getCurveForDay('monday').days).toEqual(['monday', 'tuesday'])
+  expect(result.current.getCurveForDay('wednesday').days).toEqual(['wednesday', 'thursday'])
 })

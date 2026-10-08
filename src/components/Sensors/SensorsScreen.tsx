@@ -62,8 +62,8 @@ export function SensorsScreen({ streamEnabled = true }: { streamEnabled?: boolea
 
   return (
     <div className="grid grid-flow-row-dense gap-3.5 @min-[640px]:grid-cols-2 @min-[960px]:grid-cols-3">
-      <PresenceCard />
       <BedTempMatrix />
+      <PresenceCard />
       <FreezerHealthCard />
 
       {/* Bed temperature trend */}

@@ -86,6 +86,7 @@ describe('CurveEditor', () => {
       targetDays: ['monday'],
       setPoints: [{ time: '07:00', temperature: 84 }, { time: '23:15', temperature: 84 }],
       originalDays: ['monday'],
+      endAction: 'turn_off',
     })
   })
 
@@ -206,4 +207,14 @@ it('renders the desktop editor during server rendering before media queries are 
   const html = renderToString(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
   expect(html).toContain('Save curve')
   expect(html).toContain('Edit set point 11:15 PM')
+})
+
+it('preserves maintain on edit, removes the off badge, and saves the choice', async () => {
+  const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} initialEndAction="maintain" />)
+  expect((s.getByLabelText('After schedule ends') as HTMLSelectElement).value).toBe('maintain')
+  expect(s.queryByText('Power off')).toBeNull()
+  fireEvent.click(saveCurveButton(s))
+  await waitFor(() => expect(m.saveCurve).toHaveBeenCalledWith(expect.objectContaining({ endAction: 'maintain' })))
+  fireEvent.change(s.getByLabelText('After schedule ends'), { target: { value: 'turn_off' } })
+  expect(s.getByText('Power off')).toBeTruthy()
 })

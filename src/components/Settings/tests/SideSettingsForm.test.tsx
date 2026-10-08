@@ -96,3 +96,29 @@ describe('SideSettingsForm', () => {
     expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', awayMode: true })
   })
 })
+
+it('saves and clears an optional return date without changing the bed setup', () => {
+  render(<SideSettingsForm side="left" sideData={{ ...base, awayMode: true }} presenceAvailable />)
+  const input = screen.getByLabelText('Return date for Left side')
+  fireEvent.change(input, { target: { value: '2026-11-01T18:00' } })
+  fireEvent.blur(input)
+  expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', awayReturn: new Date('2026-11-01T18:00').toISOString() })
+})
+
+it('shows a saved return date in local time, clears it, and skips an unchanged blur', () => {
+  const awayReturn = new Date(2026, 10, 1, 18, 0).toISOString()
+  render(<SideSettingsForm side="right" sideData={{ ...base, side: 'right', awayMode: true, awayReturn }} presenceAvailable />)
+  const input = screen.getByLabelText('Return date for Right side') as HTMLInputElement
+  expect(input.value).toBe('2026-11-01T18:00')
+  fireEvent.blur(input)
+  expect(trpcMock.mutate).not.toHaveBeenCalled()
+  fireEvent.change(input, { target: { value: '' } })
+  fireEvent.blur(input)
+  expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'right', awayReturn: null })
+})
+
+it('leaves an unset return date alone on blur', () => {
+  render(<SideSettingsForm side="left" sideData={base} presenceAvailable />)
+  fireEvent.blur(screen.getByLabelText('Return date for Left side'))
+  expect(trpcMock.mutate).not.toHaveBeenCalled()
+})

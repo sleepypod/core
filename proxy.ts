@@ -41,8 +41,9 @@ export const proxy = (request: NextRequest) => {
 // Routes excluded from locale redirect:
 //   api    — tRPC + REST endpoints, no locale needed
 //   panel  — tRPC panel dev tool, served as a plain route handler
+//   vendor — static vendored scripts in public/vendor (three.js fallback)
 export const config = {
   matcher: [
-    '/((?!api|panel(?:/|$)|_vercel|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!api|panel(?:/|$)|vendor/|_vercel|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }

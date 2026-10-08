@@ -20,6 +20,8 @@ const schedulerMock = vi.hoisted(() => {
     upsertPrimeJob: vi.fn(),
     upsertLedNightMode: vi.fn(async () => undefined),
     upsertAwayMode: vi.fn(),
+    applyBedConfiguration: vi.fn(async () => undefined),
+    applyAwayMode: vi.fn(async () => undefined),
   }
   return { getJobManager: vi.fn(async () => jm), jm }
 })
@@ -126,6 +128,7 @@ beforeEach(() => {
   schedulerMock.jm.upsertPrimeJob.mockReset()
   schedulerMock.jm.upsertLedNightMode.mockReset().mockResolvedValue(undefined)
   schedulerMock.jm.upsertAwayMode.mockReset()
+  schedulerMock.jm.applyAwayMode.mockReset().mockResolvedValue(undefined)
   keepaliveMock.startKeepalive.mockReset()
   keepaliveMock.stopKeepalive.mockReset()
   autoOffMock.restartAutoOffTimers.mockReset()
@@ -145,7 +148,7 @@ beforeEach(() => {
 describe('settings.getAll', () => {
   it('returns existing rows for device, sides, and gestures', async () => {
     const device = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: '03:00',
       primePodDaily: false, primePodTime: '14:00',
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -215,11 +218,20 @@ describe('settings.getAll', () => {
 })
 
 describe('settings.updateDevice', () => {
+  it('persists the default end action without rescheduling existing curves', async () => {
+    const current = { ...baseDevice, defaultScheduleEndAction: 'turn_off' }
+    const updated = { ...current, defaultScheduleEndAction: 'maintain' }
+    dbState.txRowsQueue.push([current], [updated])
+    const result = await caller.updateDevice({ defaultScheduleEndAction: 'maintain' })
+    expect(result.defaultScheduleEndAction).toBe('maintain')
+    expect(schedulerMock.getJobManager).not.toHaveBeenCalled()
+  })
+
   it('updates timezone and triggers updateTimezone reload', async () => {
     // For 'homekitEnabled' check: not present, so no prior-row select.
     // Tx: select(current) returns 1 row, update().returning().all() returns updated row.
     const current = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: '03:00',
       primePodDaily: false, primePodTime: '14:00',
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -241,7 +253,7 @@ describe('settings.updateDevice', () => {
 
   it('upserts the prime job incrementally for non-timezone scheduling fields', async () => {
     const current = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: '03:00',
       primePodDaily: false, primePodTime: '14:00',
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -406,7 +418,7 @@ describe('settings.updateDevice', () => {
 
   it('rejects rebootDaily=true without a rebootTime', async () => {
     const current = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: null,
       primePodDaily: false, primePodTime: '14:00',
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -428,7 +440,7 @@ describe('settings.updateDevice', () => {
     // Top-level update().set().where() for revert (await thenable resolves to anything)
 
     const current = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: null,
       primePodDaily: false, primePodTime: null,
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -585,7 +597,7 @@ describe('settings.setGesture / deleteGesture', () => {
 
 // Shared device row fixture for branches that don't care about specific values.
 const baseDevice = {
-  id: 1, timezone: 'UTC', temperatureUnit: 'F' as const,
+  id: 1, timezone: 'UTC', temperatureUnit: 'F' as const, timeFormat: '12h' as const,
   rebootDaily: false, rebootTime: '03:00',
   primePodDaily: false, primePodTime: '14:00',
   ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -695,6 +707,34 @@ describe('settings.updateSide — extra branches', () => {
     await caller.updateSide({ side: 'left', awayStart: '2025-01-01T00:00:00Z' })
     expect(schedulerMock.jm.upsertAwayMode).toHaveBeenCalledWith('left', '2025-01-01T00:00:00Z', null)
     expect(schedulerMock.jm.reloadSchedules).not.toHaveBeenCalled()
+  })
+
+  it('brings a side that goes away in line with the sleeper on the other side', async () => {
+    const current = { ...baseSide }
+    dbState.txRowsQueue.push([current], [{ ...current, awayMode: true }])
+    await caller.updateSide({ side: 'left', awayMode: true })
+    expect(schedulerMock.jm.applyAwayMode).toHaveBeenCalledExactlyOnceWith('left')
+  })
+
+  it('does not sync when away mode is turned off, untouched or already on, and survives a sync failure', async () => {
+    const current = { ...baseSide }
+    dbState.txRowsQueue.push([current], [current])
+    await caller.updateSide({ side: 'left', awayMode: false })
+    dbState.txRowsQueue.push([current], [current])
+    await caller.updateSide({ side: 'left', name: 'Renamed' })
+    // Re-sending true for a side that is already away is not a transition:
+    // syncing again would re-power a mirror the user may have turned off.
+    const alreadyAway = { ...current, awayMode: true }
+    dbState.txRowsQueue.push([alreadyAway], [alreadyAway])
+    await caller.updateSide({ side: 'left', awayMode: true })
+    expect(schedulerMock.jm.applyAwayMode).not.toHaveBeenCalled()
+
+    schedulerMock.jm.applyAwayMode.mockRejectedValueOnce(new Error('hw down'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    dbState.txRowsQueue.push([current], [{ ...current, awayMode: true }])
+    await caller.updateSide({ side: 'left', awayMode: true })
+    expect(errorSpy).toHaveBeenCalledWith('Single-sleeper mirror failed:', expect.any(Error))
+    errorSpy.mockRestore()
   })
 
   it('logs but does not fail when away-window scheduler upsert throws', async () => {
@@ -822,6 +862,7 @@ describe('settings.getAll — defaults and partitioning', () => {
       id: 1,
       timezone: 'America/Los_Angeles',
       temperatureUnit: 'F',
+      timeFormat: '12h',
       rebootDaily: false,
       rebootTime: '03:00',
       primePodDaily: false,
@@ -931,6 +972,18 @@ describe('settings.updateDevice — scheduler key detection', () => {
     expect(homekitMock.enable).not.toHaveBeenCalled()
     expect(homekitMock.disable).not.toHaveBeenCalled()
     expect(dbState.txSetCalls).toEqual([{ temperatureUnit: 'C', updatedAt: expect.any(Date) }])
+  })
+
+  it('persists the pod-wide time format without scheduler side effects and rejects unknown formats', async () => {
+    const current = { ...baseDevice }
+    dbState.txRowsQueue.push([current], [{ ...current, timeFormat: '24h' }])
+
+    const result = await caller.updateDevice({ timeFormat: '24h' })
+    expect(result.timeFormat).toBe('24h')
+    expect(dbState.txSetCalls).toEqual([{ timeFormat: '24h', updatedAt: expect.any(Date) }])
+    expect(schedulerMock.getJobManager).not.toHaveBeenCalled()
+    // @ts-expect-error -- exercising runtime validation
+    await expect(caller.updateDevice({ timeFormat: '24-hour' })).rejects.toThrow()
   })
 
   it('bails out quietly when the post-commit re-read finds no row', async () => {
@@ -1185,4 +1238,24 @@ describe('settings.deleteGesture — error surface', () => {
     await expect(caller.deleteGesture({ side: 'left', tapType: 'doubleTap' }))
       .rejects.toThrow('Failed to delete gesture: Unknown error')
   })
+})
+
+it('persists solo setup and zone policy and applies the transition once', async () => {
+  schedulerMock.jm.applyBedConfiguration.mockClear()
+  const current = { ...baseDevice, bedMode: 'two', unusedZoneMode: 'off' }
+  const updated = { ...current, bedMode: 'solo-left', unusedZoneMode: 'independent' }
+  dbState.txRowsQueue.push([current], [updated])
+  const result = await caller.updateDevice({ bedMode: 'solo-left', unusedZoneMode: 'independent' })
+  expect(result).toMatchObject({ bedMode: 'solo-left', unusedZoneMode: 'independent' })
+  expect(dbState.txSetCalls[0]).toMatchObject({ bedMode: 'solo-left', unusedZoneMode: 'independent' })
+  expect(schedulerMock.jm.applyBedConfiguration).toHaveBeenCalledTimes(1)
+  dbState.txRowsQueue.push([updated], [updated])
+  await caller.updateDevice({ bedMode: 'solo-left', unusedZoneMode: 'independent' })
+  expect(schedulerMock.jm.applyBedConfiguration).toHaveBeenCalledTimes(1)
+})
+
+it('rejects invalid sleeper setup and zone policy', async () => {
+  await expect(caller.updateDevice({ bedMode: 'solo' as 'two' })).rejects.toThrow()
+  await expect(caller.updateDevice({ unusedZoneMode: 'linked' as 'off' })).rejects.toThrow()
+  expect(dbMock.transaction).not.toHaveBeenCalled()
 })

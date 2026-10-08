@@ -46,23 +46,9 @@ probe_section "sleepypod service"
 systemctl status sleepypod.service --no-pager -n 0 2>/dev/null \
   || echo "sleepypod.service: not installed"
 
-# ----- firmware ------------------------------------------------------------
-probe_section "firmware"
-if [ -r /etc/rat_version ]; then
-  printf "rat_version: %s\n" "$(cat /etc/rat_version)"
-else
-  echo "rat_version: missing"
-fi
-if [ -r /etc/build_time_epoch ]; then
-  epoch=$(cat /etc/build_time_epoch)
-  built=$(date -d "@$epoch" 2>/dev/null || echo "$epoch (epoch)")
-  printf "built:       %s\n" "$built"
-fi
-if [ -f /opt/eight/bin/frank.sh ]; then
-  printf "frank.sh:    present (old firmware path)\n"
-else
-  printf "frank.sh:    absent (mid/new firmware variants)\n"
-fi
+# ----- pod / firmware / app build ------------------------------------------
+echo
+"$(dirname "$0")/sp-info"
 printf "frank.service: %s\n" "$(active_or frank.service)"
 
 # ----- biometrics pipeline -------------------------------------------------

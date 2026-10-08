@@ -1,12 +1,14 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { Bell, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Button, Card, InlineError, Skeleton, Toggle } from '@/src/components/ds'
 import { AlarmEditor } from '@/src/components/Schedule/AlarmEditor'
 import { groupAlarms } from '@/src/components/Schedule/AlarmSection'
-import { formatTime12h } from '@/src/lib/scheduleTime'
+
 import type { Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
 import { pickAlarmGroup, summarizeDays } from './tempScreenUtils'
@@ -22,6 +24,7 @@ import { useNow } from './TonightCard'
  * AlarmEditor (schedules.batchUpdate).
  */
 export function AlarmCard({ side }: { side: Side }) {
+  const { formatTime } = useTimeFormatter()
   const utils = trpc.useUtils()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
   const update = trpc.schedules.updateAlarmSchedule.useMutation()
@@ -68,11 +71,11 @@ export function AlarmCard({ side }: { side: Side }) {
             ? (
                 <button
                   type="button"
-                  aria-label={`Edit ${formatTime12h(group.time)} alarm`}
+                  aria-label={`Edit ${formatTime(group.time)} alarm`}
                   onClick={() => setEditorOpen(true)}
                   className="flex min-w-0 cursor-pointer flex-col items-start bg-transparent p-0 text-left"
                 >
-                  <span className="font-mono text-sm">{formatTime12h(group.time)}</span>
+                  <span className="font-mono text-sm">{formatTime(group.time)}</span>
                   <span className="truncate text-xs text-fg-2">
                     {`${summarizeDays(group.days)} · ${group.duration}s buzz`}
                   </span>

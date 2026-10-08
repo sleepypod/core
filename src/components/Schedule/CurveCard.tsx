@@ -1,12 +1,15 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+import { formatTime, type TimeFormat } from '@/src/lib/timeFormat'
+
 import { Fragment, type MouseEvent } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge, Card, GhostIcon, StatusDot } from '@/src/components/ds'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import { sortChronological } from '@/src/lib/scheduleGrouping'
-import { formatTime12h } from '@/src/lib/scheduleTime'
+
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 import { buildTimeline, CurveChart, CurveLegend, dropHolds, MiniCurve, type BedSample } from './CurveChart'
@@ -37,10 +40,10 @@ export function formatTempRange(setPoints: Array<{ temperature: number }>, unit:
 }
 
 /** "11:15 PM → 7:00 AM" from the chronologically first and last set points. */
-export function formatWindow(setPoints: Array<{ time: string, temperature: number }>): string | null {
+export function formatWindow(setPoints: Array<{ time: string, temperature: number }>, timeFormat: TimeFormat = '12h'): string | null {
   if (setPoints.length < 2) return null
   const sorted = sortChronological(setPoints)
-  return `${formatTime12h(sorted[0].time)} → ${formatTime12h(sorted[sorted.length - 1].time)}`
+  return `${formatTime(sorted[0].time, timeFormat)} → ${formatTime(sorted[sorted.length - 1].time, timeFormat)}`
 }
 
 export interface CurvePhase {
@@ -66,7 +69,7 @@ function formatDuration(minutes: number): string {
  * ramp before the longest hold, the hold itself, the ramp after it, and power
  * off. Points that repeat the previous temperature are ignored.
  */
-export function curvePhases(setPoints: Array<{ time: string, temperature: number }>): CurvePhase[] {
+export function curvePhases(setPoints: Array<{ time: string, temperature: number }>, endAction: 'turn_off' | 'maintain' = 'turn_off'): CurvePhase[] {
   const pts = dropHolds(buildTimeline(setPoints))
   if (pts.length === 0) return []
   if (pts.length === 1) return [{ time: pts[0].item.time, caption: 'Power on', to: pts[0].temperature }]
@@ -94,14 +97,17 @@ export function curvePhases(setPoints: Array<{ time: string, temperature: number
     const start = pts[hold].temperature
     phases.push({ time: pts[hold + 1].item.time, caption: 'Wake ramp', from: start, to: extreme(start, pts.slice(hold + 1, last)) })
   }
-  phases.push({ time: pts[last].item.time, caption: 'Power off' })
+  phases.push(endAction === 'maintain'
+    ? { time: pts[last].item.time, caption: 'Maintain temperature', to: pts[last].temperature }
+    : { time: pts[last].item.time, caption: 'Power off' })
   return phases
 }
 
 /** The night's phases as columns: time, temperature (or ramp), caption. */
-export function PhaseStrip({ setPoints, className }: { setPoints: Array<{ time: string, temperature: number }>, className?: string }) {
+export function PhaseStrip({ setPoints, className, endAction = 'turn_off' }: { endAction?: 'turn_off' | 'maintain', setPoints: Array<{ time: string, temperature: number }>, className?: string }) {
+  const { formatTime } = useTimeFormatter()
   const { unit } = useTemperatureUnit()
-  const phases = curvePhases(setPoints)
+  const phases = curvePhases(setPoints, endAction)
   return (
     <div
       className={cn('grid gap-2', className)}
@@ -109,7 +115,7 @@ export function PhaseStrip({ setPoints, className }: { setPoints: Array<{ time: 
     >
       {phases.map(ph => (
         <div key={`${ph.time}-${ph.caption}`} className="flex min-w-0 flex-col gap-0.5">
-          <span className="font-mono text-[11px] text-fg-2">{formatTime12h(ph.time)}</span>
+          <span className="font-mono text-[11px] text-fg-2">{formatTime(ph.time)}</span>
           <span className="whitespace-nowrap font-mono text-lg">
             {ph.to === undefined
               ? <span>Off</span>
@@ -140,12 +146,15 @@ function stop(fn: () => void) {
 }
 
 export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null, featured = false, bed }: CurveCardProps) {
+  const { timeFormat } = useTimeFormatter()
   const { unit } = useTemperatureUnit()
   const hasSetPoints = group.setPoints.length > 0
   const paused = !!group.allDisabled
   const label = formatDayRange(group.days)
-  const sleepWindow = formatWindow(group.setPoints)
+  const sleepWindow = formatWindow(group.setPoints, timeFormat)
   const active = isActive && hasSetPoints && !paused
+
+  const endLabel = group.endAction === 'maintain' ? 'Maintains final temperature' : null
 
   const actions = (
     <div className="ml-auto flex items-center gap-1">
@@ -155,7 +164,7 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
   )
 
   if (featured && hasSetPoints && !paused) {
-    const meta = [sleepWindow, formatTempRange(group.setPoints, unit)].filter(Boolean).join(' · ')
+    const meta = [sleepWindow, formatTempRange(group.setPoints, unit), endLabel].filter(Boolean).join(' · ')
     return (
       <Card
         highlight={active}
@@ -178,7 +187,7 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
         {/* Desktop: full chart + set-point strip */}
         <div className="hidden flex-col gap-3.5 min-[900px]:flex">
           <CurveChart setPoints={group.setPoints} height={220} showNow={active} bed={bed?.samples} />
-          <PhaseStrip setPoints={group.setPoints} className="border-t border-line pt-3.5" />
+          <PhaseStrip endAction={group.endAction} setPoints={group.setPoints} className="border-t border-line pt-3.5" />
         </div>
 
         {/* Phone: sparkline + next set point */}
@@ -220,7 +229,7 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
       <span className="font-mono text-xs text-fg-2">
         {paused
           ? 'Schedule paused'
-          : [sleepWindow, formatTempRange(group.setPoints, unit, false)].filter(Boolean).map((part, i) => (
+          : [sleepWindow, formatTempRange(group.setPoints, unit, false), endLabel].filter(Boolean).map((part, i) => (
               <Fragment key={i}>
                 {i > 0 && ' · '}
                 <span className="whitespace-nowrap">{part}</span>

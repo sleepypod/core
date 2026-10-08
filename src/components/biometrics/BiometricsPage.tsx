@@ -7,6 +7,8 @@
  */
 'use client'
 
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -19,6 +21,7 @@ import { useNowMinute } from '@/src/components/Schedule/CurveChart'
 import { DiagTable, type DiagColumn } from '@/src/components/diagnostics/DiagTable'
 import { fmtNum } from '@/src/components/diagnostics/diagnosticsLogic'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
+import { useShownSides } from '@/src/providers/SideProvider'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { OccupancyCheck } from '@/src/components/diagnostics/OccupancyCheck'
 import { RawDataButton } from './RawDataButton'
@@ -262,10 +265,12 @@ interface OccupancyLike {
 }
 
 function SidesCard({ occupancy, sideName }: { occupancy: Record<Side, OccupancyLike> | undefined, sideName: (s: Side) => string }) {
+  // One side away: the sleeper's side only.
+  const shown = useShownSides()
   return (
     <div className="@container rounded-card border border-line bg-surface" data-testid="sides-card">
-      <div className="grid @min-[640px]:grid-cols-2">
-        {(['left', 'right'] as const).map((sd, i) => {
+      <div className={cn('grid', shown.length > 1 && '@min-[640px]:grid-cols-2')}>
+        {shown.map((sd, i) => {
           const o = occupancy?.[sd]
           return (
             <div key={sd} className={cn('flex flex-col gap-3.5 px-[18px] py-4 min-[900px]:px-6', i === 1 && 'border-t border-line @min-[640px]:border-t-0 @min-[640px]:border-l')}>
@@ -341,6 +346,7 @@ function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, 
   onSelect: (s: Session) => void
   footer: ReactNode
 }) {
+  const timeFormat = useTimeFormat()
   const rows = [...sessions].reverse()
   const movements = (s: Session) => movement
     .filter(b => new Date(b.bucketStart).getTime() >= s.start - 5 * 60_000 && new Date(b.bucketStart).getTime() <= s.end)
@@ -364,7 +370,7 @@ function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, 
           {rows.map((s) => {
             const isOngoing = s === ongoing && (stale || now - s.end < SESSION_GAP_MS)
             const date = new Date(s.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).replace(',', '')
-            const endLabel = isOngoing ? 'now' : clock(s.end)
+            const endLabel = isOngoing ? 'now' : clock(s.end, timeFormat)
             const stalled = isOngoing && stale
             return (
               <button
@@ -377,13 +383,13 @@ function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, 
                 <div className="flex min-w-0 flex-col gap-1">
                   <span className="text-[15px]">
                     {date}
-                    <span className="ml-1.5 font-mono text-fg-2">{`${clock(s.start)} → ${endLabel}`}</span>
+                    <span className="ml-1.5 font-mono text-fg-2">{`${clock(s.start, timeFormat)} → ${endLabel}`}</span>
                   </span>
                   {stalled
                     ? (
                         <span className="flex items-start gap-1.5 font-mono text-[11px] text-warn">
                           <span className="mt-[5px] size-1.5 shrink-0 rounded-full bg-current" />
-                          {`in bed ${fmtDuration(now - s.start)} · no vitals since ${lastVitalAt != null ? clock(lastVitalAt) : '—'}`}
+                          {`in bed ${fmtDuration(now - s.start)} · no vitals since ${lastVitalAt != null ? clock(lastVitalAt, timeFormat) : '—'}`}
                         </span>
                       )
                     : (

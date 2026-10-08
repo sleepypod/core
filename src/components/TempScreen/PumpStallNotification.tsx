@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { AlertTriangle, X } from 'lucide-react'
 import { Button } from '@/src/components/ds'
 import { trpc } from '@/src/utils/trpc'
@@ -15,11 +17,6 @@ interface PumpStallNotificationProps {
   onAction?: () => void
 }
 
-const formatTime = (unixSeconds: number): string => {
-  const d = new Date(unixSeconds * 1000)
-  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-}
-
 /**
  * Notification shown when the pump stall guard powered a side off.
  * Two actions:
@@ -31,6 +28,7 @@ const formatTime = (unixSeconds: number): string => {
  *     path re-triggers the guard if the pump is still bad.
  */
 export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, onAction }: PumpStallNotificationProps) => {
+  const { formatClock } = useTimeFormatter()
   const acknowledge = trpc.pumpAlerts.acknowledgeAndRestore.useMutation()
   const dismiss = trpc.pumpAlerts.dismissNotification.useMutation()
   // Correlate the mutation with the incident shown here — the server then
@@ -57,7 +55,7 @@ export const PumpStallNotification = ({ side, rpm, trippedAt, alertId, onAction 
           {' '}
           at
           {' '}
-          <span className="font-mono">{formatTime(trippedAt)}</span>
+          <span className="font-mono">{formatClock(trippedAt * 1000)}</span>
           . The side is off for safety. Re-enable to retry.
         </p>
       </div>

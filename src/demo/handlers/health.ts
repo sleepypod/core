@@ -182,6 +182,7 @@ function thermalNow(): RouterOutputs['health']['thermal'] {
   const status = getDemoDeviceStatus('F')
   return {
     pumpStallProtectionEnabled: true,
+    reportsPumpSpeed: true,
     heatsinkTempF: 83.4,
     ambientTempF: AMBIENT_F,
     sides: SIDES.map((side) => {
@@ -301,6 +302,12 @@ export const health: DemoHandlers<'health'> = {
     return {
       uptimeSeconds: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000),
       rssBytes: Math.round(randomBetween(rand, 176, 192) * 1024 * 1024),
+      memory: {
+        heapTotalBytes: Math.round(randomBetween(rand, 92, 98) * 1024 * 1024),
+        heapUsedBytes: Math.round(randomBetween(rand, 74, 82) * 1024 * 1024),
+        externalBytes: Math.round(randomBetween(rand, 6, 8) * 1024 * 1024),
+        arrayBuffersBytes: Math.round(randomBetween(rand, 0.5, 1) * 1024 * 1024),
+      },
       startup: [
         { name: 'migrations', elapsedMs: 412, durationMs: 388 },
         { name: 'migrations-ready', elapsedMs: 431, durationMs: 19 },
@@ -412,6 +419,7 @@ export const health: DemoHandlers<'health'> = {
     const lastPrime = today.getTime() <= Date.now() ? today.getTime() + 6 * MINUTE : today.getTime() - DAY + 6 * MINUTE
     return {
       pumpStallProtectionEnabled: true,
+      reportsPumpSpeed: true,
       primePodDaily: true,
       primePodTime: PRIME_TIME,
       lastPrimeAt: lastPrime,

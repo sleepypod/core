@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
@@ -29,6 +32,7 @@ const HOUR_OPTIONS = [
  * historical flow readings from the biometrics DB as a compact trend.
  */
 export function FlowrateChart() {
+  const timeFormat = useTimeFormat()
   const [hours, setHours] = useState<number>(6)
   const [viewMode, setViewMode] = useState<ViewMode>('flowrate')
 
@@ -129,7 +133,7 @@ export function FlowrateChart() {
                     { data: chartData.map(d => d[leftKey] ?? Number.NaN), color: 'var(--accent-cool)', width: 1.5 },
                     { data: chartData.map(d => d[rightKey] ?? Number.NaN), color: 'var(--accent-warm)', width: 1.5 },
                   ]}
-                  xLabel={i => new Date(chartData[i].time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  xLabel={i => formatClock(new Date(chartData[i].time), timeFormat, { hour: 'numeric', minute: '2-digit' })}
                   format={v => (viewMode === 'flowrate' ? v.toFixed(2) : Math.round(v).toLocaleString())}
                 />
               )}

@@ -160,6 +160,37 @@ export const system: DemoHandlers<'system'> = {
     return { freedBytes: removed.reduce((s, i) => s + i.bytes, 0), removed: removed.length }
   },
 
+  getSensorSource: () => {
+    const lastFrameAgeMs = 400 + (Date.now() % 1_200)
+    return {
+      firmware: {
+        generation: 'nats',
+        label: 'NATS JetStream',
+        detail: 'New firmware. Sensor frames arrive over NATS JetStream.',
+        expectedTransport: 'nats',
+        probed: true,
+        signals: {
+          natsUnitInstalled: true,
+          natsServerActive: true,
+          jetstreamDirPresent: true,
+          biometricsTmpfsMounted: false,
+          frankShimRoutesTmpfs: false,
+          frankServiceRoutesTmpfs: false,
+        },
+      },
+      stream: {
+        source: 'nats',
+        override: null,
+        legacyNatsDisabled: false,
+        lastFrameAtMs: Date.now() - lastFrameAgeMs,
+        lastFrameAgeMs,
+        lastFrameType: 'piezo-dual',
+        firstFrameMs: 3124,
+        uptimeSeconds: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000),
+      },
+    }
+  },
+
   getVersion: () => {
     if (pendingUpdateAt !== null && Date.now() >= pendingUpdateAt) {
       buildDate = new Date(pendingUpdateAt).toISOString()

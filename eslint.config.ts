@@ -39,6 +39,7 @@ export default defineConfig([
     'generated/**',
     'next-env.d.ts',
     'out/**',
+    'public/vendor/**',
   ]),
 
   /** Global JS overrides */

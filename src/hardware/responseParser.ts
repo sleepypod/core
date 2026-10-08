@@ -23,7 +23,7 @@ export function parseDeviceStatus(response: string): DeviceStatus {
     // Strip surrounding quotes from hardware value (e.g. "\"ABC\"" → "ABC")
     const sensorLabel = validated.sensorLabel.replace(/^"|"$/g, '')
 
-    // Extract pod version from sensor label
+    // Legacy podVersion classifies the sensor/cover label, not the hub.
     const podVersion = extractPodVersion(sensorLabel)
 
     // Parse gesture data if available
@@ -89,7 +89,10 @@ function parseKeyValueResponse(response: string): Record<string, string> {
 }
 
 /**
- * Extract pod version from sensor label.
+ * Extract the legacy podVersion classification from the sensor/cover label.
+ * This does not identify hub generation, storage layout, OS, or socket path
+ * on mixed hub/cover setups. Unknown labels retain the legacy POD_3 fallback;
+ * callers must not treat that fallback as verified physical identity.
  *
  * Sensor labels come in two observed shapes:
  *   "8SLEEP-SN-12345-I00"      — revision code in the last segment (test sim)

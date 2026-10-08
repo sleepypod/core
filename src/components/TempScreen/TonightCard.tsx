@@ -1,8 +1,10 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { useEffect, useState } from 'react'
 import { Card, InlineError, LineChart, SectionLabel, Skeleton, StatusDot } from '@/src/components/ds'
-import { formatTime12h } from '@/src/lib/scheduleTime'
+
 import { formatSetpointF, type TempUnit } from '@/src/lib/tempUtils'
 import type { Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
@@ -25,6 +27,7 @@ export function useNow(intervalMs = 30_000): Date {
  * Wires into schedules.getAll (same query key as useScheduleActive).
  */
 export function TonightCard({ side, unit }: { side: Side, unit: TempUnit }) {
+  const { formatTime } = useTimeFormatter()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
   const now = useNow()
 
@@ -47,7 +50,7 @@ export function TonightCard({ side, unit }: { side: Side, unit: TempUnit }) {
             <>
               <div className="font-mono text-base">
                 {plan.window
-                  ? `${formatTime12h(plan.window.start)} → ${formatTime12h(plan.window.end)}`
+                  ? `${formatTime(plan.window.start)} → ${formatTime(plan.window.end)}`
                   : <span className="font-sans text-sm text-fg-2">No schedule tonight</span>}
               </div>
               {plan.points.length >= 2 && (
@@ -58,7 +61,7 @@ export function TonightCard({ side, unit }: { side: Side, unit: TempUnit }) {
               )}
               {scheduleOn && next && (
                 <div className="flex font-mono text-xs text-fg-2">
-                  {`Next ${formatTime12h(next.time)} · ${formatSetpointF(next.temperature, unit, { includeUnit: false })}`}
+                  {`Next ${formatTime(next.time)} · ${formatSetpointF(next.temperature, unit, { includeUnit: false })}`}
                   <span className="ml-auto">
                     {'in '}
                     <span className="text-fg">{formatCountdown(next.at.getTime() - now.getTime())}</span>

@@ -9,6 +9,8 @@ interface SideData {
   side: 'left' | 'right'
   name: string
   awayMode: boolean
+  awayStart?: string | null
+  awayReturn?: string | null
   alwaysOn: boolean
   autoOffEnabled: boolean
   autoOffMinutes: number
@@ -27,6 +29,11 @@ interface SideSettingsFormProps {
 }
 
 const AUTO_OFF_DURATION_OPTIONS = [5, 10, 15, 30, 45, 60, 90, 120] as const
+
+function localDateTime(iso: string): string {
+  const date = new Date(iso)
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
 
 function formatMinutes(mins: number): string {
   if (mins < 60) return `${mins} min`
@@ -49,7 +56,7 @@ export function SideSettingsForm({ side, sideData, presenceAvailable }: SideSett
   // key forces remount when server data changes, replacing the useEffect sync pattern
   return (
     <SideCards
-      key={`${d.side}-${d.name}-${d.awayMode}-${d.alwaysOn}-${d.autoOffEnabled}-${d.autoOffMinutes}`}
+      key={`${d.side}-${d.name}-${d.awayMode}-${d.awayStart}-${d.awayReturn}-${d.alwaysOn}-${d.autoOffEnabled}-${d.autoOffMinutes}`}
       data={d}
       presenceAvailable={presenceAvailable}
     />
@@ -164,13 +171,27 @@ function SideCards({ data, presenceAvailable }: { data: SideData, presenceAvaila
       </Card>
 
       <Card>
-        <CardHeader title="Away mode" subtitle="Pauses the schedule and keeps this side off until you return" />
+        <CardHeader title="Away mode" subtitle="Temporarily pause this sleeper’s tracking and alarms. Their profile and schedules are saved. The other-zone preference controls temperature while one sleeper is home." />
         <SettingRow label="Away">
           <Toggle
             on={awayMode}
             onChange={handleAwayToggle}
             disabled={isPending}
             label={`Toggle away mode for ${sideLabel} side`}
+          />
+        </SettingRow>
+        <SettingRow className="flex-col items-stretch min-[600px]:flex-row min-[600px]:items-center" label="Return date" sub="Optional. Uses your local time.">
+          <input
+            aria-label={`Return date for ${sideLabel} side`}
+            type="datetime-local"
+            className="rounded-ctl border border-line-2 bg-field px-2 py-1 text-sm"
+            defaultValue={data.awayReturn ? localDateTime(data.awayReturn) : ''}
+            disabled={isPending}
+            onBlur={(event) => {
+              const value = event.target.value
+              const awayReturn = value ? new Date(value).toISOString() : null
+              if (awayReturn !== (data.awayReturn ?? null)) mutation.mutate({ side: data.side, awayReturn })
+            }}
           />
         </SettingRow>
       </Card>

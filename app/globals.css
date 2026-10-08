@@ -387,6 +387,139 @@ html.dark {
   color: hsl(var(--h, 268) 50% 42%);
 }
 
+/* Room behind the 3D bed, as in the showroom renders: a wall meeting a floor just under
+   the horizon, a soft window-light patch on the wall, a brighter pool where the bed stands.
+   Dark is a dim lounge in the card's own inks; light is warm plaster over a stone floor. */
+/* The room while three.js loads; the colours match NIGHT_ROOM / DAY_ROOM in bedLook.ts so the
+   rendered room fades in over the same wall and floor. */
+.bed-backdrop {
+  background:
+    radial-gradient(60% 40% at 38% 70%, rgba(159, 182, 224, 0.1) 0%, transparent 70%),
+    linear-gradient(180deg, #1b1c25 0%, #292a35 22%, #20212a 28%, #20212a 100%);
+}
+
+[data-theme="light"] .bed-backdrop {
+  background:
+    radial-gradient(60% 40% at 38% 70%, rgba(255, 241, 207, 0.6) 0%, transparent 70%),
+    linear-gradient(180deg, #ece5d9 0%, #e3dacc 22%, #d5c9b6 28%, #d5c9b6 100%);
+}
+
+/* Per-side status pill on the thermal bed: the surface reading, the setpoint and a ring
+   that spins while the pod is warming or cooling that side. */
+.thermal-pill {
+  position: absolute;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(16, 16, 20, 0.6);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  color: #f4f4f6;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: opacity 300ms var(--ease-standard);
+}
+
+[data-theme="light"] .thermal-pill {
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.66);
+  box-shadow: 0 6px 18px rgba(70, 55, 30, 0.18);
+  color: #1a1a1c;
+}
+
+.thermal-pill[data-compact="true"] {
+  gap: 6px;
+  padding: 4px 9px 4px 7px;
+  font-size: 12px;
+}
+
+.thermal-pill-target {
+  opacity: 0.6;
+}
+
+.thermal-pill-target[hidden] {
+  display: none;
+}
+
+.thermal-ring {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  opacity: 0.45;
+}
+
+.thermal-pill[data-mode="off"] .thermal-ring {
+  border-style: dashed;
+}
+
+.thermal-pill[data-mode="paused"] .thermal-ring {
+  color: var(--status-warn);
+  opacity: 1;
+}
+
+.thermal-pill[data-mode="holding"] .thermal-ring {
+  opacity: 0.9;
+}
+
+.thermal-pill[data-mode="heating"] .thermal-ring,
+.thermal-pill[data-mode="cooling"] .thermal-ring {
+  border-top-color: transparent;
+  opacity: 1;
+  animation: sp-ring-spin 1.1s linear infinite;
+}
+
+.thermal-pill[data-mode="heating"] .thermal-ring {
+  color: var(--accent-warm);
+}
+
+.thermal-pill[data-mode="cooling"] .thermal-ring {
+  color: var(--accent-cool);
+}
+
+@keyframes sp-ring-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Activity ring in the stage's side label: spins while that side is warming or cooling. */
+.stage-ring {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: sp-ring-spin 1.1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thermal-ring,
+  .stage-ring {
+    animation: none !important;
+    border-top-color: currentColor !important;
+  }
+}
+
+/* Thermal legend; the stops match THERMAL_RAMP in thermalData.ts for each theme. */
+:root {
+  --thermal-ramp: linear-gradient(to right, #6ea9de, #7a9ab8, #75777b, #b98c78, #e0956f);
+}
+
+[data-theme="light"] {
+  --thermal-ramp: linear-gradient(to right, #8fc0ea, #a2bcd4, #b7b8ba, #d2a898, #eaa98e);
+}
+
 .sp-fade-in {
   animation: sp-fade-in 150ms var(--ease-standard);
 }

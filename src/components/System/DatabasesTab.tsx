@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Download, ShieldCheck, X } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
@@ -354,12 +356,13 @@ function DatabaseCard({ db, data }: { db: Db, data: Overview }) {
 }
 
 function TableRow({ table: t, occupied, now, color }: { table: Table, occupied: ReadonlySet<number>, now: number, color: string }) {
+  const timeFormat = useTimeFormat()
   const cells = stripCells(t, occupied)
   const stalled = isStalled(cells)
   const unpruned = isUnprunedGrowth(t)
   const meta = [
     `${t.rows.toLocaleString()} rows`,
-    t.lastWriteAt ? `last ${fmtLastWrite(t.lastWriteAt, now)}` : t.timeColumn ? 'empty' : 'no time column',
+    t.lastWriteAt ? `last ${fmtLastWrite(t.lastWriteAt, now, timeFormat)}` : t.timeColumn ? 'empty' : 'no time column',
     ...(stalled ? ['pod occupied'] : []),
   ].join(' · ')
 

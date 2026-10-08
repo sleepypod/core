@@ -57,3 +57,26 @@ export function hasFirmwareSynced(): boolean {
 export function _resetFirmwareSynced(): void {
   G[SYNC_KEY] = false
 }
+
+// Startup evidence is process-local, never restored from device_state. Frame
+// consumers snapshot it at receipt so queued frames cannot arm retroactively.
+// No wall-clock comparison: NTP corrections must not revoke valid evidence.
+const PUMP_RUN_KEY = '__sp_pump_run_confirmed__'
+
+/** Confirm live heating-run evidence for this side for the current process. */
+export function confirmPumpRun(side: Side): void {
+  const evidence = G[PUMP_RUN_KEY] as Partial<Record<Side, boolean>> | undefined
+  const next = evidence ?? {}
+  next[side] = true
+  G[PUMP_RUN_KEY] = next
+}
+
+/** Snapshot confirmation at frame receipt, before any asynchronous queuing. */
+export function hasConfirmedPumpRun(side: Side): boolean {
+  return (G[PUMP_RUN_KEY] as Partial<Record<Side, boolean>> | undefined)?.[side] === true
+}
+
+/** @internal — for tests only */
+export function _resetPumpRunEvidence(): void {
+  G[PUMP_RUN_KEY] = undefined
+}

@@ -1,14 +1,16 @@
-import { and, eq } from 'drizzle-orm'
-import { db } from '@/src/db'
-import { alarmSchedules, deviceSettings, deviceState, powerSchedules, runOnceSessions, sideSettings, temperatureHolds, temperatureSchedules } from '@/src/db/schema'
+import type { Statement } from 'better-sqlite3'
+import { eq } from 'drizzle-orm'
+import { db, sqlite } from '@/src/db'
+import { deviceState, temperatureHolds } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { hasFirmwareSynced } from '@/src/hardware/sideMutations'
 import { shouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { fahrenheitToLevel, MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
+import { activeSleeperSides, scheduleSourceSide, type BedConfiguration } from '@/src/lib/singleSleeper'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
-import { alarmTemperatureTargets, recurringTarget, sessionTarget, type AlarmOccurrenceCache, type RecurringOccurrenceCache } from './baseline'
+import { alarmTemperatureTargets, recurringTarget, sessionTarget, type AlarmOccurrenceCache, type RecurringOccurrenceCache, type WeeklyTarget } from './baseline'
 import { TemperatureController, type TemperatureRequest } from './controller'
 
 const invalidSessions: Record<Side, Map<number, string>> = { left: new Map(), right: new Map() }
@@ -18,23 +20,51 @@ const alarmCaches: Record<Side, AlarmOccurrenceCache> = { left: new Map(), right
 
 const recurringCache: Partial<Record<Side, { key: string, target: TemperatureRequest | null }>> = {}
 
+/**
+ * The controller's hot reads run as prepared SQLite statements. `status()`
+ * is evaluated for both sides on every `device.getStatus`, every 1 Hz status
+ * broadcast and every 1 Hz reconcile tick; building these queries through
+ * the ORM each time cost ~16 ms per side on the pod, the raw statements take
+ * about 1 ms for all of them. Statements are cached per connection so a
+ * test that reopens the database gets fresh ones.
+ */
+const statementState = globalThis as typeof globalThis & {
+  __sp_temperatureStatements?: WeakMap<object, Map<string, Statement>>
+}
+const statementCache = statementState.__sp_temperatureStatements ??= new WeakMap<object, Map<string, Statement>>()
+function statement(sql: string): Statement {
+  let cache = statementCache.get(sqlite)
+  if (!cache) {
+    cache = new Map()
+    statementCache.set(sqlite, cache)
+  }
+  let prepared = cache.get(sql)
+  if (!prepared) {
+    prepared = sqlite.prepare(sql)
+    cache.set(sql, prepared)
+  }
+  return prepared
+}
+
+interface WeeklyRow { id: number, dayOfWeek: WeeklyTarget['dayOfWeek'], time: string, temperature: number }
+interface SessionRow { id: number, setPoints: string, startedAt: number, expiresAt: number }
+
 function readBaseline(side: Side, now: number): TemperatureRequest[] {
-  const settings = db.select({ timezone: deviceSettings.timezone }).from(deviceSettings).get()
+  const settings = statement('select timezone, bed_mode as bedMode, unused_zone_mode as unusedZoneMode from device_settings').get() as ({ timezone: string | null } & BedConfiguration) | undefined
   const timezone = settings?.timezone || 'America/Los_Angeles'
-  const away = db.select({ awayMode: sideSettings.awayMode }).from(sideSettings).where(eq(sideSettings.side, side)).get()?.awayMode
+  const away = Object.fromEntries((statement('select side, away_mode as awayMode from side_settings').all() as { side: Side, awayMode: number }[])
+    .map(r => [r.side, { awayMode: r.awayMode }]))
+  const modes = { ...away, ...settings }
+  const source = scheduleSourceSide(side, modes)
   const requests: TemperatureRequest[] = []
-  if (!away) {
-    const temps = db.select().from(temperatureSchedules)
-      .where(and(eq(temperatureSchedules.side, side), eq(temperatureSchedules.enabled, true))).all()
-    const powers = db.select().from(powerSchedules)
-      .where(and(eq(powerSchedules.side, side), eq(powerSchedules.enabled, true))).all()
-    const alarms = db.select().from(alarmSchedules)
-      .where(and(eq(alarmSchedules.side, side), eq(alarmSchedules.enabled, true))).all()
-    // Alarm temperatures apply over their own span (alarmTemperatureTargets),
-    // not as schedule points that would last until the next one.
-    const rows = [
+  if (source) {
+    const alarms = statement('select id, day_of_week as dayOfWeek, time, alarm_temperature as temperature, wake_window as wakeWindow, duration from alarm_schedules where side = ? and enabled = 1').all(source) as (WeeklyRow & { wakeWindow: number, duration: number })[]
+    const temps = statement('select id, day_of_week as dayOfWeek, time, temperature from temperature_schedules where side = ? and enabled = 1').all(source) as WeeklyRow[]
+    const powers = statement('select id, day_of_week as dayOfWeek, on_time as time, on_temperature as temperature from power_schedules where side = ? and enabled = 1').all(source) as WeeklyRow[]
+    // Alarm temperatures have their own bounded warm-up/hold spans.
+    const rows: WeeklyTarget[] = [
       ...temps.map(r => ({ id: `temperature:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature })),
-      ...powers.map(r => ({ id: `power:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.onTime, temperature: r.onTemperature })),
+      ...powers.map(r => ({ id: `power:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature })),
     ]
     const key = JSON.stringify([timezone, Math.floor(now / 60_000), rows])
     const cached = recurringCache[side]
@@ -42,12 +72,13 @@ function readBaseline(side: Side, now: number): TemperatureRequest[] {
     recurringCache[side] = { key, target: baseline }
     if (baseline) requests.push(baseline)
     requests.push(...alarmTemperatureTargets(
-      alarms.map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.alarmTemperature, wakeWindow: r.wakeWindow, duration: r.duration })),
+      (activeSleeperSides(modes).includes(source) ? alarms : []).map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature, wakeWindow: r.wakeWindow, duration: r.duration })),
       timezone, now, alarmCaches[side],
     ))
   }
-  const sessions = db.select().from(runOnceSessions)
-    .where(and(eq(runOnceSessions.side, side), eq(runOnceSessions.status, 'active'))).all()
+  // run_once_sessions timestamps are drizzle `timestamp` columns: unix seconds.
+  const sessions = (statement('select id, set_points as setPoints, started_at as startedAt, expires_at as expiresAt from run_once_sessions where side = ? and status = \'active\'').all(side) as SessionRow[])
+    .map(row => ({ id: row.id, setPoints: row.setPoints, startedAt: new Date(row.startedAt * 1000), expiresAt: new Date(row.expiresAt * 1000) }))
   const activeIds = new Set(sessions.map(session => session.id))
   for (const id of invalidSessions[side].keys()) {
     if (!activeIds.has(id)) invalidSessions[side].delete(id)
@@ -91,7 +122,7 @@ export function getTemperatureController(): TemperatureController {
       now: Date.now,
       withSideLock,
       readHold: (side) => {
-        const row = db.select().from(temperatureHolds).where(eq(temperatureHolds.side, side)).get()
+        const row = statement('select temperature, started_at as startedAt, expires_at as expiresAt from temperature_holds where side = ?').get(side) as { temperature: number, startedAt: number, expiresAt: number } | undefined
         return row
           ? {
               id: 'manual', source: 'manual', temperature: row.temperature,
@@ -116,7 +147,7 @@ export function getTemperatureController(): TemperatureController {
       // energized a side the moment frank connected. Explicit power-on and
       // manual commands do not consult this.
       isPowered: side => hasFirmwareSynced()
-        && (db.select().from(deviceState).where(eq(deviceState.side, side)).get()?.isPowered ?? false),
+        && Boolean((statement('select is_powered as isPowered from device_state where side = ?').get(side) as { isPowered: number } | undefined)?.isPowered),
       readCurrentTarget: side => db.select().from(deviceState).where(eq(deviceState.side, side)).get()?.targetTemperature ?? null,
       readHardwareDeadline: side => db.select({ deadline: deviceState.hardwareDeadline }).from(deviceState).where(eq(deviceState.side, side)).get()?.deadline ?? null,
       writeHardwareDeadline: (side, hardwareDeadline) => {

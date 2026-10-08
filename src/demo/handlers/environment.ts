@@ -1,3 +1,4 @@
+import { recordedBedTemperature } from '../bedTemperatureSamples'
 import { TRPCError } from '@trpc/server'
 import { demoNightsOverlapping, type Side } from '../history'
 import type { DemoHandlers } from '../types'
@@ -20,7 +21,6 @@ const temp = (c: number, unit: Unit) => (unit === 'F' ? (round2(c) * 9) / 5 + 32
 
 /** Bedroom air: ~21 °C, warmest mid-afternoon, coolest before dawn. */
 const ambientC = (t: number) => 21 + 0.8 * Math.sin((2 * Math.PI * (hourOf(t) - 9)) / 24) + noise(t, 'amb', 0.08)
-const humidity = (t: number) => 45 + 2.5 * Math.sin((2 * Math.PI * (hourOf(t) - 3)) / 24) + noise(t, 'hu', 0.3)
 
 /** Bedroom light: daylight through curtains, lamps in the evening, dark overnight. */
 function lux(t: number): number {
@@ -45,24 +45,22 @@ function occupancyLookup(start: number, end: number) {
 
 type Occupied = ReturnType<typeof occupancyLookup>
 
-function bedRow(t: number, occupied: Occupied, unit: Unit) {
-  const amb = ambientC(t)
-  const surface = (side: Side, offset: number) => {
-    const base = occupied(side, t) ? 31.2 : amb + 1.8
-    return temp(base + offset + noise(t, `${side}${offset}`, 0.12), unit)
-  }
+/** Bed rows replay the same recorded snapshots as the live stream and getLatestBedTemp,
+ * so history, latest, and live frames agree at any shared timestamp. */
+function bedRow(t: number, unit: Unit) {
+  const reading = recordedBedTemperature(Math.floor(t / 1000))
   return {
     id: t / STEP,
     timestamp: new Date(t),
-    ambientTemp: temp(amb, unit),
-    mcuTemp: temp(33.8 + noise(t, 'mcu', 0.2), unit),
-    humidity: round2(humidity(t)),
-    leftOuterTemp: surface('left', -1.1),
-    leftCenterTemp: surface('left', 0),
-    leftInnerTemp: surface('left', -0.4),
-    rightOuterTemp: surface('right', -1.0),
-    rightCenterTemp: surface('right', 0.2),
-    rightInnerTemp: surface('right', -0.3),
+    ambientTemp: temp(reading.ambientTemp, unit),
+    mcuTemp: temp(reading.mcuTemp, unit),
+    humidity: reading.humidity,
+    leftOuterTemp: temp(reading.leftOuterTemp, unit),
+    leftCenterTemp: temp(reading.leftCenterTemp, unit),
+    leftInnerTemp: temp(reading.leftInnerTemp, unit),
+    rightOuterTemp: temp(reading.rightOuterTemp, unit),
+    rightCenterTemp: temp(reading.rightCenterTemp, unit),
+    rightInnerTemp: temp(reading.rightInnerTemp, unit),
   }
 }
 
@@ -96,9 +94,8 @@ const avg = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.le
 
 export const environment: DemoHandlers<'environment'> = {
   getBedTemp: (input) => {
-    const { times, start, end } = minuteWindow(input)
-    const occupied = occupancyLookup(start, end)
-    return times.map(t => bedRow(t, occupied, input.unit ?? 'F'))
+    const { times } = minuteWindow(input)
+    return times.map(t => bedRow(t, input.unit ?? 'F'))
   },
 
   getFreezerTemp: (input) => {
@@ -108,8 +105,8 @@ export const environment: DemoHandlers<'environment'> = {
   },
 
   getLatestBedTemp: (input) => {
-    const t = floorMinute(Date.now())
-    return bedRow(t, occupancyLookup(t - HOUR, t), input.unit ?? 'F')
+    const t = Math.floor(Date.now() / 1000)
+    return { ...bedRow(t * 1000, input.unit ?? 'F'), id: t }
   },
 
   getLatestFreezerTemp: (input) => {
@@ -130,7 +127,7 @@ export const environment: DemoHandlers<'environment'> = {
     const bed: ReturnType<typeof bedRow>[] = []
     const frz: ReturnType<typeof freezerRow>[] = []
     for (let t = start; t <= end; t += STEP) {
-      bed.push(bedRow(t, occupied, 'C'))
+      bed.push(bedRow(t, 'C'))
       frz.push(freezerRow(t, occupied, 'C'))
     }
     const conv = (c: number | null) => (c === null ? null : temp(c, unit))

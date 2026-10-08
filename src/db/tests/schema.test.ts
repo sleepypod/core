@@ -160,6 +160,21 @@ function describeSchema(module: Record<string, unknown>) {
 }
 
 const expectedTables: Record<string, TableSpec> = {
+  baseSchedules: {
+    name: 'base_schedules',
+    columns: [
+      { name: 'id', notNull: true, default: 'fn' },
+      { name: 'day_of_week', notNull: true, default: undefined },
+      { name: 'side', notNull: true, default: 'both' },
+      { name: 'preset_name', notNull: true, default: 'Custom' },
+      { name: 'time', notNull: true, default: undefined },
+      { name: 'head', notNull: true, default: undefined },
+      { name: 'feet', notNull: true, default: undefined },
+      { name: 'feed_rate', notNull: true, default: 50 },
+      { name: 'enabled', notNull: true, default: true },
+    ],
+    indexes: [{ name: 'base_schedules_day_time_side', unique: true, columns: ['day_of_week', 'time', 'side'] }],
+  },
   temperatureHolds: {
     name: 'temperature_holds',
     columns: [
@@ -174,8 +189,12 @@ const expectedTables: Record<string, TableSpec> = {
     name: 'device_settings',
     columns: [
       { name: 'id', notNull: true, default: 'fn' },
+      { name: 'bed_mode', notNull: true, default: 'two' },
+      { name: 'unused_zone_mode', notNull: true, default: 'off' },
+      { name: 'default_schedule_end_action', notNull: true, default: 'turn_off' },
       { name: 'timezone', notNull: true, default: 'America/Los_Angeles' },
       { name: 'temperature_unit', notNull: true, default: 'F' },
+      { name: 'time_format', notNull: true, default: '12h' },
       { name: 'reboot_daily', notNull: true, default: false },
       { name: 'reboot_time', notNull: false, default: '03:00' },
       { name: 'prime_pod_daily', notNull: true, default: false },
@@ -266,6 +285,7 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'day_of_week', notNull: true, default: undefined },
       { name: 'on_time', notNull: true, default: undefined },
       { name: 'off_time', notNull: true, default: undefined },
+      { name: 'end_action', notNull: true, default: 'turn_off' },
       { name: 'on_temperature', notNull: true, default: undefined },
       { name: 'enabled', notNull: true, default: true },
       { name: 'created_at', notNull: true, default: 'sql' },

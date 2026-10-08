@@ -57,6 +57,12 @@ describe('expandOccurrences', () => {
         expect(expandOccurrences([{ id: 'j', type: 'temperature', schedule }], a, b, tz).map(o => o.at), `${tz} ${schedule}`).toEqual(expected)
       }
     }
+  }, 30_000)
+
+  it('skips Havana midnight gaps in schedule previews', () => {
+    const start = new Date('2026-03-08T00:00Z')
+    const end = new Date('2026-03-09T00:00Z')
+    expect(expandOccurrences([{ id: 'gap', type: 'temperature', schedule: '30 0 * * 0' }], start, end, 'America/Havana')).toEqual([])
   })
 
   it('expands a full schedule quickly', () => {

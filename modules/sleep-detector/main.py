@@ -528,6 +528,21 @@ class CalibrationCache:
                 log.warning("Failed to load calibration for %s: %s", side, e)
 
 
+def usable_presence_input(record: dict, side: str) -> bool:
+    """Require actual finite channel readings, rather than status-only payloads."""
+    data = record.get(side)
+    if not isinstance(data, dict):
+        return False
+    if record.get("type") == "capSense2":
+        values = data.get("values")
+        if not isinstance(values, (list, tuple)) or len(values) < 6:
+            return False
+        values = values[:8] if len(values) >= 8 else values[:6]
+        return all(type(v) in (int, float) and math.isfinite(v) and v != CAPSENSE2_SENTINEL for v in values)
+    return all(type(data.get(ch)) in (int, float) and math.isfinite(data[ch])
+               for ch in ("out", "cen", "in"))
+
+
 class AdaptiveBaseline:
     """Self-adjusting empty-bed level for one side's capacitance channels.
 
@@ -551,12 +566,20 @@ class AdaptiveBaseline:
 
     def __init__(self, fmt: str, means: dict, threshold: float,
                  ref_mean: Optional[float] = None, source: str = "bootstrap",
-                 profile_seen_at: Optional[float] = None):
+                 profile_seen_at: Optional[float] = None, absence_ready: bool = False):
         self.fmt = fmt
         self.means = {ch: float(v) for ch, v in means.items()}
         self.threshold = float(threshold)
         self.ref_mean = ref_mean
         self.source = source
+        self.absence_ready = absence_ready
+        # A live/profile seed may contain a sleeper. Only a sustained drop
+        # from an observed loaded level establishes an empty reference.
+        self._absence_reference = sum(self.means.values())
+        self._absence_drop_since: Optional[float] = None
+        self._absence_rise_since: Optional[float] = None
+        self._absence_rise_level: Optional[float] = None
+        self._absence_last_ts: Optional[float] = None
         # created_at of the newest external profile already adopted or
         # deliberately skipped, so it isn't re-adopted every reload.
         self.profile_seen_at = profile_seen_at
@@ -588,7 +611,7 @@ class AdaptiveBaseline:
             return None
         return cls(fmt, means, threshold, ref_mean=ref_mean,
                    source=params.get("source", "profile"),
-                   profile_seen_at=created_at)
+                   profile_seen_at=created_at, absence_ready=params.get("absence_ready") is True)
 
     @classmethod
     def from_state(cls, state: Optional[dict]):
@@ -597,13 +620,15 @@ class AdaptiveBaseline:
         try:
             return cls(str(state["format"]), dict(state["means"]), float(state["threshold"]),
                        ref_mean=state.get("ref_mean"), source="state",
-                       profile_seen_at=state.get("profile_seen_at"))
+                       profile_seen_at=state.get("profile_seen_at"),
+                       absence_ready=state.get("absence_ready") is True)
         except (KeyError, TypeError, ValueError):
             return None
 
     def snapshot(self) -> dict:
         return {"format": self.fmt, "means": self.means, "threshold": self.threshold,
-                "ref_mean": self.ref_mean, "profile_seen_at": self.profile_seen_at}
+                "ref_mean": self.ref_mean, "profile_seen_at": self.profile_seen_at,
+                "absence_ready": self.absence_ready}
 
     def values(self, record: dict, side: str) -> Optional[dict]:
         """This format's per-channel values for a frame, or None if unusable."""
@@ -617,6 +642,40 @@ class AdaptiveBaseline:
     def is_present(self, values: dict, currently_present: bool) -> bool:
         limit = self.exit_threshold if currently_present else self.threshold
         return self.deviation(values) > limit
+
+    def observe_absence_reference(self, ts: float, values: Optional[dict]) -> None:
+        """Learn veto readiness from a sustained unloading and settled baseline.
+
+        First-frame stability alone is never evidence of an empty bed. This
+        confidence is persisted separately from the baseline's source label.
+        """
+        gap = self._absence_last_ts is None or not 0 < ts - self._absence_last_ts <= BASELINE_MAX_STEP_S
+        self._absence_last_ts = ts
+        if gap or values is None:
+            self._absence_drop_since = self._absence_rise_since = None
+        if values is None:
+            return
+        level = sum(values.values())
+        # A lone spike must not turn a stable occupied bootstrap into a
+        # supposedly observed unloading. Require a sustained higher plateau.
+        if level - self._absence_reference > self.threshold:
+            if self._absence_rise_since is None:
+                self._absence_rise_since = ts
+                self._absence_rise_level = level
+            self._absence_rise_level = min(self._absence_rise_level, level)
+            if ts - self._absence_rise_since >= PRESENCE_DEBOUNCE_S:
+                self._absence_reference = self._absence_rise_level
+                self._absence_rise_since = None
+        else:
+            self._absence_rise_since = None
+        if self._absence_reference - level <= self.threshold:
+            self._absence_drop_since = None
+            return
+        if self._absence_drop_since is None:
+            self._absence_drop_since = ts
+        if (ts - self._absence_drop_since >= PRESENCE_DEBOUNCE_S
+                and abs(self.deviation(values)) <= self.exit_threshold):
+            self.absence_ready = True
 
     def track(self, ts: float, values: dict, occupied: bool) -> None:
         """Follow the empty-bed level. Called once per sample after the
@@ -640,6 +699,10 @@ class AdaptiveBaseline:
     def reseed(self, values: dict, source: str) -> None:
         self.means = {ch: float(v) for ch, v in values.items()}
         self.source = source
+        self.absence_ready = False
+        self._absence_reference = sum(self.means.values())
+        self._absence_drop_since = self._absence_rise_since = None
+        self._absence_last_ts = None
 
     def to_params(self) -> dict:
         """Calibration-profile params (the shape the calibrators write)."""
@@ -654,6 +717,7 @@ class AdaptiveBaseline:
                       "channels": {ch: {"mean": round(m, 2), "std": 5.0}
                                    for ch, m in self.means.items()}}
         params["source"] = "adaptive"
+        params["absence_ready"] = self.absence_ready
         return params
 
 
@@ -954,6 +1018,10 @@ class SessionTracker:
     _level_present: bool = False
     _last_publish_ts: Optional[float] = None
     _tracked_samples: int = 0
+    # Separate from session bookkeeping: invalid frames cannot refresh this
+    # evidence. A merged home-side absence requires usable evidence from both.
+    _vitals_presence: Optional[bool] = None
+    _vitals_evidence_ts: Optional[float] = None
 
     def snapshot(self) -> dict:
         """JSON-serializable state needed to resume after a restart."""
@@ -966,6 +1034,8 @@ class SessionTracker:
             "was_present": self._was_present,
             "exit_count": self._exit_count,
             "debounced_present": self._debounced_present,
+            "vitals_presence": self._vitals_presence,
+            "vitals_evidence_ts": self._vitals_evidence_ts,
             "state_since": self._state_since,
             "consecutive_cap_closes": self._consecutive_cap_closes,
             "last_ts": self._last_ts,
@@ -1076,9 +1146,12 @@ class SessionTracker:
             self._replay_until_ts = None
         self._last_ts = ts
         rtype = record.get("type", "")
-        baseline = self._sync_baseline(record)
-        values = baseline.values(record, self.side) if baseline is not None else None
+        usable = usable_presence_input(record, self.side)
+        baseline = self._sync_baseline(record) if usable else self.baseline
+        values = baseline.values(record, self.side) if usable and baseline is not None else None
         present: Optional[bool] = None  # unusable frame: no new evidence
+        if baseline is not None:
+            baseline.observe_absence_reference(ts, values)
         if values is not None:
             present = baseline.is_present(values, self._level_present)
             self._level_present = present
@@ -1095,7 +1168,7 @@ class SessionTracker:
             self._scale_factor = 10.0
 
         # Movement: sample-to-sample delta (PIM)
-        current_values, _ = _extract_channel_values(record, self.side, baselines)
+        current_values, _ = _extract_channel_values(record, self.side, baselines) if usable else (None, None)
         if current_values is not None:
             delta = compute_movement_delta(current_values, self._prev_values)
             # Compute per-channel deltas for pump gate ref anomaly correlation
@@ -1166,12 +1239,35 @@ class SessionTracker:
         self._tracked_samples += 1
         self._maybe_publish_baseline(obs.ts, obs.record)
 
+    def publish_vitals_presence(self, ts: float, observations) -> None:
+        """Publish occupied, trustworthy empty, or unknown for independent vitals.
+
+        For merged sleep sessions every contributing side must be valid and
+        calibrated before absence may veto piezo. Presence on either is enough.
+        """
+        evidence = []
+        for tracker, obs in observations:
+            value = None
+            if obs is not None and obs.present is not None:
+                if obs.present:
+                    value = True
+                elif tracker.baseline is not None and tracker.baseline.absence_ready:
+                    value = False
+            evidence.append(value)
+        all_empty = all(v is False for v in evidence)
+        value = True if True in evidence or (all_empty and self._debounced_present) else False if all_empty else None
+        if value != self._vitals_presence:
+            self.state_dirty = True
+        self._vitals_presence = value
+        self._vitals_evidence_ts = ts if value is not None else None
+
     def process(self, ts: float, record: dict) -> None:
         obs = self.observe(ts, record)
         if obs is None:
             return
         capped = self.commit(ts, obs.present, obs.delta)
         self.settle(obs, reset=capped)
+        self.publish_vitals_presence(ts, [(self, obs)])
 
     def _apply_debounce(self, ts: float, raw_present: bool) -> bool:
         """Fold the raw per-sample presence into the committed (debounced)
@@ -1398,6 +1494,23 @@ class SessionTracker:
             self._last_movement_write = ts
 
 
+def process_sleeper_frame(left: SessionTracker, right: SessionTracker,
+                          ts: float, record: dict, bed_mode: SingleSleeperMode) -> None:
+    """Route one frame by active people, leaving physical sensor zones intact."""
+    home_side = bed_mode.home_side()
+    if not bed_mode.active_sides():
+        for tracker in (left, right):
+            if tracker._session_start is not None:
+                tracker._close_session(tracker._last_present_ts or ts)
+    elif home_side is None:
+        left.process(ts, record)
+        right.process(ts, record)
+    elif home_side == "left":
+        process_single_sleeper(left, right, ts, record)
+    else:
+        process_single_sleeper(right, left, ts, record)
+
+
 def process_single_sleeper(home: SessionTracker, away: SessionTracker,
                            ts: float, record: dict) -> None:
     """One frame in single-sleeper mode (the other side is in away mode).
@@ -1426,6 +1539,10 @@ def process_single_sleeper(home: SessionTracker, away: SessionTracker,
     home.settle(h, reset=capped)
     if a is not None:
         away.settle(a, reset=capped)
+    home.publish_vitals_presence(ts, [(home, h), (away, a)])
+    # This side has no independent session in merged mode.
+    away._vitals_presence = None
+    away._vitals_evidence_ts = None
 
 
 # ---------------------------------------------------------------------------
@@ -1493,14 +1610,7 @@ def main() -> None:
             log_capsense_status_once(record, "sleep-detector")
 
             ts = sanitize_ts(record.get("ts"))
-            home_side = bed_mode.home_side()
-            if home_side is None:
-                left.process(ts, record)
-                right.process(ts, record)
-            elif home_side == "left":
-                process_single_sleeper(left, right, ts, record)
-            else:
-                process_single_sleeper(right, left, ts, record)
+            process_sleeper_frame(left, right, ts, record, bed_mode)
 
             if (left.state_dirty or right.state_dirty
                     or time.monotonic() - last_save >= STATE_SAVE_INTERVAL_S):

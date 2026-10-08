@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useMemo } from 'react'
 import {
   ResponsiveContainer,
@@ -27,14 +30,14 @@ interface BedTempChartProps {
   highlightSide?: 'left' | 'right' | 'both'
 }
 
-function formatTime(timestamp: string | Date): string {
+function formatTime(timestamp: string | Date, timeFormat: TimeFormat = '12h'): string {
   const d = new Date(timestamp)
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return formatClock(d, timeFormat, { hour: 'numeric', minute: '2-digit' })
 }
 
-function formatTooltipTime(timestamp: string | Date): string {
+function formatTooltipTime(timestamp: string | Date, timeFormat: TimeFormat = '12h'): string {
   const d = new Date(timestamp)
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+  return formatClock(d, timeFormat, { hour: 'numeric', minute: '2-digit', second: '2-digit' })
 }
 
 interface ChartDataPoint {
@@ -46,17 +49,18 @@ interface ChartDataPoint {
 }
 
 export function BedTempChart({ data, unit, showAmbient = false, highlightSide }: BedTempChartProps) {
+  const timeFormat = useTimeFormat()
   const chartData = useMemo(() => {
     // Data comes in desc order from API, reverse for chronological
     const sorted = [...data].reverse()
     return sorted.map(d => ({
       time: new Date(d.timestamp).getTime(),
-      timeLabel: formatTime(d.timestamp),
+      timeLabel: formatTime(d.timestamp, timeFormat),
       left: d.leftCenterTemp !== null ? Math.round(d.leftCenterTemp * 10) / 10 : null,
       right: d.rightCenterTemp !== null ? Math.round(d.rightCenterTemp * 10) / 10 : null,
       ambient: d.ambientTemp !== null ? Math.round(d.ambientTemp * 10) / 10 : null,
     })) as ChartDataPoint[]
-  }, [data])
+  }, [data, timeFormat])
 
   if (chartData.length === 0) {
     return (
@@ -94,7 +98,7 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
             dataKey="time"
             type="number"
             domain={['dataMin', 'dataMax']}
-            tickFormatter={(v: number) => formatTime(new Date(v))}
+            tickFormatter={(v: number) => formatTime(new Date(v), timeFormat)}
             tick={{ ...AXIS_TICK, fontSize: 11 }}
             axisLine={false}
             tickLine={false}
@@ -111,7 +115,7 @@ export function BedTempChart({ data, unit, showAmbient = false, highlightSide }:
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
             labelStyle={TOOLTIP_LABEL_STYLE}
-            labelFormatter={v => formatTooltipTime(new Date(v as number))}
+            labelFormatter={v => formatTooltipTime(new Date(v as number), timeFormat)}
             formatter={(value, name) => [
               `${Number(value).toFixed(1)}°${unit}`,
               String(name),

@@ -16,12 +16,13 @@ import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
 import { SensorSourceCard } from './SensorSourceCard'
+import { BedSetupSettings } from './BedSetupSettings'
 import { SideSettingsForm } from './SideSettingsForm'
 import { TapGestureConfig } from './TapGestureConfig'
 import { MqttSettingsForm } from './MqttSettingsForm'
 import { HomeKitConfig } from './HomeKitConfig'
 import { ArchivePushSettingsForm } from './ArchivePushSettingsForm'
-import { AppearanceSettings, TempControlPicker, TempDisplayControl, ThemeControl, UnitsControl } from './AppearanceSettings'
+import { AppearanceSettings, TempControlPicker, TempDisplayControl, ThemeControl, TimeFormatControl, UnitsControl } from './AppearanceSettings'
 import { SectionColumns } from './SettingsLayout'
 import { resolveSection, SECTIONS, type SectionId } from './sections'
 
@@ -209,11 +210,14 @@ function SidesSection({ data, side }: { data: SettingsData, side: Side }) {
   const presenceAvailable = occupancy?.[side].available ?? null
 
   return (
-    <SideSettingsForm
-      side={side}
-      sideData={side === 'left' ? data.sides.left : data.sides.right}
-      presenceAvailable={presenceAvailable}
-    />
+    <div className="grid gap-4">
+      <BedSetupSettings device={data.device} names={{ left: data.sides.left.name, right: data.sides.right.name }} />
+      <SideSettingsForm
+        side={side}
+        sideData={side === 'left' ? data.sides.left : data.sides.right}
+        presenceAvailable={presenceAvailable}
+      />
+    </div>
   )
 }
 
@@ -241,9 +245,14 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
           <ThemeControl />
         </SettingRow>
         {settings.data && (
-          <SettingRow label="Units">
-            <UnitsControl unit={settings.data.device.temperatureUnit} />
-          </SettingRow>
+          <>
+            <SettingRow label="Units">
+              <UnitsControl unit={settings.data.device.temperatureUnit} />
+            </SettingRow>
+            <SettingRow label="Time format">
+              <TimeFormatControl format={settings.data.device.timeFormat} />
+            </SettingRow>
+          </>
         )}
       </div>
 

@@ -1,14 +1,17 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { TimeInput } from './TimeInput'
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, Loader2, Play, Square, Trash2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, DayPicker, InlineError, Modal, Pill, SegmentedControl, Slider, Stepper } from '@/src/components/ds'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import type { SideSelection } from '@/src/providers/SideProvider'
+import { useSingleSleeperSide, type SideSelection } from '@/src/providers/SideProvider'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
-import { formatTime12h } from '@/src/lib/scheduleTime'
+
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 import { FIXED_INTENSITY, FIXED_PATTERN } from '@/src/lib/vibrationPatterns'
 import type { AlarmGroup } from './AlarmCard'
@@ -78,9 +81,12 @@ export function AlarmEditor({
   onSaved,
   onRequestDelete,
 }: AlarmEditorProps) {
+  const { formatTime, timeFormat } = useTimeFormatter()
   const isEdit = existingGroup !== null
   const { unit } = useTemperatureUnit()
   const { leftName, rightName } = useSideNames()
+  // One side away: alarms go on the sleeper's side, no side picker.
+  const singleSleeperSide = useSingleSleeperSide()
   const minDisplayTemp = Math.round(setpointFToDisplay(MIN_TEMP, unit) ?? MIN_TEMP)
   const maxDisplayTemp = Math.round(setpointFToDisplay(MAX_TEMP, unit) ?? MAX_TEMP)
   const defaultDisplayTemp = Math.round(setpointFToDisplay(DEFAULT_TEMP, unit) ?? DEFAULT_TEMP)
@@ -96,9 +102,16 @@ export function AlarmEditor({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
 
-  // Reset local state when opening
+  // Load the form when it opens, or when a different alarm is passed in. Not
+  // on every new `existingGroup` object: callers rebuild it on each render
+  // (the home screen re-renders with every status update), which reset any
+  // edit in progress back to the saved values.
+  const loadedFrom = useRef<string | null>(null)
   useEffect(() => {
-    if (!open) return
+    const source = !open ? null : existingGroup ? `edit:${existingGroup.ids.join(',')}` : 'new'
+    if (source === loadedFrom.current) return
+    loadedFrom.current = source
+    if (source === null) return
     /* eslint-disable react-hooks/set-state-in-effect */
     if (existingGroup) {
       setDays(new Set(existingGroup.days))
@@ -131,7 +144,10 @@ export function AlarmEditor({
   const utils = trpc.useUtils()
 
   const isMutating = batchUpdate.isPending
-  const sides = useMemo<Side[]>(() => (targetSide === 'both' ? ['left', 'right'] : [targetSide]), [targetSide])
+  const sides = useMemo<Side[]>(
+    () => (singleSleeperSide ? [singleSleeperSide] : targetSide === 'both' ? ['left', 'right'] : [targetSide]),
+    [singleSleeperSide, targetSide],
+  )
 
   const handleTest = useCallback(async () => {
     try {
@@ -186,7 +202,7 @@ export function AlarmEditor({
     }
   }, [days, sides, time, intensity, pattern, duration, displayTemperature, wakeWindow, unit, existingGroup, batchUpdate, utils, onSaved, onClose])
 
-  const clock = formatTime12h(time)
+  const clock = formatTime(time)
   const [clockDigits, clockPeriod] = clock.split(' ')
 
   return (
@@ -222,35 +238,41 @@ export function AlarmEditor({
       )}
     >
       <div className="flex flex-wrap items-end gap-3.5">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs text-fg-2">Wake at</span>
-          {/* Big mono readout; an invisible native time input on top opens the OS picker. */}
-          <span className="relative rounded-ctl focus-within:outline focus-within:outline-1 focus-within:outline-offset-4 focus-within:outline-fg-3">
-            <span className="font-mono text-[44px] font-light leading-none" aria-hidden>
-              {clockDigits}
-              <span className="text-xl text-fg-2">{` ${clockPeriod ?? ''}`}</span>
-            </span>
-            <input
-              type="time"
-              aria-label="Wake at"
-              value={time}
-              onChange={e => e.target.value && setTime(e.target.value)}
-              disabled={isMutating}
-              className="absolute inset-0 m-0 w-full min-w-0 cursor-pointer appearance-none opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:p-0"
-            />
-          </span>
-        </label>
-        <SegmentedControl
-          className="ml-auto"
-          ariaLabel="Alarm side"
-          value={targetSide}
-          onChange={setTargetSide}
-          options={[
-            { value: 'left', label: leftName },
-            { value: 'right', label: rightName },
-            { value: 'both', label: 'Both' },
-          ]}
-        />
+        {timeFormat === '24h'
+          ? <TimeInput label="Wake at" value={time} onChange={setTime} disabled={isMutating} />
+          : (
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs text-fg-2">Wake at</span>
+                {/* Big mono readout; an invisible native time input on top opens the OS picker. */}
+                <span className="relative rounded-ctl focus-within:outline focus-within:outline-1 focus-within:outline-offset-4 focus-within:outline-fg-3">
+                  <span className="font-mono text-[44px] font-light leading-none" aria-hidden>
+                    {clockDigits}
+                    <span className="text-xl text-fg-2">{` ${clockPeriod ?? ''}`}</span>
+                  </span>
+                  <input
+                    type="time"
+                    aria-label="Wake at"
+                    value={time}
+                    onChange={e => e.target.value && setTime(e.target.value)}
+                    disabled={isMutating}
+                    className="absolute inset-0 m-0 w-full min-w-0 cursor-pointer appearance-none opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:p-0"
+                  />
+                </span>
+              </label>
+            )}
+        {!singleSleeperSide && (
+          <SegmentedControl
+            className="ml-auto"
+            ariaLabel="Alarm side"
+            value={targetSide}
+            onChange={setTargetSide}
+            options={[
+              { value: 'left', label: leftName },
+              { value: 'right', label: rightName },
+              { value: 'both', label: 'Both' },
+            ]}
+          />
+        )}
       </div>
 
       <div className="flex flex-col gap-2.5">
@@ -283,7 +305,7 @@ export function AlarmEditor({
         </div>
         <span className="text-xs leading-[1.4] text-fg-3">
           {wakeWindow > 0
-            ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime12h(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
+            ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
             : 'Goes off at the set time.'}
         </span>
       </div>

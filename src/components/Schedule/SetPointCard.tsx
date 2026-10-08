@@ -1,8 +1,10 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { Trash2 } from 'lucide-react'
 import { GhostIcon, Stepper } from '@/src/components/ds'
-import { formatTime12h } from '@/src/lib/scheduleTime'
+
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 import { TONE_VAR, tempTone } from './scheduleFormat'
@@ -41,9 +43,10 @@ export function SetPointCard({
   disabled = false,
   autoLabel = null,
 }: SetPointCardProps) {
+  const { formatTime } = useTimeFormatter()
   const { unit } = useTemperatureUnit()
   const display = Math.round(setpointFToDisplay(point.temperature, unit) ?? point.temperature)
-  const time = formatTime12h(point.time)
+  const time = formatTime(point.time)
 
   return (
     <div className="flex items-center gap-3 border-t border-line pt-3" data-testid="set-point-row">

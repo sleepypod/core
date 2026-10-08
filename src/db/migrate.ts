@@ -50,6 +50,7 @@ export async function seedDefaultData() {
           id: 1,
           timezone: 'America/Los_Angeles',
           temperatureUnit: 'F',
+          timeFormat: '12h',
           rebootDaily: false,
           primePodDaily: false,
           pumpStallProtectionEnabled: false,

@@ -178,6 +178,51 @@ describe('WakeWindows', () => {
     expect(fire).not.toHaveBeenCalled()
   })
 
+  it('ignores an already queued poll from a replaced watch', async () => {
+    const intervals = vi.spyOn(globalThis, 'setInterval')
+    windows.open(1, 'left', alarmAt(), 20, fire)
+    const stalePoll = intervals.mock.calls[0][0] as () => void
+    const replacement = vi.fn(async () => {})
+    windows.open(1, 'right', alarmAt(), 10, replacement)
+    reads.length = 0
+    peak = 800
+    stalePoll()
+    expect(reads).toEqual([])
+    expect(fire).not.toHaveBeenCalled()
+    expect(windows.isOpen(1)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(replacement).toHaveBeenCalledTimes(1)
+    expect(fire).not.toHaveBeenCalled()
+  })
+
+  it('keeps polling after a non-Error movement failure', async () => {
+    const failure = { code: 'SQLITE_BUSY' }
+    const readMovement = vi.fn().mockImplementationOnce(() => {
+      throw failure
+    }).mockReturnValue(600)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    windows = new WakeWindows({ readMovement, now: () => now, pollMs: 1000 })
+    windows.open(1, 'left', alarmAt(), 20, fire)
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[wakeWindow] alarm-1: movement read failed:', failure)
+    expect(windows.isOpen(1)).toBe(true)
+    expect(fire).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fire).toHaveBeenCalledTimes(1)
+    expect(windows.isOpen(1)).toBe(false)
+  })
+
+  it('allows the set-time alarm after a non-Error early-fire failure', async () => {
+    const failure = { code: 'DAC_DISCONNECTED' }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    peak = 600
+    windows.open(1, 'left', alarmAt(), 20, vi.fn().mockRejectedValue(failure))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(error).toHaveBeenCalledExactlyOnceWith('[wakeWindow] alarm-1: early fire failed:', failure)
+    expect(windows.isOpen(1)).toBe(false)
+    now = alarmAt().getTime()
+    expect(windows.claim(1)).toBe(false)
+  })
+
   it('keeps watching after a failed movement read', async () => {
     let fail = true
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

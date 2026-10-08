@@ -5,7 +5,7 @@ import { waterLevelReadings, flowReadings, primeEvents, thermalState } from '@/s
 import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
 import { DEFAULT_HEATING_DURATION } from './types'
 import type { DeviceStatus, Side } from './types'
-import { getLastSideMutationAt, markFirmwareSynced } from './sideMutations'
+import { confirmPumpRun, hasConfirmedPumpRun, getLastSideMutationAt, markFirmwareSynced } from './sideMutations'
 
 export { markSideMutated, _resetMutationStamps, hasFirmwareSynced, _resetFirmwareSynced } from './sideMutations'
 
@@ -110,7 +110,8 @@ export class DeviceStateSync {
   private isPriming = false
   private primeEndedAt = 0
   private stallGuardInFlight: Record<Side, boolean> = { left: false, right: false }
-  private stallGuardPending: Record<Side, { rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number } | null> = { left: null, right: null }
+  private stallGuardPending: Record<Side, { rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number, confirmed: boolean } | null> = { left: null, right: null }
+  private waitingForPumpEvidence: Record<Side, boolean> = { left: false, right: false }
   private lastBothHealthyAt: number | null = null
   private bilateralStopCandidateUntil = 0
 
@@ -141,6 +142,9 @@ export class DeviceStateSync {
   }
 
   private recordSideStatus(side: Side, status: DeviceStatus['leftSide'], now: number): void {
+    // A retained target with heatTime=0 is ambiguous after a reboot. A
+    // positive live countdown, unlike the persisted DB row, proves a session.
+    if (status.targetLevel !== 0 && status.heatingDuration > 0) confirmPumpRun(side)
     const previous = this.lastSideStatus[side]
     const session = this.observedSession[side]
     const mutationAt = getLastSideMutationAt(side)
@@ -358,6 +362,20 @@ export class DeviceStateSync {
     }
 
     const now = Date.now()
+    // Observe at receipt, not when a coalesced guard call eventually drains.
+    for (const [side, pump] of [['left', leftPump], ['right', rightPump]] as const) {
+      const last = this.lastSideStatus[side]
+      // Pumps also run for priming, irrespective of heating. Wait for a live
+      // non-neutral status and exclude prime/spin-down motion from startup
+      // evidence. Countdown and successful-command evidence remain independent.
+      const outsidePrime = !this.isPriming
+        && (this.primeEndedAt === 0 || now - this.primeEndedAt >= PRIME_GRACE_MS)
+      if (last && last.targetLevel !== 0 && now >= last.at
+        && now - last.at <= SESSION_END_GRACE_S * 1000 && outsidePrime
+        && ((pump.duty != null && pump.duty > 0) || pump.rpm >= PUMP_FAILURE_RPM_MIN)) {
+        confirmPumpRun(side)
+      }
+    }
 
     // Run anomaly checks on every frame (not rate-limited)
     this.checkFlowAnomalies(frzHealth, leftPump, rightPump, now)
@@ -465,8 +483,9 @@ export class DeviceStateSync {
    * transport. Only the newest frame received while busy is kept.
    */
   private queueStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number): void {
+    const confirmed = hasConfirmedPumpRun(side)
     if (this.stallGuardInFlight[side]) {
-      this.stallGuardPending[side] = { rpm, duty, bilateralStopCandidate, at }
+      this.stallGuardPending[side] = { rpm, duty, bilateralStopCandidate, at, confirmed }
       return
     }
     this.stallGuardInFlight[side] = true
@@ -475,11 +494,11 @@ export class DeviceStateSync {
       // in-flight flag is released even if that ever changes — a leaked
       // flag would silently stop feeding the guard for this side.
       try {
-        await this.runStallGuard(side, rpm, duty, bilateralStopCandidate, at)
+        await this.runStallGuard(side, rpm, duty, bilateralStopCandidate, at, confirmed)
         let next = this.stallGuardPending[side]
         while (next) {
           this.stallGuardPending[side] = null
-          await this.runStallGuard(side, next.rpm, next.duty, next.bilateralStopCandidate, next.at)
+          await this.runStallGuard(side, next.rpm, next.duty, next.bilateralStopCandidate, next.at, next.confirmed)
           next = this.stallGuardPending[side]
         }
       }
@@ -493,7 +512,7 @@ export class DeviceStateSync {
    *  `at` is the frame's arrival stamp — the guard's dwell clock runs on
    *  frame arrival, not processing time, so a queued frame that waited out a
    *  lock hold can't inflate the low-run span it evidences. */
-  private async runStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number): Promise<void> {
+  private async runStallGuard(side: Side, rpm: number, duty: number | null, bilateralStopCandidate: boolean, at: number, confirmed: boolean): Promise<void> {
     try {
       const [row] = db
         .select({
@@ -508,8 +527,16 @@ export class DeviceStateSync {
       // Dwell and session-projection clocks run on the frame's arrival stamp,
       // not drain time — see the doc above.
       const now = at
-      const expectedActive = !this.isExpectedPumpStop(side, duty, row?.poweredOnAt, bilateralStopCandidate, now)
-        && Boolean(row?.isPowered && row.targetTemperature != null)
+      const commandedActive = Boolean(row?.isPowered && row.targetTemperature != null)
+      if (!confirmed && commandedActive && !this.waitingForPumpEvidence[side]) {
+        console.warn(`[pumpStallGuard] ${side}: waiting for live pump/session evidence after startup — saved power state alone cannot establish a stall`)
+        this.waitingForPumpEvidence[side] = true
+      }
+      const expectedActive = confirmed
+        && !this.isExpectedPumpStop(side, duty, row?.poweredOnAt, bilateralStopCandidate, now)
+        && commandedActive
+      // Always feed the guard, including while unknown: inactive samples reset
+      // new-trip dwell, while existing blocks/cutoff retries still run.
       // Real remaining session seconds, projected from the last firmware
       // poll like isExpectedPumpStop. The guard restores this snapshot on
       // auto-recovery, and feeding it the literal 8h default re-armed

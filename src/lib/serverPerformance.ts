@@ -56,9 +56,18 @@ export function getServerPerformance() {
   const s = state()
   const h = s.histogram
   const ms = (ns: number) => Number.isFinite(ns) ? Math.round(ns / 10_000) / 100 : 0
+  // These process.memoryUsage() counters do not partition RSS.
+  // arrayBuffers is included in external.
+  const memory = process.memoryUsage()
   return {
     uptimeSeconds: process.uptime(),
-    rssBytes: process.memoryUsage.rss(),
+    rssBytes: memory.rss,
+    memory: {
+      heapTotalBytes: memory.heapTotal,
+      heapUsedBytes: memory.heapUsed,
+      externalBytes: memory.external,
+      arrayBuffersBytes: memory.arrayBuffers,
+    },
     startup: s.phases.slice(),
     sensorSource: s.sensorSource,
     firstFrameMs: s.firstFrameMs,

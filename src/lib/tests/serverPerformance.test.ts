@@ -38,6 +38,15 @@ describe('server performance telemetry', () => {
     expect(metrics.monitorEventLoopDelay).not.toHaveBeenCalled()
   })
 
+  it('reports RSS and overlapping memory counters from process.memoryUsage', () => {
+    const usage = { rss: 200 * 2 ** 20, heapTotal: 90 * 2 ** 20, heapUsed: 70 * 2 ** 20, external: 6 * 2 ** 20, arrayBuffers: 2 ** 20 }
+    vi.spyOn(process, 'memoryUsage').mockReturnValue(usage as NodeJS.MemoryUsage)
+    expect(getServerPerformance()).toMatchObject({
+      rssBytes: usage.rss,
+      memory: { heapTotalBytes: usage.heapTotal, heapUsedBytes: usage.heapUsed, externalBytes: usage.external, arrayBuffersBytes: usage.arrayBuffers },
+    })
+  })
+
   it('records each startup phase and the first sensor frame only once', () => {
     startPerformanceMonitoring()
     now = 125

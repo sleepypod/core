@@ -1,5 +1,5 @@
-import { parseExpression } from 'cron-parser'
 import { DAYS_OF_WEEK, type DayOfWeek } from '@/src/lib/scheduleTime'
+import { weeklyWindow, weeklyZone, type WeeklyZone } from '@/src/scheduler/occurrences'
 import { timeToDate } from '@/src/scheduler/timeUtils'
 import type { TemperatureRequest } from './controller'
 
@@ -12,29 +12,26 @@ export interface WeeklyTarget {
 
 export type RecurringOccurrenceCache = Map<string, { startsAt: number, expiresAt: number }>
 
-/** Use node-schedule's cron parser and timezone semantics for both engines. */
+/**
+ * Weekly occurrences follow the scheduler's cron and timezone semantics
+ * (`src/scheduler/occurrences.ts`), computed arithmetically: cron-parser with
+ * a `tz` option took ~0.5 s per row on the pod, which with a few hundred rows
+ * blocked the event loop for over a minute on the first tick after start.
+ */
 export function recurringTarget(rows: WeeklyTarget[], timezone: string, now: number, cache: RecurringOccurrenceCache = new Map()): TemperatureRequest | null {
   const activeKeys = new Set<string>()
   let latest: TemperatureRequest | null = null
+  let zone: WeeklyZone | null = null
   for (const row of rows) {
     const key = JSON.stringify([timezone, row.dayOfWeek, row.time])
     activeKeys.add(key)
     let occurrence = cache.get(key)
     if (!occurrence || now < occurrence.startsAt || now >= occurrence.expiresAt) {
       const [hour, minute] = row.time.split(':').map(Number)
-      const cron = `${minute} ${hour} * * ${DAYS_OF_WEEK.indexOf(row.dayOfWeek)}`
-      // Forward iteration matches node-schedule through missing/repeated DST
-      // hours. cron-parser.prev() is not the inverse of next() in a spring gap.
       // Cache each weekly interval, not just the winning target for one minute:
-      // recomputing hundreds of unchanged cron rows can saturate a Pod CPU.
-      const occurrences = parseExpression(cron, { currentDate: new Date(now - 15 * 86_400_000), tz: timezone })
-      let startsAt = occurrences.next().getTime()
-      let expiresAt = occurrences.next().getTime()
-      while (expiresAt <= now) {
-        startsAt = expiresAt
-        expiresAt = occurrences.next().getTime()
-      }
-      occurrence = { startsAt, expiresAt }
+      // recomputing hundreds of unchanged rows every minute adds up on a Pod CPU.
+      zone ??= weeklyZone(now, timezone)
+      occurrence = weeklyWindow(zone, DAYS_OF_WEEK.indexOf(row.dayOfWeek), hour, minute, now)
       cache.set(key, occurrence)
     }
     const { startsAt, expiresAt } = occurrence
@@ -79,6 +76,7 @@ export function alarmWarmupMinutes(wakeWindow: number): number {
 export function alarmTemperatureTargets(rows: AlarmTemperatureRow[], timezone: string, now: number, cache: AlarmOccurrenceCache = new Map()): TemperatureRequest[] {
   const out: TemperatureRequest[] = []
   const activeKeys = new Set<string>()
+  let zone: WeeklyZone | null = null
   for (const row of rows) {
     const afterMs = row.duration * 1000 + ALARM_HOLD_AFTER_MIN * 60_000
     const key = JSON.stringify([timezone, row.dayOfWeek, row.time, afterMs])
@@ -87,8 +85,9 @@ export function alarmTemperatureTargets(rows: AlarmTemperatureRow[], timezone: s
     if (alarmAt === undefined || now >= alarmAt + afterMs) {
       // The occurrence whose span may still hold now, else the next one.
       const [hour, minute] = row.time.split(':').map(Number)
-      const cron = `${minute} ${hour} * * ${DAYS_OF_WEEK.indexOf(row.dayOfWeek)}`
-      alarmAt = parseExpression(cron, { currentDate: new Date(now - afterMs), tz: timezone }).next().getTime()
+      const after = now - afterMs
+      zone ??= weeklyZone(after, timezone)
+      alarmAt = weeklyWindow(zone, DAYS_OF_WEEK.indexOf(row.dayOfWeek), hour, minute, after).expiresAt
       cache.set(key, alarmAt)
     }
     const startsAt = alarmAt - alarmWarmupMinutes(row.wakeWindow) * 60_000
