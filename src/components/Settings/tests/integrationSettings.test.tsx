@@ -8,10 +8,11 @@ vi.mock('@/src/utils/trpc', () => {
   const endpoint = (name: string) => ({
     useQuery: () => ({ data: mock.data[name], isLoading: mock.loading }),
     useMutation: (opts?: { onSuccess?: () => void, onError?: (e: Error) => void }) => ({
-      mutate: (input: unknown) => {
+      mutate: (input: unknown, callOpts?: { onError?: (e: Error) => void }) => {
         mock.calls(name, input)
         if (mock.error) {
           opts?.onError?.(mock.error)
+          callOpts?.onError?.(mock.error)
         }
         else {
           opts?.onSuccess?.()
@@ -157,6 +158,15 @@ it('saves the pod-wide time format from the Device section and follows server ch
   expect(mock.calls).toHaveBeenLastCalledWith('device', { timeFormat: '24h' })
   expect(tabs.getByRole('tab', { selected: true }).textContent).toBe('24-hour')
   rerender(<DeviceSettingsForm device={{ ...device, timeFormat: '12h', timezone: 'Europe/London' }} />)
+  expect(tabs.getByRole('tab', { selected: true }).textContent).toBe('12-hour')
+})
+
+it('restores the saved time format when the pod rejects the change', () => {
+  mock.error = new Error('Offline')
+  render(<DeviceSettingsForm device={device} />)
+  const tabs = within(screen.getByRole('tablist', { name: 'Time format' }))
+  fireEvent.click(tabs.getByRole('tab', { name: '24-hour' }))
+  expect(mock.calls).toHaveBeenLastCalledWith('device', { timeFormat: '24h' })
   expect(tabs.getByRole('tab', { selected: true }).textContent).toBe('12-hour')
 })
 

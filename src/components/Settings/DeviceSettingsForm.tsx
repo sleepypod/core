@@ -166,8 +166,9 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   }
 
   function handleTimeFormatChange(format: '12h' | '24h') {
+    const previous = timeFormat
     setTimeFormat(format)
-    save({ timeFormat: format })
+    mutation.mutate({ timeFormat: format }, { onError: () => setTimeFormat(previous) })
   }
 
   function handleRebootToggle() {
